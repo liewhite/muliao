@@ -8,8 +8,8 @@ from muliao.api.auth import Auth
 
 
 @pytest.fixture
-async def client(container, settings) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app(container, settings.web_dir)
+async def client(container, tmp_path) -> AsyncIterator[httpx.AsyncClient]:
+    app = create_app(container, tmp_path / "no-web")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

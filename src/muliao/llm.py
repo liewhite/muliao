@@ -13,21 +13,32 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from muliao.config import LlmConfig, ProviderConfig
+from muliao.config import LlmConfig, ProviderConfig, ProviderType, split_model
 from muliao.errors import InvalidInput
 
 ModelResolver = Callable[[str], Model]
 
 
+# 各 SDK 在 base_url 为 None 时会读环境变量（ANTHROPIC_BASE_URL、OPENAI_BASE_URL、GOOGLE_GEMINI_BASE_URL）
+# 或本地 profile，可能把配置里的 key 发往别处。所以永远显式传地址。取值与各 SDK 内置默认一致。
+OFFICIAL_BASE_URLS: dict[ProviderType, str] = {
+    "anthropic": "https://api.anthropic.com",
+    "openai": "https://api.openai.com/v1",
+    "openai-responses": "https://api.openai.com/v1",
+    "google": "https://generativelanguage.googleapis.com/",
+}
+
+
 def _build_provider(cfg: ProviderConfig) -> Provider:  # type: ignore[type-arg]
     key = cfg.api_key.get_secret_value()
+    base_url = cfg.base_url or OFFICIAL_BASE_URLS[cfg.type]
     match cfg.type:
         case "anthropic":
-            return AnthropicProvider(api_key=key, base_url=cfg.base_url)
+            return AnthropicProvider(api_key=key, base_url=base_url)
         case "openai" | "openai-responses":
-            return OpenAIProvider(api_key=key, base_url=cfg.base_url)
+            return OpenAIProvider(api_key=key, base_url=base_url)
         case "google":
-            return GoogleProvider(api_key=key, base_url=cfg.base_url)
+            return GoogleProvider(api_key=key, base_url=base_url)
         case _:
             assert_never(cfg.type)
 
@@ -39,9 +50,10 @@ class ModelRegistry:
         self._providers: dict[str, Provider] = {}  # type: ignore[type-arg]
 
     def _split(self, model: str) -> tuple[str, ProviderConfig, str]:
-        name, sep, model_name = model.partition(":")
-        if not sep or not model_name:
-            raise InvalidInput(f"model {model!r} must be '<provider>:<model>'")
+        try:
+            name, model_name = split_model(model)
+        except ValueError as e:
+            raise InvalidInput(str(e)) from e
         cfg = self._config.providers.get(name)
         if cfg is None:
             raise InvalidInput(

@@ -31,7 +31,6 @@ def settings(tmp_path: Path) -> Settings:
     return Settings.model_validate(
         {
             "data_dir": tmp_path / "data",
-            "web_dir": tmp_path / "web",
             "server": {"public_url": "http://test"},
             "auth": {"password": "password1", "secret_key": "k" * 32},
             "vault": {"key": Fernet.generate_key().decode()},

@@ -9,6 +9,7 @@ timezone = "Asia/Shanghai"
 log_level = "INFO"
 
 [server]
+# 0.0.0.0 监听所有网卡（反向代理在其他机器上时需要）；代理在本机时用 127.0.0.1
 host = "0.0.0.0"
 port = 1080
 # 必填：对外访问地址（iOS 推送要求 HTTPS）。用于通知跳转、webhook URL、cookie Secure 标记
@@ -39,7 +40,7 @@ default_model = "claude:claude-sonnet-5-5"
 #   openai            OpenAI Chat Completions，也适用于 DeepSeek、OpenRouter、vLLM、Ollama 等兼容服务
 #   openai-responses  OpenAI Responses API
 #   google            Gemini API
-# base_url 不填则使用官方地址。agent 的模型写成 "<provider 名>:<模型名>"，如 "claude:claude-opus-5-5"
+# base_url 不填则使用该类型的官方地址（不受 *_BASE_URL 环境变量影响）。agent 的模型写成 "<provider 名>:<模型名>"，如 "claude:claude-opus-5-5"
 
 [llm.providers.claude]
 type = "anthropic"

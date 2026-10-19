@@ -10,7 +10,7 @@ uv tool install git+https://github.com/liewhite/muliao.git
 uv tool upgrade muliao     # 或 uv tool install --force git+https://github.com/liewhite/muliao.git
 ```
 
-所有配置（监听地址、登录密码、密钥、LLM provider 与 API key、Telegram）都在一个 TOML 文件里，模板见仓库根目录 `config.example.toml`，每项都有注释。不读环境变量。
+所有配置（监听地址、登录密码、密钥、LLM provider 与 API key、Telegram）都在一个 TOML 文件里，模板见仓库根目录 `config.example.toml`，每项都有注释。程序自身不读环境变量；LLM 的 base_url 未填时使用官方地址，不受 `*_BASE_URL` 环境变量影响。
 
 ```bash
 mkdir -p ~/.muliao

@@ -10,6 +10,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 DEFAULT_CONFIG_PATH = Path("~/.muliao/config.toml")
+# 前端构建产物：`cd web && npm run build` 生成到包内，随 wheel 分发；不是用户配置
+WEB_DIR = Path(__file__).parent / "webui"
+
+
+def split_model(model: str) -> tuple[str, str]:
+    """把 "<provider 名>:<模型名>" 拆开；两部分都不能为空。配置校验与模型构造共用。"""
+    provider, sep, name = model.partition(":")
+    if not sep or not provider or not name:
+        raise ValueError(f"model {model!r} must be '<provider>:<model>'")
+    return provider, name
 
 
 class _Section(BaseModel):
@@ -39,6 +49,12 @@ class PushConfig(_Section):
     # VAPID subject，Web Push 协议要求为 mailto: 或 https: URL
     vapid_subject: str
 
+    @model_validator(mode="after")
+    def _subject_scheme(self) -> "PushConfig":
+        if not self.vapid_subject.startswith(("mailto:", "https://")):
+            raise ValueError("vapid_subject must start with 'mailto:' or 'https://'")
+        return self
+
 
 ProviderType = Literal["anthropic", "openai", "openai-responses", "google"]
 
@@ -46,7 +62,8 @@ ProviderType = Literal["anthropic", "openai", "openai-responses", "google"]
 class ProviderConfig(_Section):
     type: ProviderType
     api_key: SecretStr = Field(min_length=1)
-    # 为空时使用该提供方的官方地址；OpenAI 兼容服务（DeepSeek、OpenRouter、vLLM…）填其地址
+    # 为空时显式使用该类型的官方地址（llm.OFFICIAL_BASE_URLS），不会回退到 SDK 的环境变量；
+    # OpenAI 兼容服务（DeepSeek、OpenRouter、vLLM…）填其地址
     base_url: str | None = None
 
 
@@ -57,12 +74,9 @@ class LlmConfig(_Section):
 
     @model_validator(mode="after")
     def _default_model_resolvable(self) -> "LlmConfig":
-        provider, sep, _ = self.default_model.partition(":")
-        if not sep or provider not in self.providers:
-            raise ValueError(
-                f"default_model {self.default_model!r} must be '<provider>:<model>' "
-                f"with provider in {sorted(self.providers)}"
-            )
+        provider, _ = split_model(self.default_model)
+        if provider not in self.providers:
+            raise ValueError(f"default_model provider {provider!r} is not in {sorted(self.providers)}")
         return self
 
 
@@ -91,9 +105,7 @@ class Settings(_Section):
     data_dir: Path = Path("data")
     # cron 表达式按此时区解释，也用于告诉 agent 当前本地时间
     timezone: str = "UTC"
-    log_level: str = "INFO"
-    # 前端构建产物：`cd web && npm run build` 生成到包内，随 wheel 分发
-    web_dir: Path = Path(__file__).parent / "webui"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     server: ServerConfig
     auth: AuthConfig

@@ -18,6 +18,7 @@ from muliao.db import Database, create_engine, init_schema
 from muliao.delivery.base import DeliverHandler, Delivery, Notifier
 from muliao.delivery.telegram import TelegramDelivery
 from muliao.delivery.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
+from muliao.errors import InvalidInput
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelRegistry, ModelResolver
@@ -67,6 +68,7 @@ class Container:
     worker: Worker
     http: httpx.AsyncClient
     telegram: TelegramTrigger | None
+    _model_checker: Callable[[str], None]
     _background: list[asyncio.Task[None]] = field(default_factory=list)
 
     def _spawn(self, name: str, coro: Coroutine[Any, Any, None]) -> None:
@@ -76,6 +78,7 @@ class Container:
 
     async def start(self) -> None:
         await init_schema(self.db.engine)
+        await self._check_agent_models()
         if self.settings.telegram is not None:
             # 配置错误在启动时暴露，而不是在第一条消息到来时让轮询崩溃
             await self.agents.get(self.settings.telegram.agent)
@@ -83,6 +86,19 @@ class Container:
         self._spawn("cron", self.cron.run_forever())
         if self.telegram is not None:
             self._spawn("telegram", self.telegram.run_forever())
+
+    async def _check_agent_models(self) -> None:
+        """已存 agent 的模型必须能被当前配置解析：配置改动（删 provider、改名）在启动时暴露，而不是散落到每个任务里失败。"""
+        broken = []
+        for agent in await self.agents.list():
+            try:
+                self._model_checker(agent.model)
+            except InvalidInput as e:
+                broken.append(f"{agent.name}: {e}")
+        if broken:
+            raise RuntimeError(
+                "agents reference models not resolvable with current config:\n" + "\n".join(broken)
+            )
 
     async def stop(self) -> None:
         for task in self._background:
@@ -210,4 +226,5 @@ def build_container(
         worker=worker,
         http=http,
         telegram=telegram,
+        _model_checker=model_checker or models.check,
     )

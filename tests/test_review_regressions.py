@@ -74,11 +74,11 @@ async def test_broken_cron_job_is_disabled_without_blocking_others(container, ma
     assert good.last_session_id is not None
 
 
-async def test_agent_api_rejects_zero_reflect_every_and_partial_update(container):
+async def test_agent_api_rejects_zero_reflect_every_and_partial_update(container, tmp_path):
     from muliao.api.app import create_app
     from tests.test_api import login
 
-    app = create_app(container, container.settings.web_dir)
+    app = create_app(container, tmp_path / "no-web")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         await login(client)
         resp = await client.post("/api/agents", json={"name": "a", "description": "d", "reflect_every": 0})
