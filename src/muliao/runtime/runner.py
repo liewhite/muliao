@@ -1,0 +1,170 @@
+"""执行一次 agent 运行：组装 instructions、toolsets、模型，转发流式事件到总线。"""
+
+import logging
+from collections.abc import AsyncIterable, Callable, Sequence
+from dataclasses import dataclass
+from zoneinfo import ZoneInfo
+
+from pydantic_ai import Agent as PaiAgent
+from pydantic_ai import AgentRunResult, RunContext
+from pydantic_ai.messages import (
+    AgentStreamEvent,
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    ModelMessage,
+    PartDeltaEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+    ToolReturnPart,
+)
+from pydantic_ai.models import Model
+from pydantic_ai.toolsets import AbstractToolset
+
+from muliao.agents import AgentService
+from muliao.bus import EventBus
+from muliao.db import utcnow
+from muliao.evolution.memory import MemoryStore
+from muliao.evolution.skills import SkillStore
+from muliao.models import Agent
+from muliao.runtime.instructions import build_instructions
+from muliao.runtime.mcp import McpRegistry
+from muliao.runtime.scope import RunScope
+from muliao.runtime.tasks import Clock
+from muliao.runtime.tools.errors import DomainErrorsAsRetry
+from muliao.transcript import truncate
+
+log = logging.getLogger(__name__)
+
+_EVENT_TEXT_LIMIT = 2000
+
+ModelResolver = Callable[[str], Model | str]
+
+
+@dataclass(frozen=True)
+class RunProfile:
+    """一类运行开放的能力：turn 全部开放，反思只开放 skill 与 memory。"""
+
+    toolsets: Sequence[AbstractToolset[RunScope]]
+    include_mcp: bool
+
+
+class AgentRuntime:
+    def __init__(
+        self,
+        *,
+        agents: AgentService,
+        skills: SkillStore,
+        memory: MemoryStore,
+        mcp: McpRegistry,
+        bus: EventBus,
+        tz: ZoneInfo,
+        clock: Clock = utcnow,
+        resolve_model: ModelResolver = lambda name: name,
+    ):
+        self._agents = agents
+        self._skills = skills
+        self._memory = memory
+        self._mcp = mcp
+        self._bus = bus
+        self._tz = tz
+        self._clock = clock
+        self._resolve_model = resolve_model
+        self._pai = PaiAgent(deps_type=RunScope, output_type=str)
+
+    def scope(self, agent: Agent, *, session_id: str | None, origin) -> RunScope:  # noqa: ANN001
+        return RunScope(
+            agent_name=agent.name,
+            workspace=self._agents.workspace(agent.name),
+            session_id=session_id,
+            origin=origin,
+        )
+
+    def instructions(self, agent: Agent, scope: RunScope) -> str:
+        return build_instructions(
+            agent_name=agent.name,
+            agent_description=agent.description,
+            agent_instructions=agent.instructions,
+            workspace=scope.workspace,
+            now_local=self._clock().astimezone(self._tz),
+            origin=scope.origin,
+            memory=self._memory.read(agent.name),
+            skills=self._skills.visible_to(agent.name),
+            memory_limit=self._memory.max_chars,
+        )
+
+    async def run(
+        self,
+        agent: Agent,
+        scope: RunScope,
+        prompt: str,
+        history: Sequence[ModelMessage],
+        profile: RunProfile,
+    ) -> AgentRunResult[str]:
+        toolsets: list[AbstractToolset[RunScope]] = [DomainErrorsAsRetry(t) for t in profile.toolsets]
+        if profile.include_mcp:
+            toolsets += [await self._mcp.build_toolset(s) for s in await self._mcp.visible_to(agent.name)]
+        log.info(
+            "agent run started",
+            extra={
+                "agent": agent.name,
+                "session_id": scope.session_id,
+                "model": agent.model,
+                "history": len(history),
+            },
+        )
+        result = await self._pai.run(
+            prompt,
+            model=self._resolve_model(agent.model),
+            instructions=self.instructions(agent, scope),
+            message_history=list(history),
+            deps=scope,
+            toolsets=toolsets,
+            event_stream_handler=self._forward_events,
+        )
+        usage = result.usage
+        log.info(
+            "agent run finished",
+            extra={
+                "agent": agent.name,
+                "session_id": scope.session_id,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "requests": usage.requests,
+            },
+        )
+        return result
+
+    async def _forward_events(
+        self, ctx: RunContext[RunScope], stream: AsyncIterable[AgentStreamEvent]
+    ) -> None:
+        base = {"type": "run", "session_id": ctx.deps.session_id, "agent": ctx.deps.agent_name}
+        async for event in stream:
+            if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
+                self._bus.publish({**base, "event": "text", "text": event.part.content})
+            elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                self._bus.publish({**base, "event": "text", "text": event.delta.content_delta})
+            elif isinstance(event, FunctionToolCallEvent):
+                self._bus.publish(
+                    {
+                        **base,
+                        "event": "tool_call",
+                        "tool_name": event.part.tool_name,
+                        "tool_call_id": event.part.tool_call_id,
+                        "text": truncate(event.part.args_as_json_str(), _EVENT_TEXT_LIMIT),
+                    }
+                )
+            elif isinstance(event, FunctionToolResultEvent):
+                part = event.part
+                text = (
+                    part.model_response_str() if isinstance(part, ToolReturnPart) else part.model_response()
+                )
+                self._bus.publish(
+                    {
+                        **base,
+                        "event": "tool_result" if isinstance(part, ToolReturnPart) else "tool_error",
+                        "tool_name": part.tool_name,
+                        "tool_call_id": part.tool_call_id,
+                        "text": truncate(text, _EVENT_TEXT_LIMIT),
+                    }
+                )
