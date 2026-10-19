@@ -1,23 +1,5 @@
-from collections.abc import AsyncIterator
-
-import httpx
-import pytest
-
-from muliao.api.app import create_app
 from muliao.api.auth import Auth
-
-
-@pytest.fixture
-async def client(container, tmp_path) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app(container, tmp_path / "no-web")
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-        yield c
-
-
-async def login(client: httpx.AsyncClient) -> None:
-    resp = await client.post("/api/auth/login", json={"password": "password1"})
-    assert resp.status_code == 204
+from tests.conftest import login
 
 
 async def test_api_requires_login(client):

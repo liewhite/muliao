@@ -14,5 +14,10 @@ class InvalidInput(DomainError):
     pass
 
 
+class Forbidden(DomainError):
+    """身份明确，但无权执行该操作（如续写不是自己发起的会话）。"""
+
+
+
 class TransientError(Exception):
     """外部依赖按其契约可能发生的暂时性失败（5xx、限流、超时）。由任务队列统一重试。"""

@@ -36,7 +36,7 @@ data/
 
 ```
 Web / cron / delegate_task / ask_agent
-          │  conversation.enqueue_turn()（payload 带 prompt 与 reply_to）
+          │  conversation.receive(Inbound)（唯一入口；payload 带 prompt 与 reply_to）
           ▼
  tasks(turn) ──► Worker ──► TurnHandler ──► pydantic-ai Agent.run
                                       │ 同一事务提交：
@@ -141,6 +141,17 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 ## 8. 触发源
 
 触发点只有两个：用户在网页发起对话、cron 定时任务。agent 之间的委派是 agent 内部能力，在父会话下开 thread（第 4 节）。
+
+**统一入口**：用户消息、cron 到点、agent 委派都是同一件事——把一段内容交给某个 agent，在某个会话里处理一轮。各来源只做适配（鉴权、触发时机、组装内容），然后构造一个 `Inbound` 交给 `conversation.receive`：
+
+| 字段 | 含义 |
+|---|---|
+| `source` / `source_ref` | 来源与具体发送方：用户（无）、cron job id、委派方（父）会话 id |
+| `content` | 这一轮的 prompt |
+| `session` | 已有会话的 id（在其中继续），或 `NewSession`（新建：agent、标题，委派时还有父会话、thread 名、是否私有） |
+| `reply_to` | 这一轮的回答交给谁 |
+
+`receive` 是唯一投递新一轮的地方；新建会话也只有 `create_session` 一处实现（`ask_agent` 提前占用 thread 时也用它）。**续写规则**：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话（会话的来源与发送方都一致，委派会话的发送方就是它的父会话），否则 403。
 
 是否推送由每一轮的 `reply_to` 决定（唯一来源），由发起这一轮的入口设置：
 

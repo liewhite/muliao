@@ -7,7 +7,7 @@ from muliao.models import Compaction, Message, Origin, Task, TaskKind, TaskStatu
 from muliao.runtime.compaction import COMPACTION_INSTRUCTIONS, CompactionScheduler, select_turns
 from muliao.runtime.tasks import turn_lane
 from tests.scripted import scripted
-from tests.test_flow import drain, last_user_prompt, start
+from tests.test_flow import drain, last_user_prompt, reply, start
 
 
 class Recorder:
@@ -44,7 +44,7 @@ async def _session_with_turns(container, models, agent_id: str, n: int):
     session = await start(container, agent_id, "turn 1", origin=Origin.CRON)
     await drain(container)
     for i in range(2, n + 1):
-        await container.sessions.reply(session.id, f"turn {i}")
+        await reply(container, session.id, f"turn {i}")
         await drain(container)
     return session, recorder
 
@@ -68,7 +68,7 @@ async def test_compaction_summarizes_older_turns_and_next_turn_uses_summary(cont
         )
     assert compaction.through_message_id == turn2_last  # 切点在第 2 轮末尾
 
-    await container.sessions.reply(session.id, "after compaction")
+    await reply(container, session.id, "after compaction")
     await drain(container)
     prompt, message_count, instructions = recorder.turns[-1]
     assert prompt == "after compaction"
@@ -86,7 +86,7 @@ async def test_second_compaction_folds_in_previous_summary(container, make_agent
     await _enqueue_compaction(container, session)
     await drain(container)
     for i in range(2):
-        await container.sessions.reply(session.id, f"more {i}")
+        await reply(container, session.id, f"more {i}")
         await drain(container)
 
     await _enqueue_compaction(container, session)
@@ -187,7 +187,7 @@ async def test_manual_compaction_endpoint(container, make_agent, tmp_path):
     import httpx
 
     from muliao.api.app import create_app
-    from tests.test_api import login
+    from tests.conftest import login
 
     alpha = (await make_agent("alpha")).id
     session = await start(container, alpha, "hi", origin=Origin.CRON)

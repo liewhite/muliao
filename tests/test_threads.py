@@ -12,7 +12,7 @@ from sqlalchemy import select
 from muliao.errors import Conflict
 from muliao.models import Message, Session, Task, TaskKind, TaskStatus, Wait
 from tests.scripted import scripted
-from tests.test_flow import drain, last_user_prompt, start, tasks_of, tool_returns
+from tests.test_flow import drain, last_user_prompt, reply, start, tasks_of, tool_returns
 
 
 def steps(*responses: Callable[[list[ModelMessage]], ModelResponse]):
@@ -101,7 +101,7 @@ async def test_ask_agent_waits_for_answer_and_follow_up_keeps_thread_context(con
     await drain(container)
     assert await last_answer(container, parent.id) == "verdict: reviewed v1"
 
-    await container.sessions.reply(parent.id, "fix it")
+    await reply(container, parent.id, "fix it")
     await drain(container)
     assert await last_answer(container, parent.id) == "verdict: reviewed v2"
 
@@ -185,7 +185,7 @@ async def test_wait_for_finished_thread_returns_immediately(container, make_agen
 
     parent = await start(container, lead, "start")
     await drain(container)
-    await container.sessions.reply(parent.id, "and?")
+    await reply(container, parent.id, "and?")
     await drain(container)
 
     assert await last_answer(container, parent.id) == "result: did job"
@@ -286,7 +286,7 @@ async def test_private_thread_is_read_only_for_user_and_hidden_from_list(contain
     [child] = await threads_of(container, parent.id)
 
     with pytest.raises(Conflict):
-        await container.sessions.reply(child.id, "hi")
+        await reply(container, child.id, "hi")
     listed = await container.sessions.list(agent_id=None, origins=None, limit=50, offset=0)
     assert [x.id for x in listed] == [parent.id]
     async with container.db.transaction() as s:
@@ -340,7 +340,7 @@ async def test_waiting_turn_blocks_its_lane_until_resumed(container, make_agent,
     parent = await start(container, lead, "go")
     drained = asyncio.create_task(drain(container))
     await eventually(lambda: turn_in(container, parent.id, TaskStatus.WAITING))
-    followup = await container.sessions.reply(parent.id, "more")
+    followup = await reply(container, parent.id, "more")
     await asyncio.sleep(0.2)
     async with container.db.transaction() as s:
         assert (await s.get(Task, followup.id)).status == TaskStatus.PENDING
@@ -410,7 +410,7 @@ async def test_wait_for_sees_result_of_manually_retried_thread(container, make_a
     [child] = await threads_of(container, parent.id)
     await container.queue.retry((await turn_in(container, child.id, TaskStatus.FAILED)).id)
     await drain(container)
-    await container.sessions.reply(parent.id, "and?")
+    await reply(container, parent.id, "and?")
     await drain(container)
 
     assert await last_answer(container, parent.id) == "result: second try worked"
@@ -449,7 +449,7 @@ async def test_waiting_on_a_suspended_thread_gets_its_final_answer(container, ma
 
     await eventually(mid_waiting)
     # 第一轮结束后追问：wait_for 等的正是那个已挂起的 thread
-    await container.sessions.reply(parent.id, "result?")
+    await reply(container, parent.id, "result?")
     await eventually(lambda: turn_in(container, parent.id, TaskStatus.WAITING))
     gate.set()
     await drained
@@ -515,3 +515,37 @@ async def test_parallel_calls_competing_for_one_thread_name_are_corrected_by_mod
 
     assert any("belongs to another agent" in r for r in retries)
     assert await turn_in(container, parent.id, TaskStatus.DONE) is not None
+
+
+async def test_user_may_continue_any_public_session_but_delegation_only_its_own_threads(
+    container, make_agent
+):
+    from muliao.errors import Forbidden
+    from muliao.models import Origin, ReplyTo
+    from muliao.runtime.conversation import Inbound, NewSession
+
+    alpha = (await make_agent("alpha")).id
+    cron_session = await start(container, alpha, "scheduled", origin=Origin.CRON)
+    # 用户可以在 cron 会话里追问
+    await reply(container, cron_session.id, "follow up")
+    # 某个会话不能冒充父会话去续写不属于它的会话
+    with pytest.raises(Forbidden):
+        await container.sessions.receive(
+            Inbound(
+                source=Origin.DELEGATION,
+                source_ref="someone-else",
+                content="x",
+                session=cron_session.id,
+                reply_to=ReplyTo.AGENT,
+            )
+        )
+    with pytest.raises(ValueError, match="only delegation creates child sessions"):
+        await container.sessions.receive(
+            Inbound(
+                source=Origin.USER,
+                source_ref=None,
+                content="x",
+                session=NewSession(agent_id=alpha, title="t", parent_session_id=cron_session.id, thread="t"),
+                reply_to=ReplyTo.USER,
+            )
+        )

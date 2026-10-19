@@ -136,7 +136,7 @@ def build_container(
     threads = Threads(queue)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(db, vault)
-    cron = CronService(db, sessions, queue, tz)
+    cron = CronService(db, queue, tz)
     push_subscriptions = PushSubscriptions(db)
     vapid = VapidKeys(settings.vapid_key_path)
 

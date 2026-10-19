@@ -17,6 +17,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy import select
 
 from muliao.models import Origin, Reflection, ReplyTo, Task, TaskKind, TaskStatus
+from muliao.runtime.conversation import Inbound, NewSession
 from tests.scripted import scripted
 
 
@@ -66,9 +67,26 @@ _REPLY_TO = {Origin.USER: ReplyTo.USER, Origin.CRON: ReplyTo.NONE}
 
 
 async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER):
-    return await container.sessions.start(
-        agent_id=agent, prompt=prompt, origin=origin, origin_ref=None, reply_to=_REPLY_TO[origin]
+    received = await container.sessions.receive(
+        Inbound(
+            source=origin,
+            source_ref=None,
+            content=prompt,
+            session=NewSession(agent_id=agent, title=prompt[:20]),
+            reply_to=_REPLY_TO[origin],
+        )
     )
+    return received.session
+
+
+async def reply(container, session_id: str, prompt: str):
+    """用户在会话里追问，返回这一轮的 task。"""
+    received = await container.sessions.receive(
+        Inbound(
+            source=Origin.USER, source_ref=None, content=prompt, session=session_id, reply_to=ReplyTo.USER
+        )
+    )
+    return received.turn
 
 
 async def tasks_of(container, kind: TaskKind) -> list[Task]:
@@ -113,7 +131,7 @@ async def test_reply_continues_with_full_history(container, make_agent, models):
     models.models["m"] = scripted(fn)
     session = await start(container, alpha, "one")
     await drain(container)
-    await container.sessions.reply(session.id, "two")
+    await reply(container, session.id, "two")
     await drain(container)
 
     assert seen == [1, 3]

@@ -11,7 +11,7 @@ from muliao.db import Base, StrEnumType, UTCDateTime, utcnow
 
 
 class Origin(StrEnum):
-    """触发源：用户在网页发起、cron 定时触发、agent 之间委派。"""
+    """会话来源：用户在网页发起、cron 定时触发、agent 之间委派。"""
 
     USER = "user"
     CRON = "cron"

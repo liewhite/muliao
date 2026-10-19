@@ -2,11 +2,13 @@ import os
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models import Model
 
+from muliao.api.app import create_app
 from muliao.config import Settings
 from muliao.container import Container, build_container
 from muliao.db import migrate
@@ -76,3 +78,16 @@ def make_agent(container: Container) -> Callable:
         )
 
     return _make
+
+
+@pytest.fixture
+async def client(container: Container, tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
+    app = create_app(container, tmp_path / "no-web")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+async def login(client: httpx.AsyncClient) -> None:
+    resp = await client.post("/api/auth/login", json={"password": "password1"})
+    assert resp.status_code == 204

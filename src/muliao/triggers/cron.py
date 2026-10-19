@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from muliao.db import Database, utcnow
 from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 from muliao.models import Agent, CronJob, Origin, ReplyTo
-from muliao.runtime.sessions import SessionService
+from muliao.runtime.conversation import Inbound, NewSession, receive
 from muliao.runtime.tasks import Clock, TaskQueue, turn_lane
 
 log = logging.getLogger(__name__)
@@ -28,11 +28,8 @@ _MAX_SLEEP_SECONDS = 60.0
 
 
 class CronService:
-    def __init__(
-        self, db: Database, sessions: SessionService, queue: TaskQueue, tz: ZoneInfo, clock: Clock = utcnow
-    ):
+    def __init__(self, db: Database, queue: TaskQueue, tz: ZoneInfo, clock: Clock = utcnow):
         self._db = db
-        self._sessions = sessions
         self._queue = queue
         self._tz = tz
         self._clock = clock
@@ -137,15 +134,18 @@ class CronService:
                 log.info("cron fire skipped: previous run still in progress", extra=ctx)
                 return
             local = now.astimezone(self._tz).strftime("%Y-%m-%d %H:%M")
-            session = await self._sessions.create_in(
+            received = await receive(
                 s,
-                agent_id=job.agent_id,
-                prompt=job.prompt,
-                origin=Origin.CRON,
-                origin_ref=str(job.id),
-                reply_to=ReplyTo.NONE,
-                title=f"{job.name} · {local}",
+                self._queue,
+                Inbound(
+                    source=Origin.CRON,
+                    source_ref=str(job.id),
+                    content=job.prompt,
+                    session=NewSession(agent_id=job.agent_id, title=f"{job.name} · {local}"),
+                    reply_to=ReplyTo.NONE,
+                ),
             )
+            session = received.session
             job.last_run_at = now
             job.last_session_id = session.id
             log.info("cron fired", extra={**ctx, "session_id": session.id})

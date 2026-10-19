@@ -7,7 +7,7 @@ import pytest
 from muliao.errors import InvalidInput
 from muliao.models import CronJob, McpTransport, Origin, ReplyTo
 from muliao.runtime.mcp import McpSpec
-from tests.test_flow import drain
+from tests.test_flow import drain, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
 
@@ -105,13 +105,7 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     await container.mcp.add(alpha, spec, probe=False)
     models.models["m"] = call_then_answer("echo_token", {}, "got it")
 
-    session = await container.sessions.start(
-        agent_id=alpha,
-        prompt="token?",
-        origin=Origin.USER,
-        origin_ref=None,
-        reply_to=ReplyTo.USER,
-    )
+    session = await start(container, alpha, "token?")
     await drain(container, limit_seconds=30)
 
     from muliao.transcript import to_items

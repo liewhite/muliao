@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from muliao.api.deps import C
 from muliao.errors import NotFound
 from muliao.models import Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
+from muliao.runtime.conversation import Inbound, NewSession
+from muliao.runtime.sessions import default_title
 from muliao.transcript import Item, to_items
 
 router = APIRouter()
@@ -118,14 +120,16 @@ async def list_sessions(
 
 @router.post("/sessions", status_code=201)
 async def start_session(c: C, body: StartIn) -> SessionOut:
-    session = await c.sessions.start(
-        agent_id=body.agent_id,
-        prompt=body.prompt,
-        origin=Origin.USER,
-        origin_ref=None,
-        reply_to=ReplyTo.USER,
+    received = await c.sessions.receive(
+        Inbound(
+            source=Origin.USER,
+            source_ref=None,
+            content=body.prompt,
+            session=NewSession(agent_id=body.agent_id, title=default_title(body.prompt)),
+            reply_to=ReplyTo.USER,
+        )
     )
-    return SessionOut.of(session)
+    return SessionOut.of(received.session)
 
 
 @router.get("/sessions/{session_id}")
@@ -158,7 +162,16 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
 
 @router.post("/sessions/{session_id}/messages", status_code=202)
 async def reply(c: C, session_id: str, body: ReplyIn) -> TaskOut:
-    return TaskOut.of(await c.sessions.reply(session_id, body.prompt))
+    received = await c.sessions.receive(
+        Inbound(
+            source=Origin.USER,
+            source_ref=None,
+            content=body.prompt,
+            session=session_id,
+            reply_to=ReplyTo.USER,
+        )
+    )
+    return TaskOut.of(received.turn)
 
 
 class CompactOut(BaseModel):

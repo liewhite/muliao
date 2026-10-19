@@ -16,7 +16,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import utcnow
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.ids import new_id
 from muliao.models import Agent, Message, Origin, ReplyTo, Session, Task, TaskKind, TaskStatus, Wait
 from muliao.runtime.codec import load_messages
@@ -34,19 +34,122 @@ def validate_thread(name: str) -> str:
     return name
 
 
-def enqueue_turn(s: AsyncSession, queue: TaskQueue, session: Session, prompt: str, reply_to: ReplyTo) -> Task:
-    """所有新一轮对话的唯一入口：用户、cron、委派都经过这里。"""
-    if not prompt.strip():
-        raise InvalidInput("prompt must not be empty")
+# ---- 入口：一切「交给 agent 处理一轮」的事件 ----
+
+
+@dataclass(frozen=True)
+class NewSession:
+    """事件要求新建会话时的会话描述。"""
+
+    agent_id: str
+    title: str
+    # 委派产生的 thread：父会话与 thread 名；private 为 ask_agent 开出的、用户只读的 thread
+    parent_session_id: str | None = None
+    thread: str | None = None
+    private: bool = False
+
+
+@dataclass(frozen=True)
+class Inbound:
+    """一个事件：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 交给某个 agent 处理一轮」。
+
+    session 为已有会话的 id 时在其中继续，为 NewSession 时新建会话。
+    source_ref 标识具体的发送方：cron job id、事件触发器 id、委派方（父）会话 id；用户为 None。
+    """
+
+    source: Origin
+    source_ref: str | None
+    content: str
+    session: str | NewSession
+    reply_to: ReplyTo
+
+
+@dataclass(frozen=True)
+class Received:
+    session: Session
+    turn: Task
+
+
+def _sender_of(session: Session) -> tuple[Origin, str | None]:
+    """会话的发起方。委派会话的发起方就是它的父会话（存在 parent_session_id，不另存副本）。"""
+    if session.origin == Origin.DELEGATION:
+        return session.origin, session.parent_session_id
+    return session.origin, session.origin_ref
+
+
+def _check_may_continue(session: Session, source: Origin, source_ref: str | None) -> None:
+    """续写规则：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话。"""
+    if source == Origin.USER:
+        if session.private:
+            raise Conflict(f"session {session.id} is a private thread of another agent and is read-only")
+        return
+    if _sender_of(session) != (source, source_ref):
+        log.warning(
+            "continuation refused",
+            extra={"session_id": session.id, "source": source, "source_ref": source_ref},
+        )
+        raise Forbidden(
+            f"session {session.id} was not started by this sender; it may only continue its own sessions"
+        )
+
+
+async def create_session(
+    s: AsyncSession, *, source: Origin, source_ref: str | None, spec: NewSession
+) -> Session:
+    """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
+    if await s.get(Agent, spec.agent_id) is None:
+        raise NotFound(f"agent {spec.agent_id!r} not found")
+    if (spec.parent_session_id is not None) != (source == Origin.DELEGATION):
+        raise ValueError(
+            f"only delegation creates child sessions, got {source} with parent {spec.parent_session_id}"
+        )
+    if source == Origin.DELEGATION and spec.parent_session_id != source_ref:
+        raise ValueError(
+            f"delegated session must be created by its parent {spec.parent_session_id}, not {source_ref}"
+        )
+    session = Session(
+        id=new_id(),
+        agent_id=spec.agent_id,
+        title=spec.title,
+        origin=source,
+        # 委派的发起方即 parent_session_id
+        origin_ref=None if source == Origin.DELEGATION else source_ref,
+        parent_session_id=spec.parent_session_id,
+        thread=spec.thread,
+        private=spec.private,
+    )
+    s.add(session)
+    await s.flush()
+    return session
+
+
+async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Received:
+    """所有新一轮对话的唯一入口：确定会话（继续或新建），投递一轮。"""
+    if not inbound.content.strip():
+        raise InvalidInput("message must not be empty")
+    if isinstance(inbound.session, NewSession):
+        session = await create_session(
+            s, source=inbound.source, source_ref=inbound.source_ref, spec=inbound.session
+        )
+    else:
+        session = await s.get(Session, inbound.session)
+        if session is None:
+            raise NotFound(f"session {inbound.session!r} not found")
+        _check_may_continue(session, inbound.source, inbound.source_ref)
     session.updated_at = utcnow()
-    return queue.enqueue(
+    turn = queue.enqueue(
         s,
         kind=TaskKind.TURN,
         lane=turn_lane(session.id),
         agent_id=session.agent_id,
         session_id=session.id,
-        payload={"prompt": prompt, "reply_to": reply_to},
+        payload={"prompt": inbound.content, "reply_to": inbound.reply_to},
     )
+    log.info(
+        "message received",
+        extra={"session_id": session.id, "source": inbound.source, "source_ref": inbound.source_ref},
+    )
+    return Received(session, turn)
 
 
 async def answer_of(s: AsyncSession, turn_id: int) -> str:
@@ -231,19 +334,14 @@ class Threads:
                     "use ask_agent to continue it"
                 )
             return existing
-        session = Session(
-            id=new_id(),
-            agent_id=agent.id,
-            title=thread,
-            origin=Origin.DELEGATION,
-            origin_ref=None,
-            parent_session_id=parent_id,
-            thread=thread,
-            private=private,
+        return await create_session(
+            s,
+            source=Origin.DELEGATION,
+            source_ref=parent_id,
+            spec=NewSession(
+                agent_id=agent.id, title=thread, parent_session_id=parent_id, thread=thread, private=private
+            ),
         )
-        s.add(session)
-        await s.flush()
-        return session
 
     async def send(
         self,
@@ -258,7 +356,14 @@ class Threads:
     ) -> Task:
         """在 thread 里发起新的一轮（thread 不存在则新建）。"""
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, private=private)
-        return enqueue_turn(s, self._queue, child, prompt, reply_to)
+        inbound = Inbound(
+            source=Origin.DELEGATION,
+            source_ref=parent_id,
+            content=prompt,
+            session=child.id,
+            reply_to=reply_to,
+        )
+        return (await receive(s, self._queue, inbound)).turn
 
     async def state(self, s: AsyncSession, child: Session) -> ThreadState:
         """thread 最近一轮的状态。"""

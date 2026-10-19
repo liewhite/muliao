@@ -15,12 +15,12 @@ from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, require_auth
 from muliao.api.deps import C
 from muliao.bus import SubscriberOverflow
 from muliao.container import Container
-from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
+from muliao.errors import Conflict, DomainError, Forbidden, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
 
 _HEARTBEAT_SECONDS = 15.0
-_STATUS = {NotFound: 404, Conflict: 409, InvalidInput: 422}
+_STATUS = {NotFound: 404, Conflict: 409, InvalidInput: 422, Forbidden: 403}
 
 
 class LoginIn(BaseModel):

@@ -70,13 +70,13 @@ async def test_broken_cron_job_is_disabled_without_blocking_others(container, ma
     await container.cron.fire_due()
 
     bad, good = await container.cron.get_by_name("bad"), await container.cron.get_by_name("good")
-    assert not bad.enabled and "prompt must not be empty" in bad.last_error
+    assert not bad.enabled and "message must not be empty" in bad.last_error
     assert good.last_session_id is not None
 
 
 async def test_agent_api_rejects_zero_reflect_every_and_partial_update(container, tmp_path):
     from muliao.api.app import create_app
-    from tests.test_api import login
+    from tests.conftest import login
 
     app = create_app(container, tmp_path / "no-web")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
