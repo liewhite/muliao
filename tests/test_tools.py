@@ -376,7 +376,15 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
     await drain(container)
 
     assert sorted(seen) == sorted(
-        ["notify_user", "read_skill", "write_skill", "delete_skill", "memory_append", "memory_replace"]
+        [
+            "notify_user",
+            "read_skill",
+            "write_skill",
+            "delete_skill",
+            "memory_append",
+            "memory_replace",
+            "instructions_replace",
+        ]
     )
     with pytest.raises(InvalidInput, match="tool groups"):
         await container.agents.create(

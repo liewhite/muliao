@@ -32,7 +32,12 @@ from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import TaskQueue
 from muliao.runtime.tools.agents import agents_toolset
 from muliao.runtime.tools.delegation import delegation_toolset
-from muliao.runtime.tools.evolution import memory_toolset, public_skills_toolset, skills_toolset
+from muliao.runtime.tools.evolution import (
+    instructions_toolset,
+    memory_toolset,
+    public_skills_toolset,
+    skills_toolset,
+)
 from muliao.runtime.tools.mcp import mcp_admin_toolset
 from muliao.runtime.tools.notify import notify_toolset
 from muliao.runtime.tools.temp_agent import clear_temp_dirs, temp_agent_toolset
@@ -199,7 +204,7 @@ def build_container(
             settings.runtime.tool_output_max_chars,
         ),
     )
-    evolution_tools = [skills_toolset(skills), memory_toolset(memory)]
+    evolution_tools = [skills_toolset(skills), memory_toolset(memory), instructions_toolset(prompts)]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP）：没有记忆、skill、委派，也不能再开临时 agent
     temp_profile = RunProfile(toolsets=[workspace_tools], include_mcp=True)
     tool_groups = ToolGroups(

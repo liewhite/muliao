@@ -20,8 +20,9 @@ Review it and decide:
 1. Memory — durable facts worth keeping (user preferences, environment details, corrections the user made, \
 lessons learned), or existing entries that are now wrong, outdated or redundant. Use the memory tools.
 2. Skills — a multi-step procedure you worked out that is likely to recur, a better way of doing something \
-a skill describes, or a skill that proved wrong or incomplete. Use the skill tools (private unless every \
-agent would benefit).
+a skill describes, or a skill that proved wrong or incomplete. Use the skill tools.
+3. Instructions — a standing rule in your own instructions that proved wrong, or a rule the user keeps \
+having to repeat. Use `instructions_replace` sparingly: small, precise edits only.
 
 Do not record one-off details or anything already captured. If nothing needs to change, change nothing.
 Finish with a short summary of exactly what you changed and why, or "No changes" with a one-line reason.

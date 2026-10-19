@@ -100,3 +100,30 @@ async def test_empty_public_prompt_is_the_same_as_none(container):
     assert await container.prompts.set(None, "", "user") is False
     assert await container.prompts.history(None, 10) == []
     assert container.prompts.current(None) == ""
+
+
+async def test_reflection_refines_own_instructions_as_a_versioned_change(container, make_agent, models):
+    from pydantic_ai.messages import ToolCallPart
+
+    from tests.test_flow import last_user_prompt, tool_returns
+
+    agent = await make_agent("alpha", model="m", reflect_every=1)
+    seen_tools: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if "scheduled self-review" not in last_user_prompt(messages):
+            return ModelResponse(parts=[TextPart("done")])
+        if tool_returns(messages):
+            return ModelResponse(parts=[TextPart("Added a rule.")])
+        seen_tools.extend(t.name for t in info.function_tools)
+        args = {"old_text": "", "new_text": "Always reply in Chinese."}
+        return ModelResponse(parts=[ToolCallPart("instructions_replace", args)])
+
+    models.models["m"] = scripted(fn)
+    await start(container, agent.id, "hello")
+    await drain(container)
+
+    assert container.prompts.current(agent.id) == "Be helpful.\n\nAlways reply in Chinese.\n"
+    assert (await container.prompts.history(agent.id, 10))[0].author == agent.id
+    # 反思只开放自我改进；该 agent 有 public_skills（默认全部开放）所以也能写公共 skill
+    assert "instructions_replace" in seen_tools and "run_shell" not in seen_tools

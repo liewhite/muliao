@@ -1,8 +1,10 @@
-"""自我进化工具：私有 skill 与 memory（每个 agent 总是可用），以及写公共 skill（单独的工具组）。turn 和反思共用。"""
+"""自我进化工具：私有 skill、memory 与自己的指令（每个 agent 总是可用），以及写公共 skill（单独的工具组）。turn 和反思共用。"""
 
 from pydantic_ai import FunctionToolset, RunContext
 
+from muliao.errors import InvalidInput
 from muliao.evolution.memory import MemoryStore
+from muliao.evolution.prompts import PromptStore
 from muliao.evolution.skills import SkillStore
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
@@ -105,5 +107,37 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
             new_text: Replacement text.
         """
         return _status(await store.replace(ctx.deps.agent_id, old_text, new_text, ctx.deps.agent_id))
+
+    return ts
+
+
+def instructions_toolset(prompts: PromptStore) -> FunctionToolset[RunScope]:
+    """改自己的指令：只影响自己，每次修改记一版（作者是自己），用户可在界面上回滚。"""
+    ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
+
+    @ts.tool
+    async def instructions_replace(ctx: RunContext[RunScope], old_text: str, new_text: str) -> str:
+        """Refine your own instructions (the agent-specific part of your system prompt), e.g. to fix a rule that
+        proved wrong or add one the user keeps asking for. `old_text` must occur exactly once in them; an empty
+        `old_text` appends `new_text` at the end. Keep changes small; the user can roll back any version.
+
+        Args:
+            old_text: Exact text currently in your instructions, or empty to append.
+            new_text: Replacement (or appended) text; empty deletes `old_text`.
+        """
+        current = prompts.current(ctx.deps.agent_id)
+        if old_text:
+            count = current.count(old_text)
+            if count != 1:
+                raise InvalidInput(f"old text must occur exactly once in your instructions, found {count}")
+            updated = current.replace(old_text, new_text)
+        else:
+            if not new_text.strip():
+                raise InvalidInput("nothing to append")
+            updated = (
+                f"{current.rstrip()}\n\n{new_text.strip()}\n" if current.strip() else f"{new_text.strip()}\n"
+            )
+        changed = await prompts.set(ctx.deps.agent_id, updated, ctx.deps.agent_id)
+        return "instructions updated" if changed else "instructions unchanged"
 
     return ts
