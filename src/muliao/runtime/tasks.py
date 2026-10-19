@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from muliao.db import Database, utcnow
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.models import Task, TaskKind, TaskStatus
 
 log = logging.getLogger(__name__)
@@ -196,13 +196,21 @@ class TaskQueue:
             return tasks
 
     async def retry(self, task_id: int) -> Task:
-        """人工重试一个 failed task。"""
+        """人工重试一个 failed task。
+
+        同 lane 还有未结束的 task 时拒绝：重试沿用原来的 id，会按 FIFO 插到更新的工作前面
+        （例如插进挂起的一轮的工具调用与结果之间），让被重试的 task 以无关的错误失败。
+        """
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)
             if task is None:
                 raise NotFound(f"task {task_id} not found")
             if task.status != TaskStatus.FAILED:
                 raise InvalidInput(f"only failed tasks can be retried, task {task_id} is {task.status}")
+            if await self.lane_busy(s, task.lane):
+                raise Conflict(
+                    f"lane {task.lane} still has unfinished tasks; retry task {task_id} after they finish"
+                )
             task.status = TaskStatus.PENDING
             task.attempts = 0
             task.not_before = self._clock()

@@ -55,6 +55,9 @@ class TurnHandler:
             context = await load_context(s, session.id)
             # 挂起过的一轮带着所等的结果接着跑；否则从 prompt 开始
             results = await collected(s, task)
+            if not results and await s.scalar(select(Message.id).where(Message.task_id == task.id).limit(1)):
+                # 不变量：一轮已提交过消息，当且仅当它挂起着、有等待记录（提交与回滚都同时写/删二者）
+                raise RuntimeError(f"turn {task.id} has committed messages but nothing to resume with")
         scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, reply_to=reply_to)
         result = await self._runtime.run(
             agent,

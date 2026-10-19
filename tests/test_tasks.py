@@ -1,6 +1,9 @@
 from datetime import timedelta
 
+import pytest
+
 from muliao.db import utcnow
+from muliao.errors import Conflict
 from muliao.models import TaskKind, TaskStatus
 from muliao.runtime.tasks import no_commit
 
@@ -62,6 +65,18 @@ async def test_non_retryable_failure_fails_immediately_and_can_be_retried_manual
     retried = await q.retry(task.id)
     assert retried.status == TaskStatus.PENDING and retried.attempts == 0
     assert (await q.claim()).id == task.id
+
+
+async def test_retry_is_refused_while_lane_has_newer_unfinished_work(container, make_agent):
+    alpha = (await make_agent()).id
+    q = container.queue
+    old = await _enqueue(container, "a", alpha)
+    await q.claim()
+    await q.fail(old.id, "bug", retryable=False)
+    await _enqueue(container, "a", alpha)
+
+    with pytest.raises(Conflict):
+        await q.retry(old.id)
 
 
 async def test_recover_resets_running_tasks(container, make_agent):
