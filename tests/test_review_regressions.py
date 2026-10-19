@@ -134,11 +134,16 @@ async def test_webpush_isolates_subscriptions(container, monkeypatch):
     delivery = WebPushDelivery(subs, container.vapid, "mailto:a@b.c")
     note = Notification(channel=DeliveryChannel.WEBPUSH, target=None, title="t", body="b", session_id=None)
 
-    with pytest.raises(TransientError):
+    # 403 等其他 4xx 多半是本端问题：任务失败可见，但不删用户的订阅
+    with pytest.raises(RuntimeError, match="403"):
         await delivery.send(note)
 
     assert sorted(sent) == ["bad", "busy", "gone", "ok"]
-    assert sorted(s.endpoint.rsplit("/", 1)[1] for s in await subs.list()) == ["busy", "ok"]
+    assert sorted(s.endpoint.rsplit("/", 1)[1] for s in await subs.list()) == ["bad", "busy", "ok"]
+
+    statuses["bad"] = None
+    with pytest.raises(TransientError):
+        await delivery.send(note)
 
 
 async def test_telegram_notice_goes_through_deliver_task(container, make_agent):
@@ -173,3 +178,20 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     await container.queue.retry(turn.id)
     claimed = await container.queue.claim()
     assert claimed.error is not None  # 运行期间仍能看到上次为什么失败
+
+
+async def test_agent_referenced_by_config_cannot_be_deleted(settings, models):
+    from muliao.agents import AgentSpec
+    from muliao.container import build_container
+    from muliao.db import init_schema
+
+    settings.telegram_agent = "tg"
+    c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
+    await init_schema(c.db.engine)
+    try:
+        await c.agents.create("tg", AgentSpec(description="d", model="m", instructions="", reflect_every=5))
+        with pytest.raises(Conflict, match="server configuration"):
+            await c.agents.delete("tg")
+    finally:
+        await c.http.aclose()
+        await c.db.engine.dispose()

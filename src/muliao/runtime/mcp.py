@@ -75,12 +75,23 @@ class McpRegistry:
         return toolset.prefixed(server.name)
 
     async def probe(self, server: McpServer) -> list[str]:
-        """实际连接 server 并列出工具名；连接失败原样抛出。"""
+        """实际连接 server 并列出工具名。
+
+        探测的目的就是检验用户/agent 给出的配置能否工作，连接失败是预期结果之一：
+        各种传输层异常（进程退出、HTTP 错误、协议错误）统一转为 InvalidInput，把原因交还给调用方修正。
+        vault 引用缺失在构建阶段以 NotFound 报出，不在此转换。
+        """
         toolset = await self.build_toolset(server)
         inner = toolset.wrapped
         assert isinstance(inner, MCPToolset)
-        async with inner:
-            return [t.name for t in await inner.list_tools()]
+        try:
+            async with inner:
+                return [t.name for t in await inner.list_tools()]
+        except Exception as e:
+            log.info("mcp probe failed", extra={"mcp": server.name, "error": repr(e)})
+            raise InvalidInput(
+                f"could not connect to MCP server {server.name!r}: {type(e).__name__}: {e}"
+            ) from e
 
     async def visible_to(self, agent_name: str) -> list[McpServer]:
         """agent 可用的 server：公共 + 自己私有，且已启用。私有与公共同名时私有生效。"""

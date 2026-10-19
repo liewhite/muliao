@@ -66,11 +66,14 @@ export function Page({
   title,
   back,
   actions,
+  footer,
   children,
 }: {
   title: ReactNode
   back?: string
   actions?: ReactNode
+  /** 固定在页面底部、不随内容滚动（如输入框） */
+  footer?: ReactNode
   children: ReactNode
 }) {
   const navigate = useNavigate()
@@ -86,6 +89,7 @@ export function Page({
         <div className="header-actions">{actions}</div>
       </header>
       <main className="page-body">{children}</main>
+      {footer}
     </div>
   )
 }

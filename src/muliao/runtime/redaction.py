@@ -25,7 +25,12 @@ def redact_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
 def redact_call(part: ToolCallPart) -> ToolCallPart:
     if part.tool_name not in SECRET_TOOL_ARGS:
         return part
-    redacted = redact_args(part.tool_name, part.args_as_dict())
+    try:
+        parsed = part.args_as_dict()
+    except ValueError:
+        # 模型给出的参数不是合法 JSON（pydantic-ai 会让模型重试）：无法定位字段，整体替换
+        return dataclasses.replace(part, args=json.dumps({"_": REDACTED}))
+    redacted = redact_args(part.tool_name, parsed)
     args: str | dict[str, Any] = json.dumps(redacted) if isinstance(part.args, str) else redacted
     return dataclasses.replace(part, args=args)
 

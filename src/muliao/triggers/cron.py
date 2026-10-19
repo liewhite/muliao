@@ -127,7 +127,10 @@ class CronService:
 
     async def _fire(self, job_id: int, now: datetime) -> None:
         async with self._db.transaction() as s:
-            job = await self._get(s, job_id)
+            job = await s.get(CronJob, job_id)
+            if job is None:
+                log.info("cron job deleted before firing, skipped", extra={"cron_id": job_id})
+                return
             job.next_run_at = self.next_run(job.schedule, now)
             ctx = {"cron": job.name, "agent": job.agent_name}
             if job.last_session_id and await self._queue.lane_busy(s, turn_lane(job.last_session_id)):

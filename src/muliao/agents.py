@@ -42,7 +42,10 @@ class AgentService:
         agents_dir: Path,
         memory: MemoryStore,
         model_checker: Callable[[str], None] = check_model,
+        protected: frozenset[str] = frozenset(),
     ):
+        # 被进程配置引用的 agent（如 Telegram 入口）不能通过 API 删除
+        self._protected = protected
         self._db = db
         self._agents_dir = agents_dir
         self._memory = memory
@@ -104,6 +107,8 @@ class AgentService:
             return list((await s.scalars(select(Agent).order_by(Agent.name))).all())
 
     async def delete(self, name: str) -> None:
+        if name in self._protected:
+            raise Conflict(f"agent {name!r} is referenced by server configuration and cannot be deleted")
         async with self._db.transaction() as s:
             agent = await s.get(Agent, name)
             if agent is None:

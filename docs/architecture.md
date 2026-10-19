@@ -64,7 +64,7 @@ Web / cron / webhook / Telegram / delegate_task
 
 1. **失败可见**：task 失败记录 `error`、打 error 日志，UI 的「任务」页可查并可手动重试；session 页显示该轮失败；重试运行期间保留上一次的错误。
 2. **可收敛**：契约内的失败（模型接口 408/409/425/429/5xx/529、底层为连接错误的 `ModelAPIError`、网络错误、超时、推送服务 5xx/429）按指数退避重试，上限 `task_max_attempts`；进程崩溃后启动时把 `running` 复位为 `pending` 重新执行。turn 的消息、计数、后续 task 在**一个事务**里提交，所以重放不会产生重复消息。
-3. **代价可控**：重放一轮 turn 可能重复执行工具副作用（如 shell 命令）——仅在崩溃、超时或模型调用中途失败时发生，个人助手可接受。Web Push 逐个订阅投递，失效订阅（404/410 及其他 4xx）直接删除；只有暂时性失败才整体重试，可能对已成功的设备重复推送，可接受。
+3. **代价可控**：重放一轮 turn 可能重复执行工具副作用（如 shell 命令）——仅在崩溃、超时或模型调用中途失败时发生，个人助手可接受。Web Push 逐个订阅投递，只有 404/410（RFC 8030 的订阅失效）才删除订阅，其他 4xx 视为本端问题让 task 失败、不删数据；只有暂时性失败才整体重试，可能对已成功的设备重复推送，可接受。
 
 契约外的失败（代码 bug、模型返回 400、请求超限、响应解码失败、配置错误）不重试，task 直接 `failed` 并告警。
 
@@ -108,7 +108,7 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 | Web 用户发起 | 新建；回复沿用 | `webpush`（iOS 要求每个 push 都展示通知，所以页面可见时也会弹） |
 | cron | 每次触发新建；上一次触发的 session 仍有未完成 turn 时跳过本次（不重叠） | `none`，需要通知时 agent 调 `notify_user` |
 | webhook | 每个事件新建，事件体附在 prompt 后 | `webpush` |
-| Telegram | 每个 chat 复用最近的 session，`/new` 新开；给用户的提示也走 deliver task | `telegram`（回复发回原 chat） |
+| Telegram | 每个 chat 复用最近的 session，`/new` 新开；给用户的提示也走 deliver task；配置的 agent 启动时校验存在且不可删除 | `telegram`（回复发回原 chat） |
 | delegate_task | 新建，`origin_ref` 记父 session | `webpush` |
 
 Slack 入站事件尚未实现：接入方式是新增一个 trigger（Events API 回调）和一个 delivery 实现，与 Telegram 同构。示例中的「每分钟拉取 Slack 未读」用 cron + Slack MCP（或 skill 中的脚本 + vault token）即可完成，游标由 agent 存在自己的工作目录。
@@ -136,4 +136,4 @@ Slack 入站事件尚未实现：接入方式是新增一个 trigger（Events AP
 - 长 session 的上下文没有自动压缩，超长会触发模型上下文错误（task 失败可见）。
 - 只支持单进程部署（事务串行化与 task 领取依赖进程内锁）。
 - Slack 入站事件未实现（见第 5 节）。
-- 数据库结构用 `create_all` 初始化，尚无迁移工具。
+- 数据库结构用 `create_all` 初始化，尚无迁移工具：它不会修改已存在的表，结构变更后需要删库重建（或手工迁移）。

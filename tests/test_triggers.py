@@ -101,7 +101,7 @@ async def test_mcp_add_failing_probe_saves_nothing(container, make_agent):
         args=("-c", "raise SystemExit(1)"),
     )
 
-    with pytest.raises(Exception):  # noqa: B017  连接错误类型由 MCP 客户端决定
+    with pytest.raises(InvalidInput, match="could not connect"):
         await container.mcp.add(None, spec, probe=True)
     assert await container.mcp.list(None, all_owners=True) == []
 

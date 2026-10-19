@@ -203,6 +203,23 @@ export default function SessionView() {
           🗑
         </button>
       }
+      footer={
+      <div className="composer">
+          <ErrorBanner error={action.error} />
+          <div className="composer-row">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="回复…"
+              rows={Math.min(6, Math.max(1, draft.split('\n').length))}
+            />
+            <button className="button primary" disabled={action.busy || !draft.trim()} onClick={send}>
+              发送
+            </button>
+          </div>
+        </div>
+      }
     >
       <Loading state={detail}>
         {(d) => (
@@ -226,21 +243,6 @@ export default function SessionView() {
           </div>
         )}
       </Loading>
-      <div className="composer">
-        <ErrorBanner error={action.error} />
-        <div className="composer-row">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="回复…"
-            rows={Math.min(6, Math.max(1, draft.split('\n').length))}
-          />
-          <button className="button primary" disabled={action.busy || !draft.trim()} onClick={send}>
-            发送
-          </button>
-        </div>
-      </div>
     </Page>
   )
 }

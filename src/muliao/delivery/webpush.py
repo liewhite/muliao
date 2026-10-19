@@ -21,7 +21,6 @@ log = logging.getLogger(__name__)
 
 # RFC 8030：404/410 表示订阅已失效，应删除
 _GONE = {404, 410}
-_PAYLOAD_TOO_LARGE = 413
 # 网络层失败（无 HTTP 响应）用 0 表示
 _NO_RESPONSE = 0
 _TRANSIENT = {_NO_RESPONSE, 408, 429, 500, 502, 503, 504}
@@ -93,22 +92,21 @@ class WebPushDelivery:
             ensure_ascii=False,
         )
         transient: list[str] = []
-        payload_rejected: list[int] = []
+        rejected: list[int] = []
         for sub in subs:
             status = await asyncio.to_thread(self._push, sub, data)
             if status is None:
                 continue
-            if status in _TRANSIENT:
-                transient.append(str(status))
-            elif status == _PAYLOAD_TOO_LARGE:
-                payload_rejected.append(status)
-            else:
-                # 404/410 为订阅已失效（RFC 8030）；其余 4xx（如 VAPID 密钥更换后的 403）该订阅也无法再用
-                level = logging.INFO if status in _GONE else logging.ERROR
-                log.log(level, "push subscription rejected, removing it", extra={"status": status})
+            if status in _GONE:
+                log.info("push subscription gone, removing it", extra={"status": status})
                 await self._subs.remove(sub.endpoint)
-        if payload_rejected:
-            raise RuntimeError(f"push payload of {len(data)} bytes rejected as too large")
+            elif status in _TRANSIENT:
+                transient.append(str(status))
+            else:
+                # 其余 4xx（400/401/403/413…）多半是本端问题（VAPID 声明、时钟、载荷），不能删用户的订阅
+                rejected.append(status)
+        if rejected:
+            raise RuntimeError(f"push service rejected {len(rejected)} subscriptions with HTTP {rejected}")
         if transient:
             raise TransientError(
                 f"push service temporarily failed for {len(transient)} subscriptions: {transient}"
@@ -131,6 +129,6 @@ class WebPushDelivery:
         except WebPushException as e:
             # 没有响应即网络层失败
             return e.response.status_code if e.response is not None else _NO_RESPONSE
-        except requests.RequestException:
+        except (requests.ConnectionError, requests.Timeout):
             return _NO_RESPONSE
         return None

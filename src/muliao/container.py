@@ -75,6 +75,9 @@ class Container:
 
     async def start(self) -> None:
         await init_schema(self.db.engine)
+        if self.settings.telegram_agent is not None:
+            # 配置错误在启动时暴露，而不是在第一条消息到来时让轮询崩溃
+            await self.agents.get(self.settings.telegram_agent)
         self._spawn("worker", self.worker.run_forever())
         self._spawn("cron", self.cron.run_forever())
         if self.telegram is not None:
@@ -113,7 +116,13 @@ def build_container(
     vault = Vault(db, settings.vault_key.get_secret_value())
     skills = SkillStore(settings.public_skills_dir, settings.agents_dir)
     memory = MemoryStore(settings.agents_dir, settings.memory_max_chars)
-    agents = AgentService(db, settings.agents_dir, memory, model_checker)
+    agents = AgentService(
+        db,
+        settings.agents_dir,
+        memory,
+        model_checker,
+        protected=frozenset(a for a in [settings.telegram_agent] if a),
+    )
     sessions = SessionService(db, queue)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(db, vault)
