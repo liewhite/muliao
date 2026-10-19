@@ -35,7 +35,6 @@ working out a non-trivial procedure likely to recur, or finding a skill wrong or
 
 def build_instructions(
     *,
-    agent_id: str,
     agent_name: str,
     agent_description: str,
     agent_instructions: str,
@@ -48,7 +47,7 @@ def build_instructions(
     summary: str | None,
 ) -> str:
     context = [
-        f"- You are agent {agent_name!r} (id `{agent_id}`): {agent_description}",
+        f"- You are agent {agent_name!r}: {agent_description}",
         f"- Current local time: {now_local.isoformat(timespec='minutes')} ({now_local.tzname()})",
         f"- Workspace (base for relative paths and shell cwd): {workspace}",
     ]

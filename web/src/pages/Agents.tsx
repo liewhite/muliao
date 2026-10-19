@@ -155,6 +155,12 @@ function Reflections({ agentId }: { agentId: AgentId }) {
 
 const TABS = ['配置', '记忆', 'Skills', '反思'] as const
 
+async function copyText(text: string): Promise<void> {
+  // 剪贴板 API 只在 HTTPS 等安全上下文可用；不可用时如实报错，文本本身可直接选中复制
+  if (!navigator.clipboard) throw new Error('当前页面无法访问剪贴板（需要 HTTPS），请手动选中 id 复制')
+  await navigator.clipboard.writeText(text)
+}
+
 export function AgentDetail() {
   const id = asAgentId(useParams().id ?? '')
   const navigate = useNavigate()
@@ -191,8 +197,8 @@ export function AgentDetail() {
             {tab === '配置' && (
               <>
                 <div className="muted small">
-                  id <code>{a.id}</code>{' '}
-                  <button className="button small" onClick={() => void navigator.clipboard?.writeText(a.id)}>
+                  id（配置文件引用 agent 时使用）<code className="selectable">{a.id}</code>{' '}
+                  <button className="button small" onClick={() => void action.run(() => copyText(a.id))}>
                     复制
                   </button>
                 </div>

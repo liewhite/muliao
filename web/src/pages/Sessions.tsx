@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, asAgentId, type Origin } from '../api'
 import { useServerEvents } from '../events'
-import { Loading, Page, relativeTime, useLoad } from '../ui'
+import { Loading, Page, agentLabel, relativeTime, useAgents, useLoad } from '../ui'
 
 const ORIGIN_LABEL: Record<Origin, string> = {
   user: '对话',
@@ -22,7 +22,7 @@ const FILTERS: { label: string; origins: Origin[] | undefined }[] = [
 export default function Sessions() {
   const [filter, setFilter] = useState(0)
   const [agent, setAgent] = useState(asAgentId(''))
-  const agents = useLoad(() => api.agents(), [])
+  const agents = useAgents()
   const sessions = useLoad(
     () => api.sessions({ origin: FILTERS[filter].origins, agent_id: agent || undefined, limit: 100 }),
     [filter, agent],
@@ -72,7 +72,7 @@ export default function Sessions() {
                         {s.title}
                       </div>
                       <div className="list-sub">
-                        <span className="tag">{s.agent_name}</span>
+                        <span className="tag">{agentLabel(agents.data, s.agent_id)}</span>
                         <span className="tag subtle">{ORIGIN_LABEL[s.origin]}</span>
                       </div>
                     </div>

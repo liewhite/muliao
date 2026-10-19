@@ -1,6 +1,7 @@
 """端到端：触发 → 任务队列 → agent 运行 → 持久化 → 反思 / 通知 / 委派。"""
 
 import asyncio
+import re
 
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
@@ -193,7 +194,7 @@ async def test_delegate_task_starts_session_of_target_agent(container, make_agen
     router = (await make_agent("router", model="r")).id
     worker = (await make_agent("worker", model="w")).id
     models.models["r"] = call_then_answer(
-        "delegate_task", {"agent_id": worker, "task": "summarise X"}, "delegated"
+        "delegate_task", {"agent": "worker", "task": "summarise X"}, "delegated"
     )
     models.models["w"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("summary of X")]))
 
@@ -254,3 +255,43 @@ async def test_run_events_are_published_to_bus(container, make_agent, models):
     kinds = [(e["type"], e.get("event") or e.get("status")) for e in events]
     assert ("run", "tool_call") in kinds and ("run", "tool_result") in kinds
     assert ("task", "done") in kinds
+
+
+async def test_model_sees_agent_names_never_ids(container, make_agent, models):
+    """原则：给模型看的是名称和描述，给程序用的是 id。"""
+    router = await make_agent("router", model="r", description="分派任务")
+    worker = await make_agent("研究助理", model="w", description="查资料")
+    seen: list[str] = []
+    steps = [
+        ("list_agents", {}),
+        ("delegate_task", {"agent": "研究助理", "task": "调研 X"}),
+        ("delegate_task", {"agent": "不存在的助理", "task": "x"}),
+        ("cron_create", {"name": "daily", "schedule": "0 9 * * *", "prompt": "汇总", "agent": "研究助理"}),
+        ("cron_list", {}),
+    ]
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(info.instructions or "")
+        seen.append(repr(messages))
+        step = sum(isinstance(m, ModelResponse) for m in messages)
+        if step < len(steps):
+            name, args = steps[step]
+            return ModelResponse(parts=[ToolCallPart(name, args)])
+        return ModelResponse(parts=[TextPart("done")])
+
+    models.models["r"] = scripted(fn)
+    await start(container, router.id, "安排工作", delivery=DeliveryChannel.NONE)
+    await drain(container)
+
+    transcript = "\n".join(seen)
+    assert "研究助理" in transcript and "查资料" in transcript
+    assert (
+        "no agent named '不存在的助理'" in transcript and "'研究助理'" in transcript
+    )  # 写错名称时给出可选名称
+    # 工作目录等文件路径里会出现 id（agents/<id>/…），那是给文件操作用的路径；除此之外模型不该看到 id
+    for agent_id in (router.id, worker.id):
+        assert agent_id not in re.sub(r"agents/[0-9a-f]{12}/", "agents/<dir>/", transcript)
+    jobs = await container.cron.list()
+    assert [(j.name, j.agent_id) for j in jobs] == [("daily", worker.id)]  # 程序侧落到 id
+    children = await container.sessions.list(agent_id=worker.id, origins=None, limit=10, offset=0)
+    assert len(children) == 1

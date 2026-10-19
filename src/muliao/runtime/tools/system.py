@@ -18,7 +18,6 @@ from muliao.vault import Vault
 
 
 class AgentInfo(BaseModel):
-    id: str
     name: str
     description: str
 
@@ -28,27 +27,29 @@ def agents_toolset(agents: AgentService, sessions: SessionService) -> FunctionTo
 
     @ts.tool_plain
     async def list_agents() -> list[AgentInfo]:
-        """List all agents (id, display name, purpose). Use before delegating; refer to agents by `id`."""
-        return [AgentInfo(id=a.id, name=a.name, description=a.description) for a in await agents.list()]
+        """List all agents and what each one is for. Use before delegating."""
+        return [AgentInfo(name=a.name, description=a.description) for a in await agents.list()]
 
     @ts.tool
-    async def delegate_task(ctx: RunContext[RunScope], agent_id: str, task: str) -> str:
+    async def delegate_task(ctx: RunContext[RunScope], agent: str, task: str) -> str:
         """Hand a task to an agent. It runs asynchronously in a new session of that agent,
         and the user is notified when it finishes. Include all context the agent needs: it cannot see this conversation.
 
         Args:
-            agent_id: Target agent `id` from `list_agents`.
+            agent: Target agent name from `list_agents`.
             task: Self-contained task description.
         """
-        target = await agents.get(agent_id)
-        session = await sessions.start(
+        target = await agents.find_by_name(agent)
+        await sessions.start(
             agent_id=target.id,
             prompt=task,
             origin=Origin.DELEGATION,
             origin_ref=ctx.deps.session_id,
             delivery=DeliveryChannel.WEBPUSH,
         )
-        return f"delegated to {target.name} ({target.id}), session id {session.id}"
+        return (
+            f"delegated to {target.name}; it runs in a new session and the user is notified when it finishes"
+        )
 
     return ts
 
@@ -197,23 +198,24 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
 
 class CronInfo(BaseModel):
     name: str
-    agent_id: str
+    agent: str
     schedule: str
     prompt: str
     enabled: bool
     next_run_at: str
 
 
-def cron_toolset(cron: CronService) -> FunctionToolset[RunScope]:
+def cron_toolset(cron: CronService, agents: AgentService) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool_plain
     async def cron_list() -> list[CronInfo]:
         """List all scheduled jobs."""
+        names = {a.id: a.name for a in await agents.list()}
         return [
             CronInfo(
                 name=j.name,
-                agent_id=j.agent_id,
+                agent=names[j.agent_id],
                 schedule=j.schedule,
                 prompt=j.prompt,
                 enabled=j.enabled,
@@ -224,7 +226,7 @@ def cron_toolset(cron: CronService) -> FunctionToolset[RunScope]:
 
     @ts.tool
     async def cron_create(
-        ctx: RunContext[RunScope], name: str, schedule: str, prompt: str, agent_id: str | None = None
+        ctx: RunContext[RunScope], name: str, schedule: str, prompt: str, agent: str | None = None
     ) -> str:
         """Schedule a recurring job. Each firing starts a new session of the agent with `prompt`.
         Fired sessions do not notify the user automatically: the prompt should say when to call `notify_user`.
@@ -233,10 +235,13 @@ def cron_toolset(cron: CronService) -> FunctionToolset[RunScope]:
             name: Unique job name.
             schedule: 5-field cron expression in the server's configured timezone, e.g. `*/5 * * * *`.
             prompt: Instructions for each run.
-            agent_id: `id` of the agent to run (see `list_agents`); defaults to you.
+            agent: Name of the agent to run (see `list_agents`); defaults to you.
         """
         job = await cron.create(
-            name=name, agent_id=agent_id or ctx.deps.agent_id, schedule=schedule, prompt=prompt
+            name=name,
+            agent_id=(await agents.find_by_name(agent)).id if agent is not None else ctx.deps.agent_id,
+            schedule=schedule,
+            prompt=prompt,
         )
         return f"scheduled {job.name}, next run at {job.next_run_at.isoformat()}"
 

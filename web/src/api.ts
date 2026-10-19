@@ -33,7 +33,6 @@ export interface AgentInput {
 export interface Session {
   id: string
   agent_id: AgentId
-  agent_name: string
   title: string
   origin: Origin
   origin_ref: string | null

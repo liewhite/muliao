@@ -40,7 +40,7 @@ async def test_agent_session_lifecycle_over_http(client):
     assert resp.status_code == 201
     session = resp.json()
     assert session["title"] == "hello there"
-    assert (session["agent_id"], session["agent_name"]) == (agent["id"], "alpha")
+    assert session["agent_id"] == agent["id"]
 
     detail = (await client.get(f"/api/sessions/{session['id']}")).json()
     assert detail["items"] == []
@@ -117,7 +117,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     assert (await client.get(path)).json()["id"] == agent["id"]
 
     session = (await client.post("/api/sessions", json={"agent_id": agent["id"], "prompt": "hi"})).json()
-    assert session["agent_name"] == "Research Assistant 📚"
+    assert session["agent_id"] == agent["id"]  # 会话跟随 id，改名不影响
 
     other = (await client.post("/api/agents", json={"name": "other", "description": "x"})).json()
     clash = {

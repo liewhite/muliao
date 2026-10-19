@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentRoute, api, type CompactionInfo, type Item, type Task } from '../api'
 import { useServerEvents, type RunEvent } from '../events'
-import { ErrorBanner, Loading, Markdown, Page, confirmAction, formatTime, useAction, useLoad } from '../ui'
+import { ErrorBanner, Loading, Markdown, Page, agentLabel, confirmAction, formatTime, useAction, useAgents, useLoad } from '../ui'
 
 interface ToolView {
   name: string
@@ -164,6 +164,7 @@ export default function SessionView() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
   const detail = useLoad(() => api.session(id), [id])
+  const agents = useAgents()
   const [live, setLive] = useState<RunEvent[]>([])
   const [draft, setDraft] = useState('')
   const action = useAction()
@@ -258,7 +259,7 @@ export default function SessionView() {
           <div className="chat">
             <div className="chat-meta">
               <Link to={agentRoute(d.session.agent_id)} className="tag">
-                {d.session.agent_name}
+                {agentLabel(agents.data, d.session.agent_id)}
               </Link>
               <span className="muted small">{formatTime(d.session.created_at)}</span>
             </div>

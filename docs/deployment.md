@@ -59,6 +59,10 @@ uv run alembic revision --autogenerate -m "add xxx"  # 检查生成的脚本后�
 3. 从主屏幕图标打开，登录 → 设置 → 「开启推送」（iOS 16.4+）。
 4. 「发送测试通知」验证。
 
+### Telegram 入口
+
+配置里的 `[telegram] agent_id` 引用 agent 的 id：先在网页上创建 agent，到 agent 详情页复制 id，填入配置后重启服务。启动时会校验该 id 存在，且这个 agent 不能被删除。
+
 VAPID 密钥在首次启动时生成于 `data/vapid_private.pem`，更换它会使所有已有订阅失效，需要各设备重新开启推送。
 
 ## 示例：每分钟处理 Slack 未读并分派

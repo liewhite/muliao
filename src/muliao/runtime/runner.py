@@ -81,7 +81,6 @@ class AgentRuntime:
 
     def instructions(self, agent: Agent, scope: RunScope, summary: str | None) -> str:
         return build_instructions(
-            agent_id=agent.id,
             agent_name=agent.name,
             agent_description=agent.description,
             agent_instructions=agent.instructions,

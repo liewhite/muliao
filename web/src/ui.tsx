@@ -147,7 +147,7 @@ export function useAgents(): Loaded<Agent[]> {
   return useLoad(() => api.agents(), [])
 }
 
-/** 按 id 显示 agent 名称；agent 已被删除时退回显示 id。 */
+/** 按 id 显示 agent 名称；agent 列表尚未加载完时先显示 id。 */
 export function agentLabel(agents: Agent[] | undefined, id: AgentId): string {
   return agents?.find((a) => a.id === id)?.name ?? id
 }

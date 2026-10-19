@@ -14,8 +14,6 @@ router = APIRouter()
 class SessionOut(BaseModel):
     id: str
     agent_id: str
-    # 展示用；以 agent_id 为准
-    agent_name: str
     title: str
     origin: Origin
     origin_ref: str | None
@@ -25,11 +23,10 @@ class SessionOut(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def of(cls, s: Session, agent_name: str) -> "SessionOut":
+    def of(cls, s: Session) -> "SessionOut":
         return cls(
             id=s.id,
             agent_id=s.agent_id,
-            agent_name=agent_name,
             title=s.title,
             origin=s.origin,
             origin_ref=s.origin_ref,
@@ -94,10 +91,6 @@ class ReplyIn(BaseModel):
     prompt: str
 
 
-async def _agent_name(c: C, agent_id: str) -> str:
-    return (await c.agents.get(agent_id)).name
-
-
 @router.get("/sessions")
 async def list_sessions(
     c: C,
@@ -106,9 +99,8 @@ async def list_sessions(
     limit: int = Query(50, le=200),
     offset: int = 0,
 ) -> list[SessionOut]:
-    names = {a.id: a.name for a in await c.agents.list()}
     sessions = await c.sessions.list(agent_id=agent_id, origins=origin, limit=limit, offset=offset)
-    return [SessionOut.of(s, names[s.agent_id]) for s in sessions]
+    return [SessionOut.of(s) for s in sessions]
 
 
 @router.post("/sessions", status_code=201)
@@ -120,7 +112,7 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
         origin_ref=None,
         delivery=DeliveryChannel.WEBPUSH,
     )
-    return SessionOut.of(session, await _agent_name(c, session.agent_id))
+    return SessionOut.of(session)
 
 
 @router.get("/sessions/{session_id}")
@@ -142,7 +134,7 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         if t.kind == TaskKind.TURN and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.FAILED)
     ]
     return SessionDetail(
-        session=SessionOut.of(session, await _agent_name(c, session.agent_id)),
+        session=SessionOut.of(session),
         items=items,
         compactions=compactions,
         open_turns=open_turns,

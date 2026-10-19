@@ -75,16 +75,17 @@ Web / cron / webhook / Telegram / delegate_task
 
 一次 turn 的组装（`runtime/turn.py`）：
 
+- **原则：给模型看的是名称和描述，给程序用的是 id。** 工具参数、返回值、instructions 里只出现 agent 名称；名称唯一，由工具层（`AgentService.find_by_name`）解析为 id，写错时把可用名称列表作为错误交还模型。id 只会作为文件路径的一部分（`agents/<id>/…`）出现在工作目录里。`tests/test_flow.py::test_model_sees_agent_names_never_ids` 守住这条规则。
 - **instructions** = agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
 - **toolsets**：
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill` / `write_skill` / `delete_skill`（scope = `private` | `public`）。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
-  - `agents`：`list_agents`（返回 id、name、description）/ `delegate_task(agent_id, task)`（为目标 agent 新建 session 并投递 turn，origin=`delegation`，完成后推送）。模型按 id 引用 agent，不依赖名称。
+  - `agents`：`list_agents`（返回 name、description）/ `delegate_task(agent, task)`（按名称指定目标 agent，为它新建 session 并投递 turn，origin=`delegation`，完成后推送）。
   - `notify`：`notify_user`（显式 Web Push）。
   - `mcp_admin`：`mcp_list` / `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_remove`。新 MCP 从下一轮起生效。
   - `vault`：`vault_list` / `vault_set`。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
-  - `cron`：`cron_list` / `cron_create(name, schedule, prompt, agent_id?)` / `cron_delete`。
+  - `cron`：`cron_list` / `cron_create(name, schedule, prompt, agent?)` / `cron_delete`，agent 同样按名称指定。
   - 该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀；配置中的 `${vault:KEY}` 在运行时解析，引用不存在的 key 直接报错。
 - **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。
 

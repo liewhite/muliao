@@ -642,3 +642,8 @@ pre {
   cursor: pointer;
   text-align: center;
 }
+
+.selectable {
+  user-select: all;
+  -webkit-user-select: all;
+}

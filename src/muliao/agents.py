@@ -105,6 +105,16 @@ class AgentService:
         async with self._db.transaction() as s:
             return await self._get(s, agent_id)
 
+    async def find_by_name(self, name: str) -> Agent:
+        """模型按名称指代 agent（不接触 id）：在工具层把名称解析为 agent。名称唯一。"""
+        name = normalize_agent_name(name)
+        async with self._db.transaction() as s:
+            agent = await s.scalar(select(Agent).where(Agent.name == name))
+            if agent is None:
+                names = (await s.scalars(select(Agent.name).order_by(Agent.name))).all()
+                raise NotFound(f"no agent named {name!r}; available agents: {list(names)}")
+            return agent
+
     async def list(self) -> list[Agent]:
         async with self._db.transaction() as s:
             return list((await s.scalars(select(Agent).order_by(Agent.name))).all())

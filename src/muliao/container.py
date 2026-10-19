@@ -182,7 +182,7 @@ def build_container(
             notify_toolset(notifier),
             mcp_admin_toolset(mcp),
             vault_toolset(vault),
-            cron_toolset(cron),
+            cron_toolset(cron, agents),
         ],
         include_mcp=True,
     )
