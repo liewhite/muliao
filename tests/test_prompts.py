@@ -30,8 +30,8 @@ async def test_agent_instruction_changes_are_versioned_and_restorable(container,
     spec = AgentSpec(
         name="alpha", description=agent.description, model=agent.model, instructions="v2", reflect_every=5
     )
-    updated = await container.agents.update(agent.id, spec, author="user")
-    assert updated.instructions == "v2"
+    await container.agents.update(agent.id, spec, author="user")
+    assert await container.prompts.current(agent.id) == "v2"
     # 指令未变时不追加新版本
     await container.agents.update(agent.id, spec, author=agent.id)
 
@@ -39,7 +39,7 @@ async def test_agent_instruction_changes_are_versioned_and_restorable(container,
     assert [(r.content, r.author) for r in history] == [("v2", "user"), ("Be helpful.", "user")]
 
     await container.prompts.restore(history[1].id, agent.id)
-    assert (await container.agents.get(agent.id)).instructions == "Be helpful."
+    assert await container.prompts.current(agent.id) == "Be helpful."
     assert [r.author for r in await container.prompts.history(agent.id)][0] == agent.id
 
 
@@ -58,3 +58,35 @@ async def test_prompt_api_edits_public_prompt_and_restores_versions(client, make
     agent_history = (await client.get(f"/api/prompts?owner={agent.id}")).json()
     assert [r["content"] for r in agent_history] == ["Be helpful."]
     assert (await client.get("/api/prompts?owner=nope")).status_code == 404
+
+
+async def test_each_listed_agent_gets_its_own_latest_instructions(client, container, make_agent):
+    for name in ("alpha", "beta"):
+        agent = await make_agent(name)
+        for version in ("v2", "v3"):
+            spec = AgentSpec(
+                name=name,
+                description="d",
+                model=agent.model,
+                instructions=f"{name} {version}",
+                reflect_every=5,
+            )
+            await container.agents.update(agent.id, spec, author="user")
+    await login(client)
+    listed = (await client.get("/api/agents")).json()
+    assert {a["name"]: a["instructions"] for a in listed} == {"alpha": "alpha v3", "beta": "beta v3"}
+
+
+async def test_deleting_agent_drops_its_versions_but_not_public_prompt_history(container, make_agent):
+    agent = await make_agent("alpha")
+    await container.prompts.set(None, "shared", agent.id)
+    await container.agents.delete(agent.id)
+
+    assert [r.author for r in await container.prompts.history(None)] == [agent.id]
+    assert await container.prompts.history(agent.id) == []
+
+
+async def test_empty_public_prompt_is_the_same_as_none(container):
+    assert await container.prompts.set(None, "", "user") is None
+    assert await container.prompts.history(None) == []
+    assert await container.prompts.current(None) == ""

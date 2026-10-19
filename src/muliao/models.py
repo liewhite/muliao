@@ -4,8 +4,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, LargeBinary, String, Text, select
-from sqlalchemy.orm import Mapped, column_property, mapped_column
+from sqlalchemy import JSON, ForeignKey, Index, LargeBinary, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from muliao.db import Base, StrEnumType, UTCDateTime, utcnow
 
@@ -65,7 +65,7 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
-    # instructions 是派生属性：该 agent 最新一版 prompt（见 PromptRevision，定义在其后）
+    # 指令不存在这里：它是该 agent 最新一版 PromptRevision（读写都经过 evolution.prompts.PromptStore）
     reflect_every: Mapped[int]
     turns_since_reflection: Mapped[int] = mapped_column(default=0)
     # 已纳入反思的最大 message id；下一次反思从它之后开始
@@ -86,19 +86,9 @@ class PromptRevision(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     owner: Mapped[str | None] = mapped_column(_fk_agent())
     content: Mapped[str] = mapped_column(Text)
-    # 谁改的："user"，或做出修改的 agent 的 id
+    # 谁改的："user"，或做出修改的 agent 的 id。只作审计展示：该 agent 之后可能已被删除
     author: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-
-
-Agent.instructions = column_property(
-    select(PromptRevision.content)
-    .where(PromptRevision.owner == Agent.id)
-    .order_by(PromptRevision.id.desc())
-    .limit(1)
-    .correlate_except(PromptRevision)
-    .scalar_subquery()
-)
 
 
 class Session(Base):

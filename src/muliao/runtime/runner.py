@@ -90,8 +90,8 @@ class AgentRuntime:
         return build_instructions(
             agent_name=agent.name,
             agent_description=agent.description,
-            public_instructions=await self._prompts.public(),
-            agent_instructions=agent.instructions,
+            public_instructions=await self._prompts.current(None),
+            agent_instructions=await self._prompts.current(agent.id),
             workspace=scope.workspace,
             now_local=self._clock().astimezone(self._tz),
             origin=scope.origin,

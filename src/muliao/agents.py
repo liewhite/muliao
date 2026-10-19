@@ -82,10 +82,8 @@ class AgentService:
             )
             s.add(agent)
             await s.flush()
-            # 指令的第一版：之后 instructions 永远是最新一版
+            # 指令的第一版：之后当前指令永远是最新一版
             s.add(PromptRevision(owner=agent.id, content=spec.instructions, author=author))
-            await s.flush()
-            await s.refresh(agent)
             # 目录与数据库行同事务创建：目录创建失败则回滚
             self.workspace(agent.id).mkdir(parents=True, exist_ok=True)
             self._memory.init(agent.id)
@@ -102,8 +100,6 @@ class AgentService:
             agent.model = spec.model
             agent.reflect_every = spec.reflect_every
             await self._prompts.set_in(s, agent_id, spec.instructions, author)
-            await s.flush()
-            await s.refresh(agent)
         return agent
 
     async def _get(self, s: AsyncSession, agent_id: str) -> Agent:

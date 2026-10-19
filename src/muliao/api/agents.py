@@ -42,17 +42,21 @@ class AgentOut(BaseModel):
     created_at: datetime
 
     @classmethod
-    def of(cls, a: Agent) -> "AgentOut":
+    def of(cls, a: Agent, instructions: str) -> "AgentOut":
         return cls(
             id=a.id,
             name=a.name,
             description=a.description,
             model=a.model,
-            instructions=a.instructions,
+            instructions=instructions,
             reflect_every=a.reflect_every,
             turns_since_reflection=a.turns_since_reflection,
             created_at=a.created_at,
         )
+
+
+async def _out(c: C, agent: Agent) -> AgentOut:
+    return AgentOut.of(agent, await c.prompts.current(agent.id))
 
 
 def _create_spec(c: C, body: AgentCreate) -> AgentSpec:
@@ -82,17 +86,19 @@ async def agent_defaults(c: C) -> AgentDefaults:
 
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
-    return [AgentOut.of(a) for a in await c.agents.list()]
+    agents = await c.agents.list()
+    instructions = await c.prompts.current_many([a.id for a in agents])
+    return [AgentOut.of(a, instructions[a.id]) for a in agents]
 
 
 @router.post("/agents", status_code=201)
 async def create_agent(c: C, body: AgentCreate) -> AgentOut:
-    return AgentOut.of(await c.agents.create(_create_spec(c, body), author=USER))
+    return await _out(c, await c.agents.create(_create_spec(c, body), author=USER))
 
 
 @router.get("/agents/{agent_id}")
 async def get_agent(c: C, agent_id: str) -> AgentOut:
-    return AgentOut.of(await c.agents.get(agent_id))
+    return await _out(c, await c.agents.get(agent_id))
 
 
 @router.put("/agents/{agent_id}")
@@ -104,7 +110,7 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         instructions=body.instructions,
         reflect_every=body.reflect_every,
     )
-    return AgentOut.of(await c.agents.update(agent_id, spec, author=USER))
+    return await _out(c, await c.agents.update(agent_id, spec, author=USER))
 
 
 @router.delete("/agents/{agent_id}", status_code=204)

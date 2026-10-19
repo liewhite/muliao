@@ -10,7 +10,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.db import Database
+from muliao.db import Database, utcnow
 from muliao.errors import NotFound
 from muliao.models import Agent, PromptRevision
 
@@ -22,30 +22,42 @@ HISTORY_LIMIT = 50
 
 
 class PromptStore:
+    """prompt 读写的唯一入口：「当前 = 最新一版」只在 _latest 实现一次。"""
+
     def __init__(self, db: Database):
         self._db = db
 
-    async def current_in(self, s: AsyncSession, owner: str | None) -> str | None:
-        """最新一版的内容；从未设置过时为 None（公共 prompt 可以不存在，agent 创建时一定会写第一版）。"""
-        return await s.scalar(
-            select(PromptRevision.content).where(_owned_by(owner)).order_by(PromptRevision.id.desc()).limit(1)
-        )
+    async def current_in(self, s: AsyncSession, owner: str | None) -> str:
+        """当前生效的内容。公共 prompt 从未设置过时为空（没有公共 prompt）；agent 的指令在创建时就写了第一版。"""
+        content = await s.scalar(_latest(owner))
+        if content is not None:
+            return content
+        if owner is None:
+            return ""
+        raise RuntimeError(f"agent {owner} has no instructions revision; it must get one when created")
 
-    async def public(self) -> str:
-        """公共 prompt；从未设置时为空，即没有公共 prompt。"""
+    async def current(self, owner: str | None) -> str:
         async with self._db.transaction() as s:
-            return await self.current_in(s, None) or ""
+            return await self.current_in(s, owner)
+
+    async def current_many(self, owners: list[str]) -> dict[str, str]:
+        """多个 agent 的当前指令（agent 列表用）。"""
+        async with self._db.transaction() as s:
+            return {owner: await self.current_in(s, owner) for owner in owners}
 
     async def set_in(
         self, s: AsyncSession, owner: str | None, content: str, author: str
     ) -> PromptRevision | None:
-        """写入新的一版；与当前内容相同时不写，返回 None。"""
-        if owner is not None and await s.get(Agent, owner) is None:
+        """写入新的一版；与当前内容相同时不写，返回 None。agent 指令变化时同时更新 agent 的 updated_at。"""
+        agent = None if owner is None else await s.get(Agent, owner)
+        if owner is not None and agent is None:
             raise NotFound(f"agent {owner!r} not found")
         if content == await self.current_in(s, owner):
             return None
         revision = PromptRevision(owner=owner, content=content, author=author)
         s.add(revision)
+        if agent is not None:
+            agent.updated_at = utcnow()
         await s.flush()
         log.info("prompt revised", extra={"owner": owner, "revision": revision.id, "author": author})
         return revision
@@ -55,7 +67,7 @@ class PromptStore:
             return await self.set_in(s, owner, content, author)
 
     async def history(self, owner: str | None) -> list[PromptRevision]:
-        """最近的版本，新的在前。"""
+        """最近 HISTORY_LIMIT 个版本，新的在前；更早的版本保留在库里，但不在这里列出。"""
         async with self._db.transaction() as s:
             query = (
                 select(PromptRevision)
@@ -76,3 +88,8 @@ class PromptStore:
 
 def _owned_by(owner: str | None):  # noqa: ANN202
     return PromptRevision.owner.is_(None) if owner is None else PromptRevision.owner == owner
+
+
+def _latest(owner: str | None):  # noqa: ANN202
+    # AUTOINCREMENT 保证 id 单调：id 最大的就是最新一版（不按时间排序，避免时钟回拨与同一时刻写入）
+    return select(PromptRevision.content).where(_owned_by(owner)).order_by(PromptRevision.id.desc()).limit(1)

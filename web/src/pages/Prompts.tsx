@@ -98,7 +98,7 @@ export default function PublicPrompt() {
           <div className="flex flex-col gap-3">
             <TextAreaInput
               label="公共指令"
-              hint="所有 agent 都会看到，放在各自指令之前；agent 也可以用工具修改它。每次保存都会留下一个版本"
+              hint="所有 agent 都会看到，放在各自指令之前。每次保存都会留下一个版本"
               value={content}
               onChange={setContent}
               rows={14}
