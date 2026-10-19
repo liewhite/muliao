@@ -92,6 +92,7 @@ class Container:
     worker: Worker
     compaction: CompactionScheduler
     models: ModelRegistry
+    # 默认就是 models.check，单独持有只为测试替换
     _model_checker: Callable[[str], None]
     _background: list[asyncio.Task[None]] = field(default_factory=list)
 

@@ -27,7 +27,11 @@ class TooLarge(DomainError):
 
 
 class UpstreamFailed(DomainError):
-    """同步调用的外部服务（如 LLM provider）报错或不可达；原因原样带出，由调用方决定是否重试。"""
+    """界面同步查询的外部服务（如向 LLM provider 查模型列表）报错或不可达，API 映射为 502 并原样带出原因。
+
+    只用于 API 层的同步查询，不进入工具层（那里 DomainError 会被当作「模型输入有误」交还模型）；
+    任务里调用外部依赖的暂时失败用 TransientError，由任务队列统一重试。
+    """
 
 
 class TransientError(Exception):

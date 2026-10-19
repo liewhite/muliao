@@ -9,6 +9,7 @@ import anthropic
 import httpx2
 import openai
 from google.genai import errors as google_errors
+from google.genai import types as google_types
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
@@ -53,6 +54,8 @@ def _build_provider(cfg: ProviderConfig) -> Provider:  # type: ignore[type-arg]
 # 查询模型列表时 provider 按其契约可能出现的失败：鉴权、限流、5xx、网络不可达。
 # anthropic / openai 把网络错误包成自己的 APIError；google 不包，直接抛其 HTTP 客户端（httpx2）的错误
 _LIST_ERRORS = (anthropic.APIError, openai.APIError, google_errors.APIError, httpx2.HTTPError)
+# 列表查询是界面上的同步等待：不沿用推理请求长达十几分钟的超时，provider 挂起时尽快报错
+LIST_TIMEOUT_SECONDS = 30.0
 
 
 async def _fetch_model_names(kind: ProviderType, provider: Provider) -> list[str]:  # type: ignore[type-arg]
@@ -60,14 +63,19 @@ async def _fetch_model_names(kind: ProviderType, provider: Provider) -> list[str
     match kind:
         case "anthropic" | "openai" | "openai-responses":
             # 两个 SDK 的分页器都会自动翻完所有页
-            return [m.id async for m in provider.client.models.list()]
+            return [m.id async for m in provider.client.models.list(timeout=LIST_TIMEOUT_SECONDS)]
         case "google":
+            config = google_types.ListModelsConfig(
+                http_options=google_types.HttpOptions(timeout=int(LIST_TIMEOUT_SECONDS * 1000))
+            )
             names = []
-            async for m in await provider.client.aio.models.list():
-                if m.name is None:
-                    raise RuntimeError(f"google listed a model without a name: {m!r}")
-                # 只要能对话的模型（排除 embedding 等）；接口没给出能力时无法判断，保留
-                if m.supported_actions is None or "generateContent" in m.supported_actions:
+            async for m in await provider.client.aio.models.list(config=config):
+                # 配置只能指向 Gemini API（api_key + base_url，不是 Vertex），它的 Model 总带 name 与
+                # supportedGenerationMethods；缺了就是契约之外的响应，报错而不猜
+                if m.name is None or m.supported_actions is None:
+                    raise RuntimeError(f"google listed a model without name or supported actions: {m!r}")
+                # 只要能对话的模型（排除 embedding 等）
+                if "generateContent" in m.supported_actions:
                     names.append(m.name.removeprefix("models/"))
             return names
         case _:

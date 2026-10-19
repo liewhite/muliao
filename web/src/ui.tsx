@@ -40,25 +40,42 @@ export interface Loaded<T> {
   reload: () => Promise<void>
 }
 
-/** 加载数据；deps 变化时重新加载。错误原样展示，不吞掉。 */
+/**
+ * 加载数据；deps 变化时重新加载。错误原样展示，不吞掉。
+ * data 只来自当前 deps 的请求：deps 一变就清空旧数据，晚到的旧请求结果直接丢弃。
+ */
 export function useLoad<T>(load: () => Promise<T>, deps: unknown[]): Loaded<T> {
   const [data, setData] = useState<T>()
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  // 每次请求的序号：只有最新一次请求的结果能落到状态里
+  const latest = useRef(0)
   const run = useCallback(load, deps)
   const reload = useCallback(async () => {
+    const id = ++latest.current
     try {
-      setData(await run())
+      const value = await run()
+      if (id !== latest.current) return
+      setData(value)
       setError(null)
     } catch (e) {
+      if (id !== latest.current) return
       setError(errorMessage(e))
     } finally {
-      setLoading(false)
+      if (id === latest.current) setLoading(false)
     }
   }, [run])
   useEffect(() => {
+    setData(undefined)
+    setError(null)
     setLoading(true)
     void reload()
+    // 换参数或卸载后，在途请求一律作废
+    return () => {
+      // 这是请求序号计数器而不是 DOM 引用，清理时读最新值正是本意
+      // oxlint-disable-next-line react-hooks/exhaustive-deps
+      latest.current++
+    }
   }, [reload])
   return { data, error, loading, reload }
 }

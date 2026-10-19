@@ -1,10 +1,15 @@
 """模型选择：provider 来自配置，模型名向 provider 实时查询；查询失败原样报出。"""
 
 import httpx2
+import pytest
+from pydantic import SecretStr
 from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from muliao import llm
+from muliao.config import LlmConfig, ProviderConfig
+from muliao.errors import UpstreamFailed
 from tests.conftest import login
 
 
@@ -38,6 +43,58 @@ async def test_anthropic_models_follow_every_page():
 
     provider = AnthropicProvider(api_key="k", base_url="https://api.example", http_client=_client(handler))
     assert await llm._fetch_model_names("anthropic", provider) == ["a", "b"]
+
+
+async def test_google_keeps_chat_models_without_prefix_across_pages():
+    pages = {
+        None: {
+            "models": [
+                {
+                    "name": "models/gemini-pro",
+                    "supportedGenerationMethods": ["generateContent", "countTokens"],
+                },
+                {"name": "models/text-embedding", "supportedGenerationMethods": ["embedContent"]},
+            ],
+            "nextPageToken": "p2",
+        },
+        "p2": {
+            "models": [{"name": "models/gemini-flash", "supportedGenerationMethods": ["generateContent"]}]
+        },
+    }
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.path.endswith("/models")
+        return httpx2.Response(200, json=pages[request.url.params.get("pageToken")])
+
+    provider = GoogleProvider(api_key="k", base_url="https://api.example/", http_client=_client(handler))
+    assert await llm._fetch_model_names("google", provider) == ["gemini-pro", "gemini-flash"]
+
+
+async def test_google_model_without_supported_actions_is_a_contract_violation():
+    def handler(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"models": [{"name": "models/gemini-pro"}]})
+
+    provider = GoogleProvider(api_key="k", base_url="https://api.example/", http_client=_client(handler))
+    with pytest.raises(RuntimeError, match="supported actions"):
+        await llm._fetch_model_names("google", provider)
+
+
+async def test_real_sdk_error_becomes_upstream_failure_with_reason():
+    def handler(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            401, json={"type": "error", "error": {"type": "authentication_error", "message": "bad key"}}
+        )
+
+    config = LlmConfig(
+        default_model="a:m", providers={"a": ProviderConfig(type="anthropic", api_key=SecretStr("k"))}
+    )
+    registry = llm.ModelRegistry(config)
+    # 换掉连向真实地址的客户端：走完整的 SDK 报错路径，而不是直接伪造异常
+    registry._providers["a"] = AnthropicProvider(
+        api_key="k", base_url="https://api.example", http_client=_client(handler)
+    )
+    with pytest.raises(UpstreamFailed, match="bad key"):
+        await registry.list_models("a")
 
 
 async def test_api_lists_configured_providers_and_their_models(client, monkeypatch):
