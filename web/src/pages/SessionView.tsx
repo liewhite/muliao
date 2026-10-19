@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
 import { Archive, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { agentRoute, api, type Agent, type CompactionInfo, type Item, type OpenTurn as OpenTurnInfo, type Session } from '../api'
+import { agentRoute, api, type Agent, type CompactionInfo, type Item, type Task, type Session } from '../api'
 import { useServerEvents, type RunEvent } from '../events'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
@@ -179,20 +179,10 @@ function History({ items, compactions }: { items: Item[]; compactions: Compactio
   return <>{parts}</>
 }
 
-const OPEN_STATUS: Record<'pending' | 'running' | 'waiting', ReactNode> = {
-  running: (
-    <>
-      <Spinner size="sm" /> 处理中…
-    </>
-  ),
-  waiting: '等待 thread 的结果…',
-  pending: '排队中…',
-}
-
-function OpenTurn({ turn: { task, prompt_in_history }, onRetry }: { turn: OpenTurnInfo; onRetry: (id: number) => void }) {
+function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void }) {
   return (
     <>
-      {!prompt_in_history && <UserBubble text={task.prompt ?? ''} pending />}
+      <UserBubble text={task.prompt ?? ''} pending />
       {task.status === 'failed' ? (
         <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
           <div>这一轮失败了（尝试 {task.attempts} 次）</div>
@@ -205,9 +195,15 @@ function OpenTurn({ turn: { task, prompt_in_history }, onRetry }: { turn: OpenTu
         </div>
       ) : (
         <div className="flex items-center gap-2 self-end text-xs text-muted">
-          {task.status === 'pending' && task.attempts > 0
-            ? `等待重试（${formatTime(task.not_before)}）`
-            : OPEN_STATUS[task.status as keyof typeof OPEN_STATUS]}
+          {task.status === 'running' ? (
+            <>
+              <Spinner size="sm" /> 处理中…
+            </>
+          ) : task.attempts > 0 ? (
+            `等待重试（${formatTime(task.not_before)}）`
+          ) : (
+            '排队中…'
+          )}
           {task.error && <span>上次错误：{task.error}</span>}
         </div>
       )}
@@ -388,7 +384,7 @@ export default function SessionView() {
             )}
             <History items={d.items} compactions={d.compactions} />
             {d.open_turns.map((t) => (
-              <OpenTurn key={t.task.id} turn={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
+              <OpenTurn key={t.id} task={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
             ))}
             {live.length > 0 && (
               <div className="flex flex-col gap-3 opacity-90">

@@ -4,8 +4,7 @@
 - 同一 lane 内严格 FIFO、最多一个 running；不同 lane 并发。
 - 契约内的暂时性失败按指数退避重试，超过上限置 failed；其他失败直接 failed。
 - 进程崩溃遗留的 running 在启动时复位为 pending（见 docs/architecture.md「用最终正确性换架构简化」）。
-- 一次执行可以不以 done 结束，而是挂起（waiting：占住 lane 但不可领取，等外部条件满足后由 release() 转回 pending），
-  或直接转回 pending 再执行一步。两种情况下尝试次数都清零：下一次执行是新的一步。
+- 不经队列、在别处已经执行完的工作（ask_agent 内联跑完的一轮）用 record_done 补记，保持「每一轮都是一个 task」。
 """
 
 from __future__ import annotations
@@ -27,14 +26,12 @@ from muliao.models import Task, TaskKind, TaskStatus
 log = logging.getLogger(__name__)
 
 Clock = Callable[[], datetime]
-# handler 完成工作后返回的提交函数：在同一事务里写入结果，并返回这次执行后的状态（done / waiting / pending）
-Commit = Callable[[AsyncSession], Awaitable[TaskStatus]]
-_EXECUTION_OUTCOMES = (TaskStatus.DONE, TaskStatus.WAITING, TaskStatus.PENDING)
+# handler 完成工作后返回的提交函数：在标记 task done 的同一事务里写入结果
+Commit = Callable[[AsyncSession], Awaitable[None]]
 
 
-async def no_commit(_s: AsyncSession) -> TaskStatus:
+async def no_commit(_s: AsyncSession) -> None:
     """handler 没有需要与「标记 done」一起提交的结果时返回它。"""
-    return TaskStatus.DONE
 
 
 def turn_lane(session_id: str) -> str:
@@ -49,15 +46,12 @@ def deliver_lane(session_id: str | None, agent_id: str | None) -> str:
     return f"deliver:{session_id or agent_id or 'system'}"
 
 
-# 占住 lane 的状态：同一 lane 的后续 task 必须等它们结束
-LANE_BLOCKING = (TaskStatus.RUNNING, TaskStatus.WAITING)
-
-# 任务彻底失败时，在同一事务里执行的善后（例如给等待它结果的父 agent 写入错误）
-OnFailed = Callable[[AsyncSession, Task], Awaitable[None]]
+# 占住 lane 的状态：同一 lane 的后续 task 必须等它结束
+LANE_BLOCKING = (TaskStatus.RUNNING,)
 
 
 def _claimable():  # noqa: ANN202
-    """可领取的 pending：它是所在 lane 最早的 pending，且该 lane 没有 running / waiting。claim 与 next_due 共用。"""
+    """可领取的 pending：它是所在 lane 最早的 pending，且该 lane 没有 running。claim 与 next_due 共用。"""
     running = aliased(Task)
     earlier = aliased(Task)
     return (
@@ -121,6 +115,33 @@ class TaskQueue:
         event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
         return task
 
+    def record_done(
+        self,
+        s: AsyncSession,
+        *,
+        kind: TaskKind,
+        lane: str,
+        agent_id: str | None,
+        session_id: str | None,
+        payload: dict[str, Any],
+    ) -> Task:
+        """在调用方事务内补记一条已在别处执行完的 task（不会被领取）。"""
+        now = self._clock()
+        task = Task(
+            kind=kind,
+            lane=lane,
+            agent_id=agent_id,
+            session_id=session_id,
+            payload=payload,
+            status=TaskStatus.DONE,
+            attempts=1,
+            not_before=now,
+            started_at=now,
+            finished_at=now,
+        )
+        s.add(task)
+        return task
+
     async def claim(self) -> Task | None:
         now = self._clock()
         query = _claimable().where(Task.not_before <= now).order_by(Task.id).limit(1)
@@ -134,41 +155,21 @@ class TaskQueue:
             # 保留上一次失败的 error，运行期间 UI 仍能看到为什么在重试
             return task
 
-    async def complete(self, task_id: int, commit: Commit) -> TaskStatus:
-        """结束一次执行：done，或未完成（waiting / pending，见模块说明）。"""
+    async def complete(self, task_id: int, commit: Commit) -> None:
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)
             if task is None or task.status != TaskStatus.RUNNING:
                 raise RuntimeError(
                     f"task {task_id} is not running, cannot complete it (status={task and task.status})"
                 )
-            outcome = await commit(s)
-            if outcome not in _EXECUTION_OUTCOMES:
-                raise RuntimeError(
-                    f"commit of task {task_id} returned {outcome!r}, expected one of {_EXECUTION_OUTCOMES}"
-                )
-            task.status = outcome
+            await commit(s)
+            task.status = TaskStatus.DONE
             task.error = None
-            if outcome == TaskStatus.DONE:
-                task.finished_at = self._clock()
-            else:
-                task.attempts = 0
-                task.not_before = self._clock()
+            task.finished_at = self._clock()
         # 同 lane 的后续 task 现在可以领取了
         self.wake.set()
-        return outcome
 
-    def release(self, s: AsyncSession, task: Task) -> None:
-        """waiting → pending（在调用方事务内）；事务提交后唤醒 worker。"""
-        if task.status != TaskStatus.WAITING:
-            raise RuntimeError(f"task {task.id} is {task.status}, only waiting tasks can be released")
-        task.status = TaskStatus.PENDING
-        task.not_before = self._clock()
-        event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
-
-    async def fail(
-        self, task_id: int, error: str, *, retryable: bool, on_failed: OnFailed | None = None
-    ) -> Task:
+    async def fail(self, task_id: int, error: str, *, retryable: bool) -> Task:
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)
             if task is None:
@@ -181,8 +182,6 @@ class TaskQueue:
             else:
                 task.status = TaskStatus.FAILED
                 task.finished_at = self._clock()
-                if on_failed is not None:
-                    await on_failed(s, task)
         # 重试时间点或同 lane 的后续 task 需要重新计算等待
         self.wake.set()
         return task
@@ -198,8 +197,8 @@ class TaskQueue:
     async def retry(self, task_id: int) -> Task:
         """人工重试一个 failed task。
 
-        同 lane 还有未结束的 task 时拒绝：重试沿用原来的 id，会按 FIFO 插到更新的工作前面
-        （例如插进挂起的一轮的工具调用与结果之间），让被重试的 task 以无关的错误失败。
+        同 lane 还有未结束的 task 时拒绝：重试沿用原来的 id，会按 FIFO 插到更新的工作前面，
+        旧 prompt 落在更新的历史之后，顺序错乱。
         """
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)

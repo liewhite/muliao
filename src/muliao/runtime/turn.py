@@ -1,35 +1,49 @@
-"""TurnHandler：执行 session 的一轮对话，并在同一事务里提交消息、计数、反思与通知。
+"""一轮对话的执行：组装上下文、运行模型、在一个事务里提交消息、计数、反思、压缩与通知。
 
-一轮可能以待完成的工具调用（ask_agent / wait_for）结束：此时只提交消息并挂起，等结果齐了这个 task 再次执行，
-带着结果接着跑，直到模型给出最终回答。一轮是原子的：彻底失败时整轮回滚（见 runtime/conversation.py）。
+两个调用方共用 TurnRunner：
+- 队列里的 turn task（TurnHandler）：用户消息、触发器、delegate_task；
+- ask_agent：在调用方这一轮里直接跑完私有 thread 的一轮（run_inline），提交时补记一条已完成的 turn task。
+
+一轮是原子的：成功才提交消息；失败不留任何记录，由调用方按自己的失败语义处理（队列重试，或随调用方这一轮失败）。
 """
 
-from pydantic_ai import DeferredToolRequests
+import asyncio
+import weakref
+from dataclasses import dataclass
+
+from pydantic_ai.messages import ModelMessage
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database, utcnow
 from muliao.delivery.base import Notification, Notifier
-from muliao.models import Agent, Message, ReplyTo, Session, Task, TaskKind, TaskStatus
+from muliao.models import Agent, Message, ReplyTo, Session, Task, TaskKind
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import CompactionScheduler, load_context
-from muliao.runtime.conversation import Threads, collected, consume_waits, resolve_waits, roll_back_turn
 from muliao.runtime.redaction import redact_messages
 from muliao.runtime.runner import AgentRuntime, RunProfile
-from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane
+from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane, turn_lane
 
 
-async def _load(s: AsyncSession, task: Task) -> tuple[Session, Agent]:
-    session = await s.get(Session, task.session_id)
-    agent = await s.get(Agent, task.agent_id)
-    if session is None or agent is None:
-        raise RuntimeError(
-            f"turn task {task.id} references missing session/agent ({task.session_id}, {task.agent_id})"
-        )
+@dataclass(frozen=True)
+class TurnOutput:
+    session_id: str
+    agent_id: str
+    answer: str
+    messages: list[ModelMessage]
+
+
+async def _load(s: AsyncSession, session_id: str) -> tuple[Session, Agent]:
+    session = await s.get(Session, session_id)
+    if session is None:
+        raise RuntimeError(f"session {session_id} vanished during its turn")
+    agent = await s.get(Agent, session.agent_id)
+    if agent is None:
+        raise RuntimeError(f"session {session_id} references missing agent {session.agent_id}")
     return session, agent
 
 
-class TurnHandler:
+class TurnRunner:
     def __init__(
         self,
         db: Database,
@@ -38,66 +52,61 @@ class TurnHandler:
         queue: TaskQueue,
         notifier: Notifier,
         compaction: CompactionScheduler,
-        threads: Threads,
     ):
-        self._compaction = compaction
         self._db = db
         self._runtime = runtime
         self._profile = profile
         self._queue = queue
         self._notifier = notifier
-        self._threads = threads
+        self._compaction = compaction
+        # 内联运行的私有 thread 不走队列 lane：同一 thread 的并行 ask 在这里串行（进程内，单进程部署）
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
-    async def execute(self, task: Task) -> Commit:
-        reply_to = ReplyTo(task.payload["reply_to"])
+    async def run(self, session_id: str, prompt: str, reply_to: ReplyTo) -> TurnOutput:
         async with self._db.transaction() as s:
-            session, agent = await _load(s, task)
+            session, agent = await _load(s, session_id)
             context = await load_context(s, session.id)
-            # 挂起过的一轮带着所等的结果接着跑；否则从 prompt 开始
-            results = await collected(s, task)
-            if not results and await s.scalar(select(Message.id).where(Message.task_id == task.id).limit(1)):
-                # 不变量：一轮已提交过消息，当且仅当它挂起着、有等待记录（提交与回滚都同时写/删二者）
-                raise RuntimeError(f"turn {task.id} has committed messages but nothing to resume with")
         scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, reply_to=reply_to)
         result = await self._runtime.run(
-            agent,
-            scope,
-            None if results else task.payload["prompt"],
-            context.messages,
-            self._profile,
-            summary=context.summary,
-            deferred_results=results or None,
+            agent, scope, prompt, context.messages, self._profile, summary=context.summary
         )
-        new_messages = redact_messages(result.new_messages())
-        output = result.output
+        return TurnOutput(session.id, agent.id, result.output, redact_messages(result.new_messages()))
 
-        async def commit(s: AsyncSession) -> TaskStatus:
-            session, agent = await _load(s, task)
-            s.add_all(
-                Message(session_id=session.id, task_id=task.id, payload=dump_message(m)) for m in new_messages
+    async def commit_in(self, s: AsyncSession, turn_id: int, out: TurnOutput, reply_to: ReplyTo) -> None:
+        """在调用方事务里提交一轮的全部结果。"""
+        session, agent = await _load(s, out.session_id)
+        s.add_all(
+            Message(session_id=session.id, task_id=turn_id, payload=dump_message(m)) for m in out.messages
+        )
+        await s.flush()
+        session.updated_at = utcnow()
+        session.unread = not session.private
+        await self._count_turn(s, agent)
+        await self._compaction.after_turn(s, session, agent.model, out.messages)
+        if reply_to == ReplyTo.USER:
+            self._notifier.enqueue_in(
+                s,
+                agent.id,
+                Notification(title=f"{agent.name} · {session.title}", body=out.answer, session_id=session.id),
             )
-            # 用过的结果已随消息进入历史
-            await consume_waits(s, task)
-            await s.flush()
-            session.updated_at = utcnow()
-            if isinstance(output, DeferredToolRequests):
-                return await self._threads.suspend(s, task, session, output)
-            session.unread = not session.private
-            await self._count_turn(s, agent)
-            await self._compaction.after_turn(s, session, agent.model, new_messages)
-            if reply_to == ReplyTo.USER:
-                self._notifier.enqueue_in(
+
+    async def run_inline(self, session_id: str, prompt: str, reply_to: ReplyTo) -> str:
+        """在当前协程里跑完一轮并提交，返回回答。只用于私有 thread（用户不能插话，lane 里没有排队的 turn）。"""
+        lock = self._locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            out = await self.run(session_id, prompt, reply_to)
+            async with self._db.transaction() as s:
+                turn = self._queue.record_done(
                     s,
-                    agent.id,
-                    Notification(title=f"{agent.name} · {session.title}", body=output, session_id=session.id),
+                    kind=TaskKind.TURN,
+                    lane=turn_lane(session_id),
+                    agent_id=out.agent_id,
+                    session_id=session_id,
+                    payload={"prompt": prompt, "reply_to": reply_to},
                 )
-            await resolve_waits(s, self._queue, task.id, result=output)
-            return TaskStatus.DONE
-
-        return commit
-
-    async def on_failed(self, s: AsyncSession, task: Task) -> None:
-        await roll_back_turn(s, self._queue, task)
+                await s.flush()
+                await self.commit_in(s, turn.id, out, reply_to)
+        return out.answer
 
     async def _count_turn(self, s: AsyncSession, agent: Agent) -> None:
         """agent 级 turn 计数；达到阈值时把 (检查点, 当前最大消息 id] 交给反思。"""
@@ -119,3 +128,21 @@ class TurnHandler:
         )
         agent.reflection_checkpoint = to_id
         agent.turns_since_reflection = 0
+
+
+class TurnHandler:
+    """队列里的 turn task。"""
+
+    def __init__(self, runner: TurnRunner):
+        self._runner = runner
+
+    async def execute(self, task: Task) -> Commit:
+        if task.session_id is None:
+            raise RuntimeError(f"turn task {task.id} has no session")
+        reply_to = ReplyTo(task.payload["reply_to"])
+        out = await self._runner.run(task.session_id, task.payload["prompt"], reply_to)
+
+        async def commit(s: AsyncSession) -> None:
+            await self._runner.commit_in(s, task.id, out, reply_to)
+
+        return commit

@@ -164,9 +164,6 @@ class CompactionHandler:
         self._scheduler = scheduler
         self._keep_turns = keep_turns
 
-    async def on_failed(self, s: AsyncSession, task: Task) -> None:
-        """失败只需记录在 task 上，没有其他人依赖它的结果。"""
-
     async def execute(self, task: Task) -> Commit:
         session_id = task.session_id
         if session_id is None or task.agent_id is None:
@@ -195,11 +192,10 @@ class CompactionHandler:
             extra={**ctx, "compacted_turns": len(chosen), "through_message_id": through, "more": more},
         )
 
-        async def commit(s: AsyncSession) -> TaskStatus:
+        async def commit(s: AsyncSession) -> None:
             s.add(Compaction(session_id=session_id, through_message_id=through, summary=summary))
             if more:
                 # 超出单次上限的轮次留给下一次压缩，直到收敛
                 await self._scheduler.request(s, session_id, agent.id)
-            return TaskStatus.DONE
 
         return commit

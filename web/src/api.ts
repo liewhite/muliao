@@ -1,8 +1,7 @@
 // 与后端 src/muliao/api/*.py 的响应模型一一对应
 
 export type Origin = 'user' | 'cron' | 'event' | 'delegation'
-/** waiting：一轮对话挂起等待 thread 的结果，占住所在会话的队列 */
-export type TaskStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed'
+export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
 export type TaskKind = 'turn' | 'reflection' | 'deliver' | 'compaction'
 
 /** agent 的 id 与名称都是字符串；品牌类型让编译器拦住「把名称当 id 传」 */
@@ -77,17 +76,11 @@ export interface Task {
   finished_at: string | null
 }
 
-export interface OpenTurn {
-  task: Task
-  /** 挂起过的一轮已把用户消息提交进历史 */
-  prompt_in_history: boolean
-}
-
 export interface SessionDetail {
   session: Session
   items: Item[]
   compactions: CompactionInfo[]
-  open_turns: OpenTurn[]
+  open_turns: Task[]
   threads: Session[]
 }
 

@@ -33,21 +33,21 @@ data/
 
 ## 2. 核心数据流：一切都是 Task
 
-所有触发源只做一件事：**创建 session（或选中已有 session）并在同一事务里写入一个 `turn` task**。之后的执行、重试、反思、通知全部由同一个任务队列驱动。
+所有触发源只做一件事：**创建 session（或选中已有 session）并在同一事务里写入一个 `turn` task**。之后的执行、重试、反思、通知全部由同一个任务队列驱动。唯一的例外是 `ask_agent`：它在调用方这一轮里直接跑完一轮，提交时补记一条已完成的 turn task（见第 4 节）。
 
 ```
-Web / cron / 外部事件 / delegate_task / ask_agent
+Web / cron / 外部事件 / delegate_task
           │  conversation.receive(Inbound)（唯一入口；payload 带 prompt 与 reply_to）
           ▼
- tasks(turn) ──► Worker ──► TurnHandler ──► pydantic-ai Agent.run
+ tasks(turn) ──► Worker ──► TurnHandler ──┐
+                                           ├─► TurnRunner ──► pydantic-ai Agent.run
+ ask_agent（在调用方这一轮里内联）─────────┘
                                       │ 同一事务提交：
                                       ├─ messages（本轮新消息）
                                       ├─ session.unread / updated_at
                                       ├─ agent.turns_since_reflection += 1
                                       ├─ 达到阈值 → tasks(reflection)
-                                      ├─ reply_to = user → tasks(deliver)
-                                      ├─ 唤醒等这一轮的 waits
-                                      └─ 输出为待完成工具调用 → 挂起为 waiting（见第 4 节）
+                                      └─ reply_to = user → tasks(deliver)
                                                      │
                               ReflectionHandler ◄────┘     DeliverHandler ──► Web Push
 ```
@@ -86,7 +86,7 @@ Web / cron / 外部事件 / delegate_task / ask_agent
   - `skills`：`read_skill` / `write_skill` / `delete_skill`（scope = `private` | `public`）。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
   - `agents`：`list_agents`（返回 name、description）/ `get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己） / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
-  - `delegation`：`delegate_task` / `ask_agent` / `wait_for` / `list_threads`（按名称指定目标 agent、按 thread 名指定子会话，见第 4 节）。
+  - `delegation`：`delegate_task` / `ask_agent` / `list_threads`（按名称指定目标 agent、按 thread 名指定子会话，见第 4 节）。
   - `notify`：`notify_user`（显式 Web Push）。
   - `temp_agent`：`run_temp_agent(task, instructions?, model?)`：一次性的临时 agent，在调用方这一轮里同步运行（同一响应中的多次调用并行），返回它的最终回答。它只有文件与 shell 工具（工作目录在 `data/tmp/` 下临时创建、结束即删除）和调用方的 MCP，secret 按调用方的视角解析；没有记忆、skill、会话、反思与委派，也不能再开临时 agent。适合抓取网页并总结、分析文件这类做完即丢的事；需要长期积累的专长应 `create_agent` 后委派。临时 agent 不是沙箱：它和调用方有相同的 shell 权限、secret 与 MCP，工具说明里也这样告诉模型。模型请求数超过 `runtime.temp_agent_request_limit` 时以可纠正的错误交回调用方；其他失败（如模型 API 错误）向上传播，按调用方这一轮的失败统一处理（暂时性失败整轮重试）。工作目录在 finally 里删除；删除失败或进程中途被杀时留到下次启动，由启动时清空 `data/tmp`（只归临时 agent 使用）统一收敛，删除失败记 error 日志、不改变运行结果。启动时删不掉的目录（例如脱离进程组的后台进程还在写）同样记 error 日志后跳过，不阻止服务启动：残留目录只占空间，不影响正确性。
   - `mcp_admin`：`mcp_list`（含已停用的）/ `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_set_enabled` / `mcp_remove`。改动从下一轮起生效。
@@ -97,24 +97,19 @@ Web / cron / 外部事件 / delegate_task / ask_agent
 
 ## 4. 会话领域：thread 与结果路由
 
-agent 之间的委派有两种形态，都统一为「对某个 thread 发起一轮」：
+agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」：
 
-| 工具 | 父 agent | 子 session 归属 | 这一轮结果交给谁 |
+| 工具 | 父 agent | 子 session | 这一轮的回答 |
 |---|---|---|---|
-| `delegate_task(agent, task, thread)` | 立即继续 | 用户可见（进收件箱，用户可追问） | 用户（推送）；父 agent 可用 `wait_for(thread)` 等它 |
-| `ask_agent(agent, message, thread)` | 挂起，拿到结果后恢复 | 父会话私有（不进收件箱，用户只读） | 父 agent（作为工具返回值） |
-| `wait_for(thread)` | 挂起，直到该 thread 最近一轮结束 | — | 父 agent |
+| `delegate_task(agent, task, thread)` | 立即继续，不等 | 公开 thread：进收件箱，用户可追问 | 推送给用户；父 agent 拿不到 |
+| `ask_agent(agent, message, thread)` | 等它答完 | 私有 thread：不进收件箱，用户只读 | 作为工具结果交回父 agent |
 
-- **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `thread`，同一父 session 内唯一）。模型只用 thread 名，不接触 session id。用同一个 thread 名再次 `ask_agent`，就是在原来的子 session 里继续，上下文保留。thread 的归属在创建时确定：私有 thread 不能再用 `delegate_task` 变成用户可见；用户可见的 thread 可以被 `ask_agent` 同步追问。
-- **结果路由按轮、不按 session**：每个 turn task 的载荷带 `reply_to`（`user` 推送给用户；`agent` 交给发起的 agent，不推送；`none` 不推送，cron 使用，由 agent 自己决定是否 `notify_user`）。同一个子 session 里，用户追问的那一轮回给用户，父 agent 发起的那一轮回给父 agent。等待关系另存在 `waits` 表里，不靠 `reply_to`。
-- **一轮 = 一个 turn task**：这个 task 的状态就是这一轮的状态（单一事实源）。等待、重试、`wait_for` 的判断都只看它。
-- **持久化挂起**：`ask_agent` / `wait_for` 抛出 pydantic-ai 的 `CallDeferred`，这一轮以「待完成的工具调用」结束。提交时在同一事务里写入这些消息，为每个挂起的调用写一行 `waits`（等待方 turn、tool_call_id、所等的 turn），`ask_agent` 同时给子 thread 投递一轮（`reply_to = agent`）；然后 task 转为 `waiting`。`waiting` 和 `running` 一样挡住同一 session 的后续任务：用户此时的消息排在它后面，不会插进「工具调用」与「工具结果」之间。等待不占用 worker。
-- **唤醒**：所等的 turn 完成（done）时把最终回答写进指向它的 `waits`，彻底失败或所在 session 被删除时写入错误说明。某个 turn 的全部 `waits` 都有结果后转回 `pending`；再次执行时带着 `DeferredToolResults` 接着跑，用过的 `waits` 随结果进入消息历史后删除。所等的 turn 自己挂起时仍是 `waiting`，不算结束，所以等到的一定是最终回答。若工具判断「仍在运行」之后、提交之前目标已经结束，提交时就地补上结果，task 直接回到 `pending`。
-- **收敛**：每一轮都有重试上限和总时限，最终一定 done 或 failed；删除会话（包括删除 agent 带走的会话）统一经过 `conversation.delete_sessions`，给等待方写入错误。因此等待一定会结束。
-- **thread 的占用**：`ask_agent` 在工具执行时就创建（占用）thread，同一响应里并行的调用若争用同名 thread，冲突作为可纠正的错误交回模型。占用它的那一轮回滚后，thread 可能暂时没有任何一轮，`wait_for` 会如实告诉模型。
-- **一轮是原子的**：彻底失败时整轮回滚——删除这一轮已提交的消息和等待记录（否则历史里留下没有结果的工具调用，之后每一轮都会被模型 API 拒绝），等它的 agent 收到错误。人工重试就是从 prompt 重跑整轮；已收到错误的等待方不会再收到重试的结果。已经发出的委派不随回滚撤销，重跑时模型可能再委派一次，私有 thread 里会留下上一次的问答。
-- **与反思的关系**：反思按消息 id 区间取材，可能包含一轮挂起时已提交的前半段；这一轮若随后回滚，反思已经看过被撤销的内容。只影响记忆质量，接受。
-- **删除**：删除父 session 会一并删除它的私有 thread（逐层）；用户可见的 thread 保留（`parent_session_id` 置空）。有任务正在运行时拒绝删除。
+- **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `thread`，同一父 session 内唯一）。模型只用 thread 名，不接触 session id。同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。thread 的 agent 与种类在创建时确定：私有 thread 只能用 `ask_agent` 续聊，公开 thread 只能用 `delegate_task`。
+- **结果路由按轮、不按 session**：每个 turn task 的载荷带 `reply_to`（`user` 推送给用户；`agent` 交给发问的 agent，不推送；`none` 不推送，触发器使用，由 agent 自己决定是否 `notify_user`）。同一个公开 thread 里，父 agent 投递的那一轮与用户追问的那一轮都回给用户。
+- **`delegate_task` 走队列**：往公开 thread 投递一轮，与用户消息一样排在该会话的 lane 里。
+- **`ask_agent` 在调用方这一轮里直接跑完**（`TurnRunner.run_inline`）：与队列里的 turn 用同一个回合执行器（组装上下文、运行、在一个事务里提交消息、计数、压缩），提交时补记一条已完成的 turn task，所以「每一轮都是一个 task」在两条路径上都成立。私有 thread 不进队列（用户不能插话），同一 thread 的并行 ask 由进程内的锁串行。同一响应里对不同 thread 的多次 ask 并行执行；嵌套 ask（子 agent 再 ask）在同一调用链里依次完成。
+- **用最终正确性换简化**：内联运行不做持久化挂起。换掉的是「等待期间不占 worker、进程重启后从等待处继续」；换来的是没有等待表、挂起状态、恢复与回滚逻辑，队列里的 turn 与 ask_agent 共用同一个回合执行器，临时 agent 也走同一个运行入口（`AgentRuntime._execute`）。三条判据：失败可见——子 agent 的一轮失败直接作为调用方这一轮的失败（暂时性失败整轮重试，其余进入 failed 可人工重试）；可收敛——一轮是原子的，失败或崩溃时子 thread 不留半截记录，调用方这一轮按队列语义重放即可；代价可控——等待期间占用调用方的 worker 槽位和任务总时限，嵌套越深越耗时，重放会重复子 agent 的工具副作用，个人助手可接受。
+- **删除**：删除父 session 会一并删除它的私有 thread（逐层）；用户可见的 thread 保留（`parent_session_id` 置空）。有任务正在运行时拒绝删除；内联运行中的私有 thread 若被单独删除，它这一轮提交时失败，随调用方这一轮失败。
 
 ## 5. 上下文压缩
 

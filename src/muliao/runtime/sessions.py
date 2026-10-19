@@ -79,12 +79,6 @@ class SessionService:
             ).all()
         return list(zip([r.id for r in rows], load_messages(r.payload for r in rows), strict=True))
 
-    async def turns_with_messages(self, session_id: str) -> set[int]:
-        """已提交过消息的轮次（含挂起中的）。"""
-        async with self._db.transaction() as s:
-            query = select(Message.task_id).where(Message.session_id == session_id).distinct()
-            return set((await s.scalars(query)).all())
-
     async def compactions(self, session_id: str) -> list[Compaction]:
         async with self._db.transaction() as s:
             query = select(Compaction).where(Compaction.session_id == session_id).order_by(Compaction.id)
@@ -97,4 +91,4 @@ class SessionService:
     async def delete(self, session_id: str) -> None:
         """删除 session（规则见 conversation.delete_sessions）。"""
         async with self._db.transaction() as s:
-            await delete_sessions(s, self._queue, [await self._get(s, session_id)])
+            await delete_sessions(s, [await self._get(s, session_id)])

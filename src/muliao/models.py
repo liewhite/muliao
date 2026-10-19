@@ -22,8 +22,7 @@ class Origin(StrEnum):
 class ReplyTo(StrEnum):
     """一轮结束后结果交给谁，按轮决定（见 docs/architecture.md「会话领域」）。
 
-    只有 USER 会推送通知。AGENT 表示这一轮由另一个 agent 同步发问，回答经 waits 表交回给它；
-    已有的 USER 轮次也可能被 wait_for 等待，等待关系同样只记在 waits 表。
+    只有 USER 会推送通知。AGENT 表示这一轮由另一个 agent 用 ask_agent 发问，回答作为工具结果直接交回给它。
     """
 
     USER = "user"
@@ -43,8 +42,6 @@ class TaskStatus(StrEnum):
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
-    # 一轮对话挂起，等 thread 的结果；和 running 一样挡住同一 lane 的后续任务，结果齐了转回 pending 接着执行
-    WAITING = "waiting"
 
 
 class McpTransport(StrEnum):
@@ -158,24 +155,6 @@ class Task(Base):
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (Index("ix_tasks_status_lane", "status", "lane"), {"sqlite_autoincrement": True})
-
-
-class Wait(Base):
-    """父 agent 挂起的一个工具调用在等哪个 turn 的结果。
-
-    target_task_id 不设外键：目标所在 session 被删除时，要先给等待方写入错误结果，不能让级联删除悄悄抹掉等待关系。
-    """
-
-    __tablename__ = "waits"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    waiter_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
-    tool_call_id: Mapped[str] = mapped_column(String(100))
-    target_task_id: Mapped[int] = mapped_column(index=True)
-    # 二者恰有其一表示已结束：result 为目标的最终回答，error 为失败说明
-    result: Mapped[str | None] = mapped_column(Text)
-    error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class Compaction(Base):

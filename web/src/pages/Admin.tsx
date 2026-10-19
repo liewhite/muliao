@@ -111,7 +111,6 @@ const STATUS_FILTERS = {
   failed: { label: '失败', status: 'failed' as TaskStatus },
   pending: { label: '等待', status: 'pending' as TaskStatus },
   running: { label: '运行中', status: 'running' as TaskStatus },
-  waiting: { label: '挂起', status: 'waiting' as TaskStatus },
   all: { label: '全部', status: undefined },
 }
 type StatusFilter = keyof typeof STATUS_FILTERS
@@ -121,7 +120,6 @@ const STATUS_COLOR: Record<TaskStatus, 'danger' | 'success' | 'warning' | 'accen
   done: 'success',
   pending: 'warning',
   running: 'accent',
-  waiting: 'accent',
 }
 
 export function Tasks() {

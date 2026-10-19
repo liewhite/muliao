@@ -38,7 +38,7 @@ from muliao.runtime.tools.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.runtime.tools.triggers import triggers_toolset
 from muliao.runtime.tools.vault import vault_toolset
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
-from muliao.runtime.turn import TurnHandler
+from muliao.runtime.turn import TurnHandler, TurnRunner
 from muliao.runtime.worker import TaskHandler, Worker
 from muliao.triggers.cron import CronService
 from muliao.triggers.events import EventTriggers
@@ -142,7 +142,7 @@ def build_container(
         prompts,
         AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every),
     )
-    agent_lifecycle = AgentLifecycle(db, queue, agents)
+    agent_lifecycle = AgentLifecycle(db, agents)
     sessions = SessionService(db, queue)
     threads = Threads(queue)
     notifier = Notifier(db, queue)
@@ -183,7 +183,8 @@ def build_container(
                 runtime, agents, temp_profile, settings.temp_dir, settings.runtime.temp_agent_request_limit
             ),
             agents_toolset(agents, agent_lifecycle, prompts),
-            delegation_toolset(db, agents, threads),
+            # ask_agent 用回合执行器跑子 agent，而执行器又用这组工具：通过延迟绑定的调用打破构造顺序上的环
+            delegation_toolset(db, agents, threads, lambda *args: turn_runner.run_inline(*args)),
             notify_toolset(notifier),
             mcp_admin_toolset(mcp),
             vault_toolset(vault),
@@ -193,8 +194,9 @@ def build_container(
     )
     reflection_profile = RunProfile(toolsets=evolution_tools, include_mcp=False)
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
+    turn_runner = TurnRunner(db, runtime, turn_profile, queue, notifier, compaction)
     handlers: dict[TaskKind, TaskHandler] = {
-        TaskKind.TURN: TurnHandler(db, runtime, turn_profile, queue, notifier, compaction, threads),
+        TaskKind.TURN: TurnHandler(turn_runner),
         TaskKind.COMPACTION: CompactionHandler(
             db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),

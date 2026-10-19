@@ -80,19 +80,13 @@ class CompactionOut(BaseModel):
     created_at: datetime
 
 
-class OpenTurnOut(BaseModel):
-    task: TaskOut
-    # 挂起过的一轮已把用户消息提交进历史，前端不再单独显示它
-    prompt_in_history: bool
-
-
 class SessionDetail(BaseModel):
     session: SessionOut
     items: list[Item]
     # 压缩点：through_message_id 及之前的消息已由 summary 代替发给模型（原文仍完整展示）
     compactions: list[CompactionOut]
     # 尚未完成或失败的轮次：前端据此显示「处理中」的用户消息与错误
-    open_turns: list[OpenTurnOut]
+    open_turns: list[TaskOut]
     # 这个会话开出的 thread
     threads: list[SessionOut]
 
@@ -145,11 +139,8 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         for x in await c.sessions.compactions(session_id)
     ]
     tasks = await c.queue.list(status=None, session_id=session_id, limit=50)
-    started = await c.sessions.turns_with_messages(session_id)
     open_turns = [
-        OpenTurnOut(task=TaskOut.of(t), prompt_in_history=t.id in started)
-        for t in reversed(tasks)
-        if t.kind == TaskKind.TURN and t.status != TaskStatus.DONE
+        TaskOut.of(t) for t in reversed(tasks) if t.kind == TaskKind.TURN and t.status != TaskStatus.DONE
     ]
     return SessionDetail(
         session=SessionOut.of(session),

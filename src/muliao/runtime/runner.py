@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent as PaiAgent
-from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, RunContext, UsageLimits
+from pydantic_ai import AgentRunResult, RunContext, UsageLimits
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
@@ -73,8 +73,7 @@ class AgentRuntime:
         self._tz = tz
         self._clock = clock
         self._resolve_model = resolve_model
-        # 输出可能是待完成的工具调用：ask_agent / wait_for 挂起时（见 runtime/conversation.py）
-        self._pai = PaiAgent(deps_type=RunScope, output_type=[str, DeferredToolRequests])
+        self._pai = PaiAgent(deps_type=RunScope, output_type=str)
 
     def scope(
         self, agent: Agent, *, session_id: str | None, origin: Origin | None, reply_to: ReplyTo | None
@@ -107,16 +106,12 @@ class AgentRuntime:
         self,
         agent: Agent,
         scope: RunScope,
-        prompt: str | None,
+        prompt: str,
         history: Sequence[ModelMessage],
         profile: RunProfile,
         *,
         summary: str | None = None,
-        deferred_results: dict[str, str] | None = None,
-    ) -> AgentRunResult[str | DeferredToolRequests]:
-        """prompt 为 None 时是恢复挂起的一轮：deferred_results 为各待完成工具调用的结果。"""
-        if (prompt is None) == (deferred_results is None):
-            raise ValueError("a run takes either a new prompt or the results of deferred tool calls")
+    ) -> AgentRunResult[str]:
         return await self._execute(
             model=agent.model,
             instructions=await self.instructions(agent, scope, summary),
@@ -124,7 +119,6 @@ class AgentRuntime:
             scope=scope,
             prompt=prompt,
             history=history,
-            deferred_results=deferred_results,
         )
 
     async def run_temp(
@@ -157,11 +151,8 @@ class AgentRuntime:
             scope=scope,
             prompt=task,
             history=(),
-            deferred_results=None,
             usage_limits=UsageLimits(request_limit=request_limit),
         )
-        if not isinstance(result.output, str):
-            raise RuntimeError(f"temp agent of {parent.id} ended with deferred tool calls it cannot have")
         return result.output
 
     async def _toolsets(self, agent_id: str, profile: RunProfile) -> list[AbstractToolset[RunScope]]:
@@ -177,11 +168,10 @@ class AgentRuntime:
         instructions: str,
         toolsets: list[AbstractToolset[RunScope]],
         scope: RunScope,
-        prompt: str | None,
+        prompt: str,
         history: Sequence[ModelMessage],
-        deferred_results: dict[str, str] | None,
         usage_limits: UsageLimits | None = None,
-    ) -> AgentRunResult[str | DeferredToolRequests]:
+    ) -> AgentRunResult[str]:
         ctx = {
             "agent": scope.agent_id,
             "session_id": scope.session_id,
@@ -198,9 +188,6 @@ class AgentRuntime:
             toolsets=toolsets,
             event_stream_handler=self._forward_events,
             usage_limits=usage_limits,
-            deferred_tool_results=None
-            if deferred_results is None
-            else DeferredToolResults(calls=dict(deferred_results)),
         )
         usage = result.usage
         log.info(
@@ -217,7 +204,7 @@ class AgentRuntime:
     async def summarize(self, agent: Agent, instructions: str, prompt: str) -> str:
         """用该 agent 的模型做一次无工具的文本生成（上下文压缩用）。不转发事件到前端。"""
         result = await self._pai.run(
-            prompt, model=self._resolve_model(agent.model), instructions=instructions, output_type=str
+            prompt, model=self._resolve_model(agent.model), instructions=instructions
         )
         return result.output
 
