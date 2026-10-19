@@ -33,6 +33,7 @@ from muliao.evolution.skills import SkillStore
 from muliao.files import FileStore
 from muliao.llm import ModelResolver
 from muliao.models import Agent, Origin, ReplyTo
+from muliao.runtime.answers import Answer
 from muliao.runtime.attachments import AttachmentsForModel
 from muliao.runtime.instructions import build_instructions, build_temp_instructions
 from muliao.runtime.mcp import McpRegistry
@@ -40,7 +41,7 @@ from muliao.runtime.redaction import redact_call
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tasks import Clock
 from muliao.runtime.tools.errors import DomainErrorsAsRetry
-from muliao.transcript import truncate
+from muliao.transcript import tool_attachments, truncate
 
 log = logging.getLogger(__name__)
 
@@ -175,8 +176,8 @@ class AgentRuntime:
         profile: RunProfile,
         workspace: Path,
         request_limit: int,
-    ) -> str:
-        """一次性的临时 agent：替 parent 做一件事，返回最终回答。
+    ) -> Answer:
+        """一次性的临时 agent：替 parent 做一件事，返回最终回答，以及它用工具挂给用户的文件（如 share_file）。
 
         没有记忆、skill、历史与反思；工具来自 profile（不含委派与再开临时 agent），MCP 与 secret 按 parent 的视角。
         也不带公共 prompt：公共 prompt 约定的是长期 agent 之间的共同规则，临时 agent 只执行调用方交给它的任务。
@@ -197,7 +198,7 @@ class AgentRuntime:
             history=(),
             usage_limits=UsageLimits(request_limit=request_limit),
         )
-        return result.output
+        return Answer.of_run(result.output, result.new_messages())
 
     async def _toolsets(self, agent_id: str, profile: RunProfile) -> list[AbstractToolset[RunScope]]:
         toolsets: list[AbstractToolset[RunScope]] = [DomainErrorsAsRetry(t) for t in profile.toolsets]
@@ -283,6 +284,7 @@ class AgentRuntime:
                         "tool_name": call.tool_name,
                         "tool_call_id": call.tool_call_id,
                         "text": truncate(call.args_as_json_str(), _EVENT_TEXT_LIMIT),
+                        "attachments": [],
                     }
                 )
             elif isinstance(event, FunctionToolResultEvent):
@@ -297,5 +299,6 @@ class AgentRuntime:
                         "tool_name": part.tool_name,
                         "tool_call_id": part.tool_call_id,
                         "text": truncate(text, _EVENT_TEXT_LIMIT),
+                        "attachments": tool_attachments(part),
                     }
                 )

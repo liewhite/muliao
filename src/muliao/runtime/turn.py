@@ -21,6 +21,7 @@ from muliao.db import Database, utcnow
 from muliao.delivery.base import Notification, Notifier
 from muliao.files import FileStore
 from muliao.models import Agent, Message, ReplyTo, Session, Task, TaskKind
+from muliao.runtime.answers import Answer
 from muliao.runtime.attachments import copy_to_workspace, references
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import CompactionScheduler, load_context
@@ -108,8 +109,8 @@ class TurnRunner:
                 Notification(title=f"{agent.name} · {session.title}", body=out.answer, session_id=session.id),
             )
 
-    async def run_inline(self, session_id: str, prompt: str) -> str:
-        """在当前协程里跑完私有 thread 的一轮并提交，返回给发问 agent 的回答。
+    async def run_inline(self, session_id: str, prompt: str) -> Answer:
+        """在当前协程里跑完私有 thread 的一轮并提交，返回给发问 agent 的回答（连同这一轮挂给用户的文件）。
 
         只用于私有 thread：用户不能插话，lane 里没有排队的 turn；同一 thread 的并行调用由进程内的锁串行。
         """
@@ -138,7 +139,7 @@ class TurnRunner:
                 log.warning("inline turn failed: %r", e, extra={"session_id": session_id})
                 raise
         log.info("inline turn done", extra={"session_id": session_id, "task_id": turn.id})
-        return out.answer
+        return Answer.of_run(out.answer, out.messages)
 
     async def _count_turn(self, s: AsyncSession, agent: Agent) -> None:
         """agent 级 turn 计数；达到阈值时把 (检查点, 当前最大消息 id] 交给反思。"""

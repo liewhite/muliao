@@ -1,21 +1,23 @@
 """文件与 shell 工具。相对路径以 agent 工作目录为基准；不做强隔离（单人本机使用，见架构文档）。"""
 
 import asyncio
+import logging
 import mimetypes
 import os
-import re
 import signal
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic_ai import FunctionToolset, RunContext
+from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
 from muliao.errors import InvalidInput, NotFound
 from muliao.files import FileStore
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
-from muliao.transcript import truncate
+from muliao.transcript import TOOL_ATTACHMENTS, attachment_of, truncate
 from muliao.vault import Vault
+
+log = logging.getLogger(__name__)
 
 # shell 只继承这些环境变量，不把服务进程的其余环境带给命令
 _INHERITED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "USER", "SHELL")
@@ -46,12 +48,6 @@ def redact(text: str, secrets: dict[str, str]) -> str:
     for key, value in secrets.items():
         text = text.replace(value, f"[secret:{key}]")
     return text
-
-
-def markdown_reference(name: str, url: str, *, image: bool) -> str:
-    """回答里引用一个文件：图片内联显示，其他文件是下载链接。url 已经过百分号编码，只需转义名称。"""
-    label = re.sub(r"([\\\[\]])", r"\\\1", name)
-    return f"{'!' if image else ''}[{label}]({url})"
 
 
 def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
@@ -125,10 +121,11 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
         return "\n".join(lines) or "(empty)"
 
     @ts.tool
-    async def share_file(ctx: RunContext[RunScope], path: str) -> str:
+    async def share_file(ctx: RunContext[RunScope], path: str) -> ToolReturn:
         """Share a file from your workspace with the user, e.g. a chart you made or a document you wrote.
-        Returns a Markdown reference: put it in your reply exactly as given. Images show inline, other files
-        become download links. The user gets a snapshot; later changes to the file are not reflected.
+        It is shown to the user with your reply automatically (images inline, other files as downloads), so do
+        not embed or link it yourself; just refer to it by name. The user gets a snapshot; later changes to the
+        file are not reflected.
 
         Args:
             path: File path.
@@ -140,7 +137,14 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
         guessed, encoding = mimetypes.guess_type(target.name)
         media_type = guessed if guessed and encoding is None else "application/octet-stream"
         meta = await files.put_path(target.name, media_type, target)
-        return markdown_reference(meta.name, meta.url, image=meta.is_inline_image)
+        log.info(
+            "file shared with user",
+            extra={"agent": ctx.deps.agent_id, "session_id": ctx.deps.session_id, "file_id": meta.id},
+        )
+        return ToolReturn(
+            return_value=f"Shared {meta.name!r} with the user; it is shown with your reply.",
+            metadata={TOOL_ATTACHMENTS: [attachment_of(meta)]},
+        )
 
     @ts.tool
     async def run_shell(

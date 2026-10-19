@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Item } from './api'
-import { groupSteps, summarizeSteps, toBlocks, type Step } from './blocks'
+import { groupSteps, stepAttachments, summarizeSteps, toBlocks, type Step } from './blocks'
 
 const item = (type: Item['type'], text: string, tool_call_id: string | null = null): Item => ({
   type,
@@ -38,6 +38,24 @@ describe('groupSteps', () => {
   })
 })
 
+describe('stepAttachments', () => {
+  it('collects files attached by tool results, in order, for display outside the folded group', () => {
+    const chart = { url: '/api/files/1/chart.png', name: 'chart.png', media_type: 'image/png', inline: true }
+    const report = { url: '/api/files/2/r.md', name: 'r.md', media_type: 'text/markdown', inline: false }
+    const views = groupSteps(
+      toBlocks([
+        item('tool_call', '{}', 'a'),
+        { ...item('tool_result', 'shared', 'a'), attachments: [chart] },
+        item('tool_call', '{}', 'b'),
+        { ...item('tool_result', 'shared', 'b'), attachments: [report] },
+      ]),
+    )
+    expect(views).toHaveLength(1)
+    const group = views[0]
+    expect(group.kind === 'process' && stepAttachments(group.steps)).toEqual([chart, report])
+  })
+})
+
 describe('streaming stability', () => {
   // 渲染按下标作 key：流式追加（含后到的工具结果回写）时，已有视图的位置与组的起点不能变，否则用户展开的组会被重新挂载而折叠
   it('only ever grows views at the end as items stream in', () => {
@@ -69,7 +87,10 @@ describe('streaming stability', () => {
 })
 
 describe('summarizeSteps', () => {
-  const tool = (result: string | null, failed = false): Step => ({ kind: 'tool', tool: { name: 'run_shell', args: '', result, failed } })
+  const tool = (result: string | null, failed = false): Step => ({
+    kind: 'tool',
+    tool: { name: 'run_shell', args: '', result, failed, attachments: [] },
+  })
 
   it('counts tool calls, mentions thinking, and reports the running tool and failures', () => {
     expect(summarizeSteps([{ kind: 'thinking', text: 'x' }, tool('ok'), tool('err', true), tool(null)])).toEqual({

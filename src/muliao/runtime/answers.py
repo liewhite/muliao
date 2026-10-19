@@ -1,0 +1,31 @@
+"""一个 agent 替另一个 agent 跑完的结果（临时 agent、ask_agent），以及把它交回调用方的唯一方式。
+
+被调用方用工具挂给用户的文件（transcript.TOOL_ATTACHMENTS）只记在被调用方自己的消息里；临时 agent 不属于任何会话，
+私有 thread 用户也不会主动去翻。所以交回时把这些文件挂到调用方这次工具调用的结果上，文件就出现在用户正在看的会话里。
+"""
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+from pydantic_ai import ToolReturn
+from pydantic_ai.messages import ModelMessage
+
+from muliao.transcript import TOOL_ATTACHMENTS, Attachment, shared_attachments
+
+
+@dataclass(frozen=True)
+class Answer:
+    text: str
+    attachments: list[Attachment]
+
+    @classmethod
+    def of_run(cls, output: str, new_messages: Sequence[ModelMessage]) -> "Answer":
+        return cls(output, shared_attachments(new_messages))
+
+    def to_tool_return(self) -> ToolReturn:
+        """给调用方模型的是回答文字，并告诉它哪些文件已经显示给用户、不用再转发。"""
+        note = ""
+        if self.attachments:
+            names = ", ".join(repr(a["name"]) for a in self.attachments)
+            note = f"\n\n[Shared {names} with the user; they are shown with your reply automatically.]"
+        return ToolReturn(return_value=self.text + note, metadata={TOOL_ATTACHMENTS: self.attachments})

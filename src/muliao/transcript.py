@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from typing import Any, Literal, TypedDict
 
+from pydantic import TypeAdapter
 from pydantic_ai.messages import (
     DocumentUrl,
     ImageUrl,
@@ -17,7 +18,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from muliao.files import parse_file_url
+from muliao.files import FileMeta, parse_file_url
 
 ItemType = Literal["user", "assistant", "thinking", "tool_call", "tool_result", "tool_error"]
 
@@ -31,6 +32,42 @@ class Attachment(TypedDict):
     inline: bool
 
 
+# 工具给这一轮挂上文件的约定：ToolReturn(metadata={TOOL_ATTACHMENTS: [Attachment, ...]})。
+# metadata 不发给模型、随消息持久化，所以文件一定会显示给用户，不依赖模型在回答里转写引用。
+# 键带命名空间：metadata 是 pydantic-ai 开放给所有工具（含 MCP 包装）的字段，通用的键名可能撞上形状不同的数据
+TOOL_ATTACHMENTS = "muliao_attachments"
+_ATTACHMENTS = TypeAdapter(list[Attachment])
+
+
+def attachment_of(meta: FileMeta) -> Attachment:
+    return Attachment(url=meta.url, name=meta.name, media_type=meta.media_type, inline=meta.is_inline_image)
+
+
+def tool_attachments(part: ToolReturnPart | RetryPromptPart) -> list[Attachment]:
+    """工具结果挂上的文件（历史条目与实时事件共用这一处解析）。其他工具或 MCP 的 metadata 不带这个键时为空。"""
+    if not isinstance(part, ToolReturnPart) or not isinstance(part.metadata, dict):
+        return []
+    if TOOL_ATTACHMENTS not in part.metadata:
+        return []
+    attachments = _ATTACHMENTS.validate_python(part.metadata[TOOL_ATTACHMENTS])
+    # 前端把 url 直接放进 src/href：只能是本站文件存储的引用
+    for a in attachments:
+        parse_file_url(a["url"])
+    return attachments
+
+
+def shared_attachments(messages: Sequence[ModelMessage]) -> list[Attachment]:
+    """这些消息里所有工具结果挂上的文件，按出现顺序。函数工具的结果只出现在 ModelRequest 里。"""
+    return [
+        a
+        for m in messages
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if isinstance(p, ToolReturnPart)
+        for a in tool_attachments(p)
+    ]
+
+
 class Item(TypedDict):
     type: ItemType
     text: str
@@ -38,7 +75,7 @@ class Item(TypedDict):
     tool_call_id: str | None
     # 来源消息的数据库 id；由 API 填充，用于定位压缩点
     message_id: int | None
-    # 用户消息的附件（见 runtime.attachments 的存储形态）；其他条目为空
+    # 用户消息的附件（见 runtime.attachments 的存储形态），或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
     attachments: list[Attachment]
 
 
@@ -90,7 +127,13 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
                     items.append(_user_item(part.content))
                 elif isinstance(part, ToolReturnPart):
                     items.append(
-                        _item("tool_result", part.model_response_str(), part.tool_name, part.tool_call_id)
+                        _item(
+                            "tool_result",
+                            part.model_response_str(),
+                            part.tool_name,
+                            part.tool_call_id,
+                            tool_attachments(part),
+                        )
                     )
                 elif isinstance(part, RetryPromptPart):
                     items.append(

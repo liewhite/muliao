@@ -7,6 +7,8 @@ export interface ToolView {
   args: string
   result: string | null
   failed: boolean
+  /** 工具结果挂给用户的文件：显示在过程组外，折叠不影响看到它们 */
+  attachments: Attachment[]
 }
 
 export type Block =
@@ -33,7 +35,7 @@ export function toBlocks(items: Item[]): Block[] {
         blocks.push({ kind: item.type, text: item.text })
         break
       case 'tool_call': {
-        const tool: ToolView = { name: item.tool_name ?? '?', args: item.text, result: null, failed: false }
+        const tool: ToolView = { name: item.tool_name ?? '?', args: item.text, result: null, failed: false, attachments: [] }
         if (item.tool_call_id) tools.set(item.tool_call_id, tool)
         blocks.push({ kind: 'tool', tool })
         break
@@ -44,9 +46,13 @@ export function toBlocks(items: Item[]): Block[] {
         if (tool) {
           tool.result = item.text
           tool.failed = item.type === 'tool_error'
+          tool.attachments = item.attachments
         } else {
           // 没有对应调用的错误（如输出校验重试）单独展示
-          blocks.push({ kind: 'tool', tool: { name: item.tool_name ?? 'retry', args: '', result: item.text, failed: true } })
+          blocks.push({
+            kind: 'tool',
+            tool: { name: item.tool_name ?? 'retry', args: '', result: item.text, failed: true, attachments: item.attachments },
+          })
         }
         break
       }
@@ -74,6 +80,11 @@ export function groupSteps(blocks: Block[]): View[] {
     else views.push({ kind: 'process', steps: [block] })
   }
   return views
+}
+
+/** 一组步骤里工具挂给用户的全部文件，按出现顺序 */
+export function stepAttachments(steps: Step[]): Attachment[] {
+  return steps.flatMap((s) => (s.kind === 'tool' ? s.tool.attachments : []))
 }
 
 export interface StepsSummary {

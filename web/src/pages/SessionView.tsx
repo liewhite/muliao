@@ -3,7 +3,7 @@ import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/
 import { Archive, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentRoute, api, type Agent, type Attachment, type CompactionInfo, type Item, type Task, type Session } from '../api'
-import { groupSteps, summarizeSteps, toBlocks, toolStatus, type Step, type ToolStatus, type ToolView } from '../blocks'
+import { groupSteps, stepAttachments, summarizeSteps, toBlocks, toolStatus, type Step, type ToolStatus, type ToolView } from '../blocks'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
 import { liveToItems, useServerEvents, type RunEvent } from '../events'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
@@ -71,27 +71,31 @@ function StepBlock({ step }: { step: Step }) {
   )
 }
 
-/** 连续的思考与工具调用收成一组，默认折叠；标题汇总步骤数与状态，展开后每一步仍可单独展开 */
+/** 连续的思考与工具调用收成一组，默认折叠；标题汇总步骤数与状态，展开后每一步仍可单独展开。工具发出的文件显示在组下方 */
 function StepsGroup({ steps }: { steps: Step[] }) {
   const { label, running, failed } = summarizeSteps(steps)
   const status = running !== null ? `运行中：${running}` : failed > 0 ? `${failed} 次出错` : '完成'
   return (
-    <Collapsible
-      tone={failed > 0 ? 'danger' : 'default'}
-      title={
-        <>
-          {running !== null && <Spinner size="sm" />}
-          <span className="text-foreground">{label}</span>
-          <span className="ml-auto whitespace-nowrap text-xs">{status}</span>
-        </>
-      }
-    >
-      <div className="flex flex-col gap-2">
-        {steps.map((step, i) => (
-          <StepBlock key={i} step={step} />
-        ))}
-      </div>
-    </Collapsible>
+    <>
+      <Collapsible
+        tone={failed > 0 ? 'danger' : 'default'}
+        title={
+          <>
+            {running !== null && <Spinner size="sm" />}
+            <span className="text-foreground">{label}</span>
+            <span className="ml-auto whitespace-nowrap text-xs">{status}</span>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2">
+          {steps.map((step, i) => (
+            <StepBlock key={i} step={step} />
+          ))}
+        </div>
+      </Collapsible>
+      {/* 工具发给用户的文件是成果，不随过程一起折叠 */}
+      <AttachmentList files={stepAttachments(steps)} />
+    </>
   )
 }
 

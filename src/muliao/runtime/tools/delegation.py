@@ -4,10 +4,11 @@ from collections.abc import Awaitable, Callable
 from typing import Literal
 
 from pydantic import BaseModel
-from pydantic_ai import FunctionToolset, ModelRetry, RunContext
+from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolReturn
 
 from muliao.agents import AgentService
 from muliao.db import Database
+from muliao.runtime.answers import Answer
 from muliao.runtime.conversation import Threads, thread_name, threads_of, validate_thread
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
@@ -33,7 +34,7 @@ class ThreadInfo(BaseModel):
 
 
 # 在私有 thread 里内联跑完一轮并返回回答（runtime.turn.TurnRunner.run_inline）：(session_id, prompt) -> answer
-RunInline = Callable[[str, str], Awaitable[str]]
+RunInline = Callable[[str, str], Awaitable[Answer]]
 
 
 def delegation_toolset(
@@ -67,9 +68,9 @@ def delegation_toolset(
         return f"delegated to {target.name} in thread {validate_thread(thread)!r}"
 
     @ts.tool
-    async def ask_agent(ctx: RunContext[RunScope], agent: str, message: str, thread: str) -> str:
+    async def ask_agent(ctx: RunContext[RunScope], agent: str, message: str, thread: str) -> ToolReturn:
         """Ask an agent and wait for its answer, which is returned as this tool's result. The thread is private
-        to this conversation (the user can read but not reply). Ask again in the same thread to follow up with
+        to this conversation (the user can read but not reply). Files it shares are shown to the user with your reply. Ask again in the same thread to follow up with
         the agent's context intact, e.g. review -> fix -> review again. Several asks in one response run in parallel.
 
         Args:
@@ -84,7 +85,7 @@ def delegation_toolset(
         async with db.transaction() as s:
             child = await threads.open(s, parent_id=parent_id, agent=target, thread=thread, private=True)
         # 在调用方这一轮里直接跑完：失败随调用方这一轮失败，由队列统一重试
-        return await run_inline(child.id, message)
+        return (await run_inline(child.id, message)).to_tool_return()
 
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:

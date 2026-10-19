@@ -13,7 +13,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from pydantic_ai import FunctionToolset, ModelRetry, RunContext
+from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolReturn
 from pydantic_ai.exceptions import UsageLimitExceeded
 
 from muliao.agents import AgentService
@@ -77,10 +77,10 @@ def temp_agent_toolset(
     @ts.tool
     async def run_temp_agent(
         ctx: RunContext[RunScope], task: str, instructions: str = "", model: str | None = None
-    ) -> str:
+    ) -> ToolReturn:
         """Run a throwaway helper agent for one self-contained job (e.g. fetch a web page and summarize it, analyze
         some files) and get its final answer. It runs now and you wait for it; several calls in one response run in
-        parallel. It has no memory, skills or conversation: put everything it needs in `task`, and save anything you
+        parallel. Files it shares are shown to the user with your reply. It has no memory, skills or conversation: put everything it needs in `task`, and save anything you
         want to keep yourself.
 
         It is NOT a sandbox: it has the same shell access, secrets and MCP servers as you. Its default working
@@ -99,7 +99,7 @@ def temp_agent_toolset(
         )
         outcome = "failed"
         try:
-            answer = await runtime.run_temp(
+            result = await runtime.run_temp(
                 parent,
                 task=task,
                 instructions=instructions,
@@ -109,9 +109,10 @@ def temp_agent_toolset(
                 request_limit=request_limit,
             )
             outcome = "ok"
-            return answer
+            return result.to_tool_return()
         except UsageLimitExceeded as e:
-            # 有界运行在契约内的结局：交回调用方的模型去拆分任务，而不是让整轮失败后反复重试
+            # 有界运行在契约内的结局：交回调用方的模型去拆分任务，而不是让整轮失败后反复重试。
+            # 这次已经共享的文件不交付（存在文件存储里但没有引用）：拆分后重做时会重新共享
             outcome = "request limit"
             log.warning(
                 "temp agent hit its request limit",

@@ -138,7 +138,7 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 - **上传**：`POST /api/files?name=<名称>`，请求体就是文件内容，`Content-Type` 是它的类型（同 Matrix `/media/upload`，不用 multipart），边读边写边算 sha256，超过 `runtime.upload_max_bytes`（默认 50MB）立即停止。名称必须是单个路径段，不合法直接拒绝，不做修正。发消息时 `attachments` 带上 id（可以只有附件没有文字），`conversation.receive` 校验它们存在，写进 turn task 的 payload。
 - **在消息里的两种形态**（`runtime/attachments.py`）：存储形态是 `UserPromptPart` 里的 `ImageUrl` / `DocumentUrl`，url 即文件引用，数据库、界面、重放都用它；每次模型请求前由 pydantic-ai 的 `before_model_request` 钩子（`AttachmentsForModel`）展开成模型形态：一段说明（名称、类型、大小、工作目录里的路径），可内联的图片（png/jpeg/gif/webp）再附上内容。展开只替换这一次请求的消息列表，持久化的历史不变，所以文件内容在数据库里没有副本。模型不支持图片时，provider 的报错让这一轮失败，不悄悄丢掉图片。
 - **交给工具**：每次执行这一轮都把附件复制到 agent 工作目录的 `uploads/<id>/<名称>`（重试时覆盖成原件），供文件工具与 shell 处理；这是派生副本，原件只在文件存储里。
-- **agent 发出文件**：`share_file(path)` 把工作目录里的文件存一份快照，返回 Markdown 引用（图片 `![名称](url)`，其他 `[名称](url)`），agent 把它写进回答。
+- **agent 发出文件**：`share_file(path)` 把工作目录里的文件存一份快照，通过 `ToolReturn.metadata["attachments"]`（`transcript.TOOL_ATTACHMENTS`）挂到这次工具结果上。metadata 不发给模型、随消息持久化，所以文件一定显示给用户（图片内联、其他为下载链接，显示在过程组外），不依赖模型在回答里转写引用；模型只收到一句「已发给用户」。任何工具都可以用同一约定挂文件。临时 agent 与 `ask_agent` 的被问 agent 挂上的文件，随调用方那次工具调用的结果一起交给用户（`runtime/answers.py`），出现在用户正在看的会话里；临时 agent 超过请求数上限时，这次已共享的文件不交付，由调用方拆分后重做时重新共享。
 - **一致性**：内容先写临时文件再改名到最终位置，之后才插入元数据行；失败即上传失败，没有 id 就没有引用。中途被杀留下的临时文件由启动时 `FileStore.recover` 清掉；有内容没元数据的孤儿只占空间，访问不到，同样内容再上传时复用。
 
 ## 5. 上下文压缩

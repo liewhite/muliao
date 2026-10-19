@@ -1,28 +1,42 @@
 // 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
 
 import { useEffect, useRef } from 'react'
-import type { Item, TaskKind, TaskStatus } from './api'
+import type { Attachment, Item, TaskKind, TaskStatus } from './api'
 
-export interface RunEvent {
+interface RunEventBase {
   type: 'run'
   session_id: string | null
   agent: string
-  /** text 与 thinking 是增量片段：连续的同类片段拼成一条 */
-  event: 'text' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
   text: string
-  tool_name?: string | null
-  tool_call_id?: string | null
 }
+
+/** 回答与思考的增量片段：连续的同类片段拼成一条 */
+export interface StreamEvent extends RunEventBase {
+  event: 'text' | 'thinking'
+}
+
+export interface ToolEvent extends RunEventBase {
+  event: 'tool_call' | 'tool_result' | 'tool_error'
+  /** 后端 RetryPromptPart.tool_name 可以为空 */
+  tool_name: string | null
+  tool_call_id: string
+  /** 工具结果挂给用户的文件（如 share_file）；调用事件为空 */
+  attachments: Attachment[]
+}
+
+export type RunEvent = StreamEvent | ToolEvent
 
 /** 增量片段按到达顺序拼成的条目类型；工具事件各自成条 */
 const STREAMED = { text: 'assistant', thinking: 'thinking' } as const
+
+const isStream = (e: RunEvent): e is StreamEvent => e.event === 'text' || e.event === 'thinking'
 
 /** 运行中的事件流转成与历史相同的展示条目：连续的同类增量拼成一条（思考与回答交替时各自成条） */
 export function liveToItems(events: RunEvent[]): Item[] {
   const items: Item[] = []
   for (const e of events) {
     const last = items[items.length - 1]
-    if (e.event === 'text' || e.event === 'thinking') {
+    if (isStream(e)) {
       const type = STREAMED[e.event]
       if (last?.type === type) last.text += e.text
       else items.push({ type, text: e.text, tool_name: null, tool_call_id: null, message_id: null, attachments: [] })
@@ -30,10 +44,10 @@ export function liveToItems(events: RunEvent[]): Item[] {
       items.push({
         type: e.event,
         text: e.text,
-        tool_name: e.tool_name ?? null,
-        tool_call_id: e.tool_call_id ?? null,
+        tool_name: e.tool_name,
+        tool_call_id: e.tool_call_id,
         message_id: null,
-        attachments: [],
+        attachments: e.attachments,
       })
     }
   }

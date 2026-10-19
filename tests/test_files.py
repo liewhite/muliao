@@ -9,6 +9,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
+    ToolCallPart,
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo
@@ -144,7 +145,18 @@ async def test_message_may_be_only_attachments_but_they_must_exist(client, make_
     assert resp.status_code == 404
 
 
-async def test_agent_shares_a_workspace_file_as_a_markdown_reference(client, container, make_agent, models):
+async def _shared_attachments(client) -> list[dict]:
+    """用户正在看的（顶层）会话里，工具结果挂上的文件：界面显示用的就是这些。"""
+    await login(client)
+    sessions = [s for s in (await client.get("/api/sessions")).json() if s["parent_session_id"] is None]
+    assert len(sessions) == 1
+    items = (await client.get(f"/api/sessions/{sessions[0]['id']}")).json()["items"]
+    return [a for i in items if i["type"] == "tool_result" for a in i["attachments"]]
+
+
+async def test_shared_files_are_shown_to_the_user_without_the_model_repeating_them(
+    client, container, make_agent, models
+):
     agent = await make_agent("painter", model="tools")
     workspace = container.agents.workspace(agent.id)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -158,12 +170,45 @@ async def test_agent_shares_a_workspace_file_as_a_markdown_reference(client, con
         [("share_file", {"path": "chart.png"}), ("share_file", {"path": "report.md"})],
     )
 
-    assert outputs[0].startswith("![chart.png](/api/files/") and outputs[1].startswith(
-        "[report.md](/api/files/"
-    )
-    await login(client)
-    resp = await client.get(outputs[0].removeprefix("![chart.png](").removesuffix(")"))
+    # 模型只看到一句说明，不需要也不该再嵌入引用
+    assert outputs == [
+        "Shared 'chart.png' with the user; it is shown with your reply.",
+        "Shared 'report.md' with the user; it is shown with your reply.",
+    ]
+    shared = await _shared_attachments(client)
+    assert [(a["name"], a["inline"]) for a in shared] == [("chart.png", True), ("report.md", False)]
+    resp = await client.get(shared[0]["url"])
     assert resp.content == PNG and resp.headers["content-disposition"].startswith("inline")
+
+
+async def test_files_shared_by_a_temp_agent_reach_the_user_through_the_caller(
+    client, container, make_agent, models
+):
+    me = await make_agent("manager", model="tools")
+
+    def helper(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        step = sum(isinstance(m, ModelResponse) for m in messages)
+        if step == 0:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart("write_file", {"path": "plot.svg", "content": "<svg/>"}, tool_call_id="w")
+                ]
+            )
+        if step == 1:
+            return ModelResponse(parts=[ToolCallPart("share_file", {"path": "plot.svg"}, tool_call_id="s")])
+        return ModelResponse(parts=[TextPart("plotted")])
+
+    models.models["helper"] = scripted(helper)
+    outputs = await run_tools(
+        container, models, me.id, [("run_temp_agent", {"task": "plot it", "model": "helper"})]
+    )
+
+    assert outputs[0].startswith("plotted") and "'plot.svg'" in outputs[0]
+    shared = await _shared_attachments(client)
+    # SVG 能带脚本，不内联显示，只能下载
+    assert [(a["name"], a["media_type"], a["inline"]) for a in shared] == [
+        ("plot.svg", "image/svg+xml", False)
+    ]
 
 
 def test_unfinished_uploads_are_removed_on_recover(container):
@@ -266,6 +311,77 @@ async def test_shared_compressed_file_is_not_labelled_as_its_inner_type(containe
     workspace = container.agents.workspace(agent.id)
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "x.tar.gz").write_bytes(b"\x1f\x8b")
-    outputs = await run_tools(container, models, agent.id, [("share_file", {"path": "x.tar.gz"})])
-    file_id = outputs[0].split("/api/files/")[1].split("/")[0]
-    assert (await container.files.get(file_id)).media_type == "application/octet-stream"
+    await run_tools(container, models, agent.id, [("share_file", {"path": "x.tar.gz"})])
+    async with container.db.transaction() as s:
+        payloads = (await s.scalars(select(Message.payload))).all()
+    metadata = [p for p in payloads if "x.tar.gz" in p and '"muliao_attachments"' in p]
+    assert metadata and '"media_type":"application/octet-stream"' in metadata[0]
+
+
+async def test_files_shared_by_an_asked_agent_reach_the_user_in_the_asking_session(
+    client, container, make_agent, models
+):
+    me = await make_agent("manager", model="tools")
+    painter = await make_agent("painter", model="painter")
+    workspace = container.agents.workspace(painter.id)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "chart.png").write_bytes(PNG)
+
+    def paint(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if sum(isinstance(m, ModelResponse) for m in messages) == 0:
+            return ModelResponse(parts=[ToolCallPart("share_file", {"path": "chart.png"}, tool_call_id="s")])
+        return ModelResponse(parts=[TextPart("here it is")])
+
+    models.models["painter"] = scripted(paint)
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [("ask_agent", {"agent": "painter", "message": "draw", "thread": "chart"})],
+    )
+
+    assert outputs[0].startswith("here it is") and "'chart.png'" in outputs[0]
+    assert [a["name"] for a in await _shared_attachments(client)] == ["chart.png"]
+
+
+def test_attachments_must_reference_the_file_store():
+    import pytest
+    from pydantic_ai.messages import ToolReturnPart
+
+    from muliao.transcript import TOOL_ATTACHMENTS, tool_attachments
+
+    bad = {"url": "https://evil.example/x.png", "name": "x.png", "media_type": "image/png", "inline": True}
+    part = ToolReturnPart("t", "ok", tool_call_id="c", metadata={TOOL_ATTACHMENTS: [bad]})
+    with pytest.raises(RuntimeError, match="not a file reference"):
+        tool_attachments(part)
+    # 其他工具自己的 metadata 不受这条约定影响
+    assert (
+        tool_attachments(ToolReturnPart("t", "ok", tool_call_id="c", metadata={"attachments": "anything"}))
+        == []
+    )
+
+
+async def test_live_tool_result_events_carry_shared_files(container, make_agent, models):
+    import asyncio
+
+    agent = await make_agent("painter", model="tools")
+    workspace = container.agents.workspace(agent.id)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "chart.png").write_bytes(PNG)
+    events = []
+
+    async def collect():
+        async with container.bus.subscribe() as sub:
+            async for e in sub:
+                events.append(e)
+
+    collector = asyncio.create_task(collect())
+    await asyncio.sleep(0)
+    await run_tools(container, models, agent.id, [("share_file", {"path": "chart.png"})])
+    collector.cancel()
+
+    tool_events = [e for e in events if e["type"] == "run" and e["event"].startswith("tool_")]
+    assert [(e["event"], [a["name"] for a in e["attachments"]]) for e in tool_events] == [
+        ("tool_call", []),
+        ("tool_result", ["chart.png"]),
+    ]
