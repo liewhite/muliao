@@ -20,13 +20,6 @@ class PromptStore:
     def path(self, owner: str | None) -> Path:
         return self._repo.owner_dir(owner) / PROMPT_FILE
 
-    def init(self, agent_id: str, content: str) -> Path:
-        """新建 agent 时写入第一版指令；由调用方与其他初始文件一起提交。"""
-        path = self.path(agent_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        return path
-
     def current(self, owner: str | None) -> str:
         """当前生效的内容。公共 prompt 从未设置过时为空（没有公共 prompt）；agent 的指令在创建时就写了。"""
         path = self.path(owner)
@@ -42,12 +35,8 @@ class PromptStore:
         """写入并提交一版；与当前内容相同时不写，返回 False。"""
         if content == self.current(owner):
             return False
-        path = self.path(owner)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        await self._repo.commit(
-            [path], f"{'public prompt' if owner is None else f'instructions of {owner}'}", author
-        )
+        message = "public prompt" if owner is None else f"instructions of {owner}"
+        await self._repo.apply({self.path(owner): content}, message, author)
         return True
 
     async def history(self, owner: str | None, limit: int) -> list[Revision]:

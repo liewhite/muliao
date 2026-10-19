@@ -96,8 +96,8 @@ class Container:
 
     async def start(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path)
-        # git 不可用或仓库损坏时在启动时暴露，而不是散落到第一次修改资源时
-        await self.resources.ensure()
+        # git 不可用或仓库损坏时在启动时暴露；上次进程留下的未提交修改与 git 锁在这里收敛（worker 还没开始）
+        await self.resources.recover()
         await self._check_agent_models()
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
         await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)

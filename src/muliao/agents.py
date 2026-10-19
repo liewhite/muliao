@@ -118,8 +118,11 @@ class AgentService:
             s.add(agent)
             # 目录与数据库行同事务创建：目录创建失败则回滚
             self.workspace(agent.id).mkdir(parents=True, exist_ok=True)
-            files = [self._memory.init(agent.id), self._prompts.init(agent.id, spec.instructions)]
-        await self._repo.commit(files, f"create agent {agent.id}", author)
+        await self._repo.apply(
+            {self._memory.path(agent.id): "", self._prompts.path(agent.id): spec.instructions},
+            f"create agent {agent.id}",
+            author,
+        )
         return agent
 
     async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> Agent:
@@ -178,7 +181,4 @@ class AgentService:
         workspace = self.workspace(agent_id)
         if workspace.exists():
             shutil.rmtree(workspace)
-        resources = self._repo.owner_dir(agent_id)
-        if resources.exists():
-            shutil.rmtree(resources)
-            await self._repo.commit([resources], f"delete agent {agent_id}", author)
+        await self._repo.apply({self._repo.owner_dir(agent_id): None}, f"delete agent {agent_id}", author)

@@ -20,14 +20,6 @@ class MemoryStore:
     def path(self, agent: str) -> Path:
         return self._repo.owner_dir(agent) / MEMORY_FILE
 
-    def init(self, agent: str) -> Path:
-        """新建 agent 时写入空记忆；由调用方与其他初始文件一起提交。"""
-        path = self.path(agent)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            path.write_text("", encoding="utf-8")
-        return path
-
     def read(self, agent: str) -> str:
         path = self.path(agent)
         if not path.exists():
@@ -43,10 +35,7 @@ class MemoryStore:
         path = self.path(agent)
         if not path.exists():
             raise NotFound(f"memory file for agent {agent!r} does not exist: {path}")
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        tmp.replace(path)
-        await self._repo.commit([path], f"memory of {agent}", author)
+        await self._repo.apply({path: content}, f"memory of {agent}", author)
         return content
 
     async def append(self, agent: str, entry: str, author: str) -> str:

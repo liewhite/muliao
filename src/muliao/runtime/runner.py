@@ -73,6 +73,10 @@ class ToolGroups:
         self, agent_id: str, names: Sequence[str], *, within: Collection[str] | None = None
     ) -> RunProfile:
         """按 agent 选用的组组合工具；within 给出时只取其中这些组（反思只可能用到写公共 skill）。"""
+        if within is not None and not set(within) <= set(self.groups):
+            raise RuntimeError(
+                f"restriction names unknown tool groups {sorted(set(within) - set(self.groups))}"
+            )
         unknown = [n for n in names if n not in self.groups]
         if unknown:
             # 写入时已校验（AgentService）；读到未知组说明数据与代码不一致

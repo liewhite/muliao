@@ -75,9 +75,9 @@ async def test_every_change_is_a_revision_with_its_author(skills: SkillStore, re
 
 
 @pytest.fixture
-def memory(repo: ResourceRepo) -> MemoryStore:
+async def memory(repo: ResourceRepo) -> MemoryStore:
     store = MemoryStore(repo, max_chars=50)
-    store.init("alpha")
+    await repo.apply({store.path("alpha"): ""}, "init", "user")
     return store
 
 
@@ -148,3 +148,31 @@ async def test_secrets_of_deleted_agent_go_with_it(container, make_agent):
     await container.vault.set(alpha, "TOKEN", "x")
     await container.agent_lifecycle.delete(alpha, author="user")
     assert await container.vault.list_all() == []
+
+
+async def test_recover_commits_leftovers_and_clears_a_stale_lock(repo: ResourceRepo):
+    """进程在写完文件、提交之前被杀，或在 git 运行中被杀：启动时收敛到干净状态。"""
+    await repo.ensure()
+    left = repo.owner_dir("alpha") / "MEMORY.md"
+    left.parent.mkdir(parents=True)
+    left.write_text("written but never committed")
+    (repo.root / ".git" / "index.lock").write_text("")
+
+    await repo.recover()
+
+    assert not (repo.root / ".git" / "index.lock").exists()
+    [revision] = await repo.history(left, 10)
+    assert (revision.author, revision.message) == ("muliao", "reconcile uncommitted changes")
+    # 收敛后正常提交照常进行
+    assert await repo.apply({left: "next"}, "memory", "alpha") is not None
+
+
+async def test_deleting_an_agent_is_recorded_in_resource_history(container, make_agent):
+    agent = await make_agent("alpha")
+    memory = container.memory.path(agent.id)
+
+    await container.agent_lifecycle.delete(agent.id, author="user")
+
+    [deleted, created] = await container.resources.history(memory, 10)
+    assert (deleted.author, deleted.message) == ("user", f"delete agent {agent.id}")
+    assert created.message == f"create agent {agent.id}"

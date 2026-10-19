@@ -6,7 +6,6 @@ owner 为 None 表示公共 skill，否则为 agent 私有。agent 视角下同�
 
 from __future__ import annotations
 
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,13 +95,13 @@ class SkillStore:
         skill_dir.mkdir(parents=True, exist_ok=True)
         post = frontmatter.Post(body.strip() + "\n", name=name, description=description)
         path = skill_dir / SKILL_FILE
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(frontmatter.dumps(post) + "\n", encoding="utf-8")
-        tmp.replace(path)
-        await self._repo.commit([skill_dir], f"{scope_of(owner)} skill {name}", author)
+        await self._repo.apply(
+            {path: frontmatter.dumps(post) + "\n"}, f"{scope_of(owner)} skill {name}", author
+        )
         return SkillMeta(name, description, owner, path)
 
     async def delete(self, owner: str | None, name: str, author: str) -> None:
         skill = self.read(owner, name)
-        shutil.rmtree(skill.meta.path.parent)
-        await self._repo.commit([skill.meta.path.parent], f"delete {scope_of(owner)} skill {name}", author)
+        await self._repo.apply(
+            {skill.meta.path.parent: None}, f"delete {scope_of(owner)} skill {name}", author
+        )

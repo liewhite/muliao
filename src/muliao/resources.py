@@ -2,13 +2,14 @@
 
 布局（resources 根目录就是一个 git 仓库）：
 
-    public/                 公共资源：PROMPT.md、skills/<name>/SKILL.md、mcp/<name>.json
-    agents/<agent id>/      agent 私有资源：PROMPT.md、MEMORY.md、skills/…、mcp/…
+    public/                 公共资源：PROMPT.md、skills/<name>/SKILL.md
+    agents/<agent id>/      agent 私有资源：PROMPT.md、MEMORY.md、skills/<name>/SKILL.md
 
 每次修改写文件后提交一次，作者是 "user" 或做出修改的 agent 的 id。历史与回滚都来自 git：
 回滚就是把旧版本的内容写回并作为新的一次提交，历史只增不改。
 
-写文件与提交是两步：提交失败时错误向上传播（可见），已写的文件留在工作区，下一次提交会把它一并带上（收敛）。
+写文件与提交在同一个临界区里（apply）。提交失败时错误向上传播（可见）；已写未提交的文件，以及进程中途被杀
+留下的 git 锁，由启动时的 recover 统一收敛（提交为一次 reconcile，记录涉及的路径）。
 secret 不在这里：它们加密存在数据库的 vault 里，不需要版本管理。
 """
 
@@ -17,7 +18,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Sequence
+import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +29,8 @@ from muliao.errors import InvalidInput, NotFound
 log = logging.getLogger(__name__)
 
 USER = "user"
+# 系统自己做的提交（初始化、启动时的收敛）
+SYSTEM = "muliao"
 _PUBLIC = "public"
 _AGENTS = "agents"
 _FIELD = "\x1f"
@@ -65,6 +69,11 @@ class ResourceRepo:
             "git",
             "-C",
             str(self.root),
+            # 不受部署机全局 git 配置影响：hook 与签名都可能让每次提交失败
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -75,27 +84,64 @@ class ResourceRepo:
         return proc.returncode or 0, out.decode()
 
     async def ensure(self) -> None:
-        """首次使用时初始化仓库；git 不可用时直接报错（启动时调用，尽早暴露）。"""
+        """首次使用时初始化仓库；git 不可用时直接报错。"""
         if self._ready:
             return
         self.root.mkdir(parents=True, exist_ok=True)
         if not (self.root / ".git").exists():
             await self._git("init", "-q", "-b", "main")
-            await self._git("config", "user.name", "muliao")
-            await self._git("config", "user.email", "muliao@localhost")
-            await self._git("config", "commit.gpgsign", "false")
+            await self._git("config", "user.name", SYSTEM)
+            await self._git("config", "user.email", f"{SYSTEM}@localhost")
             await self._git("commit", "-q", "--allow-empty", "-m", "init resources")
             log.info("resource repository initialised", extra={"root": str(self.root)})
         self._ready = True
 
-    async def commit(self, paths: Sequence[Path], message: str, author: str) -> str | None:
-        """提交这些路径上的变化（含删除）；没有变化时返回 None。"""
+    async def recover(self) -> None:
+        """启动时（worker 开始之前、没有任何写入在进行）把仓库收敛到干净状态。
+
+        - 上次进程在 git 运行中被杀留下的 index.lock：此刻不可能有别的 git 在用它，删除并记录；
+        - 写了文件但没来得及提交的变化（进程被杀、提交失败）：整体提交为一次 reconcile，作者记为系统，
+          并记录涉及的路径——修改者已无从得知，如实标出。
+        """
         async with self._lock:
             await self.ensure()
-            rel = [self.relative(p) for p in paths]
+            lock = self.root / ".git" / "index.lock"
+            if lock.exists():
+                lock.unlink()
+                log.warning(
+                    "removed stale git index lock left by a killed process", extra={"root": str(self.root)}
+                )
+            await self._git("add", "-A")
+            _, staged = await self._git("diff", "--cached", "--name-only")
+            if not staged.strip():
+                return
+            await self._git(
+                "commit", "-q", "-m", "reconcile uncommitted changes", f"--author={SYSTEM} <{SYSTEM}@muliao>"
+            )
+        log.warning("committed resource changes left uncommitted", extra={"paths": staged.split()})
+
+    async def apply(self, changes: Mapping[Path, str | None], message: str, author: str) -> str | None:
+        """在一个临界区里写入（内容为 None 表示删除该文件或目录）并提交；没有变化时返回 None。
+
+        写与提交在同一把锁里：并发的修改不会被别人的提交带走、记错作者。
+        """
+        async with self._lock:
+            await self.ensure()
+            rel = [self.relative(p) for p in changes]
+            for path, content in changes.items():
+                if content is None:
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                    elif path.exists():
+                        path.unlink()
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = path.with_name(path.name + ".tmp")
+                    tmp.write_text(content, encoding="utf-8")
+                    tmp.replace(path)
             await self._git("add", "-A", "--", *rel)
-            changed, _ = await self._git("diff", "--cached", "--quiet", "--", *rel, check=False)
-            if changed == 0:
+            unchanged, _ = await self._git("diff", "--cached", "--quiet", "--", *rel, check=False)
+            if unchanged == 0:
                 return None
             await self._git("commit", "-q", "-m", message, f"--author={author} <{author}@muliao>", "--", *rel)
             _, rev = await self._git("rev-parse", "HEAD")
