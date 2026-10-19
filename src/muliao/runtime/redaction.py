@@ -22,13 +22,28 @@ def redact_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     return {k: REDACTED if k in secret else v for k, v in args.items()}
 
 
+def _args_dict(part: ToolCallPart) -> dict[str, Any] | None:
+    """参数解析成 dict；不是合法的 JSON 对象时为 None（模型写错，或用户停止时参数还没生成完被截断）。
+
+    不用 args_as_dict：pydantic-ai 2.57 遇到非法 JSON 不报错，而是返回 {"INVALID_JSON": 原文}，原文里就有明文。
+    """
+    if isinstance(part.args, dict):
+        return part.args
+    if not part.args:
+        return {}
+    try:
+        parsed = json.loads(part.args)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def redact_call(part: ToolCallPart) -> ToolCallPart:
     if part.tool_name not in SECRET_TOOL_ARGS:
         return part
-    try:
-        parsed = part.args_as_dict()
-    except ValueError:
-        # 模型给出的参数不是合法 JSON（pydantic-ai 会让模型重试）：无法定位字段，整体替换
+    parsed = _args_dict(part)
+    if parsed is None:
+        # 无法定位字段：整体替换，宁可丢掉参数也不留下明文
         return dataclasses.replace(part, args=json.dumps({"_": REDACTED}))
     redacted = redact_args(part.tool_name, parsed)
     args: str | dict[str, Any] = json.dumps(redacted) if isinstance(part.args, str) else redacted

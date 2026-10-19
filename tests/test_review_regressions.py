@@ -176,3 +176,14 @@ async def test_subscriber_survives_heartbeat_timeouts():
                 await asyncio.wait_for(sub.next(), timeout=0.01)
         bus.publish({"type": "x"})
         assert await asyncio.wait_for(sub.next(), timeout=1) == {"type": "x"}
+
+
+def test_unparseable_secret_tool_arguments_are_redacted_wholesale():
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+
+    from muliao.runtime.redaction import redact_messages
+
+    cut = ModelResponse(
+        parts=[ToolCallPart("vault_set", '{"key": "T", "value": "super-sec', tool_call_id="v")]
+    )
+    assert "super-sec" not in str(redact_messages([cut])[0].parts[0].args)
