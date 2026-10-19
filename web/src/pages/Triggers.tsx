@@ -27,15 +27,18 @@ import {
 type Config = Record<string, unknown>
 
 /** 各触发方式在界面上的差异：配置编辑、状态展示、额外操作。未登记的方式用通用的 JSON 编辑与原样展示。 */
+/** 配置编辑器以 config 为初始值、自己保存编辑中的内容；内容不合法时回调 null：保存按钮随之禁用，不会提交上一次的合法值 */
+type ConfigChange = (c: Config | null) => void
+
 interface KindView {
   label: string
   emptyConfig: Config
-  ConfigEditor: (props: { config: Config; onChange: (c: Config) => void }) => ReactNode
+  ConfigEditor: (props: { config: Config; onChange: ConfigChange }) => ReactNode
   Status: (props: { trigger: Trigger }) => ReactNode
   Actions?: (props: { trigger: Trigger; onChange: () => void }) => ReactNode
 }
 
-function JsonConfigEditor({ config, onChange }: { config: Config; onChange: (c: Config) => void }) {
+function JsonConfigEditor({ config, onChange }: { config: Config; onChange: ConfigChange }) {
   const [text, setText] = useState(JSON.stringify(config, null, 2))
   const [error, setError] = useState<string | null>(null)
   return (
@@ -50,9 +53,26 @@ function JsonConfigEditor({ config, onChange }: { config: Config; onChange: (c: 
           setError(null)
         } catch {
           setError('不是合法的 JSON')
+          onChange(null)
         }
       }}
       rows={4}
+      mono
+    />
+  )
+}
+
+function CronEditor({ config, onChange }: { config: Config; onChange: ConfigChange }) {
+  const [cron, setCron] = useState(String(config.cron ?? ''))
+  return (
+    <TextInput
+      label="cron 表达式"
+      hint="5 段式 cron 表达式，按服务端配置文件中的 timezone 解释，如 */5 * * * *"
+      value={cron}
+      onChange={(value) => {
+        setCron(value)
+        onChange({ cron: value })
+      }}
       mono
     />
   )
@@ -120,15 +140,7 @@ const KIND_VIEWS: Record<string, KindView> = {
   schedule: {
     label: '定时',
     emptyConfig: { cron: '*/5 * * * *' },
-    ConfigEditor: ({ config, onChange }) => (
-      <TextInput
-        label="cron 表达式"
-        hint="5 段式 cron 表达式，按服务端配置文件中的 timezone 解释，如 */5 * * * *"
-        value={String(config.cron ?? '')}
-        onChange={(cron) => onChange({ cron })}
-        mono
-      />
-    ),
+    ConfigEditor: CronEditor,
     Status: ({ trigger }) => (
       <span>
         <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{String(trigger.config.cron)}</code>
@@ -159,11 +171,12 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
   const view = viewOf(trigger.kind)
   const [editing, setEditing] = useState(false)
   const [prompt, setPrompt] = useState(trigger.prompt)
-  const [config, setConfig] = useState<Config>(trigger.config)
+  const [config, setConfig] = useState<Config | null>(trigger.config)
   const action = useAction()
 
   const save = () =>
     action.run(async () => {
+      if (config === null) throw new Error('配置不合法')
       await api.updateTrigger(trigger.id, { prompt, config })
       setEditing(false)
       onChange()
@@ -211,7 +224,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
         {trigger.last_error && <ErrorAlert title="触发失败，已自动停用" error={trigger.last_error} />}
         {editing ? (
           <>
-            <view.ConfigEditor config={config} onChange={setConfig} />
+            <view.ConfigEditor config={trigger.config} onChange={setConfig} />
             <TextAreaInput label="处理说明" value={prompt} onChange={setPrompt} rows={5} />
           </>
         ) : (
@@ -222,7 +235,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
       <Card.Footer className="flex flex-wrap gap-2">
         {editing ? (
           <>
-            <ActionButton size="sm" isPending={action.busy} onPress={() => void save()}>
+            <ActionButton size="sm" isDisabled={config === null} isPending={action.busy} onPress={() => void save()}>
               保存
             </ActionButton>
             <Button size="sm" variant="tertiary" onPress={() => setEditing(false)}>
@@ -267,13 +280,14 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   const [name, setName] = useState('')
   const [agentId, setAgentId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
-  const [config, setConfig] = useState<Config>(kind ? viewOf(kind).emptyConfig : {})
+  const [config, setConfig] = useState<Config | null>(kind ? viewOf(kind).emptyConfig : {})
   const action = useAction()
   const view = kind ? viewOf(kind) : null
 
   async function create() {
     const ok = await action.run(async () => {
       if (kind === null || agentId === null) throw new Error('请选择触发方式和 agent')
+      if (config === null) throw new Error('配置不合法')
       await api.createTrigger({ name, agent_id: asAgentId(agentId), kind, prompt, config })
       toast.success('触发器已创建')
     })
@@ -310,7 +324,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
         placeholder="选择 agent"
         options={(agents ?? []).map((a) => ({ id: a.id, label: a.name }))}
       />
-      {view && <view.ConfigEditor key={kind} config={config} onChange={setConfig} />}
+      {view && kind && <view.ConfigEditor key={kind} config={viewOf(kind).emptyConfig} onChange={setConfig} />}
       <TextAreaInput
         label="处理说明"
         hint="每次触发都在新会话中执行；事件内容（如 webhook 的请求体）附在其后。触发的会话不会自动推送，需要时在说明里要求 agent 调用 notify_user"
@@ -319,7 +333,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
         rows={5}
       />
       <ErrorAlert error={action.error} />
-      <ActionButton isDisabled={!name || !agentId || !prompt || !kind} isPending={action.busy} onPress={() => void create()}>
+      <ActionButton isDisabled={!name || !agentId || !prompt || !kind || config === null} isPending={action.busy} onPress={() => void create()}>
         创建
       </ActionButton>
     </CollapsibleForm>

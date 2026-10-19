@@ -1,4 +1,4 @@
-"""触发器的管理接口。webhook 的事件入口在 app.py（凭 token 鉴权，不走登录）。"""
+"""触发器的通用管理接口；某种触发方式专有的操作在它自己的模块里（如 api/webhook.py）。"""
 
 from datetime import datetime
 from typing import Any
@@ -46,11 +46,6 @@ class TriggerOut(BaseModel):
     last_fired_at: datetime | None
     last_session_id: str | None
     last_error: str | None
-
-
-class TokenOut(BaseModel):
-    # 明文只返回这一次
-    token: str
 
 
 class FiredOut(BaseModel):
@@ -108,9 +103,3 @@ async def delete_trigger(c: C, trigger_id: int) -> None:
 async def run_trigger(c: C, trigger_id: int) -> FiredOut:
     """立即触发一次（不带事件内容）。"""
     return FiredOut(session_id=(await c.triggers.fire(trigger_id)).id)
-
-
-@router.post("/triggers/{trigger_id}/token")
-async def generate_token(c: C, trigger_id: int) -> TokenOut:
-    """生成（或重新生成）webhook 的 token；只能由用户在这里生成。"""
-    return TokenOut(token=await c.webhooks.generate_token(trigger_id))

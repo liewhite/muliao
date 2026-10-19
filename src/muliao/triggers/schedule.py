@@ -3,7 +3,9 @@
 策略：
 - 错过的触发（进程停机期间）只补一次，然后从当前时间算下一次。
 - 不重叠：上一次触发的会话仍有未完成的一轮时跳过本次，并记 info 日志。
-- 触发器自身的数据不合法时停用它并记录原因，不阻塞其他触发器；修复后由用户重新启用。
+- 触发时被拒绝（例如处理说明为空、cron 表达式不合法）时停用它并记录原因，不阻塞其他触发器；修复后由用户重新启用。
+- 列出到期触发器之后、触发之前，触发器可能被删除、停用或改了配置：触发前按最新的行重新判断，不再到期就跳过。
+- 停用后重新启用，下次时间从启用时算起（TriggerService 在重新启用时重新推导 state），不补暂停期间的触发。
 """
 
 from __future__ import annotations
@@ -44,13 +46,11 @@ class ScheduleKind:
             raise InvalidInput(f"invalid cron expression {expr!r}")
         return croniter(expr, after.astimezone(self._tz)).get_next(datetime)
 
-    def configure(
-        self, config: dict[str, Any], state: dict[str, Any]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         if set(config) != {"cron"} or not isinstance(config["cron"], str):
             raise InvalidInput(f'schedule trigger config must be {{"cron": "<expression>"}}, got {config!r}')
         expr = config["cron"].strip()
-        return {"cron": expr}, {**state, "next_run_at": self.next_run(expr, self._clock()).isoformat()}
+        return {"cron": expr}, {"next_run_at": self.next_run(expr, self._clock()).isoformat()}
 
     def status(self, trigger: Trigger) -> dict[str, Any]:
         return {"next_run_at": trigger.state["next_run_at"]}
@@ -68,6 +68,7 @@ class ScheduleRunner:
         self._triggers = triggers
         self._kind = kind
         self._clock = clock
+        self._changed = triggers.subscribe()
 
     async def fire_due(self) -> int:
         now = self._clock()
@@ -85,7 +86,14 @@ class ScheduleRunner:
 
     async def _fire(self, trigger_id: int, now: datetime) -> None:
         async with self._db.transaction() as s:
-            trigger = await self._triggers.get_in(s, trigger_id)
+            trigger = await s.get(Trigger, trigger_id)
+            # 列出之后可能已被删除、停用或改了配置：按最新的行重新判断
+            if trigger is None or not trigger.enabled or next_run_at(trigger.state) > now:
+                log.info(
+                    "scheduled fire skipped: trigger changed since it was due",
+                    extra={"trigger_id": trigger_id},
+                )
+                return
             self._triggers.set_state(
                 trigger, next_run_at=self._kind.next_run(trigger.config["cron"], now).isoformat()
             )
@@ -98,7 +106,12 @@ class ScheduleRunner:
 
     async def _disable(self, trigger_id: int, error: str) -> None:
         async with self._db.transaction() as s:
-            trigger = await self._triggers.get_in(s, trigger_id)
+            trigger = await s.get(Trigger, trigger_id)
+            if trigger is None:
+                log.info(
+                    "failed trigger was deleted meanwhile", extra={"trigger_id": trigger_id, "error": error}
+                )
+                return
             trigger.enabled = False
             trigger.last_error = error
         log.error("schedule trigger disabled after failed fire: %s", error, extra={"trigger_id": trigger_id})
@@ -112,8 +125,8 @@ class ScheduleRunner:
     async def run_forever(self) -> None:
         while True:
             await self.fire_due()
-            self._triggers.changed.clear()
+            self._changed.clear()
             try:
-                await asyncio.wait_for(self._triggers.changed.wait(), timeout=await self._next_wake())
+                await asyncio.wait_for(self._changed.wait(), timeout=await self._next_wake())
             except TimeoutError:
                 pass

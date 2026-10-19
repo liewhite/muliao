@@ -267,7 +267,7 @@ export const api = {
     request<Trigger>('PATCH', `/api/triggers/${id}`, patch),
   runTrigger: (id: number) => post<{ session_id: string }>(`/api/triggers/${id}/run`),
   /** webhook：生成或重新生成 token，明文只返回这一次 */
-  generateTriggerToken: (id: number) => post<{ token: string }>(`/api/triggers/${id}/token`),
+  generateTriggerToken: (id: number) => post<{ token: string }>(`/api/triggers/${id}/webhook/token`),
   deleteTrigger: (id: number) => del(`/api/triggers/${id}`),
   /** owner 为空时是公共 prompt 的历史；新的在前，第一条即当前生效 */
   promptHistory: (owner: AgentId | null) =>

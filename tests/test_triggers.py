@@ -83,6 +83,61 @@ async def test_broken_schedule_trigger_is_disabled_without_blocking_others(conta
     assert good.last_session_id is not None
 
 
+async def test_trigger_deleted_or_paused_after_being_listed_is_skipped(container, make_agent):
+    """到期列表取出之后、触发之前被删除或停用：跳过，不让进程退出，也不记成触发失败。"""
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    gone = await triggers.create(
+        name="gone", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
+    )
+    paused = await triggers.create(
+        name="paused", agent_id=alpha, kind="schedule", prompt="y", config={"cron": "* * * * *"}
+    )
+    for trigger_id in (gone.id, paused.id):
+        await _make_due(container, trigger_id)
+    real_list = triggers.list
+
+    async def list_then_change(**kwargs):  # noqa: ANN003, ANN202
+        listed = await real_list(**kwargs)
+        await triggers.delete(gone.id)
+        await triggers.update(paused.id, enabled=False)
+        return listed
+
+    triggers.list = list_then_change  # type: ignore[method-assign]
+    try:
+        assert await schedules.fire_due() == 2
+    finally:
+        triggers.list = real_list  # type: ignore[method-assign]
+
+    paused = await triggers.get_by_name("paused")
+    assert not paused.enabled and paused.last_error is None and paused.last_session_id is None
+    assert await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0) == []
+
+
+async def test_reenabled_schedule_does_not_catch_up_on_the_paused_period(container, make_agent):
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    trigger = await triggers.create(
+        name="daily", agent_id=alpha, kind="schedule", prompt="report", config={"cron": "0 9 * * *"}
+    )
+    await triggers.update(trigger.id, enabled=False)
+    await _make_due(container, trigger.id)  # 暂停期间错过了一次
+
+    trigger = await triggers.update(trigger.id, enabled=True)
+
+    assert datetime.fromisoformat(trigger.state["next_run_at"]) > datetime.now().astimezone()
+    assert await schedules.fire_due() == 0
+
+
+async def test_changes_notify_every_activation_independently(container):
+    first, second = container.triggers.subscribe(), container.triggers.subscribe()
+    first.clear()
+    second.clear()
+    container.triggers._changed()
+    first.clear()
+    assert second.is_set()
+
+
 @pytest.mark.parametrize(
     ("kind", "config"),
     [("schedule", {"cron": "every minute"}), ("schedule", {}), ("webhook", {"x": 1}), ("mq", {})],

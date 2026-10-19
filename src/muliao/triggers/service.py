@@ -32,8 +32,6 @@ log = logging.getLogger(__name__)
 
 # 出现在 webhook 地址里
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-# 事件内容原样进入 prompt，过大的事件应由发送方裁剪或改为传引用
-EVENT_MAX_BYTES = 256 * 1024
 
 
 class TriggerKind(Protocol):
@@ -43,10 +41,12 @@ class TriggerKind(Protocol):
     # 给模型与界面看的说明：什么时候触发、config 的格式
     description: str
 
-    def configure(
-        self, config: dict[str, Any], state: dict[str, Any]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """校验并规范化 config，返回 (config, 新的 state)；保留 state 里与配置无关的部分（如 token 摘要）。"""
+    def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """校验并规范化 config，返回 (config, 由配置推导的 state)。
+
+        在创建、修改配置、重新启用时调用；TriggerService 把推导结果合并进已有 state，
+        所以实现不必、也不能负责保留与配置无关的部分（如 token 摘要）。
+        """
         ...
 
     def status(self, trigger: Trigger) -> dict[str, Any]:
@@ -80,8 +80,18 @@ class TriggerService:
         self.kinds = dict(kinds)
         self._tz = tz
         self._clock = clock
-        # 触发器有变化时置位，激活机制（如定时循环）据此重新计算
-        self.changed = asyncio.Event()
+        # 每个激活机制各自订阅变化通知（见 subscribe），互不清除对方的通知
+        self._subscribers: list[asyncio.Event] = []
+
+    def subscribe(self) -> asyncio.Event:
+        """返回一个只属于调用方的 Event：任何触发器变化时置位，由调用方自己清除。"""
+        event = asyncio.Event()
+        self._subscribers.append(event)
+        return event
+
+    def _changed(self) -> None:
+        for event in self._subscribers:
+            event.set()
 
     def kind(self, name: str) -> TriggerKind:
         if name not in self.kinds:
@@ -93,7 +103,7 @@ class TriggerService:
     ) -> Trigger:
         if not prompt.strip():
             raise InvalidInput("trigger prompt must not be empty")
-        config, state = self.kind(kind).configure(config, {})
+        config, state = self.kind(kind).configure(config)
         trigger = Trigger(
             name=validate_trigger_name(name),
             agent_id=agent_id,
@@ -110,7 +120,7 @@ class TriggerService:
                 s.add(trigger)
         except IntegrityError as e:
             raise Conflict(f"trigger {name!r} already exists") from e
-        self.changed.set()
+        self._changed()
         log.info("trigger created", extra={"trigger": name, "kind": kind, "agent": agent_id})
         return trigger
 
@@ -129,14 +139,19 @@ class TriggerService:
             trigger = await self.get_in(s, trigger_id)
             if prompt is not None:
                 trigger.prompt = prompt
-            if config is not None:
+            reenabled = enabled is True and not trigger.enabled
+            if config is not None or reenabled:
+                # 配置变了、或停用后重新启用（如定时触发器的下次时间要从现在算起），都重新推导 state
+                derived_config, derived = self.kind(trigger.kind).configure(
+                    trigger.config if config is None else config
+                )
                 # JSON 列只在整体赋值时被追踪
-                trigger.config, trigger.state = self.kind(trigger.kind).configure(config, dict(trigger.state))
+                trigger.config, trigger.state = derived_config, {**trigger.state, **derived}
             if enabled is not None:
                 trigger.enabled = enabled
                 if enabled:
                     trigger.last_error = None
-        self.changed.set()
+        self._changed()
         log.info("trigger updated", extra={"trigger": trigger.name, "enabled": trigger.enabled})
         return trigger
 
@@ -149,7 +164,7 @@ class TriggerService:
         async with self._db.transaction() as s:
             trigger = await self.get_in(s, trigger_id)
             await s.delete(trigger)
-        self.changed.set()
+        self._changed()
         log.info("trigger deleted", extra={"trigger": trigger.name, "trigger_id": trigger_id})
 
     async def list(self, *, kind: str | None = None, enabled_only: bool = False) -> list[Trigger]:

@@ -25,6 +25,8 @@ from muliao.triggers.service import TriggerService
 log = logging.getLogger(__name__)
 
 KIND = "webhook"
+# 事件内容原样进入 prompt，过大的事件应由发送方裁剪或改为传引用
+EVENT_MAX_BYTES = 256 * 1024
 
 
 def _hash(token: str) -> str:
@@ -45,12 +47,10 @@ class WebhookKind:
     def __init__(self, public_url: str):
         self._public_url = public_url
 
-    def configure(
-        self, config: dict[str, Any], state: dict[str, Any]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         if config:
             raise InvalidInput(f"webhook trigger config must be {{}}, got {config!r}")
-        return {}, state
+        return {}, {}
 
     def status(self, trigger: Trigger) -> dict[str, Any]:
         return {"url": hook_url(self._public_url, trigger.name), "has_token": "token_hash" in trigger.state}

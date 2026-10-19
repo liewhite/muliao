@@ -46,8 +46,6 @@ def deliver_lane(session_id: str | None, agent_id: str | None) -> str:
     return f"deliver:{session_id or agent_id or 'system'}"
 
 
-
-
 def _claimable():  # noqa: ANN202
     """可领取的 pending：它是所在 lane 最早的 pending，且该 lane 没有 running。claim 与 next_due 共用。"""
     running = aliased(Task)
@@ -56,7 +54,9 @@ def _claimable():  # noqa: ANN202
         select(Task)
         .where(Task.status == TaskStatus.PENDING)
         .where(
-            ~select(running.id).where(running.lane == Task.lane, running.status == TaskStatus.RUNNING).exists()
+            ~select(running.id)
+            .where(running.lane == Task.lane, running.status == TaskStatus.RUNNING)
+            .exists()
         )
         .where(
             ~select(earlier.id)

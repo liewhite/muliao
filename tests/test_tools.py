@@ -141,7 +141,7 @@ async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
         await client.post("/api/hooks/github", content="x", headers={"Authorization": "Bearer x"})
     ).status_code == 401
     trigger = await container.triggers.get_by_name("github")
-    token = (await client.post(f"/api/triggers/{trigger.id}/token")).json()["token"]
+    token = (await client.post(f"/api/triggers/{trigger.id}/webhook/token")).json()["token"]
     resp = await client.post(
         "/api/hooks/github", content="opened", headers={"Authorization": f"Bearer {token}"}
     )

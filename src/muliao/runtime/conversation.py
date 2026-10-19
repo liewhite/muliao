@@ -51,7 +51,7 @@ class Inbound:
     """一个事件：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 交给某个 agent 处理一轮」。
 
     session 为已有会话的 id 时在其中继续，为 NewSession 时新建会话。
-    source_ref 标识具体的发送方：cron job id、事件触发器 id、委派方（父）会话 id；用户为 None。
+    source_ref 标识具体的发送方：触发器 id、委派方（父）会话 id；用户为 None。
     """
 
     source: Origin

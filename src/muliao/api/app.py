@@ -10,13 +10,12 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from muliao.api import admin, agents, prompts, sessions, triggers
+from muliao.api import admin, agents, prompts, sessions, triggers, webhook
 from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, require_auth
 from muliao.api.deps import C
 from muliao.bus import SubscriberOverflow
 from muliao.container import Container
 from muliao.errors import Conflict, DomainError, Forbidden, InvalidInput, NotFound, TooLarge, Unauthorized
-from muliao.triggers.service import EVENT_MAX_BYTES
 
 log = logging.getLogger(__name__)
 
@@ -35,28 +34,11 @@ class LoginIn(BaseModel):
     password: str
 
 
-class HookOut(BaseModel):
-    session_id: str
-
-
 def _status_of(exc: DomainError) -> int:
     for cls, status in _STATUS.items():
         if isinstance(exc, cls):
             return status
     raise TypeError(f"unmapped domain error {type(exc).__name__}") from exc
-
-
-async def _read_limited(request: Request, limit: int) -> bytes:
-    """按字节上限读取请求体：声明的长度超限直接拒绝，未声明长度的分块读取，超限即停。"""
-    declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit() and int(declared) > limit:
-        raise TooLarge(f"request body exceeds {limit} bytes")
-    body = bytearray()
-    async for chunk in request.stream():
-        body += chunk
-        if len(body) > limit:
-            raise TooLarge(f"request body exceeds {limit} bytes")
-    return bytes(body)
 
 
 def _public_routes(secure_cookie: bool) -> APIRouter:
@@ -77,26 +59,6 @@ def _public_routes(secure_cookie: bool) -> APIRouter:
             secure=secure_cookie,
         )
 
-    @router.post("/api/hooks/{name}", status_code=202)
-    async def hook(name: str, request: Request, session_id: str | None = None) -> HookOut:
-        """外部事件入口：凭触发器 token（Authorization: Bearer <token>）鉴权，不走登录 cookie。
-
-        不带 session_id 时新建会话；带上之前返回的 session_id 则在该会话里继续。
-        """
-        c: Container = request.app.state.container
-        scheme, _, token = request.headers.get("authorization", "").partition(" ")
-        if scheme.lower() != "bearer" or not token:
-            raise Unauthorized("missing bearer token")
-        # 先鉴权再读请求体：未鉴权的调用方不能让进程读入任何内容
-        trigger_id = await c.webhooks.authenticate(name, token)
-        payload = await _read_limited(request, EVENT_MAX_BYTES)
-        try:
-            text = payload.decode()
-        except UnicodeDecodeError as e:
-            raise InvalidInput("event payload must be UTF-8 text") from e
-        session = await c.webhooks.deliver(trigger_id, text, session_id)
-        return HookOut(session_id=session.id)
-
     @router.post("/api/auth/logout", status_code=204)
     async def logout(response: Response) -> None:
         response.delete_cookie(COOKIE_NAME)
@@ -111,6 +73,7 @@ def _private_routes() -> APIRouter:
     router.include_router(admin.router)
     router.include_router(prompts.router)
     router.include_router(triggers.router)
+    router.include_router(webhook.router)
 
     @router.get("/auth/me", status_code=204)
     async def me() -> None:
@@ -179,6 +142,8 @@ def create_app(container: Container, web_dir: Path) -> FastAPI:
         return JSONResponse(status_code=_status_of(exc), content={"detail": str(exc)})
 
     app.include_router(_public_routes(secure_cookie=settings.server.public_url.startswith("https://")))
+    # webhook 的事件入口凭触发器 token 鉴权，不走登录
+    app.include_router(webhook.public_router)
     app.include_router(_private_routes())
     _mount_web(app, web_dir)
     return app

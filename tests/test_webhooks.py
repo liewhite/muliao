@@ -22,7 +22,7 @@ async def _create(client: httpx.AsyncClient, agent_id: str, name: str = "github"
     assert resp.status_code == 201, resp.text
     trigger = resp.json()
     assert trigger["status"]["has_token"] is False
-    token = (await client.post(f"/api/triggers/{trigger['id']}/token")).json()["token"]
+    token = (await client.post(f"/api/triggers/{trigger['id']}/webhook/token")).json()["token"]
     return trigger, token
 
 
@@ -78,7 +78,7 @@ async def test_rotated_token_replaces_old_one_and_disabled_trigger_refuses(clien
     await login(client)
     trigger, old = await _create(client, alpha)
 
-    new = (await client.post(f"/api/triggers/{trigger['id']}/token")).json()["token"]
+    new = (await client.post(f"/api/triggers/{trigger['id']}/webhook/token")).json()["token"]
     assert (await client.post("/api/hooks/github", content="x", headers=_bearer(old))).status_code == 401
     assert (await client.post("/api/hooks/github", content="x", headers=_bearer(new))).status_code == 202
 
@@ -167,7 +167,7 @@ async def test_recreated_trigger_cannot_continue_sessions_of_the_deleted_one(cli
 
 
 async def test_oversized_payload_is_refused_and_unauthenticated_body_is_never_read(client, make_agent):
-    from muliao.triggers.service import EVENT_MAX_BYTES
+    from muliao.triggers.webhook import EVENT_MAX_BYTES
 
     alpha = (await make_agent("alpha")).id
     await login(client)
@@ -224,4 +224,4 @@ async def test_schedule_trigger_cannot_be_fired_over_http(client, make_agent):
     )
     trigger = resp.json()
     assert trigger["status"]["next_run_at"]
-    assert (await client.post(f"/api/triggers/{trigger['id']}/token")).status_code == 422
+    assert (await client.post(f"/api/triggers/{trigger['id']}/webhook/token")).status_code == 422
