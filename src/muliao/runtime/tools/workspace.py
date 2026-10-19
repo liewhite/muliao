@@ -134,7 +134,8 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
         ctx: RunContext[RunScope],
         command: str,
         timeout: float | None = None,  # noqa: ASYNC109  工具参数，面向模型的命名
-        secrets: list[str] | None = None,
+        # 不写成 `list[str] | None`：可为空的数组在 schema 里是 anyOf[array, null]，模型更容易把数组写成 JSON 字符串
+        secrets: tuple[str, ...] = (),
     ) -> str:
         """Run a shell command (bash) in your workspace and return its exit code and combined output.
 
@@ -148,7 +149,7 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
         timeout = timeout or limits.default_timeout
         if not 0 < timeout <= limits.max_timeout:
             raise InvalidInput(f"timeout must be in (0, {limits.max_timeout}] seconds")
-        secret_values = await vault.resolve_many(ctx.deps.agent_id, secrets or [])
+        secret_values = await vault.resolve_many(ctx.deps.agent_id, list(secrets))
         result = await run_bash(
             command, cwd=ctx.deps.workspace, secrets=secret_values, timeout=timeout, merge_stderr=True
         )

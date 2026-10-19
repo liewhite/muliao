@@ -1,5 +1,6 @@
 """MCP server 的管理：agent 根据用户提供的信息自己接入 MCP。"""
 
+from collections.abc import Mapping
 from typing import Literal
 
 from pydantic import BaseModel
@@ -56,10 +57,12 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
         name: str,
         transport: Literal["stdio", "http"],
         command: str | None = None,
-        args: list[str] | None = None,
+        # 数组与对象参数不可为空、默认空值：可为空时 schema 是 anyOf[…, null]，模型更容易把它们写成 JSON 字符串
+        args: tuple[str, ...] = (),
         url: str | None = None,
-        env: dict[str, str] | None = None,
-        headers: dict[str, str] | None = None,
+        # Mapping：只读，默认的 {} 不会被改动（下面转成 tuple）
+        env: Mapping[str, str] = {},  # noqa: B006
+        headers: Mapping[str, str] = {},  # noqa: B006
         scope: Scope = "private",
     ) -> str:
         """Register an MCP server. The server is connected once to verify it and list its tools;
@@ -81,10 +84,10 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
             name=name,
             transport=McpTransport(transport),
             command=command,
-            args=tuple(args or ()),
+            args=args,
             url=url,
-            env=tuple((env or {}).items()),
-            headers=tuple((headers or {}).items()),
+            env=tuple(env.items()),
+            headers=tuple(headers.items()),
         )
         _, tools = await registry.add(
             owner_of(scope, ctx.deps.agent_id), spec, probe=True, author=ctx.deps.agent_id
