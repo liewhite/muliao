@@ -125,3 +125,10 @@ describe('ask_user blocks', () => {
     expect(askResult('{"answered":false,"answers":[],"note":"skipped"}').answered).toBe(false)
   })
 })
+
+describe('stopped turns', () => {
+  it('marks where the user stopped, outside the step group', () => {
+    const views = groupSteps(toBlocks([item('tool_call', '{}', 'a'), item('tool_result', 'stopped', 'a'), item('stopped', '')]))
+    expect(views.map((v) => v.kind)).toEqual(['process', 'stopped'])
+  })
+})

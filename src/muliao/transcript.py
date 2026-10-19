@@ -20,7 +20,10 @@ from pydantic_ai.messages import (
 
 from muliao.files import FileMeta, parse_file_url
 
-ItemType = Literal["user", "assistant", "thinking", "tool_call", "tool_result", "tool_error"]
+ItemType = Literal["user", "assistant", "thinking", "tool_call", "tool_result", "tool_error", "stopped"]
+
+# 用户停止的一轮：它保存下来的最后一条消息带这个 metadata 标记（runtime.turn），展示为「已停止」
+TURN_STOPPED = "muliao_stopped"
 
 
 class Attachment(TypedDict):
@@ -168,6 +171,8 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
                     items.append(
                         _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id)
                     )
+        if msg.metadata is not None and msg.metadata.get(TURN_STOPPED):
+            items.append(_item("stopped", ""))
     return items
 
 
@@ -183,6 +188,7 @@ def to_text(items: Sequence[Item], *, max_item_chars: int) -> str:
         "tool_call": "TOOL CALL",
         "tool_result": "TOOL RESULT",
         "tool_error": "TOOL ERROR",
+        "stopped": "STOPPED BY USER",
     }
     lines = []
     for item in items:

@@ -1,7 +1,7 @@
 """执行一次 agent 运行：组装 instructions、toolsets、模型，转发流式事件到总线。"""
 
 import logging
-from collections.abc import AsyncIterable, Collection, Mapping, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -47,6 +47,32 @@ from muliao.transcript import tool_attachments, truncate
 log = logging.getLogger(__name__)
 
 _EVENT_TEXT_LIMIT = 2000
+
+
+EventHandler = Callable[[RunContext[RunScope], AsyncIterable[AgentStreamEvent]], Awaitable[None]]
+
+
+class RunCapture:
+    """记下一次运行的 RunContext，取消后取回这次运行已经产生的消息（RunContext.messages 是运行中的历史本身）。
+
+    在事件流回调里拿到它：pydantic-ai 运行级别的上下文只是开始时历史的副本，每个节点的上下文才指向运行中的历史。
+    """
+
+    def __init__(self) -> None:
+        self._ctx: RunContext[RunScope] | None = None
+
+    def forwarding(self, handler: EventHandler) -> EventHandler:
+        async def capture(ctx: RunContext[RunScope], stream: AsyncIterable[AgentStreamEvent]) -> None:
+            self._ctx = ctx
+            await handler(ctx, stream)
+
+        return capture
+
+    def new_messages(self) -> list[ModelMessage] | None:
+        """这次运行产生的消息（按 run_id 区分，历史可能在请求前被合并，不能按下标切）；还没开始第一次模型请求时为 None。"""
+        if self._ctx is None:
+            return None
+        return [m for m in self._ctx.messages if m.run_id == self._ctx.run_id]
 
 
 @dataclass(frozen=True)
@@ -158,9 +184,11 @@ class AgentRuntime:
         *,
         summary: str | None = None,
         deferred: DeferredToolResults | None = None,
+        capture: RunCapture | None = None,
     ) -> AgentRunResult[str | DeferredToolRequests]:
         """对话的一轮。可以停在挂起的工具调用上（ask_user，见 runtime.questions）：输出为 DeferredToolRequests；
-        之后带着 deferred（用户的回答）再跑一轮就从那里继续，此时 prompt 可以为空。"""
+        之后带着 deferred（用户的回答）再跑一轮就从那里继续，此时 prompt 可以为空。
+        capture 给出时记下运行中的消息历史，这一轮被取消（用户停止）后还能取回已经产生的部分。"""
         return await self._execute(
             model=agent.model,
             instructions=await self.instructions(agent, scope, summary),
@@ -170,6 +198,7 @@ class AgentRuntime:
             history=history,
             output_type=[str, DeferredToolRequests],
             deferred=deferred,
+            capture=capture,
         )
 
     async def run_temp(
@@ -224,6 +253,7 @@ class AgentRuntime:
         output_type: Any = str,
         deferred: DeferredToolResults | None = None,
         usage_limits: UsageLimits | None = None,
+        capture: RunCapture | None = None,
     ) -> AgentRunResult[Any]:
         ctx = {
             "agent": scope.agent_id,
@@ -239,7 +269,9 @@ class AgentRuntime:
             message_history=list(history),
             deps=scope,
             toolsets=toolsets,
-            event_stream_handler=self._forward_events,
+            event_stream_handler=self._forward_events
+            if capture is None
+            else capture.forwarding(self._forward_events),
             usage_limits=usage_limits,
             output_type=output_type,
             deferred_tool_results=deferred,

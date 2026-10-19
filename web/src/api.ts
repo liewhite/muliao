@@ -74,7 +74,8 @@ export interface Attachment {
   inline: boolean
 }
 
-export type ItemType = 'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
+/** stopped：用户停止了这一轮（后端 transcript.TURN_STOPPED），出现在那一轮保存下来的内容之后 */
+export type ItemType = 'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'stopped'
 
 export interface Item {
   type: ItemType
@@ -362,6 +363,8 @@ export const api = {
   uploadFile: (file: File) =>
     send<FileInfo>('POST', FILES_PATH, { name: file.name }, { type: file.type || 'application/octet-stream', data: file }),
   markRead: (id: string) => post<void>(`/api/sessions/${id}/read`),
+  /** 停止正在运行的一轮；停止前已经产生的部分照常保存 */
+  stop: (id: string) => post<void>(`/api/sessions/${id}/stop`),
   compact: (id: string) => post<{ queued: boolean }>(`/api/sessions/${id}/compact`),
   deleteSession: (id: string) => del(`/api/sessions/${id}`),
 

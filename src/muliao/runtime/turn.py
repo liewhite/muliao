@@ -11,10 +11,10 @@ import asyncio
 import logging
 import weakref
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from pydantic_ai import DeferredToolRequests, DeferredToolResults
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults
+from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart, UserContent, UserPromptPart
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,10 +35,16 @@ from muliao.runtime.questions import (
     waiting_text,
 )
 from muliao.runtime.redaction import redact_messages
-from muliao.runtime.runner import AgentRuntime, ToolGroups
+from muliao.runtime.runner import AgentRuntime, RunCapture, ToolGroups
 from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane, turn_lane
+from muliao.transcript import TURN_STOPPED, unanswered_calls
 
 log = logging.getLogger(__name__)
+
+
+def _cancelling() -> bool:
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
 
 
 @dataclass(frozen=True)
@@ -47,6 +53,37 @@ class TurnOutput:
     agent_id: str
     answer: str
     messages: list[ModelMessage]
+    # 用户停止了这一轮：messages 是停止前已经产生的部分（见 _stopped_messages）
+    stopped: bool = False
+
+
+# 停止时还没出结果的工具调用的结果：工具的副作用可能已经发生，告诉模型它没有完成
+STOPPED_TOOL_RESULT = "Stopped by the user before this tool call finished; it may have partly run."
+
+
+def _stopped_messages(
+    new: list[ModelMessage] | None, user_prompt: str | Sequence[UserContent] | None
+) -> list[ModelMessage]:
+    """用户停止的一轮要保存的消息：停止前已经产生的部分（工具已经执行过，下一轮的模型要知道），没出结果的调用补上
+    结果，最后一条标上 TURN_STOPPED。正在生成的那段回答由 pydantic-ai 以 state='interrupted' 留在运行历史里，一起保存，
+    其中参数还没生成完的工具调用同样补上结果（参数在落库前脱敏，截断的 vault_set 参数整体替换，见 redaction）。
+    还没开始第一次模型请求时只有用户这条消息。"""
+    if new is None:
+        new = [] if user_prompt is None else [ModelRequest(parts=[UserPromptPart(user_prompt)])]
+    messages = list(new)
+    if dangling := unanswered_calls(messages):
+        messages.append(
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(c.tool_name, STOPPED_TOOL_RESULT, tool_call_id=c.tool_call_id)
+                    for c in dangling
+                ]
+            )
+        )
+    if messages:
+        last = messages[-1]
+        messages[-1] = replace(last, metadata={**(last.metadata or {}), TURN_STOPPED: True})
+    return messages
 
 
 def _deferred(history: Sequence[ModelMessage], answers: Mapping[str, object]) -> DeferredToolResults | None:
@@ -97,6 +134,8 @@ class TurnRunner:
     ):
         self._live = live
         self._files = files
+        # 正在运行的一轮（模型运行的子任务），按会话；用户停止时取消它
+        self._stoppable: dict[str, asyncio.Task[AgentRunResult[str | DeferredToolRequests]]] = {}
         self._db = db
         self._runtime = runtime
         self._tool_groups = tool_groups
@@ -126,8 +165,10 @@ class TurnRunner:
         user_prompt = (content if files else prompt) if content else None
         # 这一轮的运行事件从这里开始留存：成功时在提交事务结束（提交或回滚）时丢弃（commit_in），其余失败在这里丢弃
         self._live.begin(session.id)
-        try:
-            result = await self._runtime.run(
+        capture = RunCapture()
+        # 模型运行放在单独的子任务里：用户停止只取消它，与关停、总时限对外层任务的取消区分开（stop）
+        inner = asyncio.create_task(
+            self._runtime.run(
                 agent,
                 scope,
                 user_prompt,
@@ -135,13 +176,63 @@ class TurnRunner:
                 self._tool_groups.profile(agent.id, agent.tool_groups),
                 summary=context.summary,
                 deferred=_deferred(context.messages, answers),
-            )
+                capture=capture,
+            ),
+            name=f"turn-{session.id}",
+        )
+        if session.id in self._stoppable:
+            # 同一会话同时只有一轮（lane 串行、内联轮次有锁）：已有登记说明这个前提被打破，停止会停错一轮
+            inner.cancel()
+            raise RuntimeError(f"session {session.id} already has a running turn")
+        self._stoppable[session.id] = inner
+        try:
+            try:
+                result = await inner
+            except asyncio.CancelledError:
+                if not inner.cancelled() or _cancelling():
+                    # 外层被取消（关停、总时限）：这次运行一起取消，按原来的语义由队列恢复或重试
+                    inner.cancel()
+                    await asyncio.wait({inner})
+                    if not inner.cancelled() and (error := inner.exception()) is not None:
+                        log.warning(
+                            "turn run failed while being cancelled: %r",
+                            error,
+                            extra={"session_id": session.id},
+                        )
+                    raise
+                messages = _stopped_messages(capture.new_messages(), user_prompt)
+                log.info(
+                    "turn stopped by user",
+                    extra={
+                        "session_id": session.id,
+                        "agent": agent.id,
+                        "saved_messages": len(messages),
+                        "stopped_tool_calls": sum(
+                            1
+                            for m in messages
+                            for p in m.parts
+                            if isinstance(p, ToolReturnPart) and p.content == STOPPED_TOOL_RESULT
+                        ),
+                    },
+                )
+                return TurnOutput(session.id, agent.id, "", redact_messages(messages), stopped=True)
             return TurnOutput(
                 session.id, agent.id, _answer_text(result.output), redact_messages(result.new_messages())
             )
         except BaseException:
             self._live.end(session.id)
             raise
+        finally:
+            if self._stoppable.get(session.id) is inner:
+                del self._stoppable[session.id]
+
+    def stop(self, session_id: str) -> bool:
+        """停止这个会话正在运行的一轮；没有在运行的返回 False。停止前已经产生的部分照常提交（见 _stopped_messages）。"""
+        inner = self._stoppable.get(session_id)
+        if inner is None:
+            return False
+        inner.cancel()
+        return True
 
     async def commit_in(self, s: AsyncSession, turn_id: int, out: TurnOutput, reply_to: ReplyTo) -> None:
         """在调用方事务里提交一轮的全部结果。"""
@@ -156,6 +247,9 @@ class TurnRunner:
         session.updated_at = utcnow()
         session.unread = not session.private
         await self._count_turn(s, agent)
+        if out.stopped:
+            # 用户自己停的：不推送；停止的一轮可能没有模型响应，也就没有上下文大小可判断，下一轮再判断是否压缩
+            return
         await self._compaction.after_turn(s, session, agent.model, out.messages)
         if reply_to == ReplyTo.USER:
             self._notifier.enqueue_in(

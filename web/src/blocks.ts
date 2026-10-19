@@ -27,6 +27,7 @@ export type Block =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolView }
   | { kind: 'ask'; ask: AskView }
+  | { kind: 'stopped' }
 
 /** 过程步骤：思考与工具调用。连续的步骤收进一个折叠组，回答与说明文字留在组外 */
 export type Step = Extract<Block, { kind: 'thinking' | 'tool' }>
@@ -54,6 +55,9 @@ export function toBlocks(items: Item[]): Block[] {
     switch (item.type) {
       case 'user':
         blocks.push({ kind: 'user', text: item.text, attachments: item.attachments })
+        break
+      case 'stopped':
+        blocks.push({ kind: 'stopped' })
         break
       case 'assistant':
       case 'thinking':

@@ -98,6 +98,7 @@ class Container:
     vapid: VapidKeys
     worker: Worker
     compaction: CompactionScheduler
+    turns: TurnRunner
     models: ModelRegistry
     files: FileStore
     # 默认就是 models.check，单独持有只为测试替换
@@ -344,6 +345,7 @@ def build_container(
         vapid=vapid,
         worker=worker,
         compaction=compaction,
+        turns=turn_runner,
         models=models,
         files=files,
         _model_checker=model_checker or models.check,

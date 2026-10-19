@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
-import { Archive, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Trash2 } from 'lucide-react'
+import { Archive, CircleStop, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
@@ -145,6 +145,13 @@ function Blocks({ items, asking }: { items: Item[]; asking: Asking }) {
         switch (v.kind) {
           case 'ask':
             return <AskBlock key={i} ask={v.ask} asking={asking} />
+          case 'stopped':
+            return (
+              <div key={i} className="flex items-center gap-1.5 self-start text-xs text-muted">
+                <CircleStop className="size-3.5" />
+                已停止
+              </div>
+            )
           case 'user':
             return <UserBubble key={i} text={v.text} attachments={v.attachments} />
           case 'assistant':
@@ -259,13 +266,18 @@ function Composer({
   setDraft,
   uploads,
   busy,
+  running,
   onSend,
+  onStop,
 }: {
   draft: string
   setDraft: (v: string) => void
   uploads: Uploads
   busy: boolean
+  /** 这个会话有一轮正在运行：显示停止按钮（运行中也可以继续发消息，会排在后面） */
+  running: boolean
   onSend: () => void
+  onStop: () => void
 }) {
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     // 桌面端 Enter 发送、Shift+Enter 换行；输入法组字时不触发
@@ -288,6 +300,11 @@ function Composer({
             className="resize-none"
           />
         </TextField>
+        {running && (
+          <Button isIconOnly variant="danger-soft" isDisabled={busy} onPress={onStop} aria-label="停止">
+            <Square className="size-4" />
+          </Button>
+        )}
         <Button isIconOnly isDisabled={busy || !canSend(draft, uploads)} onPress={onSend} aria-label="发送">
           <SendHorizontal className="size-4" />
         </Button>
@@ -400,7 +417,15 @@ export default function SessionView() {
                 这是另一个 agent 向它发起的私有 thread，只能查看
               </div>
             ) : (
-              <Composer draft={draft} setDraft={setDraft} uploads={uploads} busy={action.busy} onSend={() => void send()} />
+              <Composer
+                draft={draft}
+                setDraft={setDraft}
+                uploads={uploads}
+                busy={action.busy}
+                running={detail.data?.open_turns.some((t) => t.status === 'running') ?? false}
+                onSend={() => void send()}
+                onStop={() => void action.run(() => api.stop(id))}
+              />
             )}
           </div>
         </div>

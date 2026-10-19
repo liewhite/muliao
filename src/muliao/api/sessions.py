@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.container import Container
-from muliao.errors import NotFound
+from muliao.errors import Conflict, NotFound
 from muliao.models import Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.conversation import Inbound, NewSession
 from muliao.runtime.questions import AskResult, Question, QuestionAnswer, answerable_questions
@@ -218,6 +218,17 @@ async def reply(c: C, session_id: str, body: ReplyIn) -> TaskOut:
         )
     )
     return (await task_outs(c, [received.turn]))[0]
+
+
+@router.post("/sessions/{session_id}/stop", status_code=202)
+async def stop(c: C, session_id: str) -> None:
+    """停止这个会话正在运行的一轮。停止前已经产生的部分（文字、工具调用与结果）照常保存。
+    私有 thread 的轮次属于发问的 agent（在它那一轮里内联运行），只能停止发问方所在的会话。"""
+    session = await c.sessions.get(session_id)
+    if session.private:
+        raise Conflict(f"session {session_id!r} is a private thread; stop the asking session instead")
+    if not c.turns.stop(session_id):
+        raise Conflict(f"session {session_id!r} has no running turn")
 
 
 class CompactOut(BaseModel):
