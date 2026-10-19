@@ -60,6 +60,17 @@ def next_run_at(state: dict[str, Any]) -> datetime:
     return datetime.fromisoformat(state["next_run_at"])
 
 
+def _skip_reason(trigger: Trigger | None, now: datetime) -> str | None:
+    """列出到期之后、触发之前触发器发生的变化；None 表示仍应触发。"""
+    if trigger is None:
+        return "deleted"
+    if not trigger.enabled:
+        return "disabled"
+    if next_run_at(trigger.state) > now:
+        return "rescheduled"
+    return None
+
+
 class ScheduleRunner:
     """定时触发的激活机制：到点调用 TriggerService.fire_in。"""
 
@@ -88,9 +99,11 @@ class ScheduleRunner:
         async with self._db.transaction() as s:
             trigger = await s.get(Trigger, trigger_id)
             # 列出之后可能已被删除、停用或改了配置：按最新的行重新判断
-            if trigger is None or not trigger.enabled or next_run_at(trigger.state) > now:
+            skip = _skip_reason(trigger, now)
+            if skip is not None:
                 log.info(
-                    "scheduled fire skipped: trigger changed since it was due",
+                    "scheduled fire skipped: trigger %s since it was due",
+                    skip,
                     extra={"trigger_id": trigger_id},
                 )
                 return

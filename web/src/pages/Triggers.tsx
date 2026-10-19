@@ -174,6 +174,13 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
   const [config, setConfig] = useState<Config | null>(trigger.config)
   const action = useAction()
 
+  // 每次进入编辑都从已保存的值开始：取消过的草稿不会在下一次保存时被提交
+  function startEditing() {
+    setPrompt(trigger.prompt)
+    setConfig(trigger.config)
+    setEditing(true)
+  }
+
   const save = () =>
     action.run(async () => {
       if (config === null) throw new Error('配置不合法')
@@ -244,7 +251,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           </>
         ) : (
           <>
-            <Button size="sm" variant="secondary" onPress={() => setEditing(true)}>
+            <Button size="sm" variant="secondary" onPress={startEditing}>
               <Pencil className="size-4" />
               编辑
             </Button>
