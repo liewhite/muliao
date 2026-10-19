@@ -17,6 +17,7 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   buttonVariants,
+  toast,
   type ButtonProps,
   type Key,
 } from '@heroui/react'
@@ -492,4 +493,11 @@ export function relativeTime(iso: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
   return formatTime(iso)
+}
+
+/** 复制到剪贴板。剪贴板 API 只在 HTTPS 等安全上下文可用；不可用时如实报错，文本本身可直接选中复制 */
+export async function copyText(text: string, what: string): Promise<void> {
+  if (!navigator.clipboard) throw new Error(`当前页面无法访问剪贴板（需要 HTTPS），请手动选中${what}复制`)
+  await navigator.clipboard.writeText(text)
+  toast.success(`已复制${what}`)
 }

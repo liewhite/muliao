@@ -15,7 +15,7 @@
 | Memory | agent 私有记忆，一份有长度上限的 markdown | `data/agents/<id>/memory.md` |
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `mcp_servers` 表 |
 | Secret | 加密保存的密码/token，通过 key 引用 | `secrets` 表（Fernet 加密） |
-| Trigger | 创建 session 并投递 turn 的入口：用户在网页发起、cron 定时触发；另有 agent 之间的委派（`delegate_task`） | `cron_jobs` 表 |
+| Trigger | 创建 session 并投递 turn 的入口：用户在网页发起、cron 定时触发、外部事件触发；另有 agent 之间的委派 | `cron_jobs`、`event_triggers` 表 |
 
 目录：
 
@@ -35,7 +35,7 @@ data/
 所有触发源只做一件事：**创建 session（或选中已有 session）并在同一事务里写入一个 `turn` task**。之后的执行、重试、反思、通知全部由同一个任务队列驱动。
 
 ```
-Web / cron / delegate_task / ask_agent
+Web / cron / 外部事件 / delegate_task / ask_agent
           │  conversation.receive(Inbound)（唯一入口；payload 带 prompt 与 reply_to）
           ▼
  tasks(turn) ──► Worker ──► TurnHandler ──► pydantic-ai Agent.run
@@ -140,18 +140,18 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 
 ## 8. 触发源
 
-触发点只有两个：用户在网页发起对话、cron 定时任务。agent 之间的委派是 agent 内部能力，在父会话下开 thread（第 4 节）。
+触发点有三个：用户在网页发起对话、cron 定时任务、外部事件。agent 之间的委派是 agent 内部能力，在父会话下开 thread（第 4 节）。
 
-**统一入口**：用户消息、cron 到点、agent 委派都是同一件事——把一段内容交给某个 agent，在某个会话里处理一轮。各来源只做适配（鉴权、触发时机、组装内容），然后构造一个 `Inbound` 交给 `conversation.receive`：
+**统一入口**：用户消息、cron 到点、外部事件、agent 委派都是同一件事——把一段内容交给某个 agent，在某个会话里处理一轮。各来源只做适配（鉴权、触发时机、组装内容），然后构造一个 `Inbound` 交给 `conversation.receive`：
 
 | 字段 | 含义 |
 |---|---|
-| `source` / `source_ref` | 来源与具体发送方：用户（无）、cron job id、委派方（父）会话 id |
+| `source` / `source_ref` | 来源与具体发送方：用户（无）、cron job id、事件触发器 id、委派方（父）会话 id |
 | `content` | 这一轮的 prompt |
 | `session` | 已有会话的 id（在其中继续），或 `NewSession`（新建：agent、标题，委派时还有父会话、thread 名、是否私有） |
 | `reply_to` | 这一轮的回答交给谁 |
 
-`receive` 是唯一投递新一轮的地方；新建会话也只有 `create_session` 一处实现（`ask_agent` 提前占用 thread 时也用它）。**续写规则**：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话（会话的来源与发送方都一致，委派会话的发送方就是它的父会话），否则 403。
+`receive` 是唯一投递新一轮的地方；新建会话也只有 `create_session` 一处实现（`ask_agent` 提前占用 thread 时也用它）。**续写规则**：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话（会话的来源与发送方都一致，委派会话的发送方就是它的父会话），否则 403。发送方身份是 cron job id、触发器 id（两张表都用 AUTOINCREMENT，删除后不复用）或父会话 id。
 
 是否推送由每一轮的 `reply_to` 决定（唯一来源），由发起这一轮的入口设置：
 
@@ -159,10 +159,25 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 |---|---|---|
 | 用户发起 / 回复 | 新建；回复沿用（私有 thread 只读） | `user`（iOS 要求每个 push 都展示通知，所以页面可见时也会弹） |
 | cron | 每次触发新建，`origin_ref` 记 cron job；上一次触发的 session 仍有未完成任务时跳过本次（不重叠） | `none`，需要通知时 agent 调 `notify_user` |
+| 外部事件 | 不带 `session_id` 时新建，`origin_ref` 记触发器，响应返回会话 id；带上它的后续事件在同一会话里继续（只能续写本触发器发起的会话） | `none`，同 cron |
 | `delegate_task` | 父会话下的公开 thread，同名续聊 | `user` |
 | `ask_agent` | 父会话下的私有 thread，同名续聊 | `agent` |
 
-通知只有 Web Push 一种渠道。外部消息（Slack 等）不做实时接入，统一由 cron 定时拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
+**外部事件**：每个事件触发器有一个名称和一个 token。外部系统调用 `POST /api/hooks/{name}[?session_id=...]`，带 `Authorization: Bearer <token>`，响应 `{"session_id": ...}`；请求体（UTF-8 文本，最多 256 KiB）原样附在触发器的处理说明之后，作为这一轮的 prompt：
+
+```
+<处理说明>
+
+<event>
+<请求体>
+</event>
+```
+
+- 该入口不走登录 cookie，只凭 token 鉴权，**先鉴权再读请求体**：未鉴权的调用方不能让进程读入任何内容；请求体按字节上限分块读取，超限返回 413。触发器不存在与 token 不匹配返回同一个 401，不暴露哪些名称存在；停用的触发器返回 409；续写不是本触发器发起的会话返回 403。
+- token 只存 SHA-256，明文只在创建或重置时返回一次；重置后旧 token 立即失效。
+- 不校验各平台自己的签名格式（GitHub、Slack 等各不相同）。需要时由发送方把 token 放进 Authorization 头，或在中间加一层转发。
+
+通知只有 Web Push 一种渠道。不支持主动推送的外部消息源（例如只能拉取的 Slack 未读）由 cron 定时拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
 
 ## 9. 安全边界
 
@@ -184,5 +199,5 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 ## 10. 部署形态与边界
 
 - **单进程**：事务串行化与 task 领取依赖进程内锁，所以只跑一个进程。这不影响 agent 并发：worker 同时执行 `runtime.worker_concurrency` 个 task（不同 session、不同 agent 并行，同一 session 串行）。模型调用与工具执行都是异步 IO，不占事务锁。
-- **外部消息**：不做实时推送接入（Slack 等）。需要定时处理外部消息时，用 cron 让 agent 按时拉取（见第 8 节）。
+- **外部消息**：能主动推送的外部系统接入事件触发器；只能拉取的由 cron 定时拉取（见第 8 节）。
 - **上下文压缩的覆盖范围**：只在两轮之间压缩。单轮内工具调用极多导致上下文超限时，该轮失败可见；在会话页点「压缩」后重试该轮即可。不自动识别各提供方的超限错误，因为错误格式各不相同，无法可靠识别。

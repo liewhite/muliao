@@ -13,6 +13,7 @@ import {
   type AgentInput,
 } from '../api'
 import { ActionButton,
+  copyText,
   EmptyHint,
   ErrorAlert,
   LinkButton,
@@ -220,13 +221,6 @@ function Reflections({ agentId }: { agentId: AgentId }) {
   )
 }
 
-async function copyText(text: string): Promise<void> {
-  // 剪贴板 API 只在 HTTPS 等安全上下文可用；不可用时如实报错，文本本身可直接选中复制
-  if (!navigator.clipboard) throw new Error('当前页面无法访问剪贴板（需要 HTTPS），请手动选中 id 复制')
-  await navigator.clipboard.writeText(text)
-  toast.success('已复制 id')
-}
-
 const DETAIL_TABS = [
   ['config', '配置'],
   ['memory', '记忆'],
@@ -283,7 +277,7 @@ export function AgentDetail() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-muted">id</span>
                     <code className="select-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono">{a.id}</code>
-                    <Button size="sm" variant="ghost" onPress={() => void action.run(() => copyText(a.id))}>
+                    <Button size="sm" variant="ghost" onPress={() => void action.run(() => copyText(a.id, 'id'))}>
                       <Copy className="size-4" />
                       复制
                     </Button>

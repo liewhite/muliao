@@ -10,6 +10,11 @@ from muliao.models import Origin, ReplyTo
 _ORIGIN_NOTES: dict[Origin, str] = {
     Origin.USER: "The user started this conversation in the app and may be reading along.",
     Origin.CRON: "This run was started by a schedule; nobody is watching.",
+    Origin.EVENT: (
+        "This run was started by an external event (inside <event>); nobody is watching. "
+        "A new event starts a fresh conversation unless its sender continues this one, so keep anything "
+        "unrelated events need in memory or workspace files."
+    ),
     Origin.DELEGATION: "Another agent opened this conversation with you.",
 }
 

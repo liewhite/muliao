@@ -14,9 +14,16 @@ class InvalidInput(DomainError):
     pass
 
 
+class Unauthorized(DomainError):
+    """调用方无法证明自己的身份（如事件触发器不存在或 token 不匹配）。"""
+
+
 class Forbidden(DomainError):
     """身份明确，但无权执行该操作（如续写不是自己发起的会话）。"""
 
+
+class TooLarge(DomainError):
+    """输入超过契约规定的大小上限。"""
 
 
 class TransientError(Exception):

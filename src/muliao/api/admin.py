@@ -1,4 +1,4 @@
-"""cron、MCP、vault、推送订阅的管理接口。"""
+"""cron、事件触发器、MCP、vault、推送订阅的管理接口。"""
 
 from datetime import datetime
 
@@ -7,8 +7,9 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.delivery.base import Notification
-from muliao.models import CronJob, McpServer, McpTransport
+from muliao.models import CronJob, EventTrigger, McpServer, McpTransport
 from muliao.runtime.mcp import McpSpec
+from muliao.triggers.events import hook_url
 from muliao.vault import SecretInfo
 
 router = APIRouter()
@@ -82,6 +83,82 @@ async def update_cron(c: C, job_id: int, body: CronIn) -> CronOut:
 @router.delete("/cron/{job_id}", status_code=204)
 async def delete_cron(c: C, job_id: int) -> None:
     await c.cron.delete(job_id)
+
+
+# ---- 事件触发器 ----
+
+
+class EventTriggerIn(BaseModel):
+    prompt: str
+    enabled: bool = True
+
+
+class EventTriggerCreate(BaseModel):
+    name: str
+    agent_id: str
+    prompt: str
+
+
+class EventTriggerOut(BaseModel):
+    id: int
+    name: str
+    agent_id: str
+    prompt: str
+    enabled: bool
+    # 外部系统调用的完整地址
+    url: str
+    last_fired_at: datetime | None
+    last_session_id: str | None
+
+    @classmethod
+    def of(cls, t: EventTrigger, public_url: str) -> "EventTriggerOut":
+        return cls(
+            id=t.id,
+            name=t.name,
+            agent_id=t.agent_id,
+            prompt=t.prompt,
+            enabled=t.enabled,
+            url=hook_url(public_url, t.name),
+            last_fired_at=t.last_fired_at,
+            last_session_id=t.last_session_id,
+        )
+
+
+class EventTriggerCreated(BaseModel):
+    trigger: EventTriggerOut
+    # 明文只返回这一次
+    token: str
+
+
+class TokenOut(BaseModel):
+    token: str
+
+
+@router.get("/event-triggers")
+async def list_event_triggers(c: C) -> list[EventTriggerOut]:
+    return [EventTriggerOut.of(t, c.settings.server.public_url) for t in await c.events.list()]
+
+
+@router.post("/event-triggers", status_code=201)
+async def create_event_trigger(c: C, body: EventTriggerCreate) -> EventTriggerCreated:
+    trigger, token = await c.events.create(name=body.name, agent_id=body.agent_id, prompt=body.prompt)
+    return EventTriggerCreated(trigger=EventTriggerOut.of(trigger, c.settings.server.public_url), token=token)
+
+
+@router.put("/event-triggers/{trigger_id}")
+async def update_event_trigger(c: C, trigger_id: int, body: EventTriggerIn) -> EventTriggerOut:
+    trigger = await c.events.update(trigger_id, prompt=body.prompt, enabled=body.enabled)
+    return EventTriggerOut.of(trigger, c.settings.server.public_url)
+
+
+@router.post("/event-triggers/{trigger_id}/token")
+async def rotate_event_trigger_token(c: C, trigger_id: int) -> TokenOut:
+    return TokenOut(token=await c.events.rotate_token(trigger_id))
+
+
+@router.delete("/event-triggers/{trigger_id}", status_code=204)
+async def delete_event_trigger(c: C, trigger_id: int) -> None:
+    await c.events.delete(trigger_id)
 
 
 # ---- MCP ----

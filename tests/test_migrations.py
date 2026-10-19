@@ -358,3 +358,34 @@ def test_threads_migration_links_delegated_sessions_and_sets_reply_targets(tmp_p
         ]
         reply_to = dict(conn.execute("SELECT session_id, json_extract(payload, '$.reply_to') FROM tasks"))
         assert reply_to == {"p": "user", "k": "none", "c": "user", "orphan": "user"}
+
+
+BEFORE_EVENT_TRIGGERS = "8270d02e797e"
+
+
+def test_event_triggers_migration_makes_sender_ids_non_reusable_and_keeps_cron_jobs(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    migrate(path, agents_dir, target=BEFORE_EVENT_TRIGGERS)
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO agents VALUES ('a1', 'n', 'd', 'm:x', '', 5, 0, 0, ?, ?)", (_TS, _TS))
+        conn.execute(
+            "INSERT INTO cron_jobs (id, name, agent_id, schedule, prompt, enabled, next_run_at, created_at)"
+            " VALUES (7, 'daily', 'a1', '0 9 * * *', 'p', 1, ?, ?)",
+            (_TS, _TS),
+        )
+
+    migrate(path, agents_dir)
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT id, name FROM cron_jobs").fetchall() == [(7, "daily")]
+        for table in ("cron_jobs", "event_triggers"):
+            sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = ?", (table,)).fetchone()[0]
+            assert "AUTOINCREMENT" in sql, table
+        # 删除尾部的 cron job 后，新 id 不复用
+        conn.execute("DELETE FROM cron_jobs")
+        conn.execute(
+            "INSERT INTO cron_jobs (name, agent_id, schedule, prompt, enabled, next_run_at, created_at)"
+            " VALUES ('again', 'a1', '0 9 * * *', 'p', 1, ?, ?)",
+            (_TS, _TS),
+        )
+        assert conn.execute("SELECT id FROM cron_jobs").fetchone()[0] == 8

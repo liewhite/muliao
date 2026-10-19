@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useTheme } from '@heroui/react'
-import { Bot, Clock, MessageSquare, Settings as SettingsIcon } from 'lucide-react'
+import { Bot, MessageSquare, Settings as SettingsIcon, Zap } from 'lucide-react'
 import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
 import { closeServerEvents } from './events'
 import { AgentCreate, AgentDetail, AgentList } from './pages/Agents'
 import { Login, Settings, Tasks, Vault } from './pages/Admin'
-import Cron from './pages/Cron'
+import Triggers from './pages/Triggers'
 import Mcp from './pages/Mcp'
 import NewSession from './pages/NewSession'
 import SessionView from './pages/SessionView'
@@ -20,7 +20,7 @@ type AuthState = 'checking' | 'in' | 'out'
 const TABS = [
   { to: '/', label: '会话', Icon: MessageSquare },
   { to: '/agents', label: 'Agents', Icon: Bot },
-  { to: '/cron', label: '定时', Icon: Clock },
+  { to: '/triggers', label: '触发', Icon: Zap },
   { to: '/settings', label: '设置', Icon: SettingsIcon },
 ] as const
 
@@ -84,7 +84,7 @@ export default function App() {
           <Route path="/agents" element={<AgentList />} />
           <Route path="/agents/new" element={<AgentCreate />} />
           <Route path="/agents/:id" element={<AgentDetail />} />
-          <Route path="/cron" element={<Cron />} />
+          <Route path="/triggers" element={<Triggers />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/skills" element={<PublicSkills />} />
           <Route path="/skills/edit" element={<SkillEditor />} />

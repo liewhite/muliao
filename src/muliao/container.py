@@ -39,6 +39,7 @@ from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
 from muliao.runtime.turn import TurnHandler
 from muliao.runtime.worker import TaskHandler, Worker
 from muliao.triggers.cron import CronService
+from muliao.triggers.events import EventTriggers
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class Container:
     notifier: Notifier
     mcp: McpRegistry
     cron: CronService
+    events: EventTriggers
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
     worker: Worker
@@ -137,6 +139,7 @@ def build_container(
     notifier = Notifier(db, queue)
     mcp = McpRegistry(db, vault)
     cron = CronService(db, queue, tz)
+    events = EventTriggers(db, queue, tz)
     push_subscriptions = PushSubscriptions(db)
     vapid = VapidKeys(settings.vapid_key_path)
 
@@ -202,6 +205,7 @@ def build_container(
         notifier=notifier,
         mcp=mcp,
         cron=cron,
+        events=events,
         push_subscriptions=push_subscriptions,
         vapid=vapid,
         worker=worker,

@@ -7,7 +7,6 @@ import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
   Loading,
-  Page,
   SelectInput,
   TextAreaInput,
   TextInput,
@@ -166,11 +165,11 @@ function CronForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreate
   )
 }
 
-export default function Cron() {
+export function CronPanel() {
   const jobs = useLoad(() => api.cron(), [])
   const agents = useAgents()
   return (
-    <Page title="定时任务">
+    <div className="flex flex-col gap-3">
       <CronForm agents={agents.data} onCreated={() => void jobs.reload()} />
       <Loading state={jobs}>
         {(list) =>
@@ -190,6 +189,6 @@ export default function Cron() {
           )
         }
       </Loading>
-    </Page>
+    </div>
   )
 }

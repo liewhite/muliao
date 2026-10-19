@@ -1,6 +1,6 @@
 // 与后端 src/muliao/api/*.py 的响应模型一一对应
 
-export type Origin = 'user' | 'cron' | 'delegation'
+export type Origin = 'user' | 'cron' | 'event' | 'delegation'
 /** waiting：一轮对话挂起等待 thread 的结果，占住所在会话的队列 */
 export type TaskStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed'
 export type TaskKind = 'turn' | 'reflection' | 'deliver' | 'compaction'
@@ -125,6 +125,18 @@ export interface CronJob {
   last_run_at: string | null
   last_session_id: string | null
   last_error: string | null
+}
+
+export interface EventTrigger {
+  id: number
+  name: string
+  agent_id: AgentId
+  prompt: string
+  enabled: boolean
+  /** 外部系统调用的完整地址 */
+  url: string
+  last_fired_at: string | null
+  last_session_id: string | null
 }
 
 export interface McpServer {
@@ -252,6 +264,14 @@ export const api = {
   updateCron: (id: number, job: { schedule: string; prompt: string; enabled: boolean }) =>
     put<CronJob>(`/api/cron/${id}`, job),
   deleteCron: (id: number) => del(`/api/cron/${id}`),
+  eventTriggers: () => get<EventTrigger[]>('/api/event-triggers'),
+  /** token 明文只在创建和重置时返回这一次 */
+  createEventTrigger: (t: { name: string; agent_id: AgentId; prompt: string }) =>
+    post<{ trigger: EventTrigger; token: string }>('/api/event-triggers', t),
+  updateEventTrigger: (id: number, t: { prompt: string; enabled: boolean }) =>
+    put<EventTrigger>(`/api/event-triggers/${id}`, t),
+  rotateEventTriggerToken: (id: number) => post<{ token: string }>(`/api/event-triggers/${id}/token`),
+  deleteEventTrigger: (id: number) => del(`/api/event-triggers/${id}`),
 
 
   mcp: () => get<McpServer[]>('/api/mcp'),
