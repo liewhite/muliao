@@ -1,12 +1,32 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  Alert,
+  AlertDialog,
+  Button,
+  Description,
+  Input,
+  Label,
+  ListBox,
+  Select,
+  Spinner,
+  TextArea,
+  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  buttonVariants,
+  type Key,
+} from '@heroui/react'
+import { ChevronLeft } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
-import { useNavigate } from 'react-router-dom'
 import { api, type Agent, type AgentId } from './api'
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
+
+// ---- 数据加载与操作 ----
 
 export interface Loaded<T> {
   data: T | undefined
@@ -38,7 +58,7 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[]): Loaded<T> {
   return { data, error, loading, reload }
 }
 
-/** 包装一个用户操作：执行中禁用按钮，失败时展示错误。 */
+/** 包装一个用户操作：执行中 busy，失败时记录错误（由 ErrorAlert 展示）。返回是否成功。 */
 export function useAction() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -58,10 +78,17 @@ export function useAction() {
   return { busy, error, run, setError }
 }
 
-export function ErrorBanner({ error }: { error: string | null }) {
-  if (!error) return null
-  return <div className="error">{error}</div>
+/** agent 列表（选择器与 id→名称显示共用）。 */
+export function useAgents(): Loaded<Agent[]> {
+  return useLoad(() => api.agents(), [])
 }
+
+/** 按 id 显示 agent 名称；agent 列表尚未加载完时先显示 id。 */
+export function agentLabel(agents: Agent[] | undefined, id: AgentId): string {
+  return agents?.find((a) => a.id === id)?.name ?? id
+}
+
+// ---- 布局 ----
 
 export function Page({
   title,
@@ -79,35 +106,284 @@ export function Page({
 }) {
   const navigate = useNavigate()
   return (
-    <div className="page">
-      <header className="page-header">
+    <div className="flex h-full flex-col">
+      <header className="flex items-center gap-2 border-b border-separator bg-surface px-3 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2">
         {back !== undefined && (
-          <button className="icon-button" onClick={() => navigate(back)} aria-label="返回">
-            ‹
-          </button>
+          <Button isIconOnly variant="ghost" size="sm" aria-label="返回" onPress={() => navigate(back)}>
+            <ChevronLeft className="size-5" />
+          </Button>
         )}
-        <h1>{title}</h1>
-        <div className="header-actions">{actions}</div>
+        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h1>
+        <div className="flex items-center gap-2">{actions}</div>
       </header>
-      <main className="page-body">{children}</main>
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 py-3">{children}</div>
+      </main>
       {footer}
     </div>
   )
 }
 
+/** 按钮样式的路由链接（HeroUI 的 Button 不带 href）。 */
+export function LinkButton({
+  to,
+  variant = 'primary',
+  size = 'sm',
+  children,
+}: {
+  to: string
+  variant?: 'primary' | 'secondary' | 'tertiary' | 'outline' | 'ghost'
+  size?: 'sm' | 'md' | 'lg'
+  children: ReactNode
+}) {
+  return (
+    <RouterLink to={to} className={buttonVariants({ variant, size })}>
+      {children}
+    </RouterLink>
+  )
+}
+
+// ---- 状态展示 ----
+
+export function ErrorAlert({ error, title = '出错了' }: { error: string | null; title?: string }) {
+  if (!error) return null
+  return (
+    <Alert status="danger">
+      <Alert.Indicator />
+      <Alert.Content>
+        <Alert.Title>{title}</Alert.Title>
+        <Alert.Description className="whitespace-pre-wrap break-words">{error}</Alert.Description>
+      </Alert.Content>
+    </Alert>
+  )
+}
+
 export function Loading<T>({ state, children }: { state: Loaded<T>; children: (data: T) => ReactNode }) {
-  if (state.error) return <ErrorBanner error={state.error} />
-  if (state.data === undefined) return <div className="muted center">加载中…</div>
+  if (state.error) return <ErrorAlert error={state.error} title="加载失败" />
+  if (state.data === undefined) {
+    return (
+      <div className="flex justify-center py-10">
+        <Spinner />
+      </div>
+    )
+  }
   return <>{children(state.data)}</>
+}
+
+export function EmptyHint({ children }: { children: ReactNode }) {
+  return <p className="py-10 text-center text-sm text-muted">{children}</p>
 }
 
 export function Markdown({ text }: { text: string }) {
   return (
-    <div className="markdown">
+    <div className="prose prose-sm max-w-none break-words dark:prose-invert prose-pre:overflow-x-auto">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
     </div>
   )
 }
+
+// ---- 表单字段 ----
+// 表单都放在卡片或底部栏（surface 背景）上；primary 变体的字段背景与 surface 同色，看不出边界，所以统一用 secondary
+
+interface FieldProps {
+  label: string
+  hint?: ReactNode
+  value: string
+  onChange: (value: string) => void
+  isRequired?: boolean
+  isDisabled?: boolean
+  autoFocus?: boolean
+}
+
+export function TextInput({
+  label,
+  hint,
+  type,
+  placeholder,
+  mono,
+  autoFocus,
+  ...field
+}: FieldProps & { type?: 'text' | 'password' | 'number'; placeholder?: string; mono?: boolean }) {
+  return (
+    <TextField type={type} fullWidth variant="secondary" {...field}>
+      <Label>{label}</Label>
+      <Input placeholder={placeholder} className={mono ? 'font-mono' : undefined} autoFocus={autoFocus} />
+      {hint && <Description>{hint}</Description>}
+    </TextField>
+  )
+}
+
+export function TextAreaInput({
+  label,
+  hint,
+  rows = 4,
+  mono,
+  autoFocus,
+  ...field
+}: FieldProps & { rows?: number; mono?: boolean }) {
+  return (
+    <TextField fullWidth variant="secondary" {...field}>
+      <Label>{label}</Label>
+      <TextArea rows={rows} className={mono ? 'font-mono text-sm' : undefined} autoFocus={autoFocus} />
+      {hint && <Description>{hint}</Description>}
+    </TextField>
+  )
+}
+
+export interface Option {
+  id: string
+  label: string
+  description?: string
+}
+
+export function SelectInput({
+  label,
+  hint,
+  value,
+  onChange,
+  options,
+  placeholder = '请选择',
+  isDisabled,
+}: {
+  label: string
+  hint?: ReactNode
+  value: string
+  onChange: (value: string) => void
+  options: Option[]
+  placeholder?: string
+  isDisabled?: boolean
+}) {
+  return (
+    <Select
+      fullWidth
+      variant="secondary"
+      placeholder={placeholder}
+      value={value === '' ? null : value}
+      onChange={(key: Key | null) => onChange(key === null ? '' : String(key))}
+      isDisabled={isDisabled}
+    >
+      <Label>{label}</Label>
+      <Select.Trigger>
+        <Select.Value />
+        <Select.Indicator />
+      </Select.Trigger>
+      {hint && <Description>{hint}</Description>}
+      <Select.Popover>
+        <ListBox>
+          {options.map((o) => (
+            <ListBox.Item key={o.id} id={o.id} textValue={o.label}>
+              <div className="flex flex-col">
+                <span>{o.label}</span>
+                {o.description && <span className="text-xs text-muted">{o.description}</span>}
+              </div>
+              <ListBox.ItemIndicator />
+            </ListBox.Item>
+          ))}
+        </ListBox>
+      </Select.Popover>
+    </Select>
+  )
+}
+
+/** 单选切换（如列表筛选）。 */
+export function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+  label,
+}: {
+  value: T
+  onChange: (value: T) => void
+  options: readonly { id: T; label: string }[]
+  label: string
+}) {
+  return (
+    <ToggleButtonGroup
+      aria-label={label}
+      size="sm"
+      selectionMode="single"
+      disallowEmptySelection
+      selectedKeys={[value]}
+      onSelectionChange={(keys) => {
+        const [key] = [...keys]
+        if (key !== undefined) onChange(String(key) as T)
+      }}
+    >
+      {options.map((o) => (
+        <ToggleButton key={o.id} id={o.id}>
+          {o.label}
+        </ToggleButton>
+      ))}
+    </ToggleButtonGroup>
+  )
+}
+
+// ---- 确认弹窗 ----
+
+interface ConfirmOptions {
+  title: string
+  body?: ReactNode
+  confirmLabel?: string
+  danger?: boolean
+}
+
+type Confirm = (options: ConfirmOptions) => Promise<boolean>
+
+const ConfirmContext = createContext<Confirm | null>(null)
+
+/** 全局唯一的确认弹窗；页面通过 useConfirm() 以 Promise 形式询问用户。 */
+export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const [options, setOptions] = useState<ConfirmOptions | null>(null)
+  const resolver = useRef<((ok: boolean) => void) | null>(null)
+
+  const confirm = useCallback<Confirm>((opts) => {
+    // 新的询问会让尚未回答的旧询问以「取消」结束
+    resolver.current?.(false)
+    setOptions(opts)
+    return new Promise<boolean>((resolve) => {
+      resolver.current = resolve
+    })
+  }, [])
+
+  const settle = (ok: boolean) => {
+    resolver.current?.(ok)
+    resolver.current = null
+    setOptions(null)
+  }
+
+  return (
+    <ConfirmContext.Provider value={confirm}>
+      {children}
+      <AlertDialog.Backdrop isOpen={options !== null} onOpenChange={(open) => !open && settle(false)}>
+        <AlertDialog.Container size="sm">
+          <AlertDialog.Dialog>
+            <AlertDialog.Header>
+              <AlertDialog.Icon status={options?.danger ? 'danger' : 'accent'} />
+              <AlertDialog.Heading>{options?.title}</AlertDialog.Heading>
+            </AlertDialog.Header>
+            {options?.body && <AlertDialog.Body>{options.body}</AlertDialog.Body>}
+            <AlertDialog.Footer>
+              <Button variant="tertiary" onPress={() => settle(false)}>
+                取消
+              </Button>
+              <Button variant={options?.danger ? 'danger' : 'primary'} onPress={() => settle(true)}>
+                {options?.confirmLabel ?? '确定'}
+              </Button>
+            </AlertDialog.Footer>
+          </AlertDialog.Dialog>
+        </AlertDialog.Container>
+      </AlertDialog.Backdrop>
+    </ConfirmContext.Provider>
+  )
+}
+
+export function useConfirm(): Confirm {
+  const confirm = useContext(ConfirmContext)
+  if (!confirm) throw new Error('useConfirm must be used inside <ConfirmProvider>')
+  return confirm
+}
+
+// ---- 时间 ----
 
 const dateFormat = new Intl.DateTimeFormat(undefined, {
   month: 'numeric',
@@ -126,28 +402,4 @@ export function relativeTime(iso: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
   return formatTime(iso)
-}
-
-export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
-  return (
-    <label className="field">
-      <span className="field-label">{label}</span>
-      {children}
-      {hint && <span className="field-hint">{hint}</span>}
-    </label>
-  )
-}
-
-export function confirmAction(message: string): boolean {
-  return window.confirm(message)
-}
-
-/** agent 列表（选择器与 id→名称显示共用）。 */
-export function useAgents(): Loaded<Agent[]> {
-  return useLoad(() => api.agents(), [])
-}
-
-/** 按 id 显示 agent 名称；agent 列表尚未加载完时先显示 id。 */
-export function agentLabel(agents: Agent[] | undefined, id: AgentId): string {
-  return agents?.find((a) => a.id === id)?.name ?? id
 }

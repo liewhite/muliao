@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
+import { Archive, RotateCcw, SendHorizontal, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentRoute, api, type CompactionInfo, type Item, type Task } from '../api'
 import { useServerEvents, type RunEvent } from '../events'
-import { ErrorBanner, Loading, Markdown, Page, agentLabel, confirmAction, formatTime, useAction, useAgents, useLoad } from '../ui'
+import { ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
 interface ToolView {
   name: string
@@ -71,17 +73,55 @@ function liveToItems(events: RunEvent[]): Item[] {
   return items
 }
 
+function Collapsible({ title, tone = 'default', children }: { title: ReactNode; tone?: 'default' | 'danger'; children: ReactNode }) {
+  return (
+    <Disclosure
+      className={`max-w-[88%] self-start rounded-xl border border-dashed px-3 py-1.5 text-sm text-muted ${
+        tone === 'danger' ? 'border-danger' : 'border-separator'
+      }`}
+    >
+      <Disclosure.Heading>
+        <Disclosure.Trigger className="flex w-full items-center gap-2 text-left">
+          {title}
+          <Disclosure.Indicator />
+        </Disclosure.Trigger>
+      </Disclosure.Heading>
+      <Disclosure.Content>
+        <Disclosure.Body className="pt-1">{children}</Disclosure.Body>
+      </Disclosure.Content>
+    </Disclosure>
+  )
+}
+
+const PRE = 'my-1 max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs text-foreground'
+
 function ToolBlock({ tool }: { tool: ToolView }) {
   const status = tool.result === null ? '运行中' : tool.failed ? '出错' : '完成'
   return (
-    <details className={`tool ${tool.failed ? 'failed' : ''}`}>
-      <summary>
-        <span className="tool-name">{tool.name}</span>
-        <span className="tool-status">{status}</span>
-      </summary>
-      {tool.args && tool.args !== '{}' && <pre>{tool.args}</pre>}
-      {tool.result !== null && <pre className="tool-result">{tool.result}</pre>}
-    </details>
+    <Collapsible
+      tone={tool.failed ? 'danger' : 'default'}
+      title={
+        <>
+          <span className="font-mono text-foreground">{tool.name}</span>
+          <span className="ml-auto text-xs">{status}</span>
+        </>
+      }
+    >
+      {tool.args && tool.args !== '{}' && <pre className={PRE}>{tool.args}</pre>}
+      {tool.result !== null && <pre className={PRE}>{tool.result}</pre>}
+    </Collapsible>
+  )
+}
+
+function UserBubble({ text, pending }: { text: string; pending?: boolean }) {
+  return (
+    <div
+      className={`max-w-[88%] self-end whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 text-accent-foreground ${
+        pending ? 'opacity-70' : ''
+      }`}
+    >
+      {text}
+    </div>
   )
 }
 
@@ -91,23 +131,18 @@ function Blocks({ items }: { items: Item[] }) {
       {toBlocks(items).map((b, i) => {
         switch (b.kind) {
           case 'user':
-            return (
-              <div key={i} className="bubble user">
-                {b.text}
-              </div>
-            )
+            return <UserBubble key={i} text={b.text} />
           case 'assistant':
             return (
-              <div key={i} className="bubble assistant">
+              <div key={i} className="max-w-[88%] self-start rounded-2xl rounded-bl-md bg-surface px-3.5 py-2.5 shadow-sm">
                 <Markdown text={b.text} />
               </div>
             )
           case 'thinking':
             return (
-              <details key={i} className="thinking">
-                <summary>思考</summary>
-                <div className="thinking-body">{b.text}</div>
-              </details>
+              <Collapsible key={i} title="思考">
+                <div className="whitespace-pre-wrap">{b.text}</div>
+              </Collapsible>
             )
           case 'tool':
             return <ToolBlock key={i} tool={b.tool} />
@@ -127,10 +162,19 @@ function History({ items, compactions }: { items: Item[]; compactions: Compactio
     rest = cut === -1 ? [] : rest.slice(cut)
     parts.push(<Blocks key={`b${c.through_message_id}`} items={before} />)
     parts.push(
-      <details key={`c${c.through_message_id}`} className="compaction">
-        <summary>以上内容已压缩 · {formatTime(c.created_at)}</summary>
-        <Markdown text={c.summary} />
-      </details>,
+      <Disclosure key={`c${c.through_message_id}`} className="border-y border-dashed border-separator py-1.5 text-sm text-muted">
+        <Disclosure.Heading>
+          <Disclosure.Trigger className="flex w-full items-center justify-center gap-2">
+            以上内容已压缩 · {formatTime(c.created_at)}
+            <Disclosure.Indicator />
+          </Disclosure.Trigger>
+        </Disclosure.Heading>
+        <Disclosure.Content>
+          <Disclosure.Body className="pt-2">
+            <Markdown text={c.summary} />
+          </Disclosure.Body>
+        </Disclosure.Content>
+      </Disclosure>,
     )
   }
   parts.push(<Blocks key="rest" items={rest} />)
@@ -140,20 +184,29 @@ function History({ items, compactions }: { items: Item[]; compactions: Compactio
 function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void }) {
   return (
     <>
-      <div className="bubble user pending">{task.prompt}</div>
+      <UserBubble text={task.prompt ?? ''} pending />
       {task.status === 'failed' ? (
-        <div className="turn-status failed">
-          <div>这一轮失败了（尝试 {task.attempts} 次）：</div>
-          <pre>{task.error}</pre>
-          <div className="small">如果是上下文过长，先点右上角「压缩」，完成后再重试。</div>
-          <button className="button small" onClick={() => onRetry(task.id)}>
+        <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
+          <div>这一轮失败了（尝试 {task.attempts} 次）</div>
+          <pre className={PRE}>{task.error}</pre>
+          <div className="text-xs">如果是上下文过长，先点右上角「压缩」，完成后再重试。</div>
+          <Button size="sm" variant="secondary" className="self-start" onPress={() => onRetry(task.id)}>
+            <RotateCcw className="size-4" />
             重试
-          </button>
+          </Button>
         </div>
       ) : (
-        <div className="turn-status">
-          {task.status === 'running' ? '处理中…' : task.attempts > 0 ? `等待重试（${formatTime(task.not_before)}）` : '排队中…'}
-          {task.error && <div className="muted small">上次错误：{task.error}</div>}
+        <div className="flex items-center gap-2 self-end text-xs text-muted">
+          {task.status === 'running' ? (
+            <>
+              <Spinner size="sm" /> 处理中…
+            </>
+          ) : task.attempts > 0 ? (
+            `等待重试（${formatTime(task.not_before)}）`
+          ) : (
+            '排队中…'
+          )}
+          {task.error && <span>上次错误：{task.error}</span>}
         </div>
       )}
     </>
@@ -163,6 +216,7 @@ function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void
 export default function SessionView() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
+  const confirm = useConfirm()
   const detail = useLoad(() => api.session(id), [id])
   const agents = useAgents()
   const [live, setLive] = useState<RunEvent[]>([])
@@ -212,7 +266,7 @@ export default function SessionView() {
   }
 
   async function remove() {
-    if (!confirmAction('删除这个会话？')) return
+    if (!(await confirm({ title: '删除这个会话？', body: '会话的全部消息都会被删除。', confirmLabel: '删除', danger: true }))) return
     if (await action.run(() => api.deleteSession(id))) navigate('/')
   }
 
@@ -223,52 +277,59 @@ export default function SessionView() {
       title={session?.title ?? '会话'}
       actions={
         <>
-          <button
-            className="button small"
-            disabled={action.busy}
-            onClick={() => void action.run(() => api.compact(id).then(() => detail.reload()))}
-            title="把早期对话压缩成摘要，减少发给模型的上下文"
+          <Button
+            size="sm"
+            variant="secondary"
+            isDisabled={action.busy}
+            onPress={() => void action.run(() => api.compact(id).then(() => detail.reload()))}
+            aria-label="把早期对话压缩成摘要，减少发给模型的上下文"
           >
+            <Archive className="size-4" />
             压缩
-          </button>
-          <button className="icon-button" onClick={remove} aria-label="删除会话">
-            🗑
-          </button>
+          </Button>
+          <Button isIconOnly size="sm" variant="ghost" onPress={() => void remove()} aria-label="删除会话">
+            <Trash2 className="size-4" />
+          </Button>
         </>
       }
       footer={
-      <div className="composer">
-          <ErrorBanner error={action.error} />
-          <div className="composer-row">
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="回复…"
-              rows={Math.min(6, Math.max(1, draft.split('\n').length))}
-            />
-            <button className="button primary" disabled={action.busy || !draft.trim()} onClick={send}>
-              发送
-            </button>
+        <div className="border-t border-separator bg-surface px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+            <ErrorAlert error={action.error} />
+            <div className="flex items-end gap-2">
+              <TextField value={draft} onChange={setDraft} aria-label="回复" variant="secondary" className="flex-1">
+                <TextArea
+                  placeholder="回复…"
+                  rows={Math.min(6, Math.max(1, draft.split('\n').length))}
+                  onKeyDown={onKeyDown}
+                  className="resize-none"
+                />
+              </TextField>
+              <Button isIconOnly isDisabled={action.busy || !draft.trim()} onPress={() => void send()} aria-label="发送">
+                <SendHorizontal className="size-4" />
+              </Button>
+            </div>
           </div>
         </div>
       }
     >
       <Loading state={detail}>
         {(d) => (
-          <div className="chat">
-            <div className="chat-meta">
-              <Link to={agentRoute(d.session.agent_id)} className="tag">
-                {agentLabel(agents.data, d.session.agent_id)}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-center gap-2">
+              <Link to={agentRoute(d.session.agent_id)}>
+                <Chip size="sm" color="accent" variant="soft">
+                  {agentLabel(agents.data, d.session.agent_id)}
+                </Chip>
               </Link>
-              <span className="muted small">{formatTime(d.session.created_at)}</span>
+              <span className="text-xs text-muted">{formatTime(d.session.created_at)}</span>
             </div>
             <History items={d.items} compactions={d.compactions} />
             {d.open_turns.map((t) => (
               <OpenTurn key={t.id} task={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
             ))}
             {live.length > 0 && (
-              <div className="live">
+              <div className="flex flex-col gap-3 opacity-90">
                 <Blocks items={liveToItems(live)} />
               </div>
             )}

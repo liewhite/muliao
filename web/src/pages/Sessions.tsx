@@ -1,8 +1,21 @@
 import { useState } from 'react'
+import { Card, Chip } from '@heroui/react'
+import { Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, asAgentId, type Origin } from '../api'
 import { useServerEvents } from '../events'
-import { Loading, Page, agentLabel, relativeTime, useAgents, useLoad } from '../ui'
+import {
+  EmptyHint,
+  LinkButton,
+  Loading,
+  Page,
+  Segmented,
+  SelectInput,
+  agentLabel,
+  relativeTime,
+  useAgents,
+  useLoad,
+} from '../ui'
 
 const ORIGIN_LABEL: Record<Origin, string> = {
   user: '对话',
@@ -10,19 +23,20 @@ const ORIGIN_LABEL: Record<Origin, string> = {
   delegation: '委派',
 }
 
-// 定时任务每次触发都会产生 session，默认不显示以免淹没收件箱
-const FILTERS: { label: string; origins: Origin[] | undefined }[] = [
-  { label: '收件箱', origins: ['user', 'delegation'] },
-  { label: '定时', origins: ['cron'] },
-  { label: '全部', origins: undefined },
-]
+// 定时任务每次触发都会产生会话，默认不显示以免淹没收件箱
+const FILTERS = {
+  inbox: { label: '收件箱', origins: ['user', 'delegation'] as Origin[] },
+  cron: { label: '定时', origins: ['cron'] as Origin[] },
+  all: { label: '全部', origins: undefined },
+}
+type Filter = keyof typeof FILTERS
 
 export default function Sessions() {
-  const [filter, setFilter] = useState(0)
-  const [agent, setAgent] = useState(asAgentId(''))
+  const [filter, setFilter] = useState<Filter>('inbox')
+  const [agent, setAgent] = useState('')
   const agents = useAgents()
   const sessions = useLoad(
-    () => api.sessions({ origin: FILTERS[filter].origins, agent_id: agent || undefined, limit: 100 }),
+    () => api.sessions({ origin: FILTERS[filter].origins, agent_id: agent ? asAgentId(agent) : undefined, limit: 100 }),
     [filter, agent],
   )
   useServerEvents((e) => {
@@ -33,52 +47,59 @@ export default function Sessions() {
     <Page
       title="会话"
       actions={
-        <Link className="button primary small" to="/new">
+        <LinkButton to="/new">
+          <Plus className="size-4" />
           新对话
-        </Link>
+        </LinkButton>
       }
     >
-      <div className="toolbar">
-        <div className="segmented">
-          {FILTERS.map((f, i) => (
-            <button key={f.label} className={i === filter ? 'active' : ''} onClick={() => setFilter(i)}>
-              {f.label}
-            </button>
-          ))}
+      <div className="flex flex-wrap items-end gap-3">
+        <Segmented
+          label="会话筛选"
+          value={filter}
+          onChange={setFilter}
+          options={Object.entries(FILTERS).map(([id, f]) => ({ id: id as Filter, label: f.label }))}
+        />
+        <div className="min-w-40 flex-1">
+          <SelectInput
+            label="Agent"
+            value={agent}
+            onChange={setAgent}
+            placeholder="所有 agent"
+            options={[{ id: '', label: '所有 agent' }, ...(agents.data ?? []).map((a) => ({ id: a.id, label: a.name }))]}
+          />
         </div>
-        <select value={agent} onChange={(e) => setAgent(asAgentId(e.target.value))}>
-          <option value="">所有 agent</option>
-          {agents.data?.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
       </div>
       <Loading state={sessions}>
         {(list) =>
           list.length === 0 ? (
-            <div className="muted center">没有会话</div>
+            <EmptyHint>没有会话</EmptyHint>
           ) : (
-            <ul className="list">
+            <div className="flex flex-col gap-2">
               {list.map((s) => (
-                <li key={s.id}>
-                  <Link to={`/sessions/${s.id}`} className="list-item">
-                    <div className="list-main">
-                      <div className="list-title">
-                        {s.unread && <span className="dot" aria-label="未读" />}
-                        {s.title}
+                <Link key={s.id} to={`/sessions/${s.id}`}>
+                  <Card className="transition-colors hover:bg-surface-hover">
+                    <Card.Content className="flex flex-row items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 font-medium">
+                          {s.unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="未读" />}
+                          <span className="truncate">{s.title}</span>
+                        </div>
+                        <div className="mt-1 flex gap-1.5">
+                          <Chip size="sm" color="accent" variant="soft">
+                            {agentLabel(agents.data, s.agent_id)}
+                          </Chip>
+                          <Chip size="sm" variant="secondary">
+                            {ORIGIN_LABEL[s.origin]}
+                          </Chip>
+                        </div>
                       </div>
-                      <div className="list-sub">
-                        <span className="tag">{agentLabel(agents.data, s.agent_id)}</span>
-                        <span className="tag subtle">{ORIGIN_LABEL[s.origin]}</span>
-                      </div>
-                    </div>
-                    <div className="list-meta">{relativeTime(s.updated_at)}</div>
-                  </Link>
-                </li>
+                      <span className="shrink-0 text-xs text-muted">{relativeTime(s.updated_at)}</span>
+                    </Card.Content>
+                  </Card>
+                </Link>
               ))}
-            </ul>
+            </div>
           )
         }
       </Loading>

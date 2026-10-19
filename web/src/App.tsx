@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { useTheme } from '@heroui/react'
+import { Bot, Clock, MessageSquare, Settings as SettingsIcon } from 'lucide-react'
 import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
 import { closeServerEvents } from './events'
@@ -11,21 +13,23 @@ import SessionView from './pages/SessionView'
 import Sessions from './pages/Sessions'
 import { PublicSkills, SkillEditor } from './pages/Skills'
 import { syncPushSubscription } from './push'
-import { errorMessage } from './ui'
+import { ErrorAlert, errorMessage } from './ui'
 
 type AuthState = 'checking' | 'in' | 'out'
 
 const TABS = [
-  ['/', '会话', '💬'],
-  ['/agents', 'Agents', '🤖'],
-  ['/cron', '定时', '⏰'],
-  ['/settings', '设置', '⚙️'],
+  { to: '/', label: '会话', Icon: MessageSquare },
+  { to: '/agents', label: 'Agents', Icon: Bot },
+  { to: '/cron', label: '定时', Icon: Clock },
+  { to: '/settings', label: '设置', Icon: SettingsIcon },
 ] as const
 
 export default function App() {
   const [auth, setAuth] = useState<AuthState>('checking')
   const [bootError, setBootError] = useState<string | null>(null)
   const navigate = useNavigate()
+  // 主题跟随系统深浅色（index.html 里的内联脚本负责首屏，避免闪烁）
+  useTheme('system')
 
   useEffect(() => {
     api.me().then(
@@ -54,7 +58,13 @@ export default function App() {
     return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
   }, [auth, navigate])
 
-  if (bootError) return <div className="error center">无法连接服务端：{bootError}</div>
+  if (bootError) {
+    return (
+      <div className="p-4">
+        <ErrorAlert title="无法连接服务端" error={bootError} />
+      </div>
+    )
+  }
   if (auth === 'checking') return null
   if (auth === 'out') {
     return (
@@ -65,8 +75,8 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <div className="content">
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1">
         <Routes>
           <Route path="/" element={<Sessions />} />
           <Route path="/new" element={<NewSession />} />
@@ -85,10 +95,17 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
-      <nav className="tabbar">
-        {TABS.map(([to, label, icon]) => (
-          <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => (isActive ? 'active' : '')}>
-            <span className="tab-icon">{icon}</span>
+      <nav className="flex border-t border-separator bg-surface pb-[env(safe-area-inset-bottom)]">
+        {TABS.map(({ to, label, Icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={to === '/'}
+            className={({ isActive }) =>
+              `flex h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] ${isActive ? 'text-accent' : 'text-muted'}`
+            }
+          >
+            <Icon className="size-5" />
             <span>{label}</span>
           </NavLink>
         ))}

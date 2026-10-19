@@ -1,19 +1,20 @@
 import { useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Button, Card } from '@heroui/react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, asAgentId } from '../api'
-import { ErrorBanner, Field, Loading, Page, useAction, useLoad } from '../ui'
+import { EmptyHint, ErrorAlert, LinkButton, Loading, Page, SelectInput, TextAreaInput, useAction, useAgents } from '../ui'
 
 export default function NewSession() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
-  const agents = useLoad(() => api.agents(), [])
-  const [agent, setAgent] = useState(asAgentId(params.get('agent') ?? ''))
+  const agents = useAgents()
+  const [agent, setAgent] = useState(params.get('agent') ?? '')
   const [prompt, setPrompt] = useState('')
   const action = useAction()
 
   async function start() {
     await action.run(async () => {
-      const session = await api.startSession(agent, prompt.trim())
+      const session = await api.startSession(asAgentId(agent), prompt.trim())
       navigate(`/sessions/${session.id}`, { replace: true })
     })
   }
@@ -23,34 +24,27 @@ export default function NewSession() {
       <Loading state={agents}>
         {(list) =>
           list.length === 0 ? (
-            <div className="empty">
-              <p>还没有 agent。</p>
-              <Link className="button primary" to="/agents/new">
-                创建 agent
-              </Link>
+            <div className="flex flex-col items-center gap-3">
+              <EmptyHint>还没有 agent。</EmptyHint>
+              <LinkButton to="/agents/new">创建 agent</LinkButton>
             </div>
           ) : (
-            <div className="form">
-              <Field label="Agent">
-                <select value={agent} onChange={(e) => setAgent(asAgentId(e.target.value))}>
-                  <option value="" disabled>
-                    选择 agent
-                  </option>
-                  {list.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name} — {a.description}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="消息">
-                <textarea rows={6} value={prompt} onChange={(e) => setPrompt(e.target.value)} autoFocus />
-              </Field>
-              <ErrorBanner error={action.error} />
-              <button className="button primary" disabled={!agent || !prompt.trim() || action.busy} onClick={start}>
-                开始
-              </button>
-            </div>
+            <Card>
+              <Card.Content className="flex flex-col gap-4">
+                <SelectInput
+                  label="Agent"
+                  value={agent}
+                  onChange={setAgent}
+                  placeholder="选择 agent"
+                  options={list.map((a) => ({ id: a.id, label: a.name, description: a.description }))}
+                />
+                <TextAreaInput label="消息" value={prompt} onChange={setPrompt} rows={6} autoFocus />
+                <ErrorAlert error={action.error} />
+                <Button isDisabled={!agent || !prompt.trim()} isPending={action.busy} onPress={() => void start()}>
+                  开始
+                </Button>
+              </Card.Content>
+            </Card>
           )
         }
       </Loading>

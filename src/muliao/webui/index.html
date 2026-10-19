@@ -12,8 +12,16 @@
     <link rel="icon" type="image/png" href="/icon-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Muliao</title>
-    <script type="module" crossorigin src="/assets/index-C2CkDQPz.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-KY2xIQI-.css">
+    <!-- 首屏前按系统偏好设置主题，避免闪烁；运行时由 HeroUI 的 useTheme('system') 接管 -->
+    <script>
+      (function () {
+        var t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        document.documentElement.classList.add(t)
+        document.documentElement.setAttribute('data-theme', t)
+      })()
+    </script>
+    <script type="module" crossorigin src="/assets/index-C4GuTjNm.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BbIV85Sg.css">
   </head>
   <body>
     <div id="root"></div>
