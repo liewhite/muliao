@@ -431,3 +431,9 @@ def test_scoped_secrets_migration_keeps_existing_secrets_public(tmp_path):
         assert conn.execute("SELECT owner, key, ciphertext, description FROM secrets").fetchall() == [
             (None, "TOKEN", b"\x00", "d")
         ]
+        # 部分唯一索引必须带上条件，否则同名的私有与公共 secret 无法共存（compare_metadata 不比较索引条件）
+        indexes = dict(
+            conn.execute("SELECT name, sql FROM sqlite_master WHERE tbl_name = 'secrets' AND type = 'index'")
+        )
+        assert "WHERE owner IS NOT NULL" in indexes["uq_secrets_private"]
+        assert "WHERE owner IS NULL" in indexes["uq_secrets_public"]

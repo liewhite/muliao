@@ -6,18 +6,21 @@ MCP server 的配置用 server 归属者的视角——公共 server 只能引�
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
 
 from cryptography.fernet import Fernet
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
 from muliao.errors import InvalidInput, NotFound
 from muliao.models import Agent, Secret
-from muliao.ownership import scope_of, visible
+from muliao.ownership import owned_by, scope_of, visible, visible_owners
+
+log = logging.getLogger(__name__)
 
 _KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,99}$")
 # 配置模板中的引用语法：${vault:KEY}
@@ -42,10 +45,6 @@ def _info(row: Secret) -> SecretInfo:
     return SecretInfo(row.owner, row.key, row.description, row.updated_at)
 
 
-def _owned_by(owner: str | None):  # noqa: ANN202
-    return Secret.owner.is_(None) if owner is None else Secret.owner == owner
-
-
 class Vault:
     def __init__(self, db: Database, fernet_key: str):
         self._db = db
@@ -59,19 +58,22 @@ class Vault:
         async with self._db.transaction() as s:
             if owner is not None and await s.get(Agent, owner) is None:
                 raise NotFound(f"agent {owner!r} not found")
-            row = await s.scalar(select(Secret).where(_owned_by(owner), Secret.key == key))
+            row = await s.scalar(select(Secret).where(owned_by(Secret.owner, owner), Secret.key == key))
             if row is None:
                 s.add(Secret(owner=owner, key=key, ciphertext=ciphertext, description=description))
             else:
                 row.ciphertext = ciphertext
                 row.description = description
+        # 公共 secret 所有 agent 都依赖：记录谁在什么作用域改了哪个 key（不记值）
+        log.info("secret set", extra={"owner": owner, "key": key})
 
     async def delete(self, owner: str | None, key: str) -> None:
         async with self._db.transaction() as s:
-            row = await s.scalar(select(Secret).where(_owned_by(owner), Secret.key == key))
+            row = await s.scalar(select(Secret).where(owned_by(Secret.owner, owner), Secret.key == key))
             if row is None:
                 raise NotFound(f"{scope_of(owner)} secret {key!r} not found")
             await s.delete(row)
+        log.info("secret deleted", extra={"owner": owner, "key": key})
 
     async def list_all(self) -> list[SecretInfo]:
         """管理界面：所有公共与私有 secret（不含值）。"""
@@ -85,11 +87,7 @@ class Vault:
 
     async def _visible_rows(self, s: AsyncSession, agent_id: str | None) -> list[Secret]:
         query = select(Secret).order_by(Secret.key)
-        query = query.where(
-            Secret.owner.is_(None)
-            if agent_id is None
-            else or_(Secret.owner.is_(None), Secret.owner == agent_id)
-        )
+        query = query.where(visible_owners(Secret.owner, agent_id))
         rows = (await s.scalars(query)).all()
         return visible(rows, agent_id=agent_id, owner=lambda r: r.owner, name=lambda r: r.key)
 

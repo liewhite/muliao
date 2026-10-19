@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.db import Database, utcnow
 from muliao.errors import NotFound
 from muliao.models import Agent, PromptRevision
+from muliao.ownership import owned_by
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +35,9 @@ class PromptStore:
             return content
         if owner is None:
             return ""
+        if await s.get(Agent, owner) is None:
+            # 读到一半 agent 被删除（版本随之级联删除）：如实报告，不当作数据损坏
+            raise NotFound(f"agent {owner!r} not found")
         raise RuntimeError(f"agent {owner} has no instructions revision; it must get one when created")
 
     async def current(self, owner: str | None) -> str:
@@ -71,7 +75,7 @@ class PromptStore:
         async with self._db.transaction() as s:
             query = (
                 select(PromptRevision)
-                .where(_owned_by(owner))
+                .where(owned_by(PromptRevision.owner, owner))
                 .order_by(PromptRevision.id.desc())
                 .limit(HISTORY_LIMIT)
             )
@@ -86,10 +90,11 @@ class PromptStore:
             return await self.set_in(s, old.owner, old.content, author)
 
 
-def _owned_by(owner: str | None):  # noqa: ANN202
-    return PromptRevision.owner.is_(None) if owner is None else PromptRevision.owner == owner
-
-
 def _latest(owner: str | None):  # noqa: ANN202
     # AUTOINCREMENT 保证 id 单调：id 最大的就是最新一版（不按时间排序，避免时钟回拨与同一时刻写入）
-    return select(PromptRevision.content).where(_owned_by(owner)).order_by(PromptRevision.id.desc()).limit(1)
+    return (
+        select(PromptRevision.content)
+        .where(owned_by(PromptRevision.owner, owner))
+        .order_by(PromptRevision.id.desc())
+        .limit(1)
+    )

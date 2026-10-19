@@ -8,14 +8,14 @@ from dataclasses import dataclass
 from fastmcp.client.transports import StdioTransport
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from muliao.db import Database
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.models import Agent, McpServer, McpTransport
 from muliao.naming import validate_slug
-from muliao.ownership import scope_of, visible
+from muliao.ownership import owned_by, scope_of, visible, visible_owners
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ class McpRegistry:
             rows = (
                 await s.scalars(
                     select(McpServer)
-                    .where(McpServer.enabled, or_(McpServer.owner.is_(None), McpServer.owner == agent_id))
+                    .where(McpServer.enabled, visible_owners(McpServer.owner, agent_id))
                     .order_by(McpServer.name)
                 )
             ).all()
@@ -108,7 +108,7 @@ class McpRegistry:
     async def list(self, owner: str | None, *, all_owners: bool = False) -> list[McpServer]:
         query = select(McpServer).order_by(McpServer.owner, McpServer.name)
         if not all_owners:
-            query = query.where(McpServer.owner.is_(None) if owner is None else McpServer.owner == owner)
+            query = query.where(owned_by(McpServer.owner, owner))
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
 
@@ -144,7 +144,7 @@ class McpRegistry:
         row = await s.scalar(
             select(McpServer).where(
                 McpServer.name == name,
-                McpServer.owner.is_(None) if owner is None else McpServer.owner == owner,
+                owned_by(McpServer.owner, owner),
             )
         )
         if row is None:

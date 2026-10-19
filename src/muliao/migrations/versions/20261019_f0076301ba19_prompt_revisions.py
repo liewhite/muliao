@@ -1,7 +1,7 @@
 """prompt 版本化：agent 指令与公共 prompt 存为 prompt_revisions，最新一版即当前生效
 
 - 每个 agent 现有的 instructions 成为它的第一版（author = user，时间取 agent 的 updated_at），然后删除该列：
-  之后 agents.instructions 是从 prompt_revisions 派生的只读属性，不再有第二份。
+  之后指令只存在 prompt_revisions 里，经 PromptStore 读写，不再有第二份。
 - 公共 prompt 从无到有，不需要迁移数据。
 
 不可降级：降级会丢失版本历史。

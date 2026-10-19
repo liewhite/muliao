@@ -130,7 +130,7 @@ Alembic 管理表结构（`src/muliao/migrations/`，随包分发），启动时
 ### Skill
 agent 在任何一轮都可以主动 `write_skill`。公共 skill 对所有 agent 可见；私有 skill 只对自己可见，同名时私有遮蔽公共。
 
-**归属与合并规则（skill、MCP server、secret 共用，只在 `ownership.visible` 实现一次）**：资源归属某个 agent（私有）或公共；agent 看到自己的私有资源加上公共资源，同名时私有遮蔽公共，其他 agent 的私有资源不可见。prompt 不是按名称合并，而是公共 prompt 与 agent 指令拼接（见下）。
+**归属与合并规则（skill、MCP server、secret 共用，只在 `ownership.visible` 实现一次）**：资源归属某个 agent（私有）或公共；agent 看到自己的私有资源加上公共资源，同名时私有遮蔽公共，其他 agent 的私有资源不可见。prompt 不是按名称合并，而是公共 prompt 与 agent 指令拼接（见下）。「私有」是可见范围和命名空间的划分，不是安全隔离：agent 能执行任意命令、读到数据库与 vault 主密钥（见第 9 节）。
 
 ### Prompt（公共 prompt 与 agent 指令）
 都存在 `prompt_revisions` 表，`owner` 为 agent id 时是它的指令，为空时是合并进所有 agent 的公共 prompt（放在 agent 自己的指令之前）。当前生效的就是最新一版（唯一来源，`agents` 表里没有指令列），读写都经过 `PromptStore`；修改即追加一版并记录作者（`user` 或做出修改的 agent），回滚即把旧版内容作为新的一版写入，历史只增不改。内容未变时不追加；空的公共 prompt 等同于没有。历史接口只列最近 50 版，更早的版本仍保留在库中。
