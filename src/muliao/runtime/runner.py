@@ -3,6 +3,7 @@
 import logging
 from collections.abc import AsyncIterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent as PaiAgent
@@ -28,7 +29,7 @@ from muliao.evolution.prompts import PromptStore
 from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelResolver
 from muliao.models import Agent, Origin, ReplyTo
-from muliao.runtime.instructions import build_instructions
+from muliao.runtime.instructions import build_instructions, build_temp_instructions
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.redaction import redact_call
 from muliao.runtime.scope import RunScope
@@ -116,22 +117,66 @@ class AgentRuntime:
         """prompt 为 None 时是恢复挂起的一轮：deferred_results 为各待完成工具调用的结果。"""
         if (prompt is None) == (deferred_results is None):
             raise ValueError("a run takes either a new prompt or the results of deferred tool calls")
+        return await self._execute(
+            model=agent.model,
+            instructions=await self.instructions(agent, scope, summary),
+            toolsets=await self._toolsets(agent.id, profile),
+            scope=scope,
+            prompt=prompt,
+            history=history,
+            deferred_results=deferred_results,
+        )
+
+    async def run_temp(
+        self, parent: Agent, *, task: str, instructions: str, model: str, profile: RunProfile, workspace: Path
+    ) -> str:
+        """一次性的临时 agent：替 parent 做一件事，返回最终回答。
+
+        没有记忆、skill、历史与反思；工具来自 profile（不含委派与再开临时 agent），MCP 与 secret 按 parent 的视角。
+        不属于任何会话，运行事件不推到会话页。
+        """
+        scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, origin=None, reply_to=None)
+        result = await self._execute(
+            model=model,
+            instructions=build_temp_instructions(
+                parent_name=parent.name,
+                workspace=workspace,
+                now_local=self._clock().astimezone(self._tz),
+                extra=instructions,
+            ),
+            toolsets=await self._toolsets(parent.id, profile),
+            scope=scope,
+            prompt=task,
+            history=(),
+            deferred_results=None,
+        )
+        if not isinstance(result.output, str):
+            raise RuntimeError(f"temp agent of {parent.id} ended with deferred tool calls it cannot have")
+        return result.output
+
+    async def _toolsets(self, agent_id: str, profile: RunProfile) -> list[AbstractToolset[RunScope]]:
         toolsets: list[AbstractToolset[RunScope]] = [DomainErrorsAsRetry(t) for t in profile.toolsets]
         if profile.include_mcp:
-            toolsets += [await self._mcp.build_toolset(s) for s in await self._mcp.visible_to(agent.id)]
-        log.info(
-            "agent run started",
-            extra={
-                "agent": agent.id,
-                "session_id": scope.session_id,
-                "model": agent.model,
-                "history": len(history),
-            },
-        )
+            toolsets += [await self._mcp.build_toolset(s) for s in await self._mcp.visible_to(agent_id)]
+        return toolsets
+
+    async def _execute(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        toolsets: list[AbstractToolset[RunScope]],
+        scope: RunScope,
+        prompt: str | None,
+        history: Sequence[ModelMessage],
+        deferred_results: dict[str, str] | None,
+    ) -> AgentRunResult[str | DeferredToolRequests]:
+        ctx = {"agent": scope.agent_id, "session_id": scope.session_id, "model": model}
+        log.info("agent run started", extra={**ctx, "history": len(history)})
         result = await self._pai.run(
             prompt,
-            model=self._resolve_model(agent.model),
-            instructions=await self.instructions(agent, scope, summary),
+            model=self._resolve_model(model),
+            instructions=instructions,
             message_history=list(history),
             deps=scope,
             toolsets=toolsets,
@@ -144,8 +189,7 @@ class AgentRuntime:
         log.info(
             "agent run finished",
             extra={
-                "agent": agent.id,
-                "session_id": scope.session_id,
+                **ctx,
                 "input_tokens": usage.input_tokens,
                 "output_tokens": usage.output_tokens,
                 "requests": usage.requests,

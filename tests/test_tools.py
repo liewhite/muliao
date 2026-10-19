@@ -165,3 +165,47 @@ async def test_list_threads_shows_each_thread_with_its_state(container, make_age
 
     assert outputs[0] == "ok"
     assert "review" in outputs[1] and "worker" in outputs[1] and "done" in outputs[1]
+
+
+async def test_temp_agent_runs_once_in_a_discarded_workspace_and_returns_its_answer(
+    container, make_agent, models
+):
+    me = await make_agent("manager", model="tools")
+    await container.vault.set(me.id, "API_KEY", "k-123")
+    seen: dict[str, object] = {}
+
+    def helper(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.setdefault("tools", sorted(t.name for t in info.function_tools))
+        seen.setdefault("instructions", info.instructions or "")
+        step = sum(isinstance(m, ModelResponse) for m in messages)
+        if step == 0:
+            return ModelResponse(
+                parts=[ToolCallPart("write_file", {"path": "notes.txt", "content": "x"}, tool_call_id="w")]
+            )
+        if step == 1:
+            command = 'pwd && test -n "$API_KEY" && echo has-key'
+            return ModelResponse(
+                parts=[
+                    ToolCallPart("run_shell", {"command": command, "secrets": ["API_KEY"]}, tool_call_id="s")
+                ]
+            )
+        seen["shell"] = str(tool_returns(messages)[0].content)
+        return ModelResponse(parts=[TextPart("summary: page says hello")])
+
+    models.models["helper"] = scripted(helper)
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [("run_temp_agent", {"task": "summarize https://example.com", "model": "helper"})],
+    )
+
+    assert outputs == ["summary: page says hello"]
+    workspace = str(seen["shell"]).splitlines()[1]
+    assert workspace.startswith(str(container.settings.temp_dir)) and "has-key" in str(seen["shell"])
+    assert workspace and list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240  测试里的同步检查
+    # 只有文件与 shell：没有记忆、skill、委派，也不能再开临时 agent
+    assert seen["tools"] == ["edit_file", "list_files", "read_file", "run_shell", "write_file"]
+    assert "temporary helper agent working for agent 'manager'" in str(seen["instructions"])
+    # 不留下会话
+    assert len(await container.sessions.list(agent_id=None, origins=None, limit=10, offset=0)) == 1

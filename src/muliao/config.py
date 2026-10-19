@@ -124,6 +124,11 @@ class Settings(_Section):
         return self.data_dir / "agents"
 
     @property
+    def temp_dir(self) -> Path:
+        """临时 agent 的工作目录在这里创建，用完即删。"""
+        return self.data_dir / "tmp"
+
+    @property
     def vapid_key_path(self) -> Path:
         return self.data_dir / "vapid_private.pem"
 

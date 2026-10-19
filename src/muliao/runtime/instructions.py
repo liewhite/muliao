@@ -83,3 +83,24 @@ def build_instructions(
             f"the messages after it follow in full.\n<summary>\n{summary}\n</summary>"
         )
     return "\n\n".join(s for s in sections if s)
+
+
+TEMP_AGENT_INSTRUCTIONS = """\
+You are a temporary helper agent working for agent {parent_name!r} on a single task. You have no memory and \
+nothing you do is remembered: your final answer is returned to that agent as a tool result, so make it complete \
+and self-contained. Do not ask questions back; if something is missing, say what and do what you can.
+
+## Runtime context
+- Current local time: {now} ({tz})
+- Temporary workspace (base for relative paths and shell cwd, deleted when you finish): {workspace}
+- Secrets are referenced by key as the agent you work for would (`run_shell(secrets=[KEY])`)."""
+
+
+def build_temp_instructions(*, parent_name: str, workspace: Path, now_local: datetime, extra: str) -> str:
+    base = TEMP_AGENT_INSTRUCTIONS.format(
+        parent_name=parent_name,
+        now=now_local.isoformat(timespec="minutes"),
+        tz=now_local.tzname(),
+        workspace=workspace,
+    )
+    return f"{extra.strip()}\n\n{base}" if extra.strip() else base

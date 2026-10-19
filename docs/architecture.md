@@ -87,6 +87,7 @@ Web / cron / 外部事件 / delegate_task / ask_agent
   - `agents`：`list_agents`（返回 name、description）/ `get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent` / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
   - `delegation`：`delegate_task` / `ask_agent` / `wait_for` / `list_threads`（按名称指定目标 agent、按 thread 名指定子会话，见第 4 节）。
   - `notify`：`notify_user`（显式 Web Push）。
+  - `temp_agent`：`run_temp_agent(task, instructions?, model?)`：一次性的临时 agent，在调用方这一轮里同步运行（同一响应中的多次调用并行），返回它的最终回答。它只有文件与 shell 工具（工作目录在 `data/tmp/` 下临时创建、结束即删除）和调用方的 MCP，secret 按调用方的视角解析；没有记忆、skill、会话、反思与委派，也不能再开临时 agent。适合抓取网页并总结、分析文件这类做完即丢的事；需要长期积累的专长应 `create_agent` 后委派。临时 agent 失败时异常向上传播，按调用方这一轮的失败统一处理（暂时性失败整轮重试）。
   - `mcp_admin`：`mcp_list`（含已停用的）/ `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_set_enabled` / `mcp_remove`。改动从下一轮起生效。
   - `vault`：`vault_list` / `vault_set` / `vault_delete`（scope = `private` | `public`，默认私有）。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
   - `triggers`：`cron_list` / `cron_create(name, schedule, prompt, agent?)` / `cron_update` / `cron_delete`；`event_trigger_list` / `event_trigger_create` / `event_trigger_update` / `event_trigger_rotate_token` / `event_trigger_delete`。agent 同样按名称指定。事件触发器的 token 不出现在对话里，而是存进创建者私有 vault 的 `EVENT_TOKEN_<NAME>`。

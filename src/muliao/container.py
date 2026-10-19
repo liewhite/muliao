@@ -34,6 +34,7 @@ from muliao.runtime.tools.delegation import delegation_toolset
 from muliao.runtime.tools.evolution import memory_toolset, skills_toolset
 from muliao.runtime.tools.mcp import mcp_admin_toolset
 from muliao.runtime.tools.notify import notify_toolset
+from muliao.runtime.tools.temp_agent import temp_agent_toolset
 from muliao.runtime.tools.triggers import triggers_toolset
 from muliao.runtime.tools.vault import vault_toolset
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
@@ -150,18 +151,32 @@ def build_container(
 
     pusher = WebPushDelivery(push_subscriptions, vapid, settings.push.vapid_subject)
 
+    runtime = AgentRuntime(
+        agents=agents,
+        skills=skills,
+        memory=memory,
+        prompts=prompts,
+        mcp=mcp,
+        bus=bus,
+        tz=tz,
+        resolve_model=resolve_model or models.resolve,
+    )
+    workspace_tools = workspace_toolset(
+        vault,
+        ShellLimits(
+            settings.runtime.shell_default_timeout,
+            settings.runtime.shell_max_timeout,
+            settings.runtime.tool_output_max_chars,
+        ),
+    )
     evolution_tools = [skills_toolset(skills), memory_toolset(memory)]
+    # 临时 agent 只有文件与 shell（加上调用方的 MCP）：没有记忆、skill、委派，也不能再开临时 agent
+    temp_profile = RunProfile(toolsets=[workspace_tools], include_mcp=True)
     turn_profile = RunProfile(
         toolsets=[
-            workspace_toolset(
-                vault,
-                ShellLimits(
-                    settings.runtime.shell_default_timeout,
-                    settings.runtime.shell_max_timeout,
-                    settings.runtime.tool_output_max_chars,
-                ),
-            ),
+            workspace_tools,
             *evolution_tools,
+            temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir),
             agents_toolset(
                 agents,
                 agent_lifecycle,
@@ -177,16 +192,6 @@ def build_container(
         include_mcp=True,
     )
     reflection_profile = RunProfile(toolsets=evolution_tools, include_mcp=False)
-    runtime = AgentRuntime(
-        agents=agents,
-        skills=skills,
-        memory=memory,
-        prompts=prompts,
-        mcp=mcp,
-        bus=bus,
-        tz=tz,
-        resolve_model=resolve_model or models.resolve,
-    )
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.TURN: TurnHandler(db, runtime, turn_profile, queue, notifier, compaction, threads),
