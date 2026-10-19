@@ -22,6 +22,7 @@ import { ActionButton,
   Page,
   TextAreaInput,
   TextInput,
+  ToggleSwitch,
   formatTime,
   useAction,
   useAgents,
@@ -72,16 +73,55 @@ export function AgentList() {
   )
 }
 
-function initialInput(agent: Agent | undefined, defaults: AgentDefaults | undefined): AgentInput {
+function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
   if (agent) {
-    const { name, description, model, instructions, reflect_every } = agent
-    return { name, description, model, instructions, reflect_every }
+    const { name, description, model, instructions, reflect_every, tool_groups } = agent
+    return { name, description, model, instructions, reflect_every, tool_groups }
   }
-  if (!defaults) throw new Error('agent defaults must be loaded before rendering the create form')
-  return { name: '', description: '', model: defaults.model, instructions: '', reflect_every: defaults.reflect_every }
+  return {
+    name: '',
+    description: '',
+    model: defaults.model,
+    instructions: '',
+    reflect_every: defaults.reflect_every,
+    tool_groups: defaults.tool_groups,
+  }
 }
 
-function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults?: AgentDefaults; onSaved: (a: Agent) => void }) {
+/** 工具组的中文说明；名称本身来自服务端，未登记的原样显示 */
+const TOOL_GROUP_LABELS: Record<string, string> = {
+  workspace: '文件与 shell',
+  temp_agent: '临时 agent',
+  delegation: '委派给其他 agent',
+  notify: '推送通知',
+  agents: '管理 agent 与公共指令',
+  mcp: '管理 MCP',
+  vault: '管理 vault',
+  triggers: '管理触发器',
+}
+
+function ToolGroupsInput({ all, value, onChange }: { all: string[]; value: string[]; onChange: (v: string[]) => void }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-sm font-medium">可用工具</div>
+      <div className="text-xs text-muted">记忆与 skill 总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的</div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {all.map((group) => (
+          <label key={group} className="flex items-center gap-2 text-sm">
+            <ToggleSwitch
+              label={TOOL_GROUP_LABELS[group] ?? group}
+              isSelected={value.includes(group)}
+              onChange={(on) => onChange(on ? all.filter((g) => g === group || value.includes(g)) : value.filter((g) => g !== group))}
+            />
+            {TOOL_GROUP_LABELS[group] ?? group}
+          </label>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: AgentDefaults; onSaved: (a: Agent) => void }) {
   const [input, setInput] = useState<AgentInput>(() => initialInput(agent, defaults))
   const action = useAction()
   const set = (patch: Partial<AgentInput>) => setInput((prev) => ({ ...prev, ...patch }))
@@ -130,6 +170,7 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults?: Age
         value={input.reflect_every === null ? '' : String(input.reflect_every)}
         onChange={(v) => set({ reflect_every: v ? Number(v) : null })}
       />
+      <ToolGroupsInput all={defaults.tool_groups} value={input.tool_groups} onChange={(tool_groups) => set({ tool_groups })} />
       <ErrorAlert error={action.error} />
       <ActionButton isPending={action.busy} onPress={() => void save()}>
         保存
@@ -234,6 +275,8 @@ export function AgentDetail() {
   const navigate = useNavigate()
   const confirm = useConfirm()
   const agent = useLoad(() => api.agent(id), [id])
+  // 可选的工具组列表只来自服务端
+  const defaults = useLoad(() => api.agentDefaults(), [])
   const [tab, setTab] = useState<Key>('config')
   const action = useAction()
   const name = agent.data?.name ?? id
@@ -290,7 +333,16 @@ export function AgentDetail() {
               </Card>
               <Card>
                 <Card.Content className="flex flex-col gap-3">
-                  <AgentForm key={`${a.id}-${a.name}-${a.instructions}`} agent={a} onSaved={() => void agent.reload()} />
+                  <Loading state={defaults}>
+                    {(d) => (
+                      <AgentForm
+                        key={`${a.id}-${a.name}-${a.instructions}`}
+                        agent={a}
+                        defaults={d}
+                        onSaved={() => void agent.reload()}
+                      />
+                    )}
+                  </Loading>
                   <PromptHistory owner={a.id} current={a.instructions} onRestored={() => void agent.reload()} />
                 </Card.Content>
               </Card>

@@ -61,6 +61,8 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
+    # 选用的工具组名称（见 runtime.runner.ToolGroups）；自我改进的工具总是开放
+    tool_groups: Mapped[list[str]] = mapped_column(JSON)
     # 指令不存在这里：它是该 agent 最新一版 PromptRevision（读写都经过 evolution.prompts.PromptStore）
     reflect_every: Mapped[int]
     turns_since_reflection: Mapped[int] = mapped_column(default=0)

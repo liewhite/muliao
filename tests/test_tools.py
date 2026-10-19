@@ -351,3 +351,34 @@ def test_unremovable_leftover_is_logged_and_does_not_block_startup(tmp_path, mon
 
     assert [p.name for p in tmp_path.iterdir()] == ["temp-agent-a"]
     assert any("not removable" in r.getMessage() for r in caplog.records)
+
+
+async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, models):
+    import pytest
+
+    from muliao.agents import AgentSpec
+    from muliao.errors import InvalidInput
+
+    triage = await container.agents.create(
+        AgentSpec(
+            name="triage", description="handles webhooks", instructions="", model="m", tool_groups=["notify"]
+        ),
+        author="user",
+    )
+    seen: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.extend(t.name for t in info.function_tools)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["m"] = scripted(fn)
+    await start(container, triage.id, "event", origin=Origin.TRIGGER)
+    await drain(container)
+
+    assert sorted(seen) == sorted(
+        ["notify_user", "read_skill", "write_skill", "delete_skill", "memory_append", "memory_replace"]
+    )
+    with pytest.raises(InvalidInput, match="tool groups"):
+        await container.agents.create(
+            AgentSpec(name="x", description="d", instructions="", tool_groups=["root"]), author="user"
+        )

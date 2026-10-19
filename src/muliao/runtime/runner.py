@@ -1,7 +1,7 @@
 """执行一次 agent 运行：组装 instructions、toolsets、模型，转发流式事件到总线。"""
 
 import logging
-from collections.abc import AsyncIterable, Sequence
+from collections.abc import AsyncIterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -44,10 +44,29 @@ _EVENT_TEXT_LIMIT = 2000
 
 @dataclass(frozen=True)
 class RunProfile:
-    """一类运行开放的能力：turn 全部开放，反思只开放 skill 与 memory，临时 agent 只开放文件与 shell（加调用方的 MCP）。"""
+    """一次运行开放的能力：对话按 agent 选用的工具组组合（ToolGroups），反思只开放 skill 与 memory，
+    临时 agent 只开放文件与 shell（加调用方的 MCP）。"""
 
     toolsets: Sequence[AbstractToolset[RunScope]]
     include_mcp: bool
+
+
+@dataclass(frozen=True)
+class ToolGroups:
+    """agent 按名称选用的工具组。always 里的（自我改进：skill 与 memory）对每个 agent 都开放。
+
+    用途是限制处理不可信输入的 agent 能做什么（例如处理外部事件的 agent 不开放管理 agent、vault 的工具）。
+    """
+
+    groups: Mapping[str, AbstractToolset[RunScope]]
+    always: Sequence[AbstractToolset[RunScope]]
+
+    def profile(self, names: Sequence[str]) -> RunProfile:
+        unknown = [n for n in names if n not in self.groups]
+        if unknown:
+            # 写入时已校验（AgentService）；读到未知组说明数据与代码不一致
+            raise RuntimeError(f"agent references unknown tool groups {unknown}")
+        return RunProfile(toolsets=[*self.always, *(self.groups[n] for n in names)], include_mcp=True)
 
 
 class AgentRuntime:

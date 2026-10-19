@@ -5,7 +5,7 @@
 
 Revision ID: 4a351a020890
 Revises:
-Create Date: 2026-10-19 19:31:24.214976
+Create Date: 2026-10-19 19:36:33.845461
 """
 
 from collections.abc import Sequence
@@ -27,6 +27,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=64), nullable=False),
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("model", sa.String(length=200), nullable=False),
+        sa.Column("tool_groups", sa.JSON(), nullable=False),
         sa.Column("reflect_every", sa.Integer(), nullable=False),
         sa.Column("turns_since_reflection", sa.Integer(), nullable=False),
         sa.Column("reflection_checkpoint", sa.Integer(), nullable=False),

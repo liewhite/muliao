@@ -26,7 +26,7 @@ from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
 from muliao.runtime.conversation import Threads
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
-from muliao.runtime.runner import AgentRuntime, RunProfile
+from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroups
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import TaskQueue
 from muliao.runtime.tools.agents import agents_toolset
@@ -46,6 +46,9 @@ from muliao.triggers.webhook import WebhookKind, Webhooks
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
+
+# agent 可选用的工具组（名称是 agent 配置的一部分，在这里唯一声明；注册表必须与它完全一致）
+TOOL_GROUPS = ("workspace", "temp_agent", "delegation", "notify", "agents", "mcp", "vault", "triggers")
 
 
 @dataclass
@@ -142,7 +145,7 @@ def build_container(
         memory,
         model_checker or models.check,
         prompts,
-        AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every),
+        AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, TOOL_GROUPS),
     )
     agent_lifecycle = AgentLifecycle(db, agents)
     sessions = SessionService(db, queue)
@@ -182,28 +185,29 @@ def build_container(
     evolution_tools = [skills_toolset(skills), memory_toolset(memory)]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP）：没有记忆、skill、委派，也不能再开临时 agent
     temp_profile = RunProfile(toolsets=[workspace_tools], include_mcp=True)
-    turn_profile = RunProfile(
-        toolsets=[
-            workspace_tools,
-            *evolution_tools,
-            temp_agent_toolset(
+    tool_groups = ToolGroups(
+        groups={
+            "workspace": workspace_tools,
+            "temp_agent": temp_agent_toolset(
                 runtime, agents, temp_profile, settings.temp_dir, settings.runtime.temp_agent_request_limit
             ),
-            agents_toolset(agents, agent_lifecycle, prompts),
             # ask_agent 用回合执行器跑子 agent，而执行器又用这组工具：通过延迟绑定的调用打破构造顺序上的环
-            delegation_toolset(
+            "delegation": delegation_toolset(
                 db, agents, threads, lambda session_id, prompt: turn_runner.run_inline(session_id, prompt)
             ),
-            notify_toolset(notifier),
-            mcp_admin_toolset(mcp),
-            vault_toolset(vault),
-            triggers_toolset(triggers, agents),
-        ],
-        include_mcp=True,
+            "notify": notify_toolset(notifier),
+            "agents": agents_toolset(agents, agent_lifecycle, prompts),
+            "mcp": mcp_admin_toolset(mcp),
+            "vault": vault_toolset(vault),
+            "triggers": triggers_toolset(triggers, agents),
+        },
+        always=evolution_tools,
     )
+    if tuple(tool_groups.groups) != TOOL_GROUPS:
+        raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {TOOL_GROUPS}")
     reflection_profile = RunProfile(toolsets=evolution_tools, include_mcp=False)
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
-    turn_runner = TurnRunner(db, runtime, turn_profile, queue, notifier, compaction)
+    turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction)
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.TURN: TurnHandler(turn_runner),
         TaskKind.COMPACTION: CompactionHandler(

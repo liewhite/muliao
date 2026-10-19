@@ -16,6 +16,11 @@ from muliao.transcript import truncate
 _ANSWER_PREVIEW = 500
 
 
+class AgentInfo(BaseModel):
+    name: str
+    description: str
+
+
 class ThreadInfo(BaseModel):
     thread: str
     agent: str
@@ -36,6 +41,11 @@ def delegation_toolset(
 ) -> FunctionToolset[RunScope]:
     """委派：thread 是这个会话开出的、以名字区分的子会话，同名即续聊（保留对方上下文）。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
+
+    @ts.tool_plain
+    async def list_agents() -> list[AgentInfo]:
+        """List all agents and what each one is for. Use before delegating."""
+        return [AgentInfo(name=a.name, description=a.description) for a in await agents.list()]
 
     @ts.tool
     async def delegate_task(ctx: RunContext[RunScope], agent: str, task: str, thread: str) -> str:

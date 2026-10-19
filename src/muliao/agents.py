@@ -25,17 +25,20 @@ class AgentDefaults:
 
     model: str
     reflect_every: int
+    # 所有可选的工具组名称（运行时注册的 ToolGroups）；新建 agent 默认全部开放
+    tool_groups: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class AgentSpec:
-    """新建 agent。model / reflect_every 为 None 时取 AgentDefaults。"""
+    """新建 agent。model / reflect_every / tool_groups 为 None 时取 AgentDefaults。"""
 
     name: str
     description: str
     instructions: str
     model: str | None = None
     reflect_every: int | None = None
+    tool_groups: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ class AgentPatch:
     model: str | None = None
     instructions: str | None = None
     reflect_every: int | None = None
+    tool_groups: list[str] | None = None
 
 
 class AgentService:
@@ -74,11 +78,16 @@ class AgentService:
     def workspace(self, agent_id: str) -> Path:
         return self.root(agent_id) / "workspace"
 
-    def _check(self, *, description: str, model: str, reflect_every: int) -> None:
+    def _check(self, *, description: str, model: str, reflect_every: int, tool_groups: list[str]) -> None:
         if not description.strip():
             raise InvalidInput("agent description must not be empty")
         if reflect_every < 1:
             raise InvalidInput("reflect_every must be >= 1")
+        unknown = [g for g in tool_groups if g not in self.defaults.tool_groups]
+        if unknown or len(set(tool_groups)) != len(tool_groups):
+            raise InvalidInput(
+                f"tool groups must be distinct names from {list(self.defaults.tool_groups)}, got {tool_groups}"
+            )
         self._check_model(model)
 
     async def _ensure_name_free(self, s: AsyncSession, name: str, agent_id: str | None) -> None:
@@ -92,7 +101,10 @@ class AgentService:
         name = normalize_agent_name(spec.name)
         model = self.defaults.model if spec.model is None else spec.model
         reflect_every = self.defaults.reflect_every if spec.reflect_every is None else spec.reflect_every
-        self._check(description=spec.description, model=model, reflect_every=reflect_every)
+        tool_groups = list(self.defaults.tool_groups) if spec.tool_groups is None else spec.tool_groups
+        self._check(
+            description=spec.description, model=model, reflect_every=reflect_every, tool_groups=tool_groups
+        )
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
             agent = Agent(
@@ -101,6 +113,7 @@ class AgentService:
                 description=spec.description,
                 model=model,
                 reflect_every=reflect_every,
+                tool_groups=tool_groups,
             )
             s.add(agent)
             await s.flush()
@@ -119,14 +132,15 @@ class AgentService:
             description = agent.description if patch.description is None else patch.description
             model = agent.model if patch.model is None else patch.model
             reflect_every = agent.reflect_every if patch.reflect_every is None else patch.reflect_every
-            self._check(description=description, model=model, reflect_every=reflect_every)
-            await self._ensure_name_free(s, name, agent_id)
-            agent.name, agent.description, agent.model, agent.reflect_every = (
-                name,
-                description,
-                model,
-                reflect_every,
+            tool_groups = agent.tool_groups if patch.tool_groups is None else patch.tool_groups
+            self._check(
+                description=description, model=model, reflect_every=reflect_every, tool_groups=tool_groups
             )
+            await self._ensure_name_free(s, name, agent_id)
+            agent.name, agent.description, agent.model = name, description, model
+            agent.reflect_every = reflect_every
+            # JSON 列只在整体赋值时被追踪
+            agent.tool_groups = list(tool_groups)
             if patch.instructions is not None:
                 await self._prompts.set_in(s, agent_id, patch.instructions, author)
         return agent

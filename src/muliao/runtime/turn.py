@@ -22,7 +22,7 @@ from muliao.models import Agent, Message, ReplyTo, Session, Task, TaskKind
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import CompactionScheduler, load_context
 from muliao.runtime.redaction import redact_messages
-from muliao.runtime.runner import AgentRuntime, RunProfile
+from muliao.runtime.runner import AgentRuntime, ToolGroups
 from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane, turn_lane
 
 log = logging.getLogger(__name__)
@@ -51,14 +51,14 @@ class TurnRunner:
         self,
         db: Database,
         runtime: AgentRuntime,
-        profile: RunProfile,
+        tool_groups: ToolGroups,
         queue: TaskQueue,
         notifier: Notifier,
         compaction: CompactionScheduler,
     ):
         self._db = db
         self._runtime = runtime
-        self._profile = profile
+        self._tool_groups = tool_groups
         self._queue = queue
         self._notifier = notifier
         self._compaction = compaction
@@ -71,7 +71,12 @@ class TurnRunner:
             context = await load_context(s, session.id)
         scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, reply_to=reply_to)
         result = await self._runtime.run(
-            agent, scope, prompt, context.messages, self._profile, summary=context.summary
+            agent,
+            scope,
+            prompt,
+            context.messages,
+            self._tool_groups.profile(agent.tool_groups),
+            summary=context.summary,
         )
         return TurnOutput(session.id, agent.id, result.output, redact_messages(result.new_messages()))
 

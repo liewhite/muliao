@@ -77,7 +77,11 @@ async def test_agent_identified_by_id_and_renamable(client, container):
 
     renamed = {**agent, "name": "Research Assistant 📚"}
     resp = await client.put(
-        path, json={k: renamed[k] for k in ("name", "description", "model", "instructions", "reflect_every")}
+        path,
+        json={
+            k: renamed[k]
+            for k in ("name", "description", "model", "instructions", "reflect_every", "tool_groups")
+        },
     )
     assert resp.status_code == 200 and resp.json()["name"] == "Research Assistant 📚"
     assert (await client.get(path)).json()["id"] == agent["id"]
@@ -92,6 +96,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
         "model": agent["model"],
         "instructions": "",
         "reflect_every": 5,
+        "tool_groups": agent["tool_groups"],
     }
     assert (await client.put(path, json=clash)).status_code == 409
     assert (await client.delete(f"/api/agents/{other['id']}")).status_code == 204
@@ -103,5 +108,6 @@ async def test_agent_defaults_endpoint_reflects_config(client, container):
     assert defaults == {
         "model": container.settings.llm.default_model,
         "reflect_every": container.settings.runtime.default_reflect_every,
+        "tool_groups": list(container.agents.defaults.tool_groups),
     }
     assert container.settings.runtime.default_reflect_every == 5

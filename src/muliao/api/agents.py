@@ -19,6 +19,7 @@ class AgentCreate(BaseModel):
     model: str | None = None
     instructions: str = ""
     reflect_every: int | None = None
+    tool_groups: list[str] | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -29,6 +30,7 @@ class AgentUpdate(BaseModel):
     model: str
     instructions: str
     reflect_every: int
+    tool_groups: list[str]
 
 
 class AgentOut(BaseModel):
@@ -38,6 +40,7 @@ class AgentOut(BaseModel):
     model: str
     instructions: str
     reflect_every: int
+    tool_groups: list[str]
     turns_since_reflection: int
     created_at: datetime
 
@@ -50,6 +53,7 @@ class AgentOut(BaseModel):
             model=a.model,
             instructions=instructions,
             reflect_every=a.reflect_every,
+            tool_groups=a.tool_groups,
             turns_since_reflection=a.turns_since_reflection,
             created_at=a.created_at,
         )
@@ -62,12 +66,15 @@ async def _out(c: C, agent: Agent) -> AgentOut:
 class AgentDefaultsOut(BaseModel):
     model: str
     reflect_every: int
+    # 所有可选的工具组；新建 agent 默认全部开放
+    tool_groups: list[str]
 
 
 @router.get("/agent-defaults")
 async def agent_defaults(c: C) -> AgentDefaultsOut:
     """新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。"""
-    return AgentDefaultsOut(model=c.agents.defaults.model, reflect_every=c.agents.defaults.reflect_every)
+    d = c.agents.defaults
+    return AgentDefaultsOut(model=d.model, reflect_every=d.reflect_every, tool_groups=list(d.tool_groups))
 
 
 @router.get("/agents")
@@ -85,6 +92,7 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
         instructions=body.instructions,
         model=body.model,
         reflect_every=body.reflect_every,
+        tool_groups=body.tool_groups,
     )
     return await _out(c, await c.agents.create(spec, author=USER))
 
@@ -103,6 +111,7 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         model=body.model,
         instructions=body.instructions,
         reflect_every=body.reflect_every,
+        tool_groups=body.tool_groups,
     )
     return await _out(c, await c.agents.update(agent_id, patch, author=USER))
 

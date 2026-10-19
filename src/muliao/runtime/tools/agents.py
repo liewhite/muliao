@@ -15,28 +15,19 @@ from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 
 
-class AgentInfo(BaseModel):
-    name: str
-    description: str
-
-
 class AgentDetail(BaseModel):
     name: str
     description: str
     model: str
     instructions: str
     reflect_every: int
+    tool_groups: list[str]
 
 
 def agents_toolset(
     agents: AgentService, lifecycle: AgentLifecycle, prompts: PromptStore
 ) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
-
-    @ts.tool_plain
-    async def list_agents() -> list[AgentInfo]:
-        """List all agents and what each one is for. Use before delegating."""
-        return [AgentInfo(name=a.name, description=a.description) for a in await agents.list()]
 
     @ts.tool_plain
     async def get_agent(agent: str) -> AgentDetail:
@@ -52,6 +43,7 @@ def agents_toolset(
             model=target.model,
             instructions=await prompts.current(target.id),
             reflect_every=target.reflect_every,
+            tool_groups=target.tool_groups,
         )
 
     @ts.tool
@@ -62,6 +54,7 @@ def agents_toolset(
         instructions: str,
         model: str | None = None,
         reflect_every: int | None = None,
+        tool_groups: list[str] | None = None,
     ) -> str:
         """Create a new long-lived agent with its own memory, skills and workspace, e.g. a specialist you will
         delegate to repeatedly. For a one-off job use `run_temp_agent` instead.
@@ -72,6 +65,8 @@ def agents_toolset(
             instructions: Its system prompt.
             model: `<provider>:<model>`; defaults to the server's default model.
             reflect_every: Turns between forced reflections; defaults to the server's setting.
+            tool_groups: Tool groups it may use (see `get_agent` on yourself for the names); defaults to all.
+                Give an agent that handles untrusted input (web pages, external events) only what it needs.
         """
         spec = AgentSpec(
             name=name,
@@ -79,6 +74,7 @@ def agents_toolset(
             instructions=instructions,
             model=model,
             reflect_every=reflect_every,
+            tool_groups=tool_groups,
         )
         created = await agents.create(spec, author=ctx.deps.agent_id)
         return f"created agent {created.name}"
@@ -92,6 +88,7 @@ def agents_toolset(
         instructions: str | None = None,
         model: str | None = None,
         reflect_every: int | None = None,
+        tool_groups: list[str] | None = None,
     ) -> str:
         """Change an agent's configuration, including your own (use your own name). Only the given fields change.
         Instructions replace the whole system prompt: read it first with `get_agent`. Every change is kept in a
@@ -104,6 +101,7 @@ def agents_toolset(
             instructions: New full system prompt.
             model: New `<provider>:<model>`.
             reflect_every: New reflection interval in turns.
+            tool_groups: New full list of tool groups it may use.
         """
         target = await agents.find_by_name(agent)
         patch = AgentPatch(
@@ -112,14 +110,15 @@ def agents_toolset(
             model=model,
             instructions=instructions,
             reflect_every=reflect_every,
+            tool_groups=tool_groups,
         )
         updated = await agents.update(target.id, patch, author=ctx.deps.agent_id)
         return f"updated agent {updated.name}"
 
     @ts.tool
     async def delete_agent(ctx: RunContext[RunScope], agent: str) -> str:
-        """Delete another agent with its sessions, memory, skills, private secrets and MCP servers, cron jobs,
-        event triggers and workspace. Irreversible. Threads it was given by other conversations that the user can
+        """Delete another agent with its sessions, memory, skills, private secrets and MCP servers, triggers
+        and workspace. Irreversible. Threads it was given by other conversations that the user can
         see are kept as standalone sessions. You cannot delete yourself.
 
         Args:

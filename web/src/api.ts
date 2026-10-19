@@ -18,6 +18,8 @@ export interface Agent {
   model: string
   instructions: string
   reflect_every: number
+  /** 选用的工具组；自我改进（记忆、skill）总是开放 */
+  tool_groups: string[]
   turns_since_reflection: number
   created_at: string
 }
@@ -28,6 +30,7 @@ export interface AgentInput {
   model: string | null
   instructions: string
   reflect_every: number | null
+  tool_groups: string[]
 }
 
 export interface Session {
@@ -224,6 +227,8 @@ export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams
 export interface AgentDefaults {
   model: string
   reflect_every: number
+  /** 所有可选的工具组；新建 agent 默认全部开放 */
+  tool_groups: string[]
 }
 
 export const api = {
