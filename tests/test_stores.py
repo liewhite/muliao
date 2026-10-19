@@ -7,6 +7,9 @@ from muliao.evolution.memory import MemoryFull, MemoryStore
 from muliao.evolution.skills import SkillStore
 from muliao.resources import ResourceRepo
 
+# agent id 的格式（与 ids.new_agent_id 一致）
+ALPHA, BETA = "a1a1a1a1a1a1", "b2b2b2b2b2b2"
+
 
 @pytest.fixture
 def repo(tmp_path: Path) -> ResourceRepo:
@@ -20,20 +23,20 @@ def skills(repo: ResourceRepo) -> SkillStore:
 
 async def test_private_skill_shadows_public_skill_with_same_name(skills: SkillStore):
     await skills.write(None, "digest", "public digest", "public body", "user")
-    await skills.write("alpha", "digest", "private digest", "private body", "user")
+    await skills.write(ALPHA, "digest", "private digest", "private body", "user")
     await skills.write(None, "other", "other public", "x", "user")
 
-    visible = {(s.name, s.scope) for s in skills.visible_to("alpha")}
+    visible = {(s.name, s.scope) for s in skills.visible_to(ALPHA)}
 
     assert visible == {("digest", "private"), ("other", "public")}
-    assert skills.resolve("alpha", "digest").body.strip() == "private body"
-    assert skills.resolve("beta", "digest").body.strip() == "public body"
+    assert skills.resolve(ALPHA, "digest").body.strip() == "private body"
+    assert skills.resolve(BETA, "digest").body.strip() == "public body"
 
 
 async def test_skill_roundtrip_preserves_frontmatter(skills: SkillStore):
-    await skills.write("alpha", "slack-digest", "Summarise slack", "# Steps\n1. fetch", "user")
+    await skills.write(ALPHA, "slack-digest", "Summarise slack", "# Steps\n1. fetch", "user")
 
-    skill = skills.read("alpha", "slack-digest")
+    skill = skills.read(ALPHA, "slack-digest")
 
     assert skill.meta.description == "Summarise slack"
     assert skill.body.startswith("# Steps")
@@ -61,14 +64,14 @@ async def test_delete_missing_skill_raises_not_found(skills: SkillStore):
 
 
 async def test_every_change_is_a_revision_with_its_author(skills: SkillStore, repo: ResourceRepo):
-    await skills.write("alpha", "digest", "v1", "one", "user")
-    await skills.write("alpha", "digest", "v2", "two", "alpha")
-    await skills.write("alpha", "digest", "v2", "two", "alpha")  # 没有变化：不新增版本
-    path = repo.owner_dir("alpha") / "skills" / "digest" / "SKILL.md"
+    await skills.write(ALPHA, "digest", "v1", "one", "user")
+    await skills.write(ALPHA, "digest", "v2", "two", ALPHA)
+    await skills.write(ALPHA, "digest", "v2", "two", ALPHA)  # 没有变化：不新增版本
+    path = repo.owner_dir(ALPHA) / "skills" / "digest" / "SKILL.md"
 
     history = await repo.history(path, 10)
 
-    assert [r.author for r in history] == ["alpha", "user"]
+    assert [r.author for r in history] == [ALPHA, "user"]
     assert "one" in await repo.read_at(history[1].rev, path)
     with pytest.raises(InvalidInput):
         await repo.read_at("--output=/tmp/x", path)
@@ -77,34 +80,34 @@ async def test_every_change_is_a_revision_with_its_author(skills: SkillStore, re
 @pytest.fixture
 async def memory(repo: ResourceRepo) -> MemoryStore:
     store = MemoryStore(repo, max_chars=50)
-    await repo.apply({store.path("alpha"): ""}, "init", "user")
+    await repo.apply({store.path(ALPHA): ""}, "init", "user")
     return store
 
 
 async def test_memory_append_and_replace(memory: MemoryStore):
-    await memory.append("alpha", "- likes tea", "alpha")
-    await memory.append("alpha", "- lives in Paris", "alpha")
-    await memory.replace("alpha", "Paris", "Berlin", "alpha")
+    await memory.append(ALPHA, "- likes tea", ALPHA)
+    await memory.append(ALPHA, "- lives in Paris", ALPHA)
+    await memory.replace(ALPHA, "Paris", "Berlin", ALPHA)
 
-    assert memory.read("alpha") == "- likes tea\n- lives in Berlin\n"
+    assert memory.read(ALPHA) == "- likes tea\n\n- lives in Berlin\n"
 
 
 async def test_memory_replace_requires_exactly_one_occurrence(memory: MemoryStore):
-    await memory.append("alpha", "a a", "alpha")
+    await memory.append(ALPHA, "a a", ALPHA)
     with pytest.raises(InvalidInput, match="found 2"):
-        await memory.replace("alpha", "a", "b", "alpha")
+        await memory.replace(ALPHA, "a", "b", ALPHA)
 
 
 async def test_memory_over_limit_is_rejected_and_unchanged(memory: MemoryStore):
-    await memory.append("alpha", "short", "alpha")
+    await memory.append(ALPHA, "short", ALPHA)
     with pytest.raises(MemoryFull):
-        await memory.append("alpha", "x" * 60, "alpha")
-    assert memory.read("alpha") == "short\n"
+        await memory.append(ALPHA, "x" * 60, ALPHA)
+    assert memory.read(ALPHA) == "short\n"
 
 
 def test_memory_of_unknown_agent_is_not_found(memory: MemoryStore):
     with pytest.raises(NotFound):
-        memory.read("ghost")
+        memory.read("c3c3c3c3c3c3")
 
 
 async def test_vault_renders_references_and_fails_on_missing_key(container):
@@ -121,7 +124,7 @@ async def test_vault_renders_references_and_fails_on_missing_key(container):
 
 async def test_private_secret_shadows_public_and_is_invisible_to_others(container, make_agent):
     vault = container.vault
-    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    alpha, beta = (await make_agent(ALPHA)).id, (await make_agent(BETA)).id
     await vault.set(None, "TOKEN", "public")
     await vault.set(alpha, "TOKEN", "alpha-only")
     await vault.set(alpha, "ALPHA_KEY", "a")
@@ -144,7 +147,7 @@ async def test_private_secret_shadows_public_and_is_invisible_to_others(containe
 
 
 async def test_secrets_of_deleted_agent_go_with_it(container, make_agent):
-    alpha = (await make_agent("alpha")).id
+    alpha = (await make_agent(ALPHA)).id
     await container.vault.set(alpha, "TOKEN", "x")
     await container.agent_lifecycle.delete(alpha, author="user")
     assert await container.vault.list_all() == []
@@ -153,7 +156,7 @@ async def test_secrets_of_deleted_agent_go_with_it(container, make_agent):
 async def test_recover_commits_leftovers_and_clears_a_stale_lock(repo: ResourceRepo):
     """进程在写完文件、提交之前被杀，或在 git 运行中被杀：启动时收敛到干净状态。"""
     await repo.ensure()
-    left = repo.owner_dir("alpha") / "MEMORY.md"
+    left = repo.owner_dir(ALPHA) / "MEMORY.md"
     left.parent.mkdir(parents=True)
     left.write_text("written but never committed")
     (repo.root / ".git" / "index.lock").write_text("")
@@ -164,11 +167,11 @@ async def test_recover_commits_leftovers_and_clears_a_stale_lock(repo: ResourceR
     [revision] = await repo.history(left, 10)
     assert (revision.author, revision.message) == ("muliao", "reconcile uncommitted changes")
     # 收敛后正常提交照常进行
-    assert await repo.apply({left: "next"}, "memory", "alpha") is not None
+    assert await repo.apply({left: "next"}, "memory", ALPHA) is not None
 
 
 async def test_deleting_an_agent_is_recorded_in_resource_history(container, make_agent):
-    agent = await make_agent("alpha")
+    agent = await make_agent(ALPHA)
     memory = container.memory.path(agent.id)
 
     await container.agent_lifecycle.delete(agent.id, author="user")
@@ -176,3 +179,56 @@ async def test_deleting_an_agent_is_recorded_in_resource_history(container, make
     [deleted, created] = await container.resources.history(memory, 10)
     assert (deleted.author, deleted.message) == ("user", f"delete agent {agent.id}")
     assert created.message == f"create agent {agent.id}"
+
+
+async def test_concurrent_edits_of_one_file_are_all_kept(memory: MemoryStore):
+    import asyncio
+
+    await asyncio.gather(*(memory.append(ALPHA, f"- fact {i}", ALPHA) for i in range(5)))
+
+    assert sorted(memory.read(ALPHA).split()) == sorted(
+        ["-", "fact", "0", "-", "fact", "1", "-", "fact", "2", "-", "fact", "3", "-", "fact", "4"]
+    )
+
+
+async def test_failed_commit_leaves_nothing_behind_and_a_retry_works(
+    memory: MemoryStore, repo: ResourceRepo, monkeypatch
+):
+    await memory.append(ALPHA, "- kept", ALPHA)
+    real_git = repo._git
+
+    async def failing_commit(*args, check=True):  # noqa: ANN001, ANN202
+        if args and args[0] == "commit":
+            raise RuntimeError("disk full")
+        return await real_git(*args, check=check)
+
+    monkeypatch.setattr(repo, "_git", failing_commit)
+    with pytest.raises(RuntimeError, match="disk full"):
+        await memory.append(ALPHA, "- lost", ALPHA)
+    monkeypatch.undo()
+
+    # 报错即没有生效：文件回到上一次提交，重试不会重复
+    assert memory.read(ALPHA) == "- kept\n"
+    await memory.append(ALPHA, "- lost", ALPHA)
+    assert memory.read(ALPHA) == "- kept\n\n- lost\n"
+
+
+def test_owner_ids_cannot_escape_the_repository(repo: ResourceRepo):
+    for bad in ("..", "../public", "../../etc", "ALPHA"):
+        with pytest.raises(InvalidInput, match="invalid agent id"):
+            repo.owner_dir(bad)
+
+
+async def test_corrupt_mcp_config_is_rejected_with_its_path_but_can_be_deleted(container):
+    from muliao.runtime.mcp import McpSpec, McpTransport
+
+    spec = McpSpec(name="echo", transport=McpTransport.HTTP, url="http://x")
+    await container.mcp.add(None, spec, probe=False, author="user")
+    path = container.resources.owner_dir(None) / "mcp" / "echo.json"
+    for broken in ('{"not json"', path.read_text().replace("true", '"false"')):
+        path.write_text(broken)
+        with pytest.raises(InvalidInput, match=str(path)):
+            container.mcp.list(None)
+
+    await container.mcp.remove(None, "echo", "user")
+    assert container.mcp.list(None) == []

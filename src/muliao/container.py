@@ -104,10 +104,18 @@ class Container:
         # git 不可用或仓库损坏时在启动时暴露；上次进程留下的未提交修改与 git 锁在这里收敛（worker 还没开始）
         await self.resources.recover()
         await self._check_agent_models()
+        await self._check_orphan_resources()
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
         await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)
         self._spawn("worker", self.worker.run_forever())
         self._spawn("schedules", self.schedules.run_forever())
+
+    async def _check_orphan_resources(self) -> None:
+        """数据库里已删除、资源仓库里还留着目录的 agent（删除时提交失败所致）：记录出来，由人决定是否清理。"""
+        known = {a.id for a in await self.agents.list()}
+        orphans = [o for o in self.resources.agent_owners() if o not in known]
+        if orphans:
+            log.warning("resource directories of deleted agents remain", extra={"agent_ids": orphans})
 
     async def _check_agent_models(self) -> None:
         """已存 agent 的模型必须能被当前配置解析：配置改动（删 provider、改名）在启动时暴露，而不是散落到每个任务里失败。"""

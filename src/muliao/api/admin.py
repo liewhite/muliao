@@ -47,11 +47,11 @@ class McpOut(BaseModel):
             owner=m.owner,
             name=m.name,
             transport=m.transport,
-            command=m.command,
-            args=m.args,
-            url=m.url,
-            env=m.env,
-            headers=m.headers,
+            command=m.config.command,
+            args=m.config.args,
+            url=m.config.url,
+            env=m.config.env,
+            headers=m.config.headers,
             enabled=m.enabled,
             tools=tools or [],
         )
@@ -78,6 +78,8 @@ async def add_mcp(c: C, body: McpIn) -> McpOut:
         env=tuple(body.env.items()),
         headers=tuple(body.headers.items()),
     )
+    if body.owner is not None:
+        await c.agents.get(body.owner)
     row, tools = await c.mcp.add(body.owner, spec, probe=body.probe, author=USER)
     return McpOut.of(row, tools)
 

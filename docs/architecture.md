@@ -38,7 +38,13 @@ data/
   tmp/                         # 临时 agent 的工作目录，用完即删
 ```
 
-**资源的版本管理**：agent 能改的文本资源都存成文件，用一个 git 仓库（`data/resources/`）管理版本：每次修改写文件后提交一次，作者是 `user` 或做出修改的 agent 的 id；历史与回滚都来自 git（回滚 = 把旧版本内容写回并作为新的一次提交）。写文件与提交在同一个临界区里（`ResourceRepo.apply`），并发的修改不会被别人的提交带走、记错作者。提交失败时错误可见；已写未提交的文件、进程在 git 运行中被杀留下的 `index.lock`，由启动时（worker 开始之前）的 `ResourceRepo.recover` 统一收敛：删除遗留的锁，把未提交的变化提交为一次 `reconcile`（作者记为系统，日志记录涉及的路径）。仓库不受部署机全局 git 配置的 hook 与签名影响。启动时检查 git 可用并初始化仓库。secret 不在这里——它们加密存在数据库的 vault 里，不需要版本管理。
+**资源的版本管理**：agent 能改的文本资源都存成文件，用一个 git 仓库（`data/resources/`）管理版本：每次修改提交一次，作者是 `user` 或做出修改的 agent 的 id；历史与回滚都来自 git（回滚 = 把旧版本内容写回并作为新的一次提交）。secret 不在这里——它们加密存在数据库的 vault 里，不需要版本管理。
+
+用最终正确性换简化：文件与 git 不在数据库事务里，不追求两者的强一致。
+- 换掉的：跨数据库与文件的分布式事务（例如删除 agent 时数据库行与资源目录同时成功）。
+- 失败可见：每次写入（`ResourceRepo.update`）的读取—变换—写入—提交都在同一把锁里，任何一步失败都把涉及的路径恢复到最近一次提交并向上报错，所以「报错」严格等于「没有生效」，调用方可以放心重试；启动时把数据库里已删除、仓库里还留着目录的 agent 记为 warning。
+- 可收敛：只有进程在写入中途被杀会留下不一致，由启动时（worker 开始之前）的 `ResourceRepo.recover` 统一收敛：删除 `.git` 下遗留的锁与半写的 `*.tmp`，把写完未提交的变化提交为一次 `reconcile`（作者记为系统，日志记录涉及的路径）。
+- 代价可控：不一致只发生在进程被杀的那一刻，窗口持续到下次启动；孤儿目录只占空间、出现在 MCP 管理列表里，由人清理。仓库不受部署机全局 git 配置的 hook 与签名影响。
 
 ## 2. 核心数据流：一切都是 Task
 
@@ -89,7 +95,7 @@ Web / 触发器（定时、webhook……）/ delegate_task
 
 - **原则：给模型看的是名称和描述，给程序用的是 id。** 工具参数、返回值、instructions 里只出现 agent 名称；名称唯一，由工具层（`AgentService.find_by_name`）解析为 id，写错时把可用名称列表作为错误交还模型。id 只会作为文件路径的一部分（`agents/<id>/…`）出现在工作目录里。`tests/test_flow.py::test_model_sees_agent_names_never_ids` 守住这条规则。
 - **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
-- **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定（`runtime.runner.ToolGroups`，名称在组合根 `TOOL_GROUPS` 唯一声明）：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`；私有 skill 与 memory（自我改进）总是开放，读公共 skill 也总是可以。反思只开放自我改进，以及该 agent 本来就有的 `public_skills`。新建 agent 默认全部开放；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
+- **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定（`runtime.runner.ToolGroups`，名称在组合根 `TOOL_GROUPS` 唯一声明）：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`；私有 skill、memory 与自己的指令（自我改进）总是开放，读公共 skill 也总是可以。反思只开放自我改进，以及该 agent 本来就有的 `public_skills`。新建 agent 默认全部开放；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
   - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill`（私有或公共）/ `write_skill` / `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `delete_public_skill`。
@@ -152,7 +158,7 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 反思可以更新记忆、私有 skill（有 `public_skills` 时也可写公共 skill），以及自己的指令（`instructions_replace`，只做小而准的修改）；这三者都是资源仓库里的文件，每次修改都有版本，用户可回滚。
 - 计数在 **agent** 上：每完成一轮 turn，`agents.turns_since_reflection += 1`。达到该 agent 的 `reflect_every` 时，在同一事务里清零计数、把检查点推进到当前最大消息 id，并投递一个 reflection task，载荷是消息 id 区间 `(from_id, to_id]`。
 - 选择 agent 级而不是 session 级：定时触发每次都是一个新 session，只有一轮，按 session 计数永远到不了阈值。
-- ReflectionHandler 把这个区间内该 agent 所有 turn 消息渲染成文字记录，连同固定的反思提示交给同一个 agent 运行，只开放 skill 和 memory 工具。没有需要修改的内容也要走完并给出结论。
+- ReflectionHandler 把这个区间内该 agent 所有 turn 消息渲染成文字记录，连同固定的反思提示交给同一个 agent 运行，只开放自我改进的工具（记忆、私有 skill、自己的指令，加上该 agent 已有的写公共 skill）。没有需要修改的内容也要走完并给出结论。
 - 反思的完整消息和结论写入 `reflections` 表，可在 UI 查看；不进入任何 session 的历史。
 
 ## 8. 触发源
@@ -214,6 +220,8 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 **威胁模型：agent 与运行服务的系统用户同等可信。** agent 能执行任意 shell 命令，因此能读到服务能读到的一切——包括配置文件里的 `vault.key` 与 LLM API key、数据库文件。下面的措施只防止 secret **意外**进入对话记录、日志和前端，不防 agent 本身：
 
 能缩小的是**提示注入的影响面**：处理外部事件或网页内容的 agent 用 `tool_groups` 只开放它需要的工具组（例如只开 `notify`），这样即使输入里带有恶意指令，它也删不了 agent、改不了公共指令和公共 skill（两者都会进入所有 agent 的 instructions）、用不了 MCP、动不了 vault 和触发器。下面这些组**任何一个都等同于全部权限**，只能给可信的 agent：`workspace`（shell）、`temp_agent`（临时 agent 自带 shell）、`delegation`（借目标 agent 自己的完整工具组之手）、`agents`（可以给自己加组）、`triggers`（可以让任意 agent 带着任意说明定时运行）、`mcp_admin`（可以添加运行任意命令的 stdio MCP）。`public_skills`、`mcp`、`vault` 按各自的影响判断。
+
+注入还可能**持久化**：记忆、私有 skill 与自己的指令总是开放（不受 `tool_groups` 限制），处理不可信输入的 agent、以及读取含不可信输入的转录的反思，可能把注入的内容写进它们，之后该 agent 的每一轮都会带着它。影响限于这个 agent 自己（工具组不变，不能越权），但指令在 system prompt 里的权威性比记忆高。缓解手段是版本历史与作者记录：界面上能看到每一版是谁改的，随时回滚。
 
 - shell 只继承少量环境变量（`PATH`、`HOME` 等）；
 - `run_shell(secrets=[KEY])` 输出中的 secret 明文被替换为 `[secret:KEY]`（逐字匹配，编码后的输出不会被替换）；

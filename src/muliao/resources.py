@@ -8,8 +8,9 @@
 每次修改写文件后提交一次，作者是 "user" 或做出修改的 agent 的 id。历史与回滚都来自 git：
 回滚就是把旧版本的内容写回并作为新的一次提交，历史只增不改。
 
-写文件与提交在同一个临界区里（apply）。提交失败时错误向上传播（可见）；已写未提交的文件，以及进程中途被杀
-留下的 git 锁，由启动时的 recover 统一收敛（提交为一次 reconcile，记录涉及的路径）。
+写入是原子的：读取—变换—写入—提交在同一把锁里（update），任何一步失败都把涉及的路径恢复到最近一次提交，
+所以「报错」等于「没有生效」，调用方可以放心重试。只有进程在写入中途被杀会留下不一致，由启动时的 recover
+统一收敛（删遗留的锁和半写的文件，把写完未提交的变化提交为一次 reconcile）。
 secret 不在这里：它们加密存在数据库的 vault 里，不需要版本管理。
 """
 
@@ -19,7 +20,7 @@ import asyncio
 import logging
 import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,9 @@ _PUBLIC = "public"
 _AGENTS = "agents"
 _FIELD = "\x1f"
 _REV = re.compile(r"^[0-9a-f]{40}$")
+# 与 ids.new_agent_id 的格式一致
+_AGENT_ID = re.compile(r"^[0-9a-f]{12}$")
+_TMP = ".tmp"
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,10 @@ class Revision:
     message: str
 
 
+def _read_optional(path: Path) -> str | None:
+    return path.read_text(encoding="utf-8") if path.exists() else None
+
+
 class ResourceRepo:
     def __init__(self, root: Path):
         self.root = root
@@ -53,8 +61,16 @@ class ResourceRepo:
         self._ready = False
 
     def owner_dir(self, owner: str | None) -> Path:
-        """资源归属的目录：None 为公共，否则为该 agent 私有。布局只在这里定义。"""
-        return self.root / _PUBLIC if owner is None else self.root / _AGENTS / owner
+        """资源归属的目录：None 为公共，否则为该 agent 私有。布局只在这里定义。
+
+        所有资源路径都经过这里，所以 owner 的格式在这里校验：不合法的 id（如 `..`）不能构造出越界的路径。
+        agent 是否存在不在这里判断——那是数据库里的事实，由调用方经 AgentService 确认。
+        """
+        if owner is None:
+            return self.root / _PUBLIC
+        if not _AGENT_ID.fullmatch(owner):
+            raise InvalidInput(f"invalid agent id {owner!r}")
+        return self.root / _AGENTS / owner
 
     def agent_owners(self) -> list[str]:
         """有私有资源目录的 agent id。"""
@@ -104,18 +120,16 @@ class ResourceRepo:
     async def recover(self) -> None:
         """启动时（worker 开始之前、没有任何写入在进行）把仓库收敛到干净状态。
 
-        - 上次进程在 git 运行中被杀留下的 index.lock：此刻不可能有别的 git 在用它，删除并记录；
-        - 写了文件但没来得及提交的变化（进程被杀、提交失败）：整体提交为一次 reconcile，作者记为系统，
-          并记录涉及的路径——修改者已无从得知，如实标出。
+        运行期的写入是原子的（见 apply），留下不一致的只有进程在写入或 git 运行中被杀：
+        - .git 下遗留的锁（index.lock、refs/…/*.lock）：此刻不可能有别的 git 在用，删除并记录；
+        - 写了一半的 *.tmp：按定义不完整，删除并记录，不进入历史；
+        - 写完但没来得及提交的变化：整体提交为一次 reconcile，作者记为系统，记录涉及的路径。
         """
         async with self._lock:
             await self.ensure()
-            lock = self.root / ".git" / "index.lock"
-            if lock.exists():
-                lock.unlink()
-                log.warning(
-                    "removed stale git index lock left by a killed process", extra={"root": str(self.root)}
-                )
+            for stale in [*(self.root / ".git").rglob("*.lock"), *self._partial_writes()]:
+                stale.unlink()
+                log.warning("removed leftover of a killed process", extra={"path": str(stale)})
             await self._git("add", "-A")
             _, staged = await self._git("diff", "--cached", "--name-only")
             if not staged.strip():
@@ -123,16 +137,32 @@ class ResourceRepo:
             await self._git(
                 "commit", "-q", "-m", "reconcile uncommitted changes", f"--author={SYSTEM} <{SYSTEM}@muliao>"
             )
-        log.warning("committed resource changes left uncommitted", extra={"paths": staged.split()})
+        log.warning("committed resource changes left uncommitted", extra={"paths": staged.splitlines()})
+
+    def _partial_writes(self) -> list[Path]:
+        return [p for p in self.root.rglob(f"*{_TMP}") if ".git" not in p.relative_to(self.root).parts]
 
     async def apply(self, changes: Mapping[Path, str | None], message: str, author: str) -> str | None:
-        """在一个临界区里写入（内容为 None 表示删除该文件或目录）并提交；没有变化时返回 None。
+        """写入（内容为 None 表示删除该文件或目录）并提交，原子地：要么提交成功，要么什么都没发生。"""
+        async with self._lock:
+            return await self._apply_locked(changes, message, author)
 
-        写与提交在同一把锁里：并发的修改不会被别人的提交带走、记错作者。
+    async def update(
+        self, path: Path, transform: Callable[[str | None], str | None], message: str, author: str
+    ) -> str | None:
+        """读取当前内容（不存在为 None）、变换、写入并提交，整个过程在同一把锁里：并发的修改互不覆盖。
+
+        transform 返回新内容（None 表示删除），或抛出领域错误拒绝这次修改。
         """
         async with self._lock:
-            await self.ensure()
-            rel = [self.relative(p) for p in changes]
+            return await self._apply_locked({path: transform(_read_optional(path))}, message, author)
+
+    async def _apply_locked(
+        self, changes: Mapping[Path, str | None], message: str, author: str
+    ) -> str | None:
+        await self.ensure()
+        rel = [self.relative(p) for p in changes]
+        try:
             for path, content in changes.items():
                 if content is None:
                     if path.is_dir():
@@ -141,17 +171,39 @@ class ResourceRepo:
                         path.unlink()
                 else:
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = path.with_name(path.name + ".tmp")
+                    tmp = path.with_name(path.name + _TMP)
                     tmp.write_text(content, encoding="utf-8")
                     tmp.replace(path)
-            await self._git("add", "-A", "--", *rel)
-            unchanged, _ = await self._git("diff", "--cached", "--quiet", "--", *rel, check=False)
+            # 删除一个从未提交过的路径（如没有资源目录的 agent）：没有可记录的变化
+            tracked = [r for r in rel if (self.root / r).exists() or await self._tracked(r)]
+            if not tracked:
+                return None
+            await self._git("add", "-A", "--", *tracked)
+            unchanged, _ = await self._git("diff", "--cached", "--quiet", "--", *tracked, check=False)
             if unchanged == 0:
                 return None
-            await self._git("commit", "-q", "-m", message, f"--author={author} <{author}@muliao>", "--", *rel)
+            await self._git(
+                "commit", "-q", "-m", message, f"--author={author} <{author}@muliao>", "--", *tracked
+            )
             _, rev = await self._git("rev-parse", "HEAD")
+        except BaseException:
+            # 「报错」严格等于「没有生效」：把这些路径恢复到最近一次提交的状态（工作区在每次写入前都是干净的）
+            await self._restore(rel)
+            raise
         log.info("resource committed", extra={"paths": rel, "author": author, "rev": rev.strip()})
         return rev.strip()
+
+    async def _tracked(self, rel: str) -> bool:
+        _, out = await self._git("ls-files", "--", rel)
+        return bool(out.strip())
+
+    async def _restore(self, rel: Sequence[str]) -> None:
+        await self._git("reset", "-q", "--", *rel, check=False)
+        for r in rel:
+            if await self._tracked(r):
+                await self._git("checkout", "-q", "HEAD", "--", r, check=False)
+        await self._git("clean", "-fdq", "--", *rel, check=False)
+        log.warning("resource write rolled back", extra={"paths": list(rel)})
 
     async def history(self, path: Path, limit: int) -> list[Revision]:
         """这个文件的版本，新的在前。"""

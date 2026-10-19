@@ -170,9 +170,9 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
     row, tools = await container.mcp.add(alpha, spec, probe=True, author="user")
 
     assert sorted(tools) == ["echo", "token"]
-    assert row.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
+    assert row.config.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
     assert [s.name for s in container.mcp.visible_to(alpha)] == ["echo"]
-    assert container.mcp.visible_to("beta") == []
+    assert container.mcp.visible_to("b2b2b2b2b2b2") == []
 
 
 async def test_mcp_add_failing_probe_saves_nothing(container):

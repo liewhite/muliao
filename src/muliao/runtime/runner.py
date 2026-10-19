@@ -44,7 +44,7 @@ _EVENT_TEXT_LIMIT = 2000
 
 @dataclass(frozen=True)
 class RunProfile:
-    """一次运行开放的能力：对话按 agent 选用的工具组组合（ToolGroups），反思只开放 skill 与 memory，
+    """一次运行开放的能力：对话按 agent 选用的工具组组合（ToolGroups），反思只开放自我改进（加上 agent 已有的写公共 skill），
     临时 agent 只开放文件与 shell（加调用方的 MCP）。"""
 
     toolsets: Sequence[AbstractToolset[RunScope]]

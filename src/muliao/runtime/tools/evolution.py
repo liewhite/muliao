@@ -2,7 +2,6 @@
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.errors import InvalidInput
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.prompts import PromptStore
 from muliao.evolution.skills import SkillStore
@@ -125,19 +124,12 @@ def instructions_toolset(prompts: PromptStore) -> FunctionToolset[RunScope]:
             old_text: Exact text currently in your instructions, or empty to append.
             new_text: Replacement (or appended) text; empty deletes `old_text`.
         """
-        current = prompts.current(ctx.deps.agent_id)
-        if old_text:
-            count = current.count(old_text)
-            if count != 1:
-                raise InvalidInput(f"old text must occur exactly once in your instructions, found {count}")
-            updated = current.replace(old_text, new_text)
-        else:
-            if not new_text.strip():
-                raise InvalidInput("nothing to append")
-            updated = (
-                f"{current.rstrip()}\n\n{new_text.strip()}\n" if current.strip() else f"{new_text.strip()}\n"
-            )
-        changed = await prompts.set(ctx.deps.agent_id, updated, ctx.deps.agent_id)
+        me = ctx.deps.agent_id
+        changed = (
+            await prompts.replace(me, old_text, new_text, me)
+            if old_text
+            else await prompts.append(me, new_text, me)
+        )
         return "instructions updated" if changed else "instructions unchanged"
 
     return ts

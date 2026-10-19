@@ -6,14 +6,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 from fastmcp.client.transports import StdioTransport
+from pydantic import BaseModel, ConfigDict
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset
 
@@ -59,12 +58,11 @@ class McpSpec:
             raise InvalidInput(f"unknown MCP transport {self.transport!r}")
 
 
-@dataclass(frozen=True)
-class McpServer:
-    """一个已保存的 MCP server。env / headers / args / url 的值可以包含 ${vault:KEY}，运行时按归属者的视角解析。"""
+class McpConfig(BaseModel):
+    """文件里存的内容：除归属与名称以外的字段（这两项由文件位置决定，不存第二份）。加载时严格校验。"""
 
-    owner: str | None
-    name: str
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     transport: McpTransport
     command: str | None
     args: list[str]
@@ -73,14 +71,27 @@ class McpServer:
     headers: dict[str, str]
     enabled: bool
 
+
+@dataclass(frozen=True)
+class McpServer:
+    """一个已保存的 MCP server。env / headers / args / url 的值可以包含 ${vault:KEY}，运行时按归属者的视角解析。"""
+
+    owner: str | None
+    name: str
+    config: McpConfig
+
+    @property
+    def transport(self) -> McpTransport:
+        return self.config.transport
+
+    @property
+    def enabled(self) -> bool:
+        return self.config.enabled
+
     @property
     def key(self) -> str:
         """在所有 server 里唯一：归属 + 名称。"""
         return f"{scope_of(self.owner)}:{self.owner or ''}:{self.name}"
-
-
-# 文件里存除归属与名称以外的字段（这两项由文件位置决定，不存第二份）
-_FILE_FIELDS = ("transport", "command", "args", "url", "env", "headers", "enabled")
 
 
 class McpRegistry:
@@ -95,34 +106,40 @@ class McpRegistry:
         return self._dir(owner) / f"{validate_slug('mcp server', name)}.json"
 
     def _load(self, owner: str | None, path: Path) -> McpServer:
-        data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
-        if set(data) != set(_FILE_FIELDS):
-            raise RuntimeError(f"{path}: MCP config must have exactly the fields {list(_FILE_FIELDS)}")
-        return McpServer(
-            owner=owner, name=path.stem, **{**data, "transport": McpTransport(data["transport"])}
-        )
-
-    @staticmethod
-    def _dump(server: McpServer) -> str:
-        data = {k: v for k, v in asdict(server).items() if k in _FILE_FIELDS}
-        return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        """手工改坏的文件在这里报错（带路径），不带着错误的类型或含义继续运行。"""
+        try:
+            config = McpConfig.model_validate_json(path.read_text(encoding="utf-8"))
+            spec = McpSpec(
+                name=validate_slug("mcp server", path.stem),
+                transport=config.transport,
+                command=config.command,
+                args=tuple(config.args),
+                url=config.url,
+                env=tuple(config.env.items()),
+                headers=tuple(config.headers.items()),
+            )
+            spec.validate()
+        except (ValueError, InvalidInput) as e:
+            raise InvalidInput(f"invalid MCP config {path}: {e}") from e
+        return McpServer(owner=owner, name=path.stem, config=config)
 
     async def build_toolset(self, server: McpServer) -> AbstractToolset:
         """解析 vault 引用并构建 toolset；工具名以 `<server名>_` 为前缀避免冲突。"""
-        if server.transport == McpTransport.STDIO:
-            assert server.command is not None
+        c = server.config
+        if c.transport == McpTransport.STDIO:
+            assert c.command is not None
             client = StdioTransport(
-                command=server.command,
-                args=[await self._vault.render(a, server.owner) for a in server.args],
-                env=await self._vault.render_map(server.env, server.owner) or None,
+                command=c.command,
+                args=[await self._vault.render(a, server.owner) for a in c.args],
+                env=await self._vault.render_map(c.env, server.owner) or None,
             )
             toolset = MCPToolset(client, id=f"mcp-{server.key}", init_timeout=_CONNECT_TIMEOUT)
         else:
-            assert server.url is not None
+            assert c.url is not None
             toolset = MCPToolset(
-                await self._vault.render(server.url, server.owner),
+                await self._vault.render(c.url, server.owner),
                 id=f"mcp-{server.key}",
-                headers=await self._vault.render_map(server.headers, server.owner) or None,
+                headers=await self._vault.render_map(c.headers, server.owner) or None,
                 init_timeout=_CONNECT_TIMEOUT,
             )
         return toolset.prefixed(server.name)
@@ -170,16 +187,9 @@ class McpRegistry:
     async def add(
         self, owner: str | None, spec: McpSpec, *, probe: bool, author: str
     ) -> tuple[McpServer, list[str]]:
-        """新增 server。probe=True 时先连接验证，验证失败不写入。"""
+        """新增 server。probe=True 时先连接验证，验证失败不写入。owner 对应的 agent 由调用方确认存在。"""
         spec.validate()
-        if owner is not None and not self._repo.owner_dir(owner).exists():
-            raise NotFound(f"agent {owner!r} not found")
-        path = self._path(owner, spec.name)
-        if path.exists():
-            raise Conflict(f"MCP server {spec.name!r} already exists in {scope_of(owner)} scope")
-        server = McpServer(
-            owner=owner,
-            name=spec.name,
+        config = McpConfig(
             transport=spec.transport,
             command=spec.command,
             args=list(spec.args),
@@ -188,22 +198,47 @@ class McpRegistry:
             headers=dict(spec.headers),
             enabled=True,
         )
+        server = McpServer(owner=owner, name=spec.name, config=config)
         tools = await self.probe(server) if probe else []
-        await self._repo.apply(
-            {path: self._dump(server)}, f"add {scope_of(owner)} MCP server {spec.name}", author
+
+        def create(current: str | None) -> str:
+            if current is not None:
+                raise Conflict(f"MCP server {spec.name!r} already exists in {scope_of(owner)} scope")
+            return _dump(config)
+
+        await self._repo.update(
+            self._path(owner, spec.name), create, f"add {scope_of(owner)} MCP server {spec.name}", author
         )
         log.info("mcp server added", extra={"owner": owner, "mcp": spec.name, "tools": len(tools)})
         return server, tools
 
     async def remove(self, owner: str | None, name: str, author: str) -> None:
-        self.get(owner, name)
-        await self._repo.apply(
-            {self._path(owner, name): None}, f"remove {scope_of(owner)} MCP server {name}", author
+        """只看文件在不在，不解析内容：改坏的配置也能删掉。"""
+
+        def delete(current: str | None) -> None:
+            if current is None:
+                raise NotFound(f"MCP server {name!r} not found in {scope_of(owner)} scope")
+
+        await self._repo.update(
+            self._path(owner, name), delete, f"remove {scope_of(owner)} MCP server {name}", author
         )
 
     async def set_enabled(self, owner: str | None, name: str, enabled: bool, author: str) -> McpServer:
-        server = self.get(owner, name)
-        updated = McpServer(**{**asdict(server), "enabled": enabled})
+        path = self._path(owner, name)
+        result: list[McpServer] = []
+
+        def toggle(current: str | None) -> str:
+            if current is None:
+                raise NotFound(f"MCP server {name!r} not found in {scope_of(owner)} scope")
+            server = self._load(owner, path)
+            updated = server.config.model_copy(update={"enabled": enabled})
+            result.append(McpServer(owner=owner, name=name, config=updated))
+            return _dump(updated)
+
         message = f"{'enable' if enabled else 'disable'} {scope_of(owner)} MCP server {name}"
-        await self._repo.apply({self._path(owner, name): self._dump(updated)}, message, author)
-        return updated
+        await self._repo.update(path, toggle, message, author)
+        return result[0]
+
+
+def _dump(config: McpConfig) -> str:
+    return config.model_dump_json(indent=2) + "\n"

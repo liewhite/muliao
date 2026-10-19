@@ -127,3 +127,18 @@ async def test_reflection_refines_own_instructions_as_a_versioned_change(contain
     assert (await container.prompts.history(agent.id, 10))[0].author == agent.id
     # 反思只开放自我改进；该 agent 有 public_skills（默认全部开放）所以也能写公共 skill
     assert "instructions_replace" in seen_tools and "run_shell" not in seen_tools
+
+
+async def test_agent_without_resource_files_can_still_be_deleted(container, make_agent):
+    agent = await make_agent("alpha")
+    await container.resources.apply({container.resources.owner_dir(agent.id): None}, "lost", "user")
+
+    await container.agent_lifecycle.delete(agent.id, author="user")
+
+    assert await container.agents.list() == []
+
+
+async def test_mcp_api_rejects_path_traversal_owners(client, make_agent):
+    await login(client)
+    for owner in ("..", "../public"):
+        assert (await client.post("/api/mcp/tools", params={"name": "x", "owner": owner})).status_code == 422

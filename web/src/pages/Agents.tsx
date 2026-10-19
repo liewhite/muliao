@@ -107,7 +107,7 @@ function ToolGroupsInput({ all, value, onChange }: { all: string[]; value: strin
   return (
     <div className="flex flex-col gap-2">
       <div className="text-sm font-medium">可用工具</div>
-      <div className="text-xs text-muted">记忆与私有 skill 总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的；标着「≈全部权限」的任何一项都能间接做到其余所有事</div>
+      <div className="text-xs text-muted">记忆、私有 skill 和自己的指令总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的；标着「≈全部权限」的任何一项都能间接做到其余所有事</div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {all.map((group) => (
           <label key={group} className="flex items-center gap-2 text-sm">

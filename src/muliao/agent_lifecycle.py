@@ -28,7 +28,7 @@ class AgentLifecycle:
                 raise Conflict(
                     f"agent {agent.name!r} is working right now; wait for it to finish, then delete"
                 )
-            # 先按会话删除规则处理它的会话，再由外键级联删除其余数据（指令版本、私有 MCP 与 secret、触发器……）
+            # 先按会话删除规则处理它的会话，再由外键级联删除其余数据库数据（私有 secret、触发器……）；文件资源随后删除
             sessions = list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())
             await delete_sessions(s, sessions)
             await s.delete(agent)

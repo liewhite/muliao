@@ -1,8 +1,10 @@
 """Agent 私有记忆：一份有长度上限的 markdown，每轮全文注入 instructions。存在资源仓库里，每次修改提交一版。"""
 
+from collections.abc import Callable
 from pathlib import Path
 
 from muliao.errors import InvalidInput, NotFound
+from muliao.evolution import text_edit
 from muliao.resources import ResourceRepo
 
 MEMORY_FILE = "MEMORY.md"
@@ -27,28 +29,34 @@ class MemoryStore:
         return path.read_text(encoding="utf-8")
 
     async def write(self, agent: str, content: str, author: str) -> str:
-        if len(content) > self.max_chars:
-            raise MemoryFull(
-                f"memory would be {len(content)} chars, limit is {self.max_chars}; "
-                "condense or remove existing entries first"
-            )
-        path = self.path(agent)
-        if not path.exists():
-            raise NotFound(f"memory file for agent {agent!r} does not exist: {path}")
-        await self._repo.apply({path: content}, f"memory of {agent}", author)
-        return content
+        """整体替换（用户在界面上编辑时）。"""
+        return await self._update(agent, lambda _current: content, author)
 
     async def append(self, agent: str, entry: str, author: str) -> str:
-        entry = entry.strip()
-        if not entry:
-            raise InvalidInput("memory entry must not be empty")
-        current = self.read(agent).rstrip()
-        return await self.write(agent, f"{current}\n{entry}\n" if current else f"{entry}\n", author)
+        return await self._update(agent, lambda current: text_edit.append(current, entry), author)
 
     async def replace(self, agent: str, old: str, new: str, author: str) -> str:
         """把恰好出现一次的 old 替换为 new；new 为空即删除。"""
-        current = self.read(agent)
-        count = current.count(old) if old else 0
-        if count != 1:
-            raise InvalidInput(f"old text must occur exactly once in memory, found {count} occurrences")
-        return await self.write(agent, current.replace(old, new), author)
+        return await self._update(
+            agent, lambda current: text_edit.replace_once(current, old, new, "memory"), author
+        )
+
+    async def _update(self, agent: str, edit: Callable[[str], str], author: str) -> str:
+        """读取、修改、写入、提交在资源仓库的同一把锁里：并发的修改互不覆盖。"""
+        path = self.path(agent)
+        result: list[str] = []
+
+        def transform(current: str | None) -> str:
+            if current is None:
+                raise NotFound(f"memory file for agent {agent!r} does not exist: {path}")
+            updated = edit(current)
+            if len(updated) > self.max_chars:
+                raise MemoryFull(
+                    f"memory would be {len(updated)} chars, limit is {self.max_chars}; "
+                    "condense or remove existing entries first"
+                )
+            result.append(updated)
+            return updated
+
+        await self._repo.update(path, transform, f"memory of {agent}", author)
+        return result[0]
