@@ -128,6 +128,8 @@ agent 之间的委派有两种形态，都统一为「对某个 thread 发起一
 
 Alembic 管理表结构（`src/muliao/migrations/`，随包分发），启动时自动升级到最新版本。整个升级在一个真正的事务里：pysqlite 默认只在 DML 前隐式开事务、DDL 逐条自动提交，所以迁移使用独立连接，驱动设为 autocommit 并显式 `BEGIN IMMEDIATE`，任何失败都完整回滚。SQLite 改表用 batch 模式（建新表-拷数据-删旧表），迁移连接在建立时关闭外键以免删旧表时级联删除子表数据，提交前执行 `foreign_key_check`，有违例则回滚。`tests/test_migrations.py` 保证迁移后的结构与模型定义一致。
 
+首次部署之前不积累迁移历史：所有结构变化都直接改唯一的初始版本（重新 autogenerate）。首次部署之后，每次结构变化新增一个迁移，已部署的数据只通过迁移升级，不删库。
+
 ## 7. 进化机制
 
 ### Skill

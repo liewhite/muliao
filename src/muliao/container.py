@@ -77,7 +77,7 @@ class Container:
         self._background.append(task)
 
     async def start(self) -> None:
-        await asyncio.to_thread(migrate, self.settings.db_path, self.settings.agents_dir)
+        await asyncio.to_thread(migrate, self.settings.db_path)
         await self._check_agent_models()
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
         await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)

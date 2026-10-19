@@ -54,7 +54,7 @@ def models() -> ModelSlot:
 @pytest.fixture
 async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Container]:
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
-    migrate(settings.db_path, settings.agents_dir)
+    migrate(settings.db_path)
     yield c
     await c.db.engine.dispose()
 

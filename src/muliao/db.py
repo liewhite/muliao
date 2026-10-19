@@ -76,12 +76,10 @@ def create_engine(db_path: Path) -> AsyncEngine:
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 
-def alembic_config(connection: Connection | None = None, agents_dir: Path | None = None) -> Config:
+def alembic_config(connection: Connection | None = None) -> Config:
     cfg = Config()
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     cfg.attributes["connection"] = connection
-    # 涉及 agent 数据目录的迁移（如目录改名）从这里取路径
-    cfg.attributes["agents_dir"] = agents_dir
     return cfg
 
 
@@ -111,7 +109,7 @@ def _migration_engine(db_path: Path) -> Engine:
     return engine
 
 
-def migrate(db_path: Path, agents_dir: Path, target: str = "head") -> None:
+def migrate(db_path: Path, target: str = "head") -> None:
     """把数据库升级到最新结构，整体在一个事务里：任何失败都完整回滚。启动时调用；已是最新时什么也不做。
 
     同步执行（启动阶段由调用方放进线程）。迁移连接用完即关闭，不进入应用的连接池，应用连接的外键始终开启。
@@ -121,7 +119,7 @@ def migrate(db_path: Path, agents_dir: Path, target: str = "head") -> None:
     engine = _migration_engine(db_path)
     try:
         with engine.begin() as connection:
-            command.upgrade(alembic_config(connection, agents_dir), target)
+            command.upgrade(alembic_config(connection), target)
             violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
             if violations:
                 raise RuntimeError(
