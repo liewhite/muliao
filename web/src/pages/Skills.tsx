@@ -3,7 +3,7 @@ import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plus, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { agentRoute, api, asAgentId, type AgentId, type Skill } from '../api'
-import {
+import { ActionButton,
   EmptyHint,
   ErrorAlert,
   LinkButton,
@@ -129,9 +129,9 @@ export function SkillEditor() {
               <TextAreaInput label="内容（Markdown）" value={skill.body} onChange={(body) => set({ body })} rows={18} mono />
               <ErrorAlert error={action.error} />
               <div className="flex gap-2">
-                <Button isPending={action.busy} onPress={() => void save()}>
+                <ActionButton isPending={action.busy} onPress={() => void save()}>
                   保存
-                </Button>
+                </ActionButton>
                 {existing && (
                   <Button variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
                     <Trash2 className="size-4" />

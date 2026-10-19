@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { Button, Card, Chip, Disclosure, Switch, toast } from '@heroui/react'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { Button, Card, Chip, toast } from '@heroui/react'
+import { Pencil, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, asAgentId, type Agent, type CronJob } from '../api'
-import {
+import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
   Loading,
@@ -28,9 +28,16 @@ function CronItem({ job, agents, onChange }: { job: CronJob; agents: Agent[] | u
   const [prompt, setPrompt] = useState(job.prompt)
   const action = useAction()
 
-  const update = (patch: { enabled?: boolean }) =>
+  // 开关只改启用状态，提交的是已保存的值；编辑中的草稿只由「保存」提交
+  const toggle = (enabled: boolean) =>
     action.run(async () => {
-      await api.updateCron(job.id, { schedule, prompt, enabled: patch.enabled ?? job.enabled })
+      await api.updateCron(job.id, { schedule: job.schedule, prompt: job.prompt, enabled })
+      onChange()
+    })
+
+  const save = () =>
+    action.run(async () => {
+      await api.updateCron(job.id, { schedule, prompt, enabled: job.enabled })
       setEditing(false)
       onChange()
     })
@@ -52,19 +59,12 @@ function CronItem({ job, agents, onChange }: { job: CronJob; agents: Agent[] | u
             <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{job.schedule}</code>
           </div>
         </div>
-        <Switch
-          size="sm"
+        <ToggleSwitch
+          label={`启用定时任务「${job.name}」`}
           isSelected={job.enabled}
           isDisabled={action.busy}
-          onChange={(enabled) => void update({ enabled })}
-          aria-label={job.enabled ? '停用' : '启用'}
-        >
-          <Switch.Content>
-            <Switch.Control>
-              <Switch.Thumb />
-            </Switch.Control>
-          </Switch.Content>
-        </Switch>
+          onChange={(enabled) => void toggle(enabled)}
+        />
       </Card.Header>
       <Card.Content className="flex flex-col gap-3">
         <div className="text-xs text-muted">
@@ -93,9 +93,9 @@ function CronItem({ job, agents, onChange }: { job: CronJob; agents: Agent[] | u
       <Card.Footer className="flex gap-2">
         {editing ? (
           <>
-            <Button size="sm" isPending={action.busy} onPress={() => void update({})}>
+            <ActionButton size="sm" isPending={action.busy} onPress={() => void save()}>
               保存
-            </Button>
+            </ActionButton>
             <Button size="sm" variant="tertiary" onPress={() => setEditing(false)}>
               取消
             </Button>
@@ -117,7 +117,7 @@ function CronItem({ job, agents, onChange }: { job: CronJob; agents: Agent[] | u
   )
 }
 
-const EMPTY = { name: '', agent_id: '', schedule: '*/5 * * * *', prompt: '' }
+const EMPTY = { name: '', agent_id: null as string | null, schedule: '*/5 * * * *', prompt: '' }
 
 function CronForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated: () => void }) {
   const [job, setJob] = useState(EMPTY)
@@ -126,6 +126,7 @@ function CronForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreate
 
   async function create() {
     const ok = await action.run(async () => {
+      if (job.agent_id === null) throw new Error('请选择 agent')
       await api.createCron({ ...job, agent_id: asAgentId(job.agent_id) })
       toast.success('定时任务已创建')
     })
@@ -136,17 +137,7 @@ function CronForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreate
   }
 
   return (
-    <Card>
-      <Disclosure>
-        <Disclosure.Heading>
-          <Disclosure.Trigger className="flex w-full items-center gap-2 px-1 font-medium">
-            <Plus className="size-4" />
-            新建定时任务
-            <Disclosure.Indicator className="ml-auto" />
-          </Disclosure.Trigger>
-        </Disclosure.Heading>
-        <Disclosure.Content>
-          <Disclosure.Body className="flex flex-col gap-4 pt-4">
+    <CollapsibleForm title="新建定时任务">
             <TextInput label="名称" value={job.name} onChange={(name) => set({ name })} isRequired />
             <SelectInput
               label="Agent"
@@ -164,17 +155,14 @@ function CronForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreate
               rows={5}
             />
             <ErrorAlert error={action.error} />
-            <Button
+            <ActionButton
               isDisabled={!job.name || !job.agent_id || !job.prompt}
               isPending={action.busy}
               onPress={() => void create()}
             >
               创建
-            </Button>
-          </Disclosure.Body>
-        </Disclosure.Content>
-      </Disclosure>
-    </Card>
+            </ActionButton>
+          </CollapsibleForm>
   )
 }
 
@@ -192,7 +180,7 @@ export default function Cron() {
             <div className="flex flex-col gap-3">
               {list.map((j) => (
                 <CronItem
-                  key={`${j.id}-${j.schedule}-${j.enabled}-${j.prompt}`}
+                  key={`${j.id}-${j.schedule}-${j.prompt}`}
                   job={j}
                   agents={agents.data}
                   onChange={() => void jobs.reload()}

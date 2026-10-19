@@ -4,7 +4,7 @@ import { Archive, RotateCcw, SendHorizontal, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentRoute, api, type CompactionInfo, type Item, type Task } from '../api'
 import { useServerEvents, type RunEvent } from '../events'
-import { ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
+import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
 interface ToolView {
   name: string
@@ -93,8 +93,6 @@ function Collapsible({ title, tone = 'default', children }: { title: ReactNode; 
   )
 }
 
-const PRE = 'my-1 max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs text-foreground'
-
 function ToolBlock({ tool }: { tool: ToolView }) {
   const status = tool.result === null ? '运行中' : tool.failed ? '出错' : '完成'
   return (
@@ -107,8 +105,8 @@ function ToolBlock({ tool }: { tool: ToolView }) {
         </>
       }
     >
-      {tool.args && tool.args !== '{}' && <pre className={PRE}>{tool.args}</pre>}
-      {tool.result !== null && <pre className={PRE}>{tool.result}</pre>}
+      {tool.args && tool.args !== '{}' && <pre className={CODE_BLOCK}>{tool.args}</pre>}
+      {tool.result !== null && <pre className={CODE_BLOCK}>{tool.result}</pre>}
     </Collapsible>
   )
 }
@@ -188,7 +186,7 @@ function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void
       {task.status === 'failed' ? (
         <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
           <div>这一轮失败了（尝试 {task.attempts} 次）</div>
-          <pre className={PRE}>{task.error}</pre>
+          <pre className={CODE_BLOCK}>{task.error}</pre>
           <div className="text-xs">如果是上下文过长，先点右上角「压缩」，完成后再重试。</div>
           <Button size="sm" variant="secondary" className="self-start" onPress={() => onRetry(task.id)}>
             <RotateCcw className="size-4" />
@@ -282,7 +280,7 @@ export default function SessionView() {
             variant="secondary"
             isDisabled={action.busy}
             onPress={() => void action.run(() => api.compact(id).then(() => detail.reload()))}
-            aria-label="把早期对话压缩成摘要，减少发给模型的上下文"
+            aria-description="把早期对话压缩成摘要，减少发给模型的上下文"
           >
             <Archive className="size-4" />
             压缩

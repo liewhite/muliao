@@ -1,19 +1,20 @@
 import { useState } from 'react'
-import { Button, Card } from '@heroui/react'
+import { Card } from '@heroui/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, asAgentId } from '../api'
-import { EmptyHint, ErrorAlert, LinkButton, Loading, Page, SelectInput, TextAreaInput, useAction, useAgents } from '../ui'
+import { ActionButton, EmptyHint, ErrorAlert, LinkButton, Loading, Page, SelectInput, TextAreaInput, useAction, useAgents } from '../ui'
 
 export default function NewSession() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const agents = useAgents()
-  const [agent, setAgent] = useState(params.get('agent') ?? '')
+  const [agent, setAgent] = useState<string | null>(params.get('agent'))
   const [prompt, setPrompt] = useState('')
   const action = useAction()
 
   async function start() {
     await action.run(async () => {
+      if (agent === null) throw new Error('请选择 agent')
       const session = await api.startSession(asAgentId(agent), prompt.trim())
       navigate(`/sessions/${session.id}`, { replace: true })
     })
@@ -40,9 +41,9 @@ export default function NewSession() {
                 />
                 <TextAreaInput label="消息" value={prompt} onChange={setPrompt} rows={6} autoFocus />
                 <ErrorAlert error={action.error} />
-                <Button isDisabled={!agent || !prompt.trim()} isPending={action.busy} onPress={() => void start()}>
+                <ActionButton isDisabled={!agent || !prompt.trim()} isPending={action.busy} onPress={() => void start()}>
                   开始
-                </Button>
+                </ActionButton>
               </Card.Content>
             </Card>
           )

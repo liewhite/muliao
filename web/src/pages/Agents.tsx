@@ -12,7 +12,7 @@ import {
   type AgentId,
   type AgentInput,
 } from '../api'
-import {
+import { ActionButton,
   EmptyHint,
   ErrorAlert,
   LinkButton,
@@ -129,9 +129,9 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults?: Age
         onChange={(v) => set({ reflect_every: v ? Number(v) : null })}
       />
       <ErrorAlert error={action.error} />
-      <Button isPending={action.busy} onPress={() => void save()}>
+      <ActionButton isPending={action.busy} onPress={() => void save()}>
         保存
-      </Button>
+      </ActionButton>
     </div>
   )
 }
@@ -173,7 +173,7 @@ function MemoryEditor({ agentId }: { agentId: AgentId }) {
             mono
           />
           <ErrorAlert error={action.error} />
-          <Button
+          <ActionButton
             isDisabled={content === m.content}
             isPending={action.busy}
             onPress={() =>
@@ -185,7 +185,7 @@ function MemoryEditor({ agentId }: { agentId: AgentId }) {
             }
           >
             保存记忆
-          </Button>
+          </ActionButton>
         </div>
       )}
     </Loading>
@@ -282,7 +282,7 @@ export function AgentDetail() {
                 <Card.Content className="flex flex-col gap-2 text-sm">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-muted">id</span>
-                    <code className="selectable rounded bg-surface-secondary px-1.5 py-0.5 font-mono">{a.id}</code>
+                    <code className="select-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono">{a.id}</code>
                     <Button size="sm" variant="ghost" onPress={() => void action.run(() => copyText(a.id))}>
                       <Copy className="size-4" />
                       复制

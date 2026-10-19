@@ -16,7 +16,6 @@
     "@tailwindcss/vite": "^4.3.3",
     "lucide-react": "^1.59.0",
     "react": "^19.2.8",
-    "react-aria-components": "^1.22.1",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.4",

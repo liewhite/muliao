@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api, type TaskStatus } from '../api'
 import { closeServerEvents } from '../events'
 import { enablePush, pushState, type PushState } from '../push'
-import {
+import { ActionButton,
   EmptyHint,
   ErrorAlert,
   Loading,
@@ -64,9 +64,9 @@ export function Vault() {
           <TextInput label="值" type="password" value={value} onChange={setValue} isRequired />
           <TextInput label="说明" value={description} onChange={setDescription} />
           <ErrorAlert error={action.error} />
-          <Button isDisabled={!key || !value} isPending={action.busy} onPress={() => void save()}>
+          <ActionButton isDisabled={!key || !value} isPending={action.busy} onPress={() => void save()}>
             保存（同名覆盖）
-          </Button>
+          </ActionButton>
         </Card.Content>
       </Card>
       <Loading state={secrets}>
@@ -232,13 +232,13 @@ export function Settings() {
         </Card.Header>
         {(push === 'default' || push === 'granted') && (
           <Card.Footer className="flex gap-2">
-            <Button
+            <ActionButton
               size="sm"
               isPending={action.busy}
               onPress={() => void action.run(enablePush).then(() => setPush(pushState()))}
             >
               {push === 'granted' ? '重新订阅本设备' : '开启推送'}
-            </Button>
+            </ActionButton>
             {push === 'granted' && (
               <Button
                 size="sm"
@@ -306,9 +306,9 @@ export function Login({ onLogin }: { onLogin: () => void }) {
           >
             <TextInput label="密码" type="password" value={password} onChange={setPassword} autoFocus />
             <ErrorAlert error={action.error} />
-            <Button type="submit" isDisabled={!password} isPending={action.busy} fullWidth>
+            <ActionButton type="submit" isDisabled={!password} isPending={action.busy} fullWidth>
               登录
-            </Button>
+            </ActionButton>
           </Form>
         </Card.Content>
       </Card>

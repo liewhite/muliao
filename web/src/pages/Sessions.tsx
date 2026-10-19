@@ -31,12 +31,15 @@ const FILTERS = {
 }
 type Filter = keyof typeof FILTERS
 
+// 「所有 agent」选项的 id；查询时映射为不过滤
+const ALL_AGENTS = '@all'
+
 export default function Sessions() {
   const [filter, setFilter] = useState<Filter>('inbox')
-  const [agent, setAgent] = useState('')
+  const [agent, setAgent] = useState(ALL_AGENTS)
   const agents = useAgents()
   const sessions = useLoad(
-    () => api.sessions({ origin: FILTERS[filter].origins, agent_id: agent ? asAgentId(agent) : undefined, limit: 100 }),
+    () => api.sessions({ origin: FILTERS[filter].origins, agent_id: agent === ALL_AGENTS ? undefined : asAgentId(agent), limit: 100 }),
     [filter, agent],
   )
   useServerEvents((e) => {
@@ -65,8 +68,7 @@ export default function Sessions() {
             label="Agent"
             value={agent}
             onChange={setAgent}
-            placeholder="所有 agent"
-            options={[{ id: '', label: '所有 agent' }, ...(agents.data ?? []).map((a) => ({ id: a.id, label: a.name }))]}
+            options={[{ id: ALL_AGENTS, label: '所有 agent' }, ...(agents.data ?? []).map((a) => ({ id: a.id, label: a.name }))]}
           />
         </div>
       </div>
@@ -82,7 +84,12 @@ export default function Sessions() {
                     <Card.Content className="flex flex-row items-center gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 font-medium">
-                          {s.unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="未读" />}
+                          {s.unread && (
+                            <>
+                              <span className="size-2 shrink-0 rounded-full bg-accent" aria-hidden />
+                              <span className="sr-only">未读</span>
+                            </>
+                          )}
                           <span className="truncate">{s.title}</span>
                         </div>
                         <div className="mt-1 flex gap-1.5">

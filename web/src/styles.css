@@ -21,8 +21,3 @@ textarea,
 select {
   font-size: max(16px, 1em);
 }
-
-.selectable {
-  user-select: all;
-  -webkit-user-select: all;
-}

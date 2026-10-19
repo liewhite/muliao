@@ -1,24 +1,28 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   Alert,
   AlertDialog,
   Button,
+  Card,
   Description,
+  Disclosure,
   Input,
   Label,
   ListBox,
   Select,
   Spinner,
+  Switch,
   TextArea,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
   buttonVariants,
+  type ButtonProps,
   type Key,
 } from '@heroui/react'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, Plus } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
-import { Link as RouterLink, useNavigate } from 'react-router-dom'
+import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import remarkGfm from 'remark-gfm'
 import { api, type Agent, type AgentId } from './api'
 
@@ -143,6 +147,64 @@ export function LinkButton({
   )
 }
 
+/** 带「处理中」转圈的按钮：HeroUI 的 isPending 只禁用交互，不提供视觉反馈。 */
+export function ActionButton({ isPending = false, children, ...props }: ButtonProps & { children: ReactNode }) {
+  return (
+    <Button isPending={isPending} {...props}>
+      {isPending && <Spinner size="sm" color="current" />}
+      {children}
+    </Button>
+  )
+}
+
+/** 卡片里可折叠的「新建 xxx」表单。 */
+export function CollapsibleForm({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Card>
+      <Disclosure>
+        <Disclosure.Heading>
+          <Disclosure.Trigger className="flex w-full items-center gap-2 px-1 font-medium">
+            <Plus className="size-4" />
+            {title}
+            <Disclosure.Indicator className="ml-auto" />
+          </Disclosure.Trigger>
+        </Disclosure.Heading>
+        <Disclosure.Content>
+          <Disclosure.Body className="flex flex-col gap-4 pt-4">{children}</Disclosure.Body>
+        </Disclosure.Content>
+      </Disclosure>
+    </Card>
+  )
+}
+
+/** 开关。label 描述它控制什么（读屏名称），状态由开关本身表达。 */
+export function ToggleSwitch({
+  label,
+  isSelected,
+  onChange,
+  isDisabled,
+}: {
+  label: string
+  isSelected: boolean
+  onChange: (value: boolean) => void
+  isDisabled?: boolean
+}) {
+  return (
+    <Switch size="sm" isSelected={isSelected} onChange={onChange} isDisabled={isDisabled}>
+      <Switch.Content>
+        <Switch.Control>
+          <Switch.Thumb />
+        </Switch.Control>
+        <Label className="sr-only">{label}</Label>
+      </Switch.Content>
+    </Switch>
+  )
+}
+
+/** 代码/日志块的统一样式。 */
+export const CODE_BLOCK =
+  'my-1 max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs text-foreground'
+
 // ---- 状态展示 ----
 
 export function ErrorAlert({ error, title = '出错了' }: { error: string | null; title?: string }) {
@@ -247,7 +309,8 @@ export function SelectInput({
 }: {
   label: string
   hint?: ReactNode
-  value: string
+  /** null 表示未选择（显示 placeholder）；选项 id 都是非空字符串 */
+  value: string | null
   onChange: (value: string) => void
   options: Option[]
   placeholder?: string
@@ -258,8 +321,12 @@ export function SelectInput({
       fullWidth
       variant="secondary"
       placeholder={placeholder}
-      value={value === '' ? null : value}
-      onChange={(key: Key | null) => onChange(key === null ? '' : String(key))}
+      value={value}
+      onChange={(key: Key | null) => {
+        // 单选且无清除按钮：选中后不会回到未选择
+        if (key === null) throw new Error(`select "${label}" was cleared unexpectedly`)
+        onChange(String(key))
+      }}
       isDisabled={isDisabled}
     >
       <Label>{label}</Label>
@@ -291,30 +358,43 @@ export function Segmented<T extends string>({
   onChange,
   options,
   label,
+  showLabel = false,
 }: {
   value: T
   onChange: (value: T) => void
   options: readonly { id: T; label: string }[]
   label: string
+  /** 显示可见标签（表单中）；否则 label 只作为读屏名称 */
+  showLabel?: boolean
 }) {
+  const labelId = useId()
   return (
-    <ToggleButtonGroup
-      aria-label={label}
-      size="sm"
-      selectionMode="single"
-      disallowEmptySelection
-      selectedKeys={[value]}
-      onSelectionChange={(keys) => {
-        const [key] = [...keys]
-        if (key !== undefined) onChange(String(key) as T)
-      }}
-    >
-      {options.map((o) => (
-        <ToggleButton key={o.id} id={o.id}>
-          {o.label}
-        </ToggleButton>
-      ))}
-    </ToggleButtonGroup>
+    <div className="flex flex-col gap-1">
+      {showLabel && (
+        <span id={labelId} className="text-sm font-medium">
+          {label}
+        </span>
+      )}
+      <ToggleButtonGroup
+        {...(showLabel ? { 'aria-labelledby': labelId } : { 'aria-label': label })}
+        size="sm"
+        selectionMode="single"
+        disallowEmptySelection
+        selectedKeys={[value]}
+        onSelectionChange={(keys) => {
+          // disallowEmptySelection 保证恰好选中一项
+          const [key] = [...keys]
+          if (key === undefined) throw new Error(`segmented "${label}" lost its selection`)
+          onChange(String(key) as T)
+        }}
+      >
+        {options.map((o) => (
+          <ToggleButton key={o.id} id={o.id}>
+            {o.label}
+          </ToggleButton>
+        ))}
+      </ToggleButtonGroup>
+    </div>
   )
 }
 
@@ -333,28 +413,38 @@ const ConfirmContext = createContext<Confirm | null>(null)
 
 /** 全局唯一的确认弹窗；页面通过 useConfirm() 以 Promise 形式询问用户。 */
 export function ConfirmProvider({ children }: { children: ReactNode }) {
+  // options 在关闭后保留，避免退场动画期间内容和按钮样式闪变
   const [options, setOptions] = useState<ConfirmOptions | null>(null)
+  const [isOpen, setOpen] = useState(false)
   const resolver = useRef<((ok: boolean) => void) | null>(null)
+  const { pathname } = useLocation()
 
-  const confirm = useCallback<Confirm>((opts) => {
-    // 新的询问会让尚未回答的旧询问以「取消」结束
-    resolver.current?.(false)
-    setOptions(opts)
-    return new Promise<boolean>((resolve) => {
-      resolver.current = resolve
-    })
-  }, [])
-
-  const settle = (ok: boolean) => {
+  const settle = useCallback((ok: boolean) => {
     resolver.current?.(ok)
     resolver.current = null
-    setOptions(null)
-  }
+    setOpen(false)
+  }, [])
+
+  const confirm = useCallback<Confirm>(
+    (opts) => {
+      // 新的询问会让尚未回答的旧询问以「取消」结束
+      settle(false)
+      setOptions(opts)
+      setOpen(true)
+      return new Promise<boolean>((resolve) => {
+        resolver.current = resolve
+      })
+    },
+    [settle],
+  )
+
+  // 弹窗属于发起它的页面：页面切走（通知跳转、返回、登录失效）即视为取消，不能对旧页面执行操作
+  useEffect(() => settle(false), [pathname, settle])
 
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
-      <AlertDialog.Backdrop isOpen={options !== null} onOpenChange={(open) => !open && settle(false)}>
+      <AlertDialog.Backdrop isOpen={isOpen} onOpenChange={(open) => !open && settle(false)}>
         <AlertDialog.Container size="sm">
           <AlertDialog.Dialog>
             <AlertDialog.Header>

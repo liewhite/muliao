@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { Button, Card, Chip, Disclosure, Label, Switch, toast } from '@heroui/react'
-import { Plug, Plus, Trash2 } from 'lucide-react'
+import { Button, Card, Chip, toast } from '@heroui/react'
+import { Plug, Trash2 } from 'lucide-react'
 import { api, asAgentId, type Agent, type McpInput, type McpServer } from '../api'
-import {
+import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
   Loading,
@@ -86,17 +86,7 @@ function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated
   }
 
   return (
-    <Card>
-      <Disclosure>
-        <Disclosure.Heading>
-          <Disclosure.Trigger className="flex w-full items-center gap-2 px-1 font-medium">
-            <Plus className="size-4" />
-            添加 MCP server
-            <Disclosure.Indicator className="ml-auto" />
-          </Disclosure.Trigger>
-        </Disclosure.Heading>
-        <Disclosure.Content>
-          <Disclosure.Body className="flex flex-col gap-4 pt-4">
+    <CollapsibleForm title="添加 MCP server">
             <p className="text-sm text-muted">也可以直接在对话里把 MCP 信息告诉 agent，让它自己调用 mcp_add 创建。</p>
             <SelectInput
               label="归属"
@@ -108,10 +98,10 @@ function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated
               ]}
             />
             <TextInput label="名称" hint="工具名会以「名称_」为前缀" value={name} onChange={setName} mono isRequired />
-            <div className="flex flex-col gap-1">
-              <span className="text-sm font-medium">传输</span>
+            <div>
               <Segmented
                 label="传输"
+                showLabel
                 value={transport}
                 onChange={setTransport}
                 options={[
@@ -138,13 +128,10 @@ function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated
             />
             <ErrorAlert error={action.error} />
             {tools && <ToolChips tools={tools} />}
-            <Button isDisabled={!name} isPending={action.busy} onPress={() => void create()}>
-              {action.busy ? '连接中…' : '连接并保存'}
-            </Button>
-          </Disclosure.Body>
-        </Disclosure.Content>
-      </Disclosure>
-    </Card>
+            <ActionButton isDisabled={!name} isPending={action.busy} onPress={() => void create()}>
+              连接并保存
+            </ActionButton>
+          </CollapsibleForm>
   )
 }
 
@@ -174,19 +161,12 @@ function McpItem({ server, agents, onChange }: { server: McpServer; agents: Agen
             </Chip>
           </div>
         </div>
-        <Switch
-          size="sm"
+        <ToggleSwitch
+          label={`启用 MCP server「${server.name}」`}
           isSelected={server.enabled}
           isDisabled={action.busy}
           onChange={(enabled) => void action.run(() => api.setMcpEnabled(server.owner, server.name, enabled).then(onChange))}
-        >
-          <Switch.Content>
-            <Switch.Control>
-              <Switch.Thumb />
-            </Switch.Control>
-            <Label className="sr-only">启用</Label>
-          </Switch.Content>
-        </Switch>
+        />
       </Card.Header>
       <Card.Content className="flex flex-col gap-2">
         <code className="block whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs">{target}</code>
@@ -201,7 +181,7 @@ function McpItem({ server, agents, onChange }: { server: McpServer; agents: Agen
         <ErrorAlert error={action.error} />
       </Card.Content>
       <Card.Footer className="flex gap-2">
-        <Button
+        <ActionButton
           size="sm"
           variant="secondary"
           isPending={action.busy}
@@ -209,7 +189,7 @@ function McpItem({ server, agents, onChange }: { server: McpServer; agents: Agen
         >
           <Plug className="size-4" />
           测试连接
-        </Button>
+        </ActionButton>
         <Button size="sm" variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
           <Trash2 className="size-4" />
           删除

@@ -5,7 +5,6 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import './styles.css'
 import { registerServiceWorker } from './push'
-import { HeroRouter } from './router'
 import { ConfirmProvider } from './ui'
 
 void registerServiceWorker().catch((e) => console.error('service worker registration failed', e))
@@ -13,12 +12,10 @@ void registerServiceWorker().catch((e) => console.error('service worker registra
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
-      <HeroRouter>
-        <ConfirmProvider>
-          <App />
-        </ConfirmProvider>
-        <Toast.Provider placement="top" />
-      </HeroRouter>
+      <ConfirmProvider>
+        <App />
+      </ConfirmProvider>
+      <Toast.Provider placement="top" />
     </BrowserRouter>
   </StrictMode>,
 )
