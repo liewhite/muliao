@@ -33,12 +33,10 @@ import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads 
 import { liveToItems, mergeLive, useServerEvents, type RunEvent } from '../events'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
-function Collapsible({ title, tone = 'default', children }: { title: ReactNode; tone?: 'default' | 'danger'; children: ReactNode }) {
+function Collapsible({ title, children }: { title: ReactNode; children: ReactNode }) {
   return (
     <Disclosure
-      className={`max-w-[88%] self-start rounded-xl border border-dashed px-3 py-1.5 text-sm text-muted ${
-        tone === 'danger' ? 'border-danger' : 'border-separator'
-      }`}
+      className="max-w-[88%] self-start rounded-xl border border-dashed border-separator px-3 py-1.5 text-sm text-muted"
     >
       <Disclosure.Heading>
         <Disclosure.Trigger className="flex w-full items-center gap-2 text-left">
@@ -53,13 +51,13 @@ function Collapsible({ title, tone = 'default', children }: { title: ReactNode; 
   )
 }
 
-const TOOL_STATUS_LABELS: Record<ToolStatus, string> = { running: '运行中', failed: '出错', done: '完成' }
+// 被退回不是故障：参数不合法或工具报了可纠正的错误，模型会据此修正后重试，所以不用醒目的报错样式
+const TOOL_STATUS_LABELS: Record<ToolStatus, string> = { running: '运行中', rejected: '被退回', done: '完成' }
 
 function ToolBlock({ tool }: { tool: ToolView }) {
   const status = toolStatus(tool)
   return (
     <Collapsible
-      tone={status === 'failed' ? 'danger' : 'default'}
       title={
         <>
           <span className="font-mono text-foreground">{tool.name}</span>
@@ -98,12 +96,11 @@ function StepBlock({ step }: { step: Step }) {
 
 /** 连续的思考与工具调用收成一组，默认折叠；标题汇总步骤数与状态，展开后每一步仍可单独展开。工具发出的文件显示在组下方 */
 function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
-  const { label, running, failed } = summarizeSteps(steps)
-  const status = running !== null ? `运行中：${running}` : failed > 0 ? `${failed} 次出错` : '完成'
+  const { label, running, rejected } = summarizeSteps(steps)
+  const status = running !== null ? `运行中：${running}` : rejected > 0 ? `完成 · ${rejected} 次被退回` : '完成'
   return (
     <>
       <Collapsible
-        tone={failed > 0 ? 'danger' : 'default'}
         title={
           <>
             {running !== null && <Spinner size="sm" />}

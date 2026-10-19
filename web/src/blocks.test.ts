@@ -88,18 +88,18 @@ describe('streaming stability', () => {
 })
 
 describe('summarizeSteps', () => {
-  const tool = (result: string | null, failed = false): Step => ({
+  const tool = (result: string | null, rejected = false): Step => ({
     kind: 'tool',
-    tool: { name: 'run_shell', args: '', result, failed, attachments: [], threads: [] },
+    tool: { name: 'run_shell', args: '', result, rejected, attachments: [], threads: [] },
   })
 
-  it('counts tool calls, mentions thinking, and reports the running tool and failures', () => {
+  it('counts tool calls, mentions thinking, and reports the running tool and calls returned to the model', () => {
     expect(summarizeSteps([{ kind: 'thinking', text: 'x' }, tool('ok'), tool('err', true), tool(null)])).toEqual({
       label: '思考 · 3 次工具调用',
       running: 'run_shell',
-      failed: 1,
+      rejected: 1,
     })
-    expect(summarizeSteps([tool('ok')])).toEqual({ label: '1 次工具调用', running: null, failed: 0 })
+    expect(summarizeSteps([tool('ok')])).toEqual({ label: '1 次工具调用', running: null, rejected: 0 })
     expect(summarizeSteps([{ kind: 'thinking', text: 'x' }]).label).toBe('思考')
   })
 })
@@ -112,11 +112,11 @@ describe('ask_user blocks', () => {
     expect(views.map((v) => v.kind)).toEqual(['process', 'ask', 'process'])
   })
 
-  it('records the answer as the result, and shows a rejected call as a failed tool step', () => {
+  it('records the answer as the result, and shows a rejected call as a rejected tool step', () => {
     const answered = toBlocks([ask('tool_call', '{}'), ask('tool_result', '{"answered":true,"answers":[],"note":null}')])
     expect(answered).toEqual([{ kind: 'ask', ask: { callId: 'q1', result: '{"answered":true,"answers":[],"note":null}' } }])
     const rejected = toBlocks([ask('tool_call', '{"questions": []}'), ask('tool_error', 'too short')])
-    expect(rejected.map((b) => (b.kind === 'tool' ? [b.kind, b.tool.failed] : [b.kind]))).toEqual([['tool', true]])
+    expect(rejected.map((b) => (b.kind === 'tool' ? [b.kind, b.tool.rejected] : [b.kind]))).toEqual([['tool', true]])
   })
 
   it('reads whether and how the questions were answered from the result', () => {

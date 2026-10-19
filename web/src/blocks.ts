@@ -6,7 +6,8 @@ export interface ToolView {
   name: string
   args: string
   result: string | null
-  failed: boolean
+  /** 被退回：参数校验失败或工具报了可纠正的错误，已交还模型修正（真正的执行失败会让整轮失败，不在这里） */
+  rejected: boolean
   /** 工具结果挂给用户的文件：显示在过程组外，折叠不影响看到它们 */
   attachments: Attachment[]
   /** 工具结果关联的子会话 id（委派开出的 thread）：同样显示在过程组外，就在开它的那次调用处 */
@@ -46,7 +47,7 @@ export function toBlocks(items: Item[]): Block[] {
     if (askAt !== undefined && (item.type === 'tool_result' || item.type === 'tool_error')) {
       const block = blocks[askAt]
       if (item.type === 'tool_result' && block.kind === 'ask') block.ask.result = item.text
-      else blocks[askAt] = { kind: 'tool', tool: { name: ASK_USER, args: '', result: item.text, failed: true, attachments: [], threads: [] } }
+      else blocks[askAt] = { kind: 'tool', tool: { name: ASK_USER, args: '', result: item.text, rejected: true, attachments: [], threads: [] } }
       continue
     }
     if (item.type === 'tool_call' && item.tool_name === ASK_USER && item.tool_call_id !== null) {
@@ -66,7 +67,7 @@ export function toBlocks(items: Item[]): Block[] {
         blocks.push({ kind: item.type, text: item.text })
         break
       case 'tool_call': {
-        const tool: ToolView = { name: item.tool_name ?? '?', args: item.text, result: null, failed: false, attachments: [], threads: [] }
+        const tool: ToolView = { name: item.tool_name ?? '?', args: item.text, result: null, rejected: false, attachments: [], threads: [] }
         if (item.tool_call_id) tools.set(item.tool_call_id, tool)
         blocks.push({ kind: 'tool', tool })
         break
@@ -76,7 +77,7 @@ export function toBlocks(items: Item[]): Block[] {
         const tool = item.tool_call_id ? tools.get(item.tool_call_id) : undefined
         if (tool) {
           tool.result = item.text
-          tool.failed = item.type === 'tool_error'
+          tool.rejected = item.type === 'tool_error'
           tool.attachments = item.attachments
           tool.threads = item.threads
         } else {
@@ -87,7 +88,7 @@ export function toBlocks(items: Item[]): Block[] {
               name: item.tool_name ?? 'retry',
               args: '',
               result: item.text,
-              failed: true,
+              rejected: true,
               attachments: item.attachments,
               threads: item.threads,
             },
@@ -100,11 +101,11 @@ export function toBlocks(items: Item[]): Block[] {
   return blocks
 }
 
-export type ToolStatus = 'running' | 'failed' | 'done'
+export type ToolStatus = 'running' | 'rejected' | 'done'
 
 /** 工具状态的唯一判定：历史只在一轮成功后写入，所以没有结果的调用只出现在运行中的实时流里 */
 export function toolStatus(tool: ToolView): ToolStatus {
-  return tool.result === null ? 'running' : tool.failed ? 'failed' : 'done'
+  return tool.result === null ? 'running' : tool.rejected ? 'rejected' : 'done'
 }
 
 const isStep = (b: Block): b is Step => b.kind === 'thinking' || b.kind === 'tool'
@@ -145,7 +146,8 @@ export interface StepsSummary {
   label: string
   /** 还在运行的工具名；没有则为 null */
   running: string | null
-  failed: number
+  /** 被退回、由模型修正的调用数 */
+  rejected: number
 }
 
 /** 提问的结果：工具结果的文本就是服务端 AskResult 的 JSON */
@@ -162,6 +164,6 @@ export function summarizeSteps(steps: Step[]): StepsSummary {
   return {
     label,
     running: tools.find((t) => toolStatus(t) === 'running')?.name ?? null,
-    failed: tools.filter((t) => toolStatus(t) === 'failed').length,
+    rejected: tools.filter((t) => toolStatus(t) === 'rejected').length,
   }
 }
