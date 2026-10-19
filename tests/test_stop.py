@@ -15,7 +15,7 @@ from pydantic_ai.models.function import AgentInfo
 
 from muliao.conventions import STOPPED_TOOL_RESULT, TURN_STOPPED
 from muliao.models import TaskKind, TaskStatus
-from muliao.runtime.turn import _stopped_messages
+from muliao.runtime.stopping import stopped_messages
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, tasks_of
@@ -103,10 +103,10 @@ async def test_stop_without_a_running_turn_is_refused(client, make_agent):
 
 
 def test_a_turn_stopped_before_its_first_model_request_keeps_the_user_message():
-    messages = _stopped_messages(None, "hello")
+    messages = stopped_messages(None, "hello")
     assert [type(p).__name__ for m in messages for p in m.parts] == ["UserPromptPart"]
     assert messages[-1].metadata == {TURN_STOPPED: True}
-    assert _stopped_messages(None, None) == []
+    assert stopped_messages(None, None) == []
 
 
 async def test_shutdown_is_not_a_stop_the_turn_is_left_for_recovery(client, container, make_agent, models):
@@ -178,3 +178,55 @@ async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_t
     ]
     assert ("assistant", "saving your token now") in items
     assert items[-1] == ("stopped", "")
+
+
+async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation():
+    from muliao.runtime.stopping import StoppableRuns, Stopped
+
+    runs: StoppableRuns[str] = StoppableRuns()
+    started = asyncio.Event()
+
+    async def forever() -> str:
+        started.set()
+        await asyncio.Event().wait()
+        return "never"
+
+    # 用户停止：只取消运行本身，结果是 Stopped
+    stopped = asyncio.create_task(runs.run("s", forever))
+    await started.wait()
+    assert runs.stop("s")
+    assert isinstance(await stopped, Stopped)
+    assert not runs.stop("s")
+
+    # 外层被取消（关停）：运行一起取消，取消照常抛出
+    started.clear()
+    outer = asyncio.create_task(runs.run("s", forever))
+    await started.wait()
+    outer.cancel()
+    try:
+        await outer
+        raise AssertionError("cancellation was swallowed")
+    except asyncio.CancelledError:
+        pass
+    assert not runs.stop("s")
+
+
+async def test_a_second_run_in_the_same_session_is_refused():
+    from muliao.runtime.stopping import StoppableRuns
+
+    runs: StoppableRuns[str] = StoppableRuns()
+    gate = asyncio.Event()
+
+    async def wait() -> str:
+        await gate.wait()
+        return "done"
+
+    first = asyncio.create_task(runs.run("s", wait))
+    await asyncio.sleep(0)
+    try:
+        await runs.run("s", wait)
+        raise AssertionError("second run was accepted")
+    except RuntimeError as e:
+        assert "already has a running turn" in str(e)
+    gate.set()
+    assert await first == "done"
