@@ -13,6 +13,7 @@ Create Date: 2026-10-19 16:20:00
 不可降级：降级需要把 id 映射回名称并移回目录，没有实际需要，因此直接报错。
 """
 
+import logging
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
@@ -24,6 +25,8 @@ revision: str = "5e1d7c3a9b20"
 down_revision: str | None = "c6cd52aaab8c"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+log = logging.getLogger(__name__)
 
 # 与旧表列一一对应的新表定义；{agent} 处由 agent_name 的映射结果填入 agent_id
 _REBUILDS: dict[str, tuple[str, str, list[str]]] = {
@@ -91,6 +94,7 @@ _AGENT_ID = "(SELECT agents_new.id FROM agents_new WHERE agents_new.name = {tabl
 
 
 def _new_id(taken: set[str]) -> str:
+    # 有意冻结的生成规则副本（与 muliao.ids.new_agent_id 相同）：迁移不随应用代码变化
     while True:
         candidate = uuid.uuid4().hex[:12]
         if candidate not in taken:
@@ -99,8 +103,15 @@ def _new_id(taken: set[str]) -> str:
 
 
 def _move_dirs(agents_dir: Path, mapping: dict[str, str]) -> None:
+    """agents/<名称> → agents/<id>。每个 agent 都必须有目录（AgentService.create 总会创建），缺失即异常。
+
+    在数据库提交之前执行；若目录已移动而随后提交失败，数据库回到按名称的结构、目录却已是 id，
+    需要按日志里的映射手工把目录改回名称后再启动。
+    """
     moves = [(agents_dir / name, agents_dir / agent_id) for name, agent_id in mapping.items()]
-    moves = [(src, dst) for src, dst in moves if src.exists()]
+    missing = [str(src) for src, _ in moves if not src.is_dir()]
+    if missing:
+        raise RuntimeError(f"agent directories are missing, refusing to migrate: {missing}")
     clashes = [str(dst) for _, dst in moves if dst.exists()]
     if clashes:
         raise RuntimeError(f"cannot move agent directories, targets already exist: {clashes}")
@@ -113,13 +124,27 @@ def _move_dirs(agents_dir: Path, mapping: dict[str, str]) -> None:
         for src, dst in reversed(done):
             dst.rename(src)
         raise
+    log.info("moved agent directories", extra={"moves": {str(s): str(d) for s, d in done}})
+
+
+def _orphans(conn: sa.Connection) -> list[str]:
+    """可空的引用列在旧库中指向不存在的 agent：映射会得到 NULL，私有 MCP 会悄悄变成公共的，必须拒绝。"""
+    rows = conn.exec_driver_sql(
+        "SELECT 'mcp_servers', id FROM mcp_servers WHERE owner IS NOT NULL "
+        "AND owner NOT IN (SELECT name FROM agents) UNION ALL "
+        "SELECT 'tasks', id FROM tasks WHERE agent_name IS NOT NULL AND agent_name NOT IN (SELECT name FROM agents)"
+    ).fetchall()
+    return [f"{table}#{row_id}" for table, row_id in rows]
 
 
 def upgrade() -> None:
     conn = op.get_bind()
+    if orphans := _orphans(conn):
+        raise RuntimeError(f"rows reference agents that do not exist, refusing to migrate: {orphans[:20]}")
     names = [row[0] for row in conn.exec_driver_sql("SELECT name FROM agents")]
     taken: set[str] = set()
     mapping = {name: _new_id(taken) for name in names}
+    task_seq = conn.exec_driver_sql("SELECT seq FROM sqlite_sequence WHERE name = 'tasks'").scalar()
 
     op.execute(
         """CREATE TABLE agents_new (
@@ -170,29 +195,31 @@ def upgrade() -> None:
     op.execute("CREATE UNIQUE INDEX uq_mcp_public ON mcp_servers (name) WHERE owner IS NULL")
     op.execute("CREATE UNIQUE INDEX uq_mcp_private ON mcp_servers (owner, name) WHERE owner IS NOT NULL")
 
-    for name, agent_id in mapping.items():
-        conn.execute(
-            sa.text("UPDATE tasks SET lane = :new WHERE lane = :old"),
-            {"new": f"reflection:{agent_id}", "old": f"reflection:{name}"},
-        )
-        conn.execute(
-            sa.text("UPDATE tasks SET lane = :new WHERE lane = :old AND session_id IS NULL"),
-            {"new": f"deliver:{agent_id}", "old": f"deliver:{name}"},
-        )
+    # 重建表会让 AUTOINCREMENT 计数器只记得现存最大 id；写回历史最大值，保持 id 单调不复用
+    if task_seq is not None:
+        current = conn.exec_driver_sql("SELECT seq FROM sqlite_sequence WHERE name = 'tasks'").scalar()
+        if current is None:  # 重建后的表为空时 sqlite_sequence 里没有这一行
+            conn.execute(
+                sa.text("INSERT INTO sqlite_sequence (name, seq) VALUES ('tasks', :seq)"), {"seq": task_seq}
+            )
+        else:
+            conn.execute(
+                sa.text("UPDATE sqlite_sequence SET seq = :seq WHERE name = 'tasks'"),
+                {"seq": max(current, task_seq)},
+            )
 
-    # 任何一行引用不到 agent 都说明映射出错：在动目录之前失败，整体回滚
+    # lane 中嵌着 agent 标识：从已映射好的 agent_id 列推导（与 runtime.tasks 的 lane 规则一致），不按名称字符串匹配
+    op.execute("UPDATE tasks SET lane = 'reflection:' || agent_id WHERE kind = 'reflection'")
+    op.execute(
+        "UPDATE tasks SET lane = 'deliver:' || agent_id "
+        "WHERE kind = 'deliver' AND session_id IS NULL AND agent_id IS NOT NULL"
+    )
+
     violations = conn.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
     if violations:
         raise RuntimeError(f"agent id migration left foreign key violations: {violations[:10]}")
-    missing = conn.exec_driver_sql(
-        "SELECT 'sessions' FROM sessions WHERE agent_id IS NULL UNION ALL "
-        "SELECT 'reflections' FROM reflections WHERE agent_id IS NULL UNION ALL "
-        "SELECT 'cron_jobs' FROM cron_jobs WHERE agent_id IS NULL UNION ALL "
-        "SELECT 'webhooks' FROM webhooks WHERE agent_id IS NULL"
-    ).fetchall()
-    if missing:
-        raise RuntimeError(f"rows reference agents that do not exist: {sorted({r[0] for r in missing})}")
 
+    log.info("agent ids assigned", extra={"name_to_id": mapping})
     if mapping:
         agents_dir = context.config.attributes.get("agents_dir")
         if agents_dir is None:

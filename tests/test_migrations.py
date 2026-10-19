@@ -156,3 +156,83 @@ def test_agent_id_migration_rolls_back_when_directories_cannot_move(tmp_path):
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == BEFORE_AGENT_IDS
         assert {r[0] for r in conn.execute("SELECT name FROM agents")} == {"研究助理", "alpha"}
     assert (agents_dir / "研究助理" / "memory.md").exists() and (agents_dir / "alpha" / "memory.md").exists()
+
+
+def test_agent_id_migration_keeps_task_ids_monotonic(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    _seed_name_keyed(path, agents_dir)
+    with sqlite3.connect(path) as conn:
+        conn.execute("DELETE FROM tasks")  # 末尾的行被删：计数器必须记得历史最大值
+        before = conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'tasks'").fetchone()[0]
+
+    migrate(path, agents_dir)
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'tasks'").fetchone()[0] == before
+
+
+def test_agent_id_migration_refuses_rows_pointing_at_missing_agents(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    _seed_name_keyed(path, agents_dir)
+    with sqlite3.connect(path) as conn:  # sqlite3 默认不检查外键，可写入孤儿行
+        conn.execute("UPDATE mcp_servers SET owner = 'ghost' WHERE name = 'echo'")
+
+    with pytest.raises(RuntimeError, match=r"mcp_servers#"):
+        migrate(path, agents_dir)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == BEFORE_AGENT_IDS
+
+
+def test_agent_id_migration_refuses_missing_agent_directory(tmp_path):
+    import shutil
+
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    _seed_name_keyed(path, agents_dir)
+    shutil.rmtree(agents_dir / "alpha")
+
+    with pytest.raises(RuntimeError, match="directories are missing"):
+        migrate(path, agents_dir)
+    assert (agents_dir / "研究助理").is_dir()
+
+
+def test_agent_id_migration_restores_moved_dirs_when_a_later_move_fails(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    _seed_name_keyed(path, agents_dir)
+    real_rename = Path.rename
+    calls = {"n": 0}
+
+    def flaky_rename(self, target):  # noqa: ANN001, ANN202
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk hiccup")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky_rename)
+    with pytest.raises(OSError, match="disk hiccup"):
+        migrate(path, agents_dir)
+
+    assert sorted(p.name for p in agents_dir.iterdir()) == sorted(["研究助理", "alpha"])
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == BEFORE_AGENT_IDS
+
+
+def test_agent_id_migration_leaves_system_notification_lane_alone(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    _seed_name_keyed(path, agents_dir)
+    ts = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO agents VALUES ('system', 'd', 'm:x', '', 5, 0, 0, ?, ?)", (ts, ts))
+        (agents_dir / "system").mkdir()
+        conn.execute(
+            "INSERT INTO tasks (kind, lane, agent_name, session_id, payload, status, attempts, not_before, created_at)"
+            " VALUES ('deliver', 'deliver:system', NULL, NULL, '{}', 'pending', 0, ?, ?)",
+            (ts, ts),
+        )
+
+    migrate(path, agents_dir)
+
+    with sqlite3.connect(path) as conn:
+        lanes = [r[0] for r in conn.execute("SELECT lane FROM tasks WHERE kind = 'deliver'")]
+    assert lanes == ["deliver:system"]
