@@ -1,0 +1,98 @@
+"""MCP server 的管理：agent 根据用户提供的信息自己接入 MCP。"""
+
+from typing import Literal
+
+from pydantic import BaseModel
+from pydantic_ai import FunctionToolset, RunContext
+
+from muliao.models import McpTransport
+from muliao.ownership import Scope, owner_of, scope_of
+from muliao.runtime.mcp import McpRegistry, McpSpec
+from muliao.runtime.scope import RunScope
+from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
+
+
+class McpInfo(BaseModel):
+    name: str
+    scope: Scope
+    transport: str
+    command: str | None
+    args: list[str]
+    url: str | None
+    env_keys: list[str]
+    header_keys: list[str]
+    enabled: bool
+
+
+def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
+    ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
+
+    @ts.tool
+    async def mcp_list(ctx: RunContext[RunScope]) -> list[McpInfo]:
+        """List MCP servers available to you (your private ones and public ones). Values of env/headers are hidden."""
+        return [
+            McpInfo(
+                name=s.name,
+                scope=scope_of(s.owner),
+                transport=s.transport,
+                command=s.command,
+                args=s.args,
+                url=s.url,
+                env_keys=sorted(s.env),
+                header_keys=sorted(s.headers),
+                enabled=s.enabled,
+            )
+            for s in await registry.visible_to(ctx.deps.agent_id)
+        ]
+
+    @ts.tool
+    async def mcp_add(
+        ctx: RunContext[RunScope],
+        name: str,
+        transport: Literal["stdio", "http"],
+        command: str | None = None,
+        args: list[str] | None = None,
+        url: str | None = None,
+        env: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        scope: Scope = "private",
+    ) -> str:
+        """Register an MCP server. The server is connected once to verify it and list its tools;
+        nothing is saved if that fails. Its tools become available from your next run, prefixed `<name>_`.
+        Never put secrets in plain text: store them with `vault_set` and reference them as `${vault:KEY}`
+        inside args, url, env or headers.
+
+        Args:
+            name: Lowercase slug.
+            transport: `stdio` (local command) or `http` (streamable HTTP / SSE URL).
+            command: Executable for stdio, e.g. `npx`.
+            args: Arguments for stdio.
+            url: Endpoint for http.
+            env: Environment variables for stdio.
+            headers: HTTP headers for http, e.g. {"Authorization": "Bearer ${vault:GITHUB_TOKEN}"}.
+            scope: `private` (only you) or `public` (all agents).
+        """
+        spec = McpSpec(
+            name=name,
+            transport=McpTransport(transport),
+            command=command,
+            args=tuple(args or ()),
+            url=url,
+            env=tuple((env or {}).items()),
+            headers=tuple((headers or {}).items()),
+        )
+        _, tools = await registry.add(owner_of(scope, ctx.deps.agent_id), spec, probe=True)
+        return f"registered {scope} MCP server {name} with tools: {', '.join(tools) or '(none)'}"
+
+    @ts.tool
+    async def mcp_remove(ctx: RunContext[RunScope], name: str, scope: Scope = "private") -> str:
+        """Remove an MCP server.
+
+        Args:
+            name: Server name.
+            scope: `private` or `public`.
+        """
+        await registry.remove(owner_of(scope, ctx.deps.agent_id), name)
+        return f"removed {scope} MCP server {name}"
+
+    return ts
