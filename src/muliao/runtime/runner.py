@@ -196,7 +196,7 @@ class AgentRuntime:
     async def _toolsets(self, agent_id: str, profile: RunProfile) -> list[AbstractToolset[RunScope]]:
         toolsets: list[AbstractToolset[RunScope]] = [DomainErrorsAsRetry(t) for t in profile.toolsets]
         if profile.include_mcp:
-            toolsets += [await self._mcp.build_toolset(s) for s in await self._mcp.visible_to(agent_id)]
+            toolsets += [await self._mcp.build_toolset(s) for s in self._mcp.visible_to(agent_id)]
         return toolsets
 
     async def _execute(

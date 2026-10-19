@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from muliao.errors import InvalidInput
-from muliao.models import McpTransport, Origin, ReplyTo
-from muliao.runtime.mcp import McpSpec
+from muliao.models import Origin, ReplyTo
+from muliao.runtime.mcp import McpSpec, McpTransport
 from tests.test_flow import drain, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
@@ -167,12 +167,12 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
         env=(("TOKEN", "${vault:ECHO_TOKEN}"),),
     )
 
-    row, tools = await container.mcp.add(alpha, spec, probe=True)
+    row, tools = await container.mcp.add(alpha, spec, probe=True, author="user")
 
     assert sorted(tools) == ["echo", "token"]
     assert row.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
-    assert [s.name for s in await container.mcp.visible_to(alpha)] == ["echo"]
-    assert await container.mcp.visible_to("beta") == []
+    assert [s.name for s in container.mcp.visible_to(alpha)] == ["echo"]
+    assert container.mcp.visible_to("beta") == []
 
 
 async def test_mcp_add_failing_probe_saves_nothing(container):
@@ -184,8 +184,8 @@ async def test_mcp_add_failing_probe_saves_nothing(container):
     )
 
     with pytest.raises(InvalidInput, match="could not connect"):
-        await container.mcp.add(None, spec, probe=True)
-    assert await container.mcp.list(None, all_owners=True) == []
+        await container.mcp.add(None, spec, probe=True, author="user")
+    assert container.mcp.list_all() == []
 
 
 async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, models):
@@ -200,7 +200,7 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
         args=(ECHO_SERVER,),
         env=(("TOKEN", "${vault:ECHO_TOKEN}"),),
     )
-    await container.mcp.add(alpha, spec, probe=False)
+    await container.mcp.add(alpha, spec, probe=False, author="user")
     models.models["m"] = call_then_answer("echo_token", {}, "got it")
 
     session = await start(container, alpha, "token?")

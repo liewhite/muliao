@@ -7,8 +7,8 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.delivery.base import Notification
-from muliao.models import McpServer, McpTransport
-from muliao.runtime.mcp import McpSpec
+from muliao.resources import USER
+from muliao.runtime.mcp import McpServer, McpSpec, McpTransport
 from muliao.vault import SecretInfo
 
 router = APIRouter()
@@ -30,7 +30,6 @@ class McpIn(BaseModel):
 
 
 class McpOut(BaseModel):
-    id: int
     owner: str | None
     name: str
     transport: McpTransport
@@ -45,7 +44,6 @@ class McpOut(BaseModel):
     @classmethod
     def of(cls, m: McpServer, tools: list[str] | None = None) -> "McpOut":
         return cls(
-            id=m.id,
             owner=m.owner,
             name=m.name,
             transport=m.transport,
@@ -66,7 +64,7 @@ class EnabledIn(BaseModel):
 @router.get("/mcp")
 async def list_mcp(c: C) -> list[McpOut]:
     # env/headers 中的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回
-    return [McpOut.of(m) for m in await c.mcp.list(None, all_owners=True)]
+    return [McpOut.of(m) for m in c.mcp.list_all()]
 
 
 @router.post("/mcp", status_code=201)
@@ -80,23 +78,23 @@ async def add_mcp(c: C, body: McpIn) -> McpOut:
         env=tuple(body.env.items()),
         headers=tuple(body.headers.items()),
     )
-    row, tools = await c.mcp.add(body.owner, spec, probe=body.probe)
+    row, tools = await c.mcp.add(body.owner, spec, probe=body.probe, author=USER)
     return McpOut.of(row, tools)
 
 
 @router.post("/mcp/tools")
 async def probe_mcp(c: C, name: str, owner: str | None = None) -> list[str]:
-    return await c.mcp.probe(await c.mcp.get(owner, name))
+    return await c.mcp.probe(c.mcp.get(owner, name))
 
 
 @router.put("/mcp/enabled")
 async def set_mcp_enabled(c: C, name: str, body: EnabledIn, owner: str | None = None) -> McpOut:
-    return McpOut.of(await c.mcp.set_enabled(owner, name, body.enabled))
+    return McpOut.of(await c.mcp.set_enabled(owner, name, body.enabled, USER))
 
 
 @router.delete("/mcp", status_code=204)
 async def delete_mcp(c: C, name: str, owner: str | None = None) -> None:
-    await c.mcp.remove(owner, name)
+    await c.mcp.remove(owner, name, USER)
 
 
 # ---- vault ----

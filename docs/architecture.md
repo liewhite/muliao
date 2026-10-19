@@ -14,7 +14,7 @@
 | Skill | `SKILL.md`（YAML frontmatter: name, description + 正文）。公共 skill 与 agent 私有 skill | `resources/public/skills/<name>/`、`resources/agents/<id>/skills/<name>/` |
 | Prompt | agent 自己的指令，或合并进所有 agent 的公共 prompt | `resources/agents/<id>/PROMPT.md`、`resources/public/PROMPT.md` |
 | Memory | agent 私有记忆，一份有长度上限的 markdown | `resources/agents/<id>/MEMORY.md` |
-| MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `mcp_servers` 表 |
+| MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `resources/{public,agents/<id>}/mcp/<name>.json` |
 | Secret | 加密保存的密码/token，通过 key 引用；公共或 agent 私有 | `secrets` 表（Fernet 加密） |
 | Trigger | 具名、持久的事件来源，把外部刺激变成交给某个 agent 的一轮；触发方式（定时、webhook……）多态实现 | `triggers` 表 |
 
@@ -28,10 +28,12 @@ data/
     public/
       PROMPT.md                # 公共 prompt（合并进所有 agent）
       skills/<name>/SKILL.md   # 公共 skill
+      mcp/<name>.json          # 公共 MCP server
     agents/<id>/
       PROMPT.md                # agent 的指令
       MEMORY.md                # 私有记忆
       skills/<name>/SKILL.md   # 私有 skill（同名时遮蔽公共 skill）
+      mcp/<name>.json          # 私有 MCP server（同名时遮蔽公共的）
   workspaces/<id>/             # 文件工具与 shell 的工作目录（不做版本管理）
   tmp/                         # 临时 agent 的工作目录，用完即删
 ```

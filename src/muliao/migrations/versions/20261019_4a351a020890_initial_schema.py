@@ -5,7 +5,7 @@
 
 Revision ID: 4a351a020890
 Revises:
-Create Date: 2026-10-19 19:46:56.700331
+Create Date: 2026-10-19 19:52:08.718460
 """
 
 from collections.abc import Sequence
@@ -44,28 +44,6 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("endpoint"),
     )
-    op.create_table(
-        "mcp_servers",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("owner", sa.String(length=32), nullable=True),
-        sa.Column("name", sa.String(length=64), nullable=False),
-        sa.Column("transport", sa.String(length=16), nullable=False),
-        sa.Column("command", sa.Text(), nullable=True),
-        sa.Column("args", sa.JSON(), nullable=False),
-        sa.Column("url", sa.Text(), nullable=True),
-        sa.Column("env", sa.JSON(), nullable=False),
-        sa.Column("headers", sa.JSON(), nullable=False),
-        sa.Column("enabled", sa.Boolean(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["owner"], ["agents.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    with op.batch_alter_table("mcp_servers", schema=None) as batch_op:
-        batch_op.create_index(
-            "uq_mcp_private", ["owner", "name"], unique=True, sqlite_where=sa.text("owner IS NOT NULL")
-        )
-        batch_op.create_index("uq_mcp_public", ["name"], unique=True, sqlite_where=sa.text("owner IS NULL"))
-
     op.create_table(
         "reflections",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -241,11 +219,6 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f("ix_reflections_agent_id"))
 
     op.drop_table("reflections")
-    with op.batch_alter_table("mcp_servers", schema=None) as batch_op:
-        batch_op.drop_index("uq_mcp_public", sqlite_where=sa.text("owner IS NULL"))
-        batch_op.drop_index("uq_mcp_private", sqlite_where=sa.text("owner IS NOT NULL"))
-
-    op.drop_table("mcp_servers")
     op.drop_table("push_subscriptions")
     op.drop_table("agents")
     # ### end Alembic commands ###

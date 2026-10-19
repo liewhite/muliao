@@ -168,7 +168,7 @@ def build_container(
     sessions = SessionService(db, queue)
     threads = Threads(queue)
     notifier = Notifier(db, queue)
-    mcp = McpRegistry(db, vault)
+    mcp = McpRegistry(resources, vault)
     schedule_kind = ScheduleKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
     triggers = TriggerService(

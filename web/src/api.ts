@@ -145,7 +145,6 @@ export interface Revision {
 }
 
 export interface McpServer {
-  id: number
   owner: AgentId | null
   name: string
   transport: 'stdio' | 'http'
@@ -158,7 +157,7 @@ export interface McpServer {
   tools: string[]
 }
 
-export type McpInput = Omit<McpServer, 'id' | 'enabled' | 'tools'> & { probe: boolean }
+export type McpInput = Omit<McpServer, 'enabled' | 'tools'> & { probe: boolean }
 
 export interface SecretInfo {
   /** null 为公共 */

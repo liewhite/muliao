@@ -2,8 +2,8 @@
 
 布局（resources 根目录就是一个 git 仓库）：
 
-    public/                 公共资源：PROMPT.md、skills/<name>/SKILL.md
-    agents/<agent id>/      agent 私有资源：PROMPT.md、MEMORY.md、skills/<name>/SKILL.md
+    public/                 公共资源：PROMPT.md、skills/<name>/SKILL.md、mcp/<name>.json
+    agents/<agent id>/      agent 私有资源：PROMPT.md、MEMORY.md、skills/<name>/SKILL.md、mcp/<name>.json
 
 每次修改写文件后提交一次，作者是 "user" 或做出修改的 agent 的 id。历史与回滚都来自 git：
 回滚就是把旧版本的内容写回并作为新的一次提交，历史只增不改。
@@ -55,6 +55,11 @@ class ResourceRepo:
     def owner_dir(self, owner: str | None) -> Path:
         """资源归属的目录：None 为公共，否则为该 agent 私有。布局只在这里定义。"""
         return self.root / _PUBLIC if owner is None else self.root / _AGENTS / owner
+
+    def agent_owners(self) -> list[str]:
+        """有私有资源目录的 agent id。"""
+        root = self.root / _AGENTS
+        return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
     def relative(self, path: Path) -> str:
         """仓库内的相对路径；不在仓库里的路径直接报错（防止越界读取）。"""

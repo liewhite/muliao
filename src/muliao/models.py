@@ -43,11 +43,6 @@ class TaskStatus(StrEnum):
     FAILED = "failed"
 
 
-class McpTransport(StrEnum):
-    STDIO = "stdio"
-    HTTP = "http"
-
-
 def _fk_agent() -> ForeignKey:
     return ForeignKey("agents.id", ondelete="CASCADE")
 
@@ -191,29 +186,6 @@ class Trigger(Base):
     # 触发失败时的原因（如定时触发器的数据不合法而被停用）
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-
-
-class McpServer(Base):
-    __tablename__ = "mcp_servers"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # None 表示公共，所有 agent 可见
-    owner: Mapped[str | None] = mapped_column(_fk_agent())
-    name: Mapped[str] = mapped_column(String(64))
-    transport: Mapped[McpTransport] = mapped_column(StrEnumType(McpTransport))
-    command: Mapped[str | None] = mapped_column(Text)
-    args: Mapped[list[str]] = mapped_column(JSON, default=list)
-    url: Mapped[str | None] = mapped_column(Text)
-    # 值可包含 ${vault:KEY}，运行时解析
-    env: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
-    headers: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
-    enabled: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-
-    __table_args__ = (
-        Index("uq_mcp_private", "owner", "name", unique=True, sqlite_where=owner.isnot(None)),
-        Index("uq_mcp_public", "name", unique=True, sqlite_where=owner.is_(None)),
-    )
 
 
 class Secret(Base):

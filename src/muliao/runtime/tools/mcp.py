@@ -5,9 +5,8 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.models import McpTransport
 from muliao.ownership import Scope, owner_of, scope_of
-from muliao.runtime.mcp import McpRegistry, McpSpec
+from muliao.runtime.mcp import McpRegistry, McpSpec, McpTransport
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 
@@ -34,7 +33,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
         """List your private MCP servers and the public ones, including disabled ones. `active` tells whether its
         tools are offered to you. Values of env/headers are hidden."""
         # 哪些真正生效由合并规则决定（registry.visible_to），这里不复述规则
-        active = {s.id for s in await registry.visible_to(ctx.deps.agent_id)}
+        active = {s.key for s in registry.visible_to(ctx.deps.agent_id)}
         return [
             McpInfo(
                 name=s.name,
@@ -46,9 +45,9 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
                 env_keys=sorted(s.env),
                 header_keys=sorted(s.headers),
                 enabled=s.enabled,
-                active=s.id in active,
+                active=s.key in active,
             )
-            for s in await registry.list(ctx.deps.agent_id) + await registry.list(None)
+            for s in registry.list(ctx.deps.agent_id) + registry.list(None)
         ]
 
     @ts.tool
@@ -87,7 +86,9 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
             env=tuple((env or {}).items()),
             headers=tuple((headers or {}).items()),
         )
-        _, tools = await registry.add(owner_of(scope, ctx.deps.agent_id), spec, probe=True)
+        _, tools = await registry.add(
+            owner_of(scope, ctx.deps.agent_id), spec, probe=True, author=ctx.deps.agent_id
+        )
         return f"registered {scope} MCP server {name} with tools: {', '.join(tools) or '(none)'}"
 
     @ts.tool
@@ -98,7 +99,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
             name: Server name.
             scope: `private` or `public`.
         """
-        await registry.remove(owner_of(scope, ctx.deps.agent_id), name)
+        await registry.remove(owner_of(scope, ctx.deps.agent_id), name, ctx.deps.agent_id)
         return f"removed {scope} MCP server {name}"
 
     @ts.tool
@@ -112,7 +113,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
             enabled: Whether its tools are offered.
             scope: `private` or `public`.
         """
-        await registry.set_enabled(owner_of(scope, ctx.deps.agent_id), name, enabled)
+        await registry.set_enabled(owner_of(scope, ctx.deps.agent_id), name, enabled, ctx.deps.agent_id)
         return f"{'enabled' if enabled else 'disabled'} {scope} MCP server {name}"
 
     return ts

@@ -211,7 +211,7 @@ export default function Mcp() {
           ) : (
             <div className="flex flex-col gap-3">
               {list.map((s) => (
-                <McpItem key={`${s.id}-${s.enabled}`} server={s} agents={agents.data} onChange={() => void servers.reload()} />
+                <McpItem key={`${s.owner ?? '@public'}/${s.name}-${s.enabled}`} server={s} agents={agents.data} onChange={() => void servers.reload()} />
               ))}
             </div>
           )

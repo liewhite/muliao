@@ -10,8 +10,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.models import McpTransport, Origin
-from muliao.runtime.mcp import McpSpec
+from muliao.models import Origin
+from muliao.runtime.mcp import McpSpec, McpTransport
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
@@ -93,9 +93,9 @@ async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_age
     spec = McpSpec(
         name="echo", transport=McpTransport.HTTP, command=None, args=(), url="http://x", env=(), headers=()
     )
-    await container.mcp.add(me.id, spec, probe=False)
+    await container.mcp.add(me.id, spec, probe=False, author="user")
     # 停用的 server 不会在这一轮被连接；agent 看得到它并重新启用（下一轮起生效）
-    await container.mcp.set_enabled(me.id, "echo", False)
+    await container.mcp.set_enabled(me.id, "echo", False, "user")
 
     outputs = await run_tools(
         container,
@@ -111,7 +111,7 @@ async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_age
     assert outputs[0].startswith("updated trigger daily (paused)")
     assert not (await container.triggers.get_by_name("daily")).enabled
     assert "echo" in outputs[1]
-    assert [m.name for m in await container.mcp.visible_to(me.id)] == ["echo"]
+    assert [m.name for m in container.mcp.visible_to(me.id)] == ["echo"]
 
 
 async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
@@ -390,7 +390,7 @@ async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container,
     spec = McpSpec(
         name="echo", transport=McpTransport.HTTP, command=None, args=(), url="http://x", env=(), headers=()
     )
-    await container.mcp.add(None, spec, probe=False)  # 公共 MCP：受限 agent 也看不到它的工具
+    await container.mcp.add(None, spec, probe=False, author="user")  # 公共 MCP：受限 agent 也看不到它的工具
     triage = await container.agents.create(
         AgentSpec(name="triage", description="d", instructions="", model="m", tool_groups=["notify"]),
         author="user",

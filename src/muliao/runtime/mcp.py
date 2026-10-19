@@ -1,26 +1,36 @@
-"""MCP server 配置的注册表，以及把配置构建为 pydantic-ai toolset。"""
+"""MCP server 的配置与注册表，以及把配置构建为 pydantic-ai toolset。
+
+配置是资源仓库里的 JSON 文件（public/mcp/<name>.json、agents/<id>/mcp/<name>.json，见 muliao.resources）：
+归属与名称由文件位置决定，每次修改提交一版。agent 看到的 server 按 ownership.visible 合并公共与私有。
+"""
 
 from __future__ import annotations
 
+import json
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
 
 from fastmcp.client.transports import StdioTransport
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
-from muliao.db import Database
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.models import Agent, McpServer, McpTransport
 from muliao.naming import validate_slug
-from muliao.ownership import owned_by, scope_of, visible, visible_owners
+from muliao.ownership import scope_of, visible
+from muliao.resources import ResourceRepo
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
 
 _CONNECT_TIMEOUT = 30.0
+
+
+class McpTransport(StrEnum):
+    STDIO = "stdio"
+    HTTP = "http"
 
 
 @dataclass(frozen=True)
@@ -49,10 +59,53 @@ class McpSpec:
             raise InvalidInput(f"unknown MCP transport {self.transport!r}")
 
 
+@dataclass(frozen=True)
+class McpServer:
+    """一个已保存的 MCP server。env / headers / args / url 的值可以包含 ${vault:KEY}，运行时按归属者的视角解析。"""
+
+    owner: str | None
+    name: str
+    transport: McpTransport
+    command: str | None
+    args: list[str]
+    url: str | None
+    env: dict[str, str]
+    headers: dict[str, str]
+    enabled: bool
+
+    @property
+    def key(self) -> str:
+        """在所有 server 里唯一：归属 + 名称。"""
+        return f"{scope_of(self.owner)}:{self.owner or ''}:{self.name}"
+
+
+# 文件里存除归属与名称以外的字段（这两项由文件位置决定，不存第二份）
+_FILE_FIELDS = ("transport", "command", "args", "url", "env", "headers", "enabled")
+
+
 class McpRegistry:
-    def __init__(self, db: Database, vault: Vault):
-        self._db = db
+    def __init__(self, repo: ResourceRepo, vault: Vault):
+        self._repo = repo
         self._vault = vault
+
+    def _dir(self, owner: str | None) -> Path:
+        return self._repo.owner_dir(owner) / "mcp"
+
+    def _path(self, owner: str | None, name: str) -> Path:
+        return self._dir(owner) / f"{validate_slug('mcp server', name)}.json"
+
+    def _load(self, owner: str | None, path: Path) -> McpServer:
+        data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        if set(data) != set(_FILE_FIELDS):
+            raise RuntimeError(f"{path}: MCP config must have exactly the fields {list(_FILE_FIELDS)}")
+        return McpServer(
+            owner=owner, name=path.stem, **{**data, "transport": McpTransport(data["transport"])}
+        )
+
+    @staticmethod
+    def _dump(server: McpServer) -> str:
+        data = {k: v for k, v in asdict(server).items() if k in _FILE_FIELDS}
+        return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
     async def build_toolset(self, server: McpServer) -> AbstractToolset:
         """解析 vault 引用并构建 toolset；工具名以 `<server名>_` 为前缀避免冲突。"""
@@ -63,12 +116,12 @@ class McpRegistry:
                 args=[await self._vault.render(a, server.owner) for a in server.args],
                 env=await self._vault.render_map(server.env, server.owner) or None,
             )
-            toolset = MCPToolset(client, id=f"mcp-{server.id}", init_timeout=_CONNECT_TIMEOUT)
+            toolset = MCPToolset(client, id=f"mcp-{server.key}", init_timeout=_CONNECT_TIMEOUT)
         else:
             assert server.url is not None
             toolset = MCPToolset(
                 await self._vault.render(server.url, server.owner),
-                id=f"mcp-{server.id}",
+                id=f"mcp-{server.key}",
                 headers=await self._vault.render_map(server.headers, server.owner) or None,
                 init_timeout=_CONNECT_TIMEOUT,
             )
@@ -93,28 +146,38 @@ class McpRegistry:
                 f"could not connect to MCP server {server.name!r}: {type(e).__name__}: {e}"
             ) from e
 
-    async def visible_to(self, agent_id: str) -> list[McpServer]:
+    def list(self, owner: str | None) -> list[McpServer]:
+        directory = self._dir(owner)
+        if not directory.exists():
+            return []
+        return [self._load(owner, p) for p in sorted(directory.glob("*.json"))]
+
+    def list_all(self) -> list[McpServer]:
+        """管理界面：公共与所有 agent 私有的 server。"""
+        return [*self.list(None), *(s for owner in self._repo.agent_owners() for s in self.list(owner))]
+
+    def visible_to(self, agent_id: str) -> list[McpServer]:
         """agent 可用的 server：已启用的，按 ownership.visible 合并公共与私有。"""
-        async with self._db.transaction() as s:
-            rows = (
-                await s.scalars(
-                    select(McpServer)
-                    .where(McpServer.enabled, visible_owners(McpServer.owner, agent_id))
-                    .order_by(McpServer.name)
-                )
-            ).all()
-        return visible(rows, agent_id=agent_id, owner=lambda r: r.owner, name=lambda r: r.name)
+        enabled = [s for s in self.list(agent_id) + self.list(None) if s.enabled]
+        return visible(enabled, agent_id=agent_id, owner=lambda s: s.owner, name=lambda s: s.name)
 
-    async def list(self, owner: str | None, *, all_owners: bool = False) -> list[McpServer]:
-        query = select(McpServer).order_by(McpServer.owner, McpServer.name)
-        if not all_owners:
-            query = query.where(owned_by(McpServer.owner, owner))
-        async with self._db.transaction() as s:
-            return list((await s.scalars(query)).all())
+    def get(self, owner: str | None, name: str) -> McpServer:
+        path = self._path(owner, name)
+        if not path.exists():
+            raise NotFound(f"MCP server {name!r} not found in {scope_of(owner)} scope")
+        return self._load(owner, path)
 
-    def _row(self, owner: str | None, spec: McpSpec) -> McpServer:
+    async def add(
+        self, owner: str | None, spec: McpSpec, *, probe: bool, author: str
+    ) -> tuple[McpServer, list[str]]:
+        """新增 server。probe=True 时先连接验证，验证失败不写入。"""
         spec.validate()
-        return McpServer(
+        if owner is not None and not self._repo.owner_dir(owner).exists():
+            raise NotFound(f"agent {owner!r} not found")
+        path = self._path(owner, spec.name)
+        if path.exists():
+            raise Conflict(f"MCP server {spec.name!r} already exists in {scope_of(owner)} scope")
+        server = McpServer(
             owner=owner,
             name=spec.name,
             transport=spec.transport,
@@ -125,42 +188,22 @@ class McpRegistry:
             headers=dict(spec.headers),
             enabled=True,
         )
-
-    async def add(self, owner: str | None, spec: McpSpec, *, probe: bool) -> tuple[McpServer, list[str]]:
-        """新增 server。probe=True 时先连接验证，验证失败不写入。"""
-        row = self._row(owner, spec)
-        tools = await self.probe(row) if probe else []
-        try:
-            async with self._db.transaction() as s:
-                if owner is not None and await s.get(Agent, owner) is None:
-                    raise NotFound(f"agent {owner!r} not found")
-                s.add(row)
-        except IntegrityError as e:
-            raise Conflict(f"MCP server {spec.name!r} already exists in {scope_of(owner)} scope") from e
-        log.info("mcp server added", extra={"owner": owner, "mcp": spec.name, "tools": len(tools)})
-        return row, tools
-
-    async def _find(self, s, owner: str | None, name: str) -> McpServer:  # noqa: ANN001
-        row = await s.scalar(
-            select(McpServer).where(
-                McpServer.name == name,
-                owned_by(McpServer.owner, owner),
-            )
+        tools = await self.probe(server) if probe else []
+        await self._repo.apply(
+            {path: self._dump(server)}, f"add {scope_of(owner)} MCP server {spec.name}", author
         )
-        if row is None:
-            raise NotFound(f"MCP server {name!r} not found in {scope_of(owner)} scope")
-        return row
+        log.info("mcp server added", extra={"owner": owner, "mcp": spec.name, "tools": len(tools)})
+        return server, tools
 
-    async def get(self, owner: str | None, name: str) -> McpServer:
-        async with self._db.transaction() as s:
-            return await self._find(s, owner, name)
+    async def remove(self, owner: str | None, name: str, author: str) -> None:
+        self.get(owner, name)
+        await self._repo.apply(
+            {self._path(owner, name): None}, f"remove {scope_of(owner)} MCP server {name}", author
+        )
 
-    async def remove(self, owner: str | None, name: str) -> None:
-        async with self._db.transaction() as s:
-            await s.delete(await self._find(s, owner, name))
-
-    async def set_enabled(self, owner: str | None, name: str, enabled: bool) -> McpServer:
-        async with self._db.transaction() as s:
-            row = await self._find(s, owner, name)
-            row.enabled = enabled
-            return row
+    async def set_enabled(self, owner: str | None, name: str, enabled: bool, author: str) -> McpServer:
+        server = self.get(owner, name)
+        updated = McpServer(**{**asdict(server), "enabled": enabled})
+        message = f"{'enable' if enabled else 'disable'} {scope_of(owner)} MCP server {name}"
+        await self._repo.apply({self._path(owner, name): self._dump(updated)}, message, author)
+        return updated
