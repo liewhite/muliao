@@ -15,7 +15,7 @@
 | Memory | agent 私有记忆，一份有长度上限的 markdown | `data/agents/<id>/memory.md` |
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `mcp_servers` 表 |
 | Secret | 加密保存的密码/token，通过 key 引用 | `secrets` 表（Fernet 加密） |
-| Trigger | 创建 session 并投递 turn 的入口：Web、cron、webhook、Telegram、agent 委派 | `cron_jobs` / `webhooks` 表；Telegram 走配置 |
+| Trigger | 创建 session 并投递 turn 的入口：用户在网页发起、cron 定时触发；另有 agent 之间的委派（`delegate_task`） | `cron_jobs` 表 |
 
 目录：
 
@@ -35,7 +35,7 @@ data/
 所有触发源只做一件事：**创建 session（或选中已有 session）并在同一事务里写入一个 `turn` task**。之后的执行、重试、反思、通知全部由同一个任务队列驱动。
 
 ```
-Web / cron / webhook / Telegram / delegate_task
+Web / cron / delegate_task
           │  SessionService.start() / .reply()
           ▼
       tasks(turn) ──► Worker ──► TurnHandler ──► pydantic-ai Agent.run
@@ -44,9 +44,9 @@ Web / cron / webhook / Telegram / delegate_task
                                       ├─ session.unread / updated_at
                                       ├─ agent.turns_since_reflection += 1
                                       ├─ 达到阈值 → tasks(reflection)
-                                      └─ session.delivery != none → tasks(deliver)
+                                      └─ session.notify → tasks(deliver)
                                                      │
-                              ReflectionHandler ◄────┘     DeliverHandler ──► Web Push / Telegram
+                              ReflectionHandler ◄────┘     DeliverHandler ──► Web Push
 ```
 
 - **Lane（串行通道）**：每个 task 带 `lane`。同一 lane 内严格 FIFO、同一时刻最多一个 running；不同 lane 并发。turn 与 compaction 的 lane 是 session id，reflection 的 lane 是 `reflection:<agent id>`，deliver 的 lane 是 `deliver:<session>`。
@@ -69,7 +69,7 @@ Web / cron / webhook / Telegram / delegate_task
 
 契约外的失败（代码 bug、模型返回 400、请求超限、响应解码失败、配置错误）不重试，task 直接 `failed` 并告警。
 
-后台循环（worker、cron、Telegram 轮询）意外退出视为 bug，进程直接退出交给进程管理器重启。cron 中单个 job 的数据不合法时只停用该 job 并记录 `last_error`，不影响其他 job。
+后台循环（worker、cron）意外退出视为 bug，进程直接退出交给进程管理器重启。cron 中单个 job 的数据不合法时只停用该 job 并记录 `last_error`，不影响其他 job。
 
 ## 3. Agent 运行时
 
@@ -117,15 +117,15 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 
 ## 7. 触发源
 
-| 触发源 | session 策略 | 通知（`session.delivery`） |
-|---|---|---|
-| Web 用户发起 | 新建；回复沿用 | `webpush`（iOS 要求每个 push 都展示通知，所以页面可见时也会弹） |
-| cron | 每次触发新建；上一次触发的 session 仍有未完成 turn 时跳过本次（不重叠） | `none`，需要通知时 agent 调 `notify_user` |
-| webhook | 每个事件新建，事件体附在 prompt 后 | `webpush` |
-| Telegram | 每个 chat 复用最近的 session，`/new` 新开；给用户的提示也走 deliver task；配置按 `agent_id` 引用 agent，启动时校验存在，且该 agent 不可删除 | `telegram`（回复发回原 chat） |
-| delegate_task | 新建，`origin_ref` 记父 session | `webpush` |
+触发点只有两个：用户在网页发起对话、cron 定时任务。agent 之间的委派（`delegate_task`）是 agent 内部能力，也会新建 session。
 
-外部消息（Slack 等）不做实时接入，统一由 cron 定时拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。需要实时入口时，新增一个 trigger 和对应的 delivery 实现即可，与 Telegram 同构。
+| 来源 | session 策略 | 完成后推送（`session.notify`） |
+|---|---|---|
+| 用户发起 | 新建；回复沿用 | 是（iOS 要求每个 push 都展示通知，所以页面可见时也会弹） |
+| cron | 每次触发新建；上一次触发的 session 仍有未完成 turn 时跳过本次（不重叠） | 否，需要通知时 agent 调 `notify_user` |
+| 委派 | 新建，`origin_ref` 记父 session | 是 |
+
+通知只有 Web Push 一种渠道。外部消息（Slack 等）不做实时接入，统一由 cron 定时拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
 
 ## 8. 安全边界
 
@@ -140,8 +140,6 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 其他边界：
 
 - Web 与 API：单用户密码登录（至少 8 位），HMAC 签名 cookie（密钥至少 32 位），有效期 90 天。登录接口未做频率限制，部署在公网时应在反向代理层限流。
-- webhook：每个 webhook 独立 token（请求头 `X-Muliao-Token`），请求体上限 100KB，必须是 UTF-8。
-- Telegram：只接受白名单 chat id，其余记 warn 日志后丢弃。
 - Vault：Fernet 加密，主密钥来自配置 `vault.key`，缺失或格式错误时拒绝启动。
 - 配置文件：唯一配置来源（`config.example.toml`），未知键直接报错，避免拼写错误被静默忽略。
 - 日志不打印 secret 值与 token。

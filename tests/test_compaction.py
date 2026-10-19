@@ -3,7 +3,7 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
-from muliao.models import Compaction, DeliveryChannel, Message, Task, TaskKind, TaskStatus
+from muliao.models import Compaction, Message, Task, TaskKind, TaskStatus
 from muliao.runtime.compaction import COMPACTION_INSTRUCTIONS, CompactionScheduler, select_turns
 from muliao.runtime.tasks import turn_lane
 from tests.scripted import scripted
@@ -41,7 +41,7 @@ async def _enqueue_compaction(container, session) -> None:
 async def _session_with_turns(container, models, agent_id: str, n: int):
     recorder = Recorder()
     models.models["m"] = scripted(recorder)
-    session = await start(container, agent_id, "turn 1", delivery=DeliveryChannel.NONE)
+    session = await start(container, agent_id, "turn 1", notify=False)
     await drain(container)
     for i in range(2, n + 1):
         await container.sessions.reply(session.id, f"turn {i}")
@@ -122,7 +122,7 @@ async def _compaction_tasks(container) -> list[Task]:
 
 async def test_scheduler_enqueues_above_threshold_once_per_session(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    session = await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
+    session = await start(container, alpha, "hi", notify=False)
     scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
 
     async with container.db.transaction() as s:
@@ -136,7 +136,7 @@ async def test_scheduler_enqueues_above_threshold_once_per_session(container, ma
 
 async def test_zero_usage_warns_instead_of_silently_never_compacting(container, make_agent, caplog):
     alpha = (await make_agent("alpha")).id
-    session = await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
+    session = await start(container, alpha, "hi", notify=False)
     scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
 
     async with container.db.transaction() as s:
@@ -190,7 +190,7 @@ async def test_manual_compaction_endpoint(container, make_agent, tmp_path):
     from tests.test_api import login
 
     alpha = (await make_agent("alpha")).id
-    session = await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
+    session = await start(container, alpha, "hi", notify=False)
     app = create_app(container, tmp_path / "no-web")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         await login(client)

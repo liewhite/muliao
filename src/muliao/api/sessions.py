@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.errors import NotFound
-from muliao.models import DeliveryChannel, Origin, Session, Task, TaskKind, TaskStatus
+from muliao.models import Origin, Session, Task, TaskKind, TaskStatus
 from muliao.transcript import Item, to_items
 
 router = APIRouter()
@@ -17,7 +17,7 @@ class SessionOut(BaseModel):
     title: str
     origin: Origin
     origin_ref: str | None
-    delivery: DeliveryChannel
+    notify: bool
     unread: bool
     created_at: datetime
     updated_at: datetime
@@ -30,7 +30,7 @@ class SessionOut(BaseModel):
             title=s.title,
             origin=s.origin,
             origin_ref=s.origin_ref,
-            delivery=s.delivery,
+            notify=s.notify,
             unread=s.unread,
             created_at=s.created_at,
             updated_at=s.updated_at,
@@ -110,7 +110,7 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
         prompt=body.prompt,
         origin=Origin.USER,
         origin_ref=None,
-        delivery=DeliveryChannel.WEBPUSH,
+        notify=True,
     )
     return SessionOut.of(session)
 

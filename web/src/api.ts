@@ -1,6 +1,6 @@
 // 与后端 src/muliao/api/*.py 的响应模型一一对应
 
-export type Origin = 'user' | 'cron' | 'webhook' | 'telegram' | 'delegation'
+export type Origin = 'user' | 'cron' | 'delegation'
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
 export type TaskKind = 'turn' | 'reflection' | 'deliver' | 'compaction'
 
@@ -36,7 +36,8 @@ export interface Session {
   title: string
   origin: Origin
   origin_ref: string | null
-  delivery: 'none' | 'webpush' | 'telegram'
+  /** 每轮完成后是否推送通知 */
+  notify: boolean
   unread: boolean
   created_at: string
   updated_at: string
@@ -113,15 +114,6 @@ export interface CronJob {
   last_run_at: string | null
   last_session_id: string | null
   last_error: string | null
-}
-
-export interface Webhook {
-  id: string
-  name: string
-  agent_id: AgentId
-  prompt: string
-  url: string
-  token: string
 }
 
 export interface McpServer {
@@ -250,9 +242,6 @@ export const api = {
     put<CronJob>(`/api/cron/${id}`, job),
   deleteCron: (id: number) => del(`/api/cron/${id}`),
 
-  webhooks: () => get<Webhook[]>('/api/webhooks'),
-  createWebhook: (hook: { name: string; agent_id: AgentId; prompt: string }) => post<Webhook>('/api/webhooks', hook),
-  deleteWebhook: (id: string) => del(`/api/webhooks/${id}`),
 
   mcp: () => get<McpServer[]>('/api/mcp'),
   addMcp: (input: McpInput) => post<McpServer>('/api/mcp', input),

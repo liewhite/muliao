@@ -11,17 +11,11 @@ from muliao.db import Base, UTCDateTime, utcnow
 
 
 class Origin(StrEnum):
+    """触发源：用户在网页发起、cron 定时触发、agent 之间委派。"""
+
     USER = "user"
     CRON = "cron"
-    WEBHOOK = "webhook"
-    TELEGRAM = "telegram"
     DELEGATION = "delegation"
-
-
-class DeliveryChannel(StrEnum):
-    NONE = "none"
-    WEBPUSH = "webpush"
-    TELEGRAM = "telegram"
 
 
 class TaskKind(StrEnum):
@@ -72,11 +66,10 @@ class Session(Base):
     agent_id: Mapped[str] = mapped_column(_fk_agent(), index=True)
     title: Mapped[str] = mapped_column(String(200))
     origin: Mapped[Origin] = mapped_column(String(16))
-    # 触发源内的引用：cron job id、webhook id、Telegram chat id、父 session id
+    # 触发源内的引用：cron job id、父 session id
     origin_ref: Mapped[str | None] = mapped_column(String(64))
-    delivery: Mapped[DeliveryChannel] = mapped_column(String(16))
-    # channel 内的投递目标，如 Telegram chat id；Web Push 为 None
-    delivery_target: Mapped[str | None] = mapped_column(String(64))
+    # 每轮完成后是否推送通知（Web Push）
+    notify: Mapped[bool]
     unread: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
@@ -159,17 +152,6 @@ class CronJob(Base):
     last_session_id: Mapped[str | None] = mapped_column(String(36))
     # 触发失败时记录原因并停用该 job，修复后由用户重新启用
     last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-
-
-class Webhook(Base):
-    __tablename__ = "webhooks"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True)
-    agent_id: Mapped[str] = mapped_column(_fk_agent())
-    token: Mapped[str] = mapped_column(String(64))
-    prompt: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

@@ -16,7 +16,3 @@ class InvalidInput(DomainError):
 
 class TransientError(Exception):
     """外部依赖按其契约可能发生的暂时性失败（5xx、限流、超时）。由任务队列统一重试。"""
-
-
-class Forbidden(DomainError):
-    pass

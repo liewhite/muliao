@@ -77,23 +77,6 @@ async def test_vault_never_returns_values(client):
     assert listed[0]["key"] == "SLACK_TOKEN" and "xoxb-1" not in str(listed)
 
 
-async def test_webhook_endpoint_is_public_but_token_protected(client):
-    await login(client)
-    agent_id = (
-        await client.post("/api/agents", json={"name": "alpha", "description": "general helper"})
-    ).json()["id"]
-    hook = (
-        await client.post("/api/webhooks", json={"name": "gh", "agent_id": agent_id, "prompt": "Handle"})
-    ).json()
-    client.cookies.clear()
-
-    assert (
-        await client.post(f"/hooks/{hook['id']}", content="{}", headers={"X-Muliao-Token": "bad"})
-    ).status_code == 403
-    resp = await client.post(f"/hooks/{hook['id']}", content="{}", headers={"X-Muliao-Token": hook["token"]})
-    assert resp.status_code == 202 and resp.json()["session_id"]
-
-
 def test_auth_token_expires_and_rejects_tampering():
     auth = Auth("secret", "pw")
     token = auth.issue(now=1000)

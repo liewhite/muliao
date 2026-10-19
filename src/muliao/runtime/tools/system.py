@@ -7,7 +7,7 @@ from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents import AgentService
 from muliao.delivery.base import Notification, Notifier
-from muliao.models import DeliveryChannel, McpTransport, Origin
+from muliao.models import McpTransport, Origin
 from muliao.ownership import Scope, owner_of, scope_of
 from muliao.runtime.mcp import McpRegistry, McpSpec
 from muliao.runtime.scope import RunScope
@@ -45,7 +45,7 @@ def agents_toolset(agents: AgentService, sessions: SessionService) -> FunctionTo
             prompt=task,
             origin=Origin.DELEGATION,
             origin_ref=ctx.deps.session_id,
-            delivery=DeliveryChannel.WEBPUSH,
+            notify=True,
         )
         return (
             f"delegated to {target.name}; it runs in a new session and the user is notified when it finishes"
@@ -68,8 +68,6 @@ def notify_toolset(notifier: Notifier) -> FunctionToolset[RunScope]:
         await notifier.notify(
             ctx.deps.agent_id,
             Notification(
-                channel=DeliveryChannel.WEBPUSH,
-                target=None,
                 title=title,
                 body=body,
                 session_id=ctx.deps.session_id,

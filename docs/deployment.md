@@ -10,7 +10,7 @@ uv tool install git+https://github.com/liewhite/muliao.git
 uv tool upgrade muliao     # 或 uv tool install --force git+https://github.com/liewhite/muliao.git
 ```
 
-所有配置（监听地址、登录密码、密钥、LLM provider 与 API key、Telegram）都在一个 TOML 文件里，模板见仓库根目录 `config.example.toml`，每项都有注释。程序自身不读环境变量；LLM 的 base_url 未填时使用官方地址，不受 `*_BASE_URL` 环境变量影响。
+所有配置（监听地址、登录密码、密钥、LLM provider 与 API key）都在一个 TOML 文件里，模板见仓库根目录 `config.example.toml`，每项都有注释。程序自身不读环境变量；LLM 的 base_url 未填时使用官方地址，不受 `*_BASE_URL` 环境变量影响。
 
 ```bash
 mkdir -p ~/.muliao
@@ -21,7 +21,7 @@ muliao --config /path/to.toml   # 或指定路径
 
 `data_dir` 的相对路径以配置文件所在目录为基准，默认即 `~/.muliao/data`。agent 的模型写成 `<provider 名>:<模型名>`，provider 名是配置里 `[llm.providers.<名>]` 的键。
 
-后台循环（worker、cron、Telegram）意外退出时进程会主动退出，需要进程管理器托管并自动重启。macOS 用 launchd，示例见 `deploy/muliao.plist.example`：
+后台循环（worker、cron）意外退出时进程会主动退出，需要进程管理器托管并自动重启。macOS 用 launchd，示例见 `deploy/muliao.plist.example`：
 
 ```bash
 cp deploy/muliao.plist.example ~/Library/LaunchAgents/com.muliao.plist   # 按注释改路径
@@ -58,10 +58,6 @@ uv run alembic revision --autogenerate -m "add xxx"  # 检查生成的脚本后�
 2. iPhone 用 Safari 打开 → 分享 → 「添加到主屏幕」。
 3. 从主屏幕图标打开，登录 → 设置 → 「开启推送」（iOS 16.4+）。
 4. 「发送测试通知」验证。
-
-### Telegram 入口
-
-配置里的 `[telegram] agent_id` 引用 agent 的 id：先在网页上创建 agent，到 agent 详情页复制 id，填入配置后重启服务。启动时会校验该 id 存在，且这个 agent 不能被删除。
 
 VAPID 密钥在首次启动时生成于 `data/vapid_private.pem`，更换它会使所有已有订阅失效，需要各设备重新开启推送。
 

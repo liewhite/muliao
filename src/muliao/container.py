@@ -9,20 +9,17 @@ from dataclasses import dataclass, field
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import httpx
-
 from muliao.agents import AgentService
 from muliao.bus import EventBus
 from muliao.config import Settings
 from muliao.db import Database, create_engine, migrate
-from muliao.delivery.base import DeliverHandler, Delivery, Notifier
-from muliao.delivery.telegram import TelegramDelivery
+from muliao.delivery.base import DeliverHandler, Notifier
 from muliao.delivery.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
 from muliao.errors import InvalidInput
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelRegistry, ModelResolver
-from muliao.models import DeliveryChannel, TaskKind
+from muliao.models import TaskKind
 from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
@@ -40,10 +37,7 @@ from muliao.runtime.tools.system import (
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
 from muliao.runtime.turn import TurnHandler
 from muliao.runtime.worker import TaskHandler, Worker
-from muliao.telegram import TelegramClient
 from muliao.triggers.cron import CronService
-from muliao.triggers.telegram import TelegramTrigger
-from muliao.triggers.webhook import WebhookService
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
@@ -63,12 +57,9 @@ class Container:
     notifier: Notifier
     mcp: McpRegistry
     cron: CronService
-    webhooks: WebhookService
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
     worker: Worker
-    http: httpx.AsyncClient
-    telegram: TelegramTrigger | None
     compaction: CompactionScheduler
     _model_checker: Callable[[str], None]
     _background: list[asyncio.Task[None]] = field(default_factory=list)
@@ -81,13 +72,8 @@ class Container:
     async def start(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path, self.settings.agents_dir)
         await self._check_agent_models()
-        if self.settings.telegram is not None:
-            # 配置错误在启动时暴露，而不是在第一条消息到来时让轮询崩溃
-            await self.agents.get(self.settings.telegram.agent_id)
         self._spawn("worker", self.worker.run_forever())
         self._spawn("cron", self.cron.run_forever())
-        if self.telegram is not None:
-            self._spawn("telegram", self.telegram.run_forever())
 
     async def _check_agent_models(self) -> None:
         """已存 agent 的模型必须能被当前配置解析：配置改动（删 provider、改名）在启动时暴露，而不是散落到每个任务里失败。"""
@@ -106,7 +92,6 @@ class Container:
         for task in self._background:
             task.cancel()
         await asyncio.gather(*self._background, return_exceptions=True)
-        await self.http.aclose()
         await self.db.engine.dispose()
 
 
@@ -144,27 +129,15 @@ def build_container(
         settings.agents_dir,
         memory,
         model_checker or models.check,
-        protected=frozenset([settings.telegram.agent_id]) if settings.telegram else frozenset(),
     )
     sessions = SessionService(db, queue)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(db, vault)
     cron = CronService(db, sessions, queue, tz)
-    webhooks = WebhookService(db, sessions)
     push_subscriptions = PushSubscriptions(db)
     vapid = VapidKeys(settings.vapid_key_path)
-    http = httpx.AsyncClient()
 
-    deliveries: dict[DeliveryChannel, Delivery] = {
-        DeliveryChannel.WEBPUSH: WebPushDelivery(push_subscriptions, vapid, settings.push.vapid_subject),
-    }
-    telegram: TelegramTrigger | None = None
-    if settings.telegram is not None:
-        client = TelegramClient(settings.telegram.bot_token.get_secret_value(), http)
-        deliveries[DeliveryChannel.TELEGRAM] = TelegramDelivery(client)
-        telegram = TelegramTrigger(
-            client, sessions, notifier, settings.telegram.agent_id, set(settings.telegram.allowed_chat_ids)
-        )
+    pusher = WebPushDelivery(push_subscriptions, vapid, settings.push.vapid_subject)
 
     evolution_tools = [skills_toolset(skills), memory_toolset(memory)]
     turn_profile = RunProfile(
@@ -203,7 +176,7 @@ def build_container(
             db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),
         TaskKind.REFLECTION: ReflectionHandler(db, runtime, reflection_profile),
-        TaskKind.DELIVER: DeliverHandler(deliveries),
+        TaskKind.DELIVER: DeliverHandler(pusher),
     }
     worker = Worker(
         queue,
@@ -226,12 +199,9 @@ def build_container(
         notifier=notifier,
         mcp=mcp,
         cron=cron,
-        webhooks=webhooks,
         push_subscriptions=push_subscriptions,
         vapid=vapid,
         worker=worker,
-        http=http,
-        telegram=telegram,
         compaction=compaction,
         _model_checker=model_checker or models.check,
     )

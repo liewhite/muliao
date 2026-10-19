@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -15,21 +15,16 @@ from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, require_auth
 from muliao.api.deps import C
 from muliao.bus import SubscriberOverflow
 from muliao.container import Container
-from muliao.errors import Conflict, DomainError, Forbidden, InvalidInput, NotFound
-from muliao.triggers.webhook import MAX_EVENT_BYTES
+from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
 
 _HEARTBEAT_SECONDS = 15.0
-_STATUS = {NotFound: 404, Conflict: 409, InvalidInput: 422, Forbidden: 403}
+_STATUS = {NotFound: 404, Conflict: 409, InvalidInput: 422}
 
 
 class LoginIn(BaseModel):
     password: str
-
-
-class SessionIdOut(BaseModel):
-    session_id: str
 
 
 def _status_of(exc: DomainError) -> int:
@@ -60,23 +55,6 @@ def _public_routes(secure_cookie: bool) -> APIRouter:
     @router.post("/api/auth/logout", status_code=204)
     async def logout(response: Response) -> None:
         response.delete_cookie(COOKIE_NAME)
-
-    @router.post("/hooks/{hook_id}", status_code=202)
-    async def receive_webhook(
-        c: C, hook_id: str, request: Request, x_muliao_token: str = Header(...)
-    ) -> SessionIdOut:
-        declared = int(request.headers.get("content-length", "0"))
-        if declared > MAX_EVENT_BYTES:
-            raise InvalidInput(f"event body exceeds {MAX_EVENT_BYTES} bytes")
-        raw = await request.body()
-        if len(raw) > MAX_EVENT_BYTES:
-            raise InvalidInput(f"event body exceeds {MAX_EVENT_BYTES} bytes")
-        try:
-            body = raw.decode("utf-8")
-        except UnicodeDecodeError as e:
-            raise InvalidInput(f"event body must be UTF-8: {e}") from e
-        session = await c.webhooks.receive(hook_id, x_muliao_token, body)
-        return SessionIdOut(session_id=session.id)
 
     return router
 
@@ -125,7 +103,7 @@ def _mount_web(app: FastAPI, web_dir: Path) -> None:
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str) -> FileResponse:
-        if path.startswith(("api/", "hooks/")):
+        if path.startswith("api/"):
             raise HTTPException(status_code=404)
         candidate = (web_dir / path).resolve()
         if path and candidate.is_file() and candidate.is_relative_to(root):

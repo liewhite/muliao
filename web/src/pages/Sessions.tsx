@@ -7,14 +7,12 @@ import { Loading, Page, agentLabel, relativeTime, useAgents, useLoad } from '../
 const ORIGIN_LABEL: Record<Origin, string> = {
   user: '对话',
   cron: '定时',
-  webhook: 'Webhook',
-  telegram: 'Telegram',
   delegation: '委派',
 }
 
 // 定时任务每次触发都会产生 session，默认不显示以免淹没收件箱
 const FILTERS: { label: string; origins: Origin[] | undefined }[] = [
-  { label: '收件箱', origins: ['user', 'delegation', 'webhook', 'telegram'] },
+  { label: '收件箱', origins: ['user', 'delegation'] },
   { label: '定时', origins: ['cron'] },
   { label: '全部', origins: undefined },
 ]

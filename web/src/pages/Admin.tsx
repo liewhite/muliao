@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, asAgentId, type TaskStatus } from '../api'
+import { api, type TaskStatus } from '../api'
 import { closeServerEvents } from '../events'
 import { enablePush, pushState, type PushState } from '../push'
 import { ErrorBanner, Field, Loading, Page, agentLabel, confirmAction, formatTime, useAction, useAgents, useLoad } from '../ui'
@@ -58,79 +58,6 @@ export function Vault() {
                   onClick={() => {
                     if (confirmAction(`删除 ${s.key}？引用它的 MCP 与命令会失败。`))
                       void action.run(() => api.deleteSecret(s.key).then(secrets.reload))
-                  }}
-                >
-                  删除
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Loading>
-    </Page>
-  )
-}
-
-export function Webhooks() {
-  const hooks = useLoad(() => api.webhooks(), [])
-  const agents = useAgents()
-  const [form, setForm] = useState({ name: '', agent_id: asAgentId(''), prompt: '' })
-  const action = useAction()
-
-  async function create() {
-    if (await action.run(() => api.createWebhook(form))) {
-      setForm({ name: '', agent_id: asAgentId(''), prompt: '' })
-      await hooks.reload()
-    }
-  }
-
-  return (
-    <Page title="Webhooks" back="/settings">
-      <p className="muted small">
-        外部系统 POST 到 webhook URL，请求头 <code>X-Muliao-Token</code> 带上 token；请求体会附在提示词后，交给 agent 在新会话中处理，完成后推送通知。
-      </p>
-      <details className="card">
-        <summary>新建 webhook</summary>
-        <div className="form">
-          <Field label="名称">
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </Field>
-          <Field label="Agent">
-            <select value={form.agent_id} onChange={(e) => setForm({ ...form, agent_id: asAgentId(e.target.value) })}>
-              <option value="" disabled>
-                选择 agent
-              </option>
-              {agents.data?.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="处理说明">
-            <textarea rows={4} value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} />
-          </Field>
-          <ErrorBanner error={action.error} />
-          <button className="button primary" onClick={create} disabled={action.busy || !form.name || !form.agent_id || !form.prompt}>
-            创建
-          </button>
-        </div>
-      </details>
-      <Loading state={hooks}>
-        {(list) => (
-          <ul className="cards">
-            {list.map((h) => (
-              <li key={h.id} className="card">
-                <div className="card-head">
-                  <strong>{h.name}</strong>
-                  <span className="tag">{agentLabel(agents.data, h.agent_id)}</span>
-                </div>
-                <code className="block">{`curl -X POST ${h.url} \\\n  -H 'X-Muliao-Token: ${h.token}' \\\n  -d '{"hello":"world"}'`}</code>
-                <p className="prewrap">{h.prompt}</p>
-                <button
-                  className="button small danger"
-                  onClick={() => {
-                    if (confirmAction(`删除 webhook ${h.name}？`)) void action.run(() => api.deleteWebhook(h.id).then(hooks.reload))
                   }}
                 >
                   删除
@@ -251,7 +178,6 @@ export function Settings() {
           ['/skills', '公共 Skills'],
           ['/mcp', 'MCP servers'],
           ['/vault', 'Vault'],
-          ['/webhooks', 'Webhooks'],
           ['/tasks', '任务与失败记录'],
         ].map(([to, label]) => (
           <li key={to}>

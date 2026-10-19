@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.db import Database, utcnow
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.ids import new_id
-from muliao.models import Agent, Compaction, DeliveryChannel, Message, Origin, Session, Task, TaskKind
+from muliao.models import Agent, Compaction, Message, Origin, Session, Task, TaskKind
 from muliao.runtime.codec import load_messages
 from muliao.runtime.tasks import TaskQueue, running_task_ids, turn_lane
 
@@ -36,8 +36,7 @@ class SessionService:
         prompt: str,
         origin: Origin,
         origin_ref: str | None,
-        delivery: DeliveryChannel,
-        delivery_target: str | None = None,
+        notify: bool,
         title: str | None = None,
     ) -> Session:
         if await s.get(Agent, agent_id) is None:
@@ -48,8 +47,7 @@ class SessionService:
             title=title or default_title(prompt),
             origin=origin,
             origin_ref=origin_ref,
-            delivery=delivery,
-            delivery_target=delivery_target,
+            notify=notify,
         )
         s.add(session)
         self.enqueue_turn_in(s, session, prompt)

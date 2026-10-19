@@ -54,7 +54,6 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Cont
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
     migrate(settings.db_path, settings.agents_dir)
     yield c
-    await c.http.aclose()
     await c.db.engine.dispose()
 
 

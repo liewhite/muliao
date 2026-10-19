@@ -1,4 +1,4 @@
-"""通知投递：Notifier 在业务事务里写 deliver task；DeliverHandler 由任务队列驱动，按 channel 分派给 Delivery 实现。"""
+"""通知投递：Notifier 在业务事务里写 deliver task；DeliverHandler 由任务队列驱动，把通知交给 Web Push。"""
 
 from dataclasses import asdict, dataclass
 from typing import Protocol
@@ -6,21 +6,21 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
-from muliao.models import DeliveryChannel, Task, TaskKind
+from muliao.models import Task, TaskKind
 from muliao.runtime.tasks import Commit, TaskQueue, deliver_lane, no_commit
 
 
 @dataclass(frozen=True)
 class Notification:
-    channel: DeliveryChannel
-    # channel 内的目标：Telegram chat id；Web Push 广播给所有订阅，为 None
-    target: str | None
     title: str
     body: str
+    # 点击通知打开的会话；系统通知为 None
     session_id: str | None
 
 
-class Delivery(Protocol):
+class Pusher(Protocol):
+    """把通知推送到用户的所有设备（实现：delivery.webpush.WebPushDelivery）。"""
+
     async def send(self, notification: Notification) -> None: ...
 
 
@@ -30,8 +30,6 @@ class Notifier:
         self._queue = queue
 
     def enqueue_in(self, s: AsyncSession, agent_id: str | None, notification: Notification) -> None:
-        if notification.channel == DeliveryChannel.NONE:
-            raise ValueError("cannot enqueue a notification for channel 'none'")
         self._queue.enqueue(
             s,
             kind=TaskKind.DELIVER,
@@ -48,15 +46,10 @@ class Notifier:
 
 
 class DeliverHandler:
-    def __init__(self, deliveries: dict[DeliveryChannel, Delivery]):
-        self._deliveries = deliveries
+    def __init__(self, pusher: Pusher):
+        self._pusher = pusher
 
     async def execute(self, task: Task) -> Commit:
-        notification = Notification(**task.payload)
-        delivery = self._deliveries.get(DeliveryChannel(notification.channel))
-        if delivery is None:
-            raise RuntimeError(f"delivery channel {notification.channel!r} is not configured")
-        # 各 Delivery 自己记录真实结果（实际送达几台设备、是否被丢弃）
-        await delivery.send(notification)
-
+        # 推送实现自己记录真实结果（实际送达几台设备、是否被丢弃）
+        await self._pusher.send(Notification(**task.payload))
         return no_commit

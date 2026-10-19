@@ -12,7 +12,7 @@ from sqlalchemy import select
 from muliao.delivery.base import Notification
 from muliao.delivery.webpush import WebPushDelivery
 from muliao.errors import Conflict, TransientError
-from muliao.models import CronJob, DeliveryChannel, Message, Task, TaskKind, TaskStatus
+from muliao.models import CronJob, Message, TaskKind, TaskStatus
 from muliao.runtime.worker import is_transient
 from muliao.transcript import to_items
 from tests.test_flow import call_then_answer, drain, start
@@ -20,13 +20,13 @@ from tests.test_flow import call_then_answer, drain, start
 
 async def test_message_ids_never_reused_after_deleting_latest_session(container, make_agent):
     alpha = (await make_agent("alpha", reflect_every=100)).id
-    first = await start(container, alpha, "one", delivery=DeliveryChannel.NONE)
+    first = await start(container, alpha, "one", notify=False)
     await drain(container)
     async with container.db.transaction() as s:
         max_before = max((await s.scalars(select(Message.id))).all())
     await container.sessions.delete(first.id)
 
-    await start(container, alpha, "two", delivery=DeliveryChannel.NONE)
+    await start(container, alpha, "two", notify=False)
     await drain(container)
 
     async with container.db.transaction() as s:
@@ -97,7 +97,7 @@ async def test_vault_set_value_is_redacted_from_saved_history(container, make_ag
     models.models["m"] = call_then_answer(
         "vault_set", {"key": "TOKEN", "value": "super-secret", "description": "d"}, "stored"
     )
-    session = await start(container, alpha, "save my token", delivery=DeliveryChannel.NONE)
+    session = await start(container, alpha, "save my token", notify=False)
     await drain(container)
 
     assert (await container.vault.resolve_many(["TOKEN"])) == {"TOKEN": "super-secret"}
@@ -136,7 +136,7 @@ async def test_webpush_isolates_subscriptions(container, monkeypatch):
 
     monkeypatch.setattr(WebPushDelivery, "_push", fake_push)
     delivery = WebPushDelivery(subs, container.vapid, "mailto:a@b.c")
-    note = Notification(channel=DeliveryChannel.WEBPUSH, target=None, title="t", body="b", session_id=None)
+    note = Notification(title="t", body="b", session_id=None)
 
     # 403 等其他 4xx 多半是本端问题：任务失败可见，但不删用户的订阅
     with pytest.raises(RuntimeError, match="403"):
@@ -150,20 +150,6 @@ async def test_webpush_isolates_subscriptions(container, monkeypatch):
         await delivery.send(note)
 
 
-async def test_telegram_notice_goes_through_deliver_task(container, make_agent):
-    from muliao.triggers.telegram import TelegramTrigger
-
-    alpha = (await make_agent()).id
-    trigger = TelegramTrigger(None, container.sessions, container.notifier, alpha, {42})  # type: ignore[arg-type]
-    await trigger.handle({"update_id": 1, "message": {"chat": {"id": 42}, "photo": []}})
-
-    async with container.db.transaction() as s:
-        tasks = (await s.scalars(select(Task))).all()
-    assert [(t.kind, t.payload["target"], t.payload["channel"]) for t in tasks] == [
-        (TaskKind.DELIVER, "42", DeliveryChannel.TELEGRAM)
-    ]
-
-
 async def test_retried_task_keeps_last_error_while_running(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m")).id
 
@@ -173,7 +159,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     from tests.scripted import scripted
 
     models.models["m"] = scripted(fail)
-    await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
+    await start(container, alpha, "hi", notify=False)
     await drain(container)
     turn = (await container.queue.list(status=TaskStatus.FAILED, session_id=None, limit=5))[0]
     assert turn.attempts == container.settings.runtime.task_max_attempts and "503" in turn.error
@@ -182,33 +168,6 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     await container.queue.retry(turn.id)
     claimed = await container.queue.claim()
     assert claimed.error is not None  # 运行期间仍能看到上次为什么失败
-
-
-async def test_agent_referenced_by_config_cannot_be_deleted(container, make_agent, settings, models):
-    from muliao.config import TelegramConfig
-    from muliao.container import build_container
-
-    tg = (await make_agent("tg")).id
-    settings.telegram = TelegramConfig(bot_token="t", agent_id=tg, allowed_chat_ids=[1])
-    c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
-    try:
-        with pytest.raises(Conflict, match="server configuration"):
-            await c.agents.delete(tg)
-    finally:
-        await c.http.aclose()
-        await c.db.engine.dispose()
-
-
-async def test_startup_fails_when_telegram_agent_id_does_not_exist(settings, models):
-    from muliao.config import TelegramConfig
-    from muliao.container import build_container
-    from muliao.errors import NotFound
-
-    settings.telegram = TelegramConfig(bot_token="t", agent_id="000000000000", allowed_chat_ids=[1])
-    c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
-    with pytest.raises(NotFound, match="000000000000"):
-        await c.start()
-    await c.stop()
 
 
 def test_vapid_private_key_is_owner_only(tmp_path):

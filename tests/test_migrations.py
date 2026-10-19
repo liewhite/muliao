@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 import pytest
@@ -55,7 +56,7 @@ def test_failed_migration_rolls_back_ddl_completely(tmp_path, monkeypatch):
     def broken_upgrade(cfg, _revision):  # noqa: ANN001
         conn = cfg.attributes["connection"]
         conn.exec_driver_sql("CREATE TABLE half_done (x INTEGER)")
-        conn.exec_driver_sql("DROP TABLE webhooks")
+        conn.exec_driver_sql("DROP TABLE compactions")
         raise RuntimeError("migration bug")
 
     monkeypatch.setattr(muliao.db.command, "upgrade", broken_upgrade)
@@ -71,8 +72,8 @@ def test_foreign_key_violation_rolls_back_migration(tmp_path, monkeypatch):
 
     def orphaning_upgrade(cfg, _revision):  # noqa: ANN001
         cfg.attributes["connection"].exec_driver_sql(
-            "INSERT INTO sessions (id, agent_id, title, origin, delivery, unread, created_at, updated_at) "
-            "VALUES ('s', 'ghost', 't', 'user', 'none', 0, '2026-01-01', '2026-01-01')"
+            "INSERT INTO sessions (id, agent_id, title, origin, notify, unread, created_at, updated_at) "
+            "VALUES ('s', 'ghost', 't', 'user', 0, 0, '2026-01-01', '2026-01-01')"
         )
 
     monkeypatch.setattr(muliao.db.command, "upgrade", orphaning_upgrade)
@@ -236,3 +237,52 @@ def test_agent_id_migration_leaves_system_notification_lane_alone(tmp_path):
     with sqlite3.connect(path) as conn:
         lanes = [r[0] for r in conn.execute("SELECT lane FROM tasks WHERE kind = 'deliver'")]
     assert lanes == ["deliver:system"]
+
+
+BEFORE_DROP_TRIGGERS = "5e1d7c3a9b20"
+
+
+def test_drop_triggers_migration_converts_delivery_to_notify(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    migrate(path, agents_dir, target=BEFORE_DROP_TRIGGERS)
+    ts = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO agents VALUES ('a1', 'n', 'd', 'm:x', '', 5, 0, 0, ?, ?)", (ts, ts))
+        for sid, delivery in (("s-push", "webpush"), ("s-none", "none")):
+            conn.execute(
+                "INSERT INTO sessions VALUES (?, 'a1', 't', 'user', NULL, ?, NULL, 0, ?, ?)",
+                (sid, delivery, ts, ts),
+            )
+        conn.execute(
+            "INSERT INTO tasks (kind, lane, agent_id, session_id, payload, status, attempts, not_before, created_at)"
+            " VALUES ('deliver', 'deliver:s-push', 'a1', 's-push',"
+            ' \'{"channel": "webpush", "target": null, "title": "t", "body": "b", "session_id": "s-push"}\','
+            " 'pending', 0, ?, ?)",
+            (ts, ts),
+        )
+
+    migrate(path, agents_dir)
+
+    with sqlite3.connect(path) as conn:
+        assert dict(conn.execute("SELECT id, notify FROM sessions")) == {"s-push": 1, "s-none": 0}
+        payload = conn.execute("SELECT payload FROM tasks").fetchone()[0]
+        assert json.loads(payload) == {"title": "t", "body": "b", "session_id": "s-push"}
+        tables = {r[0] for r in conn.execute("select name from sqlite_master where type='table'")}
+    assert "webhooks" not in tables
+
+
+def test_drop_triggers_migration_refuses_existing_telegram_sessions(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    migrate(path, agents_dir, target=BEFORE_DROP_TRIGGERS)
+    ts = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO agents VALUES ('a1', 'n', 'd', 'm:x', '', 5, 0, 0, ?, ?)", (ts, ts))
+        conn.execute(
+            "INSERT INTO sessions VALUES ('s', 'a1', 't', 'telegram', '42', 'telegram', '42', 0, ?, ?)",
+            (ts, ts),
+        )
+
+    with pytest.raises(RuntimeError, match="removed triggers still have data"):
+        migrate(path, agents_dir)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == BEFORE_DROP_TRIGGERS

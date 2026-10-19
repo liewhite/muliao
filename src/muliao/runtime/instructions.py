@@ -13,8 +13,6 @@ _ORIGIN_NOTES: dict[Origin, str] = {
         "This run was started by a schedule; nobody is watching. The user is NOT notified automatically: "
         "call `notify_user` only when there is something worth their attention."
     ),
-    Origin.WEBHOOK: "This run was started by an external event. The user is notified with your final answer.",
-    Origin.TELEGRAM: "The user is talking to you through Telegram; your final answer is sent back there.",
     Origin.DELEGATION: (
         "Another agent delegated this task to you. The user is notified with your final answer "
         "and may reply in this session."

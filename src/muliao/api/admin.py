@@ -1,4 +1,4 @@
-"""cron、webhook、MCP、vault、推送订阅的管理接口。"""
+"""cron、MCP、vault、推送订阅的管理接口。"""
 
 from datetime import datetime
 
@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.delivery.base import Notification
-from muliao.models import CronJob, DeliveryChannel, McpServer, McpTransport, Webhook
+from muliao.models import CronJob, McpServer, McpTransport
 from muliao.runtime.mcp import McpSpec
 from muliao.vault import SecretInfo
 
@@ -82,51 +82,6 @@ async def update_cron(c: C, job_id: int, body: CronIn) -> CronOut:
 @router.delete("/cron/{job_id}", status_code=204)
 async def delete_cron(c: C, job_id: int) -> None:
     await c.cron.delete(job_id)
-
-
-# ---- webhooks ----
-
-
-class WebhookCreate(BaseModel):
-    name: str
-    agent_id: str
-    prompt: str
-
-
-class WebhookOut(BaseModel):
-    id: str
-    name: str
-    agent_id: str
-    prompt: str
-    url: str
-    token: str
-
-    @classmethod
-    def of(cls, h: Webhook, public_url: str) -> "WebhookOut":
-        return cls(
-            id=h.id,
-            name=h.name,
-            agent_id=h.agent_id,
-            prompt=h.prompt,
-            url=f"{public_url.rstrip('/')}/hooks/{h.id}",
-            token=h.token,
-        )
-
-
-@router.get("/webhooks")
-async def list_webhooks(c: C) -> list[WebhookOut]:
-    return [WebhookOut.of(h, c.settings.server.public_url) for h in await c.webhooks.list()]
-
-
-@router.post("/webhooks", status_code=201)
-async def create_webhook(c: C, body: WebhookCreate) -> WebhookOut:
-    hook = await c.webhooks.create(name=body.name, agent_id=body.agent_id, prompt=body.prompt)
-    return WebhookOut.of(hook, c.settings.server.public_url)
-
-
-@router.delete("/webhooks/{hook_id}", status_code=204)
-async def delete_webhook(c: C, hook_id: str) -> None:
-    await c.webhooks.delete(hook_id)
 
 
 # ---- MCP ----
@@ -279,8 +234,6 @@ async def test_push(c: C) -> None:
     await c.notifier.notify(
         None,
         Notification(
-            channel=DeliveryChannel.WEBPUSH,
-            target=None,
             title="Muliao",
             body="推送通知已开启。",
             session_id=None,

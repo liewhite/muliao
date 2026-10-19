@@ -30,7 +30,7 @@ class _Section(BaseModel):
 class ServerConfig(_Section):
     host: str = "127.0.0.1"
     port: int = 8000
-    # 对外访问地址：通知点击跳转、webhook URL、cookie 是否 Secure
+    # 对外访问地址：通知点击跳转、cookie 是否 Secure
     public_url: str
 
 
@@ -97,13 +97,6 @@ class RuntimeConfig(_Section):
     tool_output_max_chars: int = 20000
 
 
-class TelegramConfig(_Section):
-    bot_token: SecretStr = Field(min_length=1)
-    # 接收消息的 agent 的 id（在 agent 详情页可复制）
-    agent_id: str
-    allowed_chat_ids: list[int] = Field(min_length=1)
-
-
 class Settings(_Section):
     # 相对路径以配置文件所在目录为基准（见 load_settings）
     data_dir: Path = Path("data")
@@ -117,7 +110,6 @@ class Settings(_Section):
     push: PushConfig
     llm: LlmConfig
     runtime: RuntimeConfig = RuntimeConfig()
-    telegram: TelegramConfig | None = None
 
     @property
     def db_path(self) -> Path:

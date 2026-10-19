@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database, utcnow
 from muliao.delivery.base import Notification, Notifier
-from muliao.models import Agent, DeliveryChannel, Message, Session, Task, TaskKind
+from muliao.models import Agent, Message, Session, Task, TaskKind
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import CompactionScheduler, load_context
 from muliao.runtime.redaction import redact_messages
@@ -60,13 +60,11 @@ class TurnHandler:
             session.updated_at = utcnow()
             await self._count_turn(s, agent)
             await self._compaction.after_turn(s, session, agent.model, new_messages)
-            if session.delivery != DeliveryChannel.NONE:
+            if session.notify:
                 self._notifier.enqueue_in(
                     s,
                     agent.id,
                     Notification(
-                        channel=session.delivery,
-                        target=session.delivery_target,
                         title=f"{agent.name} · {session.title}",
                         body=result.output,
                         session_id=session.id,

@@ -3,7 +3,7 @@ import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
 import { closeServerEvents } from './events'
 import { AgentCreate, AgentDetail, AgentList } from './pages/Agents'
-import { Login, Settings, Tasks, Vault, Webhooks } from './pages/Admin'
+import { Login, Settings, Tasks, Vault } from './pages/Admin'
 import Cron from './pages/Cron'
 import Mcp from './pages/Mcp'
 import NewSession from './pages/NewSession'
@@ -80,7 +80,6 @@ export default function App() {
           <Route path="/skills/edit" element={<SkillEditor />} />
           <Route path="/mcp" element={<Mcp />} />
           <Route path="/vault" element={<Vault />} />
-          <Route path="/webhooks" element={<Webhooks />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />

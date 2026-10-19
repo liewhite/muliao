@@ -12,7 +12,7 @@ log_level = "INFO"
 # 0.0.0.0 监听所有网卡（反向代理在其他机器上时需要）；代理在本机时用 127.0.0.1
 host = "0.0.0.0"
 port = 1080
-# 必填：对外访问地址（iOS 推送要求 HTTPS）。用于通知跳转、webhook URL、cookie Secure 标记
+# 必填：对外访问地址（iOS 推送要求 HTTPS）。用于通知跳转、cookie Secure 标记
 public_url = "https://muliao.example.com"
 
 [auth]
@@ -74,9 +74,3 @@ api_key = ""
 # shell_default_timeout = 120.0
 # shell_max_timeout = 600.0
 # tool_output_max_chars = 20000
-
-# 可选：Telegram 入口
-# [telegram]
-# bot_token = ""
-# agent_id = "3f9a0c1b7e24"       # 接收消息的 agent 的 id（agent 详情页可复制），启动时校验存在，且不可删除
-# allowed_chat_ids = [123456789]   # 只处理这些 chat 的消息
