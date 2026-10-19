@@ -227,3 +227,33 @@ def test_compaction_never_separates_a_question_from_its_answer():
     rows = [row(1, 10, ask), row(2, 11, answer), row(3, 11, done), row(4, 12, done)]
 
     assert [[r.id for r in turn] for turn in _group_turns(rows)] == [[1, 2, 3], [4]]
+
+
+async def test_retrying_an_answer_voided_by_a_later_turn_fails_clearly_and_the_session_goes_on(
+    client, container, make_agent, models
+):
+    """回答失败后又跑过别的轮次（把提问记为没回答），重试这个回答以明确的错误失败，且不影响这个会话之后的轮次。"""
+    session_id, asker = await _asked(client, container, make_agent, models)
+    original = models.models["asker"]
+
+    def broken(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise RuntimeError("model is down")
+
+    models.models["asker"] = scripted(broken)
+    answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
+    await drain(container)
+    failed = (await tasks_of(container, TaskKind.TURN))[-1]
+    assert failed.status == TaskStatus.FAILED
+
+    models.models["asker"] = original
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "算了，先聊别的"})
+    await drain(container)
+    assert (await client.post(f"/api/tasks/{failed.id}/retry")).status_code == 200
+    await drain(container)
+    retried = next(t for t in await tasks_of(container, TaskKind.TURN) if t.id == failed.id)
+    assert retried.status == TaskStatus.FAILED and "are void" in (retried.error or "")
+
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "还在吗"})
+    await drain(container)
+    assert (await tasks_of(container, TaskKind.TURN))[-1].status == TaskStatus.DONE

@@ -7,8 +7,8 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 |---|---|---|---|
 | `TOOL_ATTACHMENTS`：工具挂给用户的文件 | ToolReturnPart.metadata | share_file、run_temp_agent、ask_agent（runtime.answers） | 会话条目、实时事件、转交给调用方 |
 | `TOOL_THREADS`：工具开出或续写的子会话 | ToolReturnPart.metadata | delegate_task、ask_agent | 会话条目、实时事件 |
-| `TURN_STOPPED`：这一轮被用户停止 | 停止的一轮最后一条消息的 metadata | runtime.turn | 会话条目（「已停止」） |
-| `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | runtime.turn | 模型（下一轮） |
+| `TURN_STOPPED`：这一轮被用户停止 | 停止的一轮最后一条消息的 metadata | runtime.stopping | 会话条目（「已停止」） |
+| `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | runtime.stopping | 模型（下一轮） |
 | `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | runtime.turn | 模型、会话条目 |
 | 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart | — | unanswered_calls：挂起的提问、压缩切点、停止时补结果 |
 

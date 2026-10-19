@@ -67,6 +67,7 @@ class TaskOut(BaseModel):
 
     @classmethod
     def of(cls, t: Task, files: dict[str, FileOut]) -> "TaskOut":
+        turn = _turn_payload(t)
         return cls(
             id=t.id,
             kind=t.kind,
@@ -75,22 +76,23 @@ class TaskOut(BaseModel):
             status=t.status,
             attempts=t.attempts,
             error=t.error,
-            prompt=TurnPayload.of(t).prompt if t.kind == TaskKind.TURN else None,
-            attachments=[files[i] for i in _attachment_ids(t)],
-            answers=TurnPayload.of(t).answers if t.kind == TaskKind.TURN else {},
+            prompt=None if turn is None else turn.prompt,
+            attachments=[] if turn is None else [files[i] for i in turn.attachments],
+            answers={} if turn is None else turn.answers,
             not_before=t.not_before,
             created_at=t.created_at,
             finished_at=t.finished_at,
         )
 
 
-def _attachment_ids(t: Task) -> list[str]:
-    return TurnPayload.of(t).attachments if t.kind == TaskKind.TURN else []
+def _turn_payload(t: Task) -> TurnPayload | None:
+    """只有 turn 有输入（prompt、附件、回答）；其他种类的 task 没有。"""
+    return TurnPayload.of(t) if t.kind == TaskKind.TURN else None
 
 
 async def task_outs(c: Container, tasks: list[Task]) -> list[TaskOut]:
     """TaskOut 的唯一构造入口：一次取齐这些 task 的附件。"""
-    ids = list(dict.fromkeys(i for t in tasks for i in _attachment_ids(t)))
+    ids = list(dict.fromkeys(i for t in tasks if (turn := _turn_payload(t)) for i in turn.attachments))
     files = {f.id: FileOut.of(f) for f in await c.files.referenced(ids)}
     return [TaskOut.of(t, files) for t in tasks]
 

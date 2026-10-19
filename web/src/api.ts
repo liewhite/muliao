@@ -66,7 +66,7 @@ export interface FileInfo {
   created_at: string
 }
 
-/** 消息里的附件（后端 transcript.Attachment） */
+/** 消息里的附件（后端 conventions.Attachment） */
 export interface Attachment {
   url: string
   name: string
