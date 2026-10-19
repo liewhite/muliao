@@ -68,6 +68,25 @@ def shared_attachments(messages: Sequence[ModelMessage]) -> list[Attachment]:
     ]
 
 
+def unanswered_calls(messages: Sequence[ModelMessage]) -> list[ToolCallPart]:
+    """还没有结果的工具调用，按出现顺序。结果是 ToolReturnPart，或参数被拒绝、交还模型重试的 RetryPromptPart。
+    「调用是否已有结果」只在这里定义（挂起的提问、压缩切点都用它）。"""
+    done = {
+        p.tool_call_id
+        for m in messages
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if isinstance(p, ToolReturnPart | RetryPromptPart)
+    }
+    return [
+        p
+        for m in messages
+        if isinstance(m, ModelResponse)
+        for p in m.parts
+        if isinstance(p, ToolCallPart) and p.tool_call_id not in done
+    ]
+
+
 class Item(TypedDict):
     type: ItemType
     text: str

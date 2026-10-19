@@ -2,8 +2,31 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
 import { Archive, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { agentRoute, api, type Agent, type Attachment, type CompactionInfo, type Item, type Task, type Session } from '../api'
-import { groupSteps, stepAttachments, summarizeSteps, toBlocks, toolStatus, type Step, type ToolStatus, type ToolView } from '../blocks'
+import {
+  agentRoute,
+  api,
+  type Agent,
+  type Attachment,
+  type CompactionInfo,
+  type Item,
+  type Question,
+  type QuestionAnswer,
+  type Task,
+  type Session,
+} from '../api'
+import {
+  askResult,
+  groupSteps,
+  stepAttachments,
+  summarizeSteps,
+  toBlocks,
+  toolStatus,
+  type AskView,
+  type Step,
+  type ToolStatus,
+  type ToolView,
+} from '../blocks'
+import { AnsweredQuestions, QuestionForm, QuestionNote } from '../questions'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
 import { liveToItems, useServerEvents, type RunEvent } from '../events'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
@@ -99,11 +122,29 @@ function StepsGroup({ steps }: { steps: Step[] }) {
   )
 }
 
-function Blocks({ items }: { items: Item[] }) {
+/** 会话里还在等回答的提问，以及提交回答的方式 */
+interface Asking {
+  pending: Map<string, Question[]>
+  answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
+}
+
+const NOT_ASKING: Asking = { pending: new Map(), answer: async () => {} }
+
+function AskBlock({ ask, asking }: { ask: AskView; asking: Asking }) {
+  const questions = asking.pending.get(ask.callId)
+  if (questions) return <QuestionForm questions={questions} onSubmit={(answers) => asking.answer(ask.callId, answers)} />
+  if (ask.result === null) return <QuestionNote text="提问中…" />
+  const result = askResult(ask.result)
+  return result.answered ? <AnsweredQuestions answers={result.answers} /> : <QuestionNote text="没有回答这些问题" />
+}
+
+function Blocks({ items, asking }: { items: Item[]; asking: Asking }) {
   return (
     <>
       {groupSteps(toBlocks(items)).map((v, i) => {
         switch (v.kind) {
+          case 'ask':
+            return <AskBlock key={i} ask={v.ask} asking={asking} />
           case 'user':
             return <UserBubble key={i} text={v.text} attachments={v.attachments} />
           case 'assistant':
@@ -121,14 +162,14 @@ function Blocks({ items }: { items: Item[] }) {
 }
 
 /** 按压缩点切分历史：每个压缩点之前的消息已由摘要代替发给模型（切点总在两轮之间）。 */
-function History({ items, compactions }: { items: Item[]; compactions: CompactionInfo[] }) {
+function History({ items, compactions, asking }: { items: Item[]; compactions: CompactionInfo[]; asking: Asking }) {
   const parts: ReactNode[] = []
   let rest = items
   for (const c of compactions) {
     const cut = rest.findIndex((i) => i.message_id !== null && i.message_id > c.through_message_id)
     const before = cut === -1 ? rest : rest.slice(0, cut)
     rest = cut === -1 ? [] : rest.slice(cut)
-    parts.push(<Blocks key={`b${c.through_message_id}`} items={before} />)
+    parts.push(<Blocks key={`b${c.through_message_id}`} items={before} asking={asking} />)
     parts.push(
       <Disclosure key={`c${c.through_message_id}`} className="border-y border-dashed border-separator py-1.5 text-sm text-muted">
         <Disclosure.Heading>
@@ -145,7 +186,7 @@ function History({ items, compactions }: { items: Item[]; compactions: Compactio
       </Disclosure>,
     )
   }
-  parts.push(<Blocks key="rest" items={rest} />)
+  parts.push(<Blocks key="rest" items={rest} asking={asking} />)
   return <>{parts}</>
 }
 
@@ -153,6 +194,9 @@ function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void
   return (
     <>
       <UserBubble text={task.prompt ?? ''} attachments={task.attachments} pending />
+      {Object.values(task.answers).map((result, i) => (
+        <AnsweredQuestions key={i} answers={result.answers} />
+      ))}
       {task.status === 'failed' ? (
         <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
           <div>这一轮失败了（尝试 {task.attempts} 次）</div>
@@ -367,13 +411,20 @@ export default function SessionView() {
                 来自上级会话的 thread「{d.session.thread}」
               </Link>
             )}
-            <History items={d.items} compactions={d.compactions} />
+            <History
+              items={d.items}
+              compactions={d.compactions}
+              asking={{
+                pending: new Map(d.pending_questions.map((p) => [p.tool_call_id, p.questions])),
+                answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
+              }}
+            />
             {d.open_turns.map((t) => (
               <OpenTurn key={t.id} task={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
             ))}
             {live.length > 0 && (
               <div className="flex flex-col gap-3 opacity-90">
-                <Blocks items={liveToItems(live)} />
+                <Blocks items={liveToItems(live)} asking={NOT_ASKING} />
               </div>
             )}
             <Threads threads={d.threads} agents={agents.data} />

@@ -5,7 +5,8 @@ ask_agent 在调用方这一轮里直接跑完私有 thread 的一轮（见 runt
 """
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic_ai.messages import ModelResponse, TextPart
@@ -18,6 +19,7 @@ from muliao.files import load_metas
 from muliao.ids import new_id
 from muliao.models import Agent, Message, Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.codec import load_messages
+from muliao.runtime.questions import QuestionAnswer, resolve_answers
 from muliao.runtime.tasks import TaskQueue, running_task_ids, turn_lane
 
 log = logging.getLogger(__name__)
@@ -62,6 +64,8 @@ class Inbound:
     reply_to: ReplyTo
     # 随消息发送的文件 id（muliao.files）；只有用户在界面上发的消息会带
     attachments: tuple[str, ...] = ()
+    # 对这个会话里挂起提问的回答：tool_call_id -> 每题的回答（runtime.questions）；只有用户会带
+    answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -125,7 +129,7 @@ async def create_session(
 
 async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Received:
     """所有新一轮对话的唯一入口：确定会话（继续或新建），投递一轮。"""
-    if not inbound.content.strip() and not inbound.attachments:
+    if not inbound.content.strip() and not inbound.attachments and not inbound.answers:
         raise InvalidInput("message must not be empty")
     await load_metas(s, inbound.attachments)
     if isinstance(inbound.session, NewSession):
@@ -137,6 +141,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
         if session is None:
             raise NotFound(f"session {inbound.session!r} not found")
         _check_may_continue(session, inbound.origin, inbound.origin_ref)
+    answers = await resolve_answers(s, session.id, inbound.answers) if inbound.answers else {}
     session.updated_at = utcnow()
     turn = queue.enqueue(
         s,
@@ -148,6 +153,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
             "prompt": inbound.content,
             "reply_to": inbound.reply_to,
             "attachments": list(inbound.attachments),
+            "answers": answers,
         },
     )
     log.info(

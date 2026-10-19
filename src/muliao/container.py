@@ -32,6 +32,7 @@ from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroup, ToolGroup
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import TaskQueue
 from muliao.runtime.tools.agents import agents_toolset
+from muliao.runtime.tools.ask_user import ask_user_toolset
 from muliao.runtime.tools.delegation import delegation_toolset
 from muliao.runtime.tools.evolution import (
     instructions_toolset,
@@ -244,7 +245,13 @@ def build_container(
         ),
         files,
     )
-    evolution_tools = [skills_toolset(skills), memory_toolset(memory), instructions_toolset(prompts)]
+    # 总是开放：自我改进，以及向用户提问（没有用户会回答的运行里由工具自己隐藏，见 runtime.tools.ask_user）
+    always_tools = [
+        skills_toolset(skills),
+        memory_toolset(memory),
+        instructions_toolset(prompts),
+        ask_user_toolset(),
+    ]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
     temp_profile = RunProfile(toolsets=[workspace_tools, *web_tools], include_mcp=True)
     tool_groups = ToolGroups(
@@ -281,7 +288,7 @@ def build_container(
             "triggers": ToolGroup([triggers_toolset(triggers, agents)]),
             **optional_groups,
         },
-        always=evolution_tools,
+        always=always_tools,
     )
     if tuple(tool_groups.groups) != tool_group_names:
         raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {tool_group_names}")

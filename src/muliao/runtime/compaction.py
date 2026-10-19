@@ -21,7 +21,7 @@ from muliao.models import Agent, Compaction, Message, Session, Task, TaskKind, T
 from muliao.runtime.codec import load_messages
 from muliao.runtime.runner import AgentRuntime
 from muliao.runtime.tasks import Commit, TaskQueue, no_commit, turn_lane
-from muliao.transcript import to_items, to_text
+from muliao.transcript import to_items, to_text, unanswered_calls
 
 log = logging.getLogger(__name__)
 
@@ -117,11 +117,19 @@ class CompactionScheduler:
             log.info("context over threshold, compaction queued", extra=ctx)
 
 
+def _messages(turn: list[Message]) -> list[ModelMessage]:
+    return load_messages(r.payload for r in turn)
+
+
 def _group_turns(rows: list[Message]) -> list[list[Message]]:
-    """按产生它们的 turn task 分组，保持时间顺序。"""
+    """按产生它们的 turn task 分组，保持时间顺序。
+
+    切点必须落在所有工具调用都已有结果的地方：一轮停在挂起的调用上（如 ask_user 等用户回答）时，
+    它和给出结果的后续轮次合成一组，否则切在中间会让留下的结果找不到对应的调用。
+    """
     turns: list[list[Message]] = []
     for row in rows:
-        if turns and turns[-1][0].task_id == row.task_id:
+        if turns and (turns[-1][-1].task_id == row.task_id or unanswered_calls(_messages(turns[-1]))):
             turns[-1].append(row)
         else:
             turns.append([row])

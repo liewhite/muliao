@@ -98,7 +98,7 @@ Web / 触发器（定时、webhook……）/ delegate_task
 
 - **原则：给模型看的是名称和描述，给程序用的是 id。** 工具参数、返回值、instructions 里只出现 agent 名称；名称唯一，由工具层（`AgentService.find_by_name`）解析为 id，写错时把可用名称列表作为错误交还模型。id 只会作为文件路径的一部分（`agents/<id>/…`）出现在工作目录里。`tests/test_flow.py::test_model_sees_agent_names_never_ids` 守住这条规则。
 - **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
-- **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定（`runtime.runner.ToolGroups`，名称在组合根 `TOOL_GROUPS` 唯一声明）：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`、`web`（只在配置了 `[web]` 时存在）；私有 skill、memory 与自己的指令（自我改进）总是开放，读公共 skill 也总是可以。反思只开放自我改进，以及该 agent 本来就有的 `public_skills`。新建 agent 默认全部开放；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP 与配置了的网页搜索，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
+- **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定（`runtime.runner.ToolGroups`，名称在组合根 `TOOL_GROUPS` 唯一声明）：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`、`web`（只在配置了 `[web]` 时存在）；私有 skill、memory 与自己的指令（自我改进）总是开放，读公共 skill 也总是可以；向用户提问（`ask_user`，见第 4 节）也总是开放，但只在这一轮的回答交给用户时出现。反思只开放自我改进，以及该 agent 本来就有的 `public_skills`。新建 agent 默认全部开放；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP 与配置了的网页搜索，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
   - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `share_file`（把文件发给用户，见第 4 节「附件与文件」）/ `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill`（私有或公共）/ `write_skill` / `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `delete_public_skill`。
@@ -141,12 +141,21 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 - **agent 发出文件**：`share_file(path)` 把工作目录里的文件存一份快照，通过 `ToolReturn.metadata["attachments"]`（`transcript.TOOL_ATTACHMENTS`）挂到这次工具结果上。metadata 不发给模型、随消息持久化，所以文件一定显示给用户（图片内联、其他为下载链接，显示在过程组外），不依赖模型在回答里转写引用；模型只收到一句「已发给用户」。任何工具都可以用同一约定挂文件。临时 agent 与 `ask_agent` 的被问 agent 挂上的文件，随调用方那次工具调用的结果一起交给用户（`runtime/answers.py`），出现在用户正在看的会话里；临时 agent 超过请求数上限时，这次已共享的文件不交付，由调用方拆分后重做时重新共享。
 - **一致性**：内容先写临时文件再改名到最终位置，之后才插入元数据行；失败即上传失败，没有 id 就没有引用。中途被杀留下的临时文件由启动时 `FileStore.recover` 清掉；有内容没元数据的孤儿只占空间，访问不到，同样内容再上传时复用。
 
+### 向用户提问（ask_user）
+
+做法同 Claude Code 的 AskUserQuestion、Codex 的提问：一次 1 到 4 个选择题（单选或多选，每题 2 到 6 个选项），界面上每题总能在「其他」里自己写。只在这一轮的回答交给用户（`reply_to = user`）时提供，由工具的 `prepare` 隐藏：`ask_agent` 的私有 thread、触发器、反思与临时 agent 里没有人会回答（`runtime/tools/ask_user.py`）。
+
+- **一轮停在提问上，不在 worker 里等人**：工具抛出 pydantic-ai 的 `CallDeferred`，这一轮正常结束、提交（调用暂时没有结果），并通知用户「等你回答：…」。会话里还在等回答的提问由历史推导（没有结果的 `ask_user` 调用，`runtime.questions.pending_questions`；「调用是否已有结果」只在 `transcript.unanswered_calls` 定义一处，参数被拒绝、交还模型重试的调用也算有结果），不另存状态。每一轮都会关闭之前挂起的提问，所以挂起的提问只可能在最后一轮里。
+- **回答 = 新的一轮，且必须紧接在提问那一轮后面**：界面把回答随消息提交（`answers: {tool_call_id: [每题的回答]}`，可以没有文字）。会话里有排队或运行中的轮次时（它会先执行并把提问记为没回答），或有失败待重试的回答时（它还占着这次提问），不接受回答，会话接口的 `pending_questions` 也为空、界面不显示表单（`answering_blocked`，receive 与接口同一条规则）；失败的回答只能重试，若之后已经跑过别的轮次，提问已被关闭，重试以明确的错误失败。`conversation.receive` 还校验选项属于该题、单选至多一个、每题都有选择或「其他」，然后把交给模型的结果（`AskResult`：`answered` 加每题的选择，或没回答时的说明）写进 turn task 的 payload，执行时作为 `DeferredToolResults` 交回，模型看到的就是这次调用的结果；界面也从这份结构化结果展示已回答的提问。
+- **不回答、直接发消息**：pydantic-ai 拒绝在未处理的调用后追加新消息，所以这一轮把所有挂起的提问显式记为「用户没回答、发了新消息」，结果随这一轮持久化，提问不再显示为待回答。
+- **展示**：提问不收进过程组。待回答的显示为表单；已回答的显示问题与选择；参数被工具 schema 拒绝的调用（模型写错了，已作为可纠正的错误交还）按普通工具错误展示。
+
 ## 5. 上下文压缩
 
 与模型提供方无关的统一机制（`runtime/compaction.py`）。pydantic-ai 只为 Anthropic 与 OpenAI Responses 提供原生压缩，`openai` 兼容接口和 Gemini 没有，按提供方分支会产生两套语义，所以统一自己实现：
 
 - **触发**：一轮结束时，最后一次模型请求的输入 token（pydantic-ai 已计入缓存 token）超过 `runtime.compaction_threshold_tokens`，在提交该轮的同一事务里投递 `compaction` task；也可在会话页手动触发。它与 turn 同一 lane，同一 session 最多一个待执行的压缩。排在已经排队的用户消息之后，所以那些轮次仍带完整上下文运行。模型不返回 usage（部分 OpenAI 兼容服务流式时如此）时记 warn 日志，自动触发对该模型失效。
-- **执行**：把最近 `runtime.compaction_keep_turns` 轮之前的消息连同上一份摘要交给该 agent 的模型总结，写入 `compactions` 表（`through_message_id` + `summary`）。切点总在两轮之间，工具调用与其返回不会被拆开。单次只取总长不超过上限的最早若干轮，不截断内容；剩余部分在同一事务里续排下一次压缩，直到收敛。没有可压缩的轮次时什么也不做。
+- **执行**：把最近 `runtime.compaction_keep_turns` 轮之前的消息连同上一份摘要交给该 agent 的模型总结，写入 `compactions` 表（`through_message_id` + `summary`）。切点总在两轮之间，工具调用与其返回不会被拆开：一轮停在挂起的调用上（`ask_user` 等回答）时，它和给出结果的后续轮次算作一组，切点不会落在中间。单次只取总长不超过上限的最早若干轮，不截断内容；剩余部分在同一事务里续排下一次压缩，直到收敛。没有可压缩的轮次时什么也不做。
 - **使用**：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息。原始消息不删除，UI 显示完整原文并标出压缩点；反思读取的仍是原始消息。
 
 ## 6. 数据库迁移

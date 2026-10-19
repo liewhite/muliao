@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Item } from './api'
-import { groupSteps, stepAttachments, summarizeSteps, toBlocks, type Step } from './blocks'
+import { askResult, groupSteps, stepAttachments, summarizeSteps, toBlocks, type Step } from './blocks'
 
 const item = (type: Item['type'], text: string, tool_call_id: string | null = null): Item => ({
   type,
@@ -100,5 +100,28 @@ describe('summarizeSteps', () => {
     })
     expect(summarizeSteps([tool('ok')])).toEqual({ label: '1 次工具调用', running: null, failed: 0 })
     expect(summarizeSteps([{ kind: 'thinking', text: 'x' }]).label).toBe('思考')
+  })
+})
+
+describe('ask_user blocks', () => {
+  const ask = (type: Item['type'], text: string): Item => ({ ...item(type, text, 'q1'), tool_name: 'ask_user' })
+
+  it('keeps questions outside the step groups as their own interaction', () => {
+    const views = groupSteps(toBlocks([item('tool_call', '{}', 'a'), ask('tool_call', '{}'), item('tool_call', '{}', 'b')]))
+    expect(views.map((v) => v.kind)).toEqual(['process', 'ask', 'process'])
+  })
+
+  it('records the answer as the result, and shows a rejected call as a failed tool step', () => {
+    const answered = toBlocks([ask('tool_call', '{}'), ask('tool_result', '{"answered":true,"answers":[],"note":null}')])
+    expect(answered).toEqual([{ kind: 'ask', ask: { callId: 'q1', result: '{"answered":true,"answers":[],"note":null}' } }])
+    const rejected = toBlocks([ask('tool_call', '{"questions": []}'), ask('tool_error', 'too short')])
+    expect(rejected.map((b) => (b.kind === 'tool' ? [b.kind, b.tool.failed] : [b.kind]))).toEqual([['tool', true]])
+  })
+
+  it('reads whether and how the questions were answered from the result', () => {
+    expect(askResult('{"answered":true,"answers":[{"question":"q","selected":[],"other":"x"}],"note":null}').answers).toEqual([
+      { question: 'q', selected: [], other: 'x' },
+    ])
+    expect(askResult('{"answered":false,"answers":[],"note":"skipped"}').answered).toBe(false)
   })
 })

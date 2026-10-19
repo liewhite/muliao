@@ -219,7 +219,7 @@ def test_unfinished_uploads_are_removed_on_recover(container):
     assert list(tmp.iterdir()) == []
 
 
-def test_migration_adds_empty_attachments_to_existing_turns(tmp_path):
+def test_migrations_add_empty_attachments_and_answers_to_existing_turns(tmp_path):
     path = tmp_path / "m.db"
     migrate(path, "4a351a020890")
     with sqlite3.connect(path) as conn:
@@ -231,7 +231,7 @@ def test_migration_adds_empty_attachments_to_existing_turns(tmp_path):
     migrate(path)
     with sqlite3.connect(path) as conn:
         payload = conn.execute("SELECT payload FROM tasks").fetchone()[0]
-    assert json.loads(payload) == {"prompt": "hi", "reply_to": "user", "attachments": []}
+    assert json.loads(payload) == {"prompt": "hi", "reply_to": "user", "attachments": [], "answers": {}}
 
 
 async def test_image_from_an_earlier_turn_is_still_expanded_after_loading_history(

@@ -9,6 +9,7 @@ from muliao.container import Container
 from muliao.errors import NotFound
 from muliao.models import Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.conversation import Inbound, NewSession
+from muliao.runtime.questions import AskResult, Question, QuestionAnswer, answerable_questions
 from muliao.runtime.sessions import default_title
 from muliao.transcript import Item, to_items
 
@@ -57,6 +58,8 @@ class TaskOut(BaseModel):
     prompt: str | None
     # turn 随消息发送的文件
     attachments: list[FileOut]
+    # turn 带的对挂起提问的回答：tool_call_id -> 交给模型的结果
+    answers: dict[str, AskResult]
     not_before: datetime
     created_at: datetime
     finished_at: datetime | None
@@ -73,6 +76,7 @@ class TaskOut(BaseModel):
             error=t.error,
             prompt=t.payload["prompt"] if t.kind == TaskKind.TURN else None,
             attachments=[files[i] for i in _attachment_ids(t)],
+            answers=t.payload["answers"] if t.kind == TaskKind.TURN else {},
             not_before=t.not_before,
             created_at=t.created_at,
             finished_at=t.finished_at,
@@ -96,6 +100,13 @@ class CompactionOut(BaseModel):
     created_at: datetime
 
 
+class PendingQuestionsOut(BaseModel):
+    """一次还在等用户回答的 ask_user 提问；回答时用 tool_call_id 引用它。"""
+
+    tool_call_id: str
+    questions: list[Question]
+
+
 class SessionDetail(BaseModel):
     session: SessionOut
     items: list[Item]
@@ -105,6 +116,8 @@ class SessionDetail(BaseModel):
     open_turns: list[TaskOut]
     # 这个会话开出的 thread
     threads: list[SessionOut]
+    # 现在可以回答的提问（已提交的回答显示在 open_turns 里）
+    pending_questions: list[PendingQuestionsOut]
 
 
 class StartIn(BaseModel):
@@ -117,6 +130,8 @@ class StartIn(BaseModel):
 class ReplyIn(BaseModel):
     prompt: str
     attachments: list[str] = []
+    # 对挂起提问的回答（见 SessionDetail.pending_questions）；只回答时 prompt 可以为空
+    answers: dict[str, list[QuestionAnswer]] = {}
 
 
 @router.get("/sessions")
@@ -151,25 +166,30 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
 @router.get("/sessions/{session_id}")
 async def get_session(c: C, session_id: str) -> SessionDetail:
     session = await c.sessions.get(session_id)
+    history = await c.sessions.history_with_ids(session_id)
     items = [
-        {**item, "message_id": message_id}
-        for message_id, message in await c.sessions.history_with_ids(session_id)
-        for item in to_items([message])
+        {**item, "message_id": message_id} for message_id, message in history for item in to_items([message])
     ]
     compactions = [
         CompactionOut(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
         for x in await c.sessions.compactions(session_id)
     ]
     tasks = await c.queue.list(status=None, session_id=session_id, limit=50)
-    open_turns = await task_outs(
-        c, [t for t in reversed(tasks) if t.kind == TaskKind.TURN and t.status != TaskStatus.DONE]
-    )
+    open_tasks = [t for t in reversed(tasks) if t.kind == TaskKind.TURN and t.status != TaskStatus.DONE]
+    open_turns = await task_outs(c, open_tasks)
+    # 与 receive 同一个判断：有会先执行的轮次时提问已不能回答，不显示表单
+    async with c.db.transaction() as s:
+        pending = await answerable_questions(s, session_id) or {}
     return SessionDetail(
         session=SessionOut.of(session),
         items=items,
         compactions=compactions,
         open_turns=open_turns,
         threads=[SessionOut.of(t) for t in await c.sessions.threads(session_id)],
+        pending_questions=[
+            PendingQuestionsOut(tool_call_id=call_id, questions=questions)
+            for call_id, questions in pending.items()
+        ],
     )
 
 
@@ -183,6 +203,7 @@ async def reply(c: C, session_id: str, body: ReplyIn) -> TaskOut:
             session=session_id,
             reply_to=ReplyTo.USER,
             attachments=tuple(body.attachments),
+            answers=body.answers,
         )
     )
     return (await task_outs(c, [received.turn]))[0]

@@ -101,9 +101,50 @@ export interface Task {
   prompt: string | null
   /** turn 随消息发送的文件 */
   attachments: FileInfo[]
+  /** turn 带的对挂起提问的回答：tool_call_id -> 交给模型的结果 */
+  answers: Record<string, AskResult>
   not_before: string
   created_at: string
   finished_at: string | null
+}
+
+/** ask_user 提问（后端 runtime/questions.py 的 Question）；工具名与后端 ASK_USER 一致 */
+export const ASK_USER = 'ask_user'
+
+export interface QuestionOption {
+  label: string
+  description: string
+}
+
+export interface Question {
+  question: string
+  header: string
+  options: QuestionOption[]
+  multi_select: boolean
+}
+
+/** 用户对一题的回答：选中的选项和/或「其他」里写的文字 */
+export interface QuestionAnswer {
+  selected: string[]
+  other: string | null
+}
+
+export interface AnsweredQuestion {
+  question: string
+  selected: string[]
+  other: string | null
+}
+
+/** 一次提问交给模型的结果（后端 runtime/questions.py 的 AskResult）：用户回答了，或没回答就发了新消息 */
+export interface AskResult {
+  answered: boolean
+  answers: AnsweredQuestion[]
+  note: string | null
+}
+
+export interface PendingQuestions {
+  tool_call_id: string
+  questions: Question[]
 }
 
 export interface SessionDetail {
@@ -112,6 +153,8 @@ export interface SessionDetail {
   compactions: CompactionInfo[]
   open_turns: Task[]
   threads: Session[]
+  /** 还在等回答、也还没提交回答的提问 */
+  pending_questions: PendingQuestions[]
 }
 
 export interface SkillMeta {
@@ -297,6 +340,9 @@ export const api = {
     post<Session>('/api/sessions', { agent_id, prompt, attachments }),
   reply: (id: string, prompt: string, attachments: string[]) =>
     post<Task>(`/api/sessions/${id}/messages`, { prompt, attachments }),
+  /** 回答挂起的提问：作为这次 ask_user 调用的结果交回模型 */
+  answer: (id: string, toolCallId: string, answers: QuestionAnswer[]) =>
+    post<Task>(`/api/sessions/${id}/messages`, { prompt: '', answers: { [toolCallId]: answers } }),
   /** 请求体就是文件内容，Content-Type 是它的类型；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
   uploadFile: (file: File) =>
     send<FileInfo>('POST', FILES_PATH, { name: file.name }, { type: file.type || 'application/octet-stream', data: file }),

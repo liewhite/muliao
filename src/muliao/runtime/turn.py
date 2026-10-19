@@ -10,9 +10,10 @@
 import asyncio
 import logging
 import weakref
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from pydantic_ai import DeferredToolRequests, DeferredToolResults
 from pydantic_ai.messages import ModelMessage
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,13 @@ from muliao.runtime.answers import Answer
 from muliao.runtime.attachments import copy_to_workspace, references
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import CompactionScheduler, load_context
+from muliao.runtime.questions import (
+    ASK_USER,
+    deferred_results,
+    pending_questions,
+    questions_of,
+    waiting_text,
+)
 from muliao.runtime.redaction import redact_messages
 from muliao.runtime.runner import AgentRuntime, ToolGroups
 from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane, turn_lane
@@ -38,6 +46,30 @@ class TurnOutput:
     agent_id: str
     answer: str
     messages: list[ModelMessage]
+
+
+def _deferred(history: Sequence[ModelMessage], answers: Mapping[str, object]) -> DeferredToolResults | None:
+    """历史里还挂着的提问都要在这一轮得到结果：用户的回答，或「没回答」。回答只能针对挂起的提问（receive 已校验）。"""
+    pending = pending_questions(history)
+    if stray := set(answers) - set(pending):
+        # receive 只在没有会先执行的轮次时接受回答；走到这里是重试一个失败的回答，而之后又跑过别的轮次关闭了提问
+        raise RuntimeError(
+            f"answers to {sorted(stray)} are void: a later turn already closed these questions as unanswered"
+        )
+    return DeferredToolResults(calls=deferred_results(pending, answers)) if pending else None
+
+
+def _answer_text(output: str | DeferredToolRequests) -> str:
+    """一轮的回答；停在提问上时是问题列表（用于通知与 ask_agent 之外的展示）。"""
+    if isinstance(output, str):
+        return output
+    if output.approvals or any(c.tool_name != ASK_USER for c in output.calls):
+        # 只有 ask_user 会挂起；其他挂起说明工具与这里的约定不一致
+        raise RuntimeError(
+            f"turn deferred unexpected tool calls: calls={[c.tool_name for c in output.calls]} "
+            f"approvals={[c.tool_name for c in output.approvals]}"
+        )
+    return waiting_text([q for c in output.calls for q in questions_of(c)])
 
 
 async def _load(s: AsyncSession, session_id: str) -> tuple[Session, Agent]:
@@ -72,15 +104,23 @@ class TurnRunner:
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     async def run(
-        self, session_id: str, prompt: str, attachments: Sequence[str], reply_to: ReplyTo
+        self,
+        session_id: str,
+        prompt: str,
+        attachments: Sequence[str],
+        answers: Mapping[str, object],
+        reply_to: ReplyTo,
     ) -> TurnOutput:
+        """answers：用户对挂起提问的回答（tool_call_id -> 交给模型的结果，已在 receive 校验），见 runtime.questions。"""
         async with self._db.transaction() as s:
             session, agent = await _load(s, session_id)
             context = await load_context(s, session.id)
         scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, reply_to=reply_to)
         files = await self._files.referenced(attachments)
         await copy_to_workspace(self._files, files, scope.workspace)
-        user_prompt = [*([prompt] if prompt.strip() else []), *references(files)] if files else prompt
+        content = [*([prompt] if prompt.strip() else []), *references(files)]
+        # 只回答了提问的一轮没有新的用户消息
+        user_prompt = (content if files else prompt) if content else None
         result = await self._runtime.run(
             agent,
             scope,
@@ -88,8 +128,11 @@ class TurnRunner:
             context.messages,
             self._tool_groups.profile(agent.id, agent.tool_groups),
             summary=context.summary,
+            deferred=_deferred(context.messages, answers),
         )
-        return TurnOutput(session.id, agent.id, result.output, redact_messages(result.new_messages()))
+        return TurnOutput(
+            session.id, agent.id, _answer_text(result.output), redact_messages(result.new_messages())
+        )
 
     async def commit_in(self, s: AsyncSession, turn_id: int, out: TurnOutput, reply_to: ReplyTo) -> None:
         """在调用方事务里提交一轮的全部结果。"""
@@ -120,7 +163,7 @@ class TurnRunner:
             started = utcnow()
             log.info("inline turn started", extra={"session_id": session_id})
             try:
-                out = await self.run(session_id, prompt, (), reply_to)
+                out = await self.run(session_id, prompt, (), {}, reply_to)
                 async with self._db.transaction() as s:
                     # 先确认 thread 还在：运行期间被删除时给出可定位的错误，而不是外键冲突
                     await _load(s, session_id)
@@ -130,7 +173,7 @@ class TurnRunner:
                         lane=turn_lane(session_id),
                         agent_id=out.agent_id,
                         session_id=session_id,
-                        payload={"prompt": prompt, "reply_to": reply_to, "attachments": []},
+                        payload={"prompt": prompt, "reply_to": reply_to, "attachments": [], "answers": {}},
                         started_at=started,
                     )
                     await s.flush()
@@ -174,7 +217,11 @@ class TurnHandler:
             raise RuntimeError(f"turn task {task.id} has no session")
         reply_to = ReplyTo(task.payload["reply_to"])
         out = await self._runner.run(
-            task.session_id, task.payload["prompt"], task.payload["attachments"], reply_to
+            task.session_id,
+            task.payload["prompt"],
+            task.payload["attachments"],
+            task.payload["answers"],
+            reply_to,
         )
 
         async def commit(s: AsyncSession) -> None:

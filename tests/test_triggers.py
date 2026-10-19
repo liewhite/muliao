@@ -37,7 +37,12 @@ async def test_schedule_fires_new_session_without_notifying_and_schedules_next(c
     assert len(sessions) == 1
     assert sessions[0].origin_ref == str(trigger.id)
     turn = (await container.queue.list(status=None, session_id=sessions[0].id, limit=1))[0]
-    assert turn.payload == {"prompt": "check slack", "reply_to": ReplyTo.NONE, "attachments": []}
+    assert turn.payload == {
+        "prompt": "check slack",
+        "reply_to": ReplyTo.NONE,
+        "attachments": [],
+        "answers": {},
+    }
     trigger = await triggers.get_by_name("slack")
     assert trigger.last_session_id == sessions[0].id
     assert datetime.fromisoformat(trigger.state["next_run_at"]) > datetime.now().astimezone()

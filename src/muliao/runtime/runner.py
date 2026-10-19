@@ -4,10 +4,11 @@ import logging
 from collections.abc import AsyncIterable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent as PaiAgent
-from pydantic_ai import AgentRunResult, RunContext, UsageLimits
+from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, RunContext, UsageLimits
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
@@ -151,12 +152,15 @@ class AgentRuntime:
         self,
         agent: Agent,
         scope: RunScope,
-        prompt: str | Sequence[UserContent],
+        prompt: str | Sequence[UserContent] | None,
         history: Sequence[ModelMessage],
         profile: RunProfile,
         *,
         summary: str | None = None,
-    ) -> AgentRunResult[str]:
+        deferred: DeferredToolResults | None = None,
+    ) -> AgentRunResult[str | DeferredToolRequests]:
+        """对话的一轮。可以停在挂起的工具调用上（ask_user，见 runtime.questions）：输出为 DeferredToolRequests；
+        之后带着 deferred（用户的回答）再跑一轮就从那里继续，此时 prompt 可以为空。"""
         return await self._execute(
             model=agent.model,
             instructions=await self.instructions(agent, scope, summary),
@@ -164,6 +168,8 @@ class AgentRuntime:
             scope=scope,
             prompt=prompt,
             history=history,
+            output_type=[str, DeferredToolRequests],
+            deferred=deferred,
         )
 
     async def run_temp(
@@ -213,10 +219,12 @@ class AgentRuntime:
         instructions: str,
         toolsets: list[AbstractToolset[RunScope]],
         scope: RunScope,
-        prompt: str | Sequence[UserContent],
+        prompt: str | Sequence[UserContent] | None,
         history: Sequence[ModelMessage],
+        output_type: Any = str,
+        deferred: DeferredToolResults | None = None,
         usage_limits: UsageLimits | None = None,
-    ) -> AgentRunResult[str]:
+    ) -> AgentRunResult[Any]:
         ctx = {
             "agent": scope.agent_id,
             "session_id": scope.session_id,
@@ -233,6 +241,8 @@ class AgentRuntime:
             toolsets=toolsets,
             event_stream_handler=self._forward_events,
             usage_limits=usage_limits,
+            output_type=output_type,
+            deferred_tool_results=deferred,
         )
         usage = result.usage
         log.info(
