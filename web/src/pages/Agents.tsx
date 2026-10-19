@@ -20,6 +20,7 @@ import { ActionButton,
   Loading,
   Markdown,
   Page,
+  SelectInput,
   TextAreaInput,
   TextInput,
   ToggleSwitch,
@@ -124,6 +125,46 @@ function ToolGroupsInput({ all, value, onChange }: { all: string[]; value: strin
   )
 }
 
+/** agent 的模型 "<provider 名>:<模型名>"：provider 来自服务端配置，模型名向该 provider 实时查询 */
+function ModelInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const sep = value.indexOf(':')
+  const provider = sep > 0 ? value.slice(0, sep) : null
+  const model = sep > 0 ? value.slice(sep + 1) : ''
+  const providers = useLoad(() => api.providers(), [])
+  const models = useLoad(() => (provider ? api.providerModels(provider) : Promise.resolve([])), [provider])
+  const listed = models.data ?? []
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <SelectInput
+          label="Provider"
+          hint="来自服务端配置的 [llm.providers]"
+          value={provider}
+          // 换 provider 后模型需重新选择；未选就保存会被服务端拒绝
+          onChange={(p) => onChange(`${p}:`)}
+          options={(providers.data ?? []).map((p) => ({ id: p, label: p }))}
+          isDisabled={providers.loading}
+        />
+        <SelectInput
+          label="模型"
+          hint={
+            model && !models.loading && !listed.includes(model)
+              ? `当前为 ${model}，不在 provider 返回的列表中`
+              : '向 provider 实时查询'
+          }
+          value={model || null}
+          onChange={(m) => onChange(`${provider}:${m}`)}
+          options={listed.map((m) => ({ id: m, label: m }))}
+          placeholder={models.loading ? '查询中…' : '请选择'}
+          isDisabled={!provider || models.loading}
+        />
+      </div>
+      <ErrorAlert error={providers.error} title="读取 provider 失败" />
+      <ErrorAlert error={models.error} title="查询模型失败" />
+    </div>
+  )
+}
+
 function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: AgentDefaults; onSaved: (a: Agent) => void }) {
   const [input, setInput] = useState<AgentInput>(() => initialInput(agent, defaults))
   const action = useAction()
@@ -153,13 +194,7 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         onChange={(description) => set({ description })}
         isRequired
       />
-      <TextInput
-        label="模型"
-        hint="<provider 名>:<模型名>，provider 名来自服务端配置的 [llm.providers]，如 claude:claude-opus-5-5"
-        value={input.model ?? ''}
-        onChange={(model) => set({ model: model || null })}
-        mono
-      />
+      <ModelInput value={input.model ?? ''} onChange={(model) => set({ model })} />
       <TextAreaInput
         label="指令（system prompt）"
         value={input.instructions}

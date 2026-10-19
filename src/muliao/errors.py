@@ -1,5 +1,5 @@
 class DomainError(Exception):
-    """领域层错误的基类。API 层映射为 4xx；工具层映射为 ModelRetry 交还给模型修正。"""
+    """领域层错误的基类。API 层映射为 4xx（上游失败为 502）；工具层映射为 ModelRetry 交还给模型修正。"""
 
 
 class NotFound(DomainError):
@@ -24,6 +24,10 @@ class Forbidden(DomainError):
 
 class TooLarge(DomainError):
     """输入超过契约规定的大小上限。"""
+
+
+class UpstreamFailed(DomainError):
+    """同步调用的外部服务（如 LLM provider）报错或不可达；原因原样带出，由调用方决定是否重试。"""
 
 
 class TransientError(Exception):

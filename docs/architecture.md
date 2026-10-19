@@ -109,7 +109,7 @@ Web / 触发器（定时、webhook……）/ delegate_task
   - `vault`：`vault_list` / `vault_set` / `vault_delete`（scope = `private` | `public`，默认私有）。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
   - `triggers`：`trigger_kinds` / `trigger_list` / `trigger_create(name, kind, prompt, config, agent?)` / `trigger_update` / `trigger_run` / `trigger_delete`，一组工具覆盖所有触发方式，差异只在 `kind` 与 `config`。agent 同样按名称指定。webhook 的 token 只能由用户在界面上生成，agent 拿不到也不需要。
   - 该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀；配置中的 `${vault:KEY}` 在运行时按 server 归属者的视角解析（公共 server 只能引用公共 secret），引用不可见的 key 直接报错。
-- **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。
+- **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。界面上选模型时，provider 下拉框来自配置（`GET /api/providers`），模型名由 `ModelRegistry.list_models` 向该 provider 实时查询（`GET /api/providers/{name}/models`，即各家的 models 接口），不维护本地模型清单；查询失败返回 502 并带上原因，不用猜测的列表兜底。
 
 ## 4. 会话领域：thread 与结果路由
 

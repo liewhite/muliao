@@ -241,6 +241,10 @@ export const api = {
 
   agents: () => get<Agent[]>('/api/agents'),
   agentDefaults: () => get<AgentDefaults>('/api/agent-defaults'),
+  /** 服务端配置的 LLM provider 名 */
+  providers: () => get<string[]>('/api/providers'),
+  /** 向 provider 实时查询的模型名 */
+  providerModels: (provider: string) => get<string[]>(`/api/providers/${encodeURIComponent(provider)}/models`),
   agent: (id: AgentId) => get<Agent>(`/api/agents/${id}`),
   createAgent: (input: AgentInput) => post<Agent>('/api/agents', input),
   updateAgent: (id: AgentId, input: AgentInput) => put<Agent>(`/api/agents/${id}`, input),

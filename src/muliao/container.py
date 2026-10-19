@@ -91,6 +91,7 @@ class Container:
     vapid: VapidKeys
     worker: Worker
     compaction: CompactionScheduler
+    models: ModelRegistry
     _model_checker: Callable[[str], None]
     _background: list[asyncio.Task[None]] = field(default_factory=list)
 
@@ -292,5 +293,6 @@ def build_container(
         vapid=vapid,
         worker=worker,
         compaction=compaction,
+        models=models,
         _model_checker=model_checker or models.check,
     )
