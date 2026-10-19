@@ -3,58 +3,10 @@ import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/
 import { Archive, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentRoute, api, type Agent, type Attachment, type CompactionInfo, type Item, type Task, type Session } from '../api'
+import { groupSteps, summarizeSteps, toBlocks, toolStatus, type Step, type ToolStatus, type ToolView } from '../blocks'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
 import { liveToItems, useServerEvents, type RunEvent } from '../events'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
-
-interface ToolView {
-  name: string
-  args: string
-  result: string | null
-  failed: boolean
-}
-
-type Block =
-  | { kind: 'user'; text: string; attachments: Attachment[] }
-  | { kind: 'assistant'; text: string }
-  | { kind: 'thinking'; text: string }
-  | { kind: 'tool'; tool: ToolView }
-
-/** 把扁平条目整理成展示块：工具调用与其结果（按 tool_call_id）合并为一块。 */
-function toBlocks(items: Item[]): Block[] {
-  const blocks: Block[] = []
-  const tools = new Map<string, ToolView>()
-  for (const item of items) {
-    switch (item.type) {
-      case 'user':
-        blocks.push({ kind: 'user', text: item.text, attachments: item.attachments })
-        break
-      case 'assistant':
-      case 'thinking':
-        blocks.push({ kind: item.type, text: item.text })
-        break
-      case 'tool_call': {
-        const tool: ToolView = { name: item.tool_name ?? '?', args: item.text, result: null, failed: false }
-        if (item.tool_call_id) tools.set(item.tool_call_id, tool)
-        blocks.push({ kind: 'tool', tool })
-        break
-      }
-      case 'tool_result':
-      case 'tool_error': {
-        const tool = item.tool_call_id ? tools.get(item.tool_call_id) : undefined
-        if (tool) {
-          tool.result = item.text
-          tool.failed = item.type === 'tool_error'
-        } else {
-          // 没有对应调用的错误（如输出校验重试）单独展示
-          blocks.push({ kind: 'tool', tool: { name: item.tool_name ?? 'retry', args: '', result: item.text, failed: true } })
-        }
-        break
-      }
-    }
-  }
-  return blocks
-}
 
 function Collapsible({ title, tone = 'default', children }: { title: ReactNode; tone?: 'default' | 'danger'; children: ReactNode }) {
   return (
@@ -76,15 +28,17 @@ function Collapsible({ title, tone = 'default', children }: { title: ReactNode; 
   )
 }
 
+const TOOL_STATUS_LABELS: Record<ToolStatus, string> = { running: '运行中', failed: '出错', done: '完成' }
+
 function ToolBlock({ tool }: { tool: ToolView }) {
-  const status = tool.result === null ? '运行中' : tool.failed ? '出错' : '完成'
+  const status = toolStatus(tool)
   return (
     <Collapsible
-      tone={tool.failed ? 'danger' : 'default'}
+      tone={status === 'failed' ? 'danger' : 'default'}
       title={
         <>
           <span className="font-mono text-foreground">{tool.name}</span>
-          <span className="ml-auto text-xs">{status}</span>
+          <span className="ml-auto whitespace-nowrap text-xs">{TOOL_STATUS_LABELS[status]}</span>
         </>
       }
     >
@@ -107,27 +61,55 @@ function UserBubble({ text, attachments, pending }: { text: string; attachments:
   )
 }
 
+function StepBlock({ step }: { step: Step }) {
+  return step.kind === 'tool' ? (
+    <ToolBlock tool={step.tool} />
+  ) : (
+    <Collapsible title="思考">
+      <div className="whitespace-pre-wrap">{step.text}</div>
+    </Collapsible>
+  )
+}
+
+/** 连续的思考与工具调用收成一组，默认折叠；标题汇总步骤数与状态，展开后每一步仍可单独展开 */
+function StepsGroup({ steps }: { steps: Step[] }) {
+  const { label, running, failed } = summarizeSteps(steps)
+  const status = running !== null ? `运行中：${running}` : failed > 0 ? `${failed} 次出错` : '完成'
+  return (
+    <Collapsible
+      tone={failed > 0 ? 'danger' : 'default'}
+      title={
+        <>
+          {running !== null && <Spinner size="sm" />}
+          <span className="text-foreground">{label}</span>
+          <span className="ml-auto whitespace-nowrap text-xs">{status}</span>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-2">
+        {steps.map((step, i) => (
+          <StepBlock key={i} step={step} />
+        ))}
+      </div>
+    </Collapsible>
+  )
+}
+
 function Blocks({ items }: { items: Item[] }) {
   return (
     <>
-      {toBlocks(items).map((b, i) => {
-        switch (b.kind) {
+      {groupSteps(toBlocks(items)).map((v, i) => {
+        switch (v.kind) {
           case 'user':
-            return <UserBubble key={i} text={b.text} attachments={b.attachments} />
+            return <UserBubble key={i} text={v.text} attachments={v.attachments} />
           case 'assistant':
             return (
               <div key={i} className="max-w-[88%] self-start rounded-2xl rounded-bl-md bg-surface px-3.5 py-2.5 shadow-sm">
-                <Markdown text={b.text} />
+                <Markdown text={v.text} />
               </div>
             )
-          case 'thinking':
-            return (
-              <Collapsible key={i} title="思考">
-                <div className="whitespace-pre-wrap">{b.text}</div>
-              </Collapsible>
-            )
-          case 'tool':
-            return <ToolBlock key={i} tool={b.tool} />
+          case 'process':
+            return <StepsGroup key={i} steps={v.steps} />
         }
       })}
     </>

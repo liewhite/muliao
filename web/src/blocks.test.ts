@@ -1,0 +1,83 @@
+import { describe, expect, it } from 'vitest'
+import type { Item } from './api'
+import { groupSteps, summarizeSteps, toBlocks, type Step } from './blocks'
+
+const item = (type: Item['type'], text: string, tool_call_id: string | null = null): Item => ({
+  type,
+  text,
+  tool_name: tool_call_id ? 'run_shell' : null,
+  tool_call_id,
+  message_id: null,
+  attachments: [],
+})
+
+describe('groupSteps', () => {
+  it('folds consecutive thinking and tool calls into one group and keeps narration outside', () => {
+    const views = groupSteps(
+      toBlocks([
+        item('user', '分析 ETH'),
+        item('thinking', '先测网络'),
+        item('assistant', '我来拉取实时数据'),
+        item('tool_call', '{}', 'a'),
+        item('tool_result', 'ok', 'a'),
+        item('tool_call', '{}', 'b'),
+        item('tool_result', 'ok', 'b'),
+        item('assistant', '网络可用'),
+        item('thinking', '拉 K 线'),
+        item('tool_call', '{}', 'c'),
+      ]),
+    )
+    expect(views.map((v) => (v.kind === 'process' ? `process:${v.steps.length}` : v.kind))).toEqual([
+      'user',
+      'process:1',
+      'assistant',
+      'process:2',
+      'assistant',
+      'process:2',
+    ])
+  })
+})
+
+describe('streaming stability', () => {
+  // 渲染按下标作 key：流式追加（含后到的工具结果回写）时，已有视图的位置与组的起点不能变，否则用户展开的组会被重新挂载而折叠
+  it('only ever grows views at the end as items stream in', () => {
+    const items = [
+      item('thinking', 'a'),
+      item('tool_call', '{}', 'c1'),
+      item('assistant', '说明'),
+      item('tool_call', '{}', 'c2'),
+      item('tool_result', 'ok', 'c1'),
+      item('tool_error', 'orphan'),
+      item('tool_result', 'ok', 'c2'),
+      item('assistant', '结论'),
+    ]
+    const shape = (n: number) =>
+      groupSteps(toBlocks(items.slice(0, n))).map((v) => (v.kind === 'process' ? 'process' : v.kind))
+    for (let n = 1; n < items.length; n++) {
+      const before = shape(n)
+      expect(shape(n + 1).slice(0, before.length)).toEqual(before)
+    }
+    // 找不到对应调用的错误单独成步，并进所在的组
+    const last = groupSteps(toBlocks(items))
+    expect(last.map((v) => (v.kind === 'process' ? `process:${v.steps.length}` : v.kind))).toEqual([
+      'process:2',
+      'assistant',
+      'process:2',
+      'assistant',
+    ])
+  })
+})
+
+describe('summarizeSteps', () => {
+  const tool = (result: string | null, failed = false): Step => ({ kind: 'tool', tool: { name: 'run_shell', args: '', result, failed } })
+
+  it('counts tool calls, mentions thinking, and reports the running tool and failures', () => {
+    expect(summarizeSteps([{ kind: 'thinking', text: 'x' }, tool('ok'), tool('err', true), tool(null)])).toEqual({
+      label: '思考 · 3 次工具调用',
+      running: 'run_shell',
+      failed: 1,
+    })
+    expect(summarizeSteps([tool('ok')])).toEqual({ label: '1 次工具调用', running: null, failed: 0 })
+    expect(summarizeSteps([{ kind: 'thinking', text: 'x' }]).label).toBe('思考')
+  })
+})
