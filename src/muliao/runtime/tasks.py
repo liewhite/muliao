@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import event, select, update
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -37,8 +37,40 @@ def reflection_lane(agent_name: str) -> str:
     return f"reflection:{agent_name}"
 
 
-def deliver_lane(session_id: str | None, agent_name: str) -> str:
-    return f"deliver:{session_id or agent_name}"
+def deliver_lane(session_id: str | None, agent_name: str | None) -> str:
+    return f"deliver:{session_id or agent_name or 'system'}"
+
+
+def _claimable():  # noqa: ANN202
+    """可领取的 pending：它是所在 lane 最早的 pending，且该 lane 没有 running。claim 与 next_due 共用。"""
+    running = aliased(Task)
+    earlier = aliased(Task)
+    return (
+        select(Task)
+        .where(Task.status == TaskStatus.PENDING)
+        .where(
+            ~select(running.id)
+            .where(running.lane == Task.lane, running.status == TaskStatus.RUNNING)
+            .exists()
+        )
+        .where(
+            ~select(earlier.id)
+            .where(earlier.lane == Task.lane, earlier.status == TaskStatus.PENDING, earlier.id < Task.id)
+            .exists()
+        )
+    )
+
+
+async def running_task_ids(
+    s: AsyncSession, *, session_id: str | None = None, agent_name: str | None = None
+) -> list[int]:
+    """正在运行的 task id。删除 session/agent 前用它保证不会删掉执行中的工作。"""
+    query = select(Task.id).where(Task.status == TaskStatus.RUNNING)
+    if session_id is not None:
+        query = query.where(Task.session_id == session_id)
+    if agent_name is not None:
+        query = query.where(Task.agent_name == agent_name)
+    return list((await s.scalars(query)).all())
 
 
 class TaskQueue:
@@ -49,13 +81,16 @@ class TaskQueue:
         self._clock = clock
         self.wake = asyncio.Event()
 
+    def now(self) -> datetime:
+        return self._clock()
+
     def enqueue(
         self,
         s: AsyncSession,
         *,
         kind: TaskKind,
         lane: str,
-        agent_name: str,
+        agent_name: str | None,
         session_id: str | None,
         payload: dict[str, Any],
     ) -> Task:
@@ -74,26 +109,8 @@ class TaskQueue:
         return task
 
     async def claim(self) -> Task | None:
-        """领取一个可执行 task：它是所在 lane 最早的 pending，且该 lane 没有 running。"""
         now = self._clock()
-        running = aliased(Task)
-        earlier = aliased(Task)
-        query = (
-            select(Task)
-            .where(Task.status == TaskStatus.PENDING, Task.not_before <= now)
-            .where(
-                ~select(running.id)
-                .where(running.lane == Task.lane, running.status == TaskStatus.RUNNING)
-                .exists()
-            )
-            .where(
-                ~select(earlier.id)
-                .where(earlier.lane == Task.lane, earlier.status == TaskStatus.PENDING, earlier.id < Task.id)
-                .exists()
-            )
-            .order_by(Task.id)
-            .limit(1)
-        )
+        query = _claimable().where(Task.not_before <= now).order_by(Task.id).limit(1)
         async with self._db.transaction() as s:  # 事务串行化保证同一 task 不会被领取两次
             task = await s.scalar(query)
             if task is None:
@@ -101,7 +118,7 @@ class TaskQueue:
             task.status = TaskStatus.RUNNING
             task.attempts += 1
             task.started_at = now
-            task.error = None
+            # 保留上一次失败的 error，运行期间 UI 仍能看到为什么在重试
             return task
 
     async def complete(self, task_id: int, commit: Commit) -> None:
@@ -113,6 +130,7 @@ class TaskQueue:
                 )
             await commit(s)
             task.status = TaskStatus.DONE
+            task.error = None
             task.finished_at = self._clock()
         # 同 lane 的后续 task 现在可以领取了
         self.wake.set()
@@ -134,13 +152,13 @@ class TaskQueue:
         self.wake.set()
         return task
 
-    async def recover(self) -> int:
-        """启动时调用：上次进程遗留的 running 复位为 pending。"""
+    async def recover(self) -> list[Task]:
+        """启动时调用：上次进程遗留的 running 复位为 pending，返回被恢复的 task。"""
         async with self._db.transaction() as s:
-            result = await s.execute(
-                update(Task).where(Task.status == TaskStatus.RUNNING).values(status=TaskStatus.PENDING)
-            )
-            return result.rowcount
+            tasks = list((await s.scalars(select(Task).where(Task.status == TaskStatus.RUNNING))).all())
+            for task in tasks:
+                task.status = TaskStatus.PENDING
+            return tasks
 
     async def retry(self, task_id: int) -> Task:
         """人工重试一个 failed task。"""
@@ -158,13 +176,10 @@ class TaskQueue:
             return task
 
     async def next_due(self) -> datetime | None:
+        """最早一个「可领取、只是还没到时间」的 task 的时间；被同 lane 挡住的 task 由 complete/fail 唤醒。"""
+        claimable = _claimable().subquery()
         async with self._db.transaction() as s:
-            return await s.scalar(
-                select(Task.not_before)
-                .where(Task.status == TaskStatus.PENDING)
-                .order_by(Task.not_before)
-                .limit(1)
-            )
+            return await s.scalar(select(func.min(claimable.c.not_before)))
 
     async def list(self, *, status: TaskStatus | None, session_id: str | None, limit: int) -> list[Task]:
         query = select(Task).order_by(Task.id.desc()).limit(limit)

@@ -1,7 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -57,9 +56,6 @@ async def init_schema(engine: AsyncEngine) -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-_in_transaction: ContextVar[bool] = ContextVar("in_transaction", default=False)
-
-
 class Database:
     """事务入口。退出时提交，异常时回滚。
 
@@ -71,14 +67,17 @@ class Database:
         self.engine = engine
         self._factory = async_sessionmaker(engine, expire_on_commit=False)
         self._lock = asyncio.Lock()
+        self._holder: asyncio.Task[object] | None = None
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[AsyncSession]:
-        if _in_transaction.get():
+        current = asyncio.current_task()
+        if current is not None and current is self._holder:
             raise RuntimeError("nested Database.transaction() would deadlock; pass the open session instead")
-        token = _in_transaction.set(True)
-        try:
-            async with self._lock, self._factory() as s, s.begin():
-                yield s
-        finally:
-            _in_transaction.reset(token)
+        async with self._lock:
+            self._holder = current
+            try:
+                async with self._factory() as s, s.begin():
+                    yield s
+            finally:
+                self._holder = None

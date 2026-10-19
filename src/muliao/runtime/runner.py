@@ -29,6 +29,7 @@ from muliao.evolution.skills import SkillStore
 from muliao.models import Agent
 from muliao.runtime.instructions import build_instructions
 from muliao.runtime.mcp import McpRegistry
+from muliao.runtime.redaction import redact_call
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tasks import Clock
 from muliao.runtime.tools.errors import DomainErrorsAsRetry
@@ -145,13 +146,14 @@ class AgentRuntime:
             elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
                 self._bus.publish({**base, "event": "text", "text": event.delta.content_delta})
             elif isinstance(event, FunctionToolCallEvent):
+                call = redact_call(event.part)
                 self._bus.publish(
                     {
                         **base,
                         "event": "tool_call",
-                        "tool_name": event.part.tool_name,
-                        "tool_call_id": event.part.tool_call_id,
-                        "text": truncate(event.part.args_as_json_str(), _EVENT_TEXT_LIMIT),
+                        "tool_name": call.tool_name,
+                        "tool_call_id": call.tool_call_id,
+                        "text": truncate(call.args_as_json_str(), _EVENT_TEXT_LIMIT),
                     }
                 )
             elif isinstance(event, FunctionToolResultEvent):

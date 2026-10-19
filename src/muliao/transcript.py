@@ -63,14 +63,6 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
     return items
 
 
-def final_text(messages: Sequence[ModelMessage]) -> str:
-    """最后一条助手文本，用作通知正文。"""
-    for item in reversed(to_items(messages)):
-        if item["type"] == "assistant":
-            return item["text"]
-    return ""
-
-
 def truncate(text: str, limit: int) -> str:
     return text if len(text) <= limit else f"{text[:limit]}…[truncated {len(text) - limit} chars]"
 

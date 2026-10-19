@@ -16,6 +16,7 @@ from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.evolution.memory import MemoryStore
 from muliao.models import Agent
 from muliao.naming import validate_slug
+from muliao.runtime.tasks import running_task_ids
 
 
 def check_model(model: str) -> None:
@@ -107,6 +108,8 @@ class AgentService:
             agent = await s.get(Agent, name)
             if agent is None:
                 raise NotFound(f"agent {name!r} not found")
+            if running := await running_task_ids(s, agent_name=name):
+                raise Conflict(f"agent {name!r} has running tasks {running}; wait for them to finish")
             await s.delete(agent)
         # 删除目录，避免同名重建的 agent 继承旧记忆和 skill
         root = self.root(name)

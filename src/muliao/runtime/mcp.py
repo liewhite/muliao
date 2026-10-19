@@ -15,6 +15,7 @@ from muliao.db import Database
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.models import Agent, McpServer, McpTransport
 from muliao.naming import validate_slug
+from muliao.ownership import scope_of
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
@@ -125,8 +126,7 @@ class McpRegistry:
                     raise NotFound(f"agent {owner!r} not found")
                 s.add(row)
         except IntegrityError as e:
-            scope = "public" if owner is None else f"agent {owner!r}"
-            raise Conflict(f"MCP server {spec.name!r} already exists for {scope}") from e
+            raise Conflict(f"MCP server {spec.name!r} already exists in {scope_of(owner)} scope") from e
         log.info("mcp server added", extra={"owner": owner, "mcp": spec.name, "tools": len(tools)})
         return row, tools
 
@@ -138,9 +138,7 @@ class McpRegistry:
             )
         )
         if row is None:
-            raise NotFound(
-                f"MCP server {name!r} not found in {'public' if owner is None else 'private'} scope"
-            )
+            raise NotFound(f"MCP server {name!r} not found in {scope_of(owner)} scope")
         return row
 
     async def get(self, owner: str | None, name: str) -> McpServer:

@@ -2,24 +2,31 @@ from datetime import datetime
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import select
 
 from muliao.agents import AgentSpec
 from muliao.api.deps import C
-from muliao.models import Agent, Reflection
+from muliao.models import Agent
+from muliao.runtime.reflection import list_reflections_of
 
 router = APIRouter()
 
 
-class AgentIn(BaseModel):
+class AgentCreate(BaseModel):
+    name: str
     description: str
+    # 缺省（null）时使用服务端配置的默认值
     model: str | None = None
     instructions: str = ""
     reflect_every: int | None = None
 
 
-class AgentCreate(AgentIn):
-    name: str
+class AgentUpdate(BaseModel):
+    """整体替换：所有字段必填，不会用默认值覆盖已有配置。"""
+
+    description: str
+    model: str
+    instructions: str
+    reflect_every: int
 
 
 class AgentOut(BaseModel):
@@ -44,12 +51,12 @@ class AgentOut(BaseModel):
         )
 
 
-def _spec(c: C, body: AgentIn) -> AgentSpec:
+def _create_spec(c: C, body: AgentCreate) -> AgentSpec:
     return AgentSpec(
         description=body.description,
-        model=body.model or c.settings.default_model,
+        model=c.settings.default_model if body.model is None else body.model,
         instructions=body.instructions,
-        reflect_every=body.reflect_every or c.settings.default_reflect_every,
+        reflect_every=c.settings.default_reflect_every if body.reflect_every is None else body.reflect_every,
     )
 
 
@@ -60,7 +67,7 @@ async def list_agents(c: C) -> list[AgentOut]:
 
 @router.post("/agents", status_code=201)
 async def create_agent(c: C, body: AgentCreate) -> AgentOut:
-    return AgentOut.of(await c.agents.create(body.name, _spec(c, body)))
+    return AgentOut.of(await c.agents.create(body.name, _create_spec(c, body)))
 
 
 @router.get("/agents/{name}")
@@ -69,8 +76,14 @@ async def get_agent(c: C, name: str) -> AgentOut:
 
 
 @router.put("/agents/{name}")
-async def update_agent(c: C, name: str, body: AgentIn) -> AgentOut:
-    return AgentOut.of(await c.agents.update(name, _spec(c, body)))
+async def update_agent(c: C, name: str, body: AgentUpdate) -> AgentOut:
+    spec = AgentSpec(
+        description=body.description,
+        model=body.model,
+        instructions=body.instructions,
+        reflect_every=body.reflect_every,
+    )
+    return AgentOut.of(await c.agents.update(name, spec))
 
 
 @router.delete("/agents/{name}", status_code=204)
@@ -109,15 +122,7 @@ class ReflectionOut(BaseModel):
 
 @router.get("/agents/{name}/reflections")
 async def list_reflections(c: C, name: str, limit: int = 50) -> list[ReflectionOut]:
-    async with c.db.transaction() as s:
-        rows = (
-            await s.scalars(
-                select(Reflection)
-                .where(Reflection.agent_name == name)
-                .order_by(Reflection.id.desc())
-                .limit(limit)
-            )
-        ).all()
+    await c.agents.get(name)
     return [
         ReflectionOut(
             id=r.id,
@@ -126,7 +131,7 @@ async def list_reflections(c: C, name: str, limit: int = 50) -> list[ReflectionO
             output=r.output,
             created_at=r.created_at,
         )
-        for r in rows
+        for r in await list_reflections_of(c.db, name, limit)
     ]
 
 

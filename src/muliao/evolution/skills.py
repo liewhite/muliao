@@ -14,6 +14,7 @@ import frontmatter
 
 from muliao.errors import InvalidInput, NotFound
 from muliao.naming import validate_slug
+from muliao.ownership import Scope, scope_of
 
 SKILL_FILE = "SKILL.md"
 
@@ -26,8 +27,8 @@ class SkillMeta:
     path: Path
 
     @property
-    def scope(self) -> str:
-        return "public" if self.owner is None else "private"
+    def scope(self) -> Scope:
+        return scope_of(self.owner)
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,7 @@ class SkillStore:
     def read(self, owner: str | None, name: str) -> Skill:
         skill_dir = self._root(owner) / validate_slug("skill", name)
         if not (skill_dir / SKILL_FILE).exists():
-            raise NotFound(f"{'public' if owner is None else 'private'} skill {name!r} not found")
+            raise NotFound(f"{scope_of(owner)} skill {name!r} not found")
         return self._load(owner, skill_dir)
 
     def resolve(self, agent: str, name: str) -> Skill:

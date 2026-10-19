@@ -45,7 +45,7 @@ export interface Item {
 export interface Task {
   id: number
   kind: TaskKind
-  agent_name: string
+  agent_name: string | null
   session_id: string | null
   status: TaskStatus
   attempts: number
@@ -95,6 +95,7 @@ export interface CronJob {
   next_run_at: string
   last_run_at: string | null
   last_session_id: string | null
+  last_error: string | null
 }
 
 export interface Webhook {

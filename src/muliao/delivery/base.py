@@ -32,7 +32,7 @@ class Notifier:
         self._db = db
         self._queue = queue
 
-    def enqueue_in(self, s: AsyncSession, agent_name: str, notification: Notification) -> None:
+    def enqueue_in(self, s: AsyncSession, agent_name: str | None, notification: Notification) -> None:
         if notification.channel == DeliveryChannel.NONE:
             raise ValueError("cannot enqueue a notification for channel 'none'")
         self._queue.enqueue(
@@ -44,7 +44,8 @@ class Notifier:
             payload=asdict(notification),
         )
 
-    async def notify(self, agent_name: str, notification: Notification) -> None:
+    async def notify(self, agent_name: str | None, notification: Notification) -> None:
+        """agent_name 为 None 表示系统通知，不属于任何 agent。"""
         async with self._db.transaction() as s:
             self.enqueue_in(s, agent_name, notification)
 

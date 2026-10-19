@@ -15,12 +15,18 @@ from muliao.db import Database
 from muliao.delivery.base import Notification
 from muliao.errors import InvalidInput, TransientError
 from muliao.models import PushSubscription
+from muliao.transcript import truncate
 
 log = logging.getLogger(__name__)
 
 # RFC 8030：404/410 表示订阅已失效，应删除
 _GONE = {404, 410}
-_TRANSIENT = {408, 429, 500, 502, 503, 504}
+_PAYLOAD_TOO_LARGE = 413
+# 网络层失败（无 HTTP 响应）用 0 表示
+_NO_RESPONSE = 0
+_TRANSIENT = {_NO_RESPONSE, 408, 429, 500, 502, 503, 504}
+# 推送服务限制载荷约 4KB（加密后），正文截断留足余量
+_BODY_MAX_CHARS = 600
 _TTL_SECONDS = 24 * 3600
 
 
@@ -70,6 +76,7 @@ class WebPushDelivery:
         self._subject = subject
 
     async def send(self, notification: Notification) -> None:
+        """逐个订阅独立投递：失效订阅删除，暂时性失败汇总后抛出交给任务重试，载荷错误属于本端 bug。"""
         subs = await self._subs.list()
         if not subs:
             log.warning(
@@ -79,29 +86,36 @@ class WebPushDelivery:
         data = json.dumps(
             {
                 "title": notification.title,
-                "body": notification.body,
+                "body": truncate(notification.body, _BODY_MAX_CHARS),
                 "url": f"/sessions/{notification.session_id}" if notification.session_id else "/",
                 "session_id": notification.session_id,
-            }
+            },
+            ensure_ascii=False,
         )
         transient: list[str] = []
+        payload_rejected: list[int] = []
         for sub in subs:
             status = await asyncio.to_thread(self._push, sub, data)
             if status is None:
                 continue
-            if status in _GONE:
-                log.info("push subscription gone, removing it", extra={"status": status})
-                await self._subs.remove(sub.endpoint)
-            elif status in _TRANSIENT:
+            if status in _TRANSIENT:
                 transient.append(str(status))
+            elif status == _PAYLOAD_TOO_LARGE:
+                payload_rejected.append(status)
             else:
-                raise RuntimeError(f"push service rejected notification with HTTP {status}")
+                # 404/410 为订阅已失效（RFC 8030）；其余 4xx（如 VAPID 密钥更换后的 403）该订阅也无法再用
+                level = logging.INFO if status in _GONE else logging.ERROR
+                log.log(level, "push subscription rejected, removing it", extra={"status": status})
+                await self._subs.remove(sub.endpoint)
+        if payload_rejected:
+            raise RuntimeError(f"push payload of {len(data)} bytes rejected as too large")
         if transient:
             raise TransientError(
                 f"push service temporarily failed for {len(transient)} subscriptions: {transient}"
             )
 
     def _push(self, sub: PushSubscription, data: str) -> int | None:
+        """返回失败的 HTTP 状态码；成功返回 None。"""
         try:
             webpush(
                 subscription_info={
@@ -115,9 +129,8 @@ class WebPushDelivery:
                 timeout=15,
             )
         except WebPushException as e:
-            if e.response is None:
-                raise TransientError(f"push request failed without response: {e}") from e
-            return e.response.status_code
-        except requests.RequestException as e:
-            raise TransientError(f"push request failed: {type(e).__name__}") from e
+            # 没有响应即网络层失败
+            return e.response.status_code if e.response is not None else _NO_RESPONSE
+        except requests.RequestException:
+            return _NO_RESPONSE
         return None

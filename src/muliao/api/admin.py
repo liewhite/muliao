@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.delivery.base import Notification
-from muliao.errors import InvalidInput
 from muliao.models import CronJob, DeliveryChannel, McpServer, McpTransport, Webhook
 from muliao.runtime.mcp import McpSpec
 from muliao.vault import SecretInfo
@@ -41,6 +40,7 @@ class CronOut(BaseModel):
     next_run_at: datetime
     last_run_at: datetime | None
     last_session_id: str | None
+    last_error: str | None
 
     @classmethod
     def of(cls, j: CronJob) -> "CronOut":
@@ -54,6 +54,7 @@ class CronOut(BaseModel):
             next_run_at=j.next_run_at,
             last_run_at=j.last_run_at,
             last_session_id=j.last_session_id,
+            last_error=j.last_error,
         )
 
 
@@ -275,16 +276,13 @@ async def subscribe(c: C, body: PushSubscriptionIn) -> None:
 
 @router.post("/push/test", status_code=202)
 async def test_push(c: C) -> None:
-    agents = await c.agents.list()
-    if not agents:
-        raise InvalidInput("create an agent first: notifications are queued as tasks of an agent")
     await c.notifier.notify(
-        agents[0].name,
+        None,
         Notification(
             channel=DeliveryChannel.WEBPUSH,
             target=None,
             title="Muliao",
-            body="Push notifications work.",
+            body="推送通知已开启。",
             session_id=None,
         ),
     )

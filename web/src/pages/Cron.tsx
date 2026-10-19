@@ -33,6 +33,7 @@ function CronItem({ job, onChange }: { job: CronJob; onChange: () => void }) {
           </>
         )}
       </div>
+      {job.last_error && <div className="error">触发失败已自动停用：{job.last_error}</div>}
       {editing ? (
         <div className="form">
           <Field label="cron 表达式">

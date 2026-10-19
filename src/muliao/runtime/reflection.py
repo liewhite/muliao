@@ -42,11 +42,22 @@ def render_transcript(sessions: dict[str, Session], rows: list[Message]) -> str:
         items = to_items(load_messages(r.payload for r in group))
         header = f"### Session: {session.title} (origin: {session.origin})"
         blocks.append(f"{header}\n{to_text(items, max_item_chars=_ITEM_CHARS)}")
-    text = "\n\n".join(blocks) or "(no messages in this window: the sessions were deleted)"
+    text = "\n\n".join(blocks)
     # 超长时保留最近的部分
     return (
         text if len(text) <= _TRANSCRIPT_CHARS else "…[earlier turns omitted]\n" + text[-_TRANSCRIPT_CHARS:]
     )
+
+
+async def list_reflections_of(db: Database, agent_name: str, limit: int) -> list[Reflection]:
+    async with db.transaction() as s:
+        query = (
+            select(Reflection)
+            .where(Reflection.agent_name == agent_name)
+            .order_by(Reflection.id.desc())
+            .limit(limit)
+        )
+        return list((await s.scalars(query)).all())
 
 
 class ReflectionHandler:
@@ -76,9 +87,14 @@ class ReflectionHandler:
                 x.id: x for x in (await s.scalars(select(Session).where(Session.id.in_(session_ids)))).all()
             }
 
-        prompt = REFLECTION_PROMPT.format(transcript=render_transcript(sessions, rows))
-        scope = self._runtime.scope(agent, session_id=None, origin=None)
-        result = await self._runtime.run(agent, scope, prompt, [], self._profile)
+        if rows:
+            prompt = REFLECTION_PROMPT.format(transcript=render_transcript(sessions, rows))
+            scope = self._runtime.scope(agent, session_id=None, origin=None)
+            result = await self._runtime.run(agent, scope, prompt, [], self._profile)
+            output, messages = result.output, result.all_messages_json().decode()
+        else:
+            # 区间内的 session 都被删除了：如实记录，不浪费一次模型调用
+            output, messages = "Skipped: no messages left in this window (sessions were deleted).", "[]"
 
         async def commit(s: AsyncSession) -> None:
             s.add(
@@ -86,8 +102,8 @@ class ReflectionHandler:
                     agent_name=agent.name,
                     from_message_id=from_id,
                     to_message_id=to_id,
-                    output=result.output,
-                    messages=result.all_messages_json().decode(),
+                    output=output,
+                    messages=messages,
                 )
             )
 

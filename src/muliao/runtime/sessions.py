@@ -9,11 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database, utcnow
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.ids import new_id
 from muliao.models import Agent, DeliveryChannel, Message, Origin, Session, Task, TaskKind
 from muliao.runtime.codec import load_messages
-from muliao.runtime.tasks import TaskQueue, turn_lane
+from muliao.runtime.tasks import TaskQueue, running_task_ids, turn_lane
 
 _TITLE_MAX = 60
 
@@ -120,5 +120,9 @@ class SessionService:
             (await self._get(s, session_id)).unread = False
 
     async def delete(self, session_id: str) -> None:
+        """删除 session 及其消息和未执行的 task；有 task 正在运行时拒绝，避免运行结果无处提交。"""
         async with self._db.transaction() as s:
-            await s.delete(await self._get(s, session_id))
+            session = await self._get(s, session_id)
+            if running := await running_task_ids(s, session_id=session_id):
+                raise Conflict(f"session {session_id} has running tasks {running}; wait for them to finish")
+            await s.delete(session)

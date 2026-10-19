@@ -91,6 +91,9 @@ class Message(Base):
     payload: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
+    # SQLite 默认按 max(rowid)+1 分配 id，删除尾部行后会复用；AUTOINCREMENT 保证单调
+    __table_args__ = {"sqlite_autoincrement": True}
+
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -99,7 +102,8 @@ class Task(Base):
     kind: Mapped[TaskKind] = mapped_column(String(16))
     # 同一 lane 内 FIFO 串行；见 docs/architecture.md「Lane」
     lane: Mapped[str] = mapped_column(String(100))
-    agent_name: Mapped[str] = mapped_column(_fk_agent(), index=True)
+    # 系统通知（如推送测试）不属于任何 agent
+    agent_name: Mapped[str | None] = mapped_column(_fk_agent(), index=True)
     session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     status: Mapped[TaskStatus] = mapped_column(String(16), default=TaskStatus.PENDING)
@@ -110,7 +114,7 @@ class Task(Base):
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
-    __table_args__ = (Index("ix_tasks_status_lane", "status", "lane"),)
+    __table_args__ = (Index("ix_tasks_status_lane", "status", "lane"), {"sqlite_autoincrement": True})
 
 
 class Reflection(Base):
@@ -137,6 +141,8 @@ class CronJob(Base):
     next_run_at: Mapped[datetime] = mapped_column(UTCDateTime)
     last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_session_id: Mapped[str | None] = mapped_column(String(36))
+    # 触发失败时记录原因并停用该 job，修复后由用户重新启用
+    last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

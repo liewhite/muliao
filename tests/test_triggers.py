@@ -148,7 +148,7 @@ class FakeTelegram:
 async def test_telegram_reuses_chat_session_and_drops_unknown_chats(container, make_agent):
     await make_agent()
     tg = FakeTelegram()
-    trigger = TelegramTrigger(tg, container.sessions, "alpha", {42})  # type: ignore[arg-type]
+    trigger = TelegramTrigger(tg, container.sessions, container.notifier, "alpha", {42})  # type: ignore[arg-type]
 
     def update(chat: int, text: str, uid: int) -> dict:
         return {"update_id": uid, "message": {"chat": {"id": chat}, "text": text}}

@@ -39,7 +39,7 @@ class SessionOut(BaseModel):
 class TaskOut(BaseModel):
     id: int
     kind: TaskKind
-    agent_name: str
+    agent_name: str | None
     session_id: str | None
     status: TaskStatus
     attempts: int

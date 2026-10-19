@@ -16,6 +16,7 @@ from muliao.api.deps import C
 from muliao.bus import SubscriberOverflow
 from muliao.container import Container
 from muliao.errors import Conflict, DomainError, Forbidden, InvalidInput, NotFound
+from muliao.triggers.webhook import MAX_EVENT_BYTES
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +65,16 @@ def _public_routes(secure_cookie: bool) -> APIRouter:
     async def receive_webhook(
         c: C, hook_id: str, request: Request, x_muliao_token: str = Header(...)
     ) -> SessionIdOut:
-        body = (await request.body()).decode("utf-8", errors="replace")
+        declared = int(request.headers.get("content-length", "0"))
+        if declared > MAX_EVENT_BYTES:
+            raise InvalidInput(f"event body exceeds {MAX_EVENT_BYTES} bytes")
+        raw = await request.body()
+        if len(raw) > MAX_EVENT_BYTES:
+            raise InvalidInput(f"event body exceeds {MAX_EVENT_BYTES} bytes")
+        try:
+            body = raw.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise InvalidInput(f"event body must be UTF-8: {e}") from e
         session = await c.webhooks.receive(hook_id, x_muliao_token, body)
         return SessionIdOut(session_id=session.id)
 

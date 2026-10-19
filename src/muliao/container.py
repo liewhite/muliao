@@ -132,7 +132,7 @@ def build_container(
         client = TelegramClient(settings.telegram_bot_token.get_secret_value(), http)
         deliveries[DeliveryChannel.TELEGRAM] = TelegramDelivery(client)
         telegram = TelegramTrigger(
-            client, sessions, settings.telegram_agent, set(settings.telegram_allowed_chat_ids)
+            client, sessions, notifier, settings.telegram_agent, set(settings.telegram_allowed_chat_ids)
         )
 
     evolution_tools = [skills_toolset(skills), memory_toolset(memory)]
@@ -162,7 +162,13 @@ def build_container(
         TaskKind.REFLECTION: ReflectionHandler(db, runtime, reflection_profile),
         TaskKind.DELIVER: DeliverHandler(deliveries),
     }
-    worker = Worker(queue, handlers, bus, settings.worker_concurrency)
+    worker = Worker(
+        queue,
+        handlers,
+        bus,
+        concurrency=settings.worker_concurrency,
+        task_timeout_seconds=settings.task_timeout_seconds,
+    )
 
     return Container(
         settings=settings,

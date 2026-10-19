@@ -1,19 +1,12 @@
 """自我进化工具：skill 与 memory。turn 和反思共用。"""
 
-from typing import Literal
-
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.skills import SkillStore
+from muliao.ownership import Scope, owner_of
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
-
-Scope = Literal["private", "public"]
-
-
-def _owner(scope: Scope, agent: str) -> str | None:
-    return agent if scope == "private" else None
 
 
 def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
@@ -45,7 +38,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             content: Markdown instructions: steps, commands, pitfalls, examples.
             scope: `private` (only you) or `public` (all agents).
         """
-        meta = store.write(_owner(scope, ctx.deps.agent_name), name, description, content)
+        meta = store.write(owner_of(scope, ctx.deps.agent_name), name, description, content)
         return f"saved {scope} skill {meta.name} at {meta.path}"
 
     @ts.tool
@@ -56,7 +49,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             name: Skill name.
             scope: `private` or `public`.
         """
-        store.delete(_owner(scope, ctx.deps.agent_name), name)
+        store.delete(owner_of(scope, ctx.deps.agent_name), name)
         return f"deleted {scope} skill {name}"
 
     return ts

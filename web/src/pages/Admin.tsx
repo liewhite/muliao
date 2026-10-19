@@ -173,7 +173,7 @@ export function Tasks() {
                 <div className="card-head">
                   <strong>#{t.id}</strong>
                   <span className="tag">{t.kind}</span>
-                  <span className="tag subtle">{t.agent_name}</span>
+                  {t.agent_name && <span className="tag subtle">{t.agent_name}</span>}
                   <span className={`tag status-${t.status}`}>{t.status}</span>
                 </div>
                 <div className="muted small">

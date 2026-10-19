@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     worker_concurrency: int = 4
     task_max_attempts: int = 5
     task_retry_base_seconds: float = 5.0
+    # 单个 task 的总时限（一轮 turn 含所有工具调用）
+    task_timeout_seconds: float = 1800.0
 
     default_reflect_every: int = 10
     memory_max_chars: int = 4000
@@ -46,6 +48,14 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     telegram_agent: str | None = None
     telegram_allowed_chat_ids: list[int] = []
+
+    @model_validator(mode="after")
+    def _secrets_strong_enough(self) -> "Settings":
+        if len(self.password.get_secret_value()) < 8:
+            raise ValueError("MULIAO_PASSWORD must be at least 8 characters")
+        if len(self.secret_key.get_secret_value()) < 32:
+            raise ValueError("MULIAO_SECRET_KEY must be at least 32 characters")
+        return self
 
     @model_validator(mode="after")
     def _telegram_complete(self) -> "Settings":

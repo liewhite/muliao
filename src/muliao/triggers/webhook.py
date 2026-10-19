@@ -17,7 +17,7 @@ from muliao.runtime.sessions import SessionService
 
 log = logging.getLogger(__name__)
 
-MAX_EVENT_CHARS = 100_000
+MAX_EVENT_BYTES = 100_000
 
 
 def event_prompt(instructions: str, body: str) -> str:
@@ -60,8 +60,8 @@ class WebhookService:
             await s.delete(hook)
 
     async def receive(self, hook_id: str, token: str, body: str) -> Session:
-        if len(body) > MAX_EVENT_CHARS:
-            raise InvalidInput(f"event body exceeds {MAX_EVENT_CHARS} chars")
+        if len(body.encode()) > MAX_EVENT_BYTES:
+            raise InvalidInput(f"event body exceeds {MAX_EVENT_BYTES} bytes")
         async with self._db.transaction() as s:
             hook = await s.get(Webhook, hook_id)
             # 未知 id 与错误 token 返回同一错误，避免探测

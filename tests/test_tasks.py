@@ -72,5 +72,5 @@ async def test_recover_resets_running_tasks(container, make_agent):
     task = await _enqueue(container, "a")
     await container.queue.claim()
 
-    assert await container.queue.recover() == 1
+    assert [t.id for t in await container.queue.recover()] == [task.id]
     assert (await container.queue.claim()).id == task.id

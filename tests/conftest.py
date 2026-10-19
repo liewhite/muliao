@@ -32,7 +32,7 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(
         data_dir=tmp_path / "data",
         web_dir=tmp_path / "web",
-        password=SecretStr("pw"),
+        password=SecretStr("password1"),
         secret_key=SecretStr("k" * 32),
         vault_key=SecretStr(Fernet.generate_key().decode()),
         task_retry_base_seconds=0.01,

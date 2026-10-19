@@ -17,6 +17,7 @@ from muliao.vault import Vault
 # shell 只继承这些环境变量，避免把服务进程的模型 API key 等泄露给命令
 _INHERITED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "USER", "SHELL")
 _LIST_LIMIT = 500
+_DRAIN_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,13 @@ class ShellLimits:
     default_timeout: float
     max_timeout: float
     max_output_chars: int
+
+
+def _kill_group(pid: int) -> None:
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # 进程恰好已经退出
 
 
 def resolve(scope: RunScope, path: str) -> Path:
@@ -143,11 +151,15 @@ def workspace_toolset(vault: Vault, limits: ShellLimits) -> FunctionToolset[RunS
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             status = f"exit_code: {proc.returncode}"
         except TimeoutError:
-            os.killpg(proc.pid, signal.SIGKILL)
-            out, _ = await proc.communicate()
+            _kill_group(proc.pid)
+            try:
+                # 脱离进程组的后代可能仍持有管道，收尾读取也要有时限
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=_DRAIN_SECONDS)
+            except TimeoutError:
+                out = b""
             status = f"killed after {timeout}s timeout"
         except asyncio.CancelledError:
-            os.killpg(proc.pid, signal.SIGKILL)
+            _kill_group(proc.pid)
             raise
         text = redact(out.decode(errors="replace"), secret_values)
         return f"{status}\n{truncate(text, limits.max_output_chars)}"

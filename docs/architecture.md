@@ -49,7 +49,9 @@ Web / cron / webhook / Telegram / delegate_task
 ```
 
 - **Lane（串行通道）**：每个 task 带 `lane`。同一 lane 内严格 FIFO、同一时刻最多一个 running；不同 lane 并发。turn 的 lane 是 session id，reflection 的 lane 是 `reflection:<agent>`，deliver 的 lane 是 `deliver:<session>`。
-- **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。
+- **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。每个 task 有总时限（`task_timeout_seconds`），超时按暂时性失败重试。
+- **事务**：SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化所有事务，换来无丢失更新、无 `SQLITE_BUSY`；代价是事务内不得做模型调用、网络 IO 等慢操作。嵌套开事务会立即报错。
+- **删除约束**：session 或 agent 有正在运行的 task 时拒绝删除（409），避免运行结果无处提交。
 - **实时展示**：运行中的事件（文本增量、工具调用/结果）经进程内 EventBus 推到前端 SSE；运行结束后前端从数据库重新拉取消息。数据库是唯一事实源，事件流只是展示加速。
 
 ### 用最终正确性换架构简化
@@ -60,11 +62,13 @@ Web / cron / webhook / Telegram / delegate_task
 
 三条判据：
 
-1. **失败可见**：task 失败记录 `error`、打 error 日志，UI 的「失败任务」页可查并可手动重试；session 页显示该轮失败。
-2. **可收敛**：契约内的失败（模型接口 408/429/5xx/529、网络错误、超时、推送服务 5xx）按指数退避重试，上限 `task_max_attempts`；进程崩溃后启动时把 `running` 复位为 `pending` 重新执行。turn 的消息、计数、后续 task 在**一个事务**里提交，所以重放不会产生重复消息。
-3. **代价可控**：重放一轮 turn 可能重复执行工具副作用（如 shell 命令）——仅在崩溃或模型调用中途失败时发生，个人助手可接受。多订阅的 Web Push 重试可能对已成功的设备重复推送，可接受。
+1. **失败可见**：task 失败记录 `error`、打 error 日志，UI 的「任务」页可查并可手动重试；session 页显示该轮失败；重试运行期间保留上一次的错误。
+2. **可收敛**：契约内的失败（模型接口 408/409/425/429/5xx/529、底层为连接错误的 `ModelAPIError`、网络错误、超时、推送服务 5xx/429）按指数退避重试，上限 `task_max_attempts`；进程崩溃后启动时把 `running` 复位为 `pending` 重新执行。turn 的消息、计数、后续 task 在**一个事务**里提交，所以重放不会产生重复消息。
+3. **代价可控**：重放一轮 turn 可能重复执行工具副作用（如 shell 命令）——仅在崩溃、超时或模型调用中途失败时发生，个人助手可接受。Web Push 逐个订阅投递，失效订阅（404/410 及其他 4xx）直接删除；只有暂时性失败才整体重试，可能对已成功的设备重复推送，可接受。
 
-契约外的失败（代码 bug、模型返回 400、配置错误、agent 不存在）不重试，task 直接 `failed` 并告警。
+契约外的失败（代码 bug、模型返回 400、请求超限、响应解码失败、配置错误）不重试，task 直接 `failed` 并告警。
+
+后台循环（worker、cron、Telegram 轮询）意外退出视为 bug，进程直接退出交给进程管理器重启。cron 中单个 job 的数据不合法时只停用该 job 并记录 `last_error`，不影响其他 job。
 
 ## 3. Agent 运行时
 
@@ -78,7 +82,7 @@ Web / cron / webhook / Telegram / delegate_task
   - `agents`：`list_agents` / `delegate_task`（为目标 agent 新建 session 并投递 turn，origin=`delegation`，完成后推送）。
   - `notify`：`notify_user`（显式 Web Push）。
   - `mcp_admin`：`mcp_list` / `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_remove`。新 MCP 从下一轮起生效。
-  - `vault`：`vault_list` / `vault_set`。没有读取明文的工具。
+  - `vault`：`vault_list` / `vault_set`。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
   - `cron`：`cron_list` / `cron_create` / `cron_delete`。
   - 该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀；配置中的 `${vault:KEY}` 在运行时解析，引用不存在的 key 直接报错。
 - **model**：agent 的 `model` 字段是 pydantic-ai 模型字符串（`anthropic:...`、`openai:...`、`google-gla:...` 等），密钥由对应环境变量提供。
@@ -101,18 +105,28 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 
 | 触发源 | session 策略 | 通知（`session.delivery`） |
 |---|---|---|
-| Web 用户发起 | 新建；回复沿用 | `webpush`（Service Worker 在页面可见时不弹） |
+| Web 用户发起 | 新建；回复沿用 | `webpush`（iOS 要求每个 push 都展示通知，所以页面可见时也会弹） |
 | cron | 每次触发新建；上一次触发的 session 仍有未完成 turn 时跳过本次（不重叠） | `none`，需要通知时 agent 调 `notify_user` |
 | webhook | 每个事件新建，事件体附在 prompt 后 | `webpush` |
-| Telegram | 每个 chat 复用最近的 session，`/new` 新开 | `telegram`（回复发回原 chat） |
+| Telegram | 每个 chat 复用最近的 session，`/new` 新开；给用户的提示也走 deliver task | `telegram`（回复发回原 chat） |
 | delegate_task | 新建，`origin_ref` 记父 session | `webpush` |
 
 Slack 入站事件尚未实现：接入方式是新增一个 trigger（Events API 回调）和一个 delivery 实现，与 Telegram 同构。示例中的「每分钟拉取 Slack 未读」用 cron + Slack MCP（或 skill 中的脚本 + vault token）即可完成，游标由 agent 存在自己的工作目录。
 
 ## 6. 安全边界
 
-- Web 与 API：单用户密码登录，HMAC 签名 cookie。
-- webhook：每个 webhook 独立 token。
+**威胁模型：agent 与运行服务的系统用户同等可信。** agent 能执行任意 shell 命令，因此能读到服务能读到的一切——包括 `.env` 里的 `MULIAO_VAULT_KEY`、数据库文件、进程环境变量。下面的措施只防止 secret **意外**进入对话记录、日志和前端，不防 agent 本身：
+
+- shell 只继承少量环境变量（`PATH`、`HOME` 等），不把模型 API key 等直接暴露给命令；
+- `run_shell(secrets=[KEY])` 输出中的 secret 明文被替换为 `[secret:KEY]`（逐字匹配，编码后的输出不会被替换）；
+- `vault_set` 的参数在持久化前脱敏；但用户在 prompt 里直接写的明文会原样保存并在后续轮次发给模型——敏感值应在 UI 的 Vault 页录入。
+
+如需真正隔离，应让服务以独立系统用户运行、把 `.env` 与数据目录放在 agent 工作目录之外并限制权限，或把 shell 放进沙箱。
+
+其他边界：
+
+- Web 与 API：单用户密码登录（至少 8 位），HMAC 签名 cookie（密钥至少 32 位），有效期 90 天。登录接口未做频率限制，部署在公网时应在反向代理层限流。
+- webhook：每个 webhook 独立 token（请求头 `X-Muliao-Token`），请求体上限 100KB，必须是 UTF-8。
 - Telegram：只接受白名单 chat id，其余记 warn 日志后丢弃。
 - Vault：Fernet 加密，主密钥来自 `MULIAO_VAULT_KEY`，缺失时拒绝启动。
 - 日志不打印 secret 值与 token。
@@ -120,5 +134,6 @@ Slack 入站事件尚未实现：接入方式是新增一个 trigger（Events AP
 ## 7. 已知限制
 
 - 长 session 的上下文没有自动压缩，超长会触发模型上下文错误（task 失败可见）。
-- 只支持单进程部署（task 领取依赖进程内锁）。
+- 只支持单进程部署（事务串行化与 task 领取依赖进程内锁）。
+- Slack 入站事件未实现（见第 5 节）。
 - 数据库结构用 `create_all` 初始化，尚无迁移工具。

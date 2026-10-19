@@ -16,7 +16,7 @@ async def client(container, settings) -> AsyncIterator[httpx.AsyncClient]:
 
 
 async def login(client: httpx.AsyncClient) -> None:
-    resp = await client.post("/api/auth/login", json={"password": "pw"})
+    resp = await client.post("/api/auth/login", json={"password": "password1"})
     assert resp.status_code == 204
 
 

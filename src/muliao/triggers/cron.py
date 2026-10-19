@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from muliao.db import Database, utcnow
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 from muliao.models import Agent, CronJob, DeliveryChannel, Origin
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import Clock, TaskQueue, turn_lane
@@ -25,7 +25,6 @@ from muliao.runtime.tasks import Clock, TaskQueue, turn_lane
 log = logging.getLogger(__name__)
 
 _MAX_SLEEP_SECONDS = 60.0
-_FAILURE_BACKOFF_SECONDS = 10.0
 
 
 class CronService:
@@ -44,16 +43,20 @@ class CronService:
             raise InvalidInput(f"invalid cron expression {schedule!r}")
         return croniter(schedule, after.astimezone(self._tz)).get_next(datetime)
 
-    async def create(self, *, name: str, agent_name: str, schedule: str, prompt: str) -> CronJob:
+    def _validate(self, *, name: str, schedule: str, prompt: str) -> datetime:
+        """create 与 update 共用；返回下一次触发时间。"""
         if not name.strip() or not prompt.strip():
             raise InvalidInput("cron job name and prompt must not be empty")
+        return self.next_run(schedule, self._clock())
+
+    async def create(self, *, name: str, agent_name: str, schedule: str, prompt: str) -> CronJob:
         job = CronJob(
             name=name.strip(),
             agent_name=agent_name,
             schedule=schedule,
             prompt=prompt,
             enabled=True,
-            next_run_at=self.next_run(schedule, self._clock()),
+            next_run_at=self._validate(name=name, schedule=schedule, prompt=prompt),
         )
         try:
             async with self._db.transaction() as s:
@@ -67,10 +70,12 @@ class CronService:
         return job
 
     async def update(self, job_id: int, *, schedule: str, prompt: str, enabled: bool) -> CronJob:
-        next_run = self.next_run(schedule, self._clock())
         async with self._db.transaction() as s:
             job = await self._get(s, job_id)
-            job.schedule, job.prompt, job.enabled, job.next_run_at = schedule, prompt, enabled, next_run
+            job.next_run_at = self._validate(name=job.name, schedule=schedule, prompt=prompt)
+            job.schedule, job.prompt, job.enabled = schedule, prompt, enabled
+            if enabled:
+                job.last_error = None
         self._changed.set()
         return job
 
@@ -106,8 +111,19 @@ class CronService:
                 (await s.scalars(select(CronJob.id).where(CronJob.enabled, CronJob.next_run_at <= now))).all()
             )
         for job_id in due_ids:
-            await self._fire(job_id, now)
+            try:
+                await self._fire(job_id, now)
+            except DomainError as e:
+                # job 自身的数据不合法：停用它并记录原因，不阻塞其他 job；修复后由用户重新启用
+                await self._disable(job_id, f"{type(e).__name__}: {e}")
         return len(due_ids)
+
+    async def _disable(self, job_id: int, error: str) -> None:
+        async with self._db.transaction() as s:
+            job = await self._get(s, job_id)
+            job.enabled = False
+            job.last_error = error
+        log.error("cron job disabled after failed fire: %s", error, extra={"cron_id": job_id})
 
     async def _fire(self, job_id: int, now: datetime) -> None:
         async with self._db.transaction() as s:
@@ -142,13 +158,7 @@ class CronService:
 
     async def run_forever(self) -> None:
         while True:
-            try:
-                await self.fire_due()
-            except Exception:
-                # 失败的 job 不推进 next_run_at，下一轮会再次暴露；退避避免空转刷日志
-                log.exception("cron scheduling pass failed, backing off")
-                await asyncio.sleep(_FAILURE_BACKOFF_SECONDS)
-                continue
+            await self.fire_due()
             self._changed.clear()
             try:
                 await asyncio.wait_for(self._changed.wait(), timeout=await self._next_wake())

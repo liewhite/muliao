@@ -8,14 +8,13 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agents import AgentService
 from muliao.delivery.base import Notification, Notifier
 from muliao.models import DeliveryChannel, McpTransport, Origin
+from muliao.ownership import Scope, owner_of, scope_of
 from muliao.runtime.mcp import McpRegistry, McpSpec
 from muliao.runtime.scope import RunScope
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 from muliao.triggers.cron import CronService
 from muliao.vault import Vault
-
-Scope = Literal["private", "public"]
 
 
 class AgentInfo(BaseModel):
@@ -93,16 +92,13 @@ class McpInfo(BaseModel):
 def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    def _owner(scope: Scope, agent: str) -> str | None:
-        return agent if scope == "private" else None
-
     @ts.tool
     async def mcp_list(ctx: RunContext[RunScope]) -> list[McpInfo]:
         """List MCP servers available to you (your private ones and public ones). Values of env/headers are hidden."""
         return [
             McpInfo(
                 name=s.name,
-                scope="public" if s.owner is None else "private",
+                scope=scope_of(s.owner),
                 transport=s.transport,
                 command=s.command,
                 args=s.args,
@@ -150,7 +146,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
             env=tuple((env or {}).items()),
             headers=tuple((headers or {}).items()),
         )
-        _, tools = await registry.add(_owner(scope, ctx.deps.agent_name), spec, probe=True)
+        _, tools = await registry.add(owner_of(scope, ctx.deps.agent_name), spec, probe=True)
         return f"registered {scope} MCP server {name} with tools: {', '.join(tools) or '(none)'}"
 
     @ts.tool
@@ -161,7 +157,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
             name: Server name.
             scope: `private` or `public`.
         """
-        await registry.remove(_owner(scope, ctx.deps.agent_name), name)
+        await registry.remove(owner_of(scope, ctx.deps.agent_name), name)
         return f"removed {scope} MCP server {name}"
 
     return ts
@@ -182,7 +178,8 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
 
     @ts.tool_plain
     async def vault_set(key: str, value: str, description: str) -> str:
-        """Store a secret the user gave you so it never has to appear in files, skills or memory.
+        """Store a secret the user gave you so it never has to appear in files, skills, memory or MCP configs.
+        The value is redacted from the saved conversation.
         Reference it later as `${vault:KEY}` in MCP configs, or via `run_shell(secrets=[KEY])`.
 
         Args:
