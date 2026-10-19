@@ -4,7 +4,9 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import DateTime, event
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Connection, DateTime, event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.types import TypeDecorator
@@ -49,11 +51,42 @@ def create_engine(db_path: Path) -> AsyncEngine:
     return engine
 
 
-async def init_schema(engine: AsyncEngine) -> None:
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+
+def alembic_config(connection: Connection | None = None) -> Config:
+    cfg = Config()
+    cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
+    cfg.attributes["connection"] = connection
+    return cfg
+
+
+def _upgrade(connection: Connection) -> None:
+    # batch 迁移会「建新表-拷数据-删旧表」，外键开着时删旧表会触发 ON DELETE CASCADE 删掉子表数据。
+    # PRAGMA foreign_keys 在事务内无效，必须在迁移事务开始前关闭，结束后校验完整性再打开。
+    connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+    disabled = connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 0
+    # 结束 SQLAlchemy 的自动事务（pysqlite 不会为 PRAGMA 发 BEGIN，这里只是关闭逻辑事务）
+    connection.commit()
+    if not disabled:
+        raise RuntimeError("could not disable SQLite foreign keys before migrating")
+    try:
+        with connection.begin():
+            command.upgrade(alembic_config(connection), "head")
+            violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise RuntimeError(f"migration left foreign key violations, rolled back: {violations[:10]}")
+    finally:
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        connection.commit()
+
+
+async def migrate(engine: AsyncEngine) -> None:
+    """把数据库升级到最新结构。启动时调用；已是最新时什么也不做。"""
     from muliao import models  # noqa: F401  注册所有表
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    async with engine.connect() as conn:
+        await conn.run_sync(_upgrade)
 
 
 class Database:

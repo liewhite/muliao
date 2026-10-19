@@ -9,7 +9,7 @@ from pydantic_ai.models import Model
 
 from muliao.config import Settings
 from muliao.container import Container, build_container
-from muliao.db import init_schema
+from muliao.db import migrate
 from tests.scripted import scripted
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
@@ -52,7 +52,7 @@ def models() -> ModelSlot:
 @pytest.fixture
 async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Container]:
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
-    await init_schema(c.db.engine)
+    await migrate(c.db.engine)
     yield c
     await c.http.aclose()
     await c.db.engine.dispose()

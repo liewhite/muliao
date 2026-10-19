@@ -14,7 +14,7 @@ import httpx
 from muliao.agents import AgentService
 from muliao.bus import EventBus
 from muliao.config import Settings
-from muliao.db import Database, create_engine, init_schema
+from muliao.db import Database, create_engine, migrate
 from muliao.delivery.base import DeliverHandler, Delivery, Notifier
 from muliao.delivery.telegram import TelegramDelivery
 from muliao.delivery.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
@@ -77,7 +77,7 @@ class Container:
         self._background.append(task)
 
     async def start(self) -> None:
-        await init_schema(self.db.engine)
+        await migrate(self.db.engine)
         await self._check_agent_models()
         if self.settings.telegram is not None:
             # 配置错误在启动时暴露，而不是在第一条消息到来时让轮询崩溃

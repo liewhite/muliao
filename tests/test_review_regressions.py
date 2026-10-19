@@ -184,11 +184,11 @@ async def test_agent_referenced_by_config_cannot_be_deleted(settings, models):
     from muliao.agents import AgentSpec
     from muliao.config import TelegramConfig
     from muliao.container import build_container
-    from muliao.db import init_schema
+    from muliao.db import migrate
 
     settings.telegram = TelegramConfig(bot_token="t", agent="tg", allowed_chat_ids=[1])
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
-    await init_schema(c.db.engine)
+    await migrate(c.db.engine)
     try:
         await c.agents.create("tg", AgentSpec(description="d", model="m", instructions="", reflect_every=5))
         with pytest.raises(Conflict, match="server configuration"):

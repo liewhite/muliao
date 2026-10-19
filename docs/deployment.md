@@ -39,6 +39,17 @@ npm run dev                      # Vite 把 /api、/hooks 代理到 127.0.0.1:80
 npm run build                    # 构建到 src/muliao/webui/，改了前端必须重新构建并提交产物
 ```
 
+### 数据库迁移
+
+数据库结构由 Alembic 迁移管理（`src/muliao/migrations/`），服务启动时自动升级到最新版本，升级不需要删库。改了 `src/muliao/models.py` 后生成迁移：
+
+```bash
+uv run alembic upgrade head                          # 开发用的临时库 .alembic-dev.db
+uv run alembic revision --autogenerate -m "add xxx"  # 检查生成的脚本后提交
+```
+
+`tests/test_migrations.py` 会比对「迁移后的结构」与模型定义，忘写迁移时测试失败。SQLite 改表采用「建新表-拷数据-删旧表」，迁移期间会关闭外键（否则删旧表会级联删除子表数据），完成后执行 `foreign_key_check`，有违例则整体回滚。
+
 `src/muliao/webui/` 是 `web/src` 的派生产物：提交进仓库是为了让 `uv tool install` 不依赖 node。唯一来源仍是 `web/src`，由 `npm run build` 一条命令重建。
 
 ## iOS 主屏应用与推送
