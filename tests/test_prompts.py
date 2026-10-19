@@ -98,6 +98,7 @@ async def test_deleting_agent_drops_its_files_but_not_public_prompt_history(cont
 
 async def test_empty_public_prompt_is_the_same_as_none(container):
     assert container.prompts.current(None) == ""
+    assert await container.prompts.set(None, "", "user") is False
     assert await container.prompts.history(None, 10) == []
 
 

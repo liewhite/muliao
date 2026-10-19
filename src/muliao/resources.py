@@ -39,6 +39,7 @@ _REV = re.compile(r"^[0-9a-f]{40}$")
 # 与 ids.new_agent_id 的格式一致
 _AGENT_ID = re.compile(r"^[0-9a-f]{12}$")
 _TMP = ".tmp"
+_GIT_EXIT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -138,10 +139,15 @@ class ResourceRepo:
         try:
             out, err = await proc.communicate()
         except BaseException:
-            # 被取消时不留下继续运行的 git（它会占着锁，或在调用方以为失败之后才提交）
+            # 被取消时不留下继续运行的 git（它会占着锁，或在调用方以为失败之后才提交）。
+            # 先 SIGTERM：git 会自己删掉锁文件；不退出才 SIGKILL（留下的锁由下次启动的 recover 清理）
             if proc.returncode is None:
-                proc.kill()
-                await proc.wait()
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), _GIT_EXIT_SECONDS)
+                except TimeoutError:
+                    proc.kill()
+                    await proc.wait()
             raise
         if check and proc.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed ({proc.returncode}): {err.decode().strip()}")
