@@ -66,6 +66,9 @@ class ReflectionHandler:
         self._runtime = runtime
         self._profile = profile
 
+    async def on_failed(self, s: AsyncSession, task: Task) -> None:
+        """失败只需记录在 task 上，没有其他人依赖它的结果。"""
+
     async def execute(self, task: Task) -> Commit:
         from_id, to_id = task.payload["from_message_id"], task.payload["to_message_id"]
         async with self._db.transaction() as s:
@@ -89,8 +92,11 @@ class ReflectionHandler:
 
         if rows:
             prompt = REFLECTION_PROMPT.format(transcript=render_transcript(sessions, rows))
-            scope = self._runtime.scope(agent, session_id=None, origin=None)
+            scope = self._runtime.scope(agent, session_id=None, origin=None, reply_to=None)
             result = await self._runtime.run(agent, scope, prompt, [], self._profile)
+            if not isinstance(result.output, str):
+                # 反思只开放 skill 与 memory 工具，不可能挂起
+                raise RuntimeError(f"reflection of agent {agent.id} ended with deferred tool calls")
             output, messages = result.output, result.all_messages_json().decode()
         else:
             # 区间内的 session 都被删除了：如实记录，不浪费一次模型调用

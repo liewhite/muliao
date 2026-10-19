@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy import select
 
-from muliao.models import Origin, Reflection, Task, TaskKind, TaskStatus
+from muliao.models import Origin, Reflection, ReplyTo, Task, TaskKind, TaskStatus
 from tests.scripted import scripted
 
 
@@ -62,8 +62,13 @@ def call_then_answer(tool: str, args: dict, answer: str) -> FunctionModel:
     return scripted(fn)
 
 
+_REPLY_TO = {Origin.USER: ReplyTo.USER, Origin.CRON: ReplyTo.NONE}
+
+
 async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER):
-    return await container.sessions.start(agent_id=agent, prompt=prompt, origin=origin, origin_ref=None)
+    return await container.sessions.start(
+        agent_id=agent, prompt=prompt, origin=origin, origin_ref=None, reply_to=_REPLY_TO[origin]
+    )
 
 
 async def tasks_of(container, kind: TaskKind) -> list[Task]:
@@ -188,11 +193,11 @@ async def test_contract_violation_error_fails_without_retry(container, make_agen
     assert "400" in turn.error
 
 
-async def test_delegate_task_starts_session_of_target_agent(container, make_agent, models):
+async def test_delegate_task_opens_public_thread_and_notifies_user(container, make_agent, models):
     router = (await make_agent("router", model="r")).id
     worker = (await make_agent("worker", model="w")).id
     models.models["r"] = call_then_answer(
-        "delegate_task", {"agent": "worker", "task": "summarise X"}, "delegated"
+        "delegate_task", {"agent": "worker", "task": "summarise X", "thread": "x"}, "delegated"
     )
     models.models["w"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("summary of X")]))
 
@@ -202,7 +207,8 @@ async def test_delegate_task_starts_session_of_target_agent(container, make_agen
     children = await container.sessions.list(agent_id=worker, origins=None, limit=10, offset=0)
     assert len(children) == 1
     child = children[0]
-    assert child.origin == Origin.DELEGATION and child.origin_ref == parent.id
+    assert child.origin == Origin.DELEGATION and child.parent_session_id == parent.id
+    assert child.thread == "x" and not child.private
     assert (await container.sessions.history(child.id))[-1].parts[0].content == "summary of X"
     deliver = await tasks_of(container, TaskKind.DELIVER)
     assert [d.session_id for d in deliver] == [child.id]
@@ -262,8 +268,8 @@ async def test_model_sees_agent_names_never_ids(container, make_agent, models):
     seen: list[str] = []
     steps = [
         ("list_agents", {}),
-        ("delegate_task", {"agent": "研究助理", "task": "调研 X"}),
-        ("delegate_task", {"agent": "不存在的助理", "task": "x"}),
+        ("delegate_task", {"agent": "研究助理", "task": "调研 X", "thread": "调研"}),
+        ("delegate_task", {"agent": "不存在的助理", "task": "x", "thread": "x"}),
         ("cron_create", {"name": "daily", "schedule": "0 9 * * *", "prompt": "汇总", "agent": "研究助理"}),
         ("cron_list", {}),
     ]

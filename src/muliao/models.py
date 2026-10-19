@@ -17,10 +17,17 @@ class Origin(StrEnum):
     CRON = "cron"
     DELEGATION = "delegation"
 
-    @property
-    def notifies(self) -> bool:
-        """每轮完成后是否推送通知。这是推送策略的唯一来源：cron 在无人值守时运行，只在 agent 主动 notify_user 时推送。"""
-        return self is not Origin.CRON
+
+class ReplyTo(StrEnum):
+    """一轮结束后结果交给谁，按轮决定（见 docs/architecture.md「会话领域」）。
+
+    只有 USER 会推送通知。AGENT 表示这一轮由另一个 agent 同步发问，回答经 waits 表交回给它；
+    已有的 USER 轮次也可能被 wait_for 等待，等待关系同样只记在 waits 表。
+    """
+
+    USER = "user"
+    AGENT = "agent"
+    NONE = "none"
 
 
 class TaskKind(StrEnum):
@@ -28,6 +35,8 @@ class TaskKind(StrEnum):
     REFLECTION = "reflection"
     DELIVER = "deliver"
     COMPACTION = "compaction"
+    # 父 agent 挂起等待子 agent 后，带着结果恢复运行
+    RESUME = "resume"
 
 
 class TaskStatus(StrEnum):
@@ -35,6 +44,8 @@ class TaskStatus(StrEnum):
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
+    # 等待其他任务的结果；和 running 一样挡住同一 lane 的后续任务，结果齐了才转为 pending
+    WAITING = "waiting"
 
 
 class McpTransport(StrEnum):
@@ -71,13 +82,29 @@ class Session(Base):
     agent_id: Mapped[str] = mapped_column(_fk_agent(), index=True)
     title: Mapped[str] = mapped_column(String(200))
     origin: Mapped[Origin] = mapped_column(StrEnumType(Origin))
-    # 触发源内的引用：cron job id、父 session id
+    # cron 触发的会话记录 cron job id
     origin_ref: Mapped[str | None] = mapped_column(String(64))
+    # 委派产生的子会话：父会话与它在父会话内的 thread 名（模型用 thread 名指代子会话）
+    parent_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sessions.id", ondelete="SET NULL"), index=True
+    )
+    thread: Mapped[str | None] = mapped_column(String(100))
+    # 私有子会话归父会话所有：不进收件箱，用户只读，随父会话删除
+    private: Mapped[bool] = mapped_column(default=False)
     unread: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
-    __table_args__ = (Index("ix_sessions_origin_ref", "origin", "origin_ref"),)
+    __table_args__ = (
+        Index("ix_sessions_origin_ref", "origin", "origin_ref"),
+        Index(
+            "uq_sessions_thread",
+            "parent_session_id",
+            "thread",
+            unique=True,
+            sqlite_where=parent_session_id.isnot(None),
+        ),
+    )
 
 
 class Message(Base):
@@ -115,6 +142,24 @@ class Task(Base):
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (Index("ix_tasks_status_lane", "status", "lane"), {"sqlite_autoincrement": True})
+
+
+class Wait(Base):
+    """父 agent 挂起的一个工具调用在等哪个 turn 的结果。
+
+    target_task_id 不设外键：目标所在 session 被删除时，要先给等待方写入错误结果，不能让级联删除悄悄抹掉等待关系。
+    """
+
+    __tablename__ = "waits"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    waiter_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    tool_call_id: Mapped[str] = mapped_column(String(100))
+    target_task_id: Mapped[int] = mapped_column(index=True)
+    # 二者恰有其一表示已结束：result 为目标的最终回答，error 为失败说明
+    result: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class Compaction(Base):

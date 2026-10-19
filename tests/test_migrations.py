@@ -72,8 +72,8 @@ def test_foreign_key_violation_rolls_back_migration(tmp_path, monkeypatch):
 
     def orphaning_upgrade(cfg, _revision):  # noqa: ANN001
         cfg.attributes["connection"].exec_driver_sql(
-            "INSERT INTO sessions (id, agent_id, title, origin, unread, created_at, updated_at) "
-            "VALUES ('s', 'ghost', 't', 'user', 0, '2026-01-01', '2026-01-01')"
+            "INSERT INTO sessions (id, agent_id, title, origin, private, unread, created_at, updated_at) "
+            "VALUES ('s', 'ghost', 't', 'user', 0, 0, '2026-01-01', '2026-01-01')"
         )
 
     monkeypatch.setattr(muliao.db.command, "upgrade", orphaning_upgrade)
@@ -319,3 +319,42 @@ def test_drop_triggers_migration_refuses_unrepresentable_data(tmp_path, sessions
         migrate(path, agents_dir)
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == BEFORE_DROP_TRIGGERS
+
+
+BEFORE_THREADS = "8b4e2f6a1c37"
+
+
+def test_threads_migration_links_delegated_sessions_and_sets_reply_targets(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    migrate(path, agents_dir, target=BEFORE_THREADS)
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO agents VALUES ('a1', 'n', 'd', 'm:x', '', 5, 0, 0, ?, ?)", (_TS, _TS))
+        for sid, origin, ref in [
+            ("p", "user", None),
+            ("k", "cron", "7"),
+            ("c", "delegation", "p"),
+            ("orphan", "delegation", "deleted-parent"),
+        ]:
+            conn.execute(
+                "INSERT INTO sessions VALUES (?, 'a1', 't', ?, ?, 0, ?, ?)", (sid, origin, ref, _TS, _TS)
+            )
+            conn.execute(
+                "INSERT INTO tasks (kind, lane, agent_id, session_id, payload, status, attempts, not_before, created_at)"
+                " VALUES ('turn', ?, 'a1', ?, ?, 'done', 1, ?, ?)",
+                (f"turn:{sid}", sid, json.dumps({"prompt": "hi"}), _TS, _TS),
+            )
+
+    migrate(path, agents_dir)
+
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT id, parent_session_id, thread, private, origin_ref FROM sessions ORDER BY id"
+        ).fetchall()
+        assert rows == [
+            ("c", "p", "c", 0, None),
+            ("k", None, None, 0, "7"),
+            ("orphan", None, "orphan", 0, None),
+            ("p", None, None, 0, None),
+        ]
+        reply_to = dict(conn.execute("SELECT session_id, json_extract(payload, '$.reply_to') FROM tasks"))
+        assert reply_to == {"p": "user", "k": "none", "c": "user", "orphan": "user"}

@@ -21,6 +21,7 @@ from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import TaskKind
 from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
+from muliao.runtime.conversation import Threads
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
 from muliao.runtime.runner import AgentRuntime, RunProfile
@@ -131,6 +132,7 @@ def build_container(
         model_checker or models.check,
     )
     sessions = SessionService(db, queue)
+    threads = Threads(queue)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(db, vault)
     cron = CronService(db, sessions, queue, tz)
@@ -151,7 +153,7 @@ def build_container(
                 ),
             ),
             *evolution_tools,
-            agents_toolset(agents, sessions),
+            agents_toolset(db, agents, threads),
             notify_toolset(notifier),
             mcp_admin_toolset(mcp),
             vault_toolset(vault),
@@ -170,8 +172,10 @@ def build_container(
         resolve_model=resolve_model or models.resolve,
     )
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
+    turns = TurnHandler(db, runtime, turn_profile, queue, notifier, compaction, threads)
     handlers: dict[TaskKind, TaskHandler] = {
-        TaskKind.TURN: TurnHandler(db, runtime, turn_profile, queue, notifier, compaction),
+        TaskKind.TURN: turns,
+        TaskKind.RESUME: turns,
         TaskKind.COMPACTION: CompactionHandler(
             db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),

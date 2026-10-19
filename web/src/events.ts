@@ -1,6 +1,7 @@
 // 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
 
 import { useEffect, useRef } from 'react'
+import type { TaskKind, TaskStatus } from './api'
 
 export interface RunEvent {
   type: 'run'
@@ -15,8 +16,9 @@ export interface RunEvent {
 export interface TaskEvent {
   type: 'task'
   task_id: number
-  kind: 'turn' | 'reflection' | 'deliver' | 'compaction'
-  status: 'running' | 'pending' | 'done' | 'failed'
+  kind: TaskKind
+  // worker 只发布执行相关的状态；waiting 由挂起写入，不经过 worker
+  status: Exclude<TaskStatus, 'waiting'>
   session_id: string | null
   agent: string
   error: string | null

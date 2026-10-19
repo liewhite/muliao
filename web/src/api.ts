@@ -1,8 +1,9 @@
 // 与后端 src/muliao/api/*.py 的响应模型一一对应
 
 export type Origin = 'user' | 'cron' | 'delegation'
-export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
-export type TaskKind = 'turn' | 'reflection' | 'deliver' | 'compaction'
+/** waiting：挂起等待 thread 结果的 resume，占住所在会话的队列 */
+export type TaskStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed'
+export type TaskKind = 'turn' | 'resume' | 'reflection' | 'deliver' | 'compaction'
 
 /** agent 的 id 与名称都是字符串；品牌类型让编译器拦住「把名称当 id 传」 */
 export type AgentId = string & { readonly __brand: 'AgentId' }
@@ -36,6 +37,11 @@ export interface Session {
   title: string
   origin: Origin
   origin_ref: string | null
+  /** 委派产生的子会话：父会话与 thread 名 */
+  parent_session_id: string | null
+  thread: string | null
+  /** ask_agent 开出的 thread：只属于发起方 agent，用户只读 */
+  private: boolean
   unread: boolean
   created_at: string
   updated_at: string
@@ -76,6 +82,7 @@ export interface SessionDetail {
   items: Item[]
   compactions: CompactionInfo[]
   open_turns: Task[]
+  threads: Session[]
 }
 
 export interface SkillMeta {

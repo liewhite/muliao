@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 
 from muliao.db import Database, utcnow
 from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
-from muliao.models import Agent, CronJob, Origin
+from muliao.models import Agent, CronJob, Origin, ReplyTo
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import Clock, TaskQueue, turn_lane
 
@@ -143,6 +143,7 @@ class CronService:
                 prompt=job.prompt,
                 origin=Origin.CRON,
                 origin_ref=str(job.id),
+                reply_to=ReplyTo.NONE,
                 title=f"{job.name} · {local}",
             )
             job.last_run_at = now

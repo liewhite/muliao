@@ -5,23 +5,25 @@ from datetime import datetime
 from pathlib import Path
 
 from muliao.evolution.skills import SkillMeta
-from muliao.models import Origin
+from muliao.models import Origin, ReplyTo
 
 _ORIGIN_NOTES: dict[Origin, str] = {
     Origin.USER: "The user started this conversation in the app and may be reading along.",
     Origin.CRON: "This run was started by a schedule; nobody is watching.",
-    Origin.DELEGATION: "Another agent delegated this task to you; the user may reply in this session.",
+    Origin.DELEGATION: "Another agent opened this conversation with you.",
 }
 
-
-def _origin_note(origin: Origin) -> str:
-    # 是否推送只由 Origin.notifies 决定，这里只是把它说给模型听
-    if origin.notifies:
-        return f"{_ORIGIN_NOTES[origin]} The user is notified with your final answer."
-    return (
-        f"{_ORIGIN_NOTES[origin]} The user is NOT notified automatically: "
-        "call `notify_user` only when there is something worth their attention."
-    )
+_REPLY_NOTES: dict[ReplyTo, str] = {
+    ReplyTo.USER: "The user is notified with your final answer and may reply here.",
+    ReplyTo.AGENT: (
+        "Another agent is waiting for your final answer, which is returned to it as a tool result; "
+        "answer it directly and completely. The user is not notified."
+    ),
+    ReplyTo.NONE: (
+        "The user is NOT notified automatically: call `notify_user` only when there is something worth "
+        "their attention."
+    ),
+}
 
 
 SELF_IMPROVEMENT = """\
@@ -44,6 +46,7 @@ def build_instructions(
     workspace: Path,
     now_local: datetime,
     origin: Origin | None,
+    reply_to: ReplyTo | None,
     memory: str,
     skills: Sequence[SkillMeta],
     memory_limit: int,
@@ -55,7 +58,9 @@ def build_instructions(
         f"- Workspace (base for relative paths and shell cwd): {workspace}",
     ]
     if origin is not None:
-        context.append(f"- {_origin_note(origin)}")
+        context.append(f"- {_ORIGIN_NOTES[origin]}")
+    if reply_to is not None:
+        context.append(f"- {_REPLY_NOTES[reply_to]}")
     skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] or ["(no skills yet)"]
     sections = [
         agent_instructions.strip(),

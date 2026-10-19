@@ -164,6 +164,9 @@ class CompactionHandler:
         self._scheduler = scheduler
         self._keep_turns = keep_turns
 
+    async def on_failed(self, s: AsyncSession, task: Task) -> None:
+        """失败只需记录在 task 上，没有其他人依赖它的结果。"""
+
     async def execute(self, task: Task) -> Commit:
         session_id = task.session_id
         if session_id is None or task.agent_id is None:

@@ -8,6 +8,7 @@ import httpx
 import httpx2
 import openai
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.bus import EventBus
 from muliao.errors import TransientError
@@ -42,6 +43,10 @@ def is_transient(exc: BaseException) -> bool:
 
 class TaskHandler(Protocol):
     async def execute(self, task: Task) -> Commit: ...
+
+    async def on_failed(self, s: AsyncSession, task: Task) -> None:
+        """任务彻底失败（不再重试）时，在标记 failed 的同一事务里执行的善后。"""
+        ...
 
 
 class Worker:
@@ -128,7 +133,9 @@ class Worker:
     async def _record_failure(self, task: Task, exc: Exception, ctx: dict[str, object]) -> None:
         error = f"{type(exc).__name__}: {exc}"
         try:
-            failed = await self._queue.fail(task.id, error, retryable=is_transient(exc))
+            failed = await self._queue.fail(
+                task.id, error, retryable=is_transient(exc), on_failed=self._handlers[task.kind].on_failed
+            )
         except Exception:
             # 记账本身失败（如 task 已被删除）：留下完整上下文，不能让异常无人接收
             log.exception("could not record task failure: %s", error, extra=ctx)

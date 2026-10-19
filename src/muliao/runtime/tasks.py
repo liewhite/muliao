@@ -45,17 +45,22 @@ def deliver_lane(session_id: str | None, agent_id: str | None) -> str:
     return f"deliver:{session_id or agent_id or 'system'}"
 
 
+# 占住 lane 的状态：同一 lane 的后续 task 必须等它们结束
+LANE_BLOCKING = (TaskStatus.RUNNING, TaskStatus.WAITING)
+
+# 任务彻底失败时，在同一事务里执行的善后（例如给等待它结果的父 agent 写入错误）
+OnFailed = Callable[[AsyncSession, Task], Awaitable[None]]
+
+
 def _claimable():  # noqa: ANN202
-    """可领取的 pending：它是所在 lane 最早的 pending，且该 lane 没有 running。claim 与 next_due 共用。"""
+    """可领取的 pending：它是所在 lane 最早的 pending，且该 lane 没有 running / waiting。claim 与 next_due 共用。"""
     running = aliased(Task)
     earlier = aliased(Task)
     return (
         select(Task)
         .where(Task.status == TaskStatus.PENDING)
         .where(
-            ~select(running.id)
-            .where(running.lane == Task.lane, running.status == TaskStatus.RUNNING)
-            .exists()
+            ~select(running.id).where(running.lane == Task.lane, running.status.in_(LANE_BLOCKING)).exists()
         )
         .where(
             ~select(earlier.id)
@@ -97,15 +102,19 @@ class TaskQueue:
         agent_id: str | None,
         session_id: str | None,
         payload: dict[str, Any],
+        waiting: bool = False,
     ) -> Task:
-        """在调用方事务内写入 task；事务提交后唤醒 worker。"""
+        """在调用方事务内写入 task；事务提交后唤醒 worker。
+
+        waiting=True 时以 waiting 状态写入：占住 lane 但不可领取，由 release() 转为 pending。
+        """
         task = Task(
             kind=kind,
             lane=lane,
             agent_id=agent_id,
             session_id=session_id,
             payload=payload,
-            status=TaskStatus.PENDING,
+            status=TaskStatus.WAITING if waiting else TaskStatus.PENDING,
             not_before=self._clock(),
         )
         s.add(task)
@@ -139,7 +148,17 @@ class TaskQueue:
         # 同 lane 的后续 task 现在可以领取了
         self.wake.set()
 
-    async def fail(self, task_id: int, error: str, *, retryable: bool) -> Task:
+    def release(self, s: AsyncSession, task: Task) -> None:
+        """waiting → pending（在调用方事务内）；事务提交后唤醒 worker。"""
+        if task.status != TaskStatus.WAITING:
+            raise RuntimeError(f"task {task.id} is {task.status}, only waiting tasks can be released")
+        task.status = TaskStatus.PENDING
+        task.not_before = self._clock()
+        event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
+
+    async def fail(
+        self, task_id: int, error: str, *, retryable: bool, on_failed: OnFailed | None = None
+    ) -> Task:
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)
             if task is None:
@@ -152,6 +171,8 @@ class TaskQueue:
             else:
                 task.status = TaskStatus.FAILED
                 task.finished_at = self._clock()
+                if on_failed is not None:
+                    await on_failed(s, task)
         # 重试时间点或同 lane 的后续 task 需要重新计算等待
         self.wake.set()
         return task
@@ -197,7 +218,7 @@ class TaskQueue:
     async def lane_busy(self, s: AsyncSession, lane: str) -> bool:
         busy = await s.scalar(
             select(Task.id)
-            .where(Task.lane == lane, Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
+            .where(Task.lane == lane, Task.status.in_([TaskStatus.PENDING, *LANE_BLOCKING]))
             .limit(1)
         )
         return busy is not None

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent as PaiAgent
-from pydantic_ai import AgentRunResult, RunContext
+from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, RunContext
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
@@ -26,7 +26,7 @@ from muliao.db import utcnow
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelResolver
-from muliao.models import Agent
+from muliao.models import Agent, Origin, ReplyTo
 from muliao.runtime.instructions import build_instructions
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.redaction import redact_call
@@ -69,14 +69,18 @@ class AgentRuntime:
         self._tz = tz
         self._clock = clock
         self._resolve_model = resolve_model
-        self._pai = PaiAgent(deps_type=RunScope, output_type=str)
+        # 输出可能是待完成的工具调用：ask_agent / wait_for 挂起时（见 runtime/conversation.py）
+        self._pai = PaiAgent(deps_type=RunScope, output_type=[str, DeferredToolRequests])
 
-    def scope(self, agent: Agent, *, session_id: str | None, origin) -> RunScope:  # noqa: ANN001
+    def scope(
+        self, agent: Agent, *, session_id: str | None, origin: Origin | None, reply_to: ReplyTo | None
+    ) -> RunScope:
         return RunScope(
             agent_id=agent.id,
             workspace=self._agents.workspace(agent.id),
             session_id=session_id,
             origin=origin,
+            reply_to=reply_to,
         )
 
     def instructions(self, agent: Agent, scope: RunScope, summary: str | None) -> str:
@@ -87,6 +91,7 @@ class AgentRuntime:
             workspace=scope.workspace,
             now_local=self._clock().astimezone(self._tz),
             origin=scope.origin,
+            reply_to=scope.reply_to,
             memory=self._memory.read(agent.id),
             skills=self._skills.visible_to(agent.id),
             memory_limit=self._memory.max_chars,
@@ -97,12 +102,16 @@ class AgentRuntime:
         self,
         agent: Agent,
         scope: RunScope,
-        prompt: str,
+        prompt: str | None,
         history: Sequence[ModelMessage],
         profile: RunProfile,
         *,
         summary: str | None = None,
-    ) -> AgentRunResult[str]:
+        deferred_results: dict[str, str] | None = None,
+    ) -> AgentRunResult[str | DeferredToolRequests]:
+        """prompt 为 None 时是恢复挂起的一轮：deferred_results 为各待完成工具调用的结果。"""
+        if (prompt is None) == (deferred_results is None):
+            raise ValueError("a run takes either a new prompt or the results of deferred tool calls")
         toolsets: list[AbstractToolset[RunScope]] = [DomainErrorsAsRetry(t) for t in profile.toolsets]
         if profile.include_mcp:
             toolsets += [await self._mcp.build_toolset(s) for s in await self._mcp.visible_to(agent.id)]
@@ -123,6 +132,9 @@ class AgentRuntime:
             deps=scope,
             toolsets=toolsets,
             event_stream_handler=self._forward_events,
+            deferred_tool_results=None
+            if deferred_results is None
+            else DeferredToolResults(calls=dict(deferred_results)),
         )
         usage = result.usage
         log.info(
@@ -140,7 +152,7 @@ class AgentRuntime:
     async def summarize(self, agent: Agent, instructions: str, prompt: str) -> str:
         """用该 agent 的模型做一次无工具的文本生成（上下文压缩用）。不转发事件到前端。"""
         result = await self._pai.run(
-            prompt, model=self._resolve_model(agent.model), instructions=instructions
+            prompt, model=self._resolve_model(agent.model), instructions=instructions, output_type=str
         )
         return result.output
 

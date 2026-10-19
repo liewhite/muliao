@@ -8,12 +8,13 @@ from pydantic_ai.messages import ModelMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.db import Database, utcnow
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.db import Database
+from muliao.errors import Conflict, NotFound
 from muliao.ids import new_id
-from muliao.models import Agent, Compaction, Message, Origin, Session, Task, TaskKind
+from muliao.models import Agent, Compaction, Message, Origin, ReplyTo, Session, Task
 from muliao.runtime.codec import load_messages
-from muliao.runtime.tasks import TaskQueue, running_task_ids, turn_lane
+from muliao.runtime.conversation import enqueue_turn, fail_waits_on_session
+from muliao.runtime.tasks import TaskQueue, running_task_ids
 
 _TITLE_MAX = 60
 
@@ -36,8 +37,10 @@ class SessionService:
         prompt: str,
         origin: Origin,
         origin_ref: str | None,
+        reply_to: ReplyTo,
         title: str | None = None,
     ) -> Session:
+        """新建顶层 session（用户或 cron 发起）。委派产生的子会话由 conversation.Threads 创建。"""
         if await s.get(Agent, agent_id) is None:
             raise NotFound(f"agent {agent_id!r} not found")
         session = Session(
@@ -48,30 +51,20 @@ class SessionService:
             origin_ref=origin_ref,
         )
         s.add(session)
-        self.enqueue_turn_in(s, session, prompt)
+        enqueue_turn(s, self._queue, session, prompt, reply_to)
         return session
-
-    def enqueue_turn_in(self, s: AsyncSession, session: Session, prompt: str) -> Task:
-        if not prompt.strip():
-            raise InvalidInput("prompt must not be empty")
-        session.updated_at = utcnow()
-        return self._queue.enqueue(
-            s,
-            kind=TaskKind.TURN,
-            lane=turn_lane(session.id),
-            agent_id=session.agent_id,
-            session_id=session.id,
-            payload={"prompt": prompt},
-        )
 
     async def start(self, **kwargs) -> Session:  # noqa: ANN003  参数同 create_in
         async with self._db.transaction() as s:
             return await self.create_in(s, **kwargs)
 
     async def reply(self, session_id: str, prompt: str) -> Task:
+        """用户在 session 里追问。私有 thread 只属于发起它的 agent，用户只读。"""
         async with self._db.transaction() as s:
             session = await self._get(s, session_id)
-            return self.enqueue_turn_in(s, session, prompt)
+            if session.private:
+                raise Conflict(f"session {session_id} is a private thread of another agent and is read-only")
+            return enqueue_turn(s, self._queue, session, prompt, ReplyTo.USER)
 
     async def _get(self, s: AsyncSession, session_id: str) -> Session:
         session = await s.get(Session, session_id)
@@ -86,7 +79,14 @@ class SessionService:
     async def list(
         self, *, agent_id: str | None, origins: Sequence[Origin] | None, limit: int, offset: int
     ) -> list[Session]:
-        query = select(Session).order_by(Session.updated_at.desc()).limit(limit).offset(offset)
+        """会话列表只含用户可见的会话；私有 thread 从父会话进入。"""
+        query = (
+            select(Session)
+            .where(Session.private.is_(False))
+            .order_by(Session.updated_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         if agent_id is not None:
             query = query.where(Session.agent_id == agent_id)
         if origins is not None:
@@ -94,14 +94,12 @@ class SessionService:
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
 
-    async def find_latest(self, origin: Origin, origin_ref: str) -> Session | None:
+    async def threads(self, parent_id: str) -> list[Session]:
+        """父会话开出的 thread（含私有的），按创建顺序。"""
         async with self._db.transaction() as s:
-            return await s.scalar(
-                select(Session)
-                .where(Session.origin == origin, Session.origin_ref == origin_ref)
-                .order_by(Session.created_at.desc())
-                .limit(1)
-            )
+            await self._get(s, parent_id)
+            query = select(Session).where(Session.parent_session_id == parent_id).order_by(Session.created_at)
+            return list((await s.scalars(query)).all())
 
     async def history(self, session_id: str) -> list[ModelMessage]:
         return [m for _, m in await self.history_with_ids(session_id)]
@@ -125,9 +123,30 @@ class SessionService:
             (await self._get(s, session_id)).unread = False
 
     async def delete(self, session_id: str) -> None:
-        """删除 session 及其消息和未执行的 task；有 task 正在运行时拒绝，避免运行结果无处提交。"""
+        """删除 session 及其私有 thread（逐层）、消息和未执行的 task。
+
+        私有 thread 只对父会话有意义，随父会话删除；公开 thread 用户可见，保留为独立会话（parent 置空）。
+        任一被删会话有 task 正在运行时拒绝，避免运行结果无处提交；等待这些会话结果的 agent 收到错误。
+        """
         async with self._db.transaction() as s:
-            session = await self._get(s, session_id)
-            if running := await running_task_ids(s, session_id=session_id):
-                raise Conflict(f"session {session_id} has running tasks {running}; wait for them to finish")
-            await s.delete(session)
+            doomed = [await self._get(s, session_id)]
+            frontier = [session_id]
+            while frontier:
+                children = (
+                    await s.scalars(
+                        select(Session).where(
+                            Session.parent_session_id.in_(frontier), Session.private.is_(True)
+                        )
+                    )
+                ).all()
+                doomed += children
+                frontier = [c.id for c in children]
+            for session in doomed:
+                if running := await running_task_ids(s, session_id=session.id):
+                    raise Conflict(
+                        f"session {session.id} has running tasks {running}; wait for them to finish"
+                    )
+            for session in doomed:
+                await fail_waits_on_session(s, self._queue, session.id, f"session {session.id} was deleted")
+            for session in doomed:
+                await s.delete(session)

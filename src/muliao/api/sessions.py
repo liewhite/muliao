@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.errors import NotFound
-from muliao.models import Origin, Session, Task, TaskKind, TaskStatus
+from muliao.models import Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
 from muliao.transcript import Item, to_items
 
 router = APIRouter()
@@ -17,6 +17,10 @@ class SessionOut(BaseModel):
     title: str
     origin: Origin
     origin_ref: str | None
+    # 委派产生的子会话：父会话与 thread 名；private 为 ask_agent 开出的、用户只读的 thread
+    parent_session_id: str | None
+    thread: str | None
+    private: bool
     unread: bool
     created_at: datetime
     updated_at: datetime
@@ -29,6 +33,9 @@ class SessionOut(BaseModel):
             title=s.title,
             origin=s.origin,
             origin_ref=s.origin_ref,
+            parent_session_id=s.parent_session_id,
+            thread=s.thread,
+            private=s.private,
             unread=s.unread,
             created_at=s.created_at,
             updated_at=s.updated_at,
@@ -76,8 +83,10 @@ class SessionDetail(BaseModel):
     items: list[Item]
     # 压缩点：through_message_id 及之前的消息已由 summary 代替发给模型（原文仍完整展示）
     compactions: list[CompactionOut]
-    # 尚未完成或失败的 turn：前端据此显示「处理中」的用户消息与错误
+    # 尚未完成或失败的 turn，以及等待 thread 结果的 resume：前端据此显示「处理中」的用户消息与错误
     open_turns: list[TaskOut]
+    # 这个会话开出的 thread
+    threads: list[SessionOut]
 
 
 class StartIn(BaseModel):
@@ -108,6 +117,7 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
         prompt=body.prompt,
         origin=Origin.USER,
         origin_ref=None,
+        reply_to=ReplyTo.USER,
     )
     return SessionOut.of(session)
 
@@ -125,17 +135,25 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         for x in await c.sessions.compactions(session_id)
     ]
     tasks = await c.queue.list(status=None, session_id=session_id, limit=50)
-    open_turns = [
-        TaskOut.of(t)
-        for t in reversed(tasks)
-        if t.kind == TaskKind.TURN and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.FAILED)
-    ]
+    open_turns = [TaskOut.of(t) for t in reversed(tasks) if _is_open_turn(t)]
     return SessionDetail(
         session=SessionOut.of(session),
         items=items,
         compactions=compactions,
         open_turns=open_turns,
+        threads=[SessionOut.of(t) for t in await c.sessions.threads(session_id)],
     )
+
+
+def _is_open_turn(t: Task) -> bool:
+    match t.kind:
+        case TaskKind.TURN:
+            return t.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.FAILED)
+        case TaskKind.RESUME:
+            # resume 失败时整轮回滚、root turn 标为失败，由 root turn 展示错误与重试
+            return t.status in (TaskStatus.WAITING, TaskStatus.PENDING, TaskStatus.RUNNING)
+        case _:
+            return False
 
 
 @router.post("/sessions/{session_id}/messages", status_code=202)

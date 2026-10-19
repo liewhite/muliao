@@ -49,6 +49,9 @@ class DeliverHandler:
     def __init__(self, pusher: Pusher):
         self._pusher = pusher
 
+    async def on_failed(self, s: AsyncSession, task: Task) -> None:
+        """失败只需记录在 task 上，没有其他人依赖它的结果。"""
+
     async def execute(self, task: Task) -> Commit:
         # 推送实现自己记录真实结果（实际送达几台设备、是否被丢弃）
         await self._pusher.send(Notification(**task.payload))

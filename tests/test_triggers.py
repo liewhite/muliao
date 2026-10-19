@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from muliao.errors import InvalidInput
-from muliao.models import CronJob, McpTransport, Origin
+from muliao.models import CronJob, McpTransport, Origin, ReplyTo
 from muliao.runtime.mcp import McpSpec
 from tests.test_flow import drain
 
@@ -28,7 +28,9 @@ async def test_cron_fires_new_session_without_notifying_and_schedules_next(conta
 
     sessions = await container.sessions.list(agent_id=alpha, origins=[Origin.CRON], limit=10, offset=0)
     assert len(sessions) == 1
-    assert not sessions[0].origin.notifies and sessions[0].origin_ref == str(job.id)
+    assert sessions[0].origin_ref == str(job.id)
+    turn = (await container.queue.list(status=None, session_id=sessions[0].id, limit=1))[0]
+    assert turn.payload["reply_to"] == ReplyTo.NONE
     job = await container.cron.get_by_name("slack")
     assert job.last_session_id == sessions[0].id
     assert job.next_run_at > datetime.now().astimezone()
@@ -108,6 +110,7 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
         prompt="token?",
         origin=Origin.USER,
         origin_ref=None,
+        reply_to=ReplyTo.USER,
     )
     await drain(container, limit_seconds=30)
 
