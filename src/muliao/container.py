@@ -78,7 +78,7 @@ class Container:
         self._background.append(task)
 
     async def start(self) -> None:
-        await migrate(self.db.engine)
+        await asyncio.to_thread(migrate, self.settings.db_path)
         await self._check_agent_models()
         if self.settings.telegram is not None:
             # 配置错误在启动时暴露，而不是在第一条消息到来时让轮询崩溃

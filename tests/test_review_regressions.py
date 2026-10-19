@@ -188,7 +188,7 @@ async def test_agent_referenced_by_config_cannot_be_deleted(settings, models):
 
     settings.telegram = TelegramConfig(bot_token="t", agent="tg", allowed_chat_ids=[1])
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
-    await migrate(c.db.engine)
+    migrate(settings.db_path)
     try:
         await c.agents.create("tg", AgentSpec(description="d", model="m", instructions="", reflect_every=5))
         with pytest.raises(Conflict, match="server configuration"):

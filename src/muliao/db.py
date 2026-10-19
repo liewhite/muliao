@@ -6,9 +6,11 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, DateTime, event
+from sqlalchemy import Connection, DateTime, Engine, event
+from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 from sqlalchemy.types import TypeDecorator
 
 
@@ -61,32 +63,50 @@ def alembic_config(connection: Connection | None = None) -> Config:
     return cfg
 
 
-def _upgrade(connection: Connection) -> None:
-    # batch 迁移会「建新表-拷数据-删旧表」，外键开着时删旧表会触发 ON DELETE CASCADE 删掉子表数据。
-    # PRAGMA foreign_keys 在事务内无效，必须在迁移事务开始前关闭，结束后校验完整性再打开。
-    connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
-    disabled = connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 0
-    # 结束 SQLAlchemy 的自动事务（pysqlite 不会为 PRAGMA 发 BEGIN，这里只是关闭逻辑事务）
-    connection.commit()
-    if not disabled:
-        raise RuntimeError("could not disable SQLite foreign keys before migrating")
+def _migration_engine(db_path: Path) -> Engine:
+    """迁移专用的同步引擎。
+
+    pysqlite 默认只在 DML 前隐式 BEGIN，DDL 会逐条自动提交，导致迁移失败时只回滚一半。这里把驱动设为
+    autocommit（isolation_level=None），由 begin 事件显式发 BEGIN，DDL 才真正处于事务中。
+
+    batch 迁移会「建新表-拷数据-删旧表」，外键开着时删旧表会触发 ON DELETE CASCADE 删掉子表数据。
+    PRAGMA foreign_keys 在事务内无效，所以在建立连接时（任何事务之前）关闭。
+    """
+    engine = sa_create_engine(
+        f"sqlite:///{db_path}", connect_args={"isolation_level": None}, poolclass=NullPool
+    )
+
+    @event.listens_for(engine, "connect")
+    def _foreign_keys_off(dbapi_conn, _record):  # noqa: ANN001
+        dbapi_conn.execute("PRAGMA foreign_keys=OFF")
+        if dbapi_conn.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
+            raise RuntimeError("could not disable SQLite foreign keys before migrating")
+
+    @event.listens_for(engine, "begin")
+    def _explicit_begin(conn: Connection) -> None:
+        conn.exec_driver_sql("BEGIN IMMEDIATE")
+
+    return engine
+
+
+def migrate(db_path: Path) -> None:
+    """把数据库升级到最新结构，整体在一个事务里：任何失败都完整回滚。启动时调用；已是最新时什么也不做。
+
+    同步执行（启动阶段由调用方放进线程）。迁移连接用完即关闭，不进入应用的连接池，应用连接的外键始终开启。
+    """
+    from muliao import models  # noqa: F401  注册所有表
+
+    engine = _migration_engine(db_path)
     try:
-        with connection.begin():
+        with engine.begin() as connection:
             command.upgrade(alembic_config(connection), "head")
             violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
             if violations:
-                raise RuntimeError(f"migration left foreign key violations, rolled back: {violations[:10]}")
+                raise RuntimeError(
+                    f"migration would leave foreign key violations, rolled back: {violations[:10]}"
+                )
     finally:
-        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-        connection.commit()
-
-
-async def migrate(engine: AsyncEngine) -> None:
-    """把数据库升级到最新结构。启动时调用；已是最新时什么也不做。"""
-    from muliao import models  # noqa: F401  注册所有表
-
-    async with engine.connect() as conn:
-        await conn.run_sync(_upgrade)
+        engine.dispose()
 
 
 class Database:

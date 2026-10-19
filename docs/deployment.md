@@ -48,7 +48,7 @@ uv run alembic upgrade head                          # 开发用的临时库 .al
 uv run alembic revision --autogenerate -m "add xxx"  # 检查生成的脚本后提交
 ```
 
-`tests/test_migrations.py` 会比对「迁移后的结构」与模型定义，忘写迁移时测试失败。SQLite 改表采用「建新表-拷数据-删旧表」，迁移期间会关闭外键（否则删旧表会级联删除子表数据），完成后执行 `foreign_key_check`，有违例则整体回滚。
+`tests/test_migrations.py` 会比对「迁移后的结构」与模型定义，忘写迁移时测试失败。SQLite 改表采用「建新表-拷数据-删旧表」，迁移期间会关闭外键（否则删旧表会级联删除子表数据），提交前执行 `foreign_key_check`。整个迁移在一个事务里，任何失败都完整回滚，数据库保持迁移前的状态。
 
 `src/muliao/webui/` 是 `web/src` 的派生产物：提交进仓库是为了让 `uv tool install` 不依赖 node。唯一来源仍是 `web/src`，由 `npm run build` 一条命令重建。
 
