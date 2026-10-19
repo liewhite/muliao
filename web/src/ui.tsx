@@ -501,3 +501,19 @@ export async function copyText(text: string, what: string): Promise<void> {
   await navigator.clipboard.writeText(text)
   toast.success(`已复制${what}`)
 }
+
+/** 「归属」下拉框里代表公共资源的选项 id；提交时映射为 owner = null */
+export const PUBLIC_OWNER = '@public'
+
+export function ownerOptions(agents: Agent[] | undefined) {
+  return [
+    { id: PUBLIC_OWNER, label: '公共（所有 agent）' },
+    ...(agents ?? []).map((a) => ({ id: a.id, label: `${a.name}（私有）` })),
+  ]
+}
+
+export const ownerOf = (option: string): AgentId | null => (option === PUBLIC_OWNER ? null : (option as AgentId))
+
+export function ownerLabel(agents: Agent[] | undefined, owner: AgentId | null): string {
+  return owner === null ? '公共' : agentLabel(agents, owner)
+}

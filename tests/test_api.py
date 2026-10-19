@@ -58,7 +58,8 @@ async def test_vault_never_returns_values(client):
         await client.put("/api/vault/SLACK_TOKEN", json={"value": "xoxb-1", "description": "slack"})
     ).status_code == 204
     listed = (await client.get("/api/vault")).json()
-    assert listed[0]["key"] == "SLACK_TOKEN" and "xoxb-1" not in str(listed)
+    assert listed[0]["key"] == "SLACK_TOKEN" and listed[0]["owner"] is None and "xoxb-1" not in str(listed)
+    assert (await client.put("/api/vault/X?owner=nope", json={"value": "v"})).status_code == 404
 
 
 def test_auth_token_expires_and_rejects_tampering():

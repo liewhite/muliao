@@ -100,7 +100,7 @@ async def test_vault_set_value_is_redacted_from_saved_history(container, make_ag
     session = await start(container, alpha, "save my token", origin=Origin.CRON)
     await drain(container)
 
-    assert (await container.vault.resolve_many(["TOKEN"])) == {"TOKEN": "super-secret"}
+    assert (await container.vault.resolve_many(alpha, ["TOKEN"])) == {"TOKEN": "super-secret"}
     async with container.db.transaction() as s:
         payloads = (await s.scalars(select(Message.payload).where(Message.session_id == session.id))).all()
     assert all("super-secret" not in p for p in payloads)

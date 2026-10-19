@@ -414,3 +414,20 @@ def test_prompt_revisions_migration_moves_instructions_into_first_revision(tmp_p
         assert "instructions" not in {r[1] for r in conn.execute("PRAGMA table_info(agents)")}
         rows = conn.execute("SELECT owner, content, author FROM prompt_revisions").fetchall()
         assert rows == [("a1", "be terse", "user")]
+
+
+BEFORE_SCOPED_SECRETS = "f0076301ba19"
+
+
+def test_scoped_secrets_migration_keeps_existing_secrets_public(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    migrate(path, agents_dir, target=BEFORE_SCOPED_SECRETS)
+    with sqlite3.connect(path) as conn:
+        conn.execute("INSERT INTO secrets VALUES ('TOKEN', x'00', 'd', ?)", (_TS,))
+
+    migrate(path, agents_dir)
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT owner, key, ciphertext, description FROM secrets").fetchall() == [
+            (None, "TOKEN", b"\x00", "d")
+        ]

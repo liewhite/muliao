@@ -14,7 +14,7 @@ import frontmatter
 
 from muliao.errors import InvalidInput, NotFound
 from muliao.naming import validate_slug
-from muliao.ownership import Scope, scope_of
+from muliao.ownership import Scope, scope_of, visible
 
 SKILL_FILE = "SKILL.md"
 
@@ -68,9 +68,9 @@ class SkillStore:
         ]
 
     def visible_to(self, agent: str) -> list[SkillMeta]:
-        private = self.list(agent)
-        shadowed = {s.name for s in private}
-        return private + [s for s in self.list(None) if s.name not in shadowed]
+        return visible(
+            self.list(agent) + self.list(None), agent_id=agent, owner=lambda s: s.owner, name=lambda s: s.name
+        )
 
     def read(self, owner: str | None, name: str) -> Skill:
         skill_dir = self._root(owner) / validate_slug("skill", name)
@@ -79,15 +79,11 @@ class SkillStore:
         return self._load(owner, skill_dir)
 
     def resolve(self, agent: str, name: str) -> Skill:
-        """agent 视角读取：先私有，后公共。"""
-        try:
-            return self.read(agent, name)
-        except NotFound:
-            pass
-        try:
-            return self.read(None, name)
-        except NotFound:
-            raise NotFound(f"skill {name!r} not found in private or public skills") from None
+        """agent 视角读取（合并规则见 ownership.visible）。"""
+        for meta in self.visible_to(agent):
+            if meta.name == name:
+                return self.read(meta.owner, name)
+        raise NotFound(f"skill {name!r} not found in private or public skills")
 
     def write(self, owner: str | None, name: str, description: str, body: str) -> SkillMeta:
         validate_slug("skill", name)

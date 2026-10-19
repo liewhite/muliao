@@ -229,19 +229,26 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
 
 class SecretKeyInfo(BaseModel):
     key: str
+    scope: Scope
     description: str
 
 
 def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool_plain
-    async def vault_list() -> list[SecretKeyInfo]:
-        """List secret keys stored in the vault (values are never shown)."""
-        return [SecretKeyInfo(key=s.key, description=s.description) for s in await vault.list()]
+    @ts.tool
+    async def vault_list(ctx: RunContext[RunScope]) -> list[SecretKeyInfo]:
+        """List secret keys you can use: your private ones and public ones (a private key hides a public key
+        of the same name). Values are never shown."""
+        return [
+            SecretKeyInfo(key=s.key, scope=scope_of(s.owner), description=s.description)
+            for s in await vault.visible_to(ctx.deps.agent_id)
+        ]
 
-    @ts.tool_plain
-    async def vault_set(key: str, value: str, description: str) -> str:
+    @ts.tool
+    async def vault_set(
+        ctx: RunContext[RunScope], key: str, value: str, description: str, scope: Scope = "private"
+    ) -> str:
         """Store a secret the user gave you so it never has to appear in files, skills, memory or MCP configs.
         The value is redacted from the saved conversation.
         Reference it later as `${vault:KEY}` in MCP configs, or via `run_shell(secrets=[KEY])`.
@@ -250,9 +257,21 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
             key: Identifier like `SLACK_TOKEN`.
             value: The secret value.
             description: What it is for.
+            scope: `private` (only you) or `public` (every agent, and public MCP servers).
         """
-        await vault.set(key, value, description)
-        return f"stored secret {key}"
+        await vault.set(owner_of(scope, ctx.deps.agent_id), key, value, description)
+        return f"stored {scope} secret {key}"
+
+    @ts.tool
+    async def vault_delete(ctx: RunContext[RunScope], key: str, scope: Scope = "private") -> str:
+        """Delete a secret that is no longer needed.
+
+        Args:
+            key: The secret key.
+            scope: `private` or `public`.
+        """
+        await vault.delete(owner_of(scope, ctx.deps.agent_id), key)
+        return f"deleted {scope} secret {key}"
 
     return ts
 

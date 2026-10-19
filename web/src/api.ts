@@ -164,6 +164,8 @@ export interface McpServer {
 export type McpInput = Omit<McpServer, 'id' | 'enabled' | 'tools'> & { probe: boolean }
 
 export interface SecretInfo {
+  /** null 为公共 */
+  owner: AgentId | null
   key: string
   description: string
   updated_at: string
@@ -295,9 +297,9 @@ export const api = {
   deleteMcp: (owner: AgentId | null, name: string) => del('/api/mcp', { owner, name }),
 
   secrets: () => get<SecretInfo[]>('/api/vault'),
-  setSecret: (key: string, value: string, description: string) =>
-    put<void>(`/api/vault/${encodeURIComponent(key)}`, { value, description }),
-  deleteSecret: (key: string) => del(`/api/vault/${encodeURIComponent(key)}`),
+  setSecret: (owner: AgentId | null, key: string, value: string, description: string) =>
+    put<void>(`/api/vault/${encodeURIComponent(key)}`, { value, description }, { owner }),
+  deleteSecret: (owner: AgentId | null, key: string) => del(`/api/vault/${encodeURIComponent(key)}`, { owner }),
 
   vapidKey: () => get<{ public_key: string }>('/api/push/vapid'),
   subscribePush: (sub: PushSubscriptionJSON) => post<void>('/api/push/subscriptions', sub),

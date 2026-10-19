@@ -127,13 +127,14 @@ def workspace_toolset(vault: Vault, limits: ShellLimits) -> FunctionToolset[RunS
         Args:
             command: The command line to run.
             timeout: Seconds before the command is killed.
-            secrets: Vault keys to expose to the command as environment variables of the same name.
+            secrets: Vault keys (your private ones or public ones) to expose to the command as environment
+                variables of the same name.
                 Secret values in the output are replaced by `[secret:KEY]`.
         """
         timeout = timeout or limits.default_timeout
         if not 0 < timeout <= limits.max_timeout:
             raise InvalidInput(f"timeout must be in (0, {limits.max_timeout}] seconds")
-        secret_values = await vault.resolve_many(secrets or [])
+        secret_values = await vault.resolve_many(ctx.deps.agent_id, secrets or [])
         env = {k: os.environ[k] for k in _INHERITED_ENV if k in os.environ} | secret_values
         ctx.deps.workspace.mkdir(parents=True, exist_ok=True)
         proc = await asyncio.create_subprocess_exec(

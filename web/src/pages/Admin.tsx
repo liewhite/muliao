@@ -2,18 +2,23 @@ import { useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
 import { Activity, BellRing, ChevronRight, KeyRound, LogOut, Plug, RotateCcw, ScrollText, Sparkles, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, type TaskStatus } from '../api'
+import { api, type SecretInfo, type TaskStatus } from '../api'
 import { closeServerEvents } from '../events'
 import { enablePush, pushState, type PushState } from '../push'
 import { ActionButton,
   EmptyHint,
   ErrorAlert,
   Loading,
+  PUBLIC_OWNER,
   Page,
   Segmented,
+  SelectInput,
   TextInput,
   agentLabel,
   formatTime,
+  ownerLabel,
+  ownerOf,
+  ownerOptions,
   useAction,
   useAgents,
   useConfirm,
@@ -23,6 +28,8 @@ import { ActionButton,
 export function Vault() {
   const confirm = useConfirm()
   const secrets = useLoad(() => api.secrets(), [])
+  const agents = useAgents()
+  const [owner, setOwner] = useState(PUBLIC_OWNER)
   const [key, setKey] = useState('')
   const [value, setValue] = useState('')
   const [description, setDescription] = useState('')
@@ -30,7 +37,7 @@ export function Vault() {
 
   async function save() {
     const ok = await action.run(async () => {
-      await api.setSecret(key, value, description)
+      await api.setSecret(ownerOf(owner), key, value, description)
       toast.success(`已保存 ${key}`)
     })
     if (ok) {
@@ -41,14 +48,14 @@ export function Vault() {
     }
   }
 
-  async function remove(name: string) {
+  async function remove(s: SecretInfo) {
     const ok = await confirm({
-      title: `删除 secret「${name}」？`,
-      body: '引用它的 MCP 与命令会失败。',
+      title: `删除${ownerLabel(agents.data, s.owner)} secret「${s.key}」？`,
+      body: '引用它的 MCP 与命令会失败（私有 secret 被删后，同名的公共 secret 会生效）。',
       confirmLabel: '删除',
       danger: true,
     })
-    if (ok) await action.run(() => api.deleteSecret(name).then(secrets.reload))
+    if (ok) await action.run(() => api.deleteSecret(s.owner, s.key).then(secrets.reload))
   }
 
   return (
@@ -56,10 +63,12 @@ export function Vault() {
       <p className="text-sm text-muted">
         Secret 加密保存，值不会再显示。agent 通过 key 引用：MCP 配置里写{' '}
         <code className="font-mono">{'${vault:KEY}'}</code>，shell 里用{' '}
-        <code className="font-mono">run_shell(secrets=[KEY])</code> 注入同名环境变量。
+        <code className="font-mono">run_shell(secrets=[KEY])</code> 注入同名环境变量。私有 secret 只有该 agent 可用，同名时遮蔽公共
+        secret；公共 MCP server 只能引用公共 secret。
       </p>
       <Card>
         <Card.Content className="flex flex-col gap-4">
+          <SelectInput label="归属" value={owner} onChange={setOwner} options={ownerOptions(agents.data)} />
           <TextInput label="Key" value={key} onChange={setKey} placeholder="SLACK_TOKEN" mono isRequired />
           <TextInput label="值" type="password" value={value} onChange={setValue} isRequired />
           <TextInput label="说明" value={description} onChange={setDescription} />
@@ -76,15 +85,15 @@ export function Vault() {
           ) : (
             <div className="flex flex-col gap-2">
               {list.map((s) => (
-                <Card key={s.key}>
+                <Card key={`${s.owner}/${s.key}`}>
                   <Card.Content className="flex flex-row items-center gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="font-mono font-medium">{s.key}</div>
                       <div className="truncate text-xs text-muted">
-                        {s.description || '无说明'} · {formatTime(s.updated_at)}
+                        {ownerLabel(agents.data, s.owner)} · {s.description || '无说明'} · {formatTime(s.updated_at)}
                       </div>
                     </div>
-                    <Button isIconOnly size="sm" variant="ghost" aria-label={`删除 ${s.key}`} onPress={() => void remove(s.key)}>
+                    <Button isIconOnly size="sm" variant="ghost" aria-label={`删除 ${s.key}`} onPress={() => void remove(s)}>
                       <Trash2 className="size-4" />
                     </Button>
                   </Card.Content>

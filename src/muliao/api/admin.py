@@ -255,28 +255,31 @@ class SecretIn(BaseModel):
 
 
 class SecretOut(BaseModel):
+    # None 为公共
+    owner: str | None
     key: str
     description: str
     updated_at: datetime
 
     @classmethod
     def of(cls, s: SecretInfo) -> "SecretOut":
-        return cls(key=s.key, description=s.description, updated_at=s.updated_at)
+        return cls(owner=s.owner, key=s.key, description=s.description, updated_at=s.updated_at)
 
 
 @router.get("/vault")
 async def list_secrets(c: C) -> list[SecretOut]:
-    return [SecretOut.of(s) for s in await c.vault.list()]
+    return [SecretOut.of(s) for s in await c.vault.list_all()]
 
 
 @router.put("/vault/{key}", status_code=204)
-async def set_secret(c: C, key: str, body: SecretIn) -> None:
-    await c.vault.set(key, body.value, body.description)
+async def set_secret(c: C, key: str, body: SecretIn, owner: str | None = None) -> None:
+    """owner 缺省为公共 secret，否则为该 agent 私有。"""
+    await c.vault.set(owner, key, body.value, body.description)
 
 
 @router.delete("/vault/{key}", status_code=204)
-async def delete_secret(c: C, key: str) -> None:
-    await c.vault.delete(key)
+async def delete_secret(c: C, key: str, owner: str | None = None) -> None:
+    await c.vault.delete(owner, key)
 
 
 # ---- push ----

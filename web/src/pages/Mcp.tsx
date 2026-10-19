@@ -1,24 +1,26 @@
 import { useState } from 'react'
 import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plug, Trash2 } from 'lucide-react'
-import { api, asAgentId, type Agent, type McpInput, type McpServer } from '../api'
+import { api, type Agent, type McpInput, type McpServer } from '../api'
 import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
   Loading,
+  PUBLIC_OWNER,
   Page,
   Segmented,
   SelectInput,
   TextAreaInput,
   TextInput,
-  agentLabel,
+  ownerLabel,
+  ownerOf,
+  ownerOptions,
   useAction,
   useAgents,
   useConfirm,
   useLoad,
 } from '../ui'
 
-const PUBLIC = '@public'
 
 function parsePairs(text: string): Record<string, string> {
   const result: Record<string, string> = {}
@@ -48,7 +50,7 @@ function ToolChips({ tools }: { tools: string[] }) {
 }
 
 function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated: () => void }) {
-  const [owner, setOwner] = useState(PUBLIC)
+  const [owner, setOwner] = useState(PUBLIC_OWNER)
   const [name, setName] = useState('')
   const [transport, setTransport] = useState<'stdio' | 'http'>('stdio')
   const [command, setCommand] = useState('')
@@ -62,7 +64,7 @@ function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated
     const ok = await action.run(async () => {
       const kv = parsePairs(pairs)
       const input: McpInput = {
-        owner: owner === PUBLIC ? null : asAgentId(owner),
+        owner: ownerOf(owner),
         name,
         transport,
         command: transport === 'stdio' ? command : null,
@@ -92,10 +94,7 @@ function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated
               label="归属"
               value={owner}
               onChange={setOwner}
-              options={[
-                { id: PUBLIC, label: '公共（所有 agent）' },
-                ...(agents ?? []).map((a) => ({ id: a.id, label: `${a.name}（私有）` })),
-              ]}
+              options={ownerOptions(agents)}
             />
             <TextInput label="名称" hint="工具名会以「名称_」为前缀" value={name} onChange={setName} mono isRequired />
             <div>
@@ -154,7 +153,7 @@ function McpItem({ server, agents, onChange }: { server: McpServer; agents: Agen
           <Card.Title className="font-mono text-base">{server.name}</Card.Title>
           <div className="mt-1 flex flex-wrap gap-1.5">
             <Chip size="sm" color="accent" variant="soft">
-              {server.owner === null ? '公共' : agentLabel(agents, server.owner)}
+              {ownerLabel(agents, server.owner)}
             </Chip>
             <Chip size="sm" variant="secondary">
               {server.transport}

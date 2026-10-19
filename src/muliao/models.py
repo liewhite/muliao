@@ -278,12 +278,21 @@ class McpServer(Base):
 
 
 class Secret(Base):
+    """owner 为 None 时是公共 secret，否则为该 agent 私有；同名时私有遮蔽公共（见 ownership.visible）。"""
+
     __tablename__ = "secrets"
 
-    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    owner: Mapped[str | None] = mapped_column(_fk_agent())
+    key: Mapped[str] = mapped_column(String(100))
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
     description: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        Index("uq_secrets_private", "owner", "key", unique=True, sqlite_where=owner.isnot(None)),
+        Index("uq_secrets_public", "key", unique=True, sqlite_where=owner.is_(None)),
+    )
 
 
 class PushSubscription(Base):

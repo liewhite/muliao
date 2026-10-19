@@ -60,7 +60,7 @@ async def test_cron_rejects_invalid_expression(container, make_agent):
 
 async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent):
     alpha = (await make_agent()).id
-    await container.vault.set("ECHO_TOKEN", "tok-123")
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
     spec = McpSpec(
         name="echo",
         transport=McpTransport.STDIO,
@@ -94,7 +94,7 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     from tests.test_flow import call_then_answer
 
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set("ECHO_TOKEN", "tok-123")
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
     spec = McpSpec(
         name="echo",
         transport=McpTransport.STDIO,

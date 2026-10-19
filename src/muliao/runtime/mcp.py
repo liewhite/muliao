@@ -15,7 +15,7 @@ from muliao.db import Database
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.models import Agent, McpServer, McpTransport
 from muliao.naming import validate_slug
-from muliao.ownership import scope_of
+from muliao.ownership import scope_of, visible
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
@@ -60,16 +60,16 @@ class McpRegistry:
             assert server.command is not None
             client = StdioTransport(
                 command=server.command,
-                args=[await self._vault.render(a) for a in server.args],
-                env=await self._vault.render_map(server.env) or None,
+                args=[await self._vault.render(a, server.owner) for a in server.args],
+                env=await self._vault.render_map(server.env, server.owner) or None,
             )
             toolset = MCPToolset(client, id=f"mcp-{server.id}", init_timeout=_CONNECT_TIMEOUT)
         else:
             assert server.url is not None
             toolset = MCPToolset(
-                await self._vault.render(server.url),
+                await self._vault.render(server.url, server.owner),
                 id=f"mcp-{server.id}",
-                headers=await self._vault.render_map(server.headers) or None,
+                headers=await self._vault.render_map(server.headers, server.owner) or None,
                 init_timeout=_CONNECT_TIMEOUT,
             )
         return toolset.prefixed(server.name)
@@ -94,7 +94,7 @@ class McpRegistry:
             ) from e
 
     async def visible_to(self, agent_id: str) -> list[McpServer]:
-        """agent 可用的 server：公共 + 自己私有，且已启用。私有与公共同名时私有生效。"""
+        """agent 可用的 server：已启用的，按 ownership.visible 合并公共与私有。"""
         async with self._db.transaction() as s:
             rows = (
                 await s.scalars(
@@ -103,8 +103,7 @@ class McpRegistry:
                     .order_by(McpServer.name)
                 )
             ).all()
-        private = {r.name for r in rows if r.owner is not None}
-        return [r for r in rows if r.owner is not None or r.name not in private]
+        return visible(rows, agent_id=agent_id, owner=lambda r: r.owner, name=lambda r: r.name)
 
     async def list(self, owner: str | None, *, all_owners: bool = False) -> list[McpServer]:
         query = select(McpServer).order_by(McpServer.owner, McpServer.name)

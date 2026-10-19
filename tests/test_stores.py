@@ -89,11 +89,42 @@ def test_memory_of_unknown_agent_is_not_found(memory: MemoryStore):
 
 async def test_vault_renders_references_and_fails_on_missing_key(container):
     vault = container.vault
-    await vault.set("TOKEN", "s3cret", "api token")
+    await vault.set(None, "TOKEN", "s3cret", "api token")
 
-    assert await vault.render("Bearer ${vault:TOKEN}") == "Bearer s3cret"
-    assert [s.key for s in await vault.list()] == ["TOKEN"]
+    assert await vault.render("Bearer ${vault:TOKEN}", None) == "Bearer s3cret"
+    assert [s.key for s in await vault.list_all()] == ["TOKEN"]
     with pytest.raises(NotFound):
-        await vault.render("${vault:MISSING}")
+        await vault.render("${vault:MISSING}", None)
     with pytest.raises(InvalidInput):
-        await vault.set("bad-key", "v")
+        await vault.set(None, "bad-key", "v")
+
+
+async def test_private_secret_shadows_public_and_is_invisible_to_others(container, make_agent):
+    vault = container.vault
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    await vault.set(None, "TOKEN", "public")
+    await vault.set(alpha, "TOKEN", "alpha-only")
+    await vault.set(alpha, "ALPHA_KEY", "a")
+
+    assert await vault.resolve_many(alpha, ["TOKEN"]) == {"TOKEN": "alpha-only"}
+    assert await vault.resolve_many(beta, ["TOKEN"]) == {"TOKEN": "public"}
+    # 公共视角（公共 MCP server 的配置）只看公共 secret
+    assert await vault.render("${vault:TOKEN}", None) == "public"
+    with pytest.raises(NotFound):
+        await vault.resolve_many(beta, ["ALPHA_KEY"])
+    assert [(s.key, s.owner) for s in await vault.visible_to(alpha)] == [
+        ("ALPHA_KEY", alpha),
+        ("TOKEN", alpha),
+    ]
+
+    await vault.delete(alpha, "TOKEN")
+    assert await vault.resolve_many(alpha, ["TOKEN"]) == {"TOKEN": "public"}
+    with pytest.raises(NotFound):
+        await vault.delete(alpha, "TOKEN")
+
+
+async def test_secrets_of_deleted_agent_go_with_it(container, make_agent):
+    alpha = (await make_agent("alpha")).id
+    await container.vault.set(alpha, "TOKEN", "x")
+    await container.agents.delete(alpha)
+    assert await container.vault.list_all() == []
