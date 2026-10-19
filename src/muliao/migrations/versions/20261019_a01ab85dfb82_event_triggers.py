@@ -40,11 +40,20 @@ def upgrade() -> None:
         sqlite_autoincrement=True,
     )
     # 重建 cron_jobs 以启用 AUTOINCREMENT（SQLite 不能就地修改）；现有 id 原样保留
-    with op.batch_alter_table(
-        "cron_jobs", recreate="always", table_kwargs={"sqlite_autoincrement": True}
-    ):
+    with op.batch_alter_table("cron_jobs", recreate="always", table_kwargs={"sqlite_autoincrement": True}):
         pass
-    # ### end Alembic commands ###
+    # 重建后计数器只记得现存最大 id；迁移前已删除的 cron job 仍是旧会话的发送方（sessions.origin_ref），
+    # 把计数器抬到两者的最大值，保证这些 id 也不会再分配出去
+    conn = op.get_bind()
+    floor = conn.exec_driver_sql(
+        "SELECT max(coalesce((SELECT max(id) FROM cron_jobs), 0), "
+        "coalesce((SELECT max(CAST(origin_ref AS INTEGER)) FROM sessions WHERE origin = 'cron'), 0))"
+    ).scalar()
+    if floor:
+        conn.exec_driver_sql("DELETE FROM sqlite_sequence WHERE name = 'cron_jobs'")
+        conn.execute(
+            sa.text("INSERT INTO sqlite_sequence (name, seq) VALUES ('cron_jobs', :seq)"), {"seq": floor}
+        )
 
 
 def downgrade() -> None:

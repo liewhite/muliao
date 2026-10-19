@@ -1,4 +1,4 @@
-"""外部事件触发源：外部系统带 token 调用 POST /api/hooks/{name}，为指定 agent 新建 session 并投递 turn。
+"""外部事件触发源：外部系统带 token 调用 POST /api/hooks/{name}，把事件交给指定 agent 处理一轮（新建会话或续写）。
 
 策略：
 - 不带 session_id 的事件新建一个 session，响应里返回它的 id；带上这个 id 的后续事件在同一个 session 里继续。

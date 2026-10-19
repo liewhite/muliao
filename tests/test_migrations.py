@@ -373,6 +373,12 @@ def test_event_triggers_migration_makes_sender_ids_non_reusable_and_keeps_cron_j
             " VALUES (7, 'daily', 'a1', '0 9 * * *', 'p', 1, ?, ?)",
             (_TS, _TS),
         )
+        # 迁移前已删除的 cron job 12 仍是这个会话的发送方
+        conn.execute(
+            "INSERT INTO sessions (id, agent_id, title, origin, origin_ref, private, unread, created_at, updated_at)"
+            " VALUES ('s1', 'a1', 't', 'cron', '12', 0, 0, ?, ?)",
+            (_TS, _TS),
+        )
 
     migrate(path, agents_dir)
 
@@ -388,4 +394,4 @@ def test_event_triggers_migration_makes_sender_ids_non_reusable_and_keeps_cron_j
             " VALUES ('again', 'a1', '0 9 * * *', 'p', 1, ?, ?)",
             (_TS, _TS),
         )
-        assert conn.execute("SELECT id FROM cron_jobs").fetchone()[0] == 8
+        assert conn.execute("SELECT id FROM cron_jobs").fetchone()[0] == 13
