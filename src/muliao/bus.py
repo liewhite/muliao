@@ -5,8 +5,10 @@
 
 import asyncio
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -65,3 +67,45 @@ class EventBus:
             yield sub
         finally:
             self._subscribers.discard(sub)
+
+
+@dataclass(frozen=True)
+class LiveRun:
+    run_id: str
+    events: list[Event]
+
+
+class LiveRuns:
+    """每个会话正在进行的那一轮的运行事件，在内存里留一份，让中途打开会话页的人从这一轮的开头看起。
+
+    和事件总线一样只是展示加速：一轮提交（或失败）后由数据库接管（end），进程重启时这一轮本来也会重跑，缓存丢了无妨。
+    事件带上这一轮的 run_id 与递增的 seq，前端用它们把快照与之后经 SSE 收到的事件合并，并发现两者之间的缺口。
+    没有会话的运行（反思、临时 agent）不缓存，照常推给总线。生命周期只由 TurnRunner 管（begin / end）。
+    """
+
+    def __init__(self, bus: EventBus):
+        self._bus = bus
+        self._runs: dict[str, LiveRun] = {}
+
+    def begin(self, session_id: str) -> None:
+        if session_id in self._runs:
+            # 同一会话同时只有一轮（lane 串行、内联轮次有锁）；已有记录说明上一轮漏了 end 或这个前提被打破
+            raise RuntimeError(f"session {session_id} already has a live run")
+        self._runs[session_id] = LiveRun(uuid.uuid4().hex, [])
+
+    def end(self, session_id: str) -> None:
+        self._runs.pop(session_id, None)
+
+    def publish(self, session_id: str | None, event: Event) -> None:
+        if session_id is not None:
+            run = self._runs.get(session_id)
+            if run is None:
+                # 会话的每一轮都由 TurnRunner 先 begin；没有说明调用方漏了这一步
+                raise RuntimeError(f"run event for session {session_id} outside a begun run")
+            event = {**event, "run_id": run.run_id, "seq": len(run.events)}
+            run.events.append(event)
+        self._bus.publish(event)
+
+    def snapshot(self, session_id: str) -> LiveRun | None:
+        run = self._runs.get(session_id)
+        return None if run is None else LiveRun(run.run_id, list(run.events))

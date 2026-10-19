@@ -1,5 +1,7 @@
 // 与后端 src/muliao/api/*.py 的响应模型一一对应
 
+import type { LiveRun } from './events'
+
 export type Origin = 'user' | 'trigger' | 'delegation'
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
 export type TaskKind = 'turn' | 'reflection' | 'deliver' | 'compaction'
@@ -155,6 +157,8 @@ export interface SessionDetail {
   threads: Session[]
   /** 还在等回答、也还没提交回答的提问 */
   pending_questions: PendingQuestions[]
+  /** 正在进行的这一轮已经产生的运行事件；没有则为 null */
+  live: LiveRun | null
 }
 
 export interface SkillMeta {

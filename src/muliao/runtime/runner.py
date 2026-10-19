@@ -26,7 +26,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.toolsets import AbstractToolset
 
 from muliao.agents import AgentService
-from muliao.bus import EventBus
+from muliao.bus import LiveRuns
 from muliao.db import utcnow
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.prompts import PromptStore
@@ -104,7 +104,7 @@ class AgentRuntime:
         memory: MemoryStore,
         prompts: PromptStore,
         mcp: McpRegistry,
-        bus: EventBus,
+        live: LiveRuns,
         tz: ZoneInfo,
         clock: Clock = utcnow,
         resolve_model: ModelResolver,
@@ -115,7 +115,7 @@ class AgentRuntime:
         self._memory = memory
         self._prompts = prompts
         self._mcp = mcp
-        self._bus = bus
+        self._live = live
         self._tz = tz
         self._clock = clock
         self._resolve_model = resolve_model
@@ -269,25 +269,32 @@ class AgentRuntime:
         base = {"type": "run", "session_id": ctx.deps.session_id, "agent": ctx.deps.agent_id}
         async for event in stream:
             if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
-                self._bus.publish({**base, "event": "text", "text": event.part.content})
+                self._live.publish(ctx.deps.session_id, {**base, "event": "text", "text": event.part.content})
             elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                self._bus.publish({**base, "event": "text", "text": event.delta.content_delta})
+                self._live.publish(
+                    ctx.deps.session_id, {**base, "event": "text", "text": event.delta.content_delta}
+                )
             elif (
                 isinstance(event, PartStartEvent)
                 and isinstance(event.part, ThinkingPart)
                 and event.part.content
             ):
-                self._bus.publish({**base, "event": "thinking", "text": event.part.content})
+                self._live.publish(
+                    ctx.deps.session_id, {**base, "event": "thinking", "text": event.part.content}
+                )
             # 只更新签名、没有新内容的增量（content_delta 为 None）不用展示
             elif (
                 isinstance(event, PartDeltaEvent)
                 and isinstance(event.delta, ThinkingPartDelta)
                 and event.delta.content_delta
             ):
-                self._bus.publish({**base, "event": "thinking", "text": event.delta.content_delta})
+                self._live.publish(
+                    ctx.deps.session_id, {**base, "event": "thinking", "text": event.delta.content_delta}
+                )
             elif isinstance(event, FunctionToolCallEvent):
                 call = redact_call(event.part)
-                self._bus.publish(
+                self._live.publish(
+                    ctx.deps.session_id,
                     {
                         **base,
                         "event": "tool_call",
@@ -295,14 +302,15 @@ class AgentRuntime:
                         "tool_call_id": call.tool_call_id,
                         "text": truncate(call.args_as_json_str(), _EVENT_TEXT_LIMIT),
                         "attachments": [],
-                    }
+                    },
                 )
             elif isinstance(event, FunctionToolResultEvent):
                 part = event.part
                 text = (
                     part.model_response_str() if isinstance(part, ToolReturnPart) else part.model_response()
                 )
-                self._bus.publish(
+                self._live.publish(
+                    ctx.deps.session_id,
                     {
                         **base,
                         "event": "tool_result" if isinstance(part, ToolReturnPart) else "tool_error",
@@ -310,5 +318,5 @@ class AgentRuntime:
                         "tool_call_id": part.tool_call_id,
                         "text": truncate(text, _EVENT_TEXT_LIMIT),
                         "attachments": tool_attachments(part),
-                    }
+                    },
                 )

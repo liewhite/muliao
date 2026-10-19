@@ -28,7 +28,7 @@ import {
 } from '../blocks'
 import { AnsweredQuestions, QuestionForm, QuestionNote } from '../questions'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
-import { liveToItems, useServerEvents, type RunEvent } from '../events'
+import { liveToItems, mergeLive, useServerEvents, type RunEvent } from '../events'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
 function Collapsible({ title, tone = 'default', children }: { title: ReactNode; tone?: 'default' | 'danger'; children: ReactNode }) {
@@ -322,6 +322,18 @@ export default function SessionView() {
     }
   })
 
+  // 中途打开或重新拉取时以快照为准，从这一轮的开头显示，再接上经 SSE 收到、快照里还没有的事件。
+  // 只看这个会话的事件：切换会话时组件复用，上一个会话收到的事件还在
+  const merged = mergeLive(
+    detail.data?.live ?? null,
+    live.filter((e) => e.session_id === id),
+  )
+  const shownLive = merged.events
+  const reload = detail.reload
+  useEffect(() => {
+    if (merged.gap) void reload()
+  }, [merged.gap, reload])
+
   const unread = detail.data?.session.unread
   useEffect(() => {
     if (unread) void api.markRead(id)
@@ -329,7 +341,7 @@ export default function SessionView() {
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' })
-  }, [detail.data, live.length])
+  }, [detail.data, shownLive.length])
 
   async function send() {
     // Enter 键不经过按钮的禁用状态：请求进行中再按一次不能重复发送
@@ -422,9 +434,9 @@ export default function SessionView() {
             {d.open_turns.map((t) => (
               <OpenTurn key={t.id} task={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
             ))}
-            {live.length > 0 && (
+            {shownLive.length > 0 && (
               <div className="flex flex-col gap-3 opacity-90">
-                <Blocks items={liveToItems(live)} asking={NOT_ASKING} />
+                <Blocks items={liveToItems(shownLive)} asking={NOT_ASKING} />
               </div>
             )}
             <Threads threads={d.threads} agents={agents.data} />

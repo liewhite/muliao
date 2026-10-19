@@ -15,9 +15,10 @@ from dataclasses import dataclass
 
 from pydantic_ai import DeferredToolRequests, DeferredToolResults
 from pydantic_ai.messages import ModelMessage
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.bus import LiveRuns
 from muliao.db import Database, utcnow
 from muliao.delivery.base import Notification, Notifier
 from muliao.files import FileStore
@@ -92,7 +93,9 @@ class TurnRunner:
         notifier: Notifier,
         compaction: CompactionScheduler,
         files: FileStore,
+        live: LiveRuns,
     ):
+        self._live = live
         self._files = files
         self._db = db
         self._runtime = runtime
@@ -121,22 +124,31 @@ class TurnRunner:
         content = [*([prompt] if prompt.strip() else []), *references(files)]
         # 只回答了提问的一轮没有新的用户消息
         user_prompt = (content if files else prompt) if content else None
-        result = await self._runtime.run(
-            agent,
-            scope,
-            user_prompt,
-            context.messages,
-            self._tool_groups.profile(agent.id, agent.tool_groups),
-            summary=context.summary,
-            deferred=_deferred(context.messages, answers),
-        )
-        return TurnOutput(
-            session.id, agent.id, _answer_text(result.output), redact_messages(result.new_messages())
-        )
+        # 这一轮的运行事件从这里开始留存：成功时在提交事务结束（提交或回滚）时丢弃（commit_in），其余失败在这里丢弃
+        self._live.begin(session.id)
+        try:
+            result = await self._runtime.run(
+                agent,
+                scope,
+                user_prompt,
+                context.messages,
+                self._tool_groups.profile(agent.id, agent.tool_groups),
+                summary=context.summary,
+                deferred=_deferred(context.messages, answers),
+            )
+            return TurnOutput(
+                session.id, agent.id, _answer_text(result.output), redact_messages(result.new_messages())
+            )
+        except BaseException:
+            self._live.end(session.id)
+            raise
 
     async def commit_in(self, s: AsyncSession, turn_id: int, out: TurnOutput, reply_to: ReplyTo) -> None:
         """在调用方事务里提交一轮的全部结果。"""
         session, agent = await _load(s, out.session_id)
+        # 事务结束才交给数据库：提交后历史里有这一轮，回滚则这一轮失败，两种情况都不再显示运行中的事件
+        for outcome in ("after_commit", "after_rollback"):
+            event.listen(s.sync_session, outcome, lambda _s: self._live.end(out.session_id), once=True)
         s.add_all(
             Message(session_id=session.id, task_id=turn_id, payload=dump_message(m)) for m in out.messages
         )
@@ -179,6 +191,8 @@ class TurnRunner:
                     await s.flush()
                     await self.commit_in(s, turn.id, out, reply_to)
             except Exception as e:
+                # 运行成功、提交前失败（如 thread 已被删除）时 commit_in 没被调用到
+                self._live.end(session_id)
                 log.warning("inline turn failed: %r", e, extra={"session_id": session_id})
                 raise
         log.info("inline turn done", extra={"session_id": session_id, "task_id": turn.id})

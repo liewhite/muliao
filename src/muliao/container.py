@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from muliao.agent_lifecycle import AgentLifecycle
 from muliao.agents import AgentDefaults, AgentService
-from muliao.bus import EventBus
+from muliao.bus import EventBus, LiveRuns
 from muliao.config import Settings
 from muliao.db import Database, create_engine, migrate
 from muliao.delivery.base import DeliverHandler, Notifier
@@ -79,6 +79,7 @@ class Container:
     settings: Settings
     db: Database
     bus: EventBus
+    live: LiveRuns
     queue: TaskQueue
     vault: Vault
     resources: ResourceRepo
@@ -189,6 +190,7 @@ def build_container(
     tz = ZoneInfo(settings.timezone)
     db = Database(create_engine(settings.db_path))
     bus = EventBus()
+    live = LiveRuns(bus)
     queue = TaskQueue(
         db,
         max_attempts=settings.runtime.task_max_attempts,
@@ -240,7 +242,7 @@ def build_container(
         memory=memory,
         prompts=prompts,
         mcp=mcp,
-        bus=bus,
+        live=live,
         tz=tz,
         resolve_model=resolve_model or models.resolve,
         files=files,
@@ -302,7 +304,7 @@ def build_container(
     if tuple(tool_groups.groups) != tool_group_names:
         raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {tool_group_names}")
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
-    turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction, files)
+    turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction, files, live)
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.TURN: TurnHandler(turn_runner),
         TaskKind.COMPACTION: CompactionHandler(
@@ -323,6 +325,7 @@ def build_container(
         settings=settings,
         db=db,
         bus=bus,
+        live=live,
         queue=queue,
         vault=vault,
         resources=resources,

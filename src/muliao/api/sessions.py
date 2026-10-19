@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -107,6 +108,11 @@ class PendingQuestionsOut(BaseModel):
     questions: list[Question]
 
 
+class LiveRunOut(BaseModel):
+    run_id: str
+    events: list[dict[str, Any]]
+
+
 class SessionDetail(BaseModel):
     session: SessionOut
     items: list[Item]
@@ -118,6 +124,8 @@ class SessionDetail(BaseModel):
     threads: list[SessionOut]
     # 现在可以回答的提问（已提交的回答显示在 open_turns 里）
     pending_questions: list[PendingQuestionsOut]
+    # 正在进行的这一轮已经产生的运行事件（与 SSE 的 run 事件同一形状），让中途打开页面也能从头看起；没有则为 null
+    live: LiveRunOut | None
 
 
 class StartIn(BaseModel):
@@ -186,6 +194,9 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         compactions=compactions,
         open_turns=open_turns,
         threads=[SessionOut.of(t) for t in await c.sessions.threads(session_id)],
+        live=None
+        if (run := c.live.snapshot(session_id)) is None
+        else LiveRunOut(run_id=run.run_id, events=run.events),
         pending_questions=[
             PendingQuestionsOut(tool_call_id=call_id, questions=questions)
             for call_id, questions in pending.items()
