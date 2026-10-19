@@ -55,7 +55,7 @@ async def test_deleting_session_or_agent_with_running_task_is_rejected(container
     with pytest.raises(Conflict):
         await container.sessions.delete(session.id)
     with pytest.raises(Conflict):
-        await container.agents.delete(alpha)
+        await container.agent_lifecycle.delete(alpha)
 
 
 async def test_broken_cron_job_is_disabled_without_blocking_others(container, make_agent):

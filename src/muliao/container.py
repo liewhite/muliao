@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from muliao.agent_lifecycle import AgentLifecycle
 from muliao.agents import AgentService
 from muliao.bus import EventBus
 from muliao.config import Settings
@@ -56,6 +57,7 @@ class Container:
     memory: MemoryStore
     prompts: PromptStore
     agents: AgentService
+    agent_lifecycle: AgentLifecycle
     sessions: SessionService
     notifier: Notifier
     mcp: McpRegistry
@@ -134,9 +136,9 @@ def build_container(
         settings.agents_dir,
         memory,
         model_checker or models.check,
-        queue,
         prompts,
     )
+    agent_lifecycle = AgentLifecycle(db, queue, agents)
     sessions = SessionService(db, queue)
     threads = Threads(queue)
     notifier = Notifier(db, queue)
@@ -207,6 +209,7 @@ def build_container(
         memory=memory,
         prompts=prompts,
         agents=agents,
+        agent_lifecycle=agent_lifecycle,
         sessions=sessions,
         notifier=notifier,
         mcp=mcp,

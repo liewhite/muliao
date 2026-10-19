@@ -473,7 +473,7 @@ async def test_deleting_awaited_agent_wakes_waiter_with_error(container, make_ag
     await container.queue.recover()
     [child] = await threads_of(container, parent.id)
 
-    await container.agents.delete(slow)
+    await container.agent_lifecycle.delete(slow)
     await drain(container)
 
     assert (await last_answer(container, parent.id)).startswith(

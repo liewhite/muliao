@@ -15,10 +15,8 @@ from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.prompts import PromptStore
 from muliao.ids import new_agent_id
-from muliao.models import Agent, PromptRevision, Session
+from muliao.models import Agent, PromptRevision
 from muliao.naming import normalize_agent_name
-from muliao.runtime.conversation import delete_sessions
-from muliao.runtime.tasks import TaskQueue, running_task_ids
 
 
 @dataclass(frozen=True)
@@ -39,11 +37,9 @@ class AgentService:
         agents_dir: Path,
         memory: MemoryStore,
         model_checker: Callable[[str], None],
-        queue: TaskQueue,
         prompts: PromptStore,
     ):
         self._prompts = prompts
-        self._queue = queue
         self._db = db
         self._agents_dir = agents_dir
         self._memory = memory
@@ -126,15 +122,11 @@ class AgentService:
         async with self._db.transaction() as s:
             return list((await s.scalars(select(Agent).order_by(Agent.name))).all())
 
-    async def delete(self, agent_id: str) -> None:
-        async with self._db.transaction() as s:
-            agent = await self._get(s, agent_id)
-            if running := await running_task_ids(s, agent_id=agent_id):
-                raise Conflict(f"agent {agent.name!r} has running tasks {running}; wait for them to finish")
-            # 先按会话删除规则处理它的会话（等它的其他 agent 收到错误、其下私有 thread 一并删除），再级联删除其余数据
-            sessions = list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())
-            await delete_sessions(s, self._queue, sessions)
-            await s.delete(agent)
+    async def get_in(self, s: AsyncSession, agent_id: str) -> Agent:
+        return await self._get(s, agent_id)
+
+    def remove_files(self, agent_id: str) -> None:
+        """删除 agent 的目录（工作目录、记忆、私有 skill）。数据库行由调用方在事务里删除。"""
         root = self.root(agent_id)
         if root.exists():
             shutil.rmtree(root)

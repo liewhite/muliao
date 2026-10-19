@@ -126,5 +126,5 @@ async def test_private_secret_shadows_public_and_is_invisible_to_others(containe
 async def test_secrets_of_deleted_agent_go_with_it(container, make_agent):
     alpha = (await make_agent("alpha")).id
     await container.vault.set(alpha, "TOKEN", "x")
-    await container.agents.delete(alpha)
+    await container.agent_lifecycle.delete(alpha)
     assert await container.vault.list_all() == []

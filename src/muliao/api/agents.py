@@ -115,7 +115,7 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
 
 @router.delete("/agents/{agent_id}", status_code=204)
 async def delete_agent(c: C, agent_id: str) -> None:
-    await c.agents.delete(agent_id)
+    await c.agent_lifecycle.delete(agent_id)
 
 
 class MemoryOut(BaseModel):
