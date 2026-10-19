@@ -75,7 +75,7 @@ class TurnRunner:
             scope,
             prompt,
             context.messages,
-            self._tool_groups.profile(agent.tool_groups),
+            self._tool_groups.profile(agent.id, agent.tool_groups),
             summary=context.summary,
         )
         return TurnOutput(session.id, agent.id, result.output, redact_messages(result.new_messages()))

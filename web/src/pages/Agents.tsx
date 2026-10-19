@@ -89,22 +89,25 @@ function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentI
 }
 
 /** 工具组的中文说明；名称本身来自服务端，未登记的原样显示 */
+// 「≈全部权限」：拿到它就能间接做任何事（shell、借别的 agent 之手、改自己的配置、起任意命令的 MCP……）
 const TOOL_GROUP_LABELS: Record<string, string> = {
-  workspace: '文件与 shell',
-  temp_agent: '临时 agent',
-  delegation: '委派给其他 agent',
+  workspace: '文件与 shell（≈全部权限）',
+  temp_agent: '临时 agent（≈全部权限）',
+  delegation: '委派给其他 agent（≈全部权限）',
   notify: '推送通知',
-  agents: '管理 agent 与公共指令',
-  mcp: '管理 MCP',
+  agents: '管理 agent 与公共指令（≈全部权限）',
+  public_skills: '写公共 skill',
+  mcp: '使用 MCP',
+  mcp_admin: '管理 MCP（≈全部权限）',
   vault: '管理 vault',
-  triggers: '管理触发器',
+  triggers: '管理触发器（≈全部权限）',
 }
 
 function ToolGroupsInput({ all, value, onChange }: { all: string[]; value: string[]; onChange: (v: string[]) => void }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="text-sm font-medium">可用工具</div>
-      <div className="text-xs text-muted">记忆与 skill 总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的</div>
+      <div className="text-xs text-muted">记忆与私有 skill 总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的；标着「≈全部权限」的任何一项都能间接做到其余所有事</div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {all.map((group) => (
           <label key={group} className="flex items-center gap-2 text-sm">

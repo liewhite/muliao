@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.db import Database
 from muliao.models import Agent, Message, Reflection, Session, Task
 from muliao.runtime.codec import load_messages
-from muliao.runtime.runner import AgentRuntime, RunProfile
+from muliao.runtime.runner import AgentRuntime, ToolGroups
 from muliao.runtime.tasks import Commit
 from muliao.transcript import to_items, to_text
 
@@ -60,11 +60,15 @@ async def list_reflections_of(db: Database, agent_id: str, limit: int) -> list[R
         return list((await s.scalars(query)).all())
 
 
+# 反思能用到的可选工具组（自我改进之外）
+REFLECTION_GROUPS = frozenset({"public_skills"})
+
+
 class ReflectionHandler:
-    def __init__(self, db: Database, runtime: AgentRuntime, profile: RunProfile):
+    def __init__(self, db: Database, runtime: AgentRuntime, tool_groups: ToolGroups):
         self._db = db
         self._runtime = runtime
-        self._profile = profile
+        self._tool_groups = tool_groups
 
     async def execute(self, task: Task) -> Commit:
         from_id, to_id = task.payload["from_message_id"], task.payload["to_message_id"]
@@ -90,7 +94,9 @@ class ReflectionHandler:
         if rows:
             prompt = REFLECTION_PROMPT.format(transcript=render_transcript(sessions, rows))
             scope = self._runtime.scope(agent, session_id=None, origin=None, reply_to=None)
-            result = await self._runtime.run(agent, scope, prompt, [], self._profile)
+            # 反思读的转录里可能有不可信输入：只开放自我改进，以及该 agent 本来就有的写公共 skill 的权限
+            profile = self._tool_groups.profile(agent.id, agent.tool_groups, within=REFLECTION_GROUPS)
+            result = await self._runtime.run(agent, scope, prompt, [], profile)
             output, messages = result.output, result.all_messages_json().decode()
         else:
             # 区间内的 session 都被删除了：如实记录，不浪费一次模型调用

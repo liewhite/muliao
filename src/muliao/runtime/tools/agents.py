@@ -22,6 +22,8 @@ class AgentDetail(BaseModel):
     instructions: str
     reflect_every: int
     tool_groups: list[str]
+    # 所有可选的工具组名称
+    available_tool_groups: list[str]
 
 
 def agents_toolset(
@@ -44,6 +46,7 @@ def agents_toolset(
             instructions=await prompts.current(target.id),
             reflect_every=target.reflect_every,
             tool_groups=target.tool_groups,
+            available_tool_groups=list(agents.defaults.tool_groups),
         )
 
     @ts.tool
@@ -65,8 +68,9 @@ def agents_toolset(
             instructions: Its system prompt.
             model: `<provider>:<model>`; defaults to the server's default model.
             reflect_every: Turns between forced reflections; defaults to the server's setting.
-            tool_groups: Tool groups it may use (see `get_agent` on yourself for the names); defaults to all.
-                Give an agent that handles untrusted input (web pages, external events) only what it needs.
+            tool_groups: Tool groups it may use (`get_agent` lists the available ones); defaults to all.
+                Give an agent that handles untrusted input (web pages, external events) only what it needs:
+                workspace, temp_agent, delegation, agents, triggers and mcp_admin each amount to full access.
         """
         spec = AgentSpec(
             name=name,

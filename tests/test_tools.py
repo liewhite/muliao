@@ -382,3 +382,51 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
         await container.agents.create(
             AgentSpec(name="x", description="d", instructions="", tool_groups=["root"]), author="user"
         )
+
+
+async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container, models):
+    from muliao.agents import AgentSpec
+
+    spec = McpSpec(
+        name="echo", transport=McpTransport.HTTP, command=None, args=(), url="http://x", env=(), headers=()
+    )
+    await container.mcp.add(None, spec, probe=False)  # 公共 MCP：受限 agent 也看不到它的工具
+    triage = await container.agents.create(
+        AgentSpec(name="triage", description="d", instructions="", model="m", tool_groups=["notify"]),
+        author="user",
+    )
+    seen: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.extend(t.name for t in info.function_tools)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["m"] = scripted(fn)
+    await start(container, triage.id, "event", origin=Origin.TRIGGER)
+    await drain(container)
+
+    assert "write_public_skill" not in seen and not any(name.startswith("echo_") for name in seen)
+    assert "write_skill" in seen  # 私有 skill 仍可写
+
+
+async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, models):
+    from muliao.agents import AgentSpec
+
+    await container.agents.create(
+        AgentSpec(name="narrow", description="d", instructions="", model="n", tool_groups=["notify"]),
+        author="user",
+    )
+    seen: list[str] = []
+
+    def narrow(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.extend(t.name for t in info.function_tools)
+        return ModelResponse(parts=[TextPart("answer")])
+
+    models.models["n"] = scripted(narrow)
+    me = await make_agent("manager", model="tools")
+    outputs = await run_tools(
+        container, models, me.id, [("ask_agent", {"agent": "narrow", "message": "q", "thread": "t"})]
+    )
+
+    assert outputs == ["answer"]
+    assert "run_shell" not in seen and "notify_user" in seen

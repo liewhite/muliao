@@ -85,10 +85,10 @@ Web / 触发器（定时、webhook……）/ delegate_task
 
 - **原则：给模型看的是名称和描述，给程序用的是 id。** 工具参数、返回值、instructions 里只出现 agent 名称；名称唯一，由工具层（`AgentService.find_by_name`）解析为 id，写错时把可用名称列表作为错误交还模型。id 只会作为文件路径的一部分（`agents/<id>/…`）出现在工作目录里。`tests/test_flow.py::test_model_sees_agent_names_never_ids` 守住这条规则。
 - **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
-- **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定（`runtime.runner.ToolGroups`，名称在组合根 `TOOL_GROUPS` 唯一声明）：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`mcp`、`vault`、`triggers`；skill 与 memory（自我改进）总是开放。新建 agent 默认全部开放；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。反思与临时 agent 各有固定的工具集，不受 `tool_groups` 影响：
+- **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定（`runtime.runner.ToolGroups`，名称在组合根 `TOOL_GROUPS` 唯一声明）：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`；私有 skill 与 memory（自我改进）总是开放，读公共 skill 也总是可以。反思只开放自我改进，以及该 agent 本来就有的 `public_skills`。新建 agent 默认全部开放；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。反思与临时 agent 各有固定的工具集，不受 `tool_groups` 影响：
   - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
-  - `skills`：`read_skill` / `write_skill` / `delete_skill`（scope = `private` | `public`）。
+  - `skills`：`read_skill`（私有或公共）/ `write_skill` / `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `delete_public_skill`。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
   - `agents`：`get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己） / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
   - `delegation`：`list_agents`（返回 name、description）/ `delegate_task` / `ask_agent` / `list_threads`（按名称指定目标 agent、按 thread 名指定子会话，见第 4 节）。
@@ -207,7 +207,7 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 
 **威胁模型：agent 与运行服务的系统用户同等可信。** agent 能执行任意 shell 命令，因此能读到服务能读到的一切——包括配置文件里的 `vault.key` 与 LLM API key、数据库文件。下面的措施只防止 secret **意外**进入对话记录、日志和前端，不防 agent 本身：
 
-能缩小的是**提示注入的影响面**：处理外部事件或网页内容的 agent 用 `tool_groups` 只开放它需要的工具组（例如只开 `notify`），这样即使输入里带有恶意指令，它也删不了 agent、改不了公共指令、动不了 vault 和触发器。只开放 `workspace`（shell）就等于开放了一切，按上面的威胁模型处理。
+能缩小的是**提示注入的影响面**：处理外部事件或网页内容的 agent 用 `tool_groups` 只开放它需要的工具组（例如只开 `notify`），这样即使输入里带有恶意指令，它也删不了 agent、改不了公共指令和公共 skill（两者都会进入所有 agent 的 instructions）、用不了 MCP、动不了 vault 和触发器。下面这些组**任何一个都等同于全部权限**，只能给可信的 agent：`workspace`（shell）、`temp_agent`（临时 agent 自带 shell）、`delegation`（借目标 agent 自己的完整工具组之手）、`agents`（可以给自己加组）、`triggers`（可以让任意 agent 带着任意说明定时运行）、`mcp_admin`（可以添加运行任意命令的 stdio MCP）。`public_skills`、`mcp`、`vault` 按各自的影响判断。
 
 - shell 只继承少量环境变量（`PATH`、`HOME` 等）；
 - `run_shell(secrets=[KEY])` 输出中的 secret 明文被替换为 `[secret:KEY]`（逐字匹配，编码后的输出不会被替换）；

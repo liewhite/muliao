@@ -27,12 +27,12 @@ from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
 from muliao.runtime.conversation import Threads
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
-from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroups
+from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroup, ToolGroups
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import TaskQueue
 from muliao.runtime.tools.agents import agents_toolset
 from muliao.runtime.tools.delegation import delegation_toolset
-from muliao.runtime.tools.evolution import memory_toolset, skills_toolset
+from muliao.runtime.tools.evolution import memory_toolset, public_skills_toolset, skills_toolset
 from muliao.runtime.tools.mcp import mcp_admin_toolset
 from muliao.runtime.tools.notify import notify_toolset
 from muliao.runtime.tools.temp_agent import clear_temp_dirs, temp_agent_toolset
@@ -49,7 +49,18 @@ from muliao.vault import Vault
 log = logging.getLogger(__name__)
 
 # agent 可选用的工具组（名称是 agent 配置的一部分，在这里唯一声明；注册表必须与它完全一致）
-TOOL_GROUPS = ("workspace", "temp_agent", "delegation", "notify", "agents", "mcp", "vault", "triggers")
+TOOL_GROUPS = (
+    "workspace",
+    "temp_agent",
+    "delegation",
+    "notify",
+    "agents",
+    "public_skills",
+    "mcp",
+    "mcp_admin",
+    "vault",
+    "triggers",
+)
 
 
 @dataclass
@@ -193,25 +204,41 @@ def build_container(
     temp_profile = RunProfile(toolsets=[workspace_tools], include_mcp=True)
     tool_groups = ToolGroups(
         groups={
-            "workspace": workspace_tools,
-            "temp_agent": temp_agent_toolset(
-                runtime, agents, temp_profile, settings.temp_dir, settings.runtime.temp_agent_request_limit
+            "workspace": ToolGroup([workspace_tools]),
+            "temp_agent": ToolGroup(
+                [
+                    temp_agent_toolset(
+                        runtime,
+                        agents,
+                        temp_profile,
+                        settings.temp_dir,
+                        settings.runtime.temp_agent_request_limit,
+                    )
+                ]
             ),
             # ask_agent 用回合执行器跑子 agent，而执行器又用这组工具：通过延迟绑定的调用打破构造顺序上的环
-            "delegation": delegation_toolset(
-                db, agents, threads, lambda session_id, prompt: turn_runner.run_inline(session_id, prompt)
+            "delegation": ToolGroup(
+                [
+                    delegation_toolset(
+                        db,
+                        agents,
+                        threads,
+                        lambda session_id, prompt: turn_runner.run_inline(session_id, prompt),
+                    )
+                ]
             ),
-            "notify": notify_toolset(notifier),
-            "agents": agents_toolset(agents, agent_lifecycle, prompts),
-            "mcp": mcp_admin_toolset(mcp),
-            "vault": vault_toolset(vault),
-            "triggers": triggers_toolset(triggers, agents),
+            "notify": ToolGroup([notify_toolset(notifier)]),
+            "agents": ToolGroup([agents_toolset(agents, agent_lifecycle, prompts)]),
+            "public_skills": ToolGroup([public_skills_toolset(skills)]),
+            "mcp": ToolGroup(uses_mcp=True),
+            "mcp_admin": ToolGroup([mcp_admin_toolset(mcp)]),
+            "vault": ToolGroup([vault_toolset(vault)]),
+            "triggers": ToolGroup([triggers_toolset(triggers, agents)]),
         },
         always=evolution_tools,
     )
     if tuple(tool_groups.groups) != TOOL_GROUPS:
         raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {TOOL_GROUPS}")
-    reflection_profile = RunProfile(toolsets=evolution_tools, include_mcp=False)
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
     turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction)
     handlers: dict[TaskKind, TaskHandler] = {
@@ -219,7 +246,7 @@ def build_container(
         TaskKind.COMPACTION: CompactionHandler(
             db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),
-        TaskKind.REFLECTION: ReflectionHandler(db, runtime, reflection_profile),
+        TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups),
         TaskKind.DELIVER: DeliverHandler(pusher),
     }
     worker = Worker(

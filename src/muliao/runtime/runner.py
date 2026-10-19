@@ -1,7 +1,7 @@
 """执行一次 agent 运行：组装 instructions、toolsets、模型，转发流式事件到总线。"""
 
 import logging
-from collections.abc import AsyncIterable, Mapping, Sequence
+from collections.abc import AsyncIterable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -52,21 +52,36 @@ class RunProfile:
 
 
 @dataclass(frozen=True)
-class ToolGroups:
-    """agent 按名称选用的工具组。always 里的（自我改进：skill 与 memory）对每个 agent 都开放。
+class ToolGroup:
+    """一组能力：若干工具集，以及是否使用对它可见的 MCP server。"""
 
-    用途是限制处理不可信输入的 agent 能做什么（例如处理外部事件的 agent 不开放管理 agent、vault 的工具）。
+    toolsets: Sequence[AbstractToolset[RunScope]] = ()
+    uses_mcp: bool = False
+
+
+@dataclass(frozen=True)
+class ToolGroups:
+    """agent 按名称选用的工具组。always 里的（自我改进：私有 skill 与 memory）对每个 agent 都开放。
+
+    用途是限制处理不可信输入的 agent 能做什么（例如处理外部事件的 agent 只开放通知）。
     """
 
-    groups: Mapping[str, AbstractToolset[RunScope]]
+    groups: Mapping[str, ToolGroup]
     always: Sequence[AbstractToolset[RunScope]]
 
-    def profile(self, names: Sequence[str]) -> RunProfile:
+    def profile(
+        self, agent_id: str, names: Sequence[str], *, within: Collection[str] | None = None
+    ) -> RunProfile:
+        """按 agent 选用的组组合工具；within 给出时只取其中这些组（反思只可能用到写公共 skill）。"""
         unknown = [n for n in names if n not in self.groups]
         if unknown:
             # 写入时已校验（AgentService）；读到未知组说明数据与代码不一致
-            raise RuntimeError(f"agent references unknown tool groups {unknown}")
-        return RunProfile(toolsets=[*self.always, *(self.groups[n] for n in names)], include_mcp=True)
+            raise RuntimeError(f"agent {agent_id} references unknown tool groups {unknown}")
+        chosen = [self.groups[n] for n in names if within is None or n in within]
+        return RunProfile(
+            toolsets=[*self.always, *(t for g in chosen for t in g.toolsets)],
+            include_mcp=any(g.uses_mcp for g in chosen),
+        )
 
 
 class AgentRuntime:
