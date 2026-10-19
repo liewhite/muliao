@@ -29,25 +29,38 @@ def _make_workspace(temp_root: Path) -> Path:
     return Path(tempfile.mkdtemp(prefix="temp-agent-", dir=temp_root))
 
 
+# 删除工作目录的唯一入口（测试可以只替换这一处）
+_remove = shutil.rmtree
+
+
 def clear_temp_dirs(temp_root: Path) -> None:
-    """启动时清空上次进程遗留的临时 agent 工作目录（崩溃或删除失败所致），并记录清掉了哪些。"""
+    """启动时逐个删除上次进程遗留的临时 agent 工作目录（崩溃或删除失败所致），记录清掉了哪些。
+
+    删不掉的目录（例如脱离进程组的后台进程还在写）记 error 日志后跳过，不阻止启动：残留目录只占空间，
+    不影响任何正确性，为它让服务起不来代价不成比例；需要人来处理时，日志里有路径与原因。
+    """
     if not temp_root.exists():
         return
-    leftovers = sorted(p.name for p in temp_root.iterdir())
-    if leftovers:
-        log.warning("removing leftover temp agent workspaces", extra={"dirs": leftovers})
-        shutil.rmtree(temp_root)
+    for leftover in sorted(temp_root.iterdir()):
+        try:
+            _remove(leftover)
+        except OSError as e:
+            log.error(
+                "leftover temp agent workspace not removable: %r", e, extra={"workspace": str(leftover)}
+            )
+        else:
+            log.warning("removed leftover temp agent workspace", extra={"workspace": str(leftover)})
 
 
 async def _discard(workspace: Path, agent_id: str, outcome: str) -> None:
     """删除失败不改变这次运行的结果或异常：记为错误，留给下次启动的 clear_temp_dirs。"""
     try:
-        await asyncio.to_thread(shutil.rmtree, workspace)
+        await asyncio.to_thread(_remove, workspace)
     except OSError as e:
         log.error(
             "temp agent workspace not removed, will be cleared on next start: %r",
             e,
-            extra={"agent": agent_id, "workspace": str(workspace)},
+            extra={"agent": agent_id, "workspace": str(workspace), "outcome": outcome},
         )
         return
     log.info(
@@ -100,10 +113,17 @@ def temp_agent_toolset(
         except UsageLimitExceeded as e:
             # 有界运行在契约内的结局：交回调用方的模型去拆分任务，而不是让整轮失败后反复重试
             outcome = "request limit"
+            log.warning(
+                "temp agent hit its request limit",
+                extra={"agent": parent.id, "session_id": ctx.deps.session_id, "limit": request_limit},
+            )
             raise ModelRetry(
                 f"the temporary agent did not finish within {request_limit} model requests ({e}); "
                 "split the job into smaller tasks"
             ) from e
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
         finally:
             await _discard(workspace, parent.id, outcome)
 

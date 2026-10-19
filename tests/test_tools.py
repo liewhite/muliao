@@ -333,7 +333,7 @@ async def test_workspace_removal_failure_keeps_answer_and_is_cleared_on_next_sta
     def stuck(path):  # noqa: ANN001, ANN202
         raise OSError("Directory not empty")
 
-    monkeypatch.setattr(temp_agent.shutil, "rmtree", stuck)
+    monkeypatch.setattr(temp_agent, "_remove", stuck)
     outputs = await run_tools(
         container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})]
     )
@@ -343,4 +343,23 @@ async def test_workspace_removal_failure_keeps_answer_and_is_cleared_on_next_sta
     assert any("will be cleared on next start" in r.getMessage() for r in caplog.records)
     assert len(list(container.settings.temp_dir.iterdir())) == 1  # noqa: ASYNC240
     temp_agent.clear_temp_dirs(container.settings.temp_dir)
-    assert not container.settings.temp_dir.exists()  # noqa: ASYNC240
+    assert list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240
+
+
+def test_unremovable_leftover_is_logged_and_does_not_block_startup(tmp_path, monkeypatch, caplog):
+    import muliao.runtime.tools.temp_agent as temp_agent
+
+    for name in ("temp-agent-a", "temp-agent-b"):
+        (tmp_path / name).mkdir()
+    real = temp_agent._remove
+
+    def selective(path):  # noqa: ANN001, ANN202
+        if path.name == "temp-agent-a":
+            raise PermissionError("busy")
+        real(path)
+
+    monkeypatch.setattr(temp_agent, "_remove", selective)
+    temp_agent.clear_temp_dirs(tmp_path)
+
+    assert [p.name for p in tmp_path.iterdir()] == ["temp-agent-a"]
+    assert any("not removable" in r.getMessage() for r in caplog.records)
