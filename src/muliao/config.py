@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MULIAO_", env_file=".env", extra="ignore")
 
     data_dir: Path = Path("data")
-    # 前端构建产物目录（web/ 下 `npm run build` 生成）
-    web_dir: Path = Path("web/dist")
+    # 前端构建产物目录：`cd web && npm run build` 生成到包内，随 wheel 分发
+    web_dir: Path = Path(__file__).parent / "webui"
     log_level: str = "INFO"
     host: str = "127.0.0.1"
     port: int = 8000

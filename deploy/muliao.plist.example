@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd 用户服务。把 /Users/YOU 换成实际 home；.env 放在 WorkingDirectory 下。 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.muliao</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/.local/bin/muliao</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOU/.muliao</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- agent 的 shell 与 stdio MCP（如 npx）从这里找命令 -->
+    <key>PATH</key>
+    <string>/Users/YOU/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/.muliao/muliao.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/.muliao/muliao.log</string>
+</dict>
+</plist>

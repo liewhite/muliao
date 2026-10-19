@@ -6,8 +6,7 @@
 - 部署与使用：[docs/deployment.md](docs/deployment.md)
 
 ```bash
-uv sync
-(cd web && npm install && npm run build)
+uv tool install git+https://github.com/liewhite/muliao.git
 cp .env.example .env   # 填写密码、密钥、模型 API key
-uv run muliao
+muliao
 ```

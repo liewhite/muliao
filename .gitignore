@@ -4,6 +4,6 @@ __pycache__/
 data/
 .env
 web/node_modules/
-web/dist/
 .pytest_cache/
 .ruff_cache/
+dist/

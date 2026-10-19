@@ -1,19 +1,41 @@
 # 部署与使用
 
-## 运行
+## 安装（uv）
+
+前端构建产物随包分发（`src/muliao/webui/`），安装端不需要 node：
+
+```bash
+uv tool install git+https://github.com/liewhite/muliao.git
+# 升级
+uv tool upgrade muliao     # 或 uv tool install --force git+https://github.com/liewhite/muliao.git
+```
+
+配置全部来自环境变量或**当前工作目录**下的 `.env`（模板见仓库 `.env.example`）。建议为服务建一个目录放 `.env` 和数据：
+
+```bash
+mkdir -p ~/.muliao && cd ~/.muliao   # 放 .env，MULIAO_DATA_DIR 默认即 ./data
+muliao
+```
+
+后台循环（worker、cron、Telegram）意外退出时进程会主动退出，需要进程管理器托管并自动重启。macOS 用 launchd，示例见 `deploy/muliao.plist.example`：
+
+```bash
+cp deploy/muliao.plist.example ~/Library/LaunchAgents/com.muliao.plist   # 按注释改路径
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.muliao.plist
+launchctl kickstart -k gui/$(id -u)/com.muliao    # 重启（升级后）
+```
+
+## 开发
 
 ```bash
 uv sync
-(cd web && npm install && npm run build)   # 产物在 web/dist，由后端直接托管
-cp .env.example .env                       # 按注释填写
-uv run muliao
+uv run pytest                    # 后端测试
+cd web && npm install
+npm run dev                      # Vite 把 /api、/hooks 代理到 127.0.0.1:8000（先 uv run muliao）
+npm run build                    # 构建到 src/muliao/webui/，改了前端必须重新构建并提交产物
 ```
 
-前端开发：`uv run muliao` 启动后端，另开终端 `cd web && npm run dev`，Vite 会把 `/api`、`/hooks` 代理到 8000 端口。
-
-测试：`uv run pytest`；前端类型检查与构建：`cd web && npm run build`。
-
-后台循环（worker、cron、Telegram）意外退出时进程会主动退出，请用 systemd / launchd / supervisor 之类的进程管理器托管并自动重启。
+`src/muliao/webui/` 是 `web/src` 的派生产物：提交进仓库是为了让 `uv tool install` 不依赖 node。唯一来源仍是 `web/src`，由 `npm run build` 一条命令重建。
 
 ## iOS 主屏应用与推送
 
