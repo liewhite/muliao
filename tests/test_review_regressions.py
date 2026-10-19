@@ -1,7 +1,5 @@
 """代码审查发现的问题的回归测试。"""
 
-from datetime import datetime, timedelta
-
 import httpx
 import pytest
 from anthropic import APIConnectionError
@@ -12,7 +10,7 @@ from sqlalchemy import select
 from muliao.delivery.base import Notification
 from muliao.delivery.webpush import WebPushDelivery
 from muliao.errors import Conflict, TransientError
-from muliao.models import CronJob, Message, Origin, TaskKind, TaskStatus
+from muliao.models import Message, Origin, TaskKind, TaskStatus
 from muliao.runtime.worker import is_transient
 from muliao.transcript import to_items
 from tests.test_flow import call_then_answer, drain, start
@@ -20,13 +18,13 @@ from tests.test_flow import call_then_answer, drain, start
 
 async def test_message_ids_never_reused_after_deleting_latest_session(container, make_agent):
     alpha = (await make_agent("alpha", reflect_every=100)).id
-    first = await start(container, alpha, "one", origin=Origin.CRON)
+    first = await start(container, alpha, "one", origin=Origin.TRIGGER)
     await drain(container)
     async with container.db.transaction() as s:
         max_before = max((await s.scalars(select(Message.id))).all())
     await container.sessions.delete(first.id)
 
-    await start(container, alpha, "two", origin=Origin.CRON)
+    await start(container, alpha, "two", origin=Origin.TRIGGER)
     await drain(container)
 
     async with container.db.transaction() as s:
@@ -58,22 +56,6 @@ async def test_deleting_session_or_agent_with_running_task_is_rejected(container
         await container.agent_lifecycle.delete(alpha)
 
 
-async def test_broken_cron_job_is_disabled_without_blocking_others(container, make_agent):
-    alpha = (await make_agent()).id
-    bad = await container.cron.create(name="bad", agent_id=alpha, schedule="* * * * *", prompt="x")
-    good = await container.cron.create(name="good", agent_id=alpha, schedule="* * * * *", prompt="y")
-    async with container.db.transaction() as s:
-        for job_id in (bad.id, good.id):
-            (await s.get(CronJob, job_id)).next_run_at = datetime.now().astimezone() - timedelta(seconds=1)
-        (await s.get(CronJob, bad.id)).prompt = "   "  # 模拟绕过校验写入的坏数据
-
-    await container.cron.fire_due()
-
-    bad, good = await container.cron.get_by_name("bad"), await container.cron.get_by_name("good")
-    assert not bad.enabled and "message must not be empty" in bad.last_error
-    assert good.last_session_id is not None
-
-
 async def test_agent_api_rejects_zero_reflect_every_and_partial_update(container, tmp_path):
     from muliao.api.app import create_app
     from tests.conftest import login
@@ -97,7 +79,7 @@ async def test_vault_set_value_is_redacted_from_saved_history(container, make_ag
     models.models["m"] = call_then_answer(
         "vault_set", {"key": "TOKEN", "value": "super-secret", "description": "d"}, "stored"
     )
-    session = await start(container, alpha, "save my token", origin=Origin.CRON)
+    session = await start(container, alpha, "save my token", origin=Origin.TRIGGER)
     await drain(container)
 
     assert (await container.vault.resolve_many(alpha, ["TOKEN"])) == {"TOKEN": "super-secret"}
@@ -159,7 +141,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     from tests.scripted import scripted
 
     models.models["m"] = scripted(fail)
-    await start(container, alpha, "hi", origin=Origin.CRON)
+    await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
     turn = (await container.queue.list(status=TaskStatus.FAILED, session_id=None, limit=5))[0]
     assert turn.attempts == container.settings.runtime.task_max_attempts and "503" in turn.error

@@ -16,7 +16,7 @@
 | Memory | agent 私有记忆，一份有长度上限的 markdown | `data/agents/<id>/memory.md` |
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `mcp_servers` 表 |
 | Secret | 加密保存的密码/token，通过 key 引用；公共或 agent 私有 | `secrets` 表（Fernet 加密） |
-| Trigger | 创建 session 并投递 turn 的入口：用户在网页发起、cron 定时触发、外部事件触发；另有 agent 之间的委派 | `cron_jobs`、`event_triggers` 表 |
+| Trigger | 具名、持久的事件来源，把外部刺激变成交给某个 agent 的一轮；触发方式（定时、webhook……）多态实现 | `triggers` 表 |
 
 目录：
 
@@ -36,7 +36,7 @@ data/
 所有触发源只做一件事：**创建 session（或选中已有 session）并在同一事务里写入一个 `turn` task**。之后的执行、重试、反思、通知全部由同一个任务队列驱动。唯一的例外是 `ask_agent`：它在调用方这一轮里直接跑完一轮，提交时补记一条已完成的 turn task（见第 4 节）。
 
 ```
-Web / cron / 外部事件 / delegate_task
+Web / 触发器（定时、webhook……）/ delegate_task
           │  conversation.receive(Inbound)（唯一入口；payload 带 prompt 与 reply_to）
           ▼
  tasks(turn) ──► Worker ──► TurnHandler ──┐
@@ -72,7 +72,7 @@ Web / cron / 外部事件 / delegate_task
 
 契约外的失败（代码 bug、模型返回 400、请求超限、响应解码失败、配置错误）不重试，task 直接 `failed` 并告警。
 
-后台循环（worker、cron）意外退出视为 bug，进程直接退出交给进程管理器重启。cron 中单个 job 的数据不合法时只停用该 job 并记录 `last_error`，不影响其他 job。
+后台循环（worker、定时触发）意外退出视为 bug，进程直接退出交给进程管理器重启。单个定时触发器的数据不合法时只停用它并记录 `last_error`，不影响其他触发器。
 
 ## 3. Agent 运行时
 
@@ -81,7 +81,7 @@ Web / cron / 外部事件 / delegate_task
 - **原则：给模型看的是名称和描述，给程序用的是 id。** 工具参数、返回值、instructions 里只出现 agent 名称；名称唯一，由工具层（`AgentService.find_by_name`）解析为 id，写错时把可用名称列表作为错误交还模型。id 只会作为文件路径的一部分（`agents/<id>/…`）出现在工作目录里。`tests/test_flow.py::test_model_sees_agent_names_never_ids` 守住这条规则。
 - **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
 - **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）：
-  - 局部修改（`update_agent`、`cron_update`、`event_trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
+  - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill` / `write_skill` / `delete_skill`（scope = `private` | `public`）。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
@@ -91,7 +91,7 @@ Web / cron / 外部事件 / delegate_task
   - `temp_agent`：`run_temp_agent(task, instructions?, model?)`：一次性的临时 agent，在调用方这一轮里同步运行（同一响应中的多次调用并行），返回它的最终回答。它只有文件与 shell 工具（工作目录在 `data/tmp/` 下临时创建、结束即删除）和调用方的 MCP，secret 按调用方的视角解析；没有记忆、skill、会话、反思与委派，也不能再开临时 agent。适合抓取网页并总结、分析文件这类做完即丢的事；需要长期积累的专长应 `create_agent` 后委派。临时 agent 不是沙箱：它和调用方有相同的 shell 权限、secret 与 MCP，工具说明里也这样告诉模型。模型请求数超过 `runtime.temp_agent_request_limit` 时以可纠正的错误交回调用方；其他失败（如模型 API 错误）向上传播，按调用方这一轮的失败统一处理（暂时性失败整轮重试）。工作目录在 finally 里删除；删除失败或进程中途被杀时留到下次启动，由启动时清空 `data/tmp`（只归临时 agent 使用）统一收敛，删除失败记 error 日志、不改变运行结果。启动时删不掉的目录（例如脱离进程组的后台进程还在写）同样记 error 日志后跳过，不阻止服务启动：残留目录只占空间，不影响正确性。
   - `mcp_admin`：`mcp_list`（含已停用的）/ `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_set_enabled` / `mcp_remove`。改动从下一轮起生效。
   - `vault`：`vault_list` / `vault_set` / `vault_delete`（scope = `private` | `public`，默认私有）。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
-  - `triggers`：`cron_list` / `cron_create(name, schedule, prompt, agent?)` / `cron_update` / `cron_delete`；`event_trigger_list` / `event_trigger_create` / `event_trigger_update` / `event_trigger_rotate_token` / `event_trigger_delete`。agent 同样按名称指定。事件触发器的 token 不出现在对话里，而是存进创建者私有 vault 的 `EVENT_TOKEN_<NAME>`（触发器名不含下划线，名称与 key 一一对应）：创建时该 key 已存在则拒绝，不覆盖；重置时覆盖调用者的这个 key，其他地方的旧副本随之失效；删除触发器时一并删除调用者的这个 key。
+  - `triggers`：`trigger_kinds` / `trigger_list` / `trigger_create(name, kind, prompt, config, agent?)` / `trigger_update` / `trigger_run` / `trigger_delete`，一组工具覆盖所有触发方式，差异只在 `kind` 与 `config`。agent 同样按名称指定。webhook 的 token 只能由用户在界面上生成，agent 拿不到也不需要。
   - 该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀；配置中的 `${vault:KEY}` 在运行时按 server 归属者的视角解析（公共 server 只能引用公共 secret），引用不可见的 key 直接报错。
 - **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。
 
@@ -140,36 +140,47 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 
 ### 强制反思（reflection）
 - 计数在 **agent** 上：每完成一轮 turn，`agents.turns_since_reflection += 1`。达到该 agent 的 `reflect_every` 时，在同一事务里清零计数、把检查点推进到当前最大消息 id，并投递一个 reflection task，载荷是消息 id 区间 `(from_id, to_id]`。
-- 选择 agent 级而不是 session 级：cron 场景下每次触发都是一个新 session，只有一轮，按 session 计数永远到不了阈值。
+- 选择 agent 级而不是 session 级：定时触发每次都是一个新 session，只有一轮，按 session 计数永远到不了阈值。
 - ReflectionHandler 把这个区间内该 agent 所有 turn 消息渲染成文字记录，连同固定的反思提示交给同一个 agent 运行，只开放 skill 和 memory 工具。没有需要修改的内容也要走完并给出结论。
 - 反思的完整消息和结论写入 `reflections` 表，可在 UI 查看；不进入任何 session 的历史。
 
 ## 8. 触发源
 
-触发点有三个：用户在网页发起对话、cron 定时任务、外部事件。agent 之间的委派是 agent 内部能力，在父会话下开 thread（第 4 节）。
+触发点有两类：用户在网页发起对话，以及触发器。agent 之间的委派是 agent 内部能力，在父会话下开 thread（第 4 节）。
 
-**统一入口**：用户消息、cron 到点、外部事件、agent 委派都是同一件事——把一段内容交给某个 agent，在某个会话里处理一轮。各来源只做适配（鉴权、触发时机、组装内容），然后构造一个 `Inbound` 交给 `conversation.receive`：
+**统一入口**：用户消息、触发器、agent 委派都是同一件事——把一段内容交给某个 agent，在某个会话里处理一轮。各来源只做适配（鉴权、触发时机、组装内容），然后构造一个 `Inbound` 交给 `conversation.receive`：
 
 | 字段 | 含义 |
 |---|---|
-| `source` / `source_ref` | 来源与具体发送方：用户（无）、cron job id、事件触发器 id、委派方（父）会话 id |
+| `source` / `source_ref` | 来源与具体发送方：用户（无）、触发器 id、委派方（父）会话 id |
 | `content` | 这一轮的 prompt |
 | `session` | 已有会话的 id（在其中继续），或 `NewSession`（新建：agent、标题，委派时还有父会话、thread 名、是否私有） |
 | `reply_to` | 这一轮的回答交给谁 |
 
-`receive` 是唯一投递新一轮的地方；新建会话也只有 `create_session` 一处实现（`ask_agent` 提前占用 thread 时也用它）。**续写规则**：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话（会话的来源与发送方都一致，委派会话的发送方就是它的父会话），否则 403。发送方身份是 cron job id、触发器 id（两张表都用 AUTOINCREMENT，删除后不复用）或父会话 id。
+`receive` 是唯一投递新一轮的地方；新建会话也只有 `create_session` 一处实现。**续写规则**：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话（会话的来源与发送方都一致，委派会话的发送方就是它的父会话），否则 403。发送方身份是触发器 id（AUTOINCREMENT，删除后不复用）或父会话 id。
 
 是否推送由每一轮的 `reply_to` 决定（唯一来源），由发起这一轮的入口设置：
 
 | 入口 | session 策略 | `reply_to` |
 |---|---|---|
 | 用户发起 / 回复 | 新建；回复沿用（私有 thread 只读） | `user`（iOS 要求每个 push 都展示通知，所以页面可见时也会弹） |
-| cron | 每次触发新建，`origin_ref` 记 cron job；上一次触发的 session 仍有未完成任务时跳过本次（不重叠） | `none`，需要通知时 agent 调 `notify_user` |
-| 外部事件 | 不带 `session_id` 时新建，`origin_ref` 记触发器，响应返回会话 id；带上它的后续事件在同一会话里继续（只能续写本触发器发起的会话） | `none`，同 cron |
+| 触发器 | 默认每次新建，`origin_ref` 记触发器；带回会话 id 的事件在原会话里续写（只能续写本触发器发起的会话） | `none`，需要通知时 agent 调 `notify_user` |
 | `delegate_task` | 父会话下的公开 thread，同名续聊 | `user` |
-| `ask_agent` | 父会话下的私有 thread，同名续聊 | `agent` |
+| `ask_agent` | 父会话下的私有 thread，同名续聊（内联执行，不走 `receive`） | `agent` |
 
-**外部事件**：每个事件触发器有一个名称和一个 token。外部系统调用 `POST /api/hooks/{name}[?session_id=...]`，带 `Authorization: Bearer <token>`，响应 `{"session_id": ...}`；请求体（UTF-8 文本，最多 256 KiB）原样附在触发器的处理说明之后，作为这一轮的 prompt：
+**触发器**：具名、持久的事件来源（`triggers` 表）。公共字段只有名称、agent、处理说明、启用与最近一次触发的记录；怎么被触发由 `kind` 决定，**只在代码里多态实现**，表里不为某种方式开专门的列：`config`（JSON）是这种方式的配置，`state`（JSON）是这种方式自己维护的运行状态。每种方式分两部分：
+
+- `TriggerKind`（纯逻辑，注册给 `TriggerService`）：校验并规范化 `config`、推导 `state`、给出展示用的运行状态（不含凭证）；
+- 激活机制：怎么被触发，都只调用 `TriggerService.fire_in`（唯一出口）组装成事件交给统一入口。
+
+新增一种方式（例如消息队列）= 一个 `TriggerKind` + 它的激活机制（消费循环），在组合根注册；表、工具、统一入口与界面的通用部分都不用改（界面对未知方式用 JSON 编辑配置）。现有两种：
+
+| kind | config | state | 激活机制 |
+|---|---|---|---|
+| `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at` | `ScheduleRunner` 循环：到点触发；上一次触发的会话仍有未完成的一轮时跳过本次；错过的只补一次；数据不合法时停用并记 `last_error` |
+| `webhook` | `{}` | `token_hash` | `Webhooks`：`POST /api/hooks/{name}[?session_id=]` 凭 token 鉴权 |
+
+任何触发器都可以在界面上或用 `trigger_run` 立即运行一次（不带事件内容）。事件内容（若有）原样附在处理说明之后：
 
 ```
 <处理说明>
@@ -179,11 +190,13 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 </event>
 ```
 
-- 该入口不走登录 cookie，只凭 token 鉴权，**先鉴权再读请求体**：未鉴权的调用方不能让进程读入任何内容；请求体按字节上限分块读取，超限返回 413。触发器不存在与 token 不匹配返回同一个 401，不暴露哪些名称存在；停用的触发器返回 409；续写不是本触发器发起的会话返回 403。
-- token 只存 SHA-256，明文只在创建或重置时返回一次；重置后旧 token 立即失效。
+**webhook**：
+- 带 `Authorization: Bearer <token>`，响应 `{"session_id": ...}`；请求体为 UTF-8 文本，最多 256 KiB。
+- 不走登录 cookie，**先鉴权再读请求体**：未鉴权的调用方不能让进程读入任何内容；请求体按字节上限分块读取，超限返回 413。触发器不存在、不是 webhook、还没有 token、token 不匹配，都返回同一个 401，不暴露哪些名称存在；停用的返回 409；续写不是本触发器发起的会话返回 403。
+- token 是我们签发给外部系统的凭证，事实来源是触发器自己：`state` 里只存 SHA-256，明文只在生成时返回一次，**只能由用户在界面上生成**（agent 创建的 webhook 在用户生成 token 之前收不到事件）。不放进 vault——vault 存的是外部系统发给我们的凭证。
 - 不校验各平台自己的签名格式（GitHub、Slack 等各不相同）。需要时由发送方把 token 放进 Authorization 头，或在中间加一层转发。
 
-通知只有 Web Push 一种渠道。不支持主动推送的外部消息源（例如只能拉取的 Slack 未读）由 cron 定时拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
+通知只有 Web Push 一种渠道。不支持主动推送的外部消息源（例如只能拉取的 Slack 未读）用定时触发器拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
 
 ## 9. 安全边界
 
@@ -205,5 +218,5 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 ## 10. 部署形态与边界
 
 - **单进程**：事务串行化与 task 领取依赖进程内锁，所以只跑一个进程。这不影响 agent 并发：worker 同时执行 `runtime.worker_concurrency` 个 task（不同 session、不同 agent 并行，同一 session 串行）。模型调用与工具执行都是异步 IO，不占事务锁。
-- **外部消息**：能主动推送的外部系统接入事件触发器；只能拉取的由 cron 定时拉取（见第 8 节）。
+- **外部消息**：能主动推送的外部系统接入 webhook 触发器；只能拉取的由定时触发器拉取（见第 8 节）。
 - **上下文压缩的覆盖范围**：只在两轮之间压缩。单轮内工具调用极多导致上下文超限时，该轮失败可见；在会话页点「压缩」后重试该轮即可。不自动识别各提供方的超限错误，因为错误格式各不相同，无法可靠识别。

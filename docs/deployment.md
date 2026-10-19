@@ -21,7 +21,7 @@ muliao --config /path/to.toml   # 或指定路径
 
 `data_dir` 的相对路径以配置文件所在目录为基准，默认即 `~/.muliao/data`。agent 的模型写成 `<provider 名>:<模型名>`，provider 名是配置里 `[llm.providers.<名>]` 的键。
 
-后台循环（worker、cron）意外退出时进程会主动退出，需要进程管理器托管并自动重启。macOS 用 launchd，示例见 `deploy/muliao.plist.example`：
+后台循环（worker、定时触发）意外退出时进程会主动退出，需要进程管理器托管并自动重启。macOS 用 launchd，示例见 `deploy/muliao.plist.example`：
 
 ```bash
 cp deploy/muliao.plist.example ~/Library/LaunchAgents/com.muliao.plist   # 按注释改路径
@@ -66,10 +66,10 @@ VAPID 密钥在首次启动时生成于 `data/vapid_private.pem`，更换它会�
 1. Vault 页存入 `SLACK_TOKEN`。
 2. 新建 agent `slack-triage`，指令里说明：读取工作目录下的游标文件，取之后的未读消息，总结，`list_agents` 后用 `delegate_task` 把需要处理的事项交给合适的 agent，最后更新游标。
 3. 给它接入 Slack：在对话里把 Slack MCP 的信息告诉它，让它用 `mcp_add` 创建（token 写成 `${vault:SLACK_TOKEN}`）；或者让它写一个用 `run_shell(secrets=["SLACK_TOKEN"])` 调 Slack API 的脚本并沉淀为 skill。
-4. 「触发」页的「定时」标签新建 `* * * * *` 的任务，agent 选 `slack-triage`。
+4. 「触发」页新建触发器：方式选「定时」，cron 表达式 `* * * * *`，agent 选 `slack-triage`。
 5. 被委派的 agent 在自己的新 session 中处理，完成后推送通知；点开通知进入该 session 可继续回复。
 
-定时任务不会重叠执行：上一次触发的 session 仍在运行时会跳过本次。
+定时触发不会重叠执行：上一次触发的 session 仍在运行时会跳过本次。
 
 ## 数据
 

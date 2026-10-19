@@ -5,7 +5,7 @@
 
 Revision ID: 4a351a020890
 Revises:
-Create Date: 2026-10-19 19:20:20.274187
+Create Date: 2026-10-19 19:26:33.210181
 """
 
 from collections.abc import Sequence
@@ -44,40 +44,6 @@ def upgrade() -> None:
         sa.Column("auth", sa.Text(), nullable=False),
         sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
         sa.PrimaryKeyConstraint("endpoint"),
-    )
-    op.create_table(
-        "cron_jobs",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("name", sa.String(length=100), nullable=False),
-        sa.Column("agent_id", sa.String(length=32), nullable=False),
-        sa.Column("schedule", sa.String(length=100), nullable=False),
-        sa.Column("prompt", sa.Text(), nullable=False),
-        sa.Column("enabled", sa.Boolean(), nullable=False),
-        sa.Column("next_run_at", muliao.db.UTCDateTime(), nullable=False),
-        sa.Column("last_run_at", muliao.db.UTCDateTime(), nullable=True),
-        sa.Column("last_session_id", sa.String(length=36), nullable=True),
-        sa.Column("last_error", sa.Text(), nullable=True),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("name"),
-        sqlite_autoincrement=True,
-    )
-    op.create_table(
-        "event_triggers",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("name", sa.String(length=64), nullable=False),
-        sa.Column("agent_id", sa.String(length=32), nullable=False),
-        sa.Column("prompt", sa.Text(), nullable=False),
-        sa.Column("token_hash", sa.String(length=64), nullable=False),
-        sa.Column("enabled", sa.Boolean(), nullable=False),
-        sa.Column("last_fired_at", muliao.db.UTCDateTime(), nullable=True),
-        sa.Column("last_session_id", sa.String(length=36), nullable=True),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("name"),
-        sqlite_autoincrement=True,
     )
     op.create_table(
         "mcp_servers",
@@ -183,6 +149,25 @@ def upgrade() -> None:
         )
 
     op.create_table(
+        "triggers",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("name", sa.String(length=64), nullable=False),
+        sa.Column("agent_id", sa.String(length=32), nullable=False),
+        sa.Column("prompt", sa.Text(), nullable=False),
+        sa.Column("kind", sa.String(length=32), nullable=False),
+        sa.Column("config", sa.JSON(), nullable=False),
+        sa.Column("state", sa.JSON(), nullable=False),
+        sa.Column("enabled", sa.Boolean(), nullable=False),
+        sa.Column("last_fired_at", muliao.db.UTCDateTime(), nullable=True),
+        sa.Column("last_session_id", sa.String(length=36), nullable=True),
+        sa.Column("last_error", sa.Text(), nullable=True),
+        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("name"),
+        sqlite_autoincrement=True,
+    )
+    op.create_table(
         "compactions",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("session_id", sa.String(length=36), nullable=False),
@@ -253,6 +238,7 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f("ix_compactions_session_id"))
 
     op.drop_table("compactions")
+    op.drop_table("triggers")
     with op.batch_alter_table("sessions", schema=None) as batch_op:
         batch_op.drop_index("uq_sessions_thread", sqlite_where=sa.text("parent_session_id IS NOT NULL"))
         batch_op.drop_index(batch_op.f("ix_sessions_updated_at"))
@@ -279,8 +265,6 @@ def downgrade() -> None:
         batch_op.drop_index("uq_mcp_private", sqlite_where=sa.text("owner IS NOT NULL"))
 
     op.drop_table("mcp_servers")
-    op.drop_table("event_triggers")
-    op.drop_table("cron_jobs")
     op.drop_table("push_subscriptions")
     op.drop_table("agents")
     # ### end Alembic commands ###

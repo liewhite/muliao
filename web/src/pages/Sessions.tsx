@@ -19,15 +19,14 @@ import {
 
 const ORIGIN_LABEL: Record<Origin, string> = {
   user: '对话',
-  cron: '定时',
-  event: '事件',
+  trigger: '触发',
   delegation: '委派',
 }
 
-// 定时任务和外部事件每次触发都会产生会话，默认不显示以免淹没收件箱
+// 触发器（定时、外部事件）每次触发都会产生会话，默认不显示以免淹没收件箱
 const FILTERS = {
   inbox: { label: '收件箱', origins: ['user', 'delegation'] as Origin[] },
-  auto: { label: '自动', origins: ['cron', 'event'] as Origin[] },
+  auto: { label: '自动', origins: ['trigger'] as Origin[] },
   all: { label: '全部', origins: undefined },
 }
 type Filter = keyof typeof FILTERS

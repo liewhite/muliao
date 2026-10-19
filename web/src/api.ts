@@ -1,6 +1,6 @@
 // 与后端 src/muliao/api/*.py 的响应模型一一对应
 
-export type Origin = 'user' | 'cron' | 'event' | 'delegation'
+export type Origin = 'user' | 'trigger' | 'delegation'
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
 export type TaskKind = 'turn' | 'reflection' | 'deliver' | 'compaction'
 
@@ -107,15 +107,24 @@ export interface Reflection {
   created_at: string
 }
 
-export interface CronJob {
+export interface TriggerKind {
+  name: string
+  /** 什么时候触发、config 的格式 */
+  description: string
+}
+
+export interface Trigger {
   id: number
   name: string
   agent_id: AgentId
-  schedule: string
+  /** 触发方式，如 schedule、webhook；方式的差异只在 config 与 status */
+  kind: string
   prompt: string
+  config: Record<string, unknown>
+  /** 这种方式自己给出的运行状态，如下次触发时间、webhook 地址；不含凭证 */
+  status: Record<string, unknown>
   enabled: boolean
-  next_run_at: string
-  last_run_at: string | null
+  last_fired_at: string | null
   last_session_id: string | null
   last_error: string | null
 }
@@ -126,18 +135,6 @@ export interface PromptRevision {
   /** "user"，或做出修改的 agent 的 id */
   author: string
   created_at: string
-}
-
-export interface EventTrigger {
-  id: number
-  name: string
-  agent_id: AgentId
-  prompt: string
-  enabled: boolean
-  /** 外部系统调用的完整地址 */
-  url: string
-  last_fired_at: string | null
-  last_session_id: string | null
 }
 
 export interface McpServer {
@@ -261,27 +258,22 @@ export const api = {
   tasks: (status?: TaskStatus) => get<Task[]>('/api/tasks', { status }),
   retryTask: (id: number) => post<Task>(`/api/tasks/${id}/retry`),
 
-  cron: () => get<CronJob[]>('/api/cron'),
-  createCron: (job: { name: string; agent_id: AgentId; schedule: string; prompt: string }) =>
-    post<CronJob>('/api/cron', job),
-  updateCron: (id: number, job: { schedule: string; prompt: string; enabled: boolean }) =>
-    put<CronJob>(`/api/cron/${id}`, job),
-  deleteCron: (id: number) => del(`/api/cron/${id}`),
+  triggerKinds: () => get<TriggerKind[]>('/api/trigger-kinds'),
+  triggers: () => get<Trigger[]>('/api/triggers'),
+  createTrigger: (t: { name: string; agent_id: AgentId; kind: string; prompt: string; config: Record<string, unknown> }) =>
+    post<Trigger>('/api/triggers', t),
+  /** 只修改给出的字段 */
+  updateTrigger: (id: number, patch: { prompt?: string; config?: Record<string, unknown>; enabled?: boolean }) =>
+    request<Trigger>('PATCH', `/api/triggers/${id}`, patch),
+  runTrigger: (id: number) => post<{ session_id: string }>(`/api/triggers/${id}/run`),
+  /** webhook：生成或重新生成 token，明文只返回这一次 */
+  generateTriggerToken: (id: number) => post<{ token: string }>(`/api/triggers/${id}/token`),
+  deleteTrigger: (id: number) => del(`/api/triggers/${id}`),
   /** owner 为空时是公共 prompt 的历史；新的在前，第一条即当前生效 */
   promptHistory: (owner: AgentId | null) =>
     get<PromptRevision[]>('/api/prompts', owner === null ? {} : { owner }),
   setPublicPrompt: (content: string) => put<void>('/api/prompts/public', { content }),
   restorePrompt: (revisionId: number) => post<void>(`/api/prompt-revisions/${revisionId}/restore`),
-  eventTriggers: () => get<EventTrigger[]>('/api/event-triggers'),
-  /** token 明文只在创建和重置时返回这一次 */
-  createEventTrigger: (t: { name: string; agent_id: AgentId; prompt: string }) =>
-    post<{ trigger: EventTrigger; token: string }>('/api/event-triggers', t),
-  updateEventTrigger: (id: number, t: { prompt: string; enabled: boolean }) =>
-    put<EventTrigger>(`/api/event-triggers/${id}`, t),
-  rotateEventTriggerToken: (id: number) => post<{ token: string }>(`/api/event-triggers/${id}/token`),
-  deleteEventTrigger: (id: number) => del(`/api/event-triggers/${id}`),
-
-
   mcp: () => get<McpServer[]>('/api/mcp'),
   addMcp: (input: McpInput) => post<McpServer>('/api/mcp', input),
   probeMcp: (owner: AgentId | null, name: string) => post<string[]>('/api/mcp/tools', undefined, { owner, name }),

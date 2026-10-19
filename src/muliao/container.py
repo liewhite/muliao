@@ -40,8 +40,9 @@ from muliao.runtime.tools.vault import vault_toolset
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
 from muliao.runtime.turn import TurnHandler, TurnRunner
 from muliao.runtime.worker import TaskHandler, Worker
-from muliao.triggers.cron import CronService
-from muliao.triggers.events import EventTriggers
+from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
+from muliao.triggers.service import TriggerService
+from muliao.triggers.webhook import WebhookKind, Webhooks
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
@@ -62,8 +63,9 @@ class Container:
     sessions: SessionService
     notifier: Notifier
     mcp: McpRegistry
-    cron: CronService
-    events: EventTriggers
+    triggers: TriggerService
+    schedules: ScheduleRunner
+    webhooks: Webhooks
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
     worker: Worker
@@ -82,7 +84,7 @@ class Container:
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
         await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)
         self._spawn("worker", self.worker.run_forever())
-        self._spawn("cron", self.cron.run_forever())
+        self._spawn("schedules", self.schedules.run_forever())
 
     async def _check_agent_models(self) -> None:
         """已存 agent 的模型必须能被当前配置解析：配置改动（删 provider、改名）在启动时暴露，而不是散落到每个任务里失败。"""
@@ -147,8 +149,13 @@ def build_container(
     threads = Threads(queue)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(db, vault)
-    cron = CronService(db, queue, tz)
-    events = EventTriggers(db, queue, tz)
+    schedule_kind = ScheduleKind(tz)
+    # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
+    triggers = TriggerService(
+        db, queue, {k.name: k for k in (schedule_kind, WebhookKind(settings.server.public_url))}, tz
+    )
+    schedules = ScheduleRunner(db, triggers, schedule_kind)
+    webhooks = Webhooks(db, triggers)
     push_subscriptions = PushSubscriptions(db)
     vapid = VapidKeys(settings.vapid_key_path)
 
@@ -188,7 +195,7 @@ def build_container(
             notify_toolset(notifier),
             mcp_admin_toolset(mcp),
             vault_toolset(vault),
-            triggers_toolset(cron, events, agents, vault, settings.server.public_url),
+            triggers_toolset(triggers, agents),
         ],
         include_mcp=True,
     )
@@ -225,8 +232,9 @@ def build_container(
         sessions=sessions,
         notifier=notifier,
         mcp=mcp,
-        cron=cron,
-        events=events,
+        triggers=triggers,
+        schedules=schedules,
+        webhooks=webhooks,
         push_subscriptions=push_subscriptions,
         vapid=vapid,
         worker=worker,

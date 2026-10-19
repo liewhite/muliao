@@ -63,7 +63,7 @@ def call_then_answer(tool: str, args: dict, answer: str) -> FunctionModel:
     return scripted(fn)
 
 
-_REPLY_TO = {Origin.USER: ReplyTo.USER, Origin.CRON: ReplyTo.NONE}
+_REPLY_TO = {Origin.USER: ReplyTo.USER, Origin.TRIGGER: ReplyTo.NONE}
 
 
 async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER):
@@ -112,9 +112,9 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(contain
     assert deliver[0].payload["body"] == "Noted!"
 
 
-async def test_cron_session_does_not_notify_automatically(container, make_agent):
+async def test_triggered_session_does_not_notify_automatically(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await start(container, alpha, "hi", origin=Origin.CRON)
+    await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
 
     assert await tasks_of(container, TaskKind.DELIVER) == []
@@ -161,8 +161,8 @@ async def test_reflection_runs_every_n_turns_over_the_window_and_can_write_skill
         )
 
     models.models["m"] = scripted(fn)
-    await start(container, alpha, "first task", origin=Origin.CRON)
-    await start(container, alpha, "second task", origin=Origin.CRON)
+    await start(container, alpha, "first task", origin=Origin.TRIGGER)
+    await start(container, alpha, "second task", origin=Origin.TRIGGER)
     await drain(container)
 
     reflections = await tasks_of(container, TaskKind.REFLECTION)
@@ -188,7 +188,7 @@ async def test_transient_model_error_is_retried_and_converges(container, make_ag
         return ModelResponse(parts=[TextPart("ok")])
 
     models.models["m"] = scripted(fn)
-    session = await start(container, alpha, "hi", origin=Origin.CRON)
+    session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
 
     turn = (await tasks_of(container, TaskKind.TURN))[0]
@@ -219,7 +219,7 @@ async def test_delegate_task_opens_public_thread_and_notifies_user(container, ma
     )
     models.models["w"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("summary of X")]))
 
-    parent = await start(container, router, "new slack messages", origin=Origin.CRON)
+    parent = await start(container, router, "new slack messages", origin=Origin.TRIGGER)
     await drain(container)
 
     children = await container.sessions.list(agent_id=worker, origins=None, limit=10, offset=0)
@@ -251,7 +251,7 @@ async def test_domain_error_in_tool_is_returned_to_model_for_correction(containe
         return ModelResponse(parts=[ToolCallPart("read_skill", {"name": "missing"})])
 
     models.models["m"] = scripted(fn)
-    await start(container, alpha, "use skill", origin=Origin.CRON)
+    await start(container, alpha, "use skill", origin=Origin.TRIGGER)
     await drain(container)
 
     assert "not found" in retry_texts[0]
@@ -270,7 +270,7 @@ async def test_run_events_are_published_to_bus(container, make_agent, models):
 
     collector = asyncio.create_task(collect())
     await asyncio.sleep(0)
-    await start(container, alpha, "who is there", origin=Origin.CRON)
+    await start(container, alpha, "who is there", origin=Origin.TRIGGER)
     await drain(container)
     collector.cancel()
 
@@ -288,8 +288,17 @@ async def test_model_sees_agent_names_never_ids(container, make_agent, models):
         ("list_agents", {}),
         ("delegate_task", {"agent": "研究助理", "task": "调研 X", "thread": "调研"}),
         ("delegate_task", {"agent": "不存在的助理", "task": "x", "thread": "x"}),
-        ("cron_create", {"name": "daily", "schedule": "0 9 * * *", "prompt": "汇总", "agent": "研究助理"}),
-        ("cron_list", {}),
+        (
+            "trigger_create",
+            {
+                "name": "daily",
+                "kind": "schedule",
+                "prompt": "汇总",
+                "config": {"cron": "0 9 * * *"},
+                "agent": "研究助理",
+            },
+        ),
+        ("trigger_list", {}),
     ]
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -302,7 +311,7 @@ async def test_model_sees_agent_names_never_ids(container, make_agent, models):
         return ModelResponse(parts=[TextPart("done")])
 
     models.models["r"] = scripted(fn)
-    await start(container, router.id, "安排工作", origin=Origin.CRON)
+    await start(container, router.id, "安排工作", origin=Origin.TRIGGER)
     await drain(container)
 
     transcript = "\n".join(seen)
@@ -313,7 +322,7 @@ async def test_model_sees_agent_names_never_ids(container, make_agent, models):
     # 工作目录等文件路径里会出现 id（agents/<id>/…），那是给文件操作用的路径；除此之外模型不该看到 id
     for agent_id in (router.id, worker.id):
         assert agent_id not in re.sub(r"agents/[0-9a-f]{12}/", "agents/<dir>/", transcript)
-    jobs = await container.cron.list()
+    jobs = await container.triggers.list()
     assert [(j.name, j.agent_id) for j in jobs] == [("daily", worker.id)]  # 程序侧落到 id
     children = await container.sessions.list(agent_id=worker.id, origins=None, limit=10, offset=0)
     assert len(children) == 1

@@ -11,11 +11,10 @@ from muliao.db import Base, StrEnumType, UTCDateTime, utcnow
 
 
 class Origin(StrEnum):
-    """会话来源：用户在网页发起、cron 定时触发、外部事件触发、agent 之间委派。"""
+    """会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派。"""
 
     USER = "user"
-    CRON = "cron"
-    EVENT = "event"
+    TRIGGER = "trigger"
     DELEGATION = "delegation"
 
 
@@ -181,45 +180,31 @@ class Reflection(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
-class CronJob(Base):
-    __tablename__ = "cron_jobs"
+class Trigger(Base):
+    """触发器：具名、持久的事件来源，把外部刺激变成交给某个 agent 的一轮。
+
+    怎么被触发由 kind 决定（定时、webhook……），只在代码里多态实现（triggers/），表里不为某种方式开专门的列：
+    config 是这种方式的配置（用户或 agent 设置），state 是这种方式自己维护的运行状态（如下次触发时间、token 摘要）。
+    """
+
+    __tablename__ = "triggers"
     # id 是会话的发送方身份（sessions.origin_ref），必须永不复用
     __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True)
-    agent_id: Mapped[str] = mapped_column(_fk_agent())
-    schedule: Mapped[str] = mapped_column(String(100))
-    prompt: Mapped[str] = mapped_column(Text)
-    enabled: Mapped[bool] = mapped_column(default=True)
-    next_run_at: Mapped[datetime] = mapped_column(UTCDateTime)
-    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    last_session_id: Mapped[str | None] = mapped_column(String(36))
-    # 触发失败时记录原因并停用该 job，修复后由用户重新启用
-    last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-
-
-class EventTrigger(Base):
-    """外部事件入口：外部系统带 token 调用 POST /api/hooks/{name}，事件交给 agent 处理一轮。
-
-    不带 session_id 的事件新建会话；带回之前返回的 session_id 则在该会话里继续（只能续写本触发器发起的会话）。
-    """
-
-    __tablename__ = "event_triggers"
-    # id 是续写规则里的发送方身份（sessions.origin_ref）：必须永不复用，否则删后新建的触发器能续写旧触发器的会话
-    __table_args__ = {"sqlite_autoincrement": True}
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 出现在 webhook 地址里：小写字母、数字与 -
     name: Mapped[str] = mapped_column(String(64), unique=True)
     agent_id: Mapped[str] = mapped_column(_fk_agent())
-    # 交给 agent 的说明：这类事件是什么、该怎么处理；事件内容附在其后
+    # 交给 agent 的说明：这类事件是什么、该怎么处理；事件内容（若有）附在其后
     prompt: Mapped[str] = mapped_column(Text)
-    # 只存 token 的 SHA-256：明文只在创建或重置时返回一次
-    token_hash: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(32))
+    config: Mapped[dict[str, Any]] = mapped_column(JSON)
+    state: Mapped[dict[str, Any]] = mapped_column(JSON)
     enabled: Mapped[bool] = mapped_column(default=True)
     last_fired_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_session_id: Mapped[str | None] = mapped_column(String(36))
+    # 触发失败时的原因（如定时触发器的数据不合法而被停用）
+    last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

@@ -67,13 +67,6 @@ class Vault:
         # 公共 secret 所有 agent 都依赖：记录谁在什么作用域改了哪个 key（不记值）
         log.info("secret set", extra={"owner": owner, "key": key})
 
-    async def has(self, owner: str | None, key: str) -> bool:
-        async with self._db.transaction() as s:
-            return (
-                await s.scalar(select(Secret.id).where(owned_by(Secret.owner, owner), Secret.key == key))
-                is not None
-            )
-
     async def delete(self, owner: str | None, key: str) -> None:
         async with self._db.transaction() as s:
             row = await s.scalar(select(Secret).where(owned_by(Secret.owner, owner), Secret.key == key))

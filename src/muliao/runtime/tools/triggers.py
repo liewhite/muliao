@@ -1,191 +1,128 @@
-"""触发器的管理：cron 定时任务与外部事件触发器。agent 按名称指定，不出现 id。"""
+"""触发器的管理：一组 trigger_* 工具覆盖所有触发方式（定时、webhook……），方式的差异只在 kind 与 config。
+
+agent 按名称指定，不出现 id。webhook 的 token 只能由用户在界面上生成，agent 拿不到也不需要。
+"""
+
+from typing import Any
 
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents import AgentService
-from muliao.errors import Conflict
+from muliao.models import Trigger
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
-from muliao.triggers.cron import CronService
-from muliao.triggers.events import EventTriggers, hook_url, validate_trigger_name
-from muliao.vault import Vault
+from muliao.triggers.service import TriggerService
 
 
-def token_key(trigger_name: str) -> str:
-    """agent 创建或重置的事件 token 存在它私有 vault 的这个 key 下。触发器名不含下划线，所以一一对应。"""
-    return "EVENT_TOKEN_" + trigger_name.upper().replace("-", "_")
+class TriggerKindInfo(BaseModel):
+    kind: str
+    description: str
 
 
-class EventTriggerInfo(BaseModel):
+class TriggerInfo(BaseModel):
     name: str
+    kind: str
     agent: str
-    url: str
     prompt: str
+    config: dict[str, Any]
+    # 这种方式的运行状态，如下次触发时间、webhook 地址与是否已有 token
+    status: dict[str, Any]
     enabled: bool
+    last_error: str | None
 
 
-class CronInfo(BaseModel):
-    name: str
-    agent: str
-    schedule: str
-    prompt: str
-    enabled: bool
-    next_run_at: str
-
-
-def triggers_toolset(
-    cron: CronService, events: EventTriggers, agents: AgentService, vault: Vault, public_url: str
-) -> FunctionToolset[RunScope]:
+def triggers_toolset(triggers: TriggerService, agents: AgentService) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
+    async def info(t: Trigger, names: dict[str, str]) -> TriggerInfo:
+        return TriggerInfo(
+            name=t.name,
+            kind=t.kind,
+            agent=names[t.agent_id],
+            prompt=t.prompt,
+            config=t.config,
+            status=triggers.kind(t.kind).status(t),
+            enabled=t.enabled,
+            last_error=t.last_error,
+        )
+
     @ts.tool_plain
-    async def cron_list() -> list[CronInfo]:
-        """List all scheduled jobs."""
+    async def trigger_kinds() -> list[TriggerKindInfo]:
+        """List the kinds of triggers and the `config` each one takes."""
+        return [TriggerKindInfo(kind=k.name, description=k.description) for k in triggers.kinds.values()]
+
+    @ts.tool_plain
+    async def trigger_list() -> list[TriggerInfo]:
+        """List all triggers: things that start a new conversation of an agent (schedules, webhooks, ...)."""
         names = {a.id: a.name for a in await agents.list()}
-        return [
-            CronInfo(
-                name=j.name,
-                agent=names[j.agent_id],
-                schedule=j.schedule,
-                prompt=j.prompt,
-                enabled=j.enabled,
-                next_run_at=j.next_run_at.isoformat(),
-            )
-            for j in await cron.list()
-        ]
+        return [await info(t, names) for t in await triggers.list()]
 
     @ts.tool
-    async def cron_create(
-        ctx: RunContext[RunScope], name: str, schedule: str, prompt: str, agent: str | None = None
+    async def trigger_create(
+        ctx: RunContext[RunScope],
+        name: str,
+        kind: str,
+        prompt: str,
+        config: dict[str, Any],
+        agent: str | None = None,
     ) -> str:
-        """Schedule a recurring job. Each firing starts a new session of the agent with `prompt`.
-        Fired sessions do not notify the user automatically: the prompt should say when to call `notify_user`.
+        """Create a trigger that starts a new conversation of an agent with `prompt` (plus the event, if the kind
+        carries one). See `trigger_kinds` for the kinds and their `config`. Triggered runs do not notify the user
+        automatically: the prompt should say when to call `notify_user`. A webhook only works after the user
+        generates its token in the app; tell the user to do that.
 
         Args:
-            name: Unique job name.
-            schedule: 5-field cron expression in the server's configured timezone, e.g. `*/5 * * * *`.
-            prompt: Instructions for each run.
+            name: Lowercase letters, digits and `-`, e.g. `daily-report` (used in webhook URLs).
+            kind: Trigger kind from `trigger_kinds`.
+            prompt: What to do on each firing.
+            config: Kind-specific settings, e.g. {"cron": "0 9 * * *"} for a schedule.
             agent: Name of the agent to run (see `list_agents`); defaults to you.
         """
-        job = await cron.create(
-            name=name,
-            agent_id=(await agents.find_by_name(agent)).id if agent is not None else ctx.deps.agent_id,
-            schedule=schedule,
-            prompt=prompt,
-        )
-        return f"scheduled {job.name}, next run at {job.next_run_at.isoformat()}"
+        agent_id = (await agents.find_by_name(agent)).id if agent is not None else ctx.deps.agent_id
+        trigger = await triggers.create(name=name, agent_id=agent_id, kind=kind, prompt=prompt, config=config)
+        return f"created {trigger.kind} trigger {trigger.name}: {triggers.kind(trigger.kind).status(trigger)}"
 
     @ts.tool_plain
-    async def cron_delete(name: str) -> str:
-        """Delete a scheduled job.
-
-        Args:
-            name: Job name.
-        """
-        job = await cron.get_by_name(name)
-        await cron.delete(job.id)
-        return f"deleted cron job {name}"
-
-    @ts.tool_plain
-    async def cron_update(
-        name: str, schedule: str | None = None, prompt: str | None = None, enabled: bool | None = None
+    async def trigger_update(
+        name: str,
+        prompt: str | None = None,
+        config: dict[str, Any] | None = None,
+        enabled: bool | None = None,
     ) -> str:
-        """Change a scheduled job; only the given fields change. Disable a job to pause it without losing it.
+        """Change a trigger; only the given fields change. Disable it to pause without losing it.
 
         Args:
-            name: Job name.
-            schedule: New 5-field cron expression.
-            prompt: New instructions for each run.
+            name: Trigger name.
+            prompt: New instructions for each firing.
+            config: New kind-specific settings (replaces the old config).
             enabled: Pause (false) or resume (true).
         """
-        job = await cron.get_by_name(name)
-        job = await cron.update(job.id, schedule=schedule, prompt=prompt, enabled=enabled)
-        state = f"next run at {job.next_run_at.isoformat()}" if job.enabled else "paused"
-        return f"updated cron job {name}, {state}"
+        trigger = await triggers.get_by_name(name)
+        trigger = await triggers.update(trigger.id, prompt=prompt, config=config, enabled=enabled)
+        status = triggers.kind(trigger.kind).status(trigger)
+        return f"updated trigger {name} ({'enabled' if trigger.enabled else 'paused'}): {status}"
 
     @ts.tool_plain
-    async def event_trigger_list() -> list[EventTriggerInfo]:
-        """List external event triggers: URLs external systems POST events to."""
-        names = {a.id: a.name for a in await agents.list()}
-        return [
-            EventTriggerInfo(
-                name=t.name,
-                agent=names[t.agent_id],
-                url=hook_url(public_url, t.name),
-                prompt=t.prompt,
-                enabled=t.enabled,
-            )
-            for t in await events.list()
-        ]
-
-    @ts.tool
-    async def event_trigger_create(
-        ctx: RunContext[RunScope], name: str, prompt: str, agent: str | None = None
-    ) -> str:
-        """Create a URL that external systems (webhooks, scripts) POST events to. Each event starts a new
-        session of the agent with `prompt` followed by the event body; the response carries a `session_id`
-        that the sender may pass back as `?session_id=` to continue that session. Events do not notify the
-        user automatically: the prompt should say when to call `notify_user`.
-
-        The token is never shown: it is stored in your private vault under the returned key
-        (`EVENT_TOKEN_<NAME>`). Configure the sender with header `Authorization: Bearer <token>`, e.g. via
-        `run_shell(secrets=[key])`. If storing it fails, call `event_trigger_rotate_token` to get a new one.
-
-        Args:
-            name: Lowercase letters, digits and `-`, used in the URL, e.g. `github-issues`.
-            prompt: What these events are and how to handle them.
-            agent: Name of the agent that handles the events (see `list_agents`); defaults to you.
-        """
-        agent_id = (await agents.find_by_name(agent)).id if agent is not None else ctx.deps.agent_id
-        key = token_key(validate_trigger_name(name))
-        # 不覆盖已有的 secret：在创建触发器之前就报错
-        if await vault.has(ctx.deps.agent_id, key):
-            raise Conflict(f"your vault already has {key}; delete it first or choose another trigger name")
-        trigger, token = await events.create(name=name, agent_id=agent_id, prompt=prompt)
-        await vault.set(ctx.deps.agent_id, key, token, f"bearer token of event trigger {trigger.name}")
-        return f"created event trigger {trigger.name}: POST {hook_url(public_url, trigger.name)}; token in vault key {key}"
-
-    @ts.tool
-    async def event_trigger_rotate_token(ctx: RunContext[RunScope], name: str) -> str:
-        """Replace an event trigger's token: the old one stops working at once, wherever it was stored. The new
-        one is stored in your private vault as `EVENT_TOKEN_<NAME>`, replacing what was there.
+    async def trigger_run(name: str) -> str:
+        """Fire a trigger now (without an event body), starting a new conversation of its agent.
 
         Args:
             name: Trigger name.
         """
-        trigger = await events.get_by_name(name)
-        token = await events.rotate_token(trigger.id)
-        key = token_key(trigger.name)
-        await vault.set(ctx.deps.agent_id, key, token, f"bearer token of event trigger {trigger.name}")
-        return f"rotated token of {trigger.name}; new token in your vault key {key}; any other copy is now invalid"
+        trigger = await triggers.get_by_name(name)
+        await triggers.fire(trigger.id)
+        return f"fired trigger {name}"
 
     @ts.tool_plain
-    async def event_trigger_update(name: str, prompt: str | None = None, enabled: bool | None = None) -> str:
-        """Change an event trigger; only the given fields change. A disabled trigger rejects events.
-
-        Args:
-            name: Trigger name.
-            prompt: New handling instructions.
-            enabled: Accept (true) or reject (false) events.
-        """
-        trigger = await events.get_by_name(name)
-        await events.update(trigger.id, prompt=prompt, enabled=enabled)
-        return f"updated event trigger {name}"
-
-    @ts.tool
-    async def event_trigger_delete(ctx: RunContext[RunScope], name: str) -> str:
-        """Delete an event trigger; its URL stops accepting events. Its token in your private vault is deleted too.
+    async def trigger_delete(name: str) -> str:
+        """Delete a trigger.
 
         Args:
             name: Trigger name.
         """
-        trigger = await events.get_by_name(name)
-        await events.delete(trigger.id)
-        key = token_key(trigger.name)
-        if await vault.has(ctx.deps.agent_id, key):
-            await vault.delete(ctx.deps.agent_id, key)
-            return f"deleted event trigger {name} and its token {key} from your vault"
-        return f"deleted event trigger {name}"
+        trigger = await triggers.get_by_name(name)
+        await triggers.delete(trigger.id)
+        return f"deleted trigger {name}"
 
     return ts

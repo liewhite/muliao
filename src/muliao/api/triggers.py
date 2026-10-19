@@ -1,0 +1,116 @@
+"""触发器的管理接口。webhook 的事件入口在 app.py（凭 token 鉴权，不走登录）。"""
+
+from datetime import datetime
+from typing import Any
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from muliao.api.deps import C
+from muliao.models import Trigger
+
+router = APIRouter()
+
+
+class TriggerKindOut(BaseModel):
+    name: str
+    description: str
+
+
+class TriggerCreate(BaseModel):
+    name: str
+    agent_id: str
+    kind: str
+    prompt: str
+    config: dict[str, Any]
+
+
+class TriggerPatch(BaseModel):
+    """只修改给出的字段。"""
+
+    prompt: str | None = None
+    config: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class TriggerOut(BaseModel):
+    id: int
+    name: str
+    agent_id: str
+    kind: str
+    prompt: str
+    config: dict[str, Any]
+    # 这种触发方式自己给出的运行状态（见 TriggerKind.status），不含凭证
+    status: dict[str, Any]
+    enabled: bool
+    last_fired_at: datetime | None
+    last_session_id: str | None
+    last_error: str | None
+
+
+class TokenOut(BaseModel):
+    # 明文只返回这一次
+    token: str
+
+
+class FiredOut(BaseModel):
+    session_id: str
+
+
+def _out(c: C, t: Trigger) -> TriggerOut:
+    return TriggerOut(
+        id=t.id,
+        name=t.name,
+        agent_id=t.agent_id,
+        kind=t.kind,
+        prompt=t.prompt,
+        config=t.config,
+        status=c.triggers.kind(t.kind).status(t),
+        enabled=t.enabled,
+        last_fired_at=t.last_fired_at,
+        last_session_id=t.last_session_id,
+        last_error=t.last_error,
+    )
+
+
+@router.get("/trigger-kinds")
+async def trigger_kinds(c: C) -> list[TriggerKindOut]:
+    return [TriggerKindOut(name=k.name, description=k.description) for k in c.triggers.kinds.values()]
+
+
+@router.get("/triggers")
+async def list_triggers(c: C) -> list[TriggerOut]:
+    return [_out(c, t) for t in await c.triggers.list()]
+
+
+@router.post("/triggers", status_code=201)
+async def create_trigger(c: C, body: TriggerCreate) -> TriggerOut:
+    trigger = await c.triggers.create(
+        name=body.name, agent_id=body.agent_id, kind=body.kind, prompt=body.prompt, config=body.config
+    )
+    return _out(c, trigger)
+
+
+@router.patch("/triggers/{trigger_id}")
+async def update_trigger(c: C, trigger_id: int, body: TriggerPatch) -> TriggerOut:
+    trigger = await c.triggers.update(
+        trigger_id, prompt=body.prompt, config=body.config, enabled=body.enabled
+    )
+    return _out(c, trigger)
+
+
+@router.delete("/triggers/{trigger_id}", status_code=204)
+async def delete_trigger(c: C, trigger_id: int) -> None:
+    await c.triggers.delete(trigger_id)
+
+
+@router.post("/triggers/{trigger_id}/run", status_code=202)
+async def run_trigger(c: C, trigger_id: int) -> FiredOut:
+    """立即触发一次（不带事件内容）。"""
+    return FiredOut(session_id=(await c.triggers.fire(trigger_id)).id)
+
+
+@router.post("/triggers/{trigger_id}/token")
+async def generate_token(c: C, trigger_id: int) -> TokenOut:
+    """生成（或重新生成）webhook 的 token；只能由用户在这里生成。"""
+    return TokenOut(token=await c.webhooks.generate_token(trigger_id))

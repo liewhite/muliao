@@ -275,7 +275,7 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
     container, make_agent
 ):
     alpha = (await make_agent("alpha")).id
-    cron_session = await start(container, alpha, "scheduled", origin=Origin.CRON)
+    cron_session = await start(container, alpha, "scheduled", origin=Origin.TRIGGER)
     # 用户可以在 cron 会话里追问
     await reply(container, cron_session.id, "follow up")
     # 某个会话不能冒充父会话去续写不属于它的会话

@@ -12,7 +12,6 @@ from pydantic_ai.models.function import AgentInfo
 
 from muliao.models import McpTransport, Origin
 from muliao.runtime.mcp import McpSpec
-from muliao.runtime.tools.triggers import token_key
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
@@ -34,7 +33,7 @@ async def run_tools(container, models, agent_id: str, calls: list[tuple[str, dic
         return ModelResponse(parts=[TextPart("done")])
 
     models.models["tools"] = scripted(fn)
-    await start(container, agent_id, "do it", origin=Origin.CRON)
+    await start(container, agent_id, "do it", origin=Origin.TRIGGER)
     await drain(container)
     return outputs
 
@@ -86,9 +85,11 @@ async def test_agent_edits_public_prompt(container, make_agent, models):
     assert (await container.prompts.history(None))[0].author == me.id
 
 
-async def test_agent_pauses_cron_job_and_reenables_mcp_server(container, make_agent, models):
+async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_agent, models):
     me = await make_agent("manager", model="tools")
-    await container.cron.create(name="daily", agent_id=me.id, schedule="0 9 * * *", prompt="report")
+    await container.triggers.create(
+        name="daily", agent_id=me.id, kind="schedule", prompt="report", config={"cron": "0 9 * * *"}
+    )
     spec = McpSpec(
         name="echo", transport=McpTransport.HTTP, command=None, args=(), url="http://x", env=(), headers=()
     )
@@ -101,33 +102,51 @@ async def test_agent_pauses_cron_job_and_reenables_mcp_server(container, make_ag
         models,
         me.id,
         [
-            ("cron_update", {"name": "daily", "enabled": False}),
+            ("trigger_update", {"name": "daily", "enabled": False}),
             ("mcp_list", {}),
             ("mcp_set_enabled", {"name": "echo", "enabled": True}),
         ],
     )
 
-    assert outputs[0] == "updated cron job daily, paused"
-    assert not (await container.cron.get_by_name("daily")).enabled
+    assert outputs[0].startswith("updated trigger daily (paused)")
+    assert not (await container.triggers.get_by_name("daily")).enabled
     assert "echo" in outputs[1]
     assert [m.name for m in await container.mcp.visible_to(me.id)] == ["echo"]
 
 
-async def test_event_trigger_token_goes_to_creators_private_vault(client, container, make_agent, models):
+async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
+    client, container, make_agent, models
+):
     me = await make_agent("manager", model="tools")
     outputs = await run_tools(
-        container, models, me.id, [("event_trigger_create", {"name": "github", "prompt": "Triage it."})]
+        container,
+        models,
+        me.id,
+        [
+            ("trigger_kinds", {}),
+            ("trigger_create", {"name": "github", "kind": "webhook", "prompt": "Triage it.", "config": {}}),
+            (
+                "trigger_create",
+                {"name": "daily", "kind": "schedule", "prompt": "Report.", "config": {"cron": "bad"}},
+            ),
+        ],
     )
 
-    key = token_key("github")
-    assert key in outputs[0] and "http://test/api/hooks/github" in outputs[0]
-    token = (await container.vault.resolve_many(me.id, [key]))[key]
-    assert token not in outputs[0]
+    assert "schedule" in outputs[0] and "webhook" in outputs[0]
+    assert "http://test/api/hooks/github" in outputs[1] and "'has_token': False" in outputs[1]
+    assert "invalid cron expression" in outputs[2]
+    # 没有 token 时收不到事件；用户在界面上生成后才能用，token 不经过 agent 与 vault
     await login(client)
+    assert (
+        await client.post("/api/hooks/github", content="x", headers={"Authorization": "Bearer x"})
+    ).status_code == 401
+    trigger = await container.triggers.get_by_name("github")
+    token = (await client.post(f"/api/triggers/{trigger.id}/token")).json()["token"]
     resp = await client.post(
         "/api/hooks/github", content="opened", headers={"Authorization": f"Bearer {token}"}
     )
     assert resp.status_code == 202
+    assert await container.vault.list_all() == []
 
 
 async def test_agent_manages_private_and_public_secrets(container, make_agent, models):
@@ -228,7 +247,7 @@ async def test_parallel_partial_updates_of_one_agent_both_survive(container, mak
         return ModelResponse(parts=[TextPart("done")])
 
     models.models["tools"] = scripted(fn)
-    await start(container, me.id, "go", origin=Origin.CRON)
+    await start(container, me.id, "go", origin=Origin.TRIGGER)
     await drain(container)
 
     updated = await container.agents.get(target.id)
@@ -255,37 +274,6 @@ async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agen
     assert "cannot delete yourself" in outputs[2]
     for agent_id in (me.id, other.id):
         assert agent_id not in "\n".join(outputs)
-
-
-async def test_event_trigger_token_never_overwrites_and_moves_with_rotate_and_delete(
-    container, make_agent, models
-):
-    me = await make_agent("manager", model="tools")
-    await container.vault.set(me.id, token_key("mine"), "user-secret")
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            ("event_trigger_create", {"name": "mine", "prompt": "p"}),
-            ("event_trigger_create", {"name": "a_b", "prompt": "p"}),
-            ("event_trigger_create", {"name": "hook", "prompt": "p"}),
-            ("event_trigger_rotate_token", {"name": "hook"}),
-            ("event_trigger_delete", {"name": "hook"}),
-        ],
-    )
-
-    # 已有同名 secret 时不创建触发器、不覆盖
-    assert "already has EVENT_TOKEN_MINE" in outputs[0]
-    assert await container.vault.resolve_many(me.id, [token_key("mine")]) == {
-        token_key("mine"): "user-secret"
-    }
-    assert [t.name for t in await container.events.list()] == []
-    # 名称不允许下划线，名称到 vault key 一一对应
-    assert "invalid event trigger name" in outputs[1]
-    assert "any other copy is now invalid" in outputs[3]
-    assert "and its token EVENT_TOKEN_HOOK" in outputs[4]
-    assert not await container.vault.has(me.id, token_key("hook"))
 
 
 async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(

@@ -10,13 +10,13 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from muliao.api import admin, agents, prompts, sessions
+from muliao.api import admin, agents, prompts, sessions, triggers
 from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, require_auth
 from muliao.api.deps import C
 from muliao.bus import SubscriberOverflow
 from muliao.container import Container
 from muliao.errors import Conflict, DomainError, Forbidden, InvalidInput, NotFound, TooLarge, Unauthorized
-from muliao.triggers.events import EVENT_MAX_BYTES
+from muliao.triggers.service import EVENT_MAX_BYTES
 
 log = logging.getLogger(__name__)
 
@@ -88,13 +88,13 @@ def _public_routes(secure_cookie: bool) -> APIRouter:
         if scheme.lower() != "bearer" or not token:
             raise Unauthorized("missing bearer token")
         # 先鉴权再读请求体：未鉴权的调用方不能让进程读入任何内容
-        trigger_id = await c.events.authenticate(name, token)
+        trigger_id = await c.webhooks.authenticate(name, token)
         payload = await _read_limited(request, EVENT_MAX_BYTES)
         try:
             text = payload.decode()
         except UnicodeDecodeError as e:
             raise InvalidInput("event payload must be UTF-8 text") from e
-        session = await c.events.deliver(trigger_id, text, session_id)
+        session = await c.webhooks.deliver(trigger_id, text, session_id)
         return HookOut(session_id=session.id)
 
     @router.post("/api/auth/logout", status_code=204)
@@ -110,6 +110,7 @@ def _private_routes() -> APIRouter:
     router.include_router(sessions.router)
     router.include_router(admin.router)
     router.include_router(prompts.router)
+    router.include_router(triggers.router)
 
     @router.get("/auth/me", status_code=204)
     async def me() -> None:
