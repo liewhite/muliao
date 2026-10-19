@@ -17,7 +17,7 @@ async def _make_due(container, job_id: int) -> None:
         (await s.get(CronJob, job_id)).next_run_at = datetime.now().astimezone() - timedelta(seconds=1)
 
 
-async def test_cron_fires_new_session_without_delivery_and_schedules_next(container, make_agent):
+async def test_cron_fires_new_session_without_notifying_and_schedules_next(container, make_agent):
     alpha = (await make_agent()).id
     job = await container.cron.create(
         name="slack", agent_id=alpha, schedule="* * * * *", prompt="check slack"
@@ -28,7 +28,7 @@ async def test_cron_fires_new_session_without_delivery_and_schedules_next(contai
 
     sessions = await container.sessions.list(agent_id=alpha, origins=[Origin.CRON], limit=10, offset=0)
     assert len(sessions) == 1
-    assert sessions[0].notify is False and sessions[0].origin_ref == str(job.id)
+    assert not sessions[0].origin.notifies and sessions[0].origin_ref == str(job.id)
     job = await container.cron.get_by_name("slack")
     assert job.last_session_id == sessions[0].id
     assert job.next_run_at > datetime.now().astimezone()
@@ -108,7 +108,6 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
         prompt="token?",
         origin=Origin.USER,
         origin_ref=None,
-        notify=False,
     )
     await drain(container, limit_seconds=30)
 

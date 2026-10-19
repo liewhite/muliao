@@ -36,7 +36,6 @@ class SessionService:
         prompt: str,
         origin: Origin,
         origin_ref: str | None,
-        notify: bool,
         title: str | None = None,
     ) -> Session:
         if await s.get(Agent, agent_id) is None:
@@ -47,7 +46,6 @@ class SessionService:
             title=title or default_title(prompt),
             origin=origin,
             origin_ref=origin_ref,
-            notify=notify,
         )
         s.add(session)
         self.enqueue_turn_in(s, session, prompt)

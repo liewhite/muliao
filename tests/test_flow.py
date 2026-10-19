@@ -62,10 +62,8 @@ def call_then_answer(tool: str, args: dict, answer: str) -> FunctionModel:
     return scripted(fn)
 
 
-async def start(container, agent: str, prompt: str, notify: bool = True):
-    return await container.sessions.start(
-        agent_id=agent, prompt=prompt, origin=Origin.USER, origin_ref=None, notify=notify
-    )
+async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER):
+    return await container.sessions.start(agent_id=agent, prompt=prompt, origin=origin, origin_ref=None)
 
 
 async def tasks_of(container, kind: TaskKind) -> list[Task]:
@@ -91,9 +89,9 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(contain
     assert deliver[0].payload["body"] == "Noted!"
 
 
-async def test_cron_style_session_without_delivery_does_not_notify(container, make_agent):
+async def test_cron_session_does_not_notify_automatically(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await start(container, alpha, "hi", notify=False)
+    await start(container, alpha, "hi", origin=Origin.CRON)
     await drain(container)
 
     assert await tasks_of(container, TaskKind.DELIVER) == []
@@ -140,8 +138,8 @@ async def test_reflection_runs_every_n_turns_over_the_window_and_can_write_skill
         )
 
     models.models["m"] = scripted(fn)
-    await start(container, alpha, "first task", notify=False)
-    await start(container, alpha, "second task", notify=False)
+    await start(container, alpha, "first task", origin=Origin.CRON)
+    await start(container, alpha, "second task", origin=Origin.CRON)
     await drain(container)
 
     reflections = await tasks_of(container, TaskKind.REFLECTION)
@@ -167,7 +165,7 @@ async def test_transient_model_error_is_retried_and_converges(container, make_ag
         return ModelResponse(parts=[TextPart("ok")])
 
     models.models["m"] = scripted(fn)
-    session = await start(container, alpha, "hi", notify=False)
+    session = await start(container, alpha, "hi", origin=Origin.CRON)
     await drain(container)
 
     turn = (await tasks_of(container, TaskKind.TURN))[0]
@@ -198,7 +196,7 @@ async def test_delegate_task_starts_session_of_target_agent(container, make_agen
     )
     models.models["w"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("summary of X")]))
 
-    parent = await start(container, router, "new slack messages", notify=False)
+    parent = await start(container, router, "new slack messages", origin=Origin.CRON)
     await drain(container)
 
     children = await container.sessions.list(agent_id=worker, origins=None, limit=10, offset=0)
@@ -229,7 +227,7 @@ async def test_domain_error_in_tool_is_returned_to_model_for_correction(containe
         return ModelResponse(parts=[ToolCallPart("read_skill", {"name": "missing"})])
 
     models.models["m"] = scripted(fn)
-    await start(container, alpha, "use skill", notify=False)
+    await start(container, alpha, "use skill", origin=Origin.CRON)
     await drain(container)
 
     assert "not found" in retry_texts[0]
@@ -248,7 +246,7 @@ async def test_run_events_are_published_to_bus(container, make_agent, models):
 
     collector = asyncio.create_task(collect())
     await asyncio.sleep(0)
-    await start(container, alpha, "who is there", notify=False)
+    await start(container, alpha, "who is there", origin=Origin.CRON)
     await drain(container)
     collector.cancel()
 
@@ -280,7 +278,7 @@ async def test_model_sees_agent_names_never_ids(container, make_agent, models):
         return ModelResponse(parts=[TextPart("done")])
 
     models.models["r"] = scripted(fn)
-    await start(container, router.id, "安排工作", notify=False)
+    await start(container, router.id, "安排工作", origin=Origin.CRON)
     await drain(container)
 
     transcript = "\n".join(seen)

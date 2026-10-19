@@ -36,8 +36,6 @@ export interface Session {
   title: string
   origin: Origin
   origin_ref: string | null
-  /** 每轮完成后是否推送通知 */
-  notify: boolean
   unread: boolean
   created_at: string
   updated_at: string

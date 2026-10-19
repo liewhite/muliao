@@ -143,7 +143,6 @@ class CronService:
                 prompt=job.prompt,
                 origin=Origin.CRON,
                 origin_ref=str(job.id),
-                notify=False,
                 title=f"{job.name} · {local}",
             )
             job.last_run_at = now

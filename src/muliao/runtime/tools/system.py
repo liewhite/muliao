@@ -45,7 +45,6 @@ def agents_toolset(agents: AgentService, sessions: SessionService) -> FunctionTo
             prompt=task,
             origin=Origin.DELEGATION,
             origin_ref=ctx.deps.session_id,
-            notify=True,
         )
         return (
             f"delegated to {target.name}; it runs in a new session and the user is notified when it finishes"

@@ -9,15 +9,20 @@ from muliao.models import Origin
 
 _ORIGIN_NOTES: dict[Origin, str] = {
     Origin.USER: "The user started this conversation in the app and may be reading along.",
-    Origin.CRON: (
-        "This run was started by a schedule; nobody is watching. The user is NOT notified automatically: "
-        "call `notify_user` only when there is something worth their attention."
-    ),
-    Origin.DELEGATION: (
-        "Another agent delegated this task to you. The user is notified with your final answer "
-        "and may reply in this session."
-    ),
+    Origin.CRON: "This run was started by a schedule; nobody is watching.",
+    Origin.DELEGATION: "Another agent delegated this task to you; the user may reply in this session.",
 }
+
+
+def _origin_note(origin: Origin) -> str:
+    # 是否推送只由 Origin.notifies 决定，这里只是把它说给模型听
+    if origin.notifies:
+        return f"{_ORIGIN_NOTES[origin]} The user is notified with your final answer."
+    return (
+        f"{_ORIGIN_NOTES[origin]} The user is NOT notified automatically: "
+        "call `notify_user` only when there is something worth their attention."
+    )
+
 
 SELF_IMPROVEMENT = """\
 ## Self-improvement
@@ -50,7 +55,7 @@ def build_instructions(
         f"- Workspace (base for relative paths and shell cwd): {workspace}",
     ]
     if origin is not None:
-        context.append(f"- {_ORIGIN_NOTES[origin]}")
+        context.append(f"- {_origin_note(origin)}")
     skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] or ["(no skills yet)"]
     sections = [
         agent_instructions.strip(),

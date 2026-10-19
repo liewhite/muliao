@@ -60,7 +60,7 @@ class TurnHandler:
             session.updated_at = utcnow()
             await self._count_turn(s, agent)
             await self._compaction.after_turn(s, session, agent.model, new_messages)
-            if session.notify:
+            if session.origin.notifies:
                 self._notifier.enqueue_in(
                     s,
                     agent.id,

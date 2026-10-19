@@ -2,11 +2,12 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, DateTime, Engine, event
+from sqlalchemy import Connection, DateTime, Engine, String, event
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -16,6 +17,25 @@ from sqlalchemy.types import TypeDecorator
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+class StrEnumType[E: StrEnum](TypeDecorator[E]):
+    """以字符串存储 StrEnum，读出时还原为枚举。库里出现未知取值即报错，不让裸字符串混入业务逻辑。"""
+
+    impl = String(16)
+    cache_ok = True
+
+    def __init__(self, enum_cls: type[E]):
+        super().__init__()
+        self._enum = enum_cls
+
+    def process_bind_param(self, value: E | None, dialect: object) -> str | None:
+        if value is None:
+            return None
+        return self._enum(value).value
+
+    def process_result_value(self, value: str | None, dialect: object) -> E | None:
+        return None if value is None else self._enum(value)
 
 
 class UTCDateTime(TypeDecorator[datetime]):

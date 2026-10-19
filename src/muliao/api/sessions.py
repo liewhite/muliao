@@ -17,7 +17,6 @@ class SessionOut(BaseModel):
     title: str
     origin: Origin
     origin_ref: str | None
-    notify: bool
     unread: bool
     created_at: datetime
     updated_at: datetime
@@ -30,7 +29,6 @@ class SessionOut(BaseModel):
             title=s.title,
             origin=s.origin,
             origin_ref=s.origin_ref,
-            notify=s.notify,
             unread=s.unread,
             created_at=s.created_at,
             updated_at=s.updated_at,
@@ -110,7 +108,6 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
         prompt=body.prompt,
         origin=Origin.USER,
         origin_ref=None,
-        notify=True,
     )
     return SessionOut.of(session)
 

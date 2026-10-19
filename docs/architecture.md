@@ -44,7 +44,7 @@ Web / cron / delegate_task
                                       ├─ session.unread / updated_at
                                       ├─ agent.turns_since_reflection += 1
                                       ├─ 达到阈值 → tasks(reflection)
-                                      └─ session.notify → tasks(deliver)
+                                      └─ origin.notifies → tasks(deliver)
                                                      │
                               ReflectionHandler ◄────┘     DeliverHandler ──► Web Push
 ```
@@ -119,7 +119,7 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 
 触发点只有两个：用户在网页发起对话、cron 定时任务。agent 之间的委派（`delegate_task`）是 agent 内部能力，也会新建 session。
 
-| 来源 | session 策略 | 完成后推送（`session.notify`） |
+| 来源 | session 策略 | 完成后推送（`Origin.notifies`，唯一来源） |
 |---|---|---|
 | 用户发起 | 新建；回复沿用 | 是（iOS 要求每个 push 都展示通知，所以页面可见时也会弹） |
 | cron | 每次触发新建；上一次触发的 session 仍有未完成 turn 时跳过本次（不重叠） | 否，需要通知时 agent 调 `notify_user` |

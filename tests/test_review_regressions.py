@@ -12,7 +12,7 @@ from sqlalchemy import select
 from muliao.delivery.base import Notification
 from muliao.delivery.webpush import WebPushDelivery
 from muliao.errors import Conflict, TransientError
-from muliao.models import CronJob, Message, TaskKind, TaskStatus
+from muliao.models import CronJob, Message, Origin, TaskKind, TaskStatus
 from muliao.runtime.worker import is_transient
 from muliao.transcript import to_items
 from tests.test_flow import call_then_answer, drain, start
@@ -20,13 +20,13 @@ from tests.test_flow import call_then_answer, drain, start
 
 async def test_message_ids_never_reused_after_deleting_latest_session(container, make_agent):
     alpha = (await make_agent("alpha", reflect_every=100)).id
-    first = await start(container, alpha, "one", notify=False)
+    first = await start(container, alpha, "one", origin=Origin.CRON)
     await drain(container)
     async with container.db.transaction() as s:
         max_before = max((await s.scalars(select(Message.id))).all())
     await container.sessions.delete(first.id)
 
-    await start(container, alpha, "two", notify=False)
+    await start(container, alpha, "two", origin=Origin.CRON)
     await drain(container)
 
     async with container.db.transaction() as s:
@@ -97,7 +97,7 @@ async def test_vault_set_value_is_redacted_from_saved_history(container, make_ag
     models.models["m"] = call_then_answer(
         "vault_set", {"key": "TOKEN", "value": "super-secret", "description": "d"}, "stored"
     )
-    session = await start(container, alpha, "save my token", notify=False)
+    session = await start(container, alpha, "save my token", origin=Origin.CRON)
     await drain(container)
 
     assert (await container.vault.resolve_many(["TOKEN"])) == {"TOKEN": "super-secret"}
@@ -159,7 +159,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     from tests.scripted import scripted
 
     models.models["m"] = scripted(fail)
-    await start(container, alpha, "hi", notify=False)
+    await start(container, alpha, "hi", origin=Origin.CRON)
     await drain(container)
     turn = (await container.queue.list(status=TaskStatus.FAILED, session_id=None, limit=5))[0]
     assert turn.attempts == container.settings.runtime.task_max_attempts and "503" in turn.error

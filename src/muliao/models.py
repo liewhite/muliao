@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import JSON, ForeignKey, Index, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from muliao.db import Base, UTCDateTime, utcnow
+from muliao.db import Base, StrEnumType, UTCDateTime, utcnow
 
 
 class Origin(StrEnum):
@@ -16,6 +16,11 @@ class Origin(StrEnum):
     USER = "user"
     CRON = "cron"
     DELEGATION = "delegation"
+
+    @property
+    def notifies(self) -> bool:
+        """每轮完成后是否推送通知。这是推送策略的唯一来源：cron 在无人值守时运行，只在 agent 主动 notify_user 时推送。"""
+        return self is not Origin.CRON
 
 
 class TaskKind(StrEnum):
@@ -65,11 +70,9 @@ class Session(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     agent_id: Mapped[str] = mapped_column(_fk_agent(), index=True)
     title: Mapped[str] = mapped_column(String(200))
-    origin: Mapped[Origin] = mapped_column(String(16))
+    origin: Mapped[Origin] = mapped_column(StrEnumType(Origin))
     # 触发源内的引用：cron job id、父 session id
     origin_ref: Mapped[str | None] = mapped_column(String(64))
-    # 每轮完成后是否推送通知（Web Push）
-    notify: Mapped[bool]
     unread: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
@@ -96,14 +99,14 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    kind: Mapped[TaskKind] = mapped_column(String(16))
+    kind: Mapped[TaskKind] = mapped_column(StrEnumType(TaskKind))
     # 同一 lane 内 FIFO 串行；见 docs/architecture.md「Lane」
     lane: Mapped[str] = mapped_column(String(100))
     # 系统通知（如推送测试）不属于任何 agent
     agent_id: Mapped[str | None] = mapped_column(_fk_agent(), index=True)
     session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
-    status: Mapped[TaskStatus] = mapped_column(String(16), default=TaskStatus.PENDING)
+    status: Mapped[TaskStatus] = mapped_column(StrEnumType(TaskStatus), default=TaskStatus.PENDING)
     attempts: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None] = mapped_column(Text)
     not_before: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
@@ -162,7 +165,7 @@ class McpServer(Base):
     # None 表示公共，所有 agent 可见
     owner: Mapped[str | None] = mapped_column(_fk_agent())
     name: Mapped[str] = mapped_column(String(64))
-    transport: Mapped[McpTransport] = mapped_column(String(16))
+    transport: Mapped[McpTransport] = mapped_column(StrEnumType(McpTransport))
     command: Mapped[str | None] = mapped_column(Text)
     args: Mapped[list[str]] = mapped_column(JSON, default=list)
     url: Mapped[str | None] = mapped_column(Text)

@@ -35,7 +35,7 @@ launchctl kickstart -k gui/$(id -u)/com.muliao    # 重启（升级后）
 uv sync
 uv run pytest                    # 后端测试
 cd web && npm install
-npm run dev                      # Vite 把 /api、/hooks 代理到 127.0.0.1:8000（先 uv run muliao）
+npm run dev                      # Vite 把 /api 代理到 127.0.0.1:8000（先 uv run muliao）
 npm run build                    # 构建到 src/muliao/webui/，改了前端必须重新构建并提交产物
 ```
 

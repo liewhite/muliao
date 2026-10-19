@@ -72,8 +72,8 @@ def test_foreign_key_violation_rolls_back_migration(tmp_path, monkeypatch):
 
     def orphaning_upgrade(cfg, _revision):  # noqa: ANN001
         cfg.attributes["connection"].exec_driver_sql(
-            "INSERT INTO sessions (id, agent_id, title, origin, notify, unread, created_at, updated_at) "
-            "VALUES ('s', 'ghost', 't', 'user', 0, 0, '2026-01-01', '2026-01-01')"
+            "INSERT INTO sessions (id, agent_id, title, origin, unread, created_at, updated_at) "
+            "VALUES ('s', 'ghost', 't', 'user', 0, '2026-01-01', '2026-01-01')"
         )
 
     monkeypatch.setattr(muliao.db.command, "upgrade", orphaning_upgrade)
@@ -97,7 +97,7 @@ def _seed_name_keyed(path, agents_dir):  # noqa: ANN001
             (agents_dir / name / "workspace").mkdir(parents=True)
             (agents_dir / name / "memory.md").write_text(f"memory of {name}")
         conn.execute(
-            "INSERT INTO sessions VALUES ('s1', '研究助理', 't', 'user', NULL, 'none', NULL, 0, ?, ?)",
+            "INSERT INTO sessions VALUES ('s1', '研究助理', 't', 'user', NULL, 'webpush', NULL, 0, ?, ?)",
             (ts, ts),
         )
         conn.execute(
@@ -240,49 +240,82 @@ def test_agent_id_migration_leaves_system_notification_lane_alone(tmp_path):
 
 
 BEFORE_DROP_TRIGGERS = "5e1d7c3a9b20"
+_TS = "2026-01-01 00:00:00"
 
 
-def test_drop_triggers_migration_converts_delivery_to_notify(tmp_path):
-    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+def _seed_before_drop(path, agents_dir, sessions, tasks=()):  # noqa: ANN001
+    """sessions: (id, origin, delivery)；tasks: (session_id, status, payload dict)。"""
     migrate(path, agents_dir, target=BEFORE_DROP_TRIGGERS)
-    ts = "2026-01-01 00:00:00"
     with sqlite3.connect(path) as conn:
-        conn.execute("INSERT INTO agents VALUES ('a1', 'n', 'd', 'm:x', '', 5, 0, 0, ?, ?)", (ts, ts))
-        for sid, delivery in (("s-push", "webpush"), ("s-none", "none")):
+        conn.execute("INSERT INTO agents VALUES ('a1', 'n', 'd', 'm:x', '', 5, 0, 0, ?, ?)", (_TS, _TS))
+        for sid, origin, delivery in sessions:
             conn.execute(
-                "INSERT INTO sessions VALUES (?, 'a1', 't', 'user', NULL, ?, NULL, 0, ?, ?)",
-                (sid, delivery, ts, ts),
+                "INSERT INTO sessions VALUES (?, 'a1', 't', ?, NULL, ?, NULL, 0, ?, ?)",
+                (sid, origin, delivery, _TS, _TS),
             )
-        conn.execute(
-            "INSERT INTO tasks (kind, lane, agent_id, session_id, payload, status, attempts, not_before, created_at)"
-            " VALUES ('deliver', 'deliver:s-push', 'a1', 's-push',"
-            ' \'{"channel": "webpush", "target": null, "title": "t", "body": "b", "session_id": "s-push"}\','
-            " 'pending', 0, ?, ?)",
-            (ts, ts),
-        )
+        for session_id, status, payload in tasks:
+            conn.execute(
+                "INSERT INTO tasks (kind, lane, agent_id, session_id, payload, status, attempts, not_before, created_at)"
+                " VALUES ('deliver', 'deliver:x', 'a1', ?, ?, ?, 0, ?, ?)",
+                (session_id, json.dumps(payload), status, _TS, _TS),
+            )
+
+
+def test_drop_triggers_migration_derives_notify_from_origin(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    webpush = {"channel": "webpush", "target": None, "title": "t", "body": "b", "session_id": "s-user"}
+    telegram_done = {"channel": "telegram", "target": "42", "title": "", "body": "x", "session_id": None}
+    _seed_before_drop(
+        path,
+        agents_dir,
+        sessions=[("s-user", "user", "webpush"), ("s-cron", "cron", "none")],
+        tasks=[("s-user", "pending", webpush), (None, "done", telegram_done)],
+    )
 
     migrate(path, agents_dir)
 
     with sqlite3.connect(path) as conn:
-        assert dict(conn.execute("SELECT id, notify FROM sessions")) == {"s-push": 1, "s-none": 0}
-        payload = conn.execute("SELECT payload FROM tasks").fetchone()[0]
-        assert json.loads(payload) == {"title": "t", "body": "b", "session_id": "s-push"}
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+        assert "delivery" not in columns and "delivery_target" not in columns
+        payloads = [json.loads(r[0]) for r in conn.execute("SELECT payload FROM tasks ORDER BY id")]
+        assert payloads == [
+            {"title": "t", "body": "b", "session_id": "s-user"},
+            telegram_done,
+        ]  # 历史原样保留
+        indexes = {r[1] for r in conn.execute("PRAGMA index_list(sessions)")}
+        assert {"ix_sessions_origin_ref", "ix_sessions_agent_id", "ix_sessions_updated_at"} <= indexes
+        assert ("agents", "CASCADE") in {
+            (r[2], r[6]) for r in conn.execute("PRAGMA foreign_key_list(sessions)")
+        }
+        for child in ("messages", "tasks", "compactions"):
+            assert "sessions" in {r[2] for r in conn.execute(f"PRAGMA foreign_key_list({child})")}
         tables = {r[0] for r in conn.execute("select name from sqlite_master where type='table'")}
     assert "webhooks" not in tables
 
 
-def test_drop_triggers_migration_refuses_existing_telegram_sessions(tmp_path):
+@pytest.mark.parametrize(
+    ("sessions", "tasks"),
+    [
+        ([("s", "telegram", "telegram")], []),
+        ([("s", "user", "none")], []),  # 用户会话却不推送：新结构无法表达
+        (
+            [],
+            [
+                (
+                    None,
+                    "pending",
+                    {"channel": "telegram", "target": "42", "title": "", "body": "x", "session_id": None},
+                )
+            ],
+        ),
+    ],
+    ids=["removed-origin", "inconsistent-delivery", "unfinished-sessionless-telegram-delivery"],
+)
+def test_drop_triggers_migration_refuses_unrepresentable_data(tmp_path, sessions, tasks):
     path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
-    migrate(path, agents_dir, target=BEFORE_DROP_TRIGGERS)
-    ts = "2026-01-01 00:00:00"
-    with sqlite3.connect(path) as conn:
-        conn.execute("INSERT INTO agents VALUES ('a1', 'n', 'd', 'm:x', '', 5, 0, 0, ?, ?)", (ts, ts))
-        conn.execute(
-            "INSERT INTO sessions VALUES ('s', 'a1', 't', 'telegram', '42', 'telegram', '42', 0, ?, ?)",
-            (ts, ts),
-        )
+    _seed_before_drop(path, agents_dir, sessions=sessions, tasks=tasks)
 
-    with pytest.raises(RuntimeError, match="removed triggers still have data"):
+    with pytest.raises(RuntimeError, match="not representable"):
         migrate(path, agents_dir)
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == BEFORE_DROP_TRIGGERS
