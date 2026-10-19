@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.db import Database
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.evolution.memory import MemoryStore
+from muliao.evolution.prompts import PromptStore
 from muliao.ids import new_agent_id
-from muliao.models import Agent, Session
+from muliao.models import Agent, PromptRevision, Session
 from muliao.naming import normalize_agent_name
 from muliao.runtime.conversation import delete_sessions
 from muliao.runtime.tasks import TaskQueue, running_task_ids
@@ -39,7 +40,9 @@ class AgentService:
         memory: MemoryStore,
         model_checker: Callable[[str], None],
         queue: TaskQueue,
+        prompts: PromptStore,
     ):
+        self._prompts = prompts
         self._queue = queue
         self._db = db
         self._agents_dir = agents_dir
@@ -65,7 +68,8 @@ class AgentService:
         if holder is not None and holder != agent_id:
             raise Conflict(f"agent name {name!r} is already used by agent {holder}")
 
-    async def create(self, spec: AgentSpec) -> Agent:
+    async def create(self, spec: AgentSpec, *, author: str) -> Agent:
+        """author：创建者，"user" 或创建它的 agent 的 id（记在指令的第一版上）。"""
         spec = self._validated(spec)
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, spec.name, None)
@@ -74,16 +78,21 @@ class AgentService:
                 name=spec.name,
                 description=spec.description,
                 model=spec.model,
-                instructions=spec.instructions,
                 reflect_every=spec.reflect_every,
             )
             s.add(agent)
+            await s.flush()
+            # 指令的第一版：之后 instructions 永远是最新一版
+            s.add(PromptRevision(owner=agent.id, content=spec.instructions, author=author))
+            await s.flush()
+            await s.refresh(agent)
             # 目录与数据库行同事务创建：目录创建失败则回滚
             self.workspace(agent.id).mkdir(parents=True, exist_ok=True)
             self._memory.init(agent.id)
         return agent
 
-    async def update(self, agent_id: str, spec: AgentSpec) -> Agent:
+    async def update(self, agent_id: str, spec: AgentSpec, *, author: str) -> Agent:
+        """整体替换配置；指令有变化时追加一版（author 同 create）。"""
         spec = self._validated(spec)
         async with self._db.transaction() as s:
             agent = await self._get(s, agent_id)
@@ -91,8 +100,10 @@ class AgentService:
             agent.name = spec.name
             agent.description = spec.description
             agent.model = spec.model
-            agent.instructions = spec.instructions
             agent.reflect_every = spec.reflect_every
+            await self._prompts.set_in(s, agent_id, spec.instructions, author)
+            await s.flush()
+            await s.refresh(agent)
         return agent
 
     async def _get(self, s: AsyncSession, agent_id: str) -> Agent:

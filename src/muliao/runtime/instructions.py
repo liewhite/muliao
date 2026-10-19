@@ -47,6 +47,7 @@ def build_instructions(
     *,
     agent_name: str,
     agent_description: str,
+    public_instructions: str,
     agent_instructions: str,
     workspace: Path,
     now_local: datetime,
@@ -67,7 +68,9 @@ def build_instructions(
     if reply_to is not None:
         context.append(f"- {_REPLY_NOTES[reply_to]}")
     skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] or ["(no skills yet)"]
+    # 公共 prompt 在前、agent 自己的指令在后：具体的指令可以细化或覆盖通用规则
     sections = [
+        public_instructions.strip(),
         agent_instructions.strip(),
         "## Runtime context\n" + "\n".join(context),
         f"## Memory\n<memory>\n{memory.strip() or '(empty)'}\n</memory>",

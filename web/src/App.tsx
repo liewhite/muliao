@@ -8,6 +8,7 @@ import { AgentCreate, AgentDetail, AgentList } from './pages/Agents'
 import { Login, Settings, Tasks, Vault } from './pages/Admin'
 import Triggers from './pages/Triggers'
 import Mcp from './pages/Mcp'
+import PublicPrompt from './pages/Prompts'
 import NewSession from './pages/NewSession'
 import SessionView from './pages/SessionView'
 import Sessions from './pages/Sessions'
@@ -86,6 +87,7 @@ export default function App() {
           <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/triggers" element={<Triggers />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/prompt" element={<PublicPrompt />} />
           <Route path="/skills" element={<PublicSkills />} />
           <Route path="/skills/edit" element={<SkillEditor />} />
           <Route path="/mcp" element={<Mcp />} />

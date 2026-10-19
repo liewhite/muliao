@@ -133,7 +133,8 @@ async def test_startup_rejects_agents_with_unresolvable_models(settings, models)
     try:
         await c.start()
         agent = await c.agents.create(
-            AgentSpec(name="ok", description="d", model="fake:m", instructions="", reflect_every=5)
+            AgentSpec(name="ok", description="d", model="fake:m", instructions="", reflect_every=5),
+            author="user",
         )
         await c.stop()
         async with c.db.transaction() as s:

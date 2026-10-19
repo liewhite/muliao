@@ -74,7 +74,8 @@ def make_agent(container: Container) -> Callable:
                 model=model,
                 instructions="Be helpful.",
                 reflect_every=reflect_every,
-            )
+            ),
+            author="user",
         )
 
     return _make

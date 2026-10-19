@@ -4,8 +4,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, LargeBinary, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import JSON, ForeignKey, Index, LargeBinary, String, Text, select
+from sqlalchemy.orm import Mapped, column_property, mapped_column
 
 from muliao.db import Base, StrEnumType, UTCDateTime, utcnow
 
@@ -65,13 +65,40 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
-    instructions: Mapped[str] = mapped_column(Text)
+    # instructions 是派生属性：该 agent 最新一版 prompt（见 PromptRevision，定义在其后）
     reflect_every: Mapped[int]
     turns_since_reflection: Mapped[int] = mapped_column(default=0)
     # 已纳入反思的最大 message id；下一次反思从它之后开始
     reflection_checkpoint: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class PromptRevision(Base):
+    """prompt 的每一版。owner 为 agent 时是它的指令，为 None 时是合并进所有 agent 的公共 prompt。
+
+    当前生效的就是最新一版（唯一来源）；修改即追加一版，回滚即把旧版内容作为新的一版写入。
+    """
+
+    __tablename__ = "prompt_revisions"
+    __table_args__ = (Index("ix_prompt_revisions_owner_id", "owner", "id"), {"sqlite_autoincrement": True})
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    owner: Mapped[str | None] = mapped_column(_fk_agent())
+    content: Mapped[str] = mapped_column(Text)
+    # 谁改的："user"，或做出修改的 agent 的 id
+    author: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+Agent.instructions = column_property(
+    select(PromptRevision.content)
+    .where(PromptRevision.owner == Agent.id)
+    .order_by(PromptRevision.id.desc())
+    .limit(1)
+    .correlate_except(PromptRevision)
+    .scalar_subquery()
+)
 
 
 class Session(Base):

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
-import { Activity, BellRing, ChevronRight, KeyRound, LogOut, Plug, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
+import { Activity, BellRing, ChevronRight, KeyRound, LogOut, Plug, RotateCcw, ScrollText, Sparkles, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, type TaskStatus } from '../api'
 import { closeServerEvents } from '../events'
@@ -201,6 +201,7 @@ const PUSH_TEXT: Record<PushState, string> = {
 }
 
 const LINKS = [
+  { to: '/prompt', label: '公共指令', Icon: ScrollText },
   { to: '/skills', label: '公共 Skills', Icon: Sparkles },
   { to: '/mcp', label: 'MCP servers', Icon: Plug },
   { to: '/vault', label: 'Vault', Icon: KeyRound },

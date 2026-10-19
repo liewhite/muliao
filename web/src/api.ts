@@ -127,6 +127,14 @@ export interface CronJob {
   last_error: string | null
 }
 
+export interface PromptRevision {
+  id: number
+  content: string
+  /** "user"，或做出修改的 agent 的 id */
+  author: string
+  created_at: string
+}
+
 export interface EventTrigger {
   id: number
   name: string
@@ -264,6 +272,11 @@ export const api = {
   updateCron: (id: number, job: { schedule: string; prompt: string; enabled: boolean }) =>
     put<CronJob>(`/api/cron/${id}`, job),
   deleteCron: (id: number) => del(`/api/cron/${id}`),
+  /** owner 为空时是公共 prompt 的历史；新的在前，第一条即当前生效 */
+  promptHistory: (owner: AgentId | null) =>
+    get<PromptRevision[]>('/api/prompts', owner === null ? {} : { owner }),
+  setPublicPrompt: (content: string) => put<void>('/api/prompts/public', { content }),
+  restorePrompt: (revisionId: number) => post<void>(`/api/prompt-revisions/${revisionId}/restore`),
   eventTriggers: () => get<EventTrigger[]>('/api/event-triggers'),
   /** token 明文只在创建和重置时返回这一次 */
   createEventTrigger: (t: { name: string; agent_id: AgentId; prompt: string }) =>

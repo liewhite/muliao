@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from muliao.agents import AgentSpec
 from muliao.api.deps import C
+from muliao.evolution.prompts import USER
 from muliao.models import Agent
 from muliao.runtime.reflection import list_reflections_of
 
@@ -86,7 +87,7 @@ async def list_agents(c: C) -> list[AgentOut]:
 
 @router.post("/agents", status_code=201)
 async def create_agent(c: C, body: AgentCreate) -> AgentOut:
-    return AgentOut.of(await c.agents.create(_create_spec(c, body)))
+    return AgentOut.of(await c.agents.create(_create_spec(c, body), author=USER))
 
 
 @router.get("/agents/{agent_id}")
@@ -103,7 +104,7 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         instructions=body.instructions,
         reflect_every=body.reflect_every,
     )
-    return AgentOut.of(await c.agents.update(agent_id, spec))
+    return AgentOut.of(await c.agents.update(agent_id, spec, author=USER))
 
 
 @router.delete("/agents/{agent_id}", status_code=204)

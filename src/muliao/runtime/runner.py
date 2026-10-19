@@ -24,6 +24,7 @@ from muliao.agents import AgentService
 from muliao.bus import EventBus
 from muliao.db import utcnow
 from muliao.evolution.memory import MemoryStore
+from muliao.evolution.prompts import PromptStore
 from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelResolver
 from muliao.models import Agent, Origin, ReplyTo
@@ -55,6 +56,7 @@ class AgentRuntime:
         agents: AgentService,
         skills: SkillStore,
         memory: MemoryStore,
+        prompts: PromptStore,
         mcp: McpRegistry,
         bus: EventBus,
         tz: ZoneInfo,
@@ -64,6 +66,7 @@ class AgentRuntime:
         self._agents = agents
         self._skills = skills
         self._memory = memory
+        self._prompts = prompts
         self._mcp = mcp
         self._bus = bus
         self._tz = tz
@@ -83,10 +86,11 @@ class AgentRuntime:
             reply_to=reply_to,
         )
 
-    def instructions(self, agent: Agent, scope: RunScope, summary: str | None) -> str:
+    async def instructions(self, agent: Agent, scope: RunScope, summary: str | None) -> str:
         return build_instructions(
             agent_name=agent.name,
             agent_description=agent.description,
+            public_instructions=await self._prompts.public(),
             agent_instructions=agent.instructions,
             workspace=scope.workspace,
             now_local=self._clock().astimezone(self._tz),
@@ -127,7 +131,7 @@ class AgentRuntime:
         result = await self._pai.run(
             prompt,
             model=self._resolve_model(agent.model),
-            instructions=self.instructions(agent, scope, summary),
+            instructions=await self.instructions(agent, scope, summary),
             message_history=list(history),
             deps=scope,
             toolsets=toolsets,

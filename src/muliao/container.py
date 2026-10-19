@@ -17,6 +17,7 @@ from muliao.delivery.base import DeliverHandler, Notifier
 from muliao.delivery.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
 from muliao.errors import InvalidInput
 from muliao.evolution.memory import MemoryStore
+from muliao.evolution.prompts import PromptStore
 from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import TaskKind
@@ -54,6 +55,7 @@ class Container:
     vault: Vault
     skills: SkillStore
     memory: MemoryStore
+    prompts: PromptStore
     agents: AgentService
     sessions: SessionService
     notifier: Notifier
@@ -127,12 +129,14 @@ def build_container(
     vault = Vault(db, settings.vault.key.get_secret_value())
     skills = SkillStore(settings.public_skills_dir, settings.agents_dir)
     memory = MemoryStore(settings.agents_dir, settings.runtime.memory_max_chars)
+    prompts = PromptStore(db)
     agents = AgentService(
         db,
         settings.agents_dir,
         memory,
         model_checker or models.check,
         queue,
+        prompts,
     )
     sessions = SessionService(db, queue)
     threads = Threads(queue)
@@ -170,6 +174,7 @@ def build_container(
         agents=agents,
         skills=skills,
         memory=memory,
+        prompts=prompts,
         mcp=mcp,
         bus=bus,
         tz=tz,
@@ -200,6 +205,7 @@ def build_container(
         vault=vault,
         skills=skills,
         memory=memory,
+        prompts=prompts,
         agents=agents,
         sessions=sessions,
         notifier=notifier,

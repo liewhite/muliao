@@ -395,3 +395,22 @@ def test_event_triggers_migration_makes_sender_ids_non_reusable_and_keeps_cron_j
             (_TS, _TS),
         )
         assert conn.execute("SELECT id FROM cron_jobs").fetchone()[0] == 13
+
+
+BEFORE_PROMPT_REVISIONS = "a01ab85dfb82"
+
+
+def test_prompt_revisions_migration_moves_instructions_into_first_revision(tmp_path):
+    path, agents_dir = tmp_path / "m.db", tmp_path / "agents"
+    migrate(path, agents_dir, target=BEFORE_PROMPT_REVISIONS)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO agents VALUES ('a1', 'n', 'd', 'm:x', 'be terse', 5, 0, 0, ?, ?)", (_TS, _TS)
+        )
+
+    migrate(path, agents_dir)
+
+    with sqlite3.connect(path) as conn:
+        assert "instructions" not in {r[1] for r in conn.execute("PRAGMA table_info(agents)")}
+        rows = conn.execute("SELECT owner, content, author FROM prompt_revisions").fetchall()
+        assert rows == [("a1", "be terse", "user")]

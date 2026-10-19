@@ -28,6 +28,7 @@ import { ActionButton,
   useConfirm,
   useLoad,
 } from '../ui'
+import { PromptHistory } from './Prompts'
 import { SkillList } from './Skills'
 
 export function AgentList() {
@@ -288,8 +289,9 @@ export function AgentDetail() {
                 </Card.Content>
               </Card>
               <Card>
-                <Card.Content>
-                  <AgentForm key={`${a.id}-${a.name}`} agent={a} onSaved={() => void agent.reload()} />
+                <Card.Content className="flex flex-col gap-3">
+                  <AgentForm key={`${a.id}-${a.name}-${a.instructions}`} agent={a} onSaved={() => void agent.reload()} />
+                  <PromptHistory owner={a.id} current={a.instructions} onRestored={() => void agent.reload()} />
                 </Card.Content>
               </Card>
               <ErrorAlert error={action.error} />

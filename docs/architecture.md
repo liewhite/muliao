@@ -12,6 +12,7 @@
 | Task | 一个待执行的工作单元：`turn`（对话一轮）、`compaction`（上下文压缩）、`reflection`（强制反思）、`deliver`（投递通知） | `tasks` 表 |
 | Compaction | session 早期消息的摘要，之后发给模型的上下文用它代替 `through_message_id` 及之前的消息 | `compactions` 表 |
 | Skill | `SKILL.md`（YAML frontmatter: name, description + 正文）。公共 skill 与 agent 私有 skill | `data/skills/<name>/`、`data/agents/<id>/skills/<name>/` |
+| Prompt | 带版本的指令：agent 自己的指令，或合并进所有 agent 的公共 prompt；最新一版生效 | `prompt_revisions` 表 |
 | Memory | agent 私有记忆，一份有长度上限的 markdown | `data/agents/<id>/memory.md` |
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `mcp_servers` 表 |
 | Secret | 加密保存的密码/token，通过 key 引用 | `secrets` 表（Fernet 加密） |
@@ -78,7 +79,7 @@ Web / cron / 外部事件 / delegate_task / ask_agent
 一次 turn 的组装（`runtime/turn.py`）：
 
 - **原则：给模型看的是名称和描述，给程序用的是 id。** 工具参数、返回值、instructions 里只出现 agent 名称；名称唯一，由工具层（`AgentService.find_by_name`）解析为 id，写错时把可用名称列表作为错误交还模型。id 只会作为文件路径的一部分（`agents/<id>/…`）出现在工作目录里。`tests/test_flow.py::test_model_sees_agent_names_never_ids` 守住这条规则。
-- **instructions** = agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
+- **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
 - **toolsets**：
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill` / `write_skill` / `delete_skill`（scope = `private` | `public`）。
@@ -128,6 +129,9 @@ Alembic 管理表结构（`src/muliao/migrations/`，随包分发），启动时
 
 ### Skill
 agent 在任何一轮都可以主动 `write_skill`。公共 skill 对所有 agent 可见；私有 skill 只对自己可见，同名时私有遮蔽公共。
+
+### Prompt（公共 prompt 与 agent 指令）
+都存在 `prompt_revisions` 表，`owner` 为 agent id 时是它的指令，为空时是合并进所有 agent 的公共 prompt（放在 agent 自己的指令之前）。当前生效的就是最新一版（唯一来源，`agents.instructions` 是由它派生的只读属性）；修改即追加一版并记录作者（`user` 或做出修改的 agent），回滚即把旧版内容作为新的一版写入，历史只增不改。内容未变时不追加。
 
 ### Memory
 agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 instructions。
