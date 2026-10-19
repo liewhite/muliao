@@ -286,3 +286,61 @@ async def test_event_trigger_token_never_overwrites_and_moves_with_rotate_and_de
     assert "any other copy is now invalid" in outputs[3]
     assert "and its token EVENT_TOKEN_HOOK" in outputs[4]
     assert not await container.vault.has(me.id, token_key("hook"))
+
+
+async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
+    container, make_agent, models
+):
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    from muliao.models import TaskKind, TaskStatus
+    from tests.test_flow import tasks_of
+
+    me = await make_agent("manager", model="tools")
+
+    def broken(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(status_code=400, model_name="helper", body="bad request")
+
+    models.models["helper"] = scripted(broken)
+    await run_tools(container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})])
+
+    assert list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240
+    [turn] = await tasks_of(container, TaskKind.TURN)
+    assert turn.status == TaskStatus.FAILED and "400" in turn.error
+
+
+async def test_temp_agent_over_request_limit_is_returned_to_caller(container, make_agent, models):
+    me = await make_agent("manager", model="tools")
+    endless = scripted(lambda m, i: ModelResponse(parts=[ToolCallPart("list_files", {}, tool_call_id="l")]))
+    models.models["helper"] = endless
+    outputs = await run_tools(
+        container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})]
+    )
+
+    limit = container.settings.runtime.temp_agent_request_limit
+    assert f"did not finish within {limit} model requests" in outputs[0]
+    assert list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240
+
+
+async def test_workspace_removal_failure_keeps_answer_and_is_cleared_on_next_start(
+    container, make_agent, models, monkeypatch, caplog
+):
+    import muliao.runtime.tools.temp_agent as temp_agent
+
+    me = await make_agent("manager", model="tools")
+    models.models["helper"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("answer")]))
+
+    def stuck(path):  # noqa: ANN001, ANN202
+        raise OSError("Directory not empty")
+
+    monkeypatch.setattr(temp_agent.shutil, "rmtree", stuck)
+    outputs = await run_tools(
+        container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})]
+    )
+    monkeypatch.undo()
+
+    assert outputs == ["answer"]
+    assert any("will be cleared on next start" in r.getMessage() for r in caplog.records)
+    assert len(list(container.settings.temp_dir.iterdir())) == 1  # noqa: ASYNC240
+    temp_agent.clear_temp_dirs(container.settings.temp_dir)
+    assert not container.settings.temp_dir.exists()  # noqa: ASYNC240

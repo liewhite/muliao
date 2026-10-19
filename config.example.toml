@@ -74,3 +74,4 @@ api_key = ""
 # shell_default_timeout = 120.0
 # shell_max_timeout = 600.0
 # tool_output_max_chars = 20000
+# temp_agent_request_limit = 30    # 临时 agent 单次运行最多的模型请求数

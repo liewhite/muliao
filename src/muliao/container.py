@@ -34,7 +34,7 @@ from muliao.runtime.tools.delegation import delegation_toolset
 from muliao.runtime.tools.evolution import memory_toolset, skills_toolset
 from muliao.runtime.tools.mcp import mcp_admin_toolset
 from muliao.runtime.tools.notify import notify_toolset
-from muliao.runtime.tools.temp_agent import temp_agent_toolset
+from muliao.runtime.tools.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.runtime.tools.triggers import triggers_toolset
 from muliao.runtime.tools.vault import vault_toolset
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
@@ -79,6 +79,8 @@ class Container:
     async def start(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path, self.settings.agents_dir)
         await self._check_agent_models()
+        # 在 worker 恢复任务之前：此时没有临时 agent 在运行
+        await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)
         self._spawn("worker", self.worker.run_forever())
         self._spawn("cron", self.cron.run_forever())
 
@@ -177,7 +179,9 @@ def build_container(
         toolsets=[
             workspace_tools,
             *evolution_tools,
-            temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir),
+            temp_agent_toolset(
+                runtime, agents, temp_profile, settings.temp_dir, settings.runtime.temp_agent_request_limit
+            ),
             agents_toolset(agents, agent_lifecycle, prompts),
             delegation_toolset(db, agents, threads),
             notify_toolset(notifier),

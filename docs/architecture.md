@@ -68,7 +68,7 @@ Web / cron / 外部事件 / delegate_task / ask_agent
 
 1. **失败可见**：task 失败记录 `error`、打 error 日志，UI 的「任务」页可查并可手动重试；session 页显示该轮失败；重试运行期间保留上一次的错误。
 2. **可收敛**：契约内的失败（模型接口 408/409/425/429/5xx/529、底层为连接错误的 `ModelAPIError`、网络错误、超时、推送服务 5xx/429）按指数退避重试，上限 `task_max_attempts`；进程崩溃后启动时把 `running` 复位为 `pending` 重新执行。turn 的消息、计数、后续 task 在**一个事务**里提交，所以重放不会产生重复消息。
-3. **代价可控**：重放一轮 turn 可能重复执行工具副作用（如 shell 命令）——仅在崩溃、超时或模型调用中途失败时发生，个人助手可接受。Web Push 逐个订阅投递，只有 404/410（RFC 8030 的订阅失效）才删除订阅，其他 4xx 视为本端问题让 task 失败、不删数据；只有暂时性失败才整体重试，可能对已成功的设备重复推送，可接受。
+3. **代价可控**：重放一轮 turn 可能重复执行工具副作用（如 shell 命令）——仅在崩溃、超时或模型调用中途失败时发生，个人助手可接受。临时 agent 会放大这一点：一轮里可能并行多条模型调用链，任何一条的暂时性失败都会取消其余并整轮重放（含各临时 agent 的 shell 与 MCP 副作用）。为此临时 agent 有请求数上限（`runtime.temp_agent_request_limit`），做不完的任务在上限处失败并交回调用方拆分，而不是靠整轮超时反复重试；剩余的重放代价仍按个人助手可接受。Web Push 逐个订阅投递，只有 404/410（RFC 8030 的订阅失效）才删除订阅，其他 4xx 视为本端问题让 task 失败、不删数据；只有暂时性失败才整体重试，可能对已成功的设备重复推送，可接受。
 
 契约外的失败（代码 bug、模型返回 400、请求超限、响应解码失败、配置错误）不重试，task 直接 `failed` 并告警。
 
@@ -88,7 +88,7 @@ Web / cron / 外部事件 / delegate_task / ask_agent
   - `agents`：`list_agents`（返回 name、description）/ `get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己） / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
   - `delegation`：`delegate_task` / `ask_agent` / `wait_for` / `list_threads`（按名称指定目标 agent、按 thread 名指定子会话，见第 4 节）。
   - `notify`：`notify_user`（显式 Web Push）。
-  - `temp_agent`：`run_temp_agent(task, instructions?, model?)`：一次性的临时 agent，在调用方这一轮里同步运行（同一响应中的多次调用并行），返回它的最终回答。它只有文件与 shell 工具（工作目录在 `data/tmp/` 下临时创建、结束即删除）和调用方的 MCP，secret 按调用方的视角解析；没有记忆、skill、会话、反思与委派，也不能再开临时 agent。适合抓取网页并总结、分析文件这类做完即丢的事；需要长期积累的专长应 `create_agent` 后委派。临时 agent 失败时异常向上传播，按调用方这一轮的失败统一处理（暂时性失败整轮重试）。
+  - `temp_agent`：`run_temp_agent(task, instructions?, model?)`：一次性的临时 agent，在调用方这一轮里同步运行（同一响应中的多次调用并行），返回它的最终回答。它只有文件与 shell 工具（工作目录在 `data/tmp/` 下临时创建、结束即删除）和调用方的 MCP，secret 按调用方的视角解析；没有记忆、skill、会话、反思与委派，也不能再开临时 agent。适合抓取网页并总结、分析文件这类做完即丢的事；需要长期积累的专长应 `create_agent` 后委派。临时 agent 不是沙箱：它和调用方有相同的 shell 权限、secret 与 MCP，工具说明里也这样告诉模型。模型请求数超过 `runtime.temp_agent_request_limit` 时以可纠正的错误交回调用方；其他失败（如模型 API 错误）向上传播，按调用方这一轮的失败统一处理（暂时性失败整轮重试）。工作目录在 finally 里删除；删除失败或进程中途被杀时留到下次启动，由启动时清空 `data/tmp`（只归临时 agent 使用）统一收敛，删除失败记 error 日志、不改变运行结果。
   - `mcp_admin`：`mcp_list`（含已停用的）/ `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_set_enabled` / `mcp_remove`。改动从下一轮起生效。
   - `vault`：`vault_list` / `vault_set` / `vault_delete`（scope = `private` | `public`，默认私有）。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
   - `triggers`：`cron_list` / `cron_create(name, schedule, prompt, agent?)` / `cron_update` / `cron_delete`；`event_trigger_list` / `event_trigger_create` / `event_trigger_update` / `event_trigger_rotate_token` / `event_trigger_delete`。agent 同样按名称指定。事件触发器的 token 不出现在对话里，而是存进创建者私有 vault 的 `EVENT_TOKEN_<NAME>`（触发器名不含下划线，名称与 key 一一对应）：创建时该 key 已存在则拒绝，不覆盖；重置时覆盖调用者的这个 key，其他地方的旧副本随之失效；删除触发器时一并删除调用者的这个 key。

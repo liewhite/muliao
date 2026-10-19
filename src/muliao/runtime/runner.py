@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent as PaiAgent
-from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, RunContext
+from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, RunContext, UsageLimits
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
@@ -44,7 +44,7 @@ _EVENT_TEXT_LIMIT = 2000
 
 @dataclass(frozen=True)
 class RunProfile:
-    """一类运行开放的能力：turn 全部开放，反思只开放 skill 与 memory。"""
+    """一类运行开放的能力：turn 全部开放，反思只开放 skill 与 memory，临时 agent 只开放文件与 shell（加调用方的 MCP）。"""
 
     toolsets: Sequence[AbstractToolset[RunScope]]
     include_mcp: bool
@@ -128,12 +128,21 @@ class AgentRuntime:
         )
 
     async def run_temp(
-        self, parent: Agent, *, task: str, instructions: str, model: str, profile: RunProfile, workspace: Path
+        self,
+        parent: Agent,
+        *,
+        task: str,
+        instructions: str,
+        model: str,
+        profile: RunProfile,
+        workspace: Path,
+        request_limit: int,
     ) -> str:
         """一次性的临时 agent：替 parent 做一件事，返回最终回答。
 
         没有记忆、skill、历史与反思；工具来自 profile（不含委派与再开临时 agent），MCP 与 secret 按 parent 的视角。
-        不属于任何会话，运行事件不推到会话页。
+        也不带公共 prompt：公共 prompt 约定的是长期 agent 之间的共同规则，临时 agent 只执行调用方交给它的任务。
+        不属于任何会话，运行事件不推到会话页。模型请求数超过 request_limit 时抛出 UsageLimitExceeded。
         """
         scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, origin=None, reply_to=None)
         result = await self._execute(
@@ -149,6 +158,7 @@ class AgentRuntime:
             prompt=task,
             history=(),
             deferred_results=None,
+            usage_limits=UsageLimits(request_limit=request_limit),
         )
         if not isinstance(result.output, str):
             raise RuntimeError(f"temp agent of {parent.id} ended with deferred tool calls it cannot have")
@@ -170,8 +180,14 @@ class AgentRuntime:
         prompt: str | None,
         history: Sequence[ModelMessage],
         deferred_results: dict[str, str] | None,
+        usage_limits: UsageLimits | None = None,
     ) -> AgentRunResult[str | DeferredToolRequests]:
-        ctx = {"agent": scope.agent_id, "session_id": scope.session_id, "model": model}
+        ctx = {
+            "agent": scope.agent_id,
+            "session_id": scope.session_id,
+            "model": model,
+            "workspace": str(scope.workspace),
+        }
         log.info("agent run started", extra={**ctx, "history": len(history)})
         result = await self._pai.run(
             prompt,
@@ -181,6 +197,7 @@ class AgentRuntime:
             deps=scope,
             toolsets=toolsets,
             event_stream_handler=self._forward_events,
+            usage_limits=usage_limits,
             deferred_tool_results=None
             if deferred_results is None
             else DeferredToolResults(calls=dict(deferred_results)),

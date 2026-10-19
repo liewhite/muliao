@@ -95,6 +95,8 @@ class RuntimeConfig(_Section):
     shell_default_timeout: float = 120.0
     shell_max_timeout: float = 600.0
     tool_output_max_chars: int = 20000
+    # 临时 agent 单次运行最多的模型请求数：做不完就尽早失败，交回调用方拆分任务，而不是靠整轮超时反复重试
+    temp_agent_request_limit: int = Field(default=30, ge=1)
 
 
 class Settings(_Section):
