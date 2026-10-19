@@ -31,7 +31,7 @@ async def test_agent_session_lifecycle_over_http(client):
     await login(client)
     resp = await client.post("/api/agents", json={"name": "alpha", "description": "general helper"})
     assert resp.status_code == 201, resp.text
-    assert resp.json()["model"] == "test"
+    assert resp.json()["model"] == "fake:default"
     assert (await client.post("/api/agents", json={"name": "alpha", "description": "dup"})).status_code == 409
     assert (
         await client.post("/api/agents", json={"name": "Bad Name", "description": "x"})

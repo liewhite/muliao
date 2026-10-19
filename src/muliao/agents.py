@@ -7,8 +7,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic_ai.exceptions import UserError
-from pydantic_ai.models import infer_model
 from sqlalchemy import select
 
 from muliao.db import Database
@@ -17,14 +15,6 @@ from muliao.evolution.memory import MemoryStore
 from muliao.models import Agent
 from muliao.naming import validate_slug
 from muliao.runtime.tasks import running_task_ids
-
-
-def check_model(model: str) -> None:
-    """模型字符串必须能被 pydantic-ai 解析，且对应提供方的凭据已配置。"""
-    try:
-        infer_model(model)
-    except UserError as e:
-        raise InvalidInput(f"model {model!r} is not usable: {e}") from e
 
 
 @dataclass(frozen=True)
@@ -41,7 +31,7 @@ class AgentService:
         db: Database,
         agents_dir: Path,
         memory: MemoryStore,
-        model_checker: Callable[[str], None] = check_model,
+        model_checker: Callable[[str], None],
         protected: frozenset[str] = frozenset(),
     ):
         # 被进程配置引用的 agent（如 Telegram 入口）不能通过 API 删除

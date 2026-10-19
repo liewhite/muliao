@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from muliao.agents import AgentService, check_model
+from muliao.agents import AgentService
 from muliao.bus import EventBus
 from muliao.config import Settings
 from muliao.db import Database, create_engine, init_schema
@@ -20,10 +20,11 @@ from muliao.delivery.telegram import TelegramDelivery
 from muliao.delivery.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.skills import SkillStore
+from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import DeliveryChannel, TaskKind
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
-from muliao.runtime.runner import AgentRuntime, ModelResolver, RunProfile
+from muliao.runtime.runner import AgentRuntime, RunProfile
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import TaskQueue
 from muliao.runtime.tools.evolution import memory_toolset, skills_toolset
@@ -75,9 +76,9 @@ class Container:
 
     async def start(self) -> None:
         await init_schema(self.db.engine)
-        if self.settings.telegram_agent is not None:
+        if self.settings.telegram is not None:
             # 配置错误在启动时暴露，而不是在第一条消息到来时让轮询崩溃
-            await self.agents.get(self.settings.telegram_agent)
+            await self.agents.get(self.settings.telegram.agent)
         self._spawn("worker", self.worker.run_forever())
         self._spawn("cron", self.cron.run_forever())
         if self.telegram is not None:
@@ -103,25 +104,29 @@ def _crash_on_failure(task: asyncio.Task[None]) -> None:
 def build_container(
     settings: Settings,
     *,
-    resolve_model: ModelResolver = lambda name: name,
-    model_checker: Callable[[str], None] = check_model,
+    resolve_model: ModelResolver | None = None,
+    model_checker: Callable[[str], None] | None = None,
 ) -> Container:
+    """resolve_model / model_checker 仅供测试替换；默认由配置中的 LLM providers 构造。"""
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    models = ModelRegistry(settings.llm)
     tz = ZoneInfo(settings.timezone)
     db = Database(create_engine(settings.db_path))
     bus = EventBus()
     queue = TaskQueue(
-        db, max_attempts=settings.task_max_attempts, retry_base_seconds=settings.task_retry_base_seconds
+        db,
+        max_attempts=settings.runtime.task_max_attempts,
+        retry_base_seconds=settings.runtime.task_retry_base_seconds,
     )
-    vault = Vault(db, settings.vault_key.get_secret_value())
+    vault = Vault(db, settings.vault.key.get_secret_value())
     skills = SkillStore(settings.public_skills_dir, settings.agents_dir)
-    memory = MemoryStore(settings.agents_dir, settings.memory_max_chars)
+    memory = MemoryStore(settings.agents_dir, settings.runtime.memory_max_chars)
     agents = AgentService(
         db,
         settings.agents_dir,
         memory,
-        model_checker,
-        protected=frozenset(a for a in [settings.telegram_agent] if a),
+        model_checker or models.check,
+        protected=frozenset([settings.telegram.agent]) if settings.telegram else frozenset(),
     )
     sessions = SessionService(db, queue)
     notifier = Notifier(db, queue)
@@ -133,15 +138,14 @@ def build_container(
     http = httpx.AsyncClient()
 
     deliveries: dict[DeliveryChannel, Delivery] = {
-        DeliveryChannel.WEBPUSH: WebPushDelivery(push_subscriptions, vapid, settings.vapid_subject),
+        DeliveryChannel.WEBPUSH: WebPushDelivery(push_subscriptions, vapid, settings.push.vapid_subject),
     }
     telegram: TelegramTrigger | None = None
-    if settings.telegram_bot_token is not None:
-        assert settings.telegram_agent is not None
-        client = TelegramClient(settings.telegram_bot_token.get_secret_value(), http)
+    if settings.telegram is not None:
+        client = TelegramClient(settings.telegram.bot_token.get_secret_value(), http)
         deliveries[DeliveryChannel.TELEGRAM] = TelegramDelivery(client)
         telegram = TelegramTrigger(
-            client, sessions, notifier, settings.telegram_agent, set(settings.telegram_allowed_chat_ids)
+            client, sessions, notifier, settings.telegram.agent, set(settings.telegram.allowed_chat_ids)
         )
 
     evolution_tools = [skills_toolset(skills), memory_toolset(memory)]
@@ -150,7 +154,9 @@ def build_container(
             workspace_toolset(
                 vault,
                 ShellLimits(
-                    settings.shell_default_timeout, settings.shell_max_timeout, settings.tool_output_max_chars
+                    settings.runtime.shell_default_timeout,
+                    settings.runtime.shell_max_timeout,
+                    settings.runtime.tool_output_max_chars,
                 ),
             ),
             *evolution_tools,
@@ -164,7 +170,13 @@ def build_container(
     )
     reflection_profile = RunProfile(toolsets=evolution_tools, include_mcp=False)
     runtime = AgentRuntime(
-        agents=agents, skills=skills, memory=memory, mcp=mcp, bus=bus, tz=tz, resolve_model=resolve_model
+        agents=agents,
+        skills=skills,
+        memory=memory,
+        mcp=mcp,
+        bus=bus,
+        tz=tz,
+        resolve_model=resolve_model or models.resolve,
     )
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.TURN: TurnHandler(db, runtime, turn_profile, queue, notifier),
@@ -175,8 +187,8 @@ def build_container(
         queue,
         handlers,
         bus,
-        concurrency=settings.worker_concurrency,
-        task_timeout_seconds=settings.task_timeout_seconds,
+        concurrency=settings.runtime.worker_concurrency,
+        task_timeout_seconds=settings.runtime.task_timeout_seconds,
     )
 
     return Container(

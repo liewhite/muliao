@@ -54,9 +54,11 @@ class AgentOut(BaseModel):
 def _create_spec(c: C, body: AgentCreate) -> AgentSpec:
     return AgentSpec(
         description=body.description,
-        model=c.settings.default_model if body.model is None else body.model,
+        model=c.settings.llm.default_model if body.model is None else body.model,
         instructions=body.instructions,
-        reflect_every=c.settings.default_reflect_every if body.reflect_every is None else body.reflect_every,
+        reflect_every=c.settings.runtime.default_reflect_every
+        if body.reflect_every is None
+        else body.reflect_every,
     )
 
 

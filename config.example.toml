@@ -1,0 +1,77 @@
+# Muliao 配置模板。复制为 ~/.muliao/config.toml（或用 muliao --config 指定路径），
+# 填写所有标了「必填」的项。文件含密钥，请 chmod 600。
+# 未知的键会导致启动失败，避免拼写错误被静默忽略。
+
+# 数据目录（数据库、skill、agent 工作目录）。相对路径以本文件所在目录为基准
+data_dir = "data"
+# cron 表达式按此时区解释，也是 agent 看到的本地时间
+timezone = "Asia/Shanghai"
+log_level = "INFO"
+
+[server]
+host = "0.0.0.0"
+port = 1080
+# 必填：对外访问地址（iOS 推送要求 HTTPS）。用于通知跳转、webhook URL、cookie Secure 标记
+public_url = "https://muliao.example.com"
+
+[auth]
+# 必填：网页登录密码，至少 8 位
+password = ""
+# 必填：cookie 签名密钥，至少 32 位。生成：python3 -c "import secrets; print(secrets.token_hex(32))"
+secret_key = ""
+
+[vault]
+# 必填：vault 加密密钥。生成：
+#   python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
+# 丢失后 vault 中保存的 secret 无法解密，请另行备份
+key = ""
+
+[push]
+# 必填：Web Push 的联系方式，mailto: 或 https: URL
+vapid_subject = "https://muliao.example.com"
+
+[llm]
+# 必填：新建 agent 的默认模型，格式 "<provider 名>:<模型名>"，provider 名即下面 [llm.providers.<名>] 的键
+default_model = "claude:claude-sonnet-5-5"
+
+# 至少配置一个 provider。type 可选：
+#   anthropic         Anthropic Messages API
+#   openai            OpenAI Chat Completions，也适用于 DeepSeek、OpenRouter、vLLM、Ollama 等兼容服务
+#   openai-responses  OpenAI Responses API
+#   google            Gemini API
+# base_url 不填则使用官方地址。agent 的模型写成 "<provider 名>:<模型名>"，如 "claude:claude-opus-5-5"
+
+[llm.providers.claude]
+type = "anthropic"
+api_key = ""
+
+# [llm.providers.openai]
+# type = "openai"
+# api_key = ""
+
+# [llm.providers.deepseek]
+# type = "openai"
+# api_key = ""
+# base_url = "https://api.deepseek.com"
+
+# [llm.providers.gemini]
+# type = "google"
+# api_key = ""
+
+# 可选：运行参数，以下为默认值
+# [runtime]
+# worker_concurrency = 4          # 同时运行的任务数
+# task_max_attempts = 5           # 暂时性失败的最大尝试次数
+# task_retry_base_seconds = 5.0   # 重试退避基数（指数增长）
+# task_timeout_seconds = 1800.0   # 单个任务总时限
+# default_reflect_every = 10      # 新建 agent 的默认反思间隔（轮）
+# memory_max_chars = 4000         # agent 记忆长度上限
+# shell_default_timeout = 120.0
+# shell_max_timeout = 600.0
+# tool_output_max_chars = 20000
+
+# 可选：Telegram 入口
+# [telegram]
+# bot_token = ""
+# agent = "assistant"              # 接收消息的 agent，启动时校验存在，且不可删除
+# allowed_chat_ids = [123456789]   # 只处理这些 chat 的消息

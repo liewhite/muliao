@@ -172,7 +172,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
     await drain(container)
     turn = (await container.queue.list(status=TaskStatus.FAILED, session_id=None, limit=5))[0]
-    assert turn.attempts == container.settings.task_max_attempts and "503" in turn.error
+    assert turn.attempts == container.settings.runtime.task_max_attempts and "503" in turn.error
 
     models.models["m"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("ok")]))
     await container.queue.retry(turn.id)
@@ -182,10 +182,11 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
 
 async def test_agent_referenced_by_config_cannot_be_deleted(settings, models):
     from muliao.agents import AgentSpec
+    from muliao.config import TelegramConfig
     from muliao.container import build_container
     from muliao.db import init_schema
 
-    settings.telegram_agent = "tg"
+    settings.telegram = TelegramConfig(bot_token="t", agent="tg", allowed_chat_ids=[1])
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
     await init_schema(c.db.engine)
     try:

@@ -14,7 +14,7 @@ from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 from muliao.transcript import truncate
 from muliao.vault import Vault
 
-# shell 只继承这些环境变量，避免把服务进程的模型 API key 等泄露给命令
+# shell 只继承这些环境变量，不把服务进程的其余环境带给命令
 _INHERITED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "USER", "SHELL")
 _LIST_LIMIT = 500
 _DRAIN_SECONDS = 5.0

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- launchd 用户服务。把 /Users/YOU 换成实际 home；.env 放在 WorkingDirectory 下。 -->
+<!-- launchd 用户服务。把 /Users/YOU 换成实际 home。 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -8,6 +8,8 @@
   <key>ProgramArguments</key>
   <array>
     <string>/Users/YOU/.local/bin/muliao</string>
+    <string>--config</string>
+    <string>/Users/YOU/.muliao/config.toml</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Users/YOU/.muliao</string>

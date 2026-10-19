@@ -146,13 +146,15 @@ def create_app(container: Container, web_dir: Path) -> FastAPI:
     app = FastAPI(title="Muliao", lifespan=lifespan)
     settings = container.settings
     app.state.container = container
-    app.state.auth = Auth(settings.secret_key.get_secret_value(), settings.password.get_secret_value())
+    app.state.auth = Auth(
+        settings.auth.secret_key.get_secret_value(), settings.auth.password.get_secret_value()
+    )
 
     @app.exception_handler(DomainError)
     async def domain_error(_request: Request, exc: DomainError) -> JSONResponse:
         return JSONResponse(status_code=_status_of(exc), content={"detail": str(exc)})
 
-    app.include_router(_public_routes(secure_cookie=settings.public_url.startswith("https://")))
+    app.include_router(_public_routes(secure_cookie=settings.server.public_url.startswith("https://")))
     app.include_router(_private_routes())
     _mount_web(app, web_dir)
     return app

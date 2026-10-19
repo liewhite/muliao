@@ -66,7 +66,7 @@ function AgentForm({ agent, onSaved }: { agent?: Agent; onSaved: (a: Agent) => v
       <Field label="职责描述" hint="其他 agent 委派任务时据此选择">
         <input value={input.description} onChange={(e) => set({ description: e.target.value })} />
       </Field>
-      <Field label="模型" hint="pydantic-ai 模型字符串，如 anthropic:claude-sonnet-5-5、openai:gpt-5；留空用服务端默认">
+      <Field label="模型" hint="<provider 名>:<模型名>，provider 名来自服务端配置的 [llm.providers]，如 claude:claude-opus-5-5；留空用默认模型">
         <input
           value={input.model ?? ''}
           onChange={(e) => set({ model: e.target.value || null })}

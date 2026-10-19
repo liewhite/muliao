@@ -104,7 +104,7 @@ function CronForm({ onCreated }: { onCreated: () => void }) {
             ))}
           </select>
         </Field>
-        <Field label="cron 表达式" hint="5 段式，按服务端配置的时区（MULIAO_TIMEZONE）解释">
+        <Field label="cron 表达式" hint="5 段式，按服务端配置文件中的 timezone 解释">
           <input value={job.schedule} onChange={(e) => set({ schedule: e.target.value })} className="mono" />
         </Field>
         <Field label="提示词" hint="每次触发都会在新 session 中执行。定时 session 不会自动推送，需要时在提示词里要求 agent 调用 notify_user">

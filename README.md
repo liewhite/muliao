@@ -7,6 +7,7 @@
 
 ```bash
 uv tool install git+https://github.com/liewhite/muliao.git
-cp .env.example .env   # 填写密码、密钥、模型 API key
-muliao
+mkdir -p ~/.muliao && cp config.example.toml ~/.muliao/config.toml   # 填写密码、密钥、LLM
+chmod 600 ~/.muliao/config.toml
+muliao   # 默认读 ~/.muliao/config.toml，可用 --config 指定
 ```

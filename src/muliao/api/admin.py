@@ -115,13 +115,13 @@ class WebhookOut(BaseModel):
 
 @router.get("/webhooks")
 async def list_webhooks(c: C) -> list[WebhookOut]:
-    return [WebhookOut.of(h, c.settings.public_url) for h in await c.webhooks.list()]
+    return [WebhookOut.of(h, c.settings.server.public_url) for h in await c.webhooks.list()]
 
 
 @router.post("/webhooks", status_code=201)
 async def create_webhook(c: C, body: WebhookCreate) -> WebhookOut:
     hook = await c.webhooks.create(name=body.name, agent_name=body.agent_name, prompt=body.prompt)
-    return WebhookOut.of(hook, c.settings.public_url)
+    return WebhookOut.of(hook, c.settings.server.public_url)
 
 
 @router.delete("/webhooks/{hook_id}", status_code=204)

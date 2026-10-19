@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
-from pydantic import SecretStr
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models import Model
 
@@ -29,14 +28,20 @@ class ModelSlot:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(
-        data_dir=tmp_path / "data",
-        web_dir=tmp_path / "web",
-        password=SecretStr("password1"),
-        secret_key=SecretStr("k" * 32),
-        vault_key=SecretStr(Fernet.generate_key().decode()),
-        task_retry_base_seconds=0.01,
-        default_model="test",
+    return Settings.model_validate(
+        {
+            "data_dir": tmp_path / "data",
+            "web_dir": tmp_path / "web",
+            "server": {"public_url": "http://test"},
+            "auth": {"password": "password1", "secret_key": "k" * 32},
+            "vault": {"key": Fernet.generate_key().decode()},
+            "push": {"vapid_subject": "mailto:test@example.com"},
+            "llm": {
+                "default_model": "fake:default",
+                "providers": {"fake": {"type": "anthropic", "api_key": "unused"}},
+            },
+            "runtime": {"task_retry_base_seconds": 0.01},
+        }
     )
 
 

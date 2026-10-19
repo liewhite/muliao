@@ -1,7 +1,7 @@
 """执行一次 agent 运行：组装 instructions、toolsets、模型，转发流式事件到总线。"""
 
 import logging
-from collections.abc import AsyncIterable, Callable, Sequence
+from collections.abc import AsyncIterable, Sequence
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
@@ -18,7 +18,6 @@ from pydantic_ai.messages import (
     TextPartDelta,
     ToolReturnPart,
 )
-from pydantic_ai.models import Model
 from pydantic_ai.toolsets import AbstractToolset
 
 from muliao.agents import AgentService
@@ -26,6 +25,7 @@ from muliao.bus import EventBus
 from muliao.db import utcnow
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.skills import SkillStore
+from muliao.llm import ModelResolver
 from muliao.models import Agent
 from muliao.runtime.instructions import build_instructions
 from muliao.runtime.mcp import McpRegistry
@@ -38,8 +38,6 @@ from muliao.transcript import truncate
 log = logging.getLogger(__name__)
 
 _EVENT_TEXT_LIMIT = 2000
-
-ModelResolver = Callable[[str], Model | str]
 
 
 @dataclass(frozen=True)
@@ -61,7 +59,7 @@ class AgentRuntime:
         bus: EventBus,
         tz: ZoneInfo,
         clock: Clock = utcnow,
-        resolve_model: ModelResolver = lambda name: name,
+        resolve_model: ModelResolver,
     ):
         self._agents = agents
         self._skills = skills

@@ -10,12 +10,16 @@ uv tool install git+https://github.com/liewhite/muliao.git
 uv tool upgrade muliao     # 或 uv tool install --force git+https://github.com/liewhite/muliao.git
 ```
 
-配置全部来自环境变量或**当前工作目录**下的 `.env`（模板见仓库 `.env.example`）。建议为服务建一个目录放 `.env` 和数据：
+所有配置（监听地址、登录密码、密钥、LLM provider 与 API key、Telegram）都在一个 TOML 文件里，模板见仓库根目录 `config.example.toml`，每项都有注释。不读环境变量。
 
 ```bash
-mkdir -p ~/.muliao && cd ~/.muliao   # 放 .env，MULIAO_DATA_DIR 默认即 ./data
-muliao
+mkdir -p ~/.muliao
+cp config.example.toml ~/.muliao/config.toml && chmod 600 ~/.muliao/config.toml   # 填写「必填」项
+muliao                          # 默认读 ~/.muliao/config.toml
+muliao --config /path/to.toml   # 或指定路径
 ```
+
+`data_dir` 的相对路径以配置文件所在目录为基准，默认即 `~/.muliao/data`。agent 的模型写成 `<provider 名>:<模型名>`，provider 名是配置里 `[llm.providers.<名>]` 的键。
 
 后台循环（worker、cron、Telegram）意外退出时进程会主动退出，需要进程管理器托管并自动重启。macOS 用 launchd，示例见 `deploy/muliao.plist.example`：
 
@@ -39,7 +43,7 @@ npm run build                    # 构建到 src/muliao/webui/，改了前端必
 
 ## iOS 主屏应用与推送
 
-1. 服务必须通过 **HTTPS** 访问（反向代理如 Caddy、Nginx，或 Cloudflare Tunnel / Tailscale Funnel），`MULIAO_PUBLIC_URL` 设为该地址。反向代理需要关闭对 `/api/events` 的响应缓冲（SSE）。
+1. 服务必须通过 **HTTPS** 访问（反向代理如 Caddy、Nginx，或 Cloudflare Tunnel / Tailscale Funnel），配置里 `server.public_url` 设为该地址。反向代理需要关闭对 `/api/events` 的响应缓冲（SSE）。
 2. iPhone 用 Safari 打开 → 分享 → 「添加到主屏幕」。
 3. 从主屏幕图标打开，登录 → 设置 → 「开启推送」（iOS 16.4+）。
 4. 「发送测试通知」验证。
@@ -58,4 +62,4 @@ VAPID 密钥在首次启动时生成于 `data/vapid_private.pem`，更换它会�
 
 ## 数据
 
-全部在 `MULIAO_DATA_DIR`：`muliao.db`（SQLite）、`skills/`（公共 skill）、`agents/<name>/`（记忆、私有 skill、工作目录）。备份整个目录即可；`MULIAO_VAULT_KEY` 需单独妥善保存。
+全部在配置的 `data_dir`：`muliao.db`（SQLite）、`skills/`（公共 skill）、`agents/<name>/`（记忆、私有 skill、工作目录）。备份整个目录即可；配置文件里的 `vault.key` 需单独妥善保存，丢失后 vault 中的 secret 无法解密。

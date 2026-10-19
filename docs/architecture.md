@@ -85,7 +85,7 @@ Web / cron / webhook / Telegram / delegate_task
   - `vault`：`vault_list` / `vault_set`。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
   - `cron`：`cron_list` / `cron_create` / `cron_delete`。
   - 该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀；配置中的 `${vault:KEY}` 在运行时解析，引用不存在的 key 直接报错。
-- **model**：agent 的 `model` 字段是 pydantic-ai 模型字符串（`anthropic:...`、`openai:...`、`google-gla:...` 等），密钥由对应环境变量提供。
+- **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端；不读环境变量。
 
 ## 4. 进化机制
 
@@ -115,20 +115,21 @@ Slack 入站事件尚未实现：接入方式是新增一个 trigger（Events AP
 
 ## 6. 安全边界
 
-**威胁模型：agent 与运行服务的系统用户同等可信。** agent 能执行任意 shell 命令，因此能读到服务能读到的一切——包括 `.env` 里的 `MULIAO_VAULT_KEY`、数据库文件、进程环境变量。下面的措施只防止 secret **意外**进入对话记录、日志和前端，不防 agent 本身：
+**威胁模型：agent 与运行服务的系统用户同等可信。** agent 能执行任意 shell 命令，因此能读到服务能读到的一切——包括配置文件里的 `vault.key` 与 LLM API key、数据库文件。下面的措施只防止 secret **意外**进入对话记录、日志和前端，不防 agent 本身：
 
-- shell 只继承少量环境变量（`PATH`、`HOME` 等），不把模型 API key 等直接暴露给命令；
+- shell 只继承少量环境变量（`PATH`、`HOME` 等）；
 - `run_shell(secrets=[KEY])` 输出中的 secret 明文被替换为 `[secret:KEY]`（逐字匹配，编码后的输出不会被替换）；
 - `vault_set` 的参数在持久化前脱敏；但用户在 prompt 里直接写的明文会原样保存并在后续轮次发给模型——敏感值应在 UI 的 Vault 页录入。
 
-如需真正隔离，应让服务以独立系统用户运行、把 `.env` 与数据目录放在 agent 工作目录之外并限制权限，或把 shell 放进沙箱。
+如需真正隔离，应让服务以独立系统用户运行、把配置文件与数据目录放在 agent 可读范围之外并限制权限，或把 shell 放进沙箱。
 
 其他边界：
 
 - Web 与 API：单用户密码登录（至少 8 位），HMAC 签名 cookie（密钥至少 32 位），有效期 90 天。登录接口未做频率限制，部署在公网时应在反向代理层限流。
 - webhook：每个 webhook 独立 token（请求头 `X-Muliao-Token`），请求体上限 100KB，必须是 UTF-8。
 - Telegram：只接受白名单 chat id，其余记 warn 日志后丢弃。
-- Vault：Fernet 加密，主密钥来自 `MULIAO_VAULT_KEY`，缺失时拒绝启动。
+- Vault：Fernet 加密，主密钥来自配置 `vault.key`，缺失或格式错误时拒绝启动。
+- 配置文件：唯一配置来源（`config.example.toml`），未知键直接报错，避免拼写错误被静默忽略。
 - 日志不打印 secret 值与 token。
 
 ## 7. 已知限制

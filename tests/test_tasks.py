@@ -36,7 +36,7 @@ async def test_transient_failure_backs_off_then_fails_after_max_attempts(contain
     await make_agent()
     task = await _enqueue(container, "a")
     q = container.queue
-    max_attempts = container.settings.task_max_attempts
+    max_attempts = container.settings.runtime.task_max_attempts
 
     for attempt in range(1, max_attempts + 1):
         claimed = await q.claim()
