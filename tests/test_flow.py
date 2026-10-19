@@ -69,8 +69,8 @@ _REPLY_TO = {Origin.USER: ReplyTo.USER, Origin.TRIGGER: ReplyTo.NONE}
 async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER):
     received = await container.sessions.receive(
         Inbound(
-            source=origin,
-            source_ref=None,
+            origin=origin,
+            origin_ref=None,
             content=prompt,
             session=NewSession(agent_id=agent, title=prompt[:20]),
             reply_to=_REPLY_TO[origin],
@@ -83,7 +83,7 @@ async def reply(container, session_id: str, prompt: str):
     """用户在会话里追问，返回这一轮的 task。"""
     received = await container.sessions.receive(
         Inbound(
-            source=Origin.USER, source_ref=None, content=prompt, session=session_id, reply_to=ReplyTo.USER
+            origin=Origin.USER, origin_ref=None, content=prompt, session=session_id, reply_to=ReplyTo.USER
         )
     )
     return received.turn

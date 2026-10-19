@@ -282,8 +282,8 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
     with pytest.raises(Forbidden):
         await container.sessions.receive(
             Inbound(
-                source=Origin.DELEGATION,
-                source_ref="someone-else",
+                origin=Origin.DELEGATION,
+                origin_ref="someone-else",
                 content="x",
                 session=cron_session.id,
                 reply_to=ReplyTo.AGENT,
@@ -292,8 +292,8 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
     with pytest.raises(ValueError, match="only delegation creates child sessions"):
         await container.sessions.receive(
             Inbound(
-                source=Origin.USER,
-                source_ref=None,
+                origin=Origin.USER,
+                origin_ref=None,
                 content="x",
                 session=NewSession(agent_id=alpha, title="t", parent_session_id=cron_session.id, thread="t"),
                 reply_to=ReplyTo.USER,

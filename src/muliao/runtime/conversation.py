@@ -51,11 +51,11 @@ class Inbound:
     """一个事件：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 交给某个 agent 处理一轮」。
 
     session 为已有会话的 id 时在其中继续，为 NewSession 时新建会话。
-    source_ref 标识具体的发送方：触发器 id、委派方（父）会话 id；用户为 None。
+    origin_ref 标识具体的发送方：触发器 id、委派方（父）会话 id；用户为 None。
     """
 
-    source: Origin
-    source_ref: str | None
+    origin: Origin
+    origin_ref: str | None
     content: str
     session: str | NewSession
     reply_to: ReplyTo
@@ -74,16 +74,16 @@ def _sender_of(session: Session) -> tuple[Origin, str | None]:
     return session.origin, session.origin_ref
 
 
-def _check_may_continue(session: Session, source: Origin, source_ref: str | None) -> None:
+def _check_may_continue(session: Session, origin: Origin, origin_ref: str | None) -> None:
     """续写规则：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话。"""
-    if source == Origin.USER:
+    if origin == Origin.USER:
         if session.private:
             raise Conflict(f"session {session.id} is a private thread of another agent and is read-only")
         return
-    if _sender_of(session) != (source, source_ref):
+    if _sender_of(session) != (origin, origin_ref):
         log.warning(
             "continuation refused",
-            extra={"session_id": session.id, "source": source, "source_ref": source_ref},
+            extra={"session_id": session.id, "origin": origin, "origin_ref": origin_ref},
         )
         raise Forbidden(
             f"session {session.id} was not started by this sender; it may only continue its own sessions"
@@ -91,26 +91,26 @@ def _check_may_continue(session: Session, source: Origin, source_ref: str | None
 
 
 async def create_session(
-    s: AsyncSession, *, source: Origin, source_ref: str | None, spec: NewSession
+    s: AsyncSession, *, origin: Origin, origin_ref: str | None, spec: NewSession
 ) -> Session:
     """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
     if await s.get(Agent, spec.agent_id) is None:
         raise NotFound(f"agent {spec.agent_id!r} not found")
-    if (spec.parent_session_id is not None) != (source == Origin.DELEGATION):
+    if (spec.parent_session_id is not None) != (origin == Origin.DELEGATION):
         raise ValueError(
-            f"only delegation creates child sessions, got {source} with parent {spec.parent_session_id}"
+            f"only delegation creates child sessions, got {origin} with parent {spec.parent_session_id}"
         )
-    if source == Origin.DELEGATION and spec.parent_session_id != source_ref:
+    if origin == Origin.DELEGATION and spec.parent_session_id != origin_ref:
         raise ValueError(
-            f"delegated session must be created by its parent {spec.parent_session_id}, not {source_ref}"
+            f"delegated session must be created by its parent {spec.parent_session_id}, not {origin_ref}"
         )
     session = Session(
         id=new_id(),
         agent_id=spec.agent_id,
         title=spec.title,
-        origin=source,
+        origin=origin,
         # 委派的发起方即 parent_session_id
-        origin_ref=None if source == Origin.DELEGATION else source_ref,
+        origin_ref=None if origin == Origin.DELEGATION else origin_ref,
         parent_session_id=spec.parent_session_id,
         thread=spec.thread,
         private=spec.private,
@@ -126,13 +126,13 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
         raise InvalidInput("message must not be empty")
     if isinstance(inbound.session, NewSession):
         session = await create_session(
-            s, source=inbound.source, source_ref=inbound.source_ref, spec=inbound.session
+            s, origin=inbound.origin, origin_ref=inbound.origin_ref, spec=inbound.session
         )
     else:
         session = await s.get(Session, inbound.session)
         if session is None:
             raise NotFound(f"session {inbound.session!r} not found")
-        _check_may_continue(session, inbound.source, inbound.source_ref)
+        _check_may_continue(session, inbound.origin, inbound.origin_ref)
     session.updated_at = utcnow()
     turn = queue.enqueue(
         s,
@@ -144,7 +144,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
     )
     log.info(
         "message received",
-        extra={"session_id": session.id, "source": inbound.source, "source_ref": inbound.source_ref},
+        extra={"session_id": session.id, "origin": inbound.origin, "origin_ref": inbound.origin_ref},
     )
     return Received(session, turn)
 
@@ -272,8 +272,8 @@ class Threads:
             return existing
         return await create_session(
             s,
-            source=Origin.DELEGATION,
-            source_ref=parent_id,
+            origin=Origin.DELEGATION,
+            origin_ref=parent_id,
             spec=NewSession(
                 agent_id=agent.id, title=thread, parent_session_id=parent_id, thread=thread, private=private
             ),
@@ -291,8 +291,8 @@ class Threads:
         """在公开 thread 里投递一轮（thread 不存在则新建）；回答推送给用户，调用方不等。"""
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, private=False)
         inbound = Inbound(
-            source=Origin.DELEGATION,
-            source_ref=parent_id,
+            origin=Origin.DELEGATION,
+            origin_ref=parent_id,
             content=prompt,
             session=child.id,
             reply_to=ReplyTo.USER,

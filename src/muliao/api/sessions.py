@@ -116,8 +116,8 @@ async def list_sessions(
 async def start_session(c: C, body: StartIn) -> SessionOut:
     received = await c.sessions.receive(
         Inbound(
-            source=Origin.USER,
-            source_ref=None,
+            origin=Origin.USER,
+            origin_ref=None,
             content=body.prompt,
             session=NewSession(agent_id=body.agent_id, title=default_title(body.prompt)),
             reply_to=ReplyTo.USER,
@@ -155,8 +155,8 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
 async def reply(c: C, session_id: str, body: ReplyIn) -> TaskOut:
     received = await c.sessions.receive(
         Inbound(
-            source=Origin.USER,
-            source_ref=None,
+            origin=Origin.USER,
+            origin_ref=None,
             content=body.prompt,
             session=session_id,
             reply_to=ReplyTo.USER,

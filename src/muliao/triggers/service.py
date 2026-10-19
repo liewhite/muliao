@@ -209,8 +209,8 @@ class TriggerService:
             s,
             self._queue,
             Inbound(
-                source=Origin.TRIGGER,
-                source_ref=str(trigger.id),
+                origin=Origin.TRIGGER,
+                origin_ref=str(trigger.id),
                 content=event_prompt(trigger.prompt, payload),
                 session=NewSession(
                     agent_id=trigger.agent_id, title=f"{trigger.name} · {_local(now, self._tz)}"

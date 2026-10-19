@@ -163,7 +163,7 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 
 | 字段 | 含义 |
 |---|---|
-| `source` / `source_ref` | 来源与具体发送方：用户（无）、触发器 id、委派方（父）会话 id |
+| `origin` / `origin_ref` | 来源与具体发送方：用户（无）、触发器 id、委派方（父）会话 id；与会话上的同名字段是同一个概念（会话记的是发起它的那一个事件的来源） |
 | `content` | 这一轮的 prompt |
 | `session` | 已有会话的 id（在其中继续），或 `NewSession`（新建：agent、标题，委派时还有父会话、thread 名、是否私有） |
 | `reply_to` | 这一轮的回答交给谁 |
