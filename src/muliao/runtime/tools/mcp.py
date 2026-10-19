@@ -29,7 +29,8 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
 
     @ts.tool
     async def mcp_list(ctx: RunContext[RunScope]) -> list[McpInfo]:
-        """List MCP servers available to you (your private ones and public ones). Values of env/headers are hidden."""
+        """List your private MCP servers and the public ones, including disabled ones (a private server hides an
+        enabled public one of the same name). Values of env/headers are hidden."""
         return [
             McpInfo(
                 name=s.name,
@@ -42,7 +43,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
                 header_keys=sorted(s.headers),
                 enabled=s.enabled,
             )
-            for s in await registry.visible_to(ctx.deps.agent_id)
+            for s in await registry.list(ctx.deps.agent_id) + await registry.list(None)
         ]
 
     @ts.tool
@@ -94,5 +95,19 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
         """
         await registry.remove(owner_of(scope, ctx.deps.agent_id), name)
         return f"removed {scope} MCP server {name}"
+
+    @ts.tool
+    async def mcp_set_enabled(
+        ctx: RunContext[RunScope], name: str, enabled: bool, scope: Scope = "private"
+    ) -> str:
+        """Enable or disable an MCP server without deleting its configuration. Takes effect from the next turn.
+
+        Args:
+            name: Server name.
+            enabled: Whether its tools are offered.
+            scope: `private` or `public`.
+        """
+        await registry.set_enabled(owner_of(scope, ctx.deps.agent_id), name, enabled)
+        return f"{'enabled' if enabled else 'disabled'} {scope} MCP server {name}"
 
     return ts

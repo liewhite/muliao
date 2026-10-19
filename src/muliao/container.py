@@ -29,12 +29,12 @@ from muliao.runtime.reflection import ReflectionHandler
 from muliao.runtime.runner import AgentRuntime, RunProfile
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import TaskQueue
-from muliao.runtime.tools.agents import agents_toolset
+from muliao.runtime.tools.agents import AgentDefaults, agents_toolset
 from muliao.runtime.tools.delegation import delegation_toolset
 from muliao.runtime.tools.evolution import memory_toolset, skills_toolset
 from muliao.runtime.tools.mcp import mcp_admin_toolset
 from muliao.runtime.tools.notify import notify_toolset
-from muliao.runtime.tools.triggers import cron_toolset
+from muliao.runtime.tools.triggers import triggers_toolset
 from muliao.runtime.tools.vault import vault_toolset
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
 from muliao.runtime.turn import TurnHandler
@@ -162,12 +162,17 @@ def build_container(
                 ),
             ),
             *evolution_tools,
-            agents_toolset(agents),
+            agents_toolset(
+                agents,
+                agent_lifecycle,
+                prompts,
+                AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every),
+            ),
             delegation_toolset(db, agents, threads),
             notify_toolset(notifier),
             mcp_admin_toolset(mcp),
             vault_toolset(vault),
-            cron_toolset(cron, agents),
+            triggers_toolset(cron, events, agents, vault, settings.server.public_url),
         ],
         include_mcp=True,
     )

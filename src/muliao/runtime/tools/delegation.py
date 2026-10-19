@@ -1,13 +1,29 @@
-"""agent 之间的委派：delegate_task（异步）、ask_agent（同步）、wait_for。设计见 runtime/conversation.py。"""
+"""agent 之间的委派：delegate_task（异步）、ask_agent（同步）、wait_for、list_threads。设计见 runtime/conversation.py。"""
 
+from typing import Literal
+
+from pydantic import BaseModel
 from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext
 
 from muliao.agents import AgentService
 from muliao.db import Database
 from muliao.models import ReplyTo
-from muliao.runtime.conversation import Threads, validate_thread
+from muliao.runtime.conversation import Threads, thread_name, threads_of, validate_thread
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
+from muliao.transcript import truncate
+
+_ANSWER_PREVIEW = 500
+
+
+class ThreadInfo(BaseModel):
+    thread: str
+    agent: str
+    # true：ask_agent 开出的、只有你能继续的 thread；false：用户也能看到并回复
+    private: bool
+    status: Literal["done", "failed", "running", "idle"]
+    # 最近一轮已完成时的回答摘录；完整回答用 wait_for(thread)
+    answer: str | None
 
 
 def delegation_toolset(db: Database, agents: AgentService, threads: Threads) -> FunctionToolset[RunScope]:
@@ -89,6 +105,26 @@ def delegation_toolset(db: Database, agents: AgentService, threads: Threads) -> 
                 raise CallDeferred(metadata={"action": "wait", "turn_id": state.turn_id})
             case "idle":
                 raise ModelRetry(f"thread {thread!r} has no task to wait for")
+
+    @ts.tool
+    async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
+        """List the threads this conversation has opened, with the state of each one's latest task."""
+        parent_id = _require_session(ctx)
+        names = {a.id: a.name for a in await agents.list()}
+        async with db.transaction() as s:
+            result = []
+            for child in await threads_of(s, parent_id):
+                state = await threads.state(s, child)
+                result.append(
+                    ThreadInfo(
+                        thread=thread_name(child),
+                        agent=names[child.agent_id],
+                        private=child.private,
+                        status=state.status,
+                        answer=truncate(state.text, _ANSWER_PREVIEW) if state.status == "done" else None,
+                    )
+                )
+        return result
 
     return ts
 

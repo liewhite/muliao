@@ -293,6 +293,19 @@ async def delete_sessions(s: AsyncSession, queue: TaskQueue, roots: list[Session
 # ---- thread ----
 
 
+async def threads_of(s: AsyncSession, parent_id: str) -> list[Session]:
+    """父会话开出的 thread（含私有的），按创建顺序。"""
+    query = select(Session).where(Session.parent_session_id == parent_id).order_by(Session.created_at)
+    return list((await s.scalars(query)).all())
+
+
+def thread_name(session: Session) -> str:
+    """thread 会话的名字；委派建会话时一定写入（迁移回填时为会话 id）。"""
+    if session.thread is None:
+        raise RuntimeError(f"session {session.id} has a parent but no thread name")
+    return session.thread
+
+
 @dataclass(frozen=True)
 class ThreadState:
     # idle：thread 已被占用但还没有任何一轮（占用它的那一轮回滚了）

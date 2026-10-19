@@ -12,7 +12,7 @@ from muliao.db import Database
 from muliao.errors import NotFound
 from muliao.models import Compaction, Message, Origin, Session
 from muliao.runtime.codec import load_messages
-from muliao.runtime.conversation import Inbound, Received, delete_sessions, receive
+from muliao.runtime.conversation import Inbound, Received, delete_sessions, receive, threads_of
 from muliao.runtime.tasks import TaskQueue
 
 _TITLE_MAX = 60
@@ -65,8 +65,7 @@ class SessionService:
         """父会话开出的 thread（含私有的），按创建顺序。"""
         async with self._db.transaction() as s:
             await self._get(s, parent_id)
-            query = select(Session).where(Session.parent_session_id == parent_id).order_by(Session.created_at)
-            return list((await s.scalars(query)).all())
+            return await threads_of(s, parent_id)
 
     async def history(self, session_id: str) -> list[ModelMessage]:
         return [m for _, m in await self.history_with_ids(session_id)]
