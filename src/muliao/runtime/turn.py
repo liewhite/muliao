@@ -10,6 +10,7 @@
 import asyncio
 import logging
 import weakref
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pydantic_ai.messages import ModelMessage
@@ -18,7 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database, utcnow
 from muliao.delivery.base import Notification, Notifier
+from muliao.files import FileStore
 from muliao.models import Agent, Message, ReplyTo, Session, Task, TaskKind
+from muliao.runtime.attachments import copy_to_workspace, references
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import CompactionScheduler, load_context
 from muliao.runtime.redaction import redact_messages
@@ -55,7 +58,9 @@ class TurnRunner:
         queue: TaskQueue,
         notifier: Notifier,
         compaction: CompactionScheduler,
+        files: FileStore,
     ):
+        self._files = files
         self._db = db
         self._runtime = runtime
         self._tool_groups = tool_groups
@@ -65,15 +70,20 @@ class TurnRunner:
         # 内联运行的私有 thread 不走队列 lane：同一 thread 的并行 ask 在这里串行（进程内，单进程部署）
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
-    async def run(self, session_id: str, prompt: str, reply_to: ReplyTo) -> TurnOutput:
+    async def run(
+        self, session_id: str, prompt: str, attachments: Sequence[str], reply_to: ReplyTo
+    ) -> TurnOutput:
         async with self._db.transaction() as s:
             session, agent = await _load(s, session_id)
             context = await load_context(s, session.id)
         scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, reply_to=reply_to)
+        files = await self._files.referenced(attachments)
+        await copy_to_workspace(self._files, files, scope.workspace)
+        user_prompt = [*([prompt] if prompt.strip() else []), *references(files)] if files else prompt
         result = await self._runtime.run(
             agent,
             scope,
-            prompt,
+            user_prompt,
             context.messages,
             self._tool_groups.profile(agent.id, agent.tool_groups),
             summary=context.summary,
@@ -109,7 +119,7 @@ class TurnRunner:
             started = utcnow()
             log.info("inline turn started", extra={"session_id": session_id})
             try:
-                out = await self.run(session_id, prompt, reply_to)
+                out = await self.run(session_id, prompt, (), reply_to)
                 async with self._db.transaction() as s:
                     # 先确认 thread 还在：运行期间被删除时给出可定位的错误，而不是外键冲突
                     await _load(s, session_id)
@@ -119,7 +129,7 @@ class TurnRunner:
                         lane=turn_lane(session_id),
                         agent_id=out.agent_id,
                         session_id=session_id,
-                        payload={"prompt": prompt, "reply_to": reply_to},
+                        payload={"prompt": prompt, "reply_to": reply_to, "attachments": []},
                         started_at=started,
                     )
                     await s.flush()
@@ -162,7 +172,9 @@ class TurnHandler:
         if task.session_id is None:
             raise RuntimeError(f"turn task {task.id} has no session")
         reply_to = ReplyTo(task.payload["reply_to"])
-        out = await self._runner.run(task.session_id, task.payload["prompt"], reply_to)
+        out = await self._runner.run(
+            task.session_id, task.payload["prompt"], task.payload["attachments"], reply_to
+        )
 
         async def commit(s: AsyncSession) -> None:
             await self._runner.commit_in(s, task.id, out, reply_to)

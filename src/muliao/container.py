@@ -20,6 +20,7 @@ from muliao.errors import InvalidInput
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.prompts import PromptStore
 from muliao.evolution.skills import SkillStore
+from muliao.files import FileStore
 from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import TaskKind
 from muliao.resources import ResourceRepo
@@ -95,6 +96,7 @@ class Container:
     worker: Worker
     compaction: CompactionScheduler
     models: ModelRegistry
+    files: FileStore
     # 默认就是 models.check，单独持有只为测试替换
     _model_checker: Callable[[str], None]
     _background: list[asyncio.Task[None]] = field(default_factory=list)
@@ -113,6 +115,7 @@ class Container:
         await self._check_orphan_resources()
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
         await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)
+        await asyncio.to_thread(self.files.recover)
         self._spawn("worker", self.worker.run_forever())
         self._spawn("schedules", self.schedules.run_forever())
 
@@ -190,6 +193,7 @@ def build_container(
         retry_base_seconds=settings.runtime.task_retry_base_seconds,
     )
     vault = Vault(db, settings.vault.key.get_secret_value())
+    files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
     resources = ResourceRepo(settings.resources_dir)
     skills = SkillStore(resources)
     memory = MemoryStore(resources, settings.runtime.memory_max_chars)
@@ -229,6 +233,7 @@ def build_container(
         bus=bus,
         tz=tz,
         resolve_model=resolve_model or models.resolve,
+        files=files,
     )
     workspace_tools = workspace_toolset(
         vault,
@@ -237,6 +242,7 @@ def build_container(
             settings.runtime.shell_max_timeout,
             settings.runtime.tool_output_max_chars,
         ),
+        files,
     )
     evolution_tools = [skills_toolset(skills), memory_toolset(memory), instructions_toolset(prompts)]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
@@ -280,7 +286,7 @@ def build_container(
     if tuple(tool_groups.groups) != tool_group_names:
         raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {tool_group_names}")
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
-    turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction)
+    turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction, files)
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.TURN: TurnHandler(turn_runner),
         TaskKind.COMPACTION: CompactionHandler(
@@ -320,5 +326,6 @@ def build_container(
         worker=worker,
         compaction=compaction,
         models=models,
+        files=files,
         _model_checker=model_checker or models.check,
     )

@@ -18,6 +18,7 @@ from pydantic_ai.messages import (
     TextPart,
     TextPartDelta,
     ToolReturnPart,
+    UserContent,
 )
 from pydantic_ai.toolsets import AbstractToolset
 
@@ -27,8 +28,10 @@ from muliao.db import utcnow
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.prompts import PromptStore
 from muliao.evolution.skills import SkillStore
+from muliao.files import FileStore
 from muliao.llm import ModelResolver
 from muliao.models import Agent, Origin, ReplyTo
+from muliao.runtime.attachments import AttachmentsForModel
 from muliao.runtime.instructions import build_instructions, build_temp_instructions
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.redaction import redact_call
@@ -101,6 +104,7 @@ class AgentRuntime:
         tz: ZoneInfo,
         clock: Clock = utcnow,
         resolve_model: ModelResolver,
+        files: FileStore,
     ):
         self._agents = agents
         self._skills = skills
@@ -111,7 +115,7 @@ class AgentRuntime:
         self._tz = tz
         self._clock = clock
         self._resolve_model = resolve_model
-        self._pai = PaiAgent(deps_type=RunScope, output_type=str)
+        self._pai = PaiAgent(deps_type=RunScope, output_type=str, capabilities=[AttachmentsForModel(files)])
 
     def scope(
         self, agent: Agent, *, session_id: str | None, origin: Origin | None, reply_to: ReplyTo | None
@@ -144,7 +148,7 @@ class AgentRuntime:
         self,
         agent: Agent,
         scope: RunScope,
-        prompt: str,
+        prompt: str | Sequence[UserContent],
         history: Sequence[ModelMessage],
         profile: RunProfile,
         *,
@@ -206,7 +210,7 @@ class AgentRuntime:
         instructions: str,
         toolsets: list[AbstractToolset[RunScope]],
         scope: RunScope,
-        prompt: str,
+        prompt: str | Sequence[UserContent],
         history: Sequence[ModelMessage],
         usage_limits: UsageLimits | None = None,
     ) -> AgentRunResult[str]:

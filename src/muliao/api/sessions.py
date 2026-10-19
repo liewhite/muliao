@@ -4,6 +4,8 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from muliao.api.deps import C
+from muliao.api.files import FileOut
+from muliao.container import Container
 from muliao.errors import NotFound
 from muliao.models import Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.conversation import Inbound, NewSession
@@ -53,12 +55,14 @@ class TaskOut(BaseModel):
     attempts: int
     error: str | None
     prompt: str | None
+    # turn 随消息发送的文件
+    attachments: list[FileOut]
     not_before: datetime
     created_at: datetime
     finished_at: datetime | None
 
     @classmethod
-    def of(cls, t: Task) -> "TaskOut":
+    def of(cls, t: Task, files: dict[str, FileOut]) -> "TaskOut":
         return cls(
             id=t.id,
             kind=t.kind,
@@ -67,11 +71,23 @@ class TaskOut(BaseModel):
             status=t.status,
             attempts=t.attempts,
             error=t.error,
-            prompt=t.payload.get("prompt") if t.kind == TaskKind.TURN else None,
+            prompt=t.payload["prompt"] if t.kind == TaskKind.TURN else None,
+            attachments=[files[i] for i in _attachment_ids(t)],
             not_before=t.not_before,
             created_at=t.created_at,
             finished_at=t.finished_at,
         )
+
+
+def _attachment_ids(t: Task) -> list[str]:
+    return t.payload["attachments"] if t.kind == TaskKind.TURN else []
+
+
+async def task_outs(c: Container, tasks: list[Task]) -> list[TaskOut]:
+    """TaskOut 的唯一构造入口：一次取齐这些 task 的附件。"""
+    ids = list(dict.fromkeys(i for t in tasks for i in _attachment_ids(t)))
+    files = {f.id: FileOut.of(f) for f in await c.files.referenced(ids)}
+    return [TaskOut.of(t, files) for t in tasks]
 
 
 class CompactionOut(BaseModel):
@@ -94,10 +110,13 @@ class SessionDetail(BaseModel):
 class StartIn(BaseModel):
     agent_id: str
     prompt: str
+    # 先经 POST /api/files 上传得到的 id
+    attachments: list[str] = []
 
 
 class ReplyIn(BaseModel):
     prompt: str
+    attachments: list[str] = []
 
 
 @router.get("/sessions")
@@ -114,13 +133,16 @@ async def list_sessions(
 
 @router.post("/sessions", status_code=201)
 async def start_session(c: C, body: StartIn) -> SessionOut:
+    # 只发了文件时，用文件名作标题
+    names = ", ".join(f.name for f in await c.files.get_many(body.attachments))
     received = await c.sessions.receive(
         Inbound(
             origin=Origin.USER,
             origin_ref=None,
             content=body.prompt,
-            session=NewSession(agent_id=body.agent_id, title=default_title(body.prompt)),
+            session=NewSession(agent_id=body.agent_id, title=default_title(body.prompt.strip() or names)),
             reply_to=ReplyTo.USER,
+            attachments=tuple(body.attachments),
         )
     )
     return SessionOut.of(received.session)
@@ -139,9 +161,9 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         for x in await c.sessions.compactions(session_id)
     ]
     tasks = await c.queue.list(status=None, session_id=session_id, limit=50)
-    open_turns = [
-        TaskOut.of(t) for t in reversed(tasks) if t.kind == TaskKind.TURN and t.status != TaskStatus.DONE
-    ]
+    open_turns = await task_outs(
+        c, [t for t in reversed(tasks) if t.kind == TaskKind.TURN and t.status != TaskStatus.DONE]
+    )
     return SessionDetail(
         session=SessionOut.of(session),
         items=items,
@@ -160,9 +182,10 @@ async def reply(c: C, session_id: str, body: ReplyIn) -> TaskOut:
             content=body.prompt,
             session=session_id,
             reply_to=ReplyTo.USER,
+            attachments=tuple(body.attachments),
         )
     )
-    return TaskOut.of(received.turn)
+    return (await task_outs(c, [received.turn]))[0]
 
 
 class CompactOut(BaseModel):
@@ -194,9 +217,9 @@ async def delete_session(c: C, session_id: str) -> None:
 async def list_tasks(
     c: C, status: TaskStatus | None = None, limit: int = Query(100, le=500)
 ) -> list[TaskOut]:
-    return [TaskOut.of(t) for t in await c.queue.list(status=status, session_id=None, limit=limit)]
+    return await task_outs(c, await c.queue.list(status=status, session_id=None, limit=limit))
 
 
 @router.post("/tasks/{task_id}/retry")
 async def retry_task(c: C, task_id: int) -> TaskOut:
-    return TaskOut.of(await c.queue.retry(task_id))
+    return (await task_outs(c, [await c.queue.retry(task_id)]))[0]

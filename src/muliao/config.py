@@ -109,6 +109,8 @@ class RuntimeConfig(_Section):
     tool_output_max_chars: int = 20000
     # 临时 agent 单次运行最多的模型请求数：做不完就尽早失败，交回调用方拆分任务，而不是靠整轮超时反复重试
     temp_agent_request_limit: int = Field(default=30, ge=1)
+    # 单个文件（用户上传的附件、agent 发出的文件）的字节上限，默认与 Matrix Synapse 一致
+    upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
 
 
 class Settings(_Section):
@@ -144,6 +146,11 @@ class Settings(_Section):
     def temp_dir(self) -> Path:
         """临时 agent 的工作目录在这里创建，用完即删。"""
         return self.data_dir / "tmp"
+
+    @property
+    def files_dir(self) -> Path:
+        """对话里出现的文件，内容不可变，见 muliao.files。"""
+        return self.data_dir / "files"
 
     @property
     def vapid_key_path(self) -> Path:

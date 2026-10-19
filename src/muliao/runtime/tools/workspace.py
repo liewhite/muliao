@@ -1,7 +1,9 @@
 """文件与 shell 工具。相对路径以 agent 工作目录为基准；不做强隔离（单人本机使用，见架构文档）。"""
 
 import asyncio
+import mimetypes
 import os
+import re
 import signal
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +11,7 @@ from pathlib import Path
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.errors import InvalidInput, NotFound
+from muliao.files import FileStore
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 from muliao.transcript import truncate
@@ -45,7 +48,13 @@ def redact(text: str, secrets: dict[str, str]) -> str:
     return text
 
 
-def workspace_toolset(vault: Vault, limits: ShellLimits) -> FunctionToolset[RunScope]:
+def markdown_reference(name: str, url: str, *, image: bool) -> str:
+    """回答里引用一个文件：图片内联显示，其他文件是下载链接。url 已经过百分号编码，只需转义名称。"""
+    label = re.sub(r"([\\\[\]])", r"\\\1", name)
+    return f"{'!' if image else ''}[{label}]({url})"
+
+
+def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
@@ -114,6 +123,24 @@ def workspace_toolset(vault: Vault, limits: ShellLimits) -> FunctionToolset[RunS
         if len(entries) > _LIST_LIMIT:
             lines.append(f"… {len(entries) - _LIST_LIMIT} more entries")
         return "\n".join(lines) or "(empty)"
+
+    @ts.tool
+    async def share_file(ctx: RunContext[RunScope], path: str) -> str:
+        """Share a file from your workspace with the user, e.g. a chart you made or a document you wrote.
+        Returns a Markdown reference: put it in your reply exactly as given. Images show inline, other files
+        become download links. The user gets a snapshot; later changes to the file are not reflected.
+
+        Args:
+            path: File path.
+        """
+        target = resolve(ctx.deps, path)
+        if not target.is_file():
+            raise NotFound(f"file not found: {target}")
+        # 扩展名认不出、或是压缩过的（x.tar.gz 会被认成 tar 而丢掉 gzip）时，用 RFC 2046 的「未知二进制」类型，按附件下载
+        guessed, encoding = mimetypes.guess_type(target.name)
+        media_type = guessed if guessed and encoding is None else "application/octet-stream"
+        meta = await files.put_path(target.name, media_type, target)
+        return markdown_reference(meta.name, meta.url, image=meta.is_inline_image)
 
     @ts.tool
     async def run_shell(

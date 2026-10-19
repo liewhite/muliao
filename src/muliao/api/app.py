@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from muliao.api import admin, agents, resources, sessions, triggers, webhook
+from muliao.api import admin, agents, files, resources, sessions, triggers, webhook
 from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, require_auth
 from muliao.api.deps import C
 from muliao.bus import SubscriberOverflow
@@ -84,6 +84,7 @@ def _private_routes() -> APIRouter:
     router.include_router(resources.router)
     router.include_router(triggers.router)
     router.include_router(webhook.router)
+    router.include_router(files.router)
 
     @router.get("/auth/me", status_code=204)
     async def me() -> None:

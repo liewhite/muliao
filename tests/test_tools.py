@@ -224,7 +224,7 @@ async def test_temp_agent_runs_once_in_a_discarded_workspace_and_returns_its_ans
     assert workspace.startswith(str(container.settings.temp_dir)) and "has-key" in str(seen["shell"])
     assert workspace and list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240  测试里的同步检查
     # 只有文件与 shell：没有记忆、skill、委派，也不能再开临时 agent
-    assert seen["tools"] == ["edit_file", "list_files", "read_file", "run_shell", "write_file"]
+    assert seen["tools"] == ["edit_file", "list_files", "read_file", "run_shell", "share_file", "write_file"]
     assert "temporary helper agent working for agent 'manager'" in str(seen["instructions"])
     # 不留下会话
     assert len(await container.sessions.list(agent_id=None, origins=None, limit=10, offset=0)) == 1

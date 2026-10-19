@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import utcnow
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
+from muliao.files import load_metas
 from muliao.ids import new_id
 from muliao.models import Agent, Message, Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.codec import load_messages
@@ -59,6 +60,8 @@ class Inbound:
     content: str
     session: str | NewSession
     reply_to: ReplyTo
+    # 随消息发送的文件 id（muliao.files）；只有用户在界面上发的消息会带
+    attachments: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,8 +125,9 @@ async def create_session(
 
 async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Received:
     """所有新一轮对话的唯一入口：确定会话（继续或新建），投递一轮。"""
-    if not inbound.content.strip():
+    if not inbound.content.strip() and not inbound.attachments:
         raise InvalidInput("message must not be empty")
+    await load_metas(s, inbound.attachments)
     if isinstance(inbound.session, NewSession):
         session = await create_session(
             s, origin=inbound.origin, origin_ref=inbound.origin_ref, spec=inbound.session
@@ -140,7 +144,11 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
         lane=turn_lane(session.id),
         agent_id=session.agent_id,
         session_id=session.id,
-        payload={"prompt": inbound.content, "reply_to": inbound.reply_to},
+        payload={
+            "prompt": inbound.content,
+            "reply_to": inbound.reply_to,
+            "attachments": list(inbound.attachments),
+        },
     )
     log.info(
         "message received",
