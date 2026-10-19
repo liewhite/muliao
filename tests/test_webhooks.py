@@ -167,7 +167,7 @@ async def test_recreated_trigger_cannot_continue_sessions_of_the_deleted_one(cli
 
 
 async def test_oversized_payload_is_refused_and_unauthenticated_body_is_never_read(client, make_agent):
-    from muliao.triggers.webhook import EVENT_MAX_BYTES
+    from muliao.triggers.service import EVENT_MAX_BYTES
 
     alpha = (await make_agent("alpha")).id
     await login(client)

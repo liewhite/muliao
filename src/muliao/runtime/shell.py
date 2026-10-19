@@ -46,11 +46,14 @@ async def run_bash(
     timeout: float,  # noqa: ASYNC109  调用方给出的时限，超时要杀掉进程组而不只是取消等待
     stdin: bytes | None = None,
     merge_stderr: bool = False,
+    pipefail: bool = False,
 ) -> ShellResult:
+    """pipefail：管道里任何一步失败都算失败（bash 默认只看最后一步），用于靠退出码判断成败的调用方。"""
     env = {k: os.environ[k] for k in _INHERITED_ENV if k in os.environ} | dict(secrets)
     await asyncio.to_thread(cwd.mkdir, parents=True, exist_ok=True)
     proc = await asyncio.create_subprocess_exec(
         "bash",
+        *(["-o", "pipefail"] if pipefail else []),
         "-c",
         command,
         cwd=cwd,

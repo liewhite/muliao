@@ -1,11 +1,12 @@
 """webhook 触发方式专有的接口：外部系统的事件入口（凭 token 鉴权，不走登录），以及用户生成 token。"""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.errors import InvalidInput, TooLarge, Unauthorized
-from muliao.triggers.webhook import EVENT_MAX_BYTES
+from muliao.triggers.precheck import PrecheckFailed
+from muliao.triggers.service import EVENT_MAX_BYTES
 
 # 不需要登录：外部系统调用
 public_router = APIRouter()
@@ -14,7 +15,8 @@ router = APIRouter()
 
 
 class HookOut(BaseModel):
-    session_id: str
+    # 前置检查判定这次不触发时为 null
+    session_id: str | None
 
 
 class TokenOut(BaseModel):
@@ -48,8 +50,12 @@ async def hook(c: C, name: str, request: Request, session_id: str | None = None)
         text = payload.decode()
     except UnicodeDecodeError as e:
         raise InvalidInput("event payload must be UTF-8 text") from e
-    session = await c.webhooks.deliver(trigger_id, text, session_id)
-    return HookOut(session_id=session.id)
+    try:
+        session = await c.webhooks.deliver(trigger_id, text, session_id)
+    except PrecheckFailed as e:
+        # 原因（可能含脚本的 stderr）只记在触发器上给用户看，不交给外部调用方
+        raise HTTPException(status_code=502, detail="trigger precheck failed") from e
+    return HookOut(session_id=None if session is None else session.id)
 
 
 @router.post("/triggers/{trigger_id}/webhook/token")

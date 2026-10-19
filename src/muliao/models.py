@@ -183,7 +183,14 @@ class Trigger(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     last_fired_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_session_id: Mapped[str | None] = mapped_column(String(36))
-    # 触发失败时的原因（如定时触发器的数据不合法而被停用）
+    # 触发前的前置检查（triggers.precheck.Precheck），所有触发方式共用；None 表示每次都交给 agent
+    precheck: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # 最近一次跑前置检查的时间（不论结果），让用户看到「在检查、只是没事」
+    last_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # fire_when = changed 时最近一次成功检查的输出，用来比较；修改前置检查时清空（重新记录基线）。
+    # 最大可到事件上限，默认不随行加载（列表、定时循环都不需要它），用到时显式 undefer
+    precheck_output: Mapped[str | None] = mapped_column(Text, deferred=True)
+    # 最近一次触发或前置检查失败的原因（如定时触发器的数据不合法而被停用、检查脚本出错）；检查成功时清除
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 

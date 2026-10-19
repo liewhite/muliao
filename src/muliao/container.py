@@ -49,8 +49,9 @@ from muliao.runtime.tools.web import web_toolset
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
 from muliao.runtime.turn import TurnHandler, TurnRunner
 from muliao.runtime.worker import TaskHandler, Worker
+from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
-from muliao.triggers.service import TriggerService
+from muliao.triggers.service import EVENT_MAX_BYTES, TriggerService
 from muliao.triggers.webhook import WebhookKind, Webhooks
 from muliao.vault import Vault
 from muliao.web import WebProvider, build_web_provider
@@ -215,8 +216,16 @@ def build_container(
     mcp = McpRegistry(resources, vault)
     schedule_kind = ScheduleKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
+    precheck = PrecheckRunner(
+        vault, agents.workspace, settings.runtime.precheck_timeout_seconds, EVENT_MAX_BYTES
+    )
     triggers = TriggerService(
-        db, queue, {k.name: k for k in (schedule_kind, WebhookKind(settings.server.public_url))}, tz
+        db,
+        queue,
+        {k.name: k for k in (schedule_kind, WebhookKind(settings.server.public_url))},
+        tz,
+        precheck,
+        notifier,
     )
     schedules = ScheduleRunner(db, triggers, schedule_kind)
     webhooks = Webhooks(db, triggers)

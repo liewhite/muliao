@@ -25,8 +25,6 @@ from muliao.triggers.service import TriggerService
 log = logging.getLogger(__name__)
 
 KIND = "webhook"
-# 事件内容原样进入 prompt，过大的事件应由发送方裁剪或改为传引用
-EVENT_MAX_BYTES = 256 * 1024
 
 
 def _hash(token: str) -> str:
@@ -74,7 +72,8 @@ class Webhooks:
                 raise Unauthorized("unknown webhook or wrong token")
             return trigger.id
 
-    async def deliver(self, trigger_id: int, payload: str, session_id: str | None) -> Session:
+    async def deliver(self, trigger_id: int, payload: str, session_id: str | None) -> Session | None:
+        """None 表示前置检查判定这次不触发。"""
         if not payload.strip():
             raise InvalidInput("event payload must not be empty")
         return await self._triggers.fire(trigger_id, payload, session_id)

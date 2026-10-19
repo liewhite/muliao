@@ -6,13 +6,14 @@ agent 按名称指定，不出现 id。webhook 的 token 只能由用户在界�
 from typing import Any
 
 from pydantic import BaseModel
-from pydantic_ai import FunctionToolset, RunContext
+from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 
 from muliao.agents import AgentService
 from muliao.models import Trigger
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
-from muliao.triggers.service import TriggerService
+from muliao.triggers.precheck import Precheck
+from muliao.triggers.service import KEEP, TriggerService
 
 
 class TriggerKindInfo(BaseModel):
@@ -29,6 +30,7 @@ class TriggerInfo(BaseModel):
     # 这种方式的运行状态，如下次触发时间、webhook 地址与是否已有 token
     status: dict[str, Any]
     enabled: bool
+    precheck: Precheck | None
     last_error: str | None
 
 
@@ -44,6 +46,7 @@ def triggers_toolset(triggers: TriggerService, agents: AgentService) -> Function
             config=t.config,
             status=triggers.kind(t.kind).status(t),
             enabled=t.enabled,
+            precheck=None if t.precheck is None else Precheck.model_validate(t.precheck),
             last_error=t.last_error,
         )
 
@@ -66,11 +69,19 @@ def triggers_toolset(triggers: TriggerService, agents: AgentService) -> Function
         prompt: str,
         config: dict[str, Any],
         agent: str | None = None,
+        precheck: Precheck | None = None,
     ) -> str:
         """Create a trigger that starts a new conversation of an agent with `prompt` (plus the event, if the kind
         carries one). See `trigger_kinds` for the kinds and their `config`. Triggered runs do not notify the user
         automatically: the prompt should say when to call `notify_user`. A webhook only works after the user
         generates its token in the app; tell the user to do that.
+
+        For frequent checks (e.g. every minute) add a `precheck`, so the agent only runs when something happened: a
+        bash command run in the agent's workspace before each firing, with the event body (webhook) on stdin.
+        With fire_when "output", exit 0 with output fires and the output becomes the event the agent sees, exit 0
+        with no output skips; with "changed", it fires only when the output differs from the last run and the
+        agent gets the diff plus the output (the first run only records a baseline). A non-zero exit is recorded
+        as the trigger's error and the user is alerted once.
 
         Args:
             name: Lowercase letters, digits and `-`, e.g. `daily-report` (used in webhook URLs).
@@ -78,9 +89,12 @@ def triggers_toolset(triggers: TriggerService, agents: AgentService) -> Function
             prompt: What to do on each firing.
             config: Kind-specific settings, e.g. {"cron": "0 9 * * *"} for a schedule.
             agent: Name of the agent to run (see `list_agents`); defaults to you.
+            precheck: Optional command deciding whether to fire; see above.
         """
         agent_id = (await agents.find_by_name(agent)).id if agent is not None else ctx.deps.agent_id
-        trigger = await triggers.create(name=name, agent_id=agent_id, kind=kind, prompt=prompt, config=config)
+        trigger = await triggers.create(
+            name=name, agent_id=agent_id, kind=kind, prompt=prompt, config=config, precheck=precheck
+        )
         return f"created {trigger.kind} trigger {trigger.name}: {triggers.kind(trigger.kind).status(trigger)}"
 
     @ts.tool_plain
@@ -89,6 +103,8 @@ def triggers_toolset(triggers: TriggerService, agents: AgentService) -> Function
         prompt: str | None = None,
         config: dict[str, Any] | None = None,
         enabled: bool | None = None,
+        precheck: Precheck | None = None,
+        remove_precheck: bool = False,
     ) -> str:
         """Change a trigger; only the given fields change. Disable it to pause without losing it.
 
@@ -97,21 +113,33 @@ def triggers_toolset(triggers: TriggerService, agents: AgentService) -> Function
             prompt: New instructions for each firing.
             config: New kind-specific settings (replaces the old config).
             enabled: Pause (false) or resume (true).
+            precheck: New precheck (replaces the old one and resets its baseline); see `trigger_create`.
+            remove_precheck: Remove the precheck so every firing runs the agent.
         """
+        if precheck is not None and remove_precheck:
+            raise ModelRetry("give either precheck or remove_precheck, not both")
         trigger = await triggers.get_by_name(name)
-        trigger = await triggers.update(trigger.id, prompt=prompt, config=config, enabled=enabled)
+        trigger = await triggers.update(
+            trigger.id,
+            prompt=prompt,
+            config=config,
+            enabled=enabled,
+            precheck=None if remove_precheck else KEEP if precheck is None else precheck,
+        )
         status = triggers.kind(trigger.kind).status(trigger)
         return f"updated trigger {name} ({'enabled' if trigger.enabled else 'paused'}): {status}"
 
     @ts.tool_plain
     async def trigger_run(name: str) -> str:
-        """Fire a trigger now (without an event body), starting a new conversation of its agent.
+        """Fire a trigger now (without an event body), starting a new conversation of its agent. Its precheck,
+        if any, runs first, so this also tests the precheck.
 
         Args:
             name: Trigger name.
         """
         trigger = await triggers.get_by_name(name)
-        await triggers.fire(trigger.id)
+        if await triggers.fire(trigger.id) is None:
+            return f"precheck of {name} found nothing to do (or recorded its baseline): not fired"
         return f"fired trigger {name}"
 
     @ts.tool_plain

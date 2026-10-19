@@ -186,6 +186,14 @@ export interface TriggerKind {
   description: string
 }
 
+/** 触发前的前置检查（后端 triggers/precheck.py 的 Precheck） */
+export interface Precheck {
+  command: string
+  secrets: string[]
+  /** output：有输出就触发；changed：输出与上次不同才触发（首次只记基线） */
+  fire_when: 'output' | 'changed'
+}
+
 export interface Trigger {
   id: number
   name: string
@@ -197,6 +205,9 @@ export interface Trigger {
   /** 这种方式自己给出的运行状态，如下次触发时间、webhook 地址；不含凭证 */
   status: Record<string, unknown>
   enabled: boolean
+  /** 前置检查；null 表示每次都交给 agent */
+  precheck: Precheck | null
+  last_checked_at: string | null
   last_fired_at: string | null
   last_session_id: string | null
   last_error: string | null
@@ -355,12 +366,24 @@ export const api = {
 
   triggerKinds: () => get<TriggerKind[]>('/api/trigger-kinds'),
   triggers: () => get<Trigger[]>('/api/triggers'),
-  createTrigger: (t: { name: string; agent_id: AgentId; kind: string; prompt: string; config: Record<string, unknown> }) =>
+  createTrigger: (t: {
+    name: string
+    agent_id: AgentId
+    kind: string
+    prompt: string
+    config: Record<string, unknown>
+    precheck: Precheck | null
+  }) =>
     post<Trigger>('/api/triggers', t),
   /** 只修改给出的字段 */
-  updateTrigger: (id: number, patch: { prompt?: string; config?: Record<string, unknown>; enabled?: boolean }) =>
+  /** precheck 不给表示不变，给 null 表示去掉 */
+  updateTrigger: (
+    id: number,
+    patch: { prompt?: string; config?: Record<string, unknown>; enabled?: boolean; precheck?: Precheck | null },
+  ) =>
     request<Trigger>('PATCH', `/api/triggers/${id}`, patch),
-  runTrigger: (id: number) => post<{ session_id: string }>(`/api/triggers/${id}/run`),
+  /** session_id 为 null：前置检查判定这次不调用 agent */
+  runTrigger: (id: number) => post<{ session_id: string | null }>(`/api/triggers/${id}/run`),
   /** webhook：生成或重新生成 token，明文只返回这一次 */
   generateTriggerToken: (id: number) => post<{ token: string }>(`/api/triggers/${id}/webhook/token`),
   deleteTrigger: (id: number) => del(`/api/triggers/${id}`),

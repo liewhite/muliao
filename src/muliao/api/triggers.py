@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.models import Trigger
+from muliao.triggers.precheck import Precheck
+from muliao.triggers.service import KEEP
 
 router = APIRouter()
 
@@ -23,14 +25,17 @@ class TriggerCreate(BaseModel):
     kind: str
     prompt: str
     config: dict[str, Any]
+    # 触发前的前置检查（见 triggers.precheck）；不给则每次都交给 agent
+    precheck: Precheck | None = None
 
 
 class TriggerPatch(BaseModel):
-    """只修改给出的字段。"""
+    """只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。"""
 
     prompt: str | None = None
     config: dict[str, Any] | None = None
     enabled: bool | None = None
+    precheck: Precheck | None = None
 
 
 class TriggerOut(BaseModel):
@@ -43,13 +48,16 @@ class TriggerOut(BaseModel):
     # 这种触发方式自己给出的运行状态（见 TriggerKind.status），不含凭证
     status: dict[str, Any]
     enabled: bool
+    precheck: Precheck | None
+    last_checked_at: datetime | None
     last_fired_at: datetime | None
     last_session_id: str | None
     last_error: str | None
 
 
 class FiredOut(BaseModel):
-    session_id: str
+    # 前置检查判定这次不触发时为 null
+    session_id: str | None
 
 
 def _out(c: C, t: Trigger) -> TriggerOut:
@@ -62,6 +70,8 @@ def _out(c: C, t: Trigger) -> TriggerOut:
         config=t.config,
         status=c.triggers.kind(t.kind).status(t),
         enabled=t.enabled,
+        precheck=None if t.precheck is None else Precheck.model_validate(t.precheck),
+        last_checked_at=t.last_checked_at,
         last_fired_at=t.last_fired_at,
         last_session_id=t.last_session_id,
         last_error=t.last_error,
@@ -81,7 +91,12 @@ async def list_triggers(c: C) -> list[TriggerOut]:
 @router.post("/triggers", status_code=201)
 async def create_trigger(c: C, body: TriggerCreate) -> TriggerOut:
     trigger = await c.triggers.create(
-        name=body.name, agent_id=body.agent_id, kind=body.kind, prompt=body.prompt, config=body.config
+        name=body.name,
+        agent_id=body.agent_id,
+        kind=body.kind,
+        prompt=body.prompt,
+        config=body.config,
+        precheck=body.precheck,
     )
     return _out(c, trigger)
 
@@ -89,7 +104,11 @@ async def create_trigger(c: C, body: TriggerCreate) -> TriggerOut:
 @router.patch("/triggers/{trigger_id}")
 async def update_trigger(c: C, trigger_id: int, body: TriggerPatch) -> TriggerOut:
     trigger = await c.triggers.update(
-        trigger_id, prompt=body.prompt, config=body.config, enabled=body.enabled
+        trigger_id,
+        prompt=body.prompt,
+        config=body.config,
+        enabled=body.enabled,
+        precheck=body.precheck if "precheck" in body.model_fields_set else KEEP,
     )
     return _out(c, trigger)
 
@@ -101,5 +120,6 @@ async def delete_trigger(c: C, trigger_id: int) -> None:
 
 @router.post("/triggers/{trigger_id}/run", status_code=202)
 async def run_trigger(c: C, trigger_id: int) -> FiredOut:
-    """立即触发一次（不带事件内容）。"""
-    return FiredOut(session_id=(await c.triggers.fire(trigger_id)).id)
+    """立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。"""
+    session = await c.triggers.fire(trigger_id)
+    return FiredOut(session_id=None if session is None else session.id)

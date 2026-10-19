@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Alert, Button, Card, Chip, toast } from '@heroui/react'
 import { Copy, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, asAgentId, type Agent, type Trigger, type TriggerKind } from '../api'
+import { api, asAgentId, type Agent, type Precheck, type Trigger, type TriggerKind } from '../api'
 import {
   ActionButton,
   CODE_BLOCK,
@@ -75,6 +75,99 @@ function CronEditor({ config, onChange }: { config: Config; onChange: ConfigChan
       }}
       mono
     />
+  )
+}
+
+const FIRE_WHEN_LABELS: Record<Precheck['fire_when'], string> = {
+  output: '有输出就触发',
+  changed: '输出变化才触发',
+}
+
+/** 前置检查：先跑一条命令，只有真有事才调用 agent。关闭时回调 null（每次都交给 agent） */
+function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onChange: (p: Precheck | null) => void }) {
+  const [on, setOn] = useState(precheck !== null)
+  const [command, setCommand] = useState(precheck?.command ?? '')
+  const [secrets, setSecrets] = useState((precheck?.secrets ?? []).join(', '))
+  const [fireWhen, setFireWhen] = useState<Precheck['fire_when']>(precheck?.fire_when ?? 'output')
+
+  function emit(next: { on?: boolean; command?: string; secrets?: string; fireWhen?: Precheck['fire_when'] }) {
+    const v = { on, command, secrets, fireWhen, ...next }
+    onChange(
+      v.on
+        ? {
+            command: v.command,
+            secrets: v.secrets.split(',').map((k) => k.trim()).filter((k) => k !== ''),
+            fire_when: v.fireWhen,
+          }
+        : null,
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-separator p-3">
+      <label className="flex items-center gap-2 text-sm">
+        <ToggleSwitch
+          label="前置检查"
+          isSelected={on}
+          onChange={(value) => {
+            setOn(value)
+            emit({ on: value })
+          }}
+        />
+        前置检查：先跑一条命令，有事才调用 agent
+      </label>
+      {on && (
+        <>
+          <TextAreaInput
+            label="命令（bash，在 agent 的工作目录里执行）"
+            hint="stdin 是事件内容（webhook 的请求体）。退出码 0：按下面的条件决定是否触发，输出作为事件交给 agent；非 0 视为检查出错，不触发并推送一次告警"
+            value={command}
+            onChange={(value) => {
+              setCommand(value)
+              emit({ command: value })
+            }}
+            rows={3}
+            mono
+          />
+          <SelectInput
+            label="触发条件"
+            value={fireWhen}
+            onChange={(value) => {
+              const next = (value ?? 'output') as Precheck['fire_when']
+              setFireWhen(next)
+              emit({ fireWhen: next })
+            }}
+            options={[
+              { id: 'output', label: FIRE_WHEN_LABELS.output, description: '没有输出就跳过；适合脚本自己记游标、只打印新内容' },
+              { id: 'changed', label: FIRE_WHEN_LABELS.changed, description: '与上次输出比较，交给 agent 差异和完整输出；第一次只记录基线' },
+            ]}
+          />
+          <TextInput
+            label="secret（可选）"
+            hint="vault 里的 key，逗号分隔，作为同名环境变量传给命令"
+            value={secrets}
+            onChange={(value) => {
+              setSecrets(value)
+              emit({ secrets: value })
+            }}
+            mono
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
+function PrecheckSummary({ trigger }: { trigger: Trigger }) {
+  if (trigger.precheck === null) return null
+  return (
+    <div className="flex flex-col gap-1 text-xs text-muted">
+      <div>
+        前置检查 · {FIRE_WHEN_LABELS[trigger.precheck.fire_when]}
+        {trigger.last_checked_at && <> · 上次检查 {formatTime(trigger.last_checked_at)}</>}
+      </div>
+      <pre className={CODE_BLOCK}>{trigger.precheck.command}</pre>
+    </div>
   )
 }
 
@@ -172,19 +265,23 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
   const [editing, setEditing] = useState(false)
   const [prompt, setPrompt] = useState(trigger.prompt)
   const [config, setConfig] = useState<Config | null>(trigger.config)
+  const [precheck, setPrecheck] = useState<Precheck | null>(trigger.precheck)
   const action = useAction()
 
   // 每次进入编辑都从已保存的值开始：取消过的草稿不会在下一次保存时被提交
   function startEditing() {
     setPrompt(trigger.prompt)
     setConfig(trigger.config)
+    setPrecheck(trigger.precheck)
     setEditing(true)
   }
 
+  const precheckChanged = JSON.stringify(precheck) !== JSON.stringify(trigger.precheck)
   const save = () =>
     action.run(async () => {
       if (config === null) throw new Error('配置不合法')
-      await api.updateTrigger(trigger.id, { prompt, config })
+      // 前置检查没改就不提交：改了会重置 changed 模式的基线
+      await api.updateTrigger(trigger.id, { prompt, config, ...(precheckChanged ? { precheck } : {}) })
       setEditing(false)
       onChange()
     })
@@ -228,21 +325,32 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
             </>
           )}
         </div>
-        {trigger.last_error && <ErrorAlert title="触发失败，已自动停用" error={trigger.last_error} />}
+        {trigger.last_error && (
+          <ErrorAlert title={trigger.enabled ? '前置检查出错，本次未触发' : '触发失败，已自动停用'} error={trigger.last_error} />
+        )}
         {editing ? (
           <>
             <view.ConfigEditor config={trigger.config} onChange={setConfig} />
+            <PrecheckEditor precheck={trigger.precheck} onChange={setPrecheck} />
             <TextAreaInput label="处理说明" value={prompt} onChange={setPrompt} rows={5} />
           </>
         ) : (
-          <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
+          <>
+            <PrecheckSummary trigger={trigger} />
+            <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
+          </>
         )}
         <ErrorAlert error={action.error} />
       </Card.Content>
       <Card.Footer className="flex flex-wrap gap-2">
         {editing ? (
           <>
-            <ActionButton size="sm" isDisabled={config === null} isPending={action.busy} onPress={() => void save()}>
+            <ActionButton
+              size="sm"
+              isDisabled={config === null || (precheck !== null && !precheck.command.trim())}
+              isPending={action.busy}
+              onPress={() => void save()}
+            >
               保存
             </ActionButton>
             <Button size="sm" variant="tertiary" onPress={() => setEditing(false)}>
@@ -261,8 +369,8 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
               isDisabled={action.busy || !trigger.enabled}
               onPress={() =>
                 void action.run(async () => {
-                  await api.runTrigger(trigger.id)
-                  toast.success('已触发')
+                  const { session_id } = await api.runTrigger(trigger.id)
+                  toast.success(session_id === null ? '前置检查没有发现要处理的事，未调用 agent' : '已触发')
                   onChange()
                 })
               }
@@ -288,6 +396,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   const [agentId, setAgentId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
   const [config, setConfig] = useState<Config | null>(kind ? viewOf(kind).emptyConfig : {})
+  const [precheck, setPrecheck] = useState<Precheck | null>(null)
   const action = useAction()
   const view = kind ? viewOf(kind) : null
 
@@ -295,7 +404,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
     const ok = await action.run(async () => {
       if (kind === null || agentId === null) throw new Error('请选择触发方式和 agent')
       if (config === null) throw new Error('配置不合法')
-      await api.createTrigger({ name, agent_id: asAgentId(agentId), kind, prompt, config })
+      await api.createTrigger({ name, agent_id: asAgentId(agentId), kind, prompt, config, precheck })
       toast.success('触发器已创建')
     })
     if (ok) {
@@ -332,6 +441,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
         options={(agents ?? []).map((a) => ({ id: a.id, label: a.name }))}
       />
       {view && kind && <view.ConfigEditor key={kind} config={viewOf(kind).emptyConfig} onChange={setConfig} />}
+      <PrecheckEditor precheck={null} onChange={setPrecheck} />
       <TextAreaInput
         label="处理说明"
         hint="每次触发都在新会话中执行；事件内容（如 webhook 的请求体）附在其后。触发的会话不会自动推送，需要时在说明里要求 agent 调用 notify_user"
@@ -340,7 +450,11 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
         rows={5}
       />
       <ErrorAlert error={action.error} />
-      <ActionButton isDisabled={!name || !agentId || !prompt || !kind || config === null} isPending={action.busy} onPress={() => void create()}>
+      <ActionButton
+        isDisabled={!name || !agentId || !prompt || !kind || config === null || (precheck !== null && !precheck.command.trim())}
+        isPending={action.busy}
+        onPress={() => void create()}
+      >
         创建
       </ActionButton>
     </CollapsibleForm>
@@ -366,7 +480,7 @@ export default function Triggers() {
               <div className="flex flex-col gap-3">
                 {list.map((t) => (
                   <TriggerItem
-                    key={`${t.id}-${t.prompt}-${JSON.stringify(t.config)}`}
+                    key={`${t.id}-${t.prompt}-${JSON.stringify(t.config)}-${JSON.stringify(t.precheck)}`}
                     trigger={t}
                     agents={agents.data}
                     onChange={() => void triggers.reload()}

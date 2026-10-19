@@ -19,9 +19,10 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from muliao.db import Database, utcnow
-from muliao.errors import DomainError, InvalidInput
+from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 from muliao.models import Trigger
 from muliao.runtime.tasks import Clock
+from muliao.triggers.precheck import PrecheckFailed
 from muliao.triggers.service import TriggerService
 
 log = logging.getLogger(__name__)
@@ -72,7 +73,11 @@ def _skip_reason(trigger: Trigger | None, now: datetime) -> str | None:
 
 
 class ScheduleRunner:
-    """定时触发的激活机制：到点调用 TriggerService.fire_in。"""
+    """定时触发的激活机制：到点推进下次时间，再调用 TriggerService.fire。
+
+    用最终正确性换简化：推进下次时间与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）。进程恰好死在
+    两者之间时这一次被跳过（至多一次），换来的是检查失败或很慢都不会让同一个时刻反复触发。
+    """
 
     def __init__(self, db: Database, triggers: TriggerService, kind: ScheduleKind, clock: Clock = utcnow):
         self._db = db
@@ -88,12 +93,24 @@ class ScheduleRunner:
             for t in await self._triggers.list(kind=KIND, enabled_only=True)
             if next_run_at(t.state) <= now
         ]
-        for trigger_id in due:
-            try:
-                await self._fire(trigger_id, now)
-            except DomainError as e:
-                await self._disable(trigger_id, f"{type(e).__name__}: {e}")
+        # 到期的触发器并发执行：一个慢的前置检查不拖住同一轮里的其他触发器。意外的异常（契约之外）让整组取消并上抛，
+        # 由后台循环的崩溃处理暴露，不会留下没人接收的异常
+        async with asyncio.TaskGroup() as group:
+            for trigger_id in due:
+                group.create_task(self._fire_one(trigger_id, now))
         return len(due)
+
+    async def _fire_one(self, trigger_id: int, now: datetime) -> None:
+        try:
+            await self._fire(trigger_id, now)
+        except PrecheckFailed:
+            # 已记在触发器上；脚本的故障往往是暂时的，保持启用，下次照常检查
+            pass
+        except (Conflict, NotFound) as e:
+            # 推进时间之后、触发之前被用户停用或删除：不是触发失败，不覆盖失败原因
+            log.info("scheduled fire skipped: %s", e, extra={"trigger_id": trigger_id})
+        except DomainError as e:
+            await self._disable(trigger_id, f"{type(e).__name__}: {e}")
 
     async def _fire(self, trigger_id: int, now: datetime) -> None:
         async with self._db.transaction() as s:
@@ -115,7 +132,7 @@ class ScheduleRunner:
                     "scheduled fire skipped: previous run still in progress", extra={"trigger": trigger.name}
                 )
                 return
-            await self._triggers.fire_in(s, trigger, None, None)
+        await self._triggers.fire(trigger_id)
 
     async def _disable(self, trigger_id: int, error: str) -> None:
         async with self._db.transaction() as s:
