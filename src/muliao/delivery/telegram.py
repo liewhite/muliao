@@ -1,5 +1,9 @@
+import logging
+
 from muliao.delivery.base import Notification
 from muliao.telegram import TelegramClient
+
+log = logging.getLogger(__name__)
 
 
 class TelegramDelivery:
@@ -12,3 +16,7 @@ class TelegramDelivery:
         if notification.target is None:
             raise ValueError("telegram notification requires a target chat id")
         await self._client.send_message(notification.target, notification.body)
+        log.info(
+            "telegram message sent",
+            extra={"chat_id": notification.target, "session_id": notification.session_id},
+        )

@@ -1,6 +1,5 @@
 """通知投递：Notifier 在业务事务里写 deliver task；DeliverHandler 由任务队列驱动，按 channel 分派给 Delivery 实现。"""
 
-import logging
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
@@ -9,8 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.db import Database
 from muliao.models import DeliveryChannel, Task, TaskKind
 from muliao.runtime.tasks import Commit, TaskQueue, deliver_lane, no_commit
-
-log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -59,10 +56,7 @@ class DeliverHandler:
         delivery = self._deliveries.get(DeliveryChannel(notification.channel))
         if delivery is None:
             raise RuntimeError(f"delivery channel {notification.channel!r} is not configured")
+        # 各 Delivery 自己记录真实结果（实际送达几台设备、是否被丢弃）
         await delivery.send(notification)
-        log.info(
-            "notification delivered",
-            extra={"channel": notification.channel, "session_id": notification.session_id},
-        )
 
         return no_commit

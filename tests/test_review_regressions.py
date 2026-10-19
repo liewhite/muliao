@@ -196,3 +196,15 @@ async def test_agent_referenced_by_config_cannot_be_deleted(settings, models):
     finally:
         await c.http.aclose()
         await c.db.engine.dispose()
+
+
+def test_vapid_private_key_is_owner_only(tmp_path):
+    from muliao.delivery.webpush import VapidKeys
+
+    path = tmp_path / "vapid.pem"
+    VapidKeys(path)
+    assert path.stat().st_mode & 0o777 == 0o600
+
+    path.chmod(0o644)  # 旧版本生成的宽权限文件
+    VapidKeys(path)
+    assert path.stat().st_mode & 0o777 == 0o600

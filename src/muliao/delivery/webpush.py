@@ -36,7 +36,14 @@ class VapidKeys:
             key.generate_keys()
             key_path.parent.mkdir(parents=True, exist_ok=True)
             key.save_key(str(key_path))
+            key_path.chmod(0o600)
             log.info("generated VAPID key", extra={"path": str(key_path)})
+        if key_path.stat().st_mode & 0o077:
+            # 私钥只应属主可读
+            log.warning(
+                "VAPID private key was readable by others, restricting to 0600", extra={"path": str(key_path)}
+            )
+            key_path.chmod(0o600)
         self.vapid = Vapid02.from_file(str(key_path))
         raw = self.vapid.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
         # 浏览器 PushManager.subscribe 的 applicationServerKey
@@ -93,18 +100,30 @@ class WebPushDelivery:
         )
         transient: list[str] = []
         rejected: list[int] = []
+        sent = gone = 0
         for sub in subs:
             status = await asyncio.to_thread(self._push, sub, data)
             if status is None:
+                sent += 1
                 continue
             if status in _GONE:
                 log.info("push subscription gone, removing it", extra={"status": status})
                 await self._subs.remove(sub.endpoint)
+                gone += 1
             elif status in _TRANSIENT:
                 transient.append(str(status))
             else:
                 # 其余 4xx（400/401/403/413…）多半是本端问题（VAPID 声明、时钟、载荷），不能删用户的订阅
                 rejected.append(status)
+        log.info(
+            "web push sent",
+            extra={
+                "session_id": notification.session_id,
+                "sent": sent,
+                "gone": gone,
+                "failed": len(transient) + len(rejected),
+            },
+        )
         if rejected:
             raise RuntimeError(f"push service rejected {len(rejected)} subscriptions with HTTP {rejected}")
         if transient:
