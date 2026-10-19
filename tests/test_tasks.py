@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from muliao.db import utcnow
 from muliao.models import TaskKind, TaskStatus
+from muliao.runtime.tasks import no_commit
 
 
 async def _enqueue(container, lane: str, agent: str):
@@ -9,10 +10,6 @@ async def _enqueue(container, lane: str, agent: str):
         return container.queue.enqueue(
             s, kind=TaskKind.DELIVER, lane=lane, agent_id=agent, session_id=None, payload={}
         )
-
-
-async def _noop(_s):
-    return None
 
 
 async def test_lane_is_fifo_and_exclusive_while_other_lanes_run(container, make_agent):
@@ -27,7 +24,7 @@ async def test_lane_is_fifo_and_exclusive_while_other_lanes_run(container, make_
     assert (first.id, second.id) == (a1.id, b1.id)
     assert await q.claim() is None  # a2 被 a1 阻塞
 
-    await q.complete(first.id, _noop)
+    await q.complete(first.id, no_commit)
     third = await q.claim()
     assert third.id == a2.id
 

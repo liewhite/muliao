@@ -195,10 +195,11 @@ class CompactionHandler:
             extra={**ctx, "compacted_turns": len(chosen), "through_message_id": through, "more": more},
         )
 
-        async def commit(s: AsyncSession) -> None:
+        async def commit(s: AsyncSession) -> TaskStatus:
             s.add(Compaction(session_id=session_id, through_message_id=through, summary=summary))
             if more:
                 # 超出单次上限的轮次留给下一次压缩，直到收敛
                 await self._scheduler.request(s, session_id, agent.id)
+            return TaskStatus.DONE
 
         return commit

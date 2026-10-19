@@ -118,15 +118,15 @@ class Worker:
             # 总时限：卡死的工具或模型连接不能永久占住 lane 和 worker 槽位；超时按暂时性失败重试
             async with asyncio.timeout(self._task_timeout):
                 commit = await self._handlers[task.kind].execute(task)
-            await self._queue.complete(task.id, commit)
+            outcome = await self._queue.complete(task.id, commit)
         except asyncio.CancelledError:
             log.warning("task cancelled by shutdown, will be recovered on next start", extra=ctx)
             raise
         except Exception as e:
             await self._record_failure(task, e, ctx)
         else:
-            log.info("task done", extra=ctx)
-            self._publish(task, TaskStatus.DONE)
+            log.info("task finished as %s", outcome, extra=ctx)
+            self._publish(task, outcome)
         finally:
             self._slots.release()
 

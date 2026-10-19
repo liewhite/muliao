@@ -35,8 +35,6 @@ class TaskKind(StrEnum):
     REFLECTION = "reflection"
     DELIVER = "deliver"
     COMPACTION = "compaction"
-    # 父 agent 挂起等待子 agent 后，带着结果恢复运行
-    RESUME = "resume"
 
 
 class TaskStatus(StrEnum):
@@ -44,7 +42,7 @@ class TaskStatus(StrEnum):
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
-    # 等待其他任务的结果；和 running 一样挡住同一 lane 的后续任务，结果齐了才转为 pending
+    # 一轮对话挂起，等 thread 的结果；和 running 一样挡住同一 lane 的后续任务，结果齐了转回 pending 接着执行
     WAITING = "waiting"
 
 
@@ -86,7 +84,7 @@ class Session(Base):
     origin_ref: Mapped[str | None] = mapped_column(String(64))
     # 委派产生的子会话：父会话与它在父会话内的 thread 名（模型用 thread 名指代子会话）
     parent_session_id: Mapped[str | None] = mapped_column(
-        ForeignKey("sessions.id", ondelete="SET NULL"), index=True
+        ForeignKey("sessions.id", ondelete="SET NULL", name="fk_sessions_parent_session_id"), index=True
     )
     thread: Mapped[str | None] = mapped_column(String(100))
     # 私有子会话归父会话所有：不进收件箱，用户只读，随父会话删除

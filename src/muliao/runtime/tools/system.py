@@ -4,12 +4,11 @@ from typing import Literal
 
 from pydantic import BaseModel
 from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents import AgentService
 from muliao.db import Database
 from muliao.delivery.base import Notification, Notifier
-from muliao.models import McpTransport, ReplyTo, Session
+from muliao.models import McpTransport, ReplyTo
 from muliao.ownership import Scope, owner_of, scope_of
 from muliao.runtime.conversation import Threads, validate_thread
 from muliao.runtime.mcp import McpRegistry, McpSpec
@@ -49,10 +48,9 @@ def agents_toolset(db: Database, agents: AgentService, threads: Threads) -> Func
         parent_id = _require_session(ctx)
         target = await agents.find_by_name(agent)
         async with db.transaction() as s:
-            parent = await _session(s, parent_id)
             await threads.send(
                 s,
-                parent=parent,
+                parent_id=parent_id,
                 agent=target,
                 thread=thread,
                 prompt=task,
@@ -78,8 +76,10 @@ def agents_toolset(db: Database, agents: AgentService, threads: Threads) -> Func
         thread = validate_thread(thread)
         if not message.strip():
             raise ModelRetry("message must not be empty")
+        # 现在就占用 thread：同一响应里并行的调用若争用同名 thread，冲突在这里作为可纠正的错误交回模型，
+        # 而不是到提交时才让整轮失败
         async with db.transaction() as s:
-            await threads.check(s, parent_id=parent_id, agent=target, thread=thread, private=True)
+            await threads.open(s, parent_id=parent_id, agent=target, thread=thread, private=True)
         raise CallDeferred(
             metadata={"action": "ask", "agent_id": target.id, "thread": thread, "message": message}
         )
@@ -104,7 +104,9 @@ def agents_toolset(db: Database, agents: AgentService, threads: Threads) -> Func
             case "failed":
                 return f"[failed] {state.text}"
             case "running":
-                raise CallDeferred(metadata={"action": "wait", "target_task_id": state.target_task_id})
+                raise CallDeferred(metadata={"action": "wait", "turn_id": state.turn_id})
+            case "idle":
+                raise ModelRetry(f"thread {thread!r} has no task to wait for")
 
     return ts
 
@@ -113,13 +115,6 @@ def _require_session(ctx: RunContext[RunScope]) -> str:
     if ctx.deps.session_id is None:
         raise ModelRetry("delegation is only available inside a conversation")
     return ctx.deps.session_id
-
-
-async def _session(s: AsyncSession, session_id: str) -> Session:
-    session = await s.get(Session, session_id)
-    if session is None:
-        raise RuntimeError(f"running conversation {session_id} no longer exists")
-    return session
 
 
 def notify_toolset(notifier: Notifier) -> FunctionToolset[RunScope]:

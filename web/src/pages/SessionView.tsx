@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
 import { Archive, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { agentRoute, api, type Agent, type CompactionInfo, type Item, type Session, type Task } from '../api'
+import { agentRoute, api, type Agent, type CompactionInfo, type Item, type OpenTurn as OpenTurnInfo, type Session } from '../api'
 import { useServerEvents, type RunEvent } from '../events'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
@@ -189,11 +189,10 @@ const OPEN_STATUS: Record<'pending' | 'running' | 'waiting', ReactNode> = {
   pending: '排队中…',
 }
 
-function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void }) {
+function OpenTurn({ turn: { task, prompt_in_history }, onRetry }: { turn: OpenTurnInfo; onRetry: (id: number) => void }) {
   return (
     <>
-      {/* resume 接着同一轮继续，用户消息已在历史里 */}
-      {task.kind === 'turn' && <UserBubble text={task.prompt ?? ''} pending />}
+      {!prompt_in_history && <UserBubble text={task.prompt ?? ''} pending />}
       {task.status === 'failed' ? (
         <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
           <div>这一轮失败了（尝试 {task.attempts} 次）</div>
@@ -294,7 +293,7 @@ export default function SessionView() {
       void detail.reload()
     } else if (e.session_id === id) {
       if (e.type === 'run') setLive((prev) => [...prev, e])
-      else if (e.kind === 'turn' || e.kind === 'resume' || e.kind === 'compaction') {
+      else if (e.kind === 'turn' || e.kind === 'compaction') {
         // turn 状态变化后以数据库为准重新拉取，清空临时流
         if (e.status !== 'running') setLive([])
         void detail.reload()
@@ -389,7 +388,7 @@ export default function SessionView() {
             )}
             <History items={d.items} compactions={d.compactions} />
             {d.open_turns.map((t) => (
-              <OpenTurn key={t.id} task={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
+              <OpenTurn key={t.task.id} turn={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
             ))}
             {live.length > 0 && (
               <div className="flex flex-col gap-3 opacity-90">

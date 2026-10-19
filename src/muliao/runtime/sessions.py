@@ -13,8 +13,8 @@ from muliao.errors import Conflict, NotFound
 from muliao.ids import new_id
 from muliao.models import Agent, Compaction, Message, Origin, ReplyTo, Session, Task
 from muliao.runtime.codec import load_messages
-from muliao.runtime.conversation import enqueue_turn, fail_waits_on_session
-from muliao.runtime.tasks import TaskQueue, running_task_ids
+from muliao.runtime.conversation import delete_sessions, enqueue_turn
+from muliao.runtime.tasks import TaskQueue
 
 _TITLE_MAX = 60
 
@@ -113,6 +113,12 @@ class SessionService:
             ).all()
         return list(zip([r.id for r in rows], load_messages(r.payload for r in rows), strict=True))
 
+    async def turns_with_messages(self, session_id: str) -> set[int]:
+        """已提交过消息的轮次（含挂起中的）。"""
+        async with self._db.transaction() as s:
+            query = select(Message.task_id).where(Message.session_id == session_id).distinct()
+            return set((await s.scalars(query)).all())
+
     async def compactions(self, session_id: str) -> list[Compaction]:
         async with self._db.transaction() as s:
             query = select(Compaction).where(Compaction.session_id == session_id).order_by(Compaction.id)
@@ -123,30 +129,6 @@ class SessionService:
             (await self._get(s, session_id)).unread = False
 
     async def delete(self, session_id: str) -> None:
-        """删除 session 及其私有 thread（逐层）、消息和未执行的 task。
-
-        私有 thread 只对父会话有意义，随父会话删除；公开 thread 用户可见，保留为独立会话（parent 置空）。
-        任一被删会话有 task 正在运行时拒绝，避免运行结果无处提交；等待这些会话结果的 agent 收到错误。
-        """
+        """删除 session（规则见 conversation.delete_sessions）。"""
         async with self._db.transaction() as s:
-            doomed = [await self._get(s, session_id)]
-            frontier = [session_id]
-            while frontier:
-                children = (
-                    await s.scalars(
-                        select(Session).where(
-                            Session.parent_session_id.in_(frontier), Session.private.is_(True)
-                        )
-                    )
-                ).all()
-                doomed += children
-                frontier = [c.id for c in children]
-            for session in doomed:
-                if running := await running_task_ids(s, session_id=session.id):
-                    raise Conflict(
-                        f"session {session.id} has running tasks {running}; wait for them to finish"
-                    )
-            for session in doomed:
-                await fail_waits_on_session(s, self._queue, session.id, f"session {session.id} was deleted")
-            for session in doomed:
-                await s.delete(session)
+            await delete_sessions(s, self._queue, [await self._get(s, session_id)])

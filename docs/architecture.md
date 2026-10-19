@@ -38,7 +38,7 @@ data/
 Web / cron / delegate_task / ask_agent
           │  conversation.enqueue_turn()（payload 带 prompt 与 reply_to）
           ▼
- tasks(turn | resume) ──► Worker ──► TurnHandler ──► pydantic-ai Agent.run
+ tasks(turn) ──► Worker ──► TurnHandler ──► pydantic-ai Agent.run
                                       │ 同一事务提交：
                                       ├─ messages（本轮新消息）
                                       ├─ session.unread / updated_at
@@ -46,7 +46,7 @@ Web / cron / delegate_task / ask_agent
                                       ├─ 达到阈值 → tasks(reflection)
                                       ├─ reply_to = user → tasks(deliver)
                                       ├─ 唤醒等这一轮的 waits
-                                      └─ 输出为待完成工具调用 → 挂起（见第 4 节）
+                                      └─ 输出为待完成工具调用 → 挂起为 waiting（见第 4 节）
                                                      │
                               ReflectionHandler ◄────┘     DeliverHandler ──► Web Push
 ```
@@ -103,12 +103,14 @@ agent 之间的委派有两种形态，都统一为「对某个 thread 发起一
 
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `thread`，同一父 session 内唯一）。模型只用 thread 名，不接触 session id。用同一个 thread 名再次 `ask_agent`，就是在原来的子 session 里继续，上下文保留。thread 的归属在创建时确定：私有 thread 不能再用 `delegate_task` 变成用户可见；用户可见的 thread 可以被 `ask_agent` 同步追问。
 - **结果路由按轮、不按 session**：每个 turn task 的载荷带 `reply_to`（`user` 推送给用户；`agent` 交给发起的 agent，不推送；`none` 不推送，cron 使用，由 agent 自己决定是否 `notify_user`）。同一个子 session 里，用户追问的那一轮回给用户，父 agent 发起的那一轮回给父 agent。等待关系另存在 `waits` 表里，不靠 `reply_to`。
-- **持久化挂起**：`ask_agent` / `wait_for` 抛出 pydantic-ai 的 `CallDeferred`，这一轮以「待完成的工具调用」结束并落库。提交时在同一事务里：
-  1. 为父 session 写一个状态为 `waiting` 的 `resume` task；`waiting` 和 `running` 一样会挡住同一 session 的后续任务，用户此时的消息排在它后面，不会插进「工具调用」与「工具结果」之间；
-  2. 每个挂起的调用写一行 `waits`（等待方 resume task、tool_call_id、目标 turn task）；`ask_agent` 同时给子 session 投递一轮（`reply_to = agent`）。
-- **唤醒**：目标 turn 完成时，把它的最终回答写进所有指向它的 `waits`；目标 turn 自己挂起时，等待关系转移到它的 resume task；目标彻底失败、或所在 session 被删除时，写入错误说明。某个 resume task 的全部 `waits` 都有结果后转为 `pending`，带着 `DeferredToolResults` 恢复父 agent 的运行。等待不占用 worker；目标任务有重试上限和总时限，最终一定结束，所以等待一定会收敛。
-- **一轮是原子的**：一轮可能拆成 turn → resume → resume…，消息都记在最初的 turn task（root）名下。resume 最终失败时整轮回滚：删除这一轮已提交的消息（否则历史里留下没有结果的工具调用，之后每一轮都会被模型 API 拒绝），root turn 标为失败；用户重试的是整轮，等它的父 agent 已经拿到错误，不会再收到重试的结果。
-- **删除**：删除父 session 会一并删除它的私有子 session；用户可见的子 session 保留（`parent_session_id` 置空）。删除子 session 时，等它的父 agent 收到「session 已删除」的错误结果。
+- **一轮 = 一个 turn task**：这个 task 的状态就是这一轮的状态（单一事实源）。等待、重试、`wait_for` 的判断都只看它。
+- **持久化挂起**：`ask_agent` / `wait_for` 抛出 pydantic-ai 的 `CallDeferred`，这一轮以「待完成的工具调用」结束。提交时在同一事务里写入这些消息，为每个挂起的调用写一行 `waits`（等待方 turn、tool_call_id、所等的 turn），`ask_agent` 同时给子 thread 投递一轮（`reply_to = agent`）；然后 task 转为 `waiting`。`waiting` 和 `running` 一样挡住同一 session 的后续任务：用户此时的消息排在它后面，不会插进「工具调用」与「工具结果」之间。等待不占用 worker。
+- **唤醒**：所等的 turn 完成（done）时把最终回答写进指向它的 `waits`，彻底失败或所在 session 被删除时写入错误说明。某个 turn 的全部 `waits` 都有结果后转回 `pending`；再次执行时带着 `DeferredToolResults` 接着跑，用过的 `waits` 随结果进入消息历史后删除。所等的 turn 自己挂起时仍是 `waiting`，不算结束，所以等到的一定是最终回答。若工具判断「仍在运行」之后、提交之前目标已经结束，提交时就地补上结果，task 直接回到 `pending`。
+- **收敛**：每一轮都有重试上限和总时限，最终一定 done 或 failed；删除会话（包括删除 agent 带走的会话）统一经过 `conversation.delete_sessions`，给等待方写入错误。因此等待一定会结束。
+- **thread 的占用**：`ask_agent` 在工具执行时就创建（占用）thread，同一响应里并行的调用若争用同名 thread，冲突作为可纠正的错误交回模型。占用它的那一轮回滚后，thread 可能暂时没有任何一轮，`wait_for` 会如实告诉模型。
+- **一轮是原子的**：彻底失败时整轮回滚——删除这一轮已提交的消息和等待记录（否则历史里留下没有结果的工具调用，之后每一轮都会被模型 API 拒绝），等它的 agent 收到错误。人工重试就是从 prompt 重跑整轮；已收到错误的等待方不会再收到重试的结果。已经发出的委派不随回滚撤销，重跑时模型可能再委派一次，私有 thread 里会留下上一次的问答。
+- **与反思的关系**：反思按消息 id 区间取材，可能包含一轮挂起时已提交的前半段；这一轮若随后回滚，反思已经看过被撤销的内容。只影响记忆质量，接受。
+- **删除**：删除父 session 会一并删除它的私有 thread（逐层）；用户可见的 thread 保留（`parent_session_id` 置空）。有任务正在运行时拒绝删除。
 
 ## 5. 上下文压缩
 

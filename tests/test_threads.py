@@ -10,7 +10,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy import select
 
 from muliao.errors import Conflict
-from muliao.models import Message, ReplyTo, Session, Task, TaskKind, TaskStatus
+from muliao.models import Message, Session, Task, TaskKind, TaskStatus, Wait
 from tests.scripted import scripted
 from tests.test_flow import drain, last_user_prompt, start, tasks_of, tool_returns
 
@@ -64,6 +64,16 @@ async def eventually[T](probe: Callable[[], Awaitable[T]]) -> T:
             await asyncio.sleep(0.02)
 
 
+async def turn_in(container, session_id: str, status: TaskStatus) -> Task | None:
+    """session 里处于给定状态的那一轮。"""
+    async with container.db.transaction() as s:
+        return await s.scalar(
+            select(Task).where(
+                Task.session_id == session_id, Task.kind == TaskKind.TURN, Task.status == status
+            )
+        )
+
+
 async def threads_of(container, parent_id: str) -> list[Session]:
     return await container.sessions.threads(parent_id)
 
@@ -110,7 +120,7 @@ async def test_ask_agent_waits_for_answer_and_follow_up_keeps_thread_context(con
     assert sorted(set(task_ids)) == turns
 
 
-async def test_parallel_asks_resume_once_with_all_answers(container, make_agent, models):
+async def test_parallel_asks_resume_with_all_answers(container, make_agent, models):
     lead = (await make_agent("lead", model="l")).id
     await make_agent("a", model="a")
     await make_agent("b", model="b")
@@ -130,7 +140,9 @@ async def test_parallel_asks_resume_once_with_all_answers(container, make_agent,
     await drain(container)
 
     assert await last_answer(container, parent.id) == "both: A x | B y"
-    assert len(await tasks_of(container, TaskKind.RESUME)) == 1
+    # 恢复时用过的等待记录随结果进入历史后清除
+    async with container.db.transaction() as s:
+        assert (await s.scalars(select(Wait))).all() == []
 
 
 async def test_delegate_then_wait_for_running_thread_suspends_until_it_finishes(
@@ -148,8 +160,7 @@ async def test_delegate_then_wait_for_running_thread_suspends_until_it_finishes(
 
     parent = await start(container, lead, "need report")
     drained = asyncio.create_task(drain(container))
-    resumes = await eventually(lambda: tasks_of(container, TaskKind.RESUME))
-    assert resumes[0].status == TaskStatus.WAITING
+    await eventually(lambda: turn_in(container, parent.id, TaskStatus.WAITING))
     gate.set()
     await drained
 
@@ -161,7 +172,7 @@ async def test_delegate_then_wait_for_running_thread_suspends_until_it_finishes(
     assert sorted(d.session_id for d in deliveries) == sorted([parent.id, child.id])
 
 
-async def test_wait_for_finished_thread_returns_immediately(container, make_agent, models):
+async def test_wait_for_finished_thread_returns_immediately(container, make_agent, models, caplog):
     lead = (await make_agent("lead", model="l")).id
     await make_agent("worker", model="w")
     models.models["w"] = echo("did")
@@ -178,7 +189,7 @@ async def test_wait_for_finished_thread_returns_immediately(container, make_agen
     await drain(container)
 
     assert await last_answer(container, parent.id) == "result: did job"
-    assert await tasks_of(container, TaskKind.RESUME) == []
+    assert "turn suspended" not in caplog.messages
 
 
 async def test_failed_child_turn_is_returned_as_failed_result(container, make_agent, models):
@@ -328,7 +339,7 @@ async def test_waiting_turn_blocks_its_lane_until_resumed(container, make_agent,
     )
     parent = await start(container, lead, "go")
     drained = asyncio.create_task(drain(container))
-    await eventually(lambda: tasks_of(container, TaskKind.RESUME))
+    await eventually(lambda: turn_in(container, parent.id, TaskStatus.WAITING))
     followup = await container.sessions.reply(parent.id, "more")
     await asyncio.sleep(0.2)
     async with container.db.transaction() as s:
@@ -345,20 +356,162 @@ async def test_waiting_turn_blocks_its_lane_until_resumed(container, make_agent,
     assert texts == ["first: slow answer", "second more"]
 
 
-async def test_resume_failure_rolls_back_whole_turn(container, make_agent, models):
+async def test_failed_suspended_turn_rolls_back_and_retry_reruns_whole_turn(container, make_agent, models):
     lead = (await make_agent("lead", model="l")).id
     await make_agent("worker", model="w")
+    models.models["w"] = echo("did")
+    failures = {"left": 1}
 
-    def fail(_m):
-        raise ModelHTTPError(status_code=400, model_name="l", body="bad request")
+    def answer_or_fail(messages: list[ModelMessage]) -> ModelResponse:
+        if failures["left"]:
+            failures["left"] -= 1
+            raise ModelHTTPError(status_code=400, model_name="l", body="bad request")
+        return answer_with_tool_results("final")(messages)
 
-    models.models["l"] = steps(call("ask_agent", {"agent": "worker", "message": "q", "thread": "t"}), fail)
+    models.models["l"] = steps(
+        call("ask_agent", {"agent": "worker", "message": "q", "thread": "t"}), answer_or_fail
+    )
     parent = await start(container, lead, "go")
     await drain(container)
 
+    # 一轮是原子的：挂起前提交的工具调用随失败一起撤销，历史里不留半截
     assert await container.sessions.history(parent.id) == []
-    root = next(t for t in await tasks_of(container, TaskKind.TURN) if t.session_id == parent.id)
-    assert root.status == TaskStatus.FAILED and "resumed after waiting" in root.error
-    [resume] = await tasks_of(container, TaskKind.RESUME)
-    assert resume.status == TaskStatus.FAILED
-    assert resume.payload["reply_to"] == ReplyTo.USER
+    failed = await turn_in(container, parent.id, TaskStatus.FAILED)
+    assert failed is not None and "400" in failed.error
+
+    await container.queue.retry(failed.id)
+    await drain(container)
+
+    assert await last_answer(container, parent.id) == "final: did q"
+    [child] = await threads_of(container, parent.id)
+    assert len([t for t in await tasks_of(container, TaskKind.TURN) if t.session_id == child.id]) == 2
+
+
+async def test_wait_for_sees_result_of_manually_retried_thread(container, make_agent, models):
+    lead = (await make_agent("lead", model="l")).id
+    await make_agent("worker", model="w")
+    failures = {"left": 1}
+
+    def flaky(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if failures["left"]:
+            failures["left"] -= 1
+            raise ModelHTTPError(status_code=400, model_name="w", body="bad request")
+        return ModelResponse(parts=[TextPart("second try worked")])
+
+    models.models["w"] = scripted(flaky)
+    models.models["l"] = steps(
+        call("delegate_task", {"agent": "worker", "task": "job", "thread": "t"}),
+        lambda _m: ModelResponse(parts=[TextPart("delegated")]),
+        call("wait_for", {"thread": "t"}, "c2"),
+        answer_with_tool_results("result"),
+    )
+    parent = await start(container, lead, "start")
+    await drain(container)
+    [child] = await threads_of(container, parent.id)
+    await container.queue.retry((await turn_in(container, child.id, TaskStatus.FAILED)).id)
+    await drain(container)
+    await container.sessions.reply(parent.id, "and?")
+    await drain(container)
+
+    assert await last_answer(container, parent.id) == "result: second try worked"
+
+
+async def test_waiting_on_a_suspended_thread_gets_its_final_answer(container, make_agent, models):
+    """所等的那一轮自己也挂起了（嵌套 ask）：要等到它给出最终回答，而不是拿到中间的那段话。"""
+    lead = (await make_agent("lead", model="l")).id
+    await make_agent("mid", model="m")
+    await make_agent("leaf", model="f")
+    gate = asyncio.Event()
+    models.models["f"] = gated(gate, "leaf fact")
+    models.models["m"] = steps(
+        lambda _m: ModelResponse(
+            parts=[
+                TextPart("let me ask leaf first"),
+                ToolCallPart(
+                    "ask_agent", {"agent": "leaf", "message": "fact?", "thread": "leaf"}, tool_call_id="m1"
+                ),
+            ]
+        ),
+        answer_with_tool_results("mid says"),
+    )
+    models.models["l"] = steps(
+        call("delegate_task", {"agent": "mid", "task": "research", "thread": "m"}),
+        lambda _m: ModelResponse(parts=[TextPart("delegated")]),
+        call("wait_for", {"thread": "m"}, "c2"),
+        answer_with_tool_results("lead got"),
+    )
+    parent = await start(container, lead, "go")
+    drained = asyncio.create_task(drain(container))
+
+    async def mid_waiting() -> Task | None:
+        threads = await threads_of(container, parent.id)
+        return threads and await turn_in(container, threads[0].id, TaskStatus.WAITING)
+
+    await eventually(mid_waiting)
+    # 第一轮结束后追问：wait_for 等的正是那个已挂起的 thread
+    await container.sessions.reply(parent.id, "result?")
+    await eventually(lambda: turn_in(container, parent.id, TaskStatus.WAITING))
+    gate.set()
+    await drained
+
+    assert await last_answer(container, parent.id) == "lead got: mid says: leaf fact"
+
+
+async def test_deleting_awaited_agent_wakes_waiter_with_error(container, make_agent, models):
+    lead = (await make_agent("lead", model="l")).id
+    slow = (await make_agent("slow", model="s")).id
+    models.models["l"] = steps(
+        call("ask_agent", {"agent": "slow", "message": "do", "thread": "t"}),
+        answer_with_tool_results("outcome"),
+    )
+    parent = await start(container, lead, "go")
+    # 只执行父 agent 这一轮：挂起后子任务还在排队时删除目标 agent
+    worker = asyncio.create_task(container.worker.run_forever())
+    await eventually(lambda: turn_in(container, parent.id, TaskStatus.WAITING))
+    worker.cancel()
+    await asyncio.gather(worker, return_exceptions=True)
+    await container.queue.recover()
+    [child] = await threads_of(container, parent.id)
+
+    await container.agents.delete(slow)
+    await drain(container)
+
+    assert (await last_answer(container, parent.id)).startswith(
+        f"outcome: [failed] session {child.id} was deleted"
+    )
+
+
+async def test_parallel_calls_competing_for_one_thread_name_are_corrected_by_model(
+    container, make_agent, models
+):
+    lead = (await make_agent("lead", model="l")).id
+    await make_agent("a", model="a")
+    await make_agent("b", model="b")
+    models.models["a"] = echo("A")
+    retries: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        from pydantic_ai.messages import ModelRequest, RetryPromptPart
+
+        last = messages[-1]
+        if isinstance(last, ModelRequest):
+            retries.extend(str(p.content) for p in last.parts if isinstance(p, RetryPromptPart))
+        if sum(isinstance(m, ModelResponse) for m in messages) == 0:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "ask_agent", {"agent": "a", "message": "x", "thread": "same"}, tool_call_id="c1"
+                    ),
+                    ToolCallPart(
+                        "ask_agent", {"agent": "b", "message": "y", "thread": "same"}, tool_call_id="c2"
+                    ),
+                ]
+            )
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["l"] = scripted(fn)
+    parent = await start(container, lead, "go")
+    await drain(container)
+
+    assert any("belongs to another agent" in r for r in retries)
+    assert await turn_in(container, parent.id, TaskStatus.DONE) is not None

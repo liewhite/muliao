@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
-from muliao.models import Agent, Message, Reflection, Session, Task
+from muliao.models import Agent, Message, Reflection, Session, Task, TaskStatus
 from muliao.runtime.codec import load_messages
 from muliao.runtime.runner import AgentRuntime, RunProfile
 from muliao.runtime.tasks import Commit
@@ -102,7 +102,7 @@ class ReflectionHandler:
             # 区间内的 session 都被删除了：如实记录，不浪费一次模型调用
             output, messages = "Skipped: no messages left in this window (sessions were deleted).", "[]"
 
-        async def commit(s: AsyncSession) -> None:
+        async def commit(s: AsyncSession) -> TaskStatus:
             s.add(
                 Reflection(
                     agent_id=agent.id,
@@ -112,5 +112,6 @@ class ReflectionHandler:
                     messages=messages,
                 )
             )
+            return TaskStatus.DONE
 
         return commit

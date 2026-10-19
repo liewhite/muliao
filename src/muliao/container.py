@@ -130,6 +130,7 @@ def build_container(
         settings.agents_dir,
         memory,
         model_checker or models.check,
+        queue,
     )
     sessions = SessionService(db, queue)
     threads = Threads(queue)
@@ -172,10 +173,8 @@ def build_container(
         resolve_model=resolve_model or models.resolve,
     )
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
-    turns = TurnHandler(db, runtime, turn_profile, queue, notifier, compaction, threads)
     handlers: dict[TaskKind, TaskHandler] = {
-        TaskKind.TURN: turns,
-        TaskKind.RESUME: turns,
+        TaskKind.TURN: TurnHandler(db, runtime, turn_profile, queue, notifier, compaction, threads),
         TaskKind.COMPACTION: CompactionHandler(
             db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),

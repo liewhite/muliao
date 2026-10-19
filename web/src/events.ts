@@ -17,8 +17,7 @@ export interface TaskEvent {
   type: 'task'
   task_id: number
   kind: TaskKind
-  // worker 只发布执行相关的状态；waiting 由挂起写入，不经过 worker
-  status: Exclude<TaskStatus, 'waiting'>
+  status: TaskStatus
   session_id: string | null
   agent: string
   error: string | null

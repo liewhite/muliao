@@ -14,9 +14,10 @@ from muliao.db import Database
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.evolution.memory import MemoryStore
 from muliao.ids import new_agent_id
-from muliao.models import Agent
+from muliao.models import Agent, Session
 from muliao.naming import normalize_agent_name
-from muliao.runtime.tasks import running_task_ids
+from muliao.runtime.conversation import delete_sessions
+from muliao.runtime.tasks import TaskQueue, running_task_ids
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,9 @@ class AgentService:
         agents_dir: Path,
         memory: MemoryStore,
         model_checker: Callable[[str], None],
+        queue: TaskQueue,
     ):
+        self._queue = queue
         self._db = db
         self._agents_dir = agents_dir
         self._memory = memory
@@ -121,6 +124,9 @@ class AgentService:
             agent = await self._get(s, agent_id)
             if running := await running_task_ids(s, agent_id=agent_id):
                 raise Conflict(f"agent {agent.name!r} has running tasks {running}; wait for them to finish")
+            # 先按会话删除规则处理它的会话（等它的其他 agent 收到错误、其下私有 thread 一并删除），再级联删除其余数据
+            sessions = list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())
+            await delete_sessions(s, self._queue, sessions)
             await s.delete(agent)
         root = self.root(agent_id)
         if root.exists():
