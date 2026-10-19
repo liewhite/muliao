@@ -43,7 +43,7 @@ def agents_toolset(
             name=target.name,
             description=target.description,
             model=target.model,
-            instructions=await prompts.current(target.id),
+            instructions=prompts.current(target.id),
             reflect_every=target.reflect_every,
             tool_groups=target.tool_groups,
             available_tool_groups=list(agents.defaults.tool_groups),
@@ -139,7 +139,7 @@ def agents_toolset(
     @ts.tool_plain
     async def get_public_prompt() -> str:
         """Show the public prompt: shared instructions placed before every agent's own instructions."""
-        return await prompts.current(None) or "(no public prompt)"
+        return prompts.current(None) or "(no public prompt)"
 
     @ts.tool
     async def set_public_prompt(ctx: RunContext[RunScope], content: str) -> str:
@@ -149,7 +149,7 @@ def agents_toolset(
         Args:
             content: The new full public prompt; empty removes it.
         """
-        revision = await prompts.set(None, content, ctx.deps.agent_id)
-        return "public prompt unchanged" if revision is None else "public prompt updated"
+        changed = await prompts.set(None, content, ctx.deps.agent_id)
+        return "public prompt updated" if changed else "public prompt unchanged"
 
     return ts

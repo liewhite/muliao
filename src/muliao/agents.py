@@ -10,12 +10,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.db import Database
+from muliao.db import Database, utcnow
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.prompts import PromptStore
 from muliao.ids import new_agent_id
-from muliao.models import Agent, PromptRevision
+from muliao.models import Agent
 from muliao.naming import normalize_agent_name
 from muliao.resources import ResourceRepo
 
@@ -116,13 +116,10 @@ class AgentService:
                 tool_groups=tool_groups,
             )
             s.add(agent)
-            await s.flush()
-            # 指令的第一版：之后当前指令永远是最新一版
-            s.add(PromptRevision(owner=agent.id, content=spec.instructions, author=author))
             # 目录与数据库行同事务创建：目录创建失败则回滚
             self.workspace(agent.id).mkdir(parents=True, exist_ok=True)
-            memory = self._memory.init(agent.id)
-        await self._repo.commit([memory], f"create agent {agent.id}", author)
+            files = [self._memory.init(agent.id), self._prompts.init(agent.id, spec.instructions)]
+        await self._repo.commit(files, f"create agent {agent.id}", author)
         return agent
 
     async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> Agent:
@@ -142,8 +139,11 @@ class AgentService:
             agent.reflect_every = reflect_every
             # JSON 列只在整体赋值时被追踪
             agent.tool_groups = list(tool_groups)
-            if patch.instructions is not None:
-                await self._prompts.set_in(s, agent_id, patch.instructions, author)
+        # 指令在资源仓库里，单独提交；数据库这边已提交，提交失败时错误可见、文件留待下一次提交
+        if patch.instructions is not None and await self._prompts.set(agent_id, patch.instructions, author):
+            async with self._db.transaction() as s:
+                agent = await self._get(s, agent_id)
+                agent.updated_at = utcnow()
         return agent
 
     async def _get(self, s: AsyncSession, agent_id: str) -> Agent:

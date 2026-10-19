@@ -132,8 +132,12 @@ export interface Trigger {
   last_error: string | null
 }
 
-export interface PromptRevision {
-  id: number
+/** agent 能改的、有版本历史的文本资源 */
+export type ResourceKind = 'prompt' | 'memory'
+
+export interface Revision {
+  /** git 提交哈希 */
+  rev: string
   content: string
   /** "user"，或做出修改的 agent 的 id */
   author: string
@@ -275,10 +279,12 @@ export const api = {
   generateTriggerToken: (id: number) => post<{ token: string }>(`/api/triggers/${id}/webhook/token`),
   deleteTrigger: (id: number) => del(`/api/triggers/${id}`),
   /** owner 为空时是公共 prompt 的历史；新的在前，第一条即当前生效 */
-  promptHistory: (owner: AgentId | null) =>
-    get<PromptRevision[]>('/api/prompts', owner === null ? {} : { owner }),
+  /** owner 为空时是公共资源；新的在前，第一条即当前生效 */
+  history: (kind: ResourceKind, owner: AgentId | null) =>
+    get<Revision[]>(`/api/resources/${kind}/history`, owner === null ? {} : { owner }),
+  restore: (kind: ResourceKind, owner: AgentId | null, rev: string) =>
+    post<void>(`/api/resources/${kind}/restore`, { owner, rev }),
   setPublicPrompt: (content: string) => put<void>('/api/prompts/public', { content }),
-  restorePrompt: (revisionId: number) => post<void>(`/api/prompt-revisions/${revisionId}/restore`),
   mcp: () => get<McpServer[]>('/api/mcp'),
   addMcp: (input: McpInput) => post<McpServer>('/api/mcp', input),
   probeMcp: (owner: AgentId | null, name: string) => post<string[]>('/api/mcp/tools', undefined, { owner, name }),

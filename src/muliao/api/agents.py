@@ -5,8 +5,8 @@ from pydantic import BaseModel
 
 from muliao.agents import AgentPatch, AgentSpec
 from muliao.api.deps import C
-from muliao.evolution.prompts import USER
 from muliao.models import Agent
+from muliao.resources import USER
 from muliao.runtime.reflection import list_reflections_of
 
 router = APIRouter()
@@ -60,7 +60,7 @@ class AgentOut(BaseModel):
 
 
 async def _out(c: C, agent: Agent) -> AgentOut:
-    return AgentOut.of(agent, await c.prompts.current(agent.id))
+    return AgentOut.of(agent, c.prompts.current(agent.id))
 
 
 class AgentDefaultsOut(BaseModel):
@@ -80,8 +80,7 @@ async def agent_defaults(c: C) -> AgentDefaultsOut:
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
     agents = await c.agents.list()
-    instructions = await c.prompts.current_many([a.id for a in agents])
-    return [AgentOut.of(a, instructions[a.id]) for a in agents]
+    return [AgentOut.of(a, c.prompts.current(a.id)) for a in agents]
 
 
 @router.post("/agents", status_code=201)

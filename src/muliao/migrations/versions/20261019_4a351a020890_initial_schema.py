@@ -5,7 +5,7 @@
 
 Revision ID: 4a351a020890
 Revises:
-Create Date: 2026-10-19 19:36:33.845461
+Create Date: 2026-10-19 19:46:56.700331
 """
 
 from collections.abc import Sequence
@@ -65,20 +65,6 @@ def upgrade() -> None:
             "uq_mcp_private", ["owner", "name"], unique=True, sqlite_where=sa.text("owner IS NOT NULL")
         )
         batch_op.create_index("uq_mcp_public", ["name"], unique=True, sqlite_where=sa.text("owner IS NULL"))
-
-    op.create_table(
-        "prompt_revisions",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("owner", sa.String(length=32), nullable=True),
-        sa.Column("content", sa.Text(), nullable=False),
-        sa.Column("author", sa.String(length=32), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["owner"], ["agents.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sqlite_autoincrement=True,
-    )
-    with op.batch_alter_table("prompt_revisions", schema=None) as batch_op:
-        batch_op.create_index("ix_prompt_revisions_owner_id", ["owner", "id"], unique=False)
 
     op.create_table(
         "reflections",
@@ -255,10 +241,6 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f("ix_reflections_agent_id"))
 
     op.drop_table("reflections")
-    with op.batch_alter_table("prompt_revisions", schema=None) as batch_op:
-        batch_op.drop_index("ix_prompt_revisions_owner_id")
-
-    op.drop_table("prompt_revisions")
     with op.batch_alter_table("mcp_servers", schema=None) as batch_op:
         batch_op.drop_index("uq_mcp_public", sqlite_where=sa.text("owner IS NULL"))
         batch_op.drop_index("uq_mcp_private", sqlite_where=sa.text("owner IS NOT NULL"))

@@ -29,7 +29,7 @@ import { ActionButton,
   useConfirm,
   useLoad,
 } from '../ui'
-import { PromptHistory } from './Prompts'
+import { ResourceHistory } from './Prompts'
 import { SkillList } from './Skills'
 
 export function AgentList() {
@@ -232,6 +232,7 @@ function MemoryEditor({ agentId }: { agentId: AgentId }) {
           >
             保存记忆
           </ActionButton>
+          <ResourceHistory kind="memory" owner={agentId} current={m.content} onRestored={() => void memory.reload()} />
         </div>
       )}
     </Loading>
@@ -346,7 +347,7 @@ export function AgentDetail() {
                       />
                     )}
                   </Loading>
-                  <PromptHistory owner={a.id} current={a.instructions} onRestored={() => void agent.reload()} />
+                  <ResourceHistory kind="prompt" owner={a.id} current={a.instructions} onRestored={() => void agent.reload()} />
                 </Card.Content>
               </Card>
               <ErrorAlert error={action.error} />

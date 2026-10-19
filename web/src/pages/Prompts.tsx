@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Disclosure, toast } from '@heroui/react'
 import { History, RotateCcw } from 'lucide-react'
-import { api, type AgentId } from '../api'
+import { api, type AgentId, type ResourceKind } from '../api'
 import {
   ActionButton,
   EmptyHint,
@@ -18,16 +18,26 @@ import {
   useLoad,
 } from '../ui'
 
-/** prompt 的版本历史（新的在前，第一条即当前生效），可以把旧版恢复为新的一版。current 变化时重新加载 */
-export function PromptHistory({ owner, current, onRestored }: { owner: AgentId | null; current: string; onRestored: () => void }) {
-  const history = useLoad(() => api.promptHistory(owner), [owner, current])
+/** 文本资源的版本历史（新的在前，第一条即当前生效），可以把旧版恢复为新的一版。current 变化时重新加载 */
+export function ResourceHistory({
+  kind,
+  owner,
+  current,
+  onRestored,
+}: {
+  kind: ResourceKind
+  owner: AgentId | null
+  current: string
+  onRestored: () => void
+}) {
+  const history = useLoad(() => api.history(kind, owner), [kind, owner, current])
   const agents = useAgents()
   const confirm = useConfirm()
   const action = useAction()
 
-  async function restore(id: number, at: string) {
+  async function restore(rev: string, at: string) {
     const ok = await confirm({ title: `恢复 ${formatTime(at)} 的版本？`, body: '它会作为新的一版生效，现有历史保留。', confirmLabel: '恢复' })
-    if (ok && (await action.run(() => api.restorePrompt(id)))) {
+    if (ok && (await action.run(() => api.restore(kind, owner, rev)))) {
       toast.success('已恢复')
       onRestored()
     }
@@ -51,7 +61,7 @@ export function PromptHistory({ owner, current, onRestored }: { owner: AgentId |
                 <EmptyHint>还没有历史</EmptyHint>
               ) : (
                 list.map((r, i) => (
-                  <Card key={r.id} variant="secondary">
+                  <Card key={r.rev} variant="secondary">
                     <Card.Header className="flex flex-row items-center gap-2">
                       <Card.Description className="flex-1">
                         {formatTime(r.created_at)} · {r.author === 'user' ? '用户' : agentLabel(agents.data, r.author as AgentId)}
@@ -61,7 +71,7 @@ export function PromptHistory({ owner, current, onRestored }: { owner: AgentId |
                           当前
                         </Chip>
                       ) : (
-                        <Button size="sm" variant="ghost" isDisabled={action.busy} onPress={() => void restore(r.id, r.created_at)}>
+                        <Button size="sm" variant="ghost" isDisabled={action.busy} onPress={() => void restore(r.rev, r.created_at)}>
                           <RotateCcw className="size-4" />
                           恢复
                         </Button>
@@ -83,7 +93,7 @@ export function PromptHistory({ owner, current, onRestored }: { owner: AgentId |
 
 /** 公共 prompt：合并进所有 agent 的指令，位于各 agent 自己的指令之前 */
 export default function PublicPrompt() {
-  const history = useLoad(() => api.promptHistory(null), [])
+  const history = useLoad(() => api.history('prompt', null), [])
   const [content, setContent] = useState('')
   const action = useAction()
   // 从未设置过公共指令时没有任何版本，即为空
@@ -117,7 +127,7 @@ export default function PublicPrompt() {
             >
               保存
             </ActionButton>
-            <PromptHistory owner={null} current={current} onRestored={reload} />
+            <ResourceHistory kind="prompt" owner={null} current={current} onRestored={reload} />
           </div>
         )}
       </Loading>

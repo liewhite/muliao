@@ -154,7 +154,7 @@ def build_container(
     resources = ResourceRepo(settings.resources_dir)
     skills = SkillStore(resources)
     memory = MemoryStore(resources, settings.runtime.memory_max_chars)
-    prompts = PromptStore(db)
+    prompts = PromptStore(resources)
     agents = AgentService(
         db,
         settings.workspaces_dir,

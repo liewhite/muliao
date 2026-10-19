@@ -62,8 +62,8 @@ async def test_agent_creates_and_reconfigures_agents_with_versioned_instructions
     assert outputs[3] == "deleted agent researcher"
     assert [a.name for a in await container.agents.list()] == ["manager"]
     # 自己改自己的指令：留有版本，作者是自己
-    history = await container.prompts.history(me.id)
-    assert [(r.content, r.author) for r in history][0] == ("Delegate research to researcher.", me.id)
+    [latest, *_] = await container.prompts.history(me.id, 10)
+    assert (container.prompts.current(me.id), latest.author) == ("Delegate research to researcher.", me.id)
     # 结果里只出现名称，不出现 id
     assert me.id not in "\n".join(outputs)
 
@@ -82,7 +82,7 @@ async def test_agent_edits_public_prompt(container, make_agent, models):
     )
 
     assert outputs == ["(no public prompt)", "public prompt updated", "Be brief."]
-    assert (await container.prompts.history(None))[0].author == me.id
+    assert (await container.prompts.history(None, 10))[0].author == me.id
 
 
 async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_agent, models):
@@ -253,7 +253,7 @@ async def test_parallel_partial_updates_of_one_agent_both_survive(container, mak
     updated = await container.agents.get(target.id)
     assert (updated.description, updated.reflect_every) == ("new desc", 7)
     # 未给出的指令不被改写：不追加版本
-    assert len(await container.prompts.history(target.id)) == 1
+    assert len(await container.prompts.history(target.id, 10)) == 1
 
 
 async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agent, models):

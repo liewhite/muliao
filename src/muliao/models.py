@@ -63,30 +63,13 @@ class Agent(Base):
     model: Mapped[str] = mapped_column(String(200))
     # 选用的工具组名称（见 runtime.runner.ToolGroups）；自我改进的工具总是开放
     tool_groups: Mapped[list[str]] = mapped_column(JSON)
-    # 指令不存在这里：它是该 agent 最新一版 PromptRevision（读写都经过 evolution.prompts.PromptStore）
+    # 指令不在这里：它在资源仓库的 agents/<id>/PROMPT.md（读写都经过 evolution.prompts.PromptStore）
     reflect_every: Mapped[int]
     turns_since_reflection: Mapped[int] = mapped_column(default=0)
     # 已纳入反思的最大 message id；下一次反思从它之后开始
     reflection_checkpoint: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
-
-
-class PromptRevision(Base):
-    """prompt 的每一版。owner 为 agent 时是它的指令，为 None 时是合并进所有 agent 的公共 prompt。
-
-    当前生效的就是最新一版（唯一来源）；修改即追加一版，回滚即把旧版内容作为新的一版写入。
-    """
-
-    __tablename__ = "prompt_revisions"
-    __table_args__ = (Index("ix_prompt_revisions_owner_id", "owner", "id"), {"sqlite_autoincrement": True})
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    owner: Mapped[str | None] = mapped_column(_fk_agent())
-    content: Mapped[str] = mapped_column(Text)
-    # 谁改的："user"，或做出修改的 agent 的 id。只作审计展示：该 agent 之后可能已被删除
-    author: Mapped[str] = mapped_column(String(32))
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class Session(Base):

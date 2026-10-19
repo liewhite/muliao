@@ -29,33 +29,49 @@ async def test_agent_instruction_changes_are_versioned_and_restorable(container,
     agent = await make_agent("alpha")
     spec = AgentPatch(instructions="v2")
     await container.agents.update(agent.id, spec, author="user")
-    assert await container.prompts.current(agent.id) == "v2"
+    assert container.prompts.current(agent.id) == "v2"
     # 指令未变时不追加新版本
     await container.agents.update(agent.id, spec, author=agent.id)
 
-    history = await container.prompts.history(agent.id)
-    assert [(r.content, r.author) for r in history] == [("v2", "user"), ("Be helpful.", "user")]
+    history = await container.prompts.history(agent.id, 10)
+    contents = [await container.prompts.read_at(agent.id, r.rev) for r in history]
+    assert list(zip(contents, [r.author for r in history], strict=True)) == [
+        ("v2", "user"),
+        ("Be helpful.", "user"),
+    ]
 
-    await container.prompts.restore(history[1].id, agent.id)
-    assert await container.prompts.current(agent.id) == "Be helpful."
-    assert [r.author for r in await container.prompts.history(agent.id)][0] == agent.id
+    await container.prompts.restore(agent.id, history[1].rev, agent.id)
+    assert container.prompts.current(agent.id) == "Be helpful."
+    assert (await container.prompts.history(agent.id, 10))[0].author == agent.id
 
 
-async def test_prompt_api_edits_public_prompt_and_restores_versions(client, make_agent):
+async def test_resource_api_edits_public_prompt_and_restores_prompt_and_memory(client, container, make_agent):
     agent = await make_agent("alpha")
     await login(client)
-    assert (await client.get("/api/prompts")).json() == []
+    assert (await client.get("/api/resources/prompt/history")).json() == []
 
     for content in ("first", "second"):
         assert (await client.put("/api/prompts/public", json={"content": content})).status_code == 204
-    history = (await client.get("/api/prompts")).json()
+    history = (await client.get("/api/resources/prompt/history")).json()
     assert [r["content"] for r in history] == ["second", "first"]
 
-    assert (await client.post(f"/api/prompt-revisions/{history[1]['id']}/restore")).status_code == 204
-    assert (await client.get("/api/prompts")).json()[0]["content"] == "first"
-    agent_history = (await client.get(f"/api/prompts?owner={agent.id}")).json()
+    resp = await client.post("/api/resources/prompt/restore", json={"rev": history[1]["rev"]})
+    assert resp.status_code == 204
+    assert (await client.get("/api/resources/prompt/history")).json()[0]["content"] == "first"
+    agent_history = (await client.get(f"/api/resources/prompt/history?owner={agent.id}")).json()
     assert [r["content"] for r in agent_history] == ["Be helpful."]
-    assert (await client.get("/api/prompts?owner=nope")).status_code == 404
+    assert (await client.get("/api/resources/prompt/history?owner=nope")).status_code == 404
+
+    # 记忆同样有历史，可以恢复
+    for content in ("- likes tea\n", "- likes coffee\n"):
+        await client.put(f"/api/agents/{agent.id}/memory", json={"content": content})
+    memory = (await client.get(f"/api/resources/memory/history?owner={agent.id}")).json()
+    assert [r["content"] for r in memory][:2] == ["- likes coffee\n", "- likes tea\n"]
+    await client.post("/api/resources/memory/restore", json={"owner": agent.id, "rev": memory[1]["rev"]})
+    assert container.memory.read(agent.id) == "- likes tea\n"
+    assert (await client.get("/api/resources/memory/history")).status_code == 422
+    bad = await client.post("/api/resources/memory/restore", json={"owner": agent.id, "rev": "HEAD"})
+    assert bad.status_code == 422
 
 
 async def test_each_listed_agent_gets_its_own_latest_instructions(client, container, make_agent):
@@ -69,16 +85,18 @@ async def test_each_listed_agent_gets_its_own_latest_instructions(client, contai
     assert {a["name"]: a["instructions"] for a in listed} == {"alpha": "alpha v3", "beta": "beta v3"}
 
 
-async def test_deleting_agent_drops_its_versions_but_not_public_prompt_history(container, make_agent):
+async def test_deleting_agent_drops_its_files_but_not_public_prompt_history(container, make_agent):
     agent = await make_agent("alpha")
     await container.prompts.set(None, "shared", agent.id)
     await container.agent_lifecycle.delete(agent.id, author="user")
 
-    assert [r.author for r in await container.prompts.history(None)] == [agent.id]
-    assert await container.prompts.history(agent.id) == []
+    assert [r.author for r in await container.prompts.history(None, 10)] == [agent.id]
+    assert not container.prompts.path(agent.id).exists()
+    # 被删 agent 的历史仍在仓库里，可以审计
+    assert len(await container.resources.history(container.prompts.path(agent.id), 10)) == 2
 
 
 async def test_empty_public_prompt_is_the_same_as_none(container):
-    assert await container.prompts.set(None, "", "user") is None
-    assert await container.prompts.history(None) == []
-    assert await container.prompts.current(None) == ""
+    assert await container.prompts.set(None, "", "user") is False
+    assert await container.prompts.history(None, 10) == []
+    assert container.prompts.current(None) == ""
