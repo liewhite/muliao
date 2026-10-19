@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useNavigate } from 'react-router-dom'
+import { api, type Agent, type AgentId } from './api'
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
@@ -139,4 +140,14 @@ export function Field({ label, hint, children }: { label: string; hint?: ReactNo
 
 export function confirmAction(message: string): boolean {
   return window.confirm(message)
+}
+
+/** agent 列表（选择器与 id→名称显示共用）。 */
+export function useAgents(): Loaded<Agent[]> {
+  return useLoad(() => api.agents(), [])
+}
+
+/** 按 id 显示 agent 名称；agent 已被删除时退回显示 id。 */
+export function agentLabel(agents: Agent[] | undefined, id: AgentId): string {
+  return agents?.find((a) => a.id === id)?.name ?? id
 }

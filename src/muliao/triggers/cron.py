@@ -49,10 +49,10 @@ class CronService:
             raise InvalidInput("cron job name and prompt must not be empty")
         return self.next_run(schedule, self._clock())
 
-    async def create(self, *, name: str, agent_name: str, schedule: str, prompt: str) -> CronJob:
+    async def create(self, *, name: str, agent_id: str, schedule: str, prompt: str) -> CronJob:
         job = CronJob(
             name=name.strip(),
-            agent_name=agent_name,
+            agent_id=agent_id,
             schedule=schedule,
             prompt=prompt,
             enabled=True,
@@ -60,13 +60,13 @@ class CronService:
         )
         try:
             async with self._db.transaction() as s:
-                if await s.get(Agent, agent_name) is None:
-                    raise NotFound(f"agent {agent_name!r} not found")
+                if await s.get(Agent, agent_id) is None:
+                    raise NotFound(f"agent {agent_id!r} not found")
                 s.add(job)
         except IntegrityError as e:
             raise Conflict(f"cron job {name!r} already exists") from e
         self._changed.set()
-        log.info("cron job created", extra={"cron": job.name, "agent": agent_name, "schedule": schedule})
+        log.info("cron job created", extra={"cron": job.name, "agent": agent_id, "schedule": schedule})
         return job
 
     async def update(self, job_id: int, *, schedule: str, prompt: str, enabled: bool) -> CronJob:
@@ -92,10 +92,10 @@ class CronService:
                 raise NotFound(f"cron job {name!r} not found")
             return job
 
-    async def list(self, agent_name: str | None = None) -> list[CronJob]:
+    async def list(self, agent_id: str | None = None) -> list[CronJob]:
         query = select(CronJob).order_by(CronJob.name)
-        if agent_name is not None:
-            query = query.where(CronJob.agent_name == agent_name)
+        if agent_id is not None:
+            query = query.where(CronJob.agent_id == agent_id)
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
 
@@ -132,14 +132,14 @@ class CronService:
                 log.info("cron job deleted before firing, skipped", extra={"cron_id": job_id})
                 return
             job.next_run_at = self.next_run(job.schedule, now)
-            ctx = {"cron": job.name, "agent": job.agent_name}
+            ctx = {"cron": job.name, "agent": job.agent_id}
             if job.last_session_id and await self._queue.lane_busy(s, turn_lane(job.last_session_id)):
                 log.info("cron fire skipped: previous run still in progress", extra=ctx)
                 return
             local = now.astimezone(self._tz).strftime("%Y-%m-%d %H:%M")
             session = await self._sessions.create_in(
                 s,
-                agent_name=job.agent_name,
+                agent_id=job.agent_id,
                 prompt=job.prompt,
                 origin=Origin.CRON,
                 origin_ref=str(job.id),

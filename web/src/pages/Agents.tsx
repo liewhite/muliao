@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { agentRoute, api, newSessionRoute, type Agent, type AgentDefaults, type AgentInput } from '../api'
+import { agentRoute, api, asAgentId, newSessionRoute, type Agent, type AgentDefaults, type AgentId, type AgentInput } from '../api'
 import { ErrorBanner, Field, Loading, Markdown, Page, confirmAction, formatTime, useAction, useLoad } from '../ui'
 import { SkillList } from './Skills'
 
@@ -19,8 +19,8 @@ export function AgentList() {
         {(list) => (
           <ul className="list">
             {list.map((a) => (
-              <li key={a.name}>
-                <Link to={agentRoute(a.name)} className="list-item">
+              <li key={a.id}>
+                <Link to={agentRoute(a.id)} className="list-item">
                   <div className="list-main">
                     <div className="list-title">{a.name}</div>
                     <div className="list-sub">{a.description}</div>
@@ -39,32 +39,30 @@ export function AgentList() {
 
 function initialInput(agent: Agent | undefined, defaults: AgentDefaults | undefined): AgentInput {
   if (agent) {
-    return { description: agent.description, model: agent.model, instructions: agent.instructions, reflect_every: agent.reflect_every }
+    const { name, description, model, instructions, reflect_every } = agent
+    return { name, description, model, instructions, reflect_every }
   }
   if (!defaults) throw new Error('agent defaults must be loaded before rendering the create form')
-  return { description: '', model: defaults.model, instructions: '', reflect_every: defaults.reflect_every }
+  return { name: '', description: '', model: defaults.model, instructions: '', reflect_every: defaults.reflect_every }
 }
 
 function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults?: AgentDefaults; onSaved: (a: Agent) => void }) {
-  const [name, setName] = useState(agent?.name ?? '')
   const [input, setInput] = useState<AgentInput>(() => initialInput(agent, defaults))
   const action = useAction()
   const set = (patch: Partial<AgentInput>) => setInput((prev) => ({ ...prev, ...patch }))
 
   async function save() {
     await action.run(async () => {
-      const saved = agent ? await api.updateAgent(agent.name, input) : await api.createAgent(name, input)
+      const saved = agent ? await api.updateAgent(agent.id, input) : await api.createAgent(input)
       onSaved(saved)
     })
   }
 
   return (
     <div className="form">
-      {!agent && (
-        <Field label="名称" hint="可用中文、小写字母、数字、- 或 _，创建后不可修改">
-          <input value={name} onChange={(e) => setName(e.target.value)} autoCapitalize="off" />
-        </Field>
-      )}
+      <Field label="名称" hint="只用于显示，可随时修改，不能与其他 agent 重名">
+        <input value={input.name} onChange={(e) => set({ name: e.target.value })} />
+      </Field>
       <Field label="职责描述" hint="其他 agent 委派任务时据此选择">
         <input value={input.description} onChange={(e) => set({ description: e.target.value })} />
       </Field>
@@ -96,14 +94,14 @@ export function AgentCreate() {
   return (
     <Page title="新建 agent" back="/agents">
       <Loading state={defaults}>
-        {(d) => <AgentForm defaults={d} onSaved={(a) => navigate(agentRoute(a.name), { replace: true })} />}
+        {(d) => <AgentForm defaults={d} onSaved={(a) => navigate(agentRoute(a.id), { replace: true })} />}
       </Loading>
     </Page>
   )
 }
 
-function MemoryEditor({ name }: { name: string }) {
-  const memory = useLoad(() => api.memory(name), [name])
+function MemoryEditor({ agentId }: { agentId: AgentId }) {
+  const memory = useLoad(() => api.memory(agentId), [agentId])
   const [content, setContent] = useState('')
   const action = useAction()
   useEffect(() => {
@@ -121,7 +119,7 @@ function MemoryEditor({ name }: { name: string }) {
           <button
             className="button primary"
             disabled={action.busy || content === m.content}
-            onClick={() => void action.run(() => api.setMemory(name, content).then(() => memory.reload()))}
+            onClick={() => void action.run(() => api.setMemory(agentId, content).then(() => memory.reload()))}
           >
             保存记忆
           </button>
@@ -131,8 +129,8 @@ function MemoryEditor({ name }: { name: string }) {
   )
 }
 
-function Reflections({ name }: { name: string }) {
-  const reflections = useLoad(() => api.reflections(name), [name])
+function Reflections({ agentId }: { agentId: AgentId }) {
+  const reflections = useLoad(() => api.reflections(agentId), [agentId])
   return (
     <Loading state={reflections}>
       {(list) =>
@@ -158,15 +156,16 @@ function Reflections({ name }: { name: string }) {
 const TABS = ['配置', '记忆', 'Skills', '反思'] as const
 
 export function AgentDetail() {
-  const { name = '' } = useParams()
+  const id = asAgentId(useParams().id ?? '')
   const navigate = useNavigate()
-  const agent = useLoad(() => api.agent(name), [name])
+  const agent = useLoad(() => api.agent(id), [id])
+  const name = agent.data?.name ?? id
   const [tab, setTab] = useState<(typeof TABS)[number]>('配置')
   const action = useAction()
 
   async function remove() {
     if (!confirmAction(`删除 agent ${name}？它的会话、记忆、私有 skill 和工作目录都会被删除。`)) return
-    if (await action.run(() => api.deleteAgent(name))) navigate('/agents')
+    if (await action.run(() => api.deleteAgent(id))) navigate('/agents')
   }
 
   return (
@@ -174,7 +173,7 @@ export function AgentDetail() {
       title={name}
       back="/agents"
       actions={
-        <Link className="button small" to={newSessionRoute(name)}>
+        <Link className="button small" to={newSessionRoute(id)}>
           对话
         </Link>
       }
@@ -192,18 +191,24 @@ export function AgentDetail() {
             {tab === '配置' && (
               <>
                 <div className="muted small">
+                  id <code>{a.id}</code>{' '}
+                  <button className="button small" onClick={() => void navigator.clipboard?.writeText(a.id)}>
+                    复制
+                  </button>
+                </div>
+                <div className="muted small">
                   距下次反思：{a.reflect_every - a.turns_since_reflection} 轮 · 创建于 {formatTime(a.created_at)}
                 </div>
-                <AgentForm key={a.name} agent={a} onSaved={() => void agent.reload()} />
+                <AgentForm key={`${a.id}-${a.name}`} agent={a} onSaved={() => void agent.reload()} />
                 <ErrorBanner error={action.error} />
                 <button className="button danger" onClick={remove}>
                   删除 agent
                 </button>
               </>
             )}
-            {tab === '记忆' && <MemoryEditor name={a.name} />}
-            {tab === 'Skills' && <SkillList owner={a.name} />}
-            {tab === '反思' && <Reflections name={a.name} />}
+            {tab === '记忆' && <MemoryEditor agentId={a.id} />}
+            {tab === 'Skills' && <SkillList owner={a.id} />}
+            {tab === '反思' && <Reflections agentId={a.id} />}
           </>
         )}
       </Loading>

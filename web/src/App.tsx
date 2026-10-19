@@ -73,7 +73,7 @@ export default function App() {
           <Route path="/sessions/:id" element={<SessionView />} />
           <Route path="/agents" element={<AgentList />} />
           <Route path="/agents/new" element={<AgentCreate />} />
-          <Route path="/agents/:name" element={<AgentDetail />} />
+          <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/cron" element={<Cron />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/skills" element={<PublicSkills />} />

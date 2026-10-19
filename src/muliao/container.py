@@ -79,11 +79,11 @@ class Container:
         self._background.append(task)
 
     async def start(self) -> None:
-        await asyncio.to_thread(migrate, self.settings.db_path)
+        await asyncio.to_thread(migrate, self.settings.db_path, self.settings.agents_dir)
         await self._check_agent_models()
         if self.settings.telegram is not None:
             # 配置错误在启动时暴露，而不是在第一条消息到来时让轮询崩溃
-            await self.agents.get(self.settings.telegram.agent)
+            await self.agents.get(self.settings.telegram.agent_id)
         self._spawn("worker", self.worker.run_forever())
         self._spawn("cron", self.cron.run_forever())
         if self.telegram is not None:
@@ -96,7 +96,7 @@ class Container:
             try:
                 self._model_checker(agent.model)
             except InvalidInput as e:
-                broken.append(f"{agent.name}: {e}")
+                broken.append(f"{agent.name} ({agent.id}): {e}")
         if broken:
             raise RuntimeError(
                 "agents reference models not resolvable with current config:\n" + "\n".join(broken)
@@ -144,7 +144,7 @@ def build_container(
         settings.agents_dir,
         memory,
         model_checker or models.check,
-        protected=frozenset([settings.telegram.agent]) if settings.telegram else frozenset(),
+        protected=frozenset([settings.telegram.agent_id]) if settings.telegram else frozenset(),
     )
     sessions = SessionService(db, queue)
     notifier = Notifier(db, queue)
@@ -163,7 +163,7 @@ def build_container(
         client = TelegramClient(settings.telegram.bot_token.get_secret_value(), http)
         deliveries[DeliveryChannel.TELEGRAM] = TelegramDelivery(client)
         telegram = TelegramTrigger(
-            client, sessions, notifier, settings.telegram.agent, set(settings.telegram.allowed_chat_ids)
+            client, sessions, notifier, settings.telegram.agent_id, set(settings.telegram.allowed_chat_ids)
         )
 
     evolution_tools = [skills_toolset(skills), memory_toolset(memory)]

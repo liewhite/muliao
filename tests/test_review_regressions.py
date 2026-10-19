@@ -19,14 +19,14 @@ from tests.test_flow import call_then_answer, drain, start
 
 
 async def test_message_ids_never_reused_after_deleting_latest_session(container, make_agent):
-    await make_agent("alpha", reflect_every=100)
-    first = await start(container, "alpha", "one", delivery=DeliveryChannel.NONE)
+    alpha = (await make_agent("alpha", reflect_every=100)).id
+    first = await start(container, alpha, "one", delivery=DeliveryChannel.NONE)
     await drain(container)
     async with container.db.transaction() as s:
         max_before = max((await s.scalars(select(Message.id))).all())
     await container.sessions.delete(first.id)
 
-    await start(container, "alpha", "two", delivery=DeliveryChannel.NONE)
+    await start(container, alpha, "two", delivery=DeliveryChannel.NONE)
     await drain(container)
 
     async with container.db.transaction() as s:
@@ -35,11 +35,11 @@ async def test_message_ids_never_reused_after_deleting_latest_session(container,
 
 
 async def test_next_due_ignores_tasks_blocked_by_running_lane(container, make_agent):
-    await make_agent()
+    alpha = (await make_agent()).id
     async with container.db.transaction() as s:
         for _ in range(2):
             container.queue.enqueue(
-                s, kind=TaskKind.DELIVER, lane="x", agent_name="alpha", session_id=None, payload={}
+                s, kind=TaskKind.DELIVER, lane="x", agent_id=alpha, session_id=None, payload={}
             )
     await container.queue.claim()
 
@@ -48,20 +48,20 @@ async def test_next_due_ignores_tasks_blocked_by_running_lane(container, make_ag
 
 
 async def test_deleting_session_or_agent_with_running_task_is_rejected(container, make_agent):
-    await make_agent()
-    session = await start(container, "alpha", "hi")
+    alpha = (await make_agent()).id
+    session = await start(container, alpha, "hi")
     await container.queue.claim()
 
     with pytest.raises(Conflict):
         await container.sessions.delete(session.id)
     with pytest.raises(Conflict):
-        await container.agents.delete("alpha")
+        await container.agents.delete(alpha)
 
 
 async def test_broken_cron_job_is_disabled_without_blocking_others(container, make_agent):
-    await make_agent()
-    bad = await container.cron.create(name="bad", agent_name="alpha", schedule="* * * * *", prompt="x")
-    good = await container.cron.create(name="good", agent_name="alpha", schedule="* * * * *", prompt="y")
+    alpha = (await make_agent()).id
+    bad = await container.cron.create(name="bad", agent_id=alpha, schedule="* * * * *", prompt="x")
+    good = await container.cron.create(name="good", agent_id=alpha, schedule="* * * * *", prompt="y")
     async with container.db.transaction() as s:
         for job_id in (bad.id, good.id):
             (await s.get(CronJob, job_id)).next_run_at = datetime.now().astimezone() - timedelta(seconds=1)
@@ -83,17 +83,21 @@ async def test_agent_api_rejects_zero_reflect_every_and_partial_update(container
         await login(client)
         resp = await client.post("/api/agents", json={"name": "a", "description": "d", "reflect_every": 0})
         assert resp.status_code == 422
-        await client.post("/api/agents", json={"name": "a", "description": "d", "model": "custom"})
-        assert (await client.put("/api/agents/a", json={"description": "new"})).status_code == 422
-        assert (await client.get("/api/agents/a")).json()["model"] == "custom"
+        agent = (
+            await client.post("/api/agents", json={"name": "a", "description": "d", "model": "custom"})
+        ).json()
+        assert (
+            await client.put(f"/api/agents/{agent['id']}", json={"description": "new"})
+        ).status_code == 422
+        assert (await client.get(f"/api/agents/{agent['id']}")).json()["model"] == "custom"
 
 
 async def test_vault_set_value_is_redacted_from_saved_history(container, make_agent, models):
-    await make_agent("alpha", model="m")
+    alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = call_then_answer(
         "vault_set", {"key": "TOKEN", "value": "super-secret", "description": "d"}, "stored"
     )
-    session = await start(container, "alpha", "save my token", delivery=DeliveryChannel.NONE)
+    session = await start(container, alpha, "save my token", delivery=DeliveryChannel.NONE)
     await drain(container)
 
     assert (await container.vault.resolve_many(["TOKEN"])) == {"TOKEN": "super-secret"}
@@ -149,8 +153,8 @@ async def test_webpush_isolates_subscriptions(container, monkeypatch):
 async def test_telegram_notice_goes_through_deliver_task(container, make_agent):
     from muliao.triggers.telegram import TelegramTrigger
 
-    await make_agent()
-    trigger = TelegramTrigger(None, container.sessions, container.notifier, "alpha", {42})  # type: ignore[arg-type]
+    alpha = (await make_agent()).id
+    trigger = TelegramTrigger(None, container.sessions, container.notifier, alpha, {42})  # type: ignore[arg-type]
     await trigger.handle({"update_id": 1, "message": {"chat": {"id": 42}, "photo": []}})
 
     async with container.db.transaction() as s:
@@ -161,7 +165,7 @@ async def test_telegram_notice_goes_through_deliver_task(container, make_agent):
 
 
 async def test_retried_task_keeps_last_error_while_running(container, make_agent, models):
-    await make_agent("alpha", model="m")
+    alpha = (await make_agent("alpha", model="m")).id
 
     def fail(_m, _i) -> ModelResponse:
         raise ModelHTTPError(status_code=503, model_name="m")
@@ -169,7 +173,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     from tests.scripted import scripted
 
     models.models["m"] = scripted(fail)
-    await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
+    await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
     await drain(container)
     turn = (await container.queue.list(status=TaskStatus.FAILED, session_id=None, limit=5))[0]
     assert turn.attempts == container.settings.runtime.task_max_attempts and "503" in turn.error
@@ -180,22 +184,31 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     assert claimed.error is not None  # 运行期间仍能看到上次为什么失败
 
 
-async def test_agent_referenced_by_config_cannot_be_deleted(settings, models):
-    from muliao.agents import AgentSpec
+async def test_agent_referenced_by_config_cannot_be_deleted(container, make_agent, settings, models):
     from muliao.config import TelegramConfig
     from muliao.container import build_container
-    from muliao.db import migrate
 
-    settings.telegram = TelegramConfig(bot_token="t", agent="tg", allowed_chat_ids=[1])
+    tg = (await make_agent("tg")).id
+    settings.telegram = TelegramConfig(bot_token="t", agent_id=tg, allowed_chat_ids=[1])
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
-    migrate(settings.db_path)
     try:
-        await c.agents.create("tg", AgentSpec(description="d", model="m", instructions="", reflect_every=5))
         with pytest.raises(Conflict, match="server configuration"):
-            await c.agents.delete("tg")
+            await c.agents.delete(tg)
     finally:
         await c.http.aclose()
         await c.db.engine.dispose()
+
+
+async def test_startup_fails_when_telegram_agent_id_does_not_exist(settings, models):
+    from muliao.config import TelegramConfig
+    from muliao.container import build_container
+    from muliao.errors import NotFound
+
+    settings.telegram = TelegramConfig(bot_token="t", agent_id="000000000000", allowed_chat_ids=[1])
+    c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
+    with pytest.raises(NotFound, match="000000000000"):
+        await c.start()
+    await c.stop()
 
 
 def test_vapid_private_key_is_owner_only(tmp_path):

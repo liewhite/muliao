@@ -52,7 +52,7 @@ def models() -> ModelSlot:
 @pytest.fixture
 async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Container]:
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
-    migrate(settings.db_path)
+    migrate(settings.db_path, settings.agents_dir)
     yield c
     await c.http.aclose()
     await c.db.engine.dispose()
@@ -60,16 +60,20 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Cont
 
 @pytest.fixture
 def make_agent(container: Container) -> Callable:
+    """创建 agent 并返回它；测试通过返回值的 .id 引用它（id 由系统生成）。"""
     from muliao.agents import AgentSpec
 
     async def _make(
         name: str = "alpha", *, model: str = "test", reflect_every: int = 10, description: str = "test agent"
     ):
         return await container.agents.create(
-            name,
             AgentSpec(
-                description=description, model=model, instructions="Be helpful.", reflect_every=reflect_every
-            ),
+                name=name,
+                description=description,
+                model=model,
+                instructions="Be helpful.",
+                reflect_every=reflect_every,
+            )
         )
 
     return _make

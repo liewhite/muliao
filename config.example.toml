@@ -78,5 +78,5 @@ api_key = ""
 # 可选：Telegram 入口
 # [telegram]
 # bot_token = ""
-# agent = "assistant"              # 接收消息的 agent，启动时校验存在，且不可删除
+# agent_id = "3f9a0c1b7e24"       # 接收消息的 agent 的 id（agent 详情页可复制），启动时校验存在，且不可删除
 # allowed_chat_ids = [123456789]   # 只处理这些 chat 的消息

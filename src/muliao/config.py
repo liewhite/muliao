@@ -99,8 +99,8 @@ class RuntimeConfig(_Section):
 
 class TelegramConfig(_Section):
     bot_token: SecretStr = Field(min_length=1)
-    # 接收消息的 agent
-    agent: str
+    # 接收消息的 agent 的 id（在 agent 详情页可复制）
+    agent_id: str
     allowed_chat_ids: list[int] = Field(min_length=1)
 
 

@@ -44,13 +44,16 @@ class McpTransport(StrEnum):
 
 
 def _fk_agent() -> ForeignKey:
-    return ForeignKey("agents.name", ondelete="CASCADE")
+    return ForeignKey("agents.id", ondelete="CASCADE")
 
 
 class Agent(Base):
     __tablename__ = "agents"
 
-    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # 系统生成、不可变：主键、外键、目录名、URL 与工具调用都用它
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    # 仅供展示，可改名；唯一以免委派时混淆
+    name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
     instructions: Mapped[str] = mapped_column(Text)
@@ -66,7 +69,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    agent_name: Mapped[str] = mapped_column(_fk_agent(), index=True)
+    agent_id: Mapped[str] = mapped_column(_fk_agent(), index=True)
     title: Mapped[str] = mapped_column(String(200))
     origin: Mapped[Origin] = mapped_column(String(16))
     # 触发源内的引用：cron job id、webhook id、Telegram chat id、父 session id
@@ -104,7 +107,7 @@ class Task(Base):
     # 同一 lane 内 FIFO 串行；见 docs/architecture.md「Lane」
     lane: Mapped[str] = mapped_column(String(100))
     # 系统通知（如推送测试）不属于任何 agent
-    agent_name: Mapped[str | None] = mapped_column(_fk_agent(), index=True)
+    agent_id: Mapped[str | None] = mapped_column(_fk_agent(), index=True)
     session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     status: Mapped[TaskStatus] = mapped_column(String(16), default=TaskStatus.PENDING)
@@ -134,7 +137,7 @@ class Reflection(Base):
     __tablename__ = "reflections"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    agent_name: Mapped[str] = mapped_column(_fk_agent(), index=True)
+    agent_id: Mapped[str] = mapped_column(_fk_agent(), index=True)
     from_message_id: Mapped[int]
     to_message_id: Mapped[int]
     output: Mapped[str] = mapped_column(Text)
@@ -147,7 +150,7 @@ class CronJob(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
-    agent_name: Mapped[str] = mapped_column(_fk_agent())
+    agent_id: Mapped[str] = mapped_column(_fk_agent())
     schedule: Mapped[str] = mapped_column(String(100))
     prompt: Mapped[str] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(default=True)
@@ -164,7 +167,7 @@ class Webhook(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
-    agent_name: Mapped[str] = mapped_column(_fk_agent())
+    agent_id: Mapped[str] = mapped_column(_fk_agent())
     token: Mapped[str] = mapped_column(String(64))
     prompt: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

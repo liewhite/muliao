@@ -13,6 +13,8 @@ router = APIRouter()
 
 class SessionOut(BaseModel):
     id: str
+    agent_id: str
+    # 展示用；以 agent_id 为准
     agent_name: str
     title: str
     origin: Origin
@@ -23,10 +25,11 @@ class SessionOut(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def of(cls, s: Session) -> "SessionOut":
+    def of(cls, s: Session, agent_name: str) -> "SessionOut":
         return cls(
             id=s.id,
-            agent_name=s.agent_name,
+            agent_id=s.agent_id,
+            agent_name=agent_name,
             title=s.title,
             origin=s.origin,
             origin_ref=s.origin_ref,
@@ -40,7 +43,7 @@ class SessionOut(BaseModel):
 class TaskOut(BaseModel):
     id: int
     kind: TaskKind
-    agent_name: str | None
+    agent_id: str | None
     session_id: str | None
     status: TaskStatus
     attempts: int
@@ -55,7 +58,7 @@ class TaskOut(BaseModel):
         return cls(
             id=t.id,
             kind=t.kind,
-            agent_name=t.agent_name,
+            agent_id=t.agent_id,
             session_id=t.session_id,
             status=t.status,
             attempts=t.attempts,
@@ -83,7 +86,7 @@ class SessionDetail(BaseModel):
 
 
 class StartIn(BaseModel):
-    agent_name: str
+    agent_id: str
     prompt: str
 
 
@@ -91,30 +94,33 @@ class ReplyIn(BaseModel):
     prompt: str
 
 
+async def _agent_name(c: C, agent_id: str) -> str:
+    return (await c.agents.get(agent_id)).name
+
+
 @router.get("/sessions")
 async def list_sessions(
     c: C,
-    agent: str | None = None,
+    agent_id: str | None = None,
     origin: list[Origin] | None = Query(None),
     limit: int = Query(50, le=200),
     offset: int = 0,
 ) -> list[SessionOut]:
-    return [
-        SessionOut.of(s)
-        for s in await c.sessions.list(agent_name=agent, origins=origin, limit=limit, offset=offset)
-    ]
+    names = {a.id: a.name for a in await c.agents.list()}
+    sessions = await c.sessions.list(agent_id=agent_id, origins=origin, limit=limit, offset=offset)
+    return [SessionOut.of(s, names[s.agent_id]) for s in sessions]
 
 
 @router.post("/sessions", status_code=201)
 async def start_session(c: C, body: StartIn) -> SessionOut:
     session = await c.sessions.start(
-        agent_name=body.agent_name,
+        agent_id=body.agent_id,
         prompt=body.prompt,
         origin=Origin.USER,
         origin_ref=None,
         delivery=DeliveryChannel.WEBPUSH,
     )
-    return SessionOut.of(session)
+    return SessionOut.of(session, await _agent_name(c, session.agent_id))
 
 
 @router.get("/sessions/{session_id}")
@@ -136,7 +142,10 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         if t.kind == TaskKind.TURN and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.FAILED)
     ]
     return SessionDetail(
-        session=SessionOut.of(session), items=items, compactions=compactions, open_turns=open_turns
+        session=SessionOut.of(session, await _agent_name(c, session.agent_id)),
+        items=items,
+        compactions=compactions,
+        open_turns=open_turns,
     )
 
 
@@ -157,7 +166,7 @@ async def compact(c: C, session_id: str) -> CompactOut:
         session = await s.get(Session, session_id)
         if session is None:
             raise NotFound(f"session {session_id!r} not found")
-        return CompactOut(queued=await c.compaction.request(s, session.id, session.agent_name))
+        return CompactOut(queued=await c.compaction.request(s, session.id, session.agent_id))
 
 
 @router.post("/sessions/{session_id}/read", status_code=204)

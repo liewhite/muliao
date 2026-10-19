@@ -63,7 +63,7 @@ def call_then_answer(tool: str, args: dict, answer: str) -> FunctionModel:
 
 async def start(container, agent: str, prompt: str, delivery=DeliveryChannel.WEBPUSH):
     return await container.sessions.start(
-        agent_name=agent, prompt=prompt, origin=Origin.USER, origin_ref=None, delivery=delivery
+        agent_id=agent, prompt=prompt, origin=Origin.USER, origin_ref=None, delivery=delivery
     )
 
 
@@ -73,16 +73,16 @@ async def tasks_of(container, kind: TaskKind) -> list[Task]:
 
 
 async def test_turn_runs_tools_persists_messages_and_queues_notification(container, make_agent, models):
-    await make_agent("alpha", model="m")
+    alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = call_then_answer("memory_append", {"entry": "- user likes tea"}, "Noted!")
 
-    session = await start(container, "alpha", "I like tea")
+    session = await start(container, alpha, "I like tea")
     await drain(container)
 
     detail = await container.sessions.get(session.id)
     history = await container.sessions.history(session.id)
     assert detail.unread
-    assert container.memory.read("alpha") == "- user likes tea\n"
+    assert container.memory.read(alpha) == "- user likes tea\n"
     assert last_user_prompt(history) == "I like tea"
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "Noted!"
     deliver = await tasks_of(container, TaskKind.DELIVER)
@@ -91,15 +91,15 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(contain
 
 
 async def test_cron_style_session_without_delivery_does_not_notify(container, make_agent):
-    await make_agent("alpha")
-    await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
+    alpha = (await make_agent("alpha")).id
+    await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
     await drain(container)
 
     assert await tasks_of(container, TaskKind.DELIVER) == []
 
 
 async def test_reply_continues_with_full_history(container, make_agent, models):
-    await make_agent("alpha", model="m")
+    alpha = (await make_agent("alpha", model="m")).id
     seen: list[int] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -107,7 +107,7 @@ async def test_reply_continues_with_full_history(container, make_agent, models):
         return ModelResponse(parts=[TextPart(f"reply to {last_user_prompt(messages)}")])
 
     models.models["m"] = scripted(fn)
-    session = await start(container, "alpha", "one")
+    session = await start(container, alpha, "one")
     await drain(container)
     await container.sessions.reply(session.id, "two")
     await drain(container)
@@ -120,7 +120,7 @@ async def test_reply_continues_with_full_history(container, make_agent, models):
 async def test_reflection_runs_every_n_turns_over_the_window_and_can_write_skills(
     container, make_agent, models
 ):
-    await make_agent("alpha", model="m", reflect_every=2)
+    alpha = (await make_agent("alpha", model="m", reflect_every=2)).id
     transcripts: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -139,24 +139,24 @@ async def test_reflection_runs_every_n_turns_over_the_window_and_can_write_skill
         )
 
     models.models["m"] = scripted(fn)
-    await start(container, "alpha", "first task", delivery=DeliveryChannel.NONE)
-    await start(container, "alpha", "second task", delivery=DeliveryChannel.NONE)
+    await start(container, alpha, "first task", delivery=DeliveryChannel.NONE)
+    await start(container, alpha, "second task", delivery=DeliveryChannel.NONE)
     await drain(container)
 
     reflections = await tasks_of(container, TaskKind.REFLECTION)
     assert len(reflections) == 1 and reflections[0].status == TaskStatus.DONE
     assert "first task" in transcripts[0] and "second task" in transcripts[0]
-    assert container.skills.read("alpha", "tea-making").meta.description == "Make tea"
+    assert container.skills.read(alpha, "tea-making").meta.description == "Make tea"
     async with container.db.transaction() as s:
         rows = (await s.scalars(select(Reflection))).all()
     assert [r.output for r in rows] == ["Created skill tea-making."]
-    agent = await container.agents.get("alpha")
+    agent = await container.agents.get(alpha)
     assert agent.turns_since_reflection == 0
     assert agent.reflection_checkpoint == reflections[0].payload["to_message_id"]
 
 
 async def test_transient_model_error_is_retried_and_converges(container, make_agent, models):
-    await make_agent("alpha", model="m")
+    alpha = (await make_agent("alpha", model="m")).id
     calls = {"n": 0}
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -166,7 +166,7 @@ async def test_transient_model_error_is_retried_and_converges(container, make_ag
         return ModelResponse(parts=[TextPart("ok")])
 
     models.models["m"] = scripted(fn)
-    session = await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
+    session = await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
     await drain(container)
 
     turn = (await tasks_of(container, TaskKind.TURN))[0]
@@ -175,13 +175,13 @@ async def test_transient_model_error_is_retried_and_converges(container, make_ag
 
 
 async def test_contract_violation_error_fails_without_retry(container, make_agent, models):
-    await make_agent("alpha", model="m")
+    alpha = (await make_agent("alpha", model="m")).id
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         raise ModelHTTPError(status_code=400, model_name="m", body="bad request")
 
     models.models["m"] = scripted(fn)
-    await start(container, "alpha", "hi")
+    await start(container, alpha, "hi")
     await drain(container)
 
     turn = (await tasks_of(container, TaskKind.TURN))[0]
@@ -190,17 +190,17 @@ async def test_contract_violation_error_fails_without_retry(container, make_agen
 
 
 async def test_delegate_task_starts_session_of_target_agent(container, make_agent, models):
-    await make_agent("router", model="r")
-    await make_agent("worker", model="w")
+    router = (await make_agent("router", model="r")).id
+    worker = (await make_agent("worker", model="w")).id
     models.models["r"] = call_then_answer(
-        "delegate_task", {"agent": "worker", "task": "summarise X"}, "delegated"
+        "delegate_task", {"agent_id": worker, "task": "summarise X"}, "delegated"
     )
     models.models["w"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("summary of X")]))
 
-    parent = await start(container, "router", "new slack messages", delivery=DeliveryChannel.NONE)
+    parent = await start(container, router, "new slack messages", delivery=DeliveryChannel.NONE)
     await drain(container)
 
-    children = await container.sessions.list(agent_name="worker", origins=None, limit=10, offset=0)
+    children = await container.sessions.list(agent_id=worker, origins=None, limit=10, offset=0)
     assert len(children) == 1
     child = children[0]
     assert child.origin == Origin.DELEGATION and child.origin_ref == parent.id
@@ -210,7 +210,7 @@ async def test_delegate_task_starts_session_of_target_agent(container, make_agen
 
 
 async def test_domain_error_in_tool_is_returned_to_model_for_correction(container, make_agent, models):
-    await make_agent("alpha", model="m")
+    alpha = (await make_agent("alpha", model="m")).id
     retry_texts: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -228,7 +228,7 @@ async def test_domain_error_in_tool_is_returned_to_model_for_correction(containe
         return ModelResponse(parts=[ToolCallPart("read_skill", {"name": "missing"})])
 
     models.models["m"] = scripted(fn)
-    await start(container, "alpha", "use skill", delivery=DeliveryChannel.NONE)
+    await start(container, alpha, "use skill", delivery=DeliveryChannel.NONE)
     await drain(container)
 
     assert "not found" in retry_texts[0]
@@ -236,7 +236,7 @@ async def test_domain_error_in_tool_is_returned_to_model_for_correction(containe
 
 
 async def test_run_events_are_published_to_bus(container, make_agent, models):
-    await make_agent("alpha", model="m")
+    alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = call_then_answer("list_agents", {}, "there is one agent")
     events = []
 
@@ -247,7 +247,7 @@ async def test_run_events_are_published_to_bus(container, make_agent, models):
 
     collector = asyncio.create_task(collect())
     await asyncio.sleep(0)
-    await start(container, "alpha", "who is there", delivery=DeliveryChannel.NONE)
+    await start(container, alpha, "who is there", delivery=DeliveryChannel.NONE)
     await drain(container)
     collector.cancel()
 

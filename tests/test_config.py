@@ -132,16 +132,16 @@ async def test_startup_rejects_agents_with_unresolvable_models(settings, models)
     c = build_container(settings, resolve_model=models)  # 使用真实的配置校验
     try:
         await c.start()
-        await c.agents.create(
-            "ok", AgentSpec(description="d", model="fake:m", instructions="", reflect_every=5)
+        agent = await c.agents.create(
+            AgentSpec(name="ok", description="d", model="fake:m", instructions="", reflect_every=5)
         )
         await c.stop()
         async with c.db.transaction() as s:
             from muliao.models import Agent
 
-            (await s.get(Agent, "ok")).model = "gone:m"  # 模拟配置里删掉了 provider
+            (await s.get(Agent, agent.id)).model = "gone:m"  # 模拟配置里删掉了 provider
         c2 = build_container(settings, resolve_model=models)
-        with pytest.raises(RuntimeError, match="ok: model 'gone:m'"):
+        with pytest.raises(RuntimeError, match=f"ok \\({agent.id}\\): model 'gone:m'"):
             await c2.start()
         await c2.stop()
     finally:

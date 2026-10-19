@@ -31,16 +31,16 @@ async def test_agent_session_lifecycle_over_http(client):
     await login(client)
     resp = await client.post("/api/agents", json={"name": "alpha", "description": "general helper"})
     assert resp.status_code == 201, resp.text
-    assert resp.json()["model"] == "fake:default"
+    agent = resp.json()
+    assert agent["model"] == "fake:default" and len(agent["id"]) == 12
     assert (await client.post("/api/agents", json={"name": "alpha", "description": "dup"})).status_code == 409
-    assert (
-        await client.post("/api/agents", json={"name": "Bad Name", "description": "x"})
-    ).status_code == 422
+    assert (await client.post("/api/agents", json={"name": "  ", "description": "x"})).status_code == 422
 
-    resp = await client.post("/api/sessions", json={"agent_name": "alpha", "prompt": "hello there"})
+    resp = await client.post("/api/sessions", json={"agent_id": agent["id"], "prompt": "hello there"})
     assert resp.status_code == 201
     session = resp.json()
     assert session["title"] == "hello there"
+    assert (session["agent_id"], session["agent_name"]) == (agent["id"], "alpha")
 
     detail = (await client.get(f"/api/sessions/{session['id']}")).json()
     assert detail["items"] == []
@@ -50,18 +50,22 @@ async def test_agent_session_lifecycle_over_http(client):
 
 async def test_skill_and_memory_endpoints(client):
     await login(client)
-    await client.post("/api/agents", json={"name": "alpha", "description": "general helper"})
+    agent_id = (
+        await client.post("/api/agents", json={"name": "alpha", "description": "general helper"})
+    ).json()["id"]
 
     resp = await client.put(
         "/api/skill", json={"owner": None, "name": "shared", "description": "for all", "body": "steps"}
     )
     assert resp.status_code == 200
     assert [s["name"] for s in (await client.get("/api/skills")).json()] == ["shared"]
-    assert (await client.get("/api/skills", params={"owner": "alpha"})).json() == []
+    assert (await client.get("/api/skills", params={"owner": agent_id})).json() == []
 
-    resp = await client.put("/api/agents/alpha/memory", json={"content": "- fact"})
+    resp = await client.put(f"/api/agents/{agent_id}/memory", json={"content": "- fact"})
     assert resp.json()["content"] == "- fact"
-    assert (await client.put("/api/agents/alpha/memory", json={"content": "x" * 10_000})).status_code == 422
+    assert (
+        await client.put(f"/api/agents/{agent_id}/memory", json={"content": "x" * 10_000})
+    ).status_code == 422
 
 
 async def test_vault_never_returns_values(client):
@@ -75,9 +79,11 @@ async def test_vault_never_returns_values(client):
 
 async def test_webhook_endpoint_is_public_but_token_protected(client):
     await login(client)
-    await client.post("/api/agents", json={"name": "alpha", "description": "general helper"})
+    agent_id = (
+        await client.post("/api/agents", json={"name": "alpha", "description": "general helper"})
+    ).json()["id"]
     hook = (
-        await client.post("/api/webhooks", json={"name": "gh", "agent_name": "alpha", "prompt": "Handle"})
+        await client.post("/api/webhooks", json={"name": "gh", "agent_id": agent_id, "prompt": "Handle"})
     ).json()
     client.cookies.clear()
 
@@ -96,20 +102,33 @@ def test_auth_token_expires_and_rejects_tampering():
     assert not auth.verify(token.replace("v1.1000", "v1.2000"), now=1001)
 
 
-async def test_chinese_agent_name_roundtrip_over_http(client, container):
-    from urllib.parse import quote
-
+async def test_agent_identified_by_id_and_renamable(client, container):
     await login(client)
-    resp = await client.post("/api/agents", json={"name": "研究助理", "description": "查资料"})
-    assert resp.status_code == 201, resp.text
-    path = f"/api/agents/{quote('研究助理')}"
-    assert (await client.get(path)).json()["name"] == "研究助理"
-    assert (await client.get(f"{path}/memory")).status_code == 200
-    assert container.agents.workspace("研究助理").is_dir()
+    agent = (await client.post("/api/agents", json={"name": "研究助理", "description": "查资料"})).json()
+    path = f"/api/agents/{agent['id']}"
+    # 目录用 id，不受名称影响
+    assert container.agents.workspace(agent["id"]).is_dir()
 
-    session = (await client.post("/api/sessions", json={"agent_name": "研究助理", "prompt": "hi"})).json()
-    assert session["agent_name"] == "研究助理"
-    assert (await client.delete(path)).status_code == 204
+    renamed = {**agent, "name": "Research Assistant 📚"}
+    resp = await client.put(
+        path, json={k: renamed[k] for k in ("name", "description", "model", "instructions", "reflect_every")}
+    )
+    assert resp.status_code == 200 and resp.json()["name"] == "Research Assistant 📚"
+    assert (await client.get(path)).json()["id"] == agent["id"]
+
+    session = (await client.post("/api/sessions", json={"agent_id": agent["id"], "prompt": "hi"})).json()
+    assert session["agent_name"] == "Research Assistant 📚"
+
+    other = (await client.post("/api/agents", json={"name": "other", "description": "x"})).json()
+    clash = {
+        "name": "other",
+        "description": "d",
+        "model": agent["model"],
+        "instructions": "",
+        "reflect_every": 5,
+    }
+    assert (await client.put(path, json=clash)).status_code == 409
+    assert (await client.delete(f"/api/agents/{other['id']}")).status_code == 204
 
 
 async def test_agent_defaults_endpoint_reflects_config(client, container):

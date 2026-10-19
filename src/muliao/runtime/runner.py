@@ -73,22 +73,23 @@ class AgentRuntime:
 
     def scope(self, agent: Agent, *, session_id: str | None, origin) -> RunScope:  # noqa: ANN001
         return RunScope(
-            agent_name=agent.name,
-            workspace=self._agents.workspace(agent.name),
+            agent_id=agent.id,
+            workspace=self._agents.workspace(agent.id),
             session_id=session_id,
             origin=origin,
         )
 
     def instructions(self, agent: Agent, scope: RunScope, summary: str | None) -> str:
         return build_instructions(
+            agent_id=agent.id,
             agent_name=agent.name,
             agent_description=agent.description,
             agent_instructions=agent.instructions,
             workspace=scope.workspace,
             now_local=self._clock().astimezone(self._tz),
             origin=scope.origin,
-            memory=self._memory.read(agent.name),
-            skills=self._skills.visible_to(agent.name),
+            memory=self._memory.read(agent.id),
+            skills=self._skills.visible_to(agent.id),
             memory_limit=self._memory.max_chars,
             summary=summary,
         )
@@ -105,11 +106,11 @@ class AgentRuntime:
     ) -> AgentRunResult[str]:
         toolsets: list[AbstractToolset[RunScope]] = [DomainErrorsAsRetry(t) for t in profile.toolsets]
         if profile.include_mcp:
-            toolsets += [await self._mcp.build_toolset(s) for s in await self._mcp.visible_to(agent.name)]
+            toolsets += [await self._mcp.build_toolset(s) for s in await self._mcp.visible_to(agent.id)]
         log.info(
             "agent run started",
             extra={
-                "agent": agent.name,
+                "agent": agent.id,
                 "session_id": scope.session_id,
                 "model": agent.model,
                 "history": len(history),
@@ -128,7 +129,7 @@ class AgentRuntime:
         log.info(
             "agent run finished",
             extra={
-                "agent": agent.name,
+                "agent": agent.id,
                 "session_id": scope.session_id,
                 "input_tokens": usage.input_tokens,
                 "output_tokens": usage.output_tokens,
@@ -147,7 +148,7 @@ class AgentRuntime:
     async def _forward_events(
         self, ctx: RunContext[RunScope], stream: AsyncIterable[AgentStreamEvent]
     ) -> None:
-        base = {"type": "run", "session_id": ctx.deps.session_id, "agent": ctx.deps.agent_name}
+        base = {"type": "run", "session_id": ctx.deps.session_id, "agent": ctx.deps.agent_id}
         async for event in stream:
             if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
                 self._bus.publish({**base, "event": "text", "text": event.part.content})

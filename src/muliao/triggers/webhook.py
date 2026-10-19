@@ -29,20 +29,20 @@ class WebhookService:
         self._db = db
         self._sessions = sessions
 
-    async def create(self, *, name: str, agent_name: str, prompt: str) -> Webhook:
+    async def create(self, *, name: str, agent_id: str, prompt: str) -> Webhook:
         if not name.strip() or not prompt.strip():
             raise InvalidInput("webhook name and prompt must not be empty")
         hook = Webhook(
             id=new_id(),
             name=name.strip(),
-            agent_name=agent_name,
+            agent_id=agent_id,
             token=secrets.token_urlsafe(32),
             prompt=prompt,
         )
         try:
             async with self._db.transaction() as s:
-                if await s.get(Agent, agent_name) is None:
-                    raise NotFound(f"agent {agent_name!r} not found")
+                if await s.get(Agent, agent_id) is None:
+                    raise NotFound(f"agent {agent_id!r} not found")
                 s.add(hook)
         except IntegrityError as e:
             raise Conflict(f"webhook {name!r} already exists") from e
@@ -70,7 +70,7 @@ class WebhookService:
                 raise Forbidden("invalid webhook id or token")
             session = await self._sessions.create_in(
                 s,
-                agent_name=hook.agent_name,
+                agent_id=hook.agent_id,
                 prompt=event_prompt(hook.prompt, body),
                 origin=Origin.WEBHOOK,
                 origin_ref=hook.id,

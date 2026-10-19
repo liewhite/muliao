@@ -15,10 +15,10 @@ from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane
 
 async def _load(s: AsyncSession, task: Task) -> tuple[Session, Agent]:
     session = await s.get(Session, task.session_id)
-    agent = await s.get(Agent, task.agent_name)
+    agent = await s.get(Agent, task.agent_id)
     if session is None or agent is None:
         raise RuntimeError(
-            f"turn task {task.id} references missing session/agent ({task.session_id}, {task.agent_name})"
+            f"turn task {task.id} references missing session/agent ({task.session_id}, {task.agent_id})"
         )
     return session, agent
 
@@ -63,7 +63,7 @@ class TurnHandler:
             if session.delivery != DeliveryChannel.NONE:
                 self._notifier.enqueue_in(
                     s,
-                    agent.name,
+                    agent.id,
                     Notification(
                         channel=session.delivery,
                         target=session.delivery_target,
@@ -83,13 +83,13 @@ class TurnHandler:
         to_id = await s.scalar(
             select(func.max(Message.id))
             .join(Session, Session.id == Message.session_id)
-            .where(Session.agent_name == agent.name)
+            .where(Session.agent_id == agent.id)
         )
         self._queue.enqueue(
             s,
             kind=TaskKind.REFLECTION,
-            lane=reflection_lane(agent.name),
-            agent_name=agent.name,
+            lane=reflection_lane(agent.id),
+            agent_id=agent.id,
             session_id=None,
             payload={"from_message_id": agent.reflection_checkpoint, "to_message_id": to_id},
         )

@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { api, type McpInput, type McpServer } from '../api'
-import { ErrorBanner, Field, Loading, Page, confirmAction, useAction, useLoad } from '../ui'
+import { api, asAgentId, type Agent, type McpInput, type McpServer } from '../api'
+import { ErrorBanner, Field, Loading, Page, agentLabel, confirmAction, useAction, useAgents, useLoad } from '../ui'
 
 function parsePairs(text: string): Record<string, string> {
   const result: Record<string, string> = {}
@@ -29,7 +29,7 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
     const ok = await action.run(async () => {
       const kv = parsePairs(pairs)
       const input: McpInput = {
-        owner: owner || null,
+        owner: owner ? asAgentId(owner) : null,
         name,
         transport,
         command: transport === 'stdio' ? command : null,
@@ -54,7 +54,7 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
           <select value={owner} onChange={(e) => setOwner(e.target.value)}>
             <option value="">公共（所有 agent）</option>
             {agents.data?.map((a) => (
-              <option key={a.name} value={a.name}>
+              <option key={a.id} value={a.id}>
                 {a.name} 私有
               </option>
             ))}
@@ -99,7 +99,7 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
   )
 }
 
-function McpItem({ server, onChange }: { server: McpServer; onChange: () => void }) {
+function McpItem({ server, agents, onChange }: { server: McpServer; agents: Agent[] | undefined; onChange: () => void }) {
   const [tools, setTools] = useState<string[] | null>(null)
   const action = useAction()
   const target = server.command ? [server.command, ...server.args].join(' ') : server.url
@@ -109,7 +109,7 @@ function McpItem({ server, onChange }: { server: McpServer; onChange: () => void
     <li className="card">
       <div className="card-head">
         <strong>{server.name}</strong>
-        <span className="tag">{server.owner ?? '公共'}</span>
+        <span className="tag">{server.owner === null ? '公共' : agentLabel(agents, server.owner)}</span>
         <span className="tag subtle">{server.transport}</span>
         {!server.enabled && <span className="tag subtle">已停用</span>}
       </div>
@@ -150,6 +150,7 @@ function McpItem({ server, onChange }: { server: McpServer; onChange: () => void
 
 export default function Mcp() {
   const servers = useLoad(() => api.mcp(), [])
+  const agents = useAgents()
   return (
     <Page title="MCP" back="/settings">
       <McpForm onCreated={() => void servers.reload()} />
@@ -157,7 +158,7 @@ export default function Mcp() {
         {(list) => (
           <ul className="cards">
             {list.map((s) => (
-              <McpItem key={`${s.id}-${s.enabled}`} server={s} onChange={() => void servers.reload()} />
+              <McpItem key={`${s.id}-${s.enabled}`} server={s} agents={agents.data} onChange={() => void servers.reload()} />
             ))}
             {list.length === 0 && <div className="muted center">没有 MCP server</div>}
           </ul>

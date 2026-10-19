@@ -49,11 +49,11 @@ def render_transcript(sessions: dict[str, Session], rows: list[Message]) -> str:
     )
 
 
-async def list_reflections_of(db: Database, agent_name: str, limit: int) -> list[Reflection]:
+async def list_reflections_of(db: Database, agent_id: str, limit: int) -> list[Reflection]:
     async with db.transaction() as s:
         query = (
             select(Reflection)
-            .where(Reflection.agent_name == agent_name)
+            .where(Reflection.agent_id == agent_id)
             .order_by(Reflection.id.desc())
             .limit(limit)
         )
@@ -69,15 +69,15 @@ class ReflectionHandler:
     async def execute(self, task: Task) -> Commit:
         from_id, to_id = task.payload["from_message_id"], task.payload["to_message_id"]
         async with self._db.transaction() as s:
-            agent = await s.get(Agent, task.agent_name)
+            agent = await s.get(Agent, task.agent_id)
             if agent is None:
-                raise RuntimeError(f"reflection task {task.id} references missing agent {task.agent_name!r}")
+                raise RuntimeError(f"reflection task {task.id} references missing agent {task.agent_id!r}")
             rows = list(
                 (
                     await s.scalars(
                         select(Message)
                         .join(Session, Session.id == Message.session_id)
-                        .where(Session.agent_name == agent.name, Message.id > from_id, Message.id <= to_id)
+                        .where(Session.agent_id == agent.id, Message.id > from_id, Message.id <= to_id)
                         .order_by(Message.id)
                     )
                 ).all()
@@ -99,7 +99,7 @@ class ReflectionHandler:
         async def commit(s: AsyncSession) -> None:
             s.add(
                 Reflection(
-                    agent_name=agent.name,
+                    agent_id=agent.id,
                     from_message_id=from_id,
                     to_message_id=to_id,
                     output=output,

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Origin } from '../api'
+import { api, asAgentId, type Origin } from '../api'
 import { useServerEvents } from '../events'
 import { Loading, Page, relativeTime, useLoad } from '../ui'
 
@@ -21,10 +21,10 @@ const FILTERS: { label: string; origins: Origin[] | undefined }[] = [
 
 export default function Sessions() {
   const [filter, setFilter] = useState(0)
-  const [agent, setAgent] = useState('')
+  const [agent, setAgent] = useState(asAgentId(''))
   const agents = useLoad(() => api.agents(), [])
   const sessions = useLoad(
-    () => api.sessions({ origin: FILTERS[filter].origins, agent: agent || undefined, limit: 100 }),
+    () => api.sessions({ origin: FILTERS[filter].origins, agent_id: agent || undefined, limit: 100 }),
     [filter, agent],
   )
   useServerEvents((e) => {
@@ -48,10 +48,10 @@ export default function Sessions() {
             </button>
           ))}
         </div>
-        <select value={agent} onChange={(e) => setAgent(e.target.value)}>
+        <select value={agent} onChange={(e) => setAgent(asAgentId(e.target.value))}>
           <option value="">所有 agent</option>
           {agents.data?.map((a) => (
-            <option key={a.name} value={a.name}>
+            <option key={a.id} value={a.id}>
               {a.name}
             </option>
           ))}

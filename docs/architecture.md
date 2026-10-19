@@ -6,13 +6,13 @@
 
 | 概念 | 含义 | 事实存放处（唯一来源） |
 |---|---|---|
-| Agent | 一个具名的助手：模型、指令、私有记忆、私有 skill、工作目录。名称可含中文（Unicode 字母数字、`_`、`-`），统一 NFC 规范化、禁止大写（macOS 文件系统不区分大小写） | `agents` 表；文件在 `data/agents/<name>/` |
+| Agent | 一个助手：模型、指令、私有记忆、私有 skill、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、外键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符） | `agents` 表；文件在 `data/agents/<id>/` |
 | Session | 某个 agent 的一段对话，由某个触发源创建 | `sessions` 表 |
 | Message | pydantic-ai `ModelMessage` 原样序列化 | `messages` 表（每行一条 ModelMessage） |
 | Task | 一个待执行的工作单元：`turn`（对话一轮）、`compaction`（上下文压缩）、`reflection`（强制反思）、`deliver`（投递通知） | `tasks` 表 |
 | Compaction | session 早期消息的摘要，之后发给模型的上下文用它代替 `through_message_id` 及之前的消息 | `compactions` 表 |
-| Skill | `SKILL.md`（YAML frontmatter: name, description + 正文）。公共 skill 与 agent 私有 skill | `data/skills/<name>/`、`data/agents/<a>/skills/<name>/` |
-| Memory | agent 私有记忆，一份有长度上限的 markdown | `data/agents/<a>/memory.md` |
+| Skill | `SKILL.md`（YAML frontmatter: name, description + 正文）。公共 skill 与 agent 私有 skill | `data/skills/<name>/`、`data/agents/<id>/skills/<name>/` |
+| Memory | agent 私有记忆，一份有长度上限的 markdown | `data/agents/<id>/memory.md` |
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `mcp_servers` 表 |
 | Secret | 加密保存的密码/token，通过 key 引用 | `secrets` 表（Fernet 加密） |
 | Trigger | 创建 session 并投递 turn 的入口：Web、cron、webhook、Telegram、agent 委派 | `cron_jobs` / `webhooks` 表；Telegram 走配置 |
@@ -24,7 +24,7 @@ data/
   muliao.db
   vapid_private.pem          # Web Push 密钥，首次启动生成
   skills/<name>/SKILL.md     # 公共 skill
-  agents/<name>/
+  agents/<id>/
     memory.md                # 私有记忆
     skills/<name>/SKILL.md   # 私有 skill（同名时遮蔽公共 skill）
     workspace/               # 文件工具与 shell 的工作目录
@@ -49,7 +49,7 @@ Web / cron / webhook / Telegram / delegate_task
                               ReflectionHandler ◄────┘     DeliverHandler ──► Web Push / Telegram
 ```
 
-- **Lane（串行通道）**：每个 task 带 `lane`。同一 lane 内严格 FIFO、同一时刻最多一个 running；不同 lane 并发。turn 与 compaction 的 lane 是 session id，reflection 的 lane 是 `reflection:<agent>`，deliver 的 lane 是 `deliver:<session>`。
+- **Lane（串行通道）**：每个 task 带 `lane`。同一 lane 内严格 FIFO、同一时刻最多一个 running；不同 lane 并发。turn 与 compaction 的 lane 是 session id，reflection 的 lane 是 `reflection:<agent id>`，deliver 的 lane 是 `deliver:<session>`。
 - **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。每个 task 有总时限（`task_timeout_seconds`），超时按暂时性失败重试。
 - **事务**：SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化所有事务，换来无丢失更新、无 `SQLITE_BUSY`；代价是事务内不得做模型调用、网络 IO 等慢操作。嵌套开事务会立即报错。
 - **删除约束**：session 或 agent 有正在运行的 task 时拒绝删除（409），避免运行结果无处提交。
@@ -80,11 +80,11 @@ Web / cron / webhook / Telegram / delegate_task
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill` / `write_skill` / `delete_skill`（scope = `private` | `public`）。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
-  - `agents`：`list_agents` / `delegate_task`（为目标 agent 新建 session 并投递 turn，origin=`delegation`，完成后推送）。
+  - `agents`：`list_agents`（返回 id、name、description）/ `delegate_task(agent_id, task)`（为目标 agent 新建 session 并投递 turn，origin=`delegation`，完成后推送）。模型按 id 引用 agent，不依赖名称。
   - `notify`：`notify_user`（显式 Web Push）。
   - `mcp_admin`：`mcp_list` / `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_remove`。新 MCP 从下一轮起生效。
   - `vault`：`vault_list` / `vault_set`。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
-  - `cron`：`cron_list` / `cron_create` / `cron_delete`。
+  - `cron`：`cron_list` / `cron_create(name, schedule, prompt, agent_id?)` / `cron_delete`。
   - 该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀；配置中的 `${vault:KEY}` 在运行时解析，引用不存在的 key 直接报错。
 - **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。
 
@@ -121,7 +121,7 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 | Web 用户发起 | 新建；回复沿用 | `webpush`（iOS 要求每个 push 都展示通知，所以页面可见时也会弹） |
 | cron | 每次触发新建；上一次触发的 session 仍有未完成 turn 时跳过本次（不重叠） | `none`，需要通知时 agent 调 `notify_user` |
 | webhook | 每个事件新建，事件体附在 prompt 后 | `webpush` |
-| Telegram | 每个 chat 复用最近的 session，`/new` 新开；给用户的提示也走 deliver task；配置的 agent 启动时校验存在且不可删除 | `telegram`（回复发回原 chat） |
+| Telegram | 每个 chat 复用最近的 session，`/new` 新开；给用户的提示也走 deliver task；配置按 `agent_id` 引用 agent，启动时校验存在，且该 agent 不可删除 | `telegram`（回复发回原 chat） |
 | delegate_task | 新建，`origin_ref` 记父 session | `webpush` |
 
 外部消息（Slack 等）不做实时接入，统一由 cron 定时拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。需要实时入口时，新增一个 trigger 和对应的 delivery 实现即可，与 Telegram 同构。

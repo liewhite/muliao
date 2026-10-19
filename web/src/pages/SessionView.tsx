@@ -257,7 +257,7 @@ export default function SessionView() {
         {(d) => (
           <div className="chat">
             <div className="chat-meta">
-              <Link to={agentRoute(d.session.agent_name)} className="tag">
+              <Link to={agentRoute(d.session.agent_id)} className="tag">
                 {d.session.agent_name}
               </Link>
               <span className="muted small">{formatTime(d.session.created_at)}</span>

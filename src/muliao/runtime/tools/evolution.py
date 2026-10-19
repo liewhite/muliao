@@ -20,7 +20,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         Args:
             name: Skill name.
         """
-        skill = store.resolve(ctx.deps.agent_name, name)
+        skill = store.resolve(ctx.deps.agent_id, name)
         return (
             f"# skill {skill.meta.name} ({skill.meta.scope}, dir: {skill.meta.path.parent})\n\n{skill.body}"
         )
@@ -38,7 +38,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             content: Markdown instructions: steps, commands, pitfalls, examples.
             scope: `private` (only you) or `public` (all agents).
         """
-        meta = store.write(owner_of(scope, ctx.deps.agent_name), name, description, content)
+        meta = store.write(owner_of(scope, ctx.deps.agent_id), name, description, content)
         return f"saved {scope} skill {meta.name} at {meta.path}"
 
     @ts.tool
@@ -49,7 +49,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             name: Skill name.
             scope: `private` or `public`.
         """
-        store.delete(owner_of(scope, ctx.deps.agent_name), name)
+        store.delete(owner_of(scope, ctx.deps.agent_id), name)
         return f"deleted {scope} skill {name}"
 
     return ts
@@ -69,7 +69,7 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
         Args:
             entry: One concise markdown line or short block.
         """
-        return _status(store.append(ctx.deps.agent_name, entry))
+        return _status(store.append(ctx.deps.agent_id, entry))
 
     @ts.tool
     async def memory_replace(ctx: RunContext[RunScope], old_text: str, new_text: str) -> str:
@@ -80,6 +80,6 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
             old_text: Exact text currently in memory.
             new_text: Replacement text.
         """
-        return _status(store.replace(ctx.deps.agent_name, old_text, new_text))
+        return _status(store.replace(ctx.deps.agent_id, old_text, new_text))
 
     return ts

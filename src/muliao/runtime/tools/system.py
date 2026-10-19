@@ -18,6 +18,7 @@ from muliao.vault import Vault
 
 
 class AgentInfo(BaseModel):
+    id: str
     name: str
     description: str
 
@@ -27,26 +28,27 @@ def agents_toolset(agents: AgentService, sessions: SessionService) -> FunctionTo
 
     @ts.tool_plain
     async def list_agents() -> list[AgentInfo]:
-        """List all agents and what each one is for. Use before delegating."""
-        return [AgentInfo(name=a.name, description=a.description) for a in await agents.list()]
+        """List all agents (id, display name, purpose). Use before delegating; refer to agents by `id`."""
+        return [AgentInfo(id=a.id, name=a.name, description=a.description) for a in await agents.list()]
 
     @ts.tool
-    async def delegate_task(ctx: RunContext[RunScope], agent: str, task: str) -> str:
+    async def delegate_task(ctx: RunContext[RunScope], agent_id: str, task: str) -> str:
         """Hand a task to an agent. It runs asynchronously in a new session of that agent,
         and the user is notified when it finishes. Include all context the agent needs: it cannot see this conversation.
 
         Args:
-            agent: Target agent name from `list_agents`.
+            agent_id: Target agent `id` from `list_agents`.
             task: Self-contained task description.
         """
+        target = await agents.get(agent_id)
         session = await sessions.start(
-            agent_name=agent,
+            agent_id=target.id,
             prompt=task,
             origin=Origin.DELEGATION,
             origin_ref=ctx.deps.session_id,
             delivery=DeliveryChannel.WEBPUSH,
         )
-        return f"delegated to {agent}, session id {session.id}"
+        return f"delegated to {target.name} ({target.id}), session id {session.id}"
 
     return ts
 
@@ -63,7 +65,7 @@ def notify_toolset(notifier: Notifier) -> FunctionToolset[RunScope]:
             body: Notification text, a few sentences at most.
         """
         await notifier.notify(
-            ctx.deps.agent_name,
+            ctx.deps.agent_id,
             Notification(
                 channel=DeliveryChannel.WEBPUSH,
                 target=None,
@@ -107,7 +109,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
                 header_keys=sorted(s.headers),
                 enabled=s.enabled,
             )
-            for s in await registry.visible_to(ctx.deps.agent_name)
+            for s in await registry.visible_to(ctx.deps.agent_id)
         ]
 
     @ts.tool
@@ -146,7 +148,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
             env=tuple((env or {}).items()),
             headers=tuple((headers or {}).items()),
         )
-        _, tools = await registry.add(owner_of(scope, ctx.deps.agent_name), spec, probe=True)
+        _, tools = await registry.add(owner_of(scope, ctx.deps.agent_id), spec, probe=True)
         return f"registered {scope} MCP server {name} with tools: {', '.join(tools) or '(none)'}"
 
     @ts.tool
@@ -157,7 +159,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
             name: Server name.
             scope: `private` or `public`.
         """
-        await registry.remove(owner_of(scope, ctx.deps.agent_name), name)
+        await registry.remove(owner_of(scope, ctx.deps.agent_id), name)
         return f"removed {scope} MCP server {name}"
 
     return ts
@@ -195,7 +197,7 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
 
 class CronInfo(BaseModel):
     name: str
-    agent: str
+    agent_id: str
     schedule: str
     prompt: str
     enabled: bool
@@ -211,7 +213,7 @@ def cron_toolset(cron: CronService) -> FunctionToolset[RunScope]:
         return [
             CronInfo(
                 name=j.name,
-                agent=j.agent_name,
+                agent_id=j.agent_id,
                 schedule=j.schedule,
                 prompt=j.prompt,
                 enabled=j.enabled,
@@ -222,7 +224,7 @@ def cron_toolset(cron: CronService) -> FunctionToolset[RunScope]:
 
     @ts.tool
     async def cron_create(
-        ctx: RunContext[RunScope], name: str, schedule: str, prompt: str, agent: str | None = None
+        ctx: RunContext[RunScope], name: str, schedule: str, prompt: str, agent_id: str | None = None
     ) -> str:
         """Schedule a recurring job. Each firing starts a new session of the agent with `prompt`.
         Fired sessions do not notify the user automatically: the prompt should say when to call `notify_user`.
@@ -231,10 +233,10 @@ def cron_toolset(cron: CronService) -> FunctionToolset[RunScope]:
             name: Unique job name.
             schedule: 5-field cron expression in the server's configured timezone, e.g. `*/5 * * * *`.
             prompt: Instructions for each run.
-            agent: Agent to run; defaults to you.
+            agent_id: `id` of the agent to run (see `list_agents`); defaults to you.
         """
         job = await cron.create(
-            name=name, agent_name=agent or ctx.deps.agent_name, schedule=schedule, prompt=prompt
+            name=name, agent_id=agent_id or ctx.deps.agent_id, schedule=schedule, prompt=prompt
         )
         return f"scheduled {job.name}, next run at {job.next_run_at.isoformat()}"
 

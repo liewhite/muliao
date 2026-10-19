@@ -81,7 +81,7 @@ class CompactionScheduler:
         self._queue = queue
         self._threshold = threshold_tokens
 
-    async def request(self, s: AsyncSession, session_id: str, agent_name: str) -> bool:
+    async def request(self, s: AsyncSession, session_id: str, agent_id: str) -> bool:
         """投递压缩；同 lane 已有待执行的压缩时不重复投递。返回是否新投递了。"""
         pending = await s.scalar(
             select(Task.id)
@@ -98,7 +98,7 @@ class CompactionScheduler:
             s,
             kind=TaskKind.COMPACTION,
             lane=turn_lane(session_id),
-            agent_name=agent_name,
+            agent_id=agent_id,
             session_id=session_id,
             payload={},
         )
@@ -108,12 +108,12 @@ class CompactionScheduler:
         self, s: AsyncSession, session: Session, model: str, new_messages: list[ModelMessage]
     ) -> None:
         tokens = context_tokens(new_messages)
-        ctx = {"session_id": session.id, "agent": session.agent_name, "model": model, "tokens": tokens}
+        ctx = {"session_id": session.id, "agent": session.agent_id, "model": model, "tokens": tokens}
         if tokens == 0:
             # 部分 OpenAI 兼容服务流式时不返回 usage：无法判断上下文大小，自动压缩对该模型失效
             log.warning("model reported no input token usage, automatic compaction cannot trigger", extra=ctx)
             return
-        if tokens > self._threshold and await self.request(s, session.id, session.agent_name):
+        if tokens > self._threshold and await self.request(s, session.id, session.agent_id):
             log.info("context over threshold, compaction queued", extra=ctx)
 
 
@@ -166,12 +166,12 @@ class CompactionHandler:
 
     async def execute(self, task: Task) -> Commit:
         session_id = task.session_id
-        if session_id is None or task.agent_name is None:
+        if session_id is None or task.agent_id is None:
             raise RuntimeError(f"compaction task {task.id} must reference a session and an agent")
         async with self._db.transaction() as s:
-            agent = await s.get(Agent, task.agent_name)
+            agent = await s.get(Agent, task.agent_id)
             if agent is None:
-                raise RuntimeError(f"compaction task {task.id} references missing agent {task.agent_name!r}")
+                raise RuntimeError(f"compaction task {task.id} references missing agent {task.agent_id!r}")
             previous = await latest_compaction(s, session_id)
             rows = await _rows_after(s, session_id, previous.through_message_id if previous else 0)
         turns = _group_turns(rows)
@@ -196,6 +196,6 @@ class CompactionHandler:
             s.add(Compaction(session_id=session_id, through_message_id=through, summary=summary))
             if more:
                 # 超出单次上限的轮次留给下一次压缩，直到收敛
-                await self._scheduler.request(s, session_id, agent.name)
+                await self._scheduler.request(s, session_id, agent.id)
 
         return commit

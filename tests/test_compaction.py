@@ -32,16 +32,16 @@ async def _enqueue_compaction(container, session) -> None:
             s,
             kind=TaskKind.COMPACTION,
             lane=turn_lane(session.id),
-            agent_name=session.agent_name,
+            agent_id=session.agent_id,
             session_id=session.id,
             payload={},
         )
 
 
-async def _session_with_turns(container, models, n: int):
+async def _session_with_turns(container, models, agent_id: str, n: int):
     recorder = Recorder()
     models.models["m"] = scripted(recorder)
-    session = await start(container, "alpha", "turn 1", delivery=DeliveryChannel.NONE)
+    session = await start(container, agent_id, "turn 1", delivery=DeliveryChannel.NONE)
     await drain(container)
     for i in range(2, n + 1):
         await container.sessions.reply(session.id, f"turn {i}")
@@ -50,9 +50,9 @@ async def _session_with_turns(container, models, n: int):
 
 
 async def test_compaction_summarizes_older_turns_and_next_turn_uses_summary(container, make_agent, models):
-    await make_agent("alpha", model="m", reflect_every=100)
+    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
     keep = container.settings.runtime.compaction_keep_turns
-    session, recorder = await _session_with_turns(container, models, keep + 2)
+    session, recorder = await _session_with_turns(container, models, alpha, keep + 2)
 
     await _enqueue_compaction(container, session)
     await drain(container)
@@ -80,9 +80,9 @@ async def test_compaction_summarizes_older_turns_and_next_turn_uses_summary(cont
 
 
 async def test_second_compaction_folds_in_previous_summary(container, make_agent, models):
-    await make_agent("alpha", model="m", reflect_every=100)
+    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
     keep = container.settings.runtime.compaction_keep_turns
-    session, recorder = await _session_with_turns(container, models, keep + 1)
+    session, recorder = await _session_with_turns(container, models, alpha, keep + 1)
     await _enqueue_compaction(container, session)
     await drain(container)
     for i in range(2):
@@ -98,8 +98,8 @@ async def test_second_compaction_folds_in_previous_summary(container, make_agent
 
 
 async def test_compaction_with_nothing_beyond_kept_turns_is_a_noop(container, make_agent, models):
-    await make_agent("alpha", model="m", reflect_every=100)
-    session, recorder = await _session_with_turns(container, models, 2)
+    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    session, recorder = await _session_with_turns(container, models, alpha, 2)
 
     await _enqueue_compaction(container, session)
     await drain(container)
@@ -121,8 +121,8 @@ async def _compaction_tasks(container) -> list[Task]:
 
 
 async def test_scheduler_enqueues_above_threshold_once_per_session(container, make_agent):
-    await make_agent("alpha")
-    session = await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
+    alpha = (await make_agent("alpha")).id
+    session = await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
     scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
 
     async with container.db.transaction() as s:
@@ -135,8 +135,8 @@ async def test_scheduler_enqueues_above_threshold_once_per_session(container, ma
 
 
 async def test_zero_usage_warns_instead_of_silently_never_compacting(container, make_agent, caplog):
-    await make_agent("alpha")
-    session = await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
+    alpha = (await make_agent("alpha")).id
+    session = await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
     scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
 
     async with container.db.transaction() as s:
@@ -170,9 +170,9 @@ async def test_oversized_backlog_is_compacted_in_batches_until_converged(
     import muliao.runtime.compaction as compaction
 
     monkeypatch.setattr(compaction, "_TRANSCRIPT_CHARS", 1)  # 每批只取一轮
-    await make_agent("alpha", model="m", reflect_every=100)
+    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
     keep = container.settings.runtime.compaction_keep_turns
-    session, recorder = await _session_with_turns(container, models, keep + 3)
+    session, recorder = await _session_with_turns(container, models, alpha, keep + 3)
 
     await _enqueue_compaction(container, session)
     await drain(container)
@@ -189,8 +189,8 @@ async def test_manual_compaction_endpoint(container, make_agent, tmp_path):
     from muliao.api.app import create_app
     from tests.test_api import login
 
-    await make_agent("alpha")
-    session = await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
+    alpha = (await make_agent("alpha")).id
+    session = await start(container, alpha, "hi", delivery=DeliveryChannel.NONE)
     app = create_app(container, tmp_path / "no-web")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         await login(client)

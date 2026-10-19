@@ -32,7 +32,7 @@ class SessionService:
         self,
         s: AsyncSession,
         *,
-        agent_name: str,
+        agent_id: str,
         prompt: str,
         origin: Origin,
         origin_ref: str | None,
@@ -40,11 +40,11 @@ class SessionService:
         delivery_target: str | None = None,
         title: str | None = None,
     ) -> Session:
-        if await s.get(Agent, agent_name) is None:
-            raise NotFound(f"agent {agent_name!r} not found")
+        if await s.get(Agent, agent_id) is None:
+            raise NotFound(f"agent {agent_id!r} not found")
         session = Session(
             id=new_id(),
-            agent_name=agent_name,
+            agent_id=agent_id,
             title=title or default_title(prompt),
             origin=origin,
             origin_ref=origin_ref,
@@ -63,7 +63,7 @@ class SessionService:
             s,
             kind=TaskKind.TURN,
             lane=turn_lane(session.id),
-            agent_name=session.agent_name,
+            agent_id=session.agent_id,
             session_id=session.id,
             payload={"prompt": prompt},
         )
@@ -88,11 +88,11 @@ class SessionService:
             return await self._get(s, session_id)
 
     async def list(
-        self, *, agent_name: str | None, origins: Sequence[Origin] | None, limit: int, offset: int
+        self, *, agent_id: str | None, origins: Sequence[Origin] | None, limit: int, offset: int
     ) -> list[Session]:
         query = select(Session).order_by(Session.updated_at.desc()).limit(limit).offset(offset)
-        if agent_name is not None:
-            query = query.where(Session.agent_name == agent_name)
+        if agent_id is not None:
+            query = query.where(Session.agent_id == agent_id)
         if origins is not None:
             query = query.where(Session.origin.in_(list(origins)))
         async with self._db.transaction() as s:

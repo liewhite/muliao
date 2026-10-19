@@ -4,7 +4,15 @@ export type Origin = 'user' | 'cron' | 'webhook' | 'telegram' | 'delegation'
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
 export type TaskKind = 'turn' | 'reflection' | 'deliver' | 'compaction'
 
+/** agent 的 id 与名称都是字符串；品牌类型让编译器拦住「把名称当 id 传」 */
+export type AgentId = string & { readonly __brand: 'AgentId' }
+
+/** 仅用于边界：路由参数、取值为 id 的下拉框 */
+export const asAgentId = (value: string) => value as AgentId
+
 export interface Agent {
+  /** 系统生成、不可变，用于所有引用；name 只用于展示 */
+  id: AgentId
   name: string
   description: string
   model: string
@@ -15,6 +23,7 @@ export interface Agent {
 }
 
 export interface AgentInput {
+  name: string
   description: string
   model: string | null
   instructions: string
@@ -23,6 +32,7 @@ export interface AgentInput {
 
 export interface Session {
   id: string
+  agent_id: AgentId
   agent_name: string
   title: string
   origin: Origin
@@ -52,7 +62,7 @@ export interface CompactionInfo {
 export interface Task {
   id: number
   kind: TaskKind
-  agent_name: string | null
+  agent_id: AgentId | null
   session_id: string | null
   status: TaskStatus
   attempts: number
@@ -96,7 +106,7 @@ export interface Reflection {
 export interface CronJob {
   id: number
   name: string
-  agent_name: string
+  agent_id: AgentId
   schedule: string
   prompt: string
   enabled: boolean
@@ -109,7 +119,7 @@ export interface CronJob {
 export interface Webhook {
   id: string
   name: string
-  agent_name: string
+  agent_id: AgentId
   prompt: string
   url: string
   token: string
@@ -117,7 +127,7 @@ export interface Webhook {
 
 export interface McpServer {
   id: number
-  owner: string | null
+  owner: AgentId | null
   name: string
   transport: 'stdio' | 'http'
   command: string | null
@@ -194,8 +204,8 @@ const put = <T>(path: string, body: unknown, query?: Query) => request<T>('PUT',
 const del = (path: string, query?: Query) => request<void>('DELETE', path, undefined, query)
 
 /** 前端路由：agent 名称可含中文，必须编码 */
-export const agentRoute = (name: string) => `/agents/${encodeURIComponent(name)}`
-export const newSessionRoute = (agent: string) => `/new?${new URLSearchParams({ agent })}`
+export const agentRoute = (id: AgentId) => `/agents/${id}`
+export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
 
 export interface AgentDefaults {
   model: string
@@ -209,23 +219,23 @@ export const api = {
 
   agents: () => get<Agent[]>('/api/agents'),
   agentDefaults: () => get<AgentDefaults>('/api/agent-defaults'),
-  agent: (name: string) => get<Agent>(`/api/agents/${encodeURIComponent(name)}`),
-  createAgent: (name: string, input: AgentInput) => post<Agent>('/api/agents', { name, ...input }),
-  updateAgent: (name: string, input: AgentInput) => put<Agent>(`/api/agents/${encodeURIComponent(name)}`, input),
-  deleteAgent: (name: string) => del(`/api/agents/${encodeURIComponent(name)}`),
-  memory: (name: string) => get<Memory>(`/api/agents/${encodeURIComponent(name)}/memory`),
-  setMemory: (name: string, content: string) => put<Memory>(`/api/agents/${encodeURIComponent(name)}/memory`, { content }),
-  reflections: (name: string) => get<Reflection[]>(`/api/agents/${encodeURIComponent(name)}/reflections`),
+  agent: (id: AgentId) => get<Agent>(`/api/agents/${id}`),
+  createAgent: (input: AgentInput) => post<Agent>('/api/agents', input),
+  updateAgent: (id: AgentId, input: AgentInput) => put<Agent>(`/api/agents/${id}`, input),
+  deleteAgent: (id: AgentId) => del(`/api/agents/${id}`),
+  memory: (id: AgentId) => get<Memory>(`/api/agents/${id}/memory`),
+  setMemory: (id: AgentId, content: string) => put<Memory>(`/api/agents/${id}/memory`, { content }),
+  reflections: (id: AgentId) => get<Reflection[]>(`/api/agents/${id}/reflections`),
 
   skills: (owner: string | null) => get<SkillMeta[]>('/api/skills', { owner }),
   skill: (owner: string | null, name: string) => get<Skill>('/api/skill', { owner, name }),
   saveSkill: (skill: Skill) => put<SkillMeta>('/api/skill', skill),
   deleteSkill: (owner: string | null, name: string) => del('/api/skill', { owner, name }),
 
-  sessions: (query: { agent?: string; origin?: Origin[]; limit?: number; offset?: number }) =>
+  sessions: (query: { agent_id?: AgentId; origin?: Origin[]; limit?: number; offset?: number }) =>
     get<Session[]>('/api/sessions', query),
   session: (id: string) => get<SessionDetail>(`/api/sessions/${id}`),
-  startSession: (agent_name: string, prompt: string) => post<Session>('/api/sessions', { agent_name, prompt }),
+  startSession: (agent_id: AgentId, prompt: string) => post<Session>('/api/sessions', { agent_id, prompt }),
   reply: (id: string, prompt: string) => post<Task>(`/api/sessions/${id}/messages`, { prompt }),
   markRead: (id: string) => post<void>(`/api/sessions/${id}/read`),
   compact: (id: string) => post<{ queued: boolean }>(`/api/sessions/${id}/compact`),
@@ -235,22 +245,22 @@ export const api = {
   retryTask: (id: number) => post<Task>(`/api/tasks/${id}/retry`),
 
   cron: () => get<CronJob[]>('/api/cron'),
-  createCron: (job: { name: string; agent_name: string; schedule: string; prompt: string }) =>
+  createCron: (job: { name: string; agent_id: AgentId; schedule: string; prompt: string }) =>
     post<CronJob>('/api/cron', job),
   updateCron: (id: number, job: { schedule: string; prompt: string; enabled: boolean }) =>
     put<CronJob>(`/api/cron/${id}`, job),
   deleteCron: (id: number) => del(`/api/cron/${id}`),
 
   webhooks: () => get<Webhook[]>('/api/webhooks'),
-  createWebhook: (hook: { name: string; agent_name: string; prompt: string }) => post<Webhook>('/api/webhooks', hook),
+  createWebhook: (hook: { name: string; agent_id: AgentId; prompt: string }) => post<Webhook>('/api/webhooks', hook),
   deleteWebhook: (id: string) => del(`/api/webhooks/${id}`),
 
   mcp: () => get<McpServer[]>('/api/mcp'),
   addMcp: (input: McpInput) => post<McpServer>('/api/mcp', input),
-  probeMcp: (owner: string | null, name: string) => post<string[]>('/api/mcp/tools', undefined, { owner, name }),
-  setMcpEnabled: (owner: string | null, name: string, enabled: boolean) =>
+  probeMcp: (owner: AgentId | null, name: string) => post<string[]>('/api/mcp/tools', undefined, { owner, name }),
+  setMcpEnabled: (owner: AgentId | null, name: string, enabled: boolean) =>
     put<McpServer>('/api/mcp/enabled', { enabled }, { owner, name }),
-  deleteMcp: (owner: string | null, name: string) => del('/api/mcp', { owner, name }),
+  deleteMcp: (owner: AgentId | null, name: string) => del('/api/mcp', { owner, name }),
 
   secrets: () => get<SecretInfo[]>('/api/vault'),
   setSecret: (key: string, value: string, description: string) =>

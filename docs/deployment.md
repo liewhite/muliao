@@ -73,4 +73,4 @@ VAPID 密钥在首次启动时生成于 `data/vapid_private.pem`，更换它会�
 
 ## 数据
 
-全部在配置的 `data_dir`：`muliao.db`（SQLite）、`skills/`（公共 skill）、`agents/<name>/`（记忆、私有 skill、工作目录）。备份整个目录即可；配置文件里的 `vault.key` 需单独妥善保存，丢失后 vault 中的 secret 无法解密。
+全部在配置的 `data_dir`：`muliao.db`（SQLite）、`skills/`（公共 skill）、`agents/<agent id>/`（记忆、私有 skill、工作目录）。备份整个目录即可；配置文件里的 `vault.key` 需单独妥善保存，丢失后 vault 中的 secret 无法解密。

@@ -25,7 +25,7 @@ class CronIn(BaseModel):
 
 class CronCreate(BaseModel):
     name: str
-    agent_name: str
+    agent_id: str
     schedule: str
     prompt: str
 
@@ -33,7 +33,7 @@ class CronCreate(BaseModel):
 class CronOut(BaseModel):
     id: int
     name: str
-    agent_name: str
+    agent_id: str
     schedule: str
     prompt: str
     enabled: bool
@@ -47,7 +47,7 @@ class CronOut(BaseModel):
         return cls(
             id=j.id,
             name=j.name,
-            agent_name=j.agent_name,
+            agent_id=j.agent_id,
             schedule=j.schedule,
             prompt=j.prompt,
             enabled=j.enabled,
@@ -67,7 +67,7 @@ async def list_cron(c: C) -> list[CronOut]:
 async def create_cron(c: C, body: CronCreate) -> CronOut:
     return CronOut.of(
         await c.cron.create(
-            name=body.name, agent_name=body.agent_name, schedule=body.schedule, prompt=body.prompt
+            name=body.name, agent_id=body.agent_id, schedule=body.schedule, prompt=body.prompt
         )
     )
 
@@ -89,14 +89,14 @@ async def delete_cron(c: C, job_id: int) -> None:
 
 class WebhookCreate(BaseModel):
     name: str
-    agent_name: str
+    agent_id: str
     prompt: str
 
 
 class WebhookOut(BaseModel):
     id: str
     name: str
-    agent_name: str
+    agent_id: str
     prompt: str
     url: str
     token: str
@@ -106,7 +106,7 @@ class WebhookOut(BaseModel):
         return cls(
             id=h.id,
             name=h.name,
-            agent_name=h.agent_name,
+            agent_id=h.agent_id,
             prompt=h.prompt,
             url=f"{public_url.rstrip('/')}/hooks/{h.id}",
             token=h.token,
@@ -120,7 +120,7 @@ async def list_webhooks(c: C) -> list[WebhookOut]:
 
 @router.post("/webhooks", status_code=201)
 async def create_webhook(c: C, body: WebhookCreate) -> WebhookOut:
-    hook = await c.webhooks.create(name=body.name, agent_name=body.agent_name, prompt=body.prompt)
+    hook = await c.webhooks.create(name=body.name, agent_id=body.agent_id, prompt=body.prompt)
     return WebhookOut.of(hook, c.settings.server.public_url)
 
 

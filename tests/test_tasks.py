@@ -4,10 +4,10 @@ from muliao.db import utcnow
 from muliao.models import TaskKind, TaskStatus
 
 
-async def _enqueue(container, lane: str, agent: str = "alpha"):
+async def _enqueue(container, lane: str, agent: str):
     async with container.db.transaction() as s:
         return container.queue.enqueue(
-            s, kind=TaskKind.DELIVER, lane=lane, agent_name=agent, session_id=None, payload={}
+            s, kind=TaskKind.DELIVER, lane=lane, agent_id=agent, session_id=None, payload={}
         )
 
 
@@ -16,10 +16,10 @@ async def _noop(_s):
 
 
 async def test_lane_is_fifo_and_exclusive_while_other_lanes_run(container, make_agent):
-    await make_agent()
-    a1 = await _enqueue(container, "a")
-    a2 = await _enqueue(container, "a")
-    b1 = await _enqueue(container, "b")
+    alpha = (await make_agent()).id
+    a1 = await _enqueue(container, "a", alpha)
+    a2 = await _enqueue(container, "a", alpha)
+    b1 = await _enqueue(container, "b", alpha)
     q = container.queue
 
     first = await q.claim()
@@ -33,8 +33,8 @@ async def test_lane_is_fifo_and_exclusive_while_other_lanes_run(container, make_
 
 
 async def test_transient_failure_backs_off_then_fails_after_max_attempts(container, make_agent):
-    await make_agent()
-    task = await _enqueue(container, "a")
+    alpha = (await make_agent()).id
+    task = await _enqueue(container, "a", alpha)
     q = container.queue
     max_attempts = container.settings.runtime.task_max_attempts
 
@@ -54,8 +54,8 @@ async def test_transient_failure_backs_off_then_fails_after_max_attempts(contain
 
 
 async def test_non_retryable_failure_fails_immediately_and_can_be_retried_manually(container, make_agent):
-    await make_agent()
-    task = await _enqueue(container, "a")
+    alpha = (await make_agent()).id
+    task = await _enqueue(container, "a", alpha)
     q = container.queue
     await q.claim()
 
@@ -68,8 +68,8 @@ async def test_non_retryable_failure_fails_immediately_and_can_be_retried_manual
 
 
 async def test_recover_resets_running_tasks(container, make_agent):
-    await make_agent()
-    task = await _enqueue(container, "a")
+    alpha = (await make_agent()).id
+    task = await _enqueue(container, "a", alpha)
     await container.queue.claim()
 
     assert [t.id for t in await container.queue.recover()] == [task.id]

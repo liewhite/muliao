@@ -37,12 +37,12 @@ def turn_lane(session_id: str) -> str:
     return f"session:{session_id}"
 
 
-def reflection_lane(agent_name: str) -> str:
-    return f"reflection:{agent_name}"
+def reflection_lane(agent_id: str) -> str:
+    return f"reflection:{agent_id}"
 
 
-def deliver_lane(session_id: str | None, agent_name: str | None) -> str:
-    return f"deliver:{session_id or agent_name or 'system'}"
+def deliver_lane(session_id: str | None, agent_id: str | None) -> str:
+    return f"deliver:{session_id or agent_id or 'system'}"
 
 
 def _claimable():  # noqa: ANN202
@@ -66,14 +66,14 @@ def _claimable():  # noqa: ANN202
 
 
 async def running_task_ids(
-    s: AsyncSession, *, session_id: str | None = None, agent_name: str | None = None
+    s: AsyncSession, *, session_id: str | None = None, agent_id: str | None = None
 ) -> list[int]:
     """正在运行的 task id。删除 session/agent 前用它保证不会删掉执行中的工作。"""
     query = select(Task.id).where(Task.status == TaskStatus.RUNNING)
     if session_id is not None:
         query = query.where(Task.session_id == session_id)
-    if agent_name is not None:
-        query = query.where(Task.agent_name == agent_name)
+    if agent_id is not None:
+        query = query.where(Task.agent_id == agent_id)
     return list((await s.scalars(query)).all())
 
 
@@ -94,7 +94,7 @@ class TaskQueue:
         *,
         kind: TaskKind,
         lane: str,
-        agent_name: str | None,
+        agent_id: str | None,
         session_id: str | None,
         payload: dict[str, Any],
     ) -> Task:
@@ -102,7 +102,7 @@ class TaskQueue:
         task = Task(
             kind=kind,
             lane=lane,
-            agent_name=agent_name,
+            agent_id=agent_id,
             session_id=session_id,
             payload=payload,
             status=TaskStatus.PENDING,

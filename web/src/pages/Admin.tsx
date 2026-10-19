@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, type TaskStatus } from '../api'
+import { api, asAgentId, type TaskStatus } from '../api'
 import { closeServerEvents } from '../events'
 import { enablePush, pushState, type PushState } from '../push'
-import { ErrorBanner, Field, Loading, Page, confirmAction, formatTime, useAction, useLoad } from '../ui'
+import { ErrorBanner, Field, Loading, Page, agentLabel, confirmAction, formatTime, useAction, useAgents, useLoad } from '../ui'
 
 export function Vault() {
   const secrets = useLoad(() => api.secrets(), [])
@@ -73,13 +73,13 @@ export function Vault() {
 
 export function Webhooks() {
   const hooks = useLoad(() => api.webhooks(), [])
-  const agents = useLoad(() => api.agents(), [])
-  const [form, setForm] = useState({ name: '', agent_name: '', prompt: '' })
+  const agents = useAgents()
+  const [form, setForm] = useState({ name: '', agent_id: asAgentId(''), prompt: '' })
   const action = useAction()
 
   async function create() {
     if (await action.run(() => api.createWebhook(form))) {
-      setForm({ name: '', agent_name: '', prompt: '' })
+      setForm({ name: '', agent_id: asAgentId(''), prompt: '' })
       await hooks.reload()
     }
   }
@@ -96,12 +96,12 @@ export function Webhooks() {
             <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
           <Field label="Agent">
-            <select value={form.agent_name} onChange={(e) => setForm({ ...form, agent_name: e.target.value })}>
+            <select value={form.agent_id} onChange={(e) => setForm({ ...form, agent_id: asAgentId(e.target.value) })}>
               <option value="" disabled>
                 选择 agent
               </option>
               {agents.data?.map((a) => (
-                <option key={a.name} value={a.name}>
+                <option key={a.id} value={a.id}>
                   {a.name}
                 </option>
               ))}
@@ -111,7 +111,7 @@ export function Webhooks() {
             <textarea rows={4} value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} />
           </Field>
           <ErrorBanner error={action.error} />
-          <button className="button primary" onClick={create} disabled={action.busy || !form.name || !form.agent_name || !form.prompt}>
+          <button className="button primary" onClick={create} disabled={action.busy || !form.name || !form.agent_id || !form.prompt}>
             创建
           </button>
         </div>
@@ -123,7 +123,7 @@ export function Webhooks() {
               <li key={h.id} className="card">
                 <div className="card-head">
                   <strong>{h.name}</strong>
-                  <span className="tag">{h.agent_name}</span>
+                  <span className="tag">{agentLabel(agents.data, h.agent_id)}</span>
                 </div>
                 <code className="block">{`curl -X POST ${h.url} \\\n  -H 'X-Muliao-Token: ${h.token}' \\\n  -d '{"hello":"world"}'`}</code>
                 <p className="prewrap">{h.prompt}</p>
@@ -154,6 +154,7 @@ const STATUS_FILTERS: { label: string; status?: TaskStatus }[] = [
 export function Tasks() {
   const [filter, setFilter] = useState(0)
   const tasks = useLoad(() => api.tasks(STATUS_FILTERS[filter].status), [filter])
+  const agents = useAgents()
   const action = useAction()
   return (
     <Page title="任务" back="/settings">
@@ -173,7 +174,7 @@ export function Tasks() {
                 <div className="card-head">
                   <strong>#{t.id}</strong>
                   <span className="tag">{t.kind}</span>
-                  {t.agent_name && <span className="tag subtle">{t.agent_name}</span>}
+                  {t.agent_id && <span className="tag subtle">{agentLabel(agents.data, t.agent_id)}</span>}
                   <span className={`tag status-${t.status}`}>{t.status}</span>
                 </div>
                 <div className="muted small">

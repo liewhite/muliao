@@ -29,22 +29,22 @@ class Notifier:
         self._db = db
         self._queue = queue
 
-    def enqueue_in(self, s: AsyncSession, agent_name: str | None, notification: Notification) -> None:
+    def enqueue_in(self, s: AsyncSession, agent_id: str | None, notification: Notification) -> None:
         if notification.channel == DeliveryChannel.NONE:
             raise ValueError("cannot enqueue a notification for channel 'none'")
         self._queue.enqueue(
             s,
             kind=TaskKind.DELIVER,
-            lane=deliver_lane(notification.session_id, agent_name),
-            agent_name=agent_name,
+            lane=deliver_lane(notification.session_id, agent_id),
+            agent_id=agent_id,
             session_id=notification.session_id,
             payload=asdict(notification),
         )
 
-    async def notify(self, agent_name: str | None, notification: Notification) -> None:
-        """agent_name 为 None 表示系统通知，不属于任何 agent。"""
+    async def notify(self, agent_id: str | None, notification: Notification) -> None:
+        """agent_id 为 None 表示系统通知，不属于任何 agent。"""
         async with self._db.transaction() as s:
-            self.enqueue_in(s, agent_name, notification)
+            self.enqueue_in(s, agent_id, notification)
 
 
 class DeliverHandler:

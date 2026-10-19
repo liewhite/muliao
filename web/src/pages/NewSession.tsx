@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api } from '../api'
+import { api, asAgentId } from '../api'
 import { ErrorBanner, Field, Loading, Page, useAction, useLoad } from '../ui'
 
 export default function NewSession() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const agents = useLoad(() => api.agents(), [])
-  const [agent, setAgent] = useState(params.get('agent') ?? '')
+  const [agent, setAgent] = useState(asAgentId(params.get('agent') ?? ''))
   const [prompt, setPrompt] = useState('')
   const action = useAction()
 
@@ -32,12 +32,12 @@ export default function NewSession() {
           ) : (
             <div className="form">
               <Field label="Agent">
-                <select value={agent} onChange={(e) => setAgent(e.target.value)}>
+                <select value={agent} onChange={(e) => setAgent(asAgentId(e.target.value))}>
                   <option value="" disabled>
                     选择 agent
                   </option>
                   {list.map((a) => (
-                    <option key={a.name} value={a.name}>
+                    <option key={a.id} value={a.id}>
                       {a.name} — {a.description}
                     </option>
                   ))}

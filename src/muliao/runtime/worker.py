@@ -69,7 +69,7 @@ class Worker:
                 "kind": task.kind,
                 "status": status,
                 "session_id": task.session_id,
-                "agent": task.agent_name,
+                "agent": task.agent_id,
                 "error": error,
             }
         )

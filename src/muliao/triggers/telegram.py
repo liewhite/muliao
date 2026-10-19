@@ -28,13 +28,13 @@ class TelegramTrigger:
         client: TelegramClient,
         sessions: SessionService,
         notifier: Notifier,
-        agent_name: str,
+        agent_id: str,
         allowed_chat_ids: set[int],
     ):
         self._client = client
         self._sessions = sessions
         self._notifier = notifier
-        self._agent = agent_name
+        self._agent = agent_id
         self._allowed = allowed_chat_ids
 
     async def handle(self, update: dict[str, Any]) -> None:
@@ -53,7 +53,7 @@ class TelegramTrigger:
             return
         if text.strip() == NEW_SESSION_COMMAND:
             await self._sessions.start(
-                agent_name=self._agent,
+                agent_id=self._agent,
                 prompt="(The user started a new conversation. Greet them briefly.)",
                 origin=Origin.TELEGRAM,
                 origin_ref=ref,
@@ -65,7 +65,7 @@ class TelegramTrigger:
         session = await self._sessions.find_latest(Origin.TELEGRAM, ref)
         if session is None:
             await self._sessions.start(
-                agent_name=self._agent,
+                agent_id=self._agent,
                 prompt=text,
                 origin=Origin.TELEGRAM,
                 origin_ref=ref,

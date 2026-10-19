@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { agentRoute, api, type Skill } from '../api'
+import { agentRoute, api, asAgentId, type AgentId, type Skill } from '../api'
 import { ErrorBanner, Field, Loading, Page, confirmAction, useAction, useLoad } from '../ui'
 
-function editorPath(owner: string | null, name?: string): string {
+function editorPath(owner: AgentId | null, name?: string): string {
   const params = new URLSearchParams()
   if (owner) params.set('owner', owner)
   if (name) params.set('name', name)
@@ -11,7 +11,7 @@ function editorPath(owner: string | null, name?: string): string {
 }
 
 /** owner 为 null 列出公共 skill，否则列出该 agent 的私有 skill。 */
-export function SkillList({ owner }: { owner: string | null }) {
+export function SkillList({ owner }: { owner: AgentId | null }) {
   const skills = useLoad(() => api.skills(owner), [owner])
   return (
     <>
@@ -51,7 +51,8 @@ export function PublicSkills() {
 export function SkillEditor() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
-  const owner = params.get('owner')
+  const ownerParam = params.get('owner')
+  const owner = ownerParam === null ? null : asAgentId(ownerParam)
   const existing = params.get('name')
   const back = owner ? agentRoute(owner) : '/skills'
   const [skill, setSkill] = useState<Skill>({ owner, name: existing ?? '', description: '', body: '' })

@@ -93,13 +93,13 @@ class McpRegistry:
                 f"could not connect to MCP server {server.name!r}: {type(e).__name__}: {e}"
             ) from e
 
-    async def visible_to(self, agent_name: str) -> list[McpServer]:
+    async def visible_to(self, agent_id: str) -> list[McpServer]:
         """agent 可用的 server：公共 + 自己私有，且已启用。私有与公共同名时私有生效。"""
         async with self._db.transaction() as s:
             rows = (
                 await s.scalars(
                     select(McpServer)
-                    .where(McpServer.enabled, or_(McpServer.owner.is_(None), McpServer.owner == agent_name))
+                    .where(McpServer.enabled, or_(McpServer.owner.is_(None), McpServer.owner == agent_id))
                     .order_by(McpServer.name)
                 )
             ).all()
