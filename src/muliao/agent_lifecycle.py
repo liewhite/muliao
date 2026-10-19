@@ -20,7 +20,7 @@ class AgentLifecycle:
         self._db = db
         self._agents = agents
 
-    async def delete(self, agent_id: str) -> None:
+    async def delete(self, agent_id: str, *, author: str) -> None:
         async with self._db.transaction() as s:
             agent = await self._agents.get_in(s, agent_id)
             if running := await running_task_ids(s, agent_id=agent_id):
@@ -32,4 +32,4 @@ class AgentLifecycle:
             sessions = list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())
             await delete_sessions(s, sessions)
             await s.delete(agent)
-        self._agents.remove_files(agent_id)
+        await self._agents.remove_files(agent_id, author)

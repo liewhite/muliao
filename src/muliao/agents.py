@@ -17,6 +17,7 @@ from muliao.evolution.prompts import PromptStore
 from muliao.ids import new_agent_id
 from muliao.models import Agent, PromptRevision
 from muliao.naming import normalize_agent_name
+from muliao.resources import ResourceRepo
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,8 @@ class AgentService:
     def __init__(
         self,
         db: Database,
-        agents_dir: Path,
+        workspaces_dir: Path,
+        repo: ResourceRepo,
         memory: MemoryStore,
         model_checker: Callable[[str], None],
         prompts: PromptStore,
@@ -67,16 +69,14 @@ class AgentService:
     ):
         self._prompts = prompts
         self._db = db
-        self._agents_dir = agents_dir
+        self._workspaces_dir = workspaces_dir
+        self._repo = repo
         self._memory = memory
         self._check_model = model_checker
         self.defaults = defaults
 
-    def root(self, agent_id: str) -> Path:
-        return self._agents_dir / agent_id
-
     def workspace(self, agent_id: str) -> Path:
-        return self.root(agent_id) / "workspace"
+        return self._workspaces_dir / agent_id
 
     def _check(self, *, description: str, model: str, reflect_every: int, tool_groups: list[str]) -> None:
         if not description.strip():
@@ -121,7 +121,8 @@ class AgentService:
             s.add(PromptRevision(owner=agent.id, content=spec.instructions, author=author))
             # 目录与数据库行同事务创建：目录创建失败则回滚
             self.workspace(agent.id).mkdir(parents=True, exist_ok=True)
-            self._memory.init(agent.id)
+            memory = self._memory.init(agent.id)
+        await self._repo.commit([memory], f"create agent {agent.id}", author)
         return agent
 
     async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> Agent:
@@ -172,8 +173,12 @@ class AgentService:
     async def get_in(self, s: AsyncSession, agent_id: str) -> Agent:
         return await self._get(s, agent_id)
 
-    def remove_files(self, agent_id: str) -> None:
-        """删除 agent 的目录（工作目录、记忆、私有 skill）。数据库行由调用方在事务里删除。"""
-        root = self.root(agent_id)
-        if root.exists():
-            shutil.rmtree(root)
+    async def remove_files(self, agent_id: str, author: str) -> None:
+        """删除 agent 的工作目录与私有资源（记忆、指令、skill、MCP 配置，删除记入资源仓库）。数据库行由调用方删除。"""
+        workspace = self.workspace(agent_id)
+        if workspace.exists():
+            shutil.rmtree(workspace)
+        resources = self._repo.owner_dir(agent_id)
+        if resources.exists():
+            shutil.rmtree(resources)
+            await self._repo.commit([resources], f"delete agent {agent_id}", author)

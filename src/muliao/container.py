@@ -22,6 +22,7 @@ from muliao.evolution.prompts import PromptStore
 from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import TaskKind
+from muliao.resources import ResourceRepo
 from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
 from muliao.runtime.conversation import Threads
 from muliao.runtime.mcp import McpRegistry
@@ -58,6 +59,7 @@ class Container:
     bus: EventBus
     queue: TaskQueue
     vault: Vault
+    resources: ResourceRepo
     skills: SkillStore
     memory: MemoryStore
     prompts: PromptStore
@@ -83,6 +85,8 @@ class Container:
 
     async def start(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path)
+        # git 不可用或仓库损坏时在启动时暴露，而不是散落到第一次修改资源时
+        await self.resources.ensure()
         await self._check_agent_models()
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
         await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)
@@ -136,12 +140,14 @@ def build_container(
         retry_base_seconds=settings.runtime.task_retry_base_seconds,
     )
     vault = Vault(db, settings.vault.key.get_secret_value())
-    skills = SkillStore(settings.public_skills_dir, settings.agents_dir)
-    memory = MemoryStore(settings.agents_dir, settings.runtime.memory_max_chars)
+    resources = ResourceRepo(settings.resources_dir)
+    skills = SkillStore(resources)
+    memory = MemoryStore(resources, settings.runtime.memory_max_chars)
     prompts = PromptStore(db)
     agents = AgentService(
         db,
-        settings.agents_dir,
+        settings.workspaces_dir,
+        resources,
         memory,
         model_checker or models.check,
         prompts,
@@ -230,6 +236,7 @@ def build_container(
         bus=bus,
         queue=queue,
         vault=vault,
+        resources=resources,
         skills=skills,
         memory=memory,
         prompts=prompts,

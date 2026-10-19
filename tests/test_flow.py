@@ -321,7 +321,7 @@ async def test_model_sees_agent_names_never_ids(container, make_agent, models):
     )  # 写错名称时给出可选名称
     # 工作目录等文件路径里会出现 id（agents/<id>/…），那是给文件操作用的路径；除此之外模型不该看到 id
     for agent_id in (router.id, worker.id):
-        assert agent_id not in re.sub(r"agents/[0-9a-f]{12}/", "agents/<dir>/", transcript)
+        assert agent_id not in re.sub(r"(workspaces|agents)/[0-9a-f]{12}", r"\1/<dir>", transcript)
     jobs = await container.triggers.list()
     assert [(j.name, j.agent_id) for j in jobs] == [("daily", worker.id)]  # 程序侧落到 id
     children = await container.sessions.list(agent_id=worker.id, origins=None, limit=10, offset=0)

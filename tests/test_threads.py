@@ -331,7 +331,7 @@ async def test_private_thread_running_inline_cannot_be_deleted_nor_its_agent(con
         with pytest.raises(Conflict):
             await container.sessions.delete(child.id)
         with pytest.raises(Conflict):
-            await container.agent_lifecycle.delete(slow)
+            await container.agent_lifecycle.delete(slow, author="user")
     finally:
         gate.set()
         await drain(container)
@@ -339,4 +339,4 @@ async def test_private_thread_running_inline_cannot_be_deleted_nor_its_agent(con
         await asyncio.gather(worker, return_exceptions=True)
 
     assert await last_answer(container, parent.id) == "a: done"
-    await container.agent_lifecycle.delete(slow)  # 跑完之后可以删
+    await container.agent_lifecycle.delete(slow, author="user")  # 跑完之后可以删

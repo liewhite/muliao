@@ -1,6 +1,6 @@
 """Skill 文件存储。
 
-一个 skill 是一个目录，入口 `SKILL.md` 带 YAML frontmatter（name、description）。
+一个 skill 是一个目录，入口 `SKILL.md` 带 YAML frontmatter（name、description）。存在资源仓库里，每次修改提交一版。
 owner 为 None 表示公共 skill，否则为 agent 私有。agent 视角下同名私有 skill 遮蔽公共 skill。
 """
 
@@ -15,6 +15,7 @@ import frontmatter
 from muliao.errors import InvalidInput, NotFound
 from muliao.naming import validate_slug
 from muliao.ownership import Scope, scope_of, visible
+from muliao.resources import ResourceRepo
 
 SKILL_FILE = "SKILL.md"
 
@@ -38,12 +39,11 @@ class Skill:
 
 
 class SkillStore:
-    def __init__(self, public_dir: Path, agents_dir: Path):
-        self._public_dir = public_dir
-        self._agents_dir = agents_dir
+    def __init__(self, repo: ResourceRepo):
+        self._repo = repo
 
     def _root(self, owner: str | None) -> Path:
-        return self._public_dir if owner is None else self._agents_dir / owner / "skills"
+        return self._repo.owner_dir(owner) / "skills"
 
     def _load(self, owner: str | None, skill_dir: Path) -> Skill:
         path = skill_dir / SKILL_FILE
@@ -85,7 +85,9 @@ class SkillStore:
                 return self.read(meta.owner, name)
         raise NotFound(f"skill {name!r} not found in private or public skills")
 
-    def write(self, owner: str | None, name: str, description: str, body: str) -> SkillMeta:
+    async def write(
+        self, owner: str | None, name: str, description: str, body: str, author: str
+    ) -> SkillMeta:
         validate_slug("skill", name)
         description = description.strip()
         if not description:
@@ -97,8 +99,10 @@ class SkillStore:
         tmp = path.with_suffix(".tmp")
         tmp.write_text(frontmatter.dumps(post) + "\n", encoding="utf-8")
         tmp.replace(path)
+        await self._repo.commit([skill_dir], f"{scope_of(owner)} skill {name}", author)
         return SkillMeta(name, description, owner, path)
 
-    def delete(self, owner: str | None, name: str) -> None:
+    async def delete(self, owner: str | None, name: str, author: str) -> None:
         skill = self.read(owner, name)
         shutil.rmtree(skill.meta.path.parent)
+        await self._repo.commit([skill.meta.path.parent], f"delete {scope_of(owner)} skill {name}", author)

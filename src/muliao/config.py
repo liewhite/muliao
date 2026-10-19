@@ -118,12 +118,14 @@ class Settings(_Section):
         return self.data_dir / "muliao.db"
 
     @property
-    def public_skills_dir(self) -> Path:
-        return self.data_dir / "skills"
+    def resources_dir(self) -> Path:
+        """agent 能改的文本资源（指令、记忆、skill、MCP 配置），是一个 git 仓库，见 muliao.resources。"""
+        return self.data_dir / "resources"
 
     @property
-    def agents_dir(self) -> Path:
-        return self.data_dir / "agents"
+    def workspaces_dir(self) -> Path:
+        """每个 agent 的工作目录（文件工具与 shell 的 cwd），不做版本管理。"""
+        return self.data_dir / "workspaces"
 
     @property
     def temp_dir(self) -> Path:

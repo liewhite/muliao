@@ -6,14 +6,14 @@
 
 | 概念 | 含义 | 事实存放处（唯一来源） |
 |---|---|---|
-| Agent | 一个助手：模型、指令、私有记忆、私有 skill、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、外键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符） | `agents` 表；文件在 `data/agents/<id>/` |
+| Agent | 一个助手：模型、指令、私有记忆、私有 skill、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、外键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符） | `agents` 表；私有资源在 `data/resources/agents/<id>/`，工作目录 `data/workspaces/<id>/` |
 | Session | 某个 agent 的一段对话，由某个触发源创建 | `sessions` 表 |
 | Message | pydantic-ai `ModelMessage` 原样序列化 | `messages` 表（每行一条 ModelMessage） |
 | Task | 一个待执行的工作单元：`turn`（对话一轮）、`compaction`（上下文压缩）、`reflection`（强制反思）、`deliver`（投递通知） | `tasks` 表 |
 | Compaction | session 早期消息的摘要，之后发给模型的上下文用它代替 `through_message_id` 及之前的消息 | `compactions` 表 |
-| Skill | `SKILL.md`（YAML frontmatter: name, description + 正文）。公共 skill 与 agent 私有 skill | `data/skills/<name>/`、`data/agents/<id>/skills/<name>/` |
+| Skill | `SKILL.md`（YAML frontmatter: name, description + 正文）。公共 skill 与 agent 私有 skill | `resources/public/skills/<name>/`、`resources/agents/<id>/skills/<name>/` |
 | Prompt | 带版本的指令：agent 自己的指令，或合并进所有 agent 的公共 prompt；最新一版生效 | `prompt_revisions` 表 |
-| Memory | agent 私有记忆，一份有长度上限的 markdown | `data/agents/<id>/memory.md` |
+| Memory | agent 私有记忆，一份有长度上限的 markdown | `resources/agents/<id>/MEMORY.md` |
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `mcp_servers` 表 |
 | Secret | 加密保存的密码/token，通过 key 引用；公共或 agent 私有 | `secrets` 表（Fernet 加密） |
 | Trigger | 具名、持久的事件来源，把外部刺激变成交给某个 agent 的一轮；触发方式（定时、webhook……）多态实现 | `triggers` 表 |
@@ -23,13 +23,18 @@
 ```
 data/
   muliao.db
-  vapid_private.pem          # Web Push 密钥，首次启动生成
-  skills/<name>/SKILL.md     # 公共 skill
-  agents/<id>/
-    memory.md                # 私有记忆
-    skills/<name>/SKILL.md   # 私有 skill（同名时遮蔽公共 skill）
-    workspace/               # 文件工具与 shell 的工作目录
+  vapid_private.pem            # Web Push 密钥，首次启动生成
+  resources/                   # git 仓库：agent 能改的文本资源，每次修改提交一版（见 muliao.resources）
+    public/
+      skills/<name>/SKILL.md   # 公共 skill
+    agents/<id>/
+      MEMORY.md                # 私有记忆
+      skills/<name>/SKILL.md   # 私有 skill（同名时遮蔽公共 skill）
+  workspaces/<id>/             # 文件工具与 shell 的工作目录（不做版本管理）
+  tmp/                         # 临时 agent 的工作目录，用完即删
 ```
+
+**资源的版本管理**：agent 能改的文本资源都存成文件，用一个 git 仓库（`data/resources/`）管理版本：每次修改写文件后提交一次，作者是 `user` 或做出修改的 agent 的 id；历史与回滚都来自 git（回滚 = 把旧版本内容写回并作为新的一次提交）。写文件与提交是两步：提交失败时错误可见，已写的文件留在工作区，下一次提交一并带上。启动时检查 git 可用并初始化仓库。secret 不在这里——它们加密存在数据库的 vault 里，不需要版本管理。
 
 ## 2. 核心数据流：一切都是 Task
 

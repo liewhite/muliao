@@ -118,7 +118,7 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
 
 @router.delete("/agents/{agent_id}", status_code=204)
 async def delete_agent(c: C, agent_id: str) -> None:
-    await c.agent_lifecycle.delete(agent_id)
+    await c.agent_lifecycle.delete(agent_id, author=USER)
 
 
 class MemoryOut(BaseModel):
@@ -139,7 +139,7 @@ async def get_memory(c: C, agent_id: str) -> MemoryOut:
 @router.put("/agents/{agent_id}/memory")
 async def put_memory(c: C, agent_id: str, body: MemoryIn) -> MemoryOut:
     await c.agents.get(agent_id)
-    return MemoryOut(content=c.memory.write(agent_id, body.content), max_chars=c.memory.max_chars)
+    return MemoryOut(content=await c.memory.write(agent_id, body.content, USER), max_chars=c.memory.max_chars)
 
 
 class ReflectionOut(BaseModel):
@@ -204,11 +204,11 @@ async def get_skill(c: C, name: str, owner: str | None = None) -> SkillDetail:
 @router.put("/skill")
 async def put_skill(c: C, body: SkillIn) -> SkillOut:
     await _check_owner(c, body.owner)
-    meta = c.skills.write(body.owner, body.name, body.description, body.body)
+    meta = await c.skills.write(body.owner, body.name, body.description, body.body, USER)
     return SkillOut(name=meta.name, description=meta.description, owner=meta.owner)
 
 
 @router.delete("/skill", status_code=204)
 async def delete_skill(c: C, name: str, owner: str | None = None) -> None:
     await _check_owner(c, owner)
-    c.skills.delete(owner, name)
+    await c.skills.delete(owner, name, USER)

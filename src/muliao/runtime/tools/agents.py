@@ -129,7 +129,7 @@ def agents_toolset(
             raise InvalidInput(
                 "you cannot delete yourself while you are running; ask the user to do it in the app"
             )
-        await lifecycle.delete(target.id)
+        await lifecycle.delete(target.id, author=ctx.deps.agent_id)
         return f"deleted agent {target.name}"
 
     @ts.tool_plain

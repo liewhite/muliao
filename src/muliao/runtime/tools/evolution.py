@@ -38,7 +38,9 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             content: Markdown instructions: steps, commands, pitfalls, examples.
             scope: `private` (only you) or `public` (all agents).
         """
-        meta = store.write(owner_of(scope, ctx.deps.agent_id), name, description, content)
+        meta = await store.write(
+            owner_of(scope, ctx.deps.agent_id), name, description, content, ctx.deps.agent_id
+        )
         return f"saved {scope} skill {meta.name} at {meta.path}"
 
     @ts.tool
@@ -49,7 +51,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             name: Skill name.
             scope: `private` or `public`.
         """
-        store.delete(owner_of(scope, ctx.deps.agent_id), name)
+        await store.delete(owner_of(scope, ctx.deps.agent_id), name, ctx.deps.agent_id)
         return f"deleted {scope} skill {name}"
 
     return ts
@@ -69,7 +71,7 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
         Args:
             entry: One concise markdown line or short block.
         """
-        return _status(store.append(ctx.deps.agent_id, entry))
+        return _status(await store.append(ctx.deps.agent_id, entry, ctx.deps.agent_id))
 
     @ts.tool
     async def memory_replace(ctx: RunContext[RunScope], old_text: str, new_text: str) -> str:
@@ -80,6 +82,6 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
             old_text: Exact text currently in memory.
             new_text: Replacement text.
         """
-        return _status(store.replace(ctx.deps.agent_id, old_text, new_text))
+        return _status(await store.replace(ctx.deps.agent_id, old_text, new_text, ctx.deps.agent_id))
 
     return ts

@@ -72,7 +72,7 @@ async def test_each_listed_agent_gets_its_own_latest_instructions(client, contai
 async def test_deleting_agent_drops_its_versions_but_not_public_prompt_history(container, make_agent):
     agent = await make_agent("alpha")
     await container.prompts.set(None, "shared", agent.id)
-    await container.agent_lifecycle.delete(agent.id)
+    await container.agent_lifecycle.delete(agent.id, author="user")
 
     assert [r.author for r in await container.prompts.history(None)] == [agent.id]
     assert await container.prompts.history(agent.id) == []
