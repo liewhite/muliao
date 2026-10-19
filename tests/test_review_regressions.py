@@ -208,3 +208,17 @@ def test_vapid_private_key_is_owner_only(tmp_path):
     path.chmod(0o644)  # 旧版本生成的宽权限文件
     VapidKeys(path)
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+async def test_subscriber_survives_heartbeat_timeouts():
+    import asyncio
+
+    from muliao.bus import EventBus
+
+    bus = EventBus()
+    async with bus.subscribe() as sub:
+        for _ in range(3):  # SSE 每次心跳都是一次超时
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(sub.next(), timeout=0.01)
+        bus.publish({"type": "x"})
+        assert await asyncio.wait_for(sub.next(), timeout=1) == {"type": "x"}

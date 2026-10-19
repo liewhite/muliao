@@ -95,11 +95,10 @@ def _private_routes() -> APIRouter:
     async def events(c: C) -> StreamingResponse:
         async def stream() -> AsyncIterator[str]:
             async with c.bus.subscribe() as sub:
-                it = aiter(sub)
                 yield "retry: 3000\n\n"
                 while True:
                     try:
-                        event = await asyncio.wait_for(anext(it), timeout=_HEARTBEAT_SECONDS)
+                        event = await asyncio.wait_for(sub.next(), timeout=_HEARTBEAT_SECONDS)
                     except TimeoutError:
                         yield ": heartbeat\n\n"
                         continue

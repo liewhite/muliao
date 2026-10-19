@@ -23,12 +23,17 @@ class _Subscriber:
         self.queue: asyncio.Queue[Event | None] = asyncio.Queue(maxsize)
         self.overflowed = False
 
+    async def next(self) -> Event:
+        """取下一个事件。可以安全地被超时取消（只取消这一次读取，订阅本身不受影响）。"""
+        event = await self.queue.get()
+        if event is None:
+            raise SubscriberOverflow("event subscriber fell behind and was disconnected")
+        return event
+
     async def __aiter__(self) -> AsyncIterator[Event]:
+        # 注意：不要对这个异步生成器套超时——取消会终结生成器。需要超时时用 next()
         while True:
-            event = await self.queue.get()
-            if event is None:
-                raise SubscriberOverflow("event subscriber fell behind and was disconnected")
-            yield event
+            yield await self.next()
 
 
 class EventBus:
