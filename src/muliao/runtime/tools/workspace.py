@@ -1,10 +1,7 @@
 """文件与 shell 工具。相对路径以 agent 工作目录为基准；不做强隔离（单人本机使用，见架构文档）。"""
 
-import asyncio
 import logging
 import mimetypes
-import os
-import signal
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,16 +10,14 @@ from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 from muliao.errors import InvalidInput, NotFound
 from muliao.files import FileStore
 from muliao.runtime.scope import RunScope
+from muliao.runtime.shell import run_bash
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 from muliao.transcript import TOOL_ATTACHMENTS, attachment_of, truncate
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
 
-# shell 只继承这些环境变量，不把服务进程的其余环境带给命令
-_INHERITED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "USER", "SHELL")
 _LIST_LIMIT = 500
-_DRAIN_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -32,22 +27,9 @@ class ShellLimits:
     max_output_chars: int
 
 
-def _kill_group(pid: int) -> None:
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass  # 进程恰好已经退出
-
-
 def resolve(scope: RunScope, path: str) -> Path:
     p = Path(path).expanduser()
     return p if p.is_absolute() else scope.workspace / p
-
-
-def redact(text: str, secrets: dict[str, str]) -> str:
-    for key, value in secrets.items():
-        text = text.replace(value, f"[secret:{key}]")
-    return text
 
 
 def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
@@ -166,34 +148,15 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
         if not 0 < timeout <= limits.max_timeout:
             raise InvalidInput(f"timeout must be in (0, {limits.max_timeout}] seconds")
         secret_values = await vault.resolve_many(ctx.deps.agent_id, secrets or [])
-        env = {k: os.environ[k] for k in _INHERITED_ENV if k in os.environ} | secret_values
-        ctx.deps.workspace.mkdir(parents=True, exist_ok=True)
-        proc = await asyncio.create_subprocess_exec(
-            "bash",
-            "-c",
-            command,
-            cwd=ctx.deps.workspace,
-            env=env,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
+        result = await run_bash(
+            command, cwd=ctx.deps.workspace, secrets=secret_values, timeout=timeout, merge_stderr=True
         )
-        try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            status = f"exit_code: {proc.returncode}"
-        except TimeoutError:
-            _kill_group(proc.pid)
-            try:
-                # 脱离进程组的后代可能仍持有管道，收尾读取也要有时限
-                out, _ = await asyncio.wait_for(proc.communicate(), timeout=_DRAIN_SECONDS)
-            except TimeoutError:
-                out = b""
-            status = f"killed after {timeout}s timeout"
-        except asyncio.CancelledError:
-            _kill_group(proc.pid)
-            raise
-        text = redact(out.decode(errors="replace"), secret_values)
+        status = (
+            f"exit_code: {result.exit_code}"
+            if result.exit_code is not None
+            else f"killed after {timeout}s timeout"
+        )
+        text = result.stdout
         return f"{status}\n{truncate(text, limits.max_output_chars)}"
 
     return ts
