@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
 from muliao.models import DeliveryChannel, Task, TaskKind
-from muliao.runtime.tasks import Commit, TaskQueue, deliver_lane
+from muliao.runtime.tasks import Commit, TaskQueue, deliver_lane, no_commit
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +65,4 @@ class DeliverHandler:
             extra={"channel": notification.channel, "session_id": notification.session_id},
         )
 
-        async def commit(_s: AsyncSession) -> None:
-            return None
-
-        return commit
+        return no_commit

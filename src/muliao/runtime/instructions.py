@@ -44,6 +44,7 @@ def build_instructions(
     memory: str,
     skills: Sequence[SkillMeta],
     memory_limit: int,
+    summary: str | None,
 ) -> str:
     context = [
         f"- You are agent `{agent_name}`: {agent_description}",
@@ -60,4 +61,9 @@ def build_instructions(
         "## Skill index\n" + "\n".join(skill_lines),
         SELF_IMPROVEMENT.format(memory_limit=memory_limit),
     ]
+    if summary is not None:
+        sections.append(
+            "## Earlier in this session\nOlder messages of this session were compacted into this summary; "
+            f"the messages after it follow in full.\n<summary>\n{summary}\n</summary>"
+        )
     return "\n\n".join(s for s in sections if s)

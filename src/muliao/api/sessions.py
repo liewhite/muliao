@@ -66,9 +66,17 @@ class TaskOut(BaseModel):
         )
 
 
+class CompactionOut(BaseModel):
+    through_message_id: int
+    summary: str
+    created_at: datetime
+
+
 class SessionDetail(BaseModel):
     session: SessionOut
     items: list[Item]
+    # 压缩点：through_message_id 及之前的消息已由 summary 代替发给模型（原文仍完整展示）
+    compactions: list[CompactionOut]
     # 尚未完成或失败的 turn：前端据此显示「处理中」的用户消息与错误
     open_turns: list[TaskOut]
 
@@ -111,14 +119,24 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
 @router.get("/sessions/{session_id}")
 async def get_session(c: C, session_id: str) -> SessionDetail:
     session = await c.sessions.get(session_id)
-    history = await c.sessions.history(session_id)
+    items = [
+        {**item, "message_id": message_id}
+        for message_id, message in await c.sessions.history_with_ids(session_id)
+        for item in to_items([message])
+    ]
+    compactions = [
+        CompactionOut(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
+        for x in await c.sessions.compactions(session_id)
+    ]
     tasks = await c.queue.list(status=None, session_id=session_id, limit=50)
     open_turns = [
         TaskOut.of(t)
         for t in reversed(tasks)
         if t.kind == TaskKind.TURN and t.status in (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.FAILED)
     ]
-    return SessionDetail(session=SessionOut.of(session), items=to_items(history), open_turns=open_turns)
+    return SessionDetail(
+        session=SessionOut.of(session), items=items, compactions=compactions, open_turns=open_turns
+    )
 
 
 @router.post("/sessions/{session_id}/messages", status_code=202)

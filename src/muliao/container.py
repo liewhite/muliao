@@ -23,6 +23,7 @@ from muliao.evolution.memory import MemoryStore
 from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import DeliveryChannel, TaskKind
+from muliao.runtime.compaction import CompactionHandler, CompactionTrigger
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
 from muliao.runtime.runner import AgentRuntime, RunProfile
@@ -195,7 +196,15 @@ def build_container(
         resolve_model=resolve_model or models.resolve,
     )
     handlers: dict[TaskKind, TaskHandler] = {
-        TaskKind.TURN: TurnHandler(db, runtime, turn_profile, queue, notifier),
+        TaskKind.TURN: TurnHandler(
+            db,
+            runtime,
+            turn_profile,
+            queue,
+            notifier,
+            CompactionTrigger(queue, settings.runtime.compaction_threshold_tokens),
+        ),
+        TaskKind.COMPACTION: CompactionHandler(db, runtime, settings.runtime.compaction_keep_turns),
         TaskKind.REFLECTION: ReflectionHandler(db, runtime, reflection_profile),
         TaskKind.DELIVER: DeliverHandler(deliveries),
     }

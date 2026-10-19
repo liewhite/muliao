@@ -9,7 +9,8 @@
 | Agent | 一个具名的助手：模型、指令、私有记忆、私有 skill、工作目录 | `agents` 表；文件在 `data/agents/<name>/` |
 | Session | 某个 agent 的一段对话，由某个触发源创建 | `sessions` 表 |
 | Message | pydantic-ai `ModelMessage` 原样序列化 | `messages` 表（每行一条 ModelMessage） |
-| Task | 一个待执行的工作单元：`turn`（对话一轮）、`reflection`（强制反思）、`deliver`（投递通知） | `tasks` 表 |
+| Task | 一个待执行的工作单元：`turn`（对话一轮）、`compaction`（上下文压缩）、`reflection`（强制反思）、`deliver`（投递通知） | `tasks` 表 |
+| Compaction | session 早期消息的摘要，之后发给模型的上下文用它代替 `through_message_id` 及之前的消息 | `compactions` 表 |
 | Skill | `SKILL.md`（YAML frontmatter: name, description + 正文）。公共 skill 与 agent 私有 skill | `data/skills/<name>/`、`data/agents/<a>/skills/<name>/` |
 | Memory | agent 私有记忆，一份有长度上限的 markdown | `data/agents/<a>/memory.md` |
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `mcp_servers` 表 |
@@ -48,7 +49,7 @@ Web / cron / webhook / Telegram / delegate_task
                               ReflectionHandler ◄────┘     DeliverHandler ──► Web Push / Telegram
 ```
 
-- **Lane（串行通道）**：每个 task 带 `lane`。同一 lane 内严格 FIFO、同一时刻最多一个 running；不同 lane 并发。turn 的 lane 是 session id，reflection 的 lane 是 `reflection:<agent>`，deliver 的 lane 是 `deliver:<session>`。
+- **Lane（串行通道）**：每个 task 带 `lane`。同一 lane 内严格 FIFO、同一时刻最多一个 running；不同 lane 并发。turn 与 compaction 的 lane 是 session id，reflection 的 lane 是 `reflection:<agent>`，deliver 的 lane 是 `deliver:<session>`。
 - **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。每个 task 有总时限（`task_timeout_seconds`），超时按暂时性失败重试。
 - **事务**：SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化所有事务，换来无丢失更新、无 `SQLITE_BUSY`；代价是事务内不得做模型调用、网络 IO 等慢操作。嵌套开事务会立即报错。
 - **删除约束**：session 或 agent 有正在运行的 task 时拒绝删除（409），避免运行结果无处提交。
@@ -87,7 +88,19 @@ Web / cron / webhook / Telegram / delegate_task
   - 该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀；配置中的 `${vault:KEY}` 在运行时解析，引用不存在的 key 直接报错。
 - **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。
 
-## 4. 进化机制
+## 4. 上下文压缩
+
+与模型提供方无关的统一机制（`runtime/compaction.py`）。pydantic-ai 只为 Anthropic 与 OpenAI Responses 提供原生压缩，`openai` 兼容接口和 Gemini 没有，按提供方分支会产生两套语义，所以统一自己实现：
+
+- **触发**：一轮结束时，最后一次模型请求的输入 token 超过 `runtime.compaction_threshold_tokens`，在提交该轮的同一事务里投递 `compaction` task。它与 turn 同一 lane，执行顺序有保证。
+- **执行**：把最近 `runtime.compaction_keep_turns` 轮之前的消息连同上一份摘要交给该 agent 的模型总结，写入 `compactions` 表（`through_message_id` + `summary`）。切点总在两轮之间，工具调用与其返回不会被拆开。没有可压缩的轮次时什么也不做（重复排队的压缩因此是幂等的）。
+- **使用**：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息。原始消息不删除，UI 显示完整原文并标出压缩点；反思读取的仍是原始消息。
+
+## 5. 数据库迁移
+
+Alembic 管理表结构（`src/muliao/migrations/`，随包分发），启动时自动升级到最新版本。SQLite 改表用 batch 模式（建新表-拷数据-删旧表），迁移期间关闭外键以免删旧表时级联删除子表数据，提交前执行 `foreign_key_check`。`tests/test_migrations.py` 保证迁移后的结构与模型定义一致。
+
+## 6. 进化机制
 
 ### Skill
 agent 在任何一轮都可以主动 `write_skill`。公共 skill 对所有 agent 可见；私有 skill 只对自己可见，同名时私有遮蔽公共。
@@ -101,7 +114,7 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 - ReflectionHandler 把这个区间内该 agent 所有 turn 消息渲染成文字记录，连同固定的反思提示交给同一个 agent 运行，只开放 skill 和 memory 工具。没有需要修改的内容也要走完并给出结论。
 - 反思的完整消息和结论写入 `reflections` 表，可在 UI 查看；不进入任何 session 的历史。
 
-## 5. 触发源
+## 7. 触发源
 
 | 触发源 | session 策略 | 通知（`session.delivery`） |
 |---|---|---|
@@ -111,9 +124,9 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 | Telegram | 每个 chat 复用最近的 session，`/new` 新开；给用户的提示也走 deliver task；配置的 agent 启动时校验存在且不可删除 | `telegram`（回复发回原 chat） |
 | delegate_task | 新建，`origin_ref` 记父 session | `webpush` |
 
-Slack 入站事件尚未实现：接入方式是新增一个 trigger（Events API 回调）和一个 delivery 实现，与 Telegram 同构。示例中的「每分钟拉取 Slack 未读」用 cron + Slack MCP（或 skill 中的脚本 + vault token）即可完成，游标由 agent 存在自己的工作目录。
+外部消息（Slack 等）不做实时接入，统一由 cron 定时拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。需要实时入口时，新增一个 trigger 和对应的 delivery 实现即可，与 Telegram 同构。
 
-## 6. 安全边界
+## 8. 安全边界
 
 **威胁模型：agent 与运行服务的系统用户同等可信。** agent 能执行任意 shell 命令，因此能读到服务能读到的一切——包括配置文件里的 `vault.key` 与 LLM API key、数据库文件。下面的措施只防止 secret **意外**进入对话记录、日志和前端，不防 agent 本身：
 
@@ -132,9 +145,8 @@ Slack 入站事件尚未实现：接入方式是新增一个 trigger（Events AP
 - 配置文件：唯一配置来源（`config.example.toml`），未知键直接报错，避免拼写错误被静默忽略。
 - 日志不打印 secret 值与 token。
 
-## 7. 已知限制
+## 9. 部署形态与边界
 
-- 长 session 的上下文没有自动压缩，超长会触发模型上下文错误（task 失败可见）。
-- 只支持单进程部署（事务串行化与 task 领取依赖进程内锁）。
-- Slack 入站事件未实现（见第 5 节）。
-- 数据库结构用 `create_all` 初始化，尚无迁移工具：它不会修改已存在的表，结构变更后需要删库重建（或手工迁移）。
+- **单进程**：事务串行化与 task 领取依赖进程内锁，所以只跑一个进程。这不影响 agent 并发：worker 同时执行 `runtime.worker_concurrency` 个 task（不同 session、不同 agent 并行，同一 session 串行）。模型调用与工具执行都是异步 IO，不占事务锁。
+- **外部消息**：不做实时推送接入（Slack 等）。需要定时处理外部消息时，用 cron 让 agent 按时拉取（见第 7 节）。
+- **上下文压缩的覆盖范围**：只在两轮之间压缩；单轮内工具调用极多导致上下文超限时，该轮失败可见，下一轮之前会触发压缩。

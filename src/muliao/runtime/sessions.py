@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.db import Database, utcnow
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.ids import new_id
-from muliao.models import Agent, DeliveryChannel, Message, Origin, Session, Task, TaskKind
+from muliao.models import Agent, Compaction, DeliveryChannel, Message, Origin, Session, Task, TaskKind
 from muliao.runtime.codec import load_messages
 from muliao.runtime.tasks import TaskQueue, running_task_ids, turn_lane
 
@@ -108,12 +108,21 @@ class SessionService:
             )
 
     async def history(self, session_id: str) -> list[ModelMessage]:
+        return [m for _, m in await self.history_with_ids(session_id)]
+
+    async def history_with_ids(self, session_id: str) -> list[tuple[int, ModelMessage]]:
+        """完整原始历史（不受压缩影响），附消息 id。"""
         async with self._db.transaction() as s:
             await self._get(s, session_id)
             rows = (
                 await s.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id))
             ).all()
-            return load_messages(r.payload for r in rows)
+        return list(zip([r.id for r in rows], load_messages(r.payload for r in rows), strict=True))
+
+    async def compactions(self, session_id: str) -> list[Compaction]:
+        async with self._db.transaction() as s:
+            query = select(Compaction).where(Compaction.session_id == session_id).order_by(Compaction.id)
+            return list((await s.scalars(query)).all())
 
     async def mark_read(self, session_id: str) -> None:
         async with self._db.transaction() as s:

@@ -628,3 +628,17 @@ pre {
   flex-direction: column;
   gap: 12px;
 }
+
+.compaction {
+  align-self: stretch;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  padding: 6px 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.compaction summary {
+  cursor: pointer;
+  text-align: center;
+}

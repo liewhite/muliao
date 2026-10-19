@@ -29,6 +29,10 @@ Clock = Callable[[], datetime]
 Commit = Callable[[AsyncSession], Awaitable[None]]
 
 
+async def no_commit(_s: AsyncSession) -> None:
+    """handler 没有需要与「标记 done」一起提交的结果时返回它。"""
+
+
 def turn_lane(session_id: str) -> str:
     return f"session:{session_id}"
 

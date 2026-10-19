@@ -23,10 +23,12 @@ class Item(TypedDict):
     text: str
     tool_name: str | None
     tool_call_id: str | None
+    # 来源消息的数据库 id；由 API 填充，用于定位压缩点
+    message_id: int | None
 
 
 def _item(type_: ItemType, text: str, tool_name: str | None = None, tool_call_id: str | None = None) -> Item:
-    return Item(type=type_, text=text, tool_name=tool_name, tool_call_id=tool_call_id)
+    return Item(type=type_, text=text, tool_name=tool_name, tool_call_id=tool_call_id, message_id=None)
 
 
 def _user_text(content: str | Sequence[Any]) -> str:

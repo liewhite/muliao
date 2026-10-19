@@ -79,7 +79,7 @@ class AgentRuntime:
             origin=origin,
         )
 
-    def instructions(self, agent: Agent, scope: RunScope) -> str:
+    def instructions(self, agent: Agent, scope: RunScope, summary: str | None) -> str:
         return build_instructions(
             agent_name=agent.name,
             agent_description=agent.description,
@@ -90,6 +90,7 @@ class AgentRuntime:
             memory=self._memory.read(agent.name),
             skills=self._skills.visible_to(agent.name),
             memory_limit=self._memory.max_chars,
+            summary=summary,
         )
 
     async def run(
@@ -99,6 +100,8 @@ class AgentRuntime:
         prompt: str,
         history: Sequence[ModelMessage],
         profile: RunProfile,
+        *,
+        summary: str | None = None,
     ) -> AgentRunResult[str]:
         toolsets: list[AbstractToolset[RunScope]] = [DomainErrorsAsRetry(t) for t in profile.toolsets]
         if profile.include_mcp:
@@ -115,7 +118,7 @@ class AgentRuntime:
         result = await self._pai.run(
             prompt,
             model=self._resolve_model(agent.model),
-            instructions=self.instructions(agent, scope),
+            instructions=self.instructions(agent, scope, summary),
             message_history=list(history),
             deps=scope,
             toolsets=toolsets,
@@ -133,6 +136,13 @@ class AgentRuntime:
             },
         )
         return result
+
+    async def summarize(self, agent: Agent, instructions: str, prompt: str) -> str:
+        """用该 agent 的模型做一次无工具的文本生成（上下文压缩用）。不转发事件到前端。"""
+        result = await self._pai.run(
+            prompt, model=self._resolve_model(agent.model), instructions=instructions
+        )
+        return result.output
 
     async def _forward_events(
         self, ctx: RunContext[RunScope], stream: AsyncIterable[AgentStreamEvent]

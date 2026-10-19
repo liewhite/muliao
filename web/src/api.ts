@@ -40,6 +40,13 @@ export interface Item {
   text: string
   tool_name: string | null
   tool_call_id: string | null
+  message_id: number | null
+}
+
+export interface CompactionInfo {
+  through_message_id: number
+  summary: string
+  created_at: string
 }
 
 export interface Task {
@@ -59,6 +66,7 @@ export interface Task {
 export interface SessionDetail {
   session: Session
   items: Item[]
+  compactions: CompactionInfo[]
   open_turns: Task[]
 }
 

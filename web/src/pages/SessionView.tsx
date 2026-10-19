@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type Item, type Task } from '../api'
+import { api, type CompactionInfo, type Item, type Task } from '../api'
 import { useServerEvents, type RunEvent } from '../events'
 import { ErrorBanner, Loading, Markdown, Page, confirmAction, formatTime, useAction, useLoad } from '../ui'
 
@@ -57,13 +57,14 @@ function liveToItems(events: RunEvent[]): Item[] {
     const last = items[items.length - 1]
     if (e.event === 'text') {
       if (last?.type === 'assistant') last.text += e.text
-      else items.push({ type: 'assistant', text: e.text, tool_name: null, tool_call_id: null })
+      else items.push({ type: 'assistant', text: e.text, tool_name: null, tool_call_id: null, message_id: null })
     } else {
       items.push({
         type: e.event,
         text: e.text,
         tool_name: e.tool_name ?? null,
         tool_call_id: e.tool_call_id ?? null,
+        message_id: null,
       })
     }
   }
@@ -114,6 +115,26 @@ function Blocks({ items }: { items: Item[] }) {
       })}
     </>
   )
+}
+
+/** 按压缩点切分历史：每个压缩点之前的消息已由摘要代替发给模型（切点总在两轮之间）。 */
+function History({ items, compactions }: { items: Item[]; compactions: CompactionInfo[] }) {
+  const parts: ReactNode[] = []
+  let rest = items
+  for (const c of compactions) {
+    const cut = rest.findIndex((i) => i.message_id !== null && i.message_id > c.through_message_id)
+    const before = cut === -1 ? rest : rest.slice(0, cut)
+    rest = cut === -1 ? [] : rest.slice(cut)
+    parts.push(<Blocks key={`b${c.through_message_id}`} items={before} />)
+    parts.push(
+      <details key={`c${c.through_message_id}`} className="compaction">
+        <summary>以上内容已压缩 · {formatTime(c.created_at)}</summary>
+        <Markdown text={c.summary} />
+      </details>,
+    )
+  }
+  parts.push(<Blocks key="rest" items={rest} />)
+  return <>{parts}</>
 }
 
 function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void }) {
@@ -230,7 +251,7 @@ export default function SessionView() {
               </Link>
               <span className="muted small">{formatTime(d.session.created_at)}</span>
             </div>
-            <Blocks items={d.items} />
+            <History items={d.items} compactions={d.compactions} />
             {d.open_turns.map((t) => (
               <OpenTurn key={t.id} task={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
             ))}

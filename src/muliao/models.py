@@ -28,6 +28,7 @@ class TaskKind(StrEnum):
     TURN = "turn"
     REFLECTION = "reflection"
     DELIVER = "deliver"
+    COMPACTION = "compaction"
 
 
 class TaskStatus(StrEnum):
@@ -115,6 +116,18 @@ class Task(Base):
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (Index("ix_tasks_status_lane", "status", "lane"), {"sqlite_autoincrement": True})
+
+
+class Compaction(Base):
+    """session 上下文压缩：id <= through_message_id 的消息由 summary 代替发给模型。原始消息仍保留。"""
+
+    __tablename__ = "compactions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    through_message_id: Mapped[int]
+    summary: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class Reflection(Base):
