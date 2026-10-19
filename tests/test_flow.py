@@ -13,7 +13,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
 from sqlalchemy import select
 
 from muliao.models import Origin, Reflection, ReplyTo, Task, TaskKind, TaskStatus
@@ -277,6 +277,38 @@ async def test_run_events_are_published_to_bus(container, make_agent, models):
     kinds = [(e["type"], e.get("event") or e.get("status")) for e in events]
     assert ("run", "tool_call") in kinds and ("run", "tool_result") in kinds
     assert ("task", "done") in kinds
+
+
+async def test_thinking_is_streamed_to_bus_before_the_answer(container, make_agent, models):
+    alpha = (await make_agent("alpha", model="thinker")).id
+
+    async def stream(messages: list[ModelMessage], info: AgentInfo):
+        # 签名先到：thinking part 以空内容开始，不转发，之后的增量仍正常转发
+        yield {0: DeltaThinkingPart(signature="sig0")}
+        yield {0: DeltaThinkingPart(content="先")}
+        # 只带签名的增量没有可展示的内容
+        yield {0: DeltaThinkingPart(signature="sig")}
+        yield {0: DeltaThinkingPart(content="想想")}
+        yield "答案"
+
+    models.models["thinker"] = FunctionModel(
+        lambda _m, _i: ModelResponse(parts=[TextPart("答案")]), stream_function=stream
+    )
+    events = []
+
+    async def collect():
+        async with container.bus.subscribe() as sub:
+            async for e in sub:
+                events.append(e)
+
+    collector = asyncio.create_task(collect())
+    await asyncio.sleep(0)
+    await start(container, alpha, "q", origin=Origin.TRIGGER)
+    await drain(container)
+    collector.cancel()
+
+    run = [(e["event"], e["text"]) for e in events if e["type"] == "run"]
+    assert run == [("thinking", "先"), ("thinking", "想想"), ("text", "答案")]
 
 
 async def test_model_sees_agent_names_never_ids(container, make_agent, models):

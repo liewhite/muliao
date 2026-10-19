@@ -1,16 +1,43 @@
 // 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
 
 import { useEffect, useRef } from 'react'
-import type { TaskKind, TaskStatus } from './api'
+import type { Item, TaskKind, TaskStatus } from './api'
 
 export interface RunEvent {
   type: 'run'
   session_id: string | null
   agent: string
-  event: 'text' | 'tool_call' | 'tool_result' | 'tool_error'
+  /** text 与 thinking 是增量片段：连续的同类片段拼成一条 */
+  event: 'text' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
   text: string
   tool_name?: string | null
   tool_call_id?: string | null
+}
+
+/** 增量片段按到达顺序拼成的条目类型；工具事件各自成条 */
+const STREAMED = { text: 'assistant', thinking: 'thinking' } as const
+
+/** 运行中的事件流转成与历史相同的展示条目：连续的同类增量拼成一条（思考与回答交替时各自成条） */
+export function liveToItems(events: RunEvent[]): Item[] {
+  const items: Item[] = []
+  for (const e of events) {
+    const last = items[items.length - 1]
+    if (e.event === 'text' || e.event === 'thinking') {
+      const type = STREAMED[e.event]
+      if (last?.type === type) last.text += e.text
+      else items.push({ type, text: e.text, tool_name: null, tool_call_id: null, message_id: null, attachments: [] })
+    } else {
+      items.push({
+        type: e.event,
+        text: e.text,
+        tool_name: e.tool_name ?? null,
+        tool_call_id: e.tool_call_id ?? null,
+        message_id: null,
+        attachments: [],
+      })
+    }
+  }
+  return items
 }
 
 export interface TaskEvent {

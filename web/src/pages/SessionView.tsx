@@ -4,7 +4,7 @@ import { Archive, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Tras
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentRoute, api, type Agent, type Attachment, type CompactionInfo, type Item, type Task, type Session } from '../api'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
-import { useServerEvents, type RunEvent } from '../events'
+import { liveToItems, useServerEvents, type RunEvent } from '../events'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
 interface ToolView {
@@ -54,27 +54,6 @@ function toBlocks(items: Item[]): Block[] {
     }
   }
   return blocks
-}
-
-function liveToItems(events: RunEvent[]): Item[] {
-  const items: Item[] = []
-  for (const e of events) {
-    const last = items[items.length - 1]
-    if (e.event === 'text') {
-      if (last?.type === 'assistant') last.text += e.text
-      else items.push({ type: 'assistant', text: e.text, tool_name: null, tool_call_id: null, message_id: null, attachments: [] })
-    } else {
-      items.push({
-        type: e.event,
-        text: e.text,
-        tool_name: e.tool_name ?? null,
-        tool_call_id: e.tool_call_id ?? null,
-        message_id: null,
-        attachments: [],
-      })
-    }
-  }
-  return items
 }
 
 function Collapsible({ title, tone = 'default', children }: { title: ReactNode; tone?: 'default' | 'danger'; children: ReactNode }) {

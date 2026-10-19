@@ -17,6 +17,8 @@ from pydantic_ai.messages import (
     PartStartEvent,
     TextPart,
     TextPartDelta,
+    ThinkingPart,
+    ThinkingPartDelta,
     ToolReturnPart,
     UserContent,
 )
@@ -259,6 +261,19 @@ class AgentRuntime:
                 self._bus.publish({**base, "event": "text", "text": event.part.content})
             elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
                 self._bus.publish({**base, "event": "text", "text": event.delta.content_delta})
+            elif (
+                isinstance(event, PartStartEvent)
+                and isinstance(event.part, ThinkingPart)
+                and event.part.content
+            ):
+                self._bus.publish({**base, "event": "thinking", "text": event.part.content})
+            # 只更新签名、没有新内容的增量（content_delta 为 None）不用展示
+            elif (
+                isinstance(event, PartDeltaEvent)
+                and isinstance(event.delta, ThinkingPartDelta)
+                and event.delta.content_delta
+            ):
+                self._bus.publish({**base, "event": "thinking", "text": event.delta.content_delta})
             elif isinstance(event, FunctionToolCallEvent):
                 call = redact_call(event.part)
                 self._bus.publish(
