@@ -49,6 +49,29 @@ export interface Session {
   updated_at: string
 }
 
+/** 引用文件的地址前缀（与后端 muliao.files.FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
+export const FILES_PATH = '/api/files'
+
+/** 对话里的一个文件（后端 api/files.py 的 FileOut） */
+export interface FileInfo {
+  id: string
+  name: string
+  media_type: string
+  size: number
+  url: string
+  /** 能内联显示的图片；其余是下载链接 */
+  inline: boolean
+  created_at: string
+}
+
+/** 消息里的附件（后端 transcript.Attachment） */
+export interface Attachment {
+  url: string
+  name: string
+  media_type: string
+  inline: boolean
+}
+
 export type ItemType = 'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error'
 
 export interface Item {
@@ -57,6 +80,8 @@ export interface Item {
   tool_name: string | null
   tool_call_id: string | null
   message_id: number | null
+  /** 用户消息的附件；其他条目为空 */
+  attachments: Attachment[]
 }
 
 export interface CompactionInfo {
@@ -74,6 +99,8 @@ export interface Task {
   attempts: number
   error: string | null
   prompt: string | null
+  /** turn 随消息发送的文件 */
+  attachments: FileInfo[]
   not_before: string
   created_at: string
   finished_at: string | null
@@ -194,11 +221,16 @@ function withQuery(path: string, query?: Query): string {
 export const unauthorizedEvent = new EventTarget()
 
 async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
+  return send<T>(method, path, query, body === undefined ? undefined : { type: 'application/json', data: JSON.stringify(body) })
+}
+
+/** 所有请求的唯一出口：统一的 401 处理与错误信息 */
+async function send<T>(method: string, path: string, query: Query | undefined, body?: { type: string; data: BodyInit }): Promise<T> {
   const resp = await fetch(withQuery(path, query), {
     method,
     credentials: 'same-origin',
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: body === undefined ? undefined : { 'Content-Type': body.type },
+    body: body?.data,
   })
   if (resp.status === 401 && path !== '/api/auth/login') {
     unauthorizedEvent.dispatchEvent(new Event('unauthorized'))
@@ -261,8 +293,13 @@ export const api = {
   sessions: (query: { agent_id?: AgentId; origin?: Origin[]; limit?: number; offset?: number }) =>
     get<Session[]>('/api/sessions', query),
   session: (id: string) => get<SessionDetail>(`/api/sessions/${id}`),
-  startSession: (agent_id: AgentId, prompt: string) => post<Session>('/api/sessions', { agent_id, prompt }),
-  reply: (id: string, prompt: string) => post<Task>(`/api/sessions/${id}/messages`, { prompt }),
+  startSession: (agent_id: AgentId, prompt: string, attachments: string[]) =>
+    post<Session>('/api/sessions', { agent_id, prompt, attachments }),
+  reply: (id: string, prompt: string, attachments: string[]) =>
+    post<Task>(`/api/sessions/${id}/messages`, { prompt, attachments }),
+  /** 请求体就是文件内容，Content-Type 是它的类型；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
+  uploadFile: (file: File) =>
+    send<FileInfo>('POST', FILES_PATH, { name: file.name }, { type: file.type || 'application/octet-stream', data: file }),
   markRead: (id: string) => post<void>(`/api/sessions/${id}/read`),
   compact: (id: string) => post<{ queued: boolean }>(`/api/sessions/${id}/compact`),
   deleteSession: (id: string) => del(`/api/sessions/${id}`),

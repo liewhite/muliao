@@ -22,10 +22,14 @@ import {
   type Key,
 } from '@heroui/react'
 import { ChevronLeft, Plus } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
+import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
-import { api, type Agent, type AgentId } from './api'
+import remarkMath from 'remark-math'
+import 'katex/dist/katex.min.css'
+import { FILES_PATH, api, type Agent, type AgentId } from './api'
+import { normalizeMath } from './markdown'
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
@@ -254,10 +258,37 @@ export function EmptyHint({ children }: { children: ReactNode }) {
   return <p className="py-10 text-center text-sm text-muted">{children}</p>
 }
 
+const isFileUrl = (src: string) => src.startsWith(`${FILES_PATH}/`)
+
+// 只渲染本站文件存储里的图片：外链图片会在打开会话时由浏览器自动请求，被注入的模型可以借它把对话内容
+// 拼进 URL 发出去，所以显示成普通链接，由用户决定是否点开
+const MARKDOWN_COMPONENTS: Components = {
+  img: ({ src, alt }) => {
+    const url = typeof src === 'string' ? src : ''
+    if (isFileUrl(url)) {
+      return (
+        <a href={url} target="_blank" rel="noreferrer">
+          <img src={url} alt={alt ?? ''} loading="lazy" className="max-h-96 rounded-lg" />
+        </a>
+      )
+    }
+    return (
+      <a href={url} target="_blank" rel="noreferrer noopener">
+        {alt || url}
+      </a>
+    )
+  },
+  // 只有外部的绝对地址在新标签页打开；页内锚点（如 GFM 脚注）与本站文件保持原样，属性（脚注的 id、data-*）照传
+  a: ({ node: _node, ...props }) =>
+    /^https?:/i.test(props.href ?? '') ? <a {...props} target="_blank" rel="noreferrer noopener" /> : <a {...props} />,
+}
+
 export function Markdown({ text }: { text: string }) {
   return (
     <div className="prose prose-sm max-w-none break-words dark:prose-invert prose-pre:overflow-x-auto">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={MARKDOWN_COMPONENTS}>
+        {normalizeMath(text)}
+      </ReactMarkdown>
     </div>
   )
 }

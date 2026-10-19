@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
 import { Archive, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { agentRoute, api, type Agent, type CompactionInfo, type Item, type Task, type Session } from '../api'
+import { agentRoute, api, type Agent, type Attachment, type CompactionInfo, type Item, type Task, type Session } from '../api'
+import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
 import { useServerEvents, type RunEvent } from '../events'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
@@ -14,7 +15,7 @@ interface ToolView {
 }
 
 type Block =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; attachments: Attachment[] }
   | { kind: 'assistant'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolView }
@@ -26,6 +27,8 @@ function toBlocks(items: Item[]): Block[] {
   for (const item of items) {
     switch (item.type) {
       case 'user':
+        blocks.push({ kind: 'user', text: item.text, attachments: item.attachments })
+        break
       case 'assistant':
       case 'thinking':
         blocks.push({ kind: item.type, text: item.text })
@@ -59,7 +62,7 @@ function liveToItems(events: RunEvent[]): Item[] {
     const last = items[items.length - 1]
     if (e.event === 'text') {
       if (last?.type === 'assistant') last.text += e.text
-      else items.push({ type: 'assistant', text: e.text, tool_name: null, tool_call_id: null, message_id: null })
+      else items.push({ type: 'assistant', text: e.text, tool_name: null, tool_call_id: null, message_id: null, attachments: [] })
     } else {
       items.push({
         type: e.event,
@@ -67,6 +70,7 @@ function liveToItems(events: RunEvent[]): Item[] {
         tool_name: e.tool_name ?? null,
         tool_call_id: e.tool_call_id ?? null,
         message_id: null,
+        attachments: [],
       })
     }
   }
@@ -111,14 +115,15 @@ function ToolBlock({ tool }: { tool: ToolView }) {
   )
 }
 
-function UserBubble({ text, pending }: { text: string; pending?: boolean }) {
+function UserBubble({ text, attachments, pending }: { text: string; attachments: Attachment[]; pending?: boolean }) {
   return (
-    <div
-      className={`max-w-[88%] self-end whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 text-accent-foreground ${
-        pending ? 'opacity-70' : ''
-      }`}
-    >
-      {text}
+    <div className={`flex flex-col items-end gap-1.5 self-stretch ${pending ? 'opacity-70' : ''}`}>
+      <AttachmentList files={attachments} align="end" />
+      {text && (
+        <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 text-accent-foreground">
+          {text}
+        </div>
+      )}
     </div>
   )
 }
@@ -129,7 +134,7 @@ function Blocks({ items }: { items: Item[] }) {
       {toBlocks(items).map((b, i) => {
         switch (b.kind) {
           case 'user':
-            return <UserBubble key={i} text={b.text} />
+            return <UserBubble key={i} text={b.text} attachments={b.attachments} />
           case 'assistant':
             return (
               <div key={i} className="max-w-[88%] self-start rounded-2xl rounded-bl-md bg-surface px-3.5 py-2.5 shadow-sm">
@@ -182,7 +187,7 @@ function History({ items, compactions }: { items: Item[]; compactions: Compactio
 function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void }) {
   return (
     <>
-      <UserBubble text={task.prompt ?? ''} pending />
+      <UserBubble text={task.prompt ?? ''} attachments={task.attachments} pending />
       {task.status === 'failed' ? (
         <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
           <div>这一轮失败了（尝试 {task.attempts} 次）</div>
@@ -237,14 +242,19 @@ function Threads({ threads, agents }: { threads: Session[]; agents: Agent[] | un
   )
 }
 
+/** 有文字或附件即可发送；附件还在上传或有失败的未移除时不能发送 */
+const canSend = (draft: string, uploads: Uploads) => (draft.trim() !== '' || uploads.ids.length > 0) && !uploads.blocking
+
 function Composer({
   draft,
   setDraft,
+  uploads,
   busy,
   onSend,
 }: {
   draft: string
   setDraft: (v: string) => void
+  uploads: Uploads
   busy: boolean
   onSend: () => void
 }) {
@@ -256,18 +266,23 @@ function Composer({
     }
   }
   return (
-    <div className="flex items-end gap-2">
-      <TextField value={draft} onChange={setDraft} aria-label="回复" variant="secondary" className="flex-1">
-        <TextArea
-          placeholder="回复…"
-          rows={Math.min(6, Math.max(1, draft.split('\n').length))}
-          onKeyDown={onKeyDown}
-          className="resize-none"
-        />
-      </TextField>
-      <Button isIconOnly isDisabled={busy || !draft.trim()} onPress={onSend} aria-label="发送">
-        <SendHorizontal className="size-4" />
-      </Button>
+    <div className="flex flex-col gap-2">
+      <PendingUploads uploads={uploads} />
+      <div className="flex items-end gap-2">
+        <AttachButton uploads={uploads} isDisabled={busy} />
+        <TextField value={draft} onChange={setDraft} aria-label="回复" variant="secondary" className="flex-1">
+          <TextArea
+            placeholder="回复…"
+            rows={Math.min(6, Math.max(1, draft.split('\n').length))}
+            onKeyDown={onKeyDown}
+            onPaste={uploads.onPaste}
+            className="resize-none"
+          />
+        </TextField>
+        <Button isIconOnly isDisabled={busy || !canSend(draft, uploads)} onPress={onSend} aria-label="发送">
+          <SendHorizontal className="size-4" />
+        </Button>
+      </div>
     </div>
   )
 }
@@ -280,6 +295,7 @@ export default function SessionView() {
   const agents = useAgents()
   const [live, setLive] = useState<RunEvent[]>([])
   const [draft, setDraft] = useState('')
+  const uploads = useUploads()
   const action = useAction()
   const bottom = useRef<HTMLDivElement>(null)
 
@@ -307,11 +323,15 @@ export default function SessionView() {
   }, [detail.data, live.length])
 
   async function send() {
-    const prompt = draft.trim()
-    if (!prompt) return
-    const ok = await action.run(() => api.reply(id, prompt))
+    // Enter 键不经过按钮的禁用状态：请求进行中再按一次不能重复发送
+    if (action.busy || !canSend(draft, uploads)) return
+    const sent = uploads.batch()
+    const text = draft
+    const ok = await action.run(() => api.reply(id, text.trim(), sent.ids))
     if (ok) {
-      setDraft('')
+      // 发送过程中又改了输入框就保留新内容
+      setDraft((current) => (current === text ? '' : current))
+      uploads.removeMany(sent.keys)
       await detail.reload()
     }
   }
@@ -359,7 +379,7 @@ export default function SessionView() {
                 这是另一个 agent 向它发起的私有 thread，只能查看
               </div>
             ) : (
-              <Composer draft={draft} setDraft={setDraft} busy={action.busy} onSend={() => void send()} />
+              <Composer draft={draft} setDraft={setDraft} uploads={uploads} busy={action.busy} onSend={() => void send()} />
             )}
           </div>
         </div>
