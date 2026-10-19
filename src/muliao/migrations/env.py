@@ -4,15 +4,17 @@ from alembic import context
 from sqlalchemy import create_engine
 
 from muliao import models  # noqa: F401  注册所有表
-from muliao.db import Base, StrEnumType
+from muliao.db import Base, StrEnumType, UTCDateTime
 
 config = context.config
 
 
 def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool:
-    """枚举列在库里就是字符串：迁移里写成 sa.String，不依赖应用里的枚举类型。"""
+    """迁移里只写库里的实际类型，不依赖应用里的类型包装：枚举列是字符串，时间列是 DateTime。"""
     if type_ == "type" and isinstance(obj, StrEnumType):
         return f"sa.String(length={obj.impl.length})"
+    if type_ == "type" and isinstance(obj, UTCDateTime):
+        return "sa.DateTime()"
     return False
 
 

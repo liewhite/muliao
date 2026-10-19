@@ -299,3 +299,44 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
                 reply_to=ReplyTo.USER,
             )
         )
+
+
+async def test_private_thread_running_inline_cannot_be_deleted_nor_its_agent(container, make_agent, models):
+    import asyncio
+    from collections.abc import AsyncIterator
+
+    from pydantic_ai.models.function import FunctionModel
+
+    lead = (await make_agent("lead", model="l")).id
+    slow = (await make_agent("slow", model="s")).id
+    gate, running = asyncio.Event(), asyncio.Event()
+
+    async def blocked(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        running.set()
+        await gate.wait()
+        yield "done"
+
+    models.models["s"] = FunctionModel(stream_function=blocked)
+    models.models["l"] = steps(
+        call("ask_agent", {"agent": "slow", "message": "q", "thread": "t"}), answer_with_tool_results("a")
+    )
+    parent = await start(container, lead, "go")
+    worker = asyncio.create_task(container.worker.run_forever())
+    try:
+        async with asyncio.timeout(5):
+            await running.wait()
+        [child] = await threads_of(container, parent.id)
+
+        # 内联轮次不留 running 记录：看承载它的父会话
+        with pytest.raises(Conflict):
+            await container.sessions.delete(child.id)
+        with pytest.raises(Conflict):
+            await container.agent_lifecycle.delete(slow)
+    finally:
+        gate.set()
+        await drain(container)
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    assert await last_answer(container, parent.id) == "a: done"
+    await container.agent_lifecycle.delete(slow)  # 跑完之后可以删

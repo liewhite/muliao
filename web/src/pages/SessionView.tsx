@@ -319,7 +319,7 @@ export default function SessionView() {
   async function remove() {
     const ok = await confirm({
       title: '删除这个会话？',
-      body: '会话的全部消息，以及它开出的私有 thread 都会被删除；正在等待它结果的 agent 会收到错误。',
+      body: '会话的全部消息，以及它开出的私有 thread 都会被删除。',
       confirmLabel: '删除',
       danger: true,
     })

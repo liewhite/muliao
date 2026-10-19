@@ -1,4 +1,4 @@
-"""跨领域的 agent 生命周期操作。删除 agent 涉及会话领域（等待它的 agent 要收到错误、私有 thread 要一并删除），
+"""跨领域的 agent 生命周期操作。删除 agent 涉及会话领域（正在执行的会话不能删、私有 thread 要一并删除），
 在这里编排，agent 领域本身不依赖会话领域。"""
 
 import logging

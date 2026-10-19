@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import logging
 import weakref
 from dataclasses import dataclass
 
@@ -23,6 +24,8 @@ from muliao.runtime.compaction import CompactionScheduler, load_context
 from muliao.runtime.redaction import redact_messages
 from muliao.runtime.runner import AgentRuntime, RunProfile
 from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane, turn_lane
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -90,22 +93,36 @@ class TurnRunner:
                 Notification(title=f"{agent.name} · {session.title}", body=out.answer, session_id=session.id),
             )
 
-    async def run_inline(self, session_id: str, prompt: str, reply_to: ReplyTo) -> str:
-        """在当前协程里跑完一轮并提交，返回回答。只用于私有 thread（用户不能插话，lane 里没有排队的 turn）。"""
+    async def run_inline(self, session_id: str, prompt: str) -> str:
+        """在当前协程里跑完私有 thread 的一轮并提交，返回给发问 agent 的回答。
+
+        只用于私有 thread：用户不能插话，lane 里没有排队的 turn；同一 thread 的并行调用由进程内的锁串行。
+        """
+        reply_to = ReplyTo.AGENT
         lock = self._locks.setdefault(session_id, asyncio.Lock())
         async with lock:
-            out = await self.run(session_id, prompt, reply_to)
-            async with self._db.transaction() as s:
-                turn = self._queue.record_done(
-                    s,
-                    kind=TaskKind.TURN,
-                    lane=turn_lane(session_id),
-                    agent_id=out.agent_id,
-                    session_id=session_id,
-                    payload={"prompt": prompt, "reply_to": reply_to},
-                )
-                await s.flush()
-                await self.commit_in(s, turn.id, out, reply_to)
+            started = utcnow()
+            log.info("inline turn started", extra={"session_id": session_id})
+            try:
+                out = await self.run(session_id, prompt, reply_to)
+                async with self._db.transaction() as s:
+                    # 先确认 thread 还在：运行期间被删除时给出可定位的错误，而不是外键冲突
+                    await _load(s, session_id)
+                    turn = self._queue.record_done(
+                        s,
+                        kind=TaskKind.TURN,
+                        lane=turn_lane(session_id),
+                        agent_id=out.agent_id,
+                        session_id=session_id,
+                        payload={"prompt": prompt, "reply_to": reply_to},
+                        started_at=started,
+                    )
+                    await s.flush()
+                    await self.commit_in(s, turn.id, out, reply_to)
+            except Exception as e:
+                log.warning("inline turn failed: %r", e, extra={"session_id": session_id})
+                raise
+        log.info("inline turn done", extra={"session_id": session_id, "task_id": turn.id})
         return out.answer
 
     async def _count_turn(self, s: AsyncSession, agent: Agent) -> None:

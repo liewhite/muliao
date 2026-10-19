@@ -46,8 +46,6 @@ def deliver_lane(session_id: str | None, agent_id: str | None) -> str:
     return f"deliver:{session_id or agent_id or 'system'}"
 
 
-# 占住 lane 的状态：同一 lane 的后续 task 必须等它结束
-LANE_BLOCKING = (TaskStatus.RUNNING,)
 
 
 def _claimable():  # noqa: ANN202
@@ -58,7 +56,7 @@ def _claimable():  # noqa: ANN202
         select(Task)
         .where(Task.status == TaskStatus.PENDING)
         .where(
-            ~select(running.id).where(running.lane == Task.lane, running.status.in_(LANE_BLOCKING)).exists()
+            ~select(running.id).where(running.lane == Task.lane, running.status == TaskStatus.RUNNING).exists()
         )
         .where(
             ~select(earlier.id)
@@ -71,7 +69,11 @@ def _claimable():  # noqa: ANN202
 async def running_task_ids(
     s: AsyncSession, *, session_id: str | None = None, agent_id: str | None = None
 ) -> list[int]:
-    """正在运行的 task id。删除 session/agent 前用它保证不会删掉执行中的工作。"""
+    """正在运行的 task id。删除 session/agent 前用它保证不会删掉执行中的工作。
+
+    只看队列里的 task：ask_agent 的内联轮次不留 running 记录，判断私有 thread 是否在跑见
+    conversation.delete_sessions。
+    """
     query = select(Task.id).where(Task.status == TaskStatus.RUNNING)
     if session_id is not None:
         query = query.where(Task.session_id == session_id)
@@ -124,6 +126,7 @@ class TaskQueue:
         agent_id: str | None,
         session_id: str | None,
         payload: dict[str, Any],
+        started_at: datetime,
     ) -> Task:
         """在调用方事务内补记一条已在别处执行完的 task（不会被领取）。"""
         now = self._clock()
@@ -135,8 +138,8 @@ class TaskQueue:
             payload=payload,
             status=TaskStatus.DONE,
             attempts=1,
-            not_before=now,
-            started_at=now,
+            not_before=started_at,
+            started_at=started_at,
             finished_at=now,
         )
         s.add(task)
@@ -235,7 +238,7 @@ class TaskQueue:
     async def lane_busy(self, s: AsyncSession, lane: str) -> bool:
         busy = await s.scalar(
             select(Task.id)
-            .where(Task.lane == lane, Task.status.in_([TaskStatus.PENDING, *LANE_BLOCKING]))
+            .where(Task.lane == lane, Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
             .limit(1)
         )
         return busy is not None

@@ -169,11 +169,26 @@ def failure_of(turn: Task) -> str:
     return turn.error
 
 
+async def _queue_session(s: AsyncSession, session: Session) -> Session:
+    """承载这个会话执行的、走队列的会话：私有 thread 的轮次只在它最近的非私有祖先那一轮里内联运行。"""
+    while session.private:
+        if session.parent_session_id is None:
+            raise RuntimeError(f"private thread {session.id} has no parent")
+        parent = await s.get(Session, session.parent_session_id)
+        if parent is None:
+            raise RuntimeError(
+                f"private thread {session.id} references missing parent {session.parent_session_id}"
+            )
+        session = parent
+    return session
+
+
 async def delete_sessions(s: AsyncSession, roots: list[Session]) -> None:
     """删除会话的唯一规则（删会话、删 agent 都经过这里）。
 
     私有 thread 只对父会话有意义，逐层随之删除；用户可见的 thread 保留为独立会话（parent 置空）。
-    任一被删会话有 task 正在运行时拒绝，避免运行结果无处提交。
+    任一被删会话正在执行时拒绝，避免运行结果无处提交、工具写到被删的目录。私有 thread 的内联运行不留
+    running 记录，所以看承载它的、走队列的祖先会话（偏保守：祖先在跑任何一轮都视为它可能在跑）。
     """
     doomed = {x.id: x for x in roots}
     frontier = list(doomed)
@@ -186,7 +201,7 @@ async def delete_sessions(s: AsyncSession, roots: list[Session]) -> None:
         frontier = [c.id for c in children if c.id not in doomed]
         doomed |= {c.id: c for c in children}
     for session in doomed.values():
-        if running := await running_task_ids(s, session_id=session.id):
+        if running := await running_task_ids(s, session_id=(await _queue_session(s, session)).id):
             # 错误也会交还给模型，不带 id；定位信息记在日志里
             log.info(
                 "session deletion refused: tasks running", extra={"session_id": session.id, "tasks": running}
@@ -218,7 +233,8 @@ def thread_name(session: Session) -> str:
 
 @dataclass(frozen=True)
 class ThreadState:
-    # idle：thread 已开出但还没有任何一轮记录（ask_agent 的一轮失败时不留记录）
+    # idle：还没有任何一轮的记录。私有 thread 的内联轮次只在完成时记录，所以只会是 done 或 idle
+    # （第一次 ask 还在跑、或失败了，都是 idle；续聊还在跑时报告的是上一轮）
     status: Literal["done", "failed", "running", "idle"]
     # done 时为最终回答，failed 时为错误说明，其余为空
     text: str

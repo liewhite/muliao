@@ -8,7 +8,6 @@ from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 
 from muliao.agents import AgentService
 from muliao.db import Database
-from muliao.models import ReplyTo
 from muliao.runtime.conversation import Threads, thread_name, threads_of, validate_thread
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
@@ -22,13 +21,14 @@ class ThreadInfo(BaseModel):
     agent: str
     # true：ask_agent 开出的、只有你能继续的 thread；false：用户也能看到并回复
     private: bool
+    # 最近一轮的状态。私有 thread 只报告已完成的轮次（done，或还没有完成过任何一轮时为 idle）
     status: Literal["done", "failed", "running", "idle"]
     # 最近一轮已完成时的回答摘录
     answer: str | None
 
 
-# 在私有 thread 里内联跑完一轮并返回回答（runtime.turn.TurnRunner.run_inline）
-RunInline = Callable[[str, str, ReplyTo], Awaitable[str]]
+# 在私有 thread 里内联跑完一轮并返回回答（runtime.turn.TurnRunner.run_inline）：(session_id, prompt) -> answer
+RunInline = Callable[[str, str], Awaitable[str]]
 
 
 def delegation_toolset(
@@ -74,7 +74,7 @@ def delegation_toolset(
         async with db.transaction() as s:
             child = await threads.open(s, parent_id=parent_id, agent=target, thread=thread, private=True)
         # 在调用方这一轮里直接跑完：失败随调用方这一轮失败，由队列统一重试
-        return await run_inline(child.id, message, ReplyTo.AGENT)
+        return await run_inline(child.id, message)
 
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:

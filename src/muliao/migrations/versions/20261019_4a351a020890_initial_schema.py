@@ -5,15 +5,13 @@
 
 Revision ID: 4a351a020890
 Revises:
-Create Date: 2026-10-19 19:26:33.210181
+Create Date: 2026-10-19 19:31:24.214976
 """
 
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-
-import muliao.db
 
 revision: str = "4a351a020890"
 down_revision: str | None = None
@@ -32,8 +30,8 @@ def upgrade() -> None:
         sa.Column("reflect_every", sa.Integer(), nullable=False),
         sa.Column("turns_since_reflection", sa.Integer(), nullable=False),
         sa.Column("reflection_checkpoint", sa.Integer(), nullable=False),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
-        sa.Column("updated_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name"),
     )
@@ -42,7 +40,7 @@ def upgrade() -> None:
         sa.Column("endpoint", sa.Text(), nullable=False),
         sa.Column("p256dh", sa.Text(), nullable=False),
         sa.Column("auth", sa.Text(), nullable=False),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("endpoint"),
     )
     op.create_table(
@@ -57,7 +55,7 @@ def upgrade() -> None:
         sa.Column("env", sa.JSON(), nullable=False),
         sa.Column("headers", sa.JSON(), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["owner"], ["agents.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -73,7 +71,7 @@ def upgrade() -> None:
         sa.Column("owner", sa.String(length=32), nullable=True),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("author", sa.String(length=32), nullable=False),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["owner"], ["agents.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sqlite_autoincrement=True,
@@ -89,7 +87,7 @@ def upgrade() -> None:
         sa.Column("to_message_id", sa.Integer(), nullable=False),
         sa.Column("output", sa.Text(), nullable=False),
         sa.Column("messages", sa.Text(), nullable=False),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -103,7 +101,7 @@ def upgrade() -> None:
         sa.Column("key", sa.String(length=100), nullable=False),
         sa.Column("ciphertext", sa.LargeBinary(), nullable=False),
         sa.Column("description", sa.Text(), nullable=False),
-        sa.Column("updated_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["owner"], ["agents.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -126,8 +124,8 @@ def upgrade() -> None:
         sa.Column("thread", sa.String(length=100), nullable=True),
         sa.Column("private", sa.Boolean(), nullable=False),
         sa.Column("unread", sa.Boolean(), nullable=False),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
-        sa.Column("updated_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["parent_session_id"], ["sessions.id"], name="fk_sessions_parent_session_id", ondelete="SET NULL"
@@ -158,10 +156,10 @@ def upgrade() -> None:
         sa.Column("config", sa.JSON(), nullable=False),
         sa.Column("state", sa.JSON(), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False),
-        sa.Column("last_fired_at", muliao.db.UTCDateTime(), nullable=True),
+        sa.Column("last_fired_at", sa.DateTime(), nullable=True),
         sa.Column("last_session_id", sa.String(length=36), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name"),
@@ -173,7 +171,7 @@ def upgrade() -> None:
         sa.Column("session_id", sa.String(length=36), nullable=False),
         sa.Column("through_message_id", sa.Integer(), nullable=False),
         sa.Column("summary", sa.Text(), nullable=False),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -186,7 +184,7 @@ def upgrade() -> None:
         sa.Column("session_id", sa.String(length=36), nullable=False),
         sa.Column("task_id", sa.Integer(), nullable=False),
         sa.Column("payload", sa.Text(), nullable=False),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sqlite_autoincrement=True,
@@ -205,10 +203,10 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=16), nullable=False),
         sa.Column("attempts", sa.Integer(), nullable=False),
         sa.Column("error", sa.Text(), nullable=True),
-        sa.Column("not_before", muliao.db.UTCDateTime(), nullable=False),
-        sa.Column("created_at", muliao.db.UTCDateTime(), nullable=False),
-        sa.Column("started_at", muliao.db.UTCDateTime(), nullable=True),
-        sa.Column("finished_at", muliao.db.UTCDateTime(), nullable=True),
+        sa.Column("not_before", sa.DateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("started_at", sa.DateTime(), nullable=True),
+        sa.Column("finished_at", sa.DateTime(), nullable=True),
         sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),

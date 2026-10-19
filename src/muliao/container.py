@@ -191,7 +191,9 @@ def build_container(
             ),
             agents_toolset(agents, agent_lifecycle, prompts),
             # ask_agent 用回合执行器跑子 agent，而执行器又用这组工具：通过延迟绑定的调用打破构造顺序上的环
-            delegation_toolset(db, agents, threads, lambda *args: turn_runner.run_inline(*args)),
+            delegation_toolset(
+                db, agents, threads, lambda session_id, prompt: turn_runner.run_inline(session_id, prompt)
+            ),
             notify_toolset(notifier),
             mcp_admin_toolset(mcp),
             vault_toolset(vault),
