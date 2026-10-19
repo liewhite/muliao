@@ -43,6 +43,7 @@ from muliao.runtime.tools.notify import notify_toolset
 from muliao.runtime.tools.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.runtime.tools.triggers import triggers_toolset
 from muliao.runtime.tools.vault import vault_toolset
+from muliao.runtime.tools.web import web_toolset
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
 from muliao.runtime.turn import TurnHandler, TurnRunner
 from muliao.runtime.worker import TaskHandler, Worker
@@ -50,10 +51,12 @@ from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
 from muliao.triggers.service import TriggerService
 from muliao.triggers.webhook import WebhookKind, Webhooks
 from muliao.vault import Vault
+from muliao.web import WebProvider, build_web_provider
 
 log = logging.getLogger(__name__)
 
-# agent 可选用的工具组（名称是 agent 配置的一部分，在这里唯一声明；注册表必须与它完全一致）
+# agent 可选用的工具组（名称是 agent 配置的一部分，在这里唯一声明；注册表必须与它完全一致）。
+# 依赖可选配置的组（web 依赖 [web]）只在配置了时追加在后面，见 build_container 里的 optional_groups
 TOOL_GROUPS = (
     "workspace",
     "temp_agent",
@@ -106,6 +109,7 @@ class Container:
         # git 不可用或仓库损坏时在启动时暴露；上次进程留下的未提交修改与 git 锁在这里收敛（worker 还没开始）
         await self.resources.recover()
         await self._check_agent_models()
+        await self._check_agent_tool_groups()
         await self._check_orphan_resources()
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
         await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)
@@ -132,6 +136,19 @@ class Container:
                 "agents reference models not resolvable with current config:\n" + "\n".join(broken)
             )
 
+    async def _check_agent_tool_groups(self) -> None:
+        """已存 agent 选用的工具组必须都可用：去掉 [web] 配置后，选了 web 的 agent 在启动时暴露，而不是每轮都失败。"""
+        available = set(self.agents.defaults.tool_groups)
+        broken = [
+            f"{a.name} ({a.id}): {sorted(set(a.tool_groups) - available)}"
+            for a in await self.agents.list()
+            if not set(a.tool_groups) <= available
+        ]
+        if broken:
+            raise RuntimeError(
+                "agents use tool groups unavailable with current config:\n" + "\n".join(broken)
+            )
+
     async def stop(self) -> None:
         for task in self._background:
             task.cancel()
@@ -153,10 +170,17 @@ def build_container(
     *,
     resolve_model: ModelResolver | None = None,
     model_checker: Callable[[str], None] | None = None,
+    web: WebProvider | None = None,
 ) -> Container:
-    """resolve_model / model_checker 仅供测试替换；默认由配置中的 LLM providers 构造。"""
+    """resolve_model / model_checker / web 仅供测试替换；默认由配置中的 LLM providers 与 [web] 构造。"""
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     models = ModelRegistry(settings.llm)
+    if web is None and settings.web is not None:
+        web = build_web_provider(settings.web)
+    # 「配置了哪些可选能力」只在这里判断一次，工具组名称、注册表与临时 agent 的工具都由它导出
+    web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
+    optional_groups = {"web": ToolGroup(web_tools)} if web_tools else {}
+    tool_group_names = (*TOOL_GROUPS, *optional_groups)
     tz = ZoneInfo(settings.timezone)
     db = Database(create_engine(settings.db_path))
     bus = EventBus()
@@ -177,7 +201,7 @@ def build_container(
         memory,
         model_checker or models.check,
         prompts,
-        AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, TOOL_GROUPS),
+        AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, tool_group_names),
     )
     agent_lifecycle = AgentLifecycle(db, agents)
     sessions = SessionService(db, queue)
@@ -215,8 +239,8 @@ def build_container(
         ),
     )
     evolution_tools = [skills_toolset(skills), memory_toolset(memory), instructions_toolset(prompts)]
-    # 临时 agent 只有文件与 shell（加上调用方的 MCP）：没有记忆、skill、委派，也不能再开临时 agent
-    temp_profile = RunProfile(toolsets=[workspace_tools], include_mcp=True)
+    # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
+    temp_profile = RunProfile(toolsets=[workspace_tools, *web_tools], include_mcp=True)
     tool_groups = ToolGroups(
         groups={
             "workspace": ToolGroup([workspace_tools]),
@@ -249,11 +273,12 @@ def build_container(
             "mcp_admin": ToolGroup([mcp_admin_toolset(mcp)]),
             "vault": ToolGroup([vault_toolset(vault)]),
             "triggers": ToolGroup([triggers_toolset(triggers, agents)]),
+            **optional_groups,
         },
         always=evolution_tools,
     )
-    if tuple(tool_groups.groups) != TOOL_GROUPS:
-        raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {TOOL_GROUPS}")
+    if tuple(tool_groups.groups) != tool_group_names:
+        raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {tool_group_names}")
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
     turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction)
     handlers: dict[TaskKind, TaskHandler] = {

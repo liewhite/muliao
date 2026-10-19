@@ -102,6 +102,7 @@ const TOOL_GROUP_LABELS: Record<string, string> = {
   mcp_admin: '管理 MCP（≈全部权限）',
   vault: '管理 vault',
   triggers: '管理触发器（≈全部权限）',
+  web: '网页搜索与抓取',
 }
 
 function ToolGroupsInput({ all, value, onChange }: { all: string[]; value: string[]; onChange: (v: string[]) => void }) {

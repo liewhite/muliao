@@ -61,6 +61,13 @@ api_key = ""
 # type = "google"
 # api_key = ""
 
+# 可选：网页搜索与抓取（web 工具组）。不配置就没有这个工具组。type 可选：
+#   deepseek  DeepSeek Search / Fetch API（https://api-docs.deepseek.com/zh-cn/guides/search），按次计费
+# base_url 不填则使用该类型的官方地址
+# [web]
+# type = "deepseek"
+# api_key = ""
+
 # 可选：运行参数，以下为默认值
 # [runtime]
 # worker_concurrency = 4          # 同时运行的任务数

@@ -80,6 +80,18 @@ class LlmConfig(_Section):
         return self
 
 
+WebProviderType = Literal["deepseek"]
+
+
+class WebConfig(_Section):
+    """网页搜索与抓取服务（muliao.web）。不配置时没有 web 工具组。"""
+
+    type: WebProviderType
+    api_key: SecretStr = Field(min_length=1)
+    # 为空时显式使用该类型的官方地址
+    base_url: str | None = None
+
+
 class RuntimeConfig(_Section):
     worker_concurrency: int = 4
     task_max_attempts: int = 5
@@ -111,6 +123,7 @@ class Settings(_Section):
     vault: VaultConfig
     push: PushConfig
     llm: LlmConfig
+    web: WebConfig | None = None
     runtime: RuntimeConfig = RuntimeConfig()
 
     @property
