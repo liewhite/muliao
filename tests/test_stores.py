@@ -227,8 +227,24 @@ async def test_corrupt_mcp_config_is_rejected_with_its_path_but_can_be_deleted(c
     path = container.resources.owner_dir(None) / "mcp" / "echo.json"
     for broken in ('{"not json"', path.read_text().replace("true", '"false"')):
         path.write_text(broken)
-        with pytest.raises(InvalidInput, match=str(path)):
+        with pytest.raises(RuntimeError, match=f"corrupt MCP config {path}"):
             container.mcp.list(None)
 
     await container.mcp.remove(None, "echo", "user")
     assert container.mcp.list(None) == []
+
+
+async def test_write_blocked_by_a_held_git_lock_is_undone_on_disk(memory: MemoryStore, repo: ResourceRepo):
+    """最常见的失败是 git 锁被别的进程占着：还原不能依赖 git，必须在文件系统上完成。"""
+    await memory.append(ALPHA, "- kept", ALPHA)
+    lock = repo.root / ".git" / "index.lock"
+    lock.write_text("")
+    try:
+        with pytest.raises(RuntimeError, match="index.lock"):
+            await memory.append(ALPHA, "- blocked", ALPHA)
+        assert memory.read(ALPHA) == "- kept\n"
+    finally:
+        lock.unlink()
+
+    await memory.append(ALPHA, "- blocked", ALPHA)
+    assert memory.read(ALPHA) == "- kept\n\n- blocked\n"

@@ -42,7 +42,7 @@ data/
 
 用最终正确性换简化：文件与 git 不在数据库事务里，不追求两者的强一致。
 - 换掉的：跨数据库与文件的分布式事务（例如删除 agent 时数据库行与资源目录同时成功）。
-- 失败可见：每次写入（`ResourceRepo.update`）的读取—变换—写入—提交都在同一把锁里，任何一步失败都把涉及的路径恢复到最近一次提交并向上报错，所以「报错」严格等于「没有生效」，调用方可以放心重试；启动时把数据库里已删除、仓库里还留着目录的 agent 记为 warning。
+- 失败可见：每次写入（`ResourceRepo.update`）的读取—变换—写入—提交都在同一把锁里，任何一步失败都把涉及的路径在文件系统上还原成写入前的样子（写入前先保存旧内容，不依赖 git——失败的往往正是 git，比如锁被别的进程占用）并向上报错，所以「报错」等于「没有生效」，调用方可以放心重试；还原本身失败时记 error 并与原错误一起抛出，不声称已回滚，留下的修改由下次启动的 recover 提交；启动时把数据库里已删除、仓库里还留着目录的 agent 记为 warning。
 - 可收敛：只有进程在写入中途被杀会留下不一致，由启动时（worker 开始之前）的 `ResourceRepo.recover` 统一收敛：删除 `.git` 下遗留的锁与半写的 `*.tmp`，把写完未提交的变化提交为一次 `reconcile`（作者记为系统，日志记录涉及的路径）。
 - 代价可控：不一致只发生在进程被杀的那一刻，窗口持续到下次启动；孤儿目录只占空间、出现在 MCP 管理列表里，由人清理。仓库不受部署机全局 git 配置的 hook 与签名影响。
 
@@ -149,7 +149,7 @@ agent 在任何一轮都可以主动 `write_skill`。公共 skill 对所有 agen
 **归属与合并规则（skill、MCP server、secret 共用，只在 `ownership.visible` 实现一次）**：资源归属某个 agent（私有）或公共；agent 看到自己的私有资源加上公共资源，同名时私有遮蔽公共，其他 agent 的私有资源不可见。prompt 不是按名称合并，而是公共 prompt 与 agent 指令拼接（见下）。「私有」是可见范围和命名空间的划分，不是安全隔离：agent 能执行任意命令、读到数据库与 vault 主密钥（见第 9 节）。
 
 ### Prompt（公共 prompt 与 agent 指令）
-agent 的指令是资源仓库里的 `agents/<id>/PROMPT.md`，公共 prompt 是 `public/PROMPT.md`（合并进所有 agent，放在各自的指令之前）。当前生效的就是文件内容（`agents` 表里没有指令列），读写都经过 `PromptStore`；修改即提交一版并记录作者（`user` 或做出修改的 agent），回滚即把旧版内容作为新的一版写入，历史只增不改。内容未变时不提交；空的公共 prompt 等同于没有。指令与记忆的历史和恢复通过 `/api/resources/{prompt|memory}/history|restore`，界面在公共指令页和 agent 的配置、记忆标签里；接口只列最近 50 版，更早的仍在仓库里。
+agent 的指令是资源仓库里的 `agents/<id>/PROMPT.md`，公共 prompt 是 `public/PROMPT.md`（合并进所有 agent，放在各自的指令之前）。当前生效的就是文件内容（`agents` 表里没有指令列），读写都经过 `PromptStore`；修改即提交一版并记录作者（`user` 或做出修改的 agent），回滚即把旧版内容作为新的一版写入，历史只增不改。内容未变时不提交；空的公共 prompt 等同于没有（清空也提交一版空文件，历史里不会出现「文件不存在」的版本）。指令与记忆的历史和恢复通过 `/api/resources/{prompt|memory}/history|restore`，界面在公共指令页和 agent 的配置、记忆标签里；接口只列最近 50 版，更早的仍在仓库里。
 
 ### Memory
 agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 instructions。

@@ -106,7 +106,7 @@ class McpRegistry:
         return self._dir(owner) / f"{validate_slug('mcp server', name)}.json"
 
     def _load(self, owner: str | None, path: Path) -> McpServer:
-        """手工改坏的文件在这里报错（带路径），不带着错误的类型或含义继续运行。"""
+        """手工改坏的文件在这里报错（带路径），不带着错误的类型或含义继续运行；可以用 remove 删掉。"""
         try:
             config = McpConfig.model_validate_json(path.read_text(encoding="utf-8"))
             spec = McpSpec(
@@ -120,7 +120,8 @@ class McpRegistry:
             )
             spec.validate()
         except (ValueError, InvalidInput) as e:
-            raise InvalidInput(f"invalid MCP config {path}: {e}") from e
+            # 文件数据损坏（多半是手工改坏的）：不是调用方的输入错误，交给人修复
+            raise RuntimeError(f"corrupt MCP config {path}: {e}") from e
         return McpServer(owner=owner, name=path.stem, config=config)
 
     async def build_toolset(self, server: McpServer) -> AbstractToolset:

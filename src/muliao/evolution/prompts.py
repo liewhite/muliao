@@ -47,14 +47,13 @@ class PromptStore:
         """读取、修改、写入、提交在资源仓库的同一把锁里：并发的修改互不覆盖。"""
         path = self.path(owner)
 
-        def transform(current: str | None) -> str | None:
+        def transform(current: str | None) -> str:
             if current is None and owner is not None:
                 raise RuntimeError(
                     f"agent {owner} has no instructions file {path}; it must get one when created"
                 )
-            updated = edit(current or "")
-            # 空的公共 prompt 就是没有公共 prompt：不留空文件
-            return None if owner is None and not updated.strip() else updated
+            # 清空也写成一版（空文件）：文件只在从未设置过时缺失，历史中间不会出现「不存在」的版本
+            return edit(current or "")
 
         message = "public prompt" if owner is None else f"instructions of {owner}"
         return await self._repo.update(path, transform, message, author) is not None

@@ -8,8 +8,8 @@
 每次修改写文件后提交一次，作者是 "user" 或做出修改的 agent 的 id。历史与回滚都来自 git：
 回滚就是把旧版本的内容写回并作为新的一次提交，历史只增不改。
 
-写入是原子的：读取—变换—写入—提交在同一把锁里（update），任何一步失败都把涉及的路径恢复到最近一次提交，
-所以「报错」等于「没有生效」，调用方可以放心重试。只有进程在写入中途被杀会留下不一致，由启动时的 recover
+写入是原子的：读取—变换—写入—提交在同一把锁里（update），任何一步失败都把涉及的路径在文件系统上还原成写入前
+的样子（不依赖 git），所以「报错」等于「没有生效」，调用方可以放心重试；还原本身失败时记 error 并一起抛出。只有进程在写入中途被杀会留下不一致，由启动时的 recover
 统一收敛（删遗留的锁和半写的文件，把写完未提交的变化提交为一次 reconcile）。
 secret 不在这里：它们加密存在数据库的 vault 里，不需要版本管理。
 """
@@ -52,6 +52,42 @@ class Revision:
 
 def _read_optional(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.exists() else None
+
+
+# 一个路径写入前的样子：不存在为 None，文件为其字节，目录为其中每个文件的相对路径与字节
+Snapshot = bytes | dict[str, bytes] | None
+
+
+def _snapshot(path: Path) -> Snapshot:
+    if path.is_dir():
+        return {p.relative_to(path).as_posix(): p.read_bytes() for p in path.rglob("*") if p.is_file()}
+    return path.read_bytes() if path.exists() else None
+
+
+def _restore_snapshot(path: Path, snapshot: Snapshot) -> None:
+    _remove(path)
+    if isinstance(snapshot, bytes):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(snapshot)
+    elif isinstance(snapshot, dict):
+        for name, data in snapshot.items():
+            target = path / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
+def _write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + _TMP)
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(path)
 
 
 class ResourceRepo:
@@ -99,7 +135,14 @@ class ResourceRepo:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        out, err = await proc.communicate()
+        try:
+            out, err = await proc.communicate()
+        except BaseException:
+            # 被取消时不留下继续运行的 git（它会占着锁，或在调用方以为失败之后才提交）
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            raise
         if check and proc.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed ({proc.returncode}): {err.decode().strip()}")
         return proc.returncode or 0, out.decode()
@@ -162,18 +205,14 @@ class ResourceRepo:
     ) -> str | None:
         await self.ensure()
         rel = [self.relative(p) for p in changes]
+        # 写入之前的内容，失败时直接在文件系统上还原：不依赖 git（失败的往往正是 git，比如锁被占用）
+        before = {path: _snapshot(path) for path in changes}
         try:
             for path, content in changes.items():
                 if content is None:
-                    if path.is_dir():
-                        shutil.rmtree(path)
-                    elif path.exists():
-                        path.unlink()
+                    _remove(path)
                 else:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = path.with_name(path.name + _TMP)
-                    tmp.write_text(content, encoding="utf-8")
-                    tmp.replace(path)
+                    _write(path, content)
             # 删除一个从未提交过的路径（如没有资源目录的 agent）：没有可记录的变化
             tracked = [r for r in rel if (self.root / r).exists() or await self._tracked(r)]
             if not tracked:
@@ -185,11 +224,12 @@ class ResourceRepo:
             await self._git(
                 "commit", "-q", "-m", message, f"--author={author} <{author}@muliao>", "--", *tracked
             )
-            _, rev = await self._git("rev-parse", "HEAD")
-        except BaseException:
-            # 「报错」严格等于「没有生效」：把这些路径恢复到最近一次提交的状态（工作区在每次写入前都是干净的）
-            await self._restore(rel)
+        except BaseException as error:
+            # 「报错」等于「没有生效」：还原失败本身也必须可见，不能声称已回滚
+            await self._restore(before, rel, error)
             raise
+        # 提交已成功：之后的步骤失败不能触发回滚（那会把成功报成失败）
+        _, rev = await self._git("rev-parse", "HEAD")
         log.info("resource committed", extra={"paths": rel, "author": author, "rev": rev.strip()})
         return rev.strip()
 
@@ -197,13 +237,25 @@ class ResourceRepo:
         _, out = await self._git("ls-files", "--", rel)
         return bool(out.strip())
 
-    async def _restore(self, rel: Sequence[str]) -> None:
-        await self._git("reset", "-q", "--", *rel, check=False)
-        for r in rel:
-            if await self._tracked(r):
-                await self._git("checkout", "-q", "HEAD", "--", r, check=False)
-        await self._git("clean", "-fdq", "--", *rel, check=False)
-        log.warning("resource write rolled back", extra={"paths": list(rel)})
+    async def _restore(
+        self, before: Mapping[Path, Snapshot], rel: Sequence[str], error: BaseException
+    ) -> None:
+        try:
+            for path, snapshot in before.items():
+                _restore_snapshot(path, snapshot)
+        except Exception as restore_error:
+            log.error(
+                "resource write failed and could not be rolled back; recover on next start will commit it: %r",
+                restore_error,
+                extra={"paths": list(rel), "error": repr(error)},
+            )
+            raise restore_error from error
+        # 索引里可能已暂存了新内容：撤销暂存失败无妨，下一次 add 会重新暂存当时的文件
+        code, _ = await self._git("reset", "-q", "--", *rel, check=False)
+        log.warning(
+            "resource write rolled back",
+            extra={"paths": list(rel), "error": repr(error), "unstaged": code == 0},
+        )
 
     async def history(self, path: Path, limit: int) -> list[Revision]:
         """这个文件的版本，新的在前。"""

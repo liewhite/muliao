@@ -97,9 +97,20 @@ async def test_deleting_agent_drops_its_files_but_not_public_prompt_history(cont
 
 
 async def test_empty_public_prompt_is_the_same_as_none(container):
-    assert await container.prompts.set(None, "", "user") is False
-    assert await container.prompts.history(None, 10) == []
     assert container.prompts.current(None) == ""
+    assert await container.prompts.history(None, 10) == []
+
+
+async def test_cleared_public_prompt_keeps_a_browsable_restorable_history(client, container):
+    await container.prompts.set(None, "v1", "user")
+    await container.prompts.set(None, "", "user")
+    assert container.prompts.current(None) == ""
+
+    await login(client)
+    history = (await client.get("/api/resources/prompt/history")).json()
+    assert [r["content"] for r in history] == ["", "v1"]
+    await client.post("/api/resources/prompt/restore", json={"rev": history[1]["rev"]})
+    assert container.prompts.current(None) == "v1"
 
 
 async def test_reflection_refines_own_instructions_as_a_versioned_change(container, make_agent, models):
