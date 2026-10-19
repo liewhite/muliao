@@ -42,7 +42,7 @@ from muliao.runtime.redaction import redact_call
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tasks import Clock
 from muliao.runtime.tools.errors import DomainErrorsAsRetry
-from muliao.transcript import tool_attachments, truncate
+from muliao.transcript import tool_attachments, tool_threads, truncate
 
 log = logging.getLogger(__name__)
 
@@ -334,6 +334,7 @@ class AgentRuntime:
                         "tool_call_id": call.tool_call_id,
                         "text": truncate(call.args_as_json_str(), _EVENT_TEXT_LIMIT),
                         "attachments": [],
+                        "threads": [],
                     },
                 )
             elif isinstance(event, FunctionToolResultEvent):
@@ -350,5 +351,6 @@ class AgentRuntime:
                         "tool_call_id": part.tool_call_id,
                         "text": truncate(text, _EVENT_TEXT_LIMIT),
                         "attachments": tool_attachments(part),
+                        "threads": tool_threads(part),
                     },
                 )

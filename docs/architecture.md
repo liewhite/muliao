@@ -133,6 +133,8 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 | `delegate_task(agent, task, thread)` | 立即继续，不等 | 公开 thread：进收件箱，用户可追问 | 推送给用户；父 agent 拿不到 |
 | `ask_agent(agent, message, thread)` | 等它答完 | 私有 thread：不进收件箱，用户只读 | 作为工具结果交回父 agent |
 
+**界面上 thread 显示在开出或续写它的那次调用处**：两个工具都把 thread 的会话 id 挂在工具结果的 metadata 上（`transcript.TOOL_THREADS`，与 `TOOL_ATTACHMENTS` 同一约定，不发给模型、随消息持久化、实时事件里也带），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新一轮）。没有任何条目引用的 thread 列在末尾「未关联到调用的 thread」：在这个约定之前开出的、开出后调用被用户停止的（停止补上的结果不带 thread）、开出后调用失败的（交还模型重试的结果不带 thread）。不为后两种补记 metadata，那会把这个约定散到停止与重试的路径里。历史里引用的 thread 不在会话的 thread 列表中，说明它已被删除，显示为「thread 已删除」。
+
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `thread`，同一父 session 内唯一）。模型只用 thread 名，不接触 session id。同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。thread 的 agent 与种类在创建时确定：私有 thread 只能用 `ask_agent` 续聊，公开 thread 只能用 `delegate_task`。
 - **结果路由按轮、不按 session**：每个 turn task 的载荷带 `reply_to`（`user` 推送给用户；`agent` 交给发问的 agent，不推送；`none` 不推送，触发器使用，由 agent 自己决定是否 `notify_user`）。同一个公开 thread 里，父 agent 投递的那一轮与用户追问的那一轮都回给用户。
 - **`delegate_task` 走队列**：往公开 thread 投递一轮，与用户消息一样排在该会话的 lane 里。

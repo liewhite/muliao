@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage
 
-from muliao.transcript import TOOL_ATTACHMENTS, Attachment, shared_attachments
+from muliao.transcript import TOOL_ATTACHMENTS, TOOL_THREADS, Attachment, shared_attachments
 
 
 @dataclass(frozen=True)
@@ -22,10 +22,13 @@ class Answer:
     def of_run(cls, output: str, new_messages: Sequence[ModelMessage]) -> "Answer":
         return cls(output, shared_attachments(new_messages))
 
-    def to_tool_return(self) -> ToolReturn:
-        """给调用方模型的是回答文字，并告诉它哪些文件已经显示给用户、不用再转发。"""
+    def to_tool_return(self, thread_id: str | None = None) -> ToolReturn:
+        """给调用方模型的是回答文字，并告诉它哪些文件已经显示给用户、不用再转发。thread_id 是回答所在的子会话（ask_agent）。"""
         note = ""
         if self.attachments:
             names = ", ".join(repr(a["name"]) for a in self.attachments)
             note = f"\n\n[Shared {names} with the user; they are shown with your reply automatically.]"
-        return ToolReturn(return_value=self.text + note, metadata={TOOL_ATTACHMENTS: self.attachments})
+        metadata: dict[str, object] = {TOOL_ATTACHMENTS: self.attachments}
+        if thread_id is not None:
+            metadata[TOOL_THREADS] = [thread_id]
+        return ToolReturn(return_value=self.text + note, metadata=metadata)

@@ -9,6 +9,8 @@ export interface ToolView {
   failed: boolean
   /** 工具结果挂给用户的文件：显示在过程组外，折叠不影响看到它们 */
   attachments: Attachment[]
+  /** 工具结果关联的子会话 id（委派开出的 thread）：同样显示在过程组外，就在开它的那次调用处 */
+  threads: string[]
 }
 
 /**
@@ -44,7 +46,7 @@ export function toBlocks(items: Item[]): Block[] {
     if (askAt !== undefined && (item.type === 'tool_result' || item.type === 'tool_error')) {
       const block = blocks[askAt]
       if (item.type === 'tool_result' && block.kind === 'ask') block.ask.result = item.text
-      else blocks[askAt] = { kind: 'tool', tool: { name: ASK_USER, args: '', result: item.text, failed: true, attachments: [] } }
+      else blocks[askAt] = { kind: 'tool', tool: { name: ASK_USER, args: '', result: item.text, failed: true, attachments: [], threads: [] } }
       continue
     }
     if (item.type === 'tool_call' && item.tool_name === ASK_USER && item.tool_call_id !== null) {
@@ -64,7 +66,7 @@ export function toBlocks(items: Item[]): Block[] {
         blocks.push({ kind: item.type, text: item.text })
         break
       case 'tool_call': {
-        const tool: ToolView = { name: item.tool_name ?? '?', args: item.text, result: null, failed: false, attachments: [] }
+        const tool: ToolView = { name: item.tool_name ?? '?', args: item.text, result: null, failed: false, attachments: [], threads: [] }
         if (item.tool_call_id) tools.set(item.tool_call_id, tool)
         blocks.push({ kind: 'tool', tool })
         break
@@ -76,11 +78,19 @@ export function toBlocks(items: Item[]): Block[] {
           tool.result = item.text
           tool.failed = item.type === 'tool_error'
           tool.attachments = item.attachments
+          tool.threads = item.threads
         } else {
           // 没有对应调用的错误（如输出校验重试）单独展示
           blocks.push({
             kind: 'tool',
-            tool: { name: item.tool_name ?? 'retry', args: '', result: item.text, failed: true, attachments: item.attachments },
+            tool: {
+              name: item.tool_name ?? 'retry',
+              args: '',
+              result: item.text,
+              failed: true,
+              attachments: item.attachments,
+              threads: item.threads,
+            },
           })
         }
         break
@@ -109,6 +119,20 @@ export function groupSteps(blocks: Block[]): View[] {
     else views.push({ kind: 'process', steps: [block] })
   }
   return views
+}
+
+/** 一组步骤里委派开出或续写的 thread（子会话 id），按出现顺序、去重 */
+export function stepThreads(steps: Step[]): string[] {
+  return [...new Set(steps.flatMap((s) => (s.kind === 'tool' ? s.tool.threads : [])))]
+}
+
+/**
+ * 没有被任何条目引用的 thread：在 thread 随调用记录之前开出的、开出后调用被停止或失败的。
+ * 引用来自完整历史（被压缩的部分也算）。
+ */
+export function unlinkedThreads<T extends { id: string }>(items: Item[], threads: T[]): T[] {
+  const linked = new Set(items.flatMap((i) => i.threads))
+  return threads.filter((t) => !linked.has(t.id))
 }
 
 /** 一组步骤里工具挂给用户的全部文件，按出现顺序 */

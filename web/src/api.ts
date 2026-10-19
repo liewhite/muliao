@@ -83,8 +83,10 @@ export interface Item {
   tool_name: string | null
   tool_call_id: string | null
   message_id: number | null
-  /** 用户消息的附件；其他条目为空 */
+  /** 用户消息的附件，或工具结果挂上的文件；其他条目为空 */
   attachments: Attachment[]
+  /** 工具结果关联的子会话 id（委派开出或续写的 thread）；其他条目为空 */
+  threads: string[]
 }
 
 export interface CompactionInfo {

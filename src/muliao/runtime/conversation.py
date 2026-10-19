@@ -301,8 +301,8 @@ class Threads:
         agent: Agent,
         thread: str,
         prompt: str,
-    ) -> Task:
-        """在公开 thread 里投递一轮（thread 不存在则新建）；回答推送给用户，调用方不等。"""
+    ) -> Received:
+        """在公开 thread 里投递一轮（thread 不存在则新建）；回答推送给用户，调用方不等。返回投递到的会话与这一轮。"""
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, private=False)
         inbound = Inbound(
             origin=Origin.DELEGATION,
@@ -311,7 +311,7 @@ class Threads:
             session=child.id,
             reply_to=ReplyTo.USER,
         )
-        return (await receive(s, self._queue, inbound)).turn
+        return await receive(s, self._queue, inbound)
 
     async def state(self, s: AsyncSession, child: Session) -> ThreadState:
         """thread 最近一轮的状态。"""

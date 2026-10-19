@@ -40,6 +40,10 @@ class Attachment(TypedDict):
 # 键带命名空间：metadata 是 pydantic-ai 开放给所有工具（含 MCP 包装）的字段，通用的键名可能撞上形状不同的数据
 TOOL_ATTACHMENTS = "muliao_attachments"
 _ATTACHMENTS = TypeAdapter(list[Attachment])
+# 同一约定：委派工具（delegate_task、ask_agent）把开出或续写的子会话 id 挂在结果上，
+# 界面把 thread 显示在开它的那次调用处，而不是统一列在会话末尾
+TOOL_THREADS = "muliao_threads"
+_THREADS = TypeAdapter(list[str])
 
 
 def attachment_of(meta: FileMeta) -> Attachment:
@@ -57,6 +61,13 @@ def tool_attachments(part: ToolReturnPart | RetryPromptPart) -> list[Attachment]
     for a in attachments:
         parse_file_url(a["url"])
     return attachments
+
+
+def tool_threads(part: ToolReturnPart | RetryPromptPart) -> list[str]:
+    """工具结果关联的子会话 id（历史条目与实时事件共用这一处解析）。"""
+    if not isinstance(part, ToolReturnPart) or not isinstance(part.metadata, dict):
+        return []
+    return _THREADS.validate_python(part.metadata.get(TOOL_THREADS, []))
 
 
 def shared_attachments(messages: Sequence[ModelMessage]) -> list[Attachment]:
@@ -99,6 +110,8 @@ class Item(TypedDict):
     message_id: int | None
     # 用户消息的附件（见 runtime.attachments 的存储形态），或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
     attachments: list[Attachment]
+    # 工具结果关联的子会话 id（TOOL_THREADS）；其他条目为空
+    threads: list[str]
 
 
 def _item(
@@ -107,6 +120,7 @@ def _item(
     tool_name: str | None = None,
     tool_call_id: str | None = None,
     attachments: list[Attachment] | None = None,
+    threads: list[str] | None = None,
 ) -> Item:
     return Item(
         type=type_,
@@ -115,6 +129,7 @@ def _item(
         tool_call_id=tool_call_id,
         message_id=None,
         attachments=attachments or [],
+        threads=threads or [],
     )
 
 
@@ -155,6 +170,7 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
                             part.tool_name,
                             part.tool_call_id,
                             tool_attachments(part),
+                            tool_threads(part),
                         )
                     )
                 elif isinstance(part, RetryPromptPart):

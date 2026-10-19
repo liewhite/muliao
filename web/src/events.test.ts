@@ -13,6 +13,7 @@ const ev = (event: RunEvent['event'], text: string, tool_call_id: string | null 
         tool_name: 'tool',
         tool_call_id: tool_call_id ?? '',
         attachments: [],
+        threads: [],
         run_id: 'r',
         seq: 0,
       }

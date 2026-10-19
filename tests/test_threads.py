@@ -340,3 +340,26 @@ async def test_private_thread_running_inline_cannot_be_deleted_nor_its_agent(con
 
     assert await last_answer(container, parent.id) == "a: done"
     await container.agent_lifecycle.delete(slow, author="user")  # 跑完之后可以删
+
+
+async def test_delegation_results_point_at_the_thread_they_opened(client, container, make_agent, models):
+    from tests.conftest import login
+    from tests.test_tools import run_tools
+
+    boss = await make_agent("boss", model="tools")
+    await make_agent("helper")
+    await run_tools(
+        container,
+        models,
+        boss.id,
+        [
+            ("delegate_task", {"agent": "helper", "task": "report", "thread": "weekly"}),
+            ("ask_agent", {"agent": "helper", "message": "status?", "thread": "check"}),
+        ],
+    )
+    await login(client)
+    parent = next(s for s in (await client.get("/api/sessions")).json() if s["parent_session_id"] is None)
+    detail = (await client.get(f"/api/sessions/{parent['id']}")).json()
+    by_name = {t["thread"]: t["id"] for t in detail["threads"]}
+    linked = [(i["tool_name"], i["threads"]) for i in detail["items"] if i["type"] == "tool_result"]
+    assert linked == [("delegate_task", [by_name["weekly"]]), ("ask_agent", [by_name["check"]])]

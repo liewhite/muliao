@@ -25,6 +25,8 @@ export interface ToolEvent extends RunEventBase {
   tool_call_id: string
   /** 工具结果挂给用户的文件（如 share_file）；调用事件为空 */
   attachments: Attachment[]
+  /** 工具结果关联的子会话 id（委派）；调用事件为空 */
+  threads: string[]
 }
 
 export type RunEvent = StreamEvent | ToolEvent
@@ -68,7 +70,7 @@ export function liveToItems(events: RunEvent[]): Item[] {
     if (isStream(e)) {
       const type = STREAMED[e.event]
       if (last?.type === type) last.text += e.text
-      else items.push({ type, text: e.text, tool_name: null, tool_call_id: null, message_id: null, attachments: [] })
+      else items.push({ type, text: e.text, tool_name: null, tool_call_id: null, message_id: null, attachments: [], threads: [] })
     } else {
       items.push({
         type: e.event,
@@ -77,6 +79,7 @@ export function liveToItems(events: RunEvent[]): Item[] {
         tool_call_id: e.tool_call_id,
         message_id: null,
         attachments: e.attachments,
+        threads: e.threads,
       })
     }
   }

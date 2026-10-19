@@ -18,6 +18,8 @@ import {
   askResult,
   groupSteps,
   stepAttachments,
+  stepThreads,
+  unlinkedThreads,
   summarizeSteps,
   toBlocks,
   toolStatus,
@@ -95,7 +97,7 @@ function StepBlock({ step }: { step: Step }) {
 }
 
 /** 连续的思考与工具调用收成一组，默认折叠；标题汇总步骤数与状态，展开后每一步仍可单独展开。工具发出的文件显示在组下方 */
-function StepsGroup({ steps }: { steps: Step[] }) {
+function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
   const { label, running, failed } = summarizeSteps(steps)
   const status = running !== null ? `运行中：${running}` : failed > 0 ? `${failed} 次出错` : '完成'
   return (
@@ -116,35 +118,41 @@ function StepsGroup({ steps }: { steps: Step[] }) {
           ))}
         </div>
       </Collapsible>
-      {/* 工具发给用户的文件是成果，不随过程一起折叠 */}
+      {/* 工具发给用户的文件、委派开出的 thread 是成果，不随过程一起折叠，就显示在开它们的那次调用处 */}
       <AttachmentList files={stepAttachments(steps)} />
+      <ThreadLinks ids={stepThreads(steps)} ctx={ctx} />
     </>
   )
 }
 
-/** 会话里还在等回答的提问，以及提交回答的方式 */
-interface Asking {
+/** 渲染会话条目要用到的会话信息：还在等回答的提问与提交方式、这个会话开出的 thread、agent 名称 */
+interface SessionContext {
   pending: Map<string, Question[]>
   answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
+  threads: Map<string, Session>
+  agents: Agent[] | undefined
+  /**
+   * 条目引用的 thread 不在 threads 里时是什么情况：历史与会话列表来自同一个响应，缺失就是已被删除；
+   * 实时视图里可能只是刚开出、会话信息还没重新拉取
+   */
+  missingThread: 'deleted' | 'not-loaded-yet'
 }
 
-const NOT_ASKING: Asking = { pending: new Map(), answer: async () => {} }
-
-function AskBlock({ ask, asking }: { ask: AskView; asking: Asking }) {
-  const questions = asking.pending.get(ask.callId)
-  if (questions) return <QuestionForm questions={questions} onSubmit={(answers) => asking.answer(ask.callId, answers)} />
+function AskBlock({ ask, ctx }: { ask: AskView; ctx: SessionContext }) {
+  const questions = ctx.pending.get(ask.callId)
+  if (questions) return <QuestionForm questions={questions} onSubmit={(answers) => ctx.answer(ask.callId, answers)} />
   if (ask.result === null) return <QuestionNote text="提问中…" />
   const result = askResult(ask.result)
   return result.answered ? <AnsweredQuestions answers={result.answers} /> : <QuestionNote text="没有回答这些问题" />
 }
 
-function Blocks({ items, asking }: { items: Item[]; asking: Asking }) {
+function Blocks({ items, ctx }: { items: Item[]; ctx: SessionContext }) {
   return (
     <>
       {groupSteps(toBlocks(items)).map((v, i) => {
         switch (v.kind) {
           case 'ask':
-            return <AskBlock key={i} ask={v.ask} asking={asking} />
+            return <AskBlock key={i} ask={v.ask} ctx={ctx} />
           case 'stopped':
             return (
               <div key={i} className="flex items-center gap-1.5 self-start text-xs text-muted">
@@ -161,7 +169,7 @@ function Blocks({ items, asking }: { items: Item[]; asking: Asking }) {
               </div>
             )
           case 'process':
-            return <StepsGroup key={i} steps={v.steps} />
+            return <StepsGroup key={i} steps={v.steps} ctx={ctx} />
         }
       })}
     </>
@@ -169,14 +177,14 @@ function Blocks({ items, asking }: { items: Item[]; asking: Asking }) {
 }
 
 /** 按压缩点切分历史：每个压缩点之前的消息已由摘要代替发给模型（切点总在两轮之间）。 */
-function History({ items, compactions, asking }: { items: Item[]; compactions: CompactionInfo[]; asking: Asking }) {
+function History({ items, compactions, ctx }: { items: Item[]; compactions: CompactionInfo[]; ctx: SessionContext }) {
   const parts: ReactNode[] = []
   let rest = items
   for (const c of compactions) {
     const cut = rest.findIndex((i) => i.message_id !== null && i.message_id > c.through_message_id)
     const before = cut === -1 ? rest : rest.slice(0, cut)
     rest = cut === -1 ? [] : rest.slice(cut)
-    parts.push(<Blocks key={`b${c.through_message_id}`} items={before} asking={asking} />)
+    parts.push(<Blocks key={`b${c.through_message_id}`} items={before} ctx={ctx} />)
     parts.push(
       <Disclosure key={`c${c.through_message_id}`} className="border-y border-dashed border-separator py-1.5 text-sm text-muted">
         <Disclosure.Heading>
@@ -193,7 +201,7 @@ function History({ items, compactions, asking }: { items: Item[]; compactions: C
       </Disclosure>,
     )
   }
-  parts.push(<Blocks key="rest" items={rest} asking={asking} />)
+  parts.push(<Blocks key="rest" items={rest} ctx={ctx} />)
   return <>{parts}</>
 }
 
@@ -232,27 +240,56 @@ function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void
   )
 }
 
-function Threads({ threads, agents }: { threads: Session[]; agents: Agent[] | undefined }) {
+function ThreadRow({ thread, agents }: { thread: Session; agents: Agent[] | undefined }) {
+  return (
+    <Link to={`/sessions/${thread.id}`} className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-surface-hover">
+      <GitBranch className="size-3.5 shrink-0 text-muted" />
+      <span className="truncate font-medium">{thread.thread}</span>
+      <span className="truncate text-muted">{agentLabel(agents, thread.agent_id)}</span>
+      {thread.private && (
+        <Chip size="sm" variant="soft">
+          <Lock className="size-3" />
+          私有
+        </Chip>
+      )}
+      {thread.unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="未读" />}
+      <span className="ml-auto shrink-0 text-xs text-muted">{formatTime(thread.updated_at)}</span>
+    </Link>
+  )
+}
+
+/** 一组步骤里委派开出或续写的 thread */
+function ThreadLinks({ ids, ctx }: { ids: string[]; ctx: SessionContext }) {
+  if (ids.length === 0) return null
+  return (
+    <div className="flex w-full max-w-[88%] flex-col self-start rounded-xl border border-separator px-1.5 py-1 text-sm">
+      {ids.map((id) => {
+        const thread = ctx.threads.get(id)
+        if (thread) return <ThreadRow key={id} thread={thread} agents={ctx.agents} />
+        return ctx.missingThread === 'deleted' ? (
+          <div key={id} className="flex items-center gap-2 px-2 py-1 text-muted">
+            <GitBranch className="size-3.5" />
+            thread 已删除
+          </div>
+        ) : (
+          <Link key={id} to={`/sessions/${id}`} className="flex items-center gap-2 rounded-lg px-2 py-1 text-accent hover:bg-surface-hover">
+            <GitBranch className="size-3.5" />
+            打开 thread
+          </Link>
+        )
+      })}
+    </div>
+  )
+}
+
+/** 没有被任何条目引用的 thread（见 blocks.unlinkedThreads）：只能统一列在这里 */
+function UnlinkedThreads({ threads, agents }: { threads: Session[]; agents: Agent[] | undefined }) {
   if (threads.length === 0) return null
   return (
     <div className="flex flex-col gap-1.5 rounded-xl border border-separator p-3 text-sm">
-      <div className="flex items-center gap-1.5 text-muted">
-        <GitBranch className="size-4" />
-        委派的 thread
-      </div>
+      <div className="text-muted">未关联到调用的 thread</div>
       {threads.map((t) => (
-        <Link key={t.id} to={`/sessions/${t.id}`} className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-surface-hover">
-          <span className="truncate font-medium">{t.thread}</span>
-          <span className="truncate text-muted">{agentLabel(agents, t.agent_id)}</span>
-          {t.private && (
-            <Chip size="sm" variant="soft">
-              <Lock className="size-3" />
-              私有
-            </Chip>
-          )}
-          {t.unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="未读" />}
-          <span className="ml-auto shrink-0 text-xs text-muted">{formatTime(t.updated_at)}</span>
-        </Link>
+        <ThreadRow key={t.id} thread={t} agents={agents} />
       ))}
     </div>
   )
@@ -432,42 +469,44 @@ export default function SessionView() {
       }
     >
       <Loading state={detail}>
-        {(d) => (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-center gap-2">
-              <Link to={agentRoute(d.session.agent_id)}>
-                <Chip size="sm" color="accent" variant="soft">
-                  {agentLabel(agents.data, d.session.agent_id)}
-                </Chip>
-              </Link>
-              <span className="text-xs text-muted">{formatTime(d.session.created_at)}</span>
-            </div>
-            {d.session.parent_session_id && (
-              <Link to={parentRoute} className="flex items-center justify-center gap-1 text-xs text-accent">
-                <CornerLeftUp className="size-3.5" />
-                来自上级会话的 thread「{d.session.thread}」
-              </Link>
-            )}
-            <History
-              items={d.items}
-              compactions={d.compactions}
-              asking={{
-                pending: new Map(d.pending_questions.map((p) => [p.tool_call_id, p.questions])),
-                answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
-              }}
-            />
-            {d.open_turns.map((t) => (
-              <OpenTurn key={t.id} task={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
-            ))}
-            {shownLive.length > 0 && (
-              <div className="flex flex-col gap-3 opacity-90">
-                <Blocks items={liveToItems(shownLive)} asking={NOT_ASKING} />
+        {(d) => {
+          const ctx: SessionContext = {
+            pending: new Map(d.pending_questions.map((p) => [p.tool_call_id, p.questions])),
+            answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
+            threads: new Map(d.threads.map((t) => [t.id, t])),
+            agents: agents.data,
+            missingThread: 'deleted',
+          }
+          return (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-center gap-2">
+                <Link to={agentRoute(d.session.agent_id)}>
+                  <Chip size="sm" color="accent" variant="soft">
+                    {agentLabel(agents.data, d.session.agent_id)}
+                  </Chip>
+                </Link>
+                <span className="text-xs text-muted">{formatTime(d.session.created_at)}</span>
               </div>
-            )}
-            <Threads threads={d.threads} agents={agents.data} />
-            <div ref={bottom} />
-          </div>
-        )}
+              {d.session.parent_session_id && (
+                <Link to={parentRoute} className="flex items-center justify-center gap-1 text-xs text-accent">
+                  <CornerLeftUp className="size-3.5" />
+                  来自上级会话的 thread「{d.session.thread}」
+                </Link>
+              )}
+              <History items={d.items} compactions={d.compactions} ctx={ctx} />
+              {d.open_turns.map((t) => (
+                <OpenTurn key={t.id} task={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
+              ))}
+              {shownLive.length > 0 && (
+                <div className="flex flex-col gap-3 opacity-90">
+                  <Blocks items={liveToItems(shownLive)} ctx={{ ...ctx, pending: new Map(), missingThread: 'not-loaded-yet' }} />
+                </div>
+              )}
+              <UnlinkedThreads threads={unlinkedThreads(d.items, d.threads)} agents={agents.data} />
+              <div ref={bottom} />
+            </div>
+          )
+        }}
       </Loading>
     </Page>
   )

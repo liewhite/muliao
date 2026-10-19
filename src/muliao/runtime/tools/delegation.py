@@ -12,7 +12,7 @@ from muliao.runtime.answers import Answer
 from muliao.runtime.conversation import Threads, thread_name, threads_of, validate_thread
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
-from muliao.transcript import truncate
+from muliao.transcript import TOOL_THREADS, truncate
 
 _ANSWER_PREVIEW = 500
 
@@ -49,7 +49,7 @@ def delegation_toolset(
         return [AgentInfo(name=a.name, description=a.description) for a in await agents.list()]
 
     @ts.tool
-    async def delegate_task(ctx: RunContext[RunScope], agent: str, task: str, thread: str) -> str:
+    async def delegate_task(ctx: RunContext[RunScope], agent: str, task: str, thread: str) -> ToolReturn:
         """Hand a task to an agent and keep going without waiting. It runs in a thread the user can see and
         reply in; the user is notified with its answer, and you do NOT get it back. If you need the answer
         yourself, use `ask_agent` instead.
@@ -64,8 +64,11 @@ def delegation_toolset(
         parent_id = _require_session(ctx)
         target = await agents.find_by_name(agent)
         async with db.transaction() as s:
-            await threads.send(s, parent_id=parent_id, agent=target, thread=thread, prompt=task)
-        return f"delegated to {target.name} in thread {validate_thread(thread)!r}"
+            received = await threads.send(s, parent_id=parent_id, agent=target, thread=thread, prompt=task)
+        return ToolReturn(
+            return_value=f"delegated to {target.name} in thread {validate_thread(thread)!r}",
+            metadata={TOOL_THREADS: [received.session.id]},
+        )
 
     @ts.tool
     async def ask_agent(ctx: RunContext[RunScope], agent: str, message: str, thread: str) -> ToolReturn:
@@ -85,7 +88,7 @@ def delegation_toolset(
         async with db.transaction() as s:
             child = await threads.open(s, parent_id=parent_id, agent=target, thread=thread, private=True)
         # 在调用方这一轮里直接跑完：失败随调用方这一轮失败，由队列统一重试
-        return (await run_inline(child.id, message)).to_tool_return()
+        return (await run_inline(child.id, message)).to_tool_return(thread_id=child.id)
 
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
