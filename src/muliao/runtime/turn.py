@@ -19,6 +19,7 @@ from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.bus import LiveRuns
+from muliao.conventions import STOPPED_TOOL_RESULT, TURN_STOPPED, unanswered_calls
 from muliao.db import Database, utcnow
 from muliao.delivery.base import Notification, Notifier
 from muliao.files import FileStore
@@ -39,7 +40,6 @@ from muliao.runtime.questions import (
 from muliao.runtime.redaction import redact_messages
 from muliao.runtime.runner import AgentRuntime, RunCapture, ToolGroups
 from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane, turn_lane
-from muliao.transcript import TURN_STOPPED, unanswered_calls
 
 log = logging.getLogger(__name__)
 
@@ -57,10 +57,6 @@ class TurnOutput:
     messages: list[ModelMessage]
     # 用户停止了这一轮：messages 是停止前已经产生的部分（见 _stopped_messages）
     stopped: bool = False
-
-
-# 停止时还没出结果的工具调用的结果：工具的副作用可能已经发生，告诉模型它没有完成
-STOPPED_TOOL_RESULT = "Stopped by the user before this tool call finished; it may have partly run."
 
 
 def _stopped_messages(

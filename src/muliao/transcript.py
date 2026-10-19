@@ -1,9 +1,11 @@
-"""把 pydantic-ai 消息转换为展示条目。前端渲染和反思的文字记录共用这一份逻辑。"""
+"""把 pydantic-ai 消息转换为展示条目。前端渲染和反思的文字记录共用这一份逻辑。
+
+消息上的约定（metadata 键、标记、合成结果）登记在 muliao.conventions，这里只读它们来展示。
+"""
 
 from collections.abc import Sequence
 from typing import Any, Literal, TypedDict
 
-from pydantic import TypeAdapter
 from pydantic_ai.messages import (
     DocumentUrl,
     ImageUrl,
@@ -18,87 +20,10 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from muliao.files import FileMeta, parse_file_url
+from muliao.conventions import TURN_STOPPED, Attachment, tool_attachments, tool_threads
+from muliao.files import parse_file_url
 
 ItemType = Literal["user", "assistant", "thinking", "tool_call", "tool_result", "tool_error", "stopped"]
-
-# 用户停止的一轮：它保存下来的最后一条消息带这个 metadata 标记（runtime.turn），展示为「已停止」
-TURN_STOPPED = "muliao_stopped"
-
-
-class Attachment(TypedDict):
-    # files.file_url：界面直接用它显示与下载
-    url: str
-    name: str
-    media_type: str
-    # 能内联显示的图片（files.INLINE_IMAGE_TYPES）；其余是下载链接
-    inline: bool
-
-
-# 工具给这一轮挂上文件的约定：ToolReturn(metadata={TOOL_ATTACHMENTS: [Attachment, ...]})。
-# metadata 不发给模型、随消息持久化，所以文件一定会显示给用户，不依赖模型在回答里转写引用。
-# 键带命名空间：metadata 是 pydantic-ai 开放给所有工具（含 MCP 包装）的字段，通用的键名可能撞上形状不同的数据
-TOOL_ATTACHMENTS = "muliao_attachments"
-_ATTACHMENTS = TypeAdapter(list[Attachment])
-# 同一约定：委派工具（delegate_task、ask_agent）把开出或续写的子会话 id 挂在结果上，
-# 界面把 thread 显示在开它的那次调用处，而不是统一列在会话末尾
-TOOL_THREADS = "muliao_threads"
-_THREADS = TypeAdapter(list[str])
-
-
-def attachment_of(meta: FileMeta) -> Attachment:
-    return Attachment(url=meta.url, name=meta.name, media_type=meta.media_type, inline=meta.is_inline_image)
-
-
-def tool_attachments(part: ToolReturnPart | RetryPromptPart) -> list[Attachment]:
-    """工具结果挂上的文件（历史条目与实时事件共用这一处解析）。其他工具或 MCP 的 metadata 不带这个键时为空。"""
-    if not isinstance(part, ToolReturnPart) or not isinstance(part.metadata, dict):
-        return []
-    if TOOL_ATTACHMENTS not in part.metadata:
-        return []
-    attachments = _ATTACHMENTS.validate_python(part.metadata[TOOL_ATTACHMENTS])
-    # 前端把 url 直接放进 src/href：只能是本站文件存储的引用
-    for a in attachments:
-        parse_file_url(a["url"])
-    return attachments
-
-
-def tool_threads(part: ToolReturnPart | RetryPromptPart) -> list[str]:
-    """工具结果关联的子会话 id（历史条目与实时事件共用这一处解析）。"""
-    if not isinstance(part, ToolReturnPart) or not isinstance(part.metadata, dict):
-        return []
-    return _THREADS.validate_python(part.metadata.get(TOOL_THREADS, []))
-
-
-def shared_attachments(messages: Sequence[ModelMessage]) -> list[Attachment]:
-    """这些消息里所有工具结果挂上的文件，按出现顺序。函数工具的结果只出现在 ModelRequest 里。"""
-    return [
-        a
-        for m in messages
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if isinstance(p, ToolReturnPart)
-        for a in tool_attachments(p)
-    ]
-
-
-def unanswered_calls(messages: Sequence[ModelMessage]) -> list[ToolCallPart]:
-    """还没有结果的工具调用，按出现顺序。结果是 ToolReturnPart，或参数被拒绝、交还模型重试的 RetryPromptPart。
-    「调用是否已有结果」只在这里定义（挂起的提问、压缩切点都用它）。"""
-    done = {
-        p.tool_call_id
-        for m in messages
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if isinstance(p, ToolReturnPart | RetryPromptPart)
-    }
-    return [
-        p
-        for m in messages
-        if isinstance(m, ModelResponse)
-        for p in m.parts
-        if isinstance(p, ToolCallPart) and p.tool_call_id not in done
-    ]
 
 
 class Item(TypedDict):

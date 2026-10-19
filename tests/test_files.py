@@ -348,7 +348,7 @@ def test_attachments_must_reference_the_file_store():
     import pytest
     from pydantic_ai.messages import ToolReturnPart
 
-    from muliao.transcript import TOOL_ATTACHMENTS, tool_attachments
+    from muliao.conventions import TOOL_ATTACHMENTS, tool_attachments
 
     bad = {"url": "https://evil.example/x.png", "name": "x.png", "media_type": "image/png", "inline": True}
     part = ToolReturnPart("t", "ok", tool_call_id="c", metadata={TOOL_ATTACHMENTS: [bad]})

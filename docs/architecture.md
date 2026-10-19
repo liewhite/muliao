@@ -51,6 +51,8 @@ data/
 
 ## 2. 核心数据流：一切都是 Task
 
+我们在 pydantic-ai 消息上加的约定（工具结果 metadata 的键、停止标记、合成的工具结果、「调用是否已有结果」的定义）都登记在 `muliao.conventions` 的模块说明里，解析也只在那里写一份；新增约定先在那里登记。
+
 turn task 的 payload（一轮的输入：prompt、reply_to、附件、对挂起提问的回答）只经过 `conversation.TurnPayload` 读写：字段只在那里定义，写入时构造、读取时严格校验，存量数据由迁移补齐。
 
 所有触发源只做一件事：**创建 session（或选中已有 session）并在同一事务里写入一个 `turn` task**。之后的执行、重试、反思、通知全部由同一个任务队列驱动。唯一的例外是 `ask_agent`：它在调用方这一轮里直接跑完一轮，提交时补记一条已完成的 turn task（见第 4 节）。
@@ -99,7 +101,7 @@ Web / 触发器（定时、webhook……）/ delegate_task
 用户可以停止会话里正在运行的一轮（`POST /api/sessions/{id}/stop`，界面上运行中显示停止按钮）。做法同 ChatGPT、Claude Code：停止前已经产生的部分照常保存，因为工具的副作用（shell、写文件）已经发生，下一轮的模型必须知道做过什么，否则会重复执行。
 
 - **只取消模型运行**：`TurnRunner` 把模型运行放在单独的子任务里，停止只取消它；worker 的任务没有被取消，所以与关停、总时限（它们取消外层任务，这一轮照旧不留记录、由队列恢复或重试）区分开。
-- **取回已产生的部分**：`RunCapture` 在事件流回调里拿到每个节点的 RunContext（它的 `messages` 就是运行中的历史；运行级别的上下文只是开始时的副本），停止后按 `run_id` 取出这次运行的消息。还没出结果的工具调用补上「被用户停止、可能已部分执行」的结果（用 `transcript.unanswered_calls` 判断，不用 pydantic-ai 的 `repair_messages`：它会把本轮回答上一轮提问的结果当作孤儿删掉），最后一条消息的 metadata 标上 `TURN_STOPPED`，展示为「已停止」。正在生成的那段回答由 pydantic-ai 以 `state='interrupted'` 留在运行历史里，一起保存（下一轮也会发给模型）；其中参数还没生成完的工具调用同样补上结果，参数在落库前脱敏，截断到无法解析的 `vault_set` 参数整体替换。停在第一次模型请求之前时只保存用户这条消息。未核实：被打断的思考块（没有签名）发给 Anthropic 等提供方会不会被拒，遇到时这一轮失败可见。
+- **取回已产生的部分**：`RunCapture` 在事件流回调里拿到每个节点的 RunContext（它的 `messages` 就是运行中的历史；运行级别的上下文只是开始时的副本），停止后按 `run_id` 取出这次运行的消息。还没出结果的工具调用补上「被用户停止、可能已部分执行」的结果（用 `conventions.unanswered_calls` 判断，不用 pydantic-ai 的 `repair_messages`：它会把本轮回答上一轮提问的结果当作孤儿删掉），最后一条消息的 metadata 标上 `TURN_STOPPED`，展示为「已停止」。正在生成的那段回答由 pydantic-ai 以 `state='interrupted'` 留在运行历史里，一起保存（下一轮也会发给模型）；其中参数还没生成完的工具调用同样补上结果，参数在落库前脱敏，截断到无法解析的 `vault_set` 参数整体替换。停在第一次模型请求之前时只保存用户这条消息。未核实：被打断的思考块（没有签名）发给 Anthropic 等提供方会不会被拒，遇到时这一轮失败可见。
 - **私有 thread**：`ask_agent` 的内联轮次属于发问方那一轮，不能单独停止（409）；发问方被停止时，内联轮次随之取消，按关停语义处理，不留记录（它不在队列里，不会重跑），发问方这次 `ask_agent` 调用拿到「被停止、可能已部分执行」的结果，所以发问方的模型知道子 agent 可能做过一部分。
 - 这一轮照常提交（task 为 done、计入反思），不推送；没有模型响应时无从判断上下文大小，压缩留到下一轮判断。
 
@@ -135,7 +137,7 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 | `delegate_task(agent, task, thread)` | 立即继续，不等 | 公开 thread：进收件箱，用户可追问 | 推送给用户；父 agent 拿不到 |
 | `ask_agent(agent, message, thread)` | 等它答完 | 私有 thread：不进收件箱，用户只读 | 作为工具结果交回父 agent |
 
-**界面上 thread 显示在开出或续写它的那次调用处**：两个工具都把 thread 的会话 id 挂在工具结果的 metadata 上（`transcript.TOOL_THREADS`，与 `TOOL_ATTACHMENTS` 同一约定，不发给模型、随消息持久化、实时事件里也带），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新一轮）。没有任何条目引用的 thread 列在末尾「未关联到调用的 thread」：在这个约定之前开出的、开出后调用被用户停止的（停止补上的结果不带 thread）、开出后调用失败的（交还模型重试的结果不带 thread）。不为后两种补记 metadata，那会把这个约定散到停止与重试的路径里。历史里引用的 thread 不在会话的 thread 列表中，说明它已被删除，显示为「thread 已删除」。
+**界面上 thread 显示在开出或续写它的那次调用处**：两个工具都把 thread 的会话 id 挂在工具结果的 metadata 上（`conventions.TOOL_THREADS`，与 `TOOL_ATTACHMENTS` 同一约定，不发给模型、随消息持久化、实时事件里也带），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新一轮）。没有任何条目引用的 thread 列在末尾「未关联到调用的 thread」：在这个约定之前开出的、开出后调用被用户停止的（停止补上的结果不带 thread）、开出后调用失败的（交还模型重试的结果不带 thread）。不为后两种补记 metadata，那会把这个约定散到停止与重试的路径里。历史里引用的 thread 不在会话的 thread 列表中，说明它已被删除，显示为「thread 已删除」。
 
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `thread`，同一父 session 内唯一）。模型只用 thread 名，不接触 session id。同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。thread 的 agent 与种类在创建时确定：私有 thread 只能用 `ask_agent` 续聊，公开 thread 只能用 `delegate_task`。
 - **结果路由按轮、不按 session**：每个 turn task 的载荷带 `reply_to`（`user` 推送给用户；`agent` 交给发问的 agent，不推送；`none` 不推送，触发器使用，由 agent 自己决定是否 `notify_user`）。同一个公开 thread 里，父 agent 投递的那一轮与用户追问的那一轮都回给用户。
@@ -151,14 +153,14 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 - **上传**：`POST /api/files?name=<名称>`，请求体就是文件内容，`Content-Type` 是它的类型（同 Matrix `/media/upload`，不用 multipart），边读边写边算 sha256，超过 `runtime.upload_max_bytes`（默认 50MB）立即停止。名称必须是单个路径段，不合法直接拒绝，不做修正。发消息时 `attachments` 带上 id（可以只有附件没有文字），`conversation.receive` 校验它们存在，写进 turn task 的 payload。
 - **在消息里的两种形态**（`runtime/attachments.py`）：存储形态是 `UserPromptPart` 里的 `ImageUrl` / `DocumentUrl`，url 即文件引用，数据库、界面、重放都用它；每次模型请求前由 pydantic-ai 的 `before_model_request` 钩子（`AttachmentsForModel`）展开成模型形态：一段说明（名称、类型、大小、工作目录里的路径），可内联的图片（png/jpeg/gif/webp）再附上内容。展开只替换这一次请求的消息列表，持久化的历史不变，所以文件内容在数据库里没有副本。模型不支持图片时，provider 的报错让这一轮失败，不悄悄丢掉图片。
 - **交给工具**：每次执行这一轮都把附件复制到 agent 工作目录的 `uploads/<id>/<名称>`（重试时覆盖成原件），供文件工具与 shell 处理；这是派生副本，原件只在文件存储里。
-- **agent 发出文件**：`share_file(path)` 把工作目录里的文件存一份快照，通过 `ToolReturn.metadata["attachments"]`（`transcript.TOOL_ATTACHMENTS`）挂到这次工具结果上。metadata 不发给模型、随消息持久化，所以文件一定显示给用户（图片内联、其他为下载链接，显示在过程组外），不依赖模型在回答里转写引用；模型只收到一句「已发给用户」。任何工具都可以用同一约定挂文件。临时 agent 与 `ask_agent` 的被问 agent 挂上的文件，随调用方那次工具调用的结果一起交给用户（`runtime/answers.py`），出现在用户正在看的会话里；临时 agent 超过请求数上限时，这次已共享的文件不交付，由调用方拆分后重做时重新共享。
+- **agent 发出文件**：`share_file(path)` 把工作目录里的文件存一份快照，通过 `ToolReturn.metadata`（`conventions.TOOL_ATTACHMENTS`）挂到这次工具结果上。metadata 不发给模型、随消息持久化，所以文件一定显示给用户（图片内联、其他为下载链接，显示在过程组外），不依赖模型在回答里转写引用；模型只收到一句「已发给用户」。任何工具都可以用同一约定挂文件。临时 agent 与 `ask_agent` 的被问 agent 挂上的文件，随调用方那次工具调用的结果一起交给用户（`runtime/answers.py`），出现在用户正在看的会话里；临时 agent 超过请求数上限时，这次已共享的文件不交付，由调用方拆分后重做时重新共享。
 - **一致性**：内容先写临时文件再改名到最终位置，之后才插入元数据行；失败即上传失败，没有 id 就没有引用。中途被杀留下的临时文件由启动时 `FileStore.recover` 清掉；有内容没元数据的孤儿只占空间，访问不到，同样内容再上传时复用。
 
 ### 向用户提问（ask_user）
 
 做法同 Claude Code 的 AskUserQuestion、Codex 的提问：一次 1 到 4 个选择题（单选或多选，每题 2 到 6 个选项），界面上每题总能在「其他」里自己写。只在这一轮的回答交给用户（`reply_to = user`）时提供，由工具的 `prepare` 隐藏：`ask_agent` 的私有 thread、触发器、反思与临时 agent 里没有人会回答（`runtime/tools/ask_user.py`）。
 
-- **一轮停在提问上，不在 worker 里等人**：工具抛出 pydantic-ai 的 `CallDeferred`，这一轮正常结束、提交（调用暂时没有结果），并通知用户「等你回答：…」。会话里还在等回答的提问由历史推导（没有结果的 `ask_user` 调用，`runtime.questions.pending_questions`；「调用是否已有结果」只在 `transcript.unanswered_calls` 定义一处，参数被拒绝、交还模型重试的调用也算有结果），不另存状态。每一轮都会关闭之前挂起的提问，所以挂起的提问只可能在最后一轮里。
+- **一轮停在提问上，不在 worker 里等人**：工具抛出 pydantic-ai 的 `CallDeferred`，这一轮正常结束、提交（调用暂时没有结果），并通知用户「等你回答：…」。会话里还在等回答的提问由历史推导（没有结果的 `ask_user` 调用，`runtime.questions.pending_questions`；「调用是否已有结果」只在 `conventions.unanswered_calls` 定义一处，参数被拒绝、交还模型重试的调用也算有结果），不另存状态。每一轮都会关闭之前挂起的提问，所以挂起的提问只可能在最后一轮里。
 - **回答 = 新的一轮，且必须紧接在提问那一轮后面**：界面把回答随消息提交（`answers: {tool_call_id: [每题的回答]}`，可以没有文字）。会话里有排队或运行中的轮次时（它会先执行并把提问记为没回答），或有失败待重试的回答时（它还占着这次提问），不接受回答，会话接口的 `pending_questions` 也为空、界面不显示表单（`conversation.answerable_questions`，receive 与接口同一条规则：能不能回答取决于会话里各轮的排队顺序，属于会话领域）；失败的回答只能重试，若之后已经跑过别的轮次，提问已被关闭，重试以明确的错误失败。`conversation.receive` 还校验选项属于该题、单选至多一个、每题都有选择或「其他」，然后把交给模型的结果（`AskResult`：`answered` 加每题的选择，或没回答时的说明）写进 turn task 的 payload，执行时作为 `DeferredToolResults` 交回，模型看到的就是这次调用的结果；界面也从这份结构化结果展示已回答的提问。
 - **不回答、直接发消息**：pydantic-ai 拒绝在未处理的调用后追加新消息，所以这一轮把所有挂起的提问显式记为「用户没回答、发了新消息」，结果随这一轮持久化，提问不再显示为待回答。
 - **展示**：提问不收进过程组。待回答的显示为表单；已回答的显示问题与选择；参数被工具 schema 拒绝的调用（模型写错了，已作为可纠正的错误交还）按普通工具错误展示。

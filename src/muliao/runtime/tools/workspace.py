@@ -7,12 +7,13 @@ from pathlib import Path
 
 from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
+from muliao.conventions import TOOL_ATTACHMENTS, attachment_of
 from muliao.errors import InvalidInput, NotFound
 from muliao.files import FileStore
 from muliao.runtime.scope import RunScope
 from muliao.runtime.shell import run_bash
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
-from muliao.transcript import TOOL_ATTACHMENTS, attachment_of, truncate
+from muliao.transcript import truncate
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)

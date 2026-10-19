@@ -7,12 +7,13 @@ from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolReturn
 
 from muliao.agents import AgentService
+from muliao.conventions import TOOL_THREADS
 from muliao.db import Database
 from muliao.runtime.answers import Answer
 from muliao.runtime.conversation import Threads, thread_name, threads_of, validate_thread
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
-from muliao.transcript import TOOL_THREADS, truncate
+from muliao.transcript import truncate
 
 _ANSWER_PREVIEW = 500
 

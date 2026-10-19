@@ -27,6 +27,7 @@ from pydantic_ai.toolsets import AbstractToolset
 
 from muliao.agents import AgentService
 from muliao.bus import LiveRuns
+from muliao.conventions import tool_attachments, tool_threads
 from muliao.db import utcnow
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.prompts import PromptStore
@@ -42,7 +43,7 @@ from muliao.runtime.redaction import redact_call
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tasks import Clock
 from muliao.runtime.tools.errors import DomainErrorsAsRetry
-from muliao.transcript import tool_attachments, tool_threads, truncate
+from muliao.transcript import truncate
 
 log = logging.getLogger(__name__)
 

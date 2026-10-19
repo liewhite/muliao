@@ -15,10 +15,10 @@ from pydantic_ai.messages import ModelMessage, ToolCallPart
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.conventions import unanswered_calls
 from muliao.errors import InvalidInput
 from muliao.models import Message
 from muliao.runtime.codec import load_messages
-from muliao.transcript import unanswered_calls
 
 ASK_USER = "ask_user"
 

@@ -13,9 +13,9 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
+from muliao.conventions import STOPPED_TOOL_RESULT, TURN_STOPPED
 from muliao.models import TaskKind, TaskStatus
-from muliao.runtime.turn import STOPPED_TOOL_RESULT, _stopped_messages
-from muliao.transcript import TURN_STOPPED
+from muliao.runtime.turn import _stopped_messages
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, tasks_of

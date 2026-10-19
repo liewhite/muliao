@@ -74,7 +74,7 @@ export interface Attachment {
   inline: boolean
 }
 
-/** stopped：用户停止了这一轮（后端 transcript.TURN_STOPPED），出现在那一轮保存下来的内容之后 */
+/** stopped：用户停止了这一轮（后端 conventions.TURN_STOPPED），出现在那一轮保存下来的内容之后 */
 export type ItemType = 'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'stopped'
 
 export interface Item {

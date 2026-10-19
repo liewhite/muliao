@@ -1,6 +1,6 @@
 """一个 agent 替另一个 agent 跑完的结果（临时 agent、ask_agent），以及把它交回调用方的唯一方式。
 
-被调用方用工具挂给用户的文件（transcript.TOOL_ATTACHMENTS）只记在被调用方自己的消息里；临时 agent 不属于任何会话，
+被调用方用工具挂给用户的文件（conventions.TOOL_ATTACHMENTS）只记在被调用方自己的消息里；临时 agent 不属于任何会话，
 私有 thread 用户也不会主动去翻。所以交回时把这些文件挂到调用方这次工具调用的结果上，文件就出现在用户正在看的会话里。
 """
 
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage
 
-from muliao.transcript import TOOL_ATTACHMENTS, TOOL_THREADS, Attachment, shared_attachments
+from muliao.conventions import TOOL_ATTACHMENTS, TOOL_THREADS, Attachment, shared_attachments
 
 
 @dataclass(frozen=True)

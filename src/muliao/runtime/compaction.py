@@ -16,12 +16,13 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.conventions import unanswered_calls
 from muliao.db import Database
 from muliao.models import Agent, Compaction, Message, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.codec import load_messages
 from muliao.runtime.runner import AgentRuntime
 from muliao.runtime.tasks import Commit, TaskQueue, no_commit, turn_lane
-from muliao.transcript import to_items, to_text, unanswered_calls
+from muliao.transcript import to_items, to_text
 
 log = logging.getLogger(__name__)
 
