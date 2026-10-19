@@ -4,7 +4,7 @@ from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
 from muliao.models import Compaction, DeliveryChannel, Message, Task, TaskKind, TaskStatus
-from muliao.runtime.compaction import COMPACTION_INSTRUCTIONS, CompactionTrigger
+from muliao.runtime.compaction import COMPACTION_INSTRUCTIONS, CompactionScheduler, select_turns
 from muliao.runtime.tasks import turn_lane
 from tests.scripted import scripted
 from tests.test_flow import drain, last_user_prompt, start
@@ -111,17 +111,93 @@ async def test_compaction_with_nothing_beyond_kept_turns_is_a_noop(container, ma
     assert task.status == TaskStatus.DONE
 
 
-async def test_trigger_enqueues_only_above_threshold(container, make_agent):
+def _response(tokens: int) -> list[ModelMessage]:
+    return [ModelResponse(parts=[TextPart("x")], usage=RequestUsage(input_tokens=tokens))]
+
+
+async def _compaction_tasks(container) -> list[Task]:
+    async with container.db.transaction() as s:
+        return list((await s.scalars(select(Task).where(Task.kind == TaskKind.COMPACTION))).all())
+
+
+async def test_scheduler_enqueues_above_threshold_once_per_session(container, make_agent):
     await make_agent("alpha")
     session = await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
-    trigger = CompactionTrigger(container.queue, threshold_tokens=1000)
-
-    def response(tokens: int) -> list[ModelMessage]:
-        return [ModelResponse(parts=[TextPart("x")], usage=RequestUsage(input_tokens=tokens))]
+    scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
 
     async with container.db.transaction() as s:
-        trigger.maybe_enqueue(s, session, response(1000))
-        trigger.maybe_enqueue(s, session, response(1001))
+        await scheduler.after_turn(s, session, "m", _response(1000))
+        await scheduler.after_turn(s, session, "m", _response(1001))
     async with container.db.transaction() as s:
-        tasks = (await s.scalars(select(Task).where(Task.kind == TaskKind.COMPACTION))).all()
-    assert [t.lane for t in tasks] == [turn_lane(session.id)]
+        await scheduler.after_turn(s, session, "m", _response(5000))  # 已有待执行的压缩，不重复
+
+    assert [t.lane for t in await _compaction_tasks(container)] == [turn_lane(session.id)]
+
+
+async def test_zero_usage_warns_instead_of_silently_never_compacting(container, make_agent, caplog):
+    await make_agent("alpha")
+    session = await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
+    scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
+
+    async with container.db.transaction() as s:
+        await scheduler.after_turn(s, session, "m", _response(0))
+
+    assert "no input token usage" in caplog.text
+    assert await _compaction_tasks(container) == []
+
+
+def test_select_turns_bounds_batch_without_truncating():
+    def turn(task_id: int, chars: int) -> list[Message]:
+        payload = ModelResponse(parts=[TextPart("x" * chars)])
+        from muliao.runtime.codec import dump_message
+
+        return [Message(id=task_id, session_id="s", task_id=task_id, payload=dump_message(payload))]
+
+    turns = [turn(1, 100), turn(2, 100), turn(3, 100), turn(4, 10)]
+    chosen, more = select_turns(turns, keep_turns=1, max_chars=250)
+    assert [t[0].task_id for t in chosen] == [1, 2] and more
+
+    chosen, more = select_turns(turns, keep_turns=1, max_chars=10)  # 单轮超限也至少取一轮
+    assert [t[0].task_id for t in chosen] == [1] and more
+
+    chosen, more = select_turns(turns, keep_turns=1, max_chars=10_000)
+    assert len(chosen) == 3 and not more
+
+
+async def test_oversized_backlog_is_compacted_in_batches_until_converged(
+    container, make_agent, models, monkeypatch
+):
+    import muliao.runtime.compaction as compaction
+
+    monkeypatch.setattr(compaction, "_TRANSCRIPT_CHARS", 1)  # 每批只取一轮
+    await make_agent("alpha", model="m", reflect_every=100)
+    keep = container.settings.runtime.compaction_keep_turns
+    session, recorder = await _session_with_turns(container, models, keep + 3)
+
+    await _enqueue_compaction(container, session)
+    await drain(container)
+
+    assert len(recorder.compactions) == 3  # 三轮可压缩内容分三批，自动续排
+    async with container.db.transaction() as s:
+        compactions = (await s.scalars(select(Compaction).order_by(Compaction.id))).all()
+    assert [c.summary for c in compactions] == ["SUMMARY#1", "SUMMARY#2", "SUMMARY#3"]
+
+
+async def test_manual_compaction_endpoint(container, make_agent, tmp_path):
+    import httpx
+
+    from muliao.api.app import create_app
+    from tests.test_api import login
+
+    await make_agent("alpha")
+    session = await start(container, "alpha", "hi", delivery=DeliveryChannel.NONE)
+    app = create_app(container, tmp_path / "no-web")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
+        await login(client)
+        first = await client.post(f"/api/sessions/{session.id}/compact")
+        second = await client.post(f"/api/sessions/{session.id}/compact")
+        missing = await client.post("/api/sessions/nope/compact")
+
+    assert (first.status_code, first.json()) == (202, {"queued": True})
+    assert second.json() == {"queued": False}
+    assert missing.status_code == 404

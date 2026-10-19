@@ -23,7 +23,7 @@ from muliao.evolution.memory import MemoryStore
 from muliao.evolution.skills import SkillStore
 from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import DeliveryChannel, TaskKind
-from muliao.runtime.compaction import CompactionHandler, CompactionTrigger
+from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
 from muliao.runtime.runner import AgentRuntime, RunProfile
@@ -69,6 +69,7 @@ class Container:
     worker: Worker
     http: httpx.AsyncClient
     telegram: TelegramTrigger | None
+    compaction: CompactionScheduler
     _model_checker: Callable[[str], None]
     _background: list[asyncio.Task[None]] = field(default_factory=list)
 
@@ -195,16 +196,12 @@ def build_container(
         tz=tz,
         resolve_model=resolve_model or models.resolve,
     )
+    compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
     handlers: dict[TaskKind, TaskHandler] = {
-        TaskKind.TURN: TurnHandler(
-            db,
-            runtime,
-            turn_profile,
-            queue,
-            notifier,
-            CompactionTrigger(queue, settings.runtime.compaction_threshold_tokens),
+        TaskKind.TURN: TurnHandler(db, runtime, turn_profile, queue, notifier, compaction),
+        TaskKind.COMPACTION: CompactionHandler(
+            db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),
-        TaskKind.COMPACTION: CompactionHandler(db, runtime, settings.runtime.compaction_keep_turns),
         TaskKind.REFLECTION: ReflectionHandler(db, runtime, reflection_profile),
         TaskKind.DELIVER: DeliverHandler(deliveries),
     }
@@ -235,5 +232,6 @@ def build_container(
         worker=worker,
         http=http,
         telegram=telegram,
+        compaction=compaction,
         _model_checker=model_checker or models.check,
     )

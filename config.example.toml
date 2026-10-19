@@ -35,9 +35,10 @@ vapid_subject = "https://muliao.example.com"
 # 必填：新建 agent 的默认模型，格式 "<provider 名>:<模型名>"，provider 名即下面 [llm.providers.<名>] 的键
 default_model = "claude:claude-sonnet-5-5"
 
-# 至少配置一个 provider。type 可选：
-#   anthropic         Anthropic Messages API
-#   openai            OpenAI Chat Completions，也适用于 DeepSeek、OpenRouter、vLLM、Ollama 等兼容服务
+# 至少配置一个 provider。[llm.providers.<名称>] 的名称由你任意取，只用于模型字符串 "<名称>:<模型名>"；
+# type 是调用协议，代码里没有任何针对具体厂商的逻辑。type 可选：
+#   anthropic         Anthropic Messages 协议，也适用于提供 Anthropic 兼容接口的服务
+#   openai            OpenAI Chat Completions 协议，也适用于 DeepSeek、OpenRouter、vLLM、Ollama 等兼容服务
 #   openai-responses  OpenAI Responses API
 #   google            Gemini API
 # base_url 不填则使用该类型的官方地址（不受 *_BASE_URL 环境变量影响）。agent 的模型写成 "<provider 名>:<模型名>"，如 "claude:claude-opus-5-5"
@@ -50,7 +51,8 @@ api_key = ""
 # type = "openai"
 # api_key = ""
 
-# [llm.providers.deepseek]
+# 兼容服务示例：名称随意，用 type 选协议、base_url 指向该服务。模型写成 "my-compatible:deepseek-chat"
+# [llm.providers.my-compatible]
 # type = "openai"
 # api_key = ""
 # base_url = "https://api.deepseek.com"

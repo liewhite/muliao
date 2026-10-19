@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from muliao.api.deps import C
+from muliao.errors import NotFound
 from muliao.models import DeliveryChannel, Origin, Session, Task, TaskKind, TaskStatus
 from muliao.transcript import Item, to_items
 
@@ -142,6 +143,21 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
 @router.post("/sessions/{session_id}/messages", status_code=202)
 async def reply(c: C, session_id: str, body: ReplyIn) -> TaskOut:
     return TaskOut.of(await c.sessions.reply(session_id, body.prompt))
+
+
+class CompactOut(BaseModel):
+    # False 表示已有待执行的压缩，本次未重复投递
+    queued: bool
+
+
+@router.post("/sessions/{session_id}/compact", status_code=202)
+async def compact(c: C, session_id: str) -> CompactOut:
+    """手动压缩上下文：单轮内上下文超限导致失败时，压缩后再重试该轮。"""
+    async with c.db.transaction() as s:
+        session = await s.get(Session, session_id)
+        if session is None:
+            raise NotFound(f"session {session_id!r} not found")
+        return CompactOut(queued=await c.compaction.request(s, session.id, session.agent_name))
 
 
 @router.post("/sessions/{session_id}/read", status_code=204)

@@ -92,8 +92,8 @@ Web / cron / webhook / Telegram / delegate_task
 
 与模型提供方无关的统一机制（`runtime/compaction.py`）。pydantic-ai 只为 Anthropic 与 OpenAI Responses 提供原生压缩，`openai` 兼容接口和 Gemini 没有，按提供方分支会产生两套语义，所以统一自己实现：
 
-- **触发**：一轮结束时，最后一次模型请求的输入 token 超过 `runtime.compaction_threshold_tokens`，在提交该轮的同一事务里投递 `compaction` task。它与 turn 同一 lane，执行顺序有保证。
-- **执行**：把最近 `runtime.compaction_keep_turns` 轮之前的消息连同上一份摘要交给该 agent 的模型总结，写入 `compactions` 表（`through_message_id` + `summary`）。切点总在两轮之间，工具调用与其返回不会被拆开。没有可压缩的轮次时什么也不做（重复排队的压缩因此是幂等的）。
+- **触发**：一轮结束时，最后一次模型请求的输入 token（pydantic-ai 已计入缓存 token）超过 `runtime.compaction_threshold_tokens`，在提交该轮的同一事务里投递 `compaction` task；也可在会话页手动触发。它与 turn 同一 lane，同一 session 最多一个待执行的压缩。排在已经排队的用户消息之后，所以那些轮次仍带完整上下文运行。模型不返回 usage（部分 OpenAI 兼容服务流式时如此）时记 warn 日志，自动触发对该模型失效。
+- **执行**：把最近 `runtime.compaction_keep_turns` 轮之前的消息连同上一份摘要交给该 agent 的模型总结，写入 `compactions` 表（`through_message_id` + `summary`）。切点总在两轮之间，工具调用与其返回不会被拆开。单次只取总长不超过上限的最早若干轮，不截断内容；剩余部分在同一事务里续排下一次压缩，直到收敛。没有可压缩的轮次时什么也不做。
 - **使用**：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息。原始消息不删除，UI 显示完整原文并标出压缩点；反思读取的仍是原始消息。
 
 ## 5. 数据库迁移
@@ -149,4 +149,4 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 
 - **单进程**：事务串行化与 task 领取依赖进程内锁，所以只跑一个进程。这不影响 agent 并发：worker 同时执行 `runtime.worker_concurrency` 个 task（不同 session、不同 agent 并行，同一 session 串行）。模型调用与工具执行都是异步 IO，不占事务锁。
 - **外部消息**：不做实时推送接入（Slack 等）。需要定时处理外部消息时，用 cron 让 agent 按时拉取（见第 7 节）。
-- **上下文压缩的覆盖范围**：只在两轮之间压缩；单轮内工具调用极多导致上下文超限时，该轮失败可见，下一轮之前会触发压缩。
+- **上下文压缩的覆盖范围**：只在两轮之间压缩。单轮内工具调用极多导致上下文超限时，该轮失败可见；在会话页点「压缩」后重试该轮即可。不自动识别各提供方的超限错误，因为错误格式各不相同，无法可靠识别。

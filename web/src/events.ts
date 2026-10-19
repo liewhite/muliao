@@ -15,7 +15,7 @@ export interface RunEvent {
 export interface TaskEvent {
   type: 'task'
   task_id: number
-  kind: 'turn' | 'reflection' | 'deliver'
+  kind: 'turn' | 'reflection' | 'deliver' | 'compaction'
   status: 'running' | 'pending' | 'done' | 'failed'
   session_id: string | null
   agent: string

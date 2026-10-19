@@ -7,7 +7,7 @@ from muliao.db import Database, utcnow
 from muliao.delivery.base import Notification, Notifier
 from muliao.models import Agent, DeliveryChannel, Message, Session, Task, TaskKind
 from muliao.runtime.codec import dump_message
-from muliao.runtime.compaction import CompactionTrigger, load_context
+from muliao.runtime.compaction import CompactionScheduler, load_context
 from muliao.runtime.redaction import redact_messages
 from muliao.runtime.runner import AgentRuntime, RunProfile
 from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane
@@ -31,7 +31,7 @@ class TurnHandler:
         profile: RunProfile,
         queue: TaskQueue,
         notifier: Notifier,
-        compaction: CompactionTrigger,
+        compaction: CompactionScheduler,
     ):
         self._compaction = compaction
         self._db = db
@@ -59,7 +59,7 @@ class TurnHandler:
             session.unread = True
             session.updated_at = utcnow()
             await self._count_turn(s, agent)
-            self._compaction.maybe_enqueue(s, session, new_messages)
+            await self._compaction.after_turn(s, session, agent.model, new_messages)
             if session.delivery != DeliveryChannel.NONE:
                 self._notifier.enqueue_in(
                     s,

@@ -2,7 +2,7 @@
 
 export type Origin = 'user' | 'cron' | 'webhook' | 'telegram' | 'delegation'
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
-export type TaskKind = 'turn' | 'reflection' | 'deliver'
+export type TaskKind = 'turn' | 'reflection' | 'deliver' | 'compaction'
 
 export interface Agent {
   name: string
@@ -218,6 +218,7 @@ export const api = {
   startSession: (agent_name: string, prompt: string) => post<Session>('/api/sessions', { agent_name, prompt }),
   reply: (id: string, prompt: string) => post<Task>(`/api/sessions/${id}/messages`, { prompt }),
   markRead: (id: string) => post<void>(`/api/sessions/${id}/read`),
+  compact: (id: string) => post<{ queued: boolean }>(`/api/sessions/${id}/compact`),
   deleteSession: (id: string) => del(`/api/sessions/${id}`),
 
   tasks: (status?: TaskStatus) => get<Task[]>('/api/tasks', { status }),

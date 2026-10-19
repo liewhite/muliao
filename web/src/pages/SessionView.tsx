@@ -145,6 +145,7 @@ function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void
         <div className="turn-status failed">
           <div>这一轮失败了（尝试 {task.attempts} 次）：</div>
           <pre>{task.error}</pre>
+          <div className="small">如果是上下文过长，先点右上角「压缩」，完成后再重试。</div>
           <button className="button small" onClick={() => onRetry(task.id)}>
             重试
           </button>
@@ -174,7 +175,7 @@ export default function SessionView() {
       void detail.reload()
     } else if (e.session_id === id) {
       if (e.type === 'run') setLive((prev) => [...prev, e])
-      else if (e.kind === 'turn') {
+      else if (e.kind === 'turn' || e.kind === 'compaction') {
         // turn 状态变化后以数据库为准重新拉取，清空临时流
         if (e.status !== 'running') setLive([])
         void detail.reload()
@@ -220,9 +221,19 @@ export default function SessionView() {
       back="/"
       title={session?.title ?? '会话'}
       actions={
-        <button className="icon-button" onClick={remove} aria-label="删除会话">
-          🗑
-        </button>
+        <>
+          <button
+            className="button small"
+            disabled={action.busy}
+            onClick={() => void action.run(() => api.compact(id).then(() => detail.reload()))}
+            title="把早期对话压缩成摘要，减少发给模型的上下文"
+          >
+            压缩
+          </button>
+          <button className="icon-button" onClick={remove} aria-label="删除会话">
+            🗑
+          </button>
+        </>
       }
       footer={
       <div className="composer">
