@@ -278,7 +278,12 @@ async def delete_sessions(s: AsyncSession, queue: TaskQueue, roots: list[Session
         doomed |= {c.id: c for c in children}
     for session in doomed.values():
         if running := await running_task_ids(s, session_id=session.id):
-            raise Conflict(f"session {session.id} has running tasks {running}; wait for them to finish")
+            # 错误也会交还给模型，不带 id；定位信息记在日志里
+            log.info(
+                "session deletion refused: tasks running", extra={"session_id": session.id, "tasks": running}
+            )
+            what = "the session" if session.id in {x.id for x in roots} else "one of its private threads"
+            raise Conflict(f"{what} has a task running right now; wait for it to finish, then delete")
     for session in doomed.values():
         reason = f"session {session.id} was deleted"
         for turn_id in (await s.scalars(select(Task.id).where(Task.session_id == session.id))).all():

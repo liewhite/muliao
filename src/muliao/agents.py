@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import select
@@ -20,12 +20,33 @@ from muliao.naming import normalize_agent_name
 
 
 @dataclass(frozen=True)
+class AgentDefaults:
+    """新建 agent 时未指定的字段取这些值（来自服务端配置）；API 与工具共用这一份。"""
+
+    model: str
+    reflect_every: int
+
+
+@dataclass(frozen=True)
 class AgentSpec:
+    """新建 agent。model / reflect_every 为 None 时取 AgentDefaults。"""
+
     name: str
     description: str
-    model: str
     instructions: str
-    reflect_every: int
+    model: str | None = None
+    reflect_every: int | None = None
+
+
+@dataclass(frozen=True)
+class AgentPatch:
+    """修改 agent：为 None 的字段保持不变。整体替换就是所有字段都给出。"""
+
+    name: str | None = None
+    description: str | None = None
+    model: str | None = None
+    instructions: str | None = None
+    reflect_every: int | None = None
 
 
 class AgentService:
@@ -38,12 +59,14 @@ class AgentService:
         memory: MemoryStore,
         model_checker: Callable[[str], None],
         prompts: PromptStore,
+        defaults: AgentDefaults,
     ):
         self._prompts = prompts
         self._db = db
         self._agents_dir = agents_dir
         self._memory = memory
         self._check_model = model_checker
+        self.defaults = defaults
 
     def root(self, agent_id: str) -> Path:
         return self._agents_dir / agent_id
@@ -51,30 +74,33 @@ class AgentService:
     def workspace(self, agent_id: str) -> Path:
         return self.root(agent_id) / "workspace"
 
-    def _validated(self, spec: AgentSpec) -> AgentSpec:
-        if not spec.description.strip():
+    def _check(self, *, description: str, model: str, reflect_every: int) -> None:
+        if not description.strip():
             raise InvalidInput("agent description must not be empty")
-        if spec.reflect_every < 1:
+        if reflect_every < 1:
             raise InvalidInput("reflect_every must be >= 1")
-        self._check_model(spec.model)
-        return replace(spec, name=normalize_agent_name(spec.name))
+        self._check_model(model)
 
     async def _ensure_name_free(self, s: AsyncSession, name: str, agent_id: str | None) -> None:
         holder = await s.scalar(select(Agent.id).where(Agent.name == name))
         if holder is not None and holder != agent_id:
-            raise Conflict(f"agent name {name!r} is already used by agent {holder}")
+            # 只给名称：这条错误也会交还给模型，模型不接触 id
+            raise Conflict(f"agent name {name!r} is already taken by another agent")
 
     async def create(self, spec: AgentSpec, *, author: str) -> Agent:
         """author：创建者，"user" 或创建它的 agent 的 id（记在指令的第一版上）。"""
-        spec = self._validated(spec)
+        name = normalize_agent_name(spec.name)
+        model = self.defaults.model if spec.model is None else spec.model
+        reflect_every = self.defaults.reflect_every if spec.reflect_every is None else spec.reflect_every
+        self._check(description=spec.description, model=model, reflect_every=reflect_every)
         async with self._db.transaction() as s:
-            await self._ensure_name_free(s, spec.name, None)
+            await self._ensure_name_free(s, name, None)
             agent = Agent(
                 id=new_agent_id(),
-                name=spec.name,
+                name=name,
                 description=spec.description,
-                model=spec.model,
-                reflect_every=spec.reflect_every,
+                model=model,
+                reflect_every=reflect_every,
             )
             s.add(agent)
             await s.flush()
@@ -85,17 +111,24 @@ class AgentService:
             self._memory.init(agent.id)
         return agent
 
-    async def update(self, agent_id: str, spec: AgentSpec, *, author: str) -> Agent:
-        """整体替换配置；指令有变化时追加一版（author 同 create）。"""
-        spec = self._validated(spec)
+    async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> Agent:
+        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。指令有变化时追加一版（author 同 create）。"""
         async with self._db.transaction() as s:
             agent = await self._get(s, agent_id)
-            await self._ensure_name_free(s, spec.name, agent_id)
-            agent.name = spec.name
-            agent.description = spec.description
-            agent.model = spec.model
-            agent.reflect_every = spec.reflect_every
-            await self._prompts.set_in(s, agent_id, spec.instructions, author)
+            name = agent.name if patch.name is None else normalize_agent_name(patch.name)
+            description = agent.description if patch.description is None else patch.description
+            model = agent.model if patch.model is None else patch.model
+            reflect_every = agent.reflect_every if patch.reflect_every is None else patch.reflect_every
+            self._check(description=description, model=model, reflect_every=reflect_every)
+            await self._ensure_name_free(s, name, agent_id)
+            agent.name, agent.description, agent.model, agent.reflect_every = (
+                name,
+                description,
+                model,
+                reflect_every,
+            )
+            if patch.instructions is not None:
+                await self._prompts.set_in(s, agent_id, patch.instructions, author)
         return agent
 
     async def _get(self, s: AsyncSession, agent_id: str) -> Agent:

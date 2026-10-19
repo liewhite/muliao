@@ -3,7 +3,7 @@
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agents import AgentSpec
+from muliao.agents import AgentPatch
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start
@@ -27,9 +27,7 @@ async def test_public_prompt_precedes_agent_instructions_in_every_run(container,
 
 async def test_agent_instruction_changes_are_versioned_and_restorable(container, make_agent):
     agent = await make_agent("alpha")
-    spec = AgentSpec(
-        name="alpha", description=agent.description, model=agent.model, instructions="v2", reflect_every=5
-    )
+    spec = AgentPatch(instructions="v2")
     await container.agents.update(agent.id, spec, author="user")
     assert await container.prompts.current(agent.id) == "v2"
     # 指令未变时不追加新版本
@@ -64,13 +62,7 @@ async def test_each_listed_agent_gets_its_own_latest_instructions(client, contai
     for name in ("alpha", "beta"):
         agent = await make_agent(name)
         for version in ("v2", "v3"):
-            spec = AgentSpec(
-                name=name,
-                description="d",
-                model=agent.model,
-                instructions=f"{name} {version}",
-                reflect_every=5,
-            )
+            spec = AgentPatch(instructions=f"{name} {version}")
             await container.agents.update(agent.id, spec, author="user")
     await login(client)
     listed = (await client.get("/api/agents")).json()

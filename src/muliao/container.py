@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from muliao.agent_lifecycle import AgentLifecycle
-from muliao.agents import AgentService
+from muliao.agents import AgentDefaults, AgentService
 from muliao.bus import EventBus
 from muliao.config import Settings
 from muliao.db import Database, create_engine, migrate
@@ -29,7 +29,7 @@ from muliao.runtime.reflection import ReflectionHandler
 from muliao.runtime.runner import AgentRuntime, RunProfile
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import TaskQueue
-from muliao.runtime.tools.agents import AgentDefaults, agents_toolset
+from muliao.runtime.tools.agents import agents_toolset
 from muliao.runtime.tools.delegation import delegation_toolset
 from muliao.runtime.tools.evolution import memory_toolset, skills_toolset
 from muliao.runtime.tools.mcp import mcp_admin_toolset
@@ -138,6 +138,7 @@ def build_container(
         memory,
         model_checker or models.check,
         prompts,
+        AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every),
     )
     agent_lifecycle = AgentLifecycle(db, queue, agents)
     sessions = SessionService(db, queue)
@@ -177,12 +178,7 @@ def build_container(
             workspace_tools,
             *evolution_tools,
             temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir),
-            agents_toolset(
-                agents,
-                agent_lifecycle,
-                prompts,
-                AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every),
-            ),
+            agents_toolset(agents, agent_lifecycle, prompts),
             delegation_toolset(db, agents, threads),
             notify_toolset(notifier),
             mcp_admin_toolset(mcp),

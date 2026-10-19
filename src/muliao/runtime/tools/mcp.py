@@ -22,6 +22,8 @@ class McpInfo(BaseModel):
     env_keys: list[str]
     header_keys: list[str]
     enabled: bool
+    # 是否在给你的工具里：已启用，且没有被同名私有 server 遮蔽
+    active: bool
 
 
 def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
@@ -29,8 +31,10 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
 
     @ts.tool
     async def mcp_list(ctx: RunContext[RunScope]) -> list[McpInfo]:
-        """List your private MCP servers and the public ones, including disabled ones (a private server hides an
-        enabled public one of the same name). Values of env/headers are hidden."""
+        """List your private MCP servers and the public ones, including disabled ones. `active` tells whether its
+        tools are offered to you. Values of env/headers are hidden."""
+        # 哪些真正生效由合并规则决定（registry.visible_to），这里不复述规则
+        active = {s.id for s in await registry.visible_to(ctx.deps.agent_id)}
         return [
             McpInfo(
                 name=s.name,
@@ -42,6 +46,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
                 env_keys=sorted(s.env),
                 header_keys=sorted(s.headers),
                 enabled=s.enabled,
+                active=s.id in active,
             )
             for s in await registry.list(ctx.deps.agent_id) + await registry.list(None)
         ]

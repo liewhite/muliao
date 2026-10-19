@@ -209,3 +209,80 @@ async def test_temp_agent_runs_once_in_a_discarded_workspace_and_returns_its_ans
     assert "temporary helper agent working for agent 'manager'" in str(seen["instructions"])
     # 不留下会话
     assert len(await container.sessions.list(agent_id=None, origins=None, limit=10, offset=0)) == 1
+
+
+async def test_parallel_partial_updates_of_one_agent_both_survive(container, make_agent, models):
+    me = await make_agent("manager", model="tools")
+    target = await make_agent("worker")
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if sum(isinstance(m, ModelResponse) for m in messages) == 0:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "update_agent", {"agent": "worker", "description": "new desc"}, tool_call_id="a"
+                    ),
+                    ToolCallPart("update_agent", {"agent": "worker", "reflect_every": 7}, tool_call_id="b"),
+                ]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    models.models["tools"] = scripted(fn)
+    await start(container, me.id, "go", origin=Origin.CRON)
+    await drain(container)
+
+    updated = await container.agents.get(target.id)
+    assert (updated.description, updated.reflect_every) == ("new desc", 7)
+    # 未给出的指令不被改写：不追加版本
+    assert len(await container.prompts.history(target.id)) == 1
+
+
+async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agent, models):
+    me = await make_agent("manager", model="tools")
+    other = await make_agent("worker")
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("create_agent", {"name": "worker", "description": "d", "instructions": ""}),
+            ("update_agent", {"agent": "manager", "new_name": "worker"}),
+            ("delete_agent", {"agent": "manager"}),
+        ],
+    )
+
+    assert "already taken" in outputs[0] and "already taken" in outputs[1]
+    assert "cannot delete yourself" in outputs[2]
+    for agent_id in (me.id, other.id):
+        assert agent_id not in "\n".join(outputs)
+
+
+async def test_event_trigger_token_never_overwrites_and_moves_with_rotate_and_delete(
+    container, make_agent, models
+):
+    me = await make_agent("manager", model="tools")
+    await container.vault.set(me.id, token_key("mine"), "user-secret")
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("event_trigger_create", {"name": "mine", "prompt": "p"}),
+            ("event_trigger_create", {"name": "a_b", "prompt": "p"}),
+            ("event_trigger_create", {"name": "hook", "prompt": "p"}),
+            ("event_trigger_rotate_token", {"name": "hook"}),
+            ("event_trigger_delete", {"name": "hook"}),
+        ],
+    )
+
+    # 已有同名 secret 时不创建触发器、不覆盖
+    assert "already has EVENT_TOKEN_MINE" in outputs[0]
+    assert await container.vault.resolve_many(me.id, [token_key("mine")]) == {
+        token_key("mine"): "user-secret"
+    }
+    assert [t.name for t in await container.events.list()] == []
+    # 名称不允许下划线，名称到 vault key 一一对应
+    assert "invalid event trigger name" in outputs[1]
+    assert "any other copy is now invalid" in outputs[3]
+    assert "and its token EVENT_TOKEN_HOOK" in outputs[4]
+    assert not await container.vault.has(me.id, token_key("hook"))

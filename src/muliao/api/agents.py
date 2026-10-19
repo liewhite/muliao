@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from muliao.agents import AgentSpec
+from muliao.agents import AgentPatch, AgentSpec
 from muliao.api.deps import C
 from muliao.evolution.prompts import USER
 from muliao.models import Agent
@@ -59,29 +59,15 @@ async def _out(c: C, agent: Agent) -> AgentOut:
     return AgentOut.of(agent, await c.prompts.current(agent.id))
 
 
-def _create_spec(c: C, body: AgentCreate) -> AgentSpec:
-    return AgentSpec(
-        name=body.name,
-        description=body.description,
-        model=c.settings.llm.default_model if body.model is None else body.model,
-        instructions=body.instructions,
-        reflect_every=c.settings.runtime.default_reflect_every
-        if body.reflect_every is None
-        else body.reflect_every,
-    )
-
-
-class AgentDefaults(BaseModel):
+class AgentDefaultsOut(BaseModel):
     model: str
     reflect_every: int
 
 
 @router.get("/agent-defaults")
-async def agent_defaults(c: C) -> AgentDefaults:
-    """新建 agent 时表单预填的默认值；唯一来源是服务端配置。"""
-    return AgentDefaults(
-        model=c.settings.llm.default_model, reflect_every=c.settings.runtime.default_reflect_every
-    )
+async def agent_defaults(c: C) -> AgentDefaultsOut:
+    """新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。"""
+    return AgentDefaultsOut(model=c.agents.defaults.model, reflect_every=c.agents.defaults.reflect_every)
 
 
 @router.get("/agents")
@@ -93,7 +79,14 @@ async def list_agents(c: C) -> list[AgentOut]:
 
 @router.post("/agents", status_code=201)
 async def create_agent(c: C, body: AgentCreate) -> AgentOut:
-    return await _out(c, await c.agents.create(_create_spec(c, body), author=USER))
+    spec = AgentSpec(
+        name=body.name,
+        description=body.description,
+        instructions=body.instructions,
+        model=body.model,
+        reflect_every=body.reflect_every,
+    )
+    return await _out(c, await c.agents.create(spec, author=USER))
 
 
 @router.get("/agents/{agent_id}")
@@ -103,14 +96,15 @@ async def get_agent(c: C, agent_id: str) -> AgentOut:
 
 @router.put("/agents/{agent_id}")
 async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
-    spec = AgentSpec(
+    # 整体替换就是所有字段都给出的修改
+    patch = AgentPatch(
         name=body.name,
         description=body.description,
         model=body.model,
         instructions=body.instructions,
         reflect_every=body.reflect_every,
     )
-    return await _out(c, await c.agents.update(agent_id, spec, author=USER))
+    return await _out(c, await c.agents.update(agent_id, patch, author=USER))
 
 
 @router.delete("/agents/{agent_id}", status_code=204)

@@ -66,13 +66,25 @@ class CronService:
         log.info("cron job created", extra={"cron": job.name, "agent": agent_id, "schedule": schedule})
         return job
 
-    async def update(self, job_id: int, *, schedule: str, prompt: str, enabled: bool) -> CronJob:
+    async def update(
+        self,
+        job_id: int,
+        *,
+        schedule: str | None = None,
+        prompt: str | None = None,
+        enabled: bool | None = None,
+    ) -> CronJob:
+        """在一个事务里只修改给出的字段（None 不变），并发的局部修改互不覆盖。重新启用时清除上次的失败原因。"""
         async with self._db.transaction() as s:
             job = await self._get(s, job_id)
+            schedule = job.schedule if schedule is None else schedule
+            prompt = job.prompt if prompt is None else prompt
             job.next_run_at = self._validate(name=job.name, schedule=schedule, prompt=prompt)
-            job.schedule, job.prompt, job.enabled = schedule, prompt, enabled
-            if enabled:
-                job.last_error = None
+            job.schedule, job.prompt = schedule, prompt
+            if enabled is not None:
+                job.enabled = enabled
+                if enabled:
+                    job.last_error = None
         self._changed.set()
         return job
 

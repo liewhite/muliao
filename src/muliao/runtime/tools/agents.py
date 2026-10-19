@@ -4,24 +4,15 @@
 用户可以在界面上回滚。
 """
 
-from dataclasses import dataclass
-
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agent_lifecycle import AgentLifecycle
-from muliao.agents import AgentService, AgentSpec
+from muliao.agents import AgentPatch, AgentService, AgentSpec
+from muliao.errors import InvalidInput
 from muliao.evolution.prompts import PromptStore
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
-
-
-@dataclass(frozen=True)
-class AgentDefaults:
-    """新建 agent 时未指定的字段取服务端配置（与 API 的默认值同一来源）。"""
-
-    model: str
-    reflect_every: int
 
 
 class AgentInfo(BaseModel):
@@ -38,7 +29,7 @@ class AgentDetail(BaseModel):
 
 
 def agents_toolset(
-    agents: AgentService, lifecycle: AgentLifecycle, prompts: PromptStore, defaults: AgentDefaults
+    agents: AgentService, lifecycle: AgentLifecycle, prompts: PromptStore
 ) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
@@ -85,9 +76,9 @@ def agents_toolset(
         spec = AgentSpec(
             name=name,
             description=description,
-            model=defaults.model if model is None else model,
             instructions=instructions,
-            reflect_every=defaults.reflect_every if reflect_every is None else reflect_every,
+            model=model,
+            reflect_every=reflect_every,
         )
         created = await agents.create(spec, author=ctx.deps.agent_id)
         return f"created agent {created.name}"
@@ -115,24 +106,30 @@ def agents_toolset(
             reflect_every: New reflection interval in turns.
         """
         target = await agents.find_by_name(agent)
-        spec = AgentSpec(
-            name=target.name if new_name is None else new_name,
-            description=target.description if description is None else description,
-            model=target.model if model is None else model,
-            instructions=await prompts.current(target.id) if instructions is None else instructions,
-            reflect_every=target.reflect_every if reflect_every is None else reflect_every,
+        patch = AgentPatch(
+            name=new_name,
+            description=description,
+            model=model,
+            instructions=instructions,
+            reflect_every=reflect_every,
         )
-        updated = await agents.update(target.id, spec, author=ctx.deps.agent_id)
+        updated = await agents.update(target.id, patch, author=ctx.deps.agent_id)
         return f"updated agent {updated.name}"
 
-    @ts.tool_plain
-    async def delete_agent(agent: str) -> str:
-        """Delete an agent with its sessions, memory, skills, secrets and workspace. Irreversible.
+    @ts.tool
+    async def delete_agent(ctx: RunContext[RunScope], agent: str) -> str:
+        """Delete another agent with its sessions, memory, skills, private secrets and MCP servers, cron jobs,
+        event triggers and workspace. Irreversible. Threads it was given by other conversations that the user can
+        see are kept as standalone sessions. You cannot delete yourself.
 
         Args:
             agent: Name of the agent to delete.
         """
         target = await agents.find_by_name(agent)
+        if target.id == ctx.deps.agent_id:
+            raise InvalidInput(
+                "you cannot delete yourself while you are running; ask the user to do it in the app"
+            )
         await lifecycle.delete(target.id)
         return f"deleted agent {target.name}"
 

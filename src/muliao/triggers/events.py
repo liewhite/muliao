@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import re
 import secrets
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -23,7 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.db import Database, utcnow
 from muliao.errors import Conflict, InvalidInput, NotFound, Unauthorized
 from muliao.models import Agent, EventTrigger, Origin, ReplyTo, Session
-from muliao.naming import validate_slug
 from muliao.runtime.conversation import Inbound, NewSession, receive
 from muliao.runtime.tasks import Clock, TaskQueue
 
@@ -31,6 +31,16 @@ log = logging.getLogger(__name__)
 
 # 事件内容原样进入 prompt，过大的事件应由发送方裁剪或改为传引用
 EVENT_MAX_BYTES = 256 * 1024
+
+
+# 出现在 URL 里；不含下划线，使名称到 vault key（见 tools/triggers.token_key）一一对应
+_TRIGGER_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+def validate_trigger_name(name: str) -> str:
+    if not _TRIGGER_NAME.fullmatch(name):
+        raise InvalidInput(f"invalid event trigger name {name!r}: must match {_TRIGGER_NAME.pattern}")
+    return name
 
 
 def _hash(token: str) -> str:
@@ -58,7 +68,7 @@ class EventTriggers:
             raise InvalidInput("event trigger prompt must not be empty")
         token = secrets.token_urlsafe(32)
         trigger = EventTrigger(
-            name=validate_slug("event trigger", name),
+            name=validate_trigger_name(name),
             agent_id=agent_id,
             prompt=prompt,
             token_hash=_hash(token),
@@ -74,13 +84,19 @@ class EventTriggers:
         log.info("event trigger created", extra={"trigger": name, "agent": agent_id})
         return trigger, token
 
-    async def update(self, trigger_id: int, *, prompt: str, enabled: bool) -> EventTrigger:
-        if not prompt.strip():
+    async def update(
+        self, trigger_id: int, *, prompt: str | None = None, enabled: bool | None = None
+    ) -> EventTrigger:
+        """在一个事务里只修改给出的字段（None 不变），并发的局部修改互不覆盖。"""
+        if prompt is not None and not prompt.strip():
             raise InvalidInput("event trigger prompt must not be empty")
         async with self._db.transaction() as s:
             trigger = await self._get(s, trigger_id)
-            trigger.prompt, trigger.enabled = prompt, enabled
-        log.info("event trigger updated", extra={"trigger": trigger.name, "enabled": enabled})
+            if prompt is not None:
+                trigger.prompt = prompt
+            if enabled is not None:
+                trigger.enabled = enabled
+        log.info("event trigger updated", extra={"trigger": trigger.name, "enabled": trigger.enabled})
         return trigger
 
     async def rotate_token(self, trigger_id: int) -> str:

@@ -81,16 +81,17 @@ Web / cron / 外部事件 / delegate_task / ask_agent
 - **原则：给模型看的是名称和描述，给程序用的是 id。** 工具参数、返回值、instructions 里只出现 agent 名称；名称唯一，由工具层（`AgentService.find_by_name`）解析为 id，写错时把可用名称列表作为错误交还模型。id 只会作为文件路径的一部分（`agents/<id>/…`）出现在工作目录里。`tests/test_flow.py::test_model_sees_agent_names_never_ids` 守住这条规则。
 - **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
 - **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）：
+  - 局部修改（`update_agent`、`cron_update`、`event_trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill` / `write_skill` / `delete_skill`（scope = `private` | `public`）。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
-  - `agents`：`list_agents`（返回 name、description）/ `get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent` / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
+  - `agents`：`list_agents`（返回 name、description）/ `get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己） / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
   - `delegation`：`delegate_task` / `ask_agent` / `wait_for` / `list_threads`（按名称指定目标 agent、按 thread 名指定子会话，见第 4 节）。
   - `notify`：`notify_user`（显式 Web Push）。
   - `temp_agent`：`run_temp_agent(task, instructions?, model?)`：一次性的临时 agent，在调用方这一轮里同步运行（同一响应中的多次调用并行），返回它的最终回答。它只有文件与 shell 工具（工作目录在 `data/tmp/` 下临时创建、结束即删除）和调用方的 MCP，secret 按调用方的视角解析；没有记忆、skill、会话、反思与委派，也不能再开临时 agent。适合抓取网页并总结、分析文件这类做完即丢的事；需要长期积累的专长应 `create_agent` 后委派。临时 agent 失败时异常向上传播，按调用方这一轮的失败统一处理（暂时性失败整轮重试）。
   - `mcp_admin`：`mcp_list`（含已停用的）/ `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_set_enabled` / `mcp_remove`。改动从下一轮起生效。
   - `vault`：`vault_list` / `vault_set` / `vault_delete`（scope = `private` | `public`，默认私有）。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
-  - `triggers`：`cron_list` / `cron_create(name, schedule, prompt, agent?)` / `cron_update` / `cron_delete`；`event_trigger_list` / `event_trigger_create` / `event_trigger_update` / `event_trigger_rotate_token` / `event_trigger_delete`。agent 同样按名称指定。事件触发器的 token 不出现在对话里，而是存进创建者私有 vault 的 `EVENT_TOKEN_<NAME>`。
+  - `triggers`：`cron_list` / `cron_create(name, schedule, prompt, agent?)` / `cron_update` / `cron_delete`；`event_trigger_list` / `event_trigger_create` / `event_trigger_update` / `event_trigger_rotate_token` / `event_trigger_delete`。agent 同样按名称指定。事件触发器的 token 不出现在对话里，而是存进创建者私有 vault 的 `EVENT_TOKEN_<NAME>`（触发器名不含下划线，名称与 key 一一对应）：创建时该 key 已存在则拒绝，不覆盖；重置时覆盖调用者的这个 key，其他地方的旧副本随之失效；删除触发器时一并删除调用者的这个 key。
   - 该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀；配置中的 `${vault:KEY}` 在运行时按 server 归属者的视角解析（公共 server 只能引用公共 secret），引用不可见的 key 直接报错。
 - **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。
 
