@@ -94,3 +94,29 @@ def test_auth_token_expires_and_rejects_tampering():
     assert auth.verify(token, now=1001)
     assert not auth.verify(token, now=1000 + 91 * 24 * 3600)
     assert not auth.verify(token.replace("v1.1000", "v1.2000"), now=1001)
+
+
+async def test_chinese_agent_name_roundtrip_over_http(client, container):
+    from urllib.parse import quote
+
+    await login(client)
+    resp = await client.post("/api/agents", json={"name": "研究助理", "description": "查资料"})
+    assert resp.status_code == 201, resp.text
+    path = f"/api/agents/{quote('研究助理')}"
+    assert (await client.get(path)).json()["name"] == "研究助理"
+    assert (await client.get(f"{path}/memory")).status_code == 200
+    assert container.agents.workspace("研究助理").is_dir()
+
+    session = (await client.post("/api/sessions", json={"agent_name": "研究助理", "prompt": "hi"})).json()
+    assert session["agent_name"] == "研究助理"
+    assert (await client.delete(path)).status_code == 204
+
+
+async def test_agent_defaults_endpoint_reflects_config(client, container):
+    await login(client)
+    defaults = (await client.get("/api/agent-defaults")).json()
+    assert defaults == {
+        "model": container.settings.llm.default_model,
+        "reflect_every": container.settings.runtime.default_reflect_every,
+    }
+    assert container.settings.runtime.default_reflect_every == 5

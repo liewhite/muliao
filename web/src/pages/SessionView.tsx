@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type CompactionInfo, type Item, type Task } from '../api'
+import { agentRoute, api, type CompactionInfo, type Item, type Task } from '../api'
 import { useServerEvents, type RunEvent } from '../events'
 import { ErrorBanner, Loading, Markdown, Page, confirmAction, formatTime, useAction, useLoad } from '../ui'
 
@@ -257,7 +257,7 @@ export default function SessionView() {
         {(d) => (
           <div className="chat">
             <div className="chat-meta">
-              <Link to={`/agents/${d.session.agent_name}`} className="tag">
+              <Link to={agentRoute(d.session.agent_name)} className="tag">
                 {d.session.agent_name}
               </Link>
               <span className="muted small">{formatTime(d.session.created_at)}</span>

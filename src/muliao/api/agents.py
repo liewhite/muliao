@@ -62,6 +62,19 @@ def _create_spec(c: C, body: AgentCreate) -> AgentSpec:
     )
 
 
+class AgentDefaults(BaseModel):
+    model: str
+    reflect_every: int
+
+
+@router.get("/agent-defaults")
+async def agent_defaults(c: C) -> AgentDefaults:
+    """新建 agent 时表单预填的默认值；唯一来源是服务端配置。"""
+    return AgentDefaults(
+        model=c.settings.llm.default_model, reflect_every=c.settings.runtime.default_reflect_every
+    )
+
+
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
     return [AgentOut.of(a) for a in await c.agents.list()]

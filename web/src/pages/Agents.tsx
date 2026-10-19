@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, type Agent, type AgentInput } from '../api'
+import { agentRoute, api, newSessionRoute, type Agent, type AgentDefaults, type AgentInput } from '../api'
 import { ErrorBanner, Field, Loading, Markdown, Page, confirmAction, formatTime, useAction, useLoad } from '../ui'
 import { SkillList } from './Skills'
 
@@ -20,7 +20,7 @@ export function AgentList() {
           <ul className="list">
             {list.map((a) => (
               <li key={a.name}>
-                <Link to={`/agents/${a.name}`} className="list-item">
+                <Link to={agentRoute(a.name)} className="list-item">
                   <div className="list-main">
                     <div className="list-title">{a.name}</div>
                     <div className="list-sub">{a.description}</div>
@@ -37,15 +37,17 @@ export function AgentList() {
   )
 }
 
-const EMPTY: AgentInput = { description: '', model: null, instructions: '', reflect_every: null }
+function initialInput(agent: Agent | undefined, defaults: AgentDefaults | undefined): AgentInput {
+  if (agent) {
+    return { description: agent.description, model: agent.model, instructions: agent.instructions, reflect_every: agent.reflect_every }
+  }
+  if (!defaults) throw new Error('agent defaults must be loaded before rendering the create form')
+  return { description: '', model: defaults.model, instructions: '', reflect_every: defaults.reflect_every }
+}
 
-function AgentForm({ agent, onSaved }: { agent?: Agent; onSaved: (a: Agent) => void }) {
+function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults?: AgentDefaults; onSaved: (a: Agent) => void }) {
   const [name, setName] = useState(agent?.name ?? '')
-  const [input, setInput] = useState<AgentInput>(
-    agent
-      ? { description: agent.description, model: agent.model, instructions: agent.instructions, reflect_every: agent.reflect_every }
-      : EMPTY,
-  )
+  const [input, setInput] = useState<AgentInput>(() => initialInput(agent, defaults))
   const action = useAction()
   const set = (patch: Partial<AgentInput>) => setInput((prev) => ({ ...prev, ...patch }))
 
@@ -59,25 +61,20 @@ function AgentForm({ agent, onSaved }: { agent?: Agent; onSaved: (a: Agent) => v
   return (
     <div className="form">
       {!agent && (
-        <Field label="名称" hint="小写字母、数字、- 或 _，创建后不可修改">
+        <Field label="名称" hint="可用中文、小写字母、数字、- 或 _，创建后不可修改">
           <input value={name} onChange={(e) => setName(e.target.value)} autoCapitalize="off" />
         </Field>
       )}
       <Field label="职责描述" hint="其他 agent 委派任务时据此选择">
         <input value={input.description} onChange={(e) => set({ description: e.target.value })} />
       </Field>
-      <Field label="模型" hint="<provider 名>:<模型名>，provider 名来自服务端配置的 [llm.providers]，如 claude:claude-opus-5-5；留空用默认模型">
-        <input
-          value={input.model ?? ''}
-          onChange={(e) => set({ model: e.target.value || null })}
-          autoCapitalize="off"
-          placeholder="服务端默认"
-        />
+      <Field label="模型" hint="<provider 名>:<模型名>，provider 名来自服务端配置的 [llm.providers]，如 claude:claude-opus-5-5">
+        <input value={input.model ?? ''} onChange={(e) => set({ model: e.target.value || null })} autoCapitalize="off" />
       </Field>
       <Field label="指令（system prompt）">
         <textarea rows={8} value={input.instructions} onChange={(e) => set({ instructions: e.target.value })} />
       </Field>
-      <Field label="反思间隔（轮）" hint="每完成这么多轮对话，强制回顾一次是否需要更新 skill 和记忆；留空用服务端默认">
+      <Field label="反思间隔（轮）" hint="每完成这么多轮对话，强制回顾一次是否需要更新 skill 和记忆">
         <input
           type="number"
           min={1}
@@ -95,9 +92,12 @@ function AgentForm({ agent, onSaved }: { agent?: Agent; onSaved: (a: Agent) => v
 
 export function AgentCreate() {
   const navigate = useNavigate()
+  const defaults = useLoad(() => api.agentDefaults(), [])
   return (
     <Page title="新建 agent" back="/agents">
-      <AgentForm onSaved={(a) => navigate(`/agents/${a.name}`, { replace: true })} />
+      <Loading state={defaults}>
+        {(d) => <AgentForm defaults={d} onSaved={(a) => navigate(agentRoute(a.name), { replace: true })} />}
+      </Loading>
     </Page>
   )
 }
@@ -174,7 +174,7 @@ export function AgentDetail() {
       title={name}
       back="/agents"
       actions={
-        <Link className="button small" to={`/new?agent=${name}`}>
+        <Link className="button small" to={newSessionRoute(name)}>
           对话
         </Link>
       }

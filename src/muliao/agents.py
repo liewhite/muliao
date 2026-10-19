@@ -13,7 +13,7 @@ from muliao.db import Database
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.evolution.memory import MemoryStore
 from muliao.models import Agent
-from muliao.naming import validate_slug
+from muliao.naming import normalize_agent_name
 from muliao.runtime.tasks import running_task_ids
 
 
@@ -55,7 +55,7 @@ class AgentService:
         self._check_model(spec.model)
 
     async def create(self, name: str, spec: AgentSpec) -> Agent:
-        validate_slug("agent", name)
+        name = normalize_agent_name(name)
         self._validate(spec)
         async with self._db.transaction() as s:
             if await s.get(Agent, name) is not None:

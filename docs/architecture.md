@@ -6,7 +6,7 @@
 
 | 概念 | 含义 | 事实存放处（唯一来源） |
 |---|---|---|
-| Agent | 一个具名的助手：模型、指令、私有记忆、私有 skill、工作目录 | `agents` 表；文件在 `data/agents/<name>/` |
+| Agent | 一个具名的助手：模型、指令、私有记忆、私有 skill、工作目录。名称可含中文（Unicode 字母数字、`_`、`-`），统一 NFC 规范化、禁止大写（macOS 文件系统不区分大小写） | `agents` 表；文件在 `data/agents/<name>/` |
 | Session | 某个 agent 的一段对话，由某个触发源创建 | `sessions` 表 |
 | Message | pydantic-ai `ModelMessage` 原样序列化 | `messages` 表（每行一条 ModelMessage） |
 | Task | 一个待执行的工作单元：`turn`（对话一轮）、`compaction`（上下文压缩）、`reflection`（强制反思）、`deliver`（投递通知） | `tasks` 表 |

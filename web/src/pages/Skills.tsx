@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, type Skill } from '../api'
+import { agentRoute, api, type Skill } from '../api'
 import { ErrorBanner, Field, Loading, Page, confirmAction, useAction, useLoad } from '../ui'
 
 function editorPath(owner: string | null, name?: string): string {
@@ -53,7 +53,7 @@ export function SkillEditor() {
   const navigate = useNavigate()
   const owner = params.get('owner')
   const existing = params.get('name')
-  const back = owner ? `/agents/${owner}` : '/skills'
+  const back = owner ? agentRoute(owner) : '/skills'
   const [skill, setSkill] = useState<Skill>({ owner, name: existing ?? '', description: '', body: '' })
   const loaded = useLoad(
     () => (existing ? api.skill(owner, existing) : Promise.resolve(null)),

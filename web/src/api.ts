@@ -193,19 +193,29 @@ const post = <T>(path: string, body?: unknown, query?: Query) => request<T>('POS
 const put = <T>(path: string, body: unknown, query?: Query) => request<T>('PUT', path, body, query)
 const del = (path: string, query?: Query) => request<void>('DELETE', path, undefined, query)
 
+/** 前端路由：agent 名称可含中文，必须编码 */
+export const agentRoute = (name: string) => `/agents/${encodeURIComponent(name)}`
+export const newSessionRoute = (agent: string) => `/new?${new URLSearchParams({ agent })}`
+
+export interface AgentDefaults {
+  model: string
+  reflect_every: number
+}
+
 export const api = {
   login: (password: string) => post<void>('/api/auth/login', { password }),
   logout: () => post<void>('/api/auth/logout'),
   me: () => get<void>('/api/auth/me'),
 
   agents: () => get<Agent[]>('/api/agents'),
-  agent: (name: string) => get<Agent>(`/api/agents/${name}`),
+  agentDefaults: () => get<AgentDefaults>('/api/agent-defaults'),
+  agent: (name: string) => get<Agent>(`/api/agents/${encodeURIComponent(name)}`),
   createAgent: (name: string, input: AgentInput) => post<Agent>('/api/agents', { name, ...input }),
-  updateAgent: (name: string, input: AgentInput) => put<Agent>(`/api/agents/${name}`, input),
-  deleteAgent: (name: string) => del(`/api/agents/${name}`),
-  memory: (name: string) => get<Memory>(`/api/agents/${name}/memory`),
-  setMemory: (name: string, content: string) => put<Memory>(`/api/agents/${name}/memory`, { content }),
-  reflections: (name: string) => get<Reflection[]>(`/api/agents/${name}/reflections`),
+  updateAgent: (name: string, input: AgentInput) => put<Agent>(`/api/agents/${encodeURIComponent(name)}`, input),
+  deleteAgent: (name: string) => del(`/api/agents/${encodeURIComponent(name)}`),
+  memory: (name: string) => get<Memory>(`/api/agents/${encodeURIComponent(name)}/memory`),
+  setMemory: (name: string, content: string) => put<Memory>(`/api/agents/${encodeURIComponent(name)}/memory`, { content }),
+  reflections: (name: string) => get<Reflection[]>(`/api/agents/${encodeURIComponent(name)}/reflections`),
 
   skills: (owner: string | null) => get<SkillMeta[]>('/api/skills', { owner }),
   skill: (owner: string | null, name: string) => get<Skill>('/api/skill', { owner, name }),
