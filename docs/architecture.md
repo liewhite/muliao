@@ -51,11 +51,13 @@ data/
 
 ## 2. 核心数据流：一切都是 Task
 
+turn task 的 payload（一轮的输入：prompt、reply_to、附件、对挂起提问的回答）只经过 `conversation.TurnPayload` 读写：字段只在那里定义，写入时构造、读取时严格校验，存量数据由迁移补齐。
+
 所有触发源只做一件事：**创建 session（或选中已有 session）并在同一事务里写入一个 `turn` task**。之后的执行、重试、反思、通知全部由同一个任务队列驱动。唯一的例外是 `ask_agent`：它在调用方这一轮里直接跑完一轮，提交时补记一条已完成的 turn task（见第 4 节）。
 
 ```
 Web / 触发器（定时、webhook……）/ delegate_task
-          │  conversation.receive(Inbound)（唯一入口；payload 带 prompt 与 reply_to）
+          │  conversation.receive(Inbound)（唯一入口；turn task 的 payload 是 conversation.TurnPayload）
           ▼
  tasks(turn) ──► Worker ──► TurnHandler ──┐
                                            ├─► TurnRunner ──► pydantic-ai Agent.run
@@ -157,7 +159,7 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 做法同 Claude Code 的 AskUserQuestion、Codex 的提问：一次 1 到 4 个选择题（单选或多选，每题 2 到 6 个选项），界面上每题总能在「其他」里自己写。只在这一轮的回答交给用户（`reply_to = user`）时提供，由工具的 `prepare` 隐藏：`ask_agent` 的私有 thread、触发器、反思与临时 agent 里没有人会回答（`runtime/tools/ask_user.py`）。
 
 - **一轮停在提问上，不在 worker 里等人**：工具抛出 pydantic-ai 的 `CallDeferred`，这一轮正常结束、提交（调用暂时没有结果），并通知用户「等你回答：…」。会话里还在等回答的提问由历史推导（没有结果的 `ask_user` 调用，`runtime.questions.pending_questions`；「调用是否已有结果」只在 `transcript.unanswered_calls` 定义一处，参数被拒绝、交还模型重试的调用也算有结果），不另存状态。每一轮都会关闭之前挂起的提问，所以挂起的提问只可能在最后一轮里。
-- **回答 = 新的一轮，且必须紧接在提问那一轮后面**：界面把回答随消息提交（`answers: {tool_call_id: [每题的回答]}`，可以没有文字）。会话里有排队或运行中的轮次时（它会先执行并把提问记为没回答），或有失败待重试的回答时（它还占着这次提问），不接受回答，会话接口的 `pending_questions` 也为空、界面不显示表单（`answering_blocked`，receive 与接口同一条规则）；失败的回答只能重试，若之后已经跑过别的轮次，提问已被关闭，重试以明确的错误失败。`conversation.receive` 还校验选项属于该题、单选至多一个、每题都有选择或「其他」，然后把交给模型的结果（`AskResult`：`answered` 加每题的选择，或没回答时的说明）写进 turn task 的 payload，执行时作为 `DeferredToolResults` 交回，模型看到的就是这次调用的结果；界面也从这份结构化结果展示已回答的提问。
+- **回答 = 新的一轮，且必须紧接在提问那一轮后面**：界面把回答随消息提交（`answers: {tool_call_id: [每题的回答]}`，可以没有文字）。会话里有排队或运行中的轮次时（它会先执行并把提问记为没回答），或有失败待重试的回答时（它还占着这次提问），不接受回答，会话接口的 `pending_questions` 也为空、界面不显示表单（`conversation.answerable_questions`，receive 与接口同一条规则：能不能回答取决于会话里各轮的排队顺序，属于会话领域）；失败的回答只能重试，若之后已经跑过别的轮次，提问已被关闭，重试以明确的错误失败。`conversation.receive` 还校验选项属于该题、单选至多一个、每题都有选择或「其他」，然后把交给模型的结果（`AskResult`：`answered` 加每题的选择，或没回答时的说明）写进 turn task 的 payload，执行时作为 `DeferredToolResults` 交回，模型看到的就是这次调用的结果；界面也从这份结构化结果展示已回答的提问。
 - **不回答、直接发消息**：pydantic-ai 拒绝在未处理的调用后追加新消息，所以这一轮把所有挂起的提问显式记为「用户没回答、发了新消息」，结果随这一轮持久化，提问不再显示为待回答。
 - **展示**：提问不收进过程组。待回答的显示为表单；已回答的显示问题与选择；参数被工具 schema 拒绝的调用（模型写错了，已作为可纠正的错误交还）按普通工具错误展示。
 

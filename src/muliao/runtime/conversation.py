@@ -7,8 +7,9 @@ ask_agent 在调用方这一轮里直接跑完私有 thread 的一轮（见 runt
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict
 from pydantic_ai.messages import ModelResponse, TextPart
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +20,13 @@ from muliao.files import load_metas
 from muliao.ids import new_id
 from muliao.models import Agent, Message, Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.codec import load_messages
-from muliao.runtime.questions import QuestionAnswer, resolve_answers
+from muliao.runtime.questions import (
+    AskResult,
+    Question,
+    QuestionAnswer,
+    answer_result,
+    pending_in_session,
+)
 from muliao.runtime.tasks import TaskQueue, running_task_ids, turn_lane
 
 log = logging.getLogger(__name__)
@@ -127,6 +134,77 @@ async def create_session(
     return session
 
 
+class TurnPayload(BaseModel):
+    """turn task 的 payload：一轮的输入，在 receive（与内联轮次）里写入、执行时读出。字段只在这里定义，
+    读写都经过它；存量数据由迁移补齐，所以读取时严格校验，不认识的形状就是数据与代码不一致。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prompt: str
+    reply_to: ReplyTo
+    # 随消息发送的文件 id（muliao.files）
+    attachments: list[str]
+    # 对这个会话里挂起提问的回答：tool_call_id -> 交给模型的结果（runtime.questions）
+    answers: dict[str, AskResult]
+
+    @classmethod
+    def of(cls, task: Task) -> "TurnPayload":
+        if task.kind != TaskKind.TURN:
+            raise RuntimeError(f"task {task.id} is a {task.kind} task, not a turn")
+        return cls.model_validate(task.payload)
+
+    def dump(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+# ---- 回答挂起的提问：回答必须紧接在提问那一轮后面执行（取决于这个会话里各轮的排队顺序） ----
+
+
+def answering_blocked(open_turns: Sequence[Task]) -> bool:
+    """回答必须紧接在提问那一轮后面执行。排队或运行中的轮次会先跑完并把提问记为没回答；失败待重试的回答
+    还占着这次提问。这两种情况下不接受回答（界面也不显示表单），失败的回答只能重试。"""
+    return any(
+        t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
+        or (t.status == TaskStatus.FAILED and TurnPayload.of(t).answers)
+        for t in open_turns
+    )
+
+
+async def answerable_questions(s: AsyncSession, session_id: str) -> dict[str, list[Question]] | None:
+    """这个会话现在能回答的提问；有会先执行的轮次或失败待重试的回答时为 None（见 answering_blocked）。
+    界面展示与 receive 校验都经过这里。"""
+    if answering_blocked(await _open_turns(s, session_id)):
+        return None
+    return await pending_in_session(s, session_id)
+
+
+async def _open_turns(s: AsyncSession, session_id: str) -> list[Task]:
+    rows = await s.scalars(
+        select(Task).where(
+            Task.session_id == session_id, Task.kind == TaskKind.TURN, Task.status != TaskStatus.DONE
+        )
+    )
+    return list(rows.all())
+
+
+async def _resolve_answers(
+    s: AsyncSession, session_id: str, answers: Mapping[str, Sequence[QuestionAnswer]]
+) -> dict[str, AskResult]:
+    """用户提交的回答：会话里没有会先执行的轮次，且每个都对应还在等回答的提问。返回交给模型的结果。"""
+    pending = await answerable_questions(s, session_id)
+    if pending is None:
+        raise Conflict(
+            f"session {session_id} has a turn that runs first (or a failed answer to retry); "
+            "it would close these questions, so they can no longer be answered"
+        )
+    resolved = {}
+    for call_id, given in answers.items():
+        if call_id not in pending:
+            raise Conflict(f"question {call_id!r} is not waiting for an answer in session {session_id}")
+        resolved[call_id] = answer_result(pending[call_id], given)
+    return resolved
+
+
 async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Received:
     """所有新一轮对话的唯一入口：确定会话（继续或新建），投递一轮。"""
     if not inbound.content.strip() and not inbound.attachments and not inbound.answers:
@@ -141,7 +219,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
         if session is None:
             raise NotFound(f"session {inbound.session!r} not found")
         _check_may_continue(session, inbound.origin, inbound.origin_ref)
-    answers = await resolve_answers(s, session.id, inbound.answers) if inbound.answers else {}
+    answers = await _resolve_answers(s, session.id, inbound.answers) if inbound.answers else {}
     session.updated_at = utcnow()
     turn = queue.enqueue(
         s,
@@ -149,12 +227,12 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
         lane=turn_lane(session.id),
         agent_id=session.agent_id,
         session_id=session.id,
-        payload={
-            "prompt": inbound.content,
-            "reply_to": inbound.reply_to,
-            "attachments": list(inbound.attachments),
-            "answers": answers,
-        },
+        payload=TurnPayload(
+            prompt=inbound.content,
+            reply_to=inbound.reply_to,
+            attachments=list(inbound.attachments),
+            answers=answers,
+        ).dump(),
     )
     log.info(
         "message received",

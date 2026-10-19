@@ -9,8 +9,8 @@ from muliao.api.files import FileOut
 from muliao.container import Container
 from muliao.errors import Conflict, NotFound
 from muliao.models import Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
-from muliao.runtime.conversation import Inbound, NewSession
-from muliao.runtime.questions import AskResult, Question, QuestionAnswer, answerable_questions
+from muliao.runtime.conversation import Inbound, NewSession, TurnPayload, answerable_questions
+from muliao.runtime.questions import AskResult, Question, QuestionAnswer
 from muliao.runtime.sessions import default_title
 from muliao.transcript import Item, to_items
 
@@ -75,9 +75,9 @@ class TaskOut(BaseModel):
             status=t.status,
             attempts=t.attempts,
             error=t.error,
-            prompt=t.payload["prompt"] if t.kind == TaskKind.TURN else None,
+            prompt=TurnPayload.of(t).prompt if t.kind == TaskKind.TURN else None,
             attachments=[files[i] for i in _attachment_ids(t)],
-            answers=t.payload["answers"] if t.kind == TaskKind.TURN else {},
+            answers=TurnPayload.of(t).answers if t.kind == TaskKind.TURN else {},
             not_before=t.not_before,
             created_at=t.created_at,
             finished_at=t.finished_at,
@@ -85,7 +85,7 @@ class TaskOut(BaseModel):
 
 
 def _attachment_ids(t: Task) -> list[str]:
-    return t.payload["attachments"] if t.kind == TaskKind.TURN else []
+    return TurnPayload.of(t).attachments if t.kind == TaskKind.TURN else []
 
 
 async def task_outs(c: Container, tasks: list[Task]) -> list[TaskOut]:

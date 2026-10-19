@@ -1,4 +1,5 @@
-"""向用户提问（ask_user）：问题与回答的模型、哪些提问还在等回答、什么时候能回答、回答的校验。
+"""向用户提问（ask_user）：问题与回答的模型、哪些提问还在等回答、回答的校验。什么时候能回答取决于会话里各轮的
+排队顺序，属于会话领域（conversation.answerable_questions）。
 
 一轮里模型调用 ask_user 时，工具抛出 pydantic-ai 的 CallDeferred：这一轮正常结束并提交（调用暂时没有结果），
 不在 worker 里等人。用户在界面上提交回答 = 新的一轮，回答作为这次调用的结果（DeferredToolResults）交回模型，
@@ -14,8 +15,8 @@ from pydantic_ai.messages import ModelMessage, ToolCallPart
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import Conflict, InvalidInput
-from muliao.models import Message, Task, TaskKind, TaskStatus
+from muliao.errors import InvalidInput
+from muliao.models import Message
 from muliao.runtime.codec import load_messages
 from muliao.transcript import unanswered_calls
 
@@ -99,33 +100,6 @@ async def pending_in_session(s: AsyncSession, session_id: str) -> dict[str, list
     return pending_questions(load_messages(rows.all()))
 
 
-def answering_blocked(open_turns: Sequence[Task]) -> bool:
-    """回答必须紧接在提问那一轮后面执行。排队或运行中的轮次会先跑完并把提问记为没回答；失败待重试的回答
-    还占着这次提问。这两种情况下不接受回答（界面也不显示表单），失败的回答只能重试。"""
-    return any(
-        t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
-        or (t.status == TaskStatus.FAILED and t.payload["answers"])
-        for t in open_turns
-    )
-
-
-async def answerable_questions(s: AsyncSession, session_id: str) -> dict[str, list[Question]] | None:
-    """这个会话现在能回答的提问；有会先执行的轮次或失败待重试的回答时为 None（见 answering_blocked）。
-    界面展示与 receive 校验都经过这里。"""
-    if answering_blocked(await _open_turns(s, session_id)):
-        return None
-    return await pending_in_session(s, session_id)
-
-
-async def _open_turns(s: AsyncSession, session_id: str) -> list[Task]:
-    rows = await s.scalars(
-        select(Task).where(
-            Task.session_id == session_id, Task.kind == TaskKind.TURN, Task.status != TaskStatus.DONE
-        )
-    )
-    return list(rows.all())
-
-
 def answer_result(questions: Sequence[Question], answers: Sequence[QuestionAnswer]) -> AskResult:
     """校验回答并整理成交给模型的工具结果。回答来自用户，不合法时报 InvalidInput。"""
     if len(answers) != len(questions):
@@ -146,27 +120,9 @@ def answer_result(questions: Sequence[Question], answers: Sequence[QuestionAnswe
     return AskResult(answered=True, answers=result, note=None)
 
 
-async def resolve_answers(
-    s: AsyncSession, session_id: str, answers: Mapping[str, Sequence[QuestionAnswer]]
-) -> dict[str, dict[str, object]]:
-    """用户提交的回答：会话里没有会先执行的轮次，且每个都对应还在等回答的提问。返回交给模型的结果（payload 用）。"""
-    pending = await answerable_questions(s, session_id)
-    if pending is None:
-        raise Conflict(
-            f"session {session_id} has a turn that runs first (or a failed answer to retry); "
-            "it would close these questions, so they can no longer be answered"
-        )
-    resolved = {}
-    for call_id, given in answers.items():
-        if call_id not in pending:
-            raise Conflict(f"question {call_id!r} is not waiting for an answer in session {session_id}")
-        resolved[call_id] = answer_result(pending[call_id], given).model_dump()
-    return resolved
-
-
-def deferred_results(pending: Mapping[str, object], answers: Mapping[str, object]) -> dict[str, object]:
+def deferred_results(pending: Mapping[str, object], answers: Mapping[str, AskResult]) -> dict[str, object]:
     """这一轮交给 pydantic-ai 的挂起调用结果：有回答的用回答，其余挂起的提问一律记为没有回答。"""
-    return {call_id: answers.get(call_id, NOT_ANSWERED.model_dump()) for call_id in pending}
+    return {call_id: answers.get(call_id, NOT_ANSWERED).model_dump() for call_id in pending}
 
 
 def waiting_text(questions: Sequence[Question]) -> str:

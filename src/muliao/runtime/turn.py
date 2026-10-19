@@ -27,8 +27,10 @@ from muliao.runtime.answers import Answer
 from muliao.runtime.attachments import copy_to_workspace, references
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import CompactionScheduler, load_context
+from muliao.runtime.conversation import TurnPayload
 from muliao.runtime.questions import (
     ASK_USER,
+    AskResult,
     deferred_results,
     pending_questions,
     questions_of,
@@ -86,7 +88,9 @@ def _stopped_messages(
     return messages
 
 
-def _deferred(history: Sequence[ModelMessage], answers: Mapping[str, object]) -> DeferredToolResults | None:
+def _deferred(
+    history: Sequence[ModelMessage], answers: Mapping[str, AskResult]
+) -> DeferredToolResults | None:
     """历史里还挂着的提问都要在这一轮得到结果：用户的回答，或「没回答」。回答只能针对挂起的提问（receive 已校验）。"""
     pending = pending_questions(history)
     if stray := set(answers) - set(pending):
@@ -145,20 +149,14 @@ class TurnRunner:
         # 内联运行的私有 thread 不走队列 lane：同一 thread 的并行 ask 在这里串行（进程内，单进程部署）
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
-    async def run(
-        self,
-        session_id: str,
-        prompt: str,
-        attachments: Sequence[str],
-        answers: Mapping[str, object],
-        reply_to: ReplyTo,
-    ) -> TurnOutput:
-        """answers：用户对挂起提问的回答（tool_call_id -> 交给模型的结果，已在 receive 校验），见 runtime.questions。"""
+    async def run(self, session_id: str, payload: TurnPayload) -> TurnOutput:
+        """payload 是这一轮的输入；其中的 answers 已在 receive 校验过（见 conversation.TurnPayload）。"""
+        prompt, reply_to = payload.prompt, payload.reply_to
         async with self._db.transaction() as s:
             session, agent = await _load(s, session_id)
             context = await load_context(s, session.id)
         scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, reply_to=reply_to)
-        files = await self._files.referenced(attachments)
+        files = await self._files.referenced(payload.attachments)
         await copy_to_workspace(self._files, files, scope.workspace)
         content = [*([prompt] if prompt.strip() else []), *references(files)]
         # 只回答了提问的一轮没有新的用户消息
@@ -175,7 +173,7 @@ class TurnRunner:
                 context.messages,
                 self._tool_groups.profile(agent.id, agent.tool_groups),
                 summary=context.summary,
-                deferred=_deferred(context.messages, answers),
+                deferred=_deferred(context.messages, payload.answers),
                 capture=capture,
             ),
             name=f"turn-{session.id}",
@@ -263,13 +261,14 @@ class TurnRunner:
 
         只用于私有 thread：用户不能插话，lane 里没有排队的 turn；同一 thread 的并行调用由进程内的锁串行。
         """
-        reply_to = ReplyTo.AGENT
+        payload = TurnPayload(prompt=prompt, reply_to=ReplyTo.AGENT, attachments=[], answers={})
+        reply_to = payload.reply_to
         lock = self._locks.setdefault(session_id, asyncio.Lock())
         async with lock:
             started = utcnow()
             log.info("inline turn started", extra={"session_id": session_id})
             try:
-                out = await self.run(session_id, prompt, (), {}, reply_to)
+                out = await self.run(session_id, payload)
                 async with self._db.transaction() as s:
                     # 先确认 thread 还在：运行期间被删除时给出可定位的错误，而不是外键冲突
                     await _load(s, session_id)
@@ -279,7 +278,7 @@ class TurnRunner:
                         lane=turn_lane(session_id),
                         agent_id=out.agent_id,
                         session_id=session_id,
-                        payload={"prompt": prompt, "reply_to": reply_to, "attachments": [], "answers": {}},
+                        payload=payload.dump(),
                         started_at=started,
                     )
                     await s.flush()
@@ -323,16 +322,10 @@ class TurnHandler:
     async def execute(self, task: Task) -> Commit:
         if task.session_id is None:
             raise RuntimeError(f"turn task {task.id} has no session")
-        reply_to = ReplyTo(task.payload["reply_to"])
-        out = await self._runner.run(
-            task.session_id,
-            task.payload["prompt"],
-            task.payload["attachments"],
-            task.payload["answers"],
-            reply_to,
-        )
+        payload = TurnPayload.of(task)
+        out = await self._runner.run(task.session_id, payload)
 
         async def commit(s: AsyncSession) -> None:
-            await self._runner.commit_in(s, task.id, out, reply_to)
+            await self._runner.commit_in(s, task.id, out, payload.reply_to)
 
         return commit
