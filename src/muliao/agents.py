@@ -206,15 +206,22 @@ class AgentService:
         """模型按名称指代 agent（不接触 id）：在工具层把名称解析为 agent。名称唯一。"""
         name = normalize_agent_name(name)
         async with self._db.transaction() as s:
-            agent = await s.scalar(select(Agent).where(Agent.name == name))
+            agent = await s.scalar(select(Agent).where(Agent.name == name, Agent.deleting_by.is_(None)))
             if agent is None:
-                names = (await s.scalars(select(Agent.name).order_by(Agent.name))).all()
+                names = (
+                    await s.scalars(
+                        select(Agent.name).where(Agent.deleting_by.is_(None)).order_by(Agent.name)
+                    )
+                ).all()
                 raise NotFound(f"no agent named {name!r}; available agents: {list(names)}")
             return agent
 
     async def list(self) -> list[Agent]:
         async with self._db.transaction() as s:
-            return list((await s.scalars(select(Agent).order_by(Agent.name))).all())
+            # 正在删除的不列出
+            return list(
+                (await s.scalars(select(Agent).where(Agent.deleting_by.is_(None)).order_by(Agent.name))).all()
+            )
 
     async def get_in(self, s: AsyncSession, agent_id: str) -> Agent:
         return await self._get(s, agent_id)

@@ -43,8 +43,14 @@ class TaskStatus(StrEnum):
     FAILED = "failed"
 
 
-def _fk_agent() -> ForeignKey:
-    return ForeignKey("agents.id", ondelete="CASCADE")
+def _agent_ref() -> String:
+    """别的领域对 agent 的引用：不透明的 id，没有跨领域外键（删除 agent 时各领域按 AgentDeleting 清理自己的数据）。"""
+    return String(32)
+
+
+def _session_ref() -> String:
+    """别的领域对会话的引用：不透明的 id，没有跨领域外键（按 SessionDeleted 清理）。"""
+    return String(36)
 
 
 class Agent(Base):
@@ -63,6 +69,9 @@ class Agent(Base):
     reflect_every: Mapped[int]
     # 已纳入反思的最大 message id；下一次反思从它之后开始
     reflection_checkpoint: Mapped[int] = mapped_column(default=0)
+    # 正在删除时是发起删除的作者（docs/domain-design.md 4.4）：不出现在列表与名称解析里，各领域清理完它的数据后删除
+    # 这一行与资源目录（资源仓库的删除提交记这个作者）
+    deleting_by: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -71,7 +80,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    agent_id: Mapped[str] = mapped_column(_fk_agent(), index=True)
+    agent_id: Mapped[str] = mapped_column(_agent_ref(), index=True)
     title: Mapped[str] = mapped_column(String(200))
     origin: Mapped[Origin] = mapped_column(StrEnumType(Origin))
     # cron 触发的会话记录 cron job id
@@ -99,6 +108,15 @@ class Session(Base):
     )
 
 
+class RetiredAgent(Base):
+    """会话领域记下的「已删除的 agent」（AgentDeleting 的投影）：之后的来信与委派在本地事务里拒绝它，不用跨领域读。"""
+
+    __tablename__ = "retired_agents"
+
+    agent_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
 class Message(Base):
     """一条 pydantic-ai ModelMessage，`payload` 为其 JSON。id 单调递增，用作反思区间。"""
 
@@ -122,8 +140,8 @@ class Task(Base):
     # 同一 lane 内 FIFO 串行；见 docs/architecture.md「Lane」
     lane: Mapped[str] = mapped_column(String(100))
     # 系统通知（如推送测试）不属于任何 agent
-    agent_id: Mapped[str | None] = mapped_column(_fk_agent(), index=True)
-    session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[str | None] = mapped_column(_agent_ref(), index=True)
+    session_id: Mapped[str | None] = mapped_column(_session_ref(), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     status: Mapped[TaskStatus] = mapped_column(StrEnumType(TaskStatus), default=TaskStatus.PENDING)
     attempts: Mapped[int] = mapped_column(default=0)
@@ -154,7 +172,7 @@ class Reflection(Base):
     __tablename__ = "reflections"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    agent_id: Mapped[str] = mapped_column(_fk_agent(), index=True)
+    agent_id: Mapped[str] = mapped_column(_agent_ref(), index=True)
     from_message_id: Mapped[int]
     to_message_id: Mapped[int]
     output: Mapped[str] = mapped_column(Text)
@@ -176,7 +194,7 @@ class Trigger(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     # 出现在 webhook 地址里：小写字母、数字与 -
     name: Mapped[str] = mapped_column(String(64), unique=True)
-    agent_id: Mapped[str] = mapped_column(_fk_agent())
+    agent_id: Mapped[str] = mapped_column(_agent_ref(), index=True)
     # 交给 agent 的说明：这类事件是什么、该怎么处理；事件内容（若有）附在其后
     prompt: Mapped[str] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(String(32))
@@ -205,7 +223,7 @@ class Secret(Base):
     __tablename__ = "secrets"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    owner: Mapped[str | None] = mapped_column(_fk_agent())
+    owner: Mapped[str | None] = mapped_column(_agent_ref())
     key: Mapped[str] = mapped_column(String(100))
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
     description: Mapped[str] = mapped_column(Text, default="")
@@ -223,8 +241,8 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
-    agent_id: Mapped[str] = mapped_column(_fk_agent(), index=True)
+    session_id: Mapped[str] = mapped_column(_session_ref(), index=True)
+    agent_id: Mapped[str] = mapped_column(_agent_ref(), index=True)
     command: Mapped[str] = mapped_column(Text)
     # 注入的 vault key（不存值）
     secrets: Mapped[list[str]] = mapped_column(JSON)
@@ -370,7 +388,7 @@ class Notification(Base):
     title: Mapped[str] = mapped_column(Text)
     body: Mapped[str] = mapped_column(Text)
     # 点开通知打开的会话，随会话删除；系统通知（前置检查告警、推送测试）为 None
-    session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    session_id: Mapped[str | None] = mapped_column(_session_ref(), index=True)
     # 打开通知页或它指向的会话即为已读
     unread: Mapped[bool] = mapped_column(default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

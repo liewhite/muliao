@@ -71,8 +71,7 @@ def test_foreign_key_violation_rolls_back_migration(tmp_path, monkeypatch):
 
     def orphaning_upgrade(cfg, _revision):  # noqa: ANN001
         cfg.attributes["connection"].exec_driver_sql(
-            "INSERT INTO sessions (id, agent_id, title, origin, private, unread, created_at, updated_at) "
-            "VALUES ('s', 'ghost', 't', 'user', 0, 0, '2026-01-01', '2026-01-01')"
+            "INSERT INTO messages (session_id, task_id, payload, created_at) VALUES ('ghost', 1, '{}', '2026-01-01')"
         )
 
     monkeypatch.setattr(muliao.db.command, "upgrade", orphaning_upgrade)
@@ -80,4 +79,4 @@ def test_foreign_key_violation_rolls_back_migration(tmp_path, monkeypatch):
         migrate(path)
 
     with sqlite3.connect(path) as conn:
-        assert conn.execute("select count(*) from sessions").fetchone()[0] == 0
+        assert conn.execute("select count(*) from messages").fetchone()[0] == 0

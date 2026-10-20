@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -9,12 +10,13 @@ from pydantic_ai.messages import ModelMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agent_events import AgentDeleting
 from muliao.bus import LiveRun, LiveRuns
 from muliao.db import Database
-from muliao.errors import Conflict, NotFound
-from muliao.models import Compaction, Mail, Message, Origin, Session, Task, TaskStatus
+from muliao.errors import Conflict, NotFound, TransientError
+from muliao.models import Compaction, Mail, Message, Origin, RetiredAgent, Session, Task, TaskStatus
 from muliao.notifications import mark_session_read_in
-from muliao.platform.messaging import Messaging
+from muliao.platform.messaging import Delivery, Messaging
 from muliao.runtime.codec import load_messages
 from muliao.runtime.conversation import (
     Inbound,
@@ -25,8 +27,11 @@ from muliao.runtime.conversation import (
     threads_of,
 )
 from muliao.runtime.mailbox import latest_run, visible_in
-from muliao.runtime.tasks import TaskQueue
+from muliao.runtime.session_events import AgentSessionsCleared
+from muliao.runtime.tasks import Commit, TaskQueue
 from muliao.transcript import Item, annotate_asks, to_items
+
+log = logging.getLogger(__name__)
 
 _TITLE_MAX = 60
 
@@ -148,6 +153,31 @@ class SessionService:
         async with self._db.transaction() as s:
             (await self._get(s, session_id)).unread = False
             await mark_session_read_in(s, session_id)
+
+    def subscribe(self, messaging: Messaging) -> None:
+        messaging.subscribe(AgentDeleting, "sessions.agent_deleting", self.on_agent_deleting)
+
+    async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
+        """删除 agent 的流程：记下它已退役（之后的来信与委派在本地事务里拒绝它），删除它的全部会话，发布
+        AgentSessionsCleared（没有会话也发）。有会话忙（检查与标记之间的极小窗口）就按暂时失败重试。"""
+
+        async def commit(s: AsyncSession) -> None:
+            if await s.get(RetiredAgent, event.agent_id) is None:
+                s.add(RetiredAgent(agent_id=event.agent_id))
+            sessions = list(
+                (await s.scalars(select(Session).where(Session.agent_id == event.agent_id))).all()
+            )
+            try:
+                await delete_sessions(s, self._queue, self._messaging, sessions)
+            except Conflict as e:
+                raise TransientError(f"agent {event.agent_id} still has a busy session: {e}") from e
+            self._messaging.publish_in(s, AgentSessionsCleared(agent_id=event.agent_id))
+            log.info(
+                "sessions of a deleted agent removed",
+                extra={"agent": event.agent_id, "session_ids": [x.id for x in sessions]},
+            )
+
+        return commit
 
     async def delete(self, session_id: str) -> None:
         """用户删除会话（规则见 conversation.delete_sessions）。私有 thread 属于发问的会话，随它删除，不能单独删除。"""

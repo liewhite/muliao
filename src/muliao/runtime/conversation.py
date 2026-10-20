@@ -16,7 +16,7 @@ from muliao.db import utcnow
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.files import load_metas
 from muliao.ids import new_id
-from muliao.models import Agent, Mail, MailKind, MailState, Origin, Session, TaskStatus
+from muliao.models import Agent, Mail, MailKind, MailState, Origin, RetiredAgent, Session, TaskStatus
 from muliao.platform.messaging import Messaging
 from muliao.runtime.history import latest_answer, load_context
 from muliao.runtime.holds import get_in as get_hold_in
@@ -24,7 +24,7 @@ from muliao.runtime.holds import has_active_in, hold_in
 from muliao.runtime.mailbox import latest_run, post_in, queued_in
 from muliao.runtime.pending import pending_questions
 from muliao.runtime.questions import AskResult, Question, QuestionAnswer, answer_result
-from muliao.runtime.session_events import DelegationDispatched, Ending
+from muliao.runtime.session_events import DelegationDispatched, Ending, SessionDeleted
 from muliao.runtime.settlement import failure_of, settle_in, unsettled_in
 from muliao.runtime.tasks import TaskQueue, session_lane
 
@@ -107,12 +107,20 @@ def _check_may_continue(session: Session, origin: Origin, origin_ref: str | None
         )
 
 
+async def ensure_agent_active_in(s: AsyncSession, agent_id: str) -> None:
+    """会话只为还在的 agent 新建、继续。已退役（删除流程中，retired_agents 是会话领域自己的投影）的在本地事务里拒绝；
+    agent 只会从存在变为删除，读它的行判断「存在」没有先查后写的竞态。"""
+    if await s.get(RetiredAgent, agent_id) is not None:
+        raise NotFound(f"agent {agent_id!r} has been deleted")
+    if await s.get(Agent, agent_id) is None:
+        raise NotFound(f"agent {agent_id!r} not found")
+
+
 async def create_session(
     s: AsyncSession, *, origin: Origin, origin_ref: str | None, spec: NewSession
 ) -> Session:
     """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
-    if await s.get(Agent, spec.agent_id) is None:
-        raise NotFound(f"agent {spec.agent_id!r} not found")
+    await ensure_agent_active_in(s, spec.agent_id)
     if (spec.parent_session_id is not None) != (origin == Origin.DELEGATION):
         raise ValueError(
             f"only delegation creates child sessions, got {origin} with parent {spec.parent_session_id}"
@@ -184,6 +192,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
         if session is None:
             raise NotFound(f"session {inbound.session!r} not found")
         _check_may_continue(session, inbound.origin, inbound.origin_ref)
+        await ensure_agent_active_in(s, session.agent_id)
     session.updated_at = utcnow()
     mail = []
     if inbound.answers:
@@ -261,9 +270,18 @@ async def delete_sessions(
         )
     for session in doomed.values():
         await s.delete(session)
+        messaging.publish_in(s, SessionDeleted(session_id=session.id, agent_id=session.agent_id))
     # 立即执行删除：调用方随后可能删除 agent，数据库级联会抢先删掉这些行
     await s.flush()
     log.info("sessions deleted", extra={"session_ids": sorted(doomed)})
+
+
+async def agent_busy_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> bool:
+    """这个 agent 有会话忙（删除 agent 前的检查，规则同删除会话）。"""
+    for session_id in (await s.scalars(select(Session.id).where(Session.agent_id == agent_id))).all():
+        if await queue.lane_busy(s, session_lane(session_id)) or await has_active_in(s, session_id):
+            return True
+    return False
 
 
 # ---- thread ----

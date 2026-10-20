@@ -12,13 +12,16 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from cryptography.fernet import Fernet
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agent_events import AgentDeleting
 from muliao.db import Database
 from muliao.errors import InvalidInput, NotFound
 from muliao.models import Agent, Secret
 from muliao.ownership import owned_by, scope_of, visible, visible_owners
+from muliao.platform.messaging import Delivery, Messaging
+from muliao.runtime.tasks import Commit
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +52,17 @@ class Vault:
     def __init__(self, db: Database, fernet_key: str):
         self._db = db
         self._fernet = Fernet(fernet_key.encode())
+
+    def subscribe(self, messaging: Messaging) -> None:
+        messaging.subscribe(AgentDeleting, "vault.agent_deleting", self.on_agent_deleting)
+
+    async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
+        """删除 agent 的流程：删除它的私有 secret。"""
+
+        async def commit(s: AsyncSession) -> None:
+            await s.execute(delete(Secret).where(Secret.owner == event.agent_id))
+
+        return commit
 
     async def set(self, owner: str | None, key: str, value: str, description: str = "") -> None:
         validate_key(key)

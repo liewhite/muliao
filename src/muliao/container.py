@@ -336,6 +336,14 @@ def build_container(
     )
     content = ContentBuilder(files, runtime)
     reflection = ReflectionScheduler(db, queue)
+    notifications = Notifications(db)
+    # 删除 agent 与会话时各领域清理自己的数据
+    notifications.subscribe(messaging)
+    agent_lifecycle.subscribe(messaging)
+    sessions.subscribe(messaging)
+    vault.subscribe(messaging)
+    triggers.subscribe(messaging)
+    reflection.subscribe(messaging)
     consumer = Consumer(
         db,
         runtime,
@@ -377,7 +385,7 @@ def build_container(
         agent_lifecycle=agent_lifecycle,
         sessions=sessions,
         notifier=notifier,
-        notifications=Notifications(db),
+        notifications=notifications,
         mcp=mcp,
         triggers=triggers,
         schedules=schedules,

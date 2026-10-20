@@ -57,6 +57,8 @@ async def test_deleting_a_session_deletes_the_notifications_pointing_to_it(conta
     assert await container.notifications.unread_count() == 2
 
     await container.sessions.delete(session.id)
+    # 删除的清理经事件完成
+    await drain(container)
 
     assert [n.title for n in await container.notifications.list(10)] == ["system"]
 

@@ -89,6 +89,8 @@ async def test_deleting_agent_drops_its_files_but_not_public_prompt_history(cont
     agent = await make_agent("alpha")
     await container.prompts.set(None, "shared", agent.id)
     await container.agent_lifecycle.delete(agent.id, author="user")
+    # 删除的清理经事件完成
+    await drain(container)
 
     assert [r.author for r in await container.prompts.history(None, 10)] == [agent.id]
     assert not container.prompts.path(agent.id).exists()
@@ -146,6 +148,8 @@ async def test_agent_without_resource_files_can_still_be_deleted(container, make
     await container.resources.apply({container.resources.owner_dir(agent.id): None}, "lost", "user")
 
     await container.agent_lifecycle.delete(agent.id, author="user")
+    # 删除的清理经事件完成
+    await drain(container)
 
     assert await container.agents.list() == []
 

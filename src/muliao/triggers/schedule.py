@@ -87,7 +87,7 @@ class ScheduleRunner:
         self._triggers = triggers
         self._kind = kind
         self._clock = clock
-        self._changed = triggers.subscribe()
+        self._changed = triggers.watch()
 
     async def fire_due(self) -> int:
         now = self._clock()

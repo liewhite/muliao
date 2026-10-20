@@ -331,8 +331,7 @@ class JobRunner:
         async with self._db.transaction() as s:
             job = await s.get(Job, job_id)
             if job is None:
-                # 任务行在会话删除时随外键级联删除（会话不忙才能删，但停止之后占用已清掉、监督者可能还在写结局）；
-                # 第 2 阶段去掉跨领域外键、任务行保留终态后这里不再可能
+                # 任务行只进入终态、不删除（没有跨领域外键，会话删除时也留着）：不见了是 bug
                 raise RuntimeError(f"job {job_id} vanished while it was running")
             if job.status != JobStatus.RUNNING:
                 # 结局只记一次：监督者在写完之前一直登记着，对账与关停不会抢先记
@@ -459,7 +458,9 @@ class JobRunner:
                 if job is None or job.status != JobStatus.RUNNING:
                     continue
                 text = _check_text(job, self._clock(), tails[job.id])
-                posted += await post_check_in(s, self._queue, job.session_id, job_source(job.id), text)
+                posted += await post_check_in(
+                    s, self._queue, job.session_id, job_source(job.id), job_source(job.id), text
+                )
         return posted
 
     async def recover(self) -> None:

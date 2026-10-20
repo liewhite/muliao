@@ -226,7 +226,12 @@ class Delegations:
                     raise RuntimeError(f"delegation {delegation.holder} references a missing agent")
                 text = check_text(child, agent, await latest_run(s, child.id), self._clock())
                 posted += await post_check_in(
-                    s, self._queue, delegation.owner_session_id, thread_source(child.id), text
+                    s,
+                    self._queue,
+                    delegation.owner_session_id,
+                    delegation.holder,
+                    thread_source(child.id),
+                    text,
                 )
         return posted
 

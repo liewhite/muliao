@@ -5,12 +5,14 @@
 - Notifications：通知页与未读数。
 """
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
 from muliao.models import Notification, TaskKind
-from muliao.runtime.tasks import TaskQueue, deliver_lane
+from muliao.platform.messaging import Delivery, Messaging
+from muliao.runtime.session_events import SessionDeleted
+from muliao.runtime.tasks import Commit, TaskQueue, deliver_lane
 
 
 class Notifier:
@@ -53,6 +55,17 @@ async def mark_session_read_in(s: AsyncSession, session_id: str) -> None:
 class Notifications:
     def __init__(self, db: Database):
         self._db = db
+
+    def subscribe(self, messaging: Messaging) -> None:
+        messaging.subscribe(SessionDeleted, "notifications.session_deleted", self.on_session_deleted)
+
+    async def on_session_deleted(self, event: SessionDeleted, _delivery: Delivery) -> Commit:
+        """指向被删会话的通知随它删除。"""
+
+        async def commit(s: AsyncSession) -> None:
+            await s.execute(delete(Notification).where(Notification.session_id == event.session_id))
+
+        return commit
 
     async def list(self, limit: int) -> list[Notification]:
         async with self._db.transaction() as s:

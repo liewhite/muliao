@@ -21,17 +21,19 @@ from enum import Enum
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
+from muliao.agent_events import AgentDeleting
 from muliao.db import Database, utcnow
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.models import Agent, Notification, Origin, Session, Trigger
 from muliao.notifications import Notifier
+from muliao.platform.messaging import Delivery, Messaging
 from muliao.runtime.conversation import Inbound, NewSession, receive
-from muliao.runtime.tasks import Clock, TaskQueue, session_lane
+from muliao.runtime.tasks import Clock, Commit, TaskQueue, session_lane
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 
 log = logging.getLogger(__name__)
@@ -101,10 +103,22 @@ class TriggerService:
         self.kinds = dict(kinds)
         self._tz = tz
         self._clock = clock
-        # 每个激活机制各自订阅变化通知（见 subscribe），互不清除对方的通知
+        # 每个激活机制各自订阅变化通知（见 watch），互不清除对方的通知
         self._subscribers: list[asyncio.Event] = []
 
-    def subscribe(self) -> asyncio.Event:
+    def subscribe(self, messaging: Messaging) -> None:
+        messaging.subscribe(AgentDeleting, "triggers.agent_deleting", self.on_agent_deleting)
+
+    async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
+        """删除 agent 的流程：删除它的触发器。"""
+
+        async def commit(s: AsyncSession) -> None:
+            await s.execute(delete(Trigger).where(Trigger.agent_id == event.agent_id))
+            self._changed()
+
+        return commit
+
+    def watch(self) -> asyncio.Event:
         """返回一个只属于调用方的 Event：任何触发器变化时置位，由调用方自己清除。"""
         event = asyncio.Event()
         self._subscribers.append(event)

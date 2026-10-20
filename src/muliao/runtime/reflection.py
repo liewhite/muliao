@@ -9,11 +9,13 @@
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agent_events import AgentDeleting
 from muliao.db import Database
 from muliao.models import Agent, Message, Reflection, Session, Task, TaskKind
+from muliao.platform.messaging import Delivery, Messaging
 from muliao.runtime.codec import KIND_PATH, RESPONSE_KIND, load_messages
 from muliao.runtime.runner import AgentRuntime, ToolGroups
 from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane
@@ -92,6 +94,18 @@ class ReflectionScheduler:
     def __init__(self, db: Database, queue: TaskQueue):
         self._db = db
         self._queue = queue
+
+    def subscribe(self, messaging: Messaging) -> None:
+        messaging.subscribe(AgentDeleting, "reflection.agent_deleting", self.on_agent_deleting)
+
+    async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
+        """删除 agent 的流程：排队的反思不再执行，反思记录删除（正在执行的那次由 agent 领域等它结束）。"""
+
+        async def commit(s: AsyncSession) -> None:
+            await self._queue.finish_pending_in(s, reflection_lane(event.agent_id), TaskKind.REFLECTION)
+            await s.execute(delete(Reflection).where(Reflection.agent_id == event.agent_id))
+
+        return commit
 
     async def steps_since(self, agents: Sequence[Agent]) -> dict[str, int]:
         """这些 agent 自上次反思以来的步数（界面显示「距下次反思」）。"""

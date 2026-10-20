@@ -133,7 +133,7 @@ async def test_reenabled_schedule_does_not_catch_up_on_the_paused_period(contain
 
 
 async def test_changes_notify_every_activation_independently(container):
-    first, second = container.triggers.subscribe(), container.triggers.subscribe()
+    first, second = container.triggers.watch(), container.triggers.watch()
     first.clear()
     second.clear()
     container.triggers._changed()

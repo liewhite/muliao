@@ -2,8 +2,8 @@
 
 不保留迁移历史：表结构变化时重新生成这一个版本，数据库重建（见 docs/architecture.md「数据库迁移」）。
 
-Revision ID: edbc8f09dd26
-Create Date: 2026-10-20 20:00:56.856305
+Revision ID: 9e0fc2e232eb
+Create Date: 2026-10-20 21:26:56.403803
 Revises:
 """
 
@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "edbc8f09dd26"
+revision: str = "9e0fc2e232eb"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -29,6 +29,7 @@ def upgrade() -> None:
         sa.Column("tool_groups", sa.JSON(), nullable=False),
         sa.Column("reflect_every", sa.Integer(), nullable=False),
         sa.Column("reflection_checkpoint", sa.Integer(), nullable=False),
+        sa.Column("deleting_by", sa.String(length=64), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
@@ -69,6 +70,43 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
+        "jobs",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("session_id", sa.String(length=36), nullable=False),
+        sa.Column("agent_id", sa.String(length=32), nullable=False),
+        sa.Column("command", sa.Text(), nullable=False),
+        sa.Column("secrets", sa.JSON(), nullable=False),
+        sa.Column("status", sa.String(length=16), nullable=False),
+        sa.Column("exit_code", sa.Integer(), nullable=True),
+        sa.Column("log_path", sa.String(length=255), nullable=False),
+        sa.Column("pid", sa.Integer(), nullable=True),
+        sa.Column("awaited", sa.Boolean(), nullable=False),
+        sa.Column("started_at", sa.DateTime(), nullable=False),
+        sa.Column("finished_at", sa.DateTime(), nullable=True),
+        sa.PrimaryKeyConstraint("id"),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("jobs", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_jobs_agent_id"), ["agent_id"], unique=False)
+        batch_op.create_index(batch_op.f("ix_jobs_session_id"), ["session_id"], unique=False)
+        batch_op.create_index(batch_op.f("ix_jobs_status"), ["status"], unique=False)
+
+    op.create_table(
+        "notifications",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("title", sa.Text(), nullable=False),
+        sa.Column("body", sa.Text(), nullable=False),
+        sa.Column("session_id", sa.String(length=36), nullable=True),
+        sa.Column("unread", sa.Boolean(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("notifications", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_notifications_session_id"), ["session_id"], unique=False)
+        batch_op.create_index(batch_op.f("ix_notifications_unread"), ["unread"], unique=False)
+
+    op.create_table(
         "push_subscriptions",
         sa.Column("endpoint", sa.Text(), nullable=False),
         sa.Column("p256dh", sa.Text(), nullable=False),
@@ -85,12 +123,17 @@ def upgrade() -> None:
         sa.Column("output", sa.Text(), nullable=False),
         sa.Column("messages", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     with op.batch_alter_table("reflections", schema=None) as batch_op:
         batch_op.create_index(batch_op.f("ix_reflections_agent_id"), ["agent_id"], unique=False)
 
+    op.create_table(
+        "retired_agents",
+        sa.Column("agent_id", sa.String(length=32), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.PrimaryKeyConstraint("agent_id"),
+    )
     op.create_table(
         "secrets",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -99,7 +142,6 @@ def upgrade() -> None:
         sa.Column("ciphertext", sa.LargeBinary(), nullable=False),
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["owner"], ["agents.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     with op.batch_alter_table("secrets", schema=None) as batch_op:
@@ -123,7 +165,6 @@ def upgrade() -> None:
         sa.Column("unread", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["parent_session_id"], ["sessions.id"], name="fk_sessions_parent_session_id", ondelete="SET NULL"
         ),
@@ -144,6 +185,29 @@ def upgrade() -> None:
         )
 
     op.create_table(
+        "tasks",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("kind", sa.String(length=16), nullable=False),
+        sa.Column("lane", sa.String(length=100), nullable=False),
+        sa.Column("agent_id", sa.String(length=32), nullable=True),
+        sa.Column("session_id", sa.String(length=36), nullable=True),
+        sa.Column("payload", sa.JSON(), nullable=False),
+        sa.Column("status", sa.String(length=16), nullable=False),
+        sa.Column("attempts", sa.Integer(), nullable=False),
+        sa.Column("error", sa.Text(), nullable=True),
+        sa.Column("not_before", sa.DateTime(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("started_at", sa.DateTime(), nullable=True),
+        sa.Column("finished_at", sa.DateTime(), nullable=True),
+        sa.PrimaryKeyConstraint("id"),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("tasks", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_tasks_agent_id"), ["agent_id"], unique=False)
+        batch_op.create_index(batch_op.f("ix_tasks_session_id"), ["session_id"], unique=False)
+        batch_op.create_index("ix_tasks_status_lane", ["status", "lane"], unique=False)
+
+    op.create_table(
         "triggers",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("name", sa.String(length=64), nullable=False),
@@ -161,11 +225,13 @@ def upgrade() -> None:
         sa.Column("disabled_reason", sa.Text(), nullable=True),
         sa.Column("precheck_error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name"),
         sqlite_autoincrement=True,
     )
+    with op.batch_alter_table("triggers", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_triggers_agent_id"), ["agent_id"], unique=False)
+
     op.create_table(
         "compactions",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -179,101 +245,6 @@ def upgrade() -> None:
     )
     with op.batch_alter_table("compactions", schema=None) as batch_op:
         batch_op.create_index(batch_op.f("ix_compactions_session_id"), ["session_id"], unique=False)
-
-    op.create_table(
-        "jobs",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("session_id", sa.String(length=36), nullable=False),
-        sa.Column("agent_id", sa.String(length=32), nullable=False),
-        sa.Column("command", sa.Text(), nullable=False),
-        sa.Column("secrets", sa.JSON(), nullable=False),
-        sa.Column("status", sa.String(length=16), nullable=False),
-        sa.Column("exit_code", sa.Integer(), nullable=True),
-        sa.Column("log_path", sa.String(length=255), nullable=False),
-        sa.Column("pid", sa.Integer(), nullable=True),
-        sa.Column("awaited", sa.Boolean(), nullable=False),
-        sa.Column("started_at", sa.DateTime(), nullable=False),
-        sa.Column("finished_at", sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sqlite_autoincrement=True,
-    )
-    with op.batch_alter_table("jobs", schema=None) as batch_op:
-        batch_op.create_index(batch_op.f("ix_jobs_agent_id"), ["agent_id"], unique=False)
-        batch_op.create_index(batch_op.f("ix_jobs_session_id"), ["session_id"], unique=False)
-        batch_op.create_index(batch_op.f("ix_jobs_status"), ["status"], unique=False)
-
-    op.create_table(
-        "messages",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("session_id", sa.String(length=36), nullable=False),
-        sa.Column("task_id", sa.Integer(), nullable=False),
-        sa.Column("payload", sa.Text(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sqlite_autoincrement=True,
-    )
-    with op.batch_alter_table("messages", schema=None) as batch_op:
-        batch_op.create_index(batch_op.f("ix_messages_session_id"), ["session_id"], unique=False)
-
-    op.create_table(
-        "notifications",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("title", sa.Text(), nullable=False),
-        sa.Column("body", sa.Text(), nullable=False),
-        sa.Column("session_id", sa.String(length=36), nullable=True),
-        sa.Column("unread", sa.Boolean(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sqlite_autoincrement=True,
-    )
-    with op.batch_alter_table("notifications", schema=None) as batch_op:
-        batch_op.create_index(batch_op.f("ix_notifications_session_id"), ["session_id"], unique=False)
-        batch_op.create_index(batch_op.f("ix_notifications_unread"), ["unread"], unique=False)
-
-    op.create_table(
-        "session_holds",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("session_id", sa.String(length=36), nullable=False),
-        sa.Column("holder", sa.String(length=200), nullable=False),
-        sa.Column("call_id", sa.String(length=100), nullable=True),
-        sa.Column("status", sa.String(length=16), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("ended_at", sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    with op.batch_alter_table("session_holds", schema=None) as batch_op:
-        batch_op.create_index(batch_op.f("ix_session_holds_session_id"), ["session_id"], unique=False)
-        batch_op.create_index("uq_session_holds", ["session_id", "holder"], unique=True)
-
-    op.create_table(
-        "tasks",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("kind", sa.String(length=16), nullable=False),
-        sa.Column("lane", sa.String(length=100), nullable=False),
-        sa.Column("agent_id", sa.String(length=32), nullable=True),
-        sa.Column("session_id", sa.String(length=36), nullable=True),
-        sa.Column("payload", sa.JSON(), nullable=False),
-        sa.Column("status", sa.String(length=16), nullable=False),
-        sa.Column("attempts", sa.Integer(), nullable=False),
-        sa.Column("error", sa.Text(), nullable=True),
-        sa.Column("not_before", sa.DateTime(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("started_at", sa.DateTime(), nullable=True),
-        sa.Column("finished_at", sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sqlite_autoincrement=True,
-    )
-    with op.batch_alter_table("tasks", schema=None) as batch_op:
-        batch_op.create_index(batch_op.f("ix_tasks_agent_id"), ["agent_id"], unique=False)
-        batch_op.create_index(batch_op.f("ix_tasks_session_id"), ["session_id"], unique=False)
-        batch_op.create_index("ix_tasks_status_lane", ["status", "lane"], unique=False)
 
     op.create_table(
         "mail",
@@ -314,11 +285,50 @@ def upgrade() -> None:
             sqlite_where=sa.text("dedupe_key IS NOT NULL"),
         )
 
+    op.create_table(
+        "messages",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("session_id", sa.String(length=36), nullable=False),
+        sa.Column("task_id", sa.Integer(), nullable=False),
+        sa.Column("payload", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("messages", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_messages_session_id"), ["session_id"], unique=False)
+
+    op.create_table(
+        "session_holds",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("session_id", sa.String(length=36), nullable=False),
+        sa.Column("holder", sa.String(length=200), nullable=False),
+        sa.Column("call_id", sa.String(length=100), nullable=True),
+        sa.Column("status", sa.String(length=16), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("ended_at", sa.DateTime(), nullable=True),
+        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    with op.batch_alter_table("session_holds", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_session_holds_session_id"), ["session_id"], unique=False)
+        batch_op.create_index("uq_session_holds", ["session_id", "holder"], unique=True)
+
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    with op.batch_alter_table("session_holds", schema=None) as batch_op:
+        batch_op.drop_index("uq_session_holds")
+        batch_op.drop_index(batch_op.f("ix_session_holds_session_id"))
+
+    op.drop_table("session_holds")
+    with op.batch_alter_table("messages", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_messages_session_id"))
+
+    op.drop_table("messages")
     with op.batch_alter_table("mail", schema=None) as batch_op:
         batch_op.drop_index("uq_mail_dedupe_key", sqlite_where=sa.text("dedupe_key IS NOT NULL"))
         batch_op.drop_index(batch_op.f("ix_mail_session_id"))
@@ -326,37 +336,20 @@ def downgrade() -> None:
         batch_op.drop_index("ix_mail_correlation", sqlite_where=sa.text("correlation IS NOT NULL"))
 
     op.drop_table("mail")
+    with op.batch_alter_table("compactions", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_compactions_session_id"))
+
+    op.drop_table("compactions")
+    with op.batch_alter_table("triggers", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_triggers_agent_id"))
+
+    op.drop_table("triggers")
     with op.batch_alter_table("tasks", schema=None) as batch_op:
         batch_op.drop_index("ix_tasks_status_lane")
         batch_op.drop_index(batch_op.f("ix_tasks_session_id"))
         batch_op.drop_index(batch_op.f("ix_tasks_agent_id"))
 
     op.drop_table("tasks")
-    with op.batch_alter_table("session_holds", schema=None) as batch_op:
-        batch_op.drop_index("uq_session_holds")
-        batch_op.drop_index(batch_op.f("ix_session_holds_session_id"))
-
-    op.drop_table("session_holds")
-    with op.batch_alter_table("notifications", schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f("ix_notifications_unread"))
-        batch_op.drop_index(batch_op.f("ix_notifications_session_id"))
-
-    op.drop_table("notifications")
-    with op.batch_alter_table("messages", schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f("ix_messages_session_id"))
-
-    op.drop_table("messages")
-    with op.batch_alter_table("jobs", schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f("ix_jobs_status"))
-        batch_op.drop_index(batch_op.f("ix_jobs_session_id"))
-        batch_op.drop_index(batch_op.f("ix_jobs_agent_id"))
-
-    op.drop_table("jobs")
-    with op.batch_alter_table("compactions", schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f("ix_compactions_session_id"))
-
-    op.drop_table("compactions")
-    op.drop_table("triggers")
     with op.batch_alter_table("sessions", schema=None) as batch_op:
         batch_op.drop_index("uq_sessions_thread", sqlite_where=sa.text("parent_session_id IS NOT NULL"))
         batch_op.drop_index(batch_op.f("ix_sessions_updated_at"))
@@ -370,11 +363,23 @@ def downgrade() -> None:
         batch_op.drop_index("uq_secrets_private", sqlite_where=sa.text("owner IS NOT NULL"))
 
     op.drop_table("secrets")
+    op.drop_table("retired_agents")
     with op.batch_alter_table("reflections", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_reflections_agent_id"))
 
     op.drop_table("reflections")
     op.drop_table("push_subscriptions")
+    with op.batch_alter_table("notifications", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_notifications_unread"))
+        batch_op.drop_index(batch_op.f("ix_notifications_session_id"))
+
+    op.drop_table("notifications")
+    with op.batch_alter_table("jobs", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_jobs_status"))
+        batch_op.drop_index(batch_op.f("ix_jobs_session_id"))
+        batch_op.drop_index(batch_op.f("ix_jobs_agent_id"))
+
+    op.drop_table("jobs")
     op.drop_table("files")
     with op.batch_alter_table("delegations", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_delegations_status"))

@@ -1,17 +1,25 @@
-"""跨领域的 agent 生命周期操作。删除 agent 涉及会话领域（正在执行的会话不能删、私有 thread 要一并删除），
-在这里编排，agent 领域本身不依赖会话领域。"""
+"""删除 agent（docs/domain-design.md 4.4）：agent 领域发起、各领域清理自己的数据的流程。
+
+1. delete：它的会话有忙的就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除（不再出现在列表与名称解析里），
+   同一事务发布 AgentDeleting。
+2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域记下它已退役并删除它的全部会话，然后发布
+   AgentSessionsCleared；触发器、vault、反思各自删除。
+3. 收到 AgentSessionsCleared：它的反思还在跑就等（重试），否则删除资源目录与这一行。
+"""
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agent_events import AgentDeleting
 from muliao.agents import AgentService
 from muliao.db import Database
-from muliao.errors import Conflict
-from muliao.models import Session
-from muliao.platform.messaging import Messaging
-from muliao.runtime.conversation import delete_sessions
-from muliao.runtime.tasks import TaskQueue, running_task_ids
+from muliao.errors import Conflict, TransientError
+from muliao.models import Agent
+from muliao.platform.messaging import Delivery, Messaging
+from muliao.runtime.conversation import agent_busy_in
+from muliao.runtime.session_events import AgentSessionsCleared
+from muliao.runtime.tasks import Commit, TaskQueue, no_commit, reflection_lane
 
 log = logging.getLogger(__name__)
 
@@ -23,16 +31,46 @@ class AgentLifecycle:
         self._queue = queue
         self._messaging = messaging
 
+    def subscribe(self, messaging: Messaging) -> None:
+        messaging.subscribe(AgentSessionsCleared, "agents.sessions_cleared", self.on_sessions_cleared)
+
     async def delete(self, agent_id: str, *, author: str) -> None:
+        # 会话的状态是别的领域的数据：在自己的只读事务里查（docs/domain-design.md 1.1），检查与标记之间的极小窗口
+        # 由会话领域的订阅者重试收敛
         async with self._db.transaction() as s:
             agent = await self._agents.get_in(s, agent_id)
-            if running := await running_task_ids(s, agent_id=agent_id):
-                log.info("agent deletion refused: tasks running", extra={"agent": agent_id, "tasks": running})
-                raise Conflict(
-                    f"agent {agent.name!r} is working right now; wait for it to finish, then delete"
+            if agent.deleting_by is not None:
+                raise Conflict(f"agent {agent.name!r} is already being deleted")
+            busy = await agent_busy_in(s, self._queue, agent_id)
+        if busy:
+            log.info("agent deletion refused: busy", extra={"agent": agent_id})
+            raise Conflict(f"agent {agent.name!r} is working right now; stop its sessions first, then delete")
+        async with self._db.transaction() as s:
+            agent = await self._agents.get_in(s, agent_id)
+            agent.deleting_by = author
+            self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))
+        log.info("agent deletion started", extra={"agent": agent_id, "author": author})
+
+    async def on_sessions_cleared(self, event: AgentSessionsCleared, _delivery: Delivery) -> Commit:
+        async with self._db.transaction() as s:
+            agent = await s.get(Agent, event.agent_id)
+            if agent is None:
+                return no_commit
+            if agent.deleting_by is None:
+                raise RuntimeError(
+                    f"agent {event.agent_id} had its sessions cleared but is not being deleted"
                 )
-            # 先按会话删除规则处理它的会话，再由外键级联删除其余数据库数据（私有 secret、触发器……）；文件资源随后删除
-            sessions = list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())
-            await delete_sessions(s, self._queue, self._messaging, sessions)
-            await s.delete(agent)
-        await self._agents.remove_files(agent_id, author)
+            author = agent.deleting_by
+            if await self._queue.lane_busy(s, reflection_lane(event.agent_id)):
+                # 正在执行的反思会写它的资源：等它结束再删
+                raise TransientError(f"agent {event.agent_id} still has a reflection running")
+        # 资源目录不在数据库事务里：重放时它已经不在，删除是空操作
+        await self._agents.remove_files(event.agent_id, author)
+
+        async def commit(s: AsyncSession) -> None:
+            agent = await s.get(Agent, event.agent_id)
+            if agent is not None:
+                await s.delete(agent)
+                log.info("agent deleted", extra={"agent": event.agent_id, "author": author})
+
+        return commit

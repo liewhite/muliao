@@ -8,6 +8,7 @@ from muliao.errors import CorruptState, InvalidInput, NotFound
 from muliao.evolution.memory import MemoryFull, MemoryStore
 from muliao.evolution.skills import SkillStore
 from muliao.resources import RESOURCE_PATHSPEC, ResourceRepo
+from tests.test_flow import drain
 
 # agent id 的格式（与 ids.new_agent_id 一致）
 ALPHA, BETA = "a1a1a1a1a1a1", "b2b2b2b2b2b2"
@@ -156,6 +157,8 @@ async def test_secrets_of_deleted_agent_go_with_it(container, make_agent):
     alpha = (await make_agent(ALPHA)).id
     await container.vault.set(alpha, "TOKEN", "x")
     await container.agent_lifecycle.delete(alpha, author="user")
+    # 删除的清理经事件完成
+    await drain(container)
     assert await container.vault.list_all() == []
 
 
@@ -184,6 +187,8 @@ async def test_deleting_an_agent_is_recorded_in_resource_history(container, make
     memory = container.memory.path(agent.id)
 
     await container.agent_lifecycle.delete(agent.id, author="user")
+    # 删除的清理经事件完成
+    await drain(container)
 
     [deleted, created] = await container.resources.history(memory, 10)
     assert (deleted.author, deleted.message) == ("user", f"delete agent {agent.id}")

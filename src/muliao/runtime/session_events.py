@@ -42,6 +42,21 @@ class SessionStopped(DomainEvent):
     cleared: list[str]
 
 
+class SessionDeleted(DomainEvent):
+    """会话（连同它的私有 thread）被删除：引用它的数据由各领域清理（如指向它的通知）。"""
+
+    TYPE = "session.deleted"
+    session_id: str
+    agent_id: str
+
+
+class AgentSessionsCleared(DomainEvent):
+    """删除 agent 的流程里，会话领域已经删除了它的全部会话，并记下它已退役（之后的来信与委派拒绝它）。"""
+
+    TYPE = "session.agent_sessions_cleared"
+    agent_id: str
+
+
 class DelegationDispatched(DomainEvent):
     """会话把一项要交回结局的工作投给了 thread（runtime.conversation.Threads.dispatch）。"""
 
