@@ -1,0 +1,169 @@
+"""领域事件与定向命令（platform.messaging）：与发送方的状态同事务提交、每个订阅者恰好处理一次、按发布顺序、契约违约
+不重试、失败的投递可以按原顺序重试。"""
+
+import anyio
+import pytest
+from sqlalchemy import select
+
+from muliao.errors import TransientError
+from muliao.models import Task, TaskKind, TaskStatus
+from muliao.platform.messaging import Command, Delivery, DomainEvent, Messaging
+from muliao.runtime.tasks import no_commit
+from muliao.runtime.worker import Worker
+from tests.test_flow import idle
+
+
+class Happened(DomainEvent):
+    TYPE = "test.happened"
+    n: int
+
+
+class DoIt(Command):
+    TYPE = "test.do_it"
+    what: str
+
+
+async def run_worker(container, messaging: Messaging) -> None:
+    worker = Worker(
+        container.queue, {TaskKind.EVENT: messaging}, container.bus, concurrency=4, task_timeout_seconds=5
+    )
+    async with anyio.create_task_group() as group:
+        group.start_soon(worker.run_forever)
+        await idle(container)
+        group.cancel_scope.cancel()
+
+
+async def deliveries(container) -> list[Task]:
+    async with container.db.transaction() as s:
+        return list(
+            (await s.scalars(select(Task).where(Task.kind == TaskKind.EVENT).order_by(Task.id))).all()
+        )
+
+
+async def test_each_subscriber_handles_a_committed_event_once_with_the_same_id(container):
+    messaging = Messaging(container.queue)
+    seen: dict[str, list[tuple[int, str]]] = {"a": [], "b": []}
+
+    def recorder(name: str):
+        async def handle(event: Happened, delivery: Delivery):
+            seen[name].append((event.n, delivery.message_id))
+            return no_commit
+
+        return handle
+
+    messaging.subscribe(Happened, "a", recorder("a"))
+    messaging.subscribe(Happened, "b", recorder("b"))
+    async with container.db.transaction() as s:
+        event_id = messaging.publish_in(s, Happened(n=1))
+    await run_worker(container, messaging)
+
+    assert seen == {"a": [(1, event_id)], "b": [(1, event_id)]}
+    assert [t.status for t in await deliveries(container)] == [TaskStatus.DONE, TaskStatus.DONE]
+
+
+async def test_an_event_published_in_a_rolled_back_transaction_is_never_delivered(container):
+    messaging = Messaging(container.queue)
+    messaging.subscribe(Happened, "a", lambda _e, _d: pytest.fail("delivered"))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async with container.db.transaction() as s:
+            messaging.publish_in(s, Happened(n=1))
+            raise RuntimeError("boom")
+
+    assert await deliveries(container) == []
+
+
+async def test_a_subscriber_sees_events_in_publish_order(container):
+    messaging = Messaging(container.queue)
+    order: list[int] = []
+
+    async def handle(event: Happened, _d: Delivery):
+        # 前一条慢一点：同一条 lane 上后一条仍然等它
+        await anyio.sleep(0.05 if event.n == 1 else 0)
+        order.append(event.n)
+        return no_commit
+
+    messaging.subscribe(Happened, "a", handle)
+    for n in (1, 2, 3):
+        async with container.db.transaction() as s:
+            messaging.publish_in(s, Happened(n=n))
+    await run_worker(container, messaging)
+
+    assert order == [1, 2, 3]
+
+
+async def test_a_handlers_commit_is_atomic_with_the_delivery_and_a_retry_redelivers_the_same_id(container):
+    messaging = Messaging(container.queue)
+    attempts: list[str] = []
+    committed: list[str] = []
+
+    async def handle(_event: Happened, delivery: Delivery):
+        attempts.append(delivery.message_id)
+
+        async def commit(_s):
+            if len(attempts) == 1:
+                raise TransientError("database briefly unavailable")
+            committed.append(delivery.message_id)
+
+        return commit
+
+    messaging.subscribe(Happened, "a", handle)
+    async with container.db.transaction() as s:
+        event_id = messaging.publish_in(s, Happened(n=1))
+    await run_worker(container, messaging)
+
+    assert attempts == [event_id, event_id] and committed == [event_id]
+
+
+async def test_a_command_goes_to_its_one_handler_and_needs_one(container):
+    messaging = Messaging(container.queue)
+    done: list[str] = []
+
+    async def handle(command: DoIt, _d: Delivery):
+        done.append(command.what)
+        return no_commit
+
+    async with container.db.transaction() as s:
+        with pytest.raises(RuntimeError, match="no handler"):
+            messaging.send_in(s, DoIt(what="x"))
+    messaging.handle(DoIt, "doer", handle)
+    with pytest.raises(RuntimeError, match="already has a handler"):
+        messaging.handle(DoIt, "other", handle)
+    async with container.db.transaction() as s:
+        messaging.send_in(s, DoIt(what="x"))
+    await run_worker(container, messaging)
+
+    assert done == ["x"]
+
+
+async def test_a_delivery_this_version_cannot_read_fails_at_once_and_can_be_retried_in_place(container):
+    messaging = Messaging(container.queue)
+    handled: list[int] = []
+
+    async def handle(event: Happened, _d: Delivery):
+        handled.append(event.n)
+        return no_commit
+
+    messaging.subscribe(Happened, "a", handle)
+    async with container.db.transaction() as s:
+        messaging.publish_in(s, Happened(n=1))
+        messaging.publish_in(s, Happened(n=2))
+    async with container.db.transaction() as s:
+        first = await s.scalar(select(Task).where(Task.kind == TaskKind.EVENT).order_by(Task.id).limit(1))
+        first.payload = {**first.payload, "data": {"n": "not a number"}}
+    await run_worker(container, messaging)
+
+    broken, ok = await deliveries(container)
+    assert (broken.status, broken.attempts) == (TaskStatus.FAILED, 1)
+    assert "invalid test.happened" in broken.error and ok.status == TaskStatus.DONE
+
+    # 修好数据后人工重试：订阅 lane 上还有别的投递时也允许，沿用原 id
+    async with container.db.transaction() as s:
+        row = await s.get(Task, broken.id)
+        row.payload = {**row.payload, "data": {"n": 1}}
+    async with container.db.transaction() as s:
+        messaging.publish_in(s, Happened(n=3))
+    await container.queue.retry(broken.id)
+    await run_worker(container, messaging)
+
+    assert handled == [2, 1, 3]

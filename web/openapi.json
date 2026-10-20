@@ -4060,7 +4060,8 @@
           "run",
           "reflection",
           "deliver",
-          "compaction"
+          "compaction",
+          "event"
         ],
         "title": "TaskKind"
       },

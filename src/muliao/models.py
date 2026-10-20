@@ -23,6 +23,8 @@ class TaskKind(StrEnum):
     REFLECTION = "reflection"
     DELIVER = "deliver"
     COMPACTION = "compaction"
+    # 领域事件或定向命令的一次投递（platform.messaging）
+    EVENT = "event"
 
 
 class JobStatus(StrEnum):

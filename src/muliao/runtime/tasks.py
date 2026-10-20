@@ -183,10 +183,11 @@ class TaskQueue:
             return tasks
 
     async def retry(self, task_id: int) -> Task:
-        """人工重试一个 failed task。
+        """人工重试一个 failed task，沿用原来的 id（同 lane 内按 id FIFO）。
 
-        同 lane 还有未结束的 task 时拒绝：重试沿用原来的 id，会按 FIFO 插到更新的工作前面，和正在进行的运行
-        争同一个会话。
+        会话等 lane 上还有未结束的 task 时拒绝：重试会插到更新的工作前面，和正在进行的运行争同一个会话。
+        投递任务（EVENT）不受这个限制：它的 lane 上按 id 处理正是发布顺序，沿用原 id 重试恰好回到原来的位置，
+        而共享的订阅 lane 上可能一直有新的投递，等它空下来可能永远等不到。
         """
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)
@@ -194,7 +195,7 @@ class TaskQueue:
                 raise NotFound(f"task {task_id} not found")
             if task.status != TaskStatus.FAILED:
                 raise InvalidInput(f"only failed tasks can be retried, task {task_id} is {task.status}")
-            if await self.lane_busy(s, task.lane):
+            if task.kind != TaskKind.EVENT and await self.lane_busy(s, task.lane):
                 raise Conflict(
                     f"lane {task.lane} still has unfinished tasks; retry task {task_id} after they finish"
                 )

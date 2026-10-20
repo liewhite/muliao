@@ -1537,7 +1537,7 @@ export interface components {
          * TaskKind
          * @enum {string}
          */
-        TaskKind: "run" | "reflection" | "deliver" | "compaction";
+        TaskKind: "run" | "reflection" | "deliver" | "compaction" | "event";
         /** TaskOut */
         TaskOut: {
             /** Id */

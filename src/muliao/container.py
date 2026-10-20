@@ -27,6 +27,7 @@ from muliao.files import FileStore
 from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import TaskKind
 from muliao.notifications import Notifications, Notifier
+from muliao.platform.messaging import Messaging
 from muliao.resources import ResourceRepo
 from muliao.runtime.compaction import CompactionHandler, Compactor
 from muliao.runtime.consumer import Consumer, RunHandler
@@ -95,6 +96,7 @@ class Container:
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
     worker: Worker
+    messaging: Messaging
     mail: MailReconciler
     jobs: JobRunner
     delegations: Delegations
@@ -209,6 +211,8 @@ def build_container(
         max_attempts=settings.runtime.task_max_attempts,
         retry_base_seconds=settings.runtime.task_retry_base_seconds,
     )
+    # 领域事件与定向命令：订阅与命令处理者在下面各领域构造之后登记
+    messaging = Messaging(queue)
     vault = Vault(db, settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
     resources = ResourceRepo(settings.resources_dir)
@@ -336,6 +340,7 @@ def build_container(
         compactor,
     )
     handlers: dict[TaskKind, TaskHandler] = {
+        TaskKind.EVENT: messaging,
         TaskKind.RUN: RunHandler(consumer, queue),
         TaskKind.COMPACTION: CompactionHandler(db, compactor),
         TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups),
@@ -372,6 +377,7 @@ def build_container(
         push_subscriptions=push_subscriptions,
         vapid=vapid,
         worker=worker,
+        messaging=messaging,
         mail=MailReconciler(db, queue),
         jobs=jobs,
         delegations=delegations,
