@@ -171,14 +171,11 @@ export function Tasks() {
                       )}
                     </Card.Description>
                   </Card.Header>
-                  {(t.prompt || t.error) && (
-                    <Card.Content className="flex flex-col gap-2">
-                      {t.prompt && <p className="line-clamp-3 whitespace-pre-wrap text-sm">{t.prompt}</p>}
-                      {t.error && (
-                        <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-danger-soft p-2 font-mono text-xs text-danger-soft-foreground">
-                          {t.error}
-                        </pre>
-                      )}
+                  {t.error && (
+                    <Card.Content>
+                      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-danger-soft p-2 font-mono text-xs text-danger-soft-foreground">
+                        {t.error}
+                      </pre>
                     </Card.Content>
                   )}
                   {t.status === 'failed' && (

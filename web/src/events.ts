@@ -8,7 +8,7 @@ interface RunEventBase {
   session_id: string | null
   agent: string
   text: string
-  /** 这一轮的编号与事件序号（后端 bus.LiveRuns）：快照与 SSE 事件据此合并、去重 */
+  /** 这一段的编号与事件序号（后端 bus.LiveRuns）：快照与 SSE 事件据此合并、去重 */
   run_id: string
   seq: number
 }
@@ -34,7 +34,7 @@ export type RunEvent = StreamEvent | ToolEvent
 /** 增量片段按到达顺序拼成的条目类型；工具事件各自成条 */
 const STREAMED = { text: 'assistant', thinking: 'thinking' } as const
 
-/** 这一轮的快照（会话接口的 live 字段） */
+/** 当前这一段的快照（会话接口的 live 字段） */
 export interface LiveRun {
   run_id: string
   events: RunEvent[]
@@ -50,9 +50,9 @@ export interface MergedLive {
 }
 
 /**
- * 以快照为准（这一轮从开头起的全部事件），再接上之后经 SSE 收到、快照里还没有的同一轮事件；别的轮次的事件丢弃。
- * 没有快照（这一轮已结束或还没开始）时保留已收到的事件，由随后的任务状态事件清空；收到的事件不是从这一轮的开头起
- * （快照生成时这一轮还没开始、SSE 连上时已经开始了），同样是缺口。
+ * 以快照为准（这一段从开头起的全部事件），再接上之后经 SSE 收到、快照里还没有的同一段事件；别的段的事件丢弃
+ * （上一段已保存，在历史里）。没有快照（运行已结束或还没开始）时保留已收到的事件，由随后的任务状态事件清空；
+ * 收到的事件不是从这一段的开头起（快照生成时这一段还没开始、SSE 连上时已经开始了），同样是缺口。
  */
 export function mergeLive(snapshot: LiveRun | null, current: RunEvent[]): MergedLive {
   if (snapshot === null) return { events: current, gap: current.length > 0 && current[0].seq !== 0 }
@@ -89,8 +89,7 @@ export function liveToItems(events: RunEvent[]): Item[] {
 
 export interface TaskEvent {
   type: 'task'
-  /** 内联跑完的私有 thread 轮次失败时没有 task 记录，为 null */
-  task_id: number | null
+  task_id: number
   kind: TaskKind
   status: TaskStatus
   session_id: string | null
@@ -103,7 +102,13 @@ export interface ReconnectEvent {
   type: 'reconnected'
 }
 
-export type ServerEvent = RunEvent | TaskEvent | ReconnectEvent
+/** 运行中又保存了一步（后端 bus.LiveRuns.step）：历史有了新内容，实时事件换成新的一段 */
+export interface SavedEvent {
+  type: 'saved'
+  session_id: string
+}
+
+export type ServerEvent = RunEvent | TaskEvent | ReconnectEvent | SavedEvent
 
 type Listener = (e: ServerEvent) => void
 

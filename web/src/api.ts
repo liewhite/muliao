@@ -115,11 +115,6 @@ export interface Task {
   status: TaskStatus
   attempts: number
   error: string | null
-  prompt: string | null
-  /** turn 随消息发送的文件 */
-  attachments: FileInfo[]
-  /** turn 带的对挂起提问的回答：tool_call_id -> 交给模型的结果 */
-  answers: Record<string, AskResult>
   not_before: string
   created_at: string
   finished_at: string | null
@@ -164,15 +159,35 @@ export interface PendingQuestions {
   questions: Question[]
 }
 
+export type MailKind = 'message' | 'answer' | 'event'
+export type MailState = 'queued' | 'consumed' | 'discarded'
+
+/** 会话信箱里的一封信件（后端 runtime/mailbox.py） */
+export interface Mail {
+  id: number
+  kind: MailKind
+  /** 事件的发送方（如 job:12）；用户消息与回答为 null */
+  source: string | null
+  content: string
+  attachments: FileInfo[]
+  /** 回答信件：tool_call_id -> 交给模型的结果 */
+  answers: Record<string, AskResult>
+  state: MailState
+  created_at: string
+}
+
 export interface SessionDetail {
   session: Session
   items: Item[]
   compactions: CompactionInfo[]
-  open_turns: Task[]
+  /** 显示在历史之后的信件：排队中的，以及最近一次停止丢弃的 */
+  mail: Mail[]
+  /** 最近一次运行，还没正常结束时（排队、运行中、等重试或失败） */
+  run: Task | null
   threads: Session[]
   /** 还在等回答、也还没提交回答的提问 */
   pending_questions: PendingQuestions[]
-  /** 正在进行的这一轮已经产生的运行事件；没有则为 null */
+  /** 正在进行的运行当前这一段的事件；没有则为 null */
   live: LiveRun | null
 }
 
@@ -369,10 +384,10 @@ export const api = {
   startSession: (agent_id: AgentId, prompt: string, attachments: string[]) =>
     post<Session>('/api/sessions', { agent_id, prompt, attachments }),
   reply: (id: string, prompt: string, attachments: string[]) =>
-    post<Task>(`/api/sessions/${id}/messages`, { prompt, attachments }),
+    post<Mail[]>(`/api/sessions/${id}/messages`, { prompt, attachments }),
   /** 回答挂起的提问：作为这次 ask_user 调用的结果交回模型 */
   answer: (id: string, toolCallId: string, answers: QuestionAnswer[]) =>
-    post<Task>(`/api/sessions/${id}/messages`, { prompt: '', answers: { [toolCallId]: answers } }),
+    post<Mail[]>(`/api/sessions/${id}/messages`, { prompt: '', answers: { [toolCallId]: answers } }),
   /** 请求体就是文件内容，Content-Type 是它的类型；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
   uploadFile: (file: File) =>
     send<FileInfo>('POST', FILES_PATH, { name: file.name }, { type: file.type || 'application/octet-stream', data: file }),

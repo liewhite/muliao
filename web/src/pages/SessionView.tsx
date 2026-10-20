@@ -11,6 +11,7 @@ import {
   type Item,
   type Question,
   type QuestionAnswer,
+  type Mail,
   type Task,
   type Session,
 } from '../api'
@@ -126,7 +127,7 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
 /** 渲染会话条目要用到的会话信息：还在等回答的提问与提交方式、这个会话开出的 thread、agent 名称 */
 interface SessionContext {
   pending: Map<string, Question[]>
-  /** 未完成（排队、运行中或失败待重试）的轮次带着回答的提问：回答显示在那一轮里，提问处不再显示「提问中」 */
+  /** 已提交、还在信箱里排队的回答针对的提问：回答显示在信箱里，提问处不再显示「提问中」 */
   answering: Set<string>
   answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
   threads: Map<string, Session>
@@ -143,7 +144,7 @@ function AskBlock({ ask, ctx }: { ask: AskView; ctx: SessionContext }) {
   const questions = ctx.pending.get(ask.callId)
   if (questions) return <QuestionForm questions={questions} onSubmit={(answers) => ctx.answer(ask.callId, answers)} />
   if (ask.result === null) return ctx.answering.has(ask.callId) ? null : <QuestionNote text="提问中…" />
-  // 运行中的提问结果是截断过的展示文本；这次回答已经显示在上方排队的这一轮里，一轮结束后从历史完整显示
+  // 运行中的提问结果是截断过的展示文本；保存这一步后从历史完整显示
   if (ctx.view === 'live') return null
   const result = askResult(ask.result)
   return result.answered ? <AnsweredQuestions answers={result.answers} /> : <QuestionNote text="没有回答这些问题" />
@@ -227,38 +228,50 @@ function History({ items, compactions, ctx }: { items: Item[]; compactions: Comp
   return <>{parts}</>
 }
 
-function OpenTurn({ task, onRetry }: { task: Task; onRetry: (id: number) => void }) {
+/** 显示在历史之后的信件：排队中的显示为待处理，最近一次停止丢弃的划掉 */
+function MailNote({ mail }: { mail: Mail }) {
+  const discarded = mail.state === 'discarded'
   return (
-    <>
-      <UserBubble text={task.prompt ?? ''} attachments={task.attachments} pending />
-      {Object.values(task.answers).map((result, i) => (
-        <AnsweredQuestions key={i} answers={result.answers} />
-      ))}
-      {task.status === 'failed' ? (
-        <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
-          <div>这一轮失败了（尝试 {task.attempts} 次）</div>
-          <pre className={CODE_BLOCK}>{task.error}</pre>
-          <div className="text-xs">如果是上下文过长，先点右上角「压缩」，完成后再重试。</div>
-          <Button size="sm" variant="secondary" className="self-start" onPress={() => onRetry(task.id)}>
-            <RotateCcw className="size-4" />
-            重试
-          </Button>
-        </div>
+    <div className={`flex flex-col gap-1.5 ${discarded ? 'line-through opacity-50' : ''}`}>
+      {mail.kind === 'event' ? (
+        <EventNote source={mail.source ?? '?'} text={mail.content} />
+      ) : mail.kind === 'answer' ? (
+        Object.values(mail.answers).map((result, i) => <AnsweredQuestions key={i} answers={result.answers} />)
       ) : (
-        <div className="flex items-center gap-2 self-end text-xs text-muted">
-          {task.status === 'running' ? (
-            <>
-              <Spinner size="sm" /> 处理中…
-            </>
-          ) : task.attempts > 0 ? (
-            `等待重试（${formatTime(task.not_before)}）`
-          ) : (
-            '排队中…'
-          )}
-          {task.error && <span>上次错误：{task.error}</span>}
-        </div>
+        <UserBubble text={mail.content} attachments={mail.attachments} pending={!discarded} />
       )}
-    </>
+    </div>
+  )
+}
+
+/** 最近一次运行还没正常结束：排队、运行中、等重试，或失败（可重试） */
+function RunStatus({ run, onRetry }: { run: Task; onRetry: (id: number) => void }) {
+  if (run.status === 'failed') {
+    return (
+      <div className="flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground">
+        <div>运行失败了（尝试 {run.attempts} 次）</div>
+        <pre className={CODE_BLOCK}>{run.error}</pre>
+        <div className="text-xs">如果是上下文过长，先点右上角「压缩」，完成后再重试。重试从失败的那一步继续。</div>
+        <Button size="sm" variant="secondary" className="self-start" onPress={() => onRetry(run.id)}>
+          <RotateCcw className="size-4" />
+          重试
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <div className="flex items-center gap-2 self-end text-xs text-muted">
+      {run.status === 'running' ? (
+        <>
+          <Spinner size="sm" /> 处理中…
+        </>
+      ) : run.attempts > 0 ? (
+        `等待重试（${formatTime(run.not_before)}）`
+      ) : (
+        '排队中…'
+      )}
+      {run.error && <span>上次错误：{run.error}</span>}
+    </div>
   )
 }
 
@@ -474,15 +487,17 @@ export default function SessionView() {
       void detail.reload()
     } else if (e.session_id === id) {
       if (e.type === 'run') setLive((prev) => [...prev, e])
+      // 又保存了一步：重新拉取历史；新快照换成新的一段，合并时丢掉上一段的事件
+      else if (e.type === 'saved') void detail.reload()
       else if (e.kind === 'turn' || e.kind === 'compaction') {
-        // turn 状态变化后以数据库为准重新拉取，清空临时流
+        // 运行状态变化后以数据库为准重新拉取，清空临时流
         if (e.status !== 'running') setLive([])
         void detail.reload()
       }
     }
   })
 
-  // 中途打开或重新拉取时以快照为准，从这一轮的开头显示，再接上经 SSE 收到、快照里还没有的事件
+  // 中途打开或重新拉取时以快照为准，从这一段的开头显示，再接上经 SSE 收到、快照里还没有的事件
   const merged = mergeLive(detail.data?.live ?? null, live)
   const shownLive = merged.events
   const reload = detail.reload
@@ -586,7 +601,7 @@ export default function SessionView() {
                 setDraft={setDraft}
                 uploads={uploads}
                 busy={action.busy}
-                running={detail.data?.open_turns.some((t) => t.status === 'running') ?? false}
+                running={detail.data?.run?.status === 'running'}
                 onSend={() => void send()}
                 onStop={() => void action.run(() => api.stop(id))}
               />
@@ -599,7 +614,7 @@ export default function SessionView() {
         {(d) => {
           const ctx: SessionContext = {
             pending: new Map(d.pending_questions.map((p) => [p.tool_call_id, p.questions])),
-            answering: new Set(d.open_turns.flatMap((t) => Object.keys(t.answers))),
+            answering: new Set(d.mail.filter((m) => m.state === 'queued').flatMap((m) => Object.keys(m.answers))),
             answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
             threads: new Map(d.threads.map((t) => [t.id, t])),
             agents: agents.data,
@@ -622,9 +637,10 @@ export default function SessionView() {
                 </Link>
               )}
               <History items={d.items} compactions={d.compactions} ctx={ctx} />
-              {d.open_turns.map((t) => (
-                <OpenTurn key={t.id} task={t} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />
+              {d.mail.map((m) => (
+                <MailNote key={m.id} mail={m} />
               ))}
+              {d.run && <RunStatus run={d.run} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />}
               {shownLive.length > 0 && (
                 <div className="flex flex-col gap-3 opacity-90">
                   <Blocks items={liveToItems(shownLive)} ctx={{ ...ctx, pending: new Map(), view: 'live' }} />

@@ -108,7 +108,7 @@ export function toBlocks(items: Item[]): Block[] {
 
 export type ToolStatus = 'running' | 'rejected' | 'done'
 
-/** 工具状态的唯一判定：历史只在一轮成功后写入，所以没有结果的调用只出现在运行中的实时流里 */
+/** 工具状态的唯一判定：没有结果的调用在执行中（运行中的这一段），或运行在执行它时失败、等重试再执行 */
 export function toolStatus(tool: ToolView): ToolStatus {
   return tool.result === null ? 'running' : tool.rejected ? 'rejected' : 'done'
 }
