@@ -135,6 +135,12 @@ class Database:
 
     SQLite 只有一个写者：进程内用锁把事务串行化，换来无丢失更新、无 SQLITE_BUSY，
     代价是事务内禁止做慢操作（模型调用、网络 IO）——所有调用方都遵守这一点。
+
+    取消不能打断进行中的语句：打断会让 SQLAlchemy 作废连接，后台的优雅关闭可能永远等不到结果，事件循环关闭时卡住。
+    - anyio 的取消：每个事务整体屏蔽（transaction），取消在事务结束后生效。交换：关停与超时要等进行中的事务做完，
+      数据库卡住时它们也跟着等。
+    - 原生取消（task.cancel()，屏蔽挡不住）：只能在 exclusive 里发出——那时没有任何事务在进行，被取消的任务只会在
+      等锁处（安全）收到取消。
     """
 
     def __init__(self, engine: AsyncEngine):
@@ -144,6 +150,16 @@ class Database:
         self._holder: asyncio.Task[object] | None = None
 
     @asynccontextmanager
+    async def exclusive(self) -> AsyncIterator[None]:
+        """没有任何事务在进行的一段时间（持有事务锁）。原生取消只在这里面发出（runtime.stopping）。"""
+        current = asyncio.current_task()
+        if current is not None and current is self._holder:
+            raise RuntimeError("Database.exclusive() inside a transaction would deadlock")
+        with anyio.CancelScope(shield=True):
+            async with self._lock:
+                yield
+
+    @asynccontextmanager
     async def transaction(self) -> AsyncIterator[AsyncSession]:
         current = asyncio.current_task()
         if current is not None and current is self._holder:
@@ -151,8 +167,9 @@ class Database:
         # 事务很短（契约：事务内不做慢操作），整体屏蔽 anyio 的取消，取消在事务结束后生效。否则电平触发的取消会
         # 打断进行中的语句：SQLAlchemy 作废连接并在后台优雅关闭它，关闭又被再次取消而强制停掉 aiosqlite 的线程，
         # 留下一个永远等不到结果的关闭任务，事件循环关闭时卡住（实测：测试与关停时挂起）
-        with anyio.CancelScope(shield=True):
-            async with self._lock:
+        # 等锁可以被取消（不在任何语句中）；拿到锁之后整个事务屏蔽 anyio 的取消
+        async with self._lock:
+            with anyio.CancelScope(shield=True):
                 self._holder = current
                 try:
                     async with self._factory() as s, s.begin():

@@ -158,7 +158,7 @@ async def test_shutdown_is_not_a_stop_the_turn_is_left_for_recovery(client, cont
     items = [(i["type"], i["tool_call_id"]) for i in detail["items"]]
     assert ("tool_result", "fast") in items and "stopped" not in [kind for kind, _ in items]
     assert detail["live"] is None
-    assert not container.consumer.stop(session_id)
+    assert not await container.consumer.stop(session_id)
 
 
 async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_truncated_secret(
@@ -210,12 +210,12 @@ async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_t
     assert items[-1] == ("stopped", "")
 
 
-async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation():
+async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation(container):
     import pytest
 
     from muliao.runtime.stopping import StoppableRuns, Stopped
 
-    runs: StoppableRuns[str] = StoppableRuns()
+    runs: StoppableRuns[str] = StoppableRuns(container.db.exclusive)
     started = asyncio.Event()
     cancelled: list[bool] = []
 
@@ -231,9 +231,9 @@ async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation():
     # 用户停止：只取消运行本身，结果是 Stopped
     stopped = asyncio.create_task(runs.run("s", forever))
     await started.wait()
-    assert runs.stop("s")
+    assert await runs.stop("s")
     assert isinstance(await stopped, Stopped)
-    assert cancelled == [True] and not runs.stop("s")
+    assert cancelled == [True] and not await runs.stop("s")
 
     # 外层被取消（关停）：运行一起取消，取消照常抛出
     started.clear()
@@ -242,15 +242,15 @@ async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation():
     outer.cancel()
     with pytest.raises(asyncio.CancelledError):
         await outer
-    assert cancelled == [True, True] and not runs.stop("s")
+    assert cancelled == [True, True] and not await runs.stop("s")
 
 
-async def test_a_second_run_in_the_same_session_is_refused():
+async def test_a_second_run_in_the_same_session_is_refused(container):
     import pytest
 
     from muliao.runtime.stopping import StoppableRuns
 
-    runs: StoppableRuns[str] = StoppableRuns()
+    runs: StoppableRuns[str] = StoppableRuns(container.db.exclusive)
     gate = asyncio.Event()
 
     async def wait() -> str:
@@ -369,8 +369,12 @@ async def test_stopping_a_run_before_it_reads_its_state_still_stops_the_session(
     worker = asyncio.create_task(drain(container))
     async with asyncio.timeout(5):
         await entered.wait()
-    await container.consumer.stop_session(session.id)
+    # 停止要等进行中的事务做完才发出取消（db.Database.exclusive）：放开事务，停止随即生效
+    stopping = asyncio.create_task(container.consumer.stop_session(session.id))
+    await asyncio.sleep(0.05)
+    assert not stopping.done()
     gate.set()
+    await stopping
     await worker
 
     assert called == []

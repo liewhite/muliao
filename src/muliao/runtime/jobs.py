@@ -171,24 +171,31 @@ class JobRunner:
             raise RuntimeError("background jobs can only start while the job runner is running")
         # vault 自己开事务，不能放进下面的事务
         values = await self._vault.resolve_many(agent_id, secrets)
-        async with self._db.transaction() as s:
-            session = await s.get(Session, session_id)
-            if session is None:
-                raise NotFound(f"session {session_id!r} not found")
-            job = Job(
-                session_id=session_id,
-                agent_id=agent_id,
-                command=command,
-                secrets=list(secrets),
-                awaited=awaited,
-                log_path="",
-                started_at=self._clock(),
-            )
-            s.add(job)
-            await s.flush()
-            job.log_path = f"{JOBS_DIR}/{job.id}.log"
-        # 正在启动：对账不把它当成没人监督的（无论启动成败，结束时撤销）
-        self._starting.add(job.id)
+        job: Job | None = None
+        try:
+            async with self._db.transaction() as s:
+                session = await s.get(Session, session_id)
+                if session is None:
+                    raise NotFound(f"session {session_id!r} not found")
+                job = Job(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    command=command,
+                    secrets=list(secrets),
+                    awaited=awaited,
+                    log_path="",
+                    started_at=self._clock(),
+                )
+                s.add(job)
+                await s.flush()
+                job.log_path = f"{JOBS_DIR}/{job.id}.log"
+                # 正在启动：对账不把它当成没人监督的（无论启动成败，结束时撤销）。在插入的事务里登记，行一出现就有标记
+                self._starting.add(job.id)
+        except BaseException:
+            # 插入没有提交：撤销标记
+            if job is not None:
+                self._starting.discard(job.id)
+            raise
         try:
             await self._launch(job, values, group)
         finally:

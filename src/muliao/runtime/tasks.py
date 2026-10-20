@@ -189,8 +189,9 @@ class TaskQueue:
         """人工重试一个 failed task，沿用原来的 id（同 lane 内按 id FIFO）。
 
         会话等 lane 上还有未结束的 task 时拒绝：重试会插到更新的工作前面，和正在进行的运行争同一个会话。
-        投递任务（EVENT）不受这个限制：它的 lane 上按 id 处理正是发布顺序，沿用原 id 重试恰好回到原来的位置，
-        而共享的订阅 lane 上可能一直有新的投递，等它空下来可能永远等不到。
+        投递任务（EVENT）不受这个限制：共享的订阅 lane 上可能一直有新的投递，等它空下来可能永远等不到。沿用原 id
+        只保证它排在还没处理的投递前面；在它失败之后已经处理过的投递不会重来，所以依赖顺序的处理器遇到前置状态
+        缺失时必须报错（例如委派的 SessionSettled 找不到委派行），重试按 id 先后进行。
         """
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)

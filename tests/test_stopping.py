@@ -3,11 +3,18 @@
 不会被工具内部的 anyio 作用域吞掉、当成正常结束。"""
 
 import asyncio
+from contextlib import asynccontextmanager
 
 import anyio
+import anyio.lowlevel
 import pytest
 
 from muliao.runtime.stopping import StoppableRuns, Stopped
+
+
+@asynccontextmanager
+async def _no_gate():
+    yield
 
 
 class Tool:
@@ -38,12 +45,12 @@ class Tool:
 
 
 async def test_a_user_stop_returns_stopped_and_cancels_the_tool_for_real():
-    runs: StoppableRuns[str] = StoppableRuns()
+    runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = Tool()
 
     async def stop_when_started() -> None:
         await tool.started.wait()
-        assert runs.stop("s")
+        assert await runs.stop("s")
 
     async with anyio.create_task_group() as group:
         group.start_soon(stop_when_started)
@@ -51,11 +58,11 @@ async def test_a_user_stop_returns_stopped_and_cancels_the_tool_for_real():
 
     assert isinstance(result, Stopped)
     assert tool.outcome == "cancelled"
-    assert not runs.stop("s")
+    assert not await runs.stop("s")
 
 
 async def test_a_shutdown_propagates_out_of_the_run_and_cancels_the_tool():
-    runs: StoppableRuns[str] = StoppableRuns()
+    runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = Tool()
     results: list[object] = []
 
@@ -71,7 +78,7 @@ async def test_a_shutdown_propagates_out_of_the_run_and_cancels_the_tool():
 
 
 async def test_a_task_timeout_raises_timeout_and_cancels_the_tool():
-    runs: StoppableRuns[str] = StoppableRuns()
+    runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = Tool()
 
     with pytest.raises(TimeoutError), anyio.fail_after(0.3):
@@ -81,7 +88,7 @@ async def test_a_task_timeout_raises_timeout_and_cancels_the_tool():
 
 
 async def test_two_runs_of_one_session_at_once_is_a_bug():
-    runs: StoppableRuns[str] = StoppableRuns()
+    runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = Tool()
 
     async with anyio.create_task_group() as group:
@@ -89,7 +96,7 @@ async def test_two_runs_of_one_session_at_once_is_a_bug():
         await tool.started.wait()
         with pytest.raises(RuntimeError, match="already has a running run"):
             await runs.run("s", tool.run)
-        runs.stop("s")
+        await runs.stop("s")
 
 
 class CleaningTool:
@@ -118,14 +125,14 @@ class CleaningTool:
 
 
 async def test_stopping_twice_does_not_interrupt_the_runs_shielded_cleanup():
-    runs: StoppableRuns[str] = StoppableRuns()
+    runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = CleaningTool()
 
     async def stop_twice() -> None:
         await tool.started.wait()
-        runs.stop("s")
+        await runs.stop("s")
         await tool.cleaning.wait()
-        assert runs.stop("s")
+        assert await runs.stop("s")
 
     async with anyio.create_task_group() as group:
         group.start_soon(stop_twice)
@@ -135,13 +142,13 @@ async def test_stopping_twice_does_not_interrupt_the_runs_shielded_cleanup():
 
 
 async def test_a_shutdown_during_a_stopped_runs_cleanup_does_not_interrupt_it():
-    runs: StoppableRuns[str] = StoppableRuns()
+    runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = CleaningTool()
 
     async with anyio.create_task_group() as group:
         group.start_soon(runs.run, "s", tool.run)
         await tool.started.wait()
-        runs.stop("s")
+        await runs.stop("s")
         await tool.cleaning.wait()
         group.cancel_scope.cancel()
 
@@ -150,7 +157,7 @@ async def test_a_shutdown_during_a_stopped_runs_cleanup_does_not_interrupt_it():
 
 async def test_a_run_that_swallows_its_cancellation_stays_registered(monkeypatch):
     monkeypatch.setattr("muliao.runtime.stopping._WIND_DOWN_SECONDS", 0.1)
-    runs: StoppableRuns[str] = StoppableRuns()
+    runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = CleaningTool(cleanup_seconds=1.0)
 
     with pytest.raises(TimeoutError), anyio.fail_after(0.2):
@@ -159,3 +166,73 @@ async def test_a_run_that_swallows_its_cancellation_stays_registered(monkeypatch
     # 收尾还没结束：同一会话的下一次运行报错，不会和它同时操作会话
     with pytest.raises(RuntimeError, match="already has a running run"):
         await runs.run("s", tool.run)
+
+
+async def _write_forever(container, counter: list[int]) -> None:
+    """不停地开事务写库：取消迟早会落在某个事务进行中的时刻。"""
+    from muliao.models import Agent
+
+    while True:
+        async with container.db.transaction() as s:
+            agent = await s.get(Agent, "probe")
+            agent.description = str(counter[0])
+            await s.flush()
+        counter[0] += 1
+        # 真实的调用方在两个事务之间总有别的等待（模型、工具）
+        await anyio.lowlevel.checkpoint()
+
+
+async def _leftover_tasks() -> list[str]:
+    return [repr(t.get_coro()) for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+
+
+async def test_an_anyio_cancellation_waits_for_the_transaction_and_leaves_nothing_behind(
+    container, make_agent
+):
+    from muliao.models import Agent
+
+    agent = await make_agent("probe")
+    async with container.db.transaction() as s:
+        await s.execute(Agent.__table__.update().where(Agent.id == agent.id).values(id="probe"))
+    for _ in range(20):
+        counter = [0]
+        with anyio.move_on_after(0.01):
+            await _write_forever(container, counter)
+    await container.db.engine.dispose()
+    assert not any("terminate" in t for t in await _leftover_tasks())
+
+
+async def test_a_user_stop_never_cancels_a_statement_in_flight(tmp_path, caplog):
+    """原生取消（用户停止）只在没有事务进行时发出（db.Database.exclusive）：语句不会被打断，连接不会被作废，关停时
+    没有等不到的关闭任务。"""
+    from sqlalchemy import text
+
+    from muliao.db import Database, create_engine
+
+    db = Database(create_engine(tmp_path / "x.db"))
+    async with db.transaction() as s:
+        await s.execute(text("create table t(x int)"))
+
+    async def write_back_to_back() -> None:
+        while True:
+            async with db.transaction() as s:
+                await s.execute(text("insert into t values (1)"))
+                await s.execute(text("select count(*) from t"))
+
+    runs: StoppableRuns[None] = StoppableRuns(db.exclusive)
+    for k in range(30):
+
+        async def stop_soon(delay: float = 0.01 + k * 0.001) -> None:
+            await anyio.sleep(delay)
+            await runs.stop("s")
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(stop_soon)
+            assert isinstance(await runs.run("s", write_back_to_back), Stopped)
+
+    async with db.transaction() as s:
+        assert (await s.execute(text("select count(*) from t"))).scalar() > 0
+    await db.engine.dispose()
+    # 语句被打断时 SQLAlchemy 作废连接并记下 "Exception terminating connection"
+    assert "terminating connection" not in caplog.text
+    assert not any("terminate" in t for t in await _leftover_tasks())

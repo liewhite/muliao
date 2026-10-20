@@ -7,7 +7,8 @@
   命令执行」；其余命令直接同步调用对方接口。
 - 处理者返回 Commit：它对自己领域的写入与「这条投递完成」在同一个事务里提交（TaskQueue.complete），所以对自己领域
   是恰好一次；对别的领域只能调用命令（在 execute 里、带幂等键），不能在 Commit 里调用。
-- 消息的数据不合法、接收方没有登记，都是契约违约（例如跨版本部署），投递直接失败，不重试。
+- 消息的数据不合法、接收方没有登记，都是存下的数据与代码不一致（errors.CorruptState，例如跨版本部署），投递直接
+  失败，不重试。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.errors import CorruptState
 from muliao.ids import new_id
 from muliao.models import Task, TaskKind
 from muliao.runtime.tasks import Commit, TaskQueue
@@ -61,16 +63,14 @@ class _Receiver:
     lane: Callable[[Message], str]
 
 
-class ContractViolation(Exception):
-    """投递任务的内容与当前代码对不上（接收方没有登记、数据不合法）：不重试，人工处理。"""
-
-
 class Messaging:
     def __init__(self, queue: TaskQueue):
         self._queue = queue
         self._subscribers: dict[str, list[_Receiver]] = {}
         self._commands: dict[str, _Receiver] = {}
         self._receivers: dict[str, _Receiver] = {}
+        # TYPE 在全部消息类型里唯一：投递任务里只记 TYPE
+        self._types: dict[str, type[Message]] = {}
 
     # ---- 登记（组合根，启动前） ----
 
@@ -103,6 +103,11 @@ class Messaging:
     ) -> _Receiver:
         if name in self._receivers:
             raise RuntimeError(f"receiver name {name!r} is registered twice")
+        known = self._types.setdefault(message_type.TYPE, message_type)
+        if known is not message_type:
+            raise RuntimeError(
+                f"message type {message_type.TYPE!r} is used by {known.__name__} and {message_type.__name__}"
+            )
         receiver = _Receiver(
             name=name,
             message_type=message_type,
@@ -148,18 +153,18 @@ class Messaging:
 
     async def execute(self, task: Task) -> Commit:
         payload = task.payload
+        if not {"type", "receiver", "id", "data"} <= payload.keys():
+            raise CorruptState(f"delivery task {task.id} has a malformed payload: {sorted(payload)}")
         receiver = self._receivers.get(payload["receiver"])
         if receiver is None or receiver.message_type.TYPE != payload["type"]:
-            raise ContractViolation(
+            raise CorruptState(
                 f"delivery task {task.id} is for {payload['receiver']!r} / {payload['type']!r}, "
                 "which this version does not register"
             )
         try:
             message = receiver.message_type.model_validate(payload["data"])
         except ValidationError as e:
-            raise ContractViolation(
-                f"delivery task {task.id} carries an invalid {payload['type']}: {e}"
-            ) from e
+            raise CorruptState(f"delivery task {task.id} carries an invalid {payload['type']}: {e}") from e
         log.info(
             "delivering message",
             extra={

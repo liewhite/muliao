@@ -125,7 +125,7 @@ class Consumer:
         self._finisher = finisher
         self._halt = halt
         self._compactor = compactor
-        self._runs: StoppableRuns[Commit] = StoppableRuns()
+        self._runs: StoppableRuns[Commit] = StoppableRuns(db.exclusive)
         # 正在进行的运行的状态，按会话：被停止时从这里取（运行的协程已被取消）
         self._active: dict[str, RunState] = {}
 
@@ -237,13 +237,13 @@ class Consumer:
 
     # ---- 停止 ----
 
-    def stop(self, session_id: str) -> bool:
+    async def stop(self, session_id: str) -> bool:
         """停止这个会话正在进行的运行；没有在运行的返回 False（调用方仍会停止会话，见 stop_session）。"""
-        return self._runs.stop(session_id)
+        return await self._runs.stop(session_id)
 
     async def stop_session(self, session_id: str) -> None:
         """用户停止会话：停下正在进行的运行（它在 _stopped 里收尾），没有在运行时直接停止会话（runtime.halt）。"""
-        if not self.stop(session_id):
+        if not await self.stop(session_id):
             await self._halt(session_id)
 
     async def _stopped(self, run_id: int, session_id: str) -> Commit:

@@ -21,8 +21,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database, utcnow
+from muliao.errors import CorruptState
 from muliao.models import Agent, Delegation, DelegationStatus, Session, Task, TaskStatus
-from muliao.platform.messaging import ContractViolation, Delivery, Messaging
+from muliao.platform.messaging import Delivery, Messaging
 from muliao.runtime.mailbox import latest_run
 from muliao.runtime.pending import AgentAnswer, pending_in
 from muliao.runtime.session_events import DelegationDispatched, Ending, SessionSettled, SessionStopped
@@ -116,7 +117,7 @@ class Delegations:
                 delegation = await _by_holder(s, holder)
                 if delegation is None:
                     # DelegationDispatched 一定先到（同一条 lane、更小的 id）：没有这一行是 bug
-                    raise ContractViolation(f"thread {event.session_id} settled unknown delegation {holder}")
+                    raise CorruptState(f"thread {event.session_id} settled unknown delegation {holder}")
                 if delegation.status == DelegationStatus.RUNNING:
                     delegations.append(delegation)
             agent = await s.get(Agent, event.agent_id)
