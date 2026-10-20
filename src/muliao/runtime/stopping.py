@@ -1,4 +1,4 @@
-"""用户停止与关停、总时限的区分。停止之后要做的事在 runtime.consumer（Consumer._stopped / _halt），设计见
+"""用户停止与关停、总时限的区分。停止之后要做的事在 runtime.steps（save_stopped）与 runtime.halt（SessionHalt），设计见
 docs/architecture.md「停止会话」。
 
 运行放在单独的子任务里，用户停止只取消它；worker 的任务没被取消，所以「子任务被取消、外层没被取消」就是用户停止，
