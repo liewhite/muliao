@@ -11,6 +11,7 @@ from muliao.delegations.tables import Delegation, DelegationStatus
 from muliao.errors import InvalidInput
 from muliao.platform.tables import Task, TaskKind
 from muliao.sessions.holds import hold_in
+from muliao.sessions.kinds import SessionKind
 from muliao.sessions.settlement import Delivered, deliver_in
 from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 from tests.scripted import scripted
@@ -71,7 +72,7 @@ async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_
                 agent=other,
                 thread="review",
                 prompt="y",
-                private=False,
+                kind=SessionKind.THREAD,
                 call_id=None,
                 awaited=False,
                 key="k",
@@ -179,7 +180,7 @@ async def test_a_thread_that_settles_before_the_dispatch_is_delivered_still_repo
             agent=reviewer,
             thread="review",
             prompt="check",
-            private=False,
+            kind=SessionKind.THREAD,
             call_id=None,
             awaited=False,
             key="k",
@@ -299,7 +300,7 @@ async def test_reconcile_settles_delegations_whose_failure_hook_failed(
             agent=reviewer,
             thread="review",
             prompt="check",
-            private=False,
+            kind=SessionKind.THREAD,
             call_id=None,
             awaited=False,
             key="k",
@@ -350,7 +351,7 @@ async def test_an_outcome_is_delivered_even_if_the_threads_agent_was_deleted_mea
             agent=reviewer,
             thread="review",
             prompt="check",
-            private=False,
+            kind=SessionKind.THREAD,
             call_id=None,
             awaited=False,
             key="k",

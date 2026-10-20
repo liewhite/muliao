@@ -25,6 +25,7 @@ from muliao.sessions.events import DelegationDispatched, Ending, Receive, Receiv
 from muliao.sessions.history import latest_answer, load_context
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import has_active_in, hold_in
+from muliao.sessions.kinds import OWNED_BY_PARENT, SessionKind, policy_of
 from muliao.sessions.mailbox import latest_run, post_in, queued_in
 from muliao.sessions.pending import pending_questions
 from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
@@ -52,10 +53,10 @@ class NewSession:
 
     agent_id: str
     title: str
-    # 委派产生的 thread：父会话与 thread 名；private 为 ask_agent 开出的、用户只读的 thread
+    # 委派产生的 thread：父会话、thread 名与种类
     parent_session_id: str | None = None
     thread: str | None = None
-    private: bool = False
+    kind: SessionKind = SessionKind.CONVERSATION
     # 发送方预先分配的会话 id（经定向命令异步投递时，发送方要立即告诉它的调用方会话 id，见 Receive）；None 时生成
     id: str | None = None
 
@@ -118,8 +119,8 @@ def _sender_of(session: Session) -> tuple[Origin, str | None]:
 def _check_may_continue(session: Session, origin: Origin, origin_ref: str | None) -> None:
     """续写规则：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话。"""
     if origin == Origin.USER:
-        if session.private:
-            raise Conflict(f"session {session.id} is a private thread of another agent and is read-only")
+        if not policy_of(session.kind).user_writable:
+            raise Conflict(f"session {session.id} is a {session.kind} of another agent and is read-only")
         return
     if _sender_of(session) != (origin, origin_ref):
         log.warning(
@@ -143,9 +144,12 @@ async def create_session(
 ) -> Session:
     """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
     await ensure_agent_active_in(s, spec.agent_id)
-    if (spec.parent_session_id is not None) != (origin == Origin.DELEGATION):
+    if (spec.parent_session_id is not None) != (origin == Origin.DELEGATION) or (
+        spec.kind != SessionKind.CONVERSATION
+    ) != (origin == Origin.DELEGATION):
         raise ValueError(
-            f"only delegation creates child sessions, got {origin} with parent {spec.parent_session_id}"
+            f"only delegation creates threads, got {origin} creating a {spec.kind} with parent "
+            f"{spec.parent_session_id}"
         )
     if origin == Origin.DELEGATION and spec.parent_session_id != origin_ref:
         raise ValueError(
@@ -160,7 +164,7 @@ async def create_session(
         origin_ref=None if origin == Origin.DELEGATION else origin_ref,
         parent_session_id=spec.parent_session_id,
         thread=spec.thread,
-        private=spec.private,
+        kind=spec.kind,
     )
     s.add(session)
     await s.flush()
@@ -239,7 +243,7 @@ def receive_command(inbound: Inbound) -> Receive:
             new_session=None,
         )
     spec = inbound.session
-    if spec.id is None or spec.parent_session_id is not None or spec.private:
+    if spec.id is None or spec.kind != SessionKind.CONVERSATION:
         raise ValueError(f"a Receive command creates a top-level session with a preassigned id, got {spec}")
     return Receive(
         origin=inbound.origin,
@@ -320,11 +324,11 @@ async def delete_sessions(
     任一被删会话忙时拒绝（判断只看会话自己的数据），避免运行结果无处提交、工具写到被删的目录。交给被删会话、
     还没结清的委派结清为「被删除」（SessionSettled，委派领域交回发起方）。
     """
-    doomed = await _with_private_threads_in(s, roots)
+    doomed = await _with_owned_threads_in(s, roots)
     for session_id in await busy_among_in(s, queue, doomed):
         # 错误也会交还给模型，不带 id；定位信息记在日志里
         log.info("session deletion refused: busy", extra={"session_id": session_id})
-        what = "the session" if session_id in {x.id for x in roots} else "one of its private threads"
+        what = "the session" if session_id in {x.id for x in roots} else "one of the threads it owns"
         raise Conflict(
             f"{what} is busy (a run is queued or running, or background jobs or delegated work are still "
             "going); stop it first, then delete"
@@ -347,14 +351,14 @@ async def delete_sessions(
     log.info("sessions deleted", extra={"session_ids": sorted(doomed)})
 
 
-async def _with_private_threads_in(s: AsyncSession, roots: Sequence[Session]) -> dict[str, Session]:
-    """这些会话连同它们（逐层）的私有 thread：删除时一起删除。"""
+async def _with_owned_threads_in(s: AsyncSession, roots: Sequence[Session]) -> dict[str, Session]:
+    """这些会话连同（逐层）归它们所有的 thread（KindPolicy.owned_by_parent）：删除时一起删除。"""
     doomed = {x.id: x for x in roots}
     frontier = list(doomed)
     while frontier:
         children = (
             await s.scalars(
-                select(Session).where(Session.parent_session_id.in_(frontier), Session.private.is_(True))
+                select(Session).where(Session.parent_session_id.in_(frontier), Session.kind.in_(OWNED_BY_PARENT))
             )
         ).all()
         frontier = [c.id for c in children if c.id not in doomed]
@@ -372,7 +376,7 @@ async def busy_among_in(s: AsyncSession, queue: TaskQueue, sessions: Mapping[str
 async def busy_sessions_of_agent_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> list[str]:
     """删除这个 agent 时会被删除、此刻忙着的会话（它的会话与它们的私有 thread）。"""
     roots = list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())
-    return await busy_among_in(s, queue, await _with_private_threads_in(s, roots))
+    return await busy_among_in(s, queue, await _with_owned_threads_in(s, roots))
 
 
 async def agent_busy_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> bool:
@@ -404,7 +408,7 @@ class ThreadView:
     session_id: str
     thread: str
     agent_id: str
-    private: bool
+    kind: SessionKind
     state: ThreadState
 
 
@@ -426,7 +430,7 @@ class Threads:
         )
 
     async def open(
-        self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, private: bool
+        self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, kind: SessionKind
     ) -> Session:
         """取已有 thread 或新建。
 
@@ -440,8 +444,8 @@ class Threads:
                 raise InvalidInput(
                     f"thread {thread!r} already belongs to another agent; use a different thread name"
                 )
-            if existing.private != private:
-                tool = "ask_agent" if existing.private else "delegate_task"
+            if existing.kind != kind:
+                tool = policy_of(existing.kind).continued_by
                 raise InvalidInput(f"thread {thread!r} was started with {tool}; use {tool} to continue it")
             return existing
         return await create_session(
@@ -449,7 +453,7 @@ class Threads:
             origin=Origin.DELEGATION,
             origin_ref=parent_id,
             spec=NewSession(
-                agent_id=agent.id, title=thread, parent_session_id=parent_id, thread=thread, private=private
+                agent_id=agent.id, title=thread, parent_session_id=parent_id, thread=thread, kind=kind
             ),
         )
 
@@ -457,7 +461,7 @@ class Threads:
         self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, prompt: str
     ) -> Received:
         """不交回结局的委派（delegate_task）：往公开 thread 的信箱投一封用户在等的信（thread 不存在则新建）。"""
-        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, private=False)
+        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, kind=SessionKind.THREAD)
         inbound = Inbound(
             origin=Origin.DELEGATION, origin_ref=parent_id, content=prompt, session=child.id, awaited=True
         )
@@ -471,7 +475,7 @@ class Threads:
         agent: AgentInfo,
         thread: str,
         prompt: str,
-        private: bool,
+        kind: SessionKind,
         call_id: str | None,
         awaited: bool,
         key: str,
@@ -489,7 +493,7 @@ class Threads:
             if child is None:
                 raise RuntimeError(f"delegation {holder} points to a missing thread {existing}")
             return child
-        child = await self.open(s, parent_id=owner_id, agent=agent, thread=thread, private=private)
+        child = await self.open(s, parent_id=owner_id, agent=agent, thread=thread, kind=kind)
         await hold_in(s, owner_id, holder, call_id)
         await receive(
             s,
@@ -537,7 +541,7 @@ class Threads:
                 session_id=child.id,
                 thread=_thread_of(child),
                 agent_id=child.agent_id,
-                private=child.private,
+                kind=child.kind,
                 state=await self.state(s, child),
             )
             for child in await threads_of(s, parent_id)

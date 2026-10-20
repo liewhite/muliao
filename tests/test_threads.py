@@ -11,6 +11,7 @@ from muliao.errors import Conflict, Forbidden
 from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.kinds import SessionKind
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Message, Session
 from tests.scripted import scripted
@@ -82,7 +83,7 @@ async def test_ask_agent_returns_answer_and_follow_up_keeps_thread_context(conta
     assert await last_answer(container, parent.id) == "verdict: reviewed v2"
 
     [child] = await threads_of(container, parent.id)
-    assert child.private and child.thread == "review"
+    assert child.kind == SessionKind.PRIVATE_THREAD and child.thread == "review"
     # 第二次 ask 时对方看得到第一次的上下文
     assert child_seen == [1, 3]
     # 私有 thread 和其他会话一样由自己的运行处理，消息记在运行名下
@@ -169,7 +170,7 @@ async def test_delegate_task_runs_in_public_thread_without_returning_the_answer(
 
     assert await last_answer(container, parent.id) == "lead: delegated to worker in thread 'report'"
     [child] = await threads_of(container, parent.id)
-    assert not child.private and await last_answer(container, child.id) == "report: write it"
+    assert child.kind == SessionKind.THREAD and await last_answer(container, child.id) == "report: write it"
     # 公开 thread 的回答推送给用户
     deliveries = await tasks_of(container, TaskKind.DELIVER)
     assert sorted(d.session_id for d in deliveries) == sorted([parent.id, child.id])
@@ -252,7 +253,7 @@ async def test_deleting_parent_deletes_private_threads_and_keeps_public_ones(con
     )
     parent = await start(container, lead, "go")
     await drain(container)
-    pub, priv = sorted(await threads_of(container, parent.id), key=lambda t: t.private)
+    pub, priv = sorted(await threads_of(container, parent.id), key=lambda t: t.kind == SessionKind.PRIVATE_THREAD)
 
     await container.sessions.delete(parent.id)
 
@@ -298,7 +299,7 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
                 awaited=False,
             )
         )
-    with pytest.raises(ValueError, match="only delegation creates child sessions"):
+    with pytest.raises(ValueError, match="only delegation creates threads"):
         await container.sessions.receive(
             Inbound(
                 origin=Origin.USER,
@@ -339,7 +340,7 @@ async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_
         [child] = await threads_of(container, parent.id)
 
         # 私有 thread 不能单独删除；随父会话删除时，它正在运行就拒绝
-        with pytest.raises(Conflict, match="private thread"):
+        with pytest.raises(Conflict, match="owned by the session that opened it"):
             await container.sessions.delete(child.id)
         # 父会话也在等这个 thread（它的占用还在）：忙
         with pytest.raises(Conflict, match="busy"):

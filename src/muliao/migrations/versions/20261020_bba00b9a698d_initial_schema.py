@@ -160,7 +160,7 @@ def upgrade() -> None:
         sa.Column("origin_ref", sa.String(length=64), nullable=True),
         sa.Column("parent_session_id", sa.String(length=36), nullable=True),
         sa.Column("thread", sa.String(length=100), nullable=True),
-        sa.Column("private", sa.Boolean(), nullable=False),
+        sa.Column("kind", sa.String(length=16), nullable=False),
         sa.Column("unread", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),

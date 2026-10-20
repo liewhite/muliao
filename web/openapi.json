@@ -3779,6 +3779,15 @@
         ],
         "title": "SessionDetail"
       },
+      "SessionKind": {
+        "type": "string",
+        "enum": [
+          "conversation",
+          "thread",
+          "private_thread"
+        ],
+        "title": "SessionKind"
+      },
       "SessionOut": {
         "properties": {
           "id": {
@@ -3829,9 +3838,16 @@
             ],
             "title": "Thread"
           },
-          "private": {
+          "kind": {
+            "$ref": "#/components/schemas/SessionKind"
+          },
+          "user_writable": {
             "type": "boolean",
-            "title": "Private"
+            "title": "User Writable"
+          },
+          "deletable": {
+            "type": "boolean",
+            "title": "Deletable"
           },
           "unread": {
             "type": "boolean",
@@ -3857,7 +3873,9 @@
           "origin_ref",
           "parent_session_id",
           "thread",
-          "private",
+          "kind",
+          "user_writable",
+          "deletable",
           "unread",
           "created_at",
           "updated_at"

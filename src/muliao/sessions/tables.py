@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from muliao.platform.db import Base, StrEnumType, UTCDateTime, utcnow
 from muliao.platform.tables import agent_ref
 from muliao.platform.tooling import Origin
+from muliao.sessions.kinds import SessionKind
 
 
 class Session(Base):
@@ -26,8 +27,8 @@ class Session(Base):
         ForeignKey("sessions.id", ondelete="SET NULL", name="fk_sessions_parent_session_id"), index=True
     )
     thread: Mapped[str | None] = mapped_column(String(100))
-    # 私有子会话归父会话所有：不进收件箱，用户只读，随父会话删除
-    private: Mapped[bool] = mapped_column(default=False)
+    # 会话的种类决定它的规则（sessions.kinds）；thread 种类只由委派创建（origin 为 delegation）
+    kind: Mapped[SessionKind] = mapped_column(StrEnumType(SessionKind))
     unread: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)

@@ -291,7 +291,7 @@ function ThreadRow({ thread, agents }: { thread: Session; agents: Agent[] | unde
       <GitBranch className="size-3.5 shrink-0 text-muted" />
       <span className="truncate font-medium">{thread.thread}</span>
       <span className="truncate text-muted">{agentLabel(agents, thread.agent_id)}</span>
-      {thread.private && (
+      {thread.kind === 'private_thread' && (
         <Chip size="sm" variant="soft">
           <Lock className="size-3" />
           私有
@@ -578,9 +578,11 @@ export default function SessionView() {
             <Archive className="size-4" />
             压缩
           </Button>
-          <Button isIconOnly size="sm" variant="ghost" onPress={() => void remove()} aria-label="删除会话">
-            <Trash2 className="size-4" />
-          </Button>
+          {session?.deletable && (
+            <Button isIconOnly size="sm" variant="ghost" onPress={() => void remove()} aria-label="删除会话">
+              <Trash2 className="size-4" />
+            </Button>
+          )}
         </>
       }
       footer={
@@ -600,7 +602,7 @@ export default function SessionView() {
               </Button>
             )}
             <ErrorAlert error={action.error} />
-            {session?.private ? (
+            {session && !session.user_writable ? (
               <div className="flex items-center justify-center gap-1.5 py-1 text-sm text-muted">
                 <Lock className="size-4" />
                 这是另一个 agent 向它发起的私有 thread，只能查看

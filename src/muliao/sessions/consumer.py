@@ -24,7 +24,6 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, no_commit
-from muliao.platform.tooling import Audience
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
@@ -32,6 +31,7 @@ from muliao.sessions.finish import RunEnd, RunFinisher, load_session
 from muliao.sessions.halt import Halted, SessionHalt
 from muliao.sessions.history import load_context
 from muliao.sessions.holds import called_in
+from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import RunPayload, queued_in
 from muliao.sessions.pending import (
@@ -184,10 +184,10 @@ class Consumer:
                 if state.messages
                 else self._finisher.idle(state)
             )
-        # 运行开始时就定下（工具与指令随之确定）：私有 thread 的回答交给发问的 agent；否则看它处理过的、和这次要处理的
-        # 信件里有没有用户在等的
+        # 运行开始时就定下（工具与指令随之确定）：会话种类决定回答交给谁（KindPolicy.audience）；用户是否在等看它处理
+        # 过的、和这次要处理的信件
         awaited = any(m.awaited for m in [*state.handled, *queued])
-        audience = Audience.AGENT if session.private else Audience.USER if awaited else Audience.NONE
+        audience = policy_of(session.kind).audience(awaited)
         scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, audience=audience)
         profile = self._tool_groups.profile(agent.id, agent.tool_groups)
         self._live.begin(session_id, last_message)

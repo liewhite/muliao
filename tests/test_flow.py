@@ -22,6 +22,7 @@ from muliao.platform.worker import Worker
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
 from muliao.sessions.consumer import RunHandler
 from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.kinds import SessionKind
 from muliao.sessions.tables import Mail
 from tests.scripted import scripted
 
@@ -284,7 +285,7 @@ async def test_delegate_task_opens_public_thread_and_notifies_user(container, ma
     assert len(children) == 1
     child = children[0]
     assert child.origin == Origin.DELEGATION and child.parent_session_id == parent.id
-    assert child.thread == "x" and not child.private
+    assert child.thread == "x" and child.kind == SessionKind.THREAD
     assert (await container.sessions.history(child.id))[-1].parts[0].content == "summary of X"
     deliver = await tasks_of(container, TaskKind.DELIVER)
     assert [d.session_id for d in deliver] == [child.id]

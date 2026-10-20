@@ -10,6 +10,7 @@ from sqlalchemy import select
 from muliao.delegations.tables import Delegation, DelegationStatus
 from muliao.errors import Conflict
 from muliao.platform.tables import TaskKind, TaskStatus
+from muliao.sessions.kinds import SessionKind
 from muliao.sessions.tables import Mail, MailKind, MailState
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, start, tasks_of
@@ -95,7 +96,7 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
             agent=target,
             thread="review",
             prompt="check",
-            private=False,
+            kind=SessionKind.THREAD,
             call_id=None,
             awaited=True,
             key="call-1",
@@ -132,7 +133,7 @@ async def test_nothing_is_reported_once_the_parent_session_is_gone(container, ma
             agent=target,
             thread="review",
             prompt="check",
-            private=False,
+            kind=SessionKind.THREAD,
             call_id=None,
             awaited=True,
             key="call-2",
@@ -329,7 +330,7 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
             agent=target,
             thread="review",
             prompt="check",
-            private=False,
+            kind=SessionKind.THREAD,
             call_id=None,
             awaited=True,
             key="call-3",
@@ -374,7 +375,7 @@ async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_r
                 agent=target,
                 thread="review",
                 prompt=prompt,
-                private=False,
+                kind=SessionKind.THREAD,
                 call_id=None,
                 awaited=False,
                 key=prompt,
@@ -523,7 +524,7 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
             agent=target,
             thread="review",
             prompt="check",
-            private=False,
+            kind=SessionKind.THREAD,
             call_id=None,
             awaited=False,
             key="call-5",

@@ -16,6 +16,7 @@ from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.events import Ending
 from muliao.sessions.events import RunEnded as RunEndedEvent
 from muliao.sessions.holds import has_active_in
+from muliao.sessions.kinds import policy_of
 from muliao.sessions.mailbox import queued_in, wake_in
 from muliao.sessions.settlement import settle_in, unsettled_in
 from muliao.sessions.steps import RunState
@@ -70,7 +71,7 @@ class RunFinisher:
             session, agent = await load_session(s, state.session.id)
             if state.messages:
                 session.updated_at = utcnow()
-                session.unread = not session.private
+                session.unread = policy_of(session.kind).listed
                 # 推送、反思调度由各自的领域订阅（运行结束后随即投递）
                 self._messaging.publish_in(
                     s,

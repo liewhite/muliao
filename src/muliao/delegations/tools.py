@@ -12,7 +12,7 @@ from muliao.agents.api import AgentService
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-from muliao.sessions.api import Threads, validate_thread
+from muliao.sessions.api import SessionKind, Threads, policy_of, validate_thread
 
 _ANSWER_PREVIEW = 500
 
@@ -88,7 +88,7 @@ def delegation_toolset(
                     agent=target,
                     thread=thread,
                     prompt=task,
-                    private=False,
+                    kind=SessionKind.THREAD,
                     call_id=None,
                     awaited=ctx.deps.user_waits,
                     key=ctx.tool_call_id,
@@ -129,7 +129,7 @@ def delegation_toolset(
                 agent=target,
                 thread=thread,
                 prompt=message,
-                private=True,
+                kind=SessionKind.PRIVATE_THREAD,
                 call_id=ctx.tool_call_id,
                 awaited=ctx.deps.user_waits,
                 key=ctx.tool_call_id,
@@ -166,7 +166,7 @@ def delegation_toolset(
             ThreadInfo(
                 thread=v.thread,
                 agent=names[v.agent_id],
-                private=v.private,
+                private=not policy_of(v.kind).user_writable,
                 status=v.state.status,
                 answer=truncate(v.state.text, _ANSWER_PREVIEW) if v.state.status == "done" else None,
             )

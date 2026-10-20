@@ -32,6 +32,7 @@ from muliao.sessions.conversation import (
 )
 from muliao.sessions.events import AgentSessionsCleared, Receive
 from muliao.sessions.halt import Halted
+from muliao.sessions.kinds import LISTED, policy_of
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.tables import Compaction, Mail, Message, Session
@@ -136,10 +137,10 @@ class SessionService:
     async def list(
         self, *, agent_id: str | None, origins: Sequence[Origin] | None, limit: int, offset: int
     ) -> list[Session]:
-        """会话列表只含用户可见的会话；私有 thread 从父会话进入。"""
+        """会话列表只含列出的种类（KindPolicy.listed）；私有 thread 从父会话进入。"""
         query = (
             select(Session)
-            .where(Session.private.is_(False))
+            .where(Session.kind.in_(LISTED))
             .order_by(Session.updated_at.desc())
             .limit(limit)
             .offset(offset)
@@ -246,12 +247,13 @@ class SessionService:
         )
 
     async def delete(self, session_id: str) -> None:
-        """用户删除会话（规则见 conversation.delete_sessions）。私有 thread 属于发问的会话，随它删除，不能单独删除。"""
+        """用户删除会话（规则见 conversation.delete_sessions）。归父会话所有的 thread 随它删除，不能单独删除。"""
         async with self._db.transaction() as s:
             session = await self._get(s, session_id)
-            if session.private:
+            if policy_of(session.kind).owned_by_parent:
                 raise Conflict(
-                    f"session {session_id} is a private thread; delete the session that asked it instead"
+                    f"session {session_id} is a {session.kind} owned by the session that opened it; "
+                    "delete that session instead"
                 )
             await delete_sessions(s, self._queue, self._messaging, [session])
 

@@ -15,8 +15,10 @@ from muliao.sessions.api import (
     NewSession,
     QuestionAnswer,
     RunEvent,
+    SessionKind,
     call_result,
     default_title,
+    policy_of,
 )
 from muliao.sessions.tables import Mail, MailKind, MailState, Session
 
@@ -29,10 +31,13 @@ class SessionOut(BaseModel):
     title: str
     origin: Origin
     origin_ref: str | None
-    # 委派产生的子会话：父会话与 thread 名；private 为 ask_agent 开出的、用户只读的 thread
+    # 委派产生的子会话：父会话与 thread 名；种类决定规则（private_thread：ask_agent 开出的、用户只读的 thread）
     parent_session_id: str | None
     thread: str | None
-    private: bool
+    kind: SessionKind
+    # 种类的规则（sessions.kinds.KindPolicy）随会话下发，界面不另写一份：用户能否在里面发消息、能否单独删除
+    user_writable: bool
+    deletable: bool
     unread: bool
     created_at: datetime
     updated_at: datetime
@@ -47,7 +52,9 @@ class SessionOut(BaseModel):
             origin_ref=s.origin_ref,
             parent_session_id=s.parent_session_id,
             thread=s.thread,
-            private=s.private,
+            kind=s.kind,
+            user_writable=policy_of(s.kind).user_writable,
+            deletable=not policy_of(s.kind).owned_by_parent,
             unread=s.unread,
             created_at=s.created_at,
             updated_at=s.updated_at,

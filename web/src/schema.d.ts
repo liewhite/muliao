@@ -1438,6 +1438,11 @@ export interface components {
             threads: components["schemas"]["SessionOut"][];
             live: components["schemas"]["LiveRunOut"] | null;
         };
+        /**
+         * SessionKind
+         * @enum {string}
+         */
+        SessionKind: "conversation" | "thread" | "private_thread";
         /** SessionOut */
         SessionOut: {
             /** Id */
@@ -1453,8 +1458,11 @@ export interface components {
             parent_session_id: string | null;
             /** Thread */
             thread: string | null;
-            /** Private */
-            private: boolean;
+            kind: components["schemas"]["SessionKind"];
+            /** User Writable */
+            user_writable: boolean;
+            /** Deletable */
+            deletable: boolean;
             /** Unread */
             unread: boolean;
             /**
