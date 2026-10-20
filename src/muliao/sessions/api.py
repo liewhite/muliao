@@ -18,7 +18,6 @@ from muliao.sessions.live import RunDeltaEvent, RunEvent, RunItemEvent, SavedEve
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.service import default_title
-from muliao.sessions.threads import Threads
 from muliao.sessions.transcript import Item
 from muliao.sessions.work import AgentWork
 
@@ -40,7 +39,6 @@ __all__ = [
     "Inbound",
     "NewSession",
     "SessionInfo",
-    "Threads",
     "agent_deletion_blocked_in",
     "check_receivable_in",
     "SessionWork",

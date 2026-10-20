@@ -109,6 +109,20 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
 }
 
 
+def _takes_a_transaction(fn: object) -> bool:
+    """参数里有调用方的事务：名为 s，或注解是 AsyncSession（模块用 from __future__ import annotations 时注解是字符串）。"""
+    import inspect
+
+    for name, param in inspect.signature(fn).parameters.items():
+        if name == "self":
+            continue
+        annotation = param.annotation
+        text = annotation if isinstance(annotation, str) else getattr(annotation, "__name__", "")
+        if name == "s" or "AsyncSession" in str(text):
+            return True
+    return False
+
+
 def test_public_functions_in_the_callers_transaction_are_reviewed_read_only_queries():
     import importlib
     import inspect
@@ -120,8 +134,10 @@ def test_public_functions_in_the_callers_transaction_are_reviewed_read_only_quer
         module = importlib.import_module(f"muliao.{domain}.api")
         for name in module.__all__:
             obj = getattr(module, name)
-            if inspect.isfunction(obj):
-                params = list(inspect.signature(obj).parameters)
-                if params and params[0] == "s":
-                    found.setdefault(domain, set()).add(name)
+            if inspect.isfunction(obj) and _takes_a_transaction(obj):
+                found.setdefault(domain, set()).add(name)
+            elif inspect.isclass(obj):
+                for method_name, method in inspect.getmembers(obj, inspect.isfunction):
+                    if not method_name.startswith("_") and _takes_a_transaction(method):
+                        found.setdefault(domain, set()).add(f"{name}.{method_name}")
     assert found == READ_ONLY_IN_CALLER_TRANSACTION
