@@ -8,6 +8,10 @@ from muliao.models import TaskKind, TaskStatus
 from muliao.runtime.tasks import no_commit
 
 
+async def _nothing(_s, _task) -> None:  # noqa: ANN001
+    """这些测试只看队列本身的状态。"""
+
+
 async def _enqueue(container, lane: str, agent: str):
     async with container.db.transaction() as s:
         return container.queue.enqueue(
@@ -47,7 +51,7 @@ async def test_transient_failure_backs_off_then_fails_after_max_attempts(contain
                 (await s.get(Task, task.id)).not_before = utcnow() - timedelta(seconds=1)
             claimed = await q.claim()
         assert claimed.attempts == attempt
-        failed = await q.fail(claimed.id, "boom", retryable=True)
+        failed = await q.fail(claimed.id, "boom", retryable=True, on_final=_nothing)
 
     assert failed.status == TaskStatus.FAILED
     assert failed.error == "boom"
@@ -59,7 +63,7 @@ async def test_non_retryable_failure_fails_immediately_and_can_be_retried_manual
     q = container.queue
     await q.claim()
 
-    failed = await q.fail(task.id, "bug", retryable=False)
+    failed = await q.fail(task.id, "bug", retryable=False, on_final=_nothing)
     assert failed.status == TaskStatus.FAILED
 
     retried = await q.retry(task.id)
@@ -72,7 +76,7 @@ async def test_retry_is_refused_while_lane_has_newer_unfinished_work(container, 
     q = container.queue
     old = await _enqueue(container, "a", alpha)
     await q.claim()
-    await q.fail(old.id, "bug", retryable=False)
+    await q.fail(old.id, "bug", retryable=False, on_final=_nothing)
     await _enqueue(container, "a", alpha)
 
     with pytest.raises(Conflict):

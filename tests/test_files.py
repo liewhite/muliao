@@ -231,7 +231,13 @@ def test_migrations_add_empty_attachments_and_answers_to_existing_turns(tmp_path
     migrate(path)
     with sqlite3.connect(path) as conn:
         payload = conn.execute("SELECT payload FROM tasks").fetchone()[0]
-    assert json.loads(payload) == {"prompt": "hi", "reply_to": "user", "attachments": [], "answers": {}}
+    assert json.loads(payload) == {
+        "prompt": "hi",
+        "reply_to": "user",
+        "attachments": [],
+        "answers": {},
+        "report_to": None,
+    }
 
 
 async def test_image_from_an_earlier_turn_is_still_expanded_after_loading_history(

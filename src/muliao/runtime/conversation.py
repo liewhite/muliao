@@ -56,6 +56,17 @@ class NewSession:
     private: bool = False
 
 
+class ReportTo(BaseModel):
+    """这一轮结束（完成、被停止或最终失败）时把结果作为事件交给哪个会话：delegate_task(report_back) 的父会话
+    （runtime.reports）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_id: str
+    # 父会话发起委派的那一轮的去向：结果事件随它推送
+    reply_to: ReplyTo
+
+
 @dataclass(frozen=True)
 class Inbound:
     """一个事件：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 交给某个 agent 处理一轮」。
@@ -73,6 +84,8 @@ class Inbound:
     attachments: tuple[str, ...] = ()
     # 对这个会话里挂起提问的回答：tool_call_id -> 每题的回答（runtime.questions）；只有用户会带
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
+    # 这一轮的结果要交回的会话；只有 delegate_task(report_back) 会带
+    report_to: ReportTo | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +159,8 @@ class TurnPayload(BaseModel):
     attachments: list[str]
     # 对这个会话里挂起提问的回答：tool_call_id -> 交给模型的结果（runtime.questions）
     answers: dict[str, AskResult]
+    # 这一轮结束时把结果交回的会话（delegate_task(report_back)），否则为 None
+    report_to: ReportTo | None
 
     @classmethod
     def of(cls, task: Task) -> "TurnPayload":
@@ -234,6 +249,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
             reply_to=inbound.reply_to,
             attachments=list(inbound.attachments),
             answers=answers,
+            report_to=inbound.report_to,
         ).dump(),
     )
     log.info(
@@ -395,15 +411,19 @@ class Threads:
         agent: Agent,
         thread: str,
         prompt: str,
+        report_to: ReportTo | None,
     ) -> Received:
-        """在公开 thread 里投递一轮（thread 不存在则新建）；回答推送给用户，调用方不等。返回投递到的会话与这一轮。"""
+        """在公开 thread 里投递一轮（thread 不存在则新建），调用方不等。返回投递到的会话与这一轮。
+
+        回答推送给用户；要交回调用方时（report_to）不推送，结果作为事件交给调用方的会话，由它决定怎么告诉用户。"""
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, private=False)
         inbound = Inbound(
             origin=Origin.DELEGATION,
             origin_ref=parent_id,
             content=prompt,
             session=child.id,
-            reply_to=ReplyTo.USER,
+            reply_to=ReplyTo.USER if report_to is None else ReplyTo.NONE,
+            report_to=report_to,
         )
         return await receive(s, self._queue, inbound)
 

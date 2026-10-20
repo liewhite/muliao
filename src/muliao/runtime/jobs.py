@@ -364,11 +364,6 @@ class JobRunner:
                 "background jobs left by an unexpected stop", extra={"job_ids": [j.id for j in stale]}
             )
 
-    async def run_forever(self) -> None:
-        while True:
-            await asyncio.sleep(self.check_seconds)
-            await self.check()
-
     async def stop(self) -> None:
         """正常关停：杀掉所有后台任务的进程组，记为被中断并告诉 agent（事件在重启后处理）。"""
         handles = dict(self._running)

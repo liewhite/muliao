@@ -114,3 +114,18 @@ def test_existing_deliver_tasks_become_notifications_and_only_reference_them(tmp
     assert payloads == [('{"notification_id":7}',), ('{"notification_id":9}',)]
     # 沿用 task id 后，新通知的 id 仍在它们之后（「已读到哪一条」的游标单调）
     assert next_id == 10
+
+
+def test_existing_turn_payloads_get_an_empty_report_to(tmp_path):
+    path = tmp_path / "m.db"
+    migrate(path, "21fe4c2a53ff")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO tasks (kind, lane, payload, status, attempts, not_before, created_at) VALUES "
+            '(\'turn\', \'l\', \'{"prompt": "hi", "reply_to": "user", "attachments": [], "answers": {}}\', '
+            "'done', 1, '2026-01-01', '2026-01-01')"
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        [(payload,)] = conn.execute("select payload from tasks").fetchall()
+    assert '"report_to":null' in payload.replace(" ", "")

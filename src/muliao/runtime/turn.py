@@ -29,7 +29,7 @@ from muliao.runtime.answers import Answer
 from muliao.runtime.attachments import copy_to_workspace, references
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import CompactionScheduler, SessionContext, load_context
-from muliao.runtime.conversation import TurnPayload
+from muliao.runtime.conversation import ReportTo, TurnPayload, failure_of
 from muliao.runtime.events import TurnEvents, consume_in, dispatch_in, take_in
 from muliao.runtime.questions import (
     ASK_USER,
@@ -40,6 +40,7 @@ from muliao.runtime.questions import (
     waiting_text,
 )
 from muliao.runtime.redaction import redact_messages
+from muliao.runtime.reports import failed_text, finished_text, report_in
 from muliao.runtime.runner import AgentRuntime, RunCapture, ToolGroups
 from muliao.runtime.scope import RunScope
 from muliao.runtime.stopping import StoppableRuns, Stopped, stopped_messages, stopped_tool_calls
@@ -65,6 +66,8 @@ class PreparedTurn:
     event_indices: tuple[int, ...]
     # 这一轮的回答交给谁：轮次自己的去向，或带上的事件要求推送给用户
     reply_to: ReplyTo
+    # 这一轮结束时把结果交回的会话（delegate_task(report_back)，见 runtime.reports）
+    report_to: ReportTo | None
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,7 @@ class TurnOutput:
     reply_to: ReplyTo
     # 这一轮处理掉的会话事件，提交时记下
     event_ids: tuple[int, ...]
+    report_to: ReportTo | None
     # 用户停止了这一轮：messages 是停止前已经产生的部分（见 stopping.stopped_messages）
     stopped: bool = False
 
@@ -200,6 +204,7 @@ class TurnRunner:
             events=events,
             event_indices=indices,
             reply_to=reply_to,
+            report_to=payload.report_to,
         )
 
     def _output(
@@ -227,6 +232,7 @@ class TurnRunner:
                 mark_events(redact_messages(messages), turn.event_indices),
                 turn.reply_to,
                 turn.events.ids,
+                turn.report_to,
                 stopped=True,
             )
         return TurnOutput(
@@ -236,6 +242,7 @@ class TurnRunner:
             mark_events(redact_messages(result.new_messages()), turn.event_indices),
             turn.reply_to,
             turn.events.ids,
+            turn.report_to,
         )
 
     def stop(self, session_id: str) -> bool:
@@ -253,6 +260,14 @@ class TurnRunner:
         )
         await s.flush()
         await consume_in(s, out.event_ids, turn_id)
+        if out.report_to is not None:
+            await report_in(
+                s,
+                self._queue,
+                out.report_to,
+                session,
+                finished_text(session, agent, out.answer, stopped=out.stopped),
+            )
         # 这一轮运行期间到达的事件：现在需要一轮来处理（这一轮停在提问上时等用户，见 events.dispatch_in）
         await dispatch_in(s, self._queue, session, committing=turn_id)
         session.updated_at = utcnow()
@@ -274,7 +289,9 @@ class TurnRunner:
 
         只用于私有 thread：用户不能插话，lane 里没有排队的 turn；同一 thread 的并行调用由进程内的锁串行。
         """
-        payload = TurnPayload(prompt=prompt, reply_to=ReplyTo.AGENT, attachments=[], answers={})
+        payload = TurnPayload(
+            prompt=prompt, reply_to=ReplyTo.AGENT, attachments=[], answers={}, report_to=None
+        )
         lock = self._locks.setdefault(session_id, asyncio.Lock())
         async with lock:
             started = utcnow()
@@ -350,8 +367,9 @@ class TurnRunner:
 class TurnHandler:
     """队列里的 turn task。"""
 
-    def __init__(self, runner: TurnRunner):
+    def __init__(self, runner: TurnRunner, queue: TaskQueue):
         self._runner = runner
+        self._queue = queue
 
     async def execute(self, task: Task) -> Commit:
         if task.session_id is None:
@@ -363,3 +381,11 @@ class TurnHandler:
             await self._runner.commit_in(s, task.id, out)
 
         return commit
+
+    async def failed_in(self, s: AsyncSession, task: Task) -> None:
+        """最终失败：结果要交回的（delegate_task(report_back)），把失败原因交给发起方，它不会一直等。"""
+        report_to = TurnPayload.of(task).report_to
+        if report_to is None or task.session_id is None:
+            return
+        child, agent = await _load(s, task.session_id)
+        await report_in(s, self._queue, report_to, child, failed_text(child, agent, failure_of(task)))

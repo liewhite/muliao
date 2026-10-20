@@ -71,6 +71,9 @@ class ReflectionHandler:
         self._runtime = runtime
         self._tool_groups = tool_groups
 
+    async def failed_in(self, s: AsyncSession, task: Task) -> None:
+        """失败只需可见（任务记录、日志），没有等着结果的一方。"""
+
     async def execute(self, task: Task) -> Commit:
         from_id, to_id = task.payload["from_message_id"], task.payload["to_message_id"]
         async with self._db.transaction() as s:

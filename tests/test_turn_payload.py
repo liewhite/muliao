@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from muliao.models import ReplyTo, Task, TaskKind
-from muliao.runtime.conversation import TurnPayload
+from muliao.runtime.conversation import ReportTo, TurnPayload
 from muliao.runtime.questions import AskResult
 
 
@@ -18,12 +18,13 @@ def test_a_dumped_payload_reads_back_the_same():
         reply_to=ReplyTo.USER,
         attachments=["f1"],
         answers={"q1": AskResult(answered=False, answers=[], note="skipped")},
+        report_to=ReportTo(session_id="parent", reply_to=ReplyTo.USER),
     )
     assert TurnPayload.of(_task(TaskKind.TURN, payload.dump())) == payload
 
 
 def test_unknown_or_missing_fields_and_non_turn_tasks_fail_where_they_are_read():
-    good = {"prompt": "hi", "reply_to": "user", "attachments": [], "answers": {}}
+    good = {"prompt": "hi", "reply_to": "user", "attachments": [], "answers": {}, "report_to": None}
     with pytest.raises(ValidationError):
         TurnPayload.of(_task(TaskKind.TURN, {**good, "extra": 1}))
     with pytest.raises(ValidationError):

@@ -28,6 +28,8 @@ log = logging.getLogger(__name__)
 Clock = Callable[[], datetime]
 # handler 完成工作后返回的提交函数：在标记 task done 的同一事务里写入结果
 Commit = Callable[[AsyncSession], Awaitable[None]]
+# task 最终失败（不再重试）时，在记下失败的同一事务里由 handler 收尾（如把失败交回等着结果的会话）
+Settle = Callable[[AsyncSession, Task], Awaitable[None]]
 
 
 async def no_commit(_s: AsyncSession) -> None:
@@ -172,7 +174,7 @@ class TaskQueue:
         # 同 lane 的后续 task 现在可以领取了
         self.wake.set()
 
-    async def fail(self, task_id: int, error: str, *, retryable: bool) -> Task:
+    async def fail(self, task_id: int, error: str, *, retryable: bool, on_final: Settle) -> Task:
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)
             if task is None:
@@ -185,6 +187,7 @@ class TaskQueue:
             else:
                 task.status = TaskStatus.FAILED
                 task.finished_at = self._clock()
+                await on_final(s, task)
         # 重试时间点或同 lane 的后续 task 需要重新计算等待
         self.wake.set()
         return task

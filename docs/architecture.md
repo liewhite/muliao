@@ -120,7 +120,7 @@ Web / 触发器（定时、webhook……）/ delegate_task
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
   - `instructions`：`instructions_replace`（改自己的指令：替换恰好出现一次的片段，或追加），每次修改记一版、作者是自己。
   - `agents`：`get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己） / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
-  - `delegation`：`list_agents`（返回 name、description）/ `delegate_task` / `ask_agent` / `list_threads`（按名称指定目标 agent、按 thread 名指定子会话，见第 4 节）。
+  - `delegation`：`list_agents`（返回 name、description）/ `delegate_task` / `ask_agent` / `list_threads` / `stop_thread`（停止一个 thread 正在运行的那一轮）（按名称指定目标 agent、按 thread 名指定子会话，见第 4 节）。
   - `notify`：`notify_user`（显式 Web Push）。
   - `temp_agent`：`run_temp_agent(task, instructions?, model?)`：一次性的临时 agent，在调用方这一轮里同步运行（同一响应中的多次调用并行），返回它的最终回答。它只有文件与 shell 工具（工作目录在 `data/tmp/` 下临时创建、结束即删除）和调用方的 MCP，secret 按调用方的视角解析；没有记忆、skill、会话、反思与委派，也不能再开临时 agent。适合抓取网页并总结、分析文件这类做完即丢的事；需要长期积累的专长应 `create_agent` 后委派。临时 agent 不是沙箱：它和调用方有相同的 shell 权限、secret 与 MCP，工具说明里也这样告诉模型。模型请求数超过 `runtime.temp_agent_request_limit` 时以可纠正的错误交回调用方；其他失败（如模型 API 错误）向上传播，按调用方这一轮的失败统一处理（暂时性失败整轮重试）。工作目录在 finally 里删除；删除失败或进程中途被杀时留到下次启动，由启动时清空 `data/tmp`（只归临时 agent 使用）统一收敛，删除失败记 error 日志、不改变运行结果。启动时删不掉的目录（例如脱离进程组的后台进程还在写）同样记 error 日志后跳过，不阻止服务启动：残留目录只占空间，不影响正确性。
   - `mcp_admin`：`mcp_list`（含已停用的）/ `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_set_enabled` / `mcp_remove`。改动从下一轮起生效。
@@ -137,6 +137,7 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 | 工具 | 父 agent | 子 session | 这一轮的回答 |
 |---|---|---|---|
 | `delegate_task(agent, task, thread)` | 立即继续，不等 | 公开 thread：进收件箱，用户可追问 | 推送给用户；父 agent 拿不到 |
+| `delegate_task(..., report_back=true)` | 立即继续，不等 | 同上 | 不直接推送，作为事件交回父会话（见下文「异步 agent 回报」） |
 | `ask_agent(agent, message, thread)` | 等它答完 | 私有 thread：不进收件箱，用户只读 | 作为工具结果交回父 agent |
 
 **界面上 thread 显示在开出或续写它的那次调用处**：两个工具都把 thread 的会话 id 挂在工具结果的 metadata 上（`conventions.TOOL_THREADS`，与 `TOOL_ATTACHMENTS` 同一约定，不发给模型、随消息持久化、实时事件里也带），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新一轮）。没有任何条目引用的 thread 列在末尾「未关联到调用的 thread」：在这个约定之前开出的、开出后调用被用户停止的（停止补上的结果不带 thread）、开出后调用失败的（交还模型重试的结果不带 thread）。不为后两种补记 metadata，那会把这个约定散到停止与重试的路径里。历史里引用的 thread 不在会话的 thread 列表中，说明它已被删除，显示为「thread 已删除」。
@@ -188,6 +189,15 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 - **进程**：自成进程组（`shell.spawn_bash`，与同步 shell 共用环境与 secret 注入），`job_kill` 与关停杀掉整棵进程树。
 - **重启**：正常关停时杀掉所有后台任务；启动时（worker 开始之前）把还记为运行中的任务记为被中断，并投递事件告诉 agent，不接管旧进程。
 - **边界**：私有 thread（发问方在同步等它的回答）、反思与临时 agent（没有会话）没有自己的队列轮次来处理事件，不能开后台任务，`job_*` 工具在没有会话的运行里不出现；有后台任务在跑的会话不能删除（进程不随会话结束，结束时也无处投递），先结束它们。
+
+### 异步 agent 回报（`runtime/reports.py`）
+
+做法同 Claude Code 的后台子 agent：`delegate_task(report_back: true)` 不等结果，thread 那一轮结束时结果作为会话事件（来源 `thread:<子会话 id>`）交回发起委派的会话。turn task 的 payload 带 `report_to`（父会话与发起委派那一轮的去向，`conversation.ReportTo`），只在这里写入。
+
+- **完成或被停止**：随 thread 那一轮的提交（`TurnRunner.commit_in`）在同一个事务里投递，内容是 thread 的回答（被停止时说明停止了、附上停止前说的话）。thread 的回答不再直接推送给用户：交给父 agent 处理，父会话那一轮按原来的去向推送，不重复打扰。
+- **最终失败**：任务处理器接口有一个与成功时 `Commit` 对称的收尾点：task 最终失败（不再重试）时，队列在记下失败的同一个事务里调用处理器的 `failed_in`。turn 用它把失败原因交回；其他种类的 task 没有等着结果的一方，失败只需可见。
+- **运行中检查**：与后台任务同一个节奏（`runtime.job_check_seconds`，同一个检查循环），给还在排队或运行的这种 thread 轮次向发起方发检查事件（不推送），同一个 thread 已有事件在队列里时不再发；不需要了就用 `stop_thread` 停止它。
+- **边界**：私有 thread 的发问方在同步等回答，不能用 `report_back`；公开 thread 在父会话删除后仍然保留，那时结果无处可交，记下日志后跳过。
 
 ## 5. 上下文压缩
 

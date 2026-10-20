@@ -108,7 +108,9 @@ async def dispatch_in(
         agent_id=session.agent_id,
         session_id=session.id,
         # 只有事件的一轮：没有用户消息；推不推送由它带上的事件决定（TurnEvents.reply_to）
-        payload=TurnPayload(prompt="", reply_to=ReplyTo.NONE, attachments=[], answers={}).dump(),
+        payload=TurnPayload(
+            prompt="", reply_to=ReplyTo.NONE, attachments=[], answers={}, report_to=None
+        ).dump(),
     )
     log.info("turn dispatched for session events", extra={"session_id": session.id})
     return turn

@@ -85,6 +85,9 @@ class DeliverHandler:
         self._db = db
         self._pusher = pusher
 
+    async def failed_in(self, s: AsyncSession, task: Task) -> None:
+        """失败只需可见（任务记录、日志），没有等着结果的一方。"""
+
     async def execute(self, task: Task) -> Commit:
         notification_id = task.payload["notification_id"]
         async with self._db.transaction() as s:

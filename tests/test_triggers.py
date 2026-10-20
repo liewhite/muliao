@@ -42,6 +42,7 @@ async def test_schedule_fires_new_session_without_notifying_and_schedules_next(c
         "reply_to": ReplyTo.NONE,
         "attachments": [],
         "answers": {},
+        "report_to": None,
     }
     trigger = await triggers.get_by_name("slack")
     assert trigger.last_session_id == sessions[0].id

@@ -30,6 +30,7 @@ from muliao.runtime.events import EventDispatcher
 from muliao.runtime.jobs import JobRunner
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
+from muliao.runtime.reports import ReportWatcher
 from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroup, ToolGroups
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.tasks import TaskQueue
@@ -102,6 +103,7 @@ class Container:
     worker: Worker
     events: EventDispatcher
     jobs: JobRunner
+    reports: ReportWatcher
     compaction: CompactionScheduler
     turns: TurnRunner
     models: ModelRegistry
@@ -130,7 +132,14 @@ class Container:
         self._spawn("worker", self.worker.run_forever())
         self._spawn("schedules", self.schedules.run_forever())
         self._spawn("events", self.events.run_forever())
-        self._spawn("jobs", self.jobs.run_forever())
+        self._spawn("checks", self._check_running_work())
+
+    async def _check_running_work(self) -> None:
+        """运行中的检查：每隔 job_check_seconds，给还在跑的后台任务、结果要交回的 thread 轮次各发一个检查事件。"""
+        while True:
+            await asyncio.sleep(self.settings.runtime.job_check_seconds)
+            await self.jobs.check()
+            await self.reports.check()
 
     async def _check_orphan_resources(self) -> None:
         """数据库里已删除、资源仓库里还留着目录的 agent（删除时提交失败所致）：记录出来，由人决定是否清理。"""
@@ -301,6 +310,7 @@ def build_container(
                         agents,
                         threads,
                         lambda session_id, prompt: turn_runner.run_inline(session_id, prompt),
+                        lambda session_id: turn_runner.stop(session_id),
                     )
                 ]
             ),
@@ -322,7 +332,7 @@ def build_container(
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
     turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction, files, live, bus)
     handlers: dict[TaskKind, TaskHandler] = {
-        TaskKind.TURN: TurnHandler(turn_runner),
+        TaskKind.TURN: TurnHandler(turn_runner, queue),
         TaskKind.COMPACTION: CompactionHandler(
             db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),
@@ -364,6 +374,7 @@ def build_container(
         worker=worker,
         events=events,
         jobs=jobs,
+        reports=ReportWatcher(db, queue),
         compaction=compaction,
         turns=turn_runner,
         models=models,
