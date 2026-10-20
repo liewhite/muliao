@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
-import { Archive, CircleStop, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
+import { Archive, ArrowDown, CircleStop, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
@@ -348,6 +348,47 @@ function Composer({
   )
 }
 
+/**
+ * 新内容到来时只在用户本来就在底部时跟随；往上翻看历史时不把人拽下来。
+ * 是否在底部看底部锚点是否可见（IntersectionObserver），不依赖页面的滚动容器。
+ */
+function useFollowBottom() {
+  const anchor = useRef<HTMLDivElement | null>(null)
+  const observer = useRef<IntersectionObserver | null>(null)
+  // 渲染新内容之前是否在底部：观察回调在布局之后才到，effect 里读到的正是更新前的状态
+  const following = useRef(true)
+  const [atBottom, setAtBottom] = useState(true)
+
+  // 锚点在数据加载后才出现，用回调 ref 在它挂载时开始观察
+  const ref = useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect()
+    anchor.current = el
+    if (el === null) return
+    // 开始观察时的第一次回调只反映刚挂载、还没滚动的位置，不是用户的操作，忽略
+    let initial = true
+    observer.current = new IntersectionObserver(([entry]) => {
+      if (initial) {
+        initial = false
+        return
+      }
+      following.current = entry.isIntersecting
+      setAtBottom(entry.isIntersecting)
+    })
+    observer.current.observe(el)
+  }, [])
+  const follow = useCallback(() => {
+    if (following.current) anchor.current?.scrollIntoView({ block: 'end' })
+  }, [])
+  const refollow = useCallback(() => {
+    following.current = true
+  }, [])
+  const toBottom = useCallback(() => {
+    following.current = true
+    anchor.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
+  }, [])
+  return { ref, atBottom, follow, refollow, toBottom }
+}
+
 export default function SessionView() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
@@ -358,7 +399,7 @@ export default function SessionView() {
   const [draft, setDraft] = useState('')
   const uploads = useUploads()
   const action = useAction()
-  const bottom = useRef<HTMLDivElement>(null)
+  const bottom = useFollowBottom()
 
   useServerEvents((e) => {
     if (e.type === 'reconnected') {
@@ -396,9 +437,10 @@ export default function SessionView() {
       .catch((e) => console.error('marking session read failed', e))
   }, [id, unread])
 
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' })
-  }, [detail.data, shownLive.length])
+  // 打开（或切换到）一个会话时从底部看起
+  const { refollow, follow } = bottom
+  useEffect(refollow, [id, refollow])
+  useEffect(follow, [detail.data, shownLive.length, follow])
 
   async function send() {
     // Enter 键不经过按钮的禁用状态：请求进行中再按一次不能重复发送
@@ -407,6 +449,8 @@ export default function SessionView() {
     const text = draft
     const ok = await action.run(() => api.reply(id, text.trim(), sent.ids))
     if (ok) {
+      // 自己发的消息总要看到
+      refollow()
       // 发送过程中又改了输入框就保留新内容
       setDraft((current) => (current === text ? '' : current))
       uploads.removeMany(sent.keys)
@@ -452,7 +496,19 @@ export default function SessionView() {
         </>
       }
       footer={
-        <div className="border-t border-separator bg-surface px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
+        <div className="relative border-t border-separator bg-surface px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
+          {!bottom.atBottom && (
+            <Button
+              isIconOnly
+              size="sm"
+              variant="secondary"
+              className="absolute -top-12 right-4 rounded-full shadow"
+              aria-label="回到底部"
+              onPress={bottom.toBottom}
+            >
+              <ArrowDown className="size-4" />
+            </Button>
+          )}
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
             <ErrorAlert error={action.error} />
             {session?.private ? (
@@ -510,7 +566,8 @@ export default function SessionView() {
                 </div>
               )}
               <UnlinkedThreads threads={unlinkedThreads(d.items, d.threads)} agents={agents.data} />
-              <div ref={bottom} />
+              {/* 底部锚点：与最后 64px 重叠，离底部这么近仍算「在底部」 */}
+              <div ref={bottom.ref} aria-hidden className="pointer-events-none -mt-16 h-16" />
             </div>
           )
         }}
