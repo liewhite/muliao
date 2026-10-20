@@ -1,5 +1,5 @@
-"""一次运行的收尾（与运行记为完成在同一个事务里）：会话的已读状态、反思调度、压缩判断、委派的结局、推送、唤醒下一次
-运行。运行被用户停止时的委派结局与信箱由停止处理（runtime.halt），这里只做其余部分。"""
+"""一次运行的收尾（与运行记为完成在同一个事务里）：会话的已读状态、反思调度、委派的结局、推送、唤醒下一次运行。
+运行被用户停止时的委派结局与信箱由停止处理（runtime.halt），这里只做其余部分。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from muliao.conventions import shared_attachments
 from muliao.db import utcnow
 from muliao.delivery.base import Notifier
 from muliao.models import Agent, Notification, Session
-from muliao.runtime.compaction import CompactionScheduler
 from muliao.runtime.delegations import Ending, Outcome, in_session_in, settle_all_in
 from muliao.runtime.mailbox import wake_in
 from muliao.runtime.reflection import ReflectionScheduler
@@ -47,12 +46,10 @@ class RunFinisher:
         self,
         queue: TaskQueue,
         notifier: Notifier,
-        compaction: CompactionScheduler,
         reflection: ReflectionScheduler,
     ):
         self._queue = queue
         self._notifier = notifier
-        self._compaction = compaction
         self._reflection = reflection
 
     def idle(self, state: RunState) -> Commit:
@@ -78,7 +75,6 @@ class RunFinisher:
                     s, self._queue, await in_session_in(s, session.id, consumed_only=True), session, outcome
                 )
             if not end.stopped and state.messages:
-                await self._compaction.after_run(s, session, agent.model, state.messages)
                 # 推送：处理过的信件里有用户在等的，且有话要告诉用户（做完了，或停下来问用户）
                 if any(m.awaited for m in state.handled) and (not end.paused or end.asked_user):
                     await self._notifier.enqueue_in(

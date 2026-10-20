@@ -14,6 +14,7 @@ from muliao.bus import LiveRuns
 from muliao.db import Database
 from muliao.models import Agent, Mail, Message, Session
 from muliao.runtime.codec import dump_message
+from muliao.runtime.compaction import Compactor
 from muliao.runtime.content import ContentBuilder, append_content, mark_events
 from muliao.runtime.halt import marked_stopped, stopped_results
 from muliao.runtime.mailbox import consume_in, queued_in
@@ -21,6 +22,10 @@ from muliao.runtime.redaction import redact_messages
 from muliao.runtime.runner import StepHooks
 
 log = logging.getLogger(__name__)
+
+
+class CompactionDue(Exception):
+    """上下文超过压缩阈值：这次请求已经保存为一步，停下驱动，由消费者压缩后从它续跑（runtime.compaction）。"""
 
 
 @dataclass
@@ -46,13 +51,16 @@ class RunState:
     # 这次运行保存的消息（包括之前几次尝试保存的），和最后保存的那一行
     messages: list[ModelMessage] = field(default_factory=list)
     last_row: Message | None = None
+    # 压缩过但保留窗口之外已经没有可压缩的：这次运行不再因为上下文大小停下（再停也压缩不了）
+    compaction_exhausted: bool = False
 
 
 class Steps:
-    def __init__(self, db: Database, live: LiveRuns, content: ContentBuilder):
+    def __init__(self, db: Database, live: LiveRuns, content: ContentBuilder, compactor: Compactor):
         self._db = db
         self._live = live
         self._content = content
+        self._compactor = compactor
 
     def hooks(self, state: RunState) -> StepHooks:
         return StepHooks(
@@ -91,6 +99,8 @@ class Steps:
         state.handled += state.taken
         state.taken = []
         state.saved = len(messages) + 1
+        if not state.compaction_exhausted and self._compactor.over_threshold(state.session.id, messages):
+            raise CompactionDue()
 
     async def _after_response(
         self, state: RunState, response: ModelResponse, messages: list[ModelMessage]

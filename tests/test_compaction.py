@@ -1,17 +1,29 @@
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+"""上下文压缩：步与步之间切分，手动压缩与运行中自动压缩共用 Compactor.compact；超过上限分批压缩直到收敛。"""
+
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
 from muliao.models import Compaction, Message, Origin, Task, TaskKind, TaskStatus
-from muliao.runtime.compaction import COMPACTION_INSTRUCTIONS, CompactionScheduler, select_turns
+from muliao.runtime.codec import dump_message
+from muliao.runtime.compaction import COMPACTION_INSTRUCTIONS, select_steps, steps_of
+from muliao.runtime.history import CONTINUATION
 from muliao.runtime.tasks import session_lane
 from tests.scripted import scripted
 from tests.test_flow import drain, last_user_prompt, reply, start
 
 
 class Recorder:
-    """记录每次模型调用：对话轮次回复 "ok"，压缩请求回复固定摘要。"""
+    """记录每次模型调用：对话回复 "re: ..."，压缩请求回复固定摘要。"""
 
     def __init__(self) -> None:
         self.turns: list[tuple[str, int, str | None]] = []  # (prompt, 消息数, instructions)
@@ -38,7 +50,8 @@ async def _enqueue_compaction(container, session) -> None:
         )
 
 
-async def _session_with_turns(container, models, agent_id: str, n: int):
+async def _session_with_exchanges(container, models, agent_id: str, n: int):
+    """n 次一问一答（没有工具调用：每条消息各是一步）。"""
     recorder = Recorder()
     models.models["m"] = scripted(recorder)
     session = await start(container, agent_id, "turn 1", origin=Origin.TRIGGER)
@@ -49,40 +62,60 @@ async def _session_with_turns(container, models, agent_id: str, n: int):
     return session, recorder
 
 
-async def test_compaction_summarizes_older_turns_and_next_turn_uses_summary(container, make_agent, models):
+def _row(i: int, message: ModelMessage) -> Message:
+    return Message(id=i, session_id="s", task_id=1, payload=dump_message(message))
+
+
+def test_steps_split_where_no_call_is_left_dangling():
+    call = ModelResponse(parts=[ToolCallPart("memory_append", {"entry": "x"}, tool_call_id="c")])
+    result = ModelRequest(parts=[ToolReturnPart("memory_append", "ok", tool_call_id="c")])
+    rows = [
+        _row(1, ModelRequest(parts=[UserPromptPart("go")])),
+        _row(2, call),
+        _row(3, result),
+        _row(4, ModelResponse(parts=[TextPart("done")])),
+        _row(5, ModelRequest(parts=[UserPromptPart("next")])),
+    ]
+    # 工具调用与它的结果在同一步；运行中途（结果之后、下一次回复之前）也是切点
+    assert [[r.id for r in step] for step in steps_of(rows)] == [[1], [2, 3], [4], [5]]
+
+
+async def test_compaction_summarizes_older_steps_and_the_next_run_uses_the_summary(
+    container, make_agent, models
+):
     alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
-    keep = container.settings.runtime.compaction_keep_turns
-    session, recorder = await _session_with_turns(container, models, alpha, keep + 2)
+    keep = container.settings.runtime.compaction_keep_steps
+    n = keep // 2 + 2
+    session, recorder = await _session_with_exchanges(container, models, alpha, n)
 
     await _enqueue_compaction(container, session)
     await drain(container)
 
-    # 早于保留窗口的两轮被总结，保留窗口内的不在其中
+    # 保留窗口之外的四步（前两次问答）被总结
     assert len(recorder.compactions) == 1
     assert "turn 1" in recorder.compactions[0] and "turn 2" in recorder.compactions[0]
-    assert f"turn {keep + 2}" not in recorder.compactions[0]
+    assert f"turn {n}" not in recorder.compactions[0]
     async with container.db.transaction() as s:
         compaction = await s.scalar(select(Compaction))
-        turn2_last = await s.scalar(
+        fourth = await s.scalar(
             select(Message.id).where(Message.session_id == session.id).order_by(Message.id).offset(3).limit(1)
         )
-    assert compaction.through_message_id == turn2_last  # 切点在第 2 轮末尾
+    assert compaction.through_message_id == fourth
 
     await reply(container, session.id, "after compaction")
     await drain(container)
     prompt, message_count, instructions = recorder.turns[-1]
     assert prompt == "after compaction"
-    assert message_count == keep * 2 + 1  # 只有保留的轮次 + 本轮提问
+    assert message_count == keep + 1  # 只有保留的步 + 这次的提问
     assert "<summary>\nSUMMARY#1\n</summary>" in instructions
-
     # UI 仍能看到完整原文
-    assert len(await container.sessions.history(session.id)) == (keep + 3) * 2
+    assert len(await container.sessions.history(session.id)) == (n + 1) * 2
 
 
 async def test_second_compaction_folds_in_previous_summary(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
-    keep = container.settings.runtime.compaction_keep_turns
-    session, recorder = await _session_with_turns(container, models, alpha, keep + 1)
+    keep = container.settings.runtime.compaction_keep_steps
+    session, recorder = await _session_with_exchanges(container, models, alpha, keep // 2 + 1)
     await _enqueue_compaction(container, session)
     await drain(container)
     for i in range(2):
@@ -97,9 +130,9 @@ async def test_second_compaction_folds_in_previous_summary(container, make_agent
     assert "turn 1\n" not in recorder.compactions[1]  # 已压缩的原文不再重复发送
 
 
-async def test_compaction_with_nothing_beyond_kept_turns_is_a_noop(container, make_agent, models):
+async def test_compaction_with_nothing_beyond_kept_steps_is_a_noop(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
-    session, recorder = await _session_with_turns(container, models, alpha, 2)
+    session, recorder = await _session_with_exchanges(container, models, alpha, 2)
 
     await _enqueue_compaction(container, session)
     await drain(container)
@@ -115,52 +148,31 @@ def _response(tokens: int) -> list[ModelMessage]:
     return [ModelResponse(parts=[TextPart("x")], usage=RequestUsage(input_tokens=tokens))]
 
 
-async def _compaction_tasks(container) -> list[Task]:
-    async with container.db.transaction() as s:
-        return list((await s.scalars(select(Task).where(Task.kind == TaskKind.COMPACTION))).all())
+def test_threshold_is_the_size_of_the_last_request(container):
+    compactor = container.compactor
+    threshold = container.settings.runtime.compaction_threshold_tokens
+    assert not compactor.over_threshold("s", [])
+    assert not compactor.over_threshold("s", _response(threshold))
+    assert compactor.over_threshold("s", _response(threshold + 1))
 
 
-async def test_scheduler_enqueues_above_threshold_once_per_session(container, make_agent):
-    alpha = (await make_agent("alpha")).id
-    session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
-    scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
-
-    async with container.db.transaction() as s:
-        await scheduler.after_run(s, session, "m", _response(1000))
-        await scheduler.after_run(s, session, "m", _response(1001))
-    async with container.db.transaction() as s:
-        await scheduler.after_run(s, session, "m", _response(5000))  # 已有待执行的压缩，不重复
-
-    assert [t.lane for t in await _compaction_tasks(container)] == [session_lane(session.id)]
-
-
-async def test_zero_usage_warns_instead_of_silently_never_compacting(container, make_agent, caplog):
-    alpha = (await make_agent("alpha")).id
-    session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
-    scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
-
-    async with container.db.transaction() as s:
-        await scheduler.after_run(s, session, "m", _response(0))
-
+def test_zero_usage_warns_instead_of_silently_never_compacting(container, caplog):
+    assert not container.compactor.over_threshold("s", _response(0))
     assert "no input token usage" in caplog.text
-    assert await _compaction_tasks(container) == []
 
 
-def test_select_turns_bounds_batch_without_truncating():
-    def turn(task_id: int, chars: int) -> list[Message]:
-        payload = ModelResponse(parts=[TextPart("x" * chars)])
-        from muliao.runtime.codec import dump_message
+def test_select_steps_bounds_batch_without_truncating():
+    def step(i: int, chars: int) -> list[Message]:
+        return [_row(i, ModelResponse(parts=[TextPart("x" * chars)]))]
 
-        return [Message(id=task_id, session_id="s", task_id=task_id, payload=dump_message(payload))]
+    steps = [step(1, 100), step(2, 100), step(3, 100), step(4, 10)]
+    chosen, more = select_steps(steps, keep_steps=1, max_chars=250)
+    assert [s[0].id for s in chosen] == [1, 2] and more
 
-    turns = [turn(1, 100), turn(2, 100), turn(3, 100), turn(4, 10)]
-    chosen, more = select_turns(turns, keep_turns=1, max_chars=250)
-    assert [t[0].task_id for t in chosen] == [1, 2] and more
+    chosen, more = select_steps(steps, keep_steps=1, max_chars=10)  # 单步超限也至少取一步
+    assert [s[0].id for s in chosen] == [1] and more
 
-    chosen, more = select_turns(turns, keep_turns=1, max_chars=10)  # 单轮超限也至少取一轮
-    assert [t[0].task_id for t in chosen] == [1] and more
-
-    chosen, more = select_turns(turns, keep_turns=1, max_chars=10_000)
+    chosen, more = select_steps(steps, keep_steps=1, max_chars=10_000)
     assert len(chosen) == 3 and not more
 
 
@@ -169,18 +181,54 @@ async def test_oversized_backlog_is_compacted_in_batches_until_converged(
 ):
     import muliao.runtime.compaction as compaction
 
-    monkeypatch.setattr(compaction, "_TRANSCRIPT_CHARS", 1)  # 每批只取一轮
+    monkeypatch.setattr(compaction, "_TRANSCRIPT_CHARS", 1)  # 每批只取一步
     alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
-    keep = container.settings.runtime.compaction_keep_turns
-    session, recorder = await _session_with_turns(container, models, alpha, keep + 3)
+    keep = container.settings.runtime.compaction_keep_steps
+    session, recorder = await _session_with_exchanges(container, models, alpha, keep // 2 + 3)
 
     await _enqueue_compaction(container, session)
     await drain(container)
 
-    assert len(recorder.compactions) == 3  # 三轮可压缩内容分三批，自动续排
+    assert len(recorder.compactions) == 6  # 六步可压缩内容分六批
     async with container.db.transaction() as s:
         compactions = (await s.scalars(select(Compaction).order_by(Compaction.id))).all()
-    assert [c.summary for c in compactions] == ["SUMMARY#1", "SUMMARY#2", "SUMMARY#3"]
+    assert [c.summary for c in compactions] == [f"SUMMARY#{i}" for i in range(1, 7)]
+
+
+async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make_agent, models, monkeypatch):
+    """运行中途上下文超过阈值：这次请求保存后停下、压缩，再从它续跑；留下的部分从一条回复开始时补接续的用户消息。"""
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_keep_steps", 1)
+    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    seen: list[tuple[list[ModelMessage], str | None]] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if info.instructions == COMPACTION_INSTRUCTIONS:
+            return ModelResponse(parts=[TextPart("SUMMARY")])
+        seen.append((list(messages), info.instructions))
+        if len(seen) == 1:
+            return ModelResponse(parts=[ToolCallPart("memory_append", {"entry": "- once"}, tool_call_id="c")])
+        return ModelResponse(parts=[TextPart("done")])
+
+    models.models["m"] = scripted(fn)
+    session = await start(container, alpha, "go", origin=Origin.TRIGGER)
+    await drain(container)
+
+    assert len(seen) == 2
+    resumed, instructions = seen[1]
+    assert isinstance(resumed[0], ModelRequest) and resumed[0].parts[0].content == CONTINUATION
+    assert "SUMMARY" in (instructions or "")
+    # 工具只执行一次，运行只有一次
+    assert container.memory.read(alpha) == "- once\n"
+    runs = [t for t in await _tasks(container, TaskKind.RUN)]
+    assert [r.status for r in runs] == [TaskStatus.DONE]
+    history = await container.sessions.history(session.id)
+    assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "done"
+
+
+async def _tasks(container, kind: TaskKind) -> list[Task]:
+    async with container.db.transaction() as s:
+        return list((await s.scalars(select(Task).where(Task.kind == kind))).all())
 
 
 async def test_manual_compaction_endpoint(container, make_agent, tmp_path):

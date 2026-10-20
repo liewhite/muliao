@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, UserPromptPart
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,13 +32,20 @@ async def rows_after(s: AsyncSession, session_id: str, after_id: int) -> list[Me
     return list((await s.scalars(query)).all())
 
 
+# 压缩的切点可能落在一条模型回复之前（runtime.compaction.steps_of），而提供方要求对话从用户消息开始：这时在留下的
+# 部分前面补这一条。它由切点推导，不存库
+CONTINUATION = (
+    "The earlier part of this conversation is summarized in your instructions. Continue from there."
+)
+
+
 async def load_context(s: AsyncSession, session_id: str) -> SessionContext:
     compaction = await latest_compaction(s, session_id)
     rows = await rows_after(s, session_id, compaction.through_message_id if compaction else 0)
-    return SessionContext(
-        summary=compaction.summary if compaction else None,
-        messages=load_messages(r.payload for r in rows),
-    )
+    messages = load_messages(r.payload for r in rows)
+    if messages and isinstance(messages[0], ModelResponse):
+        messages.insert(0, ModelRequest(parts=[UserPromptPart(CONTINUATION)]))
+    return SessionContext(summary=compaction.summary if compaction else None, messages=messages)
 
 
 async def latest_answer(s: AsyncSession, session_id: str) -> str:

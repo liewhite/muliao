@@ -24,7 +24,7 @@ from muliao.files import FileStore
 from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import TaskKind
 from muliao.resources import ResourceRepo
-from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
+from muliao.runtime.compaction import CompactionHandler, Compactor
 from muliao.runtime.consumer import Consumer, RunHandler
 from muliao.runtime.content import ContentBuilder
 from muliao.runtime.conversation import Threads
@@ -110,7 +110,7 @@ class Container:
     jobs: JobRunner
     delegations: Delegations
     work: WorkWatcher
-    compaction: CompactionScheduler
+    compactor: Compactor
     reflection: ReflectionScheduler
     consumer: Consumer
     models: ModelRegistry
@@ -331,7 +331,13 @@ def build_container(
     )
     if tuple(tool_groups.groups) != tool_group_names:
         raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {tool_group_names}")
-    compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
+    compactor = Compactor(
+        db,
+        runtime,
+        queue,
+        threshold_tokens=settings.runtime.compaction_threshold_tokens,
+        keep_steps=settings.runtime.compaction_keep_steps,
+    )
     content = ContentBuilder(files, runtime)
     reflection = ReflectionScheduler(db, queue)
     consumer = Consumer(
@@ -340,15 +346,14 @@ def build_container(
         tool_groups,
         live,
         content,
-        Steps(db, live, content),
-        RunFinisher(queue, notifier, compaction, reflection),
+        Steps(db, live, content, compactor),
+        RunFinisher(queue, notifier, reflection),
         SessionHalt(db, queue, [jobs, delegations]),
+        compactor,
     )
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.RUN: RunHandler(consumer, queue),
-        TaskKind.COMPACTION: CompactionHandler(
-            db, runtime, compaction, settings.runtime.compaction_keep_turns
-        ),
+        TaskKind.COMPACTION: CompactionHandler(db, compactor),
         TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups),
         TaskKind.DELIVER: DeliverHandler(db, pusher),
     }
@@ -387,7 +392,7 @@ def build_container(
         jobs=jobs,
         delegations=delegations,
         work=WorkWatcher([jobs, delegations], settings.runtime.job_check_seconds),
-        compaction=compaction,
+        compactor=compactor,
         reflection=reflection,
         consumer=consumer,
         models=models,

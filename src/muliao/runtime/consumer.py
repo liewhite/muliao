@@ -4,7 +4,7 @@
 - 起点由历史决定（_opening）：历史停在一条没得到回复、没标停止的请求上就重发它；最后一条回复里有没执行完的工具
   调用（进程在执行工具时退出）就执行它们；停在挂起的调用上时按 runtime.pending 交回结果；否则把信箱里排队的信件
   作为开头交给模型（runtime.content）。
-- 逐步运行、每一步保存（runtime.steps）。
+- 逐步运行、每一步保存（runtime.steps）；上下文超过阈值时在步与步之间压缩后续跑（runtime.compaction）。
 - 收尾（runtime.finish），与运行记为完成在同一个事务里。
 - 用户停止（runtime.halt）。
 """
@@ -23,6 +23,7 @@ from muliao.conventions import answer_text, is_stopped, unanswered_calls
 from muliao.db import Database
 from muliao.models import Mail, Message, ReplyTo, Task
 from muliao.runtime.codec import load_messages
+from muliao.runtime.compaction import Compactor
 from muliao.runtime.content import ContentBuilder
 from muliao.runtime.conversation import failure_of
 from muliao.runtime.delegations import Ending, Outcome, in_session_in, running_for_in, settle_all_in
@@ -42,7 +43,7 @@ from muliao.runtime.pending import (
 )
 from muliao.runtime.questions import ASK_USER, questions_of, waiting_text
 from muliao.runtime.runner import AgentRuntime, ToolGroups
-from muliao.runtime.steps import RunState, Steps
+from muliao.runtime.steps import CompactionDue, RunState, Steps
 from muliao.runtime.stopping import StoppableRuns, Stopped
 from muliao.runtime.tasks import Commit, TaskQueue, no_commit
 
@@ -108,6 +109,7 @@ class Consumer:
         steps: Steps,
         finisher: RunFinisher,
         halt: SessionHalt,
+        compactor: Compactor,
     ):
         self._db = db
         self._runtime = runtime
@@ -117,6 +119,7 @@ class Consumer:
         self._steps = steps
         self._finisher = finisher
         self._halt = halt
+        self._compactor = compactor
         self._runs: StoppableRuns[Commit] = StoppableRuns()
         # 正在进行的运行的状态，按会话：被停止时从这里取（运行的协程已被取消）
         self._active: dict[str, RunState] = {}
@@ -135,6 +138,12 @@ class Consumer:
     async def _run(self, run_id: int, session_id: str) -> Commit:
         async with self._db.transaction() as s:
             session, agent = await load_session(s, session_id)
+        # 上下文超过阈值时先压缩（之后每一步之前同样检查，见 runtime.steps.CompactionDue）
+        async with self._db.transaction() as s:
+            history = (await load_context(s, session.id)).messages
+        if self._compactor.over_threshold(session.id, history):
+            await self._compactor.compact(session, agent)
+        async with self._db.transaction() as s:
             context = await load_context(s, session.id)
             queued = await queued_in(s, session.id)
             earlier = list((await s.scalars(select(Mail).where(Mail.consumed_by == run_id))).all())
@@ -174,17 +183,29 @@ class Consumer:
         awaited = any(m.awaited for m in [*state.handled, *queued])
         reply_to = ReplyTo.AGENT if session.private else ReplyTo.USER if awaited else ReplyTo.NONE
         scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, reply_to=reply_to)
+        profile = self._tool_groups.profile(agent.id, agent.tool_groups)
         self._live.begin(session_id, last_message)
-        result = await self._runtime.run_steps(
-            agent,
-            scope,
-            prompt,
-            history,
-            self._tool_groups.profile(agent.id, agent.tool_groups),
-            self._steps.hooks(state),
-            summary=context.summary,
-            deferred=deferred,
-        )
+        while True:
+            try:
+                result = await self._runtime.run_steps(
+                    agent,
+                    scope,
+                    prompt,
+                    history,
+                    profile,
+                    self._steps.hooks(state),
+                    summary=context.summary,
+                    deferred=deferred,
+                )
+                break
+            except CompactionDue:
+                # 这次请求已经保存：压缩，再从库里加载上下文（摘要 + 切点之后），从它续跑
+                if not await self._compactor.compact(session, agent):
+                    state.compaction_exhausted = True
+                async with self._db.transaction() as s:
+                    context = await load_context(s, session.id)
+                history, prompt, deferred = context.messages, None, None
+                state.resending = True
         await self._steps.save_tail(state)
         return self._finisher.commit(state, end_of(result.output))
 

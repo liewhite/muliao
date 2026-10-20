@@ -259,12 +259,12 @@ class CompactOut(BaseModel):
 
 @router.post("/sessions/{session_id}/compact", status_code=202)
 async def compact(c: C, session_id: str) -> CompactOut:
-    """手动压缩上下文：上下文超限导致运行失败时，压缩后再重试。"""
+    """手动压缩上下文（自动压缩见 runtime.compaction）：排在正在进行与排队的运行之后。"""
     async with c.db.transaction() as s:
         session = await s.get(Session, session_id)
         if session is None:
             raise NotFound(f"session {session_id!r} not found")
-        return CompactOut(queued=await c.compaction.request(s, session.id, session.agent_id))
+        return CompactOut(queued=await c.compactor.request_in(s, session))
 
 
 @router.post("/sessions/{session_id}/read", status_code=204)

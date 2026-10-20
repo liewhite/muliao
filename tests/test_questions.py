@@ -14,7 +14,7 @@ from pydantic_ai.models.function import AgentInfo
 
 from muliao.models import Message, Origin, TaskKind, TaskStatus
 from muliao.runtime.codec import dump_message
-from muliao.runtime.compaction import _group_turns
+from muliao.runtime.compaction import steps_of
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tasks_of
@@ -243,7 +243,7 @@ def test_compaction_never_separates_a_question_from_its_answer():
     done = ModelResponse(parts=[TextPart("ok")])
     rows = [row(1, 10, ask), row(2, 11, answer), row(3, 11, done), row(4, 12, done)]
 
-    assert [[r.id for r in turn] for turn in _group_turns(rows)] == [[1, 2, 3], [4]]
+    assert [[r.id for r in step] for step in steps_of(rows)] == [[1, 2], [3], [4]]
 
 
 async def test_a_later_run_finishes_a_failed_answer_and_retrying_it_does_nothing(
