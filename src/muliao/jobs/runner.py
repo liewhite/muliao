@@ -38,7 +38,7 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash
 from muliao.platform.tasks import Clock, Commit, TaskQueue, no_commit
-from muliao.sessions.api import hold_in, hold_registered_in, post_check_in, session_in
+from muliao.sessions.api import SessionWork, hold_registered_in, session_in
 from muliao.sessions.events import PostEvent, SessionStopped
 from muliao.vault.api import Vault
 
@@ -125,9 +125,11 @@ class JobRunner:
         workspace_of: Callable[[str], Path],
         check_seconds: float,
         messaging: Messaging,
+        sessions: SessionWork,
         clock: Clock = utcnow,
     ):
         self._db = db
+        self._sessions = sessions
         self._queue = queue
         self._messaging = messaging
         self._vault = vault
@@ -206,8 +208,7 @@ class JobRunner:
         log_file = workspace / job.log_path
         try:
             # 先在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上），再起进程
-            async with self._db.transaction() as s:
-                await hold_in(s, job.session_id, job_source(job.id), awaited=awaited)
+            await self._sessions.hold(job.session_id, job_source(job.id), awaited=awaited)
             await asyncio.to_thread(log_file.parent.mkdir, parents=True, exist_ok=True)
             proc = await spawn_bash(job.command, cwd=workspace, secrets=values, merge_stderr=True)
         except BaseException as e:
@@ -457,15 +458,14 @@ class JobRunner:
             j.id: await asyncio.to_thread(tail, self._workspace_of(j.agent_id) / j.log_path) for j in running
         }
         posted = 0
-        async with self._db.transaction() as s:
-            for stale in running:
-                job = await s.get(Job, stale.id)
-                if job is None or job.status != JobStatus.RUNNING or job.id not in self._running:
-                    continue
-                text = _check_text(job, self._clock(), tails[job.id])
-                posted += await post_check_in(
-                    s, self._queue, job.session_id, job_source(job.id), job_source(job.id), text
-                )
+        for job in running:
+            # 快照之后结束的任务：结局已经交回，占用不再 active，会话领域不投
+            if job.id not in self._running:
+                continue
+            text = _check_text(job, self._clock(), tails[job.id])
+            posted += await self._sessions.post_check(
+                job.session_id, job_source(job.id), job_source(job.id), text
+            )
         return posted
 
     async def recover(self) -> None:

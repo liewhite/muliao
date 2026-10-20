@@ -58,7 +58,7 @@ from muliao.sessions.content import ContentBuilder
 from muliao.sessions.conversation import Threads
 from muliao.sessions.delegation import ThreadChecks
 from muliao.sessions.delegation_tools import delegation_toolset
-from muliao.sessions.delivery import handle_post_event
+from muliao.sessions.delivery import SessionWork, handle_post_event
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
 from muliao.sessions.live import LiveRuns
@@ -242,7 +242,9 @@ def build_container(
     agent_lifecycle = AgentLifecycle(
         db, agents, queue, messaging, lambda s, agent_id: agent_busy_in(s, queue, agent_id)
     )
-    sessions = SessionService(db, queue, live, messaging, lambda session_id: consumer.stop_session(session_id))
+    sessions = SessionService(
+        db, queue, live, messaging, lambda session_id: consumer.stop_session(session_id)
+    )
     threads = Threads(queue)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(resources, vault)
@@ -277,7 +279,15 @@ def build_container(
         resolve_model=resolve_model or models.resolve,
         files=files,
     )
-    jobs = JobRunner(db, queue, vault, agents.workspace, settings.runtime.job_check_seconds, messaging)
+    jobs = JobRunner(
+        db,
+        queue,
+        vault,
+        agents.workspace,
+        settings.runtime.job_check_seconds,
+        messaging,
+        SessionWork(db, queue),
+    )
     thread_checks = ThreadChecks(db, queue)
     # 跨领域的反应：会话领域的命令处理者与各领域的订阅
     handle_post_event(messaging, queue)

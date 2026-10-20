@@ -85,3 +85,31 @@ async def test_a_domain_and_the_task_table_may_be_written_together(container):
 
     async with container.db.transaction() as s:
         await container.notifier.enqueue_in(s, None, Notification(title="t", body="b", session_id=None))
+
+
+# 领域公开接口里在调用方事务里执行的函数（第一个参数是调用方的事务 s）：只能是只读的查询（docs/architecture.md 2.2）。
+# 写入一律是被调领域自己开事务的命令，调用方不替它管事务。读的事实只会单向变化或不变时，调用方可以据它在同一事务里
+# 写自己的数据；否则（session_busy_in、agent_busy_in）只能先查后写。新增一个这样的函数要先确认它只读，再登记到这里。
+READ_ONLY_IN_CALLER_TRANSACTION = {
+    "agents": {"active_agent_in", "agent_in"},
+    "files": {"load_metas"},
+    "sessions": {"session_in", "check_receivable_in", "session_busy_in", "agent_busy_in", "hold_registered_in"},
+}
+
+
+def test_public_functions_in_the_callers_transaction_are_reviewed_read_only_queries():
+    import importlib
+    import inspect
+
+    found: dict[str, set[str]] = {}
+    for domain in sorted(DOMAINS):
+        if not (SRC / domain / "api.py").exists():
+            continue
+        module = importlib.import_module(f"muliao.{domain}.api")
+        for name in module.__all__:
+            obj = getattr(module, name)
+            if inspect.isfunction(obj):
+                params = list(inspect.signature(obj).parameters)
+                if params and params[0] == "s":
+                    found.setdefault(domain, set()).add(name)
+    assert found == READ_ONLY_IN_CALLER_TRANSACTION

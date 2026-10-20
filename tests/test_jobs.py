@@ -321,7 +321,7 @@ async def test_a_job_that_fails_before_holding_its_session_leaves_no_row(contain
     async def broken_hold(*_args, **_kwargs):
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr("muliao.jobs.runner.hold_in", broken_hold)
+    monkeypatch.setattr(container.jobs._sessions, "hold", broken_hold)  # noqa: SLF001
     with pytest.raises(RuntimeError, match="database unavailable"):
         await container.jobs.start(
             session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
