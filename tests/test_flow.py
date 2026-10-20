@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
 from sqlalchemy import select
 
-from muliao.models import Mail, Origin, Reflection, Task, TaskKind, TaskStatus
+from muliao.models import Mail, Origin, Reflection, ReflectionCheckpoint, Task, TaskKind, TaskStatus
 from muliao.runtime.conversation import Inbound, NewSession
 from muliao.runtime.worker import Worker
 from tests.scripted import scripted
@@ -220,7 +220,9 @@ async def test_reflection_runs_every_n_steps_over_the_window_and_can_write_skill
     agent = await container.agents.get(alpha)
     # 步数由消息推导：检查点推进之后归零
     assert (await container.reflection.steps_since([agent]))[alpha] == 0
-    assert agent.reflection_checkpoint == reflections[0].payload["to_message_id"]
+    async with container.db.transaction() as s:
+        checkpoint = await s.get(ReflectionCheckpoint, alpha)
+    assert checkpoint.message_id == reflections[0].payload["to_message_id"]
 
 
 async def test_transient_model_error_is_retried_and_converges(container, make_agent, models):

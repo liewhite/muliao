@@ -1,4 +1,5 @@
-"""一次运行的收尾（与运行记为完成在同一个事务里）：会话的已读状态、反思调度、委派的结局、推送、唤醒下一次运行。
+"""一次运行的收尾（与运行记为完成在同一个事务里），只写会话自己的数据：已读状态、委派的结清、唤醒下一次运行，并发布
+RunEnded（推送、反思调度由各自的领域订阅）。
 运行被用户停止时的委派结局与信箱由停止处理（runtime.halt），这里只做其余部分。"""
 
 from __future__ import annotations
@@ -9,13 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.conventions import shared_attachments
 from muliao.db import utcnow
-from muliao.models import Agent, MailState, Notification, Session
-from muliao.notifications import Notifier
+from muliao.models import Agent, MailState, Session
 from muliao.platform.messaging import Messaging
 from muliao.runtime.holds import has_active_in
 from muliao.runtime.mailbox import queued_in, wake_in
-from muliao.runtime.reflection import ReflectionScheduler
 from muliao.runtime.session_events import Ending
+from muliao.runtime.session_events import RunEnded as RunEndedEvent
 from muliao.runtime.settlement import settle_in, unsettled_in
 from muliao.runtime.steps import RunState
 from muliao.runtime.tasks import Commit, TaskQueue
@@ -48,13 +48,9 @@ class RunFinisher:
     def __init__(
         self,
         queue: TaskQueue,
-        notifier: Notifier,
-        reflection: ReflectionScheduler,
         messaging: Messaging,
     ):
         self._queue = queue
-        self._notifier = notifier
-        self._reflection = reflection
         self._messaging = messaging
 
     async def _work_done(self, s: AsyncSession, session_id: str) -> bool:
@@ -77,7 +73,22 @@ class RunFinisher:
             if state.messages:
                 session.updated_at = utcnow()
                 session.unread = not session.private
-                await self._reflection.after_run_in(s, agent)
+                # 推送、反思调度由各自的领域订阅（运行结束后随即投递）
+                self._messaging.publish_in(
+                    s,
+                    RunEndedEvent(
+                        session_id=session.id,
+                        session_title=session.title,
+                        agent_id=agent.id,
+                        agent_name=agent.name,
+                        run_id=state.run_id,
+                        answer=end.answer,
+                        stopped=end.stopped,
+                        paused=end.paused,
+                        asked_user=end.asked_user,
+                        awaited=any(m.awaited for m in state.handled),
+                    ),
+                )
             if not end.stopped and not end.paused and await self._work_done(s, session.id):
                 # 处理中的委派结清。委派可能跨几次运行：停在挂起的调用上、或还有工作没做完时，由之后那次做完的运行结清
                 await settle_in(
@@ -89,16 +100,6 @@ class RunFinisher:
                     end.answer,
                     shared_attachments(state.messages),
                 )
-            if not end.stopped and state.messages:
-                # 推送：处理过的信件里有用户在等的，且有话要告诉用户（做完了，或停下来问用户）
-                if any(m.awaited for m in state.handled) and (not end.paused or end.asked_user):
-                    await self._notifier.enqueue_in(
-                        s,
-                        agent.id,
-                        Notification(
-                            title=f"{agent.name} · {session.title}", body=end.answer, session_id=session.id
-                        ),
-                    )
             await wake_in(s, self._queue, session, finished=state.run_id)
 
         return finish

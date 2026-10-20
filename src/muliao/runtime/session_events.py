@@ -17,6 +17,25 @@ class Ending(StrEnum):
     DELETED = "deleted"
 
 
+class RunEnded(DomainEvent):
+    """一次运行结束了（完成、停在挂起的调用上、被停止）；没有可交给模型的空闲收尾不发。通知、反思各自订阅。"""
+
+    TYPE = "session.run_ended"
+    session_id: str
+    session_title: str
+    agent_id: str
+    agent_name: str
+    run_id: int
+    # 给用户的回答：停在提问上时是问题列表，停在等 agent 上时为空
+    answer: str
+    stopped: bool
+    # 停在挂起的调用上（等用户回答，或等被问的 agent）
+    paused: bool
+    asked_user: bool
+    # 这次运行处理过的信件里有用户在等的
+    awaited: bool
+
+
 class SessionSettled(DomainEvent):
     """会话结清了这些关联。text：完成时是会话的回答，被停止时是停止前说的话，失败时是错误说明，被删除时为空。"""
 

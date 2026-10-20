@@ -335,10 +335,11 @@ def build_container(
         keep_steps=settings.runtime.compaction_keep_steps,
     )
     content = ContentBuilder(files, runtime)
-    reflection = ReflectionScheduler(db, queue)
+    reflection = ReflectionScheduler(db, queue, agents)
     notifications = Notifications(db)
     # 删除 agent 与会话时各领域清理自己的数据
     notifications.subscribe(messaging)
+    notifier.subscribe(messaging)
     agent_lifecycle.subscribe(messaging)
     sessions.subscribe(messaging)
     vault.subscribe(messaging)
@@ -351,7 +352,7 @@ def build_container(
         live,
         content,
         Steps(db, live, content, compactor),
-        RunFinisher(queue, notifier, reflection, messaging),
+        RunFinisher(queue, messaging),
         SessionHalt(db, queue, messaging),
         compactor,
     )

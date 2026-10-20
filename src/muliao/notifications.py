@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.db import Database
 from muliao.models import Notification, TaskKind
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.runtime.session_events import SessionDeleted
-from muliao.runtime.tasks import Commit, TaskQueue, deliver_lane
+from muliao.runtime.session_events import RunEnded, SessionDeleted
+from muliao.runtime.tasks import Commit, TaskQueue, deliver_lane, no_commit
 
 
 class Notifier:
@@ -31,6 +31,28 @@ class Notifier:
             session_id=notification.session_id,
             payload={"notification_id": notification.id},
         )
+
+    def subscribe(self, messaging: Messaging) -> None:
+        messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended)
+
+    async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
+        """推送一次运行的回答：处理过的信件里有用户在等的，且有话要告诉用户（做完了，或停下来问用户）；用户自己停止的
+        不推。"""
+        if not event.awaited or event.stopped or (event.paused and not event.asked_user):
+            return no_commit
+
+        async def commit(s: AsyncSession) -> None:
+            await self.enqueue_in(
+                s,
+                event.agent_id,
+                Notification(
+                    title=f"{event.agent_name} · {event.session_title}",
+                    body=event.answer,
+                    session_id=event.session_id,
+                ),
+            )
+
+        return commit
 
     async def notify(self, agent_id: str | None, notification: Notification) -> None:
         """agent_id 为 None 表示系统通知，不属于任何 agent。"""

@@ -59,6 +59,7 @@ async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_
     async with container.db.transaction() as s:
         await container.threads.send(s, parent_id=parent.id, agent=reviewer, thread="review", prompt="x")
     before = await _mail_count(container)
+    events_before = await _event_count(container)
 
     with pytest.raises(InvalidInput, match="another agent"):
         async with container.db.transaction() as s:
@@ -76,9 +77,12 @@ async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_
 
     assert await _holds(container, parent.id) == []
     assert await _mail_count(container) == before
+    assert await _event_count(container) == events_before
+
+
+async def _event_count(container) -> int:
     async with container.db.transaction() as s:
-        events = (await s.scalars(select(Task).where(Task.kind == TaskKind.EVENT))).all()
-    assert events == []
+        return len((await s.scalars(select(Task).where(Task.kind == TaskKind.EVENT))).all())
 
 
 async def _mail_count(container) -> int:

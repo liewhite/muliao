@@ -13,12 +13,15 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_events import AgentDeleting
+from muliao.agents import AgentService
 from muliao.db import Database
-from muliao.models import Agent, Message, Reflection, Session, Task, TaskKind
+from muliao.errors import NotFound
+from muliao.models import Agent, Message, Reflection, ReflectionCheckpoint, Session, Task, TaskKind
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.runtime.codec import KIND_PATH, RESPONSE_KIND, load_messages
 from muliao.runtime.runner import AgentRuntime, ToolGroups
-from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane
+from muliao.runtime.session_events import RunEnded
+from muliao.runtime.tasks import Commit, TaskQueue, no_commit, reflection_lane
 from muliao.tool_catalog import REFLECTION_GROUPS
 from muliao.transcript import to_items, to_text
 
@@ -91,51 +94,82 @@ def _steps_after(agent_id: str, checkpoint: int):  # noqa: ANN202  返回 SQL �
 
 
 class ReflectionScheduler:
-    def __init__(self, db: Database, queue: TaskQueue):
+    """反思的调度（反思领域）：订阅 RunEnded，按该 agent 自检查点以来的步数决定是否投递反思；检查点在自己的表里。"""
+
+    def __init__(self, db: Database, queue: TaskQueue, agents: AgentService):
         self._db = db
         self._queue = queue
+        self._agents = agents
 
     def subscribe(self, messaging: Messaging) -> None:
+        messaging.subscribe(RunEnded, "reflection.run_ended", self.on_run_ended)
         messaging.subscribe(AgentDeleting, "reflection.agent_deleting", self.on_agent_deleting)
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
-        """删除 agent 的流程：排队的反思不再执行，反思记录删除（正在执行的那次由 agent 领域等它结束）。"""
+        """删除 agent 的流程：排队的反思不再执行，反思记录与检查点删除（正在执行的那次由 agent 领域等它结束）。"""
 
         async def commit(s: AsyncSession) -> None:
             await self._queue.finish_pending_in(s, reflection_lane(event.agent_id), TaskKind.REFLECTION)
             await s.execute(delete(Reflection).where(Reflection.agent_id == event.agent_id))
+            await s.execute(
+                delete(ReflectionCheckpoint).where(ReflectionCheckpoint.agent_id == event.agent_id)
+            )
+
+        return commit
+
+    async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
+        """步数达到该 agent 的 reflect_every 就投递反思，检查点推进到当前最大消息 id。reflect_every 是 agent 领域的配置：
+        在自己的只读事务里查（docs/domain-design.md 1.1），改动与这次判断之间的先后无关紧要。"""
+        try:
+            agent = await self._agents.get(event.agent_id)
+        except NotFound:
+            return no_commit
+        if agent.deleting_by is not None:
+            return no_commit
+        reflect_every = agent.reflect_every
+
+        async def commit(s: AsyncSession) -> None:
+            checkpoint = await _checkpoint_in(s, event.agent_id)
+            if await s.scalar(_steps_after(event.agent_id, checkpoint.message_id)) < reflect_every:
+                return
+            to_id = await s.scalar(
+                select(func.max(Message.id))
+                .join(Session, Session.id == Message.session_id)
+                .where(Session.agent_id == event.agent_id)
+            )
+            if to_id is None:
+                raise RuntimeError(f"agent {event.agent_id} has steps to reflect on but no messages")
+            self._queue.enqueue(
+                s,
+                kind=TaskKind.REFLECTION,
+                lane=reflection_lane(event.agent_id),
+                agent_id=event.agent_id,
+                session_id=None,
+                payload={"from_message_id": checkpoint.message_id, "to_message_id": to_id},
+            )
+            log.info("reflection scheduled", extra={"agent": event.agent_id, "to_message_id": to_id})
+            checkpoint.message_id = to_id
 
         return commit
 
     async def steps_since(self, agents: Sequence[Agent]) -> dict[str, int]:
         """这些 agent 自上次反思以来的步数（界面显示「距下次反思」）。"""
         async with self._db.transaction() as s:
-            return {a.id: await self.steps_since_in(s, a) for a in agents}
+            result = {}
+            for a in agents:
+                checkpoint = await s.get(ReflectionCheckpoint, a.id)
+                result[a.id] = (
+                    await s.scalar(_steps_after(a.id, checkpoint.message_id if checkpoint else 0)) or 0
+                )
+            return result
 
-    async def steps_since_in(self, s: AsyncSession, agent: Agent) -> int:
-        return await s.scalar(_steps_after(agent.id, agent.reflection_checkpoint)) or 0
 
-    async def after_run_in(self, s: AsyncSession, agent: Agent) -> None:
-        """运行结束时（它的收尾事务里）：步数达到阈值就投递反思，检查点推进到当前最大消息 id。"""
-        if await self.steps_since_in(s, agent) < agent.reflect_every:
-            return
-        to_id = await s.scalar(
-            select(func.max(Message.id))
-            .join(Session, Session.id == Message.session_id)
-            .where(Session.agent_id == agent.id)
-        )
-        if to_id is None:
-            raise RuntimeError(f"agent {agent.id} has steps to reflect on but no messages")
-        self._queue.enqueue(
-            s,
-            kind=TaskKind.REFLECTION,
-            lane=reflection_lane(agent.id),
-            agent_id=agent.id,
-            session_id=None,
-            payload={"from_message_id": agent.reflection_checkpoint, "to_message_id": to_id},
-        )
-        log.info("reflection scheduled", extra={"agent": agent.id, "to_message_id": to_id})
-        agent.reflection_checkpoint = to_id
+async def _checkpoint_in(s: AsyncSession, agent_id: str) -> ReflectionCheckpoint:
+    checkpoint = await s.get(ReflectionCheckpoint, agent_id)
+    if checkpoint is None:
+        checkpoint = ReflectionCheckpoint(agent_id=agent_id, message_id=0)
+        s.add(checkpoint)
+    return checkpoint
 
 
 class ReflectionHandler:

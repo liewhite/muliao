@@ -67,8 +67,6 @@ class Agent(Base):
     # 指令不在这里：它在资源仓库的 agents/<id>/PROMPT.md（读写都经过 evolution.prompts.PromptStore）
     # 两次反思之间的步数（模型回复数，见 runtime.reflection.ReflectionScheduler）
     reflect_every: Mapped[int]
-    # 已纳入反思的最大 message id；下一次反思从它之后开始
-    reflection_checkpoint: Mapped[int] = mapped_column(default=0)
     # 正在删除时是发起删除的作者（docs/domain-design.md 4.4）：不出现在列表与名称解析里，各领域清理完它的数据后删除
     # 这一行与资源目录（资源仓库的删除提交记这个作者）
     deleting_by: Mapped[str | None] = mapped_column(String(64))
@@ -178,6 +176,15 @@ class Reflection(Base):
     output: Mapped[str] = mapped_column(Text)
     messages: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class ReflectionCheckpoint(Base):
+    """反思领域的检查点：该 agent 已纳入反思的最大 message id，下一次反思从它之后开始（runtime.reflection）。"""
+
+    __tablename__ = "reflection_checkpoints"
+
+    agent_id: Mapped[str] = mapped_column(_agent_ref(), primary_key=True)
+    message_id: Mapped[int] = mapped_column(default=0)
 
 
 class Trigger(Base):

@@ -2,8 +2,8 @@
 
 不保留迁移历史：表结构变化时重新生成这一个版本，数据库重建（见 docs/architecture.md「数据库迁移」）。
 
-Revision ID: 9e0fc2e232eb
-Create Date: 2026-10-20 21:26:56.403803
+Revision ID: bba00b9a698d
+Create Date: 2026-10-20 21:33:10.496224
 Revises:
 """
 
@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "9e0fc2e232eb"
+revision: str = "bba00b9a698d"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -28,7 +28,6 @@ def upgrade() -> None:
         sa.Column("model", sa.String(length=200), nullable=False),
         sa.Column("tool_groups", sa.JSON(), nullable=False),
         sa.Column("reflect_every", sa.Integer(), nullable=False),
-        sa.Column("reflection_checkpoint", sa.Integer(), nullable=False),
         sa.Column("deleting_by", sa.String(length=64), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
@@ -113,6 +112,12 @@ def upgrade() -> None:
         sa.Column("auth", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("endpoint"),
+    )
+    op.create_table(
+        "reflection_checkpoints",
+        sa.Column("agent_id", sa.String(length=32), nullable=False),
+        sa.Column("message_id", sa.Integer(), nullable=False),
+        sa.PrimaryKeyConstraint("agent_id"),
     )
     op.create_table(
         "reflections",
@@ -368,6 +373,7 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f("ix_reflections_agent_id"))
 
     op.drop_table("reflections")
+    op.drop_table("reflection_checkpoints")
     op.drop_table("push_subscriptions")
     with op.batch_alter_table("notifications", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_notifications_unread"))
