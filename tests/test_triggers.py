@@ -227,3 +227,27 @@ async def test_a_cron_expression_with_seconds_is_refused(container, make_agent):
         await container.triggers.create(
             name="every-second", agent_id=alpha, kind="schedule", prompt="p", config={"cron": "* * * * * *"}
         )
+
+
+async def test_a_failing_probe_does_not_leak_the_secrets_it_was_given(container, monkeypatch):
+    """连接错误的文本可能带着已代入 secret 的 URL（如 HTTP 错误），它会交还给模型并返回给调用方。"""
+    from pydantic_ai.mcp import MCPToolset
+
+    await container.vault.set(None, "API_TOKEN", "tok-secret-9")
+
+    async def refuse(self):  # noqa: ANN001, ANN202
+        raise RuntimeError("401 for https://mcp.example/sse?token=tok-secret-9")
+
+    monkeypatch.setattr(MCPToolset, "__aenter__", refuse)
+    spec = McpSpec(
+        name="remote",
+        transport=McpTransport.HTTP,
+        command=None,
+        args=(),
+        url="https://mcp.example/sse?token=${vault:API_TOKEN}",
+        env=(),
+        headers=(),
+    )
+    with pytest.raises(InvalidInput) as raised:
+        await container.mcp.add(None, spec, probe=True, author="user")
+    assert "tok-secret-9" not in str(raised.value) and "[secret:API_TOKEN]" in str(raised.value)

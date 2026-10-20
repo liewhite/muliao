@@ -20,7 +20,8 @@ from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.naming import validate_slug
 from muliao.ownership import scope_of, visible
 from muliao.resources import ResourceRepo
-from muliao.vault import Vault
+from muliao.runtime.shell import redact
+from muliao.vault import VAULT_REF, Vault
 
 log = logging.getLogger(__name__)
 
@@ -159,9 +160,12 @@ class McpRegistry:
             async with inner:
                 return [t.name for t in await inner.list_tools()]
         except Exception as e:
-            log.info("mcp probe failed", extra={"mcp": server.name, "error": repr(e)})
+            # 异常文本可能带着已代入 secret 的 URL、参数或请求头（如 HTTP 错误里的完整 URL），它会进日志、
+            # 交还给模型并返回给调用方：先把这次用到的 secret 明文替换掉（与 run_shell 同一份实现）
+            secrets = await self._vault.resolve_many(server.owner, _vault_keys(server.config))
+            log.info("mcp probe failed", extra={"mcp": server.name, "error": redact(repr(e), secrets)})
             raise InvalidInput(
-                f"could not connect to MCP server {server.name!r}: {type(e).__name__}: {e}"
+                redact(f"could not connect to MCP server {server.name!r}: {type(e).__name__}: {e}", secrets)
             ) from e
 
     def list(self, owner: str | None) -> list[McpServer]:
@@ -243,3 +247,14 @@ class McpRegistry:
 
 def _dump(config: McpConfig) -> str:
     return config.model_dump_json(indent=2) + "\n"
+
+
+def _vault_keys(config: McpConfig) -> list[str]:
+    """配置里引用的 vault key（构建 toolset 时代入的就是它们），按出现顺序去重。"""
+    templates = [
+        *config.args,
+        *config.env.values(),
+        *([config.url] if config.url else []),
+        *config.headers.values(),
+    ]
+    return list(dict.fromkeys(k for template in templates for k in VAULT_REF.findall(template)))
