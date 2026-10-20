@@ -1,8 +1,8 @@
 """会话领域的公开接口：别的领域只经这里（与 sessions.events）使用会话领域（docs/architecture.md 第 7 节、2.3）。
 
 - 来信：发送方在自己的事务里 check_receivable_in，再发出 receive_command 构造的定向命令 Receive（sessions.events）；
-- 后台任务：SessionWork（登记占用、运行中检查，各在会话领域自己的事务里），hold_registered_in；结局经定向命令
-  PostEvent 交回；
+- 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；结局与运行中检查经定向命令
+  WorkEnded / WorkCheckIn（sessions.events）；
 - 查询：session_in（SessionInfo）、session_has_pending_work_in、agent_deletion_blocked_in、AgentWork（反思用的步数与记录）；
 - 会话种类与 HTTP 层用的读模型、展示事件；停止的结果：Halted。
 """

@@ -90,8 +90,12 @@ async def test_running_jobs_get_check_events_without_piling_up_and_can_be_killed
     # 输出写进日志之后再检查
     await asyncio.sleep(0.3)
     assert await container.jobs.check() == 1
-    # 上一条检查还在信箱里（还没交给模型）：不再堆一条
-    assert await container.jobs.check() == 0
+    await deliver(container)
+    # 上一条检查还在信箱里（还没交给模型）：会话领域不再堆一条
+    assert await container.jobs.check() == 1
+    await deliver(container)
+    checks = [m for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
+    assert len(checks) == 1
     await drain(container)
     assert "still running" in recorder.prompts[-1][0] and "started" in recorder.prompts[-1][0]
 

@@ -1,8 +1,9 @@
 """在会话之外进行的工作与会话的接口（docs/architecture.md 第 7 节「占用与结清」）：登记占用、运行中检查、交回结局。
 
-- SessionWork：别的领域（后台任务）用的命令，各自在会话领域自己的事务里执行。
+- SessionWork.hold：别的领域（后台任务）登记占用，在会话领域自己的事务里执行；结束与运行中检查经定向命令
+  WorkEnded / WorkCheckIn（同一条按占用者的 lane）。
 - deliver_in：交回结局并释放占用，和一封信件同一个事务；占用已被停止清掉、或会话已删除时不投。唯一出口：后台任务
-  经定向命令 PostEvent，委派由 thread 结清时在同一个事务里调用（sessions.delegation）。
+  经定向命令 WorkEnded，委派由 thread 结清时在同一个事务里调用（sessions.delegation）。
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
-from muliao.sessions.events import PostEvent
+from muliao.sessions.events import WorkCheckIn, WorkEnded, work_lane
 from muliao.sessions.holds import get_in, hold_in, release_in
 from muliao.sessions.mailbox import post_check_in, post_in
 from muliao.sessions.pending import AgentAnswer, AgentAnswered, pending_in
@@ -36,11 +37,6 @@ class SessionWork:
         """登记一项进行中的工作（重放幂等）：会话据此知道工作还没做完。awaited：用户是否在等它的结局。"""
         async with self._db.transaction() as s:
             await hold_in(s, session_id, holder, awaited=awaited)
-
-    async def post_check(self, session_id: str, holder: str, source: str, text: str) -> bool:
-        """运行中检查：给发起会话投一封检查信件（规则见 mailbox.post_check_in），返回是否投了。"""
-        async with self._db.transaction() as s:
-            return await post_check_in(s, self._queue, session_id, holder, source, text)
 
 
 class Delivered(StrEnum):
@@ -118,21 +114,28 @@ async def deliver_in(
     return delivered
 
 
-def handle_post_event(messaging: Messaging, queue: TaskQueue) -> None:
-    """登记定向命令 PostEvent 的处理者（会话领域）：投信与释放占用和这条投递的完成在同一个事务里。"""
+def handle_work_commands(messaging: Messaging, queue: TaskQueue) -> None:
+    """登记 WorkEnded 与 WorkCheckIn 的处理者（会话领域）：投信、释放占用与这条投递的完成在同一个事务里。"""
 
-    async def handle(command: PostEvent, _delivery: Delivery) -> Commit:
+    async def ended(command: WorkEnded, _delivery: Delivery) -> Commit:
         async def commit(s: AsyncSession) -> None:
             await deliver_in(
                 s,
                 queue,
                 command.session_id,
-                command.release,
-                key=command.key,
-                source=command.source,
-                event_text=command.content,
+                command.holder,
+                key=f"{command.holder}:end",
+                source=command.holder,
+                event_text=command.text,
             )
 
         return commit
 
-    messaging.handle(PostEvent, "sessions.post_event", handle)
+    async def check_in(command: WorkCheckIn, _delivery: Delivery) -> Commit:
+        async def commit(s: AsyncSession) -> None:
+            await post_check_in(s, queue, command.session_id, command.holder, command.holder, command.text)
+
+        return commit
+
+    messaging.handle(WorkEnded, "sessions.work_ended", ended, lane=work_lane)
+    messaging.handle(WorkCheckIn, "sessions.work_check_in", check_in, lane=work_lane)

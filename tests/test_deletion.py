@@ -206,16 +206,19 @@ async def test_notifications_of_a_deleted_agents_sessions_go_with_them(container
 
 
 async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, models):
-    from muliao.sessions.tables import HoldStatus, SessionHold
+    from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 
     session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
     # 停止已清掉占用，但后台任务领域还没处理 SessionStopped（进程还在跑）
     await container.consumer.stop_session(session.id)
 
-    assert await container.jobs.check() == 0
+    # 任务还在运行，检查命令照发；会话领域看到占用已清掉，不投检查信件
+    assert await container.jobs.check() == 1
+    await deliver(container)
     async with container.db.transaction() as s:
         [hold] = (await s.scalars(select(SessionHold).where(SessionHold.session_id == session.id))).all()
-    assert hold.status == HoldStatus.CLEARED
+        mail = (await s.scalars(select(Mail).where(Mail.session_id == session.id, Mail.source.is_not(None)))).all()
+    assert hold.status == HoldStatus.CLEARED and mail == []
     await drain(container)
     await wait_until_done(container, job.id)
 

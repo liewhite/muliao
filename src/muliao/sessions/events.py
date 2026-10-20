@@ -69,15 +69,28 @@ class StopThread(Command):
     session_id: str
 
 
-class PostEvent(Command):
-    """往会话的信箱投一封事件信件，同时释放一个占用（后台任务的结局）。占用已被停止清掉、或会话已删除时不投。"""
+class WorkEnded(Command):
+    """在会话之外进行的一项工作（后台任务）结束了：往会话的信箱投一封事件信件（来源是占用者），同时释放占用。占用
+    已被停止清掉、或会话已删除时不投。按占用者幂等。与这项工作的 WorkCheckIn 在同一条 lane（work_lane）上。"""
 
-    TYPE = "session.post_event"
+    TYPE = "session.work_ended"
     session_id: str
-    source: str
-    content: str
-    key: str
-    release: str
+    holder: str
+    text: str
+
+
+class WorkCheckIn(Command):
+    """在会话之外进行的一项工作还在进行：给会话投一封检查信件（规则见 mailbox.post_check_in）。发送方在确认工作仍在
+    进行的事务里发出；与这项工作的 WorkEnded 同一条 lane，所以检查信件不会排在结束之后。"""
+
+    TYPE = "session.work_check_in"
+    session_id: str
+    holder: str
+    text: str
+
+
+def work_lane(command: WorkEnded | WorkCheckIn) -> str:
+    return f"sessions.work:{command.holder}"
 
 
 class ReceiveNewSession(BaseModel):

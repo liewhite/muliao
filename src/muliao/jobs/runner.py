@@ -39,7 +39,7 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, spawn_bash
 from muliao.platform.tasks import Clock, Commit, TaskQueue, no_commit
 from muliao.sessions.api import SessionWork, hold_registered_in, session_in
-from muliao.sessions.events import PostEvent, SessionStopped
+from muliao.sessions.events import SessionStopped, WorkCheckIn, WorkEnded
 from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
@@ -341,16 +341,7 @@ class JobRunner:
     def _report_in(self, s: AsyncSession, job: Job, text: str) -> None:
         """结局与「一定交回会话」同一个事务（定向命令）：会话投一封事件信件并释放占用；会话已被停止（占用已清掉）
         或已删除时不投。"""
-        self._messaging.send_in(
-            s,
-            PostEvent(
-                session_id=job.session_id,
-                source=job_source(job.id),
-                content=text,
-                key=f"{job_source(job.id)}:end",
-                release=job_source(job.id),
-            ),
-        )
+        self._messaging.send_in(s, WorkEnded(session_id=job.session_id, holder=job_source(job.id), text=text))
 
     async def kill(self, job_id: int, agent_id: str) -> None:
         """结束这个 agent 的一个运行中的任务；结果（KILLED）随后作为事件到达。"""
@@ -404,7 +395,8 @@ class JobRunner:
         )
 
     async def check(self) -> int:
-        """给每个运行中的任务发一个检查事件；它上一条事件还在队列里等着时不再发（不堆积）。返回发出的个数。
+        """给每个运行中的任务发一条检查命令（会话领域投检查信件；它上一封还在信箱里排着时不投，不堆积）。返回发出的
+        命令数。
 
         先对账：记为运行中、却不在本进程监督之下、也不在启动中的任务（记下结局时失败、监督意外结束、启动失败后的
         清理没做完），按 recover 的同一套逻辑记为被中断并告诉 agent。"""
@@ -437,16 +429,20 @@ class JobRunner:
         tails = {
             j.id: await asyncio.to_thread(tail, self._workspace_of(j.agent_id) / j.log_path) for j in running
         }
-        posted = 0
-        for job in running:
-            # 快照之后结束的任务：结局已经交回，占用不再 active，会话领域不投
-            if job.id not in self._running:
-                continue
-            text = _check_text(job, self._clock(), tails[job.id])
-            posted += await self._sessions.post_check(
-                job.session_id, job_source(job.id), job_source(job.id), text
-            )
-        return posted
+        # 在确认任务仍在运行的同一个事务里发出检查命令：与记下结局（同一事务发出 WorkEnded）互斥，检查要么先于结束
+        # 排进同一条 lane，要么任务已经结束、不再发
+        sent = 0
+        async with self._db.transaction() as s:
+            for stale in running:
+                job = await s.get(Job, stale.id)
+                if job is None or job.status != JobStatus.RUNNING or job.id not in self._running:
+                    continue
+                text = _check_text(job, self._clock(), tails[job.id])
+                self._messaging.send_in(
+                    s, WorkCheckIn(session_id=job.session_id, holder=job_source(job.id), text=text)
+                )
+                sent += 1
+        return sent
 
     async def recover(self) -> None:
         """启动时（还没有任务在跑）：正常关停已把任务记为被中断，这里剩下的是服务意外退出（被强杀、崩溃）时还在跑的。

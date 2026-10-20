@@ -58,7 +58,7 @@ from muliao.sessions.content import ContentBuilder
 from muliao.sessions.delegation import ThreadChecks
 from muliao.sessions.delegation_tools import delegation_toolset
 from muliao.sessions.deletion import AgentSessionsCleanup
-from muliao.sessions.delivery import SessionWork, handle_post_event
+from muliao.sessions.delivery import SessionWork, handle_work_commands
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
 from muliao.sessions.live import LiveRuns
@@ -290,7 +290,7 @@ def build_container(
     )
     thread_checks = ThreadChecks(db, queue)
     # 跨领域的反应：会话领域的命令处理者与各领域的订阅
-    handle_post_event(messaging, queue)
+    handle_work_commands(messaging, queue)
     jobs.subscribe(messaging)
     limits = ShellLimits(
         settings.runtime.shell_default_timeout,
