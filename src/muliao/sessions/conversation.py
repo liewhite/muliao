@@ -1,7 +1,7 @@
 """会话领域：子会话 thread、来信的唯一入口（投进会话信箱，sessions.mailbox）。设计见 docs/architecture.md「会话领域」。
 
 委派都是往 thread 的信箱投信，thread 由自己的消费者处理：delegate_task 投给公开 thread（用户能看到、能插话）；
-ask_agent 投给私有 thread（用户只读），发问方停在这次调用上，结局作为它的结果交回（delegations.manager）。
+ask_agent 投给私有 thread（用户只读），发问方停在这次调用上，结局作为它的结果交回（sessions.delegation）。
 """
 
 import logging
@@ -21,7 +21,8 @@ from muliao.platform.messaging import Messaging
 from muliao.platform.tables import TaskStatus
 from muliao.platform.tasks import TaskQueue, session_lane
 from muliao.platform.tooling import Origin
-from muliao.sessions.events import DelegationDispatched, Ending, Receive, ReceiveNewSession, SessionDeleted
+from muliao.sessions.delegation import delegation_holder
+from muliao.sessions.events import Ending, Receive, ReceiveNewSession, SessionDeleted
 from muliao.sessions.history import latest_answer, load_context
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import has_active_in, hold_in
@@ -347,7 +348,7 @@ async def delete_sessions(
     私有 thread 只对父会话有意义，逐层随父会话删除（用户不能单独删除它，见 SessionService.delete）；用户可见的
     thread 保留为独立会话（parent 置空）。
     任一被删会话忙时拒绝（判断只看会话自己的数据），避免运行结果无处提交、工具写到被删的目录。交给被删会话、
-    还没结清的委派结清为「被删除」（SessionSettled，委派领域交回发起方）。
+    还没结清的委派结清为「被删除」，结局交回发起方（sessions.delegation）。
     """
     doomed = await _with_owned_threads_in(s, roots)
     for session_id in await busy_among_in(s, queue, doomed):
@@ -362,7 +363,7 @@ async def delete_sessions(
         # 交给被删会话、还没结清的工作交回「被删除」
         await settle_in(
             s,
-            messaging,
+            queue,
             session,
             await unsettled_in(s, session.id, [MailState.QUEUED, MailState.CONSUMED]),
             Ending.DELETED,
@@ -438,15 +439,9 @@ class ThreadView:
     state: ThreadState
 
 
-def delegation_holder(owner_id: str, key: str) -> str:
-    """委派在发起方会话上的占用者，也是 thread 信件的关联 id 与委派行的主键（sessions.holds）。"""
-    return f"delegation:{owner_id}:{key}"
-
-
 class Threads:
-    def __init__(self, queue: TaskQueue, messaging: Messaging):
+    def __init__(self, queue: TaskQueue):
         self._queue = queue
-        self._messaging = messaging
 
     async def find(self, s: AsyncSession, parent_id: str, thread: str) -> Session | None:
         return await s.scalar(
@@ -507,9 +502,9 @@ class Threads:
         key: str,
     ) -> Session:
         """要交回结局的委派（ask_agent、delegate_task(report_back)），在调用方的一个事务里：打开或找到 thread，在发起方
-        登记占用（带 call_id 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件，发布
-        DelegationDispatched（委派领域据此建委派行）。thread 不合用时抛 InvalidInput，什么都没写。按 key 幂等：
-        续跑重新执行这次调用时只返回已经投递到的 thread。awaited：用户是否在等发起方的回答。"""
+        登记占用（带 call_id 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件（委派的全部状态，
+        结局的交回见 sessions.delegation）。thread 不合用时抛 InvalidInput，什么都没写。按 key 幂等：续跑重新执行这次
+        调用时只返回已经投递到的 thread。awaited：用户是否在等发起方的回答。"""
         holder = delegation_holder(owner_id, key)
         if await get_hold_in(s, owner_id, holder) is not None:
             existing = await s.scalar(select(Mail.session_id).where(Mail.correlation == holder).limit(1))
@@ -520,7 +515,7 @@ class Threads:
                 raise RuntimeError(f"delegation {holder} points to a missing thread {existing}")
             return child
         child = await self.open(s, parent_id=owner_id, agent=agent, thread=thread, kind=kind)
-        await hold_in(s, owner_id, holder, call_id)
+        await hold_in(s, owner_id, holder, call_id=call_id, awaited=awaited)
         await receive(
             s,
             self._queue,
@@ -532,16 +527,6 @@ class Threads:
                 # 没有人等 thread 的回答：结局交回发起方，由它处理
                 awaited=False,
                 correlation=holder,
-            ),
-        )
-        self._messaging.publish_in(
-            s,
-            DelegationDispatched(
-                holder=holder,
-                owner_session_id=owner_id,
-                child_session_id=child.id,
-                call_id=call_id,
-                awaited=awaited,
             ),
         )
         log.info(

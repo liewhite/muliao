@@ -7,12 +7,11 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
-from muliao.delegations.tables import Delegation, DelegationStatus
 from muliao.errors import InvalidInput
 from muliao.platform.tables import Task, TaskKind
+from muliao.sessions.delivery import Delivered, deliver_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.kinds import SessionKind
-from muliao.sessions.settlement import Delivered, deliver_in
 from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 from tests.scripted import scripted
 from tests.test_delegations import _asking
@@ -48,8 +47,8 @@ async def test_an_answered_ask_is_not_executed_again_and_its_hold_stays_as_the_r
     [hold] = await _holds(container, parent.id)
     assert (hold.call_id, hold.status) == ("ask1", HoldStatus.RELEASED)
     async with container.db.transaction() as s:
-        [delegation] = (await s.scalars(select(Delegation))).all()
-    assert delegation.status == DelegationStatus.SETTLED
+        [delegation] = (await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))).all()
+    assert delegation.status == HoldStatus.RELEASED
 
 
 async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_agent, models):
@@ -97,13 +96,13 @@ async def test_an_outcome_after_the_session_was_stopped_is_dropped_without_wakin
     agent = (await make_agent("alpha")).id
     session = await start(container, agent, "go")
     async with container.db.transaction() as s:
-        await hold_in(s, session.id, "job:1")
+        await hold_in(s, session.id, "job:1", awaited=False)
     await container.consumer.stop_session(session.id)
     before = await _mail_count(container)
 
     async with container.db.transaction() as s:
         delivered = await deliver_in(
-            s, container.queue, session.id, "job:1", key="k", awaited=True, source="job:1", event_text="done"
+            s, container.queue, session.id, "job:1", key="k", source="job:1", event_text="done"
         )
 
     assert delivered == Delivered.DROPPED
@@ -118,7 +117,7 @@ async def test_an_outcome_for_a_hold_that_was_never_registered_is_a_bug(containe
     with pytest.raises(RuntimeError, match="has no hold"):
         async with container.db.transaction() as s:
             await deliver_in(
-                s, container.queue, session.id, "job:9", key="k", awaited=True, source="job:9", event_text="x"
+                s, container.queue, session.id, "job:9", key="k", source="job:9", event_text="x"
             )
 
 
@@ -159,12 +158,9 @@ async def test_a_final_failure_settles_delegations_handled_by_an_earlier_run(con
     assert len(lead_seen) == 1 and "failed" in lead_seen[0] and "bad request" in lead_seen[0]
 
 
-async def test_a_thread_that_settles_before_the_dispatch_is_delivered_still_reports_back(
-    container, make_agent, models
-):
-    """子会话的运行在 DelegationDispatched 投递之前就结清了：两条投递在同一条 lane 上按发布顺序处理，委派行先建立，
-    结局照常交回。"""
-    from muliao.platform.worker import Worker
+async def test_a_thread_hands_its_outcome_back_in_the_transaction_that_settles_it(container, make_agent, models):
+    """委派的交回不经事件投递：thread 结清关联的那个事务就把结局投进发起方的信箱、释放占用。"""
+    from tests.test_flow import run_only
 
     lead = (await make_agent("lead", model="l")).id
     reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
@@ -185,34 +181,12 @@ async def test_a_thread_that_settles_before_the_dispatch_is_delivered_still_repo
             awaited=False,
             key="k",
         )
-    # 只跑运行（不投递事件）：thread 做完并结清
-    runs_only = Worker(
-        container.queue,
-        {TaskKind.RUN: container.worker._handlers[TaskKind.RUN]},
-        container.bus,
-        concurrency=1,
-        task_timeout_seconds=5,
-    )  # noqa: SLF001
-    import anyio
+    # 只跑运行、不投递任何事件：thread 做完、结清，发起方的运行接着处理交回的事件
+    await run_only(container)
 
-    async with anyio.create_task_group() as group:
-        group.start_soon(runs_only.run_forever)
-        while True:
-            await anyio.sleep(0.02)
-            async with container.db.transaction() as s:
-                if (
-                    await s.get(
-                        Mail, (await s.scalars(select(Mail.id).where(Mail.session_id == child.id))).first()
-                    )
-                ).correlation_settled:
-                    break
-        group.cancel_scope.cancel()
-
-    await drain(container)
     assert any(f"thread:{child.id}" in p and "reviewed check" in p for p in recorder.prompts[-1])
-    async with container.db.transaction() as s:
-        [delegation] = (await s.scalars(select(Delegation))).all()
-    assert delegation.status == DelegationStatus.SETTLED
+    [hold] = await _holds(container, parent.id)
+    assert hold.status == HoldStatus.RELEASED
 
 
 async def test_a_hold_registered_while_the_run_winds_down_is_cleared_by_the_stop(
@@ -240,7 +214,7 @@ async def test_a_hold_registered_while_the_run_winds_down_is_cleared_by_the_stop
     async def hold_then_stop(self, run_id, session_id):  # noqa: ANN001, ANN202
         # 运行刚退出、停止事务之前：模拟退出途中提交的占用（如后台任务的启动）
         async with container.db.transaction() as s:
-            await hold_in(s, session_id, "job:77")
+            await hold_in(s, session_id, "job:77", awaited=False)
         return await original(self, run_id, session_id)
 
     consumer_module.Consumer._stopped = hold_then_stop
@@ -313,13 +287,13 @@ async def test_reconcile_settles_delegations_whose_failure_hook_failed(
     await drain(container)
     monkeypatch.undo()
     async with container.db.transaction() as s:
-        assert (await s.scalars(select(Delegation))).one().status == DelegationStatus.RUNNING
+        assert (await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))).one().status == HoldStatus.ACTIVE
 
     await container.mail.reconcile()
     await drain(container)
 
     async with container.db.transaction() as s:
-        assert (await s.scalars(select(Delegation))).one().status == DelegationStatus.SETTLED
+        assert (await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))).one().status == HoldStatus.RELEASED
     assert any("failed" in p and "bad request" in p for p in recorder.prompts[-1])
 
 
@@ -364,7 +338,7 @@ async def test_an_outcome_is_delivered_even_if_the_threads_agent_was_deleted_mea
     await drain(container)
 
     async with container.db.transaction() as s:
-        assert (await s.scalars(select(Delegation))).one().status == DelegationStatus.SETTLED
+        assert (await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))).one().status == HoldStatus.RELEASED
     assert any("(reviewer) was stopped" in p for p in recorder.prompts[-1])
 
 
@@ -405,8 +379,8 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
     failed = await container.queue.fail(run.id, "boom", retryable=False, on_final=no_hook)
     assert failed.status == TaskStatus.FAILED
 
-    assert await reconcile_failures(container.db, container.messaging) == [child.id]
-    assert await reconcile_failures(container.db, container.messaging) == []
+    assert await reconcile_failures(container.db, container.queue) == [child.id]
+    assert await reconcile_failures(container.db, container.queue) == []
     await deliver(container)
     events = [m for m in await _mail_of(container, parent.id) if m.source == f"thread:{child.id}"]
     assert len(events) == 1 and "boom" in events[0].content
@@ -464,7 +438,7 @@ async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_fail
         ).all()
         await s.delete(woken)
 
-    assert await reconcile_failures(container.db, container.messaging) == [child.id]
+    assert await reconcile_failures(container.db, container.queue) == [child.id]
     late = [m for m in await _mail_of(container, child.id) if m.content.endswith("second")]
     assert [(m.state, m.correlation_settled) for m in late] == [(MailState.QUEUED, False)]
     first = [m for m in await _mail_of(container, child.id) if m.content.endswith("first")]

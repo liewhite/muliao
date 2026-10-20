@@ -16,7 +16,7 @@ from muliao.errors import Conflict, NotFound, TransientError
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskStatus
-from muliao.platform.tasks import Commit, TaskQueue
+from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.platform.tooling import Origin
 from muliao.sessions.codec import load_messages
 from muliao.sessions.conversation import (
@@ -32,7 +32,7 @@ from muliao.sessions.conversation import (
     receive_target,
     threads_of,
 )
-from muliao.sessions.events import AgentSessionsCleared, Receive
+from muliao.sessions.events import AgentSessionsCleared, Receive, StopThread
 from muliao.sessions.halt import Halted
 from muliao.sessions.kinds import LISTED, policy_of
 from muliao.sessions.live import LiveRun, LiveRuns
@@ -174,6 +174,7 @@ class SessionService:
             (await self._get(s, session_id)).unread = False
 
     def subscribe(self, messaging: Messaging) -> None:
+        messaging.handle(StopThread, "sessions.stop_thread", self.on_stop_thread)
         messaging.handle(
             Receive, "sessions.receive", self.on_receive, lane=lambda c: receive_lane(receive_target(c))
         )
@@ -183,6 +184,12 @@ class SessionService:
             self.on_agent_deleting,
             lane=lambda e: f"sessions.agent_deleting:{e.agent_id}",
         )
+
+    async def on_stop_thread(self, command: StopThread, _delivery: Delivery) -> Commit:
+        """一个 thread 做的委派的发起方被停止了：停止它（已被删除时是 GONE，什么都不做）。"""
+        halted = await self._stop_session(command.session_id)
+        log.info("thread of a stopped session stopped", extra={"session_id": command.session_id, "halted": halted})
+        return no_commit
 
     async def on_receive(self, command: Receive, delivery: Delivery) -> Commit:
         inbound = inbound_of(command)

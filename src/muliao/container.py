@@ -34,8 +34,6 @@ from muliao.agents.service import AgentDefaults, AgentService
 from muliao.agents.skills import SkillStore
 from muliao.agents.tools import agents_toolset
 from muliao.config import Settings
-from muliao.delegations.manager import Delegations
-from muliao.delegations.tools import delegation_toolset
 from muliao.errors import InvalidInput
 from muliao.files.store import FileStore
 from muliao.jobs.runner import JobRunner
@@ -58,12 +56,15 @@ from muliao.sessions.compaction import CompactionHandler, Compactor
 from muliao.sessions.consumer import Consumer, RunHandler
 from muliao.sessions.content import ContentBuilder
 from muliao.sessions.conversation import Threads
+from muliao.sessions.delegation import ThreadChecks
+from muliao.sessions.delegation_tools import delegation_toolset
+from muliao.sessions.delivery import handle_post_event
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import MailReconciler
 from muliao.sessions.service import SessionService
-from muliao.sessions.settlement import handle_post_event, reconcile_failures
+from muliao.sessions.settlement import reconcile_failures
 from muliao.sessions.steps import Steps
 from muliao.sessions.work import AgentWork
 from muliao.triggers.precheck import PrecheckRunner
@@ -105,7 +106,7 @@ class Container:
     threads: Threads
     mail: MailReconciler
     jobs: JobRunner
-    delegations: Delegations
+    thread_checks: ThreadChecks
     work: WorkWatcher
     compactor: Compactor
     reflection: ReflectionScheduler
@@ -242,7 +243,7 @@ def build_container(
         db, agents, queue, messaging, lambda s, agent_id: agent_busy_in(s, queue, agent_id)
     )
     sessions = SessionService(db, queue, live, messaging, lambda session_id: consumer.stop_session(session_id))
-    threads = Threads(queue, messaging)
+    threads = Threads(queue)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(resources, vault)
     schedule_kind = ScheduleKind(tz)
@@ -277,12 +278,10 @@ def build_container(
         files=files,
     )
     jobs = JobRunner(db, queue, vault, agents.workspace, settings.runtime.job_check_seconds, messaging)
-    # 委派停下 thread 要用消费者，消费者停止会话又要停下委派：延迟绑定打破构造顺序上的环
-    delegations = Delegations(db, queue, lambda session_id: consumer.stop_session(session_id))
+    thread_checks = ThreadChecks(db, queue)
     # 跨领域的反应：会话领域的命令处理者与各领域的订阅
     handle_post_event(messaging, queue)
     jobs.subscribe(messaging)
-    delegations.subscribe(messaging)
     limits = ShellLimits(
         settings.runtime.shell_default_timeout,
         settings.runtime.shell_max_timeout,
@@ -368,7 +367,7 @@ def build_container(
     )
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.EVENT: messaging,
-        TaskKind.RUN: RunHandler(consumer, messaging),
+        TaskKind.RUN: RunHandler(consumer, queue),
         TaskKind.COMPACTION: CompactionHandler(db, compactor),
         TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups, agents, agent_work),
         TaskKind.DELIVER: DeliverHandler(db, pusher),
@@ -406,10 +405,10 @@ def build_container(
         worker=worker,
         messaging=messaging,
         threads=threads,
-        mail=MailReconciler(db, queue, lambda: reconcile_failures(db, messaging)),
+        mail=MailReconciler(db, queue, lambda: reconcile_failures(db, queue)),
         jobs=jobs,
-        delegations=delegations,
-        work=WorkWatcher([jobs, delegations], settings.runtime.job_check_seconds),
+        thread_checks=thread_checks,
+        work=WorkWatcher([jobs, thread_checks], settings.runtime.job_check_seconds),
         compactor=compactor,
         reflection=reflection,
         consumer=consumer,

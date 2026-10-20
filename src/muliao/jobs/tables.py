@@ -36,8 +36,6 @@ class Job(Base):
     log_path: Mapped[str] = mapped_column(String(255))
     # 进程（组）号；进程还没起来时为 None
     pid: Mapped[int | None]
-    # 发起它的那次运行里用户是否在等回答：完成通知的信件随它（运行中的检查不推送）
-    awaited: Mapped[bool]
     started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 

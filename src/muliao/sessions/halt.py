@@ -4,9 +4,10 @@
 1. 让库里的历史停在不会被续跑的地方：悬空的工具调用（等用户回答的提问除外，用户仍可回答）补上「被停止」的结果，
    末尾没得到回复的请求标上停止。
 2. 排队与等重试的运行记为完成，不再执行。
-3. 全部 active 占用记为 cleared：之后才到的结局（后台任务、委派）一律不投（sessions.settlement.deliver_in）。
-4. 交给这个会话、还没结清的委派结清为「被停止」；清空信箱。
-5. 发布 SessionStopped：后台任务结束被清掉的进程，委派放弃被清掉的工作并逐层停止 thread（各自订阅）。
+3. 全部 active 占用记为 cleared：之后才到的结局（后台任务、委派）一律不投（sessions.delivery.deliver_in）。
+4. 交给这个会话、还没结清的委派结清为「被停止」，结局交回它们的发起方（sessions.delegation）；清空信箱。
+5. 被清掉的委派：给做这些工作的 thread 各发一条定向命令 StopThread（逐层停止）。
+6. 发布 SessionStopped：后台任务领域结束被清掉的进程。
 """
 
 from __future__ import annotations
@@ -24,7 +25,8 @@ from muliao.platform.messaging import Messaging
 from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue, session_lane
 from muliao.sessions.codec import dump_message, load_messages
-from muliao.sessions.events import Ending, SessionStopped
+from muliao.sessions.delegation import threads_of_holds_in
+from muliao.sessions.events import Ending, SessionStopped, StopThread
 from muliao.sessions.history import latest_answer, load_context, marked_stopped, stopped_results
 from muliao.sessions.holds import clear_in
 from muliao.sessions.mailbox import discard_in, latest_run
@@ -59,7 +61,7 @@ class Halted(StrEnum):
     """停止的结果（命令的结果类型）。"""
 
     STOPPED = "stopped"
-    # 会话已删除（例如委派领域停止一个刚被用户删掉的 thread）：契约内的情况，不是错误
+    # 会话已删除（例如 StopThread 停止一个刚被用户删掉的 thread）：契约内的情况，不是错误
     GONE = "gone"
 
 
@@ -82,13 +84,17 @@ class SessionHalt:
             cleared = await clear_in(s, session_id)
             settled = await settle_in(
                 s,
-                self._messaging,
+                self._queue,
                 session,
                 await unsettled_in(s, session_id, [MailState.QUEUED, MailState.CONSUMED]),
                 Ending.STOPPED,
                 await latest_answer(s, session_id),
             )
             discarded = await discard_in(s, session_id)
+            # 被清掉的委派：做这些工作的 thread 一起停下（逐层，由它们自己的停止继续）
+            threads = await threads_of_holds_in(s, cleared)
+            for thread_id in threads:
+                self._messaging.send_in(s, StopThread(session_id=thread_id))
             self._messaging.publish_in(s, SessionStopped(session_id=session_id, cleared=cleared))
         log.info(
             "session halted",
@@ -98,6 +104,7 @@ class SessionHalt:
                 "discarded_mail": discarded,
                 "cleared_holds": cleared,
                 "settled_correlations": settled,
+                "stopping_threads": threads,
             },
         )
         return Halted.STOPPED

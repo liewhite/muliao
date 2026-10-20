@@ -15,16 +15,19 @@ from muliao.platform.db import utcnow
 from muliao.sessions.tables import HoldStatus, SessionHold
 
 
-async def hold_in(s: AsyncSession, session_id: str, holder: str, call_id: str | None = None) -> SessionHold:
-    """登记一个占用；已经登记过（重放）就返回它。"""
+async def hold_in(
+    s: AsyncSession, session_id: str, holder: str, *, awaited: bool, call_id: str | None = None
+) -> SessionHold:
+    """登记一个占用；已经登记过（重放）就返回它。awaited：用户是否在等这项工作的结局（交回的信件随它推送）。"""
     existing = await get_in(s, session_id, holder)
     if existing is not None:
-        if existing.call_id != call_id:
+        if (existing.call_id, existing.awaited) != (call_id, awaited):
             raise RuntimeError(
-                f"hold {holder} of session {session_id} was registered for call {existing.call_id}, not {call_id}"
+                f"hold {holder} of session {session_id} was registered for call {existing.call_id} "
+                f"(awaited={existing.awaited}), not {call_id} (awaited={awaited})"
             )
         return existing
-    hold = SessionHold(session_id=session_id, holder=holder, call_id=call_id)
+    hold = SessionHold(session_id=session_id, holder=holder, call_id=call_id, awaited=awaited)
     s.add(hold)
     await s.flush()
     return hold

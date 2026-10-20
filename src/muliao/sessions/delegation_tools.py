@@ -1,5 +1,5 @@
 """agent 之间的委派：delegate_task（不等结果）、ask_agent（挂起这次调用，等对方的结局作为结果）、stop_thread、
-list_threads。设计见 sessions/conversation.py 与 delegations/manager.py。"""
+list_threads。委派的生命周期见 sessions.delegation。"""
 
 from collections.abc import Awaitable, Callable
 from typing import Literal
@@ -12,7 +12,8 @@ from muliao.agents.api import AgentService
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-from muliao.sessions.api import SessionKind, Threads, policy_of, validate_thread
+from muliao.sessions.conversation import Threads, validate_thread
+from muliao.sessions.kinds import SessionKind, policy_of
 
 _ANSWER_PREVIEW = 500
 

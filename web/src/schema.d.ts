@@ -791,7 +791,7 @@ export interface components {
     schemas: {
         /**
          * AgentAnswer
-         * @description 被问的 agent 交回的结局（delegations.manager）：给发问方模型的文字，它挂给用户的文件，所在的 thread。
+         * @description 被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件，所在的 thread。
          */
         AgentAnswer: {
             /** Text */

@@ -2,7 +2,6 @@
 领域也由这里推导（表定义所在的包）。"""
 
 from muliao.agents import tables as agents  # noqa: F401
-from muliao.delegations import tables as delegations  # noqa: F401
 from muliao.files import tables as files  # noqa: F401
 from muliao.jobs import tables as jobs  # noqa: F401
 from muliao.notifications import tables as notifications  # noqa: F401

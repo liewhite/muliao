@@ -7,7 +7,7 @@ pydantic-ai 的 CallDeferred，这次运行停在这里正常结束，不在 wor
 - 什么时候继续（waiting，唯一规则）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件留在信箱里
   等它们一起交给模型。唤醒（mailbox.wake_in）与消费者开头共用这一条。
 - 跳过：没回答的 ask_user 记为没回答（questions），还没回答的 ask_agent 记为「回答之后作为事件送达」——那时
-  它已不再挂着，委派的结局按事件投回（delegations.manager）。
+  它已不再挂着，委派的结局按事件投回（sessions.delegation）。
 """
 
 from collections.abc import Mapping, Sequence
@@ -38,7 +38,7 @@ DEFERRED_TOOLS: Final = frozenset({ASK_USER, ASK_AGENT})
 
 
 class AgentAnswer(BaseModel):
-    """被问的 agent 交回的结局（delegations.manager）：给发问方模型的文字，它挂给用户的文件，所在的 thread。"""
+    """被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件，所在的 thread。"""
 
     text: str
     attachments: list[Attachment]

@@ -111,7 +111,7 @@ class Mail(Base):
     # 用户是否在等它的回答：一次运行处理过的信件里有一封是，结束时就把回答推送给用户
     awaited: Mapped[bool] = mapped_column(default=False)
     # 不透明的关联 id：发送方要知道这封信件带来的工作什么时候结束（委派来的信件是它的 holder，sessions.holds）。
-    # 会话在结束时结清它并发布 SessionSettled（sessions.settlement），每个关联只结清一次
+    # 会话在结束时结清它，结局在同一事务里交回发起方（sessions.settlement、sessions.delegation），每个关联只结清一次
     correlation: Mapped[str | None] = mapped_column(String(200))
     correlation_settled: Mapped[bool] = mapped_column(default=False)
     # 幂等键：带同一个键的投信只投一次（命令按键去重，docs/architecture.md 3.4）
@@ -153,8 +153,11 @@ class SessionHold(Base):
     holder: Mapped[str] = mapped_column(String(200))
     # 这项工作的结局作为这次挂起调用的结果交回（ask_agent）
     call_id: Mapped[str | None] = mapped_column(String(100))
+    # 用户是否在等这项工作的结局：交回结局的信件随它推送（发起这项工作的运行有用户在等）
+    awaited: Mapped[bool]
     status: Mapped[HoldStatus] = mapped_column(StrEnumType(HoldStatus), default=HoldStatus.ACTIVE)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
-    __table_args__ = (Index("uq_session_holds", "session_id", "holder", unique=True),)
+    # 占用者全局唯一（job:<id>、delegation:<发起会话>:<工具调用 id>）：委派交回时按它找到发起方（sessions.delegation）
+    __table_args__ = (Index("uq_session_holds_holder", "holder", unique=True),)

@@ -92,7 +92,7 @@ class RunFinisher:
                 # 处理中的委派结清。委派可能跨几次运行：停在挂起的调用上、或还有工作没做完时，由之后那次做完的运行结清
                 await settle_in(
                     s,
-                    self._messaging,
+                    self._queue,
                     session,
                     await unsettled_in(s, session.id, [MailState.CONSUMED]),
                     Ending.FINISHED,

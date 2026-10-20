@@ -179,7 +179,6 @@ class JobRunner:
                     agent_id=agent_id,
                     command=command,
                     secrets=list(secrets),
-                    awaited=awaited,
                     log_path="",
                     started_at=self._clock(),
                 )
@@ -194,21 +193,21 @@ class JobRunner:
                 self._starting.discard(job.id)
             raise
         try:
-            await self._launch(job, values, group)
+            await self._launch(job, values, group, awaited)
         finally:
             self._starting.discard(job.id)
         log.info("background job started", extra={"job_id": job.id, "session_id": session_id, "pid": job.pid})
         return job
 
-    async def _launch(self, job: Job, values: Mapping[str, str], group: TaskGroup) -> None:
+    async def _launch(self, job: Job, values: Mapping[str, str], group: TaskGroup, awaited: bool) -> None:
         """起进程与监督者并记下 pid。任何一步失败或被取消（这次运行被停止）都不能留下没人能结束的进程：清理在
         屏蔽作用域里做完；清理超时则记 error，这一行留在 running，下一次检查的对账把它记为被中断并告诉 agent。"""
         workspace = self._workspace_of(job.agent_id)
         log_file = workspace / job.log_path
         try:
-            # 先在会话上登记占用（会话据此知道工作还没做完），再起进程
+            # 先在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上），再起进程
             async with self._db.transaction() as s:
-                await hold_in(s, job.session_id, job_source(job.id))
+                await hold_in(s, job.session_id, job_source(job.id), awaited=awaited)
             await asyncio.to_thread(log_file.parent.mkdir, parents=True, exist_ok=True)
             proc = await spawn_bash(job.command, cwd=workspace, secrets=values, merge_stderr=True)
         except BaseException as e:
@@ -367,7 +366,6 @@ class JobRunner:
                 session_id=job.session_id,
                 source=job_source(job.id),
                 content=text,
-                awaited=job.awaited,
                 key=f"{job_source(job.id)}:end",
                 release=job_source(job.id),
             ),

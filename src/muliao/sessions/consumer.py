@@ -21,9 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import AgentRuntime, ToolGroups, answer_text, is_stopped, unanswered_calls
 from muliao.platform.db import Database
-from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
-from muliao.platform.tasks import Commit, no_commit
+from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
@@ -274,9 +273,9 @@ async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
 class RunHandler:
     """队列里的运行（run task）。"""
 
-    def __init__(self, consumer: Consumer, messaging: Messaging):
+    def __init__(self, consumer: Consumer, queue: TaskQueue):
         self._consumer = consumer
-        self._messaging = messaging
+        self._queue = queue
 
     async def execute(self, task: Task) -> Commit:
         if task.session_id is None:
@@ -292,4 +291,4 @@ class RunHandler:
         if task.session_id is None:
             raise RuntimeError(f"run {task.id} has no session")
         child, _agent = await load_session(s, task.session_id)
-        await settle_failure_in(s, self._messaging, child, task)
+        await settle_failure_in(s, self._queue, child, task)

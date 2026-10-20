@@ -119,13 +119,12 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
             command="sleep 100",
             secrets=[],
             log_path="jobs/x.log",
-            awaited=True,
             pid=424242,
         )
         s.add(job)
-    # 上一个进程启动它时已在会话上登记了占用（会话领域自己的事务）
+    # 上一个进程启动它时已在会话上登记了占用（会话领域自己的事务），发起它的运行有用户在等
     async with container.db.transaction() as s:
-        await hold_in(s, session.id, f"job:{job.id}")
+        await hold_in(s, session.id, f"job:{job.id}", awaited=True)
 
     await container.jobs.recover()
     await drain(container)
@@ -479,7 +478,6 @@ async def test_a_job_whose_session_was_deleted_is_kept_as_interrupted_after_a_cr
             command="sleep 100",
             secrets=[],
             log_path="jobs/x.log",
-            awaited=False,
             pid=424242,
         )
         s.add(job)

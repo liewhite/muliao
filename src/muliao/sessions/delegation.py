@@ -1,0 +1,190 @@
+"""委派：会话交给另一个 agent、要交回结局的工作（ask_agent，delegate_task(report_back)）。整个生命周期在会话领域里，
+由两个对称的事务完成（docs/architecture.md 第 8 节）：
+
+- 发出（Threads.dispatch）：一个事务里在发起方登记占用（holder 由工具调用 id 确定性派生，带 call_id 与「用户是否在等
+  发起方」），往 thread 投一封以 holder 为关联 id 的信件。
+- 交回（hand_back_in，由 thread 结清关联时调用：运行做完、最终失败、被停止、被删除）：同一个事务里经 deliver_in 把
+  结局交给发起方并释放占用——发起方还停在那次 ask_agent 调用上时作为调用的结果，否则作为事件；发起方已被停止
+  （占用 cleared）不投，已删除（占用随它删除）不投。
+- 发起方被停止：停止事务清掉占用，并给做这些工作的 thread 各发一条定向命令 StopThread（逐层由它们自己的停止继续）。
+- 运行中检查（ThreadChecks）：发起方没停在这次调用上时（它在等时检查信件交不到模型），给发起方投检查信件。
+
+委派的状态只有发起方的占用（active / released / cleared）一处；thread 是哪个会话由关联信件推出，不另存。
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Sequence
+from datetime import datetime
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from muliao.agent_runtime.api import Attachment
+from muliao.agents.api import AgentInfo, agent_in
+from muliao.platform.db import Database, utcnow
+from muliao.platform.tables import Task, TaskStatus
+from muliao.platform.tasks import Clock, TaskQueue
+from muliao.sessions.delivery import deliver_in
+from muliao.sessions.events import Ending
+from muliao.sessions.mailbox import latest_run, post_check_in
+from muliao.sessions.pending import AgentAnswer, pending_in
+from muliao.sessions.tables import HoldStatus, Mail, Session, SessionHold
+
+log = logging.getLogger(__name__)
+
+
+def delegation_holder(owner_id: str, key: str) -> str:
+    """委派在发起方会话上的占用者，也是 thread 信件的关联 id。"""
+    return f"delegation:{owner_id}:{key}"
+
+
+def thread_source(child_id: str) -> str:
+    """thread 交回的事件的来源，也用来判断它是否已有信件在发起方的信箱里排着。"""
+    return f"thread:{child_id}"
+
+
+def thread_name(child: Session) -> str:
+    if child.thread is None:
+        raise RuntimeError(f"session {child.id} is a child session without a thread name")
+    return child.thread
+
+
+def _result_text(thread: str, agent: str, ending: Ending, text: str) -> str:
+    """作为 ask_agent 调用的结果：完成时就是回答本身（发问方问的就是它）。"""
+    if ending == Ending.FINISHED:
+        return text
+    return event_text(thread, agent, ending, text)
+
+
+def event_text(thread: str, agent: str, ending: Ending, text: str) -> str:
+    who = f"Thread {thread!r} ({agent})"
+    match ending:
+        case Ending.FINISHED:
+            return f"{who} finished your task. Its answer:\n{text}"
+        case Ending.STOPPED:
+            return f"{who} was stopped before it finished. What it said so far:\n{text or '(nothing)'}"
+        case Ending.FAILED:
+            return f"{who} failed: {text}\nYou can ask it again, or delegate to another agent."
+        case Ending.DELETED:
+            return f"{who} was deleted by the user before it finished."
+
+
+async def hand_back_in(
+    s: AsyncSession,
+    queue: TaskQueue,
+    child: Session,
+    holders: Sequence[str],
+    ending: Ending,
+    text: str,
+    attachments: Sequence[Attachment],
+) -> None:
+    """thread 结清了这些委派：在同一个事务里把结局交给各自的发起方（deliver_in，唯一出口）。每个关联只结清一次
+    （mail.correlation_settled），所以每项委派只交回一次。"""
+    if not holders:
+        return
+    name = thread_name(child)
+    agent = await agent_in(s, child.agent_id)
+    for holder in holders:
+        hold = await s.scalar(select(SessionHold).where(SessionHold.holder == holder))
+        if hold is None:
+            # 占用随发起方删除：结局没有收件人
+            log.info("delegation outcome for a deleted session dropped", extra={"holder": holder})
+            continue
+        delivered = await deliver_in(
+            s,
+            queue,
+            hold.session_id,
+            holder,
+            key=f"{holder}:settled",
+            source=thread_source(child.id),
+            event_text=event_text(name, agent.name, ending, text),
+            answer=AgentAnswer(
+                text=_result_text(name, agent.name, ending, text),
+                attachments=list(attachments),
+                thread=child.id,
+            ),
+        )
+        log.info(
+            "delegation handed back",
+            extra={
+                "holder": holder,
+                "session_id": hold.session_id,
+                "thread_session_id": child.id,
+                "ending": ending,
+                "delivered_as": delivered,
+            },
+        )
+
+
+async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> list[str]:
+    """做这些委派的 thread（由以 holder 为关联 id 的信件推出），按出现顺序去重。不是委派的占用（后台任务）没有
+    这样的信件。"""
+    if not holders:
+        return []
+    rows = await s.scalars(select(Mail.session_id).where(Mail.correlation.in_(list(holders))).order_by(Mail.id))
+    return list(dict.fromkeys(rows.all()))
+
+
+class ThreadChecks:
+    """委派的运行中检查（platform.checks.WorkWatcher 的一种工作）。"""
+
+    def __init__(self, db: Database, queue: TaskQueue, clock: Clock = utcnow):
+        self._db = db
+        self._queue = queue
+        self._clock = clock
+
+    async def check(self) -> int:
+        posted = 0
+        async with self._db.transaction() as s:
+            rows = (
+                await s.execute(
+                    select(SessionHold, Mail.session_id)
+                    .join(Mail, Mail.correlation == SessionHold.holder)
+                    .where(SessionHold.status == HoldStatus.ACTIVE)
+                    .order_by(SessionHold.id)
+                )
+            ).all()
+            seen: set[tuple[str, str]] = set()
+            for hold, child_id in rows:
+                if (hold.session_id, child_id) in seen:
+                    continue
+                seen.add((hold.session_id, child_id))
+                if hold.call_id is not None and hold.call_id in await pending_in(s, hold.session_id):
+                    # 发起方停在这次调用上：检查信件要等回答一起才交给模型，没有意义
+                    continue
+                child = await s.get(Session, child_id)
+                if child is None:
+                    raise RuntimeError(f"delegation {hold.holder} has mail in a missing thread {child_id}")
+                agent = await agent_in(s, child.agent_id)
+                text = check_text(child, agent, await latest_run(s, child.id), self._clock())
+                posted += await post_check_in(
+                    s, self._queue, hold.session_id, hold.holder, thread_source(child.id), text
+                )
+        return posted
+
+
+def check_text(child: Session, agent: AgentInfo, run: Task | None, now: datetime) -> str:
+    """run 为 None：委派信件还排着，thread 还没有运行。最近一次运行已经结束（委派却还没结清）：thread 停在它自己的
+    挂起调用上，或在等它发起的后台任务、委派。"""
+    name = thread_name(child)
+    stop = f"if it is no longer needed, call stop_thread({name!r})."
+    if run is None or run.status in (TaskStatus.PENDING, TaskStatus.DONE, TaskStatus.FAILED):
+        if run is not None and run.status == TaskStatus.PENDING and run.attempts:
+            state = f"is waiting to run again (attempt {run.attempts} so far)"
+        elif run is not None and run.status == TaskStatus.DONE:
+            state = (
+                "is waiting for work it started (background jobs, other agents) or for answers it asked for"
+            )
+        else:
+            state = "is queued and has not started yet"
+        return f"Thread {name!r} ({agent.name}) {state}. Keep waiting, you will get an event with its answer; {stop}"
+    if run.started_at is None:
+        raise RuntimeError(f"running run {run.id} has no start time")
+    minutes = int((now - run.started_at).total_seconds() // 60)
+    return (
+        f"Thread {name!r} ({agent.name}) is still working on your task ({minutes} min so far).\n"
+        f"Keep waiting, you will get an event with its answer; {stop}"
+    )
+

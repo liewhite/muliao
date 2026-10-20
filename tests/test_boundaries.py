@@ -14,7 +14,6 @@ SRC = Path(__file__).parent.parent / "src" / "muliao"
 DOMAINS = {
     "agents",
     "agent_runtime",
-    "delegations",
     "files",
     "jobs",
     "notifications",
