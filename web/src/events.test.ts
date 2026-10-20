@@ -86,3 +86,14 @@ describe('isStale', () => {
     expect(isStale(0, 10 * 60_000, 15)).toBe(true)
   })
 })
+
+describe('mergeLive without a snapshot', () => {
+  const at = (seq: number): RunEvent => ({ ...ev('text', 'x'), seq })
+  it('keeps events that start at the beginning of the run', () => {
+    expect(mergeLive(null, [at(0), at(1)]).gap).toBe(false)
+  })
+  it('reports a gap when the first events of the run were missed', () => {
+    // 快照生成时这一轮还没开始，SSE 连上时已经开始了：开头的事件两边都没有
+    expect(mergeLive(null, [at(3), at(4)]).gap).toBe(true)
+  })
+})

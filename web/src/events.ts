@@ -1,7 +1,7 @@
 // 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
 
 import { useEffect, useRef } from 'react'
-import type { Attachment, Item, TaskKind, TaskStatus } from './api'
+import { api, type Attachment, type Item, type TaskKind, type TaskStatus } from './api'
 
 interface RunEventBase {
   type: 'run'
@@ -51,10 +51,11 @@ export interface MergedLive {
 
 /**
  * 以快照为准（这一轮从开头起的全部事件），再接上之后经 SSE 收到、快照里还没有的同一轮事件；别的轮次的事件丢弃。
- * 没有快照（这一轮已结束或还没开始）时保留已收到的事件，由随后的任务状态事件清空。
+ * 没有快照（这一轮已结束或还没开始）时保留已收到的事件，由随后的任务状态事件清空；收到的事件不是从这一轮的开头起
+ * （快照生成时这一轮还没开始、SSE 连上时已经开始了），同样是缺口。
  */
 export function mergeLive(snapshot: LiveRun | null, current: RunEvent[]): MergedLive {
-  if (snapshot === null) return { events: current, gap: false }
+  if (snapshot === null) return { events: current, gap: current.length > 0 && current[0].seq !== 0 }
   const last = snapshot.events.at(-1)?.seq ?? -1
   const after = current.filter((e) => e.run_id === snapshot.run_id && e.seq > last)
   return { events: [...snapshot.events, ...after], gap: after.length > 0 && after[0].seq !== last + 1 }
@@ -137,6 +138,13 @@ function connect() {
   source.onopen = () => {
     if (everOpened) listeners.forEach((l) => l({ type: 'reconnected' }))
     everOpened = true
+  }
+  source.onerror = () => {
+    // 网络错误时 EventSource 自己重连（readyState 回到 CONNECTING）；非 200 响应（如登录过期的 401）会让它永久关闭，
+    // 看门狗只会一直重建、一直失败。用一次普通请求走统一的 401 处理（回到登录页）；不是 401 时由看门狗继续重试
+    if (source?.readyState === EventSource.CLOSED) {
+      void api.me().catch((e) => console.error('event stream closed by the server', e))
+    }
   }
   source.onmessage = (msg) => {
     lastMessageAt = Date.now()

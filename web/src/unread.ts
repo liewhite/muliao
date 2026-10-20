@@ -6,6 +6,8 @@ import { api } from './api'
 import { useServerEvents, type ServerEvent } from './events'
 
 let unread = 0
+// 请求序号：并发刷新时只让最新一次的结果落下，晚到的旧响应不能覆盖新值
+let latest = 0
 const subscribers = new Set<() => void>()
 
 function setBadge(count: number) {
@@ -18,7 +20,9 @@ function setBadge(count: number) {
 
 /** 从服务端重新取未读数；标记已读之后调用 */
 export async function refreshUnread(): Promise<void> {
+  const id = ++latest
   const { count } = await api.unreadNotifications()
+  if (id !== latest) return
   unread = count
   setBadge(count)
   subscribers.forEach((s) => s())

@@ -461,12 +461,8 @@ export default function SessionView() {
     }
   })
 
-  // 中途打开或重新拉取时以快照为准，从这一轮的开头显示，再接上经 SSE 收到、快照里还没有的事件。
-  // 只看这个会话的事件：切换会话时组件复用，上一个会话收到的事件还在
-  const merged = mergeLive(
-    detail.data?.live ?? null,
-    live.filter((e) => e.session_id === id),
-  )
+  // 中途打开或重新拉取时以快照为准，从这一轮的开头显示，再接上经 SSE 收到、快照里还没有的事件
+  const merged = mergeLive(detail.data?.live ?? null, live)
   const shownLive = merged.events
   const reload = detail.reload
   useEffect(() => {
@@ -542,7 +538,8 @@ export default function SessionView() {
         </>
       }
       footer={
-        <div className="border-t border-separator bg-surface px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
+        // 底部安全区由下面的导航栏留出，这里不重复
+        <div className="border-t border-separator bg-surface px-3 pt-2 pb-2">
           <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2">
             {bottom.atBottom === false && (
               <Button

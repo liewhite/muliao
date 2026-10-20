@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTheme } from '@heroui/react'
 import { Bell, Bot, MessageSquare, Settings as SettingsIcon, Zap } from 'lucide-react'
-import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
 import { closeServerEvents } from './events'
 import { useUnreadCount, useUnreadSync } from './unread'
@@ -80,6 +80,12 @@ export default function App() {
   return <Shell />
 }
 
+/** 每个会话一个独立的页面实例：会话之间跳转（thread 链接、点通知）时，草稿、附件、运行中的事件与报错不带到另一个会话 */
+function SessionRoute() {
+  const { id = '' } = useParams()
+  return <SessionView key={id} />
+}
+
 /** 登录后的界面：页面与底部导航 */
 function Shell() {
   useUnreadSync()
@@ -91,7 +97,7 @@ function Shell() {
           <Route path="/" element={<Sessions />} />
           <Route path="/new" element={<NewSession />} />
           <Route path="/notifications" element={<Notifications />} />
-          <Route path="/sessions/:id" element={<SessionView />} />
+          <Route path="/sessions/:id" element={<SessionRoute />} />
           <Route path="/agents" element={<AgentList />} />
           <Route path="/agents/new" element={<AgentCreate />} />
           <Route path="/agents/:id" element={<AgentDetail />} />

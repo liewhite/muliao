@@ -2,9 +2,8 @@ import { useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
 import { Activity, BellRing, ChevronRight, KeyRound, LogOut, Plug, RotateCcw, ScrollText, Sparkles, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, type SecretInfo, type TaskStatus } from '../api'
-import { closeServerEvents } from '../events'
-import { enablePush, pushState, type PushState } from '../push'
+import { api, unauthorizedEvent, type SecretInfo, type TaskStatus } from '../api'
+import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
 import { ActionButton,
   EmptyHint,
   ErrorAlert,
@@ -216,7 +215,6 @@ const LINKS = [
 ] as const
 
 export function Settings() {
-  const navigate = useNavigate()
   const confirm = useConfirm()
   const [push, setPush] = useState<PushState>(pushState())
   const action = useAction()
@@ -224,9 +222,11 @@ export function Settings() {
   async function logout() {
     if (!(await confirm({ title: '退出登录？', confirmLabel: '退出' }))) return
     await action.run(async () => {
+      // 退出后锁屏上不该再出现 agent 的回复：取消本设备的订阅（服务端下次推送收到 410 即删除），重新登录后再开启
+      await unsubscribePush()
       await api.logout()
-      closeServerEvents()
-      navigate('/login')
+      // 与登录过期走同一个出口：App 关闭事件流、回到登录页
+      unauthorizedEvent.dispatchEvent(new Event('unauthorized'))
     })
   }
 

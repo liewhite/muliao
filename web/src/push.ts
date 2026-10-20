@@ -45,6 +45,13 @@ export async function enablePush(): Promise<void> {
   await api.subscribePush(subscription.toJSON())
 }
 
+/** 取消本设备的推送订阅（退出登录时）；没有订阅时什么也不做 */
+export async function unsubscribePush(): Promise<void> {
+  if (pushState() !== 'granted') return
+  const registration = await navigator.serviceWorker.ready
+  await (await registration.pushManager.getSubscription())?.unsubscribe()
+}
+
 /** 已授权时把当前订阅同步到服务端（订阅可能被浏览器轮换）。 */
 export async function syncPushSubscription(): Promise<void> {
   if (pushState() !== 'granted') return
