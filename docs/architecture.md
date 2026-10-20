@@ -296,12 +296,12 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 | 状态 | 含义 |
 |---|---|
 | `active` | 工作还在进行：会话不算做完，交给它的委派不结清；会话算忙，不能删除 |
-| `released` | 结局已经交回（和一封信件同一事务，`delivery.deliver_in`） |
+| `released` | 结局已经交回（和一封信件同一事务，`work.deliver_in`） |
 | `cleared` | 会话被停止，工作被放弃：之后才到的结局一律不投 |
 
 占用可以带 `call_id`：这项工作的结局要作为那次挂起调用的结果交回（`ask_agent`）。**「这次调用已经交出去」= 本会话有带这个 `call_id` 的占用，不论状态**，是永久事实（`holds.called_in`）。
 
-**交回结局**（`delivery.deliver_in`，唯一出口）：一项占用的结局交回会话（后台任务经 `WorkEnded`，委派由 thread 结清时在同一事务里），和释放占用同一个事务：发起方还停在这项占用对应的挂起调用上 → 一封回答信件，作为调用的结果交回；否则 → 一封事件信件（来源如 `thread:<子会话>`、`job:<id>`）。占用已 `cleared` → 不投（`DROPPED`）；会话已删除 → `GONE`。「迟到的回答改为事件」只在这里。按幂等键去重，重放只投一次。
+**交回结局**（`work.deliver_in`，唯一出口）：一项占用的结局交回会话（后台任务经 `WorkEnded`，委派由 thread 结清时在同一事务里），和释放占用同一个事务：发起方还停在这项占用对应的挂起调用上 → 一封回答信件，作为调用的结果交回；否则 → 一封事件信件（来源如 `thread:<子会话>`、`job:<id>`）。占用已 `cleared` → 不投（`DROPPED`）；会话已删除 → `GONE`。「迟到的回答改为事件」只在这里。按幂等键去重，重放只投一次。
 
 **运行中检查**（`mailbox.post_check_in`）：`platform.checks.WorkWatcher` 每隔 `runtime.job_check_seconds`（默认 60 秒）让后台任务与委派给还在进行的工作向发起会话投一封检查信件（不推送）；同一来源已有信件在信箱里排着时不再发，占用已不是 active 时不投，事件不会在等回答时堆积。不需要了就 `job_kill` 或 `stop_thread`。
 
@@ -422,7 +422,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 ### 强制反思（reflection）
 反思可以更新记忆、私有 skill（有 `public_skills` 时也可写公共 skill），以及自己的指令（`instructions_replace`，只做小而准的修改）；这三者都是资源仓库里的文件，每次修改都有版本，用户可回滚。
-- 按 **agent** 的**步数**调度（反思领域，`reflection/service.py` 的 `ReflectionScheduler`，订阅 `RunEnded`）：每次运行结束时数一次该 agent 自检查点以来的模型回复条数（每条回复就是一步），由 `messages` 表推导（会话领域的查询 `sessions.work.AgentWork`，步数与区间上界取自同一个快照），不另存计数。达到该 agent 的 `reflect_every`（默认 `runtime.default_reflect_every` = 30 步）时，反思领域在处理 `RunEnded` 的事务里把检查点（`reflection_checkpoints`）推进到当前最大消息 id，并投递一个 reflection task，载荷是消息 id 区间 `(from_id, to_id]`。按步而不按运行：一次长运行与几次短运行做的事差别很大，步数更接近工作量。
+- 按 **agent** 的**步数**调度（反思领域，`reflection/service.py` 的 `ReflectionScheduler`，订阅 `RunEnded`）：每次运行结束时数一次该 agent 自检查点以来的模型回复条数（每条回复就是一步），由 `messages` 表推导（会话领域的查询 `sessions.agent_history.AgentHistory`，步数与区间上界取自同一个快照），不另存计数。达到该 agent 的 `reflect_every`（默认 `runtime.default_reflect_every` = 30 步）时，反思领域在处理 `RunEnded` 的事务里把检查点（`reflection_checkpoints`）推进到当前最大消息 id，并投递一个 reflection task，载荷是消息 id 区间 `(from_id, to_id]`。按步而不按运行：一次长运行与几次短运行做的事差别很大，步数更接近工作量。
 - 选择 agent 级而不是 session 级：定时触发每次都是一个新 session，只有一次运行，按 session 计数永远到不了阈值。
 - ReflectionHandler 把这个区间内该 agent 所有会话消息渲染成文字记录，连同固定的反思提示交给同一个 agent 运行，只开放自我改进的工具（记忆、私有 skill、自己的指令，加上该 agent 已有的写公共 skill）。没有需要修改的内容也要走完并给出结论。
 - 反思的完整消息和结论写入 `reflections` 表，可在 UI 查看；不进入任何 session 的历史。

@@ -50,6 +50,7 @@ from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.worker import TaskHandler, Worker
 from muliao.reflection.service import ReflectionHandler, ReflectionScheduler
+from muliao.sessions.agent_history import AgentHistory
 from muliao.sessions.api import SessionActivity
 from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import CompactionHandler, Compactor
@@ -58,7 +59,6 @@ from muliao.sessions.content import ContentBuilder
 from muliao.sessions.delegation import ThreadChecks
 from muliao.sessions.delegation_tools import delegation_toolset
 from muliao.sessions.deletion import AgentSessionsCleanup
-from muliao.sessions.delivery import SessionWork, handle_work_commands
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
 from muliao.sessions.live import LiveRuns
@@ -67,7 +67,7 @@ from muliao.sessions.service import SessionService
 from muliao.sessions.settlement import reconcile_failures
 from muliao.sessions.steps import Steps
 from muliao.sessions.threads import Threads
-from muliao.sessions.work import AgentWork
+from muliao.sessions.work import SessionWork, handle_work_commands
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
 from muliao.triggers.service import EVENT_MAX_BYTES, TriggerService
@@ -358,8 +358,8 @@ def build_container(
         keep_steps=settings.runtime.compaction_keep_steps,
     )
     content = ContentBuilder(files, runtime)
-    agent_work = AgentWork(db)
-    reflection = ReflectionScheduler(db, queue, agents, agent_work)
+    agent_history = AgentHistory(db)
+    reflection = ReflectionScheduler(db, queue, agents, agent_history)
     # 删除 agent 与会话时各领域清理自己的数据
     notifications.subscribe(messaging)
     agent_lifecycle.subscribe(messaging)
@@ -385,7 +385,7 @@ def build_container(
         TaskKind.EVENT: messaging,
         TaskKind.RUN: RunHandler(consumer, queue),
         TaskKind.COMPACTION: CompactionHandler(db, compactor),
-        TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups, agents, agent_work),
+        TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups, agents, agent_history),
         TaskKind.DELIVER: DeliverHandler(db, pusher),
     }
     worker = Worker(

@@ -21,7 +21,7 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskKind
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
-from muliao.sessions.api import AgentWork
+from muliao.sessions.api import AgentHistory
 from muliao.sessions.events import RunEnded
 
 log = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ async def list_reflections_of(db: Database, agent_id: str, limit: int) -> list[R
 class ReflectionScheduler:
     """反思的调度（反思领域）：订阅 RunEnded，按该 agent 自检查点以来的步数决定是否投递反思；检查点在自己的表里。"""
 
-    def __init__(self, db: Database, queue: TaskQueue, agents: AgentService, work: AgentWork):
+    def __init__(self, db: Database, queue: TaskQueue, agents: AgentService, work: AgentHistory):
         self._db = db
         self._queue = queue
         self._agents = agents
@@ -184,7 +184,7 @@ class ReflectionHandler:
         runtime: AgentRuntime,
         tool_groups: ToolGroups,
         agents: AgentService,
-        work: AgentWork,
+        work: AgentHistory,
     ):
         self._db = db
         self._runtime = runtime

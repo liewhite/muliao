@@ -26,11 +26,11 @@ from muliao.agents.api import AgentInfo, agent_in
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Clock, TaskQueue
-from muliao.sessions.delivery import deliver_in
 from muliao.sessions.events import Ending
 from muliao.sessions.mailbox import latest_run, post_check_in
 from muliao.sessions.pending import AgentAnswer, pending_in
 from muliao.sessions.tables import HoldStatus, Mail, Session, SessionHold
+from muliao.sessions.work import deliver_in
 
 log = logging.getLogger(__name__)
 
@@ -87,7 +87,8 @@ async def hand_back_in(
     name = thread_name(child)
     owner_id = child.parent_session_id
     if owner_id is None:
-        # thread 总是由发起方开出（Threads.dispatch）：父会话置空说明发起方已被删除，结局没有收件人
+        # 发起方的唯一来源是 thread 的父会话（Threads.dispatch 总在发起方下开 thread）；holder 对这里是不透明的键。
+        # 父会话置空说明发起方已被删除，结局没有收件人
         log.info("delegation outcomes of a thread whose asker is gone dropped", extra={"holders": list(holders)})
         return
     agent = await agent_in(s, child.agent_id)

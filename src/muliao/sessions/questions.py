@@ -1,5 +1,5 @@
 """向用户提问（ask_user）：问题与回答的模型、回答的校验、给模型与用户的文字。ask_user 是一种挂起的调用，
-挂起、唤醒与交回的规则见 sessions.pending；哪些提问现在能回答属于会话领域（conversation.answerable_questions）。
+挂起、唤醒与交回的规则见 sessions.pending；哪些提问现在能回答由来信的规则判断（sessions.inbound.open_asks）。
 """
 
 from collections.abc import Sequence

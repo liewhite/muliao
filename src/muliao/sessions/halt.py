@@ -4,7 +4,7 @@
 1. 让库里的历史停在不会被续跑的地方：悬空的工具调用（等用户回答的提问除外，用户仍可回答）补上「被停止」的结果，
    末尾没得到回复的请求标上停止。
 2. 排队与等重试的运行记为完成，不再执行。
-3. 全部 active 占用记为 cleared：之后才到的结局（后台任务、委派）一律不投（sessions.delivery.deliver_in）。
+3. 全部 active 占用记为 cleared：之后才到的结局（后台任务、委派）一律不投（sessions.work.deliver_in）。
 4. 交给这个会话、还没结清的委派结清为「被停止」，结局交回它们的发起方（sessions.delegation）；清空信箱。
 5. 被清掉的委派：给做这些工作的 thread 各发一条定向命令 StopThread（逐层停止）。
 6. 发布 SessionStopped：后台任务领域结束被清掉的进程。

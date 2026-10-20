@@ -9,10 +9,10 @@ from sqlalchemy import select
 
 from muliao.errors import InvalidInput
 from muliao.platform.tables import Task, TaskKind, TaskStatus
-from muliao.sessions.delivery import Delivered, deliver_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.tables import HoldStatus, Mail, SessionHold
+from muliao.sessions.work import Delivered, deliver_in
 from tests.scripted import scripted
 from tests.test_delegations import _asking
 from tests.test_flow import drain, start, tool_returns

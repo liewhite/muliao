@@ -1,76 +1,142 @@
-"""一个 agent 在它全部会话里做过的事（会话领域给反思用的查询，docs/architecture.md 第 13 节「强制反思」）。事实只在 messages 表里：步数（模型
-回复数）、消息 id 区间与那段记录都由它推导，不另存。消息 id 单调递增，区间 (from_id, to_id] 一经确定，里面的消息只会
-因为会话被删除而减少。"""
+"""在会话之外进行的工作与会话的接口（docs/architecture.md 第 7 节「占用与结清」）：登记占用、运行中检查、交回结局。
 
-from sqlalchemy import func, select
+- SessionWork.hold：别的领域（后台任务）登记占用，在会话领域自己的事务里执行；结束与运行中检查经定向命令
+  WorkEnded / WorkCheckIn（同一条按占用者的 lane）。
+- deliver_in：交回结局并释放占用，和一封信件同一个事务；占用已被停止清掉、或会话已删除时不投。唯一出口：后台任务
+  经定向命令 WorkEnded，委派由 thread 结清时在同一个事务里调用（sessions.delegation）。
+"""
+
+from __future__ import annotations
+
+import logging
+from enum import StrEnum
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.db import Database
-from muliao.sessions.codec import KIND_PATH, RESPONSE_KIND, load_messages
-from muliao.sessions.tables import Message, Session
-from muliao.sessions.transcript import to_items, to_text
+from muliao.platform.messaging import Delivery, Messaging
+from muliao.platform.tasks import Commit, TaskQueue
+from muliao.sessions.events import WorkCheckIn, WorkEnded
+from muliao.sessions.holds import get_in, hold_in, release_in
+from muliao.sessions.lanes import work_lane
+from muliao.sessions.mailbox import post_check_in, post_in
+from muliao.sessions.pending import AgentAnswer, AgentAnswered, pending_in
+from muliao.sessions.tables import HoldStatus, Mail, MailKind, Session
+
+log = logging.getLogger(__name__)
 
 
-class AgentWork:
-    def __init__(self, db: Database):
+class SessionWork:
+    """别的领域在会话之外做一项工作时对会话的命令，每个在会话领域自己的事务里执行。"""
+
+    def __init__(self, db: Database, queue: TaskQueue):
         self._db = db
+        self._queue = queue
 
-    async def steps_after(self, agent_id: str, after_message_id: int) -> int:
-        """这个 agent 在消息 after_message_id 之后的模型回复条数（每条回复就是一步）。"""
+    async def hold(self, session_id: str, holder: str, *, awaited: bool) -> None:
+        """登记一项进行中的工作（重放幂等）：会话据此知道工作还没做完。awaited：用户是否在等它的结局。"""
         async with self._db.transaction() as s:
-            return await _steps_after_in(s, agent_id, after_message_id)
-
-    async def window_after(self, agent_id: str, after_message_id: int) -> tuple[int, int | None]:
-        """同一个快照里的步数与这个 agent 最后一条消息的 id（没有消息为 None）：有步数时后者一定大于
-        after_message_id。"""
-        async with self._db.transaction() as s:
-            steps = await _steps_after_in(s, agent_id, after_message_id)
-            last = await s.scalar(
-                select(func.max(Message.id))
-                .join(Session, Session.id == Message.session_id)
-                .where(Session.agent_id == agent_id)
-            )
-            return steps, last
-
-    async def transcript(self, agent_id: str, from_id: int, to_id: int, *, max_item_chars: int) -> str:
-        """消息 (from_id, to_id] 的文字记录，按会话分段（按会话在区间里首次出现的先后）；区间里没有消息时为空串。"""
-        async with self._db.transaction() as s:
-            rows = list(
-                (
-                    await s.scalars(
-                        select(Message)
-                        .join(Session, Session.id == Message.session_id)
-                        .where(Session.agent_id == agent_id, Message.id > from_id, Message.id <= to_id)
-                        .order_by(Message.id)
-                    )
-                ).all()
-            )
-            sessions = {
-                x.id: x
-                for x in (
-                    await s.scalars(select(Session).where(Session.id.in_({r.session_id for r in rows})))
-                ).all()
-            }
-        by_session: dict[str, list[Message]] = {}
-        for row in rows:
-            by_session.setdefault(row.session_id, []).append(row)
-        blocks = []
-        for session_id, group in by_session.items():
-            session = sessions[session_id]
-            items = to_items(load_messages(r.payload for r in group))
-            header = f"### Session: {session.title} (origin: {session.origin})"
-            blocks.append(f"{header}\n{to_text(items, max_item_chars=max_item_chars)}")
-        return "\n\n".join(blocks)
+            await hold_in(s, session_id, holder, awaited=awaited)
 
 
-async def _steps_after_in(s: AsyncSession, agent_id: str, after_message_id: int) -> int:
-    result = await s.execute(
-        select(func.count(Message.id))
-        .join(Session, Session.id == Message.session_id)
-        .where(
-            Session.agent_id == agent_id,
-            Message.id > after_message_id,
-            func.json_extract(Message.payload, KIND_PATH) == RESPONSE_KIND,
+class Delivered(StrEnum):
+    """交回结局的结果（命令的结果类型，契约内的情况不靠异常表达）。"""
+
+    # 作为挂起调用的结果（回答信件）
+    ANSWER = "answer"
+    # 作为事件信件
+    EVENT = "event"
+    # 占用已被停止清掉：不投
+    DROPPED = "dropped"
+    # 会话已删除
+    GONE = "gone"
+
+
+async def deliver_in(
+    s: AsyncSession,
+    queue: TaskQueue,
+    session_id: str,
+    holder: str,
+    *,
+    key: str,
+    source: str,
+    event_text: str,
+    answer: AgentAnswer | None = None,
+) -> Delivered:
+    """交回占用 holder 的结局并释放它，唯一出口。会话还停在这项占用对应的挂起调用上、且给了 answer 时作为那次调用
+    的结果（回答信件）；否则作为事件信件（「迟到的回答改为事件」只在这里）。用户是否在等这封信随占用登记时记下的。
+    按 key 幂等。"""
+    if await s.get(Session, session_id) is None:
+        log.info("outcome for a deleted session dropped", extra={"session_id": session_id, "holder": holder})
+        return Delivered.GONE
+    hold = await get_in(s, session_id, holder)
+    if hold is None:
+        raise RuntimeError(f"session {session_id} has no hold {holder}")
+    before = await release_in(s, session_id, holder)
+    if before == HoldStatus.CLEARED:
+        log.info("outcome for a stopped session dropped", extra={"session_id": session_id, "holder": holder})
+        return Delivered.DROPPED
+    if (
+        before == HoldStatus.RELEASED
+        and (await s.scalar(select(Mail.id).where(Mail.session_id == session_id, Mail.dedupe_key == key)))
+        is None
+    ):
+        # 重放带的是同一个 key（按它去重）；换了 key 再交回一次，是同一项工作被交回了两次
+        raise RuntimeError(f"hold {holder} of session {session_id} was already released by another delivery")
+    if answer is not None and hold.call_id is not None and hold.call_id in await pending_in(s, session_id):
+        await post_in(
+            s,
+            queue,
+            session_id,
+            kind=MailKind.ANSWER,
+            content="",
+            answers={hold.call_id: AgentAnswered.of(answer).model_dump()},
+            awaited=hold.awaited,
+            dedupe_key=key,
         )
+        delivered = Delivered.ANSWER
+    else:
+        await post_in(
+            s,
+            queue,
+            session_id,
+            kind=MailKind.EVENT,
+            source=source,
+            content=event_text,
+            awaited=hold.awaited,
+            dedupe_key=key,
+        )
+        delivered = Delivered.EVENT
+    log.info(
+        "outcome delivered",
+        extra={"session_id": session_id, "holder": holder, "delivered_as": delivered, "key": key},
     )
-    return result.scalar_one()
+    return delivered
+
+
+def handle_work_commands(messaging: Messaging, queue: TaskQueue) -> None:
+    """登记 WorkEnded 与 WorkCheckIn 的处理者（会话领域）：投信、释放占用与这条投递的完成在同一个事务里。"""
+
+    async def ended(command: WorkEnded, _delivery: Delivery) -> Commit:
+        async def commit(s: AsyncSession) -> None:
+            await deliver_in(
+                s,
+                queue,
+                command.session_id,
+                command.holder,
+                key=f"{command.holder}:end",
+                source=command.holder,
+                event_text=command.text,
+            )
+
+        return commit
+
+    async def check_in(command: WorkCheckIn, _delivery: Delivery) -> Commit:
+        async def commit(s: AsyncSession) -> None:
+            await post_check_in(s, queue, command.session_id, command.holder, command.holder, command.text)
+
+        return commit
+
+    messaging.handle(WorkEnded, "sessions.work_ended", ended, lane=lambda c: work_lane(c.holder))
+    messaging.handle(WorkCheckIn, "sessions.work_check_in", check_in, lane=lambda c: work_lane(c.holder))
