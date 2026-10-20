@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
+import anyio
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Connection, DateTime, Engine, String, event
@@ -147,10 +148,14 @@ class Database:
         current = asyncio.current_task()
         if current is not None and current is self._holder:
             raise RuntimeError("nested Database.transaction() would deadlock; pass the open session instead")
-        async with self._lock:
-            self._holder = current
-            try:
-                async with self._factory() as s, s.begin():
-                    yield s
-            finally:
-                self._holder = None
+        # 事务很短（契约：事务内不做慢操作），整体屏蔽 anyio 的取消，取消在事务结束后生效。否则电平触发的取消会
+        # 打断进行中的语句：SQLAlchemy 作废连接并在后台优雅关闭它，关闭又被再次取消而强制停掉 aiosqlite 的线程，
+        # 留下一个永远等不到结果的关闭任务，事件循环关闭时卡住（实测：测试与关停时挂起）
+        with anyio.CancelScope(shield=True):
+            async with self._lock:
+                self._holder = current
+                try:
+                    async with self._factory() as s, s.begin():
+                        yield s
+                finally:
+                    self._holder = None

@@ -20,11 +20,12 @@ from __future__ import annotations
 import asyncio
 import codecs
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import anyio
 from anyio.abc import TaskGroup
@@ -97,7 +98,8 @@ class _Running:
     halted: bool = False
     # 监督者自己的取消作用域：只取消这一个监督者（启动时记录写不进去）；关停取消的是整个任务组
     scope: anyio.CancelScope = field(default_factory=anyio.CancelScope)
-    # 监督者结束（结局写完、失败或被取消）
+    # 监督者开始执行 / 结束（结局写完、失败或被取消）
+    started: bool = False
     finished: anyio.Event = field(default_factory=anyio.Event)
 
 
@@ -122,6 +124,8 @@ class JobRunner:
         self.check_seconds = check_seconds
         self._clock = clock
         self._running: dict[int, _Running] = {}
+        # 正在启动（行已写入、监督者还没接手）的任务
+        self._starting: set[int] = set()
         # 监督者所在的任务组：服务运行期间（running）存在
         self._group: TaskGroup | None = None
 
@@ -170,38 +174,62 @@ class JobRunner:
             s.add(job)
             await s.flush()
             job.log_path = f"{JOBS_DIR}/{job.id}.log"
-        workspace = self._workspace_of(agent_id)
+        # 正在启动：对账不把它当成没人监督的（无论启动成败，结束时撤销）
+        self._starting.add(job.id)
+        try:
+            await self._launch(job, values, group)
+        finally:
+            self._starting.discard(job.id)
+        log.info("background job started", extra={"job_id": job.id, "session_id": session_id, "pid": job.pid})
+        return job
+
+    async def _launch(self, job: Job, values: Mapping[str, str], group: TaskGroup) -> None:
+        """起进程与监督者并记下 pid。任何一步失败或被取消（这次运行被停止）都不能留下没人能结束的进程：清理在
+        屏蔽作用域里做完；清理超时则记 error，这一行留在 running，下一次检查的对账把它记为被中断并告诉 agent。"""
+        workspace = self._workspace_of(job.agent_id)
         log_file = workspace / job.log_path
         try:
             await asyncio.to_thread(log_file.parent.mkdir, parents=True, exist_ok=True)
-            proc = await spawn_bash(command, cwd=workspace, secrets=values, merge_stderr=True)
+            proc = await spawn_bash(job.command, cwd=workspace, secrets=values, merge_stderr=True)
         except BaseException:
-            # 进程没起来：这个任务不存在。被取消（这次运行被停止）时同样要删掉，清理不能被取消打断
-            with anyio.CancelScope(shield=True), anyio.move_on_after(_CLEANUP_SECONDS):
-                await self._discard_row(job.id)
+            # 进程没起来：这个任务不存在
+            await self._cleanup(job.id, "spawn", self._discard_row(job.id))
             raise
-        # 进程一起来就有人管：先登记、起监督者，再记 pid
         handle = _Running(proc)
-        self._running[job.id] = handle
-        group.start_soon(self._supervise, job.id, handle, log_file, values, name=f"job-{job.id}")
         try:
-            async with self._db.transaction() as s:
-                row = await s.get(Job, job.id)
-                if row is None:
-                    raise RuntimeError(f"job {job.id} vanished right after it was created")
-                row.pid = job.pid = proc.pid
+            # 进程一起来就有人管：先登记、起监督者，再记 pid
+            self._running[job.id] = handle
+            group.start_soon(self._supervise, job.id, handle, log_file, values, name=f"job-{job.id}")
+            await self._record_pid(job, proc.pid)
         except BaseException:
-            # 记录写不进去，或这次运行恰好被停止：不能留下没有记录、没人能结束的进程（取消监督者会杀掉进程组）。
-            # 清理不能被取消打断；超时则行留在 running、没有 pid 之外的监督，由对账收敛
-            with anyio.CancelScope(shield=True), anyio.move_on_after(_CLEANUP_SECONDS):
-                handle.scope.cancel()
-                await handle.finished.wait()
-                await self._discard_row(job.id)
+            # 取消监督者会杀掉进程组；监督者没起来（任务组已关闭）时在这里杀
+            kill_group(proc.pid)
+            self._running.pop(job.id, None)
+            await self._cleanup(job.id, "record pid", self._stop_and_discard(job.id, handle))
             raise
-        log.info(
-            "background job started", extra={"job_id": job.id, "session_id": session_id, "pid": proc.pid}
-        )
-        return job
+
+    async def _record_pid(self, job: Job, pid: int) -> None:
+        async with self._db.transaction() as s:
+            row = await s.get(Job, job.id)
+            if row is None:
+                raise RuntimeError(f"job {job.id} vanished right after it was created")
+            row.pid = job.pid = pid
+
+    async def _stop_and_discard(self, job_id: int, handle: _Running) -> None:
+        handle.scope.cancel()
+        if handle.started:
+            await handle.finished.wait()
+        await self._discard_row(job_id)
+
+    async def _cleanup(self, job_id: int, stage: str, cleanup: Coroutine[Any, Any, None]) -> None:
+        """启动失败后的清理：屏蔽取消、设时限；做不完就记下来，交给对账。"""
+        with anyio.CancelScope(shield=True), anyio.move_on_after(_CLEANUP_SECONDS) as limited:
+            await cleanup
+        if limited.cancelled_caught:
+            log.error(
+                "cleanup after a failed background job start timed out; the check will reconcile it",
+                extra={"job_id": job_id, "stage": stage},
+            )
 
     async def _discard_row(self, job_id: int) -> None:
         async with self._db.transaction() as s:
@@ -215,6 +243,7 @@ class JobRunner:
         """看着进程直到结局写进库。「有人监督」（_running）一直保持到结局写完（成功、失败或被取消），
         对账才不会把正在记结局的任务当成没人管的。这是每个监督者的异常边界：意外异常只记日志，这一行停在
         running，由 check 的对账记为被中断并告诉 agent，不影响别的监督者与运行。"""
+        handle.started = True
         try:
             with handle.scope:
                 status, exit_code, note = await self._watch(job_id, handle, log_file, secrets)
@@ -242,8 +271,8 @@ class JobRunner:
                 drained = recorder.done.is_set()
                 # 后代还占着管道时不再等它的输出
                 group.cancel_scope.cancel()
-        except anyio.get_cancelled_exc_class():
-            # 关停（stop 随后记为被中断）或启动时记录写不进去：进程不随服务退出，在这里杀掉
+        except BaseException:
+            # 关停（stop 随后记为被中断）、启动时记录写不进去，或意外失败：进程不随服务退出，在这里杀掉
             kill_group(proc.pid)
             raise
         if recorder.error is not None:
@@ -385,15 +414,14 @@ class JobRunner:
     async def check(self) -> int:
         """给每个运行中的任务发一个检查事件；它上一条事件还在队列里等着时不再发（不堆积）。返回发出的个数。
 
-        先对账：记为运行中、却不在本进程监督之下的任务（记下结局时失败、监督意外结束），按 recover 的同一套逻辑
-        记为被中断并告诉 agent。pid 还没记下的行是正在启动的任务（start 里登记之前），不算。"""
+        先对账：记为运行中、却不在本进程监督之下、也不在启动中的任务（记下结局时失败、监督意外结束、启动失败后的
+        清理没做完），按 recover 的同一套逻辑记为被中断并告诉 agent。"""
         async with self._db.transaction() as s:
             orphans = (
                 await s.scalars(
                     select(Job).where(
                         Job.status == JobStatus.RUNNING,
-                        Job.pid.is_not(None),
-                        Job.id.not_in(list(self._running)),
+                        Job.id.not_in([*self._running, *self._starting]),
                     )
                 )
             ).all()
@@ -445,10 +473,18 @@ class JobRunner:
         with anyio.move_on_after(_CLEANUP_SECONDS):
             for handle in handles.values():
                 await handle.finished.wait()
+        if forced := [job_id for job_id, h in handles.items() if not h.finished.is_set()]:
+            log.warning("background job supervisors cancelled at shutdown", extra={"job_ids": forced})
         for handle in handles.values():
             handle.scope.cancel()
-        for handle in handles.values():
-            await handle.finished.wait()
+        with anyio.move_on_after(_CLEANUP_SECONDS) as limited:
+            for handle in handles.values():
+                await handle.finished.wait()
+        if limited.cancelled_caught:
+            log.error(
+                "background job supervisors did not end after cancellation",
+                extra={"job_ids": [job_id for job_id, h in handles.items() if not h.finished.is_set()]},
+            )
         if not handles:
             return
         async with self._db.transaction() as s:

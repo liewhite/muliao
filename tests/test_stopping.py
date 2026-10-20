@@ -7,7 +7,7 @@ import asyncio
 import anyio
 import pytest
 
-from muliao.runtime.stopping import Stopped, StoppableRuns
+from muliao.runtime.stopping import StoppableRuns, Stopped
 
 
 class Tool:
@@ -90,3 +90,72 @@ async def test_two_runs_of_one_session_at_once_is_a_bug():
         with pytest.raises(RuntimeError, match="already has a running run"):
             await runs.run("s", tool.run)
         runs.stop("s")
+
+
+class CleaningTool:
+    """被取消后还要做完一段屏蔽着的清理（同 jobs.start 删掉没起来的行、resources 等 git 退出）。"""
+
+    def __init__(self, cleanup_seconds: float = 0.2) -> None:
+        self.cleaned = False
+        self.started = anyio.Event()
+        self.cleaning = anyio.Event()
+        self._cleanup_seconds = cleanup_seconds
+
+    async def _body(self) -> None:
+        try:
+            self.started.set()
+            await anyio.sleep(60)
+        except asyncio.CancelledError:
+            self.cleaning.set()
+            with anyio.CancelScope(shield=True):
+                await anyio.sleep(self._cleanup_seconds)
+                self.cleaned = True
+            raise
+
+    async def run(self) -> str:
+        await asyncio.create_task(self._body())
+        return "done"
+
+
+async def test_stopping_twice_does_not_interrupt_the_runs_shielded_cleanup():
+    runs: StoppableRuns[str] = StoppableRuns()
+    tool = CleaningTool()
+
+    async def stop_twice() -> None:
+        await tool.started.wait()
+        runs.stop("s")
+        await tool.cleaning.wait()
+        assert runs.stop("s")
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(stop_twice)
+        result = await runs.run("s", tool.run)
+
+    assert isinstance(result, Stopped) and tool.cleaned
+
+
+async def test_a_shutdown_during_a_stopped_runs_cleanup_does_not_interrupt_it():
+    runs: StoppableRuns[str] = StoppableRuns()
+    tool = CleaningTool()
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(runs.run, "s", tool.run)
+        await tool.started.wait()
+        runs.stop("s")
+        await tool.cleaning.wait()
+        group.cancel_scope.cancel()
+
+    assert tool.cleaned
+
+
+async def test_a_run_that_swallows_its_cancellation_stays_registered(monkeypatch):
+    monkeypatch.setattr("muliao.runtime.stopping._WIND_DOWN_SECONDS", 0.1)
+    runs: StoppableRuns[str] = StoppableRuns()
+    tool = CleaningTool(cleanup_seconds=1.0)
+
+    with pytest.raises(TimeoutError), anyio.fail_after(0.2):
+        await runs.run("s", tool.run)
+
+    # 收尾还没结束：同一会话的下一次运行报错，不会和它同时操作会话
+    with pytest.raises(RuntimeError, match="already has a running run"):
+        await runs.run("s", tool.run)

@@ -111,8 +111,9 @@ class Container:
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
-        """服务的整个生命周期：启动检查与恢复，然后在根任务组里跑后台循环；退出时先结束后台任务的进程，再取消
-        根任务组（docs/domain-design.md「并发模型」）。"""
+        """服务的整个生命周期：启动检查与恢复，然后在根任务组里跑后台循环（docs/domain-design.md「并发模型」）。
+        退出时先取消根任务组（循环与正在进行的运行），它们全部退出之后，再按关停结束后台任务的进程并记为被中断
+        （jobs.running 的退出）：这时已经不会有运行再开新的后台任务，结束的就是全部。"""
         try:
             await self._prepare()
             async with self.jobs.running(), anyio.create_task_group() as root:
@@ -176,7 +177,8 @@ class Container:
 
 async def _loop(name: str, run_forever: Callable[[], Awaitable[None]]) -> None:
     """根任务组里的后台循环：意外退出属于 bug 或不可恢复的配置错误，停止进程，交给进程管理器重启并告警。
-    不把异常抛给任务组：那会立刻取消所有正在进行的运行，而 SIGTERM 走正常关停（先结束后台任务的进程）。"""
+    不把异常抛给任务组：关停只走一条路径（SIGTERM → 服务器停止接收请求、排空连接 → lifespan 退出 → running
+    的退出顺序），不另起一条从任务组内部炸开的关停。"""
     try:
         await run_forever()
     except Exception:

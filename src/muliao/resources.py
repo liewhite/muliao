@@ -328,7 +328,8 @@ class ResourceRepo:
             )
             raise restore_error from error
         # 索引里可能已暂存了新内容：撤销暂存失败无妨，下一次 add 会重新暂存当时的文件。写入被取消时也做（屏蔽取消）
-        with anyio.CancelScope(shield=True):
+        code: int | None = None
+        with anyio.CancelScope(shield=True), anyio.move_on_after(_GIT_EXIT_SECONDS):
             code, _ = await self._git("reset", "-q", "--", *rel, check=False)
         log.warning(
             "resource write rolled back",

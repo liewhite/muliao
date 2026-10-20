@@ -24,6 +24,9 @@ from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 
 log = logging.getLogger(__name__)
 
+# 删除临时工作目录最多等这么久（在屏蔽作用域里，被取消也要删）；删不完的留给下次启动的 clear_temp_dirs
+_DISCARD_SECONDS = 30.0
+
 
 def _make_workspace(temp_root: Path) -> Path:
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -128,7 +131,12 @@ def temp_agent_toolset(
             raise
         finally:
             # 被取消时也要删掉工作目录：清理不能被取消打断（删不掉的留给下次启动的 clear_temp_dirs）
-            with anyio.CancelScope(shield=True):
+            with anyio.CancelScope(shield=True), anyio.move_on_after(_DISCARD_SECONDS) as limited:
                 await _discard(workspace, parent.id, outcome)
+            if limited.cancelled_caught:
+                log.error(
+                    "temp agent workspace removal timed out, will be cleared on next start",
+                    extra={"agent": parent.id, "workspace": str(workspace)},
+                )
 
     return ts

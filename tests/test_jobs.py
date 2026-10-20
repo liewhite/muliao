@@ -291,3 +291,108 @@ def test_the_cut_also_avoids_secrets_overlapping_each_other():
     text = "....ABCDEFGH...."
     # ABCD 先查时还没跨在切口 9 上；DEFGH 把切口挪到 7 之后它才跨上去
     assert _safe_cut(text, 9, {"B": "ABCD", "A": "DEFGH"}) == 4
+
+
+async def _session_for_jobs(container, make_agent):
+    agent = await make_agent("alpha")
+    session = await start(container, agent.id, "hi", origin=Origin.TRIGGER)
+    return session, agent
+
+
+async def _job_rows(container) -> list[Job]:
+    async with container.db.transaction() as s:
+        return list((await s.scalars(select(Job))).all())
+
+
+async def test_a_job_whose_process_cannot_start_leaves_no_row(container, make_agent, monkeypatch):
+    session, agent = await _session_for_jobs(container, make_agent)
+
+    async def broken_spawn(*_args, **_kwargs):
+        raise OSError("bash missing")
+
+    monkeypatch.setattr("muliao.runtime.jobs.spawn_bash", broken_spawn)
+    with pytest.raises(OSError, match="bash missing"):
+        await container.jobs.start(
+            session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
+        )
+    assert await _job_rows(container) == []
+
+
+async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_leaves_no_row(
+    container, make_agent, monkeypatch
+):
+    session, agent = await _session_for_jobs(container, make_agent)
+    spawned = []
+    real_spawn = __import__("muliao.runtime.jobs", fromlist=["spawn_bash"]).spawn_bash
+
+    async def recording_spawn(*args, **kwargs):
+        proc = await real_spawn(*args, **kwargs)
+        spawned.append(proc)
+        return proc
+
+    async def broken_record(_self, _job, _pid):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr("muliao.runtime.jobs.spawn_bash", recording_spawn)
+    monkeypatch.setattr("muliao.runtime.jobs.JobRunner._record_pid", broken_record)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await container.jobs.start(
+            session_id=session.id, agent_id=agent.id, command="sleep 30", secrets=[], awaited=False
+        )
+
+    assert await _job_rows(container) == []
+    [proc] = spawned
+    await asyncio.wait_for(proc.wait(), 5)
+
+
+async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
+    container, make_agent, monkeypatch
+):
+    session, agent = await _session_for_jobs(container, make_agent)
+
+    async def broken_spawn(*_args, **_kwargs):
+        raise OSError("bash missing")
+
+    async def stuck_discard(_self, _job_id):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr("muliao.runtime.jobs.spawn_bash", broken_spawn)
+    monkeypatch.setattr("muliao.runtime.jobs.JobRunner._discard_row", stuck_discard)
+    monkeypatch.setattr("muliao.runtime.jobs._CLEANUP_SECONDS", 0.1)
+    with pytest.raises(OSError):
+        await container.jobs.start(
+            session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
+        )
+
+    [row] = await _job_rows(container)
+    assert row.status == JobStatus.RUNNING and row.pid is None
+    await container.jobs.check()
+    [row] = await _job_rows(container)
+    assert row.status == JobStatus.INTERRUPTED
+    [event] = [m for m in await queued_events(container, session.id) if m.source == f"job:{row.id}"]
+    assert "supervision ended unexpectedly" in event.content
+
+
+async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_stopped(settings, models):
+    """Container.running 的退出顺序：先取消运行与循环，再结束后台任务的进程并记为被中断。"""
+    from muliao.agents import AgentSpec
+    from muliao.container import build_container
+
+    c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
+    async with c.running():
+        agent = await c.agents.create(
+            AgentSpec(name="alpha", description="d", model="m", instructions="", reflect_every=5),
+            author="user",
+        )
+        session = await start(c, agent.id, "hi", origin=Origin.TRIGGER)
+        job = await c.jobs.start(
+            session_id=session.id, agent_id=agent.id, command="sleep 30", secrets=[], awaited=False
+        )
+
+    async with c.db.transaction() as s:
+        row = await s.get(Job, job.id)
+    await c.db.engine.dispose()
+    assert row.status == JobStatus.INTERRUPTED
+    await asyncio.sleep(0.2)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(job.pid, 0)
