@@ -187,6 +187,8 @@ class AgentRuntime:
             "workspace": str(scope.workspace),
         }
         log.info("agent run started", extra={**ctx, "history": len(history)})
+        # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
+        resumed = frozenset(deferred.calls) if deferred is not None else frozenset()
         async with self._pai.iter(
             None if prompt is None else list(prompt),
             model=self._resolve_model(model),
@@ -206,7 +208,7 @@ class AgentRuntime:
                 if PaiAgent.is_model_request_node(node):
                     await hooks.before_request(node.request, run.ctx.state.message_history)
                     async with node.stream(run.ctx) as stream:
-                        await self._forward_events(session_id, scope.agent_id, stream)
+                        await self._forward_events(session_id, scope.agent_id, stream, resumed)
                     node = await run.next(node)
                     messages = run.ctx.state.message_history
                     response = messages[-1]
@@ -217,7 +219,7 @@ class AgentRuntime:
                     await hooks.after_response(response, messages)
                 elif PaiAgent.is_call_tools_node(node):
                     async with node.stream(run.ctx) as stream:
-                        await self._forward_events(session_id, scope.agent_id, stream)
+                        await self._forward_events(session_id, scope.agent_id, stream, resumed)
                     node = await run.next(node)
                 else:
                     node = await run.next(node)
@@ -334,10 +336,15 @@ class AgentRuntime:
         return result.output
 
     async def _forward_events(
-        self, session_id: str, agent_id: str, stream: AsyncIterable[AgentStreamEvent]
+        self,
+        session_id: str,
+        agent_id: str,
+        stream: AsyncIterable[AgentStreamEvent],
+        resumed: frozenset[str],
     ) -> None:
         """会话运行的事件推到会话页（bus.LiveRuns），条目与历史同一个投影（transcript）。没有会话的运行（反思、临时
-        agent）没有页面在看，不转发。工具的参数与结果在实时事件里截断（保存后历史里是完整的）。"""
+        agent）没有页面在看，不转发。工具的参数与结果在实时事件里截断（保存后历史里是完整的）。续跑时 pydantic-ai 会把
+        交回结果的挂起调用（resumed）再发一遍调用与结果事件：它们已经在历史里，不转发。"""
         async for event in stream:
             if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
                 self._live.publish_delta(session_id, agent_id, "assistant", event.part.content)
@@ -356,6 +363,10 @@ class AgentRuntime:
                 and event.delta.content_delta
             ):
                 self._live.publish_delta(session_id, agent_id, "thinking", event.delta.content_delta)
+            elif isinstance(event, FunctionToolCallEvent | FunctionToolResultEvent) and (
+                event.part.tool_call_id in resumed
+            ):
+                continue
             elif isinstance(event, FunctionToolCallEvent):
                 self._live.publish_item(session_id, agent_id, _truncated(call_item(redact_call(event.part))))
             elif isinstance(event, FunctionToolResultEvent):

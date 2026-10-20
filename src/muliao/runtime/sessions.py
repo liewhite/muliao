@@ -18,14 +18,14 @@ from muliao.runtime.codec import load_messages
 from muliao.runtime.conversation import (
     Inbound,
     Received,
-    answerable_questions,
     delete_sessions,
+    open_asks,
     receive,
     threads_of,
 )
 from muliao.runtime.mailbox import latest_run, visible_in
-from muliao.runtime.questions import Question
 from muliao.runtime.tasks import TaskQueue
+from muliao.transcript import Item, annotate_asks, to_items
 
 _TITLE_MAX = 60
 
@@ -40,16 +40,15 @@ class SessionView:
     """会话页看到的会话（读模型）：一次取齐，与实时快照对得上。"""
 
     session: Session
-    # 完整原始历史（不受压缩影响）附消息 id；正在进行的那一段已经保存的部分由实时快照展示，这里不重复（bus.LiveRuns）
-    history: list[tuple[int, ModelMessage]]
+    # 完整原始历史（不受压缩影响）的展示条目，带来源消息 id 与提问状态；正在进行的那一段已经保存的部分由实时快照
+    # 展示，这里不重复（bus.LiveRuns）
+    items: list[Item]
     compactions: list[Compaction]
     # 显示在历史之后的信件：排队中的，以及最近一次停止丢弃的
     mail: list[Mail]
     # 最近一次运行，还没正常结束时
     run: Task | None
     threads: list[Session]
-    # 现在能回答的提问（conversation.answerable_questions）
-    questions: dict[str, list[Question]]
     live: LiveRun | None
 
 
@@ -66,11 +65,17 @@ class SessionService:
         async with self._db.transaction() as s:
             session = await self._get(s, session_id)
             history = await _history_in(s, session_id)
-            shown = [
-                (message_id, message)
-                for message_id, message in history
-                if live is None or live.after_message_id is None or message_id <= live.after_message_id
-            ]
+            asks = await open_asks(s, session_id)
+            items = annotate_asks(
+                [
+                    item.model_copy(update={"message_id": message_id})
+                    for message_id, message in history
+                    if live is None or live.after_message_id is None or message_id <= live.after_message_id
+                    for item in to_items([message])
+                ],
+                answerable=asks.answerable.keys(),
+                submitted=asks.submitted,
+            )
             compactions = list(
                 (
                     await s.scalars(
@@ -81,12 +86,11 @@ class SessionService:
             latest = await latest_run(s, session_id)
             return SessionView(
                 session=session,
-                history=shown,
+                items=items,
                 compactions=compactions,
                 mail=await visible_in(s, session_id),
                 run=None if latest is None or latest.status == TaskStatus.DONE else latest,
                 threads=await threads_of(s, session_id),
-                questions=await answerable_questions(s, session_id),
                 live=live,
             )
 

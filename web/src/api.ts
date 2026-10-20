@@ -123,8 +123,7 @@ export interface Task {
   finished_at: string | null
 }
 
-/** ask_user 提问（后端 runtime/questions.py 的 Question）；工具名与后端 ASK_USER 一致 */
-export const ASK_USER = 'ask_user'
+/** ask_user 提问（后端 runtime/questions.py 的 Question） */
 
 export interface QuestionOption {
   label: string

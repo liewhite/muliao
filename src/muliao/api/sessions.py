@@ -12,7 +12,7 @@ from muliao.runtime.conversation import Inbound, NewSession
 from muliao.runtime.pending import CallResult, call_result
 from muliao.runtime.questions import QuestionAnswer
 from muliao.runtime.sessions import default_title
-from muliao.transcript import Item, annotate_asks, to_items
+from muliao.transcript import Item
 
 router = APIRouter()
 
@@ -185,20 +185,7 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
     view = await c.sessions.detail(session_id)
     return SessionDetail(
         session=SessionOut.of(view.session),
-        items=annotate_asks(
-            [
-                item.model_copy(update={"message_id": message_id})
-                for message_id, message in view.history
-                for item in to_items([message])
-            ],
-            answerable=view.questions,
-            submitted={
-                call_id
-                for m in view.mail
-                if m.kind == MailKind.ANSWER and m.state == MailState.QUEUED
-                for call_id in m.answers
-            },
-        ),
+        items=view.items,
         compactions=[
             CompactionOut(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
             for x in view.compactions

@@ -1,6 +1,6 @@
 // 会话条目（历史与运行中的事件流共用 Item）到展示块的整理，纯函数，与渲染分开。
 
-import { ASK_USER, type AskView, type Attachment, type Item } from './api'
+import { type AskView, type Attachment, type Item } from './api'
 
 export interface ToolView {
   name: string
@@ -37,18 +37,13 @@ export type View = Exclude<Block, Step> | { kind: 'process'; steps: Step[] }
 export function toBlocks(items: Item[]): Block[] {
   const blocks: Block[] = []
   const tools = new Map<string, ToolView>()
-  // ask_user 调用在 blocks 里的位置：它的结果不再单独成块，被退回时原地换成工具错误块
-  const asks = new Map<string, number>()
+  // 提问的调用：结局已经体现在调用的状态里（后端 transcript.annotate_asks），结果不再单独成块。被退回的提问后端不给
+  // 状态，按普通工具调用展示；运行中还没保存的那一段里它显示为「提问中」，保存后以历史为准
+  const asks = new Set<string>()
   for (const item of items) {
-    const askAt = item.tool_call_id !== null ? asks.get(item.tool_call_id) : undefined
-    if (askAt !== undefined) {
-      // 提问的结果已经体现在调用的状态里；被退回的提问原地换成工具错误块
-      if (item.type === 'tool_error')
-        blocks[askAt] = { kind: 'tool', tool: { name: ASK_USER, args: '', result: item.text, rejected: true, attachments: [], threads: [] } }
-      continue
-    }
+    if (item.tool_call_id !== null && asks.has(item.tool_call_id)) continue
     if (item.ask !== null && item.tool_call_id !== null) {
-      asks.set(item.tool_call_id, blocks.length)
+      asks.add(item.tool_call_id)
       blocks.push({ kind: 'ask', ask: { callId: item.tool_call_id, ask: item.ask } })
       continue
     }

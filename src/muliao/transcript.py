@@ -46,25 +46,25 @@ class AskView(BaseModel):
     status: Literal["asking", "pending", "submitted", "answered", "not_answered"]
     questions: list[Question]
     # answered 时每题的回答
-    answers: list[AnsweredQuestion] = []
+    answers: list[AnsweredQuestion]
     # not_answered 时交给模型的说明
-    note: str | None = None
+    note: str | None
 
 
 class Item(BaseModel):
     type: ItemType
     text: str
     # 会话事件（type 为 event）：tool_name 是事件的来源（如 job:12），text 是事件内容
-    tool_name: str | None = None
-    tool_call_id: str | None = None
+    tool_name: str | None
+    tool_call_id: str | None
     # 来源消息的数据库 id；会话接口填充，用于定位压缩点；实时条目为 None
-    message_id: int | None = None
+    message_id: int | None
     # 用户消息的附件（见 runtime.attachments 的存储形态），或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
-    attachments: list[Attachment] = []
+    attachments: list[Attachment]
     # 工具结果关联的子会话 id（TOOL_THREADS）；其他条目为空
-    threads: list[str] = []
+    threads: list[str]
     # ask_user 的调用（参数合法时）；其他条目为 None
-    ask: AskView | None = None
+    ask: AskView | None
 
 
 def _item(
@@ -80,8 +80,10 @@ def _item(
         text=text,
         tool_name=tool_name,
         tool_call_id=tool_call_id,
+        message_id=None,
         attachments=attachments or [],
         threads=threads or [],
+        ask=None,
     )
 
 
@@ -93,36 +95,44 @@ def call_item(part: ToolCallPart) -> Item:
         except (ValidationError, KeyError):
             # 参数被工具 schema 拒绝、交还模型重试的提问（它有 tool_error 结果）：按普通工具调用展示
             return item
-        item.ask = AskView(status="asking", questions=questions)
+        item.ask = AskView(status="asking", questions=questions, answers=[], note=None)
     return item
 
 
 def annotate_asks(items: list[Item], answerable: Collection[str], submitted: Collection[str]) -> list[Item]:
-    """给 ask_user 调用填上状态：有结果的按结果（AskResult）；没有结果的，现在能回答（answerable）就是 pending，回答已提交、
-    还排着（submitted）就是 submitted，否则运行还没停下（asking）。"""
-    results = {i.tool_call_id: i.text for i in items if i.type == "tool_result" and i.tool_name == ASK_USER}
-    annotated = []
-    for item in items:
-        if item.ask is not None and item.tool_call_id is not None:
-            result = results.get(item.tool_call_id)
-            if result is not None:
-                parsed = AskResult.model_validate_json(result)
-                ask = item.ask.model_copy(
-                    update={
-                        "status": "answered" if parsed.answered else "not_answered",
-                        "answers": parsed.answers,
-                        "note": parsed.note,
-                    }
-                )
-            elif item.tool_call_id in answerable:
-                ask = item.ask.model_copy(update={"status": "pending"})
-            elif item.tool_call_id in submitted:
-                ask = item.ask.model_copy(update={"status": "submitted"})
-            else:
-                ask = item.ask
-            item = item.model_copy(update={"ask": ask})
-        annotated.append(item)
-    return annotated
+    """给 ask_user 调用填上状态，唯一规则：
+    - 被退回（结果是 tool_error，如这次运行不提供提问）：不是提问，按普通工具调用加错误展示（ask 为 None）；
+    - 有结果的按结果（AskResult）：answered / not_answered；
+    - 没有结果的：现在能回答（answerable）是 pending，回答已提交、还排着（submitted）是 submitted，否则运行还没停下（asking）。"""
+    results = {
+        i.tool_call_id: i
+        for i in items
+        if i.tool_name == ASK_USER and i.type in ("tool_result", "tool_error")
+    }
+    return [_annotated(item, results.get(item.tool_call_id), answerable, submitted) for item in items]
+
+
+def _annotated(
+    item: Item, result: Item | None, answerable: Collection[str], submitted: Collection[str]
+) -> Item:
+    if item.ask is None:
+        return item
+    if result is not None and result.type == "tool_error":
+        return item.model_copy(update={"ask": None})
+    if result is not None:
+        parsed = AskResult.model_validate_json(result.text)
+        update = {
+            "status": "answered" if parsed.answered else "not_answered",
+            "answers": parsed.answers,
+            "note": parsed.note,
+        }
+    elif item.tool_call_id in answerable:
+        update = {"status": "pending"}
+    elif item.tool_call_id in submitted:
+        update = {"status": "submitted"}
+    else:
+        return item
+    return item.model_copy(update={"ask": item.ask.model_copy(update=update)})
 
 
 def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:

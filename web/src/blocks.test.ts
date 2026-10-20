@@ -120,12 +120,9 @@ describe('ask_user blocks', () => {
     expect(blocks).toEqual([{ kind: 'ask', ask: { callId: 'q1', ask: state } }])
   })
 
-  it('shows a rejected call as a rejected tool step', () => {
-    // 参数不合法的提问后端不给状态，按普通工具调用展示；参数合法却被退回（如这次运行不提供提问）原地换成工具错误
-    for (const ask of [null, state]) {
-      const rejected = toBlocks([call('{"questions": []}', ask), result('tool_error', 'too short')])
-      expect(rejected.map((b) => (b.kind === 'tool' ? [b.kind, b.tool.rejected] : [b.kind]))).toEqual([['tool', true]])
-    }
+  it('shows a rejected call, which has no ask state, as a rejected tool step', () => {
+    const rejected = toBlocks([call('{"questions": []}', null), result('tool_error', 'too short')])
+    expect(rejected.map((b) => (b.kind === 'tool' ? [b.kind, b.tool.rejected] : [b.kind]))).toEqual([['tool', true]])
   })
 })
 

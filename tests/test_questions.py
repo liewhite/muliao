@@ -1,5 +1,6 @@
 """向用户提问（ask_user）：一轮停在提问上并通知用户，用户回答后作为工具结果继续；回答在服务端校验。"""
 
+import asyncio
 import json
 
 from pydantic_ai.messages import (
@@ -225,6 +226,8 @@ async def test_rejected_question_arguments_do_not_leave_a_pending_question(
     detail = await client.get(f"/api/sessions/{session_id}")
     assert detail.status_code == 200
     assert [p["tool_call_id"] for p in pending_asks(detail.json())] == ["good"]
+    # 参数被拒绝的调用不是提问：按普通工具调用展示
+    assert ask_states(detail.json()) == {"good": "pending"}
     resp = await client.post(
         f"/api/sessions/{session_id}/messages",
         json={"prompt": "", "answers": {"good": [{"selected": ["日线"]}]}},
@@ -330,6 +333,49 @@ async def test_a_voided_failed_answer_does_not_block_later_questions(client, con
     assert resp.status_code == 202
 
 
+async def test_a_question_where_ask_user_is_not_offered_shows_as_a_rejected_tool_call(
+    client, container, make_agent, models
+):
+    """参数合法、但这次运行不提供 ask_user（没有用户在等）：pydantic-ai 退回调用，它不是提问。"""
+    await login(client)
+    agent = await make_agent("analyst", model="blind")
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("ask_user", {"questions": QUESTIONS[:1]}, tool_call_id="q")]
+            )
+        return ModelResponse(parts=[TextPart("那我自己决定")])
+
+    models.models["blind"] = scripted(fn)
+    session_id = (await start(container, agent.id, "event", origin=Origin.TRIGGER)).id
+    await drain(container)
+
+    detail = (await client.get(f"/api/sessions/{session_id}")).json()
+    assert ask_states(detail) == {}
+    assert [i["type"] for i in detail["items"] if i["tool_call_id"] == "q"] == ["tool_call", "tool_error"]
+
+
+async def test_a_live_question_is_shown_as_asking(container, make_agent, models):
+    """运行中的提问条目与历史同一个投影：还不能回答（asking）。"""
+    agent = await make_agent("analyst", model="asker")
+    models.models["asker"] = scripted(Asker())
+    events = []
+
+    async def collect():
+        async with container.bus.subscribe() as sub:
+            async for e in sub:
+                events.append(e)
+
+    collector = asyncio.create_task(collect())
+    await asyncio.sleep(0)
+    await start(container, agent.id, "分析", origin=Origin.USER)
+    await drain(container)
+    collector.cancel()
+    [ask] = [e.item.ask for e in events if e.type == "run" and e.event == "item" and e.item.ask is not None]
+    assert ask.status == "asking" and len(ask.questions) == 2
+
+
 async def test_two_questions_wait_for_both_answers_and_a_message_skips_the_rest(
     client, container, make_agent, models
 ):
@@ -372,6 +418,10 @@ async def test_two_questions_wait_for_both_answers_and_a_message_skips_the_rest(
     answered, skipped = results
     assert answered["answered"] is True
     assert skipped["answered"] is False and "new message" not in skipped["note"]
+    detail = (await client.get(f"/api/sessions/{session_id}")).json()
+    assert ask_states(detail) == {"a": "answered", "b": "not_answered"}
+    [note] = [i["ask"]["note"] for i in detail["items"] if i["tool_call_id"] == "b" and i["ask"] is not None]
+    assert note == skipped["note"]
 
 
 async def test_a_question_asked_alongside_another_tool_is_answered_as_its_result(

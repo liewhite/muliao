@@ -148,19 +148,28 @@ async def create_session(
 # ---- 回答挂起的提问 ----
 
 
-async def answerable_questions(s: AsyncSession, session_id: str) -> dict[str, list[Question]]:
-    """这个会话现在能回答的提问：在等回答、还没有回答在信箱里排队的。界面展示与投信校验都经过这里。
-    回答在交给模型之前一直排着（运行失败重试时也还在），所以不需要别的条件。"""
+@dataclass(frozen=True)
+class OpenAsks:
+    """还没有结果的提问分成两种：现在能回答的（answerable），与回答已提交、还在信箱里排队的（submitted）。
+    回答在交给模型之前一直排着（运行失败重试时也还在），所以不需要别的条件。界面展示与投信校验都经过 open_asks。"""
+
+    answerable: dict[str, list[Question]]
+    submitted: frozenset[str]
+
+
+async def open_asks(s: AsyncSession, session_id: str) -> OpenAsks:
     pending = pending_questions((await load_context(s, session_id)).messages)
-    answered = {k for m in await queued_in(s, session_id) if m.kind == MailKind.ANSWER for k in m.answers}
-    return {k: v for k, v in pending.items() if k not in answered}
+    submitted = frozenset(
+        k for m in await queued_in(s, session_id) if m.kind == MailKind.ANSWER for k in m.answers
+    )
+    return OpenAsks(answerable={k: v for k, v in pending.items() if k not in submitted}, submitted=submitted)
 
 
 async def _resolve_answers(
     s: AsyncSession, session_id: str, answers: Mapping[str, Sequence[QuestionAnswer]]
 ) -> dict[str, AskResult]:
     """用户提交的回答：每个都对应还在等回答的提问。返回交给模型的结果。"""
-    pending = await answerable_questions(s, session_id)
+    pending = (await open_asks(s, session_id)).answerable
     resolved = {}
     for call_id, given in answers.items():
         if call_id not in pending:
