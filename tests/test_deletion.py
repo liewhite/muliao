@@ -310,9 +310,11 @@ async def test_a_failed_run_ended_retried_after_the_session_was_deleted_writes_n
         raise RuntimeError("notification store unavailable")
 
     with monkeypatch.context() as m:
-        m.setattr(container.notifier, "enqueue_in", broken)
+        m.setattr(container.notifications, "enqueue_in", broken)
         await deliver(container)
-    [failed] = [t for t in await _failed_tasks(container) if t.payload["receiver"] == "notifications.run_ended"]
+    [failed] = [
+        t for t in await _failed_tasks(container) if t.payload["receiver"] == "notifications.run_ended"
+    ]
 
     await container.sessions.delete(session.id)
     await deliver(container)

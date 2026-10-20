@@ -25,13 +25,18 @@ from muliao.sessions.events import AgentSessionsCleared
 log = logging.getLogger(__name__)
 
 
-# 这个 agent 有会话忙（会话领域的查询，组合根接上 sessions.api.agent_busy_in）
+# 这个 agent 有会话忙（会话领域的查询，组合根接上 sessions.api.agent_deletion_blocked_in）
 AgentBusy = Callable[[AsyncSession, str], Awaitable[bool]]
 
 
 class AgentLifecycle:
     def __init__(
-        self, db: Database, agents: AgentService, queue: TaskQueue, messaging: Messaging, agent_busy: AgentBusy
+        self,
+        db: Database,
+        agents: AgentService,
+        queue: TaskQueue,
+        messaging: Messaging,
+        agent_busy: AgentBusy,
     ):
         self._db = db
         self._agents = agents

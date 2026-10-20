@@ -1,8 +1,8 @@
 """通知：发给用户的一条消息（标题、正文、指向的会话、是否未读）。通知页与应用角标的未读数是它的展示；投递
 （Web Push）是 delivery 的事，deliver task 只引用通知，内容只存在 notifications 表。
 
-- Notifier：在业务事务里写下通知并排一个 deliver task。
-- Notifications：通知页与未读数。
+Notifications 是这个领域的唯一服务：写下通知并排一个 deliver task（notify、定向命令 Notify、订阅 RunEnded），通知页
+与未读数，随会话删除（订阅 SessionDeleted）。同一会话的两种事件在同一条 lane 上（session_events_lane）。
 """
 
 import logging
@@ -28,7 +28,7 @@ def session_events_lane(event: RunEnded | SessionDeleted) -> str:
     return f"notifications:{event.session_id}"
 
 
-class Notifier:
+class Notifications:
     def __init__(self, db: Database, queue: TaskQueue):
         self._db = db
         self._queue = queue
@@ -47,6 +47,9 @@ class Notifier:
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended, lane=session_events_lane)
+        messaging.subscribe(
+            SessionDeleted, "notifications.session_deleted", self.on_session_deleted, lane=session_events_lane
+        )
         messaging.handle(Notify, "notifications.notify", self.on_notify)
 
     async def on_notify(self, command: Notify, _delivery: Delivery) -> Commit:
@@ -91,21 +94,6 @@ class Notifier:
         async with self._db.transaction() as s:
             await self.enqueue_in(s, agent_id, Notification(title=title, body=body, session_id=session_id))
 
-
-async def unread_count_in(s: AsyncSession) -> int:
-    query = select(func.count()).select_from(Notification).where(Notification.unread.is_(True))
-    return (await s.execute(query)).scalar_one()
-
-
-class Notifications:
-    def __init__(self, db: Database):
-        self._db = db
-
-    def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(
-            SessionDeleted, "notifications.session_deleted", self.on_session_deleted, lane=session_events_lane
-        )
-
     async def on_session_deleted(self, event: SessionDeleted, _delivery: Delivery) -> Commit:
         """指向被删会话的通知随它删除。"""
 
@@ -140,3 +128,8 @@ class Notifications:
                 .where(Notification.id <= through_id, Notification.unread.is_(True))
                 .values(unread=False)
             )
+
+
+async def unread_count_in(s: AsyncSession) -> int:
+    query = select(func.count()).select_from(Notification).where(Notification.unread.is_(True))
+    return (await s.execute(query)).scalar_one()

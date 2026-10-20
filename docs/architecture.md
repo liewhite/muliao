@@ -386,7 +386,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 ## 10. 删除 agent
 
-1. `AgentLifecycle.delete`：它的会话有忙的（与删除会话同一条规则，组合根注入会话领域的 `agent_busy_in`）、或它的反思在排队或运行时拒绝（409）；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据库数据（会话来信与手动压缩、委派、secret、触发器）之前在同一事务里用 `active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。资源文件与配置不在数据库事务里，写入前在单独的事务里检查（`get_active`），极小的窗口里可能留下孤儿目录，由启动时的检查报告（第 1 节「资源的版本管理」）。
+1. `AgentLifecycle.delete`：它的会话有忙的（与删除会话同一条规则，组合根注入会话领域的 `agent_deletion_blocked_in`）、或它的反思在排队或运行时拒绝（409）；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据库数据（会话来信与手动压缩、委派、secret、触发器）之前在同一事务里用 `active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。资源文件与配置不在数据库事务里，写入前在单独的事务里检查（`get_active`），极小的窗口里可能留下孤儿目录，由启动时的检查报告（第 1 节「资源的版本管理」）。
 2. 订阅者：
    - 会话：删除它的全部会话（连同私有 thread），发布 `AgentSessionsCleared`（没有会话时立即发布）。标记一提交就不再为它新排工作，但仍可能有会话忙：删除前的检查与标记分属两个事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会。处理器先停止这些会话（每个只停一次；它们的工作随 agent 一起放弃），再在时限内（30 秒）等它们空闲——正在执行的运行被取消后，停止事务在它退出之后才执行，正在执行的压缩做完才空闲——然后删除。时限内没有空闲就按暂时失败重试，重试时同样先停止再等；重试用完时投递记为 failed，可见，人工重试。
    - 反思：结束该 agent 排队的反思任务，删除检查点与记录；正在执行的反思结束时发现 agent 正在删除，不写记录。
@@ -461,7 +461,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 | kind | config | state | 激活机制 |
 |---|---|---|---|
-| `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at` | `ScheduleRunner` 循环：到点先推进下次时间并提交，再调用 `fire`（前置检查不能占着事务；进程恰好死在两者之间时这一次被跳过，至多一次）；上一次触发的会话仍有没做完的事时跳过本次（会话领域的 `session_busy_in`：会话的 lane 上有任务，或有投给它、还没投递的 `Receive`）；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起）；触发前按最新的行重新判断（列出之后被删除、停用或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason` |
+| `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at` | `ScheduleRunner` 循环：到点先推进下次时间并提交，再调用 `fire`（前置检查不能占着事务；进程恰好死在两者之间时这一次被跳过，至多一次）；上一次触发的会话仍有没做完的事时跳过本次（会话领域的 `session_has_pending_work_in`：会话的 lane 上有任务，或有投给它、还没投递的 `Receive`）；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起）；触发前按最新的行重新判断（列出之后被删除、停用或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason` |
 | `webhook` | `{}` | `token_hash` | `Webhooks`：`POST /api/hooks/{name}[?session_id=]` 凭 token 鉴权 |
 
 **前置检查**（`triggers/precheck.py`，所有触发方式共用，触发器的公共字段 `precheck`）：做法同 Hermes 的 script / monitor 模式——触发前先跑一条便宜、确定性的命令，有事才调用 agent，没事不花模型调用。命令在该 agent 的工作目录里用 `bash -o pipefail` 执行（管道里任何一步失败都算检查失败：`curl … | jq` 里 curl 失败时 jq 照样退出 0，否则故障会变成静默的「没事」；与 `run_shell` 共用 `platform/shell.py`：最小环境变量、按 key 注入 secret、输出里的 secret 替换掉、超时杀进程组），stdin 是原始事件内容（webhook 请求体，定时与手动为空），在数据库事务之外执行，时限 `runtime.precheck_timeout_seconds`（默认 30 秒：webhook 的调用方在同步等它，检查本该便宜），这个时限写进 `trigger_create` 的工具说明，agent 写检查脚本时知道上限（包括重试在内）。同一轮到期的定时触发器并发执行，一个慢的检查不拖住其他触发器。退出码 0 时按 `fire_when` 决定（`decide`，纯逻辑）：
@@ -489,7 +489,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - token 是我们签发给外部系统的凭证，事实来源是触发器自己：`state` 里只存 SHA-256，明文只在生成时返回一次，**只能由用户在界面上生成**（agent 创建的 webhook 在用户生成 token 之前收不到事件）。不放进 vault——vault 存的是外部系统发给我们的凭证。
 - 不校验各平台自己的签名格式（GitHub、Slack 等各不相同）。需要时由发送方把 token 放进 Authorization 头，或在中间加一层转发。
 
-**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警（定向命令 `Notify`）、推送测试，都经 `Notifier.enqueue_in` 在通知领域的事务里写一条 `notifications` 行并排一个只带 `notification_id` 的 deliver task。DeliverHandler 投递时读出通知和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到 deliver 事件和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时 HTTP 层同时标记会话与指向它的通知为已读（两个领域各自的事务，各自幂等）。通知随它指向的会话删除（订阅 `SessionDeleted`，与 `RunEnded` 在同一条按会话的 lane 上）；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
+**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警（定向命令 `Notify`）、推送测试，都经 `Notifications.enqueue_in` 在通知领域的事务里写一条 `notifications` 行并排一个只带 `notification_id` 的 deliver task。DeliverHandler 投递时读出通知和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到 deliver 事件和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时 HTTP 层同时标记会话与指向它的通知为已读（两个领域各自的事务，各自幂等）。通知随它指向的会话删除（订阅 `SessionDeleted`，与 `RunEnded` 在同一条按会话的 lane 上）；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
 
 通知只有 Web Push 一种渠道。不支持主动推送的外部消息源（例如只能拉取的 Slack 未读）用定时触发器拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
 

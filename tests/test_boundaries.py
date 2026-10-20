@@ -54,8 +54,14 @@ def _violations() -> list[str]:
                 problems.append(f"{where} (platform must not depend on a domain)")
             if owner in DOMAINS:
                 if target[1] in ("api", "container"):
-                    problems.append(f"{where} (a domain must not depend on the HTTP layer or the composition root)")
-                elif target[1] in DOMAINS and target[1] != owner and (len(target) < 3 or target[2] not in PUBLIC):
+                    problems.append(
+                        f"{where} (a domain must not depend on the HTTP layer or the composition root)"
+                    )
+                elif (
+                    target[1] in DOMAINS
+                    and target[1] != owner
+                    and (len(target) < 3 or target[2] not in PUBLIC)
+                ):
                     problems.append(f"{where} (only {target[1]}.api and {target[1]}.events are public)")
             if owner == "api" and target[1] in DOMAINS and (len(target) < 3 or target[2] not in HTTP_VISIBLE):
                 problems.append(f"{where} (the HTTP layer uses {target[1]}.api, .events and .tables only)")
@@ -84,16 +90,22 @@ async def test_a_domain_and_the_task_table_may_be_written_together(container):
     from muliao.notifications.tables import Notification
 
     async with container.db.transaction() as s:
-        await container.notifier.enqueue_in(s, None, Notification(title="t", body="b", session_id=None))
+        await container.notifications.enqueue_in(s, None, Notification(title="t", body="b", session_id=None))
 
 
 # 领域公开接口里在调用方事务里执行的函数（第一个参数是调用方的事务 s）：只能是只读的查询（docs/architecture.md 2.2）。
 # 写入一律是被调领域自己开事务的命令，调用方不替它管事务。读的事实只会单向变化或不变时，调用方可以据它在同一事务里
-# 写自己的数据；否则（session_busy_in、agent_busy_in）只能先查后写。新增一个这样的函数要先确认它只读，再登记到这里。
+# 写自己的数据；否则（session_has_pending_work_in、agent_deletion_blocked_in）只能先查后写。新增一个这样的函数要先确认它只读，再登记到这里。
 READ_ONLY_IN_CALLER_TRANSACTION = {
     "agents": {"active_agent_in", "agent_in"},
     "files": {"load_metas"},
-    "sessions": {"session_in", "check_receivable_in", "session_busy_in", "agent_busy_in", "hold_registered_in"},
+    "sessions": {
+        "session_in",
+        "check_receivable_in",
+        "session_has_pending_work_in",
+        "agent_deletion_blocked_in",
+        "hold_registered_in",
+    },
 }
 
 

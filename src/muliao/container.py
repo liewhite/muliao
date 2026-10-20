@@ -39,7 +39,7 @@ from muliao.files.store import FileStore
 from muliao.jobs.runner import JobRunner
 from muliao.jobs.tools import session_workspace_toolset
 from muliao.notifications.delivery import DeliverHandler
-from muliao.notifications.service import Notifications, Notifier
+from muliao.notifications.service import Notifications
 from muliao.notifications.tools import notify_toolset
 from muliao.notifications.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
 from muliao.platform.bus import EventBus
@@ -50,7 +50,7 @@ from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.worker import TaskHandler, Worker
 from muliao.reflection.service import ReflectionHandler, ReflectionScheduler
-from muliao.sessions.api import agent_busy_in
+from muliao.sessions.api import agent_deletion_blocked_in
 from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import CompactionHandler, Compactor
 from muliao.sessions.consumer import Consumer, RunHandler
@@ -94,7 +94,6 @@ class Container:
     agents: AgentService
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
-    notifier: Notifier
     notifications: Notifications
     mcp: McpRegistry
     triggers: TriggerService
@@ -241,13 +240,13 @@ def build_container(
         AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, groups),
     )
     agent_lifecycle = AgentLifecycle(
-        db, agents, queue, messaging, lambda s, agent_id: agent_busy_in(s, queue, agent_id)
+        db, agents, queue, messaging, lambda s, agent_id: agent_deletion_blocked_in(s, queue, agent_id)
     )
     sessions = SessionService(
         db, queue, live, messaging, lambda session_id: consumer.stop_session(session_id)
     )
     threads = Threads(queue)
-    notifier = Notifier(db, queue)
+    notifications = Notifications(db, queue)
     mcp = McpRegistry(resources, vault)
     schedule_kind = ScheduleKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
@@ -334,7 +333,7 @@ def build_container(
                 )
             ]
         ),
-        "notify": [notify_toolset(notifier)],
+        "notify": [notify_toolset(notifications)],
         "agents": [agents_toolset(agents, agent_lifecycle, prompts)],
         "public_skills": [public_skills_toolset(skills)],
         "mcp": [mcp.toolset()],
@@ -356,10 +355,8 @@ def build_container(
     content = ContentBuilder(files, runtime)
     agent_work = AgentWork(db)
     reflection = ReflectionScheduler(db, queue, agents, agent_work)
-    notifications = Notifications(db)
     # 删除 agent 与会话时各领域清理自己的数据
     notifications.subscribe(messaging)
-    notifier.subscribe(messaging)
     agent_lifecycle.subscribe(messaging)
     sessions.subscribe(messaging)
     AgentSessionsCleanup(
@@ -408,7 +405,6 @@ def build_container(
         agents=agents,
         agent_lifecycle=agent_lifecycle,
         sessions=sessions,
-        notifier=notifier,
         notifications=notifications,
         mcp=mcp,
         triggers=triggers,
