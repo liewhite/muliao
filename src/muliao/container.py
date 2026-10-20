@@ -37,7 +37,7 @@ from muliao.runtime.jobs import JobRunner
 from muliao.runtime.mailbox import MailReconciler
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler, ReflectionScheduler
-from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroup, ToolGroups
+from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroups
 from muliao.runtime.sessions import SessionService
 from muliao.runtime.steps import Steps
 from muliao.runtime.tasks import TaskQueue
@@ -248,7 +248,6 @@ def build_container(
         skills=skills,
         memory=memory,
         prompts=prompts,
-        mcp=mcp,
         live=live,
         tz=tz,
         resolve_model=resolve_model or models.resolve,
@@ -270,14 +269,12 @@ def build_container(
         ask_user_toolset(),
     ]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
-    temp_profile = RunProfile(
-        toolsets=[workspace_toolset(vault, limits, files), *web_tools], include_mcp=True
-    )
+    temp_profile = RunProfile(toolsets=[workspace_toolset(vault, limits, files), *web_tools, mcp.toolset()])
     # 每个组的实现，按目录取：目录里有、这里没有的组是代码不一致，在启动时报出
     implementations = {
         # 对话里用的这份带后台任务（只有会话运行会选用工具组；反思不开放它）
-        "workspace": ToolGroup([session_workspace_toolset(vault, limits, files, jobs)]),
-        "temp_agent": ToolGroup(
+        "workspace": [session_workspace_toolset(vault, limits, files, jobs)],
+        "temp_agent": (
             [
                 temp_agent_toolset(
                     runtime,
@@ -289,7 +286,7 @@ def build_container(
             ]
         ),
         # stop_thread 用消费者停止会话，而消费者又用这组工具：通过延迟绑定的调用打破构造顺序上的环
-        "delegation": ToolGroup(
+        "delegation": (
             [
                 delegation_toolset(
                     db,
@@ -300,16 +297,14 @@ def build_container(
                 )
             ]
         ),
-        "notify": ToolGroup([notify_toolset(notifier)]),
-        "agents": ToolGroup([agents_toolset(agents, agent_lifecycle, prompts)]),
-        "public_skills": ToolGroup([public_skills_toolset(skills)]),
-        "mcp": ToolGroup(uses_mcp=True),
-        "mcp_admin": ToolGroup([mcp_admin_toolset(mcp)]),
-        "vault": ToolGroup([vault_toolset(vault)]),
-        "triggers": ToolGroup(
-            [triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)]
-        ),
-        "web": ToolGroup(web_tools),
+        "notify": [notify_toolset(notifier)],
+        "agents": [agents_toolset(agents, agent_lifecycle, prompts)],
+        "public_skills": [public_skills_toolset(skills)],
+        "mcp": [mcp.toolset()],
+        "mcp_admin": [mcp_admin_toolset(mcp)],
+        "vault": [vault_toolset(vault)],
+        "triggers": ([triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)]),
+        "web": web_tools,
     }
     if missing := [g.name for g in tool_catalog.CATALOG if g.name not in implementations]:
         raise RuntimeError(f"tool groups in the catalog without an implementation: {missing}")

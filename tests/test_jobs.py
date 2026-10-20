@@ -141,7 +141,7 @@ def test_runs_without_a_session_get_no_background_jobs(container):
     plain = workspace_toolset(container.vault, ShellLimits(10, 20, 1000), container.files)
     assert "job_status" not in plain.tools and "job_kill" not in plain.tools
     assert "background" not in plain.tools["run_shell"].function_schema.json_schema["properties"]
-    session = container.consumer._tool_groups.groups["workspace"].toolsets[0]  # noqa: SLF001
+    session = container.consumer._tool_groups.groups["workspace"][0]  # noqa: SLF001
     assert {"job_status", "job_kill"} <= set(session.tools)
     assert "background" in session.tools["run_shell"].function_schema.json_schema["properties"]
 

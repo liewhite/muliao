@@ -13,13 +13,15 @@ from pathlib import Path
 
 from fastmcp.client.transports import StdioTransport
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic_ai import RunContext
 from pydantic_ai.mcp import MCPToolset
-from pydantic_ai.toolsets import AbstractToolset
+from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset
 
 from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
 from muliao.naming import validate_slug
 from muliao.ownership import scope_of, visible
 from muliao.resources import ResourceRepo
+from muliao.runtime.scope import RunScope
 from muliao.runtime.shell import redact
 from muliao.vault import VAULT_REF, Vault
 
@@ -130,6 +132,18 @@ class McpRegistry:
                 init_timeout=_CONNECT_TIMEOUT,
             )
         return toolset.prefixed(server.name)
+
+    def toolset(self) -> DynamicToolset[RunScope]:
+        """「使用 MCP」：每次运行时按这次运行的 agent（RunScope.agent_id；临时 agent 用调用方的视角）取可见的 server
+        构建，与其他工具组一样是一个 toolset，没有可见的 server 时为空。"""
+
+        async def build(ctx: RunContext[RunScope]) -> AbstractToolset[RunScope] | None:
+            servers = self.visible_to(ctx.deps.agent_id)
+            if not servers:
+                return None
+            return CombinedToolset([await self.build_toolset(s) for s in servers])
+
+        return DynamicToolset(build, per_run_step=False)
 
     async def probe(self, server: McpServer) -> list[str]:
         """实际连接 server 并列出工具名。

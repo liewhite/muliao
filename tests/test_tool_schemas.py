@@ -29,7 +29,7 @@ def _nullable_containers(schema: dict) -> list[str]:
 
 
 async def test_array_and_object_parameters_are_not_nullable_unless_null_means_something(container):
-    toolsets = [t for g in container.consumer._tool_groups.groups.values() for t in g.toolsets]  # noqa: SLF001
+    toolsets = [t for g in container.consumer._tool_groups.groups.values() for t in g]  # noqa: SLF001
     toolsets += list(container.consumer._tool_groups.always)  # noqa: SLF001
     offending = [
         (tool.name, param)

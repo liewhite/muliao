@@ -40,7 +40,6 @@ from muliao.models import Agent, Origin
 from muliao.runtime.answers import Answer
 from muliao.runtime.attachments import AttachmentsForModel
 from muliao.runtime.instructions import build_instructions, build_temp_instructions
-from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.redaction import redact_call
 from muliao.runtime.scope import Audience, RunScope
 from muliao.runtime.tasks import Clock
@@ -74,29 +73,21 @@ class StepHooks:
 
 @dataclass(frozen=True)
 class RunProfile:
-    """一次运行开放的能力：对话按 agent 选用的工具组组合（ToolGroups），反思只开放自我改进（加上 agent 已有的写公共 skill），
-    临时 agent 只开放文件与 shell（加调用方的 MCP）。"""
+    """一次运行开放的工具：对话按 agent 选用的工具组组合（ToolGroups），反思只开放自我改进（加上 agent 已有的写公共
+    skill），临时 agent 只开放文件与 shell（加调用方可见的 MCP）。"""
 
     toolsets: Sequence[AbstractToolset[RunScope]]
-    include_mcp: bool
-
-
-@dataclass(frozen=True)
-class ToolGroup:
-    """一组能力：若干工具集，以及是否使用对它可见的 MCP server。"""
-
-    toolsets: Sequence[AbstractToolset[RunScope]] = ()
-    uses_mcp: bool = False
 
 
 @dataclass(frozen=True)
 class ToolGroups:
-    """agent 按名称选用的工具组。always 里的（自我改进：私有 skill 与 memory）对每个 agent 都开放。
+    """agent 按名称选用的工具组（组名见 tool_catalog），每组是若干工具集。always 里的（自我改进：私有 skill 与
+    memory、提问）对每个 agent 都开放。
 
     用途是限制处理不可信输入的 agent 能做什么（例如处理外部事件的 agent 只开放通知）。
     """
 
-    groups: Mapping[str, ToolGroup]
+    groups: Mapping[str, Sequence[AbstractToolset[RunScope]]]
     always: Sequence[AbstractToolset[RunScope]]
 
     def profile(
@@ -112,10 +103,7 @@ class ToolGroups:
             # 写入时已校验（AgentService）；读到未知组说明数据与代码不一致
             raise RuntimeError(f"agent {agent_id} references unknown tool groups {unknown}")
         chosen = [self.groups[n] for n in names if within is None or n in within]
-        return RunProfile(
-            toolsets=[*self.always, *(t for g in chosen for t in g.toolsets)],
-            include_mcp=any(g.uses_mcp for g in chosen),
-        )
+        return RunProfile(toolsets=[*self.always, *(t for g in chosen for t in g)])
 
 
 class AgentRuntime:
@@ -126,7 +114,6 @@ class AgentRuntime:
         skills: SkillStore,
         memory: MemoryStore,
         prompts: PromptStore,
-        mcp: McpRegistry,
         live: LiveRuns,
         tz: ZoneInfo,
         clock: Clock = utcnow,
@@ -137,7 +124,6 @@ class AgentRuntime:
         self._skills = skills
         self._memory = memory
         self._prompts = prompts
-        self._mcp = mcp
         self._live = live
         self._tz = tz
         self._clock = clock
@@ -209,7 +195,7 @@ class AgentRuntime:
             instructions=await self.instructions(agent, scope, summary),
             message_history=list(history),
             deps=scope,
-            toolsets=await self._toolsets(agent.id, profile),
+            toolsets=self._toolsets(profile),
             output_type=[str, DeferredToolRequests],
             deferred_tool_results=deferred,
         ) as run:
@@ -259,7 +245,7 @@ class AgentRuntime:
         return await self._execute(
             model=agent.model,
             instructions=await self.instructions(agent, scope, None),
-            toolsets=await self._toolsets(agent.id, profile),
+            toolsets=self._toolsets(profile),
             scope=scope,
             prompt=prompt,
             history=(),
@@ -291,7 +277,7 @@ class AgentRuntime:
                 now_local=self._clock().astimezone(self._tz),
                 extra=instructions,
             ),
-            toolsets=await self._toolsets(parent.id, profile),
+            toolsets=self._toolsets(profile),
             scope=scope,
             prompt=task,
             history=(),
@@ -299,11 +285,9 @@ class AgentRuntime:
         )
         return Answer.of_run(result.output, result.new_messages())
 
-    async def _toolsets(self, agent_id: str, profile: RunProfile) -> list[AbstractToolset[RunScope]]:
-        toolsets: list[AbstractToolset[RunScope]] = [DomainErrorsAsRetry(t) for t in profile.toolsets]
-        if profile.include_mcp:
-            toolsets += [await self._mcp.build_toolset(s) for s in self._mcp.visible_to(agent_id)]
-        return toolsets
+    @staticmethod
+    def _toolsets(profile: RunProfile) -> list[AbstractToolset[RunScope]]:
+        return [DomainErrorsAsRetry(t) for t in profile.toolsets]
 
     async def _execute(
         self,
