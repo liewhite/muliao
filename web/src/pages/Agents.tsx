@@ -76,7 +76,10 @@ export function AgentList() {
   )
 }
 
-function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
+/** 表单状态：反思间隔清空时为 null（新建时表示用默认值，修改时必须填写） */
+type AgentFormInput = Omit<AgentInput, 'reflect_every'> & { reflect_every: number | null }
+
+function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentFormInput {
   if (agent) {
     const { name, description, model, instructions, reflect_every, tool_groups } = agent
     return { name, description, model, instructions, reflect_every, tool_groups }
@@ -161,14 +164,20 @@ function ModelInput({ value, onChange }: { value: string; onChange: (v: string) 
   )
 }
 
+function updateOf(input: AgentFormInput): AgentInput {
+  const { reflect_every } = input
+  if (reflect_every === null) throw new Error('请填写反思间隔')
+  return { ...input, reflect_every }
+}
+
 function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: AgentDefaults; onSaved: (a: Agent) => void }) {
-  const [input, setInput] = useState<AgentInput>(() => initialInput(agent, defaults))
+  const [input, setInput] = useState<AgentFormInput>(() => initialInput(agent, defaults))
   const action = useAction()
-  const set = (patch: Partial<AgentInput>) => setInput((prev) => ({ ...prev, ...patch }))
+  const set = (patch: Partial<AgentFormInput>) => setInput((prev) => ({ ...prev, ...patch }))
 
   async function save() {
     await action.run(async () => {
-      const saved = agent ? await api.updateAgent(agent.id, input) : await api.createAgent(input)
+      const saved = agent ? await api.updateAgent(agent.id, updateOf(input)) : await api.createAgent(input)
       toast.success(agent ? '已保存' : '已创建')
       onSaved(saved)
     })
@@ -199,7 +208,7 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
       />
       <TextInput
         label="反思间隔（步）"
-        hint="每完成这么多轮对话，强制回顾一次是否需要更新 skill 和记忆"
+        hint="每完成这么多步（模型回复），强制回顾一次是否需要更新 skill 和记忆"
         type="number"
         value={input.reflect_every === null ? '' : String(input.reflect_every)}
         onChange={(v) => set({ reflect_every: v ? Number(v) : null })}

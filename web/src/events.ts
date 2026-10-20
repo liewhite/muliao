@@ -1,37 +1,14 @@
 // 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
 
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { api, type Item, type TaskKind, type TaskStatus } from './api'
-
-interface RunEventBase {
-  type: 'run'
-  session_id: string
-  agent: string
-  /** 这一段的编号与事件序号（后端 bus.LiveRuns）：快照与 SSE 事件据此合并、去重 */
-  run_id: string
-  seq: number
-}
+import { api, type Item, type LiveRun, type Schemas } from './api'
 
 /** 一条完整的会话条目（工具调用、工具结果），与历史同一个投影（后端 transcript）；文字可能截断过 */
-export interface RunItemEvent extends RunEventBase {
-  event: 'item'
-  item: Item
-}
-
+export type RunItemEvent = Schemas['RunItemEvent']
 /** 流式文字：接在同类的最后一条后面（或开始新的一条） */
-export interface RunDeltaEvent extends RunEventBase {
-  event: 'delta'
-  item_type: 'assistant' | 'thinking'
-  text: string
-}
-
+export type RunDeltaEvent = Schemas['RunDeltaEvent']
+/** run_id 与 seq：这一段的编号与事件序号（后端 bus.LiveRuns），快照与 SSE 事件据此合并、去重 */
 export type RunEvent = RunItemEvent | RunDeltaEvent
-
-/** 当前这一段的快照（会话接口的 live 字段） */
-export interface LiveRun {
-  run_id: string
-  events: RunEvent[]
-}
 
 export interface MergedLive {
   events: RunEvent[]
@@ -79,25 +56,14 @@ export function liveItems(events: RunEvent[]): Item[] {
   return items
 }
 
-export interface TaskEvent {
-  type: 'task'
-  task_id: number
-  kind: TaskKind
-  status: TaskStatus
-  session_id: string | null
-  /** 系统通知的投递没有所属 agent */
-  agent: string | null
-  error: string | null
-}
+/** task 状态变化：页面据此从数据库重新拉取 */
+export type TaskEvent = Schemas['TaskEvent']
+/** 运行中又保存了一步（后端 bus.LiveRuns.step）：历史有了新内容，实时事件换成新的一段 */
+export type SavedEvent = Schemas['SavedEvent']
 
+/** 重新连上了（前端自己产生）：期间可能丢了事件，页面要重新拉取 */
 export interface ReconnectEvent {
   type: 'reconnected'
-}
-
-/** 运行中又保存了一步（后端 bus.LiveRuns.step）：历史有了新内容，实时事件换成新的一段 */
-export interface SavedEvent {
-  type: 'saved'
-  session_id: string
 }
 
 export type ServerEvent = RunEvent | TaskEvent | ReconnectEvent | SavedEvent
@@ -105,12 +71,7 @@ export type ServerEvent = RunEvent | TaskEvent | ReconnectEvent | SavedEvent
 type Listener = (e: ServerEvent) => void
 
 /** 服务端定时发的心跳（api/app.py），只用来判断连接是否还活着，不交给页面 */
-interface HeartbeatEvent {
-  type: 'heartbeat'
-  interval_seconds: number
-  /** 服务端当前前端构建的版本；包里没有前端构建时为 null */
-  ui_version: string | null
-}
+type HeartbeatEvent = Schemas['HeartbeatEvent']
 
 /** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
 export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {

@@ -1,9 +1,11 @@
 import asyncio
 import hashlib
+import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -25,12 +27,13 @@ from muliao.errors import (
     Unauthorized,
     UpstreamFailed,
 )
-from muliao.events import HeartbeatEvent
+from muliao.events import HeartbeatEvent, ServerEvent
 from muliao.triggers.precheck import PrecheckFailed
 
 log = logging.getLogger(__name__)
 
 _HEARTBEAT_SECONDS = 15.0
+TITLE = "Muliao"
 
 
 def _heartbeat(ui_version: str | None) -> str:
@@ -39,6 +42,10 @@ def _heartbeat(ui_version: str | None) -> str:
       消息」发现；间隔随心跳下发，前端不另存一份；
     - ui_version 是服务端当前前端构建的版本：手机主屏应用常驻内存，升级后旧页面还在跑，前端据此提示刷新。"""
     return _sse(HeartbeatEvent(interval_seconds=_HEARTBEAT_SECONDS, ui_version=ui_version))
+
+
+class EventStream(StreamingResponse):
+    media_type = "text/event-stream"
 
 
 def _sse(event: BaseModel) -> str:
@@ -74,7 +81,7 @@ def _status_of(exc: DomainError) -> int:
     raise TypeError(f"unmapped domain error {type(exc).__name__}") from exc
 
 
-def _public_routes(secure_cookie: bool) -> APIRouter:
+def _public_routes() -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/auth/login", status_code=204)
@@ -89,7 +96,7 @@ def _public_routes(secure_cookie: bool) -> APIRouter:
             max_age=MAX_AGE_SECONDS,
             httponly=True,
             samesite="lax",
-            secure=secure_cookie,
+            secure=request.app.state.secure_cookie,
         )
 
     @router.post("/api/auth/logout", status_code=204)
@@ -99,7 +106,7 @@ def _public_routes(secure_cookie: bool) -> APIRouter:
     return router
 
 
-def _private_routes(heartbeat: str) -> APIRouter:
+def _private_routes() -> APIRouter:
     router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
     router.include_router(agents.router)
     router.include_router(sessions.router)
@@ -114,8 +121,11 @@ def _private_routes(heartbeat: str) -> APIRouter:
     async def me() -> None:
         return None
 
-    @router.get("/events")
-    async def events(c: C) -> StreamingResponse:
+    # 每条 data 是一个 ServerEvent：声明出来是为了把事件模型登记进 OpenAPI，前端类型由此生成
+    @router.get("/events", response_class=EventStream, responses={200: {"model": ServerEvent}})
+    async def events(request: Request, c: C) -> EventStream:
+        heartbeat = _heartbeat(request.app.state.ui_version)
+
         async def stream() -> AsyncIterator[str]:
             async with c.bus.subscribe() as sub:
                 # 连上就先发一次心跳：前端立刻知道间隔
@@ -130,11 +140,7 @@ def _private_routes(heartbeat: str) -> APIRouter:
                         return
                     yield _sse(event)
 
-        return StreamingResponse(
-            stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+        return EventStream(stream(), headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     return router
 
@@ -166,7 +172,7 @@ def create_app(container: Container, web_dir: Path) -> FastAPI:
         finally:
             await container.stop()
 
-    app = FastAPI(title="Muliao", lifespan=lifespan)
+    app = FastAPI(title=TITLE, lifespan=lifespan)
     settings = container.settings
     app.state.container = container
     app.state.auth = Auth(
@@ -181,9 +187,28 @@ def create_app(container: Container, web_dir: Path) -> FastAPI:
     async def upstream_failed(_request: Request, exc: UpstreamFailed) -> JSONResponse:
         return JSONResponse(status_code=502, content={"detail": str(exc)})
 
-    app.include_router(_public_routes(secure_cookie=settings.server.public_url.startswith("https://")))
-    # webhook 的事件入口凭触发器 token 鉴权，不走登录
-    app.include_router(webhook.public_router)
-    app.include_router(_private_routes(_heartbeat(ui_version(web_dir))))
+    app.state.secure_cookie = settings.server.public_url.startswith("https://")
+    app.state.ui_version = ui_version(web_dir)
+    _install_api(app)
     _mount_web(app, web_dir)
     return app
+
+
+def _install_api(app: FastAPI) -> None:
+    """全部接口；不依赖运行时的 container，生成接口描述时也用它（api_schema）。"""
+    app.include_router(_public_routes())
+    # webhook 的事件入口凭触发器 token 鉴权，不走登录
+    app.include_router(webhook.public_router)
+    app.include_router(_private_routes())
+
+
+def api_schema() -> dict[str, Any]:
+    """接口的 OpenAPI 描述（含 SSE 事件），与运行中的服务一致；web/openapi.json 由它生成。"""
+    app = FastAPI(title=TITLE)
+    _install_api(app)
+    return app.openapi()
+
+
+if __name__ == "__main__":
+    # uv run python -m muliao.api.app > web/openapi.json
+    print(json.dumps(api_schema(), ensure_ascii=False, indent=2))

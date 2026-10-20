@@ -1,0 +1,3319 @@
+// 由 scripts/gen-api.mjs 从 openapi.json 生成，不要手改
+
+export interface paths {
+    "/api/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Login */
+        post: operations["login_api_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["logout_api_auth_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hooks/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hook
+         * @description 外部事件入口：Authorization: Bearer <token>。不带 session_id 时新建会话；带上之前返回的则在该会话里继续。
+         */
+        post: operations["hook_api_hooks__name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent-defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Defaults
+         * @description 新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。
+         */
+        get: operations["agent_defaults_api_agent_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Providers
+         * @description 配置里的 LLM provider 名，即 agent 模型 "<provider 名>:<模型名>" 的前半部分。
+         */
+        get: operations["list_providers_api_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/providers/{name}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Provider Models
+         * @description 向该 provider 实时查询的模型名；provider 出错时为 502 并带上原因。
+         */
+        get: operations["list_provider_models_api_providers__name__models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agents */
+        get: operations["list_agents_api_agents_get"];
+        put?: never;
+        /** Create Agent */
+        post: operations["create_agent_api_agents_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent */
+        get: operations["get_agent_api_agents__agent_id__get"];
+        /** Update Agent */
+        put: operations["update_agent_api_agents__agent_id__put"];
+        post?: never;
+        /** Delete Agent */
+        delete: operations["delete_agent_api_agents__agent_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Memory */
+        get: operations["get_memory_api_agents__agent_id__memory_get"];
+        /** Put Memory */
+        put: operations["put_memory_api_agents__agent_id__memory_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}/reflections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Reflections */
+        get: operations["list_reflections_api_agents__agent_id__reflections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skills
+         * @description owner 为空列出公共 skill，否则列出该 agent 的私有 skill。
+         */
+        get: operations["list_skills_api_skills_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Skill */
+        get: operations["get_skill_api_skill_get"];
+        /** Put Skill */
+        put: operations["put_skill_api_skill_put"];
+        post?: never;
+        /** Delete Skill */
+        delete: operations["delete_skill_api_skill_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Sessions */
+        get: operations["list_sessions_api_sessions_get"];
+        put?: never;
+        /** Start Session */
+        post: operations["start_session_api_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Session */
+        get: operations["get_session_api_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Session */
+        delete: operations["delete_session_api_sessions__session_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reply */
+        post: operations["reply_api_sessions__session_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop
+         * @description 停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的异步工作
+         *     （docs/architecture.md「停止会话」）。
+         */
+        post: operations["stop_api_sessions__session_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/compact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compact
+         * @description 手动压缩上下文（自动压缩见 runtime.compaction）：排在正在进行与排队的运行之后。
+         */
+        post: operations["compact_api_sessions__session_id__compact_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Read */
+        post: operations["mark_read_api_sessions__session_id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Tasks */
+        get: operations["list_tasks_api_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tasks/{task_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Task */
+        post: operations["retry_task_api_tasks__task_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Mcp */
+        get: operations["list_mcp_api_mcp_get"];
+        put?: never;
+        /** Add Mcp */
+        post: operations["add_mcp_api_mcp_post"];
+        /** Delete Mcp */
+        delete: operations["delete_mcp_api_mcp_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mcp/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Probe Mcp */
+        post: operations["probe_mcp_api_mcp_tools_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mcp/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Mcp Enabled */
+        put: operations["set_mcp_enabled_api_mcp_enabled_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vault": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Secrets */
+        get: operations["list_secrets_api_vault_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vault/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Secret
+         * @description owner 缺省为公共 secret，否则为该 agent 私有。
+         */
+        put: operations["set_secret_api_vault__key__put"];
+        post?: never;
+        /** Delete Secret */
+        delete: operations["delete_secret_api_vault__key__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/push/vapid": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Vapid Key */
+        get: operations["vapid_key_api_push_vapid_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/push/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Subscribe */
+        post: operations["subscribe_api_push_subscriptions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/push/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Push */
+        post: operations["test_push_api_push_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/resources/{kind}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * History
+         * @description owner 缺省为公共资源；新的在前，第一条即当前生效的一版。只列最近 50 版，更早的仍保留在仓库里。
+         */
+        get: operations["history_api_resources__kind__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/resources/{kind}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore
+         * @description 把某一版的内容作为新的一版写入。
+         */
+        post: operations["restore_api_resources__kind__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/prompts/public": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Public Prompt */
+        put: operations["set_public_prompt_api_prompts_public_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/trigger-kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Trigger Kinds */
+        get: operations["trigger_kinds_api_trigger_kinds_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/triggers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Triggers */
+        get: operations["list_triggers_api_triggers_get"];
+        put?: never;
+        /** Create Trigger */
+        post: operations["create_trigger_api_triggers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/triggers/{trigger_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Trigger */
+        delete: operations["delete_trigger_api_triggers__trigger_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Trigger */
+        patch: operations["update_trigger_api_triggers__trigger_id__patch"];
+        trace?: never;
+    };
+    "/api/triggers/{trigger_id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Trigger
+         * @description 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。
+         */
+        post: operations["run_trigger_api_triggers__trigger_id__run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/triggers/{trigger_id}/webhook/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Token
+         * @description 生成（或重新生成）webhook 的 token；只能由用户在这里生成，旧 token 立即失效。
+         */
+        post: operations["generate_token_api_triggers__trigger_id__webhook_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload
+         * @description 请求体就是文件内容，Content-Type 是它的类型（与 Matrix /media/upload 相同，不用 multipart），边读边写，超限即停。
+         */
+        post: operations["upload_api_files_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/files/{file_id}/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download */
+        get: operations["download_api_files__file_id___name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Notifications */
+        get: operations["list_notifications_api_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/unread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Unread */
+        get: operations["unread_api_notifications_unread_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Read */
+        post: operations["mark_read_api_notifications_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Me */
+        get: operations["me_api_auth_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Events */
+        get: operations["events_api_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+}
+export type webhooks = Record<string, never>;
+export interface components {
+    schemas: {
+        /**
+         * AgentAnswer
+         * @description 被问的 agent 交回的结局（runtime.delegations）：给发问方模型的文字，它挂给用户的文件，所在的 thread。
+         */
+        AgentAnswer: {
+            /** Text */
+            text: string;
+            /** Attachments */
+            attachments: components["schemas"]["Attachment"][];
+            /** Thread */
+            thread: string;
+        };
+        /** AgentCreate */
+        AgentCreate: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Model */
+            model?: string | null;
+            /**
+             * Instructions
+             * @default
+             */
+            instructions: string;
+            /** Reflect Every */
+            reflect_every?: number | null;
+            /** Tool Groups */
+            tool_groups?: string[] | null;
+        };
+        /** AgentDefaultsOut */
+        AgentDefaultsOut: {
+            /** Model */
+            model: string;
+            /** Reflect Every */
+            reflect_every: number;
+            /** Groups */
+            groups: components["schemas"]["ToolGroupOut"][];
+            /** Default Tool Groups */
+            default_tool_groups: string[];
+        };
+        /** AgentOut */
+        AgentOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Model */
+            model: string;
+            /** Instructions */
+            instructions: string;
+            /** Reflect Every */
+            reflect_every: number;
+            /** Tool Groups */
+            tool_groups: string[];
+            /** Steps Since Reflection */
+            steps_since_reflection: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * AgentUpdate
+         * @description 整体替换：所有字段必填，不会用默认值覆盖已有配置。name 可改（只用于展示）。
+         */
+        AgentUpdate: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Model */
+            model: string;
+            /** Instructions */
+            instructions: string;
+            /** Reflect Every */
+            reflect_every: number;
+            /** Tool Groups */
+            tool_groups: string[];
+        };
+        /** AnsweredQuestion */
+        AnsweredQuestion: {
+            /** Question */
+            question: string;
+            /** Selected */
+            selected: string[];
+            /** Other */
+            other: string | null;
+        };
+        /**
+         * AskResult
+         * @description 一次提问交给模型的结果（也是界面展示已回答提问的来源）：answered 区分用户回答了，还是没回答就发了新消息。
+         */
+        AskResult: {
+            /** Answered */
+            answered: boolean;
+            /** Answers */
+            answers: components["schemas"]["AnsweredQuestion"][];
+            /** Note */
+            note: string | null;
+        };
+        /**
+         * AskView
+         * @description ask_user 调用的状态，由后端按唯一规则给出（annotate_asks），前端只渲染：
+         *     asking 运行还没停下（还不能回答）；pending 现在能回答（显示表单）；submitted 回答已提交、还排着；answered 已回答；
+         *     not_answered 用户没回答（发了新消息或只回答了别的提问）。
+         */
+        AskView: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "asking" | "pending" | "submitted" | "answered" | "not_answered";
+            /** Questions */
+            questions: components["schemas"]["Question"][];
+            /** Answers */
+            answers: components["schemas"]["AnsweredQuestion"][];
+            /** Note */
+            note: string | null;
+        };
+        /** Attachment */
+        Attachment: {
+            /** Url */
+            url: string;
+            /** Name */
+            name: string;
+            /** Media Type */
+            media_type: string;
+            /** Inline */
+            inline: boolean;
+        };
+        /** CompactOut */
+        CompactOut: {
+            /** Queued */
+            queued: boolean;
+        };
+        /** CompactionOut */
+        CompactionOut: {
+            /** Through Message Id */
+            through_message_id: number;
+            /** Summary */
+            summary: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ContentIn */
+        ContentIn: {
+            /** Content */
+            content: string;
+        };
+        /** EnabledIn */
+        EnabledIn: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** FileOut */
+        FileOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Media Type */
+            media_type: string;
+            /** Size */
+            size: number;
+            /** Url */
+            url: string;
+            /** Inline */
+            inline: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** FiredOut */
+        FiredOut: {
+            /** Session Id */
+            session_id: string | null;
+        };
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HeartbeatEvent
+         * @description 连上就发一次、之后每隔一段时间发一次：前端据此判断连接是否还活着（间隔随心跳下发），并比较前端构建的版本。
+         */
+        HeartbeatEvent: {
+            /**
+             * Type
+             * @default heartbeat
+             * @constant
+             */
+            type: "heartbeat";
+            /** Interval Seconds */
+            interval_seconds: number;
+            /** Ui Version */
+            ui_version: string | null;
+        };
+        /** HookOut */
+        HookOut: {
+            /** Session Id */
+            session_id: string | null;
+        };
+        /** Item */
+        Item: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "user" | "event" | "assistant" | "thinking" | "tool_call" | "tool_result" | "tool_error" | "stopped";
+            /** Text */
+            text: string;
+            /** Tool Name */
+            tool_name: string | null;
+            /** Tool Call Id */
+            tool_call_id: string | null;
+            /** Message Id */
+            message_id: number | null;
+            /** Attachments */
+            attachments: components["schemas"]["Attachment"][];
+            /** Threads */
+            threads: string[];
+            ask: components["schemas"]["AskView"] | null;
+        };
+        /** LiveRunOut */
+        LiveRunOut: {
+            /** Run Id */
+            run_id: string;
+            /** Events */
+            events: (components["schemas"]["RunItemEvent"] | components["schemas"]["RunDeltaEvent"])[];
+        };
+        /** LoginIn */
+        LoginIn: {
+            /** Password */
+            password: string;
+        };
+        /**
+         * MailKind
+         * @description 信箱里的信件（runtime.mailbox）。
+         * @enum {string}
+         */
+        MailKind: "message" | "answer" | "event";
+        /**
+         * MailOut
+         * @description 会话信箱里的一封信件（runtime.mailbox）。
+         */
+        MailOut: {
+            /** Id */
+            id: number;
+            kind: components["schemas"]["MailKind"];
+            /** Source */
+            source: string | null;
+            /** Content */
+            content: string;
+            /** Attachments */
+            attachments: components["schemas"]["FileOut"][];
+            /** Answers */
+            answers: {
+                [key: string]: components["schemas"]["AskResult"] | components["schemas"]["AgentAnswer"];
+            };
+            state: components["schemas"]["MailState"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * MailState
+         * @enum {string}
+         */
+        MailState: "queued" | "consumed" | "discarded";
+        /** MarkReadIn */
+        MarkReadIn: {
+            /** Through Id */
+            through_id: number;
+        };
+        /** McpIn */
+        McpIn: {
+            /** Owner */
+            owner: string | null;
+            /** Name */
+            name: string;
+            transport: components["schemas"]["McpTransport"];
+            /** Command */
+            command?: string | null;
+            /**
+             * Args
+             * @default []
+             */
+            args: string[];
+            /** Url */
+            url?: string | null;
+            /**
+             * Env
+             * @default {}
+             */
+            env: {
+                [key: string]: string;
+            };
+            /**
+             * Headers
+             * @default {}
+             */
+            headers: {
+                [key: string]: string;
+            };
+            /**
+             * Probe
+             * @default true
+             */
+            probe: boolean;
+        };
+        /** McpOut */
+        McpOut: {
+            /** Owner */
+            owner: string | null;
+            /** Name */
+            name: string;
+            transport: components["schemas"]["McpTransport"];
+            /** Command */
+            command: string | null;
+            /** Args */
+            args: string[];
+            /** Url */
+            url: string | null;
+            /** Env */
+            env: {
+                [key: string]: string;
+            };
+            /** Headers */
+            headers: {
+                [key: string]: string;
+            };
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Tools
+             * @default []
+             */
+            tools: string[];
+        };
+        /**
+         * McpTransport
+         * @enum {string}
+         */
+        McpTransport: "stdio" | "http";
+        /** MemoryIn */
+        MemoryIn: {
+            /** Content */
+            content: string;
+        };
+        /** MemoryOut */
+        MemoryOut: {
+            /** Content */
+            content: string;
+            /** Max Chars */
+            max_chars: number;
+        };
+        /** NotificationOut */
+        NotificationOut: {
+            /** Id */
+            id: number;
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+            /** Session Id */
+            session_id: string | null;
+            /** Unread */
+            unread: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** Option */
+        Option: {
+            /**
+             * Label
+             * @description Short choice text shown on the button.
+             */
+            label: string;
+            /**
+             * Description
+             * @description What choosing it means, if not obvious.
+             * @default
+             */
+            description: string;
+        };
+        /**
+         * Origin
+         * @description 会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派。
+         * @enum {string}
+         */
+        Origin: "user" | "trigger" | "delegation";
+        /** Precheck */
+        Precheck: {
+            /**
+             * Command
+             * @description bash command run before each firing.
+             */
+            command: string;
+            /**
+             * Secrets
+             * @description Vault keys exposed to the command as env vars.
+             * @default []
+             */
+            secrets: string[];
+            /**
+             * Fire When
+             * @description 'output': fire when stdout is non-empty. 'changed': fire when stdout differs from the last run (the first run only records it).
+             * @default output
+             * @enum {string}
+             */
+            fire_when: "output" | "changed";
+        };
+        /** PushKeys */
+        PushKeys: {
+            /** P256Dh */
+            p256dh: string;
+            /** Auth */
+            auth: string;
+        };
+        /** PushSubscriptionIn */
+        PushSubscriptionIn: {
+            /** Endpoint */
+            endpoint: string;
+            keys: components["schemas"]["PushKeys"];
+        };
+        /** Question */
+        Question: {
+            /**
+             * Question
+             * @description The full question.
+             */
+            question: string;
+            /**
+             * Header
+             * @description Very short label, e.g. 'Timeframe'.
+             */
+            header: string;
+            /** Options */
+            options: components["schemas"]["Option"][];
+            /**
+             * Multi Select
+             * @description Allow choosing several options.
+             * @default false
+             */
+            multi_select: boolean;
+        };
+        /**
+         * QuestionAnswer
+         * @description 用户对一个问题的回答：选中的选项，和/或「其他」里填的文字。
+         */
+        QuestionAnswer: {
+            /**
+             * Selected
+             * @default []
+             */
+            selected: string[];
+            /** Other */
+            other?: string | null;
+        };
+        /** ReflectionOut */
+        ReflectionOut: {
+            /** Id */
+            id: number;
+            /** From Message Id */
+            from_message_id: number;
+            /** To Message Id */
+            to_message_id: number;
+            /** Output */
+            output: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ReplyIn */
+        ReplyIn: {
+            /** Prompt */
+            prompt: string;
+            /**
+             * Attachments
+             * @default []
+             */
+            attachments: string[];
+            /**
+             * Answers
+             * @default {}
+             */
+            answers: {
+                [key: string]: components["schemas"]["QuestionAnswer"][];
+            };
+        };
+        /**
+         * ResourceKind
+         * @enum {string}
+         */
+        ResourceKind: "prompt" | "memory";
+        /** RestoreIn */
+        RestoreIn: {
+            /** Owner */
+            owner?: string | null;
+            /** Rev */
+            rev: string;
+        };
+        /** RevisionOut */
+        RevisionOut: {
+            /** Rev */
+            rev: string;
+            /** Content */
+            content: string;
+            /** Author */
+            author: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * RunDeltaEvent
+         * @description 流式文字：接在同类的最后一条后面（或开始新的一条）。
+         */
+        RunDeltaEvent: {
+            /**
+             * Type
+             * @default run
+             * @constant
+             */
+            type: "run";
+            /** Session Id */
+            session_id: string;
+            /** Agent */
+            agent: string;
+            /** Run Id */
+            run_id: string;
+            /** Seq */
+            seq: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "delta";
+            /**
+             * Item Type
+             * @enum {string}
+             */
+            item_type: "assistant" | "thinking";
+            /** Text */
+            text: string;
+        };
+        /**
+         * RunItemEvent
+         * @description 一条完整的会话条目（工具调用、工具结果），与历史同一个投影（transcript）；文字可能截断过。
+         */
+        RunItemEvent: {
+            /**
+             * Type
+             * @default run
+             * @constant
+             */
+            type: "run";
+            /** Session Id */
+            session_id: string;
+            /** Agent */
+            agent: string;
+            /** Run Id */
+            run_id: string;
+            /** Seq */
+            seq: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            event: "item";
+            item: components["schemas"]["Item"];
+        };
+        /**
+         * SavedEvent
+         * @description 运行中又保存了一步（bus.LiveRuns.step）：历史有了新内容，实时事件换成新的一段。
+         */
+        SavedEvent: {
+            /**
+             * Type
+             * @default saved
+             * @constant
+             */
+            type: "saved";
+            /** Session Id */
+            session_id: string;
+        };
+        /** SecretIn */
+        SecretIn: {
+            /** Value */
+            value: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** SecretOut */
+        SecretOut: {
+            /** Owner */
+            owner: string | null;
+            /** Key */
+            key: string;
+            /** Description */
+            description: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** SessionDetail */
+        SessionDetail: {
+            session: components["schemas"]["SessionOut"];
+            /** Items */
+            items: components["schemas"]["Item"][];
+            /** Compactions */
+            compactions: components["schemas"]["CompactionOut"][];
+            /** Mail */
+            mail: components["schemas"]["MailOut"][];
+            run: components["schemas"]["TaskOut"] | null;
+            /** Threads */
+            threads: components["schemas"]["SessionOut"][];
+            live: components["schemas"]["LiveRunOut"] | null;
+        };
+        /** SessionOut */
+        SessionOut: {
+            /** Id */
+            id: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Title */
+            title: string;
+            origin: components["schemas"]["Origin"];
+            /** Origin Ref */
+            origin_ref: string | null;
+            /** Parent Session Id */
+            parent_session_id: string | null;
+            /** Thread */
+            thread: string | null;
+            /** Private */
+            private: boolean;
+            /** Unread */
+            unread: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** SkillDetail */
+        SkillDetail: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Owner */
+            owner: string | null;
+            /** Body */
+            body: string;
+        };
+        /** SkillIn */
+        SkillIn: {
+            /** Owner */
+            owner: string | null;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Body */
+            body: string;
+        };
+        /** SkillOut */
+        SkillOut: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Owner */
+            owner: string | null;
+        };
+        /** StartIn */
+        StartIn: {
+            /** Agent Id */
+            agent_id: string;
+            /** Prompt */
+            prompt: string;
+            /**
+             * Attachments
+             * @default []
+             */
+            attachments: string[];
+        };
+        /**
+         * TaskEvent
+         * @description 一个 task 的状态变化（前端据此从数据库重新拉取），由 worker 发出。
+         */
+        TaskEvent: {
+            /**
+             * Type
+             * @default task
+             * @constant
+             */
+            type: "task";
+            /** Task Id */
+            task_id: number;
+            kind: components["schemas"]["TaskKind"];
+            status: components["schemas"]["TaskStatus"];
+            /** Session Id */
+            session_id: string | null;
+            /** Agent */
+            agent: string | null;
+            /** Error */
+            error: string | null;
+        };
+        /**
+         * TaskKind
+         * @enum {string}
+         */
+        TaskKind: "run" | "reflection" | "deliver" | "compaction";
+        /** TaskOut */
+        TaskOut: {
+            /** Id */
+            id: number;
+            kind: components["schemas"]["TaskKind"];
+            /** Agent Id */
+            agent_id: string | null;
+            /** Session Id */
+            session_id: string | null;
+            status: components["schemas"]["TaskStatus"];
+            /** Attempts */
+            attempts: number;
+            /** Error */
+            error: string | null;
+            /**
+             * Not Before
+             * Format: date-time
+             */
+            not_before: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
+        };
+        /**
+         * TaskStatus
+         * @enum {string}
+         */
+        TaskStatus: "pending" | "running" | "done" | "failed";
+        /** TokenOut */
+        TokenOut: {
+            /** Token */
+            token: string;
+        };
+        /**
+         * ToolGroupOut
+         * @description 一个可选的工具组（tool_catalog）。
+         */
+        ToolGroupOut: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /** Full Access */
+            full_access: boolean;
+            /** Default */
+            default: boolean;
+        };
+        /** TriggerCreate */
+        TriggerCreate: {
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Kind */
+            kind: string;
+            /** Prompt */
+            prompt: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            precheck?: components["schemas"]["Precheck"] | null;
+        };
+        /** TriggerKindOut */
+        TriggerKindOut: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+        };
+        /** TriggerOut */
+        TriggerOut: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Kind */
+            kind: string;
+            /** Prompt */
+            prompt: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Status */
+            status: {
+                [key: string]: unknown;
+            };
+            /** Enabled */
+            enabled: boolean;
+            precheck: components["schemas"]["Precheck"] | null;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /** Last Fired At */
+            last_fired_at: string | null;
+            /** Last Session Id */
+            last_session_id: string | null;
+            /** Disabled Reason */
+            disabled_reason: string | null;
+            /** Precheck Error */
+            precheck_error: string | null;
+        };
+        /**
+         * TriggerPatch
+         * @description 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。
+         */
+        TriggerPatch: {
+            /** Prompt */
+            prompt?: string | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            precheck?: components["schemas"]["Precheck"] | null;
+        };
+        /** UnreadOut */
+        UnreadOut: {
+            /** Count */
+            count: number;
+        };
+        /** ValidationError */
+        ValidationError: {
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
+        };
+        /** VapidOut */
+        VapidOut: {
+            /** Public Key */
+            public_key: string;
+        };
+    };
+    responses: never;
+    parameters: never;
+    requestBodies: never;
+    headers: never;
+    pathItems: never;
+}
+export type $defs = Record<string, never>;
+export interface operations {
+    login_api_auth_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout_api_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    hook_api_hooks__name__post: {
+        parameters: {
+            query?: {
+                session_id?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HookOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_defaults_api_agent_defaults_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentDefaultsOut"];
+                };
+            };
+        };
+    };
+    list_providers_api_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+        };
+    };
+    list_provider_models_api_providers__name__models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agents_api_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentOut"][];
+                };
+            };
+        };
+    };
+    create_agent_api_agents_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_api_agents__agent_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_agent_api_agents__agent_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_agent_api_agents__agent_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_memory_api_agents__agent_id__memory_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_memory_api_agents__agent_id__memory_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_reflections_api_agents__agent_id__reflections_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReflectionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skills_api_skills_get: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_api_skill_get: {
+        parameters: {
+            query: {
+                name: string;
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_skill_api_skill_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_skill_api_skill_delete: {
+        parameters: {
+            query: {
+                name: string;
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sessions_api_sessions_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+                origin?: components["schemas"]["Origin"][] | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_session_api_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_api_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_session_api_sessions__session_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reply_api_sessions__session_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplyIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_api_sessions__session_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compact_api_sessions__session_id__compact_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_read_api_sessions__session_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tasks_api_tasks_get: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["TaskStatus"] | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_task_api_tasks__task_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_mcp_api_mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpOut"][];
+                };
+            };
+        };
+    };
+    add_mcp_api_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_mcp_api_mcp_delete: {
+        parameters: {
+            query: {
+                name: string;
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_mcp_api_mcp_tools_post: {
+        parameters: {
+            query: {
+                name: string;
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_mcp_enabled_api_mcp_enabled_put: {
+        parameters: {
+            query: {
+                name: string;
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnabledIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_secrets_api_vault_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretOut"][];
+                };
+            };
+        };
+    };
+    set_secret_api_vault__key__put: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+            };
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_secret_api_vault__key__delete: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+            };
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vapid_key_api_push_vapid_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VapidOut"];
+                };
+            };
+        };
+    };
+    subscribe_api_push_subscriptions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushSubscriptionIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_push_api_push_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    history_api_resources__kind__history_get: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+            };
+            header?: never;
+            path: {
+                kind: components["schemas"]["ResourceKind"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_api_resources__kind__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: components["schemas"]["ResourceKind"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_public_prompt_api_prompts_public_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContentIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_kinds_api_trigger_kinds_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerKindOut"][];
+                };
+            };
+        };
+    };
+    list_triggers_api_triggers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerOut"][];
+                };
+            };
+        };
+    };
+    create_trigger_api_triggers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_trigger_api_triggers__trigger_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trigger_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_trigger_api_triggers__trigger_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trigger_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_trigger_api_triggers__trigger_id__run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trigger_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FiredOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_token_api_triggers__trigger_id__webhook_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trigger_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_api_files_post: {
+        parameters: {
+            query: {
+                name: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_api_files__file_id___name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                file_id: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notifications_api_notifications_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unread_api_notifications_unread_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreadOut"];
+                };
+            };
+        };
+    };
+    mark_read_api_notifications_read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkReadIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    me_api_auth_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    events_api_events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string | components["schemas"]["TaskEvent"] | components["schemas"]["SavedEvent"] | components["schemas"]["RunItemEvent"] | components["schemas"]["RunDeltaEvent"] | components["schemas"]["HeartbeatEvent"];
+                };
+            };
+        };
+    };
+}

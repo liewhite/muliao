@@ -8,6 +8,7 @@ import {
   type Agent,
   type Attachment,
   type CompactionInfo,
+  isAskResult,
   type Item,
   type QuestionAnswer,
   type Mail,
@@ -239,7 +240,13 @@ function MailNote({ mail }: { mail: Mail }) {
       {mail.kind === 'event' ? (
         <EventNote source={mail.source ?? '?'} text={mail.content} />
       ) : mail.kind === 'answer' ? (
-        Object.values(mail.answers).map((result, i) => <AnsweredQuestions key={i} answers={result.answers} />)
+        Object.values(mail.answers).map((result, i) =>
+          isAskResult(result) ? (
+            <AnsweredQuestions key={i} answers={result.answers} />
+          ) : (
+            <EventNote key={i} source="agent 的回答" text={result.text} />
+          ),
+        )
       ) : (
         <UserBubble text={mail.content} attachments={mail.attachments} pending={!discarded} />
       )}

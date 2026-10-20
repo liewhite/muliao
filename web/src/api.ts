@@ -1,10 +1,12 @@
-// 与后端 src/muliao/api/*.py 的响应模型一一对应
+// 接口类型取自 schema.d.ts（由后端的 OpenAPI 描述生成，见 scripts/gen-api.mjs），这里只起名字、补上品牌类型
 
-import type { LiveRun } from './events'
+import type { components } from './schema'
 
-export type Origin = 'user' | 'trigger' | 'delegation'
-export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
-export type TaskKind = 'run' | 'reflection' | 'deliver' | 'compaction'
+export type Schemas = components['schemas']
+
+export type Origin = Schemas['Origin']
+export type TaskStatus = Schemas['TaskStatus']
+export type TaskKind = Schemas['TaskKind']
 
 /** agent 的 id 与名称都是字符串；品牌类型让编译器拦住「把名称当 id 传」 */
 export type AgentId = string & { readonly __brand: 'AgentId' }
@@ -12,286 +14,61 @@ export type AgentId = string & { readonly __brand: 'AgentId' }
 /** 仅用于边界：路由参数、取值为 id 的下拉框 */
 export const asAgentId = (value: string) => value as AgentId
 
-export interface Agent {
-  /** 系统生成、不可变，用于所有引用；name 只用于展示 */
-  id: AgentId
-  name: string
-  description: string
-  model: string
-  instructions: string
-  reflect_every: number
-  /** 选用的工具组；自我改进（记忆、skill）总是开放 */
-  tool_groups: string[]
-  /** 自上次反思以来的步数（模型回复数） */
-  steps_since_reflection: number
-  created_at: string
-}
+/** 把接口类型里是 agent id 的字段换成 AgentId（可为空的保持可为空） */
+type WithAgentId<T, K extends keyof T> = Omit<T, K> & { [P in K]: null extends T[P] ? AgentId | null : AgentId }
 
-export interface AgentInput {
-  name: string
-  description: string
-  model: string | null
-  instructions: string
-  reflect_every: number | null
-  tool_groups: string[]
-}
-
-export interface Session {
-  id: string
-  agent_id: AgentId
-  title: string
-  origin: Origin
-  origin_ref: string | null
-  /** 委派产生的子会话：父会话与 thread 名 */
-  parent_session_id: string | null
-  thread: string | null
-  /** ask_agent 开出的 thread：只属于发起方 agent，用户只读 */
-  private: boolean
-  unread: boolean
-  created_at: string
-  updated_at: string
-}
-
+export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
+/** agent 表单总是给出全部字段：新建与修改共用 */
+export type AgentInput = Schemas['AgentUpdate']
+export type Session = WithAgentId<Schemas['SessionOut'], 'agent_id'>
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
-export interface AppNotification {
-  id: number
-  title: string
-  body: string
-  /** 点开打开的会话；系统通知（前置检查告警、推送测试）为 null */
-  session_id: string | null
-  unread: boolean
-  created_at: string
-}
+export type AppNotification = Schemas['NotificationOut']
 
 /** 引用文件的地址前缀（与后端 muliao.files.FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
 export const FILES_PATH = '/api/files'
 
-/** 对话里的一个文件（后端 api/files.py 的 FileOut） */
-export interface FileInfo {
-  id: string
-  name: string
-  media_type: string
-  size: number
-  url: string
-  /** 能内联显示的图片；其余是下载链接 */
-  inline: boolean
-  created_at: string
-}
+export type FileInfo = Schemas['FileOut']
+export type Attachment = Schemas['Attachment']
+export type Item = Schemas['Item']
+export type CompactionInfo = Schemas['CompactionOut']
+export type Task = WithAgentId<Schemas['TaskOut'], 'agent_id'>
 
-/** 消息里的附件（后端 conventions.Attachment） */
-export interface Attachment {
-  url: string
-  name: string
-  media_type: string
-  inline: boolean
-}
+export type QuestionOption = Schemas['Option']
+export type Question = Schemas['Question']
+export type QuestionAnswer = Schemas['QuestionAnswer']
+export type AnsweredQuestion = Schemas['AnsweredQuestion']
+export type AskResult = Schemas['AskResult']
+export type AgentAnswer = Schemas['AgentAnswer']
+export type AskView = Schemas['AskView']
 
-/** stopped：用户停止了这次运行（后端 conventions.RUN_STOPPED），出现在它保存下来的内容之后 */
-/** event：会话事件（后台任务完成、运行中的检查……），tool_name 是来源（如 job:12），text 是内容 */
-export type ItemType = 'user' | 'event' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'stopped'
+/** 回答信件里一次调用的结果：ask_user 是用户的回答，ask_agent 是对方的结局。两者字段不重叠，按形状区分（后端 runtime.pending.CallResult） */
+export const isAskResult = (result: AskResult | AgentAnswer): result is AskResult => 'answered' in result
 
-export interface Item {
-  type: ItemType
-  text: string
-  tool_name: string | null
-  tool_call_id: string | null
-  message_id: number | null
-  /** 用户消息的附件，或工具结果挂上的文件；其他条目为空 */
-  attachments: Attachment[]
-  /** 工具结果关联的子会话 id（委派开出或续写的 thread）；其他条目为空 */
-  threads: string[]
-  /** ask_user 的调用（参数合法时）；其他条目为 null */
-  ask: AskView | null
-}
-
-export interface CompactionInfo {
-  through_message_id: number
-  summary: string
-  created_at: string
-}
-
-export interface Task {
-  id: number
-  kind: TaskKind
-  agent_id: AgentId | null
-  session_id: string | null
-  status: TaskStatus
-  attempts: number
-  error: string | null
-  not_before: string
-  created_at: string
-  finished_at: string | null
-}
-
-/** ask_user 提问（后端 runtime/questions.py 的 Question） */
-
-export interface QuestionOption {
-  label: string
-  description: string
-}
-
-export interface Question {
-  question: string
-  header: string
-  options: QuestionOption[]
-  multi_select: boolean
-}
-
-/** 用户对一题的回答：选中的选项和/或「其他」里写的文字 */
-export interface QuestionAnswer {
-  selected: string[]
-  other: string | null
-}
-
-export interface AnsweredQuestion {
-  question: string
-  selected: string[]
-  other: string | null
-}
-
-/** 一次提问交给模型的结果（后端 runtime/questions.py 的 AskResult）：用户回答了，或没回答就发了新消息 */
-export interface AskResult {
-  answered: boolean
-  answers: AnsweredQuestion[]
-  note: string | null
-}
-
-/**
- * ask_user 调用的状态（后端 transcript.AskView，由后端按唯一规则给出）：asking 运行还没停下；pending 现在能回答；
- * submitted 回答已提交、还排着；answered 已回答；not_answered 用户没回答
- */
-export interface AskView {
-  status: 'asking' | 'pending' | 'submitted' | 'answered' | 'not_answered'
-  questions: Question[]
-  /** answered 时每题的回答 */
-  answers: AnsweredQuestion[]
-  /** not_answered 时交给模型的说明 */
-  note: string | null
-}
-
-export type MailKind = 'message' | 'answer' | 'event'
-export type MailState = 'queued' | 'consumed' | 'discarded'
-
-/** 会话信箱里的一封信件（后端 runtime/mailbox.py） */
-export interface Mail {
-  id: number
-  kind: MailKind
-  /** 事件的发送方（如 job:12）；用户消息与回答为 null */
-  source: string | null
-  content: string
-  attachments: FileInfo[]
-  /** 回答信件：tool_call_id -> 交给模型的结果 */
-  answers: Record<string, AskResult>
-  state: MailState
-  created_at: string
-}
-
-export interface SessionDetail {
+export type MailKind = Schemas['MailKind']
+export type MailState = Schemas['MailState']
+export type Mail = Schemas['MailOut']
+export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'run' | 'threads'> & {
   session: Session
-  items: Item[]
-  compactions: CompactionInfo[]
-  /** 显示在历史之后的信件：排队中的，以及最近一次停止丢弃的 */
-  mail: Mail[]
-  /** 最近一次运行，还没正常结束时（排队、运行中、等重试或失败） */
   run: Task | null
   threads: Session[]
-  /** 正在进行的运行当前这一段的事件；没有则为 null */
-  live: LiveRun | null
 }
+export type LiveRun = Schemas['LiveRunOut']
 
-export interface SkillMeta {
-  name: string
-  description: string
-  owner: string | null
-}
-
-export interface Skill extends SkillMeta {
-  body: string
-}
-
-export interface Memory {
-  content: string
-  max_chars: number
-}
-
-export interface Reflection {
-  id: number
-  from_message_id: number
-  to_message_id: number
-  output: string
-  created_at: string
-}
-
-export interface TriggerKind {
-  name: string
-  /** 什么时候触发、config 的格式 */
-  description: string
-}
-
-/** 触发前的前置检查（后端 triggers/precheck.py 的 Precheck） */
-export interface Precheck {
-  command: string
-  secrets: string[]
-  /** output：有输出就触发；changed：输出与上次不同才触发（首次只记基线） */
-  fire_when: 'output' | 'changed'
-}
-
-export interface Trigger {
-  id: number
-  name: string
-  agent_id: AgentId
-  /** 触发方式，如 schedule、webhook；方式的差异只在 config 与 status */
-  kind: string
-  prompt: string
-  config: Record<string, unknown>
-  /** 这种方式自己给出的运行状态，如下次触发时间、webhook 地址；不含凭证 */
-  status: Record<string, unknown>
-  enabled: boolean
-  /** 前置检查；null 表示每次都交给 agent */
-  precheck: Precheck | null
-  last_checked_at: string | null
-  last_fired_at: string | null
-  last_session_id: string | null
-  /** 被自动停用的原因 */
-  disabled_reason: string | null
-  /** 最近一次前置检查失败的原因 */
-  precheck_error: string | null
-}
-
-/** agent 能改的、有版本历史的文本资源 */
-export type ResourceKind = 'prompt' | 'memory'
-
-export interface Revision {
-  /** git 提交哈希 */
-  rev: string
-  content: string
-  /** "user"，或做出修改的 agent 的 id */
-  author: string
-  created_at: string
-}
-
-export interface McpServer {
-  owner: AgentId | null
-  name: string
-  transport: 'stdio' | 'http'
-  command: string | null
-  args: string[]
-  url: string | null
-  env: Record<string, string>
-  headers: Record<string, string>
-  enabled: boolean
-  tools: string[]
-}
-
-export type McpInput = Omit<McpServer, 'enabled' | 'tools'> & { probe: boolean }
-
-export interface SecretInfo {
-  /** null 为公共 */
-  owner: AgentId | null
-  key: string
-  description: string
-  updated_at: string
-}
+export type SkillMeta = Schemas['SkillOut']
+export type Skill = Schemas['SkillDetail']
+export type Memory = Schemas['MemoryOut']
+export type Reflection = Schemas['ReflectionOut']
+export type TriggerKind = Schemas['TriggerKindOut']
+export type Precheck = Schemas['Precheck']
+export type Trigger = WithAgentId<Schemas['TriggerOut'], 'agent_id'>
+export type ResourceKind = Schemas['ResourceKind']
+export type Revision = Schemas['RevisionOut']
+export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
+export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
+export type SecretInfo = WithAgentId<Schemas['SecretOut'], 'owner'>
+/** 一个可选的工具组（后端 tool_catalog） */
+export type ToolGroup = Schemas['ToolGroupOut']
+export type AgentDefaults = Schemas['AgentDefaultsOut']
 
 export class ApiError extends Error {
   readonly status: number
@@ -360,25 +137,6 @@ export const agentRoute = (id: AgentId) => `/agents/${id}`
 export const sessionRoute = (id: string) => `/sessions/${id}`
 export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
 
-/** 一个可选的工具组（后端 tool_catalog） */
-export interface ToolGroup {
-  name: string
-  label: string
-  /** 开了它就能间接做任何事：给处理不可信输入的 agent 开要谨慎 */
-  full_access: boolean
-  /** 新建 agent 时默认开启 */
-  default: boolean
-}
-
-export interface AgentDefaults {
-  model: string
-  reflect_every: number
-  /** 当前配置下可选的工具组，按目录顺序 */
-  groups: ToolGroup[]
-  /** 新建 agent 默认开启的组 */
-  default_tool_groups: string[]
-}
-
 export const api = {
   login: (password: string) => post<void>('/api/auth/login', { password }),
   logout: () => post<void>('/api/auth/logout'),
@@ -391,7 +149,7 @@ export const api = {
   /** 向 provider 实时查询的模型名 */
   providerModels: (provider: string) => get<string[]>(`/api/providers/${encodeURIComponent(provider)}/models`),
   agent: (id: AgentId) => get<Agent>(`/api/agents/${id}`),
-  createAgent: (input: AgentInput) => post<Agent>('/api/agents', input),
+  createAgent: (input: Schemas['AgentCreate']) => post<Agent>('/api/agents', input),
   updateAgent: (id: AgentId, input: AgentInput) => put<Agent>(`/api/agents/${id}`, input),
   deleteAgent: (id: AgentId) => del(`/api/agents/${id}`),
   memory: (id: AgentId) => get<Memory>(`/api/agents/${id}/memory`),

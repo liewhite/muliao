@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen:api": "node scripts/gen-api.mjs"
   },
   "dependencies": {
     "@heroui/react": "^3.2.6",
@@ -31,12 +32,16 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "openapi-typescript": "^7.13.0",
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
     "vitest": "^5.0.3"
   },
   "overrides": {
-    "katex": "$katex"
+    "katex": "$katex",
+    "openapi-typescript": {
+      "typescript": "$typescript"
+    }
   }
 }

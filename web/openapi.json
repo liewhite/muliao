@@ -1,0 +1,4495 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Muliao",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/auth/login": {
+      "post": {
+        "summary": "Login",
+        "operationId": "login_api_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "summary": "Logout",
+        "operationId": "logout_api_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
+    "/api/hooks/{name}": {
+      "post": {
+        "summary": "Hook",
+        "description": "外部事件入口：Authorization: Bearer <token>。不带 session_id 时新建会话；带上之前返回的则在该会话里继续。",
+        "operationId": "hook_api_hooks__name__post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent-defaults": {
+      "get": {
+        "summary": "Agent Defaults",
+        "description": "新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。",
+        "operationId": "agent_defaults_api_agent_defaults_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDefaultsOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers": {
+      "get": {
+        "summary": "List Providers",
+        "description": "配置里的 LLM provider 名，即 agent 模型 \"<provider 名>:<模型名>\" 的前半部分。",
+        "operationId": "list_providers_api_providers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "title": "Response List Providers Api Providers Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{name}/models": {
+      "get": {
+        "summary": "List Provider Models",
+        "description": "向该 provider 实时查询的模型名；provider 出错时为 502 并带上原因。",
+        "operationId": "list_provider_models_api_providers__name__models_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response List Provider Models Api Providers  Name  Models Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agents": {
+      "get": {
+        "summary": "List Agents",
+        "operationId": "list_agents_api_agents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Agents Api Agents Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Agent",
+        "operationId": "create_agent_api_agents_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agents/{agent_id}": {
+      "get": {
+        "summary": "Get Agent",
+        "operationId": "get_agent_api_agents__agent_id__get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Agent",
+        "operationId": "update_agent_api_agents__agent_id__put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Agent",
+        "operationId": "delete_agent_api_agents__agent_id__delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agents/{agent_id}/memory": {
+      "get": {
+        "summary": "Get Memory",
+        "operationId": "get_memory_api_agents__agent_id__memory_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Memory",
+        "operationId": "put_memory_api_agents__agent_id__memory_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agents/{agent_id}/reflections": {
+      "get": {
+        "summary": "List Reflections",
+        "operationId": "list_reflections_api_agents__agent_id__reflections_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReflectionOut"
+                  },
+                  "title": "Response List Reflections Api Agents  Agent Id  Reflections Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/skills": {
+      "get": {
+        "summary": "List Skills",
+        "description": "owner 为空列出公共 skill，否则列出该 agent 的私有 skill。",
+        "operationId": "list_skills_api_skills_get",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SkillOut"
+                  },
+                  "title": "Response List Skills Api Skills Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/skill": {
+      "get": {
+        "summary": "Get Skill",
+        "operationId": "get_skill_api_skill_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Skill",
+        "operationId": "put_skill_api_skill_put",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Skill",
+        "operationId": "delete_skill_api_skill_delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions": {
+      "get": {
+        "summary": "List Sessions",
+        "operationId": "list_sessions_api_sessions_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "origin",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Origin"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origin"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionOut"
+                  },
+                  "title": "Response List Sessions Api Sessions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Start Session",
+        "operationId": "start_session_api_sessions_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}": {
+      "get": {
+        "summary": "Get Session",
+        "operationId": "get_session_api_sessions__session_id__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Session",
+        "operationId": "delete_session_api_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/messages": {
+      "post": {
+        "summary": "Reply",
+        "operationId": "reply_api_sessions__session_id__messages_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplyIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MailOut"
+                  },
+                  "title": "Response Reply Api Sessions  Session Id  Messages Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/stop": {
+      "post": {
+        "summary": "Stop",
+        "description": "停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的异步工作\n（docs/architecture.md「停止会话」）。",
+        "operationId": "stop_api_sessions__session_id__stop_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/compact": {
+      "post": {
+        "summary": "Compact",
+        "description": "手动压缩上下文（自动压缩见 runtime.compaction）：排在正在进行与排队的运行之后。",
+        "operationId": "compact_api_sessions__session_id__compact_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{session_id}/read": {
+      "post": {
+        "summary": "Mark Read",
+        "operationId": "mark_read_api_sessions__session_id__read_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks": {
+      "get": {
+        "summary": "List Tasks",
+        "operationId": "list_tasks_api_tasks_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TaskStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskOut"
+                  },
+                  "title": "Response List Tasks Api Tasks Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{task_id}/retry": {
+      "post": {
+        "summary": "Retry Task",
+        "operationId": "retry_task_api_tasks__task_id__retry_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mcp": {
+      "get": {
+        "summary": "List Mcp",
+        "operationId": "list_mcp_api_mcp_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/McpOut"
+                  },
+                  "title": "Response List Mcp Api Mcp Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add Mcp",
+        "operationId": "add_mcp_api_mcp_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Mcp",
+        "operationId": "delete_mcp_api_mcp_delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mcp/tools": {
+      "post": {
+        "summary": "Probe Mcp",
+        "operationId": "probe_mcp_api_mcp_tools_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response Probe Mcp Api Mcp Tools Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mcp/enabled": {
+      "put": {
+        "summary": "Set Mcp Enabled",
+        "operationId": "set_mcp_enabled_api_mcp_enabled_put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnabledIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault": {
+      "get": {
+        "summary": "List Secrets",
+        "operationId": "list_secrets_api_vault_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SecretOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Secrets Api Vault Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/{key}": {
+      "put": {
+        "summary": "Set Secret",
+        "description": "owner 缺省为公共 secret，否则为该 agent 私有。",
+        "operationId": "set_secret_api_vault__key__put",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Secret",
+        "operationId": "delete_secret_api_vault__key__delete",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/push/vapid": {
+      "get": {
+        "summary": "Vapid Key",
+        "operationId": "vapid_key_api_push_vapid_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VapidOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/push/subscriptions": {
+      "post": {
+        "summary": "Subscribe",
+        "operationId": "subscribe_api_push_subscriptions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushSubscriptionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/push/test": {
+      "post": {
+        "summary": "Test Push",
+        "operationId": "test_push_api_push_test_post",
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/resources/{kind}/history": {
+      "get": {
+        "summary": "History",
+        "description": "owner 缺省为公共资源；新的在前，第一条即当前生效的一版。只列最近 50 版，更早的仍保留在仓库里。",
+        "operationId": "history_api_resources__kind__history_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ResourceKind"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RevisionOut"
+                  },
+                  "title": "Response History Api Resources  Kind  History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/resources/{kind}/restore": {
+      "post": {
+        "summary": "Restore",
+        "description": "把某一版的内容作为新的一版写入。",
+        "operationId": "restore_api_resources__kind__restore_post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ResourceKind"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/prompts/public": {
+      "put": {
+        "summary": "Set Public Prompt",
+        "operationId": "set_public_prompt_api_prompts_public_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/trigger-kinds": {
+      "get": {
+        "summary": "Trigger Kinds",
+        "operationId": "trigger_kinds_api_trigger_kinds_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TriggerKindOut"
+                  },
+                  "type": "array",
+                  "title": "Response Trigger Kinds Api Trigger Kinds Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers": {
+      "get": {
+        "summary": "List Triggers",
+        "operationId": "list_triggers_api_triggers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TriggerOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Triggers Api Triggers Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Trigger",
+        "operationId": "create_trigger_api_triggers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers/{trigger_id}": {
+      "patch": {
+        "summary": "Update Trigger",
+        "operationId": "update_trigger_api_triggers__trigger_id__patch",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Trigger",
+        "operationId": "delete_trigger_api_triggers__trigger_id__delete",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers/{trigger_id}/run": {
+      "post": {
+        "summary": "Run Trigger",
+        "description": "立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。",
+        "operationId": "run_trigger_api_triggers__trigger_id__run_post",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiredOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/triggers/{trigger_id}/webhook/token": {
+      "post": {
+        "summary": "Generate Token",
+        "description": "生成（或重新生成）webhook 的 token；只能由用户在这里生成，旧 token 立即失效。",
+        "operationId": "generate_token_api_triggers__trigger_id__webhook_token_post",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Trigger Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files": {
+      "post": {
+        "summary": "Upload",
+        "description": "请求体就是文件内容，Content-Type 是它的类型（与 Matrix /media/upload 相同，不用 multipart），边读边写，超限即停。",
+        "operationId": "upload_api_files_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/files/{file_id}/{name}": {
+      "get": {
+        "summary": "Download",
+        "operationId": "download_api_files__file_id___name__get",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/notifications": {
+      "get": {
+        "summary": "List Notifications",
+        "operationId": "list_notifications_api_notifications_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationOut"
+                  },
+                  "title": "Response List Notifications Api Notifications Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/notifications/unread": {
+      "get": {
+        "summary": "Unread",
+        "operationId": "unread_api_notifications_unread_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/notifications/read": {
+      "post": {
+        "summary": "Mark Read",
+        "operationId": "mark_read_api_notifications_read_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkReadIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "summary": "Me",
+        "operationId": "me_api_auth_me_get",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
+    "/api/events": {
+      "get": {
+        "summary": "Events",
+        "operationId": "events_api_events_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskEvent"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SavedEvent"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RunItemEvent"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RunDeltaEvent"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HeartbeatEvent"
+                    }
+                  ],
+                  "type": "string",
+                  "title": "Response 200 Events Api Events Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AgentAnswer": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "type": "array",
+            "title": "Attachments"
+          },
+          "thread": {
+            "type": "string",
+            "title": "Thread"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "attachments",
+          "thread"
+        ],
+        "title": "AgentAnswer",
+        "description": "被问的 agent 交回的结局（runtime.delegations）：给发问方模型的文字，它挂给用户的文件，所在的 thread。"
+      },
+      "AgentCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "instructions": {
+            "type": "string",
+            "title": "Instructions",
+            "default": ""
+          },
+          "reflect_every": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reflect Every"
+          },
+          "tool_groups": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "AgentCreate"
+      },
+      "AgentDefaultsOut": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "reflect_every": {
+            "type": "integer",
+            "title": "Reflect Every"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/ToolGroupOut"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "default_tool_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Default Tool Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "reflect_every",
+          "groups",
+          "default_tool_groups"
+        ],
+        "title": "AgentDefaultsOut"
+      },
+      "AgentOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "instructions": {
+            "type": "string",
+            "title": "Instructions"
+          },
+          "reflect_every": {
+            "type": "integer",
+            "title": "Reflect Every"
+          },
+          "tool_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tool Groups"
+          },
+          "steps_since_reflection": {
+            "type": "integer",
+            "title": "Steps Since Reflection"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "model",
+          "instructions",
+          "reflect_every",
+          "tool_groups",
+          "steps_since_reflection",
+          "created_at"
+        ],
+        "title": "AgentOut"
+      },
+      "AgentUpdate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "instructions": {
+            "type": "string",
+            "title": "Instructions"
+          },
+          "reflect_every": {
+            "type": "integer",
+            "title": "Reflect Every"
+          },
+          "tool_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tool Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "model",
+          "instructions",
+          "reflect_every",
+          "tool_groups"
+        ],
+        "title": "AgentUpdate",
+        "description": "整体替换：所有字段必填，不会用默认值覆盖已有配置。name 可改（只用于展示）。"
+      },
+      "AnsweredQuestion": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "selected": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Selected"
+          },
+          "other": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Other"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question",
+          "selected",
+          "other"
+        ],
+        "title": "AnsweredQuestion"
+      },
+      "AskResult": {
+        "properties": {
+          "answered": {
+            "type": "boolean",
+            "title": "Answered"
+          },
+          "answers": {
+            "items": {
+              "$ref": "#/components/schemas/AnsweredQuestion"
+            },
+            "type": "array",
+            "title": "Answers"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "answered",
+          "answers",
+          "note"
+        ],
+        "title": "AskResult",
+        "description": "一次提问交给模型的结果（也是界面展示已回答提问的来源）：answered 区分用户回答了，还是没回答就发了新消息。"
+      },
+      "AskView": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "asking",
+              "pending",
+              "submitted",
+              "answered",
+              "not_answered"
+            ],
+            "title": "Status"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/Question"
+            },
+            "type": "array",
+            "title": "Questions"
+          },
+          "answers": {
+            "items": {
+              "$ref": "#/components/schemas/AnsweredQuestion"
+            },
+            "type": "array",
+            "title": "Answers"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "questions",
+          "answers",
+          "note"
+        ],
+        "title": "AskView",
+        "description": "ask_user 调用的状态，由后端按唯一规则给出（annotate_asks），前端只渲染：\nasking 运行还没停下（还不能回答）；pending 现在能回答（显示表单）；submitted 回答已提交、还排着；answered 已回答；\nnot_answered 用户没回答（发了新消息或只回答了别的提问）。"
+      },
+      "Attachment": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "media_type": {
+            "type": "string",
+            "title": "Media Type"
+          },
+          "inline": {
+            "type": "boolean",
+            "title": "Inline"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "name",
+          "media_type",
+          "inline"
+        ],
+        "title": "Attachment"
+      },
+      "CompactOut": {
+        "properties": {
+          "queued": {
+            "type": "boolean",
+            "title": "Queued"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queued"
+        ],
+        "title": "CompactOut"
+      },
+      "CompactionOut": {
+        "properties": {
+          "through_message_id": {
+            "type": "integer",
+            "title": "Through Message Id"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "through_message_id",
+          "summary",
+          "created_at"
+        ],
+        "title": "CompactionOut"
+      },
+      "ContentIn": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "ContentIn"
+      },
+      "EnabledIn": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "EnabledIn"
+      },
+      "FileOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "media_type": {
+            "type": "string",
+            "title": "Media Type"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "inline": {
+            "type": "boolean",
+            "title": "Inline"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "media_type",
+          "size",
+          "url",
+          "inline",
+          "created_at"
+        ],
+        "title": "FileOut"
+      },
+      "FiredOut": {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "title": "FiredOut"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HeartbeatEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "heartbeat",
+            "title": "Type",
+            "default": "heartbeat"
+          },
+          "interval_seconds": {
+            "type": "number",
+            "title": "Interval Seconds"
+          },
+          "ui_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ui Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "interval_seconds",
+          "ui_version"
+        ],
+        "title": "HeartbeatEvent",
+        "description": "连上就发一次、之后每隔一段时间发一次：前端据此判断连接是否还活着（间隔随心跳下发），并比较前端构建的版本。"
+      },
+      "HookOut": {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "title": "HookOut"
+      },
+      "Item": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "user",
+              "event",
+              "assistant",
+              "thinking",
+              "tool_call",
+              "tool_result",
+              "tool_error",
+              "stopped"
+            ],
+            "title": "Type"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "type": "array",
+            "title": "Attachments"
+          },
+          "threads": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Threads"
+          },
+          "ask": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AskView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "text",
+          "tool_name",
+          "tool_call_id",
+          "message_id",
+          "attachments",
+          "threads",
+          "ask"
+        ],
+        "title": "Item"
+      },
+      "LiveRunOut": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "events": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/RunItemEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/RunDeltaEvent"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "event",
+                "mapping": {
+                  "delta": "#/components/schemas/RunDeltaEvent",
+                  "item": "#/components/schemas/RunItemEvent"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "events"
+        ],
+        "title": "LiveRunOut"
+      },
+      "LoginIn": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "title": "LoginIn"
+      },
+      "MailKind": {
+        "type": "string",
+        "enum": [
+          "message",
+          "answer",
+          "event"
+        ],
+        "title": "MailKind",
+        "description": "信箱里的信件（runtime.mailbox）。"
+      },
+      "MailOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MailKind"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/FileOut"
+            },
+            "type": "array",
+            "title": "Attachments"
+          },
+          "answers": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AskResult"
+                },
+                {
+                  "$ref": "#/components/schemas/AgentAnswer"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Answers"
+          },
+          "state": {
+            "$ref": "#/components/schemas/MailState"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "source",
+          "content",
+          "attachments",
+          "answers",
+          "state",
+          "created_at"
+        ],
+        "title": "MailOut",
+        "description": "会话信箱里的一封信件（runtime.mailbox）。"
+      },
+      "MailState": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "consumed",
+          "discarded"
+        ],
+        "title": "MailState"
+      },
+      "MarkReadIn": {
+        "properties": {
+          "through_id": {
+            "type": "integer",
+            "title": "Through Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "through_id"
+        ],
+        "title": "MarkReadIn"
+      },
+      "McpIn": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/McpTransport"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Args",
+            "default": []
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Env",
+            "default": {}
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers",
+            "default": {}
+          },
+          "probe": {
+            "type": "boolean",
+            "title": "Probe",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner",
+          "name",
+          "transport"
+        ],
+        "title": "McpIn"
+      },
+      "McpOut": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/McpTransport"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Args"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Env"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner",
+          "name",
+          "transport",
+          "command",
+          "args",
+          "url",
+          "env",
+          "headers",
+          "enabled"
+        ],
+        "title": "McpOut"
+      },
+      "McpTransport": {
+        "type": "string",
+        "enum": [
+          "stdio",
+          "http"
+        ],
+        "title": "McpTransport"
+      },
+      "MemoryIn": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "MemoryIn"
+      },
+      "MemoryOut": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "max_chars": {
+            "type": "integer",
+            "title": "Max Chars"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "max_chars"
+        ],
+        "title": "MemoryOut"
+      },
+      "NotificationOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "unread": {
+            "type": "boolean",
+            "title": "Unread"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "body",
+          "session_id",
+          "unread",
+          "created_at"
+        ],
+        "title": "NotificationOut"
+      },
+      "Option": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Label",
+            "description": "Short choice text shown on the button."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Description",
+            "description": "What choosing it means, if not obvious.",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "Option"
+      },
+      "Origin": {
+        "type": "string",
+        "enum": [
+          "user",
+          "trigger",
+          "delegation"
+        ],
+        "title": "Origin",
+        "description": "会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派。"
+      },
+      "Precheck": {
+        "properties": {
+          "command": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Command",
+            "description": "bash command run before each firing."
+          },
+          "secrets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Secrets",
+            "description": "Vault keys exposed to the command as env vars.",
+            "default": []
+          },
+          "fire_when": {
+            "type": "string",
+            "enum": [
+              "output",
+              "changed"
+            ],
+            "title": "Fire When",
+            "description": "'output': fire when stdout is non-empty. 'changed': fire when stdout differs from the last run (the first run only records it).",
+            "default": "output"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "command"
+        ],
+        "title": "Precheck"
+      },
+      "PushKeys": {
+        "properties": {
+          "p256dh": {
+            "type": "string",
+            "title": "P256Dh"
+          },
+          "auth": {
+            "type": "string",
+            "title": "Auth"
+          }
+        },
+        "type": "object",
+        "required": [
+          "p256dh",
+          "auth"
+        ],
+        "title": "PushKeys"
+      },
+      "PushSubscriptionIn": {
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "title": "Endpoint"
+          },
+          "keys": {
+            "$ref": "#/components/schemas/PushKeys"
+          }
+        },
+        "type": "object",
+        "required": [
+          "endpoint",
+          "keys"
+        ],
+        "title": "PushSubscriptionIn"
+      },
+      "Question": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Question",
+            "description": "The full question."
+          },
+          "header": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Header",
+            "description": "Very short label, e.g. 'Timeframe'."
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/Option"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "minItems": 2,
+            "title": "Options"
+          },
+          "multi_select": {
+            "type": "boolean",
+            "title": "Multi Select",
+            "description": "Allow choosing several options.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question",
+          "header",
+          "options"
+        ],
+        "title": "Question"
+      },
+      "QuestionAnswer": {
+        "properties": {
+          "selected": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Selected",
+            "default": []
+          },
+          "other": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Other"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "QuestionAnswer",
+        "description": "用户对一个问题的回答：选中的选项，和/或「其他」里填的文字。"
+      },
+      "ReflectionOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "from_message_id": {
+            "type": "integer",
+            "title": "From Message Id"
+          },
+          "to_message_id": {
+            "type": "integer",
+            "title": "To Message Id"
+          },
+          "output": {
+            "type": "string",
+            "title": "Output"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "from_message_id",
+          "to_message_id",
+          "output",
+          "created_at"
+        ],
+        "title": "ReflectionOut"
+      },
+      "ReplyIn": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "attachments": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attachments",
+            "default": []
+          },
+          "answers": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/QuestionAnswer"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Answers",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "ReplyIn"
+      },
+      "ResourceKind": {
+        "type": "string",
+        "enum": [
+          "prompt",
+          "memory"
+        ],
+        "title": "ResourceKind"
+      },
+      "RestoreIn": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "rev": {
+            "type": "string",
+            "title": "Rev"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rev"
+        ],
+        "title": "RestoreIn"
+      },
+      "RevisionOut": {
+        "properties": {
+          "rev": {
+            "type": "string",
+            "title": "Rev"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "author": {
+            "type": "string",
+            "title": "Author"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rev",
+          "content",
+          "author",
+          "created_at"
+        ],
+        "title": "RevisionOut"
+      },
+      "RunDeltaEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "run",
+            "title": "Type",
+            "default": "run"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "agent": {
+            "type": "string",
+            "title": "Agent"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "event": {
+            "type": "string",
+            "const": "delta",
+            "title": "Event",
+            "default": "delta"
+          },
+          "item_type": {
+            "type": "string",
+            "enum": [
+              "assistant",
+              "thinking"
+            ],
+            "title": "Item Type"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "agent",
+          "run_id",
+          "seq",
+          "item_type",
+          "text"
+        ],
+        "title": "RunDeltaEvent",
+        "description": "流式文字：接在同类的最后一条后面（或开始新的一条）。"
+      },
+      "RunItemEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "run",
+            "title": "Type",
+            "default": "run"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "agent": {
+            "type": "string",
+            "title": "Agent"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "seq": {
+            "type": "integer",
+            "title": "Seq"
+          },
+          "event": {
+            "type": "string",
+            "const": "item",
+            "title": "Event",
+            "default": "item"
+          },
+          "item": {
+            "$ref": "#/components/schemas/Item"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "agent",
+          "run_id",
+          "seq",
+          "item"
+        ],
+        "title": "RunItemEvent",
+        "description": "一条完整的会话条目（工具调用、工具结果），与历史同一个投影（transcript）；文字可能截断过。"
+      },
+      "SavedEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "saved",
+            "title": "Type",
+            "default": "saved"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "title": "SavedEvent",
+        "description": "运行中又保存了一步（bus.LiveRuns.step）：历史有了新内容，实时事件换成新的一段。"
+      },
+      "SecretIn": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "title": "SecretIn"
+      },
+      "SecretOut": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner",
+          "key",
+          "description",
+          "updated_at"
+        ],
+        "title": "SecretOut"
+      },
+      "SessionDetail": {
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/SessionOut"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "compactions": {
+            "items": {
+              "$ref": "#/components/schemas/CompactionOut"
+            },
+            "type": "array",
+            "title": "Compactions"
+          },
+          "mail": {
+            "items": {
+              "$ref": "#/components/schemas/MailOut"
+            },
+            "type": "array",
+            "title": "Mail"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threads": {
+            "items": {
+              "$ref": "#/components/schemas/SessionOut"
+            },
+            "type": "array",
+            "title": "Threads"
+          },
+          "live": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "session",
+          "items",
+          "compactions",
+          "mail",
+          "run",
+          "threads",
+          "live"
+        ],
+        "title": "SessionDetail"
+      },
+      "SessionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/Origin"
+          },
+          "origin_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Ref"
+          },
+          "parent_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Session Id"
+          },
+          "thread": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread"
+          },
+          "private": {
+            "type": "boolean",
+            "title": "Private"
+          },
+          "unread": {
+            "type": "boolean",
+            "title": "Unread"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agent_id",
+          "title",
+          "origin",
+          "origin_ref",
+          "parent_session_id",
+          "thread",
+          "private",
+          "unread",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SessionOut"
+      },
+      "SkillDetail": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "owner",
+          "body"
+        ],
+        "title": "SkillDetail"
+      },
+      "SkillIn": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner",
+          "name",
+          "description",
+          "body"
+        ],
+        "title": "SkillIn"
+      },
+      "SkillOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "owner"
+        ],
+        "title": "SkillOut"
+      },
+      "StartIn": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "attachments": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attachments",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "prompt"
+        ],
+        "title": "StartIn"
+      },
+      "TaskEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "task",
+            "title": "Type",
+            "default": "task"
+          },
+          "task_id": {
+            "type": "integer",
+            "title": "Task Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TaskKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "kind",
+          "status",
+          "session_id",
+          "agent",
+          "error"
+        ],
+        "title": "TaskEvent",
+        "description": "一个 task 的状态变化（前端据此从数据库重新拉取），由 worker 发出。"
+      },
+      "TaskKind": {
+        "type": "string",
+        "enum": [
+          "run",
+          "reflection",
+          "deliver",
+          "compaction"
+        ],
+        "title": "TaskKind"
+      },
+      "TaskOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TaskKind"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "not_before": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Not Before"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "agent_id",
+          "session_id",
+          "status",
+          "attempts",
+          "error",
+          "not_before",
+          "created_at",
+          "finished_at"
+        ],
+        "title": "TaskOut"
+      },
+      "TaskStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "done",
+          "failed"
+        ],
+        "title": "TaskStatus"
+      },
+      "TokenOut": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "TokenOut"
+      },
+      "ToolGroupOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "full_access": {
+            "type": "boolean",
+            "title": "Full Access"
+          },
+          "default": {
+            "type": "boolean",
+            "title": "Default"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "full_access",
+          "default"
+        ],
+        "title": "ToolGroupOut",
+        "description": "一个可选的工具组（tool_catalog）。"
+      },
+      "TriggerCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "agent_id",
+          "kind",
+          "prompt",
+          "config"
+        ],
+        "title": "TriggerCreate"
+      },
+      "TriggerKindOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "TriggerKindOut"
+      },
+      "TriggerOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config"
+          },
+          "status": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Status"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_fired_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fired At"
+          },
+          "last_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Session Id"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "precheck_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precheck Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "agent_id",
+          "kind",
+          "prompt",
+          "config",
+          "status",
+          "enabled",
+          "precheck",
+          "last_checked_at",
+          "last_fired_at",
+          "last_session_id",
+          "disabled_reason",
+          "precheck_error"
+        ],
+        "title": "TriggerOut"
+      },
+      "TriggerPatch": {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "TriggerPatch",
+        "description": "只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。"
+      },
+      "UnreadOut": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count"
+        ],
+        "title": "UnreadOut"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VapidOut": {
+        "properties": {
+          "public_key": {
+            "type": "string",
+            "title": "Public Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "public_key"
+        ],
+        "title": "VapidOut"
+      }
+    }
+  }
+}

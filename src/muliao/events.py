@@ -1,12 +1,13 @@
 """推给前端的服务端事件（SSE）：只用于展示加速，数据库是唯一事实源，收到状态变化时前端从接口重新拉取。
 
-形状在这里声明一次：SSE 只序列化这些模型（api.app）。
+形状在这里声明一次：SSE 只序列化这些模型，它们也登记进 OpenAPI（api.app），前端类型由此生成。
 """
 
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+from muliao.models import TaskKind, TaskStatus
 from muliao.transcript import Item
 
 
@@ -15,8 +16,8 @@ class TaskEvent(BaseModel):
 
     type: Literal["task"] = "task"
     task_id: int
-    kind: str
-    status: str
+    kind: TaskKind
+    status: TaskStatus
     session_id: str | None
     # 系统通知的投递没有所属 agent
     agent: str | None
@@ -66,6 +67,5 @@ class HeartbeatEvent(BaseModel):
     ui_version: str | None
 
 
-ServerEvent = Annotated[
-    TaskEvent | SavedEvent | RunItemEvent | RunDeltaEvent | HeartbeatEvent, Field(union_mode="left_to_right")
-]
+# SSE 里每条 data 的形状；只用于登记 OpenAPI（OpenAPI 的 discriminator 不能嵌套，这里不标）
+ServerEvent = TaskEvent | SavedEvent | RunItemEvent | RunDeltaEvent | HeartbeatEvent
