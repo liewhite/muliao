@@ -15,10 +15,11 @@ from sqlalchemy import select
 
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import session_lane
+from muliao.platform.tooling import Origin
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS, select_steps, steps_of
 from muliao.sessions.history import CONTINUATION
-from muliao.sessions.tables import Compaction, Message, Origin
+from muliao.sessions.tables import Compaction, Message
 from tests.scripted import scripted
 from tests.test_flow import drain, last_user_prompt, reply, start
 
@@ -258,8 +259,8 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
     """停在步间压缩的途中：那次请求（带着工具结果）已经保存，停止不能再给这些调用补一份「被停止」的结果。"""
     import asyncio
 
+    from muliao.agent_runtime.conventions import calls_in, results_in
     from muliao.agent_runtime.runner import AgentRuntime
-    from muliao.sessions.conventions import calls_in, results_in
     from tests.test_flow import idle
 
     monkeypatch.setattr(container.compactor, "_threshold", 1)

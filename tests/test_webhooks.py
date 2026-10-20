@@ -3,7 +3,7 @@
 import httpx
 
 from muliao.platform.tables import TaskKind
-from muliao.sessions.tables import Origin
+from muliao.platform.tooling import Origin
 from tests.conftest import login
 from tests.test_flow import drain, last_user_prompt, tasks_of
 

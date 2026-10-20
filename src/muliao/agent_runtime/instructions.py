@@ -4,9 +4,8 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from muliao.agent_runtime.scope import Audience
 from muliao.agents.skills import SkillMeta
-from muliao.sessions.tables import Origin
+from muliao.platform.tooling import Audience, Origin
 
 _ORIGIN_NOTES: dict[Origin, str] = {
     Origin.USER: "The user started this conversation in the app and may be reading along.",

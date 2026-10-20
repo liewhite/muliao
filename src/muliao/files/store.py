@@ -6,7 +6,7 @@
 - 元数据（名称、类型、大小、哈希）在 `files` 表，是唯一的索引；内容按 sha256 存在 `data/files/<前两位>/<sha256>`，
   相同内容只存一份。
 - 引用的唯一形式是 `file_url`：`/api/files/<id>/<name>`。界面直接用它显示与下载，消息里的
-  ImageUrl / DocumentUrl 也存它（见 sessions.attachments）。
+  ImageUrl / DocumentUrl 也存它（见 agent_runtime.attachments）。
 
 用最终正确性换简化：内容与元数据不在一个事务里。先把内容写进临时文件、改名到最终位置，再插入元数据行。
 - 失败可见：任何一步失败都向上报错，调用方看到的是上传失败，没有返回 id 就没有任何引用。

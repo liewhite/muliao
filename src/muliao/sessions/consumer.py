@@ -19,21 +19,21 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Tool
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agent_runtime.conventions import answer_text, is_stopped, unanswered_calls
 from muliao.agent_runtime.runner import AgentRuntime, ToolGroups
-from muliao.agent_runtime.scope import Audience
-from muliao.platform.bus import LiveRuns
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, no_commit
+from muliao.platform.tooling import Audience
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
-from muliao.sessions.conventions import answer_text, is_stopped, unanswered_calls
 from muliao.sessions.finish import RunEnd, RunFinisher, load_session
 from muliao.sessions.halt import Halted, SessionHalt
 from muliao.sessions.history import load_context
 from muliao.sessions.holds import called_in
+from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import RunPayload, queued_in
 from muliao.sessions.pending import (
     DEFERRED_TOOLS,

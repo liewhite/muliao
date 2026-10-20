@@ -17,12 +17,12 @@ from pydantic_ai import RunContext
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset
 
-from muliao.agent_runtime.scope import RunScope
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import scope_of, visible
 from muliao.agents.resources import ResourceRepo
 from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
 from muliao.platform.shell import redact
+from muliao.platform.tooling import RunScope
 from muliao.vault.service import VAULT_REF, Vault
 
 log = logging.getLogger(__name__)

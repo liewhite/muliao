@@ -7,12 +7,11 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext, ToolReturn
 
-from muliao.agent_runtime.scope import RunScope
-from muliao.agent_runtime.tool_errors import TOOL_MAX_RETRIES
+from muliao.agent_runtime.conventions import TOOL_THREADS
 from muliao.agents.service import AgentService
 from muliao.delegations.manager import thread_name
 from muliao.platform.db import Database
-from muliao.sessions.conventions import TOOL_THREADS
+from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.conversation import Threads, threads_of, validate_thread
 from muliao.sessions.transcript import truncate
 

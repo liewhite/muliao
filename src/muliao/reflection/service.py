@@ -13,10 +13,10 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.runner import AgentRuntime, ToolGroups
-from muliao.agent_runtime.tool_catalog import REFLECTION_GROUPS
 from muliao.agents.events import AgentDeleting
 from muliao.agents.service import AgentService
 from muliao.agents.tables import Agent
+from muliao.agents.tool_catalog import REFLECTION_GROUPS
 from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging

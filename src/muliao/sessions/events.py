@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from muliao.agent_runtime.conventions import Attachment
 from muliao.platform.messaging import Command, DomainEvent
-from muliao.sessions.conventions import Attachment
 
 
 class Ending(StrEnum):

@@ -54,7 +54,7 @@ data/
 
 ## 2. 核心数据流：一切都是 Task
 
-我们在 pydantic-ai 消息上加的约定（工具结果 metadata 的键、停止标记、合成的工具结果、「调用是否已有结果」的定义）都登记在 `muliao.sessions.conventions` 的模块说明里，解析也只在那里写一份；新增约定先在那里登记。
+我们在 pydantic-ai 消息上加的约定（工具结果 metadata 的键、停止标记、合成的工具结果、「调用是否已有结果」的定义）都登记在 `muliao.agent_runtime.conventions` 的模块说明里，解析也只在那里写一份；新增约定先在那里登记。
 
 所有触发源只做一件事：**创建 session（或选中已有 session），在同一事务里往它的信箱投一封信件**（`conversation.receive` → `mailbox.post_in`）。消费信箱的运行是一条 `run` task，之后的执行、重试、反思、通知全部由同一个任务队列驱动，没有例外：`ask_agent` 也只是往私有 thread 的信箱投信，发问方停在这次调用上等回信（见第 4 节「挂起的调用」）。
 
@@ -151,7 +151,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `thread`，同一父 session 内唯一）。模型只用 thread 名，不接触 session id。同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。thread 的 agent 与种类在创建时确定：私有 thread 只能用 `ask_agent` 续聊，公开 thread 只能用 `delegate_task`。
 - **推送按信件、不按 session**：每封信件带「用户是否在等它的回答」（`awaited`，由投信的入口设置，见第 8 节）。一次运行处理过的信件里有用户在等的，就把它的回答推送给用户；否则不推，agent 可以自己 `notify_user`。同一个公开 thread 里，父 agent 委派的任务与用户的追问都推送；`report_back` 的委派不推送，结果交回父 agent。
-- **回答交给谁**（`agent_runtime.scope.Audience`，不入库）：运行开始时由会话与它处理的信件推导一次，决定开放哪些工具（`ask_user`）与指令里怎么说：私有 thread 是 `agent`（回答作为 `ask_agent` 的结果交回发问方）；处理过的和信箱里排着的信件有用户在等就是 `user`；否则 `none`。运行中途才到的、用户在等的消息会被这次运行处理、收尾时推送，但这次运行的工具与指令不随之改变（工具集在 pydantic-ai 运行开始时固定）；提问要等下一次运行。
+- **回答交给谁**（`platform.tooling.Audience`，不入库）：运行开始时由会话与它处理的信件推导一次，决定开放哪些工具（`ask_user`）与指令里怎么说：私有 thread 是 `agent`（回答作为 `ask_agent` 的结果交回发问方）；处理过的和信箱里排着的信件有用户在等就是 `user`；否则 `none`。运行中途才到的、用户在等的消息会被这次运行处理、收尾时推送，但这次运行的工具与指令不随之改变（工具集在 pydantic-ai 运行开始时固定）；提问要等下一次运行。
 - **私有 thread** 的含义只剩「用户只读、只收发问方的信」：它有自己的信箱和消费者，可以开后台任务、`report_back`、被停止（发问方那次调用拿到「被停止」）。`ask_user` 在私有 thread 里不提供（没有用户在等）。不能单独删除，随发问的会话删除。
 - **删除**：删除父 session 会一并删除它的私有 thread（逐层）；用户可见的 thread 保留（`parent_session_id` 置空）。会话或它的私有 thread 有任务正在运行、或有后台任务在跑时拒绝删除（409）。交给被删除的 thread、还没交回的委派交回「thread 已删除」。
 
@@ -221,7 +221,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
   - 处理委派信件的运行结束时，随它的收尾（`sessions.finish`）。**什么时候算做完**：thread 的运行正常结束、没有停在挂起的调用上、它发起的异步工作都结束了、信箱里也没有还要交给模型的信件；否则等之后的运行。
   - 最终失败时随队列记下失败（`RunHandler.failed_in`，见第 2 节「用最终正确性换架构简化」）：它处理过的委派信件，以及交给过它、还排着的——运行在第一次保存之前就失败（组装指令、连接 MCP、复制附件）时，开头取走的信件一直排着，它们不晚于这次运行，不会再有运行因为它们被唤醒（`mailbox.handed_to`）；它们随失败交回一起记为被丢弃，不会在之后的运行里被悄悄执行。运行开始之后才到的委派不动，它们会唤醒新的运行、交回真实的结局。
   - thread 被停止时随停止（`SessionHalt`）；thread 被删除时随删除（`conversation.delete_sessions`）。
-- **交回的形态**：发起方还停在那次 `ask_agent` 调用上时，结局是一封回答信件，作为调用的结果交回（`AgentAnswer`：回答文字、它挂给用户的文件、thread，经 `sessions.answers` 带上 `TOOL_THREADS` 与 `TOOL_ATTACHMENTS`）；否则（`report_back`，或用户已经跳过了那次调用）是一封事件信件（来源 `thread:<子会话 id>`）。thread 的回答不直接推送给用户：交给父 agent 处理，父会话处理它的运行按 `awaited` 推送。
+- **交回的形态**：发起方还停在那次 `ask_agent` 调用上时，结局是一封回答信件，作为调用的结果交回（`AgentAnswer`：回答文字、它挂给用户的文件、thread，经 `agent_runtime.answers` 带上 `TOOL_THREADS` 与 `TOOL_ATTACHMENTS`）；否则（`report_back`，或用户已经跳过了那次调用）是一封事件信件（来源 `thread:<子会话 id>`）。thread 的回答不直接推送给用户：交给父 agent 处理，父会话处理它的运行按 `awaited` 推送。
 - **运行中检查**：发起方没在等这次调用时（它在等时检查信件交不到模型），给发起方投检查信件。
 - **发起方被停止**：它发起的委派一起放弃（状态 abandoned，不再交回），thread 逐层停下。
 - **边界**：公开 thread 在父会话删除后仍然保留，发起会话的委派行随它删除，结局不再交回。thread 被删除时委派行的 `child_session_id` 置空，交回「thread 已删除」。

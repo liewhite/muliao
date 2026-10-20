@@ -20,6 +20,7 @@ from muliao.platform.ids import new_id
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import TaskStatus
 from muliao.platform.tasks import TaskQueue, session_lane
+from muliao.platform.tooling import Origin
 from muliao.sessions.events import DelegationDispatched, Ending, SessionDeleted
 from muliao.sessions.history import latest_answer, load_context
 from muliao.sessions.holds import get_in as get_hold_in
@@ -28,7 +29,7 @@ from muliao.sessions.mailbox import latest_run, post_in, queued_in
 from muliao.sessions.pending import pending_questions
 from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
 from muliao.sessions.settlement import failure_of, settle_in, unsettled_in
-from muliao.sessions.tables import Mail, MailKind, MailState, Origin, RetiredAgent, Session
+from muliao.sessions.tables import Mail, MailKind, MailState, RetiredAgent, Session
 
 log = logging.getLogger(__name__)
 

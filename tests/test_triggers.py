@@ -6,8 +6,9 @@ import pytest
 
 from muliao.agent_runtime.mcp import McpTransport, mcp_config
 from muliao.errors import InvalidInput
+from muliao.platform.tooling import Origin
 from muliao.sessions.mailbox import queued_in
-from muliao.sessions.tables import MailKind, Origin
+from muliao.sessions.tables import MailKind
 from tests.test_flow import drain, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")

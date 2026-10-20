@@ -1382,7 +1382,7 @@ export interface components {
         };
         /**
          * SavedEvent
-         * @description 运行中又保存了一步（bus.LiveRuns.step）：历史有了新内容，实时事件换成新的一段。
+         * @description 运行中又保存了一步（LiveRuns.step）：历史有了新内容，实时事件换成新的一段。
          */
         SavedEvent: {
             /**

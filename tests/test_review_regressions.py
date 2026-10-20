@@ -11,8 +11,9 @@ from muliao.errors import Conflict, TransientError
 from muliao.notifications.tables import Notification
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import TaskKind, TaskStatus
+from muliao.platform.tooling import Origin
 from muliao.platform.worker import is_transient
-from muliao.sessions.tables import Message, Origin
+from muliao.sessions.tables import Message
 from muliao.sessions.transcript import to_items
 from tests.test_flow import call_then_answer, drain, start
 

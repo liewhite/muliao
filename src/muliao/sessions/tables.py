@@ -9,14 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from muliao.platform.db import Base, StrEnumType, UTCDateTime, utcnow
 from muliao.platform.tables import agent_ref
-
-
-class Origin(StrEnum):
-    """会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派。"""
-
-    USER = "user"
-    TRIGGER = "trigger"
-    DELEGATION = "delegation"
+from muliao.platform.tooling import Origin
 
 
 class Session(Base):

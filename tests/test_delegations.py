@@ -595,8 +595,8 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
 
 
 async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, make_agent, models):
+    from muliao.agent_runtime.conventions import STOPPED_TOOL_RESULT
     from muliao.delegations.tables import Delegation, DelegationStatus
-    from muliao.sessions.conventions import STOPPED_TOOL_RESULT
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
     run = await container.queue.claim(list(TaskKind))

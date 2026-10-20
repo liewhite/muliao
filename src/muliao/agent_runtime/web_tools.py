@@ -2,9 +2,8 @@
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agent_runtime.scope import RunScope
-from muliao.agent_runtime.tool_errors import TOOL_MAX_RETRIES
 from muliao.agent_runtime.web import SearchHit, WebProvider
+from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.transcript import truncate
 
 

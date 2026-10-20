@@ -2,10 +2,9 @@
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agent_runtime.scope import RunScope
-from muliao.agent_runtime.tool_errors import TOOL_MAX_RETRIES
 from muliao.notifications.service import Notifier
 from muliao.notifications.tables import Notification
+from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
 def notify_toolset(notifier: Notifier) -> FunctionToolset[RunScope]:

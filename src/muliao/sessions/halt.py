@@ -18,12 +18,12 @@ from pydantic_ai.messages import ModelRequest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agent_runtime.conventions import is_stopped
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue, session_lane
 from muliao.sessions.codec import dump_message, load_messages
-from muliao.sessions.conventions import is_stopped
 from muliao.sessions.events import Ending, SessionStopped
 from muliao.sessions.history import latest_answer, load_context, marked_stopped, stopped_results
 from muliao.sessions.holds import clear_in

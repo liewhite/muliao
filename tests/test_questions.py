@@ -14,9 +14,10 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 
 from muliao.platform.tables import TaskKind, TaskStatus
+from muliao.platform.tooling import Origin
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import steps_of
-from muliao.sessions.tables import Message, Origin
+from muliao.sessions.tables import Message
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tasks_of

@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo
 
 import anyio
 
-from muliao.agent_runtime import tool_catalog
 from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
 from muliao.agent_runtime.mcp import McpRegistry
 from muliao.agent_runtime.mcp_tools import mcp_admin_toolset
@@ -20,6 +19,7 @@ from muliao.agent_runtime.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.agent_runtime.web import WebProvider, build_web_provider
 from muliao.agent_runtime.web_tools import web_toolset
 from muliao.agent_runtime.workspace_tools import ShellLimits, session_workspace_toolset, workspace_toolset
+from muliao.agents import tool_catalog
 from muliao.agents.evolution_tools import (
     instructions_toolset,
     memory_toolset,
@@ -43,7 +43,7 @@ from muliao.notifications.delivery import DeliverHandler
 from muliao.notifications.service import Notifications, Notifier
 from muliao.notifications.tools import notify_toolset
 from muliao.notifications.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
-from muliao.platform.bus import EventBus, LiveRuns
+from muliao.platform.bus import EventBus
 from muliao.platform.checks import WorkWatcher
 from muliao.platform.db import Database, create_engine, migrate
 from muliao.platform.messaging import Messaging
@@ -58,6 +58,7 @@ from muliao.sessions.content import ContentBuilder
 from muliao.sessions.conversation import Threads
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
+from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import MailReconciler
 from muliao.sessions.service import SessionService
 from muliao.sessions.settlement import handle_post_event, reconcile_failures

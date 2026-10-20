@@ -11,15 +11,14 @@ from pathlib import Path
 
 from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
-from muliao.agent_runtime.scope import RunScope
-from muliao.agent_runtime.tool_errors import TOOL_MAX_RETRIES
+from muliao.agent_runtime.conventions import TOOL_ATTACHMENTS, attachment_of
 from muliao.agents import text_edit
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.store import FileStore
 from muliao.jobs.runner import JobRunner
 from muliao.jobs.tables import JobStatus
 from muliao.platform.shell import run_bash
-from muliao.sessions.conventions import TOOL_ATTACHMENTS, attachment_of
+from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.transcript import truncate
 from muliao.vault.service import Vault
 

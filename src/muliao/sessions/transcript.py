@@ -1,7 +1,7 @@
 """把 pydantic-ai 消息转换为展示条目（Item）：会话页的历史、运行中的实时条目（agent_runtime.runner）、反思与压缩的文字记录
 共用这一份投影，前端只渲染与合并，不再自己投影。
 
-消息上的约定（metadata 键、标记、合成结果）登记在 muliao.sessions.conventions，这里只读它们来展示。
+消息上的约定（metadata 键、标记、合成结果）登记在 muliao.agent_runtime.conventions，这里只读它们来展示。
 """
 
 from collections.abc import Collection, Sequence
@@ -22,8 +22,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from muliao.files.store import parse_file_url
-from muliao.sessions.conventions import (
+from muliao.agent_runtime.conventions import (
     RUN_STOPPED,
     Attachment,
     event_indices,
@@ -31,6 +30,7 @@ from muliao.sessions.conventions import (
     tool_attachments,
     tool_threads,
 )
+from muliao.files.store import parse_file_url
 from muliao.sessions.questions import ASK_USER, AnsweredQuestion, AskResult, Question, questions_of
 
 ItemType = Literal[
@@ -59,7 +59,7 @@ class Item(BaseModel):
     tool_call_id: str | None
     # 来源消息的数据库 id；会话接口填充，用于定位压缩点；实时条目为 None
     message_id: int | None
-    # 用户消息的附件（见 sessions.attachments 的存储形态），或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
+    # 用户消息的附件（见 agent_runtime.attachments 的存储形态），或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
     attachments: list[Attachment]
     # 工具结果关联的子会话 id（TOOL_THREADS）；其他条目为空
     threads: list[str]

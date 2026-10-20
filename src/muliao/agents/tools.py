@@ -7,12 +7,11 @@
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agent_runtime.scope import RunScope
-from muliao.agent_runtime.tool_errors import TOOL_MAX_RETRIES
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.prompts import PromptStore
 from muliao.agents.service import AgentPatch, AgentService, AgentSpec
 from muliao.errors import InvalidInput
+from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
 class AgentDetail(BaseModel):

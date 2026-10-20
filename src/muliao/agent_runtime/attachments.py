@@ -28,8 +28,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import ModelRequestContext
 
-from muliao.agent_runtime.scope import RunScope
 from muliao.files.store import FileMeta, FileStore, parse_file_url
+from muliao.platform.tooling import RunScope
 
 UPLOADS_DIR = "uploads"
 

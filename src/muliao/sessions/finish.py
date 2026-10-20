@@ -8,11 +8,11 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agent_runtime.conventions import shared_attachments
 from muliao.agents.tables import Agent
 from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
-from muliao.sessions.conventions import shared_attachments
 from muliao.sessions.events import Ending
 from muliao.sessions.events import RunEnded as RunEndedEvent
 from muliao.sessions.holds import has_active_in

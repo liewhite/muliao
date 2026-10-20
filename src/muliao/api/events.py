@@ -3,59 +3,14 @@
 形状在这里声明一次：SSE 只序列化这些模型，它们也登记进 OpenAPI（api.app），前端类型由此生成。
 """
 
-from typing import Annotated, Literal
+from typing import Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, RootModel
 
-from muliao.platform.tables import TaskKind, TaskStatus
-from muliao.sessions.transcript import Item
+from muliao.platform.bus import TaskEvent
+from muliao.sessions.live import RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 
-
-class TaskEvent(BaseModel):
-    """一个 task 的状态变化（前端据此从数据库重新拉取），由 worker 发出。"""
-
-    type: Literal["task"] = "task"
-    task_id: int
-    kind: TaskKind
-    status: TaskStatus
-    session_id: str | None
-    # 系统通知的投递没有所属 agent
-    agent: str | None
-    error: str | None
-
-
-class SavedEvent(BaseModel):
-    """运行中又保存了一步（bus.LiveRuns.step）：历史有了新内容，实时事件换成新的一段。"""
-
-    type: Literal["saved"] = "saved"
-    session_id: str
-
-
-class _RunEventBase(BaseModel):
-    type: Literal["run"] = "run"
-    session_id: str
-    agent: str
-    # 这一段的编号与事件序号（bus.LiveRuns）：快照与 SSE 事件据此合并、去重、发现缺口
-    run_id: str
-    seq: int
-
-
-class RunItemEvent(_RunEventBase):
-    """一条完整的会话条目（工具调用、工具结果），与历史同一个投影（transcript）；文字可能截断过。"""
-
-    event: Literal["item"] = "item"
-    item: Item
-
-
-class RunDeltaEvent(_RunEventBase):
-    """流式文字：接在同类的最后一条后面（或开始新的一条）。"""
-
-    event: Literal["delta"] = "delta"
-    item_type: Literal["assistant", "thinking"]
-    text: str
-
-
-RunEvent = Annotated[RunItemEvent | RunDeltaEvent, Field(discriminator="event")]
+__all__ = ["HeartbeatEvent", "RunDeltaEvent", "RunEvent", "RunItemEvent", "SavedEvent", "ServerEvent", "TaskEvent"]
 
 
 class HeartbeatEvent(BaseModel):

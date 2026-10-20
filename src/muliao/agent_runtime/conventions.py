@@ -5,7 +5,7 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 
 | 约定 | 记在哪里 | 谁写 | 谁读 |
 |---|---|---|---|
-| `TOOL_ATTACHMENTS`：工具挂给用户的文件 | ToolReturnPart.metadata | share_file、run_temp_agent、ask_agent（sessions.answers） | 会话条目、实时事件、转交给调用方 |
+| `TOOL_ATTACHMENTS`：工具挂给用户的文件 | ToolReturnPart.metadata | share_file、run_temp_agent、ask_agent（agent_runtime.answers） | 会话条目、实时事件、转交给调用方 |
 | `TOOL_THREADS`：工具开出或续写的子会话 | ToolReturnPart.metadata | delegate_task、ask_agent | 会话条目、实时事件 |
 | `RUN_STOPPED`：运行被用户停止 | 停止时最后保存的那条消息的 metadata | sessions.consumer | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
 | `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | sessions.consumer | 模型（之后的运行） |

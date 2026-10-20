@@ -8,8 +8,9 @@ from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tooling import Origin
 from muliao.sessions.conversation import Inbound, NewSession
-from muliao.sessions.tables import Origin, RetiredAgent
+from muliao.sessions.tables import RetiredAgent
 from tests.test_flow import drain, start
 from tests.test_jobs import start_job, wait_until_done
 

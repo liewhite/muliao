@@ -10,12 +10,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.tool_catalog import ToolGroupInfo
 from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import normalize_agent_name
 from muliao.agents.prompts import PromptStore
 from muliao.agents.resources import ResourceRepo
 from muliao.agents.tables import Agent
+from muliao.agents.tool_catalog import ToolGroupInfo
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.ids import new_agent_id

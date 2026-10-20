@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage
 
-from muliao.sessions.conventions import TOOL_ATTACHMENTS, TOOL_THREADS, Attachment, shared_attachments
+from muliao.agent_runtime.conventions import TOOL_ATTACHMENTS, TOOL_THREADS, Attachment, shared_attachments
 
 
 @dataclass(frozen=True)

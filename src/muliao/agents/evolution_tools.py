@@ -2,11 +2,10 @@
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agent_runtime.scope import RunScope
-from muliao.agent_runtime.tool_errors import TOOL_MAX_RETRIES
 from muliao.agents.memory import MemoryStore
 from muliao.agents.prompts import PromptStore
 from muliao.agents.skills import SkillStore
+from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
 def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:

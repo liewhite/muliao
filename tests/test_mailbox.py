@@ -15,10 +15,11 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
+from muliao.agent_runtime.conventions import RUN_EVENTS, format_event
 from muliao.platform.tables import TaskKind, TaskStatus
-from muliao.sessions.conventions import RUN_EVENTS, format_event
+from muliao.platform.tooling import Origin
 from muliao.sessions.mailbox import post_in, queued_in
-from muliao.sessions.tables import Mail, MailKind, MailState, Origin
+from muliao.sessions.tables import Mail, MailKind, MailState
 from muliao.sessions.transcript import to_items, to_text
 from tests.conftest import login
 from tests.scripted import scripted
