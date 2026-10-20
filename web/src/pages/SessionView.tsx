@@ -351,16 +351,14 @@ function Composer({
 // 离底部这么近仍算「在底部」
 const PINNED_SLACK_PX = 50
 
-function toEndOf(el: HTMLElement | null) {
-  if (el !== null) el.scrollTop = el.scrollHeight
-}
 
 /**
  * 新内容到来时只在用户本来就在底部时跟随；往上翻看历史时不把人拽下来。
  *
- * 「在不在底部」只有一个来源：滚动容器的 scroll 事件里记下的 pinned。内容变高既不改变 scrollTop 也不触发 scroll
- * 事件，所以高度变化时（ResizeObserver：新数据、流式输出、图片加载完、输入框变高使容器变矮）读到的 pinned 必然是
- * 变化之前的，不依赖浏览器在同一帧里先算哪个观察者。打开会话、发送消息就是把 pinned 设回 true。
+ * 「在不在底部」只有一个来源 pinned，只由用户的滚动改变：滚到离底部 50px 以内就钉住，向上滚离开就解除。不能每次
+ * scroll 事件都按距底距离重算——程序滚到底产生的 scroll 事件要到下一帧才派发，那时内容可能又长了，会被误判成
+ * 「离开了底部」；而内容变长时 scrollTop 只会不变或变大，不会被当成向上滚。高度变化（ResizeObserver：新数据、
+ * 流式输出、图片加载完、输入框变高使容器变矮）时 pinned 为真就滚到底。打开会话、发送消息就是重新钉住。
  * 代价：在底部展开最后一个折叠块时，页面会跟着滚到它的末尾。
  */
 function useFollowBottom() {
@@ -369,12 +367,21 @@ function useFollowBottom() {
   // null：内容没挂载（加载中），不显示「回到底部」
   const [atBottom, setAtBottom] = useState<boolean | null>(null)
   const content = useRef<HTMLElement | null>(null)
+  // 上一次看到的 scrollTop：比它小才是向上滚
+  const lastTop = useRef(0)
 
-  const toEnd = useCallback(() => toEndOf(scroller.current), [])
+  const toEnd = useCallback(() => {
+    const el = scroller.current
+    if (el === null) return
+    el.scrollTop = el.scrollHeight
+    lastTop.current = el.scrollTop
+  }, [])
   const onScroll = useCallback(() => {
     const el = scroller.current
     if (el === null) return
-    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight <= PINNED_SLACK_PX
+    if (el.scrollHeight - el.scrollTop - el.clientHeight <= PINNED_SLACK_PX) pinned.current = true
+    else if (el.scrollTop < lastTop.current) pinned.current = false
+    lastTop.current = el.scrollTop
     setAtBottom(pinned.current)
   }, [])
   // 观察滚动容器（输入框变高时它变矮）与内容（新数据、流式输出、图片加载）的尺寸；两个 ref 各自登记，不依赖挂载先后
@@ -382,9 +389,9 @@ function useFollowBottom() {
   const resize = useCallback(
     () =>
       (observer.current ??= new ResizeObserver(() => {
-        if (pinned.current) toEndOf(scroller.current)
+        if (pinned.current) toEnd()
       })),
-    [],
+    [toEnd],
   )
   useEffect(() => () => observer.current?.disconnect(), [])
 
