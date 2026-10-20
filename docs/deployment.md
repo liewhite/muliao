@@ -41,7 +41,9 @@ npm run build                    # 构建到 src/muliao/webui/，改了前端必
 
 ### 数据库迁移
 
-数据库结构由 Alembic 迁移管理（`src/muliao/migrations/`），服务启动时自动升级到最新版本，升级不需要删库。改了各领域的 `tables.py`（全部表经 `src/muliao/schema.py` 汇总）后生成迁移：
+数据库结构由 Alembic 迁移管理（`src/muliao/migrations/`），服务启动时自动升级到最新版本，升级不需要删库。
+
+例外：2026-10-20 按领域重构时迁移历史重置为唯一的初始版本（见 docs/architecture.md「数据库迁移」）。从重构之前的版本升级时，已有数据库停在同一个修订号上却是旧结构，必须先备份 `data/muliao.db`，再删除它让服务重建；之后的升级照常自动迁移。改了各领域的 `tables.py`（全部表经 `src/muliao/schema.py` 汇总）后生成迁移：
 
 ```bash
 uv run alembic upgrade head                          # 开发用的临时库 .alembic-dev.db
