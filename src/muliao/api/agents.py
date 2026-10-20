@@ -41,11 +41,12 @@ class AgentOut(BaseModel):
     instructions: str
     reflect_every: int
     tool_groups: list[str]
-    turns_since_reflection: int
+    # 自上次反思以来的步数（模型回复数），由消息推导
+    steps_since_reflection: int
     created_at: datetime
 
     @classmethod
-    def of(cls, a: Agent, instructions: str) -> "AgentOut":
+    def of(cls, a: Agent, instructions: str, steps_since_reflection: int) -> "AgentOut":
         return cls(
             id=a.id,
             name=a.name,
@@ -54,13 +55,20 @@ class AgentOut(BaseModel):
             instructions=instructions,
             reflect_every=a.reflect_every,
             tool_groups=a.tool_groups,
-            turns_since_reflection=a.turns_since_reflection,
+            steps_since_reflection=steps_since_reflection,
             created_at=a.created_at,
         )
 
 
+async def _outs(c: C, agents: list[Agent]) -> list[AgentOut]:
+    """AgentOut 的唯一构造入口：一次取齐这些 agent 的反思进度。"""
+    steps = await c.reflection.steps_since(agents)
+    return [AgentOut.of(a, c.prompts.current(a.id), steps[a.id]) for a in agents]
+
+
 async def _out(c: C, agent: Agent) -> AgentOut:
-    return AgentOut.of(agent, c.prompts.current(agent.id))
+    [out] = await _outs(c, [agent])
+    return out
 
 
 class AgentDefaultsOut(BaseModel):
@@ -91,8 +99,7 @@ async def list_provider_models(c: C, name: str) -> list[str]:
 
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
-    agents = await c.agents.list()
-    return [AgentOut.of(a, c.prompts.current(a.id)) for a in agents]
+    return await _outs(c, await c.agents.list())
 
 
 @router.post("/agents", status_code=201)

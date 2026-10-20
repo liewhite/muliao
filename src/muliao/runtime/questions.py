@@ -1,24 +1,14 @@
-"""向用户提问（ask_user）：问题与回答的模型、哪些提问还在等回答、回答的校验。什么时候能回答取决于会话里各轮的
-排队顺序，属于会话领域（conversation.answerable_questions）。
-
-一轮里模型调用 ask_user 时，工具抛出 pydantic-ai 的 CallDeferred：这一轮正常结束并提交（调用暂时没有结果），
-不在 worker 里等人。用户在界面上提交回答 = 新的一轮，回答作为这次调用的结果（DeferredToolResults）交回模型，
-所以模型看到的就是「我问了，用户这样答」。用户不答、直接发消息时，那一轮把挂起的提问显式记为没有回答
-（deferred_results），结果随它持久化。所以挂起的提问只可能出现在会话最后一轮里。
+"""向用户提问（ask_user）：问题与回答的模型、回答的校验、给模型与用户的文字。ask_user 是一种挂起的调用，
+挂起、唤醒与交回的规则见 runtime.pending；哪些提问现在能回答属于会话领域（conversation.answerable_questions）。
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
-from pydantic_ai.messages import ModelMessage, ToolCallPart
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic_ai.messages import ToolCallPart
 
-from muliao.conventions import unanswered_calls
 from muliao.errors import InvalidInput
-from muliao.models import Message
-from muliao.runtime.codec import load_messages
 
 ASK_USER = "ask_user"
 
@@ -71,13 +61,13 @@ class AskResult(BaseModel):
 
 
 # 用户没回答、直接发了新消息：挂起的提问必须有个结果才能继续（pydantic-ai 拒绝在未处理的调用后追加新消息），
-# 显式给出并随这一轮持久化，提问就不再显示为待回答
+# 显式给出并随那一步保存，提问就不再显示为待回答
 NOT_ANSWERED = AskResult(
     answered=False,
     answers=[],
     note="The user did not answer these questions and sent a new message instead.",
 )
-# 同一轮里问了几次，用户只回答了其中一部分（界面按每次提问分别提交）：没回答的那些如实说明，不能说成发了新消息
+# 同一次运行里问了几次，用户只回答了其中一部分（界面按每次提问分别提交）：没回答的那些如实说明，不能说成发了新消息
 SKIPPED = AskResult(
     answered=False,
     answers=[],
@@ -85,27 +75,9 @@ SKIPPED = AskResult(
 )
 
 
-def pending_questions(messages: Sequence[ModelMessage]) -> dict[str, list[Question]]:
-    """还在等回答的提问：没有结果的 ask_user 调用（参数被 schema 拒绝的调用有重试结果，不算）。按出现顺序。"""
-    return {c.tool_call_id: questions_of(c) for c in unanswered_calls(messages) if c.tool_name == ASK_USER}
-
-
 def questions_of(call: ToolCallPart) -> list[Question]:
     """挂起的 ask_user 调用里的问题：能挂起就说明参数已通过同一个 Questions 类型的校验，读回不合法是数据与代码不一致。"""
     return _QUESTIONS.validate_python(call.args_as_dict()["questions"])
-
-
-async def pending_in_session(s: AsyncSession, session_id: str) -> dict[str, list[Question]]:
-    """每一轮都会关闭之前挂起的提问，所以只需要看最后提交的那一轮的消息。最后提交的一轮由消息 id（单调递增）定，
-    不是最大的 task id：重试一个失败的旧轮次沿用原来的 task id，它的消息却在之后的轮次之后提交。"""
-    last_message = select(func.max(Message.id)).where(Message.session_id == session_id).scalar_subquery()
-    last_turn = select(Message.task_id).where(Message.id == last_message).scalar_subquery()
-    rows = await s.scalars(
-        select(Message.payload)
-        .where(Message.session_id == session_id, Message.task_id == last_turn)
-        .order_by(Message.id)
-    )
-    return pending_questions(load_messages(rows.all()))
 
 
 def answer_result(questions: Sequence[Question], answers: Sequence[QuestionAnswer]) -> AskResult:
@@ -128,23 +100,16 @@ def answer_result(questions: Sequence[Question], answers: Sequence[QuestionAnswe
     return AskResult(answered=True, answers=result, note=None)
 
 
-def deferred_results(pending: Mapping[str, object], answers: Mapping[str, AskResult]) -> dict[str, object]:
-    """这一轮交给 pydantic-ai 的挂起调用结果：有回答的用回答；其余挂起的提问记为没有回答——这一轮回答了别的提问时
-    是跳过了它们（SKIPPED），否则是发了新消息（NOT_ANSWERED）。"""
-    unanswered = SKIPPED if answers else NOT_ANSWERED
-    return {call_id: answers.get(call_id, unanswered).model_dump() for call_id in pending}
-
-
-def late_answer_text(results: Sequence[AskResult]) -> str:
-    """用户的回答到达时那次提问已经结束（模型已经带着「没回答」继续了）：作为一段用户消息交给模型，回答不丢。"""
-    lines = ["The user answered questions that had already been closed:"]
+def late_answer_lines(results: Sequence[AskResult]) -> list[str]:
+    """已经结束的提问的回答，每题一行（runtime.pending.late_text 交给模型）。"""
+    lines = []
     for result in results:
         for a in result.answers:
             given = [*a.selected, *([a.other] if a.other else [])]
             lines.append(f"- {a.question}: {'; '.join(given)}")
-    return "\n".join(lines)
+    return lines
 
 
 def waiting_text(questions: Sequence[Question]) -> str:
-    """一轮停在提问上时给用户的通知正文。"""
+    """运行停在提问上时给用户的通知正文。"""
     return "等你回答：" + "；".join(q.question for q in questions)

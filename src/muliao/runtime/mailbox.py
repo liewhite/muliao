@@ -1,12 +1,13 @@
 """会话信箱：一切要交给 agent 的东西都是往会话信箱里投一封信件（mail 表），消费者（runtime.consumer）按到达顺序把
 信件交给模型。设计见 docs/architecture.md「会话信箱」。
 
-- 投信（post_in）：用户消息、对提问的回答、触发器事件、委派来的任务、后台任务与 thread 的事件、运行中检查。
+- 投信（post_in）：用户消息、对挂起调用的回答（用户回答提问、被问的 agent 交回结局）、触发器事件、委派来的任务、
+  后台任务与 thread 的事件、运行中检查。
 - 一封信件在交给模型的那一步保存时记为已处理（consume_in，与那一步的消息同一个事务）。
 - 用户停止会话时信箱清空（discard_in）：没交给模型的信件记为被丢弃，留着记录。
 - 唤醒（wake_in，唯一规则）：会话里有排队的信件、没有排队或运行中的运行，并且有信件在最近一次运行之后才到；
-  会话停在提问上时，只有回答或新消息（跳过提问）能唤醒，事件等它们一起交给模型。私有 thread 的消费者在发问方
-  那一步里内联运行，不由这里唤醒。调用方：投信时、运行结束时、定期对账（MailReconciler，兜住投递时事务失败与重启）。
+  会话停在挂起的调用上时按 runtime.pending.waiting 等回答或新消息，事件等它们一起交给模型。调用方：投信时、运行
+  结束时、定期对账（MailReconciler，兜住投递时事务失败与重启）。
   「最近一次运行之后才到」保证最终失败的运行不会因为同一批信件被无限重新投递：它被重试、或新信件到达时再处理。
 """
 
@@ -21,9 +22,10 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
-from muliao.errors import Conflict, NotFound
+from muliao.errors import NotFound
 from muliao.models import Mail, MailKind, MailState, Session, Task, TaskKind, TaskStatus
-from muliao.runtime.questions import pending_in_session
+from muliao.runtime.history import load_context
+from muliao.runtime.pending import waiting
 from muliao.runtime.tasks import TaskQueue, session_lane
 
 log = logging.getLogger(__name__)
@@ -43,7 +45,7 @@ async def post_in(
     source: str | None = None,
     attachments: Sequence[str] = (),
     answers: Mapping[str, Any] | None = None,
-    report_to: Mapping[str, Any] | None = None,
+    delegation_id: int | None = None,
 ) -> Mail:
     """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。"""
     if kind == MailKind.EVENT and (not source or len(source) > _SOURCE_MAX or '"' in source):
@@ -51,11 +53,6 @@ async def post_in(
     session = await s.get(Session, session_id)
     if session is None:
         raise NotFound(f"session {session_id!r} not found")
-    if session.private and kind != MailKind.MESSAGE:
-        # 私有 thread 只收发问方的问题（ask_agent），它的消费者在发问方那一步里内联运行
-        raise Conflict(
-            f"session {session_id} is a private thread; it only takes questions from its asking agent"
-        )
     mail = Mail(
         session_id=session_id,
         kind=kind,
@@ -64,7 +61,7 @@ async def post_in(
         attachments=list(attachments),
         answers=dict(answers or {}),
         awaited=awaited,
-        report_to=None if report_to is None else dict(report_to),
+        delegation_id=delegation_id,
     )
     s.add(mail)
     await s.flush()
@@ -91,8 +88,6 @@ async def wake_in(
     finished：刚正常结束的那次运行（在它的收尾事务里调用时）。队列在同一个事务里稍后才把它记为完成，此刻它还是
     running，不能因此判定会话忙；它也不是「失败待重试」，剩下的信件（它没取走的，如从历史续跑、只重发了一条请求
     就结束）一定要有下一次运行，所以不做「之后才到」的判断。"""
-    if session.private:
-        return None
     queued = await queued_in(s, session.id)
     if not queued:
         return None
@@ -108,8 +103,8 @@ async def wake_in(
     if finished is None and latest is not None and all(handed_to(m, latest) for m in queued):
         # 都已经交给过一次运行（它失败了、等重试）：由它或之后新信件唤醒的运行处理，不重复投递
         return None
-    if await pending_in_session(s, session.id) and not any(m.kind != MailKind.EVENT for m in queued):
-        # 停在提问上：等回答或新消息（跳过），事件到时一起交给模型
+    if waiting((await load_context(s, session.id)).messages, queued):
+        # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型
         return None
     run = queue.enqueue(
         s, kind=TaskKind.RUN, lane=lane, agent_id=session.agent_id, session_id=session.id, payload={}

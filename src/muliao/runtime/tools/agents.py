@@ -67,7 +67,7 @@ def agents_toolset(
             description: What it is for; other agents choose whom to delegate to by this.
             instructions: Its system prompt.
             model: `<provider>:<model>`; defaults to the server's default model.
-            reflect_every: Turns between forced reflections; defaults to the server's setting.
+            reflect_every: Steps (model responses) between forced reflections; defaults to the server's setting.
             tool_groups: Tool groups it may use (`get_agent` lists the available ones); defaults to all.
                 Give an agent that handles untrusted input (web pages, external events) only what it needs:
                 workspace, temp_agent, delegation, agents, triggers and mcp_admin each amount to full access.
@@ -104,7 +104,7 @@ def agents_toolset(
             description: New description.
             instructions: New full system prompt.
             model: New `<provider>:<model>`.
-            reflect_every: New reflection interval in turns.
+            reflect_every: New reflection interval in steps (model responses).
             tool_groups: New full list of tool groups it may use.
         """
         target = await agents.find_by_name(agent)

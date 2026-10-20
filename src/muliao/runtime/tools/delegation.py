@@ -1,17 +1,18 @@
-"""agent 之间的委派：delegate_task（异步，不等结果）、ask_agent（同步，内联跑完）、list_threads。设计见 runtime/conversation.py。"""
+"""agent 之间的委派：delegate_task（不等结果）、ask_agent（挂起这次调用，等对方的结局作为结果）、stop_thread、
+list_threads。设计见 runtime/conversation.py 与 runtime/delegations.py。"""
 
 from collections.abc import Awaitable, Callable
 from typing import Literal
 
 from pydantic import BaseModel
-from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolReturn
+from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext, ToolReturn
 
 from muliao.agents import AgentService
 from muliao.conventions import TOOL_THREADS
 from muliao.db import Database
 from muliao.models import ReplyTo
-from muliao.runtime.answers import Answer
-from muliao.runtime.conversation import ReportTo, Threads, thread_name, threads_of, validate_thread
+from muliao.runtime.conversation import ReportBack, Threads, threads_of, validate_thread
+from muliao.runtime.delegations import for_call_in, thread_name
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 from muliao.transcript import truncate
@@ -35,8 +36,6 @@ class ThreadInfo(BaseModel):
     answer: str | None
 
 
-# 在私有 thread 里内联跑完一次运行并返回回答（runtime.consumer.Consumer.run_inline）：(session_id, prompt) -> answer
-RunInline = Callable[[str, str], Awaitable[Answer]]
 # 停止一个会话：停下它的消费、清空信箱（runtime.consumer.Consumer.stop_session）
 StopSession = Callable[[str], Awaitable[None]]
 
@@ -53,7 +52,6 @@ def delegation_toolset(
     db: Database,
     agents: AgentService,
     threads: Threads,
-    run_inline: RunInline,
     stop_session: StopSession,
     check_seconds: float,
 ) -> FunctionToolset[RunScope]:
@@ -81,16 +79,11 @@ def delegation_toolset(
             report_back: Get the thread's answer back as an event in this conversation.
         """
         parent_id = _require_session(ctx)
-        report_to = None
-        if report_back:
-            if ctx.deps.reply_to not in (ReplyTo.USER, ReplyTo.NONE):
-                # 私有 thread 的发问方在同步等它的回答，交回的事件没有信箱可投（私有 thread 只收问题）
-                raise ModelRetry("report_back is not available in a private thread; use ask_agent instead")
-            report_to = ReportTo(session_id=parent_id, awaited=ctx.deps.reply_to == ReplyTo.USER)
+        report = ReportBack(call_id=None, awaited=ctx.deps.reply_to == ReplyTo.USER) if report_back else None
         target = await agents.find_by_name(agent)
         async with db.transaction() as s:
             received = await threads.send(
-                s, parent_id=parent_id, agent=target, thread=thread, prompt=task, report_to=report_to
+                s, parent_id=parent_id, agent=target, thread=thread, prompt=task, private=False, report=report
             )
         return ToolReturn(
             return_value=f"delegated to {target.name} in thread {validate_thread(thread)!r}",
@@ -98,10 +91,12 @@ def delegation_toolset(
         )
 
     @ts.tool
-    async def ask_agent(ctx: RunContext[RunScope], agent: str, message: str, thread: str) -> ToolReturn:
+    async def ask_agent(ctx: RunContext[RunScope], agent: str, message: str, thread: str) -> str:
         """Ask an agent and wait for its answer, which is returned as this tool's result. The thread is private
-        to this conversation (the user can read but not reply). Files it shares are shown to the user with your reply. Ask again in the same thread to follow up with
-        the agent's context intact, e.g. review -> fix -> review again. Several asks in one response run in parallel.
+        to this conversation (the user can read but not reply). Files it shares are shown to the user with your
+        reply. Ask again in the same thread to follow up with the agent's context intact, e.g. review -> fix ->
+        review again. Several asks in one response run in parallel. Your reply pauses until the answers arrive; if
+        the user writes to you meanwhile, you continue and the answer reaches you later as an event.
 
         Args:
             agent: Target agent name from `list_agents`.
@@ -112,19 +107,31 @@ def delegation_toolset(
         target = await agents.find_by_name(agent)
         if not message.strip():
             raise ModelRetry("message must not be empty")
+        if ctx.tool_call_id is None:
+            raise RuntimeError("ask_agent was called without a tool call id")
         async with db.transaction() as s:
-            child = await threads.open(s, parent_id=parent_id, agent=target, thread=thread, private=True)
-        # 在调用方那一步里直接跑完：失败随调用方的运行失败，由队列统一重试（续跑时重新执行这次调用）
-        return (await run_inline(child.id, message)).to_tool_return(thread_id=child.id)
+            # 续跑时重新执行这次调用：已经投过就只再挂起（runtime.delegations.for_call_in）
+            if await for_call_in(s, parent_id, ctx.tool_call_id) is None:
+                await threads.send(
+                    s,
+                    parent_id=parent_id,
+                    agent=target,
+                    thread=thread,
+                    prompt=message,
+                    private=True,
+                    report=ReportBack(call_id=ctx.tool_call_id, awaited=ctx.deps.reply_to == ReplyTo.USER),
+                )
+        # 发问方的运行停在这次调用上，不占 worker；对方的结局作为这次调用的结果交回（runtime.pending）
+        raise CallDeferred()
 
     @ts.tool
     async def stop_thread(ctx: RunContext[RunScope], thread: str) -> str:
         """Stop a thread of this conversation, whether it is running or still queued: its current run stops (what it
-        already did is kept) and the work queued for it is dropped. With `report_back` you then get an event saying
-        it was stopped.
+        already did is kept) and the work queued for it is dropped. If you are waiting for its answer (`ask_agent`,
+        or `report_back`), you get its outcome saying it was stopped.
 
         Args:
-            thread: The thread name used with `delegate_task`.
+            thread: The thread name used with `delegate_task` or `ask_agent`.
         """
         parent_id = _require_session(ctx)
         async with db.transaction() as s:

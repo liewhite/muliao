@@ -1,5 +1,6 @@
-"""后台任务：agent 在后台跑的 shell 命令。做法同 Claude Code 的后台 bash：不占住运行、不设时限，
-结束时往发起它的会话的信箱投事件信件（runtime.mailbox），运行期间每隔一段时间发一个检查事件，由 agent 决定继续等还是结束它。
+"""后台任务：agent 在后台跑的 shell 命令，会话拥有的异步工作的一种（runtime.work）。做法同 Claude Code 的后台 bash：
+不占住运行、不设时限，结束时往发起它的会话的信箱投事件信件（runtime.mailbox），运行期间每隔一段时间发一个检查事件，
+由 agent 决定继续等还是结束它。
 
 - 输出（stdout 与 stderr 合并）逐块脱敏后写进 agent 工作目录的 jobs/<id>.log，agent 用 read_file 读完整输出；
   事件里只带最后几行。
@@ -11,7 +12,7 @@
   监督意外结束（如记下结局时数据库失败），由每次检查前的对账发现。
 - 任务对 agent 可见（工作目录本来就是 agent 级的，job_status / job_kill 按 agent 检查归属），事件归发起它的会话。
   日志大小不设上限（按「不限制」的决定）。
-- 私有 thread（只收发问方的问题）、反思与临时 agent（没有会话）没有信箱接收事件，不能开后台任务。
+- 反思与临时 agent 没有会话、没有信箱接收事件，不能开后台任务。
 """
 
 from __future__ import annotations
@@ -29,10 +30,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database, utcnow
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.models import Job, JobStatus, MailKind, ReplyTo, Session
-from muliao.runtime.mailbox import has_queued_from, post_in
+from muliao.models import Job, JobStatus, MailKind, Session
+from muliao.runtime.mailbox import post_in
 from muliao.runtime.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash
 from muliao.runtime.tasks import Clock, TaskQueue
+from muliao.runtime.work import post_check_in
 from muliao.vault import Vault
 
 log = logging.getLogger(__name__)
@@ -118,16 +120,12 @@ class JobRunner:
         agent_id: str,
         command: str,
         secrets: list[str],
-        reply_to: ReplyTo | None,
+        awaited: bool,
     ) -> Job:
-        if session_id is None or reply_to is None:
+        """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。"""
+        if session_id is None:
             raise InvalidInput(
                 "background jobs need a conversation to report back to; run the command in the foreground"
-            )
-        if reply_to == ReplyTo.AGENT:
-            raise InvalidInput(
-                "background jobs are not available in a private thread: the asking agent is waiting for this answer; "
-                "run the command in the foreground"
             )
         # vault 自己开事务，不能放进下面的事务
         values = await self._vault.resolve_many(agent_id, secrets)
@@ -135,14 +133,12 @@ class JobRunner:
             session = await s.get(Session, session_id)
             if session is None:
                 raise NotFound(f"session {session_id!r} not found")
-            if session.private:
-                raise Conflict(f"session {session_id} is a private thread; it cannot run background jobs")
             job = Job(
                 session_id=session_id,
                 agent_id=agent_id,
                 command=command,
                 secrets=list(secrets),
-                awaited=reply_to == ReplyTo.USER,
+                awaited=awaited,
                 log_path="",
                 started_at=self._clock(),
             )
@@ -303,14 +299,16 @@ class JobRunner:
         kill_group(handle.proc.pid)
         log.info("background job kill requested", extra={"job_id": job_id})
 
-    async def stop_session(self, session_id: str) -> None:
+    async def halt(self, owner_session_id: str) -> None:
         """用户停止会话：结束它正在跑的后台任务（同 job_kill），结局照常由监督者记下（KILLED），但不再给这个会话投信。
         调用方在清空信箱之前调用：标记在这里同步设上，之后监督者的结局事务一定看得到。"""
         async with self._db.transaction() as s:
             ids = list(
                 (
                     await s.scalars(
-                        select(Job.id).where(Job.session_id == session_id, Job.status == JobStatus.RUNNING)
+                        select(Job.id).where(
+                            Job.session_id == owner_session_id, Job.status == JobStatus.RUNNING
+                        )
                     )
                 ).all()
             )
@@ -325,7 +323,7 @@ class JobRunner:
         if stopped:
             log.info(
                 "background jobs stopped with their session",
-                extra={"session_id": session_id, "job_ids": stopped},
+                extra={"session_id": owner_session_id, "job_ids": stopped},
             )
 
     async def info(self, job_id: int, agent_id: str) -> JobInfo:
@@ -376,19 +374,8 @@ class JobRunner:
                 job = await s.get(Job, stale.id)
                 if job is None or job.status != JobStatus.RUNNING:
                     continue
-                if await has_queued_from(s, job.session_id, job_source(job.id)):
-                    continue
                 text = _check_text(job, self._clock(), tails[job.id])
-                await post_in(
-                    s,
-                    self._queue,
-                    job.session_id,
-                    kind=MailKind.EVENT,
-                    source=job_source(job.id),
-                    content=text,
-                    awaited=False,
-                )
-                posted += 1
+                posted += await post_check_in(s, self._queue, job.session_id, job_source(job.id), text)
         return posted
 
     async def recover(self) -> None:

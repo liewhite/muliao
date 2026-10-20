@@ -1,5 +1,5 @@
-"""会话领域：delegate_task（公开 thread，走队列）、ask_agent（私有 thread，在调用方这一轮里内联跑完）、
-thread 续聊、失败与删除的语义、续写规则。"""
+"""会话领域：delegate_task（公开 thread）、ask_agent（私有 thread，发问方停在这次调用上，对方的结局作为它的结果
+交回）、thread 续聊、失败与删除的语义、续写规则。"""
 
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
@@ -66,9 +66,9 @@ async def test_ask_agent_returns_answer_and_follow_up_keeps_thread_context(conta
     models.models["v"] = echo("reviewed", child_seen)
     ask = {"agent": "reviewer", "thread": "review"}
     models.models["l"] = steps(
-        call("ask_agent", {**ask, "message": "v1"}),
+        call("ask_agent", {**ask, "message": "v1"}, "c1"),
         answer_with_tool_results("verdict"),
-        call("ask_agent", {**ask, "message": "v2"}),
+        call("ask_agent", {**ask, "message": "v2"}, "c2"),
         answer_with_tool_results("verdict"),
     )
 
@@ -83,18 +83,22 @@ async def test_ask_agent_returns_answer_and_follow_up_keeps_thread_context(conta
     assert child.private and child.thread == "review"
     # 第二次 ask 时对方看得到第一次的上下文
     assert child_seen == [1, 3]
-    # 子会话的每一轮也是一条已完成的 turn task，消息记在它名下
+    # 私有 thread 和其他会话一样由自己的运行处理，消息记在运行名下
     child_turns = await turns_in(container, child.id)
     assert [t.status for t in child_turns] == [TaskStatus.DONE, TaskStatus.DONE]
     async with container.db.transaction() as s:
         task_ids = (await s.scalars(select(Message.task_id).where(Message.session_id == child.id))).all()
     assert sorted(set(task_ids)) == [t.id for t in child_turns]
-    # 子会话的回答交给父 agent，不推送；父会话每轮推送一次最终回答
+    # 发问方停在 ask_agent 上时不推送；子会话的回答交给父 agent，不推送；父会话做完时推送最终回答
     deliveries = await tasks_of(container, TaskKind.DELIVER)
     assert [d.session_id for d in deliveries] == [parent.id, parent.id]
+    # 发问方等待时不占运行：每次 ask 前后各是一次运行
+    assert [t.status for t in await turns_in(container, parent.id)] == [TaskStatus.DONE] * 4
 
 
-async def test_parallel_asks_run_concurrently_and_same_thread_is_serialized(container, make_agent, models):
+async def test_parallel_asks_run_concurrently_and_asks_to_one_thread_are_answered_together(
+    container, make_agent, models
+):
     lead = (await make_agent("lead", model="l")).id
     await make_agent("a", model="a")
     await make_agent("b", model="b")
@@ -115,9 +119,9 @@ async def test_parallel_asks_run_concurrently_and_same_thread_is_serialized(cont
     parent = await start(container, lead, "go")
     await drain(container)
 
-    assert await last_answer(container, parent.id) == "all: A x | A y | B z"
-    # 同一个私有 thread 的两次 ask 依次执行：第二次看得到第一次
-    assert sorted(a_seen) == [1, 3]
+    # 同一个私有 thread 的两次 ask 进了同一个信箱：对方一次看到两个问题、一起回答，两次调用拿到同一个回答
+    assert await last_answer(container, parent.id) == "all: A x\ny | A x\ny | B z"
+    assert a_seen == [1]
 
 
 async def test_nested_ask_returns_the_final_answer_of_the_whole_chain(container, make_agent, models):
@@ -169,9 +173,8 @@ async def test_delegate_task_runs_in_public_thread_without_returning_the_answer(
     assert sorted(d.session_id for d in deliveries) == sorted([parent.id, child.id])
 
 
-async def test_failed_ask_fails_the_callers_run_and_records_the_childs_failed_run(
-    container, make_agent, models
-):
+async def test_a_failed_ask_comes_back_as_its_result_and_the_asker_goes_on(container, make_agent, models):
+    """对方的运行最终失败：失败原因作为 ask_agent 的结果交回，发问方接着做（不跟着失败）。"""
     lead = (await make_agent("lead", model="l")).id
     await make_agent("broken", model="x")
 
@@ -186,14 +189,12 @@ async def test_failed_ask_fails_the_callers_run_and_records_the_childs_failed_ru
     parent = await start(container, lead, "go")
     await drain(container)
 
-    [turn] = await turns_in(container, parent.id)
-    assert turn.status == TaskStatus.FAILED and "400" in turn.error
+    assert [t.status for t in await turns_in(container, parent.id)] == [TaskStatus.DONE, TaskStatus.DONE]
+    answer = await last_answer(container, parent.id)
+    assert "failed" in answer and "400" in answer
     [child] = await threads_of(container, parent.id)
-    # 子 thread 的运行如实记为失败；发出的问题已经保存（逐步保存），发问方的运行随之失败
     [child_run] = await turns_in(container, child.id)
     assert child_run.status == TaskStatus.FAILED and "400" in (child_run.error or "")
-    [question] = await container.sessions.history(child.id)
-    assert "do" in str(question.parts[-1].content)
 
 
 async def test_thread_kind_and_owner_are_fixed_at_creation(container, make_agent, models):
@@ -370,31 +371,9 @@ async def test_delegation_results_point_at_the_thread_they_opened(client, contai
     assert linked == [("delegate_task", [by_name["weekly"]]), ("ask_agent", [by_name["check"]])]
 
 
-async def test_inline_turns_announce_their_end_like_queued_turns(container, make_agent, models):
-    """私有 thread 的轮次不经 worker，也要发 task 事件：打开 thread 页的人靠它在一轮结束后重新拉取。"""
-    lead = (await make_agent("lead", model="l")).id
-    await make_agent("reviewer", model="v")
-    models.models["v"] = echo("reviewed")
-    models.models["l"] = steps(
-        call("ask_agent", {"agent": "reviewer", "thread": "review", "message": "v1"}),
-        answer_with_tool_results("verdict"),
-    )
-    events = []
-    async with container.bus.subscribe() as sub:
-        parent = await start(container, lead, "write code")
-        await drain(container)
-        while not sub.queue.empty():
-            events.append(sub.queue.get_nowait())
-
-    [child] = await threads_of(container, parent.id)
-    [child_turn] = await turns_in(container, child.id)
-    ended = [e for e in events if e.get("type") == "task" and e["session_id"] == child.id]
-    assert [(e["task_id"], e["kind"], e["status"]) for e in ended] == [(child_turn.id, "run", "done")]
-
-
 async def test_a_question_after_a_failed_ask_gets_its_own_answer(container, make_agent, models):
-    """私有 thread 上一次内联运行失败、历史停在它保存的请求上：下一次 ask 先续跑那次请求，再接着处理新投来的问题，
-    直到信箱空（私有 thread 不被唤醒，这条规则在内联路径上执行），不留下问题夹带进之后的 ask。"""
+    """私有 thread 上一次运行失败、历史停在它保存的请求上：下一次 ask 唤醒的运行先续跑那次请求，再处理新问题，
+    新问题拿到它自己的回答。"""
     lead = (await make_agent("lead", model="l")).id
     await make_agent("helper", model="h")
     asks = {"n": 0}
@@ -420,16 +399,11 @@ async def test_a_question_after_a_failed_ask_gets_its_own_answer(container, make
     models.models["h"] = scripted(helper_fn)
     parent = await start(container, lead, "first")
     await drain(container)
-    assert [t.status for t in await turns_in(container, parent.id)] == [TaskStatus.FAILED]
+    assert "failed" in await last_answer(container, parent.id)
 
-    # 父会话续跑时重新执行那次 ask：子 thread 先重发保存的请求，再处理重新投来的同一个问题，信箱清空
     await reply(container, parent.id, "second")
     await drain(container)
+    assert await last_answer(container, parent.id) == "a: re second"
     [child] = await threads_of(container, parent.id)
     async with container.db.transaction() as s:
         assert await queued_in(s, child.id) == []
-
-    # 之后的问题得到它自己的回答，没有夹带上次剩下的问题
-    await reply(container, parent.id, "third")
-    await drain(container)
-    assert await last_answer(container, parent.id) == "a: re third"

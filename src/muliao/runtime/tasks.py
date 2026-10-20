@@ -4,8 +4,6 @@
 - 同一 lane 内严格 FIFO、最多一个 running；不同 lane 并发。
 - 契约内的暂时性失败按指数退避重试，超过上限置 failed；其他失败直接 failed。
 - 进程崩溃遗留的 running 在启动时复位为 pending（见 docs/architecture.md「用最终正确性换架构简化」）。
-- 不经 worker 执行的运行（ask_agent 在发问方那一步里内联驱动私有 thread）用 start_inline 直接记为 running，
-  保持「每一次运行都是一个 task」；它们不能被重启后恢复，recover 记为失败。
 """
 
 from __future__ import annotations
@@ -41,14 +39,6 @@ def session_lane(session_id: str) -> str:
     return f"session:{session_id}"
 
 
-_INLINE = "inline:"
-
-
-def inline_lane(session_id: str) -> str:
-    """私有 thread 的运行：在发问方那一步里内联执行，不经过队列领取（TaskQueue.start_inline）。"""
-    return f"{_INLINE}{session_id}"
-
-
 def reflection_lane(agent_id: str) -> str:
     return f"reflection:{agent_id}"
 
@@ -80,8 +70,7 @@ def _claimable():  # noqa: ANN202
 async def running_task_ids(
     s: AsyncSession, *, session_id: str | None = None, agent_id: str | None = None
 ) -> list[int]:
-    """正在运行的 task id（包括私有 thread 的内联运行，见 TaskQueue.start_inline）。删除 session/agent 前用它保证
-    不会删掉执行中的工作。"""
+    """正在运行的 task id。删除 session/agent 前用它保证不会删掉执行中的工作。"""
     query = select(Task.id).where(Task.status == TaskStatus.RUNNING)
     if session_id is not None:
         query = query.where(Task.session_id == session_id)
@@ -123,24 +112,6 @@ class TaskQueue:
         )
         s.add(task)
         event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
-        return task
-
-    def start_inline(self, s: AsyncSession, *, agent_id: str, session_id: str) -> Task:
-        """在调用方事务内记下一次在别处（发问方那一步里）执行的运行，从一开始就是 running、不会被领取；
-        结束时照常 complete 或 fail。它的 lane 不参与排队（inline_lane）。"""
-        now = self._clock()
-        task = Task(
-            kind=TaskKind.RUN,
-            lane=inline_lane(session_id),
-            agent_id=agent_id,
-            session_id=session_id,
-            payload={},
-            status=TaskStatus.RUNNING,
-            attempts=1,
-            not_before=now,
-            started_at=now,
-        )
-        s.add(task)
         return task
 
     async def claim(self) -> Task | None:
@@ -204,19 +175,12 @@ class TaskQueue:
         return tasks
 
     async def recover(self) -> list[Task]:
-        """启动时调用：上次进程遗留的 running 复位为 pending，返回被恢复的 task。
-
-        内联运行（私有 thread）不复位：发问方那次运行续跑时会重新发问，交给 worker 接手会让同一个 thread 同时有两个
-        消费者。记为失败。"""
+        """启动时调用：上次进程遗留的 running 复位为 pending，返回被恢复的 task。"""
         async with self._db.transaction() as s:
             tasks = list((await s.scalars(select(Task).where(Task.status == TaskStatus.RUNNING))).all())
             for task in tasks:
-                if task.lane.startswith(_INLINE):
-                    task.status, task.finished_at = TaskStatus.FAILED, self._clock()
-                    task.error = "interrupted by a restart; the asking agent asks again when its run resumes"
-                else:
-                    task.status = TaskStatus.PENDING
-            return [t for t in tasks if t.status == TaskStatus.PENDING]
+                task.status = TaskStatus.PENDING
+            return tasks
 
     async def retry(self, task_id: int) -> Task:
         """人工重试一个 failed task。

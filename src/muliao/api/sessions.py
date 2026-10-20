@@ -7,11 +7,12 @@ from pydantic import BaseModel
 from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.container import Container
-from muliao.errors import Conflict, NotFound
+from muliao.errors import NotFound
 from muliao.models import Mail, MailKind, MailState, Origin, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.conversation import Inbound, NewSession, answerable_questions
 from muliao.runtime.mailbox import latest_run, visible_in
-from muliao.runtime.questions import AskResult, Question, QuestionAnswer
+from muliao.runtime.pending import CallResult, call_result
+from muliao.runtime.questions import Question, QuestionAnswer
 from muliao.runtime.sessions import default_title
 from muliao.transcript import Item, to_items
 
@@ -86,8 +87,8 @@ class MailOut(BaseModel):
     source: str | None
     content: str
     attachments: list[FileOut]
-    # 回答信件：tool_call_id -> 交给模型的结果
-    answers: dict[str, AskResult]
+    # 回答信件：tool_call_id -> 那次挂起调用的结果（用户的回答，或被问 agent 的结局）
+    answers: dict[str, CallResult]
     state: MailState
     created_at: datetime
 
@@ -103,7 +104,7 @@ async def mail_outs(c: Container, mail: list[Mail]) -> list[MailOut]:
             source=m.source,
             content=m.content,
             attachments=[files[i] for i in m.attachments],
-            answers={k: AskResult.model_validate(v) for k, v in m.answers.items()},
+            answers={k: call_result(v) for k, v in m.answers.items()},
             state=m.state,
             created_at=m.created_at,
         )
@@ -245,12 +246,9 @@ async def reply(c: C, session_id: str, body: ReplyIn) -> list[MailOut]:
 
 @router.post("/sessions/{session_id}/stop", status_code=202)
 async def stop(c: C, session_id: str) -> None:
-    """停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的后台任务和
-    report_back 的 thread（docs/architecture.md「会话信箱」）。私有 thread 在发问方那一步里内联运行，
-    只能停止发问方所在的会话。"""
-    session = await c.sessions.get(session_id)
-    if session.private:
-        raise Conflict(f"session {session_id!r} is a private thread; stop the asking session instead")
+    """停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的异步工作
+    （docs/architecture.md「停止会话」）。"""
+    await c.sessions.get(session_id)
     await c.consumer.stop_session(session_id)
 
 

@@ -115,7 +115,7 @@ async def test_agent_defaults_endpoint_reflects_config(client, container):
         "reflect_every": container.settings.runtime.default_reflect_every,
         "tool_groups": list(container.agents.defaults.tool_groups),
     }
-    assert container.settings.runtime.default_reflect_every == 5
+    assert container.settings.runtime.default_reflect_every == 30
 
 
 async def test_marking_notifications_read_stops_at_the_one_the_user_saw(client):

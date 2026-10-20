@@ -1,14 +1,25 @@
-"""ReflectionHandler：强制反思。把一段区间内的 turn 记录交给 agent，审视是否需要更新 skill 与 memory。"""
+"""强制反思：agent 自上次反思以来做了足够多步（模型回复数达到 reflect_every），就把这段区间的会话记录交给它，
+审视是否需要更新 skill、memory 与自己的指令。
 
-from sqlalchemy import select
+- 调度（ReflectionScheduler）：每次运行结束时数一次，步数由 messages 表推导（检查点之后该 agent 的模型回复条数），
+  不另存计数。达到阈值就投递一个 reflection task（载荷是消息 id 区间），检查点推进到当前最大消息 id。
+- 执行（ReflectionHandler）。
+"""
+
+import logging
+from collections.abc import Sequence
+
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
-from muliao.models import Agent, Message, Reflection, Session, Task
+from muliao.models import Agent, Message, Reflection, Session, Task, TaskKind
 from muliao.runtime.codec import load_messages
 from muliao.runtime.runner import AgentRuntime, ToolGroups
-from muliao.runtime.tasks import Commit
+from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane
 from muliao.transcript import to_items, to_text
+
+log = logging.getLogger(__name__)
 
 _ITEM_CHARS = 2000
 _TRANSCRIPT_CHARS = 120_000
@@ -46,7 +57,9 @@ def render_transcript(sessions: dict[str, Session], rows: list[Message]) -> str:
     text = "\n\n".join(blocks)
     # 超长时保留最近的部分
     return (
-        text if len(text) <= _TRANSCRIPT_CHARS else "…[earlier turns omitted]\n" + text[-_TRANSCRIPT_CHARS:]
+        text
+        if len(text) <= _TRANSCRIPT_CHARS
+        else "…[earlier messages omitted]\n" + text[-_TRANSCRIPT_CHARS:]
     )
 
 
@@ -63,6 +76,55 @@ async def list_reflections_of(db: Database, agent_id: str, limit: int) -> list[R
 
 # 反思能用到的可选工具组（自我改进之外）
 REFLECTION_GROUPS = frozenset({"public_skills"})
+
+
+def _steps_after(agent_id: str, checkpoint: int):  # noqa: ANN202  返回 SQL 查询
+    """该 agent 在检查点之后的模型回复（每条回复就是一步）。"""
+    return (
+        select(func.count(Message.id))
+        .join(Session, Session.id == Message.session_id)
+        .where(
+            Session.agent_id == agent_id,
+            Message.id > checkpoint,
+            func.json_extract(Message.payload, "$.kind") == "response",
+        )
+    )
+
+
+class ReflectionScheduler:
+    def __init__(self, db: Database, queue: TaskQueue):
+        self._db = db
+        self._queue = queue
+
+    async def steps_since(self, agents: Sequence[Agent]) -> dict[str, int]:
+        """这些 agent 自上次反思以来的步数（界面显示「距下次反思」）。"""
+        async with self._db.transaction() as s:
+            return {a.id: await self.steps_since_in(s, a) for a in agents}
+
+    async def steps_since_in(self, s: AsyncSession, agent: Agent) -> int:
+        return await s.scalar(_steps_after(agent.id, agent.reflection_checkpoint)) or 0
+
+    async def after_run_in(self, s: AsyncSession, agent: Agent) -> None:
+        """运行结束时（它的收尾事务里）：步数达到阈值就投递反思，检查点推进到当前最大消息 id。"""
+        if await self.steps_since_in(s, agent) < agent.reflect_every:
+            return
+        to_id = await s.scalar(
+            select(func.max(Message.id))
+            .join(Session, Session.id == Message.session_id)
+            .where(Session.agent_id == agent.id)
+        )
+        if to_id is None:
+            raise RuntimeError(f"agent {agent.id} has steps to reflect on but no messages")
+        self._queue.enqueue(
+            s,
+            kind=TaskKind.REFLECTION,
+            lane=reflection_lane(agent.id),
+            agent_id=agent.id,
+            session_id=None,
+            payload={"from_message_id": agent.reflection_checkpoint, "to_message_id": to_id},
+        )
+        log.info("reflection scheduled", extra={"agent": agent.id, "to_message_id": to_id})
+        agent.reflection_checkpoint = to_id
 
 
 class ReflectionHandler:
@@ -103,8 +165,7 @@ class ReflectionHandler:
             result = await self._runtime.run_once(agent, scope, prompt, profile)
             output, messages = result.output, result.all_messages_json().decode()
         else:
-            # 不浪费一次模型调用，如实记录是哪种情况：区间本来就是空的（如被停止、没有产生消息的轮次凑满了阈值），
-            # 还是区间里的消息随会话一起被删除了
+            # 不浪费一次模型调用，如实记录是哪种情况：区间本来就是空的，还是区间里的消息随会话一起被删除了
             reason = (
                 "no new messages since the last reflection"
                 if to_id <= from_id

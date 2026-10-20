@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
 from muliao.delivery.base import mark_session_read_in
-from muliao.errors import NotFound
+from muliao.errors import Conflict, NotFound
 from muliao.models import Compaction, Message, Origin, Session
 from muliao.runtime.codec import load_messages
 from muliao.runtime.conversation import Inbound, Received, delete_sessions, receive, threads_of
@@ -91,6 +91,11 @@ class SessionService:
             await mark_session_read_in(s, session_id)
 
     async def delete(self, session_id: str) -> None:
-        """删除 session（规则见 conversation.delete_sessions）。"""
+        """用户删除会话（规则见 conversation.delete_sessions）。私有 thread 属于发问的会话，随它删除，不能单独删除。"""
         async with self._db.transaction() as s:
-            await delete_sessions(s, [await self._get(s, session_id)])
+            session = await self._get(s, session_id)
+            if session.private:
+                raise Conflict(
+                    f"session {session_id} is a private thread; delete the session that asked it instead"
+                )
+            await delete_sessions(s, self._queue, [session])

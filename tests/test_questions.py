@@ -12,10 +12,9 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.models import Mail, MailKind, Message, Origin, TaskKind, TaskStatus
+from muliao.models import Message, Origin, TaskKind, TaskStatus
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import _group_turns
-from muliao.runtime.consumer import _Run
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tasks_of
@@ -145,28 +144,17 @@ async def test_an_answer_behind_a_queued_message_still_answers_the_questions(
     assert "先看看别的" in str(history[-2].parts[-1].content)
 
 
-async def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text(container, make_agent):
+def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text():
     """回答投信后、交给模型前，提问已被别的运行结束（它带着「没回答」继续了）：回答作为一段文字交给模型。"""
-    from muliao.runtime.consumer import Consumer
-    from muliao.runtime.questions import AskResult
+    from muliao.runtime.pending import late_text
+    from muliao.runtime.questions import AnsweredQuestion, AskResult
 
-    agent = await make_agent("alpha")
-    mail = Mail(
-        id=1,
-        session_id="s",
-        kind=MailKind.ANSWER,
-        content="",
-        attachments=[],
-        answers={
-            "q1": AskResult(
-                answered=True,
-                answers=[{"question": "看哪个周期？", "selected": ["日线"], "other": "也看周线"}],
-                note=None,
-            ).model_dump()
-        },
+    answered = AskResult(
+        answered=True,
+        answers=[AnsweredQuestion(question="看哪个周期？", selected=["日线"], other="也看周线")],
+        note=None,
     )
-    state = _Run(run_id=1, session=None, agent=agent, resending=False)  # type: ignore[arg-type]
-    [text] = (await Consumer._content(container.consumer, state, [mail])).items  # noqa: SLF001
+    text = late_text([answered])
     assert "already been closed" in text and "看哪个周期？: 日线; 也看周线" in text
 
 
@@ -326,32 +314,11 @@ async def test_a_voided_failed_answer_does_not_block_later_questions(client, con
     assert resp.status_code == 202
 
 
-async def test_pending_questions_follow_the_turn_committed_last_not_the_highest_task_id(
-    container, make_agent
-):
-    """重试一个失败的旧轮次沿用原来的 task id，它的消息却在之后的轮次之后提交：最后一轮按提交顺序定。"""
-    from muliao.runtime.questions import pending_in_session
-
-    alpha = (await make_agent("alpha")).id
-    session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
-    ask = ModelResponse(parts=[ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="late")])
-    async with container.db.transaction() as s:
-        # task 9 先提交（没有提问），task 3 被重试后才提交，停在提问上
-        s.add(
-            Message(
-                session_id=session.id, task_id=9, payload=dump_message(ModelResponse(parts=[TextPart("ok")]))
-            )
-        )
-        await s.flush()
-        s.add(Message(session_id=session.id, task_id=3, payload=dump_message(ask)))
-    async with container.db.transaction() as s:
-        assert list(await pending_in_session(s, session.id)) == ["late"]
-
-
-async def test_answering_one_of_two_questions_tells_the_model_the_other_was_skipped(
+async def test_two_questions_wait_for_both_answers_and_a_message_skips_the_rest(
     client, container, make_agent, models
 ):
-    """同一轮里问了两次，用户只回答了一次：另一次是被跳过，不是「发了新消息」。"""
+    """同一次运行里问了两次：两次都回答了才继续（runtime.pending.waiting）；只回答了一次就发消息，另一次是被跳过，
+    不是「发了新消息」。"""
     await login(client)
     agent = await make_agent("analyst", model="twice")
     results: list[dict] = []
@@ -381,7 +348,11 @@ async def test_answering_one_of_two_questions_tells_the_model_the_other_was_skip
     )
     assert resp.status_code == 202
     await drain(container)
+    # 还有一次提问没回答：等着
+    assert results == []
 
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "另一个先不答"})
+    await drain(container)
     answered, skipped = results
     assert answered["answered"] is True
     assert skipped["answered"] is False and "new message" not in skipped["note"]

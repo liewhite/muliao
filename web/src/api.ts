@@ -22,7 +22,8 @@ export interface Agent {
   reflect_every: number
   /** 选用的工具组；自我改进（记忆、skill）总是开放 */
   tool_groups: string[]
-  turns_since_reflection: number
+  /** 自上次反思以来的步数（模型回复数） */
+  steps_since_reflection: number
   created_at: string
 }
 

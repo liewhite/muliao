@@ -68,8 +68,8 @@ class Agent(Base):
     # 选用的工具组名称（见 runtime.runner.ToolGroups）；自我改进的工具总是开放
     tool_groups: Mapped[list[str]] = mapped_column(JSON)
     # 指令不在这里：它在资源仓库的 agents/<id>/PROMPT.md（读写都经过 evolution.prompts.PromptStore）
+    # 两次反思之间的步数（模型回复数，见 runtime.reflection.ReflectionScheduler）
     reflect_every: Mapped[int]
-    turns_since_reflection: Mapped[int] = mapped_column(default=0)
     # 已纳入反思的最大 message id；下一次反思从它之后开始
     reflection_checkpoint: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
@@ -252,7 +252,7 @@ class MailKind(StrEnum):
 
     # 交给模型的原文：用户在界面发的消息（可带附件）、触发器事件、另一个 agent 委派来的任务
     MESSAGE = "message"
-    # 用户对挂起提问（ask_user）的回答：作为那次调用的结果交回，不是一段新消息
+    # 对挂起调用的回答（用户回答 ask_user，被问的 agent 回答 ask_agent）：作为那次调用的结果交回，不是一段新消息
     ANSWER = "answer"
     # 后台任务、交回的结果、运行中检查：套上来源交给模型（conventions.format_event），界面单独显示
     EVENT = "event"
@@ -279,13 +279,13 @@ class Mail(Base):
     content: Mapped[str] = mapped_column(Text)
     # 随消息发送的文件 id（muliao.files）
     attachments: Mapped[list[str]] = mapped_column(JSON, default=list)
-    # ANSWER：tool_call_id -> 交给模型的结果（runtime.questions.AskResult 的 dump）
+    # ANSWER：tool_call_id -> 那次调用的结果（runtime.pending.CallResult 的 dump）
     answers: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # 用户是否在等它的回答：一次运行处理过的信件里有一封是，结束时就把回答推送给用户
     awaited: Mapped[bool] = mapped_column(default=False)
-    # 委派来的任务（delegate_task(report_back)）：处理它的运行结束时把结果交回的会话（runtime.reports）
-    # none_as_null：没有交回地址存 SQL NULL（默认会存成 JSON 的 null），查询才能用 IS NULL
-    report_to: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True))
+    # 委派来的任务里要交回结局的（ask_agent、delegate_task(report_back)）：处理它的运行结束时按这个委派交回
+    # （runtime.delegations）。发起会话删除时委派随之删除，这里置空，结局无处可交
+    delegation_id: Mapped[int | None] = mapped_column(ForeignKey("delegations.id", ondelete="SET NULL"))
     state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
     # 处理掉它的运行（turn task）
     consumed_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
@@ -294,6 +294,42 @@ class Mail(Base):
     # 查询几乎只看还在排队的，用部分索引
     __table_args__ = (
         Index("ix_mail_queued", "session_id", sqlite_where=state == MailState.QUEUED),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class DelegationStatus(StrEnum):
+    RUNNING = "running"
+    # 结局已经交回发起方（完成、被停止、最终失败、子会话被删除）
+    SETTLED = "settled"
+    # 发起方被用户停止：不再交回
+    ABANDONED = "abandoned"
+
+
+class Delegation(Base):
+    """会话交给另一个 agent、要交回结局的一项工作（runtime.delegations）：ask_agent 等它作为挂起调用的结果，
+    delegate_task(report_back) 等它作为事件。结局只交回一次（状态从 running 离开）。"""
+
+    __tablename__ = "delegations"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 发起委派的会话：结局交回这里，随它删除
+    owner_session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    # 做这项工作的 thread；它被删除前委派先交回「被删除」（conversation.delete_sessions）
+    child_session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    # ask_agent 的那次调用：发起方还停在它上面时，结局作为它的结果交回；否则（或 report_back）作为事件
+    call_id: Mapped[str | None] = mapped_column(String(100))
+    # 发起委派时用户是否在等发起方的回答：交回结局的信件随它推送
+    awaited: Mapped[bool]
+    status: Mapped[DelegationStatus] = mapped_column(
+        StrEnumType(DelegationStatus), default=DelegationStatus.RUNNING, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    settled_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (
+        # 同一次 ask_agent 调用只委派一次：续跑重新执行这次调用时据此不重复投信
+        Index("ux_delegations_call", "owner_session_id", "call_id", unique=True),
         {"sqlite_autoincrement": True},
     )
 

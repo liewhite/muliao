@@ -27,6 +27,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
+    TextPart,
     ToolCallPart,
     ToolReturnPart,
 )
@@ -56,6 +57,16 @@ def parse_event(text: str) -> tuple[str, str]:
     if match is None:
         raise RuntimeError(f"stored event does not follow the event format: {text[:200]!r}")
     return match["source"], match["content"]
+
+
+def is_stopped(message: ModelMessage) -> bool:
+    """这条消息标着「已停止」（RUN_STOPPED）。"""
+    return bool((message.metadata or {}).get(RUN_STOPPED))
+
+
+def answer_text(response: ModelResponse) -> str:
+    """一条模型回复给用户的文字：它的文本部分按顺序连起来（会话最近的回答、运行的回答都按这一条取）。"""
+    return "".join(p.content for p in response.parts if isinstance(p, TextPart))
 
 
 def event_indices(message: ModelMessage) -> list[int]:

@@ -204,7 +204,7 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         rows={8}
       />
       <TextInput
-        label="反思间隔（轮）"
+        label="反思间隔（步）"
         hint="每完成这么多轮对话，强制回顾一次是否需要更新 skill 和记忆"
         type="number"
         value={input.reflect_every === null ? '' : String(input.reflect_every)}
@@ -372,7 +372,7 @@ export function AgentDetail() {
                     </Button>
                   </div>
                   <div className="text-muted">
-                    距下次反思：{a.reflect_every - a.turns_since_reflection} 轮 · 创建于 {formatTime(a.created_at)}
+                    距下次反思：{Math.max(0, a.reflect_every - a.steps_since_reflection)} 步 · 创建于 {formatTime(a.created_at)}
                   </div>
                 </Card.Content>
               </Card>

@@ -26,14 +26,18 @@ from muliao.models import TaskKind
 from muliao.resources import ResourceRepo
 from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
 from muliao.runtime.consumer import Consumer, RunHandler
+from muliao.runtime.content import ContentBuilder
 from muliao.runtime.conversation import Threads
+from muliao.runtime.delegations import Delegations
+from muliao.runtime.finish import RunFinisher
+from muliao.runtime.halt import SessionHalt
 from muliao.runtime.jobs import JobRunner
 from muliao.runtime.mailbox import MailReconciler
 from muliao.runtime.mcp import McpRegistry
-from muliao.runtime.reflection import ReflectionHandler
-from muliao.runtime.reports import ReportWatcher
+from muliao.runtime.reflection import ReflectionHandler, ReflectionScheduler
 from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroup, ToolGroups
 from muliao.runtime.sessions import SessionService
+from muliao.runtime.steps import Steps
 from muliao.runtime.tasks import TaskQueue
 from muliao.runtime.tools.agents import agents_toolset
 from muliao.runtime.tools.ask_user import ask_user_toolset
@@ -51,6 +55,7 @@ from muliao.runtime.tools.triggers import triggers_toolset
 from muliao.runtime.tools.vault import vault_toolset
 from muliao.runtime.tools.web import web_toolset
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
+from muliao.runtime.work import WorkWatcher
 from muliao.runtime.worker import TaskHandler, Worker
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
@@ -103,8 +108,10 @@ class Container:
     worker: Worker
     mail: MailReconciler
     jobs: JobRunner
-    reports: ReportWatcher
+    delegations: Delegations
+    work: WorkWatcher
     compaction: CompactionScheduler
+    reflection: ReflectionScheduler
     consumer: Consumer
     models: ModelRegistry
     files: FileStore
@@ -132,14 +139,7 @@ class Container:
         self._spawn("worker", self.worker.run_forever())
         self._spawn("schedules", self.schedules.run_forever())
         self._spawn("mail", self.mail.run_forever())
-        self._spawn("checks", self._check_running_work())
-
-    async def _check_running_work(self) -> None:
-        """运行中的检查：每隔 job_check_seconds，给还在跑的后台任务、结果要交回的 thread 各投一封检查信件。"""
-        while True:
-            await asyncio.sleep(self.settings.runtime.job_check_seconds)
-            await self.jobs.check()
-            await self.reports.check()
+        self._spawn("checks", self.work.run_forever())
 
     async def _check_orphan_resources(self) -> None:
         """数据库里已删除、资源仓库里还留着目录的 agent（删除时提交失败所致）：记录出来，由人决定是否清理。"""
@@ -232,7 +232,7 @@ def build_container(
         prompts,
         AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, tool_group_names),
     )
-    agent_lifecycle = AgentLifecycle(db, agents)
+    agent_lifecycle = AgentLifecycle(db, agents, queue)
     sessions = SessionService(db, queue)
     threads = Threads(queue)
     notifier = Notifier(db, queue)
@@ -269,6 +269,8 @@ def build_container(
         files=files,
     )
     jobs = JobRunner(db, queue, vault, agents.workspace, settings.runtime.job_check_seconds)
+    # 委派停下 thread 要用消费者，消费者停止会话又要停下委派：延迟绑定打破构造顺序上的环
+    delegations = Delegations(db, queue, lambda session_id: consumer.stop_session(session_id))
     workspace_tools = workspace_toolset(
         vault,
         ShellLimits(
@@ -302,14 +304,13 @@ def build_container(
                     )
                 ]
             ),
-            # ask_agent 用消费者跑子 agent，而消费者又用这组工具：通过延迟绑定的调用打破构造顺序上的环
+            # stop_thread 用消费者停止会话，而消费者又用这组工具：通过延迟绑定的调用打破构造顺序上的环
             "delegation": ToolGroup(
                 [
                     delegation_toolset(
                         db,
                         agents,
                         threads,
-                        lambda session_id, prompt: consumer.run_inline(session_id, prompt),
                         lambda session_id: consumer.stop_session(session_id),
                         settings.runtime.job_check_seconds,
                     )
@@ -331,8 +332,17 @@ def build_container(
     if tuple(tool_groups.groups) != tool_group_names:
         raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {tool_group_names}")
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
+    content = ContentBuilder(files, runtime)
+    reflection = ReflectionScheduler(db, queue)
     consumer = Consumer(
-        db, runtime, tool_groups, queue, notifier, compaction, files, live, bus, jobs.stop_session
+        db,
+        runtime,
+        tool_groups,
+        live,
+        content,
+        Steps(db, live, content),
+        RunFinisher(queue, notifier, compaction, reflection),
+        SessionHalt(db, queue, [jobs, delegations]),
     )
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.RUN: RunHandler(consumer, queue),
@@ -375,8 +385,10 @@ def build_container(
         worker=worker,
         mail=MailReconciler(db, queue),
         jobs=jobs,
-        reports=ReportWatcher(db, queue),
+        delegations=delegations,
+        work=WorkWatcher([jobs, delegations], settings.runtime.job_check_seconds),
         compaction=compaction,
+        reflection=reflection,
         consumer=consumer,
         models=models,
         files=files,

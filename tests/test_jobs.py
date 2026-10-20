@@ -9,7 +9,7 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.errors import Conflict, InvalidInput
-from muliao.models import Job, JobStatus, Mail, MailState, Origin, ReplyTo, TaskKind
+from muliao.models import Job, JobStatus, Mail, MailState, Origin, TaskKind
 from muliao.runtime.mailbox import queued_in
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tasks_of
@@ -138,11 +138,7 @@ async def test_background_jobs_need_a_conversation_to_report_to(container, make_
     agent = await make_agent("alpha")
     with pytest.raises(InvalidInput, match="conversation"):
         await container.jobs.start(
-            session_id=None, agent_id=agent.id, command="true", secrets=[], reply_to=None
-        )
-    with pytest.raises(InvalidInput, match="private thread"):
-        await container.jobs.start(
-            session_id="s", agent_id=agent.id, command="true", secrets=[], reply_to=ReplyTo.AGENT
+            session_id=None, agent_id=agent.id, command="true", secrets=[], awaited=False
         )
 
 

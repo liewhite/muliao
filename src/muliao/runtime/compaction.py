@@ -10,7 +10,6 @@
 """
 
 import logging
-from dataclasses import dataclass
 
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from sqlalchemy import select
@@ -20,6 +19,7 @@ from muliao.conventions import unanswered_calls
 from muliao.db import Database
 from muliao.models import Agent, Compaction, Message, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.codec import load_messages
+from muliao.runtime.history import latest_compaction, rows_after
 from muliao.runtime.runner import AgentRuntime
 from muliao.runtime.tasks import Commit, TaskQueue, no_commit, session_lane
 from muliao.transcript import to_items, to_text
@@ -35,36 +35,6 @@ without the original messages. Write a dense summary in the conversation's langu
 and requests, decisions made, facts learned, results of tool calls that still matter (file paths, IDs, URLs, \
 commands, numbers), work completed, and open tasks or questions. Omit pleasantries and anything superseded. \
 Output only the summary."""
-
-
-@dataclass(frozen=True)
-class SessionContext:
-    """发给模型的 session 上下文。"""
-
-    summary: str | None
-    messages: list[ModelMessage]
-
-
-async def latest_compaction(s: AsyncSession, session_id: str) -> Compaction | None:
-    return await s.scalar(
-        select(Compaction).where(Compaction.session_id == session_id).order_by(Compaction.id.desc()).limit(1)
-    )
-
-
-async def _rows_after(s: AsyncSession, session_id: str, after_id: int) -> list[Message]:
-    query = (
-        select(Message).where(Message.session_id == session_id, Message.id > after_id).order_by(Message.id)
-    )
-    return list((await s.scalars(query)).all())
-
-
-async def load_context(s: AsyncSession, session_id: str) -> SessionContext:
-    compaction = await latest_compaction(s, session_id)
-    rows = await _rows_after(s, session_id, compaction.through_message_id if compaction else 0)
-    return SessionContext(
-        summary=compaction.summary if compaction else None,
-        messages=load_messages(r.payload for r in rows),
-    )
 
 
 def context_tokens(messages: list[ModelMessage]) -> int:
@@ -185,7 +155,7 @@ class CompactionHandler:
             if agent is None:
                 raise RuntimeError(f"compaction task {task.id} references missing agent {task.agent_id!r}")
             previous = await latest_compaction(s, session_id)
-            rows = await _rows_after(s, session_id, previous.through_message_id if previous else 0)
+            rows = await rows_after(s, session_id, previous.through_message_id if previous else 0)
         turns = _group_turns(rows)
         ctx = {"session_id": session_id, "turns": len(turns)}
 

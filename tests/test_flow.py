@@ -153,7 +153,7 @@ async def test_reply_continues_with_full_history(container, make_agent, models):
     assert [type(m).__name__ for m in history] == ["ModelRequest", "ModelResponse"] * 2
 
 
-async def test_reflection_runs_every_n_turns_over_the_window_and_can_write_skills(
+async def test_reflection_runs_every_n_steps_over_the_window_and_can_write_skills(
     container, make_agent, models
 ):
     alpha = (await make_agent("alpha", model="m", reflect_every=2)).id
@@ -187,7 +187,8 @@ async def test_reflection_runs_every_n_turns_over_the_window_and_can_write_skill
         rows = (await s.scalars(select(Reflection))).all()
     assert [r.output for r in rows] == ["Created skill tea-making."]
     agent = await container.agents.get(alpha)
-    assert agent.turns_since_reflection == 0
+    # 步数由消息推导：检查点推进之后归零
+    assert (await container.reflection.steps_since([agent]))[alpha] == 0
     assert agent.reflection_checkpoint == reflections[0].payload["to_message_id"]
 
 

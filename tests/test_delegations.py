@@ -1,16 +1,17 @@
-"""delegate_task(report_back)：thread 的结果（完成、被停止、最终失败）作为事件交回发起委派的会话。"""
+"""委派的结局（完成、被停止、最终失败、被删除）只交回一次：delegate_task(report_back) 作为事件，ask_agent 作为它
+的结果（发问方已经不等时作为事件）；运行中检查；随发起方停止。"""
 
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
-from muliao.models import Mail, MailState, TaskKind, TaskStatus
-from muliao.runtime.conversation import ReportTo, Threads
+from muliao.models import Mail, MailKind, MailState, TaskKind, TaskStatus
+from muliao.runtime.conversation import ReportBack, Threads
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tasks_of
 from tests.test_mailbox import Recorder
-from tests.test_threads import call, echo, steps, threads_of
+from tests.test_threads import call, echo, threads_of
 
 
 async def test_a_reported_thread_answer_comes_back_as_an_event_not_a_push(container, make_agent, models):
@@ -91,12 +92,13 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
             agent=target,
             thread="review",
             prompt="check",
-            report_to=ReportTo(session_id=parent.id, awaited=True),
+            private=False,
+            report=ReportBack(call_id=None, awaited=True),
         )
     [child] = await threads_of(container, parent.id)
 
-    assert await container.reports.check() == 1
-    assert await container.reports.check() == 0
+    assert await container.delegations.check() == 1
+    assert await container.delegations.check() == 0
     async with container.db.transaction() as s:
         [event] = (
             await s.scalars(select(Mail).where(Mail.session_id == parent.id, Mail.state == MailState.QUEUED))
@@ -121,44 +123,14 @@ async def test_nothing_is_reported_once_the_parent_session_is_gone(container, ma
             agent=target,
             thread="review",
             prompt="check",
-            report_to=ReportTo(session_id=parent.id, awaited=True),
+            private=False,
+            report=ReportBack(call_id=None, awaited=True),
         )
     # 公开 thread 在父会话删除后作为独立会话保留
     await container.sessions.delete(parent.id)
     await drain(container)
     async with container.db.transaction() as s:
         assert (await s.scalars(select(Mail).where(Mail.source.is_not(None)))).all() == []
-
-
-async def test_report_back_is_refused_in_a_private_thread(container, make_agent, models):
-    """私有 thread 的发问方在同步等回答，交回的事件没有信箱可投（私有 thread 只收发问方的问题）。"""
-    from pydantic_ai.messages import RetryPromptPart, ToolReturnPart
-
-    from tests.test_threads import answer_with_tool_results
-
-    lead = (await make_agent("lead", model="l")).id
-    await make_agent("reviewer", model="v")
-    await make_agent("helper", model="h")
-
-    def reviewer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        retries = [p for m in messages for p in m.parts if isinstance(p, RetryPromptPart)]
-        if retries:
-            return ModelResponse(parts=[TextPart(str(retries[-1].content))])
-        return call("delegate_task", {"agent": "helper", "task": "t", "thread": "x", "report_back": True})(
-            messages
-        )
-
-    models.models["v"] = scripted(reviewer)
-    models.models["l"] = steps(
-        call("ask_agent", {"agent": "reviewer", "message": "please", "thread": "ask"}),
-        answer_with_tool_results("got"),
-    )
-    parent = await start(container, lead, "go")
-    await drain(container)
-
-    history = await container.sessions.history(parent.id)
-    returns = [str(p.content) for m in history for p in m.parts if isinstance(p, ToolReturnPart)]
-    assert any("not available in a private thread" in r for r in returns)
 
 
 async def test_a_failing_settle_hook_still_records_the_failure_instead_of_leaving_it_running(
@@ -188,7 +160,7 @@ def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running()
     from datetime import UTC, datetime
 
     from muliao.models import Agent, Session, Task
-    from muliao.runtime.reports import _check_text, finished_text
+    from muliao.runtime.delegations import Ending, Outcome, _event_text, check_text
 
     child = Session(id="c", agent_id="a", title="t", thread="review")
     agent = Agent(id="a", name="reviewer")
@@ -196,10 +168,10 @@ def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running()
     retrying = Task(id=2, kind=TaskKind.RUN, status=TaskStatus.PENDING, attempts=2)
     now = datetime.now(UTC)
     # 排队中的 thread 也能停：停止清空它的信箱，并交回「被停止」
-    assert "stop_thread('review')" in _check_text(child, agent, queued, now)
-    assert "waiting to run again" in _check_text(child, agent, retrying, now)
+    assert "stop_thread('review')" in check_text(child, agent, queued, now)
+    assert "waiting to run again" in check_text(child, agent, retrying, now)
     # 被停止时如实说明，附上停止前说的话
-    assert "was stopped" in finished_text(child, agent, "", stopped=True)
+    assert "was stopped" in _event_text(child, agent, Outcome(Ending.STOPPED, ""))
 
 
 async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_hook(container, monkeypatch):
@@ -322,7 +294,7 @@ async def test_a_thread_failing_before_its_first_step_reports_the_failure_once(
     reports = [c for p in recorder.prompts for c in p if f'source="thread:{child.id}"' in c]
     assert len(reports) == 1 and "cannot build instructions" in reports[0]
     # 已经交回：不再给父会话发检查
-    assert await container.reports.check() == 0
+    assert await container.delegations.check() == 0
 
 
 async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, make_agent, models):
@@ -339,7 +311,8 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
             agent=target,
             thread="review",
             prompt="check",
-            report_to=ReportTo(session_id=parent.id, awaited=True),
+            private=False,
+            report=ReportBack(call_id=None, awaited=True),
         )
     [child] = await threads_of(container, parent.id)
 
@@ -353,7 +326,7 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
     assert event.source == f"thread:{child.id}" and "was stopped" in event.content
     # 排着的运行记为完成、没有任何消息：thread 的状态照样能读
     assert (state.status, state.text) == ("done", "")
-    assert await container.reports.check() == 0
+    assert await container.delegations.check() == 0
 
 
 async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_reported(
@@ -380,7 +353,8 @@ async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_r
                 agent=target,
                 thread="review",
                 prompt=prompt,
-                report_to=ReportTo(session_id=parent.id, awaited=False),
+                private=False,
+                report=ReportBack(call_id=None, awaited=False),
             )
 
     async def stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
@@ -407,4 +381,151 @@ async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_r
     texts = [e.content for e in events]
     assert len(texts) == 2
     assert "failed" in texts[0] and "finished your task" in texts[1] and "done with it" in texts[1]
-    assert await container.reports.check() == 0
+    assert await container.delegations.check() == 0
+
+
+async def _asking(container, make_agent, models, helper_model):  # noqa: ANN001, ANN202
+    """lead 用 ask_agent 问 helper（模型由调用方给），返回父会话与记下 lead 收到的工具结果的列表。"""
+    from tests.test_threads import call
+
+    lead = (await make_agent("lead", model="l")).id
+    await make_agent("helper", model="h")
+    models.models["h"] = helper_model
+    seen: list[str] = []
+    calls = {"n": 0}
+
+    def lead_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        from tests.test_flow import tool_returns
+
+        calls["n"] += 1
+        seen.extend(str(r.content) for r in tool_returns(messages))
+        if calls["n"] == 1:
+            return call("ask_agent", {"agent": "helper", "message": "check", "thread": "h"}, "ask1")(messages)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["l"] = scripted(lead_fn)
+    parent = await start(container, lead, "go")
+    return parent, seen
+
+
+async def test_a_user_message_while_waiting_on_an_agent_continues_and_the_answer_arrives_as_an_event(
+    container, make_agent, models
+):
+    import asyncio
+    from collections.abc import AsyncIterator
+
+    from pydantic_ai.models.function import FunctionModel
+
+    from tests.test_flow import idle, reply
+
+    gate = asyncio.Event()
+
+    async def slow(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        await gate.wait()
+        yield "checked"
+
+    parent, seen = await _asking(container, make_agent, models, FunctionModel(stream_function=slow))
+
+    async def parent_runs_done(n: int) -> bool:
+        runs = [r for r in await tasks_of(container, TaskKind.RUN) if r.session_id == parent.id]
+        return len(runs) >= n and all(r.status == TaskStatus.DONE for r in runs)
+
+    worker = asyncio.create_task(container.worker.run_forever())
+    try:
+        await _until(lambda: parent_runs_done(1))
+        # 发问方停在 ask_agent 上：用户插话，它不再等，这次调用记为「回答之后作为事件送达」
+        await reply(container, parent.id, "anything else?")
+        await _until(lambda: parent_runs_done(2))
+        assert any("will reach you as an event" in r for r in seen)
+        gate.set()
+        await idle(container)
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    [child] = await threads_of(container, parent.id)
+    async with container.db.transaction() as s:
+        events = (
+            await s.scalars(
+                select(Mail).where(Mail.session_id == parent.id, Mail.source == f"thread:{child.id}")
+            )
+        ).all()
+    # 回答到达时发问方已经不等这次调用了：作为事件交回
+    assert [("checked" in e.content, e.kind) for e in events] == [(True, MailKind.EVENT)]
+
+
+async def test_stopping_a_private_thread_answers_the_waiting_ask_with_stopped(container, make_agent, models):
+    import asyncio
+    from collections.abc import AsyncIterator
+
+    from pydantic_ai.models.function import FunctionModel
+
+    from tests.test_flow import idle
+
+    running = asyncio.Event()
+
+    async def blocked(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        running.set()
+        await asyncio.Event().wait()
+        yield "never"
+
+    parent, seen = await _asking(container, make_agent, models, FunctionModel(stream_function=blocked))
+    worker = asyncio.create_task(container.worker.run_forever())
+    try:
+        async with asyncio.timeout(5):
+            await running.wait()
+        [child] = await threads_of(container, parent.id)
+        await container.consumer.stop_session(child.id)
+        await idle(container)
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    assert len(seen) == 1 and "was stopped" in seen[0]
+
+
+async def test_deleting_a_reported_thread_tells_the_delegator(container, make_agent, models):
+    lead = (await make_agent("lead", model="l")).id
+    reviewer = (await make_agent("reviewer", model="v")).id
+    models.models["l"] = scripted(Recorder())
+    parent = await start(container, lead, "go")
+    await drain(container)
+    target = await container.agents.get(reviewer)
+    async with container.db.transaction() as s:
+        received = await Threads(container.queue).send(
+            s,
+            parent_id=parent.id,
+            agent=target,
+            thread="review",
+            prompt="check",
+            private=False,
+            report=ReportBack(call_id=None, awaited=False),
+        )
+    await container.sessions.delete(received.session.id)
+
+    async with container.db.transaction() as s:
+        [event] = (
+            await s.scalars(select(Mail).where(Mail.session_id == parent.id, Mail.state == MailState.QUEUED))
+        ).all()
+    assert "was deleted" in event.content
+    assert await container.delegations.check() == 0
+
+
+async def test_no_check_ins_while_the_delegator_waits_on_the_ask(container, make_agent, models):
+    parent, _seen = await _asking(container, make_agent, models, scripted(Recorder()))
+    # 只跑发问方那次运行：它停在 ask_agent 上，子 thread 的运行还排着
+    run = await container.queue.claim()
+    assert run is not None and run.session_id == parent.id
+    await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
+    # 检查信件要等回答一起才交给模型，这时不发
+    assert await container.delegations.check() == 0
+
+
+async def _until(predicate) -> None:  # noqa: ANN001
+    import asyncio
+
+    for _ in range(250):
+        if await predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("condition not reached")

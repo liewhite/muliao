@@ -3,7 +3,6 @@
 
 from collections.abc import AsyncIterator
 
-import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
@@ -280,24 +279,3 @@ def test_events_read_as_events_in_transcripts_for_reflection_and_compaction():
     )
     text = to_text(to_items([request]), max_item_chars=1000)
     assert text.splitlines() == ["[EVENT job:7] exit 0", "[USER] thanks"]
-
-
-async def test_a_private_thread_only_takes_questions_from_its_asking_agent(container, make_agent):
-    from muliao.errors import Conflict
-    from muliao.runtime.conversation import NewSession, create_session
-
-    agent = await make_agent("alpha")
-    async with container.db.transaction() as s:
-        parent = await create_session(
-            s, origin=Origin.USER, origin_ref=None, spec=NewSession(agent_id=agent.id, title="p")
-        )
-        child = await create_session(
-            s,
-            origin=Origin.DELEGATION,
-            origin_ref=parent.id,
-            spec=NewSession(
-                agent_id=agent.id, title="c", parent_session_id=parent.id, thread="t", private=True
-            ),
-        )
-    with pytest.raises(Conflict):
-        await post(container, child.id, "done")

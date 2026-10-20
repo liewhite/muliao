@@ -96,9 +96,10 @@ class RuntimeConfig(_Section):
     worker_concurrency: int = 4
     task_max_attempts: int = 5
     task_retry_base_seconds: float = 5.0
-    # 单个 task 的总时限（一轮 turn 含所有工具调用）
+    # 单个 task 的总时限（一次运行含所有工具调用）
     task_timeout_seconds: float = 1800.0
-    default_reflect_every: int = Field(default=5, ge=1)
+    # 新建 agent 的默认反思间隔（步，即模型回复数）
+    default_reflect_every: int = Field(default=30, ge=1)
     # 一轮结束时最后一次模型请求的输入 token 超过此值，就压缩该 session 的早期上下文
     compaction_threshold_tokens: int = Field(default=100_000, ge=1000)
     # 压缩时保留最近这么多轮原文不压缩

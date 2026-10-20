@@ -11,7 +11,7 @@ from pydantic_ai.tools import ToolDefinition
 from muliao.conventions import TOOL_ATTACHMENTS, attachment_of
 from muliao.errors import InvalidInput, NotFound
 from muliao.files import FileStore
-from muliao.models import JobStatus
+from muliao.models import JobStatus, ReplyTo
 from muliao.runtime.jobs import JobRunner
 from muliao.runtime.scope import RunScope
 from muliao.runtime.shell import run_bash
@@ -179,7 +179,7 @@ def workspace_toolset(
                 agent_id=ctx.deps.agent_id,
                 command=command,
                 secrets=list(secrets),
-                reply_to=ctx.deps.reply_to,
+                awaited=ctx.deps.reply_to == ReplyTo.USER,
             )
             return (
                 f"started background job {job.id}; output goes to {job.log_path}. "
