@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 
 from muliao.evolution.skills import SkillMeta
-from muliao.models import Origin, ReplyTo
+from muliao.models import Origin
+from muliao.runtime.scope import Audience
 
 _ORIGIN_NOTES: dict[Origin, str] = {
     Origin.USER: "The user started this conversation in the app and may be reading along.",
@@ -17,13 +18,13 @@ _ORIGIN_NOTES: dict[Origin, str] = {
     Origin.DELEGATION: "Another agent opened this conversation with you.",
 }
 
-_REPLY_NOTES: dict[ReplyTo, str] = {
-    ReplyTo.USER: "The user is notified with your final answer and may reply here.",
-    ReplyTo.AGENT: (
+_AUDIENCE_NOTES: dict[Audience, str] = {
+    Audience.USER: "The user is notified with your final answer and may reply here.",
+    Audience.AGENT: (
         "Another agent is waiting for your final answer, which is returned to it as a tool result; "
         "answer it directly and completely. The user is not notified."
     ),
-    ReplyTo.NONE: (
+    Audience.NONE: (
         "The user is NOT notified automatically: call `notify_user` only when there is something worth "
         "their attention."
     ),
@@ -54,7 +55,7 @@ def build_instructions(
     workspace: Path,
     now_local: datetime,
     origin: Origin | None,
-    reply_to: ReplyTo | None,
+    audience: Audience | None,
     memory: str,
     skills: Sequence[SkillMeta],
     memory_limit: int,
@@ -67,8 +68,8 @@ def build_instructions(
     ]
     if origin is not None:
         context.append(f"- {_ORIGIN_NOTES[origin]}")
-    if reply_to is not None:
-        context.append(f"- {_REPLY_NOTES[reply_to]}")
+    if audience is not None:
+        context.append(f"- {_AUDIENCE_NOTES[audience]}")
     skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] or ["(no skills yet)"]
     # 公共 prompt 在前、agent 自己的指令在后：具体的指令可以细化或覆盖通用规则
     sections = [

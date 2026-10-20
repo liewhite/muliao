@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.bus import LiveRuns
 from muliao.conventions import answer_text, is_stopped, unanswered_calls
 from muliao.db import Database
-from muliao.models import Mail, Message, ReplyTo, Task
+from muliao.models import Mail, Message, Task
 from muliao.runtime.codec import load_messages
 from muliao.runtime.compaction import Compactor, Verdict
 from muliao.runtime.content import ContentBuilder
@@ -44,6 +44,7 @@ from muliao.runtime.pending import (
 )
 from muliao.runtime.questions import ASK_USER, questions_of, waiting_text
 from muliao.runtime.runner import AgentRuntime, ToolGroups
+from muliao.runtime.scope import Audience
 from muliao.runtime.steps import CompactionDue, RunState, Steps
 from muliao.runtime.stopping import StoppableRuns, Stopped
 from muliao.runtime.tasks import Commit, TaskQueue, no_commit
@@ -186,8 +187,8 @@ class Consumer:
         # 运行开始时就定下（工具与指令随之确定）：私有 thread 的回答交给发问的 agent；否则看它处理过的、和这次要处理的
         # 信件里有没有用户在等的
         awaited = any(m.awaited for m in [*state.handled, *queued])
-        reply_to = ReplyTo.AGENT if session.private else ReplyTo.USER if awaited else ReplyTo.NONE
-        scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, reply_to=reply_to)
+        audience = Audience.AGENT if session.private else Audience.USER if awaited else Audience.NONE
+        scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, audience=audience)
         profile = self._tool_groups.profile(agent.id, agent.tool_groups)
         self._live.begin(session_id, last_message)
         while True:

@@ -54,7 +54,7 @@ from muliao.runtime.tools.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.runtime.tools.triggers import triggers_toolset
 from muliao.runtime.tools.vault import vault_toolset
 from muliao.runtime.tools.web import web_toolset
-from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
+from muliao.runtime.tools.workspace import ShellLimits, session_workspace_toolset, workspace_toolset
 from muliao.runtime.work import WorkWatcher
 from muliao.runtime.worker import TaskHandler, Worker
 from muliao.triggers.precheck import PrecheckRunner
@@ -271,15 +271,10 @@ def build_container(
     jobs = JobRunner(db, queue, vault, agents.workspace, settings.runtime.job_check_seconds)
     # 委派停下 thread 要用消费者，消费者停止会话又要停下委派：延迟绑定打破构造顺序上的环
     delegations = Delegations(db, queue, lambda session_id: consumer.stop_session(session_id))
-    workspace_tools = workspace_toolset(
-        vault,
-        ShellLimits(
-            settings.runtime.shell_default_timeout,
-            settings.runtime.shell_max_timeout,
-            settings.runtime.tool_output_max_chars,
-        ),
-        files,
-        jobs,
+    limits = ShellLimits(
+        settings.runtime.shell_default_timeout,
+        settings.runtime.shell_max_timeout,
+        settings.runtime.tool_output_max_chars,
     )
     # 总是开放：自我改进，以及向用户提问（没有用户会回答的运行里由工具自己隐藏，见 runtime.tools.ask_user）
     always_tools = [
@@ -289,10 +284,13 @@ def build_container(
         ask_user_toolset(),
     ]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
-    temp_profile = RunProfile(toolsets=[workspace_tools, *web_tools], include_mcp=True)
+    temp_profile = RunProfile(
+        toolsets=[workspace_toolset(vault, limits, files), *web_tools], include_mcp=True
+    )
     tool_groups = ToolGroups(
         groups={
-            "workspace": ToolGroup([workspace_tools]),
+            # 对话里用的这份带后台任务（只有会话运行会选用工具组；反思不开放它）
+            "workspace": ToolGroup([session_workspace_toolset(vault, limits, files, jobs)]),
             "temp_agent": ToolGroup(
                 [
                     temp_agent_toolset(

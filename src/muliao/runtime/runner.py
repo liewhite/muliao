@@ -36,13 +36,13 @@ from muliao.evolution.prompts import PromptStore
 from muliao.evolution.skills import SkillStore
 from muliao.files import FileStore
 from muliao.llm import ModelResolver
-from muliao.models import Agent, Origin, ReplyTo
+from muliao.models import Agent, Origin
 from muliao.runtime.answers import Answer
 from muliao.runtime.attachments import AttachmentsForModel
 from muliao.runtime.instructions import build_instructions, build_temp_instructions
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.redaction import redact_call
-from muliao.runtime.scope import RunScope
+from muliao.runtime.scope import Audience, RunScope
 from muliao.runtime.tasks import Clock
 from muliao.runtime.tools.errors import DomainErrorsAsRetry
 from muliao.transcript import truncate
@@ -148,14 +148,14 @@ class AgentRuntime:
         return self._agents.workspace(agent_id)
 
     def scope(
-        self, agent: Agent, *, session_id: str | None, origin: Origin | None, reply_to: ReplyTo | None
+        self, agent: Agent, *, session_id: str | None, origin: Origin | None, audience: Audience | None
     ) -> RunScope:
         return RunScope(
             agent_id=agent.id,
             workspace=self.workspace(agent.id),
             session_id=session_id,
             origin=origin,
-            reply_to=reply_to,
+            audience=audience,
         )
 
     async def instructions(self, agent: Agent, scope: RunScope, summary: str | None) -> str:
@@ -167,7 +167,7 @@ class AgentRuntime:
             workspace=scope.workspace,
             now_local=self._clock().astimezone(self._tz),
             origin=scope.origin,
-            reply_to=scope.reply_to,
+            audience=scope.audience,
             memory=self._memory.read(agent.id),
             skills=self._skills.visible_to(agent.id),
             memory_limit=self._memory.max_chars,
@@ -282,7 +282,7 @@ class AgentRuntime:
         也不带公共 prompt：公共 prompt 约定的是长期 agent 之间的共同规则，临时 agent 只执行调用方交给它的任务。
         不属于任何会话，运行事件不推到会话页。模型请求数超过 request_limit 时抛出 UsageLimitExceeded。
         """
-        scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, origin=None, reply_to=None)
+        scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, origin=None, audience=None)
         result = await self._execute(
             model=model,
             instructions=build_temp_instructions(

@@ -10,7 +10,6 @@ from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext, T
 from muliao.agents import AgentService
 from muliao.conventions import TOOL_THREADS
 from muliao.db import Database
-from muliao.models import ReplyTo
 from muliao.runtime.conversation import ReportBack, Threads, threads_of, validate_thread
 from muliao.runtime.delegations import for_call_in, thread_name
 from muliao.runtime.scope import RunScope
@@ -79,7 +78,7 @@ def delegation_toolset(
             report_back: Get the thread's answer back as an event in this conversation.
         """
         parent_id = _require_session(ctx)
-        report = ReportBack(call_id=None, awaited=ctx.deps.reply_to == ReplyTo.USER) if report_back else None
+        report = ReportBack(call_id=None, awaited=ctx.deps.user_waits) if report_back else None
         target = await agents.find_by_name(agent)
         async with db.transaction() as s:
             received = await threads.send(
@@ -119,7 +118,7 @@ def delegation_toolset(
                     thread=thread,
                     prompt=message,
                     private=True,
-                    report=ReportBack(call_id=ctx.tool_call_id, awaited=ctx.deps.reply_to == ReplyTo.USER),
+                    report=ReportBack(call_id=ctx.tool_call_id, awaited=ctx.deps.user_waits),
                 )
         # 发问方的运行停在这次调用上，不占 worker；对方的结局作为这次调用的结果交回（runtime.pending）
         raise CallDeferred()
@@ -165,6 +164,7 @@ def delegation_toolset(
 
 
 def _require_session(ctx: RunContext[RunScope]) -> str:
+    """委派组只组合进有会话的运行（反思与临时 agent 的工具组合里没有它）。"""
     if ctx.deps.session_id is None:
-        raise ModelRetry("delegation is only available inside a conversation")
+        raise RuntimeError(f"delegation tools used outside a session by agent {ctx.deps.agent_id}")
     return ctx.deps.session_id

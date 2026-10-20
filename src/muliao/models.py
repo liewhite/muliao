@@ -18,17 +18,6 @@ class Origin(StrEnum):
     DELEGATION = "delegation"
 
 
-class ReplyTo(StrEnum):
-    """一次运行的回答交给谁，运行开始时由它处理的信件决定（见 docs/architecture.md「会话领域」），决定开放哪些工具与
-    指令里怎么说。USER：有用户在等（运行结束时推送）；AGENT：私有 thread 的运行，回答作为 ask_agent 的结果交回发问方；
-    NONE：没有人在等。
-    """
-
-    USER = "user"
-    AGENT = "agent"
-    NONE = "none"
-
-
 class TaskKind(StrEnum):
     RUN = "run"
     REFLECTION = "reflection"

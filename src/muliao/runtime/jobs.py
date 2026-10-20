@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database, utcnow
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, NotFound
 from muliao.models import Job, JobStatus, MailKind, Session
 from muliao.runtime.mailbox import post_in
 from muliao.runtime.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash
@@ -116,17 +116,14 @@ class JobRunner:
     async def start(
         self,
         *,
-        session_id: str | None,
+        session_id: str,
         agent_id: str,
         command: str,
         secrets: list[str],
         awaited: bool,
     ) -> Job:
-        """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。"""
-        if session_id is None:
-            raise InvalidInput(
-                "background jobs need a conversation to report back to; run the command in the foreground"
-            )
+        """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。只在有会话的运行里能开
+        （tools.workspace.session_workspace_toolset）。"""
         # vault 自己开事务，不能放进下面的事务
         values = await self._vault.resolve_many(agent_id, secrets)
         async with self._db.transaction() as s:

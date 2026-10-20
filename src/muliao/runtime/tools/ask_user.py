@@ -3,7 +3,6 @@
 from pydantic_ai import CallDeferred, FunctionToolset, RunContext
 from pydantic_ai.tools import ToolDefinition
 
-from muliao.models import ReplyTo
 from muliao.runtime.questions import ASK_USER, Questions
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
@@ -11,7 +10,7 @@ from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 
 async def _only_when_the_user_reads(ctx: RunContext[RunScope], tool: ToolDefinition) -> ToolDefinition | None:
     """只有这一轮的回答交给用户时才有人能回答：ask_agent 的私有 thread、触发器、反思与临时 agent 里不提供。"""
-    return tool if ctx.deps.reply_to == ReplyTo.USER else None
+    return tool if ctx.deps.user_waits else None
 
 
 def ask_user_toolset() -> FunctionToolset[RunScope]:
