@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from muliao.delivery.base import DeliverHandler
 from muliao.delivery.webpush import WebPushDelivery
 from muliao.models import Notification, Task, TaskKind
@@ -57,3 +59,26 @@ async def test_deleting_a_session_deletes_the_notifications_pointing_to_it(conta
     await container.sessions.delete(session.id)
 
     assert [n.title for n in await container.notifications.list(10)] == ["system"]
+
+
+async def test_any_transport_failure_is_retried_and_does_not_stop_other_devices(container, monkeypatch):
+    import requests
+
+    import muliao.delivery.webpush as webpush_module
+    from muliao.errors import TransientError
+
+    for name in ("broken", "ok"):
+        await container.push_subscriptions.add(f"https://push.example/{name}", "k", "a")
+    reached: list[str] = []
+
+    def fake_webpush(subscription_info, **_kwargs):  # noqa: ANN001, ANN202
+        reached.append(subscription_info["endpoint"])
+        if subscription_info["endpoint"].endswith("broken"):
+            raise requests.exceptions.ChunkedEncodingError("connection broken mid-response")
+
+    monkeypatch.setattr(webpush_module, "webpush", fake_webpush)
+    delivery = WebPushDelivery(container.push_subscriptions, container.vapid, "mailto:a@b.c")
+
+    with pytest.raises(TransientError):
+        await delivery.send(Notification(id=1, title="t", body="b", session_id=None), unread=1)
+    assert len(reached) == 2

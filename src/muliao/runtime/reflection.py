@@ -100,8 +100,14 @@ class ReflectionHandler:
             result = await self._runtime.run(agent, scope, prompt, [], profile)
             output, messages = result.output, result.all_messages_json().decode()
         else:
-            # 区间内的 session 都被删除了：如实记录，不浪费一次模型调用
-            output, messages = "Skipped: no messages left in this window (sessions were deleted).", "[]"
+            # 不浪费一次模型调用，如实记录是哪种情况：区间本来就是空的（如被停止、没有产生消息的轮次凑满了阈值），
+            # 还是区间里的消息随会话一起被删除了
+            reason = (
+                "no new messages since the last reflection"
+                if to_id <= from_id
+                else "its sessions were deleted"
+            )
+            output, messages = f"Skipped: nothing to reflect on in this window ({reason}).", "[]"
 
         async def commit(s: AsyncSession) -> None:
             s.add(

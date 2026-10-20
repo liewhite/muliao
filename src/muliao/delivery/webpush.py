@@ -129,7 +129,11 @@ class WebPushDelivery:
             },
         )
         if rejected:
-            raise RuntimeError(f"push service rejected {len(rejected)} subscriptions with HTTP {rejected}")
+            # 本端问题优先：整个 task 失败、不重试（重试也会再次被拒，还会重复推送给已经成功的设备）；暂时失败的也如实列出
+            also = f"; {len(transient)} more failed temporarily: {transient}" if transient else ""
+            raise RuntimeError(
+                f"push service rejected {len(rejected)} subscriptions with HTTP {rejected}{also}"
+            )
         if transient:
             raise TransientError(
                 f"push service temporarily failed for {len(transient)} subscriptions: {transient}"
@@ -152,6 +156,8 @@ class WebPushDelivery:
         except WebPushException as e:
             # 没有响应即网络层失败
             return e.response.status_code if e.response is not None else _NO_RESPONSE
-        except (requests.ConnectionError, requests.Timeout):
+        except requests.RequestException:
+            # 传输层的任何失败（连接、超时、读到一半断开……）都是没有拿到推送服务的响应：按暂时性失败处理，
+            # 而不是中断循环、让剩下的设备收不到
             return _NO_RESPONSE
         return None

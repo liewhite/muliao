@@ -295,7 +295,10 @@ async def delete_sessions(s: AsyncSession, roots: list[Session]) -> None:
         frontier = [c.id for c in children if c.id not in doomed]
         doomed |= {c.id: c for c in children}
     for session in doomed.values():
-        if running := await running_task_ids(s, session_id=(await _queue_session(s, session)).id):
+        # 私有 thread 自己也可能有走队列的 task（内联轮次之后排的压缩），一并检查
+        carriers = dict.fromkeys([(await _queue_session(s, session)).id, session.id])
+        running = [i for carrier in carriers for i in await running_task_ids(s, session_id=carrier)]
+        if running:
             # 错误也会交还给模型，不带 id；定位信息记在日志里
             log.info(
                 "session deletion refused: tasks running", extra={"session_id": session.id, "tasks": running}
