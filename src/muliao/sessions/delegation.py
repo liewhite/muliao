@@ -85,17 +85,18 @@ async def hand_back_in(
     if not holders:
         return
     name = thread_name(child)
+    owner_id = child.parent_session_id
+    if owner_id is None:
+        # thread 总是由发起方开出（Threads.dispatch）：父会话置空说明发起方已被删除，结局没有收件人
+        log.info("delegation outcomes of a thread whose asker is gone dropped", extra={"holders": list(holders)})
+        return
     agent = await agent_in(s, child.agent_id)
     for holder in holders:
-        hold = await s.scalar(select(SessionHold).where(SessionHold.holder == holder))
-        if hold is None:
-            # 占用随发起方删除：结局没有收件人
-            log.info("delegation outcome for a deleted session dropped", extra={"holder": holder})
-            continue
+        # 发起方已删除时 GONE；发起方还在却没有这个占用是 bug，deliver_in 报错
         delivered = await deliver_in(
             s,
             queue,
-            hold.session_id,
+            owner_id,
             holder,
             key=f"{holder}:settled",
             source=thread_source(child.id),
@@ -110,7 +111,7 @@ async def hand_back_in(
             "delegation handed back",
             extra={
                 "holder": holder,
-                "session_id": hold.session_id,
+                "session_id": owner_id,
                 "thread_session_id": child.id,
                 "ending": ending,
                 "delivered_as": delivered,
@@ -156,6 +157,7 @@ class ThreadChecks:
                     continue
                 child = await s.get(Session, child_id)
                 if child is None:
+                    # 不变量断言：信件随会话删除，join 不会给出已删除的 thread
                     raise RuntimeError(f"delegation {hold.holder} has mail in a missing thread {child_id}")
                 agent = await agent_in(s, child.agent_id)
                 text = check_text(child, agent, await latest_run(s, child.id), self._clock())
