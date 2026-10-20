@@ -9,8 +9,15 @@
 回滚就是把旧版本的内容写回并作为新的一次提交，历史只增不改。
 
 写入是原子的：读取—变换—写入—提交在同一把锁里（update），任何一步失败都把涉及的路径在文件系统上还原成写入前
-的样子（不依赖 git），所以「报错」等于「没有生效」，调用方可以放心重试；还原本身失败时记 error 并一起抛出。只有进程在写入中途被杀会留下不一致，由启动时的 recover
-统一收敛（删遗留的锁和半写的文件，把写完未提交的变化提交为一次 reconcile）。
+的样子（不依赖 git），所以「报错」等于「没有生效」，调用方可以放心重试；还原本身失败时记 error 并一起抛出。
+
+资源文件就是上面布局里列出的那些（RESOURCE_FILES，唯一定义），版本管理只管它们。
+
+仓库也会被绕过本模块写入：agent 有 shell 与文件工具，能直接改资源文件（read_skill 会给出 skill 目录）；进程在写入
+中途被杀也会留下写完未提交的变化。两者用同一个机制收敛：每次写入前、以及启动时（recover），把资源文件上不经本模块的
+变化先单独提交为一次 reconcile（作者记为系统，表示「来源不明的外部写入」）。这样外部写入最迟在下一次任何资源写入时
+进入历史，也不会被并进下一个作者的提交里。布局之外的东西（agent 放进目录的脚本、虚拟环境、嵌套的 git 仓库、自己的
+临时文件）不进历史：历史只增不改，进去就删不掉，也不能让一个 agent 目录里的杂物让所有资源写入失败。
 secret 不在这里：它们加密存在数据库的 vault 里，不需要版本管理。
 """
 
@@ -32,6 +39,7 @@ log = logging.getLogger(__name__)
 USER = "user"
 # 系统自己做的提交（初始化、启动时的收敛）
 SYSTEM = "muliao"
+RECONCILE_MESSAGE = "reconcile changes made outside the resource tools"
 _PUBLIC = "public"
 _AGENTS = "agents"
 _FIELD = "\x1f"
@@ -39,6 +47,22 @@ _REV = re.compile(r"^[0-9a-f]{40}$")
 # 与 ids.new_agent_id 的格式一致
 _AGENT_ID = re.compile(r"^[0-9a-f]{12}$")
 _TMP = ".tmp"
+# 资源文件（相对仓库根目录的 glob，`*` 不跨目录）：见模块说明的布局。reconcile 与 recover 只处理它们。
+# 文件名由各 store 拥有（MEMORY_FILE、SKILL_FILE……），这里是副本，由 test_every_file_the_stores_write_is_in_the_resource_layout 守护
+RESOURCE_FILES = (
+    "public/PROMPT.md",
+    "public/skills/*/SKILL.md",
+    "public/mcp/*.json",
+    "agents/*/PROMPT.md",
+    "agents/*/MEMORY.md",
+    "agents/*/skills/*/SKILL.md",
+    "agents/*/mcp/*.json",
+)
+
+# 交给 git 的 pathspec：哪些路径是资源文件只由 git 按它判断，不另写一套匹配
+RESOURCE_PATHSPEC = tuple(f":(glob){p}" for p in RESOURCE_FILES)
+
+
 _GIT_EXIT_SECONDS = 5.0
 
 
@@ -169,31 +193,56 @@ class ResourceRepo:
     async def recover(self) -> None:
         """启动时（worker 开始之前、没有任何写入在进行）把仓库收敛到干净状态。
 
-        运行期的写入是原子的（见 apply），留下不一致的只有进程在写入或 git 运行中被杀：
+        进程在写入或 git 运行中被杀会留下：
         - .git 下遗留的锁（index.lock、refs/…/*.lock）：此刻不可能有别的 git 在用，删除并记录；
-        - 写了一半的 *.tmp：按定义不完整，删除并记录，不进入历史；
-        - 写完但没来得及提交的变化：整体提交为一次 reconcile，作者记为系统，记录涉及的路径。
+        - 写了一半的资源文件（`<资源文件>.tmp`，见 _write）：按定义不完整，删除并记录，不进入历史；
+        - 写完但没来得及提交的变化：与运行期的外部写入一样提交为一次 reconcile。
         """
         async with self._lock:
             await self.ensure()
-            for stale in [*(self.root / ".git").rglob("*.lock"), *self._partial_writes()]:
+            for stale in [*(self.root / ".git").rglob("*.lock"), *await self._partial_writes()]:
                 stale.unlink()
                 log.warning("removed leftover of a killed process", extra={"path": str(stale)})
-            await self._git("add", "-A")
-            _, staged = await self._git("diff", "--cached", "--name-only")
-            if not staged.strip():
-                return
-            await self._git(
-                "commit", "-q", "-m", "reconcile uncommitted changes", f"--author={SYSTEM} <{SYSTEM}@muliao>"
-            )
-        log.warning("committed resource changes left uncommitted", extra={"paths": staged.splitlines()})
+            await self._reconcile_locked()
 
-    def _partial_writes(self) -> list[Path]:
-        return [p for p in self.root.rglob(f"*{_TMP}") if ".git" not in p.relative_to(self.root).parts]
+    async def _reconcile_locked(self) -> None:
+        """把资源文件上不经本模块的变化（外部写入、被杀的进程写完未提交的）单独提交为一次 reconcile。"""
+        await self.ensure()
+        # 只列资源文件：status 对没有匹配的 pathspec 不报错（add 会），布局之外的路径 git 根本不会去看
+        # --no-renames：每条记录只有「XY 路径」一段。否则暂存区里的重命名（进程死在上一次 reconcile 的 add 与
+        # commit 之间）会多带一个原路径，按单路径解析就会切坏它
+        _, status = await self._git(
+            "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--", *RESOURCE_PATHSPEC
+        )
+        # 状态码第二位是工作区相对暂存区的变化；已经完整暂存的（如上次留下的删除）不再 add：路径不在工作区时 add 会报错
+        unstaged = [entry[3:] for entry in status.split("\0") if entry and entry[1] != " "]
+        if unstaged:
+            await self._git("add", "-A", "--", *unstaged)
+        # 要提交什么由 add 之后的暂存区决定，而不是 add 之前的状态：add 会改变它（暂存过又在工作区删掉的新文件，
+        # add 之后既不在 HEAD 也不在暂存区，不能再交给 commit）
+        _, staged = await self._git(
+            "diff", "--cached", "--name-only", "-z", "--no-renames", "--", *RESOURCE_PATHSPEC
+        )
+        paths = [rel for rel in staged.split("\0") if rel]
+        if not paths:
+            return
+        await self._git(
+            "commit", "-q", "-m", RECONCILE_MESSAGE, f"--author={SYSTEM} <{SYSTEM}@muliao>", "--", *paths
+        )
+        log.warning("committed resource changes made outside the resource tools", extra={"paths": paths})
+
+    async def _partial_writes(self) -> list[Path]:
+        """资源文件写了一半的临时文件（见 _write）。由 git 按同一组 pattern 列出：不跟随符号链接，不进入嵌套仓库。"""
+        _, out = await self._git(
+            "ls-files", "--others", "-z", "--", *(f"{spec}{_TMP}" for spec in RESOURCE_PATHSPEC)
+        )
+        return [self.root / rel for rel in out.split("\0") if rel]
 
     async def apply(self, changes: Mapping[Path, str | None], message: str, author: str) -> str | None:
         """写入（内容为 None 表示删除该文件或目录）并提交，原子地：要么提交成功，要么什么都没发生。"""
         async with self._lock:
+            # 外部写入先单独记一版，不并进这次作者的提交
+            await self._reconcile_locked()
             return await self._apply_locked(changes, message, author)
 
     async def update(
@@ -204,12 +253,13 @@ class ResourceRepo:
         transform 返回新内容（None 表示删除），或抛出领域错误拒绝这次修改。
         """
         async with self._lock:
+            # 先收敛外部写入再读：读到的就是刚提交的版本，变换的结果不会悄悄盖掉一次外部写入
+            await self._reconcile_locked()
             return await self._apply_locked({path: transform(_read_optional(path))}, message, author)
 
     async def _apply_locked(
         self, changes: Mapping[Path, str | None], message: str, author: str
     ) -> str | None:
-        await self.ensure()
         rel = [self.relative(p) for p in changes]
         # 写入之前的内容，失败时直接在文件系统上还原：不依赖 git（失败的往往正是 git，比如锁被占用）
         before = {path: _snapshot(path) for path in changes}
@@ -224,6 +274,12 @@ class ResourceRepo:
             if not tracked:
                 return None
             await self._git("add", "-A", "--", *tracked)
+            for path, r in zip(changes, rel, strict=True):
+                # git add 对它不管的路径（如上级目录是一个嵌套仓库）照样返回 0，不能当成「没有变化」悄悄成功
+                if changes[path] is not None and not await self._tracked(r):
+                    raise RuntimeError(
+                        f"{r} is not versioned by git after adding it; is a parent directory a nested repository?"
+                    )
             unchanged, _ = await self._git("diff", "--cached", "--quiet", "--", *tracked, check=False)
             if unchanged == 0:
                 return None

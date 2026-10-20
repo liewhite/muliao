@@ -381,6 +381,7 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
             "read_skill",
             "write_skill",
             "delete_skill",
+            "edit_skill",
             "memory_append",
             "memory_replace",
             "instructions_replace",
@@ -438,3 +439,8 @@ async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, 
 
     assert outputs == ["answer"]
     assert "run_shell" not in seen and "notify_user" in seen
+
+
+def test_public_skills_group_can_edit_part_of_a_public_skill(container):
+    [toolset] = container.turns._tool_groups.groups["public_skills"].toolsets  # noqa: SLF001
+    assert set(toolset.tools) == {"write_public_skill", "edit_public_skill", "delete_public_skill"}

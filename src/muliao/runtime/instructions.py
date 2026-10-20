@@ -36,8 +36,9 @@ SELF_IMPROVEMENT = """\
 environment details, corrections, lessons learned) with `memory_append`; fix or condense with `memory_replace`. \
 Never record secrets or one-off details.
 - Skills are reusable procedures. Before a task that matches a skill in the index, call `read_skill`. After \
-working out a non-trivial procedure likely to recur, or finding a skill wrong or incomplete, save it with \
-`write_skill`.
+working out a non-trivial procedure likely to recur, save it with `write_skill`; when a skill proves wrong or \
+incomplete, fix that part with `edit_skill`. Change skills, memory and instructions only through these tools, never \
+with shell commands or file tools, so every change is versioned under your name.
 - Your own instructions can be refined with `instructions_replace` when a standing rule proved wrong or the \
 user keeps repeating one; keep such edits small. Every version is kept and the user can roll back.
 - Secrets go in the vault (`vault_set`), referenced by key; never write secret values into files, memory or skills.

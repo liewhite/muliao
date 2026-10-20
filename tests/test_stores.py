@@ -1,3 +1,5 @@
+import asyncio
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -5,10 +7,14 @@ import pytest
 from muliao.errors import InvalidInput, NotFound
 from muliao.evolution.memory import MemoryFull, MemoryStore
 from muliao.evolution.skills import SkillStore
-from muliao.resources import ResourceRepo
+from muliao.resources import RESOURCE_PATHSPEC, ResourceRepo
 
 # agent id 的格式（与 ids.new_agent_id 一致）
 ALPHA, BETA = "a1a1a1a1a1a1", "b2b2b2b2b2b2"
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
 
 
 @pytest.fixture
@@ -165,7 +171,10 @@ async def test_recover_commits_leftovers_and_clears_a_stale_lock(repo: ResourceR
 
     assert not (repo.root / ".git" / "index.lock").exists()
     [revision] = await repo.history(left, 10)
-    assert (revision.author, revision.message) == ("muliao", "reconcile uncommitted changes")
+    assert (revision.author, revision.message) == (
+        "muliao",
+        "reconcile changes made outside the resource tools",
+    )
     # 收敛后正常提交照常进行
     assert await repo.apply({left: "next"}, "memory", ALPHA) is not None
 
@@ -248,3 +257,184 @@ async def test_write_blocked_by_a_held_git_lock_is_undone_on_disk(memory: Memory
 
     await memory.append(ALPHA, "- blocked", ALPHA)
     assert memory.read(ALPHA) == "- kept\n\n- blocked\n"
+
+
+async def test_a_change_made_outside_the_tools_is_recorded_before_the_next_write(repo: ResourceRepo):
+    """agent 用 shell 直接改了资源文件：下一次写入前单独记一版，不并进下一个作者的提交。"""
+    path = repo.owner_dir(ALPHA) / "MEMORY.md"
+    await repo.apply({path: "first\n"}, "memory", ALPHA)
+    path.write_text("first\nedited by shell\n")
+
+    await repo.apply({path: "first\nedited by shell\nsecond\n"}, "memory", "user")
+
+    newest, outside, _ = await repo.history(path, 10)
+    assert (outside.author, outside.message) == (
+        "muliao",
+        "reconcile changes made outside the resource tools",
+    )
+    assert newest.author == "user"
+    assert await repo.read_at(outside.rev, path) == "first\nedited by shell\n"
+
+
+async def test_editing_a_skill_replaces_or_appends_to_its_body_and_keeps_name_and_description(
+    repo: ResourceRepo,
+):
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "step one\nstep two", ALPHA)
+
+    await skills.edit(ALPHA, "digest", "step two", "step 2", ALPHA)
+    await skills.edit(ALPHA, "digest", "", "## pitfalls\n- none", ALPHA)
+
+    skill = skills.read(ALPHA, "digest")
+    assert (skill.meta.name, skill.meta.description) == ("digest", "When digesting")
+    assert skill.body == "step one\nstep 2\n\n## pitfalls\n- none"
+    with pytest.raises(InvalidInput, match="exactly once"):
+        await skills.edit(ALPHA, "digest", "missing", "x", ALPHA)
+    with pytest.raises(NotFound):
+        await skills.edit(ALPHA, "nope", "", "x", ALPHA)
+
+
+async def test_files_outside_the_resource_layout_never_enter_history(repo: ResourceRepo, tmp_path: Path):
+    """agent 在 skill 目录里放的杂物不进历史；一个没有提交的嵌套仓库（git add 会失败）也不影响任何写入。"""
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
+    (skill_dir / "notes.tmp").write_text("agent's own scratch")
+    (skill_dir / ".env").write_text("TOKEN=x")
+    nested = skill_dir / "clone"
+    nested.mkdir()
+    await asyncio.to_thread(_git, "init", "-q", str(nested))
+
+    await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA)
+    await repo.recover()
+
+    tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split()
+    assert sorted(tracked) == [f"agents/{ALPHA}/MEMORY.md", f"agents/{ALPHA}/skills/digest/SKILL.md"]
+    # recover 只删资源文件写了一半的 .tmp，agent 自己的临时文件不动
+    assert (skill_dir / "notes.tmp").exists()
+
+
+async def test_every_file_the_stores_write_is_in_the_resource_layout(container, make_agent):
+    """RESOURCE_FILES 与各 store 的文件名必须一致：不在布局里的资源文件，外部写入就不会被收敛。"""
+    from muliao.runtime.mcp import McpSpec, McpTransport
+
+    agent = (await make_agent(ALPHA)).id
+    await container.memory.append(agent, "fact", agent)
+    await container.prompts.set(None, "public rules", "user")
+    for owner in (agent, None):
+        await container.skills.write(owner, "digest", "When digesting", "steps", "user")
+        spec = McpSpec(
+            name="echo",
+            transport=McpTransport.HTTP,
+            command=None,
+            args=(),
+            url="http://x",
+            env=(),
+            headers=(),
+        )
+        await container.mcp.add(owner, spec, probe=False, author="user")
+
+    root = container.resources.root
+    files = (await asyncio.to_thread(_git, "-C", str(root), "ls-files")).split()
+    in_layout = (await asyncio.to_thread(_git, "-C", str(root), "ls-files", "--", *RESOURCE_PATHSPEC)).split()
+    assert len(files) == 7
+    assert in_layout == files
+
+
+@pytest.mark.parametrize(
+    "outside",
+    ["edit", "delete", "new skill", "path with space"],
+)
+async def test_reconcile_records_each_kind_of_outside_change(repo: ResourceRepo, outside: str):
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    skill = repo.owner_dir(ALPHA) / "skills" / "digest" / "SKILL.md"
+    target = {
+        "edit": skill,
+        "delete": skill,
+        "new skill": repo.owner_dir(ALPHA) / "skills" / "fresh" / "SKILL.md",
+        "path with space": repo.owner_dir(ALPHA) / "skills" / "a b" / "SKILL.md",
+    }[outside]
+    if outside == "delete":
+        target.unlink()
+    else:
+        target.parent.mkdir(exist_ok=True)
+        target.write_text("---\nname: x\ndescription: y\n---\nby shell\n")
+
+    await repo.recover()
+
+    [revision, *_] = await repo.history(target, 10)
+    assert revision.author == "muliao"
+    assert await asyncio.to_thread(_git, "-C", str(repo.root), "status", "--porcelain") == ""
+
+
+async def test_recover_commits_a_rename_left_staged_by_a_killed_reconcile(repo: ResourceRepo):
+    """进程死在 reconcile 的 add 与 commit 之间、暂存区里留下一次重命名：之后的收敛不能被它卡住。"""
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "old", "When digesting", "steps", ALPHA)
+    old_dir = repo.owner_dir(ALPHA) / "skills" / "old"
+    old_dir.rename(old_dir.with_name("new"))
+    await asyncio.to_thread(_git, "-C", str(repo.root), "add", "-A")
+
+    await repo.recover()
+
+    tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split()
+    assert tracked == [f"agents/{ALPHA}/skills/new/SKILL.md"]
+
+
+async def test_a_symlink_named_like_a_partial_write_does_not_stop_startup(repo: ResourceRepo, tmp_path: Path):
+    await repo.ensure()
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "cache.tmp").symlink_to(tmp_path)
+    (skill_dir / "SKILL.md.tmp").write_text("half written")
+
+    await repo.recover()
+
+    assert (skill_dir / "cache.tmp").is_symlink()
+    assert not (skill_dir / "SKILL.md.tmp").exists()
+
+
+async def test_writing_a_skill_whose_directory_is_a_nested_repository_fails_instead_of_going_unversioned(
+    repo: ResourceRepo,
+):
+    skills = SkillStore(repo)
+    await repo.ensure()
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / "cloned"
+    skill_dir.mkdir(parents=True)
+    await asyncio.to_thread(_git, "init", "-q", str(skill_dir))
+
+    with pytest.raises(RuntimeError, match="nested repository"):
+        await skills.write(ALPHA, "cloned", "When digesting", "steps", ALPHA)
+    # 「报错」等于「没有生效」
+    assert not (skill_dir / "SKILL.md").exists()
+
+
+@pytest.mark.parametrize(
+    ("staged", "then"),
+    [
+        ("new", "delete"),  # AD：暂存的新文件又被删掉（如写入失败后回滚时 git reset 也失败）
+        ("edit", "edit"),  # MM
+        ("edit", "delete"),  # MD
+    ],
+)
+async def test_reconcile_converges_from_any_mix_of_staged_and_unstaged_changes(
+    repo: ResourceRepo, staged: str, then: str
+):
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / ("fresh" if staged == "new" else "digest")
+    skill_dir.mkdir(exist_ok=True)
+    path = skill_dir / "SKILL.md"
+    path.write_text("---\nname: x\ndescription: y\n---\nstaged\n")
+    await asyncio.to_thread(_git, "-C", str(repo.root), "add", "-A")
+    if then == "delete":
+        path.unlink()
+    else:
+        path.write_text("---\nname: x\ndescription: y\n---\nedited again\n")
+
+    await repo.recover()
+
+    assert await asyncio.to_thread(_git, "-C", str(repo.root), "status", "--porcelain") == ""
+    # 收敛后正常写入照常进行
+    assert await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA) is not None
