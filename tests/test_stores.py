@@ -7,7 +7,7 @@ import pytest
 from muliao.errors import InvalidInput, NotFound
 from muliao.evolution.memory import MemoryFull, MemoryStore
 from muliao.evolution.skills import SkillStore
-from muliao.resources import ResourceRepo, is_resource_file
+from muliao.resources import RESOURCE_PATHSPEC, ResourceRepo
 
 # agent id 的格式（与 ids.new_agent_id 一致）
 ALPHA, BETA = "a1a1a1a1a1a1", "b2b2b2b2b2b2"
@@ -314,16 +314,6 @@ async def test_files_outside_the_resource_layout_never_enter_history(repo: Resou
     assert (skill_dir / "notes.tmp").exists()
 
 
-def test_resource_layout_covers_every_store_file_and_nothing_else():
-    assert is_resource_file(f"agents/{ALPHA}/skills/digest/SKILL.md")
-    assert is_resource_file("public/mcp/slack.json")
-    assert is_resource_file(f"agents/{ALPHA}/MEMORY.md")
-    assert not is_resource_file("public/MEMORY.md")
-    assert not is_resource_file(f"agents/{ALPHA}/skills/digest/run.sh")
-    assert not is_resource_file(f"agents/{ALPHA}/skills/digest/clone/SKILL.md")
-    assert not is_resource_file(f"x/agents/{ALPHA}/MEMORY.md")
-
-
 async def test_every_file_the_stores_write_is_in_the_resource_layout(container, make_agent):
     """RESOURCE_FILES 与各 store 的文件名必须一致：不在布局里的资源文件，外部写入就不会被收敛。"""
     from muliao.runtime.mcp import McpSpec, McpTransport
@@ -346,5 +336,75 @@ async def test_every_file_the_stores_write_is_in_the_resource_layout(container, 
 
     root = container.resources.root
     files = (await asyncio.to_thread(_git, "-C", str(root), "ls-files")).split()
+    in_layout = (await asyncio.to_thread(_git, "-C", str(root), "ls-files", "--", *RESOURCE_PATHSPEC)).split()
     assert len(files) == 7
-    assert [f for f in files if not is_resource_file(f)] == []
+    assert in_layout == files
+
+
+@pytest.mark.parametrize(
+    "outside",
+    ["edit", "delete", "new skill", "path with space"],
+)
+async def test_reconcile_records_each_kind_of_outside_change(repo: ResourceRepo, outside: str):
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    skill = repo.owner_dir(ALPHA) / "skills" / "digest" / "SKILL.md"
+    target = {
+        "edit": skill,
+        "delete": skill,
+        "new skill": repo.owner_dir(ALPHA) / "skills" / "fresh" / "SKILL.md",
+        "path with space": repo.owner_dir(ALPHA) / "skills" / "a b" / "SKILL.md",
+    }[outside]
+    if outside == "delete":
+        target.unlink()
+    else:
+        target.parent.mkdir(exist_ok=True)
+        target.write_text("---\nname: x\ndescription: y\n---\nby shell\n")
+
+    await repo.recover()
+
+    [revision, *_] = await repo.history(target, 10)
+    assert revision.author == "muliao"
+    assert await asyncio.to_thread(_git, "-C", str(repo.root), "status", "--porcelain") == ""
+
+
+async def test_recover_commits_a_rename_left_staged_by_a_killed_reconcile(repo: ResourceRepo):
+    """进程死在 reconcile 的 add 与 commit 之间、暂存区里留下一次重命名：之后的收敛不能被它卡住。"""
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "old", "When digesting", "steps", ALPHA)
+    old_dir = repo.owner_dir(ALPHA) / "skills" / "old"
+    old_dir.rename(old_dir.with_name("new"))
+    await asyncio.to_thread(_git, "-C", str(repo.root), "add", "-A")
+
+    await repo.recover()
+
+    tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split()
+    assert tracked == [f"agents/{ALPHA}/skills/new/SKILL.md"]
+
+
+async def test_a_symlink_named_like_a_partial_write_does_not_stop_startup(repo: ResourceRepo, tmp_path: Path):
+    await repo.ensure()
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "cache.tmp").symlink_to(tmp_path)
+    (skill_dir / "SKILL.md.tmp").write_text("half written")
+
+    await repo.recover()
+
+    assert (skill_dir / "cache.tmp").is_symlink()
+    assert not (skill_dir / "SKILL.md.tmp").exists()
+
+
+async def test_writing_a_skill_whose_directory_is_a_nested_repository_fails_instead_of_going_unversioned(
+    repo: ResourceRepo,
+):
+    skills = SkillStore(repo)
+    await repo.ensure()
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / "cloned"
+    skill_dir.mkdir(parents=True)
+    await asyncio.to_thread(_git, "init", "-q", str(skill_dir))
+
+    with pytest.raises(RuntimeError, match="nested repository"):
+        await skills.write(ALPHA, "cloned", "When digesting", "steps", ALPHA)
+    # 「报错」等于「没有生效」
+    assert not (skill_dir / "SKILL.md").exists()
