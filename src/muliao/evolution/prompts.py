@@ -36,13 +36,11 @@ class PromptStore:
         """写入并提交一版；与当前内容相同时不提交，返回 False。"""
         return await self._update(owner, lambda _current: content, author)
 
-    async def replace(self, owner: str, old: str, new: str, author: str) -> bool:
+    async def edit(self, owner: str, old: str, new: str, author: str) -> bool:
+        """改 agent 自己的指令（规则见 text_edit.edit）。"""
         return await self._update(
-            owner, lambda current: text_edit.replace_once(current, old, new, "instructions"), author
+            owner, lambda current: text_edit.edit(current, old, new, "instructions"), author
         )
-
-    async def append(self, owner: str, entry: str, author: str) -> bool:
-        return await self._update(owner, lambda current: text_edit.append(current, entry), author)
 
     async def _update(self, owner: str | None, edit: Callable[[str], str], author: str) -> bool:
         """读取、修改、写入、提交在资源仓库的同一把锁里：并发的修改互不覆盖。"""

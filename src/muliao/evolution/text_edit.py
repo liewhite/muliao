@@ -1,4 +1,4 @@
-"""agent 修改自己文本资源（记忆、指令）的唯一规则：替换恰好出现一次的片段，或追加一段。纯函数。"""
+"""修改文本的唯一规则：替换恰好出现一次的片段，或追加一段（记忆、指令、skill 正文、工作区文件都用它）。纯函数。"""
 
 from muliao.errors import InvalidInput
 
@@ -9,6 +9,11 @@ def replace_once(current: str, old: str, new: str, what: str) -> str:
     if count != 1:
         raise InvalidInput(f"old text must occur exactly once in {what}, found {count} occurrences")
     return current.replace(old, new)
+
+
+def edit(current: str, old: str, new: str, what: str) -> str:
+    """old 恰好出现一次时替换为 new（new 为空即删除）；old 为空时把 new 追加到末尾。"""
+    return replace_once(current, old, new, what) if old else append(current, new)
 
 
 def append(current: str, entry: str) -> str:

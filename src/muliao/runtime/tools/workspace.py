@@ -13,6 +13,7 @@ from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
 from muliao.conventions import TOOL_ATTACHMENTS, attachment_of
 from muliao.errors import InvalidInput, NotFound
+from muliao.evolution import text_edit
 from muliao.files import FileStore
 from muliao.models import JobStatus
 from muliao.runtime.jobs import JobRunner
@@ -226,10 +227,7 @@ def _file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunS
         if not target.is_file():
             raise NotFound(f"file not found: {target}")
         content = target.read_text(encoding="utf-8")
-        count = content.count(old_text) if old_text else 0
-        if count != 1:
-            raise InvalidInput(f"old_text must occur exactly once in {target}, found {count}")
-        target.write_text(content.replace(old_text, new_text), encoding="utf-8")
+        target.write_text(text_edit.replace_once(content, old_text, new_text, str(target)), encoding="utf-8")
         return f"edited {target}"
 
     @ts.tool

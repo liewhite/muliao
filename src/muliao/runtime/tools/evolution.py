@@ -152,11 +152,7 @@ def instructions_toolset(prompts: PromptStore) -> FunctionToolset[RunScope]:
             new_text: Replacement (or appended) text; empty deletes `old_text`.
         """
         me = ctx.deps.agent_id
-        changed = (
-            await prompts.replace(me, old_text, new_text, me)
-            if old_text
-            else await prompts.append(me, new_text, me)
-        )
+        changed = await prompts.edit(me, old_text, new_text, me)
         return "instructions updated" if changed else "instructions unchanged"
 
     return ts

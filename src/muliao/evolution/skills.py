@@ -112,11 +112,7 @@ class SkillStore:
                 raise NotFound(f"skill {name!r} was deleted")
             post = frontmatter.loads(current)
             what = f"skill {name}"
-            body = (
-                text_edit.replace_once(post.content, old, new, what)
-                if old
-                else text_edit.append(post.content, new)
-            )
+            body = text_edit.edit(post.content, old, new, what)
             post.content = body.strip() + "\n"
             return frontmatter.dumps(post) + "\n"
 
