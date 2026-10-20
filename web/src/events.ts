@@ -88,11 +88,13 @@ export function liveToItems(events: RunEvent[]): Item[] {
 
 export interface TaskEvent {
   type: 'task'
-  task_id: number
+  /** 内联跑完的私有 thread 轮次失败时没有 task 记录，为 null */
+  task_id: number | null
   kind: TaskKind
   status: TaskStatus
   session_id: string | null
-  agent: string
+  /** 系统通知的投递、失败的内联轮次没有（或不知道）所属 agent */
+  agent: string | null
   error: string | null
 }
 

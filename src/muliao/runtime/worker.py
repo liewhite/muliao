@@ -9,7 +9,7 @@ import httpx2
 import openai
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from muliao.bus import EventBus
+from muliao.bus import EventBus, task_event
 from muliao.errors import TransientError
 from muliao.models import Task, TaskKind, TaskStatus
 from muliao.runtime.tasks import Commit, TaskQueue
@@ -63,15 +63,14 @@ class Worker:
 
     def _publish(self, task: Task, status: TaskStatus, error: str | None = None) -> None:
         self._bus.publish(
-            {
-                "type": "task",
-                "task_id": task.id,
-                "kind": task.kind,
-                "status": status,
-                "session_id": task.session_id,
-                "agent": task.agent_id,
-                "error": error,
-            }
+            task_event(
+                task_id=task.id,
+                kind=task.kind,
+                status=status,
+                session_id=task.session_id,
+                agent_id=task.agent_id,
+                error=error,
+            )
         )
 
     async def run_forever(self) -> None:

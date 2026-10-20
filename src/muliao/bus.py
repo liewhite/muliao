@@ -16,6 +16,28 @@ log = logging.getLogger(__name__)
 Event = dict[str, Any]
 
 
+def task_event(
+    *,
+    task_id: int | None,
+    kind: str,
+    status: str,
+    session_id: str | None,
+    agent_id: str | None,
+    error: str | None,
+) -> Event:
+    """一个 task 的状态变化（前端据此从数据库重新拉取）。worker 执行的 task 与内联跑完的私有 thread 轮次共用这一个形状；
+    内联轮次失败时没有 task 记录（失败不入库），task_id 为 None。"""
+    return {
+        "type": "task",
+        "task_id": task_id,
+        "kind": kind,
+        "status": status,
+        "session_id": session_id,
+        "agent": agent_id,
+        "error": error,
+    }
+
+
 class SubscriberOverflow(Exception):
     pass
 

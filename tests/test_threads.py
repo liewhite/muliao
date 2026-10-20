@@ -363,3 +363,25 @@ async def test_delegation_results_point_at_the_thread_they_opened(client, contai
     by_name = {t["thread"]: t["id"] for t in detail["threads"]}
     linked = [(i["tool_name"], i["threads"]) for i in detail["items"] if i["type"] == "tool_result"]
     assert linked == [("delegate_task", [by_name["weekly"]]), ("ask_agent", [by_name["check"]])]
+
+
+async def test_inline_turns_announce_their_end_like_queued_turns(container, make_agent, models):
+    """私有 thread 的轮次不经 worker，也要发 task 事件：打开 thread 页的人靠它在一轮结束后重新拉取。"""
+    lead = (await make_agent("lead", model="l")).id
+    await make_agent("reviewer", model="v")
+    models.models["v"] = echo("reviewed")
+    models.models["l"] = steps(
+        call("ask_agent", {"agent": "reviewer", "thread": "review", "message": "v1"}),
+        answer_with_tool_results("verdict"),
+    )
+    events = []
+    async with container.bus.subscribe() as sub:
+        parent = await start(container, lead, "write code")
+        await drain(container)
+        while not sub.queue.empty():
+            events.append(sub.queue.get_nowait())
+
+    [child] = await threads_of(container, parent.id)
+    [child_turn] = await turns_in(container, child.id)
+    ended = [e for e in events if e.get("type") == "task" and e["session_id"] == child.id]
+    assert [(e["task_id"], e["kind"], e["status"]) for e in ended] == [(child_turn.id, "turn", "done")]

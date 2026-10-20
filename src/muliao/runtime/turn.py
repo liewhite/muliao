@@ -18,11 +18,11 @@ from pydantic_ai.messages import ModelMessage, UserContent
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.bus import LiveRuns
+from muliao.bus import EventBus, LiveRuns, task_event
 from muliao.db import Database, utcnow
 from muliao.delivery.base import Notifier
 from muliao.files import FileStore
-from muliao.models import Agent, Message, Notification, ReplyTo, Session, Task, TaskKind
+from muliao.models import Agent, Message, Notification, ReplyTo, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.answers import Answer
 from muliao.runtime.attachments import copy_to_workspace, references
 from muliao.runtime.codec import dump_message
@@ -116,8 +116,11 @@ class TurnRunner:
         compaction: CompactionScheduler,
         files: FileStore,
         live: LiveRuns,
+        bus: EventBus,
     ):
         self._live = live
+        # 内联轮次不经 worker，自己发 task 事件（前端靠它在一轮结束后重新拉取）
+        self._bus = bus
         self._files = files
         # 正在运行的一轮，按会话；用户可以停止（见 runtime.stopping）
         self._runs: StoppableRuns[AgentRunResult[str | DeferredToolRequests]] = StoppableRuns()
@@ -256,9 +259,30 @@ class TurnRunner:
                 # 运行成功、提交前失败（如 thread 已被删除）时 commit_in 没被调用到
                 self._live.end(session_id)
                 log.warning("inline turn failed: %r", e, extra={"session_id": session_id})
+                self._publish_inline(None, None, session_id, TaskStatus.FAILED, f"{type(e).__name__}: {e}")
                 raise
         log.info("inline turn done", extra={"session_id": session_id, "task_id": turn.id})
+        self._publish_inline(turn.id, out.agent_id, session_id, TaskStatus.DONE, None)
         return Answer.of_run(out.answer, out.messages)
+
+    def _publish_inline(
+        self,
+        task_id: int | None,
+        agent_id: str | None,
+        session_id: str,
+        status: TaskStatus,
+        error: str | None,
+    ) -> None:
+        self._bus.publish(
+            task_event(
+                task_id=task_id,
+                kind=TaskKind.TURN,
+                status=status,
+                session_id=session_id,
+                agent_id=agent_id,
+                error=error,
+            )
+        )
 
     async def _count_turn(self, s: AsyncSession, agent: Agent) -> None:
         """agent 级 turn 计数；达到阈值时把 (检查点, 当前最大消息 id] 交给反思。"""

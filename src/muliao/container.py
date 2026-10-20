@@ -308,7 +308,7 @@ def build_container(
     if tuple(tool_groups.groups) != tool_group_names:
         raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {tool_group_names}")
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
-    turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction, files, live)
+    turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction, files, live, bus)
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.TURN: TurnHandler(turn_runner),
         TaskKind.COMPACTION: CompactionHandler(
