@@ -2201,8 +2201,7 @@
           "tool": {
             "type": "string",
             "const": "ask_agent",
-            "title": "Tool",
-            "default": "ask_agent"
+            "title": "Tool"
           },
           "result": {
             "$ref": "#/components/schemas/AgentAnswer"
@@ -2210,6 +2209,7 @@
         },
         "type": "object",
         "required": [
+          "tool",
           "result"
         ],
         "title": "AgentAnswered",
@@ -4502,8 +4502,7 @@
           "tool": {
             "type": "string",
             "const": "ask_user",
-            "title": "Tool",
-            "default": "ask_user"
+            "title": "Tool"
           },
           "result": {
             "$ref": "#/components/schemas/AskResult"
@@ -4511,6 +4510,7 @@
         },
         "type": "object",
         "required": [
+          "tool",
           "result"
         ],
         "title": "UserAnswered",

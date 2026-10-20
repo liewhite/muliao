@@ -206,7 +206,7 @@ async def deliver_in(
             session_id,
             kind=MailKind.ANSWER,
             content="",
-            answers={hold.call_id: AgentAnswered(result=answer).model_dump()},
+            answers={hold.call_id: AgentAnswered(tool="ask_agent", result=answer).model_dump()},
             awaited=awaited,
             dedupe_key=key,
         )

@@ -144,12 +144,15 @@ async def create_session(
 ) -> Session:
     """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
     await ensure_agent_active_in(s, spec.agent_id)
-    if (spec.parent_session_id is not None) != (origin == Origin.DELEGATION) or (
-        spec.kind != SessionKind.CONVERSATION
-    ) != (origin == Origin.DELEGATION):
+    is_thread = origin == Origin.DELEGATION
+    if (
+        (spec.parent_session_id is not None) != is_thread
+        or (spec.kind != SessionKind.CONVERSATION) != is_thread
+        or (spec.thread is not None) != is_thread
+    ):
         raise ValueError(
-            f"only delegation creates threads, got {origin} creating a {spec.kind} with parent "
-            f"{spec.parent_session_id}"
+            f"only delegation creates threads, each with a parent and a name; got {origin} creating a "
+            f"{spec.kind} with parent {spec.parent_session_id} and name {spec.thread!r}"
         )
     if origin == Origin.DELEGATION and spec.parent_session_id != origin_ref:
         raise ValueError(
@@ -243,8 +246,8 @@ def receive_target(command: Receive) -> str:
 
 
 async def session_busy_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> bool:
-    """会话有没做完的事：它的 lane 上有排队或进行中的任务，或有投给它、还没投递的来信（Receive）。触发器据此避免
-    重叠触发。"""
+    """会话有没有排着或正在做的事：它的 lane 上有排队或进行中的任务，或有投给它、还没投递的来信（Receive）。触发器
+    据此避免重叠触发。与「能不能删除」（busy_among_in：lane 加 active 占用）回答的是不同的问题。"""
     return await queue.lane_busy(s, session_lane(session_id)) or await queue.lane_busy(
         s, receive_lane(session_id)
     )
@@ -312,7 +315,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
                 session.id,
                 kind=MailKind.ANSWER,
                 content="",
-                answers={k: UserAnswered(result=v).model_dump() for k, v in answers.items()},
+                answers={k: UserAnswered(tool="ask_user", result=v).model_dump() for k, v in answers.items()},
                 awaited=inbound.awaited,
             )
         )
@@ -391,7 +394,8 @@ async def _with_owned_threads_in(s: AsyncSession, roots: Sequence[Session]) -> d
 
 
 async def busy_among_in(s: AsyncSession, queue: TaskQueue, sessions: Mapping[str, Session]) -> list[str]:
-    """其中忙的会话：lane 上有排队或运行中的任务（运行、压缩），或有人替它在外面做事（后台任务、委派出去的工作）。"""
+    """其中忙、因而不能删除的会话：lane 上有排队或运行中的任务（运行、压缩），或有人替它在外面做事（后台任务、委派
+    出去的工作）。与「有没有排着的事」（session_busy_in）回答的是不同的问题。"""
     return [x for x in sessions if await queue.lane_busy(s, session_lane(x)) or await has_active_in(s, x)]
 
 

@@ -702,7 +702,7 @@ async def test_an_answer_arriving_mid_run_reaches_the_model_as_late_text(
                     session_id,
                     kind=MailKind.ANSWER,
                     content="",
-                    answers={"q": UserAnswered(result=answer).model_dump()},
+                    answers={"q": UserAnswered(tool="ask_user", result=answer).model_dump()},
                     awaited=True,
                 )
             yield {0: DeltaToolCall(name="memory_append", json_args='{"entry": "- x"}', tool_call_id="m")}

@@ -112,8 +112,8 @@ class TaskQueue:
         return await self._claim(_claimable().where(Task.id == task_id, Task.kind.in_(list(kinds))))
 
     async def unclaim(self, task_id: int) -> bool:
-        """把一个还在 running 的 task 放回 pending（领取它的执行者被取消、不会再完成它，同 recover 的语义）。已经
-        完成或记下失败的不动。返回是否放回了。"""
+        """把一个还在 running 的 task 放回 pending（领取它的执行者被取消、不会再完成它，同 recover 的语义：已用的
+        尝试次数不退回）。已经完成或记下失败的不动。返回是否放回了。"""
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)
             if task is None or task.status != TaskStatus.RUNNING:

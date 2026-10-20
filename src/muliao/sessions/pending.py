@@ -51,7 +51,7 @@ class AgentAnswer(BaseModel):
 class UserAnswered(BaseModel):
     """回答信件里一次 ask_user 调用的结果：用户的回答。"""
 
-    tool: Literal["ask_user"] = ASK_USER
+    tool: Literal["ask_user"]
     result: AskResult
 
     def tool_return(self) -> object:
@@ -61,7 +61,7 @@ class UserAnswered(BaseModel):
 class AgentAnswered(BaseModel):
     """回答信件里一次 ask_agent 调用的结果：被问的 agent 的结局。"""
 
-    tool: Literal["ask_agent"] = ASK_AGENT
+    tool: Literal["ask_agent"]
     result: AgentAnswer
 
     def tool_return(self) -> object:

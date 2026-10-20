@@ -112,6 +112,8 @@ class Worker:
         取消语义与 worker 不同：worker 的任务只被关停取消，下次启动由 recover 复位；这里的调用方随时可能被取消（请求
         断开、调用它的运行被停止）。被取消时在屏蔽作用域里把还在 running 的它放回 pending 交给 worker，再照常抛出
         取消——投递的写入与「完成」同一事务，重做是安全的。"""
+        if TaskKind.EVENT not in self._handlers:
+            raise RuntimeError("run_now executes deliveries, but this worker has no EVENT handler")
         task = await self._queue.claim_task(task_id, [TaskKind.EVENT])
         if task is None:
             log.info("task not claimable now, left to the worker", extra={"task_id": task_id})
@@ -119,11 +121,16 @@ class Worker:
         try:
             await self._process(task)
         except anyio.get_cancelled_exc_class():
-            with anyio.CancelScope(shield=True), anyio.move_on_after(_UNCLAIM_SECONDS):
-                released = await self._queue.unclaim(task.id)
-                log.warning(
-                    "task run on the spot was cancelled; handed back to the worker",
-                    extra={"task_id": task.id, "lane": task.lane, "handed_back": released},
+            ctx = {"task_id": task.id, "lane": task.lane}
+            with anyio.CancelScope(shield=True), anyio.move_on_after(_UNCLAIM_SECONDS) as limited:
+                if await self._queue.unclaim(task.id):
+                    self._publish(task, TaskStatus.PENDING)
+                    log.warning("task run on the spot was cancelled; handed back to the worker", extra=ctx)
+            if limited.cancelled_caught:
+                log.error(
+                    "could not hand back a cancelled task run on the spot; it stays running and blocks its lane "
+                    "until the next start recovers it",
+                    extra=ctx,
                 )
             raise
 

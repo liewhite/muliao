@@ -174,7 +174,7 @@ def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text
         answers=[AnsweredQuestion(question="看哪个周期？", selected=["日线"], other="也看周线")],
         note=None,
     )
-    text = late_text([UserAnswered(result=answered)])
+    text = late_text([UserAnswered(tool="ask_user", result=answered)])
     assert "already been closed" in text and "看哪个周期？: 日线; 也看周线" in text
 
 
@@ -491,3 +491,15 @@ async def test_a_question_asked_alongside_another_tool_is_answered_as_its_result
     assert [name for name, _ in results] == ["memory_append", "ask_user"]
     assert json.loads(results[1][1])["answered"] is True
     assert container.memory.read(agent.id) == "- asked\n"  # 别的工具只执行了一次
+
+
+def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():
+    import pytest
+    from pydantic_ai.messages import ToolCallPart
+
+    from muliao.sessions.pending import AgentAnswer, AgentAnswered, deferred_results
+
+    call = ToolCallPart("ask_user", {"questions": []}, tool_call_id="c")
+    wrong = AgentAnswered(tool="ask_agent", result=AgentAnswer(text="hi", attachments=[], thread="t"))
+    with pytest.raises(RuntimeError, match="got an answer for ask_agent"):
+        deferred_results({"c": call}, {"c": wrong}, delegated=frozenset())
