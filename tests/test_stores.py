@@ -1,3 +1,5 @@
+import asyncio
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -5,10 +7,14 @@ import pytest
 from muliao.errors import InvalidInput, NotFound
 from muliao.evolution.memory import MemoryFull, MemoryStore
 from muliao.evolution.skills import SkillStore
-from muliao.resources import ResourceRepo
+from muliao.resources import ResourceRepo, is_resource_file
 
 # agent id 的格式（与 ids.new_agent_id 一致）
 ALPHA, BETA = "a1a1a1a1a1a1", "b2b2b2b2b2b2"
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
 
 
 @pytest.fixture
@@ -286,3 +292,59 @@ async def test_editing_a_skill_replaces_or_appends_to_its_body_and_keeps_name_an
         await skills.edit(ALPHA, "digest", "missing", "x", ALPHA)
     with pytest.raises(NotFound):
         await skills.edit(ALPHA, "nope", "", "x", ALPHA)
+
+
+async def test_files_outside_the_resource_layout_never_enter_history(repo: ResourceRepo, tmp_path: Path):
+    """agent 在 skill 目录里放的杂物不进历史；一个没有提交的嵌套仓库（git add 会失败）也不影响任何写入。"""
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
+    (skill_dir / "notes.tmp").write_text("agent's own scratch")
+    (skill_dir / ".env").write_text("TOKEN=x")
+    nested = skill_dir / "clone"
+    nested.mkdir()
+    await asyncio.to_thread(_git, "init", "-q", str(nested))
+
+    await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA)
+    await repo.recover()
+
+    tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split()
+    assert sorted(tracked) == [f"agents/{ALPHA}/MEMORY.md", f"agents/{ALPHA}/skills/digest/SKILL.md"]
+    # recover 只删资源文件写了一半的 .tmp，agent 自己的临时文件不动
+    assert (skill_dir / "notes.tmp").exists()
+
+
+def test_resource_layout_covers_every_store_file_and_nothing_else():
+    assert is_resource_file(f"agents/{ALPHA}/skills/digest/SKILL.md")
+    assert is_resource_file("public/mcp/slack.json")
+    assert is_resource_file(f"agents/{ALPHA}/MEMORY.md")
+    assert not is_resource_file("public/MEMORY.md")
+    assert not is_resource_file(f"agents/{ALPHA}/skills/digest/run.sh")
+    assert not is_resource_file(f"agents/{ALPHA}/skills/digest/clone/SKILL.md")
+    assert not is_resource_file(f"x/agents/{ALPHA}/MEMORY.md")
+
+
+async def test_every_file_the_stores_write_is_in_the_resource_layout(container, make_agent):
+    """RESOURCE_FILES 与各 store 的文件名必须一致：不在布局里的资源文件，外部写入就不会被收敛。"""
+    from muliao.runtime.mcp import McpSpec, McpTransport
+
+    agent = (await make_agent(ALPHA)).id
+    await container.memory.append(agent, "fact", agent)
+    await container.prompts.set(None, "public rules", "user")
+    for owner in (agent, None):
+        await container.skills.write(owner, "digest", "When digesting", "steps", "user")
+        spec = McpSpec(
+            name="echo",
+            transport=McpTransport.HTTP,
+            command=None,
+            args=(),
+            url="http://x",
+            env=(),
+            headers=(),
+        )
+        await container.mcp.add(owner, spec, probe=False, author="user")
+
+    root = container.resources.root
+    files = (await asyncio.to_thread(_git, "-C", str(root), "ls-files")).split()
+    assert len(files) == 7
+    assert [f for f in files if not is_resource_file(f)] == []

@@ -11,9 +11,13 @@
 写入是原子的：读取—变换—写入—提交在同一把锁里（update），任何一步失败都把涉及的路径在文件系统上还原成写入前
 的样子（不依赖 git），所以「报错」等于「没有生效」，调用方可以放心重试；还原本身失败时记 error 并一起抛出。
 
-仓库外也会有写入：agent 有 shell，能直接改自己的 skill 目录（read_skill 会给出目录），进程在写入中途被杀也会留下
-写完未提交的变化。两者用同一个机制收敛：每次提交前、以及启动时（recover），把工作区里不经本模块的变化先整体提交为一次
-reconcile，作者记为系统。这样外部写入最迟在下一次任何资源写入时进入历史，也不会被并进下一个作者的提交里。
+资源文件就是上面布局里列出的那些（RESOURCE_FILES，唯一定义），版本管理只管它们。
+
+仓库也会被绕过本模块写入：agent 有 shell 与文件工具，能直接改资源文件（read_skill 会给出 skill 目录）；进程在写入
+中途被杀也会留下写完未提交的变化。两者用同一个机制收敛：每次写入前、以及启动时（recover），把资源文件上不经本模块的
+变化先单独提交为一次 reconcile（作者记为系统，表示「来源不明的外部写入」）。这样外部写入最迟在下一次任何资源写入时
+进入历史，也不会被并进下一个作者的提交里。布局之外的东西（agent 放进目录的脚本、虚拟环境、嵌套的 git 仓库、自己的
+临时文件）不进历史：历史只增不改，进去就删不掉，也不能让一个 agent 目录里的杂物让所有资源写入失败。
 secret 不在这里：它们加密存在数据库的 vault 里，不需要版本管理。
 """
 
@@ -26,7 +30,7 @@ import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from muliao.errors import InvalidInput, NotFound
 
@@ -43,6 +47,27 @@ _REV = re.compile(r"^[0-9a-f]{40}$")
 # 与 ids.new_agent_id 的格式一致
 _AGENT_ID = re.compile(r"^[0-9a-f]{12}$")
 _TMP = ".tmp"
+# 资源文件（相对仓库根目录的 glob，`*` 不跨目录）：见模块说明的布局。reconcile 与 recover 只处理它们
+RESOURCE_FILES = (
+    "public/PROMPT.md",
+    "public/skills/*/SKILL.md",
+    "public/mcp/*.json",
+    "agents/*/PROMPT.md",
+    "agents/*/MEMORY.md",
+    "agents/*/skills/*/SKILL.md",
+    "agents/*/mcp/*.json",
+)
+
+
+def is_resource_file(rel: str) -> bool:
+    """rel 是否是布局里的一个资源文件（与 git 的 :(glob) 语义一致：每一段各自匹配）。"""
+    parts = PurePosixPath(rel).parts
+    return any(
+        len(parts) == len(pattern.split("/")) and PurePosixPath(rel).match(pattern)
+        for pattern in RESOURCE_FILES
+    )
+
+
 _GIT_EXIT_SECONDS = 5.0
 
 
@@ -173,10 +198,10 @@ class ResourceRepo:
     async def recover(self) -> None:
         """启动时（worker 开始之前、没有任何写入在进行）把仓库收敛到干净状态。
 
-        运行期的写入是原子的（见 apply），留下不一致的只有进程在写入或 git 运行中被杀：
+        进程在写入或 git 运行中被杀会留下：
         - .git 下遗留的锁（index.lock、refs/…/*.lock）：此刻不可能有别的 git 在用，删除并记录；
-        - 写了一半的 *.tmp：按定义不完整，删除并记录，不进入历史；
-        - 写完但没来得及提交的变化：整体提交为一次 reconcile，作者记为系统，记录涉及的路径。
+        - 写了一半的资源文件（`<资源文件>.tmp`，见 _write）：按定义不完整，删除并记录，不进入历史；
+        - 写完但没来得及提交的变化：与运行期的外部写入一样提交为一次 reconcile。
         """
         async with self._lock:
             await self.ensure()
@@ -186,22 +211,35 @@ class ResourceRepo:
             await self._reconcile_locked()
 
     async def _reconcile_locked(self) -> None:
-        """把工作区里不经本模块的变化（shell 直接写入、被杀的进程写完未提交的）整体提交为一次 reconcile。"""
-        await self._git("add", "-A")
-        _, staged = await self._git("diff", "--cached", "--name-only")
-        if not staged.strip():
-            return
-        await self._git("commit", "-q", "-m", RECONCILE_MESSAGE, f"--author={SYSTEM} <{SYSTEM}@muliao>")
-        log.warning(
-            "committed resource changes made outside the resource tools", extra={"paths": staged.splitlines()}
+        """把资源文件上不经本模块的变化（外部写入、被杀的进程写完未提交的）单独提交为一次 reconcile。"""
+        await self.ensure()
+        # 只列资源文件：status 对没有匹配的 pathspec 不报错（add 会），布局之外的路径 git 根本不会去看
+        _, status = await self._git(
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            *(f":(glob){p}" for p in RESOURCE_FILES),
         )
+        # -z 的每条记录是「XY 路径」；资源文件不会被重命名（rename 记录会多带一个原路径，这里不出现）
+        paths = [entry[3:] for entry in status.split("\0") if entry]
+        if not paths:
+            return
+        await self._git("add", "-A", "--", *paths)
+        await self._git(
+            "commit", "-q", "-m", RECONCILE_MESSAGE, f"--author={SYSTEM} <{SYSTEM}@muliao>", "--", *paths
+        )
+        log.warning("committed resource changes made outside the resource tools", extra={"paths": paths})
 
     def _partial_writes(self) -> list[Path]:
-        return [p for p in self.root.rglob(f"*{_TMP}") if ".git" not in p.relative_to(self.root).parts]
+        return [p for p in self.root.rglob(f"*{_TMP}") if is_resource_file(self.relative(p)[: -len(_TMP)])]
 
     async def apply(self, changes: Mapping[Path, str | None], message: str, author: str) -> str | None:
         """写入（内容为 None 表示删除该文件或目录）并提交，原子地：要么提交成功，要么什么都没发生。"""
         async with self._lock:
+            # 外部写入先单独记一版，不并进这次作者的提交
+            await self._reconcile_locked()
             return await self._apply_locked(changes, message, author)
 
     async def update(
@@ -212,14 +250,13 @@ class ResourceRepo:
         transform 返回新内容（None 表示删除），或抛出领域错误拒绝这次修改。
         """
         async with self._lock:
+            # 先收敛外部写入再读：读到的就是刚提交的版本，变换的结果不会悄悄盖掉一次外部写入
+            await self._reconcile_locked()
             return await self._apply_locked({path: transform(_read_optional(path))}, message, author)
 
     async def _apply_locked(
         self, changes: Mapping[Path, str | None], message: str, author: str
     ) -> str | None:
-        await self.ensure()
-        # 外部写入先单独记一版：不能算在这次的作者名下，失败回滚时也要能还原到它
-        await self._reconcile_locked()
         rel = [self.relative(p) for p in changes]
         # 写入之前的内容，失败时直接在文件系统上还原：不依赖 git（失败的往往正是 git，比如锁被占用）
         before = {path: _snapshot(path) for path in changes}

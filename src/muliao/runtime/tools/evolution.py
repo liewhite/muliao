@@ -41,7 +41,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
     async def edit_skill(ctx: RunContext[RunScope], name: str, old_text: str, new_text: str) -> str:
         """Change part of one of your private skills' instructions without rewriting the whole skill.
         `old_text` must occur exactly once in them; an empty `old_text` appends `new_text` at the end.
-        Use this (or `write_skill`) rather than editing SKILL.md with shell commands, so the change is versioned.
+        Use this (or `write_skill`) rather than editing SKILL.md with shell or file tools, so the change is versioned.
 
         Args:
             name: Skill name.
