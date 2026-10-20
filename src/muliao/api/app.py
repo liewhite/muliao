@@ -29,7 +29,7 @@ from muliao.errors import (
     UpstreamFailed,
 )
 from muliao.platform.bus import SubscriberOverflow
-from muliao.triggers.precheck import PrecheckFailed
+from muliao.triggers.api import PrecheckFailed
 
 log = logging.getLogger(__name__)
 

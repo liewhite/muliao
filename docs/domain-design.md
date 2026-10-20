@@ -359,7 +359,7 @@ muliao/
   app.py           组合根：构造领域、注册事件订阅、组装工具组
 ```
 
-依赖规则由 `tests/test_boundaries.py` 对源码的 import 做静态检查（不另引入 import-linter）：领域包之间只能 import 对方的 `api` 模块（命令、查询、读模型）与 `events` 模块（它发布的事件、接收的定向命令）；任何领域不得 import 别的领域的表，也不拿别的领域的 ORM 对象（`AgentInfo`、`SessionInfo` 这类读模型代替）；`platform` 不 import 任何领域；领域不 import HTTP 适配层（`api/`）与组合根（`container.py`）。经 `api` 的依赖无环：`files`、`agents` → `vault` → `agent_runtime` → `sessions` → `jobs`、`delegations`、`reflection`、`notifications`、`triggers`；反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`，例如 agent 领域订阅 `AgentSessionsCleared`），`events` 模块只放消息的数据形状。
+依赖规则由 `tests/test_boundaries.py` 对源码的 import 做静态检查（不另引入 import-linter）：领域包之间只能 import 对方的 `api` 模块（命令、查询、读模型）与 `events` 模块（它发布的事件、接收的定向命令）；任何领域不得 import 别的领域的表，也不拿别的领域的 ORM 对象（`AgentInfo`、`SessionInfo` 这类读模型代替）；`platform` 不 import 任何领域；领域不 import HTTP 适配层（`api/`）与组合根（`container.py`）；HTTP 适配层经领域的 `api`（与 `events`）调用领域，另外可以 import 领域的 `tables`，把领域交给它的行序列化成响应（它是适配器，不是领域，不另造一套读模型）。经 `api` 的依赖无环：`files`、`agents` → `vault` → `agent_runtime` → `sessions` → `jobs`、`delegations`、`reflection`、`notifications`、`triggers`；反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`，例如 agent 领域订阅 `AgentSessionsCleared`），`events` 模块只放消息的数据形状。
 
 表定义放在各领域包内（`<domain>/tables.py`），Alembic 汇总全部 metadata。跨领域外键全部删除，领域内的外键保留。开发期断言：一个写事务写入的表属于同一个领域（平台任务表除外）——`schema.single_domain_writes`，测试的容器经 `Database(check_writes=...)` 打开，记下每个事务的 ORM 写入与 insert / update / delete 语句。
 

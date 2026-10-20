@@ -5,8 +5,7 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.errors import InvalidInput, TooLarge, Unauthorized
-from muliao.triggers.precheck import PrecheckFailed
-from muliao.triggers.service import EVENT_MAX_BYTES
+from muliao.triggers.api import EVENT_MAX_BYTES, PrecheckFailed
 
 # 不需要登录：外部系统调用
 public_router = APIRouter()

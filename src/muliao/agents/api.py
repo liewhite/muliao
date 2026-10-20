@@ -10,12 +10,15 @@ from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import Scope, owned_by, owner_of, scope_of, visible, visible_owners
 from muliao.agents.prompts import PromptStore
-from muliao.agents.resources import ResourceRepo
-from muliao.agents.service import AgentInfo, AgentService, active_agent_in, agent_in
+from muliao.agents.resources import USER, ResourceRepo
+from muliao.agents.service import AgentInfo, AgentPatch, AgentService, AgentSpec, active_agent_in, agent_in
 from muliao.agents.skills import SkillMeta, SkillStore
 from muliao.agents.tool_catalog import REFLECTION_GROUPS
 
 __all__ = [
+    "USER",
+    "AgentPatch",
+    "AgentSpec",
     "REFLECTION_GROUPS",
     "AgentInfo",
     "AgentService",

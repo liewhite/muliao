@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.errors import InvalidInput, NotFound
-from muliao.files.store import FILES_PATH, FileMeta
+from muliao.files.api import FILES_PATH, FileMeta
 
 router = APIRouter()
 

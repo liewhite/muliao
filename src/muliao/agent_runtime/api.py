@@ -22,11 +22,15 @@ from muliao.agent_runtime.conventions import (
     tool_threads,
     unanswered_calls,
 )
+from muliao.agent_runtime.mcp import McpServer, McpTransport, mcp_config
 from muliao.agent_runtime.redaction import redact_messages
 from muliao.agent_runtime.runner import AgentRuntime, RunProfile, StepHooks, TextKind, ToolGroups
 from muliao.agent_runtime.workspace_tools import SHELL_DESCRIPTION, ShellLimits, file_toolset, run_foreground
 
 __all__ = [
+    "McpServer",
+    "McpTransport",
+    "mcp_config",
     "RUN_EVENTS",
     "RUN_STOPPED",
     "SHELL_DESCRIPTION",

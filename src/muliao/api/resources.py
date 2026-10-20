@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from muliao.agents.resources import USER
+from muliao.agents.api import USER
 from muliao.api.deps import C
 from muliao.errors import InvalidInput
 

@@ -3,7 +3,8 @@
 - 领域包之间只能 import 对方的 api 模块（命令、查询、数据结构）与 events 模块（它发布的事件与接收的命令），
   不能碰对方的表与内部模块；
 - platform 不 import 任何领域；
-- 领域不 import HTTP 适配层（api 包）与组合根（container）。
+- 领域不 import HTTP 适配层（api 包）与组合根（container）；
+- HTTP 适配层经领域的 api（与 events）调用领域，另外可以 import 领域的 tables，把领域交给它的行序列化成响应。
 """
 
 import ast
@@ -24,6 +25,8 @@ DOMAINS = {
 }
 # 一个领域对外公开的模块
 PUBLIC = {"api", "events"}
+# HTTP 适配层另外可以 import 的：序列化领域交给它的行
+HTTP_VISIBLE = PUBLIC | {"tables"}
 
 
 def _imports(path: Path) -> list[tuple[int, str]]:
@@ -55,6 +58,8 @@ def _violations() -> list[str]:
                     problems.append(f"{where} (a domain must not depend on the HTTP layer or the composition root)")
                 elif target[1] in DOMAINS and target[1] != owner and (len(target) < 3 or target[2] not in PUBLIC):
                     problems.append(f"{where} (only {target[1]}.api and {target[1]}.events are public)")
+            if owner == "api" and target[1] in DOMAINS and (len(target) < 3 or target[2] not in HTTP_VISIBLE):
+                problems.append(f"{where} (the HTTP layer uses {target[1]}.api, .events and .tables only)")
     return sorted(problems)
 
 
