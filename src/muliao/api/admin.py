@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
 from muliao.api.deps import C
@@ -161,7 +161,7 @@ async def subscribe(c: C, body: PushSubscriptionIn) -> None:
     await c.push_subscriptions.add(body.endpoint, body.keys.p256dh, body.keys.auth)
 
 
-@router.post("/push/test", status_code=202)
+@router.post("/push/test", status_code=202, response_class=Response)
 async def test_push(c: C) -> None:
     await c.notifier.notify(
         None,

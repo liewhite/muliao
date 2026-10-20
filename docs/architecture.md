@@ -355,8 +355,9 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 ## 11. 前后端契约
 
-- **接口类型只有一份**：后端的响应模型与 SSE 事件模型（`muliao/events.py`：任务状态、`saved`、运行条目、运行文字增量、心跳）就是契约。`python -m muliao.api.app` 输出与服务一致的 OpenAPI 描述（`/api/events` 声明 `ServerEvent` 响应，事件模型因此也在里面），提交为 `web/openapi.json`，后端测试保证它与接口一致；前端类型 `web/src/schema.d.ts` 由 `npm run gen:api`（openapi-typescript）生成，前端测试保证它与描述一致。`api.ts` 只给生成的类型起名字，并把 agent id 字段换成品牌类型 `AgentId`。改了接口：重新生成两份，再改前端。
-- **SSE 只序列化这些模型**（`model_dump_json`，不用 `default=str` 兜底）。数据库是唯一事实源，事件只是展示加速：前端收到任务状态变化、`saved`、重连时从接口重新拉取。
+- **接口类型只有一份**：后端的请求、响应模型与 SSE 事件模型（`muliao/events.py`：任务状态、`saved`、运行条目、运行文字增量、心跳）就是契约。`python -m muliao.api.app` 输出与服务一致的 OpenAPI 描述，提交为 `web/openapi.json`，后端测试保证它与接口一致；前端类型 `web/src/schema.d.ts` 由 `npm run gen:api`（openapi-typescript）生成，前端测试保证它与描述一致。改了接口：重新生成两份，再改前端。
+- **前端调用按描述类型化**（`api.ts` 的 `call`）：每个调用写一次路径模板（如 `/api/agents/{agent_id}`），路径参数、查询参数、请求体与成功响应的类型都从生成的 `paths` 推出；没有响应体的接口类型为 `void`。`api.ts` 只给生成的类型起名字，并在边界上把 agent id 字段换成品牌类型 `AgentId`。唯一的例外是上传（请求体是文件本身，描述里没有 JSON 请求体）。
+- **SSE 用 FastAPI 自带的事件流**（`/api/events`，`EventSourceResponse`）：每条 data 按 `ServerEvent` 校验并序列化。`ServerEvent` 是具名组件，前端的事件联合直接取它（openapi-typescript 还不认识 OpenAPI 3.2 的 `itemSchema`），只加上前端自己的重连事件。数据库是唯一事实源，事件只是展示加速：前端收到任务状态变化、`saved`、重连时从接口重新拉取。
 - **实时条目与历史同一个投影**（`muliao/transcript.py`）：前端把快照（会话接口的 `live`）与之后收到的事件按 `run_id`、`seq` 合并，完整条目原样接上，文字增量接在同类最后一条后面（`events.liveItems`），不自己投影。
 - **结构化状态由后端给出**：`ask_user` 条目的状态见第 4 节；前端不解析工具结果文本。
 - **路由**：前端会话页地址只由 `api.sessionRoute` 构造（推送通知点开的地址由后端 `delivery/webpush.py` 生成，与它一致）；webhook 地址只由 `triggers.webhook.hook_url` 构造。

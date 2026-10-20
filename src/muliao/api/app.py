@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.sse import EventSourceResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -36,20 +37,12 @@ _HEARTBEAT_SECONDS = 15.0
 TITLE = "Muliao"
 
 
-def _heartbeat(ui_version: str | None) -> str:
+def _heartbeat(ui_version: str | None) -> HeartbeatEvent:
     """心跳是一个真正的事件（不是 SSE 注释行，那种前端读不到），连上就发一次、之后每隔一段时间发一次：
     - 前端据此判断连接是否还活着：手机切后台、代理链路断开时 EventSource 往往收不到任何错误，只能靠「多久没收到
       消息」发现；间隔随心跳下发，前端不另存一份；
     - ui_version 是服务端当前前端构建的版本：手机主屏应用常驻内存，升级后旧页面还在跑，前端据此提示刷新。"""
-    return _sse(HeartbeatEvent(interval_seconds=_HEARTBEAT_SECONDS, ui_version=ui_version))
-
-
-class EventStream(StreamingResponse):
-    media_type = "text/event-stream"
-
-
-def _sse(event: BaseModel) -> str:
-    return f"data: {event.model_dump_json()}\n\n"
+    return HeartbeatEvent(interval_seconds=_HEARTBEAT_SECONDS, ui_version=ui_version)
 
 
 def ui_version(web_dir: Path) -> str | None:
@@ -121,26 +114,23 @@ def _private_routes() -> APIRouter:
     async def me() -> None:
         return None
 
-    # 每条 data 是一个 ServerEvent：声明出来是为了把事件模型登记进 OpenAPI，前端类型由此生成
-    @router.get("/events", response_class=EventStream, responses={200: {"model": ServerEvent}})
-    async def events(request: Request, c: C) -> EventStream:
+    # FastAPI 的 SSE：每条 data 按 ServerEvent 校验并序列化，OpenAPI 里登记为事件流的条目类型，前端类型由此生成。
+    # 断线重连的间隔用浏览器的默认值（几秒），连接是否还活着由心跳与前端的看门狗判断
+    @router.get("/events", response_class=EventSourceResponse)
+    async def events(request: Request, c: C) -> AsyncIterator[ServerEvent]:
         heartbeat = _heartbeat(request.app.state.ui_version)
-
-        async def stream() -> AsyncIterator[str]:
-            async with c.bus.subscribe() as sub:
-                # 连上就先发一次心跳：前端立刻知道间隔
-                yield "retry: 3000\n\n" + heartbeat
-                while True:
-                    try:
-                        event = await asyncio.wait_for(sub.next(), timeout=_HEARTBEAT_SECONDS)
-                    except TimeoutError:
-                        yield heartbeat
-                        continue
-                    except SubscriberOverflow:
-                        return
-                    yield _sse(event)
-
-        return EventStream(stream(), headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        async with c.bus.subscribe() as sub:
+            # 连上就先发一次心跳：前端立刻知道间隔
+            yield heartbeat
+            while True:
+                try:
+                    event = await asyncio.wait_for(sub.next(), timeout=_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    yield heartbeat
+                    continue
+                except SubscriberOverflow:
+                    return
+                yield event
 
     return router
 
@@ -195,7 +185,8 @@ def create_app(container: Container, web_dir: Path) -> FastAPI:
 
 
 def _install_api(app: FastAPI) -> None:
-    """全部接口；不依赖运行时的 container，生成接口描述时也用它（api_schema）。"""
+    """全部接口；不依赖运行时的 container，生成接口描述时也用它（api_schema）。处理请求时路由读取 app.state 上的
+    container、auth、secure_cookie、ui_version，只有 create_app 设置它们：只装了路由的应用只能用来生成描述。"""
     app.include_router(_public_routes())
     # webhook 的事件入口凭触发器 token 鉴权，不走登录
     app.include_router(webhook.public_router)

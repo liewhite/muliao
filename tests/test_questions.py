@@ -376,6 +376,28 @@ async def test_a_live_question_is_shown_as_asking(container, make_agent, models)
     assert ask.status == "asking" and len(ask.questions) == 2
 
 
+async def test_an_answered_question_is_not_replayed_as_a_live_item(client, container, make_agent, models):
+    """续跑时 pydantic-ai 会把交回结果的挂起调用再发一遍事件：它已经在历史里，实时条目里不再出现。"""
+    session_id, _ = await _asked(client, container, make_agent, models)
+    events = []
+
+    async def collect():
+        async with container.bus.subscribe() as sub:
+            async for e in sub:
+                events.append(e)
+
+    collector = asyncio.create_task(collect())
+    await asyncio.sleep(0)
+    answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
+    await drain(container)
+    collector.cancel()
+
+    items = [e.item for e in events if e.type == "run" and e.event == "item"]
+    assert all(i.tool_call_id != "q1" for i in items)
+    assert any(e.type == "run" and e.event == "delta" for e in events)
+
+
 async def test_two_questions_wait_for_both_answers_and_a_message_skips_the_rest(
     client, container, make_agent, models
 ):

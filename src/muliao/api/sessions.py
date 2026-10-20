@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel
 
 from muliao.api.deps import C
@@ -213,7 +213,7 @@ async def reply(c: C, session_id: str, body: ReplyIn) -> list[MailOut]:
     return await mail_outs(c, received.mail)
 
 
-@router.post("/sessions/{session_id}/stop", status_code=202)
+@router.post("/sessions/{session_id}/stop", status_code=202, response_class=Response)
 async def stop(c: C, session_id: str) -> None:
     """停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的异步工作
     （docs/architecture.md「停止会话」）。"""

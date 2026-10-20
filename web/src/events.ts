@@ -56,22 +56,18 @@ export function liveItems(events: RunEvent[]): Item[] {
   return items
 }
 
-/** task 状态变化：页面据此从数据库重新拉取 */
-export type TaskEvent = Schemas['TaskEvent']
-/** 运行中又保存了一步（后端 bus.LiveRuns.step）：历史有了新内容，实时事件换成新的一段 */
-export type SavedEvent = Schemas['SavedEvent']
-
 /** 重新连上了（前端自己产生）：期间可能丢了事件，页面要重新拉取 */
 export interface ReconnectEvent {
   type: 'reconnected'
 }
 
-export type ServerEvent = RunEvent | TaskEvent | ReconnectEvent | SavedEvent
-
-type Listener = (e: ServerEvent) => void
-
 /** 服务端定时发的心跳（api/app.py），只用来判断连接是否还活着，不交给页面 */
 type HeartbeatEvent = Schemas['HeartbeatEvent']
+
+/** 交给页面的事件：服务端发的（除了心跳），加上前端自己的重连事件 */
+export type ServerEvent = Exclude<Schemas['ServerEvent'], HeartbeatEvent> | ReconnectEvent
+
+type Listener = (e: ServerEvent) => void
 
 /** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
 export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {
@@ -126,7 +122,7 @@ function connect() {
   }
   source.onmessage = (msg) => {
     lastMessageAt = Date.now()
-    const event = JSON.parse(msg.data) as ServerEvent | HeartbeatEvent
+    const event = JSON.parse(msg.data) as Schemas['ServerEvent']
     if (event.type === 'heartbeat') {
       heartbeatSeconds = event.interval_seconds
       if (loadedUiVersion === undefined) loadedUiVersion = event.ui_version

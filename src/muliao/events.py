@@ -5,7 +5,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 from muliao.models import TaskKind, TaskStatus
 from muliao.transcript import Item
@@ -67,5 +67,6 @@ class HeartbeatEvent(BaseModel):
     ui_version: str | None
 
 
-# SSE 里每条 data 的形状；只用于登记 OpenAPI（OpenAPI 的 discriminator 不能嵌套，这里不标）
-ServerEvent = TaskEvent | SavedEvent | RunItemEvent | RunDeltaEvent | HeartbeatEvent
+class ServerEvent(RootModel[TaskEvent | SavedEvent | RunItemEvent | RunDeltaEvent | HeartbeatEvent]):
+    """SSE 里每条 data 的形状（api.app 的 /events）。具名是为了在 OpenAPI 里成为一个组件：前端的事件联合直接取它，
+    不另列一遍（openapi-typescript 还不认识 OpenAPI 3.2 的 itemSchema）。OpenAPI 的 discriminator 不能嵌套，这里不标。"""

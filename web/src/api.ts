@@ -1,6 +1,6 @@
 // 接口类型取自 schema.d.ts（由后端的 OpenAPI 描述生成，见 scripts/gen-api.mjs），这里只起名字、补上品牌类型
 
-import type { components } from './schema'
+import type { components, paths } from './schema'
 
 export type Schemas = components['schemas']
 
@@ -18,7 +18,7 @@ export const asAgentId = (value: string) => value as AgentId
 type WithAgentId<T, K extends keyof T> = Omit<T, K> & { [P in K]: null extends T[P] ? AgentId | null : AgentId }
 
 export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
-/** agent 表单总是给出全部字段：新建与修改共用 */
+/** 修改 agent 的请求体：整体替换，字段全部必填（新建用 Schemas['AgentCreate']） */
 export type AgentInput = Schemas['AgentUpdate']
 export type Session = WithAgentId<Schemas['SessionOut'], 'agent_id'>
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
@@ -96,10 +96,6 @@ function withQuery(path: string, query?: Query): string {
 // 401 时通知应用跳转登录页
 export const unauthorizedEvent = new EventTarget()
 
-async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
-  return send<T>(method, path, query, body === undefined ? undefined : { type: 'application/json', data: JSON.stringify(body) })
-}
-
 /** 所有请求的唯一出口：统一的 401 处理与错误信息 */
 async function send<T>(method: string, path: string, query: Query | undefined, body?: { type: string; data: BodyInit }): Promise<T> {
   const resp = await fetch(withQuery(path, query), {
@@ -122,14 +118,50 @@ async function send<T>(method: string, path: string, query: Query | undefined, b
     }
     throw new ApiError(resp.status, `${resp.status}: ${message}`)
   }
-  if (resp.status === 204) return undefined as T
-  return (await resp.json()) as T
+  // 没有响应体的接口（204，或 stop 这类 202）在接口描述里就是没有 content，类型为 void
+  const text = await resp.text()
+  return (text === '' ? undefined : JSON.parse(text)) as T
 }
 
-const get = <T>(path: string, query?: Query) => request<T>('GET', path, undefined, query)
-const post = <T>(path: string, body?: unknown, query?: Query) => request<T>('POST', path, body ?? {}, query)
-const put = <T>(path: string, body: unknown, query?: Query) => request<T>('PUT', path, body, query)
-const del = (path: string, query?: Query) => request<void>('DELETE', path, undefined, query)
+// ---- 按接口描述（schema.d.ts 的 paths）类型化的调用：路径模板、参数、请求体、响应各只对应一次 ----
+
+type Method = 'get' | 'post' | 'put' | 'patch' | 'delete'
+type Path = keyof paths
+type MethodOf<P extends Path> = { [M in Method]: [NonNullable<paths[P][M]>] extends [never] ? never : M }[Method]
+type Operation<P extends Path, M extends Method> = NonNullable<paths[P][M]>
+
+type Responses<O> = O extends { responses: infer R } ? R : never
+type JsonOf<R> = R extends { content: { 'application/json': infer T } } ? T : void
+/** 成功响应的 JSON 体；204、202 没有响应体时为 void */
+type Result<O> = JsonOf<Responses<O>[Extract<keyof Responses<O>, 200 | 201 | 202 | 204>]>
+
+type Parameters_<O> = O extends { parameters: infer X } ? X : never
+type PathParams<O> = Parameters_<O> extends { path: infer X } ? X : never
+type QueryParams<O> = Parameters_<O> extends { query?: infer X } ? NonNullable<X> : never
+type Body<O> = O extends { requestBody: { content: { 'application/json': infer B } } } ? B : never
+type WithoutNever<T> = { [K in keyof T as [T[K]] extends [never] ? never : K]: T[K] }
+/** 查询参数都可选时，query 本身也可以不给 */
+type QueryArg<Q> = [Q] extends [never] ? object : object extends Q ? { query?: Q } : { query: Q }
+type Args<O> = WithoutNever<{ path: PathParams<O>; body: Body<O> }> & QueryArg<QueryParams<O>>
+
+function call<P extends Path, M extends MethodOf<P>>(
+  method: M,
+  path: P,
+  ...[args]: object extends Args<Operation<P, M>> ? [Args<Operation<P, M>>?] : [Args<Operation<P, M>>]
+): Promise<Result<Operation<P, M>>> {
+  const given = (args ?? {}) as { path?: Record<string, string | number>; query?: Query; body?: unknown }
+  const url = path.replace(/\{(\w+)\}/g, (_, name: string) => {
+    const value = given.path?.[name]
+    if (value === undefined) throw new Error(`missing path parameter ${name} for ${path}`)
+    return encodeURIComponent(String(value))
+  })
+  // FastAPI 对没有请求体的 POST 也接受空 JSON 对象；有 requestBody 的接口按描述必须给出
+  const body = given.body === undefined ? undefined : { type: 'application/json', data: JSON.stringify(given.body) }
+  return send(method.toUpperCase(), url, given.query, body)
+}
+
+/** 接口返回的 agent id 都是字符串；这里是给它们打上 AgentId 品牌的边界（字段由 WithAgentId 决定） */
+const branded = <T>(p: Promise<unknown>) => p as Promise<T>
 
 /** 前端路由：agent 名称可含中文，必须编码 */
 export const agentRoute = (id: AgentId) => `/agents/${id}`
@@ -138,99 +170,93 @@ export const sessionRoute = (id: string) => `/sessions/${id}`
 export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
 
 export const api = {
-  login: (password: string) => post<void>('/api/auth/login', { password }),
-  logout: () => post<void>('/api/auth/logout'),
-  me: () => get<void>('/api/auth/me'),
+  login: (password: string) => call('post', '/api/auth/login', { body: { password } }),
+  logout: () => call('post', '/api/auth/logout'),
+  me: () => call('get', '/api/auth/me'),
 
-  agents: () => get<Agent[]>('/api/agents'),
-  agentDefaults: () => get<AgentDefaults>('/api/agent-defaults'),
+  agents: () => branded<Agent[]>(call('get', '/api/agents')),
+  agentDefaults: () => call('get', '/api/agent-defaults'),
   /** 服务端配置的 LLM provider 名 */
-  providers: () => get<string[]>('/api/providers'),
+  providers: () => call('get', '/api/providers'),
   /** 向 provider 实时查询的模型名 */
-  providerModels: (provider: string) => get<string[]>(`/api/providers/${encodeURIComponent(provider)}/models`),
-  agent: (id: AgentId) => get<Agent>(`/api/agents/${id}`),
-  createAgent: (input: Schemas['AgentCreate']) => post<Agent>('/api/agents', input),
-  updateAgent: (id: AgentId, input: AgentInput) => put<Agent>(`/api/agents/${id}`, input),
-  deleteAgent: (id: AgentId) => del(`/api/agents/${id}`),
-  memory: (id: AgentId) => get<Memory>(`/api/agents/${id}/memory`),
-  setMemory: (id: AgentId, content: string) => put<Memory>(`/api/agents/${id}/memory`, { content }),
-  reflections: (id: AgentId) => get<Reflection[]>(`/api/agents/${id}/reflections`),
+  providerModels: (name: string) => call('get', '/api/providers/{name}/models', { path: { name } }),
+  agent: (agent_id: AgentId) => branded<Agent>(call('get', '/api/agents/{agent_id}', { path: { agent_id } })),
+  createAgent: (body: Schemas['AgentCreate']) => branded<Agent>(call('post', '/api/agents', { body })),
+  updateAgent: (agent_id: AgentId, body: AgentInput) =>
+    branded<Agent>(call('put', '/api/agents/{agent_id}', { path: { agent_id }, body })),
+  deleteAgent: (agent_id: AgentId) => call('delete', '/api/agents/{agent_id}', { path: { agent_id } }),
+  memory: (agent_id: AgentId) => call('get', '/api/agents/{agent_id}/memory', { path: { agent_id } }),
+  setMemory: (agent_id: AgentId, content: string) =>
+    call('put', '/api/agents/{agent_id}/memory', { path: { agent_id }, body: { content } }),
+  reflections: (agent_id: AgentId) => call('get', '/api/agents/{agent_id}/reflections', { path: { agent_id } }),
 
-  skills: (owner: string | null) => get<SkillMeta[]>('/api/skills', { owner }),
-  skill: (owner: string | null, name: string) => get<Skill>('/api/skill', { owner, name }),
-  saveSkill: (skill: Skill) => put<SkillMeta>('/api/skill', skill),
-  deleteSkill: (owner: string | null, name: string) => del('/api/skill', { owner, name }),
+  skills: (owner: string | null) => call('get', '/api/skills', { query: { owner } }),
+  skill: (owner: string | null, name: string) => call('get', '/api/skill', { query: { owner, name } }),
+  saveSkill: (body: Schemas['SkillIn']) => call('put', '/api/skill', { body }),
+  deleteSkill: (owner: string | null, name: string) => call('delete', '/api/skill', { query: { owner, name } }),
 
   sessions: (query: { agent_id?: AgentId; origin?: Origin[]; limit?: number; offset?: number }) =>
-    get<Session[]>('/api/sessions', query),
-  session: (id: string) => get<SessionDetail>(`/api/sessions/${id}`),
+    branded<Session[]>(call('get', '/api/sessions', { query })),
+  session: (session_id: string) =>
+    branded<SessionDetail>(call('get', '/api/sessions/{session_id}', { path: { session_id } })),
   startSession: (agent_id: AgentId, prompt: string, attachments: string[]) =>
-    post<Session>('/api/sessions', { agent_id, prompt, attachments }),
-  reply: (id: string, prompt: string, attachments: string[]) =>
-    post<Mail[]>(`/api/sessions/${id}/messages`, { prompt, attachments }),
+    branded<Session>(call('post', '/api/sessions', { body: { agent_id, prompt, attachments } })),
+  reply: (session_id: string, prompt: string, attachments: string[]) =>
+    call('post', '/api/sessions/{session_id}/messages', { path: { session_id }, body: { prompt, attachments, answers: {} } }),
   /** 回答挂起的提问：作为这次 ask_user 调用的结果交回模型 */
-  answer: (id: string, toolCallId: string, answers: QuestionAnswer[]) =>
-    post<Mail[]>(`/api/sessions/${id}/messages`, { prompt: '', answers: { [toolCallId]: answers } }),
-  /** 请求体就是文件内容，Content-Type 是它的类型；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
+  answer: (session_id: string, toolCallId: string, answers: QuestionAnswer[]) =>
+    call('post', '/api/sessions/{session_id}/messages', {
+      path: { session_id },
+      body: { prompt: '', attachments: [], answers: { [toolCallId]: answers } },
+    }),
+  /** 请求体就是文件内容，Content-Type 是它的类型（接口描述里没有 JSON 请求体）；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
   uploadFile: (file: File) =>
     send<FileInfo>('POST', FILES_PATH, { name: file.name }, { type: file.type || 'application/octet-stream', data: file }),
   /** 同时把指向这个会话的通知标为已读 */
-  markRead: (id: string) => post<void>(`/api/sessions/${id}/read`),
-  notifications: () => get<AppNotification[]>('/api/notifications'),
-  unreadNotifications: () => get<{ count: number }>('/api/notifications/unread'),
+  markRead: (session_id: string) => call('post', '/api/sessions/{session_id}/read', { path: { session_id } }),
+  notifications: () => call('get', '/api/notifications'),
+  unreadNotifications: () => call('get', '/api/notifications/unread'),
   /** 标记到 throughId（用户看到的最新一条）为止已读，之后才到的保持未读 */
-  markNotificationsRead: (throughId: number) => post<void>('/api/notifications/read', { through_id: throughId }),
-  /** 停止正在运行的一轮；停止前已经产生的部分照常保存 */
-  stop: (id: string) => post<void>(`/api/sessions/${id}/stop`),
-  compact: (id: string) => post<{ queued: boolean }>(`/api/sessions/${id}/compact`),
-  deleteSession: (id: string) => del(`/api/sessions/${id}`),
+  markNotificationsRead: (throughId: number) => call('post', '/api/notifications/read', { body: { through_id: throughId } }),
+  /** 停止正在进行的运行；停止前已经产生的部分照常保存 */
+  stop: (session_id: string) => call('post', '/api/sessions/{session_id}/stop', { path: { session_id } }),
+  compact: (session_id: string) => call('post', '/api/sessions/{session_id}/compact', { path: { session_id } }),
+  deleteSession: (session_id: string) => call('delete', '/api/sessions/{session_id}', { path: { session_id } }),
 
-  tasks: (status?: TaskStatus) => get<Task[]>('/api/tasks', { status }),
-  retryTask: (id: number) => post<Task>(`/api/tasks/${id}/retry`),
+  tasks: (status?: TaskStatus) => branded<Task[]>(call('get', '/api/tasks', { query: { status } })),
+  retryTask: (task_id: number) => branded<Task>(call('post', '/api/tasks/{task_id}/retry', { path: { task_id } })),
 
-  triggerKinds: () => get<TriggerKind[]>('/api/trigger-kinds'),
-  triggers: () => get<Trigger[]>('/api/triggers'),
-  createTrigger: (t: {
-    name: string
-    agent_id: AgentId
-    kind: string
-    prompt: string
-    config: Record<string, unknown>
-    precheck: Precheck | null
-  }) =>
-    post<Trigger>('/api/triggers', t),
-  /** 只修改给出的字段 */
-  /** precheck 不给表示不变，给 null 表示去掉 */
-  updateTrigger: (
-    id: number,
-    patch: { prompt?: string; config?: Record<string, unknown>; enabled?: boolean; precheck?: Precheck | null },
-  ) =>
-    request<Trigger>('PATCH', `/api/triggers/${id}`, patch),
+  triggerKinds: () => call('get', '/api/trigger-kinds'),
+  triggers: () => branded<Trigger[]>(call('get', '/api/triggers')),
+  createTrigger: (body: Schemas['TriggerCreate'] & { agent_id: AgentId }) => branded<Trigger>(call('post', '/api/triggers', { body })),
+  /** 只修改给出的字段；precheck 不给表示不变，给 null 表示去掉 */
+  updateTrigger: (trigger_id: number, body: Schemas['TriggerPatch']) =>
+    branded<Trigger>(call('patch', '/api/triggers/{trigger_id}', { path: { trigger_id }, body })),
   /** session_id 为 null：前置检查判定这次不调用 agent */
-  runTrigger: (id: number) => post<{ session_id: string | null }>(`/api/triggers/${id}/run`),
+  runTrigger: (trigger_id: number) => call('post', '/api/triggers/{trigger_id}/run', { path: { trigger_id } }),
   /** webhook：生成或重新生成 token，明文只返回这一次 */
-  generateTriggerToken: (id: number) => post<{ token: string }>(`/api/triggers/${id}/webhook/token`),
-  deleteTrigger: (id: number) => del(`/api/triggers/${id}`),
-  /** owner 为空时是公共 prompt 的历史；新的在前，第一条即当前生效 */
+  generateTriggerToken: (trigger_id: number) =>
+    call('post', '/api/triggers/{trigger_id}/webhook/token', { path: { trigger_id } }),
+  deleteTrigger: (trigger_id: number) => call('delete', '/api/triggers/{trigger_id}', { path: { trigger_id } }),
   /** owner 为空时是公共资源；新的在前，第一条即当前生效 */
   history: (kind: ResourceKind, owner: AgentId | null) =>
-    get<Revision[]>(`/api/resources/${kind}/history`, owner === null ? {} : { owner }),
+    call('get', '/api/resources/{kind}/history', { path: { kind }, query: { owner } }),
   restore: (kind: ResourceKind, owner: AgentId | null, rev: string) =>
-    post<void>(`/api/resources/${kind}/restore`, { owner, rev }),
-  setPublicPrompt: (content: string) => put<void>('/api/prompts/public', { content }),
-  mcp: () => get<McpServer[]>('/api/mcp'),
-  addMcp: (input: McpInput) => post<McpServer>('/api/mcp', input),
-  probeMcp: (owner: AgentId | null, name: string) => post<string[]>('/api/mcp/tools', undefined, { owner, name }),
+    call('post', '/api/resources/{kind}/restore', { path: { kind }, body: { owner, rev } }),
+  setPublicPrompt: (content: string) => call('put', '/api/prompts/public', { body: { content } }),
+  mcp: () => branded<McpServer[]>(call('get', '/api/mcp')),
+  addMcp: (body: McpInput) => branded<McpServer>(call('post', '/api/mcp', { body })),
+  probeMcp: (owner: AgentId | null, name: string) => call('post', '/api/mcp/tools', { query: { owner, name } }),
   setMcpEnabled: (owner: AgentId | null, name: string, enabled: boolean) =>
-    put<McpServer>('/api/mcp/enabled', { enabled }, { owner, name }),
-  deleteMcp: (owner: AgentId | null, name: string) => del('/api/mcp', { owner, name }),
+    branded<McpServer>(call('put', '/api/mcp/enabled', { query: { owner, name }, body: { enabled } })),
+  deleteMcp: (owner: AgentId | null, name: string) => call('delete', '/api/mcp', { query: { owner, name } }),
 
-  secrets: () => get<SecretInfo[]>('/api/vault'),
+  secrets: () => branded<SecretInfo[]>(call('get', '/api/vault')),
   setSecret: (owner: AgentId | null, key: string, value: string, description: string) =>
-    put<void>(`/api/vault/${encodeURIComponent(key)}`, { value, description }, { owner }),
-  deleteSecret: (owner: AgentId | null, key: string) => del(`/api/vault/${encodeURIComponent(key)}`, { owner }),
+    call('put', '/api/vault/{key}', { path: { key }, query: { owner }, body: { value, description } }),
+  deleteSecret: (owner: AgentId | null, key: string) => call('delete', '/api/vault/{key}', { path: { key }, query: { owner } }),
 
-  vapidKey: () => get<{ public_key: string }>('/api/push/vapid'),
-  subscribePush: (sub: PushSubscriptionJSON) => post<void>('/api/push/subscriptions', sub),
-  testPush: () => post<void>('/api/push/test'),
+  vapidKey: () => call('get', '/api/push/vapid'),
+  subscribePush: (body: Schemas['PushSubscriptionIn']) => call('post', '/api/push/subscriptions', { body }),
+  testPush: () => call('post', '/api/push/test'),
 }

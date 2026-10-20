@@ -960,12 +960,7 @@
         ],
         "responses": {
           "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -1562,12 +1557,7 @@
         "operationId": "test_push_api_push_test_post",
         "responses": {
           "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
+            "description": "Successful Response"
           }
         }
       }
@@ -2145,26 +2135,30 @@
             "description": "Successful Response",
             "content": {
               "text/event-stream": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/TaskEvent"
+                "itemSchema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "string",
+                      "contentMediaType": "application/json",
+                      "contentSchema": {
+                        "$ref": "#/components/schemas/ServerEvent"
+                      }
                     },
-                    {
-                      "$ref": "#/components/schemas/SavedEvent"
+                    "event": {
+                      "type": "string"
                     },
-                    {
-                      "$ref": "#/components/schemas/RunItemEvent"
+                    "id": {
+                      "type": "string"
                     },
-                    {
-                      "$ref": "#/components/schemas/RunDeltaEvent"
-                    },
-                    {
-                      "$ref": "#/components/schemas/HeartbeatEvent"
+                    "retry": {
+                      "type": "integer",
+                      "minimum": 0
                     }
-                  ],
-                  "type": "string",
-                  "title": "Response 200 Events Api Events Get"
+                  },
+                  "required": [
+                    "data"
+                  ]
                 }
               }
             }
@@ -3697,6 +3691,27 @@
           "updated_at"
         ],
         "title": "SecretOut"
+      },
+      "ServerEvent": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TaskEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SavedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/RunItemEvent"
+          },
+          {
+            "$ref": "#/components/schemas/RunDeltaEvent"
+          },
+          {
+            "$ref": "#/components/schemas/HeartbeatEvent"
+          }
+        ],
+        "title": "ServerEvent",
+        "description": "SSE 里每条 data 的形状（api.app 的 /events）。具名是为了在 OpenAPI 里成为一个组件：前端的事件联合直接取它，\n不另列一遍（openapi-typescript 还不认识 OpenAPI 3.2 的 itemSchema）。OpenAPI 的 discriminator 不能嵌套，这里不标。"
       },
       "SessionDetail": {
         "properties": {
