@@ -228,6 +228,28 @@ async def check_receivable_in(s: AsyncSession, inbound: Inbound) -> None:
     await _existing_target_in(s, inbound)
 
 
+def receive_lane(session_id: str) -> str:
+    """投给一个会话的 Receive 命令所在的 lane：同一会话的来信按发送顺序投递，不同会话之间互不阻塞。不是会话自己的
+    lane：投信不排在会话正在进行的运行后面。"""
+    return f"sessions.receive:{session_id}"
+
+
+def receive_target(command: Receive) -> str:
+    if command.new_session is not None:
+        return command.new_session.id
+    if command.session_id is None:
+        raise ValueError(f"Receive needs a session id or a new session, got {command}")
+    return command.session_id
+
+
+async def session_busy_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> bool:
+    """会话有没做完的事：它的 lane 上有排队或进行中的任务，或有投给它、还没投递的来信（Receive）。触发器据此避免
+    重叠触发。"""
+    return await queue.lane_busy(s, session_lane(session_id)) or await queue.lane_busy(
+        s, receive_lane(session_id)
+    )
+
+
 def receive_command(inbound: Inbound) -> Receive:
     """一封要经定向命令投递的来信（发送方先 check_receivable_in）。新建会话必须带预先分配的 id；只有文字内容的来信
     才能这样投（附件、回答、关联只来自同步的入口）。"""
@@ -358,7 +380,9 @@ async def _with_owned_threads_in(s: AsyncSession, roots: Sequence[Session]) -> d
     while frontier:
         children = (
             await s.scalars(
-                select(Session).where(Session.parent_session_id.in_(frontier), Session.kind.in_(OWNED_BY_PARENT))
+                select(Session).where(
+                    Session.parent_session_id.in_(frontier), Session.kind.in_(OWNED_BY_PARENT)
+                )
             )
         ).all()
         frontier = [c.id for c in children if c.id not in doomed]
@@ -368,9 +392,7 @@ async def _with_owned_threads_in(s: AsyncSession, roots: Sequence[Session]) -> d
 
 async def busy_among_in(s: AsyncSession, queue: TaskQueue, sessions: Mapping[str, Session]) -> list[str]:
     """其中忙的会话：lane 上有排队或运行中的任务（运行、压缩），或有人替它在外面做事（后台任务、委派出去的工作）。"""
-    return [
-        x for x in sessions if await queue.lane_busy(s, session_lane(x)) or await has_active_in(s, x)
-    ]
+    return [x for x in sessions if await queue.lane_busy(s, session_lane(x)) or await has_active_in(s, x)]
 
 
 async def busy_sessions_of_agent_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> list[str]:

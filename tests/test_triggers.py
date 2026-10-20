@@ -321,3 +321,18 @@ async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_mean
         assert await s.get(Session, session_id) is None
         failed = (await s.scalars(select(Task).where(Task.status == TaskStatus.FAILED))).all()
     assert failed == []
+
+
+async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_pile_up(container, make_agent):
+    alpha = (await make_agent("alpha")).id
+    trigger = await container.triggers.create(
+        name="slack", agent_id=alpha, kind="schedule", prompt="check slack", config={"cron": "* * * * *"}
+    )
+
+    async def later(_task_id: int) -> None:
+        return None
+
+    container.triggers._run_now = later  # noqa: SLF001  模拟投递没能马上执行
+    await container.triggers.fire(trigger.id)
+    async with container.db.transaction() as s:
+        assert await container.triggers.busy_in(s, await container.triggers.get_in(s, trigger.id))

@@ -16,6 +16,8 @@ from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue
 
 log = logging.getLogger(__name__)
+# run_now 被取消后把任务放回 pending 的时限（一个短事务）
+_UNCLAIM_SECONDS = 10.0
 
 # 模型提供方契约中声明的暂时性状态码
 _TRANSIENT_HTTP = {408, 409, 425, 429, 500, 502, 503, 504, 529}
@@ -103,16 +105,27 @@ class Worker:
                 group.start_soon(self._process_in_slot, task, name=f"task-{task.id}")
 
     async def run_now(self, task_id: int) -> None:
-        """在调用方的任务里立刻执行这一个 task（经同一个执行边界：时限、重试或失败记账），不占 worker 的槽位。用于
-        发送方提交了定向命令之后希望它马上生效（例如触发器新建的会话在返回会话 id 之前就已存在）；此刻不可领取就
-        什么都不做，照常由 worker 执行。"""
-        task = await self._queue.claim_task(task_id)
+        """在调用方的任务里立刻执行这一个投递任务（经同一个执行边界：时限、重试或失败记账），不占 worker 的槽位。
+        用于发送方提交了定向命令之后希望它马上生效（例如触发器新建的会话在返回会话 id 之前就已存在）；只用于短小的
+        投递（EVENT），运行这类长任务仍由 worker 按并发上限执行。此刻不可领取就什么都不做，照常由 worker 执行。
+
+        取消语义与 worker 不同：worker 的任务只被关停取消，下次启动由 recover 复位；这里的调用方随时可能被取消（请求
+        断开、调用它的运行被停止）。被取消时在屏蔽作用域里把还在 running 的它放回 pending 交给 worker，再照常抛出
+        取消——投递的写入与「完成」同一事务，重做是安全的。"""
+        task = await self._queue.claim_task(task_id, [TaskKind.EVENT])
         if task is None:
             log.info("task not claimable now, left to the worker", extra={"task_id": task_id})
             return
-        if task.kind not in self._handlers:
-            raise RuntimeError(f"task {task_id} of kind {task.kind} has no handler in this worker")
-        await self._process(task)
+        try:
+            await self._process(task)
+        except anyio.get_cancelled_exc_class():
+            with anyio.CancelScope(shield=True), anyio.move_on_after(_UNCLAIM_SECONDS):
+                released = await self._queue.unclaim(task.id)
+                log.warning(
+                    "task run on the spot was cancelled; handed back to the worker",
+                    extra={"task_id": task.id, "lane": task.lane, "handed_back": released},
+                )
+            raise
 
     async def _process_in_slot(self, task: Task) -> None:
         try:
@@ -137,7 +150,8 @@ class Worker:
                 commit = await self._handlers[task.kind].execute(task)
             await self._queue.complete(task.id, commit)
         except anyio.get_cancelled_exc_class():
-            log.warning("task cancelled by shutdown, will be recovered on next start", extra=ctx)
+            # worker 的任务只被关停取消，下次启动由 recover 复位；run_now 的调用方被取消时由 run_now 当场放回
+            log.warning("task cancelled", extra=ctx)
             raise
         except Exception as e:
             # 每个任务的异常在这里记账（重试或失败），不向上传播：一个任务出错不影响别的任务

@@ -28,6 +28,8 @@ from muliao.sessions.conversation import (
     inbound_of,
     open_asks,
     receive,
+    receive_lane,
+    receive_target,
     threads_of,
 )
 from muliao.sessions.events import AgentSessionsCleared, Receive
@@ -172,7 +174,9 @@ class SessionService:
             (await self._get(s, session_id)).unread = False
 
     def subscribe(self, messaging: Messaging) -> None:
-        messaging.handle(Receive, "sessions.receive", self.on_receive)
+        messaging.handle(
+            Receive, "sessions.receive", self.on_receive, lane=lambda c: receive_lane(receive_target(c))
+        )
         messaging.subscribe(
             AgentDeleting,
             "sessions.agent_deleting",
@@ -206,6 +210,7 @@ class SessionService:
         正在执行的运行被取消后，停止事务在它退出之后才执行（清掉占用、结束排队的任务），正在执行的压缩做完才空闲。
         时限内没有空闲（压缩卡住、或停止之后又被人为重跑）就按暂时失败重试，重试时同样先停止再等。"""
         await self._stop_and_wait_idle(event.agent_id)
+
         async def commit(s: AsyncSession) -> None:
             sessions = list(
                 (await s.scalars(select(Session).where(Session.agent_id == event.agent_id))).all()

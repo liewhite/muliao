@@ -35,9 +35,9 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
-from muliao.platform.tasks import Clock, Commit, TaskQueue, session_lane
+from muliao.platform.tasks import Clock, Commit, TaskQueue
 from muliao.platform.tooling import Origin
-from muliao.sessions.api import Inbound, NewSession, check_receivable_in, receive_command
+from muliao.sessions.api import Inbound, NewSession, check_receivable_in, receive_command, session_busy_in
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 from muliao.triggers.tables import Trigger
 
@@ -255,9 +255,9 @@ class TriggerService:
             return trigger
 
     async def busy_in(self, s: AsyncSession, trigger: Trigger) -> bool:
-        """上一次触发的会话是否还有未完成的运行（定时触发据此避免重叠）。"""
-        return trigger.last_session_id is not None and await self._queue.lane_busy(
-            s, session_lane(trigger.last_session_id)
+        """上一次触发的会话是否还有没做完的事，包括还没投递的这次来信（定时触发据此避免重叠，会话领域的查询）。"""
+        return trigger.last_session_id is not None and await session_busy_in(
+            s, self._queue, trigger.last_session_id
         )
 
     async def _deliver_in(

@@ -106,10 +106,21 @@ class TaskQueue:
         """领取一个可以执行的 task，只在调用方能处理的这些种类里找。"""
         return await self._claim(_claimable().where(Task.kind.in_(list(kinds))).order_by(Task.id).limit(1))
 
-    async def claim_task(self, task_id: int) -> Task | None:
-        """现在就领取这一个 task（Worker.run_now）；它此刻不可领取（已被领取、同 lane 有更早或进行中的、还没到时间）
-        时为 None，留给 worker。"""
-        return await self._claim(_claimable().where(Task.id == task_id))
+    async def claim_task(self, task_id: int, kinds: Collection[TaskKind]) -> Task | None:
+        """现在就领取这一个 task（Worker.run_now）；它此刻不可领取（已被领取、同 lane 有更早或进行中的、还没到时间、
+        不是这些种类）时为 None，留给 worker。"""
+        return await self._claim(_claimable().where(Task.id == task_id, Task.kind.in_(list(kinds))))
+
+    async def unclaim(self, task_id: int) -> bool:
+        """把一个还在 running 的 task 放回 pending（领取它的执行者被取消、不会再完成它，同 recover 的语义）。已经
+        完成或记下失败的不动。返回是否放回了。"""
+        async with self._db.transaction() as s:
+            task = await s.get(Task, task_id)
+            if task is None or task.status != TaskStatus.RUNNING:
+                return False
+            task.status = TaskStatus.PENDING
+        self.wake.set()
+        return True
 
     async def _claim(self, query: Select[tuple[Task]]) -> Task | None:
         now = self._clock()

@@ -17,6 +17,7 @@ from muliao.sessions.conversation import (
     agent_busy_in,
     check_receivable_in,
     receive_command,
+    session_busy_in,
     session_in,
     validate_thread,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "pending_in",
     "post_check_in",
     "receive_command",
+    "session_busy_in",
     "session_in",
     "validate_thread",
 ]
