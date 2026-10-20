@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { liveToItems, mergeLive, type RunEvent } from './events'
+import { isStale, liveToItems, mergeLive, type RunEvent } from './events'
 
 const ev = (event: RunEvent['event'], text: string, tool_call_id: string | null = null): RunEvent =>
   event === 'text' || event === 'thinking'
@@ -74,5 +74,15 @@ describe('mergeLive', () => {
   it('drops events of another run and keeps received events when there is no snapshot', () => {
     expect(mergeLive({ run_id: 'new', events: [at('new', 0)] }, [at('old', 7)]).events.map((e) => e.run_id)).toEqual(['new'])
     expect(mergeLive(null, [at('r', 0)]).events).toHaveLength(1)
+  })
+})
+
+describe('isStale', () => {
+  it('keeps a connection that heard anything within two heartbeats plus slack', () => {
+    expect(isStale(0, 35_000, 15)).toBe(false)
+  })
+  it('gives up on a connection silent for longer, e.g. after the phone was in the background', () => {
+    expect(isStale(0, 35_001, 15)).toBe(true)
+    expect(isStale(0, 10 * 60_000, 15)).toBe(true)
   })
 })

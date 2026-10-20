@@ -104,21 +104,66 @@ export type ServerEvent = RunEvent | TaskEvent | ReconnectEvent
 
 type Listener = (e: ServerEvent) => void
 
+/** 服务端定时发的心跳（api/app.py），只用来判断连接是否还活着，不交给页面 */
+interface HeartbeatEvent {
+  type: 'heartbeat'
+  interval_seconds: number
+}
+
+/**
+ * 连接是否已经死了：超过两个心跳周期没收到任何消息（再留 5 秒余量）。
+ * 手机切后台、代理链路断开时 EventSource 往往收不到错误、以为还连着，事件就丢了，只能这样发现。
+ */
+export function isStale(lastMessageAt: number, now: number, intervalSeconds: number): boolean {
+  return now - lastMessageAt > (2 * intervalSeconds + 5) * 1000
+}
+
+const WATCHDOG_MS = 5000
+
 const listeners = new Set<Listener>()
 let source: EventSource | null = null
+// 是否连上过：之后的每次 open 都是重连，期间可能丢了事件，页面要重新拉取
+let everOpened = false
+let lastMessageAt = 0
+// 心跳间隔来自服务端的心跳；收到第一个之前不判断
+let heartbeatSeconds: number | null = null
+let watchdog: ReturnType<typeof setInterval> | null = null
 
 function connect() {
   source = new EventSource('/api/events')
-  let opened = false
+  lastMessageAt = Date.now()
   source.onopen = () => {
-    // 首次连接之外的 open 都是重连，期间可能丢事件
-    if (opened) listeners.forEach((l) => l({ type: 'reconnected' }))
-    opened = true
+    if (everOpened) listeners.forEach((l) => l({ type: 'reconnected' }))
+    everOpened = true
   }
   source.onmessage = (msg) => {
-    const event = JSON.parse(msg.data) as ServerEvent
+    lastMessageAt = Date.now()
+    const event = JSON.parse(msg.data) as ServerEvent | HeartbeatEvent
+    if (event.type === 'heartbeat') {
+      heartbeatSeconds = event.interval_seconds
+      return
+    }
     listeners.forEach((l) => l(event))
   }
+}
+
+/** 连接已死就丢掉它重新连接；重连成功时页面收到 reconnected，从数据库重新拉取 */
+function checkAlive() {
+  if (source === null || heartbeatSeconds === null || !isStale(lastMessageAt, Date.now(), heartbeatSeconds)) return
+  console.warn(`no server event for ${Math.round((Date.now() - lastMessageAt) / 1000)}s, reconnecting`)
+  source.close()
+  connect()
+}
+
+const onVisible = () => {
+  // 从后台回来时计时器可能还没跑，立刻检查
+  if (document.visibilityState === 'visible') checkAlive()
+}
+
+function start() {
+  connect()
+  watchdog = setInterval(checkAlive, WATCHDOG_MS)
+  document.addEventListener('visibilitychange', onVisible)
 }
 
 export function useServerEvents(listener: Listener) {
@@ -127,7 +172,7 @@ export function useServerEvents(listener: Listener) {
   useEffect(() => {
     const l: Listener = (e) => ref.current(e)
     listeners.add(l)
-    if (source === null) connect()
+    if (source === null) start()
     return () => {
       listeners.delete(l)
     }
@@ -137,4 +182,9 @@ export function useServerEvents(listener: Listener) {
 export function closeServerEvents() {
   source?.close()
   source = null
+  everOpened = false
+  heartbeatSeconds = null
+  if (watchdog !== null) clearInterval(watchdog)
+  watchdog = null
+  document.removeEventListener('visibilitychange', onVisible)
 }

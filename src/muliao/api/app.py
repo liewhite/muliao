@@ -29,6 +29,9 @@ from muliao.errors import (
 log = logging.getLogger(__name__)
 
 _HEARTBEAT_SECONDS = 15.0
+# 心跳是一个真正的事件（不是 SSE 注释行，那种前端读不到）：前端据此判断连接是否还活着。
+# 手机切后台、代理链路断开时 EventSource 往往收不到任何错误，只能靠「多久没收到消息」发现；间隔随心跳下发，前端不另存一份
+_HEARTBEAT = f"data: {json.dumps({'type': 'heartbeat', 'interval_seconds': _HEARTBEAT_SECONDS})}\n\n"
 _STATUS = {
     NotFound: 404,
     Conflict: 409,
@@ -95,12 +98,13 @@ def _private_routes() -> APIRouter:
     async def events(c: C) -> StreamingResponse:
         async def stream() -> AsyncIterator[str]:
             async with c.bus.subscribe() as sub:
-                yield "retry: 3000\n\n"
+                # 连上就先发一次心跳：前端立刻知道间隔
+                yield "retry: 3000\n\n" + _HEARTBEAT
                 while True:
                     try:
                         event = await asyncio.wait_for(sub.next(), timeout=_HEARTBEAT_SECONDS)
                     except TimeoutError:
-                        yield ": heartbeat\n\n"
+                        yield _HEARTBEAT
                         continue
                     except SubscriberOverflow:
                         return
