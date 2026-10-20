@@ -1,5 +1,5 @@
 """agent 之间的委派：delegate_task（不等结果）、ask_agent（挂起这次调用，等对方的结局作为结果）、stop_thread、
-list_threads。设计见 runtime/conversation.py 与 runtime/delegations.py。"""
+list_threads。设计见 sessions/conversation.py 与 delegations/manager.py。"""
 
 from collections.abc import Awaitable, Callable
 from typing import Literal

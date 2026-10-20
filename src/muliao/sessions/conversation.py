@@ -12,6 +12,7 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.service import active_agent_in
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.files.store import load_metas
@@ -29,7 +30,7 @@ from muliao.sessions.mailbox import latest_run, post_in, queued_in
 from muliao.sessions.pending import pending_questions
 from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
 from muliao.sessions.settlement import failure_of, settle_in, unsettled_in
-from muliao.sessions.tables import Mail, MailKind, MailState, RetiredAgent, Session
+from muliao.sessions.tables import Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
 
@@ -111,12 +112,10 @@ def _check_may_continue(session: Session, origin: Origin, origin_ref: str | None
 
 
 async def ensure_agent_active_in(s: AsyncSession, agent_id: str) -> None:
-    """会话只为还在的 agent 新建、继续。已退役（删除流程中，retired_agents 是会话领域自己的投影）的在本地事务里拒绝；
-    agent 只会从存在变为删除，读它的行判断「存在」没有先查后写的竞态。"""
-    if await s.get(RetiredAgent, agent_id) is not None:
-        raise NotFound(f"agent {agent_id!r} has been deleted")
-    if await s.get(Agent, agent_id) is None:
-        raise NotFound(f"agent {agent_id!r} not found")
+    """会话只为还可用的 agent 新建、继续：正在删除的按不存在处理（agents 的 active_agent_in）。agent 只会从可用变为
+    正在删除、再变为不存在，在本事务里检查没有先查后写的竞态：删除标记提交之后，它的会话不会再收到来信、变忙，
+    删除流程清理会话时不必等待（docs/domain-design.md 4.4）。"""
+    await active_agent_in(s, agent_id)
 
 
 async def create_session(

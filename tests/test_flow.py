@@ -20,6 +20,7 @@ from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.platform.worker import Worker
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
+from muliao.sessions.consumer import RunHandler
 from muliao.sessions.conversation import Inbound, NewSession
 from muliao.sessions.tables import Mail
 from tests.scripted import scripted
@@ -36,13 +37,19 @@ async def drain(container, limit_seconds: float = 10.0) -> None:
 
 async def deliver(container, limit_seconds: float = 10.0) -> None:
     """只执行事件与定向命令的投递（不执行运行）：投进信箱的信件留着排队，测试可以直接看它们。"""
-    worker = Worker(
-        container.queue,
-        {TaskKind.EVENT: container.messaging},
-        container.bus,
-        concurrency=1,
-        task_timeout_seconds=5,
+    await work_only(container, {TaskKind.EVENT: container.messaging}, limit_seconds)
+
+
+async def run_only(container, limit_seconds: float = 10.0) -> None:
+    """只执行运行（不投递事件）：运行发布的事件留着排队，测试可以安排它们与别的操作的先后。"""
+    await work_only(
+        container, {TaskKind.RUN: RunHandler(container.consumer, container.messaging)}, limit_seconds
     )
+
+
+async def work_only(container, handlers: dict, limit_seconds: float) -> None:
+    """只执行这些种类的 task，直到它们都做完。"""
+    worker = Worker(container.queue, handlers, container.bus, concurrency=1, task_timeout_seconds=5)
     task = asyncio.create_task(worker.run_forever())
     try:
         async with asyncio.timeout(limit_seconds):
@@ -52,7 +59,7 @@ async def deliver(container, limit_seconds: float = 10.0) -> None:
                     busy = await s.scalar(
                         select(Task.id)
                         .where(
-                            Task.kind == TaskKind.EVENT,
+                            Task.kind.in_(list(handlers)),
                             Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
                         )
                         .limit(1)

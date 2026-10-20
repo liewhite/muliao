@@ -10,7 +10,6 @@ from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.sessions.conversation import Inbound, NewSession
-from muliao.sessions.tables import RetiredAgent
 from tests.test_flow import drain, start
 from tests.test_jobs import start_job, wait_until_done
 
@@ -18,6 +17,17 @@ from tests.test_jobs import start_job, wait_until_done
 async def _failed_tasks(container) -> list[Task]:
     async with container.db.transaction() as s:
         return list((await s.scalars(select(Task).where(Task.status == TaskStatus.FAILED))).all())
+
+
+async def _lanes_of(container, *receivers: str) -> set[str]:
+    """这些接收方排队中的投递所在的 lane（每个接收方都必须有一条）。"""
+    async with container.db.transaction() as s:
+        pending = (
+            await s.scalars(select(Task).where(Task.kind == TaskKind.EVENT, Task.status == TaskStatus.PENDING))
+        ).all()
+    mine = [t for t in pending if t.payload["receiver"] in receivers]
+    assert {t.payload["receiver"] for t in mine} == set(receivers)
+    return {t.lane for t in mine}
 
 
 async def test_stopping_then_deleting_right_away_leaves_no_failed_delivery(container, make_agent, models):
@@ -44,7 +54,6 @@ async def test_deleting_an_agent_without_sessions_completes(container, make_agen
 
     async with container.db.transaction() as s:
         assert await s.get(Agent, agent.id) is None
-        assert await s.get(RetiredAgent, agent.id) is not None
     assert await _failed_tasks(container) == []
 
 
@@ -73,21 +82,23 @@ async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(conta
     assert await _failed_tasks(container) == []
 
 
-async def test_a_retired_agent_receives_no_new_mail(container, make_agent):
+async def test_an_agent_marked_for_deletion_receives_no_new_mail(container, make_agent, models):
     agent = await make_agent("alpha")
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    session = await start(container, agent.id, "hi")
     await drain(container)
 
-    with pytest.raises(NotFound, match="deleted"):
-        await container.sessions.receive(
-            Inbound(
-                origin=Origin.USER,
-                origin_ref=None,
-                content="hello",
-                session=NewSession(agent_id=agent.id, title="t"),
-                awaited=True,
+    # 删除标记一提交就拒绝来信，不等删除流程的事件投递：它的会话不会再变忙
+    await container.agent_lifecycle.delete(agent.id, author="user")
+    for target in (NewSession(agent_id=agent.id, title="t"), session.id):
+        with pytest.raises(NotFound, match="not found"):
+            await container.sessions.receive(
+                Inbound(origin=Origin.USER, origin_ref=None, content="hello", session=target, awaited=True)
             )
-        )
+    await drain(container)
+
+    async with container.db.transaction() as s:
+        assert await s.get(Agent, agent.id) is None
+    assert await _failed_tasks(container) == []
 
 
 async def test_an_agent_with_a_busy_session_is_not_deleted(container, make_agent, models):
@@ -129,28 +140,33 @@ async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     await drain(container)
 
 
-async def test_a_session_that_turns_busy_meanwhile_is_cleared_later_and_the_agent_stays_retired(
-    container, make_agent, models
-):
-    """检查与标记之间会话变忙：清理会话的命令按忙重试；退役已经单独生效，重试期间新的来信一律拒绝。重试用完时投递
-    记为失败（可见），人工重试即可继续。"""
-    from muliao.platform.tables import TaskKind
-    from tests.test_flow import deliver, reply
+async def test_a_session_kept_busy_after_the_mark_is_cleared_once_it_is_idle(container, make_agent, models):
+    """标记删除之后会话不会再收到来信；仍可能变忙的只有人为重跑它的任务。这时清理会话按忙重试，重试用完时投递记为
+    失败（可见），会话空闲后人工重试即可继续。"""
+    from muliao.platform.tasks import session_lane
+    from tests.test_flow import deliver
 
     agent = await make_agent("alpha")
     session = await start(container, agent.id, "hi")
     await drain(container)
     await container.agent_lifecycle.delete(agent.id, author="user")
-    # 删除开始之后、退役生效之前，会话又收到一封信，排上了一次运行
-    await reply(container, session.id, "one more thing")
+    # 模拟人为重跑：会话的 lane 上又有一个运行在排队
+    async with container.db.transaction() as s:
+        rerun = container.queue.enqueue(
+            s,
+            kind=TaskKind.RUN,
+            lane=session_lane(session.id),
+            agent_id=agent.id,
+            session_id=session.id,
+            payload={},
+        )
 
     await deliver(container)
 
     [clear] = [t for t in await _failed_tasks(container) if t.kind == TaskKind.EVENT]
     assert "busy session" in (clear.error or "")
-    with pytest.raises(NotFound, match="deleted"):
-        await reply(container, session.id, "and another")
-    await drain(container)
+    async with container.db.transaction() as s:
+        (await s.get(Task, rerun.id)).status = TaskStatus.DONE
     await container.queue.retry(clear.id)
     await drain(container)
     async with container.db.transaction() as s:
@@ -159,7 +175,7 @@ async def test_a_session_that_turns_busy_meanwhile_is_cleared_later_and_the_agen
         await container.sessions.get(session.id)
 
 
-async def test_a_retired_agents_thread_takes_no_new_delegation(container, make_agent, models):
+async def test_a_deleted_agents_thread_takes_no_new_delegation(container, make_agent, models):
     from muliao.errors import NotFound as Missing
     from tests.scripted import scripted
     from tests.test_mailbox import Recorder
@@ -175,7 +191,7 @@ async def test_a_retired_agents_thread_takes_no_new_delegation(container, make_a
     await container.agent_lifecycle.delete(reviewer.id, author="user")
     await drain(container)
 
-    with pytest.raises(Missing, match="deleted"):
+    with pytest.raises(Missing, match="not found"):
         async with container.db.transaction() as s:
             await container.threads.send(s, parent_id=parent.id, agent=reviewer, thread="review2", prompt="y")
 
@@ -205,3 +221,45 @@ async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, mo
     assert hold.status == HoldStatus.CLEARED
     await drain(container)
     await wait_until_done(container, job.id)
+
+
+async def test_deleting_a_session_before_its_run_ended_is_delivered_leaves_no_notification(
+    container, make_agent, models
+):
+    from tests.test_flow import run_only
+
+    agent = await make_agent("alpha")
+    session = await start(container, agent.id, "hi")
+    await run_only(container)
+    # RunEnded 还没投递就删除：通知领域按会话的同一条 lane 先处理 RunEnded、再处理 SessionDeleted
+    await container.sessions.delete(session.id)
+    assert await _lanes_of(container, "notifications.run_ended", "notifications.session_deleted") == {
+        f"notifications:{session.id}"
+    }
+    await drain(container)
+
+    assert await container.notifications.list(10) == []
+    assert await _failed_tasks(container) == []
+
+
+async def test_deleting_an_agent_before_its_run_ended_is_delivered_schedules_no_reflection(
+    container, make_agent, models
+):
+    from muliao.reflection.tables import ReflectionCheckpoint
+    from tests.test_flow import run_only
+
+    agent = await make_agent("alpha")
+    async with container.db.transaction() as s:
+        (await s.get(Agent, agent.id)).reflect_every = 1
+    await start(container, agent.id, "hi")
+    await run_only(container)
+    await container.agent_lifecycle.delete(agent.id, author="user")
+    assert await _lanes_of(container, "reflection.run_ended", "reflection.agent_deleting") == {
+        f"reflection-events:{agent.id}"
+    }
+    await drain(container)
+
+    async with container.db.transaction() as s:
+        assert await s.get(ReflectionCheckpoint, agent.id) is None
+        assert (await s.scalars(select(Task).where(Task.kind == TaskKind.REFLECTION))).all() == []
+    assert await _failed_tasks(container) == []

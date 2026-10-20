@@ -166,7 +166,7 @@ class JobRunner:
         awaited: bool,
     ) -> Job:
         """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。只在有会话的运行里能开
-        （tools.workspace.session_workspace_toolset）。"""
+        （agent_runtime.workspace_tools.session_workspace_toolset）。"""
         group = self._group
         if group is None:
             raise RuntimeError("background jobs can only start while the job runner is running")
@@ -447,8 +447,15 @@ class JobRunner:
             log.warning(
                 "unsupervised background jobs marked interrupted", extra={"job_ids": [j.id for j in orphans]}
             )
+        # 只检查有人监督的：登记监督之前占用已经登记（_launch），启动中的任务还没有占用，不检查
         async with self._db.transaction() as s:
-            running = list((await s.scalars(select(Job).where(Job.status == JobStatus.RUNNING))).all())
+            running = list(
+                (
+                    await s.scalars(
+                        select(Job).where(Job.status == JobStatus.RUNNING, Job.id.in_(list(self._running)))
+                    )
+                ).all()
+            )
         tails = {
             j.id: await asyncio.to_thread(tail, self._workspace_of(j.agent_id) / j.log_path) for j in running
         }
@@ -456,7 +463,7 @@ class JobRunner:
         async with self._db.transaction() as s:
             for stale in running:
                 job = await s.get(Job, stale.id)
-                if job is None or job.status != JobStatus.RUNNING:
+                if job is None or job.status != JobStatus.RUNNING or job.id not in self._running:
                     continue
                 text = _check_text(job, self._clock(), tails[job.id])
                 posted += await post_check_in(

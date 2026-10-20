@@ -437,3 +437,31 @@ async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_s
     await asyncio.sleep(0.2)
     with pytest.raises(ProcessLookupError):
         os.killpg(job.pid, 0)
+
+
+async def test_a_check_while_a_job_is_starting_skips_it(container, make_agent, monkeypatch):
+    import anyio
+
+    session, agent = await _session_for_jobs(container, make_agent)
+    holding, release = anyio.Event(), anyio.Event()
+    launch = container.jobs._launch
+
+    async def slow_launch(*args, **kwargs):
+        # 行已插入、占用还没登记（hold_in 在 _launch 的第一个事务里）；停在事务之外
+        holding.set()
+        await release.wait()
+        await launch(*args, **kwargs)
+
+    monkeypatch.setattr(container.jobs, "_launch", slow_launch)
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(
+            lambda: container.jobs.start(
+                session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
+            )
+        )
+        await holding.wait()
+        # 行已经是 running、占用还没登记：既不当成没人监督的，也不发检查
+        assert await container.jobs.check() == 0
+        release.set()
+    [row] = await _job_rows(container)
+    assert (await wait_until_done(container, row.id)).status == JobStatus.EXITED

@@ -1,4 +1,4 @@
-"""会话领域的表：会话、消息、信箱、压缩、占用、已退役的 agent。"""
+"""会话领域的表：会话、消息、信箱、压缩、占用。"""
 
 from datetime import datetime
 from enum import StrEnum
@@ -42,15 +42,6 @@ class Session(Base):
             sqlite_where=parent_session_id.isnot(None),
         ),
     )
-
-
-class RetiredAgent(Base):
-    """会话领域记下的「已删除的 agent」（AgentDeleting 的投影）：之后的来信与委派在本地事务里拒绝它，不用跨领域读。"""
-
-    __tablename__ = "retired_agents"
-
-    agent_id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class Message(Base):

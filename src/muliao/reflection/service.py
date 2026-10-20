@@ -105,8 +105,10 @@ class ReflectionScheduler:
         self._agents = agents
 
     def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(RunEnded, "reflection.run_ended", self.on_run_ended)
-        messaging.subscribe(AgentDeleting, "reflection.agent_deleting", self.on_agent_deleting)
+        # 同一个 agent 的两种事件在同一条 lane 上按发布顺序处理：RunEnded 一定先于 AgentDeleting 发布（agent 有会话忙时
+        # 不能删除），删除的清理之后不会再写入检查点、投递反思
+        messaging.subscribe(RunEnded, "reflection.run_ended", self.on_run_ended, lane=_agent_lane)
+        messaging.subscribe(AgentDeleting, "reflection.agent_deleting", self.on_agent_deleting, lane=_agent_lane)
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
         """删除 agent 的流程：排队的反思不再执行，反思记录与检查点删除（正在执行的那次由 agent 领域等它结束）。"""
@@ -126,8 +128,10 @@ class ReflectionScheduler:
         try:
             agent = await self._agents.get(event.agent_id)
         except NotFound:
+            log.info("run of a deleted agent not counted for reflection", extra={"agent": event.agent_id})
             return no_commit
         if agent.deleting_by is not None:
+            log.info("run of a deleting agent not counted for reflection", extra={"agent": event.agent_id})
             return no_commit
         reflect_every = agent.reflect_every
 
@@ -165,6 +169,10 @@ class ReflectionScheduler:
                     await s.scalar(_steps_after(a.id, checkpoint.message_id if checkpoint else 0)) or 0
                 )
             return result
+
+
+def _agent_lane(event: RunEnded | AgentDeleting) -> str:
+    return f"reflection-events:{event.agent_id}"
 
 
 async def _checkpoint_in(s: AsyncSession, agent_id: str) -> ReflectionCheckpoint:

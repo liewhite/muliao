@@ -3,8 +3,8 @@
 1. delete：它的会话有忙的、或它的反思在排队或运行，就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除
    （不再出现在列表与名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in），同一事务发布
    AgentDeleting。
-2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域记下它已退役并删除它的全部会话，然后发布
-   AgentSessionsCleared；触发器、vault、反思各自删除。
+2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域删除它的全部会话（标记之后它的会话不会再收到
+   来信），然后发布 AgentSessionsCleared；触发器、vault、反思各自删除。
 3. 收到 AgentSessionsCleared：它的反思还在跑就等（重试），否则删除资源目录与这一行。
 """
 

@@ -134,12 +134,6 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f("ix_reflections_agent_id"), ["agent_id"], unique=False)
 
     op.create_table(
-        "retired_agents",
-        sa.Column("agent_id", sa.String(length=32), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.PrimaryKeyConstraint("agent_id"),
-    )
-    op.create_table(
         "secrets",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("owner", sa.String(length=32), nullable=True),
@@ -368,7 +362,6 @@ def downgrade() -> None:
         batch_op.drop_index("uq_secrets_private", sqlite_where=sa.text("owner IS NOT NULL"))
 
     op.drop_table("secrets")
-    op.drop_table("retired_agents")
     with op.batch_alter_table("reflections", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_reflections_agent_id"))
 

@@ -134,7 +134,7 @@ class SessionDetail(BaseModel):
     run: TaskOut | None
     # 这个会话开出的 thread
     threads: list[SessionOut]
-    # 正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状，见 bus.LiveRuns），让中途打开页面也能从这一段
+    # 正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状，见 sessions.live.LiveRuns），让中途打开页面也能从这一段
     # 的开头看起；没有则为 null
     live: LiveRunOut | None
 

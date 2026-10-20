@@ -70,7 +70,7 @@ class SessionDeleted(DomainEvent):
 
 
 class AgentSessionsCleared(DomainEvent):
-    """删除 agent 的流程里，会话领域已经删除了它的全部会话，并记下它已退役（之后的来信与委派拒绝它）。"""
+    """删除 agent 的流程里，会话领域已经删除了它的全部会话。"""
 
     TYPE = "session.agent_sessions_cleared"
     agent_id: str
@@ -85,14 +85,6 @@ class DelegationDispatched(DomainEvent):
     child_session_id: str
     call_id: str | None
     awaited: bool
-
-
-class ClearAgentSessions(Command):
-    """会话领域自己的定向命令：删除一个已退役 agent 的全部会话。有会话忙就按暂时失败重试（退役已经生效，不会再有
-    新的来信让它们变忙），删完发布 AgentSessionsCleared。"""
-
-    TYPE = "session.clear_agent_sessions"
-    agent_id: str
 
 
 class PostEvent(Command):

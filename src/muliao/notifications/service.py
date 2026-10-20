@@ -16,6 +16,12 @@ from muliao.platform.tasks import Commit, TaskQueue, deliver_lane, no_commit
 from muliao.sessions.events import RunEnded, SessionDeleted
 
 
+def session_events_lane(event: RunEnded | SessionDeleted) -> str:
+    """同一个会话的事件在同一条 lane 上按发布顺序处理：RunEnded 一定先于 SessionDeleted 发布（会话忙时不能删除），
+    删除的清理之后不会再为它写通知。"""
+    return f"notifications:{event.session_id}"
+
+
 class Notifier:
     def __init__(self, db: Database, queue: TaskQueue):
         self._db = db
@@ -34,7 +40,7 @@ class Notifier:
         )
 
     def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended)
+        messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended, lane=session_events_lane)
 
     async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
         """推送一次运行的回答：处理过的信件里有用户在等的，且有话要告诉用户（做完了，或停下来问用户）；用户自己停止的
@@ -80,7 +86,9 @@ class Notifications:
         self._db = db
 
     def subscribe(self, messaging: Messaging) -> None:
-        messaging.subscribe(SessionDeleted, "notifications.session_deleted", self.on_session_deleted)
+        messaging.subscribe(
+            SessionDeleted, "notifications.session_deleted", self.on_session_deleted, lane=session_events_lane
+        )
 
     async def on_session_deleted(self, event: SessionDeleted, _delivery: Delivery) -> Commit:
         """指向被删会话的通知随它删除。"""
