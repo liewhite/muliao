@@ -10,10 +10,10 @@ from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
 
-from muliao.agent_runtime.redaction import redact_messages
-from muliao.agent_runtime.runner import StepHooks
-from muliao.agents.tables import Agent
+from muliao.agent_runtime.api import StepHooks, redact_messages
+from muliao.agents.api import AgentInfo
 from muliao.platform.db import Database
+from muliao.platform.text_edit import truncate
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder, append_content, mark_events
@@ -21,8 +21,11 @@ from muliao.sessions.history import marked_stopped, stopped_results
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import consume_in, queued_in
 from muliao.sessions.tables import Mail, Message, Session
+from muliao.sessions.transcript import Item, call_item, result_item
 
 log = logging.getLogger(__name__)
+
+_PREVIEW_CHARS = 2000
 
 
 class CompactionDue(Exception):
@@ -35,7 +38,7 @@ class RunState:
 
     run_id: int
     session: Session
-    agent: Agent
+    agent: AgentInfo
     # 从历史末尾那条没得到回复的请求续跑：第一次请求是重发它，它已经在库里
     resending: bool
     # 运行中的历史里已经保存的条数（started 时按 pydantic-ai 规整后的历史定基准）
@@ -70,6 +73,15 @@ class Steps:
             started=lambda messages: self._started(state, messages),
             before_request=lambda request, messages: self._before_request(state, request, messages),
             after_response=lambda response, messages: self._after_response(state, response, messages),
+            on_text=lambda kind, text: self._live.publish_delta(
+                state.session.id, state.session.agent_id, kind, text
+            ),
+            on_tool_call=lambda part: self._live.publish_item(
+                state.session.id, state.session.agent_id, _preview(call_item(part))
+            ),
+            on_tool_result=lambda part: self._live.publish_item(
+                state.session.id, state.session.agent_id, _preview(result_item(part))
+            ),
         )
 
     async def _started(self, state: RunState, messages: list[ModelMessage]) -> None:
@@ -167,3 +179,8 @@ class Steps:
         state.messages += stored
         if rows:
             state.last_row = rows[-1]
+
+
+def _preview(item: Item) -> Item:
+    """实时展示里工具的参数与结果截断（保存后历史里是完整的）。"""
+    return item.model_copy(update={"text": truncate(item.text, _PREVIEW_CHARS)})

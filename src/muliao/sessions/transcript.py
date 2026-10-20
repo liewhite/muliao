@@ -22,7 +22,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from muliao.agent_runtime.conventions import (
+from muliao.agent_runtime.api import (
     RUN_STOPPED,
     Attachment,
     event_indices,
@@ -30,7 +30,8 @@ from muliao.agent_runtime.conventions import (
     tool_attachments,
     tool_threads,
 )
-from muliao.files.store import parse_file_url
+from muliao.files.api import parse_file_url
+from muliao.platform.text_edit import truncate
 from muliao.sessions.questions import ASK_USER, AnsweredQuestion, AskResult, Question, questions_of
 
 ItemType = Literal[
@@ -213,10 +214,6 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
         if msg.metadata is not None and msg.metadata.get(RUN_STOPPED):
             items.append(_item("stopped", ""))
     return items
-
-
-def truncate(text: str, limit: int) -> str:
-    return text if len(text) <= limit else f"{text[:limit]}…[truncated {len(text) - limit} chars]"
 
 
 def to_text(items: Sequence[Item], *, max_item_chars: int) -> str:

@@ -12,10 +12,9 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.service import active_agent_in
-from muliao.agents.tables import Agent
+from muliao.agents.api import AgentInfo, active_agent_in
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
-from muliao.files.store import load_metas
+from muliao.files.api import load_metas
 from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.messaging import Messaging
@@ -321,7 +320,7 @@ class Threads:
         )
 
     async def open(
-        self, s: AsyncSession, *, parent_id: str, agent: Agent, thread: str, private: bool
+        self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, private: bool
     ) -> Session:
         """取已有 thread 或新建。
 
@@ -349,7 +348,7 @@ class Threads:
         )
 
     async def send(
-        self, s: AsyncSession, *, parent_id: str, agent: Agent, thread: str, prompt: str
+        self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, prompt: str
     ) -> Received:
         """不交回结局的委派（delegate_task）：往公开 thread 的信箱投一封用户在等的信（thread 不存在则新建）。"""
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, private=False)
@@ -363,7 +362,7 @@ class Threads:
         s: AsyncSession,
         *,
         owner_id: str,
-        agent: Agent,
+        agent: AgentInfo,
         thread: str,
         prompt: str,
         private: bool,

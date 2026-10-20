@@ -20,9 +20,8 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.conventions import calls_in, results_in
-from muliao.agent_runtime.runner import AgentRuntime
-from muliao.agents.tables import Agent
+from muliao.agent_runtime.api import AgentRuntime, calls_in, results_in
+from muliao.agents.api import AgentInfo, agent_in
 from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskKind, TaskStatus
@@ -149,7 +148,7 @@ class Compactor:
             return Verdict.HOPELESS
         return Verdict.DUE
 
-    async def compact(self, session: Session, agent: Agent) -> int:
+    async def compact(self, session: Session, agent: AgentInfo) -> int:
         """压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。返回压缩的步数；为 0 表示没有可压缩的。"""
         compacted = 0
         while True:
@@ -235,9 +234,9 @@ class CompactionHandler:
             raise RuntimeError(f"compaction task {task.id} must reference a session")
         async with self._db.transaction() as s:
             session = await s.get(Session, task.session_id)
-            agent = await s.get(Agent, session.agent_id) if session is not None else None
-        if session is None or agent is None:
-            raise RuntimeError(f"compaction task {task.id} references a missing session or agent")
+            if session is None:
+                raise RuntimeError(f"compaction task {task.id} references a missing session")
+            agent = await agent_in(s, session.agent_id)
         if not await self._compactor.compact(session, agent):
             log.info("nothing to compact beyond the kept steps", extra={"session_id": session.id})
         return no_commit

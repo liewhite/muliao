@@ -20,17 +20,16 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.tables import Agent
+from muliao.agents.api import AgentInfo, agent_in
 from muliao.delegations.tables import Delegation, DelegationStatus
 from muliao.errors import CorruptState
-from muliao.platform.checks import post_check_in
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Clock, Commit, TaskQueue, no_commit
 from muliao.sessions.events import DelegationDispatched, Ending, SessionSettled, SessionStopped
 from muliao.sessions.halt import Halted
-from muliao.sessions.mailbox import latest_run
+from muliao.sessions.mailbox import latest_run, post_check_in
 from muliao.sessions.pending import AgentAnswer, pending_in
 from muliao.sessions.settlement import deliver_in
 from muliao.sessions.tables import Session
@@ -225,9 +224,7 @@ class Delegations:
                 if child is None:
                     # thread 已删除：它的结清正在交回途中
                     continue
-                agent = await s.get(Agent, child.agent_id)
-                if agent is None:
-                    raise RuntimeError(f"delegation {delegation.holder} references a missing agent")
+                agent = await agent_in(s, child.agent_id)
                 text = check_text(child, agent, await latest_run(s, child.id), self._clock())
                 posted += await post_check_in(
                     s,
@@ -248,7 +245,7 @@ async def _by_holder(s: AsyncSession, holder: str) -> Delegation | None:
     return await s.scalar(select(Delegation).where(Delegation.holder == holder))
 
 
-def check_text(child: Session, agent: Agent, run: Task | None, now: datetime) -> str:
+def check_text(child: Session, agent: AgentInfo, run: Task | None, now: datetime) -> str:
     """run 为 None：委派信件还排着，thread 还没有运行。最近一次运行已经结束（委派却还没结清）：thread 停在它自己的
     挂起调用上，或在等它发起的后台任务、委派。"""
     name = thread_name(child)

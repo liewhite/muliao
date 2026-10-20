@@ -32,7 +32,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from muliao.files.store import FileMeta, parse_file_url
+from muliao.files.api import FileMeta, parse_file_url
 
 # 用户停止的一轮：它保存下来的最后一条消息的 metadata 带这个标记，展示为「已停止」
 RUN_STOPPED = "muliao_stopped"

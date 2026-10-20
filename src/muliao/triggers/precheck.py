@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from muliao.errors import DomainError, NotFound
 from muliao.platform.shell import run_bash
-from muliao.vault.service import Vault
+from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 

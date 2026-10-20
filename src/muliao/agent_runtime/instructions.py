@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from muliao.agents.skills import SkillMeta
+from muliao.agents.api import SkillMeta
 from muliao.platform.tooling import Audience, Origin
 
 _ORIGIN_NOTES: dict[Origin, str] = {

@@ -7,7 +7,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Tool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.conventions import RUN_STOPPED, STOPPED_TOOL_RESULT, answer_text, unanswered_calls
+from muliao.agent_runtime.api import RUN_STOPPED, STOPPED_TOOL_RESULT, answer_text, unanswered_calls
 from muliao.sessions.codec import load_messages
 from muliao.sessions.questions import ASK_USER
 from muliao.sessions.tables import Compaction, Message

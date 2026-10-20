@@ -1,7 +1,7 @@
 """文件与 shell 工具。相对路径以 agent 工作目录为基准；不做强隔离（单人本机使用，见架构文档）。
 
-两种组合：workspace_toolset 只有文件与前台 shell（临时 agent）；session_workspace_toolset 再加后台任务
-（run_shell 的 background、job_status、job_kill），只组合进有会话的运行——后台任务属于会话，要有信箱接收它的结局。
+workspace_toolset 是文件与前台 shell（临时 agent）；有会话的运行用 jobs.tools.session_workspace_toolset，它由这里的
+文件工具与前台执行加上后台任务组成。
 """
 
 import logging
@@ -12,15 +12,13 @@ from pathlib import Path
 from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.conventions import TOOL_ATTACHMENTS, attachment_of
-from muliao.agents import text_edit
 from muliao.errors import InvalidInput, NotFound
-from muliao.files.store import FileStore
-from muliao.jobs.runner import JobRunner
-from muliao.jobs.tables import JobStatus
+from muliao.files.api import FileStore
+from muliao.platform import text_edit
 from muliao.platform.shell import run_bash
+from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-from muliao.sessions.transcript import truncate
-from muliao.vault.service import Vault
+from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 
@@ -39,24 +37,16 @@ def resolve(scope: RunScope, path: str) -> Path:
     return p if p.is_absolute() else scope.workspace / p
 
 
-_SHELL_DESCRIPTION = (
+SHELL_DESCRIPTION = (
     "Run a shell command (bash) in your workspace and return its exit code and combined output. "
     "Commands are killed after {default:g} seconds unless you pass a longer `timeout` (at most {max:g})."
 )
-_BACKGROUND_DESCRIPTION = (
-    " For anything longer, or to keep working while it runs, pass `background: true`: it returns a job id at once "
-    "and has no time limit; its output goes to a log file in your workspace, you get an event when it finishes and "
-    "a check-in event about every {check:g} seconds while it runs (decide then whether to keep waiting or call "
-    "`job_kill`)."
-)
-
-
 def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
     """文件与前台 shell。"""
-    ts = _file_toolset(limits, files)
+    ts = file_toolset(limits, files)
 
     # 时限是配置的值，写进说明：模型不知道默认时限，长命令会被杀了才学会加 timeout
-    @ts.tool(description=_SHELL_DESCRIPTION.format(default=limits.default_timeout, max=limits.max_timeout))
+    @ts.tool(description=SHELL_DESCRIPTION.format(default=limits.default_timeout, max=limits.max_timeout))
     async def run_shell(
         ctx: RunContext[RunScope],
         command: str,
@@ -73,87 +63,12 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
                 variables of the same name.
                 Secret values in the output are replaced by `[secret:KEY]`.
         """
-        return await _run_foreground(vault, limits, ctx.deps, command, timeout, secrets)
+        return await run_foreground(vault, limits, ctx.deps, command, timeout, secrets)
 
     return ts
 
 
-def session_workspace_toolset(
-    vault: Vault, limits: ShellLimits, files: FileStore, jobs: JobRunner
-) -> FunctionToolset[RunScope]:
-    """文件、shell 与后台任务。"""
-    ts = _file_toolset(limits, files)
-
-    @ts.tool(
-        description=_SHELL_DESCRIPTION.format(default=limits.default_timeout, max=limits.max_timeout)
-        + _BACKGROUND_DESCRIPTION.format(check=jobs.check_seconds)
-    )
-    async def run_shell(
-        ctx: RunContext[RunScope],
-        command: str,
-        timeout: float | None = None,  # noqa: ASYNC109  工具参数，面向模型的命名
-        secrets: tuple[str, ...] = (),
-        background: bool = False,
-    ) -> str:
-        """The description is set in the decorator (it carries the configured time limits).
-
-        Args:
-            command: The command line to run.
-            timeout: Seconds before the command is killed (foreground only).
-            secrets: Vault keys (your private ones or public ones) to expose to the command as environment
-                variables of the same name.
-                Secret values in the output are replaced by `[secret:KEY]`.
-            background: Run it as a background job instead of waiting for it.
-        """
-        if not background:
-            return await _run_foreground(vault, limits, ctx.deps, command, timeout, secrets)
-        if timeout is not None:
-            raise InvalidInput(
-                "background jobs have no timeout; leave `timeout` out (kill them with job_kill)"
-            )
-        if ctx.deps.session_id is None:
-            # 这组工具只组合进有会话的运行
-            raise RuntimeError(f"session workspace tools used outside a session by agent {ctx.deps.agent_id}")
-        job = await jobs.start(
-            session_id=ctx.deps.session_id,
-            agent_id=ctx.deps.agent_id,
-            command=command,
-            secrets=list(secrets),
-            awaited=ctx.deps.user_waits,
-        )
-        return (
-            f"started background job {job.id}; output goes to {job.log_path}. "
-            "You will get an event when it finishes; keep working or end your reply."
-        )
-
-    @ts.tool
-    async def job_status(ctx: RunContext[RunScope], job_id: int) -> str:
-        """Show a background job's status and the last lines of its output (read its log file for all of it).
-
-        Args:
-            job_id: The id `run_shell(background: true)` returned.
-        """
-        info = await jobs.info(job_id, ctx.deps.agent_id)
-        state = f"exited with code {info.exit_code}" if info.status == JobStatus.EXITED else info.status.value
-        return (
-            f"job {info.id}: {state} ({info.running_for})\ncommand: {info.command}\nlog: {info.log_path}\n"
-            f"last lines:\n{info.tail or '(no output yet)'}"
-        )
-
-    @ts.tool
-    async def job_kill(ctx: RunContext[RunScope], job_id: int) -> str:
-        """Kill a running background job (its whole process tree). Its final status arrives as an event.
-
-        Args:
-            job_id: The id `run_shell(background: true)` returned.
-        """
-        await jobs.kill(job_id, ctx.deps.agent_id)
-        return f"kill signal sent to job {job_id}; its final status will arrive as an event"
-
-    return ts
-
-
-async def _run_foreground(
+async def run_foreground(
     vault: Vault,
     limits: ShellLimits,
     scope: RunScope,
@@ -176,7 +91,7 @@ async def _run_foreground(
     return f"{status}\n{truncate(result.stdout, limits.max_output_chars)}"
 
 
-def _file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
+def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool

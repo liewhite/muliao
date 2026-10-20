@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agent_runtime.mcp import McpRegistry, McpTransport, mcp_config
-from muliao.agents.ownership import Scope, owner_of, scope_of
+from muliao.agents.api import Scope, owner_of, scope_of
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 

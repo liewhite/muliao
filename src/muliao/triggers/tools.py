@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 
-from muliao.agents.service import AgentService
+from muliao.agents.api import AgentService
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.triggers.precheck import Precheck
 from muliao.triggers.service import KEEP, TriggerService

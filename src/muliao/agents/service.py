@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -75,13 +76,53 @@ class _AgentFields:
     tool_groups: list[str]
 
 
-async def active_agent_in(s: AsyncSession, agent_id: str) -> Agent:
-    """还可用的 agent（正在删除的按不存在处理）。别的领域在自己的写事务里为某个 agent 写数据之前用它检查：事务串行，
-    agent 只会从可用变为正在删除、再变为不存在，检查与写入之间不会插进删除，删除流程的清理一定看得到这次写入。"""
+@dataclass(frozen=True)
+class AgentInfo:
+    """别的领域看到的 agent（读模型）：ORM 行不出 agent 领域。"""
+
+    id: str
+    name: str
+    description: str
+    model: str
+    tool_groups: tuple[str, ...]
+    reflect_every: int
+    created_at: datetime
+    updated_at: datetime
+
+
+def info_of(agent: Agent) -> AgentInfo:
+    return AgentInfo(
+        id=agent.id,
+        name=agent.name,
+        description=agent.description,
+        model=agent.model,
+        tool_groups=tuple(agent.tool_groups),
+        reflect_every=agent.reflect_every,
+        created_at=agent.created_at,
+        updated_at=agent.updated_at,
+    )
+
+
+async def _active_in(s: AsyncSession, agent_id: str) -> Agent:
     agent = await s.get(Agent, agent_id)
     if agent is None or agent.deleting_by is not None:
         raise NotFound(f"agent {agent_id!r} not found")
     return agent
+
+
+async def active_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
+    """还可用的 agent（正在删除的按不存在处理）。别的领域在自己的写事务里为某个 agent 写数据之前用它检查：事务串行，
+    agent 只会从可用变为正在删除、再变为不存在，检查与写入之间不会插进删除，删除流程的清理一定看得到这次写入。"""
+    return info_of(await _active_in(s, agent_id))
+
+
+async def agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
+    """agent（包括正在删除的）。在调用方的事务里读它的展示信息（名称、模型）：这些字段的修改与调用方的写入之间没有
+    先后要求。"""
+    agent = await s.get(Agent, agent_id)
+    if agent is None:
+        raise NotFound(f"agent {agent_id!r} not found")
+    return info_of(agent)
 
 
 class AgentService:
@@ -126,7 +167,7 @@ class AgentService:
             # 只给名称：这条错误也会交还给模型，模型不接触 id
             raise Conflict(f"agent name {name!r} is already taken by another agent")
 
-    async def create(self, spec: AgentSpec, *, author: str) -> Agent:
+    async def create(self, spec: AgentSpec, *, author: str) -> AgentInfo:
         """author：创建者，"user" 或创建它的 agent 的 id（记在指令的第一版上）。"""
         name = normalize_agent_name(spec.name)
         model = self.defaults.model if spec.model is None else spec.model
@@ -159,21 +200,22 @@ class AgentService:
             s.add(agent)
             # 工作目录与数据库行同事务：建不出来则不插行
             self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
-        return agent
+            await s.flush()
+            return info_of(agent)
 
-    async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> Agent:
+    async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> AgentInfo:
         """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。指令有变化时追加一版（author 同 create）。
 
         先校验全部字段，再写指令（资源仓库），最后改数据库行：校验或指令写入失败时什么都没生效。只有写完指令后
         恰好被并发改名撞了名字，才会出现指令已更新、其余字段报错（窗口极小，报错可见，重试即可）。"""
         async with self._db.transaction() as s:
-            fields = self._validated(await active_agent_in(s, agent_id), patch)
+            fields = self._validated(await _active_in(s, agent_id), patch)
             await self._ensure_name_free(s, fields.name, agent_id)
         instructions_changed = patch.instructions is not None and await self._prompts.set(
             agent_id, patch.instructions, author
         )
         async with self._db.transaction() as s:
-            agent = await active_agent_in(s, agent_id)
+            agent = await _active_in(s, agent_id)
             fields = self._validated(agent, patch)
             await self._ensure_name_free(s, fields.name, agent_id)
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
@@ -182,7 +224,8 @@ class AgentService:
             agent.tool_groups = list(fields.tool_groups)
             if instructions_changed:
                 agent.updated_at = utcnow()
-        return agent
+            await s.flush()
+            return info_of(agent)
 
     def _validated(self, agent: Agent, patch: AgentPatch) -> _AgentFields:
         """patch 合并到 agent 当前值之后的字段，校验过（不合法时报 InvalidInput）。"""
@@ -201,22 +244,17 @@ class AgentService:
         )
         return fields
 
-    async def _get(self, s: AsyncSession, agent_id: str) -> Agent:
-        agent = await s.get(Agent, agent_id)
-        if agent is None:
-            raise NotFound(f"agent {agent_id!r} not found")
-        return agent
-
-    async def get_active(self, agent_id: str) -> Agent:
+    async def get_active(self, agent_id: str) -> AgentInfo:
         """还可用的 agent：正在删除的按不存在处理。为它写数据（资源、配置）之前用这个检查。"""
         async with self._db.transaction() as s:
             return await active_agent_in(s, agent_id)
 
-    async def get(self, agent_id: str) -> Agent:
+    async def get(self, agent_id: str) -> AgentInfo:
+        """agent（包括正在删除的）。"""
         async with self._db.transaction() as s:
-            return await self._get(s, agent_id)
+            return await agent_in(s, agent_id)
 
-    async def find_by_name(self, name: str) -> Agent:
+    async def find_by_name(self, name: str) -> AgentInfo:
         """模型按名称指代 agent（不接触 id）：在工具层把名称解析为 agent。名称唯一。"""
         name = normalize_agent_name(name)
         async with self._db.transaction() as s:
@@ -228,17 +266,13 @@ class AgentService:
                     )
                 ).all()
                 raise NotFound(f"no agent named {name!r}; available agents: {list(names)}")
-            return agent
+            return info_of(agent)
 
-    async def list(self) -> list[Agent]:
+    async def list(self) -> list[AgentInfo]:
         async with self._db.transaction() as s:
             # 正在删除的不列出
-            return list(
-                (await s.scalars(select(Agent).where(Agent.deleting_by.is_(None)).order_by(Agent.name))).all()
-            )
-
-    async def get_in(self, s: AsyncSession, agent_id: str) -> Agent:
-        return await self._get(s, agent_id)
+            rows = (await s.scalars(select(Agent).where(Agent.deleting_by.is_(None)).order_by(Agent.name))).all()
+            return [info_of(a) for a in rows]
 
     async def remove_files(self, agent_id: str, author: str) -> None:
         """删除 agent 的工作目录与私有资源（记忆、指令、skill、MCP 配置，删除记入资源仓库）。数据库行由调用方删除。"""

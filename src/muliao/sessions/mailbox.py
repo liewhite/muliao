@@ -27,9 +27,9 @@ from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import TaskQueue, session_lane
 from muliao.sessions.history import load_context
-from muliao.sessions.holds import called_in
+from muliao.sessions.holds import called_in, get_in
 from muliao.sessions.pending import waiting
-from muliao.sessions.tables import Mail, MailKind, MailState, Session
+from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
 
@@ -261,3 +261,22 @@ class MailReconciler:
         while True:
             await self.reconcile()
             await asyncio.sleep(self._interval)
+
+
+async def post_check_in(
+    s: AsyncSession, queue: TaskQueue, owner_session_id: str, holder: str, source: str, text: str
+) -> bool:
+    """运行中检查（platform.checks.WorkWatcher 的节奏）：在调用方事务里给发起会话投一封检查信件（不推送）；这个来源
+    已有信件排着时不投（不堆积）。工作的占用已不是 active（会话被停止，或
+    会话已删除）时也不投：停止之后不唤醒会话。返回是否投了。"""
+    hold = await get_in(s, owner_session_id, holder)
+    if hold is None:
+        if await s.get(Session, owner_session_id) is not None:
+            raise RuntimeError(f"session {owner_session_id} has no hold {holder} for its running work")
+        return False
+    if hold.status != HoldStatus.ACTIVE:
+        return False
+    if await has_queued_from(s, owner_session_id, source):
+        return False
+    await post_in(s, queue, owner_session_id, kind=MailKind.EVENT, source=source, content=text, awaited=False)
+    return True

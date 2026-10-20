@@ -18,7 +18,7 @@ from muliao.agent_runtime.runner import AgentRuntime, RunProfile, ToolGroups
 from muliao.agent_runtime.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.agent_runtime.web import WebProvider, build_web_provider
 from muliao.agent_runtime.web_tools import web_toolset
-from muliao.agent_runtime.workspace_tools import ShellLimits, session_workspace_toolset, workspace_toolset
+from muliao.agent_runtime.workspace_tools import ShellLimits, workspace_toolset
 from muliao.agents import tool_catalog
 from muliao.agents.evolution_tools import (
     instructions_toolset,
@@ -39,6 +39,7 @@ from muliao.delegations.tools import delegation_toolset
 from muliao.errors import InvalidInput
 from muliao.files.store import FileStore
 from muliao.jobs.runner import JobRunner
+from muliao.jobs.tools import session_workspace_toolset
 from muliao.notifications.delivery import DeliverHandler
 from muliao.notifications.service import Notifications, Notifier
 from muliao.notifications.tools import notify_toolset
@@ -55,7 +56,7 @@ from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import CompactionHandler, Compactor
 from muliao.sessions.consumer import Consumer, RunHandler
 from muliao.sessions.content import ContentBuilder
-from muliao.sessions.conversation import Threads
+from muliao.sessions.conversation import Threads, agent_busy_in
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
 from muliao.sessions.live import LiveRuns
@@ -63,6 +64,7 @@ from muliao.sessions.mailbox import MailReconciler
 from muliao.sessions.service import SessionService
 from muliao.sessions.settlement import handle_post_event, reconcile_failures
 from muliao.sessions.steps import Steps
+from muliao.sessions.work import AgentWork
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
 from muliao.triggers.service import EVENT_MAX_BYTES, TriggerService
@@ -233,7 +235,9 @@ def build_container(
         prompts,
         AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, groups),
     )
-    agent_lifecycle = AgentLifecycle(db, agents, queue, messaging)
+    agent_lifecycle = AgentLifecycle(
+        db, agents, queue, messaging, lambda s, agent_id: agent_busy_in(s, queue, agent_id)
+    )
     sessions = SessionService(db, queue, live, messaging)
     threads = Threads(queue, messaging)
     notifier = Notifier(db, queue)
@@ -263,7 +267,6 @@ def build_container(
         skills=skills,
         memory=memory,
         prompts=prompts,
-        live=live,
         tz=tz,
         resolve_model=resolve_model or models.resolve,
         files=files,
@@ -336,7 +339,8 @@ def build_container(
         keep_steps=settings.runtime.compaction_keep_steps,
     )
     content = ContentBuilder(files, runtime)
-    reflection = ReflectionScheduler(db, queue, agents)
+    agent_work = AgentWork(db)
+    reflection = ReflectionScheduler(db, queue, agents, agent_work)
     notifications = Notifications(db)
     # 删除 agent 与会话时各领域清理自己的数据
     notifications.subscribe(messaging)
@@ -361,7 +365,7 @@ def build_container(
         TaskKind.EVENT: messaging,
         TaskKind.RUN: RunHandler(consumer, messaging),
         TaskKind.COMPACTION: CompactionHandler(db, compactor),
-        TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups),
+        TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups, agents, agent_work),
         TaskKind.DELIVER: DeliverHandler(db, pusher),
     }
     worker = Worker(

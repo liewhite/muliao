@@ -10,9 +10,8 @@ import openai
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.api.events import TaskEvent
 from muliao.errors import TransientError
-from muliao.platform.bus import EventBus
+from muliao.platform.bus import EventBus, TaskEvent
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue
 

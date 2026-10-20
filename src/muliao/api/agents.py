@@ -3,9 +3,9 @@ from datetime import datetime
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
+from muliao.agents.api import AgentInfo
 from muliao.agents.resources import USER
 from muliao.agents.service import AgentPatch, AgentSpec
-from muliao.agents.tables import Agent
 from muliao.api.deps import C
 from muliao.reflection.service import list_reflections_of
 
@@ -46,7 +46,7 @@ class AgentOut(BaseModel):
     created_at: datetime
 
     @classmethod
-    def of(cls, a: Agent, instructions: str, steps_since_reflection: int) -> "AgentOut":
+    def of(cls, a: AgentInfo, instructions: str, steps_since_reflection: int) -> "AgentOut":
         return cls(
             id=a.id,
             name=a.name,
@@ -54,19 +54,19 @@ class AgentOut(BaseModel):
             model=a.model,
             instructions=instructions,
             reflect_every=a.reflect_every,
-            tool_groups=a.tool_groups,
+            tool_groups=list(a.tool_groups),
             steps_since_reflection=steps_since_reflection,
             created_at=a.created_at,
         )
 
 
-async def _outs(c: C, agents: list[Agent]) -> list[AgentOut]:
+async def _outs(c: C, agents: list[AgentInfo]) -> list[AgentOut]:
     """AgentOut 的唯一构造入口：一次取齐这些 agent 的反思进度。"""
     steps = await c.reflection.steps_since(agents)
     return [AgentOut.of(a, c.prompts.current(a.id), steps[a.id]) for a in agents]
 
 
-async def _out(c: C, agent: Agent) -> AgentOut:
+async def _out(c: C, agent: AgentInfo) -> AgentOut:
     [out] = await _outs(c, [agent])
     return out
 

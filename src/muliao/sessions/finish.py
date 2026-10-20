@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.conventions import shared_attachments
-from muliao.agents.tables import Agent
+from muliao.agent_runtime.api import shared_attachments
+from muliao.agents.api import AgentInfo, agent_in
 from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
@@ -35,14 +35,11 @@ class RunEnd:
     stopped: bool
 
 
-async def load_session(s: AsyncSession, session_id: str) -> tuple[Session, Agent]:
+async def load_session(s: AsyncSession, session_id: str) -> tuple[Session, AgentInfo]:
     session = await s.get(Session, session_id)
     if session is None:
         raise RuntimeError(f"session {session_id} vanished during its run")
-    agent = await s.get(Agent, session.agent_id)
-    if agent is None:
-        raise RuntimeError(f"session {session_id} references missing agent {session.agent_id}")
-    return session, agent
+    return session, await agent_in(s, session.agent_id)
 
 
 class RunFinisher:

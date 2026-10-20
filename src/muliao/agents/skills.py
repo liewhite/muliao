@@ -11,11 +11,11 @@ from pathlib import Path
 
 import frontmatter
 
-from muliao.agents import text_edit
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import Scope, scope_of, visible
 from muliao.agents.resources import ResourceRepo
 from muliao.errors import CorruptState, InvalidInput, NotFound
+from muliao.platform import text_edit
 
 SKILL_FILE = "SKILL.md"
 

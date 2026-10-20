@@ -3,9 +3,9 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from muliao.agents import text_edit
 from muliao.agents.resources import ResourceRepo
 from muliao.errors import CorruptState, InvalidInput
+from muliao.platform import text_edit
 
 MEMORY_FILE = "MEMORY.md"
 

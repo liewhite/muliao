@@ -8,9 +8,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from muliao.agents import text_edit
 from muliao.agents.resources import ResourceRepo, Revision
 from muliao.errors import CorruptState
+from muliao.platform import text_edit
 
 PROMPT_FILE = "PROMPT.md"
 

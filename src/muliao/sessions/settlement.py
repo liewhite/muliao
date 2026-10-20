@@ -15,8 +15,8 @@ from enum import StrEnum
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.conventions import Attachment
-from muliao.agents.tables import Agent
+from muliao.agent_runtime.api import Attachment
+from muliao.agents.api import agent_in
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskStatus
@@ -65,9 +65,7 @@ async def settle_in(
         return []
     if session.thread is None:
         raise RuntimeError(f"session {session.id} carries correlations {correlations} but is not a thread")
-    agent = await s.get(Agent, session.agent_id)
-    if agent is None:
-        raise RuntimeError(f"session {session.id} references missing agent {session.agent_id}")
+    agent = await agent_in(s, session.agent_id)
     messaging.publish_in(
         s,
         SessionSettled(

@@ -18,7 +18,7 @@ from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolReturn
 from pydantic_ai.exceptions import UsageLimitExceeded
 
 from muliao.agent_runtime.runner import AgentRuntime, RunProfile
-from muliao.agents.service import AgentService
+from muliao.agents.api import AgentService
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 log = logging.getLogger(__name__)

@@ -15,7 +15,7 @@ from sqlalchemy import select
 from muliao.errors import InvalidInput, TransientError
 from muliao.notifications.tables import Notification, PushSubscription
 from muliao.platform.db import Database
-from muliao.sessions.transcript import truncate
+from muliao.platform.text_edit import truncate
 
 log = logging.getLogger(__name__)
 

@@ -4,6 +4,7 @@ import logging
 from collections.abc import AsyncIterable, Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent as PaiAgent
@@ -17,10 +18,13 @@ from pydantic_ai.messages import (
     ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
+    RetryPromptPart,
     TextPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
+    ToolCallPart,
+    ToolReturnPart,
     UserContent,
 )
 from pydantic_ai.toolsets import AbstractToolset
@@ -31,22 +35,15 @@ from muliao.agent_runtime.attachments import AttachmentsForModel
 from muliao.agent_runtime.instructions import build_instructions, build_temp_instructions
 from muliao.agent_runtime.llm import ModelResolver
 from muliao.agent_runtime.redaction import redact_call
-from muliao.agents.memory import MemoryStore
-from muliao.agents.prompts import PromptStore
-from muliao.agents.service import AgentService
-from muliao.agents.skills import SkillStore
-from muliao.agents.tables import Agent
-from muliao.files.store import FileStore
+from muliao.agents.api import AgentInfo, AgentService, MemoryStore, PromptStore, SkillStore
+from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
 from muliao.platform.tooling import Audience, DomainErrorsAsRetry, Origin, RunScope
-from muliao.sessions.live import LiveRuns
-from muliao.sessions.transcript import Item, call_item, result_item, truncate
 
 log = logging.getLogger(__name__)
 
-_EVENT_TEXT_LIMIT = 2000
-
+TextKind = Literal["assistant", "thinking"]
 
 EventHandler = Callable[[RunContext[RunScope], AsyncIterable[AgentStreamEvent]], Awaitable[None]]
 
@@ -66,6 +63,12 @@ class StepHooks:
     before_request: Callable[[ModelRequest, list[ModelMessage]], Awaitable[None]]
     # 模型回复之后（回复已在 history 末尾），工具执行之前：保存它
     after_response: Callable[[ModelResponse, list[ModelMessage]], Awaitable[None]]
+
+    # 流式展示（会话页）：模型回答与思考的文字增量、工具调用（参数已脱敏）与结果。都是完整保存之前的预览，保存后
+    # 历史里有完整的一份；续跑时交回结果的挂起调用已在历史里，不再报告
+    on_text: Callable[[TextKind, str], None]
+    on_tool_call: Callable[[ToolCallPart], None]
+    on_tool_result: Callable[[ToolReturnPart | RetryPromptPart], None]
 
 
 @dataclass(frozen=True)
@@ -111,7 +114,6 @@ class AgentRuntime:
         skills: SkillStore,
         memory: MemoryStore,
         prompts: PromptStore,
-        live: LiveRuns,
         tz: ZoneInfo,
         clock: Clock = utcnow,
         resolve_model: ModelResolver,
@@ -121,7 +123,6 @@ class AgentRuntime:
         self._skills = skills
         self._memory = memory
         self._prompts = prompts
-        self._live = live
         self._tz = tz
         self._clock = clock
         self._resolve_model = resolve_model
@@ -131,7 +132,7 @@ class AgentRuntime:
         return self._agents.workspace(agent_id)
 
     def scope(
-        self, agent: Agent, *, session_id: str | None, origin: Origin | None, audience: Audience | None
+        self, agent: AgentInfo, *, session_id: str | None, origin: Origin | None, audience: Audience | None
     ) -> RunScope:
         return RunScope(
             agent_id=agent.id,
@@ -141,7 +142,7 @@ class AgentRuntime:
             audience=audience,
         )
 
-    async def instructions(self, agent: Agent, scope: RunScope, summary: str | None) -> str:
+    async def instructions(self, agent: AgentInfo, scope: RunScope, summary: str | None) -> str:
         return build_instructions(
             agent_name=agent.name,
             agent_description=agent.description,
@@ -159,7 +160,7 @@ class AgentRuntime:
 
     async def run_steps(
         self,
-        agent: Agent,
+        agent: AgentInfo,
         scope: RunScope,
         prompt: Sequence[UserContent] | None,
         history: Sequence[ModelMessage],
@@ -207,7 +208,7 @@ class AgentRuntime:
                 if PaiAgent.is_model_request_node(node):
                     await hooks.before_request(node.request, run.ctx.state.message_history)
                     async with node.stream(run.ctx) as stream:
-                        await self._forward_events(session_id, scope.agent_id, stream, resumed)
+                        await _forward_events(stream, hooks, resumed)
                     node = await run.next(node)
                     messages = run.ctx.state.message_history
                     response = messages[-1]
@@ -218,7 +219,7 @@ class AgentRuntime:
                     await hooks.after_response(response, messages)
                 elif PaiAgent.is_call_tools_node(node):
                     async with node.stream(run.ctx) as stream:
-                        await self._forward_events(session_id, scope.agent_id, stream, resumed)
+                        await _forward_events(stream, hooks, resumed)
                     node = await run.next(node)
                 else:
                     node = await run.next(node)
@@ -238,7 +239,7 @@ class AgentRuntime:
         return result
 
     async def run_once(
-        self, agent: Agent, scope: RunScope, prompt: str, profile: RunProfile
+        self, agent: AgentInfo, scope: RunScope, prompt: str, profile: RunProfile
     ) -> AgentRunResult[str]:
         """agent 一次不属于会话的运行（反思）：带它完整的指令，没有历史，不逐步保存。"""
         return await self._execute(
@@ -252,7 +253,7 @@ class AgentRuntime:
 
     async def run_temp(
         self,
-        parent: Agent,
+        parent: AgentInfo,
         *,
         task: str,
         instructions: str,
@@ -327,50 +328,40 @@ class AgentRuntime:
         )
         return result
 
-    async def summarize(self, agent: Agent, instructions: str, prompt: str) -> str:
+    async def summarize(self, agent: AgentInfo, instructions: str, prompt: str) -> str:
         """用该 agent 的模型做一次无工具的文本生成（上下文压缩用）。不转发事件到前端。"""
         result = await self._pai.run(
             prompt, model=self._resolve_model(agent.model), instructions=instructions
         )
         return result.output
 
-    async def _forward_events(
-        self,
-        session_id: str,
-        agent_id: str,
-        stream: AsyncIterable[AgentStreamEvent],
-        resumed: frozenset[str],
-    ) -> None:
-        """会话运行的事件推到会话页（bus.LiveRuns），条目与历史同一个投影（transcript）。没有会话的运行（反思、临时
-        agent）没有页面在看，不转发。工具的参数与结果在实时事件里截断（保存后历史里是完整的）。续跑时 pydantic-ai 会把
-        交回结果的挂起调用（resumed）再发一遍调用与结果事件：它们已经在历史里，不转发。"""
-        async for event in stream:
-            if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
-                self._live.publish_delta(session_id, agent_id, "assistant", event.part.content)
-            elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                self._live.publish_delta(session_id, agent_id, "assistant", event.delta.content_delta)
-            elif (
-                isinstance(event, PartStartEvent)
-                and isinstance(event.part, ThinkingPart)
-                and event.part.content
-            ):
-                self._live.publish_delta(session_id, agent_id, "thinking", event.part.content)
-            # 只更新签名、没有新内容的增量（content_delta 为 None）不用展示
-            elif (
-                isinstance(event, PartDeltaEvent)
-                and isinstance(event.delta, ThinkingPartDelta)
-                and event.delta.content_delta
-            ):
-                self._live.publish_delta(session_id, agent_id, "thinking", event.delta.content_delta)
-            elif isinstance(event, FunctionToolCallEvent | FunctionToolResultEvent) and (
-                event.part.tool_call_id in resumed
-            ):
-                continue
-            elif isinstance(event, FunctionToolCallEvent):
-                self._live.publish_item(session_id, agent_id, _truncated(call_item(redact_call(event.part))))
-            elif isinstance(event, FunctionToolResultEvent):
-                self._live.publish_item(session_id, agent_id, _truncated(result_item(event.part)))
 
-
-def _truncated(item: Item) -> Item:
-    return item.model_copy(update={"text": truncate(item.text, _EVENT_TEXT_LIMIT)})
+async def _forward_events(
+    stream: AsyncIterable[AgentStreamEvent], hooks: StepHooks, resumed: frozenset[str]
+) -> None:
+    """把一步里的流式事件报告给 hooks（会话页的实时展示）。续跑时 pydantic-ai 会把交回结果的挂起调用（resumed）再发
+    一遍调用与结果事件：它们已经在历史里，不报告。"""
+    async for event in stream:
+        if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
+            hooks.on_text("assistant", event.part.content)
+        elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+            hooks.on_text("assistant", event.delta.content_delta)
+        elif (
+            isinstance(event, PartStartEvent) and isinstance(event.part, ThinkingPart) and event.part.content
+        ):
+            hooks.on_text("thinking", event.part.content)
+        # 只更新签名、没有新内容的增量（content_delta 为 None）不用展示
+        elif (
+            isinstance(event, PartDeltaEvent)
+            and isinstance(event.delta, ThinkingPartDelta)
+            and event.delta.content_delta
+        ):
+            hooks.on_text("thinking", event.delta.content_delta)
+        elif isinstance(event, FunctionToolCallEvent | FunctionToolResultEvent) and (
+            event.part.tool_call_id in resumed
+        ):
+            continue
+        elif isinstance(event, FunctionToolCallEvent):
+            hooks.on_tool_call(redact_call(event.part))
+        elif isinstance(event, FunctionToolResultEvent):
+            hooks.on_tool_result(event.part)

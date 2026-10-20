@@ -26,8 +26,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
+from muliao.agents.api import active_agent_in
 from muliao.agents.events import AgentDeleting
-from muliao.agents.service import active_agent_in
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.notifications.service import Notifier
 from muliao.notifications.tables import Notification

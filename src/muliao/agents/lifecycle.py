@@ -9,28 +9,35 @@
 """
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.events import AgentDeleting
 from muliao.agents.service import AgentService
 from muliao.agents.tables import Agent
-from muliao.errors import Conflict, TransientError
+from muliao.errors import Conflict, NotFound, TransientError
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, no_commit, reflection_lane
-from muliao.sessions.conversation import agent_busy_in
 from muliao.sessions.events import AgentSessionsCleared
 
 log = logging.getLogger(__name__)
 
 
+# 这个 agent 有会话忙（会话领域的查询，组合根接上 sessions.api.agent_busy_in）
+AgentBusy = Callable[[AsyncSession, str], Awaitable[bool]]
+
+
 class AgentLifecycle:
-    def __init__(self, db: Database, agents: AgentService, queue: TaskQueue, messaging: Messaging):
+    def __init__(
+        self, db: Database, agents: AgentService, queue: TaskQueue, messaging: Messaging, agent_busy: AgentBusy
+    ):
         self._db = db
         self._agents = agents
         self._queue = queue
         self._messaging = messaging
+        self._agent_busy = agent_busy
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(AgentSessionsCleared, "agents.sessions_cleared", self.on_sessions_cleared)
@@ -39,17 +46,17 @@ class AgentLifecycle:
         # 会话的状态是别的领域的数据：在自己的只读事务里查（docs/domain-design.md 1.1），检查与标记之间的极小窗口
         # 由会话领域的订阅者重试收敛
         async with self._db.transaction() as s:
-            agent = await self._agents.get_in(s, agent_id)
+            agent = await _get_in(s, agent_id)
             if agent.deleting_by is not None:
                 raise Conflict(f"agent {agent.name!r} is already being deleted")
-            busy = await agent_busy_in(s, self._queue, agent_id) or await self._queue.lane_busy(
+            busy = await self._agent_busy(s, agent_id) or await self._queue.lane_busy(
                 s, reflection_lane(agent_id)
             )
         if busy:
             log.info("agent deletion refused: busy", extra={"agent": agent_id})
             raise Conflict(f"agent {agent.name!r} is working right now; stop its sessions first, then delete")
         async with self._db.transaction() as s:
-            agent = await self._agents.get_in(s, agent_id)
+            agent = await _get_in(s, agent_id)
             if agent.deleting_by is not None:
                 raise Conflict(f"agent {agent.name!r} is already being deleted")
             agent.deleting_by = author
@@ -80,3 +87,10 @@ class AgentLifecycle:
                 log.info("agent deleted", extra={"agent": event.agent_id, "author": author})
 
         return commit
+
+
+async def _get_in(s: AsyncSession, agent_id: str) -> Agent:
+    agent = await s.get(Agent, agent_id)
+    if agent is None:
+        raise NotFound(f"agent {agent_id!r} not found")
+    return agent

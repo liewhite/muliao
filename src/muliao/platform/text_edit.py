@@ -1,4 +1,5 @@
-"""修改文本的唯一规则：替换恰好出现一次的片段，或追加一段（记忆、指令、skill 正文、工作区文件都用它）。纯函数。"""
+"""文本的唯一规则（纯函数）：修改文本——替换恰好出现一次的片段，或追加一段（记忆、指令、skill 正文、工作区文件都用它）；
+截断过长的文本（交给模型、展示、通知的长输出都用它）。"""
 
 from muliao.errors import InvalidInput
 
@@ -22,3 +23,7 @@ def append(current: str, entry: str) -> str:
     if not entry:
         raise InvalidInput("nothing to append")
     return f"{current.rstrip()}\n\n{entry}\n" if current.strip() else f"{entry}\n"
+
+
+def truncate(text: str, limit: int) -> str:
+    return text if len(text) <= limit else f"{text[:limit]}…[truncated {len(text) - limit} chars]"
