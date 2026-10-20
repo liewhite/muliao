@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from muliao.api.app import create_app
-from muliao.api.events import SavedEvent
+from muliao.sessions.live import SavedEvent
 from tests.conftest import login
 
 

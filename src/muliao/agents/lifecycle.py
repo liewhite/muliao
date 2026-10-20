@@ -43,8 +43,8 @@ class AgentLifecycle:
         messaging.subscribe(AgentSessionsCleared, "agents.sessions_cleared", self.on_sessions_cleared)
 
     async def delete(self, agent_id: str, *, author: str) -> None:
-        # 会话的状态是别的领域的数据：在自己的只读事务里查（docs/domain-design.md 1.1），检查与标记之间的极小窗口
-        # 由会话领域的订阅者重试收敛
+        # 会话的状态是别的领域的数据：在自己的只读事务里查（docs/domain-design.md 1.1）。检查与标记之间排上的工作
+        # 由会话领域的订阅者先停止再删除（4.4）
         async with self._db.transaction() as s:
             agent = await _get_in(s, agent_id)
             if agent.deleting_by is not None:

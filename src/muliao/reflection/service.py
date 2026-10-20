@@ -78,8 +78,9 @@ class ReflectionScheduler:
         self._work = work
 
     def subscribe(self, messaging: Messaging) -> None:
-        # 同一个 agent 的两种事件在同一条 lane 上按发布顺序处理：RunEnded 一定先于 AgentDeleting 发布（agent 有会话忙时
-        # 不能删除），删除的清理之后不会再写入检查点、投递反思
+        # 同一个 agent 的两种事件在同一条 lane 上按发布顺序处理。通常 RunEnded 先于 AgentDeleting 发布（agent 有会话忙时
+        # 不能删除）；排在 AgentDeleting 之后的 RunEnded（删除前检查与标记之间排上的运行、人工重试的投递）由 on_run_ended
+        # 检查 agent 已在删除而跳过——这个检查是必需的，不是防御。两者合起来，删除的清理之后不会再写检查点、投递反思
         messaging.subscribe(RunEnded, "reflection.run_ended", self.on_run_ended, lane=_agent_lane)
         messaging.subscribe(
             AgentDeleting, "reflection.agent_deleting", self.on_agent_deleting, lane=_agent_lane
@@ -102,6 +103,7 @@ class ReflectionScheduler:
         数据，在它们自己的只读事务里查（docs/domain-design.md 1.1）：配置改动与这次判断的先后无关紧要；消息只会追加，
         数到的步数之后又多了几步，下一次运行结束时照样数到。检查点只由这条 lane 写（单写者），先读后写没有竞态。"""
         try:
+            # 标记删除先于 AgentDeleting 的处理：排在它之后的 RunEnded 在这里一定看到 agent 已在删除
             agent = await self._agents.get_active(event.agent_id)
         except NotFound:
             log.info("run of a deleted agent not counted for reflection", extra={"agent": event.agent_id})

@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import AgentRuntime, calls_in, results_in
-from muliao.agents.api import AgentInfo, agent_in
+from muliao.agents.api import AgentInfo, active_agent_in, agent_in
 from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskKind, TaskStatus
@@ -197,6 +197,8 @@ class Compactor:
             session = await s.get(Session, session_id)
             if session is None:
                 raise NotFound(f"session {session_id!r} not found")
+            # 正在删除的 agent 的会话不再新排工作（与来信同一条规则）
+            await active_agent_in(s, session.agent_id)
             return await self._request_in(s, session)
 
     async def _request_in(self, s: AsyncSession, session: Session) -> bool:

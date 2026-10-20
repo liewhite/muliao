@@ -4,12 +4,12 @@ from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel
 
 from muliao.api.deps import C
-from muliao.api.events import RunEvent
 from muliao.api.files import FileOut
 from muliao.container import Container
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.live import RunEvent
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.service import default_title

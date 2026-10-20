@@ -238,7 +238,7 @@ def build_container(
     agent_lifecycle = AgentLifecycle(
         db, agents, queue, messaging, lambda s, agent_id: agent_busy_in(s, queue, agent_id)
     )
-    sessions = SessionService(db, queue, live, messaging)
+    sessions = SessionService(db, queue, live, messaging, lambda session_id: consumer.stop_session(session_id))
     threads = Threads(queue, messaging)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(resources, vault)

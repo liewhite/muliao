@@ -76,7 +76,9 @@
   4. 事件 payload 校验失败是契约违约（例如跨版本部署），投递直接失败，「任务」页可见，人工处理。
 - 正确性依赖的投递顺序都由「同一对象的事件放在订阅者的同一条 lane 上」保证（lane 内按发布顺序，前一条在重试时后一条等着）：
   - 同一个委派的 `DelegationDispatched` 先于它的 `SessionSettled` 到达委派 lane（4.2 说明为什么一定如此）；
-  - 通知领域把同一会话的 `RunEnded` 与 `SessionDeleted` 放在一条 lane（`notifications:<会话>`），反思领域把同一 agent 的 `RunEnded` 与 `AgentDeleting` 放在一条 lane（`reflection-events:<agent>`）：`RunEnded` 一定先发布（忙时不能删除），删除的清理之后不会再写通知、检查点或投递反思。
+  - 通知领域把同一会话的 `RunEnded` 与 `SessionDeleted` 放在一条 lane（`notifications:<会话>`），反思领域把同一 agent 的 `RunEnded` 与 `AgentDeleting` 放在一条 lane（`reflection-events:<agent>`）：通常 `RunEnded` 先发布（忙时不能删除），删除的清理之后不会再写通知、检查点或投递反思。
+
+  **lane 内的顺序只对没有失败的投递成立**：最终失败的投递不挡同一条 lane 上之后的投递（`_claimable` 只看排队与运行中的），人工重试时它排在已经处理过的投递之后。另外删除 agent 前的检查与标记分属两个事务，之间排上的运行的 `RunEnded` 晚于 `AgentDeleting`。所以依赖顺序的处理器必须检查前置状态：通知的 `RunEnded` 在提交事务里确认会话还在（会话只会从存在变为删除），反思的 `RunEnded` 确认 agent 不在删除中；前置状态缺失时按契约内的情况跳过并记日志，或在确属契约违约时报错（委派的 `SessionSettled` 找不到委派行）。
 
   其余处理器都按目标对象的当前状态判断（占用状态、委派状态），乱序到达也收敛。
 - 失败投递的恢复：投递最终失败后在「任务」页人工重试。重试保留原 id，所以仍按原顺序处理；`TaskQueue.retry` 改为允许在 lane 上还有更晚的任务时重试更早的那条（现在会拒绝），否则共享 lane 上可能一直找不到重试时机。同一委派的 `DelegationDispatched` 失败时，它的 `SessionSettled` 也会失败，按 id 顺序先后重试即可。
@@ -92,7 +94,7 @@
 
 ### 3.5 实时展示总线
 
-`bus.LiveRuns` 与 SSE（`muliao/events.py`）是展示加速，不是领域事件，不持久化、不保证送达，保持现状。命名上区分：领域事件叫 domain event，SSE 推送叫 server event。
+`sessions.live.LiveRuns` 与 SSE（`api/events.py`）是展示加速，不是领域事件，不持久化、不保证送达，保持现状。命名上区分：领域事件叫 domain event，SSE 推送叫 server event。
 
 ### 3.6 幂等键
 
@@ -206,7 +208,7 @@
 
 1. `Agents.delete(agent)`：它的会话有忙的、或它的反思在排队或运行时拒绝（409，与删除会话的规则一致）；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据（secret、触发器、资源、配置）之前用 `agents.service.active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。
 2. 订阅者：
-   - 会话：删除它的全部会话，发布 `AgentSessionsCleared`（没有会话时立即发布）。标记删除时它的会话都不忙；会话领域新建、继续会话前在本地事务里用 `active_agent_in` 检查（`receive`、`dispatch`），标记一提交就拒绝新的来信，所以之后会话不会再变忙，通常一次删完。仍有会话忙只可能是人为重跑了它的任务：按暂时失败重试，重试用完时投递记为 failed，在「任务」页可见，会话空闲后人工重试即可继续。（早先的设计用会话领域自己的投影 `retired_agents` 加一条定向命令分两步提交；`active_agent_in` 读的事实只会单向变化（1.1），投影与两步都是多余的。）
+   - 会话：删除它的全部会话（连同私有 thread），发布 `AgentSessionsCleared`（没有会话时立即发布）。标记一提交，会话领域新建、继续会话与手动压缩前在本地事务里用 `active_agent_in` 检查（`receive`、`dispatch`、`Compactor.request`），不再为它新排工作。仍可能有会话忙：删除前的检查与标记分属两个事务，之间来的信件排上的运行在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会。处理器先停止这些会话（停止幂等，也本来是删除的前提：它们的工作随 agent 一起放弃），再删除；停止之后又变忙（只可能是人为重跑）按暂时失败重试，重试时同样先停止。所以这一步在有限时间内收敛，不依赖会话自己结束。（早先的设计用会话领域自己的投影 `retired_agents` 加一条定向命令分两步提交；`active_agent_in` 读的事实只会单向变化（1.1），投影与两步都是多余的。）
    - 反思：取消该 agent 排队的反思任务，删除检查点与记录；正在执行的反思（删除前的检查之后才开始的极小窗口）结束时发现 agent 正在删除，不写记录。
    - 触发器、vault：删除它的触发器与私有 secret。
 3. agents 订阅 `AgentSessionsCleared`：删除行与资源目录。

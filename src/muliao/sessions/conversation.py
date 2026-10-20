@@ -258,26 +258,15 @@ async def delete_sessions(
     任一被删会话忙时拒绝（判断只看会话自己的数据），避免运行结果无处提交、工具写到被删的目录。交给被删会话、
     还没结清的委派结清为「被删除」（SessionSettled，委派领域交回发起方）。
     """
-    doomed = {x.id: x for x in roots}
-    frontier = list(doomed)
-    while frontier:
-        children = (
-            await s.scalars(
-                select(Session).where(Session.parent_session_id.in_(frontier), Session.private.is_(True))
-            )
-        ).all()
-        frontier = [c.id for c in children if c.id not in doomed]
-        doomed |= {c.id: c for c in children}
-    for session in doomed.values():
-        # 忙：lane 上有排队或运行中的任务（运行、压缩），或有人替它在外面做事（后台任务、委派出去的工作）
-        if await queue.lane_busy(s, session_lane(session.id)) or await has_active_in(s, session.id):
-            # 错误也会交还给模型，不带 id；定位信息记在日志里
-            log.info("session deletion refused: busy", extra={"session_id": session.id})
-            what = "the session" if session.id in {x.id for x in roots} else "one of its private threads"
-            raise Conflict(
-                f"{what} is busy (a run is queued or running, or background jobs or delegated work are still "
-                "going); stop it first, then delete"
-            )
+    doomed = await _with_private_threads_in(s, roots)
+    for session_id in await busy_among_in(s, queue, doomed):
+        # 错误也会交还给模型，不带 id；定位信息记在日志里
+        log.info("session deletion refused: busy", extra={"session_id": session_id})
+        what = "the session" if session_id in {x.id for x in roots} else "one of its private threads"
+        raise Conflict(
+            f"{what} is busy (a run is queued or running, or background jobs or delegated work are still "
+            "going); stop it first, then delete"
+        )
     for session in doomed.values():
         # 交给被删会话、还没结清的工作交回「被删除」
         await settle_in(
@@ -294,6 +283,34 @@ async def delete_sessions(
     # 立即执行删除：同一事务里随后的查询（如删除 agent 的流程）看到的是删除之后的状态
     await s.flush()
     log.info("sessions deleted", extra={"session_ids": sorted(doomed)})
+
+
+async def _with_private_threads_in(s: AsyncSession, roots: Sequence[Session]) -> dict[str, Session]:
+    """这些会话连同它们（逐层）的私有 thread：删除时一起删除。"""
+    doomed = {x.id: x for x in roots}
+    frontier = list(doomed)
+    while frontier:
+        children = (
+            await s.scalars(
+                select(Session).where(Session.parent_session_id.in_(frontier), Session.private.is_(True))
+            )
+        ).all()
+        frontier = [c.id for c in children if c.id not in doomed]
+        doomed |= {c.id: c for c in children}
+    return doomed
+
+
+async def busy_among_in(s: AsyncSession, queue: TaskQueue, sessions: Mapping[str, Session]) -> list[str]:
+    """其中忙的会话：lane 上有排队或运行中的任务（运行、压缩），或有人替它在外面做事（后台任务、委派出去的工作）。"""
+    return [
+        x for x in sessions if await queue.lane_busy(s, session_lane(x)) or await has_active_in(s, x)
+    ]
+
+
+async def busy_sessions_of_agent_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> list[str]:
+    """删除这个 agent 时会被删除、此刻忙着的会话（它的会话与它们的私有 thread）。"""
+    roots = list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())
+    return await busy_among_in(s, queue, await _with_private_threads_in(s, roots))
 
 
 async def agent_busy_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> bool:

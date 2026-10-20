@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from pydantic_ai.messages import ModelMessage
@@ -21,12 +21,14 @@ from muliao.sessions.codec import load_messages
 from muliao.sessions.conversation import (
     Inbound,
     Received,
+    busy_sessions_of_agent_in,
     delete_sessions,
     open_asks,
     receive,
     threads_of,
 )
 from muliao.sessions.events import AgentSessionsCleared
+from muliao.sessions.halt import Halted
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.tables import Compaction, Mail, Message, Session
@@ -60,11 +62,19 @@ class SessionView:
 
 
 class SessionService:
-    def __init__(self, db: Database, queue: TaskQueue, live: LiveRuns, messaging: Messaging):
+    def __init__(
+        self,
+        db: Database,
+        queue: TaskQueue,
+        live: LiveRuns,
+        messaging: Messaging,
+        stop_session: Callable[[str], Awaitable[Halted]],
+    ):
         self._db = db
         self._queue = queue
         self._live = live
         self._messaging = messaging
+        self._stop_session = stop_session
 
     async def detail(self, session_id: str) -> SessionView:
         # 先取快照再读库：快照这一段已在展示的消息不在历史里重复；之间换了段时，新保存的消息照旧由旧快照展示，
@@ -159,13 +169,24 @@ class SessionService:
             AgentDeleting,
             "sessions.agent_deleting",
             self.on_agent_deleting,
-            lane=lambda e: f"agent:{e.agent_id}",
+            lane=lambda e: f"sessions.agent_deleting:{e.agent_id}",
         )
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
-        """删除 agent 的流程：删除它的全部会话，发布 AgentSessionsCleared（没有会话也发）。标记删除时它的会话都不忙，
-        之后也不会再收到来信（ensure_agent_active_in），所以这里通常一次删完。仍有会话忙只可能是人为重跑了它的失败
-        任务：按暂时失败重试，重试用完时投递记为失败，在「任务」页可见。"""
+        """删除 agent 的流程：删除它的全部会话（连同私有 thread），发布 AgentSessionsCleared（没有会话也发）。
+
+        标记删除之后它的会话不再收到来信（ensure_agent_active_in），但仍可能有会话忙：删除前的检查与标记分属两个
+        事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会让会话变忙。
+        忙的会话先停止（停止幂等，也本来是删除的前提：它们的工作随 agent 一起放弃），再删除。停止之后到删除之间
+        又变忙（只可能是人为重跑）就按暂时失败重试，重试时同样先停止。"""
+        async with self._db.transaction() as s:
+            busy = await busy_sessions_of_agent_in(s, self._queue, event.agent_id)
+        for session_id in busy:
+            halted = await self._stop_session(session_id)
+            log.info(
+                "busy session of a deleted agent stopped",
+                extra={"agent": event.agent_id, "session_id": session_id, "halted": halted},
+            )
 
         async def commit(s: AsyncSession) -> None:
             sessions = list(

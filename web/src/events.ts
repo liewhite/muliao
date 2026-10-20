@@ -7,7 +7,7 @@ import { api, type Item, type LiveRun, type Schemas } from './api'
 export type RunItemEvent = Schemas['RunItemEvent']
 /** 流式文字：接在同类的最后一条后面（或开始新的一条） */
 export type RunDeltaEvent = Schemas['RunDeltaEvent']
-/** run_id 与 seq：这一段的编号与事件序号（后端 bus.LiveRuns），快照与 SSE 事件据此合并、去重 */
+/** run_id 与 seq：这一段的编号与事件序号（后端 sessions.live.LiveRuns），快照与 SSE 事件据此合并、去重 */
 export type RunEvent = RunItemEvent | RunDeltaEvent
 
 export interface MergedLive {

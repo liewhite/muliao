@@ -176,7 +176,7 @@ async def test_subscriber_survives_heartbeat_timeouts():
         for _ in range(3):  # SSE 每次心跳都是一次超时
             with pytest.raises(TimeoutError):
                 await asyncio.wait_for(sub.next(), timeout=0.01)
-        from muliao.api.events import SavedEvent
+        from muliao.sessions.live import SavedEvent
 
         bus.publish(SavedEvent(session_id="s"))
         assert await asyncio.wait_for(sub.next(), timeout=1) == SavedEvent(session_id="s")

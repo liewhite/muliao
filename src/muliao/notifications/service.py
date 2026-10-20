@@ -5,6 +5,8 @@
 - Notifications：通知页与未读数。
 """
 
+import logging
+
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,12 +16,15 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import Commit, TaskQueue, deliver_lane, no_commit
+from muliao.sessions.api import session_in
 from muliao.sessions.events import RunEnded, SessionDeleted
+
+log = logging.getLogger(__name__)
 
 
 def session_events_lane(event: RunEnded | SessionDeleted) -> str:
     """同一个会话的事件在同一条 lane 上按发布顺序处理：RunEnded 一定先于 SessionDeleted 发布（会话忙时不能删除），
-    删除的清理之后不会再为它写通知。"""
+    删除的清理之后不会再为它写通知。顺序只对没有失败的投递成立：人工重试的 RunEnded 由处理器检查会话还在。"""
     return f"notifications:{event.session_id}"
 
 
@@ -61,6 +66,14 @@ class Notifier:
             return no_commit
 
         async def commit(s: AsyncSession) -> None:
+            # 正常情况下同一会话的 SessionDeleted 排在后面（session_events_lane）；这条投递失败后被人工重试时可能已在
+            # 删除之后。会话只会从存在变为删除，在本事务里检查没有竞态
+            if await session_in(s, event.session_id) is None:
+                log.info(
+                    "run of a deleted session not notified",
+                    extra={"session_id": event.session_id, "run_id": event.run_id},
+                )
+                return
             await self.enqueue_in(
                 s,
                 event.agent_id,
