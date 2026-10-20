@@ -86,7 +86,8 @@ export interface Attachment {
 }
 
 /** stopped：用户停止了这一轮（后端 conventions.TURN_STOPPED），出现在那一轮保存下来的内容之后 */
-export type ItemType = 'user' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'stopped'
+/** event：会话事件（后台任务完成、运行中的检查……），tool_name 是来源（如 job:12），text 是内容 */
+export type ItemType = 'user' | 'event' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'stopped'
 
 export interface Item {
   type: ItemType

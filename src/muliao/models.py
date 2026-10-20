@@ -213,6 +213,29 @@ class Secret(Base):
     )
 
 
+class SessionEvent(Base):
+    """交给某个会话的 agent、等下一轮一起处理的事件（后台任务完成、运行中的检查……）。设计见 runtime/events。
+
+    一轮开始时取走会话里所有还没处理的事件，提交时记下 consumed_by；会话在等用户回答提问时事件留着，回答或跳过的
+    那一轮一起带上。
+    """
+
+    __tablename__ = "session_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    # 谁发的，如 "job:12"（交给模型时标在事件上）
+    source: Mapped[str] = mapped_column(String(100))
+    content: Mapped[str] = mapped_column(Text)
+    # 处理它的那一轮的回答要不要推送给用户（运行中的检查不推送，完成通知随发起任务的那一轮）
+    reply_to: Mapped[ReplyTo] = mapped_column(StrEnumType(ReplyTo))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # 处理掉它的 turn task；None 表示还在队列里
+    consumed_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
+
+    __table_args__ = {"sqlite_autoincrement": True}
+
+
 class Notification(Base):
     """发给用户的一条通知。通知页与应用角标的未读数是它的展示，Web Push 是它的投递（deliver task 引用它）。"""
 

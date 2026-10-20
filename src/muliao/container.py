@@ -26,6 +26,7 @@ from muliao.models import TaskKind
 from muliao.resources import ResourceRepo
 from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
 from muliao.runtime.conversation import Threads
+from muliao.runtime.events import EventDispatcher
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
 from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroup, ToolGroups
@@ -98,6 +99,7 @@ class Container:
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
     worker: Worker
+    events: EventDispatcher
     compaction: CompactionScheduler
     turns: TurnRunner
     models: ModelRegistry
@@ -123,6 +125,7 @@ class Container:
         await asyncio.to_thread(self.files.recover)
         self._spawn("worker", self.worker.run_forever())
         self._spawn("schedules", self.schedules.run_forever())
+        self._spawn("events", self.events.run_forever())
 
     async def _check_orphan_resources(self) -> None:
         """数据库里已删除、资源仓库里还留着目录的 agent（删除时提交失败所致）：记录出来，由人决定是否清理。"""
@@ -325,6 +328,8 @@ def build_container(
         task_timeout_seconds=settings.runtime.task_timeout_seconds,
     )
 
+    events = EventDispatcher(db, queue)
+
     return Container(
         settings=settings,
         db=db,
@@ -348,6 +353,7 @@ def build_container(
         push_subscriptions=push_subscriptions,
         vapid=vapid,
         worker=worker,
+        events=events,
         compaction=compaction,
         turns=turn_runner,
         models=models,

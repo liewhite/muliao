@@ -156,3 +156,13 @@ describe('unlinkedThreads', () => {
     expect(unlinkedThreads(items, [{ id: 't1' }, { id: 't2' }])).toEqual([{ id: 't2' }])
   })
 })
+
+describe('session events', () => {
+  it('become their own block with the source, not part of a user bubble', () => {
+    const event: Item = { ...item('event', 'job 1 finished'), tool_name: 'job:1' }
+    expect(toBlocks([event, item('user', 'hi')])).toEqual([
+      { kind: 'event', source: 'job:1', text: 'job 1 finished' },
+      { kind: 'user', text: 'hi', attachments: [] },
+    ])
+  })
+})

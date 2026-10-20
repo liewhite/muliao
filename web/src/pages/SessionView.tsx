@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
-import { Archive, ArrowDown, CircleStop, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
+import { Archive, ArrowDown, BellDot, CircleStop, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
@@ -149,6 +149,23 @@ function AskBlock({ ask, ctx }: { ask: AskView; ctx: SessionContext }) {
   return result.answered ? <AnsweredQuestions answers={result.answers} /> : <QuestionNote text="没有回答这些问题" />
 }
 
+/** 会话事件（后台任务完成、运行中的检查……）：不是用户说的话，单独显示，默认收起内容 */
+function EventNote({ source, text }: { source: string; text: string }) {
+  return (
+    <Collapsible
+      title={
+        <>
+          <BellDot className="size-3.5 shrink-0" />
+          <span className="font-mono text-foreground">{source}</span>
+          <span className="truncate">{text.split('\n', 1)[0]}</span>
+        </>
+      }
+    >
+      <pre className={CODE_BLOCK}>{text}</pre>
+    </Collapsible>
+  )
+}
+
 function Blocks({ items, ctx }: { items: Item[]; ctx: SessionContext }) {
   return (
     <>
@@ -165,6 +182,8 @@ function Blocks({ items, ctx }: { items: Item[]; ctx: SessionContext }) {
             )
           case 'user':
             return <UserBubble key={i} text={v.text} attachments={v.attachments} />
+          case 'event':
+            return <EventNote key={i} source={v.source} text={v.text} />
           case 'assistant':
             return (
               <div key={i} className="max-w-[88%] self-start rounded-2xl rounded-bl-md bg-surface px-3.5 py-2.5 shadow-sm">

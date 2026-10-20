@@ -11,12 +11,15 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 | `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | runtime.stopping | 模型（下一轮） |
 | `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | runtime.turn | 模型、会话条目 |
 | 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart | — | unanswered_calls：挂起的提问、压缩切点、停止时补结果 |
+| `TURN_EVENTS`：这一轮交给模型的会话事件 | 事件各占用户消息内容的一段（format_event），metadata 记下是第几段 | runtime.turn | 模型、会话条目 |
 
 metadata 的键都带 `muliao_` 前缀：metadata 是 pydantic-ai 开放给所有工具（含 MCP 包装）的字段，通用的键名可能撞上形状
 不同的数据。
 """
 
+import re
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import TypedDict
 
 from pydantic import TypeAdapter
@@ -27,6 +30,7 @@ from pydantic_ai.messages import (
     RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 
 from muliao.files import FileMeta, parse_file_url
@@ -35,6 +39,42 @@ from muliao.files import FileMeta, parse_file_url
 TURN_STOPPED = "muliao_stopped"
 # 停止时还没出结果的工具调用的结果：工具的副作用可能已经发生，告诉模型它没有完成
 STOPPED_TOOL_RESULT = "Stopped by the user before this tool call finished; it may have partly run."
+
+
+# 一轮带上的会话事件（runtime.events）：每条事件是用户消息内容里独立的一段，格式见 format_event；
+# 那条 ModelRequest 的 metadata[TURN_EVENTS] 是这些段在内容里的下标
+TURN_EVENTS = "muliao_events"
+_EVENT = re.compile(r'\A<event source="(?P<source>[^"]*)">\n(?P<content>.*)\n</event>\Z', re.DOTALL)
+
+
+def format_event(source: str, content: str) -> str:
+    """交给模型的一条事件。source 是发送方（如 job:12），不含引号（runtime.events 校验）。"""
+    return f'<event source="{source}">\n{content}\n</event>'
+
+
+def parse_event(text: str) -> tuple[str, str]:
+    """format_event 的逆运算；对不上就是数据与代码不一致。"""
+    match = _EVENT.match(text)
+    if match is None:
+        raise RuntimeError(f"stored event does not follow the event format: {text[:200]!r}")
+    return match["source"], match["content"]
+
+
+def event_indices(message: ModelMessage) -> list[int]:
+    """这条消息里哪些内容段是会话事件（TURN_EVENTS）；没有事件为空。"""
+    return list((message.metadata or {}).get(TURN_EVENTS, []))
+
+
+def mark_events(messages: Sequence[ModelMessage], indices: Sequence[int]) -> list[ModelMessage]:
+    """在这一轮的用户消息上记下哪些内容段是事件：它是本轮唯一带 UserPromptPart 的请求。没有事件时原样返回。"""
+    if not indices:
+        return list(messages)
+    marked = list(messages)
+    for i, message in enumerate(marked):
+        if isinstance(message, ModelRequest) and any(isinstance(p, UserPromptPart) for p in message.parts):
+            marked[i] = replace(message, metadata={**(message.metadata or {}), TURN_EVENTS: list(indices)})
+            return marked
+    raise RuntimeError("a turn with events has no user prompt to carry them")
 
 
 class Attachment(TypedDict):

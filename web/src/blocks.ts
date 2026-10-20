@@ -26,6 +26,7 @@ export interface AskView {
 
 export type Block =
   | { kind: 'user'; text: string; attachments: Attachment[] }
+  | { kind: 'event'; source: string; text: string }
   | { kind: 'assistant'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolView }
@@ -58,6 +59,10 @@ export function toBlocks(items: Item[]): Block[] {
     switch (item.type) {
       case 'user':
         blocks.push({ kind: 'user', text: item.text, attachments: item.attachments })
+        break
+      case 'event':
+        if (item.tool_name === null) throw new Error('event item without a source')
+        blocks.push({ kind: 'event', source: item.tool_name, text: item.text })
         break
       case 'stopped':
         blocks.push({ kind: 'stopped' })

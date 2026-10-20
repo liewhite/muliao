@@ -20,10 +20,19 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from muliao.conventions import TURN_STOPPED, Attachment, tool_attachments, tool_threads
+from muliao.conventions import (
+    TURN_STOPPED,
+    Attachment,
+    event_indices,
+    parse_event,
+    tool_attachments,
+    tool_threads,
+)
 from muliao.files import parse_file_url
 
-ItemType = Literal["user", "assistant", "thinking", "tool_call", "tool_result", "tool_error", "stopped"]
+ItemType = Literal[
+    "user", "event", "assistant", "thinking", "tool_call", "tool_result", "tool_error", "stopped"
+]
 
 
 class Item(TypedDict):
@@ -33,6 +42,7 @@ class Item(TypedDict):
     tool_call_id: str | None
     # 来源消息的数据库 id；由 API 填充，用于定位压缩点
     message_id: int | None
+    # 会话事件（type 为 event）：tool_name 是事件的来源（如 job:12），text 是事件内容
     # 用户消息的附件（见 runtime.attachments 的存储形态），或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
     attachments: list[Attachment]
     # 工具结果关联的子会话 id（TOOL_THREADS）；其他条目为空
@@ -56,6 +66,28 @@ def _item(
         attachments=attachments or [],
         threads=threads or [],
     )
+
+
+def _prompt_items(content: str | Sequence[Any], events: Sequence[int]) -> list[Item]:
+    """一条用户消息展示成的条目：会话事件（TURN_EVENTS 标出的内容段）各自成条，其余连续的内容合成一条用户消息。"""
+    if not events:
+        return [_user_item(content)]
+    if isinstance(content, str):
+        raise RuntimeError("a user prompt marked with events must be a content list")
+    items: list[Item] = []
+    own: list[Any] = []
+    for i, c in enumerate(content):
+        if i in events:
+            if own:
+                items.append(_user_item(own))
+                own = []
+            source, text = parse_event(c)
+            items.append(_item("event", text, tool_name=source))
+        else:
+            own.append(c)
+    if own:
+        items.append(_user_item(own))
+    return items
 
 
 def _user_item(content: str | Sequence[Any]) -> Item:
@@ -86,7 +118,7 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
                 if isinstance(part, UserPromptPart):
-                    items.append(_user_item(part.content))
+                    items.extend(_prompt_items(part.content, event_indices(msg)))
                 elif isinstance(part, ToolReturnPart):
                     items.append(
                         _item(
@@ -124,6 +156,7 @@ def truncate(text: str, limit: int) -> str:
 def to_text(items: Sequence[Item], *, max_item_chars: int) -> str:
     labels = {
         "user": "USER",
+        "event": "EVENT",
         "assistant": "ASSISTANT",
         "thinking": None,
         "tool_call": "TOOL CALL",
