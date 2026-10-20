@@ -10,9 +10,18 @@ from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart, UserContent, UserPromptPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelRequestPart,
+    ToolReturnPart,
+    UserContent,
+    UserPromptPart,
+)
+from pydantic_ai.tools import DeferredToolResults
 
 from muliao.conventions import STOPPED_TOOL_RESULT, TURN_STOPPED, unanswered_calls
+from muliao.runtime.questions import ASK_USER
 
 log = logging.getLogger(__name__)
 
@@ -64,14 +73,24 @@ class StoppableRuns[T]:
 
 
 def stopped_messages(
-    new: Sequence[ModelMessage] | None, user_prompt: str | Sequence[UserContent] | None
+    new: Sequence[ModelMessage] | None,
+    user_prompt: str | Sequence[UserContent] | None,
+    deferred: DeferredToolResults | None,
 ) -> list[ModelMessage]:
     """用户停止的一轮要保存的消息：停止前已经产生的部分（工具已经执行过，下一轮的模型要知道），没出结果的调用补上
     结果，最后一条标上 TURN_STOPPED。正在生成的那段回答由 pydantic-ai 以 state='interrupted' 留在运行历史里，一起保存，
     其中参数还没生成完的工具调用同样补上结果（参数在落库前脱敏，截断的 vault_set 参数整体替换，见 redaction）。
-    new 为 None 表示还没开始第一次模型请求，只有用户这条消息。"""
-    if new is None:
-        new = [] if user_prompt is None else [ModelRequest(parts=[UserPromptPart(user_prompt)])]
+    new 为空表示 pydantic-ai 还没组装出这一轮的第一条请求（还没开始第一次模型请求，或停在处理挂起提问结果的途中）：
+    按它会组装的样子补上——挂起提问的结果（用户的回答或「没回答」）与用户这条消息在同一条请求里。不能只存用户消息：
+    历史里的提问调用就一直没有结果，下一轮会把结果接在这条用户消息之后，提供方拒绝这种顺序，会话从此每一轮都失败。"""
+    if not new:
+        parts: list[ModelRequestPart] = [
+            ToolReturnPart(ASK_USER, result, tool_call_id=call_id)
+            for call_id, result in (deferred.calls.items() if deferred is not None else ())
+        ]
+        if user_prompt is not None:
+            parts.append(UserPromptPart(user_prompt))
+        new = [ModelRequest(parts=parts)] if parts else []
     messages = list(new)
     if dangling := unanswered_calls(messages):
         messages.append(

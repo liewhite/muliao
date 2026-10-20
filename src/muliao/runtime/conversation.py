@@ -160,12 +160,13 @@ class TurnPayload(BaseModel):
 # ---- 回答挂起的提问：回答必须紧接在提问那一轮后面执行（取决于这个会话里各轮的排队顺序） ----
 
 
-def answering_blocked(open_turns: Sequence[Task]) -> bool:
+def answering_blocked(open_turns: Sequence[Task], pending: Mapping[str, object]) -> bool:
     """回答必须紧接在提问那一轮后面执行。排队或运行中的轮次会先跑完并把提问记为没回答；失败待重试的回答
-    还占着这次提问。这两种情况下不接受回答（界面也不显示表单），失败的回答只能重试。"""
+    还占着它回答的那次提问。这两种情况下不接受回答（界面也不显示表单），失败的回答只能重试。
+    失败的回答针对的提问已经被之后的轮次关闭时，它不再占着什么（重试会以明确的错误失败），不能挡住之后的提问。"""
     return any(
         t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
-        or (t.status == TaskStatus.FAILED and TurnPayload.of(t).answers)
+        or (t.status == TaskStatus.FAILED and not TurnPayload.of(t).answers.keys().isdisjoint(pending))
         for t in open_turns
     )
 
@@ -173,9 +174,10 @@ def answering_blocked(open_turns: Sequence[Task]) -> bool:
 async def answerable_questions(s: AsyncSession, session_id: str) -> dict[str, list[Question]] | None:
     """这个会话现在能回答的提问；有会先执行的轮次或失败待重试的回答时为 None（见 answering_blocked）。
     界面展示与 receive 校验都经过这里。"""
-    if answering_blocked(await _open_turns(s, session_id)):
+    pending = await pending_in_session(s, session_id)
+    if answering_blocked(await _open_turns(s, session_id), pending):
         return None
-    return await pending_in_session(s, session_id)
+    return pending
 
 
 async def _open_turns(s: AsyncSession, session_id: str) -> list[Task]:

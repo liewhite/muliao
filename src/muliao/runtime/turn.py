@@ -182,7 +182,7 @@ class TurnRunner:
     ) -> TurnOutput:
         session_id, agent_id = turn.session.id, turn.agent.id
         if isinstance(result, Stopped):
-            messages = stopped_messages(capture.new_messages(), turn.user_prompt)
+            messages = stopped_messages(capture.new_messages(), turn.user_prompt, turn.deferred)
             log.info(
                 "turn stopped by user",
                 extra={

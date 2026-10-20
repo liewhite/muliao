@@ -103,10 +103,39 @@ async def test_stop_without_a_running_turn_is_refused(client, make_agent):
 
 
 def test_a_turn_stopped_before_its_first_model_request_keeps_the_user_message():
-    messages = stopped_messages(None, "hello")
+    messages = stopped_messages(None, "hello", None)
     assert [type(p).__name__ for m in messages for p in m.parts] == ["UserPromptPart"]
     assert messages[-1].metadata == {TURN_STOPPED: True}
-    assert stopped_messages(None, None) == []
+    assert stopped_messages(None, None, None) == []
+    # pydantic-ai 停在处理挂起结果的途中时给出的是空列表，同样保留用户消息
+    assert stopped_messages([], "hello", None)[0].parts[0].content == "hello"
+
+
+def test_a_turn_stopped_early_still_closes_the_questions_it_was_answering():
+    """停在第一次请求之前，也要把挂起提问的结果（回答或「没回答」）存下：否则历史里的提问一直没有结果，
+    下一轮会把结果接在用户消息之后，提供方拒绝这种顺序，会话从此每一轮都失败。"""
+    from pydantic_ai.tools import DeferredToolResults
+
+    from muliao.runtime.questions import NOT_ANSWERED, pending_questions
+
+    asked = ModelResponse(
+        parts=[
+            ToolCallPart(
+                "ask_user",
+                {"questions": [{"question": "q", "header": "h", "options": [{"label": "a"}]}]},
+                tool_call_id="q1",
+            )
+        ]
+    )
+    deferred = DeferredToolResults(calls={"q1": NOT_ANSWERED.model_dump()})
+
+    messages = stopped_messages(None, "直接分析", deferred)
+
+    [request] = messages
+    assert [type(p).__name__ for p in request.parts] == ["ToolReturnPart", "UserPromptPart"]
+    assert request.parts[0].tool_call_id == "q1" and request.parts[0].content == NOT_ANSWERED.model_dump()
+    assert request.metadata == {TURN_STOPPED: True}
+    assert pending_questions([asked, *messages]) == {}
 
 
 async def test_shutdown_is_not_a_stop_the_turn_is_left_for_recovery(client, container, make_agent, models):

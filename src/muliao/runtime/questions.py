@@ -77,6 +77,12 @@ NOT_ANSWERED = AskResult(
     answers=[],
     note="The user did not answer these questions and sent a new message instead.",
 )
+# 同一轮里问了几次，用户只回答了其中一部分（界面按每次提问分别提交）：没回答的那些如实说明，不能说成发了新消息
+SKIPPED = AskResult(
+    answered=False,
+    answers=[],
+    note="The user answered other questions you asked at the same time, but not these.",
+)
 
 
 def pending_questions(messages: Sequence[ModelMessage]) -> dict[str, list[Question]]:
@@ -90,8 +96,10 @@ def questions_of(call: ToolCallPart) -> list[Question]:
 
 
 async def pending_in_session(s: AsyncSession, session_id: str) -> dict[str, list[Question]]:
-    """每一轮都会关闭之前挂起的提问，所以只需要看最后一轮的消息。"""
-    last_turn = select(func.max(Message.task_id)).where(Message.session_id == session_id).scalar_subquery()
+    """每一轮都会关闭之前挂起的提问，所以只需要看最后提交的那一轮的消息。最后提交的一轮由消息 id（单调递增）定，
+    不是最大的 task id：重试一个失败的旧轮次沿用原来的 task id，它的消息却在之后的轮次之后提交。"""
+    last_message = select(func.max(Message.id)).where(Message.session_id == session_id).scalar_subquery()
+    last_turn = select(Message.task_id).where(Message.id == last_message).scalar_subquery()
     rows = await s.scalars(
         select(Message.payload)
         .where(Message.session_id == session_id, Message.task_id == last_turn)
@@ -121,8 +129,10 @@ def answer_result(questions: Sequence[Question], answers: Sequence[QuestionAnswe
 
 
 def deferred_results(pending: Mapping[str, object], answers: Mapping[str, AskResult]) -> dict[str, object]:
-    """这一轮交给 pydantic-ai 的挂起调用结果：有回答的用回答，其余挂起的提问一律记为没有回答。"""
-    return {call_id: answers.get(call_id, NOT_ANSWERED).model_dump() for call_id in pending}
+    """这一轮交给 pydantic-ai 的挂起调用结果：有回答的用回答；其余挂起的提问记为没有回答——这一轮回答了别的提问时
+    是跳过了它们（SKIPPED），否则是发了新消息（NOT_ANSWERED）。"""
+    unanswered = SKIPPED if answers else NOT_ANSWERED
+    return {call_id: answers.get(call_id, unanswered).model_dump() for call_id in pending}
 
 
 def waiting_text(questions: Sequence[Question]) -> str:

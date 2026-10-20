@@ -257,3 +257,93 @@ async def test_retrying_an_answer_voided_by_a_later_turn_fails_clearly_and_the_s
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "还在吗"})
     await drain(container)
     assert (await tasks_of(container, TaskKind.TURN))[-1].status == TaskStatus.DONE
+
+
+async def test_a_voided_failed_answer_does_not_block_later_questions(client, container, make_agent, models):
+    """失败的回答被之后的轮次作废后，不能永远挡住这个会话之后的提问。"""
+    session_id, asker = await _asked(client, container, make_agent, models)
+    original = models.models["asker"]
+
+    def broken(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise RuntimeError("model is down")
+
+    models.models["asker"] = scripted(broken)
+    answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
+    await drain(container)
+
+    # 之后的轮次关闭了 q1，又问了一次（Asker 第一次请求之外都回答文字，这里换一个会再问的模型）
+    def ask_again(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="q2")])
+
+    models.models["asker"] = scripted(ask_again)
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "换个问题"})
+    await drain(container)
+
+    pending = (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"]
+    assert [p["tool_call_id"] for p in pending] == ["q2"]
+    models.models["asker"] = original
+    answers = {"q2": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
+    resp = await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
+    assert resp.status_code == 202
+
+
+async def test_pending_questions_follow_the_turn_committed_last_not_the_highest_task_id(
+    container, make_agent
+):
+    """重试一个失败的旧轮次沿用原来的 task id，它的消息却在之后的轮次之后提交：最后一轮按提交顺序定。"""
+    from muliao.runtime.questions import pending_in_session
+
+    alpha = (await make_agent("alpha")).id
+    session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
+    ask = ModelResponse(parts=[ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="late")])
+    async with container.db.transaction() as s:
+        # task 9 先提交（没有提问），task 3 被重试后才提交，停在提问上
+        s.add(
+            Message(
+                session_id=session.id, task_id=9, payload=dump_message(ModelResponse(parts=[TextPart("ok")]))
+            )
+        )
+        await s.flush()
+        s.add(Message(session_id=session.id, task_id=3, payload=dump_message(ask)))
+    async with container.db.transaction() as s:
+        assert list(await pending_in_session(s, session.id)) == ["late"]
+
+
+async def test_answering_one_of_two_questions_tells_the_model_the_other_was_skipped(
+    client, container, make_agent, models
+):
+    """同一轮里问了两次，用户只回答了一次：另一次是被跳过，不是「发了新消息」。"""
+    await login(client)
+    agent = await make_agent("analyst", model="twice")
+    results: list[dict] = []
+
+    def twice(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        last = messages[-1]
+        if isinstance(last, ModelRequest) and (
+            returns := [p for p in last.parts if isinstance(p, ToolReturnPart)]
+        ):
+            results.extend(json.loads(p.model_response_str()) for p in returns)
+            return ModelResponse(parts=[TextPart("好")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart("ask_user", {"questions": QUESTIONS[:1]}, tool_call_id="a"),
+                ToolCallPart("ask_user", {"questions": QUESTIONS[1:]}, tool_call_id="b"),
+            ]
+        )
+
+    models.models["twice"] = scripted(twice)
+    session_id = (await client.post("/api/sessions", json={"agent_id": agent.id, "prompt": "分析"})).json()[
+        "id"
+    ]
+    await drain(container)
+    resp = await client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={"prompt": "", "answers": {"a": [{"selected": ["日线"]}]}},
+    )
+    assert resp.status_code == 202
+    await drain(container)
+
+    answered, skipped = results
+    assert answered["answered"] is True
+    assert skipped["answered"] is False and "new message" not in skipped["note"]
