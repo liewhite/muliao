@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -8,10 +8,10 @@ from pathlib import Path
 import anyio
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, DateTime, Engine, String, event
+from sqlalchemy import Connection, DateTime, Engine, String, event, inspect
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, ORMExecuteState, Session
 from sqlalchemy.pool import NullPool
 from sqlalchemy.types import TypeDecorator
 
@@ -128,6 +128,28 @@ def migrate(db_path: Path, target: str = "head") -> None:
         engine.dispose()
 
 
+# 一个事务写过的表名 -> 不合规时报错
+WriteCheck = Callable[[frozenset[str]], None]
+
+
+def _track_writes(s: AsyncSession) -> set[str]:
+    """记下这个会话写入的表：ORM 对象的增删改（flush 时）与直接执行的 insert / update / delete 语句。"""
+    written: set[str] = set()
+
+    @event.listens_for(s.sync_session, "before_flush")
+    def _objects(session: Session, _context: object, _instances: object) -> None:
+        dirty = [o for o in session.dirty if session.is_modified(o)]
+        for obj in (*session.new, *dirty, *session.deleted):
+            written.add(inspect(obj).mapper.local_table.name)
+
+    @event.listens_for(s.sync_session, "do_orm_execute")
+    def _statements(state: ORMExecuteState) -> None:
+        if state.is_insert or state.is_update or state.is_delete:
+            written.add(state.statement.table.name)
+
+    return written
+
+
 class Database:
     """事务入口。退出时提交，异常时回滚。
 
@@ -141,8 +163,10 @@ class Database:
       等锁处（安全）收到取消。
     """
 
-    def __init__(self, engine: AsyncEngine):
+    def __init__(self, engine: AsyncEngine, *, check_writes: WriteCheck | None = None):
+        """check_writes：提交前拿到这个事务写过的表名（开发期断言，见 schema.single_domain_writes）。"""
         self.engine = engine
+        self._check_writes = check_writes
         self._factory = async_sessionmaker(engine, expire_on_commit=False)
         self._lock = asyncio.Lock()
         self._holder: asyncio.Task[object] | None = None
@@ -176,6 +200,12 @@ class Database:
                 self._holder = current
                 try:
                     async with self._factory() as s, s.begin():
-                        yield s
+                        if self._check_writes is None:
+                            yield s
+                        else:
+                            written = _track_writes(s)
+                            yield s
+                            await s.flush()
+                            self._check_writes(frozenset(written))
                 finally:
                     self._holder = None

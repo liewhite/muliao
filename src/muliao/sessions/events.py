@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from pydantic import BaseModel, ConfigDict
+
 from muliao.agent_runtime.api import Attachment
 from muliao.platform.messaging import Command, DomainEvent
+from muliao.platform.tooling import Origin
 
 
 class Ending(StrEnum):
@@ -97,3 +100,27 @@ class PostEvent(Command):
     awaited: bool
     key: str
     release: str
+
+
+class ReceiveNewSession(BaseModel):
+    """Receive 要新建的会话：id 由发送方预先分配。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str
+    agent_id: str
+    title: str
+
+
+class Receive(Command):
+    """把一封来信投进会话的信箱（conversation.receive），在会话领域自己的事务里。发送方在自己的事务里先用
+    check_receivable_in 校验、记下自己的状态，同一事务发出它（触发器到点、收到 webhook）。投递时会话或 agent 已被
+    删除（校验之后的变化）就不投，记日志。"""
+
+    TYPE = "session.receive"
+    origin: Origin
+    origin_ref: str | None
+    content: str
+    awaited: bool
+    # 续写的会话；新建时为 None
+    session_id: str | None
+    new_session: ReceiveNewSession | None

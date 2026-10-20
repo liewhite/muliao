@@ -233,7 +233,7 @@
 
 ### 4.8 触发器（`muliao/triggers/`）
 
-**拥有的表**：`triggers`。触发 = `Sessions.receive(Inbound)`；「上一次触发的会话还在运行就跳过」用 `Sessions.is_busy`（先查后写的竞态最坏多触发一次，与现状相同）。订阅 `AgentDeleting` 删除该 agent 的触发器。
+**拥有的表**：`triggers`。触发：在触发器自己的事务里用 `check_receivable_in` 校验来信（读的会话、agent、文件都是只会单向变化或不变的事实，不合规当场报错给调用方）、记下触发（时间、前置检查的输出、上一次的会话），同一事务发出定向命令 `Receive`；新建会话的 id 在这里预先分配。提交之后马上执行这条投递（`Worker.run_now`，同一个执行边界），通常返回时会话已经存在，做不到（lane 正忙）就由 worker 稍后投递；投递时会话或 agent 已被删除就丢弃并记日志。这样「记下触发」与「投信」恰好一次，不跨领域写事务。「上一次触发的会话还在运行就跳过」用 `Sessions.is_busy`（先查后写的竞态最坏多触发一次，与现状相同）。订阅 `AgentDeleting` 删除该 agent 的触发器。
 
 ### 4.9 agent 运行时（`muliao/agent_runtime/`）
 
@@ -361,7 +361,7 @@ muliao/
 
 依赖规则由 `tests/test_boundaries.py` 对源码的 import 做静态检查（不另引入 import-linter）：领域包之间只能 import 对方的 `api` 模块（命令、查询、读模型）与 `events` 模块（它发布的事件、接收的定向命令）；任何领域不得 import 别的领域的表，也不拿别的领域的 ORM 对象（`AgentInfo`、`SessionInfo` 这类读模型代替）；`platform` 不 import 任何领域；领域不 import HTTP 适配层（`api/`）与组合根（`container.py`）。经 `api` 的依赖无环：`files`、`agents` → `vault` → `agent_runtime` → `sessions` → `jobs`、`delegations`、`reflection`、`notifications`、`triggers`；反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`，例如 agent 领域订阅 `AgentSessionsCleared`），`events` 模块只放消息的数据形状。
 
-表定义放在各领域包内（`<domain>/tables.py`），Alembic 汇总全部 metadata。跨领域外键全部删除，领域内的外键保留。开发期断言：一个写事务写入的表属于同一个领域（平台任务表除外）。
+表定义放在各领域包内（`<domain>/tables.py`），Alembic 汇总全部 metadata。跨领域外键全部删除，领域内的外键保留。开发期断言：一个写事务写入的表属于同一个领域（平台任务表除外）——`schema.single_domain_writes`，测试的容器经 `Database(check_writes=...)` 打开，记下每个事务的 ORM 写入与 insert / update / delete 语句。
 
 ## 11. 实施阶段
 
@@ -382,6 +382,7 @@ muliao/
 - 委派结局、推送、反思调度从运行结束的同一事务改为随后的事件投递，晚几百毫秒。
 - 删除 agent 改为异步完成（先从列表消失，会话与资源随后删除）。
 - 删除会话与 agent 保留忙时拒绝（用户已决定）；「忙」现在包括会话 lane 上排队的压缩。
+- 触发器与 webhook 的投信经定向命令：返回的 `session_id` 通常已经可用；极少数情况下（投递没能马上执行）会话在随后几毫秒内出现，这期间续写它会得到 404，重试即可。
 
 ## 13. 已决定
 

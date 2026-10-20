@@ -46,7 +46,7 @@ from muliao.notifications.tools import notify_toolset
 from muliao.notifications.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
 from muliao.platform.bus import EventBus
 from muliao.platform.checks import WorkWatcher
-from muliao.platform.db import Database, create_engine, migrate
+from muliao.platform.db import Database, WriteCheck, create_engine, migrate
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue
@@ -200,8 +200,10 @@ def build_container(
     resolve_model: ModelResolver | None = None,
     model_checker: Callable[[str], None] | None = None,
     web: WebProvider | None = None,
+    check_writes: WriteCheck | None = None,
 ) -> Container:
-    """resolve_model / model_checker / web 仅供测试替换；默认由配置中的 LLM providers 与 [web] 构造。"""
+    """resolve_model / model_checker / web 仅供测试替换；默认由配置中的 LLM providers 与 [web] 构造。check_writes 是
+    测试打开的开发期断言（schema.single_domain_writes）。"""
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     models = ModelRegistry(settings.llm)
     if web is None and settings.web is not None:
@@ -210,7 +212,7 @@ def build_container(
     web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
     groups = tool_catalog.available(web_configured=bool(web_tools))
     tz = ZoneInfo(settings.timezone)
-    db = Database(create_engine(settings.db_path))
+    db = Database(create_engine(settings.db_path), check_writes=check_writes)
     bus = EventBus()
     live = LiveRuns(bus)
     queue = TaskQueue(
@@ -254,6 +256,8 @@ def build_container(
         tz,
         precheck,
         messaging,
+        # worker 在后面构造：延迟绑定
+        lambda task_id: worker.run_now(task_id),
     )
     schedules = ScheduleRunner(db, triggers, schedule_kind)
     webhooks = Webhooks(db, triggers)

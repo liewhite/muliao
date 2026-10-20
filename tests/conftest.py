@@ -12,6 +12,7 @@ from muliao.api.app import create_app
 from muliao.config import Settings
 from muliao.container import Container, build_container
 from muliao.platform.db import migrate
+from muliao.schema import single_domain_writes
 from tests.scripted import scripted
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
@@ -61,7 +62,9 @@ def models() -> ModelSlot:
 
 @pytest.fixture
 async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Container]:
-    c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
+    c = build_container(
+        settings, resolve_model=models, model_checker=lambda _m: None, check_writes=single_domain_writes
+    )
     migrate(settings.db_path)
     # 后台任务的监督者需要它的任务组（服务里由 Container.running 打开）；worker 等循环由测试自己驱动
     async with c.jobs.running():

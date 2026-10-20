@@ -100,7 +100,25 @@ class Worker:
                     self._slots.release()
                     await self._wait_for_work()
                     continue
-                group.start_soon(self._process, task, name=f"task-{task.id}")
+                group.start_soon(self._process_in_slot, task, name=f"task-{task.id}")
+
+    async def run_now(self, task_id: int) -> None:
+        """在调用方的任务里立刻执行这一个 task（经同一个执行边界：时限、重试或失败记账），不占 worker 的槽位。用于
+        发送方提交了定向命令之后希望它马上生效（例如触发器新建的会话在返回会话 id 之前就已存在）；此刻不可领取就
+        什么都不做，照常由 worker 执行。"""
+        task = await self._queue.claim_task(task_id)
+        if task is None:
+            log.info("task not claimable now, left to the worker", extra={"task_id": task_id})
+            return
+        if task.kind not in self._handlers:
+            raise RuntimeError(f"task {task_id} of kind {task.kind} has no handler in this worker")
+        await self._process(task)
+
+    async def _process_in_slot(self, task: Task) -> None:
+        try:
+            await self._process(task)
+        finally:
+            self._slots.release()
 
     async def _wait_for_work(self) -> None:
         self._queue.wake.clear()
@@ -127,8 +145,6 @@ class Worker:
         else:
             log.info("task done", extra=ctx)
             self._publish(task, TaskStatus.DONE)
-        finally:
-            self._slots.release()
 
     async def _record_failure(self, task: Task, exc: Exception, ctx: dict[str, object]) -> None:
         error = f"{type(exc).__name__}: {exc}"

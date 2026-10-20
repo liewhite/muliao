@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import event, func, select
+from sqlalchemy import Select, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -104,12 +104,17 @@ class TaskQueue:
 
     async def claim(self, kinds: Collection[TaskKind]) -> Task | None:
         """领取一个可以执行的 task，只在调用方能处理的这些种类里找。"""
+        return await self._claim(_claimable().where(Task.kind.in_(list(kinds))).order_by(Task.id).limit(1))
+
+    async def claim_task(self, task_id: int) -> Task | None:
+        """现在就领取这一个 task（Worker.run_now）；它此刻不可领取（已被领取、同 lane 有更早或进行中的、还没到时间）
+        时为 None，留给 worker。"""
+        return await self._claim(_claimable().where(Task.id == task_id))
+
+    async def _claim(self, query: Select[tuple[Task]]) -> Task | None:
         now = self._clock()
-        query = (
-            _claimable().where(Task.not_before <= now, Task.kind.in_(list(kinds))).order_by(Task.id).limit(1)
-        )
         async with self._db.transaction() as s:  # 事务串行化保证同一 task 不会被领取两次
-            task = await s.scalar(query)
+            task = await s.scalar(query.where(Task.not_before <= now))
             if task is None:
                 return None
             task.status = TaskStatus.RUNNING

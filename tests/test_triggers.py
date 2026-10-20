@@ -295,3 +295,29 @@ async def test_a_missing_vault_reference_in_an_mcp_config_fails_the_run_visibly(
 
     [run] = await tasks_of(container, TaskKind.RUN)
     assert run.status == TaskStatus.FAILED and "MISSING" in (run.error or "")
+
+
+async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_meanwhile(container, make_agent):
+    """触发记下后投信不能马上执行时由 worker 稍后投递；其间 agent 被删除，这封信没有收件人，丢弃并记日志，不留失败。"""
+    from sqlalchemy import select
+
+    from muliao.platform.tables import Task, TaskStatus
+    from muliao.sessions.tables import Session
+
+    alpha = (await make_agent("alpha")).id
+    trigger = await container.triggers.create(
+        name="slack", agent_id=alpha, kind="schedule", prompt="check slack", config={"cron": "* * * * *"}
+    )
+
+    async def later(_task_id: int) -> None:
+        return None
+
+    container.triggers._run_now = later  # noqa: SLF001  模拟投递没能马上执行
+    session_id = await container.triggers.fire(trigger.id)
+    await container.agent_lifecycle.delete(alpha, author="user")
+    await drain(container)
+
+    async with container.db.transaction() as s:
+        assert await s.get(Session, session_id) is None
+        failed = (await s.scalars(select(Task).where(Task.status == TaskStatus.FAILED))).all()
+    assert failed == []

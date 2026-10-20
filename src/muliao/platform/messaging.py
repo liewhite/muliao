@@ -126,16 +126,15 @@ class Messaging:
             self._enqueue(s, receiver, event, message_id)
         return message_id
 
-    def send_in(self, s: AsyncSession, command: Command) -> str:
+    def send_in(self, s: AsyncSession, command: Command) -> Task:
+        """返回投递任务：发送方提交之后可以让它马上执行（Worker.run_now）。"""
         receiver = self._commands.get(command.TYPE)
         if receiver is None:
             raise RuntimeError(f"command {command.TYPE} has no handler")
-        message_id = new_id()
-        self._enqueue(s, receiver, command, message_id)
-        return message_id
+        return self._enqueue(s, receiver, command, new_id())
 
-    def _enqueue(self, s: AsyncSession, receiver: _Receiver, message: Message, message_id: str) -> None:
-        self._queue.enqueue(
+    def _enqueue(self, s: AsyncSession, receiver: _Receiver, message: Message, message_id: str) -> Task:
+        return self._queue.enqueue(
             s,
             kind=TaskKind.EVENT,
             lane=receiver.lane(message),

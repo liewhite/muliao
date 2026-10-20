@@ -123,8 +123,8 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
             pid=424242,
         )
         s.add(job)
-        await s.flush()
-        # 上一个进程启动它时已在会话上登记了占用
+    # 上一个进程启动它时已在会话上登记了占用（会话领域自己的事务）
+    async with container.db.transaction() as s:
         await hold_in(s, session.id, f"job:{job.id}")
 
     await container.jobs.recover()

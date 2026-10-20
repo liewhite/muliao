@@ -15,7 +15,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol
@@ -31,10 +32,12 @@ from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
+from muliao.platform.ids import new_id
 from muliao.platform.messaging import Delivery, Messaging
+from muliao.platform.tables import Task
 from muliao.platform.tasks import Clock, Commit, TaskQueue, session_lane
 from muliao.platform.tooling import Origin
-from muliao.sessions.api import Inbound, NewSession, receive
+from muliao.sessions.api import Inbound, NewSession, check_receivable_in, receive_command
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 from muliao.triggers.tables import Trigger
 
@@ -96,10 +99,13 @@ class TriggerService:
         tz: ZoneInfo,
         precheck: PrecheckRunner,
         messaging: Messaging,
+        run_now: Callable[[int], Awaitable[None]],
         clock: Clock = utcnow,
     ):
         self._precheck = precheck
         self._messaging = messaging
+        # 马上执行一个已提交的投递任务（Worker.run_now）
+        self._run_now = run_now
         self._db = db
         self._queue = queue
         self.kinds = dict(kinds)
@@ -256,40 +262,50 @@ class TriggerService:
 
     async def _deliver_in(
         self, s: AsyncSession, trigger: Trigger, payload: str | None, session_id: str | None
-    ) -> str:
-        """组装成事件交给会话领域（只由 fire 调用），返回会话 id。
+    ) -> _Fired:
+        """组装成事件交给会话领域（只由 fire 调用）。
 
         payload 为事件内容（无则只有处理说明）；session_id 为空时新建会话，否则续写——只能续写本触发器发起的会话。
+        在这个事务里校验来信（不合规的当场报错给调用方）、记下触发，同一事务发出定向命令 Receive，由会话领域在自己的
+        事务里投信：触发记下了就一定投递，投递恰好一次。新建的会话 id 在这里预先分配，投递之后（通常毫秒级）会话才
+        出现。
         """
         now = self._clock()
-        received = await receive(
-            s,
-            self._queue,
-            Inbound(
-                origin=Origin.TRIGGER,
-                origin_ref=str(trigger.id),
-                content=event_prompt(trigger.prompt, payload),
-                session=NewSession(
-                    agent_id=trigger.agent_id, title=f"{trigger.name} · {_local(now, self._tz)}"
-                )
-                if session_id is None
-                else session_id,
-                awaited=False,
-            ),
+        inbound = Inbound(
+            origin=Origin.TRIGGER,
+            origin_ref=str(trigger.id),
+            content=event_prompt(trigger.prompt, payload),
+            session=NewSession(
+                agent_id=trigger.agent_id, title=f"{trigger.name} · {_local(now, self._tz)}", id=new_id()
+            )
+            if session_id is None
+            else session_id,
+            awaited=False,
         )
+        await check_receivable_in(s, inbound)
+        delivery = self._messaging.send_in(s, receive_command(inbound))
+        target = inbound.session if isinstance(inbound.session, str) else inbound.session.id
+        if target is None:
+            raise RuntimeError("a new trigger session must have a preassigned id")
         trigger.last_fired_at = now
-        trigger.last_session_id = received.session.id
-        log.info(
-            "trigger fired",
-            extra={"trigger": trigger.name, "kind": trigger.kind, "session_id": received.session.id},
-        )
-        return received.session.id
+        trigger.last_session_id = target
+        log.info("trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "session_id": target})
+        return _Fired(session_id=target, delivery=delivery)
 
     async def fire(
         self, trigger_id: int, payload: str | None = None, session_id: str | None = None
     ) -> str | None:
         """所有触发方式的唯一出口，返回交给的会话 id。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
-        检查失败记在触发器上并抛出 PrecheckFailed（触发器保持启用：脚本的故障往往是暂时的）。"""
+        检查失败记在触发器上并抛出 PrecheckFailed（触发器保持启用：脚本的故障往往是暂时的）。
+
+        触发记下之后马上执行投信（run_now），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。"""
+        fired = await self._fire(trigger_id, payload, session_id)
+        if fired is None:
+            return None
+        await self._run_now(fired.delivery.id)
+        return fired.session_id
+
+    async def _fire(self, trigger_id: int, payload: str | None, session_id: str | None) -> _Fired | None:
         async with self._db.transaction() as s:
             trigger = await self.get_in(s, trigger_id)
             if not trigger.enabled:
@@ -371,6 +387,13 @@ class TriggerService:
                     session_id=None,
                 ),
             )
+
+
+@dataclass(frozen=True)
+class _Fired:
+    session_id: str
+    # 投信的定向命令（Receive）的投递任务
+    delivery: Task
 
 
 def _local(now: datetime, tz: ZoneInfo) -> str:

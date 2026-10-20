@@ -60,3 +60,24 @@ def _violations() -> list[str]:
 
 def test_domains_only_use_each_others_api():
     assert _violations() == []
+
+
+async def test_a_transaction_writing_two_domains_tables_fails(container, make_agent):
+    import pytest
+    from sqlalchemy import update
+
+    from muliao.notifications.tables import Notification
+    from muliao.vault.tables import Secret
+
+    await make_agent("alpha")
+    with pytest.raises(RuntimeError, match="several domains"):
+        async with container.db.transaction() as s:
+            s.add(Notification(title="t", body="b", session_id=None))
+            await s.execute(update(Secret).values(description="x"))
+
+
+async def test_a_domain_and_the_task_table_may_be_written_together(container):
+    from muliao.notifications.tables import Notification
+
+    async with container.db.transaction() as s:
+        await container.notifier.enqueue_in(s, None, Notification(title="t", body="b", session_id=None))

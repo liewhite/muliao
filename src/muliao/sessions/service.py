@@ -22,12 +22,14 @@ from muliao.sessions.conversation import (
     Inbound,
     Received,
     busy_sessions_of_agent_in,
+    check_receivable_in,
     delete_sessions,
+    inbound_of,
     open_asks,
     receive,
     threads_of,
 )
-from muliao.sessions.events import AgentSessionsCleared
+from muliao.sessions.events import AgentSessionsCleared, Receive
 from muliao.sessions.halt import Halted
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
@@ -165,12 +167,30 @@ class SessionService:
             (await self._get(s, session_id)).unread = False
 
     def subscribe(self, messaging: Messaging) -> None:
+        messaging.handle(Receive, "sessions.receive", self.on_receive)
         messaging.subscribe(
             AgentDeleting,
             "sessions.agent_deleting",
             self.on_agent_deleting,
             lane=lambda e: f"sessions.agent_deleting:{e.agent_id}",
         )
+
+    async def on_receive(self, command: Receive, delivery: Delivery) -> Commit:
+        inbound = inbound_of(command)
+
+        async def commit(s: AsyncSession) -> None:
+            try:
+                await check_receivable_in(s, inbound)
+            except NotFound as e:
+                # 发送方校验之后会话或 agent 被删除：契约内的变化，这封信不再有收件人
+                log.info(
+                    "inbound mail dropped: its session or agent is gone",
+                    extra={"message_id": delivery.message_id, "origin": command.origin, "reason": str(e)},
+                )
+                return
+            await receive(s, self._queue, inbound)
+
+        return commit
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
         """删除 agent 的流程：删除它的全部会话（连同私有 thread），发布 AgentSessionsCleared（没有会话也发）。
