@@ -298,7 +298,9 @@ def build_container(
             "mcp": ToolGroup(uses_mcp=True),
             "mcp_admin": ToolGroup([mcp_admin_toolset(mcp)]),
             "vault": ToolGroup([vault_toolset(vault)]),
-            "triggers": ToolGroup([triggers_toolset(triggers, agents)]),
+            "triggers": ToolGroup(
+                [triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)]
+            ),
             **optional_groups,
         },
         always=always_tools,

@@ -438,3 +438,13 @@ async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, 
 
     assert outputs == ["answer"]
     assert "run_shell" not in seen and "notify_user" in seen
+
+
+async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):
+    """agent 写检查脚本时要知道时限：生产上一个「正常 15 秒、网络抖动时重试 30~60 秒」的脚本反复超时。"""
+    toolset = container.turns._tool_groups.groups["triggers"].toolsets[0]  # noqa: SLF001
+    create = toolset.tools["trigger_create"]
+    limit = container.settings.runtime.precheck_timeout_seconds
+    assert f"longer than {limit:g} seconds" in create.description
+    # 参数说明仍来自 docstring
+    assert "Optional command deciding whether to fire" in str(create.function_schema.json_schema)

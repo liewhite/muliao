@@ -34,7 +34,26 @@ class TriggerInfo(BaseModel):
     last_error: str | None
 
 
-def triggers_toolset(triggers: TriggerService, agents: AgentService) -> FunctionToolset[RunScope]:
+_CREATE_DESCRIPTION = """\
+Create a trigger that starts a new conversation of an agent with `prompt` (plus the event, if the kind \
+carries one). See `trigger_kinds` for the kinds and their `config`. Triggered runs do not notify the user \
+automatically: the prompt should say when to call `notify_user`. A webhook only works after the user \
+generates its token in the app; tell the user to do that.
+
+For frequent checks (e.g. every minute) add a `precheck`, so the agent only runs when something happened: a \
+bash command run in the agent's workspace before each firing, with the event body (webhook) on stdin. \
+With fire_when "output", exit 0 with output fires and the output becomes the event the agent sees, exit 0 \
+with no output skips; with "changed", it fires only when the output differs from the last run and the \
+agent gets the diff plus the output (the first run only records a baseline). A non-zero exit, or running \
+longer than {timeout:g} seconds (the command is then killed), is recorded as the trigger's error and the user \
+is alerted once. Keep the precheck cheap and well under that limit, retries included; slow work (full scans, \
+long retry loops) belongs in the agent's run, not in the precheck."""
+
+
+def triggers_toolset(
+    triggers: TriggerService, agents: AgentService, precheck_timeout: float
+) -> FunctionToolset[RunScope]:
+    """precheck_timeout：前置检查的时限（runtime.precheck_timeout_seconds），写进工具说明，agent 写检查脚本时要知道。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     async def info(t: Trigger, names: dict[str, str]) -> TriggerInfo:
@@ -61,7 +80,7 @@ def triggers_toolset(triggers: TriggerService, agents: AgentService) -> Function
         names = {a.id: a.name for a in await agents.list()}
         return [await info(t, names) for t in await triggers.list()]
 
-    @ts.tool
+    @ts.tool(description=_CREATE_DESCRIPTION.format(timeout=precheck_timeout))
     async def trigger_create(
         ctx: RunContext[RunScope],
         name: str,
@@ -71,17 +90,7 @@ def triggers_toolset(triggers: TriggerService, agents: AgentService) -> Function
         agent: str | None = None,
         precheck: Precheck | None = None,
     ) -> str:
-        """Create a trigger that starts a new conversation of an agent with `prompt` (plus the event, if the kind
-        carries one). See `trigger_kinds` for the kinds and their `config`. Triggered runs do not notify the user
-        automatically: the prompt should say when to call `notify_user`. A webhook only works after the user
-        generates its token in the app; tell the user to do that.
-
-        For frequent checks (e.g. every minute) add a `precheck`, so the agent only runs when something happened: a
-        bash command run in the agent's workspace before each firing, with the event body (webhook) on stdin.
-        With fire_when "output", exit 0 with output fires and the output becomes the event the agent sees, exit 0
-        with no output skips; with "changed", it fires only when the output differs from the last run and the
-        agent gets the diff plus the output (the first run only records a baseline). A non-zero exit is recorded
-        as the trigger's error and the user is alerted once.
+        """The description is `_CREATE_DESCRIPTION` (it carries the configured precheck time limit).
 
         Args:
             name: Lowercase letters, digits and `-`, e.g. `daily-report` (used in webhook URLs).
