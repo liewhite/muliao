@@ -15,15 +15,17 @@ from enum import StrEnum
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.models import Agent, HoldStatus, Mail, MailKind, MailState, Session, Task, TaskStatus
+from muliao.agents.tables import Agent
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.conventions import Attachment
 from muliao.sessions.events import Ending, PostEvent, SessionSettled
 from muliao.sessions.holds import get_in, release_in
 from muliao.sessions.mailbox import discard_in, handed_to, latest_run, post_in
 from muliao.sessions.pending import AgentAnswer, pending_in
+from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
 

@@ -2,9 +2,10 @@ import json
 
 import pytest
 
-from muliao.models import Notification, Task, TaskKind
 from muliao.notifications.delivery import DeliverHandler
+from muliao.notifications.tables import Notification
 from muliao.notifications.webpush import WebPushDelivery
+from muliao.platform.tables import Task, TaskKind
 from tests.test_flow import drain, start
 
 

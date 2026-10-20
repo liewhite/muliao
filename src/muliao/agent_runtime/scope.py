@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from muliao.models import Origin
+from muliao.sessions.tables import Origin
 
 
 class Audience(StrEnum):

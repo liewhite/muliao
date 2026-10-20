@@ -7,8 +7,10 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
+from muliao.delegations.tables import Delegation, DelegationStatus
 from muliao.errors import Conflict
-from muliao.models import Delegation, DelegationStatus, Mail, MailKind, MailState, TaskKind, TaskStatus
+from muliao.platform.tables import TaskKind, TaskStatus
+from muliao.sessions.tables import Mail, MailKind, MailState
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, start, tasks_of
 from tests.test_mailbox import Recorder
@@ -172,9 +174,11 @@ async def test_a_failing_settle_hook_still_records_the_failure_instead_of_leavin
 def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running():
     from datetime import UTC, datetime
 
+    from muliao.agents.tables import Agent
     from muliao.delegations.manager import _event_text, check_text
-    from muliao.models import Agent, Session, Task
+    from muliao.platform.tables import Task
     from muliao.sessions.events import Ending
+    from muliao.sessions.tables import Session
 
     child = Session(id="c", agent_id="a", title="t", thread="review")
     agent = Agent(id="a", name="reviewer")
@@ -190,7 +194,7 @@ def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running()
 
 async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_hook(container, monkeypatch):
     """记账本身失败（如数据库暂时不可用）不走「跳过收尾」的退路：那条退路只为收尾钩子自己的失败准备。"""
-    from muliao.models import Task
+    from muliao.platform.tables import Task
     from muliao.platform.worker import Worker
 
     calls = {"n": 0}
@@ -564,7 +568,7 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
     container, make_agent, models, monkeypatch
 ):
     """回复（含 ask_agent）已保存、投递还没提交时失败：这次调用不算在等回信（没有占用），重试时重新执行它，只委派一次。"""
-    from muliao.models import Delegation
+    from muliao.delegations.tables import Delegation
     from muliao.sessions.conversation import Threads as ThreadsClass
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
@@ -591,7 +595,7 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
 
 
 async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, make_agent, models):
-    from muliao.models import Delegation, DelegationStatus
+    from muliao.delegations.tables import Delegation, DelegationStatus
     from muliao.sessions.conventions import STOPPED_TOOL_RESULT
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))

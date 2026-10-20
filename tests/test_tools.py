@@ -11,7 +11,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 
 from muliao.agent_runtime.mcp import McpTransport, mcp_config
-from muliao.models import Origin
+from muliao.sessions.tables import Origin
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
@@ -279,7 +279,7 @@ async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
 ):
     from pydantic_ai.exceptions import ModelHTTPError
 
-    from muliao.models import TaskKind, TaskStatus
+    from muliao.platform.tables import TaskKind, TaskStatus
     from tests.test_flow import tasks_of
 
     me = await make_agent("manager", model="tools")

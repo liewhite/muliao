@@ -13,7 +13,7 @@ from pywebpush import WebPushException, webpush
 from sqlalchemy import select
 
 from muliao.errors import InvalidInput, TransientError
-from muliao.models import Notification, PushSubscription
+from muliao.notifications.tables import Notification, PushSubscription
 from muliao.platform.db import Database
 from muliao.sessions.transcript import truncate
 

@@ -3,8 +3,8 @@ from datetime import timedelta
 import pytest
 
 from muliao.errors import Conflict
-from muliao.models import TaskKind, TaskStatus
 from muliao.platform.db import utcnow
+from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.platform.tasks import no_commit
 
 
@@ -46,7 +46,7 @@ async def test_transient_failure_backs_off_then_fails_after_max_attempts(contain
         claimed = await q.claim(list(TaskKind))
         if claimed is None:  # 退避尚未到期，直接把 not_before 拨到现在
             async with container.db.transaction() as s:
-                from muliao.models import Task
+                from muliao.platform.tables import Task
 
                 (await s.get(Task, task.id)).not_before = utcnow() - timedelta(seconds=1)
             claimed = await q.claim(list(TaskKind))

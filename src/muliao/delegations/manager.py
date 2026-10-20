@@ -20,17 +20,20 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.tables import Agent
+from muliao.delegations.tables import Delegation, DelegationStatus
 from muliao.errors import CorruptState
-from muliao.models import Agent, Delegation, DelegationStatus, Session, Task, TaskStatus
 from muliao.platform.checks import post_check_in
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Clock, Commit, TaskQueue, no_commit
 from muliao.sessions.events import DelegationDispatched, Ending, SessionSettled, SessionStopped
 from muliao.sessions.halt import Halted
 from muliao.sessions.mailbox import latest_run
 from muliao.sessions.pending import AgentAnswer, pending_in
 from muliao.sessions.settlement import deliver_in
+from muliao.sessions.tables import Session
 
 log = logging.getLogger(__name__)
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from muliao.agent_runtime.scope import Audience
 from muliao.agents.skills import SkillMeta
-from muliao.models import Origin
+from muliao.sessions.tables import Origin
 
 _ORIGIN_NOTES: dict[Origin, str] = {
     Origin.USER: "The user started this conversation in the app and may be reading along.",

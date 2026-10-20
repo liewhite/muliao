@@ -7,9 +7,9 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from muliao.api.deps import C
-from muliao.models import Trigger
 from muliao.triggers.precheck import Precheck
 from muliao.triggers.service import KEEP
+from muliao.triggers.tables import Trigger
 
 router = APIRouter()
 

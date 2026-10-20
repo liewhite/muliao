@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import Conflict, NotFound
-from muliao.models import Job, JobStatus, Session
+from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.checks import post_check_in
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
@@ -42,6 +42,7 @@ from muliao.platform.tasks import Clock, Commit, TaskQueue, no_commit
 from muliao.sessions.events import PostEvent, SessionStopped
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import hold_in
+from muliao.sessions.tables import Session
 from muliao.vault.service import Vault
 
 log = logging.getLogger(__name__)

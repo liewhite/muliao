@@ -21,13 +21,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.runner import AgentRuntime
+from muliao.agents.tables import Agent
 from muliao.errors import NotFound
-from muliao.models import Agent, Compaction, Message, Session, Task, TaskKind, TaskStatus
 from muliao.platform.db import Database
+from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue, no_commit, session_lane
 from muliao.sessions.codec import load_messages
 from muliao.sessions.conventions import calls_in, results_in
 from muliao.sessions.history import latest_compaction, rows_after
+from muliao.sessions.tables import Compaction, Message, Session
 from muliao.sessions.transcript import to_items, to_text
 
 log = logging.getLogger(__name__)

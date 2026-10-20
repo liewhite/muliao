@@ -7,11 +7,12 @@ from muliao.api.deps import C
 from muliao.api.events import RunEvent
 from muliao.api.files import FileOut
 from muliao.container import Container
-from muliao.models import Mail, MailKind, MailState, Origin, Session, Task, TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.sessions.conversation import Inbound, NewSession
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.service import default_title
+from muliao.sessions.tables import Mail, MailKind, MailState, Origin, Session
 from muliao.sessions.transcript import Item
 
 router = APIRouter()

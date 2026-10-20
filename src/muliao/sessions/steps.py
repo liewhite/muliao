@@ -12,7 +12,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
 
 from muliao.agent_runtime.redaction import redact_messages
 from muliao.agent_runtime.runner import StepHooks
-from muliao.models import Agent, Mail, Message, Session
+from muliao.agents.tables import Agent
 from muliao.platform.bus import LiveRuns
 from muliao.platform.db import Database
 from muliao.sessions.codec import dump_message
@@ -20,6 +20,7 @@ from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder, append_content, mark_events
 from muliao.sessions.history import marked_stopped, stopped_results
 from muliao.sessions.mailbox import consume_in, queued_in
+from muliao.sessions.tables import Mail, Message, Session
 
 log = logging.getLogger(__name__)
 

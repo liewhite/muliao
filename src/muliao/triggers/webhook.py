@@ -18,9 +18,10 @@ from typing import Any
 from sqlalchemy import select
 
 from muliao.errors import InvalidInput, Unauthorized
-from muliao.models import Session, Trigger
 from muliao.platform.db import Database
+from muliao.sessions.tables import Session
 from muliao.triggers.service import TriggerService
+from muliao.triggers.tables import Trigger
 
 log = logging.getLogger(__name__)
 

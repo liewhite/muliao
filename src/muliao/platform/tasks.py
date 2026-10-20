@@ -19,8 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.models import Task, TaskKind, TaskStatus
 from muliao.platform.db import Database, utcnow
+from muliao.platform.tables import Task, TaskKind, TaskStatus
 
 log = logging.getLogger(__name__)
 

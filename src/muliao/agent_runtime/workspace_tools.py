@@ -17,7 +17,7 @@ from muliao.agents import text_edit
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.store import FileStore
 from muliao.jobs.runner import JobRunner
-from muliao.models import JobStatus
+from muliao.jobs.tables import JobStatus
 from muliao.platform.shell import run_bash
 from muliao.sessions.conventions import TOOL_ATTACHMENTS, attachment_of
 from muliao.sessions.transcript import truncate

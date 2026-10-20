@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from muliao.api.deps import C
-from muliao.models import Notification
+from muliao.notifications.tables import Notification
 
 router = APIRouter(prefix="/notifications")
 

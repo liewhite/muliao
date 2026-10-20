@@ -8,9 +8,11 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from sqlalchemy import select
 
 from muliao.errors import Conflict, TransientError
-from muliao.models import Message, Notification, Origin, TaskKind, TaskStatus
+from muliao.notifications.tables import Notification
 from muliao.notifications.webpush import WebPushDelivery
+from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.platform.worker import is_transient
+from muliao.sessions.tables import Message, Origin
 from muliao.sessions.transcript import to_items
 from tests.test_flow import call_then_answer, drain, start
 

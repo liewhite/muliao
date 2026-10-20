@@ -19,7 +19,6 @@ from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage, ToolCallPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.models import Mail, MailKind
 from muliao.sessions.answers import Answer
 from muliao.sessions.conventions import Attachment, unanswered_calls
 from muliao.sessions.history import load_context
@@ -33,6 +32,7 @@ from muliao.sessions.questions import (
     late_answer_lines,
     questions_of,
 )
+from muliao.sessions.tables import Mail, MailKind
 
 ASK_AGENT: Final = "ask_agent"
 DEFERRED_TOOLS: Final = frozenset({ASK_USER, ASK_AGENT})

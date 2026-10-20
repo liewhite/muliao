@@ -5,8 +5,8 @@ from pydantic import BaseModel
 
 from muliao.agents.resources import USER
 from muliao.agents.service import AgentPatch, AgentSpec
+from muliao.agents.tables import Agent
 from muliao.api.deps import C
-from muliao.models import Agent
 from muliao.reflection.service import list_reflections_of
 
 router = APIRouter()

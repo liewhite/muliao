@@ -8,10 +8,10 @@ from pydantic_ai.messages import ModelRequest, UserContent, UserPromptPart
 
 from muliao.agent_runtime.runner import AgentRuntime
 from muliao.files.store import FileStore
-from muliao.models import Mail, MailKind
 from muliao.sessions.attachments import copy_to_workspace, references
 from muliao.sessions.conventions import RUN_EVENTS, event_indices, format_event
 from muliao.sessions.pending import call_result, late_text
+from muliao.sessions.tables import Mail, MailKind
 
 
 @dataclass(frozen=True)

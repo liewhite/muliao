@@ -14,7 +14,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
-from muliao.models import Message
+from muliao.sessions.tables import Message
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain

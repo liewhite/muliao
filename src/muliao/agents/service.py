@@ -15,8 +15,8 @@ from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import normalize_agent_name
 from muliao.agents.prompts import PromptStore
 from muliao.agents.resources import ResourceRepo
+from muliao.agents.tables import Agent
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.models import Agent
 from muliao.platform.db import Database, utcnow
 from muliao.platform.ids import new_agent_id
 

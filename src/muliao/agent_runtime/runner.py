@@ -35,13 +35,14 @@ from muliao.agents.memory import MemoryStore
 from muliao.agents.prompts import PromptStore
 from muliao.agents.service import AgentService
 from muliao.agents.skills import SkillStore
+from muliao.agents.tables import Agent
 from muliao.files.store import FileStore
-from muliao.models import Agent, Origin
 from muliao.platform.bus import LiveRuns
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
 from muliao.sessions.answers import Answer
 from muliao.sessions.attachments import AttachmentsForModel
+from muliao.sessions.tables import Origin
 from muliao.sessions.transcript import Item, call_item, result_item, truncate
 
 log = logging.getLogger(__name__)

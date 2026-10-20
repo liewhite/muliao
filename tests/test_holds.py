@@ -7,10 +7,12 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
+from muliao.delegations.tables import Delegation, DelegationStatus
 from muliao.errors import InvalidInput
-from muliao.models import Delegation, DelegationStatus, HoldStatus, Mail, SessionHold, Task, TaskKind
+from muliao.platform.tables import Task, TaskKind
 from muliao.sessions.holds import hold_in
 from muliao.sessions.settlement import Delivered, deliver_in
+from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 from tests.scripted import scripted
 from tests.test_delegations import _asking
 from tests.test_flow import drain, start, tool_returns

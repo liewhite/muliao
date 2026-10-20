@@ -19,11 +19,11 @@ import anyio
 from croniter import croniter
 
 from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
-from muliao.models import Trigger
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock
 from muliao.triggers.precheck import PrecheckFailed
 from muliao.triggers.service import TriggerService
+from muliao.triggers.tables import Trigger
 
 log = logging.getLogger(__name__)
 

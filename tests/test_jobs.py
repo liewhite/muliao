@@ -9,9 +9,11 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.errors import Conflict
-from muliao.models import Job, JobStatus, Mail, MailState, Origin, TaskKind
+from muliao.jobs.tables import Job, JobStatus
+from muliao.platform.tables import TaskKind
 from muliao.sessions.holds import has_active_in, hold_in
 from muliao.sessions.mailbox import queued_in
+from muliao.sessions.tables import Mail, MailState, Origin
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, start, tasks_of
 from tests.test_mailbox import Recorder

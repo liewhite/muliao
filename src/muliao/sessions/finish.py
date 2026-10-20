@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.models import Agent, MailState, Session
+from muliao.agents.tables import Agent
 from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
@@ -19,6 +19,7 @@ from muliao.sessions.holds import has_active_in
 from muliao.sessions.mailbox import queued_in, wake_in
 from muliao.sessions.settlement import settle_in, unsettled_in
 from muliao.sessions.steps import RunState
+from muliao.sessions.tables import MailState, Session
 
 
 @dataclass(frozen=True)

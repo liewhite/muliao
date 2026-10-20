@@ -8,9 +8,10 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.errors import Conflict, Forbidden
-from muliao.models import Message, Origin, Session, TaskKind, TaskStatus
+from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.sessions.conversation import Inbound, NewSession
 from muliao.sessions.mailbox import queued_in
+from muliao.sessions.tables import Message, Origin, Session
 from tests.scripted import scripted
 from tests.test_flow import drain, idle, last_user_prompt, reply, start, tasks_of, tool_returns
 

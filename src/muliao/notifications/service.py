@@ -8,9 +8,10 @@
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.models import Notification, TaskKind
+from muliao.notifications.tables import Notification
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
+from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import Commit, TaskQueue, deliver_lane, no_commit
 from muliao.sessions.events import RunEnded, SessionDeleted
 

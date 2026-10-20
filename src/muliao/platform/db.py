@@ -115,8 +115,6 @@ def migrate(db_path: Path, target: str = "head") -> None:
 
     同步执行（启动阶段由调用方放进线程）。迁移连接用完即关闭，不进入应用的连接池，应用连接的外键始终开启。
     """
-    from muliao import models  # noqa: F401  注册所有表
-
     engine = _migration_engine(db_path)
     try:
         with engine.begin() as connection:

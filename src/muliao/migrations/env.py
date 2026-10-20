@@ -3,7 +3,7 @@
 from alembic import context
 from sqlalchemy import create_engine
 
-from muliao import models  # noqa: F401  注册所有表
+import muliao.schema  # noqa: F401  注册所有表
 from muliao.platform.db import Base, StrEnumType, UTCDateTime
 
 config = context.config

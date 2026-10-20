@@ -5,9 +5,10 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.models import Notification, Task
 from muliao.notifications.service import unread_count_in
+from muliao.notifications.tables import Notification
 from muliao.platform.db import Database
+from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, no_commit
 
 log = logging.getLogger(__name__)

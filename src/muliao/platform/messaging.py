@@ -22,8 +22,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import CorruptState
-from muliao.models import Task, TaskKind
 from muliao.platform.ids import new_id
+from muliao.platform.tables import Task, TaskKind
 from muliao.platform.tasks import Commit, TaskQueue
 
 log = logging.getLogger(__name__)

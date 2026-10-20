@@ -6,8 +6,8 @@ import pytest
 
 from muliao.agent_runtime.mcp import McpTransport, mcp_config
 from muliao.errors import InvalidInput
-from muliao.models import MailKind, Origin
 from muliao.sessions.mailbox import queued_in
+from muliao.sessions.tables import MailKind, Origin
 from tests.test_flow import drain, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
@@ -276,7 +276,7 @@ async def test_a_temp_agent_sees_the_mcp_servers_of_its_caller(container, make_a
 async def test_a_missing_vault_reference_in_an_mcp_config_fails_the_run_visibly(
     container, make_agent, models
 ):
-    from muliao.models import TaskKind, TaskStatus
+    from muliao.platform.tables import TaskKind, TaskStatus
     from tests.test_flow import call_then_answer, tasks_of
 
     alpha = (await make_agent("alpha", model="m")).id

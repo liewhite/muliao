@@ -23,12 +23,13 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import CorruptState, NotFound
-from muliao.models import Mail, MailKind, MailState, Session, Task, TaskKind, TaskStatus
 from muliao.platform.db import Database
+from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import TaskQueue, session_lane
 from muliao.sessions.history import load_context
 from muliao.sessions.holds import called_in
 from muliao.sessions.pending import waiting
+from muliao.sessions.tables import Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
 

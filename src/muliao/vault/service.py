@@ -19,10 +19,10 @@ from muliao.agents.events import AgentDeleting
 from muliao.agents.ownership import owned_by, scope_of, visible, visible_owners
 from muliao.agents.service import active_agent_in
 from muliao.errors import InvalidInput, NotFound
-from muliao.models import Secret
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit
+from muliao.vault.tables import Secret
 
 log = logging.getLogger(__name__)
 

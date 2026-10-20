@@ -39,7 +39,6 @@ from muliao.delegations.tools import delegation_toolset
 from muliao.errors import InvalidInput
 from muliao.files.store import FileStore
 from muliao.jobs.runner import JobRunner
-from muliao.models import TaskKind
 from muliao.notifications.delivery import DeliverHandler
 from muliao.notifications.service import Notifications, Notifier
 from muliao.notifications.tools import notify_toolset
@@ -48,6 +47,7 @@ from muliao.platform.bus import EventBus, LiveRuns
 from muliao.platform.checks import WorkWatcher
 from muliao.platform.db import Database, create_engine, migrate
 from muliao.platform.messaging import Messaging
+from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.worker import TaskHandler, Worker
 from muliao.reflection.service import ReflectionHandler, ReflectionScheduler

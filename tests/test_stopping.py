@@ -170,7 +170,7 @@ async def test_a_run_that_swallows_its_cancellation_stays_registered(monkeypatch
 
 async def _write_forever(container, counter: list[int]) -> None:
     """不停地开事务写库：取消迟早会落在某个事务进行中的时刻。"""
-    from muliao.models import Agent
+    from muliao.agents.tables import Agent
 
     while True:
         async with container.db.transaction() as s:
@@ -189,7 +189,7 @@ async def _leftover_tasks() -> list[str]:
 async def test_an_anyio_cancellation_waits_for_the_transaction_and_leaves_nothing_behind(
     container, make_agent
 ):
-    from muliao.models import Agent
+    from muliao.agents.tables import Agent
 
     agent = await make_agent("probe")
     async with container.db.transaction() as s:

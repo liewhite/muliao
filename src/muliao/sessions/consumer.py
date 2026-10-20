@@ -21,10 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.runner import AgentRuntime, ToolGroups
 from muliao.agent_runtime.scope import Audience
-from muliao.models import Mail, Message, Task
 from muliao.platform.bus import LiveRuns
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
+from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
@@ -48,6 +48,7 @@ from muliao.sessions.questions import ASK_USER, questions_of, waiting_text
 from muliao.sessions.settlement import settle_failure_in
 from muliao.sessions.steps import CompactionDue, RunState, Steps
 from muliao.sessions.stopping import StoppableRuns, Stopped
+from muliao.sessions.tables import Mail, Message
 
 log = logging.getLogger(__name__)
 

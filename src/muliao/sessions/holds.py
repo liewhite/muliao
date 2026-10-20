@@ -11,8 +11,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.models import HoldStatus, SessionHold
 from muliao.platform.db import utcnow
+from muliao.sessions.tables import HoldStatus, SessionHold
 
 
 async def hold_in(s: AsyncSession, session_id: str, holder: str, call_id: str | None = None) -> SessionHold:

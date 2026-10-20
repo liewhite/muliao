@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from muliao.agent_runtime.mcp import McpServer, McpTransport, mcp_config
 from muliao.agents.resources import USER
 from muliao.api.deps import C
-from muliao.models import Notification
+from muliao.notifications.tables import Notification
 from muliao.vault.service import SecretInfo
 
 router = APIRouter()

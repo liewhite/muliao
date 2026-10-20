@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, RootModel
 
-from muliao.models import TaskKind, TaskStatus
+from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.sessions.transcript import Item
 
 

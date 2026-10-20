@@ -3,7 +3,7 @@
 import pytest
 
 from muliao.errors import NotFound
-from muliao.models import TaskKind
+from muliao.platform.tables import TaskKind
 from muliao.triggers.precheck import Precheck, PrecheckFailed, decide
 from tests.conftest import login
 from tests.test_flow import mail_of, tasks_of

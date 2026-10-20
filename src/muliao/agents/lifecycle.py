@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.events import AgentDeleting
 from muliao.agents.service import AgentService
+from muliao.agents.tables import Agent
 from muliao.errors import Conflict, TransientError
-from muliao.models import Agent
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, no_commit, reflection_lane

@@ -4,9 +4,12 @@
 import pytest
 from sqlalchemy import select
 
+from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
-from muliao.models import Agent, Job, JobStatus, Origin, RetiredAgent, Task, TaskKind, TaskStatus
+from muliao.jobs.tables import Job, JobStatus
+from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.tables import Origin, RetiredAgent
 from tests.test_flow import drain, start
 from tests.test_jobs import start_job, wait_until_done
 
@@ -130,7 +133,7 @@ async def test_a_session_that_turns_busy_meanwhile_is_cleared_later_and_the_agen
 ):
     """检查与标记之间会话变忙：清理会话的命令按忙重试；退役已经单独生效，重试期间新的来信一律拒绝。重试用完时投递
     记为失败（可见），人工重试即可继续。"""
-    from muliao.models import TaskKind
+    from muliao.platform.tables import TaskKind
     from tests.test_flow import deliver, reply
 
     agent = await make_agent("alpha")
@@ -189,7 +192,7 @@ async def test_notifications_of_a_deleted_agents_sessions_go_with_them(container
 
 
 async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, models):
-    from muliao.models import HoldStatus, SessionHold
+    from muliao.sessions.tables import HoldStatus, SessionHold
 
     session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
     # 停止已清掉占用，但后台任务领域还没处理 SessionStopped（进程还在跑）

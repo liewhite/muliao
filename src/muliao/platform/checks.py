@@ -13,10 +13,10 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.models import HoldStatus, MailKind, Session
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.mailbox import has_queued_from, post_in
+from muliao.sessions.tables import HoldStatus, MailKind, Session
 
 log = logging.getLogger(__name__)
 

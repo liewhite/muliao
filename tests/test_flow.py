@@ -16,9 +16,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
 from sqlalchemy import select
 
-from muliao.models import Mail, Origin, Reflection, ReflectionCheckpoint, Task, TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.worker import Worker
+from muliao.reflection.tables import Reflection, ReflectionCheckpoint
 from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.tables import Mail, Origin
 from tests.scripted import scripted
 
 

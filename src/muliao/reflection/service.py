@@ -16,13 +16,16 @@ from muliao.agent_runtime.runner import AgentRuntime, ToolGroups
 from muliao.agent_runtime.tool_catalog import REFLECTION_GROUPS
 from muliao.agents.events import AgentDeleting
 from muliao.agents.service import AgentService
+from muliao.agents.tables import Agent
 from muliao.errors import NotFound
-from muliao.models import Agent, Message, Reflection, ReflectionCheckpoint, Session, Task, TaskKind
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
+from muliao.platform.tables import Task, TaskKind
 from muliao.platform.tasks import Commit, TaskQueue, no_commit, reflection_lane
+from muliao.reflection.tables import Reflection, ReflectionCheckpoint
 from muliao.sessions.codec import KIND_PATH, RESPONSE_KIND, load_messages
 from muliao.sessions.events import RunEnded
+from muliao.sessions.tables import Message, Session
 from muliao.sessions.transcript import to_items, to_text
 
 log = logging.getLogger(__name__)

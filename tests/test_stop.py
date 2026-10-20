@@ -14,9 +14,10 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.models import MailKind, MailState, TaskKind, TaskStatus
+from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.sessions.conventions import RUN_STOPPED, STOPPED_TOOL_RESULT
 from muliao.sessions.mailbox import post_in
+from muliao.sessions.tables import MailKind, MailState
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, mail_of, tasks_of
@@ -167,7 +168,7 @@ async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_t
     from pydantic_ai.models.function import DeltaToolCall, FunctionModel
     from sqlalchemy import select
 
-    from muliao.models import Message
+    from muliao.sessions.tables import Message
 
     await login(client)
     agent = await make_agent("keeper", model="streaming")
@@ -289,7 +290,7 @@ async def _failed_after_saving_a_request(container, make_agent, models) -> tuple
 async def test_stopping_during_a_pending_retry_stops_the_retry(container, make_agent, models):
     from datetime import timedelta
 
-    from muliao.models import Task
+    from muliao.platform.tables import Task
 
     session_id, calls = await _failed_after_saving_a_request(container, make_agent, models)
     # 如同在退避里等重试：排着、还没到时间

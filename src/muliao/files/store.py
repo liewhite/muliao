@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import CorruptState, InvalidInput, NotFound, TooLarge
-from muliao.models import StoredFile
+from muliao.files.tables import StoredFile
 from muliao.platform.db import Database
 from muliao.platform.ids import new_id
 

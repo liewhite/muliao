@@ -29,13 +29,15 @@ from sqlalchemy.orm import undefer
 from muliao.agents.events import AgentDeleting
 from muliao.agents.service import active_agent_in
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.models import Notification, Origin, Session, Trigger
 from muliao.notifications.service import Notifier
+from muliao.notifications.tables import Notification
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Clock, Commit, TaskQueue, session_lane
 from muliao.sessions.conversation import Inbound, NewSession, receive
+from muliao.sessions.tables import Origin, Session
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
+from muliao.triggers.tables import Trigger
 
 log = logging.getLogger(__name__)
 

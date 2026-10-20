@@ -12,12 +12,13 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.tables import Agent
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.files.store import load_metas
-from muliao.models import Agent, Mail, MailKind, MailState, Origin, RetiredAgent, Session, TaskStatus
 from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.messaging import Messaging
+from muliao.platform.tables import TaskStatus
 from muliao.platform.tasks import TaskQueue, session_lane
 from muliao.sessions.events import DelegationDispatched, Ending, SessionDeleted
 from muliao.sessions.history import latest_answer, load_context
@@ -27,6 +28,7 @@ from muliao.sessions.mailbox import latest_run, post_in, queued_in
 from muliao.sessions.pending import pending_questions
 from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
 from muliao.sessions.settlement import failure_of, settle_in, unsettled_in
+from muliao.sessions.tables import Mail, MailKind, MailState, Origin, RetiredAgent, Session
 
 log = logging.getLogger(__name__)
 

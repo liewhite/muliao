@@ -18,9 +18,9 @@ from pydantic_ai.messages import ModelRequest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.models import MailState, Message, Session, TaskKind
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
+from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue, session_lane
 from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.conventions import is_stopped
@@ -29,6 +29,7 @@ from muliao.sessions.history import latest_answer, load_context, marked_stopped,
 from muliao.sessions.holds import clear_in
 from muliao.sessions.mailbox import discard_in, latest_run
 from muliao.sessions.settlement import settle_in, unsettled_in
+from muliao.sessions.tables import MailState, Message, Session
 
 log = logging.getLogger(__name__)
 

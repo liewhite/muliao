@@ -137,7 +137,7 @@ async def test_startup_rejects_agents_with_unresolvable_models(settings, models)
         )
     try:
         async with c.db.transaction() as s:
-            from muliao.models import Agent
+            from muliao.agents.tables import Agent
 
             (await s.get(Agent, agent.id)).model = "gone:m"  # 模拟配置里删掉了 provider
     finally:
