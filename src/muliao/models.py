@@ -233,7 +233,11 @@ class SessionEvent(Base):
     # 处理掉它的 turn task；None 表示还在队列里
     consumed_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
 
-    __table_args__ = {"sqlite_autoincrement": True}
+    # 处理掉之后这一行只作记录（内容已随那一轮的消息保存）；查询只看还在队列里的，用部分索引
+    __table_args__ = (
+        Index("ix_session_events_queued", "session_id", sqlite_where=consumed_by.is_(None)),
+        {"sqlite_autoincrement": True},
+    )
 
 
 class Notification(Base):

@@ -196,3 +196,29 @@ async def test_events_are_ordered_around_the_user_message_by_arrival(container, 
     contents = [c for p in recorder.prompts[1:] for c in p]
     assert contents.index('<event source="job:1">\nearly\n</event>') < contents.index("user says")
     assert await queued(container, session.id) == []
+
+
+def test_a_stopped_turn_keeps_its_events_marked_on_the_saved_prompt():
+    """停在第一次请求之前：补上的开头请求带着事件段，标记打在它身上（界面仍把事件单独显示）。"""
+    from muliao.conventions import TURN_EVENTS, format_event, mark_events
+    from muliao.runtime.stopping import stopped_messages
+
+    prompt = [format_event("job:1", "done"), "and the user says hi"]
+    messages = mark_events(stopped_messages(None, prompt, None), [0])
+
+    [request] = messages
+    assert request.metadata[TURN_EVENTS] == [0]
+    assert [(i["type"], i["text"]) for i in to_items(messages)] == [
+        ("event", "done"),
+        ("user", "and the user says hi"),
+        ("stopped", ""),
+    ]
+
+
+def test_events_read_as_events_in_transcripts_for_reflection_and_compaction():
+    from muliao.conventions import format_event, mark_events
+    from muliao.transcript import to_text
+
+    request = ModelRequest(parts=[UserPromptPart([format_event("job:7", "exit 0"), "thanks"])])
+    text = to_text(to_items(mark_events([request], [0])), max_item_chars=1000)
+    assert text.splitlines() == ["[EVENT job:7] exit 0", "[USER] thanks"]

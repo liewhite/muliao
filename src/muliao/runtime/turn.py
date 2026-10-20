@@ -184,8 +184,11 @@ class TurnRunner:
         after_start = len(events.before) + len(own)
         indices = (*range(len(events.before)), *range(after_start, after_start + len(events.after)))
         if not content and not payload.answers:
-            # 投递时一定有内容：用户消息、回答，或「只有事件」的一轮在它之前不会有别的轮次取走事件（同一会话串行）
-            raise RuntimeError(f"turn of session {session_id} has nothing to hand to the model")
+            # 只有事件的一轮，投递时它前面没有别的轮次，执行时一定取得到事件；只有它失败之后，之后的轮次处理掉了
+            # 这些事件，用户再手动重试它，才会什么都没有
+            raise RuntimeError(
+                "this turn only carried session events, and a later turn already handled them; nothing to retry"
+            )
         return PreparedTurn(
             session=session,
             agent=agent,

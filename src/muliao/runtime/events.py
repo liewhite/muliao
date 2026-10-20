@@ -76,8 +76,12 @@ async def dispatch_in(
 
     committing：正在提交的那一轮（在它的提交事务里调用时）。队列在同一个事务里稍后才把它记为完成，此刻它还是
     running，不能因此判定会话忙。"""
-    events = await queued_in(s, session.id)
-    if not events:
+    newest = await s.scalar(
+        select(func.max(SessionEvent.created_at)).where(
+            SessionEvent.session_id == session.id, SessionEvent.consumed_by.is_(None)
+        )
+    )
+    if newest is None:
         return None
     lane = turn_lane(session.id)
     turns = select(Task).where(Task.lane == lane, Task.kind == TaskKind.TURN)
@@ -90,7 +94,8 @@ async def dispatch_in(
     latest = await s.scalar(
         select(func.max(Task.created_at)).where(Task.lane == lane, Task.kind == TaskKind.TURN)
     )
-    if latest is not None and events[-1].created_at <= latest:
+    # 「交给过」由两张表的 created_at（同一个时钟 db.utcnow）比较得出，依赖系统时间不回拨
+    if latest is not None and newest <= latest:
         # 都已经交给过一轮（它失败了、等重试）：由它或之后的任何一轮带上，不重复投递
         return None
     if await pending_in_session(s, session.id):
@@ -105,7 +110,7 @@ async def dispatch_in(
         # 只有事件的一轮：没有用户消息；推不推送由它带上的事件决定（TurnEvents.reply_to）
         payload=TurnPayload(prompt="", reply_to=ReplyTo.NONE, attachments=[], answers={}).dump(),
     )
-    log.info("turn dispatched for session events", extra={"session_id": session.id, "events": len(events)})
+    log.info("turn dispatched for session events", extra={"session_id": session.id})
     return turn
 
 
@@ -177,7 +182,8 @@ class EventDispatcher:
             ).all()
             dispatched = [session.id for session in waiting if await dispatch_in(s, self._queue, session)]
         if dispatched:
-            log.warning(
+            # 正常路径也会走到这里（不可重试地失败的一轮运行期间到达的事件），所以是 info；补了什么仍然可查
+            log.info(
                 "reconcile dispatched turns for waiting session events", extra={"session_ids": dispatched}
             )
         return len(dispatched)
