@@ -1,6 +1,8 @@
-# 设计：领域边界与跨领域一致性（2026-10-20，草案第 3 版，待审）
+# 设计：领域边界与跨领域一致性（2026-10-20，草案第 4 版，待审）
 
 状态：方案讨论稿。审定后按第 11 节分阶段实施，完成后并入 architecture.md 并删除本文。技术栈不变（Python、FastAPI、pydantic-ai、SQLite），并发改用 anyio（第 9 节）。生产库在上线时重建，表结构调整不写迁移。
+
+第 4 版根据第三轮审查修订：会话删除后委派行与 job 行保留终态、不删除（「先停止再删除」是正常路径，迟到事件不能撞上被删的行）；`post` 增加 `Gone`；后台任务启动失败与崩溃对账共用一条规则；holder 写法统一；失败投递的恢复顺序；运行开始时检查是否已被停止。
 
 第 3 版根据第二轮审查修订：委派行只由委派领域的事件处理器创建（`dispatch` 同一事务发布 `DelegationDispatched`），删掉「打开中」状态与按时间的对账；停止事务在运行退出之后执行；后台任务启动失败走正常的结束路径；并发模型写明异常边界与屏蔽点。用户已决定：删除会话与 agent 保留忙时拒绝。
 
@@ -71,6 +73,7 @@
   3. 一个事件涉及多个对象时（例如一次结清带多个委派），命令的幂等键是「事件 id + 对象 id」。
   4. 事件 payload 校验失败是契约违约（例如跨版本部署），投递直接失败，「任务」页可见，人工处理。
 - 正确性只依赖一处投递顺序：同一个委派的 `DelegationDispatched` 先于它的 `SessionSettled` 到达委派 lane（4.2 说明为什么一定如此）。其余处理器都按目标对象的当前状态判断（占用状态、委派状态），乱序到达也收敛。
+- 失败投递的恢复：投递最终失败后在「任务」页人工重试。重试保留原 id，所以仍按原顺序处理；`TaskQueue.retry` 改为允许在 lane 上还有更晚的任务时重试更早的那条（现在会拒绝），否则共享 lane 上可能一直找不到重试时机。同一委派的 `DelegationDispatched` 失败时，它的 `SessionSettled` 也会失败，按 id 顺序先后重试即可。
 - 队头阻塞：一条投递暂时失败、按退避重试时会挡住同一 lane 的后续投递。处理器只能执行短命令，不做长任务；需要时按分区键拆 lane。
 - 可观测：每条投递任务记事件类型、事件 id、关联 id；处理开始、结果、去重、被丢弃的迟到结局都打结构化日志。
 
@@ -94,7 +97,7 @@
 
 #### 占用（hold）
 
-别的领域为某个会话开始一项异步工作时，在会话上登记一个占用（不透明的 `holder`，如 `job:<id>`、`delegation:<id>`）。占用行**永久保留**，带状态：
+别的领域为某个会话开始一项异步工作时，在会话上登记一个占用（不透明的 `holder`，如 `job:<id>`、`delegation:<owner>:<key>`）。占用行**永久保留**，带状态：
 
 | 状态 | 含义 |
 |---|---|
@@ -111,7 +114,7 @@
 | 命令 | 说明 |
 |---|---|
 | `receive(Inbound)` | 外部来信的唯一入口（用户消息、对 `ask_user` 的回答、触发器），现有规则不变 |
-| `post(session, mail, key, *, coalesce=False, release=None)` | 代码里的生产者投信（事件、检查）。`coalesce`：同一来源已有信件排着就不投。`release=h`：同一事务里把占用 `h` 记为 released。占用 `h` 已是 `cleared` 时什么都不投，返回 `Dropped`（记 info 日志，带 holder）；从未登记过则报错（bug） |
+| `post(session, mail, key, *, coalesce=False, release=None)` | 代码里的生产者投信（事件、检查）。`coalesce`：同一来源已有信件排着就不投。`release=h`：同一事务里把占用 `h` 记为 released。占用 `h` 已是 `cleared` 时什么都不投，返回 `Dropped`（记 info 日志，带 holder）；会话已不存在返回 `Gone`；会话存在而占用从未登记过则报错（bug） |
 | `hold(session, holder)` | 登记一个占用（后台任务用），幂等 |
 | `dispatch(owner, call_id?, thread, content, awaited, key)` | **委派投递，一个事务**：校验并打开或找到 thread（同名续聊，agent 或种类不符返回 `ThreadMismatch`，什么都不写）；在发起方登记占用，`holder` 由幂等键确定性派生（`delegation:<owner>:<key>`）；往 thread 投一封以同一个 `holder` 为关联 id 的信件；发布 `DelegationDispatched`。返回 holder 与子会话 id |
 | `send_to_thread(parent, thread, content, awaited, key)` | 不交回结局的 `delegate_task`：打开或找到公开 thread 并投信，不登记占用 |
@@ -127,7 +130,7 @@
 
 #### 关联与结清
 
-信件可以带一个不透明的关联 id（委派来的信件是 `delegation:<id>`）。会话判断关联什么时候「结束」，发布 `SessionSettled`。**结清只由会话自己在以下时机判断**，不由占用释放触发：
+信件可以带一个不透明的关联 id（委派来的信件以它的 holder `delegation:<owner>:<key>` 为关联 id；holder 同时是占用 id、关联 id 与委派表主键）。会话判断关联什么时候「结束」，发布 `SessionSettled`。**结清只由会话自己在以下时机判断**，不由占用释放触发：
 
 - **完成**：运行结束的事务里，运行正常结束、没有停在挂起的调用上、信箱里没有排队的信件、没有 `active` 占用 → 会话内已处理、还未结清的全部关联以 `finished` 结清，带回答与文件。占用释放总是伴随一封信件（`reply`、`post(release=…)`），信件会唤醒下一次运行，结清由那次运行结束时判断。
 - **最终失败**：队列记失败的事务里（`failed_in`），会话内已处理、还未结清的全部关联，加上交给过这次运行、还排着的（现有 `handed_to` 规则，这些信件随之丢弃），以 `failed` 结清。按会话范围而不是按 `consumed_by` 归属，所以早先停在 `ask_user` 上的运行处理过的委派、被续跑接管（现有 `_adopted`）的信件都包括在内。
@@ -162,10 +165,9 @@
 
 | 事件 | 处理 |
 |---|---|
-| `DelegationDispatched` | Commit 里插入 `running` 行（按 holder 去重） |
+| `DelegationDispatched` | Commit 里插入 `running` 行（按 holder 去重）。委派行永久保留（只进入终态），会话删除时也不删：发起方要被删除，必须先不忙，此时它发起的委派都已结清或被放弃；之后迟到的 `SessionSettled` 看到终态行按规则忽略，「没有这一行」只剩真正的 bug 一种情况 |
 | `SessionSettled`（子会话） | 对其中每个关联 holder：状态是 running → `Sessions.reply(owner, holder, 结局, key=事件 id + holder)`，Commit 里记为 settled；`reply` 返回 `Dropped` 或 `Gone` 同样记为 settled，并记日志。已 settled 或 abandoned 的忽略。**没有这一行是契约违约，投递直接失败**（见下） |
 | `SessionStopped`（发起方） | 被清掉的占用里的委派：running → Commit 里记为 abandoned，`execute` 里对子会话 `Sessions.stop(child)`（逐层由子会话自己的 `SessionStopped` 继续） |
-| `SessionDeleted`（发起方） | 删除它发起的委派行 |
 
 **为什么 `DelegationDispatched` 一定先于对应的 `SessionSettled` 到达**：子会话的信件与 `DelegationDispatched` 的投递任务在同一个事务里提交；子会话只有在之后的事务里处理了这封信件，才可能因为它结清并发布 `SessionSettled`，那条投递任务的 id 一定更大。两者在同一条 lane 上按 id FIFO 处理。`SessionStopped`（发起方）同理：停止事务晚于发起时的 `dispatch`。
 
@@ -175,11 +177,11 @@
 
 **拥有的表**：`jobs`。状态：`starting` → `running` → `exited` / `killed` / `interrupted`。
 
-**发起**（在屏蔽作用域里完成，加时限，运行被停止也不会停在中间，见第 9 节）：插入 job 行（`starting`，键为工具调用 id）→ `Sessions.hold(session, "job:<id>")` → 启动进程 → 记为 `running`。**启动失败**（spawn 报错、写 pid 失败、超出时限）按 `interrupted` 结束并发布 `JobEnded`，走正常的投信加释放，工具同时把错误交还模型；代价是模型多收到一封「任务被中断」的事件。**进程崩溃**留下的 `starting` 行由后台任务领域启动时的对账收敛：占用存在就按 `interrupted` 结束（同上），不存在就删除该行。
+**发起**（在屏蔽作用域里完成，加时限，运行被停止也不会停在中间，见第 9 节）：插入 job 行（`starting`，键为工具调用 id）→ `Sessions.hold(session, "job:<id>")` → 启动进程 → 记为 `running`。**没有走到 `running` 的 `starting` 行只有一条收敛规则**，进程内的启动失败（spawn 报错、写 pid 失败、超出时限，此时占用是否已提交不确定）与崩溃后的启动对账都调用它：`Sessions.hold_state(session, holder)` 显示占用存在 → 按 `interrupted` 结束并发布 `JobEnded`（走正常的投信加释放）；不存在 → 删除该行。进程内失败时工具同时把错误交还模型。
 
-**结束**：记下状态与退出码，同一事务发布 `JobEnded`；自己的订阅者 `Sessions.post(session, 完成事件信件, key="job:<id>:end", release="job:<id>")`，返回 `Dropped` 时只记日志。
+**结束**：记下状态与退出码，同一事务发布 `JobEnded`；自己的订阅者 `Sessions.post(session, 完成事件信件, key="job:<id>:end", release="job:<id>")`，返回 `Dropped` 或 `Gone` 时只记日志。
 
-**订阅**：`SessionStopped` → 结束被清掉的占用对应的后台任务（进程组），不投信；`SessionDeleted` → 删除该会话的 job 行（删除前会话已确认没有 `active` 占用）。
+**订阅**：`SessionStopped` → 结束被清掉的占用对应的后台任务（进程组），不投信。job 行永久保留（终态即历史），会话删除时不删：停止后进程的结局可能晚于删除写入，它照常写进自己的行，投信得到 `Gone` 只记日志。
 
 ### 4.4 Agent 目录与资源（`muliao/agents/`）
 
@@ -260,7 +262,7 @@
 | `failed_in` / `handed_to` / `_adopted` | 4.1「最终失败」，会话范围 |
 | `delegated_in` / `waiting` / `deferred_results` / `STILL_WORKING` | 带 `call_id` 的占用（永久）；规则不变 |
 | `Threads.send`（单事务） | `dispatch`（单事务，同时发布 `DelegationDispatched`），委派行由委派 lane 创建 |
-| `delete_sessions` | 忙时拒绝（判断在会话内部）+ `SessionDeleted` |
+| `delete_sessions` | 忙时拒绝（判断在会话内部）+ `SessionDeleted`；委派行与 job 行保留终态 |
 | `agent_lifecycle` | 忙时拒绝 + 删除 agent 流程（4.4） |
 | 反思检查点在 `agents` 表 | `reflection_checkpoints` |
 | 触发器跳过（`busy_in`） | `Sessions.is_busy` |
@@ -273,7 +275,7 @@
 | 推送 | 同上；Web Push 失败语义不变 | 通知按运行 id 去重 | 推送晚几百毫秒 |
 | 反思调度 | 同上 | 步数从 messages 推导，检查点推进幂等 | 无 |
 | 停止后结束后台任务、放弃委派 | 同上 | 结束进程与放弃委派幂等；迟到结局不投 | 停止后进程可能多跑几百毫秒 |
-| 删除后的清理 | 同上 | 删除幂等 | 引用已删除会话的行短暂存在（界面不可见） |
+| 删除后的清理（通知） | 同上 | 删除幂等 | 指向已删除会话的通知短暂存在 |
 | 删除 agent | `deleting` 状态可见 | 每步幂等；会话全部删除后完成 | agent 从列表消失与目录删除之间有窗口 |
 | 后台任务的发起中途崩溃 | `starting` 行可查 | 启动时对账按占用是否存在收敛 | 重启前多占一行 |
 | 委派行的创建 | 投递任务失败可见 | 按 holder 去重；先于结清到达（4.2） | 委派行晚于占用几百毫秒出现 |
@@ -310,7 +312,7 @@
 | 清理 | 超时或失败后 |
 |---|---|
 | 保存被停止的那一步（`steps.save_stopped`） | 停止事务照样关闭历史（悬空调用补结果、末尾请求标停止），只是正在生成的那段回答没保存 |
-| 后台任务的发起（4.3） | 按启动失败处理（`interrupted`） |
+| 后台任务的发起（4.3） | 按 `starting` 行的收敛规则处理 |
 | 结束进程组并回收（后台任务、同步 shell、前置检查） | 记 error 日志；后台任务由启动时对账记为 `interrupted` |
 | 后台任务日志的最后写入 | 日志缺最后几行，记 warning |
 | 临时 agent 工作目录删除 | 启动时清空 `data/tmp` |
@@ -320,6 +322,8 @@
 1. **根任务组**（容器启动时开，关停 = 取消它）：只放「意外异常即进程退出」的循环——worker 调度循环、定时触发循环、信箱对账循环、后台任务的检查循环。它们意外退出是 bug，进程退出交给进程管理器重启（现有语义）。
 2. **每个任务一个边界**：worker 执行的每个 task（运行、压缩、反思、投递、事件投递）在自己的作用域里执行，边界上捕获异常并按队列规则记账（重试或失败），不向上传播，一个运行出错不影响别的运行。
 3. **每个后台任务的监督者一个边界**：意外异常只记 error 日志，由后台任务的对账收敛（「监督意外结束」是契约内的情况），不取消别的监督者或运行。
+
+**运行开始与停止的竞态**：运行任务已被领取、但还没登记取消作用域时，`stop` 看不到正在进行的运行，会直接执行停止事务（现状也有这个竞态）。修正：运行开始的第一个事务里检查自己的 task 是否已被停止事务记为完成，是就不执行。
 
 **规则用 lint 固定**：ruff banned-api 禁止 `asyncio.create_task`、`asyncio.gather`、`asyncio.wait_for`、`asyncio.shield`。停止、关停、超时三种取消各写测试。
 
@@ -354,7 +358,7 @@ muliao/
 5. **会话种类策略、回答信封。**
 6. **文档并入 architecture.md、上线。** 之后再评估临时 agent（8.3）。
 
-必须有测试固定的行为（另加各阶段的常规测试）：回答到达后不会重新执行 `ask_agent`；发起时 thread 校验失败什么都不写；子会话在 `dispatch` 之后立刻结清，结局仍然交回；后台任务启动失败释放占用；`starting` 中途崩溃由对账收敛；停止在运行退出之后执行，运行退出途中登记的占用被清掉；停止后迟到的 `JobEnded` / `SessionSettled` 不唤醒会话；最终失败结清早先运行处理过的关联；删除带私有 thread 的会话（忙时拒绝、不忙时一并删除）；删除没有会话的 agent。领域测试只经对方的 `api.py`；跨领域流程测试在 `drain`（同时处理运行与事件投递）之后断言。
+必须有测试固定的行为（另加各阶段的常规测试）：回答到达后不会重新执行 `ask_agent`；发起时 thread 校验失败什么都不写；子会话在 `dispatch` 之后立刻结清，结局仍然交回；后台任务启动失败释放占用；`starting` 中途崩溃由对账收敛；停止在运行退出之后执行，运行退出途中登记的占用被清掉；停止后迟到的 `JobEnded` / `SessionSettled` 不唤醒会话；停止后立即删除，迟到的 `SessionSettled` / `JobEnded` 不产生失败投递；运行刚被领取时停止，这次运行不执行；持锁期间停止一次运行（保存被停止的一步超时，停止事务照样关闭历史）；最终失败结清早先运行处理过的关联；删除带私有 thread 的会话（忙时拒绝、不忙时一并删除）；删除没有会话的 agent。领域测试只经对方的 `api.py`；跨领域流程测试在 `drain`（同时处理运行与事件投递）之后断言。
 
 ## 12. 行为变化
 
