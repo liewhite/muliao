@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
-from muliao.errors import InvalidInput, NotFound, TooLarge
+from muliao.errors import CorruptState, InvalidInput, NotFound, TooLarge
 from muliao.ids import new_id
 from muliao.models import StoredFile
 
@@ -202,7 +202,7 @@ class FileStore:
         try:
             return await self.get_many(file_ids)
         except NotFound as e:
-            raise RuntimeError(f"stored references point to missing files: {e}") from e
+            raise CorruptState(f"stored references point to missing files: {e}") from e
 
     def read(self, meta: FileMeta) -> bytes:
         return self.blob_path(meta).read_bytes()

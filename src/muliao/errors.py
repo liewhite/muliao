@@ -26,12 +26,17 @@ class TooLarge(DomainError):
     """输入超过契约规定的大小上限。"""
 
 
-class UpstreamFailed(DomainError):
+class UpstreamFailed(Exception):
     """界面同步查询的外部服务（如向 LLM provider 查模型列表）报错或不可达，API 映射为 502 并原样带出原因。
 
-    只用于 API 层的同步查询，不进入工具层（那里 DomainError 会被当作「模型输入有误」交还模型）；
-    任务里调用外部依赖的暂时失败用 TransientError，由任务队列统一重试。
+    不是 DomainError：调用方纠正不了，工具层也不会把它当作「模型输入有误」交还模型。任务里调用外部依赖的暂时失败用
+    TransientError，由任务队列统一重试。
     """
+
+
+class CorruptState(Exception):
+    """系统自己存下的数据缺失或不合法（资源文件缺失或格式损坏、引用的文件不存在）：数据与代码不一致，不是调用方的
+    输入错误。不是 DomainError：不映射成 4xx，不交还模型修正；按程序错误报出，信息里带上路径或 id，等人修复。"""
 
 
 class TransientError(Exception):

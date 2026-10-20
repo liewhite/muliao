@@ -55,7 +55,6 @@ _STATUS = {
     Unauthorized: 401,
     Forbidden: 403,
     TooLarge: 413,
-    UpstreamFailed: 502,
     # 手动运行触发器时前置检查失败：原因（可能含脚本 stderr）给已登录的用户看
     PrecheckFailed: 502,
 }
@@ -174,6 +173,10 @@ def create_app(container: Container, web_dir: Path) -> FastAPI:
     @app.exception_handler(DomainError)
     async def domain_error(_request: Request, exc: DomainError) -> JSONResponse:
         return JSONResponse(status_code=_status_of(exc), content={"detail": str(exc)})
+
+    @app.exception_handler(UpstreamFailed)
+    async def upstream_failed(_request: Request, exc: UpstreamFailed) -> JSONResponse:
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
 
     app.include_router(_public_routes(secure_cookie=settings.server.public_url.startswith("https://")))
     # webhook 的事件入口凭触发器 token 鉴权，不走登录

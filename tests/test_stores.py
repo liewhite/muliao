@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import CorruptState, InvalidInput, NotFound
 from muliao.evolution.memory import MemoryFull, MemoryStore
 from muliao.evolution.skills import SkillStore
 from muliao.resources import RESOURCE_PATHSPEC, ResourceRepo
@@ -60,7 +60,7 @@ def test_skill_with_mismatched_frontmatter_name_fails_loudly(skills: SkillStore,
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text("---\nname: fake\ndescription: x\n---\nbody")
 
-    with pytest.raises(InvalidInput, match="does not match directory"):
+    with pytest.raises(CorruptState, match="does not match directory"):
         skills.list(None)
 
 
@@ -111,8 +111,8 @@ async def test_memory_over_limit_is_rejected_and_unchanged(memory: MemoryStore):
     assert memory.read(ALPHA) == "short\n"
 
 
-def test_memory_of_unknown_agent_is_not_found(memory: MemoryStore):
-    with pytest.raises(NotFound):
+def test_a_missing_memory_file_is_corrupt_state_not_a_caller_error(memory: MemoryStore):
+    with pytest.raises(CorruptState):
         memory.read("c3c3c3c3c3c3")
 
 
@@ -236,7 +236,7 @@ async def test_corrupt_mcp_config_is_rejected_with_its_path_but_can_be_deleted(c
     path = container.resources.owner_dir(None) / "mcp" / "echo.json"
     for broken in ('{"not json"', path.read_text().replace("true", '"false"')):
         path.write_text(broken)
-        with pytest.raises(RuntimeError, match=f"corrupt MCP config {path}"):
+        with pytest.raises(CorruptState, match=f"corrupt MCP config {path}"):
             container.mcp.list(None)
 
     await container.mcp.remove(None, "echo", "user")

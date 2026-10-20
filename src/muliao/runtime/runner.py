@@ -193,9 +193,12 @@ class AgentRuntime:
         prompt 为 None 时从历史续跑：历史停在一条请求上就重发它，停在带工具调用的回复上就执行这些调用（pydantic-ai
         的续跑语义）。"""
         model = agent.model
+        session_id = scope.session_id
+        if session_id is None:
+            raise RuntimeError(f"a stepwise run needs a session, agent {scope.agent_id} has none")
         ctx = {
             "agent": scope.agent_id,
-            "session_id": scope.session_id,
+            "session_id": session_id,
             "model": model,
             "workspace": str(scope.workspace),
         }
@@ -219,7 +222,7 @@ class AgentRuntime:
                 if PaiAgent.is_model_request_node(node):
                     await hooks.before_request(node.request, run.ctx.state.message_history)
                     async with node.stream(run.ctx) as stream:
-                        await self._forward_events(scope, stream)
+                        await self._forward_events(session_id, scope.agent_id, stream)
                     node = await run.next(node)
                     messages = run.ctx.state.message_history
                     response = messages[-1]
@@ -230,7 +233,7 @@ class AgentRuntime:
                     await hooks.after_response(response, messages)
                 elif PaiAgent.is_call_tools_node(node):
                     async with node.stream(run.ctx) as stream:
-                        await self._forward_events(scope, stream)
+                        await self._forward_events(session_id, scope.agent_id, stream)
                     node = await run.next(node)
                 else:
                     node = await run.next(node)
@@ -327,7 +330,6 @@ class AgentRuntime:
             message_history=list(history),
             deps=scope,
             toolsets=toolsets,
-            event_stream_handler=lambda run_ctx, stream: self._forward_events(run_ctx.deps, stream),
             usage_limits=usage_limits,
         )
         usage = result.usage
@@ -349,23 +351,22 @@ class AgentRuntime:
         )
         return result.output
 
-    async def _forward_events(self, scope: RunScope, stream: AsyncIterable[AgentStreamEvent]) -> None:
-        base = {"type": "run", "session_id": scope.session_id, "agent": scope.agent_id}
+    async def _forward_events(
+        self, session_id: str, agent_id: str, stream: AsyncIterable[AgentStreamEvent]
+    ) -> None:
+        """会话运行的事件推到会话页（bus.LiveRuns）。没有会话的运行（反思、临时 agent）没有页面在看，不转发。"""
+        base = {"type": "run", "session_id": session_id, "agent": agent_id}
         async for event in stream:
             if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
-                self._live.publish(scope.session_id, {**base, "event": "text", "text": event.part.content})
+                self._live.publish(session_id, {**base, "event": "text", "text": event.part.content})
             elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                self._live.publish(
-                    scope.session_id, {**base, "event": "text", "text": event.delta.content_delta}
-                )
+                self._live.publish(session_id, {**base, "event": "text", "text": event.delta.content_delta})
             elif (
                 isinstance(event, PartStartEvent)
                 and isinstance(event.part, ThinkingPart)
                 and event.part.content
             ):
-                self._live.publish(
-                    scope.session_id, {**base, "event": "thinking", "text": event.part.content}
-                )
+                self._live.publish(session_id, {**base, "event": "thinking", "text": event.part.content})
             # 只更新签名、没有新内容的增量（content_delta 为 None）不用展示
             elif (
                 isinstance(event, PartDeltaEvent)
@@ -373,12 +374,12 @@ class AgentRuntime:
                 and event.delta.content_delta
             ):
                 self._live.publish(
-                    scope.session_id, {**base, "event": "thinking", "text": event.delta.content_delta}
+                    session_id, {**base, "event": "thinking", "text": event.delta.content_delta}
                 )
             elif isinstance(event, FunctionToolCallEvent):
                 call = redact_call(event.part)
                 self._live.publish(
-                    scope.session_id,
+                    session_id,
                     {
                         **base,
                         "event": "tool_call",
@@ -395,7 +396,7 @@ class AgentRuntime:
                     part.model_response_str() if isinstance(part, ToolReturnPart) else part.model_response()
                 )
                 self._live.publish(
-                    scope.session_id,
+                    session_id,
                     {
                         **base,
                         "event": "tool_result" if isinstance(part, ToolReturnPart) else "tool_error",

@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import CorruptState, InvalidInput
 from muliao.evolution import text_edit
 from muliao.resources import ResourceRepo
 
@@ -25,7 +25,8 @@ class MemoryStore:
     def read(self, agent: str) -> str:
         path = self.path(agent)
         if not path.exists():
-            raise NotFound(f"memory file for agent {agent!r} does not exist: {path}")
+            # 创建 agent 时就写了记忆文件
+            raise CorruptState(f"memory file for agent {agent!r} does not exist: {path}")
         return path.read_text(encoding="utf-8")
 
     async def write(self, agent: str, content: str, author: str) -> str:
@@ -48,7 +49,7 @@ class MemoryStore:
 
         def transform(current: str | None) -> str:
             if current is None:
-                raise NotFound(f"memory file for agent {agent!r} does not exist: {path}")
+                raise CorruptState(f"memory file for agent {agent!r} does not exist: {path}")
             updated = edit(current)
             if len(updated) > self.max_chars:
                 raise MemoryFull(

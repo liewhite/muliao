@@ -93,29 +93,38 @@ class WebConfig(_Section):
 
 
 class RuntimeConfig(_Section):
-    worker_concurrency: int = 4
-    task_max_attempts: int = 5
-    task_retry_base_seconds: float = 5.0
+    worker_concurrency: int = Field(default=4, ge=1)
+    task_max_attempts: int = Field(default=5, ge=1)
+    task_retry_base_seconds: float = Field(default=5.0, gt=0)
     # 单个 task 的总时限（一次运行含所有工具调用）
-    task_timeout_seconds: float = 1800.0
+    task_timeout_seconds: float = Field(default=1800.0, gt=0)
     # 新建 agent 的默认反思间隔（步，即模型回复数）
     default_reflect_every: int = Field(default=30, ge=1)
     # 发给模型的上下文（上一次请求的输入 token）超过此值，就在步与步之间压缩该 session 的早期上下文
     compaction_threshold_tokens: int = Field(default=100_000, ge=1000)
     # 压缩时保留最近这么多步原文不压缩（一步是一次模型回复及其工具结果）
     compaction_keep_steps: int = Field(default=10, ge=1)
-    memory_max_chars: int = 4000
-    shell_default_timeout: float = 120.0
-    shell_max_timeout: float = 600.0
+    memory_max_chars: int = Field(default=4000, ge=100)
+    shell_default_timeout: float = Field(default=120.0, gt=0)
+    shell_max_timeout: float = Field(default=600.0, gt=0)
     # 触发器前置检查的时限：webhook 的调用方在同步等它，检查本该便宜，比 shell 的默认时限短得多
     precheck_timeout_seconds: float = Field(default=30.0, gt=0)
     # 后台任务（runtime.jobs）运行期间，每隔这么久给发起它的会话发一个检查事件，由 agent 决定继续等还是结束它
     job_check_seconds: float = Field(default=60.0, gt=0)
-    tool_output_max_chars: int = 20000
+    tool_output_max_chars: int = Field(default=20000, ge=1000)
     # 临时 agent 单次运行最多的模型请求数：做不完就尽早失败，交回调用方拆分任务，而不是靠整轮超时反复重试
     temp_agent_request_limit: int = Field(default=30, ge=1)
     # 单个文件（用户上传的附件、agent 发出的文件）的字节上限，默认与 Matrix Synapse 一致
     upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "RuntimeConfig":
+        # 默认时限超过上限时，每次不带 timeout 的 run_shell 都会被拒绝
+        if self.shell_default_timeout > self.shell_max_timeout:
+            raise ValueError(
+                f"shell_default_timeout ({self.shell_default_timeout}) exceeds shell_max_timeout ({self.shell_max_timeout})"
+            )
+        return self
 
 
 class Settings(_Section):

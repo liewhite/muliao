@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset
 
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
 from muliao.naming import validate_slug
 from muliao.ownership import scope_of, visible
 from muliao.resources import ResourceRepo
@@ -122,7 +122,7 @@ class McpRegistry:
             spec.validate()
         except (ValueError, InvalidInput) as e:
             # 文件数据损坏（多半是手工改坏的）：不是调用方的输入错误，交给人修复
-            raise RuntimeError(f"corrupt MCP config {path}: {e}") from e
+            raise CorruptState(f"corrupt MCP config {path}: {e}") from e
         return McpServer(owner=owner, name=path.stem, config=config)
 
     async def build_toolset(self, server: McpServer) -> AbstractToolset:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import frontmatter
 
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import CorruptState, InvalidInput, NotFound
 from muliao.evolution import text_edit
 from muliao.naming import validate_slug
 from muliao.ownership import Scope, scope_of, visible
@@ -49,10 +49,11 @@ class SkillStore:
         path = skill_dir / SKILL_FILE
         post = frontmatter.load(path)
         name, description = post.get("name"), post.get("description")
+        # 读的是存下的文件（写入时校验过）：不合法是被绕过工具改坏了，不是调用方的输入错误
         if not isinstance(name, str) or not isinstance(description, str):
-            raise InvalidInput(f"{path}: frontmatter must contain string 'name' and 'description'")
+            raise CorruptState(f"{path}: frontmatter must contain string 'name' and 'description'")
         if name != skill_dir.name:
-            raise InvalidInput(
+            raise CorruptState(
                 f"{path}: frontmatter name {name!r} does not match directory {skill_dir.name!r}"
             )
         return Skill(SkillMeta(name, description, owner, path), post.content)

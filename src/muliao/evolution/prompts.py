@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from muliao.errors import CorruptState
 from muliao.evolution import text_edit
 from muliao.resources import ResourceRepo, Revision
 
@@ -29,7 +30,7 @@ class PromptStore:
             return path.read_text(encoding="utf-8")
         if owner is None:
             return ""
-        raise RuntimeError(f"agent {owner} has no instructions file {path}; it must get one when created")
+        raise CorruptState(f"agent {owner} has no instructions file {path}; it must get one when created")
 
     async def set(self, owner: str | None, content: str, author: str) -> bool:
         """写入并提交一版；与当前内容相同时不提交，返回 False。"""

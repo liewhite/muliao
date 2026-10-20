@@ -147,3 +147,13 @@ async def test_startup_rejects_agents_with_unresolvable_models(settings, models)
         await c2.stop()
     finally:
         await c.db.engine.dispose()
+
+
+def test_a_default_shell_timeout_above_the_maximum_is_rejected():
+    import pytest
+    from pydantic import ValidationError
+
+    from muliao.config import RuntimeConfig
+
+    with pytest.raises(ValidationError, match="shell_default_timeout"):
+        RuntimeConfig(shell_default_timeout=900, shell_max_timeout=600)
