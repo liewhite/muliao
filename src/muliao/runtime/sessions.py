@@ -11,9 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.bus import LiveRun, LiveRuns
 from muliao.db import Database
-from muliao.delivery.base import mark_session_read_in
 from muliao.errors import Conflict, NotFound
 from muliao.models import Compaction, Mail, Message, Origin, Session, Task, TaskStatus
+from muliao.notifications import mark_session_read_in
 from muliao.runtime.codec import load_messages
 from muliao.runtime.conversation import (
     Inbound,

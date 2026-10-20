@@ -15,7 +15,7 @@ from muliao.agents import AgentDefaults, AgentService
 from muliao.bus import EventBus, LiveRuns
 from muliao.config import Settings
 from muliao.db import Database, create_engine, migrate
-from muliao.delivery.base import DeliverHandler, Notifications, Notifier
+from muliao.delivery.base import DeliverHandler
 from muliao.delivery.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
 from muliao.errors import InvalidInput
 from muliao.evolution.memory import MemoryStore
@@ -24,6 +24,7 @@ from muliao.evolution.skills import SkillStore
 from muliao.files import FileStore
 from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import TaskKind
+from muliao.notifications import Notifications, Notifier
 from muliao.resources import ResourceRepo
 from muliao.runtime.compaction import CompactionHandler, Compactor
 from muliao.runtime.consumer import Consumer, RunHandler

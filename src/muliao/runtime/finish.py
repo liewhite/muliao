@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.conventions import shared_attachments
 from muliao.db import utcnow
-from muliao.delivery.base import Notifier
 from muliao.models import Agent, Notification, Session
+from muliao.notifications import Notifier
 from muliao.runtime.delegations import Ending, Outcome, in_session_in, settle_all_in
 from muliao.runtime.mailbox import queued_in, wake_in
 from muliao.runtime.reflection import ReflectionScheduler

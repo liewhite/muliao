@@ -27,9 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from muliao.db import Database, utcnow
-from muliao.delivery.base import Notifier
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.models import Agent, Notification, Origin, Session, Trigger
+from muliao.notifications import Notifier
 from muliao.runtime.conversation import Inbound, NewSession, receive
 from muliao.runtime.tasks import Clock, TaskQueue, session_lane
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
