@@ -129,7 +129,12 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
             metadata={TOOL_ATTACHMENTS: [attachment_of(meta)]},
         )
 
-    @ts.tool
+    # 时限是配置的值，写进说明：模型不知道默认时限，长命令会被杀了才学会加 timeout
+    @ts.tool(
+        description="Run a shell command (bash) in your workspace and return its exit code and combined output. "
+        f"Commands are killed after {limits.default_timeout:g} seconds unless you pass a longer `timeout` "
+        f"(at most {limits.max_timeout:g})."
+    )
     async def run_shell(
         ctx: RunContext[RunScope],
         command: str,
@@ -137,7 +142,7 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
         # 不写成 `list[str] | None`：可为空的数组在 schema 里是 anyOf[array, null]，模型更容易把数组写成 JSON 字符串
         secrets: tuple[str, ...] = (),
     ) -> str:
-        """Run a shell command (bash) in your workspace and return its exit code and combined output.
+        """The description is set in the decorator (it carries the configured time limits).
 
         Args:
             command: The command line to run.

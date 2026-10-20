@@ -448,3 +448,10 @@ async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit
     assert f"longer than {limit:g} seconds" in create.description
     # 参数说明仍来自 docstring
     assert "Optional command deciding whether to fire" in str(create.function_schema.json_schema)
+
+
+async def test_run_shell_tells_the_model_its_configured_time_limits(container):
+    run_shell = container.turns._tool_groups.groups["workspace"].toolsets[0].tools["run_shell"]  # noqa: SLF001
+    runtime = container.settings.runtime
+    assert f"after {runtime.shell_default_timeout:g} seconds" in run_shell.description
+    assert f"at most {runtime.shell_max_timeout:g}" in run_shell.description
