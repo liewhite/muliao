@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react'
 import {
   Alert,
   AlertDialog,
@@ -121,6 +121,7 @@ export function Page({
   back,
   actions,
   footer,
+  scrollRef,
   children,
 }: {
   title: ReactNode
@@ -128,6 +129,8 @@ export function Page({
   actions?: ReactNode
   /** 固定在页面底部、不随内容滚动（如输入框） */
   footer?: ReactNode
+  /** 页面内容的滚动容器（需要跟随滚动的页面用，如会话页） */
+  scrollRef?: Ref<HTMLElement>
   children: ReactNode
 }) {
   const navigate = useNavigate()
@@ -142,7 +145,7 @@ export function Page({
         <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h1>
         <div className="flex items-center gap-2">{actions}</div>
       </header>
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      <main ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 py-3">{children}</div>
       </main>
       {footer}

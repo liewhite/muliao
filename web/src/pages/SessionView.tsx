@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
-import { Archive, CircleStop, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
+import { Archive, ArrowDown, CircleStop, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
@@ -348,6 +348,90 @@ function Composer({
   )
 }
 
+// 离底部这么近仍算「在底部」
+const PINNED_SLACK_PX = 50
+
+/**
+ * 新内容到来时只在用户本来就在底部时跟随；往上翻看历史时不把人拽下来。
+ *
+ * 「在不在底部」只有一个来源 pinned，除 pin() 外只由用户的滚动改变：滚到离底部 50px 以内就钉住，向上滚离开就解除。不能每次
+ * scroll 事件都按距底距离重算——程序滚到底产生的 scroll 事件要到下一帧才派发，那时内容可能又长了，会被误判成
+ * 「离开了底部」；而内容变长时 scrollTop 只会不变或变大，不会被当成向上滚。高度变化（ResizeObserver：新数据、
+ * 流式输出、图片加载完、输入框变高使容器变矮）时 pinned 为真就滚到底；内容变短时 scrollTop 被钳到最底，距底为 0，
+ * 也不会被当成向上滚。打开会话、发送消息就是重新钉住。
+ * 代价：在底部展开最后一个折叠块时，页面会跟着滚到它的末尾。
+ */
+function useFollowBottom() {
+  const scroller = useRef<HTMLElement | null>(null)
+  const pinned = useRef(true)
+  // null：内容没挂载（加载中），不显示「回到底部」
+  const [atBottom, setAtBottom] = useState<boolean | null>(null)
+  const content = useRef<HTMLElement | null>(null)
+  // 上一次看到的 scrollTop：比它小才是向上滚
+  const lastTop = useRef(0)
+
+  const toEnd = useCallback(() => {
+    const el = scroller.current
+    if (el === null) return
+    el.scrollTop = el.scrollHeight
+    lastTop.current = el.scrollTop
+  }, [])
+  const onScroll = useCallback(() => {
+    const el = scroller.current
+    if (el === null) return
+    if (el.scrollHeight - el.scrollTop - el.clientHeight <= PINNED_SLACK_PX) pinned.current = true
+    else if (el.scrollTop < lastTop.current) pinned.current = false
+    lastTop.current = el.scrollTop
+    setAtBottom(pinned.current)
+  }, [])
+  // 观察滚动容器（输入框变高时它变矮）与内容（新数据、流式输出、图片加载）的尺寸；两个 ref 各自登记，不依赖挂载先后
+  const observer = useRef<ResizeObserver | null>(null)
+  const resize = useCallback(
+    () =>
+      (observer.current ??= new ResizeObserver(() => {
+        if (pinned.current) toEnd()
+      })),
+    [toEnd],
+  )
+  useEffect(() => () => observer.current?.disconnect(), [])
+
+  const scrollRef = useCallback(
+    (el: HTMLElement | null) => {
+      if (scroller.current !== null) {
+        scroller.current.removeEventListener('scroll', onScroll)
+        resize().unobserve(scroller.current)
+      }
+      scroller.current = el
+      if (el !== null) {
+        el.addEventListener('scroll', onScroll, { passive: true })
+        resize().observe(el)
+      }
+    },
+    [onScroll, resize],
+  )
+  // 内容末尾的锚点：数据加载后才出现，观察它所在的内容容器
+  const contentEndRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (content.current !== null) resize().unobserve(content.current)
+      content.current = el?.parentElement ?? null
+      if (content.current === null) {
+        setAtBottom(null)
+        return
+      }
+      resize().observe(content.current)
+      setAtBottom(pinned.current)
+    },
+    [resize],
+  )
+  /** 回到底部并跟随之后的新内容（打开会话、发送消息、点「回到底部」） */
+  const pin = useCallback(() => {
+    pinned.current = true
+    setAtBottom(true)
+    toEnd()
+  }, [toEnd])
+  return { scrollRef, contentEndRef, atBottom, pin }
+}
+
 export default function SessionView() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
@@ -358,7 +442,7 @@ export default function SessionView() {
   const [draft, setDraft] = useState('')
   const uploads = useUploads()
   const action = useAction()
-  const bottom = useRef<HTMLDivElement>(null)
+  const bottom = useFollowBottom()
 
   useServerEvents((e) => {
     if (e.type === 'reconnected') {
@@ -396,9 +480,9 @@ export default function SessionView() {
       .catch((e) => console.error('marking session read failed', e))
   }, [id, unread])
 
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' })
-  }, [detail.data, shownLive.length])
+  // 打开（或切换到）一个会话时从底部看起
+  const { pin } = bottom
+  useEffect(() => pin(), [id, pin])
 
   async function send() {
     // Enter 键不经过按钮的禁用状态：请求进行中再按一次不能重复发送
@@ -407,6 +491,8 @@ export default function SessionView() {
     const text = draft
     const ok = await action.run(() => api.reply(id, text.trim(), sent.ids))
     if (ok) {
+      // 自己发的消息总要看到
+      pin()
       // 发送过程中又改了输入框就保留新内容
       setDraft((current) => (current === text ? '' : current))
       uploads.removeMany(sent.keys)
@@ -432,6 +518,7 @@ export default function SessionView() {
   const parentRoute = session?.parent_session_id ? `/sessions/${session.parent_session_id}` : '/'
   return (
     <Page
+      scrollRef={bottom.scrollRef}
       back={parentRoute}
       title={session?.title ?? '会话'}
       actions={
@@ -453,7 +540,19 @@ export default function SessionView() {
       }
       footer={
         <div className="border-t border-separator bg-surface px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+          <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2">
+            {bottom.atBottom === false && (
+              <Button
+                isIconOnly
+                size="sm"
+                variant="secondary"
+                className="absolute -top-14 right-0 rounded-full shadow"
+                aria-label="回到底部"
+                onPress={pin}
+              >
+                <ArrowDown className="size-4" />
+              </Button>
+            )}
             <ErrorAlert error={action.error} />
             {session?.private ? (
               <div className="flex items-center justify-center gap-1.5 py-1 text-sm text-muted">
@@ -510,7 +609,7 @@ export default function SessionView() {
                 </div>
               )}
               <UnlinkedThreads threads={unlinkedThreads(d.items, d.threads)} agents={agents.data} />
-              <div ref={bottom} />
+              <div ref={bottom.contentEndRef} aria-hidden />
             </div>
           )
         }}
