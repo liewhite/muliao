@@ -126,7 +126,7 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
 /** 渲染会话条目要用到的会话信息：还在等回答的提问与提交方式、这个会话开出的 thread、agent 名称 */
 interface SessionContext {
   pending: Map<string, Question[]>
-  /** 排队或运行中的轮次带着回答的提问：回答显示在那一轮里，提问处不再显示「提问中」 */
+  /** 未完成（排队、运行中或失败待重试）的轮次带着回答的提问：回答显示在那一轮里，提问处不再显示「提问中」 */
   answering: Set<string>
   answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
   threads: Map<string, Session>

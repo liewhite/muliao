@@ -93,15 +93,6 @@ function Shell() {
   const outdated = useUiOutdated()
   return (
     <div className="flex h-full flex-col">
-      {outdated && (
-        <button
-          type="button"
-          className="bg-accent px-3 pt-[calc(env(safe-area-inset-top)+0.25rem)] pb-1 text-center text-sm text-accent-foreground"
-          onClick={() => location.reload()}
-        >
-          新版本已上线，点这里刷新
-        </button>
-      )}
       <div className="min-h-0 flex-1">
         <Routes>
           <Route path="/" element={<Sessions />} />
@@ -123,6 +114,16 @@ function Shell() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
+      {/* 放在底部导航上方：不占顶部安全区（页面头部已经留了），也不挡头部的按钮 */}
+      {outdated && (
+        <button
+          type="button"
+          className="bg-accent px-3 py-1.5 text-center text-sm text-accent-foreground"
+          onClick={() => location.reload()}
+        >
+          新版本已上线，点这里刷新
+        </button>
+      )}
       <nav className="flex border-t border-separator bg-surface pb-[env(safe-area-inset-bottom)]">
         {TABS.map(({ to, label, Icon }) => (
           <NavLink

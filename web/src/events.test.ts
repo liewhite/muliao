@@ -117,7 +117,7 @@ describe('isOutdated', () => {
     expect(isOutdated('aaa', 'bbb')).toBe(true)
     expect(isOutdated('aaa', 'aaa')).toBe(false)
   })
-  it('never flags when either side has no build (development)', () => {
+  it('never flags when either side has no frontend build', () => {
     expect(isOutdated(null, 'bbb')).toBe(false)
     expect(isOutdated('aaa', null)).toBe(false)
   })

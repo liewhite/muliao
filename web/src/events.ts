@@ -111,7 +111,7 @@ type Listener = (e: ServerEvent) => void
 interface HeartbeatEvent {
   type: 'heartbeat'
   interval_seconds: number
-  /** 服务端当前前端构建的版本；没有构建前端（开发时）为 null */
+  /** 服务端当前前端构建的版本；包里没有前端构建时为 null */
   ui_version: string | null
 }
 
