@@ -1,3 +1,5 @@
+import pytest
+
 from muliao.api.auth import Auth
 from tests.conftest import login
 
@@ -126,3 +128,21 @@ async def test_marking_notifications_read_stops_at_the_one_the_user_saw(client):
     notes = (await client.get("/api/notifications")).json()
     assert [n["unread"] for n in notes] == [True, False]
     assert (await client.get("/api/notifications/unread")).json() == {"count": 1}
+
+
+async def test_a_failed_resource_write_leaves_no_half_created_agent(client, container, monkeypatch):
+    """资源仓库提交失败时，agent 不能只剩数据库行（之后它的每一轮与 agent 列表都会因缺指令文件失败）。"""
+    await login(client)
+
+    async def failing_apply(*_args, **_kwargs):
+        raise RuntimeError("git index.lock is held")
+
+    from muliao.agents import AgentSpec
+
+    monkeypatch.setattr(container.resources, "apply", failing_apply)
+    with pytest.raises(RuntimeError, match="index.lock"):
+        await container.agents.create(AgentSpec(name="half", description="d", instructions=""), author="user")
+    monkeypatch.undo()
+
+    assert (await client.get("/api/agents")).status_code == 200
+    assert (await client.post("/api/agents", json={"name": "half", "description": "d"})).status_code == 201

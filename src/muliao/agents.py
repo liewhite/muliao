@@ -54,6 +54,17 @@ class AgentPatch:
     tool_groups: list[str] | None = None
 
 
+@dataclass(frozen=True)
+class _AgentFields:
+    """agent 的可修改字段合并 patch 之后的值（AgentService._validated）。"""
+
+    name: str
+    description: str
+    model: str
+    reflect_every: int
+    tool_groups: list[str]
+
+
 class AgentService:
     """agent 以系统生成的 id 标识（主键、目录名、外键）；名称只用于展示，可改、唯一。"""
 
@@ -107,8 +118,20 @@ class AgentService:
         )
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
+        # 先写资源文件、后插数据库行：agent 一旦存在，它的指令与记忆就必须在（每一轮、agent 列表都要读）。
+        # 资源写入失败时什么都没留下（apply 原子），报错就是没有生效；只有并发创建同名 agent 时下面的检查会冲突，
+        # 留下的资源目录由启动时的孤儿检查报告（与删除 agent 时提交失败同一种情况）
+        agent_id = new_agent_id()
+        self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
+        await self._repo.apply(
+            {self._memory.path(agent_id): "", self._prompts.path(agent_id): spec.instructions},
+            f"create agent {agent_id}",
+            author,
+        )
+        async with self._db.transaction() as s:
+            await self._ensure_name_free(s, name, None)
             agent = Agent(
-                id=new_agent_id(),
+                id=agent_id,
                 name=name,
                 description=spec.description,
                 model=model,
@@ -116,38 +139,47 @@ class AgentService:
                 tool_groups=tool_groups,
             )
             s.add(agent)
-            # 目录与数据库行同事务创建：目录创建失败则回滚
-            self.workspace(agent.id).mkdir(parents=True, exist_ok=True)
-        await self._repo.apply(
-            {self._memory.path(agent.id): "", self._prompts.path(agent.id): spec.instructions},
-            f"create agent {agent.id}",
-            author,
-        )
         return agent
 
     async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> Agent:
-        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。指令有变化时追加一版（author 同 create）。"""
+        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。指令有变化时追加一版（author 同 create）。
+
+        先校验全部字段，再写指令（资源仓库），最后改数据库行：任何一步报错时，之后的都没有发生，不会出现「报错了、
+        其实一部分已经生效」。"""
+        async with self._db.transaction() as s:
+            fields = self._validated(await self._get(s, agent_id), patch)
+            await self._ensure_name_free(s, fields.name, agent_id)
+        instructions_changed = patch.instructions is not None and await self._prompts.set(
+            agent_id, patch.instructions, author
+        )
         async with self._db.transaction() as s:
             agent = await self._get(s, agent_id)
-            name = agent.name if patch.name is None else normalize_agent_name(patch.name)
-            description = agent.description if patch.description is None else patch.description
-            model = agent.model if patch.model is None else patch.model
-            reflect_every = agent.reflect_every if patch.reflect_every is None else patch.reflect_every
-            tool_groups = agent.tool_groups if patch.tool_groups is None else patch.tool_groups
-            self._check(
-                description=description, model=model, reflect_every=reflect_every, tool_groups=tool_groups
-            )
-            await self._ensure_name_free(s, name, agent_id)
-            agent.name, agent.description, agent.model = name, description, model
-            agent.reflect_every = reflect_every
+            fields = self._validated(agent, patch)
+            await self._ensure_name_free(s, fields.name, agent_id)
+            agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
+            agent.reflect_every = fields.reflect_every
             # JSON 列只在整体赋值时被追踪
-            agent.tool_groups = list(tool_groups)
-        # 指令在资源仓库里，单独提交；数据库这边已提交，提交失败时错误可见、文件留待下一次提交
-        if patch.instructions is not None and await self._prompts.set(agent_id, patch.instructions, author):
-            async with self._db.transaction() as s:
-                agent = await self._get(s, agent_id)
+            agent.tool_groups = list(fields.tool_groups)
+            if instructions_changed:
                 agent.updated_at = utcnow()
         return agent
+
+    def _validated(self, agent: Agent, patch: AgentPatch) -> _AgentFields:
+        """patch 合并到 agent 当前值之后的字段，校验过（不合法时报 InvalidInput）。"""
+        fields = _AgentFields(
+            name=agent.name if patch.name is None else normalize_agent_name(patch.name),
+            description=agent.description if patch.description is None else patch.description,
+            model=agent.model if patch.model is None else patch.model,
+            reflect_every=agent.reflect_every if patch.reflect_every is None else patch.reflect_every,
+            tool_groups=agent.tool_groups if patch.tool_groups is None else patch.tool_groups,
+        )
+        self._check(
+            description=fields.description,
+            model=fields.model,
+            reflect_every=fields.reflect_every,
+            tool_groups=fields.tool_groups,
+        )
+        return fields
 
     async def _get(self, s: AsyncSession, agent_id: str) -> Agent:
         agent = await s.get(Agent, agent_id)
