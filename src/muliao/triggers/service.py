@@ -35,14 +35,14 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
-from muliao.platform.tasks import Clock, Commit, TaskQueue
+from muliao.platform.tasks import Clock, Commit
 from muliao.platform.tooling import Origin
 from muliao.sessions.api import (
     Inbound,
     NewSession,
+    SessionActivity,
     check_receivable_in,
     receive_command,
-    session_has_pending_work_in,
 )
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 from muliao.triggers.tables import Trigger
@@ -100,7 +100,7 @@ class TriggerService:
     def __init__(
         self,
         db: Database,
-        queue: TaskQueue,
+        activity: SessionActivity,
         kinds: Mapping[str, TriggerKind],
         tz: ZoneInfo,
         precheck: PrecheckRunner,
@@ -113,7 +113,7 @@ class TriggerService:
         # 马上执行一个已提交的投递任务（Worker.run_now）
         self._run_now = run_now
         self._db = db
-        self._queue = queue
+        self._activity = activity
         self.kinds = dict(kinds)
         self._tz = tz
         self._clock = clock
@@ -262,8 +262,8 @@ class TriggerService:
 
     async def busy_in(self, s: AsyncSession, trigger: Trigger) -> bool:
         """上一次触发的会话是否还有没做完的事，包括还没投递的这次来信（定时触发据此避免重叠，会话领域的查询）。"""
-        return trigger.last_session_id is not None and await session_has_pending_work_in(
-            s, self._queue, trigger.last_session_id
+        return trigger.last_session_id is not None and await self._activity.has_pending_work_in(
+            s, trigger.last_session_id
         )
 
     async def _deliver_in(

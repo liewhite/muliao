@@ -89,9 +89,6 @@ class WorkCheckIn(Command):
     text: str
 
 
-def work_lane(command: WorkEnded | WorkCheckIn) -> str:
-    return f"sessions.work:{command.holder}"
-
 
 class ReceiveNewSession(BaseModel):
     """Receive 要新建的会话：id 由发送方预先分配。"""

@@ -3,11 +3,11 @@
 - 来信：发送方在自己的事务里 check_receivable_in，再发出 receive_command 构造的定向命令 Receive（sessions.events）；
 - 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；结局与运行中检查经定向命令
   WorkEnded / WorkCheckIn（sessions.events）；
-- 查询：session_in（SessionInfo）、session_has_pending_work_in、agent_deletion_blocked_in、AgentWork（反思用的步数与记录）；
+- 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙）、AgentWork（反思用的步数与记录）；
 - 会话种类与 HTTP 层用的读模型、展示事件；停止的结果：Halted。
 """
 
-from muliao.sessions.deletion import agent_deletion_blocked_in, session_has_pending_work_in
+from muliao.sessions.deletion import SessionActivity
 from muliao.sessions.delivery import SessionWork
 from muliao.sessions.halt import Halted
 from muliao.sessions.holds import registered_in as hold_registered_in
@@ -22,6 +22,7 @@ from muliao.sessions.transcript import Item
 from muliao.sessions.work import AgentWork
 
 __all__ = [
+    "SessionActivity",
     "KindPolicy",
     "SessionKind",
     "policy_of",
@@ -39,11 +40,9 @@ __all__ = [
     "Inbound",
     "NewSession",
     "SessionInfo",
-    "agent_deletion_blocked_in",
     "check_receivable_in",
     "SessionWork",
     "hold_registered_in",
     "receive_command",
-    "session_has_pending_work_in",
     "session_in",
 ]

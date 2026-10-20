@@ -25,9 +25,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.errors import CorruptState, NotFound
 from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskKind, TaskStatus
-from muliao.platform.tasks import TaskQueue, session_lane
+from muliao.platform.tasks import TaskQueue
 from muliao.sessions.history import load_context
 from muliao.sessions.holds import called_in, get_in
+from muliao.sessions.lanes import session_lane
 from muliao.sessions.pending import waiting
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
 

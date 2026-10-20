@@ -15,11 +15,16 @@ from muliao.notifications.tables import Notification
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import TaskKind
-from muliao.platform.tasks import Commit, TaskQueue, deliver_lane, no_commit
+from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.api import session_in
 from muliao.sessions.events import RunEnded, SessionDeleted
 
 log = logging.getLogger(__name__)
+
+
+def deliver_lane(session_id: str | None, agent_id: str | None) -> str:
+    """投递通知的 lane：同一会话（没有会话时同一 agent、系统通知一条）的推送按顺序。"""
+    return f"deliver:{session_id or agent_id or 'system'}"
 
 
 def session_events_lane(event: RunEnded | SessionDeleted) -> str:

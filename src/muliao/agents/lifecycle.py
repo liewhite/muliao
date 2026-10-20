@@ -9,7 +9,7 @@
 """
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,14 +19,14 @@ from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound, TransientError
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tasks import Commit, TaskQueue, no_commit, reflection_lane
+from muliao.platform.tasks import Commit, no_commit
 from muliao.sessions.events import AgentSessionsCleared
 
 log = logging.getLogger(__name__)
 
 
-# 这个 agent 有会话忙（会话领域的查询，组合根接上 sessions.api.agent_deletion_blocked_in）
-AgentBusy = Callable[[AsyncSession, str], Awaitable[bool]]
+# 删除这个 agent 会打断的工作还在进行（别的领域的只读查询，组合根注入：它的会话忙、它的反思在排队或执行）
+DeletionBlocker = Callable[[AsyncSession, str], Awaitable[bool]]
 
 
 class AgentLifecycle:
@@ -34,15 +34,13 @@ class AgentLifecycle:
         self,
         db: Database,
         agents: AgentService,
-        queue: TaskQueue,
         messaging: Messaging,
-        agent_busy: AgentBusy,
+        blockers: Sequence[DeletionBlocker],
     ):
         self._db = db
         self._agents = agents
-        self._queue = queue
         self._messaging = messaging
-        self._agent_busy = agent_busy
+        self._blockers = blockers
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(AgentSessionsCleared, "agents.sessions_cleared", self.on_sessions_cleared)
@@ -54,9 +52,7 @@ class AgentLifecycle:
             agent = await _get_in(s, agent_id)
             if agent.deleting_by is not None:
                 raise Conflict(f"agent {agent.name!r} is already being deleted")
-            busy = await self._agent_busy(s, agent_id) or await self._queue.lane_busy(
-                s, reflection_lane(agent_id)
-            )
+            busy = await self._blocked_in(s, agent_id)
         if busy:
             log.info("agent deletion refused: busy", extra={"agent": agent_id})
             raise Conflict(f"agent {agent.name!r} is working right now; stop its sessions first, then delete")
@@ -68,6 +64,9 @@ class AgentLifecycle:
             self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))
         log.info("agent deletion started", extra={"agent": agent_id, "author": author})
 
+    async def _blocked_in(self, s: AsyncSession, agent_id: str) -> bool:
+        return any([await blocked(s, agent_id) for blocked in self._blockers])
+
     async def on_sessions_cleared(self, event: AgentSessionsCleared, _delivery: Delivery) -> Commit:
         async with self._db.transaction() as s:
             agent = await s.get(Agent, event.agent_id)
@@ -78,9 +77,9 @@ class AgentLifecycle:
                     f"agent {event.agent_id} had its sessions cleared but is not being deleted"
                 )
             author = agent.deleting_by
-            if await self._queue.lane_busy(s, reflection_lane(event.agent_id)):
-                # 正在执行的反思会写它的资源：等它结束再删
-                raise TransientError(f"agent {event.agent_id} still has a reflection running")
+            if await self._blocked_in(s, event.agent_id):
+                # 会话已清理，剩下的只可能是正在执行的反思（它会写资源）：等它结束再删
+                raise TransientError(f"agent {event.agent_id} still has work running (a reflection)")
         # 资源目录不在数据库事务里：重放时它已经不在，删除是空操作
         await self._agents.remove_files(event.agent_id, author)
         log.info("resources of a deleted agent removed", extra={"agent": event.agent_id})

@@ -27,10 +27,10 @@ from muliao.sessions.inbound import (
     inbound_of,
     open_asks,
     receive,
-    receive_lane,
     receive_target,
 )
 from muliao.sessions.kinds import LISTED, policy_of
+from muliao.sessions.lanes import receive_lane
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.tables import Compaction, Mail, Message, Session

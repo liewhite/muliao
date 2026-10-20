@@ -10,6 +10,7 @@ from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.sessions.inbound import Inbound, NewSession
+from muliao.sessions.lanes import session_lane
 from tests.test_flow import deliver, drain, start
 from tests.test_jobs import start_job, wait_until_done
 
@@ -113,7 +114,7 @@ async def test_an_agent_with_a_busy_session_is_not_deleted(container, make_agent
 
 
 async def test_an_agent_with_a_queued_reflection_is_not_deleted(container, make_agent, models):
-    from muliao.platform.tasks import reflection_lane
+    from muliao.reflection.service import reflection_lane
 
     agent = await make_agent("alpha")
     async with container.db.transaction() as s:
@@ -144,7 +145,6 @@ async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
 
 async def test_a_run_rerun_after_the_mark_is_stopped_and_the_agent_deleted(container, make_agent, models):
     """标记删除之后会话不再收到来信，人为重跑它的任务仍会让会话变忙：删除流程停止它（排队的运行不再执行）再删除。"""
-    from muliao.platform.tasks import session_lane
 
     agent = await make_agent("alpha")
     session = await start(container, agent.id, "hi")
@@ -275,7 +275,7 @@ async def test_a_session_turned_busy_between_the_check_and_the_mark_is_stopped_a
     async def not_busy(_s, _agent_id):  # noqa: ANN202  检查时还不忙
         return False
 
-    monkeypatch.setattr(container.agent_lifecycle, "_agent_busy", not_busy)
+    monkeypatch.setattr(container.agent_lifecycle, "_blockers", [not_busy])
     await container.agent_lifecycle.delete(agent.id, author="user")
     await drain(container)
     ended = await wait_until_done(container, job.id)
@@ -351,7 +351,7 @@ async def test_deleting_an_agent_whose_run_is_executing_stops_it_and_completes(
     async def not_busy(_s, _agent_id):  # noqa: ANN202  检查时还不忙
         return False
 
-    monkeypatch.setattr(container.agent_lifecycle, "_agent_busy", not_busy)
+    monkeypatch.setattr(container.agent_lifecycle, "_blockers", [not_busy])
     worker = asyncio.create_task(container.worker.run_forever())
     try:
         await asyncio.wait_for(started.wait(), 5)

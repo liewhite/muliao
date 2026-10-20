@@ -1,0 +1,23 @@
+"""会话领域用到的全部 lane（docs/architecture.md「任务队列即 actor 调度」）：lane 名在任务表里是全局的，会话领域的都在
+这里定义，别的领域不拼它们（要问会话忙不忙，用 SessionActivity）。"""
+
+
+def session_lane(session_id: str) -> str:
+    """会话 actor 的邮箱：运行、压缩都在这条 lane 上串行执行。"""
+    return f"session:{session_id}"
+
+
+def receive_lane(session_id: str) -> str:
+    """投给一个会话的 Receive 命令：同一会话的来信按发送顺序投递，不同会话之间互不阻塞。不是会话自己的 lane：投信
+    不排在会话正在进行的运行后面。"""
+    return f"sessions.receive:{session_id}"
+
+
+def work_lane(holder: str) -> str:
+    """会话之外的一项工作的结束与运行中检查（WorkEnded、WorkCheckIn）：检查不会排在结束之后。"""
+    return f"sessions.work:{holder}"
+
+
+def agent_deleting_lane(agent_id: str) -> str:
+    """删除 agent 流程里会话领域的一步（AgentSessionsCleanup）。"""
+    return f"sessions.agent_deleting:{agent_id}"

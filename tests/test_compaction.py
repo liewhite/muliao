@@ -14,11 +14,11 @@ from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
 from muliao.platform.tables import Task, TaskKind, TaskStatus
-from muliao.platform.tasks import session_lane
 from muliao.platform.tooling import Origin
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS, select_steps, steps_of
 from muliao.sessions.history import CONTINUATION
+from muliao.sessions.lanes import session_lane
 from muliao.sessions.tables import Compaction, Message
 from tests.scripted import scripted
 from tests.test_flow import drain, last_user_prompt, reply, start

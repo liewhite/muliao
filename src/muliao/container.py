@@ -50,7 +50,7 @@ from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.worker import TaskHandler, Worker
 from muliao.reflection.service import ReflectionHandler, ReflectionScheduler
-from muliao.sessions.api import agent_deletion_blocked_in
+from muliao.sessions.api import SessionActivity
 from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import CompactionHandler, Compactor
 from muliao.sessions.consumer import Consumer, RunHandler
@@ -239,8 +239,13 @@ def build_container(
         prompts,
         AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, groups),
     )
+    activity = SessionActivity(queue)
+    # 反思调度在后面构造：延迟绑定
     agent_lifecycle = AgentLifecycle(
-        db, agents, queue, messaging, lambda s, agent_id: agent_deletion_blocked_in(s, queue, agent_id)
+        db,
+        agents,
+        messaging,
+        [activity.blocks_agent_deletion_in, lambda s, agent_id: reflection.blocks_agent_deletion_in(s, agent_id)],
     )
     sessions = SessionService(
         db, queue, live, messaging, lambda session_id: consumer.stop_session(session_id)
@@ -255,7 +260,7 @@ def build_container(
     )
     triggers = TriggerService(
         db,
-        queue,
+        activity,
         {k.name: k for k in (schedule_kind, WebhookKind(settings.server.public_url))},
         tz,
         precheck,

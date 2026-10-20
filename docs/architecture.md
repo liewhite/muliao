@@ -115,7 +115,7 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 
 ### 3.2 任务队列即 actor 调度
 
-`tasks` 表是持久化的任务队列，也是 actor 调度器：每个 task 带 `lane`，同一 lane 内严格 FIFO（更早的排队任务、或进行中的任务挡住后面的）、同一时刻最多一个 running；不同 lane 并发。会话的 lane `session:<id>` 就是会话 actor 的邮箱：运行、压缩都在这条 lane 上串行执行。reflection 的 lane 是 `reflection:<agent id>`，deliver 的 lane 是 `deliver:<会话>`（系统通知按 agent，没有 agent 的是 `deliver:system`）。
+`tasks` 表是持久化的任务队列，也是 actor 调度器：每个 task 带 `lane`，同一 lane 内严格 FIFO（更早的排队任务、或进行中的任务挡住后面的）、同一时刻最多一个 running；不同 lane 并发。平台只提供 lane 的机制，lane 名由用它的领域定义：会话领域的都在 `sessions/lanes.py`（会话 actor 的邮箱 `session:<id>`，运行、压缩都在这条 lane 上串行执行；`Receive` 与会话之外的工作各自的 lane），反思的 `reflection:<agent id>` 在反思领域，deliver 的 `deliver:<会话>`（系统通知按 agent，没有 agent 的是 `deliver:system`）在通知领域。别的领域不拼这些名字，要问会话忙不忙用会话领域的 `SessionActivity`。
 
 - **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。处理器分两段：`execute` 做事（可以开自己的事务、调用别的领域的命令），返回的 `Commit` 与「task 记为完成」在同一个事务里提交（`TaskQueue.complete`）。每个 task 有总时限（`task_timeout_seconds`），超时按暂时性失败重试。
 - **失败**：契约内的失败（第 5 节）按指数退避重试，上限 `task_max_attempts`；最终失败时处理器的 `failed_in` 在记下失败的同一事务里收尾（如把失败交回等着的会话）。「任务」页可查并可手动重试（沿用原 id，所以仍按原顺序）。进程崩溃后启动时把 `running` 复位为 `pending`。
@@ -386,12 +386,12 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 ## 10. 删除 agent
 
-1. `AgentLifecycle.delete`：它的会话有忙的（与删除会话同一条规则，组合根注入会话领域的 `agent_deletion_blocked_in`）、或它的反思在排队或运行时拒绝（409）；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据库数据（会话来信与手动压缩、委派、secret、触发器）之前在同一事务里用 `active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。资源文件与配置不在数据库事务里，写入前在单独的事务里检查（`get_active`），极小的窗口里可能留下孤儿目录，由启动时的检查报告（第 1 节「资源的版本管理」）。
+1. `AgentLifecycle.delete`：组合根注入的删除阻止查询有一个为真时拒绝（409）——它的会话有忙的（与删除会话同一条规则，会话领域的 `SessionActivity.blocks_agent_deletion_in`）、它的反思在排队或执行（反思领域的 `blocks_agent_deletion_in`）；agent 领域不知道别的领域的 lane；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据库数据（会话来信与手动压缩、委派、secret、触发器）之前在同一事务里用 `active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。资源文件与配置不在数据库事务里，写入前在单独的事务里检查（`get_active`），极小的窗口里可能留下孤儿目录，由启动时的检查报告（第 1 节「资源的版本管理」）。
 2. 订阅者：
    - 会话：删除它的全部会话（连同私有 thread），发布 `AgentSessionsCleared`（没有会话时立即发布）。标记一提交就不再为它新排工作，但仍可能有会话忙：删除前的检查与标记分属两个事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会。处理器先停止这些会话（每个只停一次；它们的工作随 agent 一起放弃），再在时限内（30 秒）等它们空闲——正在执行的运行被取消后，停止事务在它退出之后才执行，正在执行的压缩做完才空闲——然后删除。时限内没有空闲就按暂时失败重试，重试时同样先停止再等；重试用完时投递记为 failed，可见，人工重试。
    - 反思：结束该 agent 排队的反思任务，删除检查点与记录；正在执行的反思结束时发现 agent 正在删除，不写记录。
    - 触发器、vault：删除它的触发器与私有 secret。
-3. agent 领域订阅 `AgentSessionsCleared`：它的反思还在跑就等（暂时失败重试），否则删除资源目录与这一行。
+3. agent 领域订阅 `AgentSessionsCleared`：再问一遍同一组删除阻止查询（会话已经删光，剩下的只可能是正在执行的反思），还有就等（暂时失败重试），否则删除资源目录与这一行。
 
 ## 11. 上下文压缩
 

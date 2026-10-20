@@ -11,12 +11,12 @@ from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, TransientError
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tasks import Commit, TaskQueue, session_lane
+from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.events import AgentSessionsCleared, Ending, SessionDeleted
 from muliao.sessions.halt import Halted
 from muliao.sessions.holds import has_active_in
-from muliao.sessions.inbound import receive_lane
 from muliao.sessions.kinds import OWNED_BY_PARENT
+from muliao.sessions.lanes import agent_deleting_lane, receive_lane, session_lane
 from muliao.sessions.settlement import settle_in, unsettled_in
 from muliao.sessions.tables import MailState, Session
 
@@ -104,6 +104,20 @@ async def session_has_pending_work_in(s: AsyncSession, queue: TaskQueue, session
     )
 
 
+class SessionActivity:
+    """别的领域问「会话忙不忙」的查询（只读，在调用方的事务里）：看哪些 lane、哪些占用是会话领域的实现细节，不交给
+    调用方。两个问题不同：有没有排着或正在做的事（触发器避免重叠触发），删除会不会打断工作（删除 agent 的检查）。"""
+
+    def __init__(self, queue: TaskQueue):
+        self._queue = queue
+
+    async def has_pending_work_in(self, s: AsyncSession, session_id: str) -> bool:
+        return await session_has_pending_work_in(s, self._queue, session_id)
+
+    async def blocks_agent_deletion_in(self, s: AsyncSession, agent_id: str) -> bool:
+        return await agent_deletion_blocked_in(s, self._queue, agent_id)
+
+
 # 删除 agent 时停止它忙的会话之后，等它们空闲的时限与查看间隔
 _IDLE_WAIT_SECONDS = 30.0
 _IDLE_POLL_SECONDS = 0.1
@@ -130,7 +144,7 @@ class AgentSessionsCleanup:
             AgentDeleting,
             "sessions.agent_deleting",
             self.on_agent_deleting,
-            lane=lambda e: f"sessions.agent_deleting:{e.agent_id}",
+            lane=lambda e: agent_deleting_lane(e.agent_id),
         )
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:

@@ -25,9 +25,10 @@ from muliao.agents.api import AgentInfo, active_agent_in, agent_in
 from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskKind, TaskStatus
-from muliao.platform.tasks import Commit, TaskQueue, no_commit, session_lane
+from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.history import latest_compaction, rows_after
+from muliao.sessions.lanes import session_lane
 from muliao.sessions.tables import Compaction, Message, Session
 from muliao.sessions.transcript import to_items, to_text
 

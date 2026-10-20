@@ -191,10 +191,6 @@ async def check_receivable_in(s: AsyncSession, inbound: Inbound) -> None:
     await _existing_target_in(s, inbound)
 
 
-def receive_lane(session_id: str) -> str:
-    """投给一个会话的 Receive 命令所在的 lane：同一会话的来信按发送顺序投递，不同会话之间互不阻塞。不是会话自己的
-    lane：投信不排在会话正在进行的运行后面。"""
-    return f"sessions.receive:{session_id}"
 
 
 def receive_target(command: Receive) -> str:

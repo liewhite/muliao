@@ -23,12 +23,13 @@ from muliao.agent_runtime.api import is_stopped
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import TaskKind
-from muliao.platform.tasks import TaskQueue, session_lane
+from muliao.platform.tasks import TaskQueue
 from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.delegation import threads_of_holds_in
 from muliao.sessions.events import Ending, SessionStopped, StopThread
 from muliao.sessions.history import latest_answer, load_context, marked_stopped, stopped_results
 from muliao.sessions.holds import clear_in
+from muliao.sessions.lanes import session_lane
 from muliao.sessions.mailbox import discard_in, latest_run
 from muliao.sessions.settlement import settle_in, unsettled_in
 from muliao.sessions.tables import MailState, Message, Session

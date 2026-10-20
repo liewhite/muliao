@@ -19,7 +19,7 @@ from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskKind
-from muliao.platform.tasks import Commit, TaskQueue, no_commit, reflection_lane
+from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
 from muliao.sessions.api import AgentWork
 from muliao.sessions.events import RunEnded
@@ -140,6 +140,10 @@ class ReflectionScheduler:
 
         return commit
 
+    async def blocks_agent_deletion_in(self, s: AsyncSession, agent_id: str) -> bool:
+        """这个 agent 的反思在排队或执行（删除 agent 的检查，组合根注入 AgentLifecycle）：执行中的反思会写它的资源。"""
+        return await self._queue.lane_busy(s, reflection_lane(agent_id))
+
     async def steps_since(self, agents: Sequence[AgentInfo]) -> dict[str, int]:
         """这些 agent 自上次反思以来的步数（界面显示「距下次反思」）。"""
         async with self._db.transaction() as s:
@@ -154,6 +158,11 @@ class ReflectionScheduler:
                 ).all()
             }
         return {a.id: await self._work.steps_after(a.id, checkpoints.get(a.id, 0)) for a in agents}
+
+
+def reflection_lane(agent_id: str) -> str:
+    """一个 agent 的反思任务：同一时刻只有一次反思在写它的资源。"""
+    return f"reflection:{agent_id}"
 
 
 def _agent_lane(event: RunEnded | AgentDeleting) -> str:

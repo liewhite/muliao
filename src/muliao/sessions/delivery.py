@@ -17,8 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
-from muliao.sessions.events import WorkCheckIn, WorkEnded, work_lane
+from muliao.sessions.events import WorkCheckIn, WorkEnded
 from muliao.sessions.holds import get_in, hold_in, release_in
+from muliao.sessions.lanes import work_lane
 from muliao.sessions.mailbox import post_check_in, post_in
 from muliao.sessions.pending import AgentAnswer, AgentAnswered, pending_in
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, Session
@@ -137,5 +138,5 @@ def handle_work_commands(messaging: Messaging, queue: TaskQueue) -> None:
 
         return commit
 
-    messaging.handle(WorkEnded, "sessions.work_ended", ended, lane=work_lane)
-    messaging.handle(WorkCheckIn, "sessions.work_check_in", check_in, lane=work_lane)
+    messaging.handle(WorkEnded, "sessions.work_ended", ended, lane=lambda c: work_lane(c.holder))
+    messaging.handle(WorkCheckIn, "sessions.work_check_in", check_in, lane=lambda c: work_lane(c.holder))
