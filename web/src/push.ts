@@ -1,6 +1,9 @@
 import { api } from './api'
 
-export type PushState = 'unsupported' | 'needs-install' | 'default' | 'denied' | 'granted'
+/** 本设备的推送状态：有通知权限不等于在接收推送（退出登录时会取消订阅），所以「已授权」再分成有没有订阅 */
+export type PushState = 'unsupported' | 'needs-install' | 'default' | 'denied' | 'unsubscribed' | 'subscribed'
+
+type Permission = 'unsupported' | 'needs-install' | NotificationPermission
 
 function isIos(): boolean {
   return /iPad|iPhone|iPod/.test(navigator.userAgent)
@@ -10,11 +13,23 @@ function isStandalone(): boolean {
   return window.matchMedia('(display-mode: standalone)').matches || ('standalone' in navigator && navigator.standalone === true)
 }
 
-export function pushState(): PushState {
+function permission(): Permission {
   if (!('serviceWorker' in navigator)) return 'unsupported'
   // iOS 只有「添加到主屏幕」后以独立模式打开时才提供 PushManager
   if (!('PushManager' in window)) return isIos() && !isStandalone() ? 'needs-install' : 'unsupported'
   return Notification.permission
+}
+
+/** 本设备当前的订阅；没有注册 Service Worker 或没有订阅时为 null。不用 serviceWorker.ready：注册失败时它永远不返回 */
+async function currentSubscription(): Promise<PushSubscription | null> {
+  const registration = await navigator.serviceWorker.getRegistration()
+  return (await registration?.pushManager.getSubscription()) ?? null
+}
+
+export async function pushState(): Promise<PushState> {
+  const p = permission()
+  if (p !== 'granted') return p
+  return (await currentSubscription()) ? 'subscribed' : 'unsubscribed'
 }
 
 export async function registerServiceWorker(): Promise<void> {
@@ -47,15 +62,13 @@ export async function enablePush(): Promise<void> {
 
 /** 取消本设备的推送订阅（退出登录时）；没有订阅时什么也不做 */
 export async function unsubscribePush(): Promise<void> {
-  if (pushState() !== 'granted') return
-  const registration = await navigator.serviceWorker.ready
-  await (await registration.pushManager.getSubscription())?.unsubscribe()
+  if (permission() !== 'granted') return
+  await (await currentSubscription())?.unsubscribe()
 }
 
 /** 已授权时把当前订阅同步到服务端（订阅可能被浏览器轮换）。 */
 export async function syncPushSubscription(): Promise<void> {
-  if (pushState() !== 'granted') return
-  const registration = await navigator.serviceWorker.ready
-  const subscription = await registration.pushManager.getSubscription()
+  if (permission() !== 'granted') return
+  const subscription = await currentSubscription()
   if (subscription) await api.subscribePush(subscription.toJSON())
 }

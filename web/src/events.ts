@@ -121,6 +121,14 @@ export function isStale(lastMessageAt: number, now: number, intervalSeconds: num
   return now - lastMessageAt > (2 * intervalSeconds + 5) * 1000
 }
 
+/**
+ * 看门狗是否该丢掉当前连接重建：连接已被关闭（非 200 响应后 EventSource 不再自己重连），或已经知道心跳间隔、
+ * 却太久没收到任何消息。还没收到过心跳时只看前者——第一次连接就失败的也要重建，不能永远停在那里。
+ */
+export function needsReconnect(closed: boolean, lastMessageAt: number, now: number, heartbeatSeconds: number | null): boolean {
+  return closed || (heartbeatSeconds !== null && isStale(lastMessageAt, now, heartbeatSeconds))
+}
+
 const WATCHDOG_MS = 5000
 
 const listeners = new Set<Listener>()
@@ -139,11 +147,12 @@ function connect() {
     if (everOpened) listeners.forEach((l) => l({ type: 'reconnected' }))
     everOpened = true
   }
-  source.onerror = () => {
-    // 网络错误时 EventSource 自己重连（readyState 回到 CONNECTING）；非 200 响应（如登录过期的 401）会让它永久关闭，
-    // 看门狗只会一直重建、一直失败。用一次普通请求走统一的 401 处理（回到登录页）；不是 401 时由看门狗继续重试
-    if (source?.readyState === EventSource.CLOSED) {
-      void api.me().catch((e) => console.error('event stream closed by the server', e))
+  source.onerror = (e) => {
+    // 网络错误时 EventSource 自己重连（readyState 回到 CONNECTING）；非 200 响应会让它永久关闭，由看门狗重建。
+    // 关闭的原因可能是登录过期（401）：用一次普通请求走统一的 401 处理（回到登录页）
+    if ((e.currentTarget as EventSource).readyState === EventSource.CLOSED) {
+      console.warn('event stream closed by the server, the watchdog will reconnect')
+      void api.me().catch((error) => console.error('checking the login after the event stream closed failed', error))
     }
   }
   source.onmessage = (msg) => {
@@ -159,8 +168,14 @@ function connect() {
 
 /** 连接已死就丢掉它重新连接；重连成功时页面收到 reconnected，从数据库重新拉取 */
 function checkAlive() {
-  if (source === null || heartbeatSeconds === null || !isStale(lastMessageAt, Date.now(), heartbeatSeconds)) return
-  console.warn(`no server event for ${Math.round((Date.now() - lastMessageAt) / 1000)}s, reconnecting`)
+  if (source === null) return
+  const closed = source.readyState === EventSource.CLOSED
+  if (!needsReconnect(closed, lastMessageAt, Date.now(), heartbeatSeconds)) return
+  console.warn(
+    closed
+      ? 'event stream is closed, reconnecting'
+      : `no server event for ${Math.round((Date.now() - lastMessageAt) / 1000)}s, reconnecting`,
+  )
   source.close()
   connect()
 }

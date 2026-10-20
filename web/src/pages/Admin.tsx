@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
 import { Activity, BellRing, ChevronRight, KeyRound, LogOut, Plug, RotateCcw, ScrollText, Sparkles, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
@@ -22,6 +22,7 @@ import { ActionButton,
   useAgents,
   useConfirm,
   useLoad,
+  errorMessage,
 } from '../ui'
 
 export function Vault() {
@@ -203,7 +204,8 @@ const PUSH_TEXT: Record<PushState, string> = {
   'needs-install': 'iOS 需要先用 Safari「分享 → 添加到主屏幕」，再从主屏幕图标打开本应用，才能开启推送。',
   default: '尚未开启推送。',
   denied: '通知权限已被拒绝，请在系统设置中为本应用开启通知。',
-  granted: '推送已开启。',
+  unsubscribed: '本设备没有订阅推送（退出登录时会取消），重新开启即可。',
+  subscribed: '推送已开启。',
 }
 
 const LINKS = [
@@ -216,15 +218,24 @@ const LINKS = [
 
 export function Settings() {
   const confirm = useConfirm()
-  const [push, setPush] = useState<PushState>(pushState())
+  // null：还在查询本设备的订阅
+  const [push, setPush] = useState<PushState | null>(null)
   const action = useAction()
+  const refreshPush = () =>
+    pushState().then(setPush, (e) => action.setError(`读取推送状态失败：${errorMessage(e)}`))
+  useEffect(() => {
+    void refreshPush()
+    // 只在打开设置页时读一次
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function logout() {
     if (!(await confirm({ title: '退出登录？', confirmLabel: '退出' }))) return
     await action.run(async () => {
-      // 退出后锁屏上不该再出现 agent 的回复：取消本设备的订阅（服务端下次推送收到 410 即删除），重新登录后再开启
-      await unsubscribePush()
+      // 服务端会话失效才是退出的核心，先做；之后不再需要登录的步骤失败了也不能挡住退出
       await api.logout()
+      // 退出后锁屏上不该再出现 agent 的回复：取消本设备的订阅（服务端下次推送收到 410 即删除），重新登录后再开启
+      await unsubscribePush().catch((e) => toast.danger(`取消本设备的推送失败：${errorMessage(e)}`))
       // 与登录过期走同一个出口：App 关闭事件流、回到登录页
       unauthorizedEvent.dispatchEvent(new Event('unauthorized'))
     })
@@ -238,18 +249,18 @@ export function Settings() {
             <BellRing className="size-4" />
             推送通知
           </Card.Title>
-          <Card.Description>{PUSH_TEXT[push]}</Card.Description>
+          <Card.Description>{push === null ? '正在读取推送状态…' : PUSH_TEXT[push]}</Card.Description>
         </Card.Header>
-        {(push === 'default' || push === 'granted') && (
+        {(push === 'default' || push === 'unsubscribed' || push === 'subscribed') && (
           <Card.Footer className="flex gap-2">
             <ActionButton
               size="sm"
               isPending={action.busy}
-              onPress={() => void action.run(enablePush).then(() => setPush(pushState()))}
+              onPress={() => void action.run(enablePush).then(refreshPush)}
             >
-              {push === 'granted' ? '重新订阅本设备' : '开启推送'}
+              {push === 'subscribed' ? '重新订阅本设备' : '开启推送'}
             </ActionButton>
-            {push === 'granted' && (
+            {push === 'subscribed' && (
               <Button
                 size="sm"
                 variant="secondary"

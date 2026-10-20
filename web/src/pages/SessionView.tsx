@@ -479,9 +479,9 @@ export default function SessionView() {
       .catch((e) => console.error('marking session read failed', e))
   }, [id, unread])
 
-  // 打开（或切换到）一个会话时从底部看起
+  // 打开会话时从底部看起（每个会话一个页面实例，只在挂载时）
   const { pin } = bottom
-  useEffect(() => pin(), [id, pin])
+  useEffect(() => pin(), [pin])
 
   async function send() {
     // Enter 键不经过按钮的禁用状态：请求进行中再按一次不能重复发送

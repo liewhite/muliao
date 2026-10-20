@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isStale, liveToItems, mergeLive, type RunEvent } from './events'
+import { isStale, liveToItems, mergeLive, needsReconnect, type RunEvent } from './events'
 
 const ev = (event: RunEvent['event'], text: string, tool_call_id: string | null = null): RunEvent =>
   event === 'text' || event === 'thinking'
@@ -95,5 +95,19 @@ describe('mergeLive without a snapshot', () => {
   it('reports a gap when the first events of the run were missed', () => {
     // 快照生成时这一轮还没开始，SSE 连上时已经开始了：开头的事件两边都没有
     expect(mergeLive(null, [at(3), at(4)]).gap).toBe(true)
+  })
+})
+
+describe('needsReconnect', () => {
+  it('rebuilds a connection the server closed, even before the first heartbeat', () => {
+    // 第一次连接就收到 502（服务重启中）：EventSource 不再自己重连
+    expect(needsReconnect(true, 0, 1, null)).toBe(true)
+  })
+  it('does not judge silence before knowing the heartbeat interval', () => {
+    expect(needsReconnect(false, 0, 10 * 60_000, null)).toBe(false)
+  })
+  it('rebuilds a silent connection once the interval is known', () => {
+    expect(needsReconnect(false, 0, 35_001, 15)).toBe(true)
+    expect(needsReconnect(false, 0, 35_000, 15)).toBe(false)
   })
 })
