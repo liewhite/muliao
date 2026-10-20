@@ -1,4 +1,4 @@
-"""agent 运行时的公开接口（docs/domain-design.md 4.9）：会话与反思共用的端口——逐步驱动一次运行、模型消息的约定
+"""agent 运行时的公开接口（docs/architecture.md 2.1）：会话与反思共用的端口——逐步驱动一次运行、模型消息的约定
 （会话历史里各种标记的读写）、工具组合、工作区工具的组成部分。别的领域只经这里使用它。"""
 
 from muliao.agent_runtime.answers import Answer

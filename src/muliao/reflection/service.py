@@ -100,7 +100,7 @@ class ReflectionScheduler:
 
     async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
         """步数达到该 agent 的 reflect_every 就投递反思，检查点推进到当前最大消息 id。reflect_every 与步数是别的领域的
-        数据，在它们自己的只读事务里查（docs/domain-design.md 1.1）：配置改动与这次判断的先后无关紧要；消息只会追加，
+        数据，在它们自己的只读事务里查（docs/architecture.md 2.2）：配置改动与这次判断的先后无关紧要；消息只会追加，
         数到的步数之后又多了几步，下一次运行结束时照样数到。检查点只由这条 lane 写（单写者），先读后写没有竞态。"""
         try:
             # 标记删除先于 AgentDeleting 的处理：排在它之后的 RunEnded 在这里一定看到 agent 已在删除
@@ -216,7 +216,7 @@ class ReflectionHandler:
             output, messages = f"Skipped: nothing to reflect on in this window ({reason}).", "[]"
         async def commit(s: AsyncSession) -> None:
             try:
-                # agent 只会从可用变为删除（单向），在本事务里检查没有竞态（docs/domain-design.md 1.1）
+                # agent 只会从可用变为删除（单向），在本事务里检查没有竞态（docs/architecture.md 2.2）
                 await active_agent_in(s, agent.id)
             except NotFound:
                 # 反思期间 agent 进入删除流程：它的反思记录已被清理，这条不再写

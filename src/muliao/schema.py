@@ -23,7 +23,7 @@ def _domains() -> dict[str, str]:
 
 def single_domain_writes(tables: frozenset[str]) -> None:
     """一个写事务只写一个领域的表（加上平台的任务表）：领域之间只经命令与事件通信，强一致只在一个领域内部
-    （docs/domain-design.md 原则 1、4，第 10 节的开发期断言）。"""
+    （docs/architecture.md 2.2、2.3）。"""
     domains = _domains()
     unknown = sorted(tables - domains.keys())
     if unknown:

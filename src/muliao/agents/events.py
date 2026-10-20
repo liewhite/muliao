@@ -1,4 +1,4 @@
-"""agent 领域对外发布的事件（platform.messaging）。设计见 docs/domain-design.md 4.4。"""
+"""agent 领域对外发布的事件（platform.messaging）。设计见 docs/architecture.md 第 10 节。"""
 
 from muliao.platform.messaging import DomainEvent
 

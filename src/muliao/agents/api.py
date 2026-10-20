@@ -1,4 +1,4 @@
-"""agent 领域的公开接口：别的领域只经这里（与 agents.events）使用 agent 领域（docs/domain-design.md 第 10 节）。
+"""agent 领域的公开接口：别的领域只经这里（与 agents.events）使用 agent 领域（docs/architecture.md 2.3）。
 
 - 查询：AgentService 的 get / get_active / find_by_name / list，事务内的 agent_in / active_agent_in，返回 AgentInfo；
 - 资源：指令、记忆、skill 的存取（自我改进工具与指令组装用），资源仓库（MCP 配置）；

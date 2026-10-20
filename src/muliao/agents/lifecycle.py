@@ -1,4 +1,4 @@
-"""删除 agent（docs/domain-design.md 4.4）：agent 领域发起、各领域清理自己的数据的流程。
+"""删除 agent（docs/architecture.md 第 10 节）：agent 领域发起、各领域清理自己的数据的流程。
 
 1. delete：它的会话有忙的、或它的反思在排队或运行，就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除
    （不再出现在列表与名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in），同一事务发布
@@ -43,7 +43,7 @@ class AgentLifecycle:
         messaging.subscribe(AgentSessionsCleared, "agents.sessions_cleared", self.on_sessions_cleared)
 
     async def delete(self, agent_id: str, *, author: str) -> None:
-        # 会话的状态是别的领域的数据：在自己的只读事务里查（docs/domain-design.md 1.1）。检查与标记之间排上的工作
+        # 会话的状态是别的领域的数据：在自己的只读事务里查（docs/architecture.md 2.2）。检查与标记之间排上的工作
         # 由会话领域的订阅者先停止再删除（4.4）
         async with self._db.transaction() as s:
             agent = await _get_in(s, agent_id)

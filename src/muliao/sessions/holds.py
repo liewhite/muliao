@@ -1,5 +1,5 @@
 """占用：别的领域替一个会话在外面做的一项异步工作（后台任务 job:<id>、委派 delegation:<会话>:<键>）。会话只知道
-「有人替我在外面做事」，不知道是什么事。设计见 docs/domain-design.md 4.1。
+「有人替我在外面做事」，不知道是什么事。设计见 docs/architecture.md 第 7 节。
 
 - 有 active 占用：会话的工作还没做完，交给它的委派不结清（sessions.finish、sessions.settlement）。
 - 带 call_id 的占用：这次挂起调用（ask_agent）已经交出去了。不论状态都算，是永久事实（sessions.pending）。

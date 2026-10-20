@@ -1,4 +1,4 @@
-"""后台任务：agent 在后台跑的 shell 命令，会话拥有的异步工作的一种（platform.checks）。做法同 Claude Code 的后台 bash：
+"""后台任务：agent 在后台跑的 shell 命令，会话之外进行、结局交回会话的工作（sessions.holds 的占用）的一种。做法同 Claude Code 的后台 bash：
 不占住运行、不设时限，结束时往发起它的会话的信箱投事件信件（sessions.mailbox），运行期间每隔一段时间发一个检查事件，
 由 agent 决定继续等还是结束它。
 

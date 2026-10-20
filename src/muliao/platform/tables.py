@@ -41,7 +41,7 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     kind: Mapped[TaskKind] = mapped_column(StrEnumType(TaskKind))
-    # 同一 lane 内 FIFO 串行；见 docs/architecture.md「Lane」
+    # 同一 lane 内 FIFO 串行；见 docs/architecture.md「任务队列即 actor 调度」
     lane: Mapped[str] = mapped_column(String(100))
     # 系统通知（如推送测试）不属于任何 agent
     agent_id: Mapped[str | None] = mapped_column(agent_ref(), index=True)

@@ -114,7 +114,7 @@ class Mail(Base):
     # 会话在结束时结清它并发布 SessionSettled（sessions.settlement），每个关联只结清一次
     correlation: Mapped[str | None] = mapped_column(String(200))
     correlation_settled: Mapped[bool] = mapped_column(default=False)
-    # 幂等键：带同一个键的投信只投一次（命令按键去重，docs/domain-design.md 3.6）
+    # 幂等键：带同一个键的投信只投一次（命令按键去重，docs/architecture.md 3.4）
     dedupe_key: Mapped[str | None] = mapped_column(String(200))
     state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
     # 处理掉它的运行（turn task）

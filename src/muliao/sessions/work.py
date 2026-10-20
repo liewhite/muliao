@@ -1,4 +1,4 @@
-"""一个 agent 在它全部会话里做过的事（反思领域的查询，docs/domain-design.md 4.6）。事实只在 messages 表里：步数（模型
+"""一个 agent 在它全部会话里做过的事（反思领域的查询，docs/architecture.md 第 13 节「强制反思」）。事实只在 messages 表里：步数（模型
 回复数）、消息 id 区间与那段记录都由它推导，不另存。消息 id 单调递增，区间 (from_id, to_id] 一经确定，里面的消息只会
 因为会话被删除而减少。"""
 

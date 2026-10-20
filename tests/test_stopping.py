@@ -1,4 +1,4 @@
-"""三种取消各自的语义（sessions.stopping，docs/domain-design.md「并发模型」）：用户停止只停这次运行并返回 Stopped；
+"""三种取消各自的语义（sessions.stopping，docs/architecture.md「并发模型」）：用户停止只停这次运行并返回 Stopped；
 关停与总时限的取消照常向外抛出；无论哪种，运行里工具的子任务（pydantic-ai 的工具在原生任务里执行）都如实收到取消，
 不会被工具内部的 anyio 作用域吞掉、当成正常结束。"""
 

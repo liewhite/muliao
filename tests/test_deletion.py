@@ -1,4 +1,4 @@
-"""删除经事件完成（docs/domain-design.md 4.4、5.4）：没有跨领域外键，各领域按 SessionDeleted / AgentDeleting 清理
+"""删除经事件完成（docs/architecture.md 第 10 节与第 7 节「thread 与结果路由」）：没有跨领域外键，各领域按 SessionDeleted / AgentDeleting 清理
 自己的数据；先停止再删除时迟到的结局不产生失败投递。"""
 
 import pytest

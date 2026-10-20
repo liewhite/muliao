@@ -1,6 +1,6 @@
 """运行中检查的节奏：每隔 job_check_seconds 让每种在会话之外进行的工作（后台任务、委派）给还在进行的工作向发起会话
-投一封检查信件。投信的规则在会话领域（sessions.mailbox.post_check_in）。设计见 docs/architecture.md「会话拥有的
-异步工作」。
+投一封检查信件。投信的规则在会话领域（sessions.mailbox.post_check_in）。设计见 docs/architecture.md「占用与
+结清」。
 """
 
 import asyncio

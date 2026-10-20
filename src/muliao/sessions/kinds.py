@@ -1,4 +1,4 @@
-"""会话的种类与每种的规则（docs/domain-design.md 8.1）：会话的行为差别只在这里定义，别处读策略，不按种类分支。"""
+"""会话的种类与每种的规则（docs/architecture.md 第 7 节「会话种类」）：会话的行为差别只在这里定义，别处读策略，不按种类分支。"""
 
 from dataclasses import dataclass
 from enum import StrEnum

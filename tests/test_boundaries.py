@@ -1,4 +1,4 @@
-"""模块依赖规则（docs/domain-design.md 第 10 节），对源码的 import 做静态检查：
+"""模块依赖规则（docs/architecture.md 2.3），对源码的 import 做静态检查：
 
 - 领域包之间只能 import 对方的 api 模块（命令、查询、数据结构）与 events 模块（它发布的事件与接收的命令），
   不能碰对方的表与内部模块；

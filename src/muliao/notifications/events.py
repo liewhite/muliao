@@ -5,7 +5,7 @@ from muliao.platform.messaging import Command
 
 class Notify(Command):
     """给用户发一条通知（并排上推送）。发送方在自己的事务里先提交了状态、又必须保证通知发出时用它（定向命令，
-    docs/domain-design.md 3.4），例如触发器的前置检查从正常变为出错。"""
+    docs/architecture.md 3.4），例如触发器的前置检查从正常变为出错。"""
 
     TYPE = "notifications.notify"
     # 系统通知（不属于任何 agent）为 None

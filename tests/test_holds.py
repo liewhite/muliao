@@ -1,4 +1,4 @@
-"""占用与结清（sessions.holds、sessions.settlement，docs/domain-design.md 4.1、4.2）：会话只看自己的数据判断工作是否
+"""占用与结清（sessions.holds、sessions.settlement，docs/architecture.md 第 7、8 节）：会话只看自己的数据判断工作是否
 做完、什么时候结清；委派的结局只交回一次；停止之后迟到的结局不投。"""
 
 import pytest

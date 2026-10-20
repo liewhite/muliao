@@ -116,7 +116,7 @@ class Container:
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
-        """服务的整个生命周期：启动检查与恢复，然后在根任务组里跑后台循环（docs/domain-design.md「并发模型」）。
+        """服务的整个生命周期：启动检查与恢复，然后在根任务组里跑后台循环（docs/architecture.md「并发模型」）。
         退出时先取消根任务组（循环与正在进行的运行），它们全部退出之后，再按关停结束后台任务的进程并记为被中断
         （jobs.running 的退出）：这时已经不会有运行再开新的后台任务，结束的就是全部。"""
         try:

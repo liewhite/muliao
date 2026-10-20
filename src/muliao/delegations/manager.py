@@ -1,6 +1,6 @@
 """委派：会话交给另一个 agent、要交回结局的工作（ask_agent，delegate_task(report_back)）。委派领域是流程管理者：委派行
 只由它的投递 lane（sub:delegations）创建和修改，它只对事件做出反应、经会话领域的命令交回结局。设计见
-docs/domain-design.md 4.2。
+docs/architecture.md 第 8 节。
 
 - 发起（工具里）：Threads.dispatch 在一个事务里占用发起方、给 thread 投信、发布 DelegationDispatched；委派领域收到后
   建委派行。同一个委派的 DelegationDispatched 一定先于它的 SessionSettled 到达这条 lane（子会话要先处理那封信件才

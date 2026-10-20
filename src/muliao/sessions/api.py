@@ -1,4 +1,4 @@
-"""会话领域的公开接口：别的领域只经这里（与 sessions.events）使用会话领域（docs/domain-design.md 4.1、第 10 节）。
+"""会话领域的公开接口：别的领域只经这里（与 sessions.events）使用会话领域（docs/architecture.md 第 7 节、2.3）。
 
 - 来信：发送方在自己的事务里 check_receivable_in，再发出 receive_command 构造的定向命令 Receive（sessions.events）；
   thread：Threads、validate_thread；

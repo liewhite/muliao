@@ -1,4 +1,4 @@
-"""会话的结清与结局的交回（会话领域，docs/domain-design.md 4.1）。
+"""会话的结清与结局的交回（会话领域，docs/architecture.md 第 7 节）。
 
 - 结清：会话自己判断委派来的工作（带关联 id 的信件）什么时候结束，发布 SessionSettled。时机只有这几个：运行正常
   结束且工作做完（sessions.finish）、运行最终失败（sessions.consumer.RunHandler.failed_in）、停止（sessions.halt）、

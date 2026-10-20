@@ -1,4 +1,4 @@
-"""会话领域对外发布的事件与它接收的定向命令（platform.messaging）。设计见 docs/domain-design.md 4.1。"""
+"""会话领域对外发布的事件与它接收的定向命令（platform.messaging）。设计见 docs/architecture.md 第 7 节。"""
 
 from __future__ import annotations
 

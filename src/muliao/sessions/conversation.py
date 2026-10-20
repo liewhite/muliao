@@ -135,7 +135,7 @@ def _check_may_continue(session: Session, origin: Origin, origin_ref: str | None
 async def ensure_agent_active_in(s: AsyncSession, agent_id: str) -> None:
     """会话只为还可用的 agent 新建、继续：正在删除的按不存在处理（agents 的 active_agent_in）。agent 只会从可用变为
     正在删除、再变为不存在，在本事务里检查没有先查后写的竞态：删除标记提交之后，它的会话不会再收到来信、变忙，
-    删除流程清理会话时不必等待（docs/domain-design.md 4.4）。"""
+    删除流程清理会话时不必等待（docs/architecture.md 第 10 节）。"""
     await active_agent_in(s, agent_id)
 
 
@@ -223,8 +223,8 @@ async def _existing_target_in(s: AsyncSession, inbound: Inbound) -> Session | No
 
 async def check_receivable_in(s: AsyncSession, inbound: Inbound) -> None:
     """在发送方的事务里校验一封来信（不写入），之后经定向命令 Receive 投递。校验读的都是只会单向变化或不变的事实
-    （会话与 agent 是否还在、会话的发起方、文件），投递时只剩「期间被删除」这一种契约内的变化（docs/domain-design.md
-    1.1）。"""
+    （会话与 agent 是否还在、会话的发起方、文件），投递时只剩「期间被删除」这一种契约内的变化（docs/architecture.md
+    2.2）。"""
     await _existing_target_in(s, inbound)
 
 
