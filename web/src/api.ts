@@ -118,8 +118,11 @@ async function send<T>(method: string, path: string, query: Query | undefined, b
     }
     throw new ApiError(resp.status, `${resp.status}: ${message}`)
   }
-  // 按响应声明的类型解码：JSON 响应体缺失时 resp.json() 直接报错；没有响应体的接口（204，或 stop 这类 202，
-  // 接口描述里没有 content，类型为 void）必须真的没有响应体
+  // 204 按 HTTP 语义没有响应体。FastAPI 的 204 仍带着 JSONResponse 的 content-type: application/json
+  // （fastapi/routing.py 先建 JSONResponse 再清空响应体），所以不能按 Content-Type 判断
+  if (resp.status === 204) return undefined as T
+  // 其余按响应的类型解码：JSON 响应体缺失时 resp.json() 直接报错；没有响应体的接口（stop 这类 202，接口描述里
+  // 没有 content，类型为 void）必须真的没有响应体
   if (resp.headers.get('Content-Type')?.startsWith('application/json')) return (await resp.json()) as T
   const text = await resp.text()
   if (text !== '') throw new Error(`${method} ${path} answered ${resp.status} with an unexpected non-JSON body`)
