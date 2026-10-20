@@ -130,16 +130,19 @@ interface SessionContext {
   threads: Map<string, Session>
   agents: Agent[] | undefined
   /**
-   * 条目引用的 thread 不在 threads 里时是什么情况：历史与会话列表来自同一个响应，缺失就是已被删除；
-   * 实时视图里可能只是刚开出、会话信息还没重新拉取
+   * 条目来自哪里：
+   * - history：数据库里的历史，与会话的 thread 列表来自同一个响应，引用的 thread 缺失就是已被删除；
+   * - live：运行中的事件，thread 可能刚开出、还没重新拉取；工具结果是截断过的展示文本，不能当结构化数据解析
    */
-  missingThread: 'deleted' | 'not-loaded-yet'
+  view: 'history' | 'live'
 }
 
 function AskBlock({ ask, ctx }: { ask: AskView; ctx: SessionContext }) {
   const questions = ctx.pending.get(ask.callId)
   if (questions) return <QuestionForm questions={questions} onSubmit={(answers) => ctx.answer(ask.callId, answers)} />
   if (ask.result === null) return <QuestionNote text="提问中…" />
+  // 运行中的提问结果是截断过的展示文本；这次回答已经显示在上方排队的这一轮里，一轮结束后从历史完整显示
+  if (ctx.view === 'live') return null
   const result = askResult(ask.result)
   return result.answered ? <AnsweredQuestions answers={result.answers} /> : <QuestionNote text="没有回答这些问题" />
 }
@@ -264,7 +267,7 @@ function ThreadLinks({ ids, ctx }: { ids: string[]; ctx: SessionContext }) {
       {ids.map((id) => {
         const thread = ctx.threads.get(id)
         if (thread) return <ThreadRow key={id} thread={thread} agents={ctx.agents} />
-        return ctx.missingThread === 'deleted' ? (
+        return ctx.view === 'history' ? (
           <div key={id} className="flex items-center gap-2 px-2 py-1 text-muted">
             <GitBranch className="size-3.5" />
             thread 已删除
@@ -581,7 +584,7 @@ export default function SessionView() {
             answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
             threads: new Map(d.threads.map((t) => [t.id, t])),
             agents: agents.data,
-            missingThread: 'deleted',
+            view: 'history',
           }
           return (
             <div className="flex flex-col gap-3">
@@ -605,7 +608,7 @@ export default function SessionView() {
               ))}
               {shownLive.length > 0 && (
                 <div className="flex flex-col gap-3 opacity-90">
-                  <Blocks items={liveToItems(shownLive)} ctx={{ ...ctx, pending: new Map(), missingThread: 'not-loaded-yet' }} />
+                  <Blocks items={liveToItems(shownLive)} ctx={{ ...ctx, pending: new Map(), view: 'live' }} />
                 </div>
               )}
               <UnlinkedThreads threads={unlinkedThreads(d.items, d.threads)} agents={agents.data} />
