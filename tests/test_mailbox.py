@@ -84,8 +84,8 @@ async def test_an_event_to_an_idle_session_is_handled_in_a_run_of_its_own(contai
     assert await queued(container, session.id) == []
     # 界面上事件单独成条
     history = await container.sessions.history(session.id)
-    events = [i for i in to_items(history) if i["type"] == "event"]
-    assert [(i["tool_name"], i["text"]) for i in events] == [("job:1", "job 1 finished: exit 0")]
+    events = [i for i in to_items(history) if i.type == "event"]
+    assert [(i.tool_name, i.text) for i in events] == [("job:1", "job 1 finished: exit 0")]
 
 
 async def test_mail_arriving_during_a_run_reaches_the_model_between_tool_calls(container, make_agent, models):
@@ -118,7 +118,7 @@ async def test_mail_arriving_during_a_run_reaches_the_model_between_tool_calls(c
     [_, mail] = await mail_of(container)
     assert mail.state == MailState.CONSUMED
     history = await container.sessions.history(session.id)
-    assert [i["type"] for i in to_items(history)][-3:] == ["tool_result", "event", "assistant"]
+    assert [i.type for i in to_items(history)][-3:] == ["tool_result", "event", "assistant"]
 
 
 async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_tools(
@@ -270,7 +270,7 @@ async def test_a_user_message_that_looks_like_an_event_is_still_a_user_message(c
     await drain(container)
 
     history = await container.sessions.history(session.id)
-    assert [i["type"] for i in to_items(history)] == ["user", "assistant"]
+    assert [i.type for i in to_items(history)] == ["user", "assistant"]
 
 
 def test_events_read_as_events_in_transcripts_for_reflection_and_compaction():

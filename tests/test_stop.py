@@ -71,7 +71,9 @@ async def test_stopping_keeps_what_already_happened_and_marks_the_turn_stopped(
 
     async def slow_tool_running() -> bool:
         live = container.live.snapshot(session_id)
-        return live is not None and any(e.get("tool_call_id") == "slow" for e in live.events)
+        return live is not None and any(
+            e.event == "item" and e.item.tool_call_id == "slow" for e in live.events
+        )
 
     await _wait_for(slow_tool_running)
     # 慢工具还在跑时到达的事件：还没交给模型
@@ -142,7 +144,9 @@ async def test_shutdown_is_not_a_stop_the_turn_is_left_for_recovery(client, cont
 
     async def slow_tool_running() -> bool:
         live = container.live.snapshot(session_id)
-        return live is not None and any(e.get("tool_call_id") == "slow" for e in live.events)
+        return live is not None and any(
+            e.event == "item" and e.item.tool_call_id == "slow" for e in live.events
+        )
 
     await _wait_for(slow_tool_running)
     worker.cancel()
@@ -187,7 +191,9 @@ async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_t
 
     async def streaming() -> bool:
         live = container.live.snapshot(session_id)
-        return live is not None and any(e["event"] == "text" for e in live.events)
+        return live is not None and any(
+            e.event == "delta" and e.item_type == "assistant" for e in live.events
+        )
 
     await _wait_for(streaming)
     await asyncio.sleep(0.1)  # 让工具调用的增量也进入运行历史

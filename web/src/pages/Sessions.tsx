@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Card, Chip } from '@heroui/react'
 import { Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, asAgentId, type Origin } from '../api'
+import { api, asAgentId, type Origin, sessionRoute } from '../api'
 import { useServerEvents } from '../events'
 import {
   EmptyHint,
@@ -79,7 +79,7 @@ export default function Sessions() {
           ) : (
             <div className="flex flex-col gap-2">
               {list.map((s) => (
-                <Link key={s.id} to={`/sessions/${s.id}`}>
+                <Link key={s.id} to={sessionRoute(s.id)}>
                   <Card className="transition-colors hover:bg-surface-hover">
                     <Card.Content className="flex flex-row items-center gap-3">
                       <div className="min-w-0 flex-1">

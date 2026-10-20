@@ -1,11 +1,13 @@
-"""把 pydantic-ai 消息转换为展示条目。前端渲染和反思的文字记录共用这一份逻辑。
+"""把 pydantic-ai 消息转换为展示条目（Item）：会话页的历史、运行中的实时条目（runtime.runner）、反思与压缩的文字记录
+共用这一份投影，前端只渲染与合并，不再自己投影。
 
 消息上的约定（metadata 键、标记、合成结果）登记在 muliao.conventions，这里只读它们来展示。
 """
 
-from collections.abc import Sequence
-from typing import Any, Literal, TypedDict
+from collections.abc import Collection, Sequence
+from typing import Any, Literal
 
+from pydantic import BaseModel, ValidationError
 from pydantic_ai.messages import (
     DocumentUrl,
     ImageUrl,
@@ -29,24 +31,40 @@ from muliao.conventions import (
     tool_threads,
 )
 from muliao.files import parse_file_url
+from muliao.runtime.questions import ASK_USER, AnsweredQuestion, AskResult, Question, questions_of
 
 ItemType = Literal[
     "user", "event", "assistant", "thinking", "tool_call", "tool_result", "tool_error", "stopped"
 ]
 
 
-class Item(TypedDict):
+class AskView(BaseModel):
+    """ask_user 调用的状态，由后端按唯一规则给出（annotate_asks），前端只渲染：
+    asking 运行还没停下（还不能回答）；pending 现在能回答（显示表单）；submitted 回答已提交、还排着；answered 已回答；
+    not_answered 用户没回答（发了新消息或只回答了别的提问）。"""
+
+    status: Literal["asking", "pending", "submitted", "answered", "not_answered"]
+    questions: list[Question]
+    # answered 时每题的回答
+    answers: list[AnsweredQuestion] = []
+    # not_answered 时交给模型的说明
+    note: str | None = None
+
+
+class Item(BaseModel):
     type: ItemType
     text: str
-    tool_name: str | None
-    tool_call_id: str | None
-    # 来源消息的数据库 id；由 API 填充，用于定位压缩点
-    message_id: int | None
     # 会话事件（type 为 event）：tool_name 是事件的来源（如 job:12），text 是事件内容
+    tool_name: str | None = None
+    tool_call_id: str | None = None
+    # 来源消息的数据库 id；会话接口填充，用于定位压缩点；实时条目为 None
+    message_id: int | None = None
     # 用户消息的附件（见 runtime.attachments 的存储形态），或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
-    attachments: list[Attachment]
+    attachments: list[Attachment] = []
     # 工具结果关联的子会话 id（TOOL_THREADS）；其他条目为空
-    threads: list[str]
+    threads: list[str] = []
+    # ask_user 的调用（参数合法时）；其他条目为 None
+    ask: AskView | None = None
 
 
 def _item(
@@ -62,10 +80,63 @@ def _item(
         text=text,
         tool_name=tool_name,
         tool_call_id=tool_call_id,
-        message_id=None,
         attachments=attachments or [],
         threads=threads or [],
     )
+
+
+def call_item(part: ToolCallPart) -> Item:
+    item = _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id)
+    if part.tool_name == ASK_USER:
+        try:
+            questions = questions_of(part)
+        except (ValidationError, KeyError):
+            # 参数被工具 schema 拒绝、交还模型重试的提问（它有 tool_error 结果）：按普通工具调用展示
+            return item
+        item.ask = AskView(status="asking", questions=questions)
+    return item
+
+
+def annotate_asks(items: list[Item], answerable: Collection[str], submitted: Collection[str]) -> list[Item]:
+    """给 ask_user 调用填上状态：有结果的按结果（AskResult）；没有结果的，现在能回答（answerable）就是 pending，回答已提交、
+    还排着（submitted）就是 submitted，否则运行还没停下（asking）。"""
+    results = {i.tool_call_id: i.text for i in items if i.type == "tool_result" and i.tool_name == ASK_USER}
+    annotated = []
+    for item in items:
+        if item.ask is not None and item.tool_call_id is not None:
+            result = results.get(item.tool_call_id)
+            if result is not None:
+                parsed = AskResult.model_validate_json(result)
+                ask = item.ask.model_copy(
+                    update={
+                        "status": "answered" if parsed.answered else "not_answered",
+                        "answers": parsed.answers,
+                        "note": parsed.note,
+                    }
+                )
+            elif item.tool_call_id in answerable:
+                ask = item.ask.model_copy(update={"status": "pending"})
+            elif item.tool_call_id in submitted:
+                ask = item.ask.model_copy(update={"status": "submitted"})
+            else:
+                ask = item.ask
+            item = item.model_copy(update={"ask": ask})
+        annotated.append(item)
+    return annotated
+
+
+def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
+    """工具结果，或参数被拒绝、交还模型重试的结果。"""
+    if isinstance(part, ToolReturnPart):
+        return _item(
+            "tool_result",
+            part.model_response_str(),
+            part.tool_name,
+            part.tool_call_id,
+            tool_attachments(part),
+            tool_threads(part),
+        )
+    return _item("tool_error", part.model_response(), part.tool_name, part.tool_call_id)
 
 
 def _prompt_items(content: str | Sequence[Any], events: Sequence[int]) -> list[Item]:
@@ -119,21 +190,8 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
             for part in msg.parts:
                 if isinstance(part, UserPromptPart):
                     items.extend(_prompt_items(part.content, event_indices(msg)))
-                elif isinstance(part, ToolReturnPart):
-                    items.append(
-                        _item(
-                            "tool_result",
-                            part.model_response_str(),
-                            part.tool_name,
-                            part.tool_call_id,
-                            tool_attachments(part),
-                            tool_threads(part),
-                        )
-                    )
-                elif isinstance(part, RetryPromptPart):
-                    items.append(
-                        _item("tool_error", part.model_response(), part.tool_name, part.tool_call_id)
-                    )
+                elif isinstance(part, ToolReturnPart | RetryPromptPart):
+                    items.append(result_item(part))
         elif isinstance(msg, ModelResponse):
             for part in msg.parts:
                 if isinstance(part, TextPart) and part.content:
@@ -141,9 +199,7 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
                 elif isinstance(part, ThinkingPart) and part.content:
                     items.append(_item("thinking", part.content))
                 elif isinstance(part, ToolCallPart):
-                    items.append(
-                        _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id)
-                    )
+                    items.append(call_item(part))
         if msg.metadata is not None and msg.metadata.get(RUN_STOPPED):
             items.append(_item("stopped", ""))
     return items
@@ -166,10 +222,10 @@ def to_text(items: Sequence[Item], *, max_item_chars: int) -> str:
     }
     lines = []
     for item in items:
-        label = labels[item["type"]]
+        label = labels[item.type]
         if label is None:
             continue
-        name = f" {item['tool_name']}" if item["tool_name"] else ""
-        files = "".join(f" [attachment {a['name']!r} ({a['media_type']})]" for a in item["attachments"])
-        lines.append(f"[{label}{name}] {truncate(item['text'], max_item_chars)}{files}")
+        name = f" {item.tool_name}" if item.tool_name else ""
+        files = "".join(f" [attachment {a['name']!r} ({a['media_type']})]" for a in item.attachments)
+        lines.append(f"[{label}{name}] {truncate(item.text, max_item_chars)}{files}")
     return "\n".join(lines)

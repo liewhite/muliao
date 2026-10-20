@@ -1,6 +1,6 @@
 // 会话条目（历史与运行中的事件流共用 Item）到展示块的整理，纯函数，与渲染分开。
 
-import { ASK_USER, type AskResult, type Attachment, type Item } from './api'
+import { ASK_USER, type AskView, type Attachment, type Item } from './api'
 
 export interface ToolView {
   name: string
@@ -14,14 +14,10 @@ export interface ToolView {
   threads: string[]
 }
 
-/**
- * 一次 ask_user 提问：是要用户操作的交互，不收进过程组。问题本身取自服务端校验过的 pending_questions（待回答时），
- * 已回答的内容取自结果；参数校验失败的调用（模型写错了）按普通工具错误展示。
- */
-export interface AskView {
+/** 一次 ask_user 提问：是要用户操作的交互，不收进过程组。状态与内容都由后端给出（条目上的 ask） */
+export interface AskBlock {
   callId: string
-  /** 交给模型的结果文本；挂起时为 null */
-  result: string | null
+  ask: AskView
 }
 
 export type Block =
@@ -30,7 +26,7 @@ export type Block =
   | { kind: 'assistant'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolView }
-  | { kind: 'ask'; ask: AskView }
+  | { kind: 'ask'; ask: AskBlock }
   | { kind: 'stopped' }
 
 /** 过程步骤：思考与工具调用。连续的步骤收进一个折叠组，回答与说明文字留在组外 */
@@ -41,19 +37,19 @@ export type View = Exclude<Block, Step> | { kind: 'process'; steps: Step[] }
 export function toBlocks(items: Item[]): Block[] {
   const blocks: Block[] = []
   const tools = new Map<string, ToolView>()
-  // ask_user 调用在 blocks 里的位置：参数出错时原地换成工具错误块
+  // ask_user 调用在 blocks 里的位置：它的结果不再单独成块，被退回时原地换成工具错误块
   const asks = new Map<string, number>()
   for (const item of items) {
     const askAt = item.tool_call_id !== null ? asks.get(item.tool_call_id) : undefined
-    if (askAt !== undefined && (item.type === 'tool_result' || item.type === 'tool_error')) {
-      const block = blocks[askAt]
-      if (item.type === 'tool_result' && block.kind === 'ask') block.ask.result = item.text
-      else blocks[askAt] = { kind: 'tool', tool: { name: ASK_USER, args: '', result: item.text, rejected: true, attachments: [], threads: [] } }
+    if (askAt !== undefined) {
+      // 提问的结果已经体现在调用的状态里；被退回的提问原地换成工具错误块
+      if (item.type === 'tool_error')
+        blocks[askAt] = { kind: 'tool', tool: { name: ASK_USER, args: '', result: item.text, rejected: true, attachments: [], threads: [] } }
       continue
     }
-    if (item.type === 'tool_call' && item.tool_name === ASK_USER && item.tool_call_id !== null) {
+    if (item.ask !== null && item.tool_call_id !== null) {
       asks.set(item.tool_call_id, blocks.length)
-      blocks.push({ kind: 'ask', ask: { callId: item.tool_call_id, result: null } })
+      blocks.push({ kind: 'ask', ask: { callId: item.tool_call_id, ask: item.ask } })
       continue
     }
     switch (item.type) {
@@ -153,11 +149,6 @@ export interface StepsSummary {
   running: string | null
   /** 被退回、由模型修正的调用数 */
   rejected: number
-}
-
-/** 提问的结果：工具结果的文本就是服务端 AskResult 的 JSON */
-export function askResult(result: string): AskResult {
-  return JSON.parse(result) as AskResult
 }
 
 export function summarizeSteps(steps: Step[]): StepsSummary {

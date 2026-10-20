@@ -86,7 +86,7 @@ export interface Attachment {
   inline: boolean
 }
 
-/** stopped：用户停止了这一轮（后端 conventions.TURN_STOPPED），出现在那一轮保存下来的内容之后 */
+/** stopped：用户停止了这次运行（后端 conventions.RUN_STOPPED），出现在它保存下来的内容之后 */
 /** event：会话事件（后台任务完成、运行中的检查……），tool_name 是来源（如 job:12），text 是内容 */
 export type ItemType = 'user' | 'event' | 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'tool_error' | 'stopped'
 
@@ -100,6 +100,8 @@ export interface Item {
   attachments: Attachment[]
   /** 工具结果关联的子会话 id（委派开出或续写的 thread）；其他条目为空 */
   threads: string[]
+  /** ask_user 的调用（参数合法时）；其他条目为 null */
+  ask: AskView | null
 }
 
 export interface CompactionInfo {
@@ -155,9 +157,17 @@ export interface AskResult {
   note: string | null
 }
 
-export interface PendingQuestions {
-  tool_call_id: string
+/**
+ * ask_user 调用的状态（后端 transcript.AskView，由后端按唯一规则给出）：asking 运行还没停下；pending 现在能回答；
+ * submitted 回答已提交、还排着；answered 已回答；not_answered 用户没回答
+ */
+export interface AskView {
+  status: 'asking' | 'pending' | 'submitted' | 'answered' | 'not_answered'
   questions: Question[]
+  /** answered 时每题的回答 */
+  answers: AnsweredQuestion[]
+  /** not_answered 时交给模型的说明 */
+  note: string | null
 }
 
 export type MailKind = 'message' | 'answer' | 'event'
@@ -186,8 +196,6 @@ export interface SessionDetail {
   /** 最近一次运行，还没正常结束时（排队、运行中、等重试或失败） */
   run: Task | null
   threads: Session[]
-  /** 还在等回答、也还没提交回答的提问 */
-  pending_questions: PendingQuestions[]
   /** 正在进行的运行当前这一段的事件；没有则为 null */
   live: LiveRun | null
 }
@@ -349,6 +357,8 @@ const del = (path: string, query?: Query) => request<void>('DELETE', path, undef
 
 /** 前端路由：agent 名称可含中文，必须编码 */
 export const agentRoute = (id: AgentId) => `/agents/${id}`
+/** 会话页；推送通知点开的地址由后端 delivery/webpush.py 生成，与它保持一致 */
+export const sessionRoute = (id: string) => `/sessions/${id}`
 export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
 
 /** 一个可选的工具组（后端 tool_catalog） */

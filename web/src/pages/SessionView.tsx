@@ -9,14 +9,13 @@ import {
   type Attachment,
   type CompactionInfo,
   type Item,
-  type Question,
   type QuestionAnswer,
   type Mail,
   type Task,
   type Session,
+  sessionRoute,
 } from '../api'
 import {
-  askResult,
   groupSteps,
   stepAttachments,
   stepThreads,
@@ -24,14 +23,14 @@ import {
   summarizeSteps,
   toBlocks,
   toolStatus,
-  type AskView,
+  type AskBlock as AskBlockData,
   type Step,
   type ToolStatus,
   type ToolView,
 } from '../blocks'
 import { AnsweredQuestions, QuestionForm, QuestionNote } from '../questions'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
-import { liveToItems, mergeLive, useServerEvents, type RunEvent } from '../events'
+import { liveItems, mergeLive, useServerEvents, type RunEvent } from '../events'
 import { refreshUnread, refreshUnreadLogged } from '../unread'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
@@ -124,30 +123,34 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
   )
 }
 
-/** 渲染会话条目要用到的会话信息：还在等回答的提问与提交方式、这个会话开出的 thread、agent 名称 */
+/** 渲染会话条目要用到的会话信息：回答提问的方式、这个会话开出的 thread、agent 名称 */
 interface SessionContext {
-  pending: Map<string, Question[]>
-  /** 已提交、还在信箱里排队的回答针对的提问：回答显示在信箱里，提问处不再显示「提问中」 */
-  answering: Set<string>
   answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
   threads: Map<string, Session>
   agents: Agent[] | undefined
   /**
    * 条目来自哪里：
    * - history：数据库里的历史，与会话的 thread 列表来自同一个响应，引用的 thread 缺失就是已被删除；
-   * - live：运行中的事件，thread 可能刚开出、还没重新拉取；工具结果是截断过的展示文本，不能当结构化数据解析
+   * - live：运行中的条目，thread 可能刚开出、还没重新拉取
    */
   view: 'history' | 'live'
 }
 
-function AskBlock({ ask, ctx }: { ask: AskView; ctx: SessionContext }) {
-  const questions = ctx.pending.get(ask.callId)
-  if (questions) return <QuestionForm questions={questions} onSubmit={(answers) => ctx.answer(ask.callId, answers)} />
-  if (ask.result === null) return ctx.answering.has(ask.callId) ? null : <QuestionNote text="提问中…" />
-  // 运行中的提问结果是截断过的展示文本；保存这一步后从历史完整显示
-  if (ctx.view === 'live') return null
-  const result = askResult(ask.result)
-  return result.answered ? <AnsweredQuestions answers={result.answers} /> : <QuestionNote text="没有回答这些问题" />
+function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) {
+  const { ask } = block
+  switch (ask.status) {
+    case 'pending':
+      return <QuestionForm questions={ask.questions} onSubmit={(answers) => ctx.answer(block.callId, answers)} />
+    case 'asking':
+      return <QuestionNote text="提问中…" />
+    // 回答显示在信箱里
+    case 'submitted':
+      return null
+    case 'answered':
+      return <AnsweredQuestions answers={ask.answers} />
+    case 'not_answered':
+      return <QuestionNote text="没有回答这些问题" />
+  }
 }
 
 /** 会话事件（后台任务完成、运行中的检查……）：不是用户说的话，单独显示，默认收起内容 */
@@ -173,7 +176,7 @@ function Blocks({ items, ctx }: { items: Item[]; ctx: SessionContext }) {
       {groupSteps(toBlocks(items)).map((v, i) => {
         switch (v.kind) {
           case 'ask':
-            return <AskBlock key={i} ask={v.ask} ctx={ctx} />
+            return <AskBlock key={i} block={v.ask} ctx={ctx} />
           case 'stopped':
             return (
               <div key={i} className="flex items-center gap-1.5 self-start text-xs text-muted">
@@ -277,7 +280,7 @@ function RunStatus({ run, onRetry }: { run: Task; onRetry: (id: number) => void 
 
 function ThreadRow({ thread, agents }: { thread: Session; agents: Agent[] | undefined }) {
   return (
-    <Link to={`/sessions/${thread.id}`} className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-surface-hover">
+    <Link to={sessionRoute(thread.id)} className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-surface-hover">
       <GitBranch className="size-3.5 shrink-0 text-muted" />
       <span className="truncate font-medium">{thread.thread}</span>
       <span className="truncate text-muted">{agentLabel(agents, thread.agent_id)}</span>
@@ -307,7 +310,7 @@ function ThreadLinks({ ids, ctx }: { ids: string[]; ctx: SessionContext }) {
             thread 已删除
           </div>
         ) : (
-          <Link key={id} to={`/sessions/${id}`} className="flex items-center gap-2 rounded-lg px-2 py-1 text-accent hover:bg-surface-hover">
+          <Link key={id} to={sessionRoute(id)} className="flex items-center gap-2 rounded-lg px-2 py-1 text-accent hover:bg-surface-hover">
             <GitBranch className="size-3.5" />
             打开 thread
           </Link>
@@ -550,7 +553,7 @@ export default function SessionView() {
   }
 
   const session = detail.data?.session
-  const parentRoute = session?.parent_session_id ? `/sessions/${session.parent_session_id}` : '/'
+  const parentRoute = session?.parent_session_id ? sessionRoute(session.parent_session_id) : '/'
   return (
     <Page
       scrollRef={bottom.scrollRef}
@@ -613,8 +616,6 @@ export default function SessionView() {
       <Loading state={detail}>
         {(d) => {
           const ctx: SessionContext = {
-            pending: new Map(d.pending_questions.map((p) => [p.tool_call_id, p.questions])),
-            answering: new Set(d.mail.filter((m) => m.state === 'queued').flatMap((m) => Object.keys(m.answers))),
             answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
             threads: new Map(d.threads.map((t) => [t.id, t])),
             agents: agents.data,
@@ -643,7 +644,7 @@ export default function SessionView() {
               {d.run && <RunStatus run={d.run} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />}
               {shownLive.length > 0 && (
                 <div className="flex flex-col gap-3 opacity-90">
-                  <Blocks items={liveToItems(shownLive)} ctx={{ ...ctx, pending: new Map(), view: 'live' }} />
+                  <Blocks items={liveItems(shownLive)} ctx={{ ...ctx, view: 'live' }} />
                 </div>
               )}
               <UnlinkedThreads threads={unlinkedThreads(d.items, d.threads)} agents={agents.data} />

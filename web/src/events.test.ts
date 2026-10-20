@@ -1,39 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { isOutdated, isStale, liveToItems, mergeLive, needsReconnect, type RunEvent } from './events'
+import { isOutdated, isStale, liveItems, mergeLive, needsReconnect, type RunEvent } from './events'
 
-const ev = (event: RunEvent['event'], text: string, tool_call_id: string | null = null): RunEvent =>
-  event === 'text' || event === 'thinking'
-    ? { type: 'run', session_id: 's', agent: 'a', event, text, run_id: 'r', seq: 0 }
-    : {
-        type: 'run',
-        session_id: 's',
-        agent: 'a',
-        event,
-        text,
-        tool_name: 'tool',
-        tool_call_id: tool_call_id ?? '',
-        attachments: [],
-        threads: [],
-        run_id: 'r',
-        seq: 0,
-      }
+const base = { type: 'run', session_id: 's', agent: 'a', run_id: 'r', seq: 0 } as const
 
-describe('liveToItems', () => {
+const delta = (item_type: 'assistant' | 'thinking', text: string): RunEvent => ({ ...base, event: 'delta', item_type, text })
+
+const tool = (type: 'tool_call' | 'tool_result', text: string, tool_call_id: string): RunEvent => ({
+  ...base,
+  event: 'item',
+  item: { type, text, tool_name: 'tool', tool_call_id, message_id: null, attachments: [], threads: [], ask: null },
+})
+
+describe('liveItems', () => {
   it('joins consecutive thinking deltas into one thinking item before the answer', () => {
-    const items = liveToItems([ev('thinking', '先'), ev('thinking', '想想'), ev('text', '答'), ev('text', '案')])
+    const items = liveItems([delta('thinking', '先'), delta('thinking', '想想'), delta('assistant', '答'), delta('assistant', '案')])
     expect(items.map((i) => [i.type, i.text])).toEqual([
       ['thinking', '先想想'],
       ['assistant', '答案'],
     ])
   })
 
-  it('keeps alternating thinking, tool calls and answers as separate items in order', () => {
-    const items = liveToItems([
-      ev('thinking', 'a'),
-      ev('tool_call', '{}', 'c1'),
-      ev('tool_result', 'ok', 'c1'),
-      ev('thinking', 'b'),
-      ev('text', 'done'),
+  it('keeps alternating thinking, tool items and answers as separate items in order', () => {
+    const items = liveItems([
+      delta('thinking', 'a'),
+      tool('tool_call', '{}', 'c1'),
+      tool('tool_result', 'ok', 'c1'),
+      delta('thinking', 'b'),
+      delta('assistant', 'done'),
     ])
     expect(items.map((i) => [i.type, i.text])).toEqual([
       ['thinking', 'a'],
@@ -43,15 +36,18 @@ describe('liveToItems', () => {
       ['assistant', 'done'],
     ])
   })
+
+  it('does not change the events it folds', () => {
+    const events = [tool('tool_call', '{}', 'c1'), delta('assistant', 'x')]
+    const before = structuredClone(events)
+    liveItems([...events, delta('assistant', 'y')])
+    expect(events).toEqual(before)
+  })
 })
 
 describe('mergeLive', () => {
   const at = (run_id: string, seq: number, text = `${run_id}${seq}`): RunEvent => ({
-    type: 'run',
-    session_id: 's',
-    agent: 'a',
-    event: 'text',
-    text,
+    ...delta('assistant', text),
     run_id,
     seq,
   })
@@ -88,7 +84,7 @@ describe('isStale', () => {
 })
 
 describe('mergeLive without a snapshot', () => {
-  const at = (seq: number): RunEvent => ({ ...ev('text', 'x'), seq })
+  const at = (seq: number): RunEvent => ({ ...delta('assistant', 'x'), seq })
   it('keeps events that start at the beginning of the run', () => {
     expect(mergeLive(null, [at(0), at(1)]).gap).toBe(false)
   })

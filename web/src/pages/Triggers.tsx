@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Alert, Button, Card, Chip, toast } from '@heroui/react'
 import { Copy, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, asAgentId, type Agent, type Precheck, type Trigger, type TriggerKind } from '../api'
+import { api, asAgentId, type Agent, type Precheck, type Trigger, type TriggerKind, sessionRoute } from '../api'
 import {
   ActionButton,
   CODE_BLOCK,
@@ -319,7 +319,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           {trigger.last_session_id && (
             <>
               {' · '}
-              <Link className="text-accent" to={`/sessions/${trigger.last_session_id}`}>
+              <Link className="text-accent" to={sessionRoute(trigger.last_session_id)}>
                 上次会话
               </Link>
             </>

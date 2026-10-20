@@ -30,12 +30,12 @@ async def test_a_page_opened_mid_turn_sees_the_turn_from_its_start(client, conta
     live = None
     for _ in range(100):
         live = (await client.get(f"/api/sessions/{session_id}")).json()["live"]
-        if live and any(e["event"] == "tool_call" for e in live["events"]):
+        if live and any(_label(e) == "tool_call" for e in live["events"]):
             break
         await asyncio.sleep(0.02)
     assert live is not None
-    kinds = [(e["event"], e["seq"]) for e in live["events"]]
-    assert kinds[0] == ("text", 0) and ("tool_call", len(kinds) - 1) in kinds
+    kinds = [(_label(e), e["seq"]) for e in live["events"]]
+    assert kinds[0] == ("assistant", 0) and ("tool_call", len(kinds) - 1) in kinds
     assert all(e["run_id"] == live["run_id"] for e in live["events"])
 
     await worker
@@ -67,3 +67,8 @@ async def test_a_failed_turn_leaves_no_live_events_behind(client, container, mak
     assert detail["run"]["status"] == "failed"
     assert detail["live"] is None
     assert container.live.snapshot(session_id) is None
+
+
+def _label(event: dict) -> str:
+    """实时事件是哪种条目：流式文字的类型，或完整条目的类型。"""
+    return event["item_type"] if event["event"] == "delta" else event["item"]["type"]

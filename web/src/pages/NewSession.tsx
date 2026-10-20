@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Card } from '@heroui/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { api, asAgentId } from '../api'
+import { api, asAgentId, sessionRoute } from '../api'
 import { AttachButton, PendingUploads, useUploads } from '../attachments'
 import { ActionButton, EmptyHint, ErrorAlert, LinkButton, Loading, Page, SelectInput, TextAreaInput, useAction, useAgents } from '../ui'
 
@@ -19,7 +19,7 @@ export default function NewSession() {
     await action.run(async () => {
       if (agent === null) throw new Error('请选择 agent')
       const session = await api.startSession(asAgentId(agent), prompt.trim(), uploads.ids)
-      navigate(`/sessions/${session.id}`, { replace: true })
+      navigate(sessionRoute(session.id), { replace: true })
     })
   }
 

@@ -34,6 +34,20 @@ QUESTIONS = [
 ]
 
 
+def ask_states(detail: dict) -> dict[str, str]:
+    """会话详情里每个 ask_user 调用的状态。"""
+    return {i["tool_call_id"]: i["ask"]["status"] for i in detail["items"] if i["ask"] is not None}
+
+
+def pending_asks(detail: dict) -> list[dict]:
+    """会话详情里还在等用户回答的提问（条目上的 ask 状态）。"""
+    return [
+        {"tool_call_id": i["tool_call_id"], "questions": i["ask"]["questions"]}
+        for i in detail["items"]
+        if i["ask"] is not None and i["ask"]["status"] == "pending"
+    ]
+
+
 class Asker:
     """第一轮提问；之后记录模型看到的工具结果并作答。"""
 
@@ -79,13 +93,13 @@ async def test_turn_stops_on_questions_and_answers_come_back_as_the_tool_result(
     [note] = (await client.get("/api/notifications")).json()
     assert "看哪个周期？" in note["body"] and note["session_id"] == session_id
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
-    assert [(p["tool_call_id"], len(p["questions"])) for p in detail["pending_questions"]] == [("q1", 2)]
+    assert [(p["tool_call_id"], len(p["questions"])) for p in pending_asks(detail)] == [("q1", 2)]
 
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量", "持仓量"], "other": "还有链上数据"}]}
     resp = await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
     assert resp.status_code == 202 and resp.json()[0]["answers"]["q1"]["answers"][0]["selected"] == ["日线"]
     # 已提交、还没执行的回答不再显示成待回答的表单
-    assert (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"] == []
+    assert ask_states((await client.get(f"/api/sessions/{session_id}")).json()) == {"q1": "submitted"}
     await drain(container)
 
     assert json.loads(asker.results[0]) == {
@@ -97,7 +111,9 @@ async def test_turn_stops_on_questions_and_answers_come_back_as_the_tool_result(
         "note": None,
     }
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
-    assert detail["pending_questions"] == []
+    assert ask_states(detail) == {"q1": "answered"}
+    [ask] = [i["ask"] for i in detail["items"] if i["ask"] is not None]
+    assert [a["selected"] for a in ask["answers"]] == [["日线"], ["成交量", "持仓量"]]
     assert detail["items"][-1]["text"] == "好的，开始分析。"
 
 
@@ -125,7 +141,7 @@ async def test_replying_without_answering_interrupts_the_questions(client, conta
     await drain(container)
 
     assert [json.loads(r)["answered"] for r in asker.results] == [False]
-    assert (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"] == []
+    assert ask_states((await client.get(f"/api/sessions/{session_id}")).json()) == {"q1": "not_answered"}
 
 
 async def test_an_answer_behind_a_queued_message_still_answers_the_questions(
@@ -173,7 +189,7 @@ async def test_a_failed_answer_holds_the_questions_until_it_is_retried(client, c
     assert failed.status == TaskStatus.FAILED
 
     # 失败的回答还占着这次提问：不显示表单，不能再答，只能重试
-    assert (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"] == []
+    assert pending_asks((await client.get(f"/api/sessions/{session_id}")).json()) == []
     resp = await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
     assert resp.status_code == 409
     models.models["asker"] = original
@@ -208,7 +224,7 @@ async def test_rejected_question_arguments_do_not_leave_a_pending_question(
 
     detail = await client.get(f"/api/sessions/{session_id}")
     assert detail.status_code == 200
-    assert [p["tool_call_id"] for p in detail.json()["pending_questions"]] == ["good"]
+    assert [p["tool_call_id"] for p in pending_asks(detail.json())] == ["good"]
     resp = await client.post(
         f"/api/sessions/{session_id}/messages",
         json={"prompt": "", "answers": {"good": [{"selected": ["日线"]}]}},
@@ -306,7 +322,7 @@ async def test_a_voided_failed_answer_does_not_block_later_questions(client, con
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "换个问题"})
     await drain(container)
 
-    pending = (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"]
+    pending = pending_asks((await client.get(f"/api/sessions/{session_id}")).json())
     [latest] = [p["tool_call_id"] for p in pending]
     models.models["asker"] = original
     answers = {latest: [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
@@ -388,8 +404,7 @@ async def test_a_question_asked_alongside_another_tool_is_answered_as_its_result
     ]
     await drain(container)
     assert [
-        p["tool_call_id"]
-        for p in (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"]
+        p["tool_call_id"] for p in pending_asks((await client.get(f"/api/sessions/{session_id}")).json())
     ] == ["q1"]
 
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
 import { Activity, BellRing, ChevronRight, KeyRound, LogOut, Plug, RotateCcw, ScrollText, Sparkles, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, unauthorizedEvent, type SecretInfo, type TaskStatus } from '../api'
+import { api, unauthorizedEvent, type SecretInfo, type TaskStatus, sessionRoute } from '../api'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
 import { ActionButton,
   EmptyHint,
@@ -164,7 +164,7 @@ export function Tasks() {
                       {t.session_id && (
                         <>
                           {' · '}
-                          <Link className="text-accent" to={`/sessions/${t.session_id}`}>
+                          <Link className="text-accent" to={sessionRoute(t.session_id)}>
                             会话
                           </Link>
                         </>

@@ -207,7 +207,7 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     from muliao.transcript import to_items
 
     items = to_items(await container.sessions.history(session.id))
-    results = [i["text"] for i in items if i["type"] == "tool_result"]
+    results = [i.text for i in items if i.type == "tool_result"]
     assert results == ["tok-123"]
 
 
@@ -236,3 +236,61 @@ async def test_a_failing_probe_does_not_leak_the_secrets_it_was_given(container,
     with pytest.raises(InvalidInput) as raised:
         await container.mcp.add(None, "remote", spec, probe=True, author="user")
     assert "tok-secret-9" not in str(raised.value) and "[secret:API_TOKEN]" in str(raised.value)
+
+
+async def test_a_temp_agent_sees_the_mcp_servers_of_its_caller(container, make_agent, models, tmp_path):
+    from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+    from pydantic_ai.models.function import AgentInfo
+
+    from muliao.runtime.runner import RunProfile
+    from tests.scripted import scripted
+
+    parent = await make_agent("alpha", model="m")
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
+    config = mcp_config(
+        transport=McpTransport.STDIO,
+        command=sys.executable,
+        args=[ECHO_SERVER],
+        env={"TOKEN": "${vault:ECHO_TOKEN}"},
+    )
+    await container.mcp.add(parent.id, "echo", config, probe=False, author="user")
+    seen: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.extend(t.name for t in info.function_tools)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["temp"] = scripted(fn)
+    answer = await container.consumer._runtime.run_temp(  # noqa: SLF001
+        parent,
+        task="t",
+        instructions="",
+        model="temp",
+        profile=RunProfile(toolsets=[container.mcp.toolset()]),
+        workspace=tmp_path,
+        request_limit=3,
+    )
+    assert answer.text == "ok" and {"echo_echo", "echo_token"} <= set(seen)
+
+
+async def test_a_missing_vault_reference_in_an_mcp_config_fails_the_run_visibly(
+    container, make_agent, models
+):
+    from muliao.models import TaskKind, TaskStatus
+    from tests.test_flow import call_then_answer, tasks_of
+
+    alpha = (await make_agent("alpha", model="m")).id
+    config = mcp_config(
+        transport=McpTransport.STDIO,
+        command=sys.executable,
+        args=[ECHO_SERVER],
+        env={"TOKEN": "${vault:MISSING}"},
+    )
+    await container.mcp.add(alpha, "echo", config, probe=False, author="user")
+    models.models["m"] = call_then_answer("echo_token", {}, "got it")
+
+    await start(container, alpha, "token?")
+    await drain(container)
+
+    [run] = await tasks_of(container, TaskKind.RUN)
+    assert run.status == TaskStatus.FAILED and "MISSING" in (run.error or "")

@@ -289,7 +289,10 @@ async def test_run_events_are_published_to_bus(container, make_agent, models):
     await drain(container)
     collector.cancel()
 
-    kinds = [(e["type"], e.get("event") or e.get("status")) for e in events]
+    kinds = [
+        (e.type, e.item.type if e.type == "run" and e.event == "item" else getattr(e, "status", None))
+        for e in events
+    ]
     assert ("run", "tool_call") in kinds and ("run", "tool_result") in kinds
     assert ("task", "done") in kinds
 
@@ -322,8 +325,8 @@ async def test_thinking_is_streamed_to_bus_before_the_answer(container, make_age
     await drain(container)
     collector.cancel()
 
-    run = [(e["event"], e["text"]) for e in events if e["type"] == "run"]
-    assert run == [("thinking", "先"), ("thinking", "想想"), ("text", "答案")]
+    run = [(e.item_type, e.text) for e in events if e.type == "run"]
+    assert run == [("thinking", "先"), ("thinking", "想想"), ("assistant", "答案")]
 
 
 async def test_model_sees_agent_names_never_ids(container, make_agent, models):

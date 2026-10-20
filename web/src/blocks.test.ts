@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { Item } from './api'
-import { askResult, groupSteps, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
+import type { AskView, Item } from './api'
+import { groupSteps, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
 
 const item = (type: Item['type'], text: string, tool_call_id: string | null = null): Item => ({
   type,
@@ -10,6 +10,7 @@ const item = (type: Item['type'], text: string, tool_call_id: string | null = nu
   message_id: null,
   attachments: [],
   threads: [],
+  ask: null,
 })
 
 describe('groupSteps', () => {
@@ -105,29 +106,30 @@ describe('summarizeSteps', () => {
 })
 
 describe('ask_user blocks', () => {
-  const ask = (type: Item['type'], text: string): Item => ({ ...item(type, text, 'q1'), tool_name: 'ask_user' })
+  const state: AskView = { status: 'answered', questions: [], answers: [], note: null }
+  const call = (args: string, ask: AskView | null = state): Item => ({ ...item('tool_call', args, 'q1'), tool_name: 'ask_user', ask })
+  const result = (type: Item['type'], text: string): Item => ({ ...item(type, text, 'q1'), tool_name: 'ask_user' })
 
   it('keeps questions outside the step groups as their own interaction', () => {
-    const views = groupSteps(toBlocks([item('tool_call', '{}', 'a'), ask('tool_call', '{}'), item('tool_call', '{}', 'b')]))
+    const views = groupSteps(toBlocks([item('tool_call', '{}', 'a'), call('{}'), item('tool_call', '{}', 'b')]))
     expect(views.map((v) => v.kind)).toEqual(['process', 'ask', 'process'])
   })
 
-  it('records the answer as the result, and shows a rejected call as a rejected tool step', () => {
-    const answered = toBlocks([ask('tool_call', '{}'), ask('tool_result', '{"answered":true,"answers":[],"note":null}')])
-    expect(answered).toEqual([{ kind: 'ask', ask: { callId: 'q1', result: '{"answered":true,"answers":[],"note":null}' } }])
-    const rejected = toBlocks([ask('tool_call', '{"questions": []}'), ask('tool_error', 'too short')])
-    expect(rejected.map((b) => (b.kind === 'tool' ? [b.kind, b.tool.rejected] : [b.kind]))).toEqual([['tool', true]])
+  it('takes the state from the call and does not show the result as a separate block', () => {
+    const blocks = toBlocks([call('{}'), result('tool_result', '{"answered":true,"answers":[],"note":null}')])
+    expect(blocks).toEqual([{ kind: 'ask', ask: { callId: 'q1', ask: state } }])
   })
 
-  it('reads whether and how the questions were answered from the result', () => {
-    expect(askResult('{"answered":true,"answers":[{"question":"q","selected":[],"other":"x"}],"note":null}').answers).toEqual([
-      { question: 'q', selected: [], other: 'x' },
-    ])
-    expect(askResult('{"answered":false,"answers":[],"note":"skipped"}').answered).toBe(false)
+  it('shows a rejected call as a rejected tool step', () => {
+    // 参数不合法的提问后端不给状态，按普通工具调用展示；参数合法却被退回（如这次运行不提供提问）原地换成工具错误
+    for (const ask of [null, state]) {
+      const rejected = toBlocks([call('{"questions": []}', ask), result('tool_error', 'too short')])
+      expect(rejected.map((b) => (b.kind === 'tool' ? [b.kind, b.tool.rejected] : [b.kind]))).toEqual([['tool', true]])
+    }
   })
 })
 
-describe('stopped turns', () => {
+describe('stopped runs', () => {
   it('marks where the user stopped, outside the step group', () => {
     const views = groupSteps(toBlocks([item('tool_call', '{}', 'a'), item('tool_result', 'stopped', 'a'), item('stopped', '')]))
     expect(views.map((v) => v.kind)).toEqual(['process', 'stopped'])

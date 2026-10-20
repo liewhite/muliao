@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -26,6 +25,7 @@ from muliao.errors import (
     Unauthorized,
     UpstreamFailed,
 )
+from muliao.events import HeartbeatEvent
 from muliao.triggers.precheck import PrecheckFailed
 
 log = logging.getLogger(__name__)
@@ -38,8 +38,11 @@ def _heartbeat(ui_version: str | None) -> str:
     - 前端据此判断连接是否还活着：手机切后台、代理链路断开时 EventSource 往往收不到任何错误，只能靠「多久没收到
       消息」发现；间隔随心跳下发，前端不另存一份；
     - ui_version 是服务端当前前端构建的版本：手机主屏应用常驻内存，升级后旧页面还在跑，前端据此提示刷新。"""
-    event = {"type": "heartbeat", "interval_seconds": _HEARTBEAT_SECONDS, "ui_version": ui_version}
-    return f"data: {json.dumps(event)}\n\n"
+    return _sse(HeartbeatEvent(interval_seconds=_HEARTBEAT_SECONDS, ui_version=ui_version))
+
+
+def _sse(event: BaseModel) -> str:
+    return f"data: {event.model_dump_json()}\n\n"
 
 
 def ui_version(web_dir: Path) -> str | None:
@@ -125,7 +128,7 @@ def _private_routes(heartbeat: str) -> APIRouter:
                         continue
                     except SubscriberOverflow:
                         return
-                    yield f"data: {json.dumps(event, default=str)}\n\n"
+                    yield _sse(event)
 
         return StreamingResponse(
             stream(),

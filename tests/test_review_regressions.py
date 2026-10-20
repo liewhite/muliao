@@ -85,8 +85,8 @@ async def test_vault_set_value_is_redacted_from_saved_history(container, make_ag
     async with container.db.transaction() as s:
         payloads = (await s.scalars(select(Message.payload).where(Message.session_id == session.id))).all()
     assert all("super-secret" not in p for p in payloads)
-    calls = [i for i in to_items(await container.sessions.history(session.id)) if i["type"] == "tool_call"]
-    assert "[redacted]" in calls[0]["text"]
+    calls = [i for i in to_items(await container.sessions.history(session.id)) if i.type == "tool_call"]
+    assert "[redacted]" in calls[0].text
 
 
 def test_only_transport_level_model_api_errors_are_transient():
@@ -173,8 +173,10 @@ async def test_subscriber_survives_heartbeat_timeouts():
         for _ in range(3):  # SSE 每次心跳都是一次超时
             with pytest.raises(TimeoutError):
                 await asyncio.wait_for(sub.next(), timeout=0.01)
-        bus.publish({"type": "x"})
-        assert await asyncio.wait_for(sub.next(), timeout=1) == {"type": "x"}
+        from muliao.events import SavedEvent
+
+        bus.publish(SavedEvent(session_id="s"))
+        assert await asyncio.wait_for(sub.next(), timeout=1) == SavedEvent(session_id="s")
 
 
 def test_unparseable_secret_tool_arguments_are_redacted_wholesale():

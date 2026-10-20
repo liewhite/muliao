@@ -1,38 +1,31 @@
 // 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
 
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { api, type Attachment, type Item, type TaskKind, type TaskStatus } from './api'
+import { api, type Item, type TaskKind, type TaskStatus } from './api'
 
 interface RunEventBase {
   type: 'run'
-  session_id: string | null
+  session_id: string
   agent: string
-  text: string
   /** 这一段的编号与事件序号（后端 bus.LiveRuns）：快照与 SSE 事件据此合并、去重 */
   run_id: string
   seq: number
 }
 
-/** 回答与思考的增量片段：连续的同类片段拼成一条 */
-export interface StreamEvent extends RunEventBase {
-  event: 'text' | 'thinking'
+/** 一条完整的会话条目（工具调用、工具结果），与历史同一个投影（后端 transcript）；文字可能截断过 */
+export interface RunItemEvent extends RunEventBase {
+  event: 'item'
+  item: Item
 }
 
-export interface ToolEvent extends RunEventBase {
-  event: 'tool_call' | 'tool_result' | 'tool_error'
-  /** 后端 RetryPromptPart.tool_name 可以为空 */
-  tool_name: string | null
-  tool_call_id: string
-  /** 工具结果挂给用户的文件（如 share_file）；调用事件为空 */
-  attachments: Attachment[]
-  /** 工具结果关联的子会话 id（委派）；调用事件为空 */
-  threads: string[]
+/** 流式文字：接在同类的最后一条后面（或开始新的一条） */
+export interface RunDeltaEvent extends RunEventBase {
+  event: 'delta'
+  item_type: 'assistant' | 'thinking'
+  text: string
 }
 
-export type RunEvent = StreamEvent | ToolEvent
-
-/** 增量片段按到达顺序拼成的条目类型；工具事件各自成条 */
-const STREAMED = { text: 'assistant', thinking: 'thinking' } as const
+export type RunEvent = RunItemEvent | RunDeltaEvent
 
 /** 当前这一段的快照（会话接口的 live 字段） */
 export interface LiveRun {
@@ -61,28 +54,27 @@ export function mergeLive(snapshot: LiveRun | null, current: RunEvent[]): Merged
   return { events: [...snapshot.events, ...after], gap: after.length > 0 && after[0].seq !== last + 1 }
 }
 
-const isStream = (e: RunEvent): e is StreamEvent => e.event === 'text' || e.event === 'thinking'
-
-/** 运行中的事件流转成与历史相同的展示条目：连续的同类增量拼成一条（思考与回答交替时各自成条） */
-export function liveToItems(events: RunEvent[]): Item[] {
+/** 这一段的条目：完整条目原样接上，文字增量接在同类的最后一条后面（思考与回答交替时各自成条） */
+export function liveItems(events: RunEvent[]): Item[] {
   const items: Item[] = []
   for (const e of events) {
-    const last = items[items.length - 1]
-    if (isStream(e)) {
-      const type = STREAMED[e.event]
-      if (last?.type === type) last.text += e.text
-      else items.push({ type, text: e.text, tool_name: null, tool_call_id: null, message_id: null, attachments: [], threads: [] })
-    } else {
-      items.push({
-        type: e.event,
-        text: e.text,
-        tool_name: e.tool_name,
-        tool_call_id: e.tool_call_id,
-        message_id: null,
-        attachments: e.attachments,
-        threads: e.threads,
-      })
+    if (e.event === 'item') {
+      items.push(e.item)
+      continue
     }
+    const last = items.at(-1)
+    if (last?.type === e.item_type) items[items.length - 1] = { ...last, text: last.text + e.text }
+    else
+      items.push({
+        type: e.item_type,
+        text: e.text,
+        tool_name: null,
+        tool_call_id: null,
+        message_id: null,
+        attachments: [],
+        threads: [],
+        ask: null,
+      })
   }
   return items
 }

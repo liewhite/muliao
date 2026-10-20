@@ -363,8 +363,8 @@ async def test_live_tool_result_events_carry_shared_files(container, make_agent,
     await run_tools(container, models, agent.id, [("share_file", {"path": "chart.png"})])
     collector.cancel()
 
-    tool_events = [e for e in events if e["type"] == "run" and e["event"].startswith("tool_")]
-    assert [(e["event"], [a["name"] for a in e["attachments"]]) for e in tool_events] == [
+    tool_items = [e.item for e in events if e.type == "run" and e.event == "item"]
+    assert [(i.type, [a["name"] for a in i.attachments]) for i in tool_items] == [
         ("tool_call", []),
         ("tool_result", ["chart.png"]),
     ]

@@ -21,7 +21,6 @@ from pydantic_ai.messages import (
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
-    ToolReturnPart,
     UserContent,
 )
 from pydantic_ai.toolsets import AbstractToolset
@@ -29,7 +28,6 @@ from pydantic_graph import End
 
 from muliao.agents import AgentService
 from muliao.bus import LiveRuns
-from muliao.conventions import tool_attachments, tool_threads
 from muliao.db import utcnow
 from muliao.evolution.memory import MemoryStore
 from muliao.evolution.prompts import PromptStore
@@ -44,7 +42,7 @@ from muliao.runtime.redaction import redact_call
 from muliao.runtime.scope import Audience, RunScope
 from muliao.runtime.tasks import Clock
 from muliao.runtime.tools.errors import DomainErrorsAsRetry
-from muliao.transcript import truncate
+from muliao.transcript import Item, call_item, result_item, truncate
 
 log = logging.getLogger(__name__)
 
@@ -338,56 +336,31 @@ class AgentRuntime:
     async def _forward_events(
         self, session_id: str, agent_id: str, stream: AsyncIterable[AgentStreamEvent]
     ) -> None:
-        """会话运行的事件推到会话页（bus.LiveRuns）。没有会话的运行（反思、临时 agent）没有页面在看，不转发。"""
-        base = {"type": "run", "session_id": session_id, "agent": agent_id}
+        """会话运行的事件推到会话页（bus.LiveRuns），条目与历史同一个投影（transcript）。没有会话的运行（反思、临时
+        agent）没有页面在看，不转发。工具的参数与结果在实时事件里截断（保存后历史里是完整的）。"""
         async for event in stream:
             if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
-                self._live.publish(session_id, {**base, "event": "text", "text": event.part.content})
+                self._live.publish_delta(session_id, agent_id, "assistant", event.part.content)
             elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                self._live.publish(session_id, {**base, "event": "text", "text": event.delta.content_delta})
+                self._live.publish_delta(session_id, agent_id, "assistant", event.delta.content_delta)
             elif (
                 isinstance(event, PartStartEvent)
                 and isinstance(event.part, ThinkingPart)
                 and event.part.content
             ):
-                self._live.publish(session_id, {**base, "event": "thinking", "text": event.part.content})
+                self._live.publish_delta(session_id, agent_id, "thinking", event.part.content)
             # 只更新签名、没有新内容的增量（content_delta 为 None）不用展示
             elif (
                 isinstance(event, PartDeltaEvent)
                 and isinstance(event.delta, ThinkingPartDelta)
                 and event.delta.content_delta
             ):
-                self._live.publish(
-                    session_id, {**base, "event": "thinking", "text": event.delta.content_delta}
-                )
+                self._live.publish_delta(session_id, agent_id, "thinking", event.delta.content_delta)
             elif isinstance(event, FunctionToolCallEvent):
-                call = redact_call(event.part)
-                self._live.publish(
-                    session_id,
-                    {
-                        **base,
-                        "event": "tool_call",
-                        "tool_name": call.tool_name,
-                        "tool_call_id": call.tool_call_id,
-                        "text": truncate(call.args_as_json_str(), _EVENT_TEXT_LIMIT),
-                        "attachments": [],
-                        "threads": [],
-                    },
-                )
+                self._live.publish_item(session_id, agent_id, _truncated(call_item(redact_call(event.part))))
             elif isinstance(event, FunctionToolResultEvent):
-                part = event.part
-                text = (
-                    part.model_response_str() if isinstance(part, ToolReturnPart) else part.model_response()
-                )
-                self._live.publish(
-                    session_id,
-                    {
-                        **base,
-                        "event": "tool_result" if isinstance(part, ToolReturnPart) else "tool_error",
-                        "tool_name": part.tool_name,
-                        "tool_call_id": part.tool_call_id,
-                        "text": truncate(text, _EVENT_TEXT_LIMIT),
-                        "attachments": tool_attachments(part),
-                        "threads": tool_threads(part),
-                    },
-                )
+                self._live.publish_item(session_id, agent_id, _truncated(result_item(event.part)))
+
+
+def _truncated(item: Item) -> Item:
+    return item.model_copy(update={"text": truncate(item.text, _EVENT_TEXT_LIMIT)})

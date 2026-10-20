@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { Card } from '@heroui/react'
 import { ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type AppNotification } from '../api'
+import { api, type AppNotification, sessionRoute } from '../api'
 import { useServerEvents } from '../events'
 import { notificationsMayHaveChanged, refreshUnread } from '../unread'
 import { EmptyHint, Loading, Page, formatTime, useLoad } from '../ui'
@@ -56,7 +56,7 @@ export default function Notifications() {
             <div className="flex flex-col gap-2">
               {list.map((n) =>
                 n.session_id ? (
-                  <Link key={n.id} to={`/sessions/${n.session_id}`}>
+                  <Link key={n.id} to={sessionRoute(n.session_id)}>
                     <NotificationCard n={n} />
                   </Link>
                 ) : (

@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Any
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -7,12 +6,13 @@ from pydantic import BaseModel
 from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.container import Container
+from muliao.events import RunEvent
 from muliao.models import Mail, MailKind, MailState, Origin, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.conversation import Inbound, NewSession
 from muliao.runtime.pending import CallResult, call_result
-from muliao.runtime.questions import Question, QuestionAnswer
+from muliao.runtime.questions import QuestionAnswer
 from muliao.runtime.sessions import default_title
-from muliao.transcript import Item, to_items
+from muliao.transcript import Item, annotate_asks, to_items
 
 router = APIRouter()
 
@@ -116,16 +116,9 @@ class CompactionOut(BaseModel):
     created_at: datetime
 
 
-class PendingQuestionsOut(BaseModel):
-    """一次还在等用户回答的 ask_user 提问；回答时用 tool_call_id 引用它。"""
-
-    tool_call_id: str
-    questions: list[Question]
-
-
 class LiveRunOut(BaseModel):
     run_id: str
-    events: list[dict[str, Any]]
+    events: list[RunEvent]
 
 
 class SessionDetail(BaseModel):
@@ -139,8 +132,6 @@ class SessionDetail(BaseModel):
     run: TaskOut | None
     # 这个会话开出的 thread
     threads: list[SessionOut]
-    # 现在可以回答的提问（已提交、还没交给模型的回答显示在 mail 里）
-    pending_questions: list[PendingQuestionsOut]
     # 正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状，见 bus.LiveRuns），让中途打开页面也能从这一段
     # 的开头看起；没有则为 null
     live: LiveRunOut | None
@@ -156,7 +147,7 @@ class StartIn(BaseModel):
 class ReplyIn(BaseModel):
     prompt: str
     attachments: list[str] = []
-    # 对挂起提问的回答（见 SessionDetail.pending_questions）；只回答时 prompt 可以为空
+    # 对挂起提问的回答（条目里 ask.status 为 pending 的提问）；只回答时 prompt 可以为空
     answers: dict[str, list[QuestionAnswer]] = {}
 
 
@@ -194,11 +185,20 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
     view = await c.sessions.detail(session_id)
     return SessionDetail(
         session=SessionOut.of(view.session),
-        items=[
-            {**item, "message_id": message_id}
-            for message_id, message in view.history
-            for item in to_items([message])
-        ],
+        items=annotate_asks(
+            [
+                item.model_copy(update={"message_id": message_id})
+                for message_id, message in view.history
+                for item in to_items([message])
+            ],
+            answerable=view.questions,
+            submitted={
+                call_id
+                for m in view.mail
+                if m.kind == MailKind.ANSWER and m.state == MailState.QUEUED
+                for call_id in m.answers
+            },
+        ),
         compactions=[
             CompactionOut(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
             for x in view.compactions
@@ -207,10 +207,6 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         run=None if view.run is None else TaskOut.of(view.run),
         threads=[SessionOut.of(t) for t in view.threads],
         live=None if view.live is None else LiveRunOut(run_id=view.live.run_id, events=view.live.events),
-        pending_questions=[
-            PendingQuestionsOut(tool_call_id=call_id, questions=questions)
-            for call_id, questions in view.questions.items()
-        ],
     )
 
 

@@ -9,32 +9,15 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Literal
+
+from muliao.events import RunDeltaEvent, RunItemEvent, SavedEvent, TaskEvent
+from muliao.transcript import Item
 
 log = logging.getLogger(__name__)
 
-Event = dict[str, Any]
-
-
-def task_event(
-    *,
-    task_id: int,
-    kind: str,
-    status: str,
-    session_id: str | None,
-    agent_id: str | None,
-    error: str | None,
-) -> Event:
-    """一个 task 的状态变化（前端据此从数据库重新拉取）。由 worker 发出。"""
-    return {
-        "type": "task",
-        "task_id": task_id,
-        "kind": kind,
-        "status": status,
-        "session_id": session_id,
-        "agent": agent_id,
-        "error": error,
-    }
+# 总线上的事件（心跳由 SSE 接口自己发，不经过总线）
+Event = TaskEvent | SavedEvent | RunItemEvent | RunDeltaEvent
 
 
 class SubscriberOverflow(Exception):
@@ -71,9 +54,7 @@ class EventBus:
             try:
                 sub.queue.put_nowait(event)
             except asyncio.QueueFull:
-                log.warning(
-                    "event subscriber overflowed, disconnecting it", extra={"event_type": event.get("type")}
-                )
+                log.warning("event subscriber overflowed, disconnecting it", extra={"event_type": event.type})
                 sub.overflowed = True
                 self._subscribers.discard(sub)
                 # 腾出一个位置放结束标记
@@ -95,7 +76,7 @@ class LiveRun:
     run_id: str
     # 这一段开始时会话最后一条已保存消息的 id：这之后保存的消息（这一段的回复）由这一段的事件展示，历史里先不显示
     after_message_id: int | None
-    events: list[Event]
+    events: list[RunItemEvent | RunDeltaEvent]
 
 
 class LiveRuns:
@@ -124,17 +105,44 @@ class LiveRuns:
         if session_id not in self._runs:
             raise RuntimeError(f"step saved for session {session_id} outside a begun run")
         self._runs[session_id] = LiveRun(uuid.uuid4().hex, after_message_id, [])
-        self._bus.publish({"type": "saved", "session_id": session_id})
+        self._bus.publish(SavedEvent(session_id=session_id))
 
     def end(self, session_id: str) -> None:
         self._runs.pop(session_id, None)
 
-    def publish(self, session_id: str, event: Event) -> None:
+    def publish_item(self, session_id: str, agent: str, item: Item) -> None:
+        run = self._current(session_id)
+        self._publish(
+            run,
+            RunItemEvent(
+                session_id=session_id, agent=agent, run_id=run.run_id, seq=len(run.events), item=item
+            ),
+        )
+
+    def publish_delta(
+        self, session_id: str, agent: str, item_type: Literal["assistant", "thinking"], text: str
+    ) -> None:
+        run = self._current(session_id)
+        self._publish(
+            run,
+            RunDeltaEvent(
+                session_id=session_id,
+                agent=agent,
+                run_id=run.run_id,
+                seq=len(run.events),
+                item_type=item_type,
+                text=text,
+            ),
+        )
+
+    def _current(self, session_id: str) -> LiveRun:
         run = self._runs.get(session_id)
         if run is None:
             # 会话的每次运行都由消费者先 begin；没有说明调用方漏了这一步
             raise RuntimeError(f"run event for session {session_id} outside a begun run")
-        event = {**event, "run_id": run.run_id, "seq": len(run.events)}
+        return run
+
+    def _publish(self, run: LiveRun, event: RunItemEvent | RunDeltaEvent) -> None:
         run.events.append(event)
         self._bus.publish(event)
 
