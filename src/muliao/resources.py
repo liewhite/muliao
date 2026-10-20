@@ -214,14 +214,18 @@ class ResourceRepo:
         _, status = await self._git(
             "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--", *RESOURCE_PATHSPEC
         )
-        entries = [entry for entry in status.split("\0") if entry]
-        if not entries:
-            return
-        paths = [entry[3:] for entry in entries]
         # 状态码第二位是工作区相对暂存区的变化；已经完整暂存的（如上次留下的删除）不再 add：路径不在工作区时 add 会报错
-        unstaged = [entry[3:] for entry in entries if entry[1] != " "]
+        unstaged = [entry[3:] for entry in status.split("\0") if entry and entry[1] != " "]
         if unstaged:
             await self._git("add", "-A", "--", *unstaged)
+        # 要提交什么由 add 之后的暂存区决定，而不是 add 之前的状态：add 会改变它（暂存过又在工作区删掉的新文件，
+        # add 之后既不在 HEAD 也不在暂存区，不能再交给 commit）
+        _, staged = await self._git(
+            "diff", "--cached", "--name-only", "-z", "--no-renames", "--", *RESOURCE_PATHSPEC
+        )
+        paths = [rel for rel in staged.split("\0") if rel]
+        if not paths:
+            return
         await self._git(
             "commit", "-q", "-m", RECONCILE_MESSAGE, f"--author={SYSTEM} <{SYSTEM}@muliao>", "--", *paths
         )

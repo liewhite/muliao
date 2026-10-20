@@ -408,3 +408,33 @@ async def test_writing_a_skill_whose_directory_is_a_nested_repository_fails_inst
         await skills.write(ALPHA, "cloned", "When digesting", "steps", ALPHA)
     # 「报错」等于「没有生效」
     assert not (skill_dir / "SKILL.md").exists()
+
+
+@pytest.mark.parametrize(
+    ("staged", "then"),
+    [
+        ("new", "delete"),  # AD：暂存的新文件又被删掉（如写入失败后回滚时 git reset 也失败）
+        ("edit", "edit"),  # MM
+        ("edit", "delete"),  # MD
+    ],
+)
+async def test_reconcile_converges_from_any_mix_of_staged_and_unstaged_changes(
+    repo: ResourceRepo, staged: str, then: str
+):
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / ("fresh" if staged == "new" else "digest")
+    skill_dir.mkdir(exist_ok=True)
+    path = skill_dir / "SKILL.md"
+    path.write_text("---\nname: x\ndescription: y\n---\nstaged\n")
+    await asyncio.to_thread(_git, "-C", str(repo.root), "add", "-A")
+    if then == "delete":
+        path.unlink()
+    else:
+        path.write_text("---\nname: x\ndescription: y\n---\nedited again\n")
+
+    await repo.recover()
+
+    assert await asyncio.to_thread(_git, "-C", str(repo.root), "status", "--porcelain") == ""
+    # 收敛后正常写入照常进行
+    assert await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA) is not None
