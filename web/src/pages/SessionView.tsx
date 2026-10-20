@@ -348,45 +348,65 @@ function Composer({
   )
 }
 
+/** 最近的可滚动祖先：页面怎么布局由 Page 决定，这里不依赖它的结构 */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p !== null; p = p.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p
+  }
+  return null
+}
+
 /**
  * 新内容到来时只在用户本来就在底部时跟随；往上翻看历史时不把人拽下来。
- * 是否在底部看底部锚点是否可见（IntersectionObserver），不依赖页面的滚动容器。
+ *
+ * 「在不在底部」只有一个来源：底部锚点是否可见（IntersectionObserver）。高度的任何变化（新数据、流式输出、图片
+ * 加载完、输入框变高）都由 ResizeObserver 发现：按 HTML 规范它在同一帧里先于 IntersectionObserver 执行，此时
+ * 读到的可见状态必然是变化之前的，于是「之前在底部」就滚到新的底部。打开会话、发送消息后要跳到底，是一次性的标记。
+ * 代价：在底部展开最后一个折叠块时，页面会跟着滚到它的末尾。
  */
 function useFollowBottom() {
   const anchor = useRef<HTMLDivElement | null>(null)
-  const observer = useRef<IntersectionObserver | null>(null)
-  // 渲染新内容之前是否在底部：观察回调在布局之后才到，effect 里读到的正是更新前的状态
-  const following = useRef(true)
-  const [atBottom, setAtBottom] = useState(true)
+  const visible = useRef(false)
+  const jump = useRef(true)
+  // null：锚点没挂载（加载中），不显示「回到底部」
+  const [atBottom, setAtBottom] = useState<boolean | null>(null)
+  const observers = useRef<{ disconnect(): void }[]>([])
 
-  // 锚点在数据加载后才出现，用回调 ref 在它挂载时开始观察
-  const ref = useCallback((el: HTMLDivElement | null) => {
-    observer.current?.disconnect()
-    anchor.current = el
-    if (el === null) return
-    // 开始观察时的第一次回调只反映刚挂载、还没滚动的位置，不是用户的操作，忽略
-    let initial = true
-    observer.current = new IntersectionObserver(([entry]) => {
-      if (initial) {
-        initial = false
+  const follow = useCallback(() => {
+    if (!jump.current && !visible.current) return
+    jump.current = false
+    anchor.current?.scrollIntoView({ block: 'end' })
+  }, [])
+
+  // 锚点在数据加载后才出现，用回调 ref 在它挂载时开始观察、卸载时停止
+  const ref = useCallback(
+    (el: HTMLDivElement | null) => {
+      observers.current.forEach((o) => o.disconnect())
+      observers.current = []
+      anchor.current = el
+      if (el === null) {
+        setAtBottom(null)
         return
       }
-      following.current = entry.isIntersecting
-      setAtBottom(entry.isIntersecting)
-    })
-    observer.current.observe(el)
-  }, [])
-  const follow = useCallback(() => {
-    if (following.current) anchor.current?.scrollIntoView({ block: 'end' })
-  }, [])
-  const refollow = useCallback(() => {
-    following.current = true
+      const intersection = new IntersectionObserver(([entry]) => {
+        visible.current = entry.isIntersecting
+        setAtBottom(entry.isIntersecting)
+      })
+      intersection.observe(el)
+      const resize = new ResizeObserver(follow)
+      for (const box of [el.parentElement, scrollParent(el)]) if (box !== null) resize.observe(box)
+      observers.current = [intersection, resize]
+    },
+    [follow],
+  )
+  /** 下一次高度变化时跳到底（打开会话、发送消息） */
+  const jumpNext = useCallback(() => {
+    jump.current = true
   }, [])
   const toBottom = useCallback(() => {
-    following.current = true
     anchor.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
   }, [])
-  return { ref, atBottom, follow, refollow, toBottom }
+  return { ref, atBottom, jumpNext, toBottom }
 }
 
 export default function SessionView() {
@@ -438,9 +458,8 @@ export default function SessionView() {
   }, [id, unread])
 
   // 打开（或切换到）一个会话时从底部看起
-  const { refollow, follow } = bottom
-  useEffect(refollow, [id, refollow])
-  useEffect(follow, [detail.data, shownLive.length, follow])
+  const { jumpNext } = bottom
+  useEffect(() => jumpNext(), [id, jumpNext])
 
   async function send() {
     // Enter 键不经过按钮的禁用状态：请求进行中再按一次不能重复发送
@@ -450,7 +469,7 @@ export default function SessionView() {
     const ok = await action.run(() => api.reply(id, text.trim(), sent.ids))
     if (ok) {
       // 自己发的消息总要看到
-      refollow()
+      jumpNext()
       // 发送过程中又改了输入框就保留新内容
       setDraft((current) => (current === text ? '' : current))
       uploads.removeMany(sent.keys)
@@ -496,20 +515,20 @@ export default function SessionView() {
         </>
       }
       footer={
-        <div className="relative border-t border-separator bg-surface px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
-          {!bottom.atBottom && (
-            <Button
-              isIconOnly
-              size="sm"
-              variant="secondary"
-              className="absolute -top-12 right-4 rounded-full shadow"
-              aria-label="回到底部"
-              onPress={bottom.toBottom}
-            >
-              <ArrowDown className="size-4" />
-            </Button>
-          )}
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+        <div className="border-t border-separator bg-surface px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
+          <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2">
+            {bottom.atBottom === false && (
+              <Button
+                isIconOnly
+                size="sm"
+                variant="secondary"
+                className="absolute -top-14 right-0 rounded-full shadow"
+                aria-label="回到底部"
+                onPress={bottom.toBottom}
+              >
+                <ArrowDown className="size-4" />
+              </Button>
+            )}
             <ErrorAlert error={action.error} />
             {session?.private ? (
               <div className="flex items-center justify-center gap-1.5 py-1 text-sm text-muted">
@@ -566,7 +585,7 @@ export default function SessionView() {
                 </div>
               )}
               <UnlinkedThreads threads={unlinkedThreads(d.items, d.threads)} agents={agents.data} />
-              {/* 底部锚点：与最后 64px 重叠，离底部这么近仍算「在底部」 */}
+              {/* 底部锚点：净高度为 0，减去上方 12px 的间距后与内容最后约 50px 重叠，离底部这么近仍算「在底部」 */}
               <div ref={bottom.ref} aria-hidden className="pointer-events-none -mt-16 h-16" />
             </div>
           )
