@@ -234,7 +234,12 @@ async def test_corrupt_mcp_config_is_rejected_with_its_path_but_can_be_deleted(c
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     await container.mcp.add(None, "echo", spec, probe=False, author="user")
     path = container.resources.owner_dir(None) / "mcp" / "echo.json"
-    for broken in ('{"not json"', path.read_text().replace("true", '"false"')):
+    import json
+
+    original = path.read_text()
+    # 坏的 JSON、类型不对、缺字段（被停用的 server 丢了 enabled 不能悄悄变回启用）
+    missing = json.dumps({k: v for k, v in json.loads(original).items() if k != "enabled"})
+    for broken in ('{"not json"', original.replace("true", '"false"'), missing):
         path.write_text(broken)
         with pytest.raises(CorruptState, match=f"corrupt MCP config {path}"):
             container.mcp.list(None)

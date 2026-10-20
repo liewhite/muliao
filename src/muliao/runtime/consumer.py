@@ -31,7 +31,7 @@ from muliao.runtime.delegations import Ending, Outcome, in_session_in, running_f
 from muliao.runtime.finish import RunEnd, RunFinisher, load_session
 from muliao.runtime.halt import SessionHalt
 from muliao.runtime.history import load_context
-from muliao.runtime.mailbox import discard_in, handed_to, queued_in
+from muliao.runtime.mailbox import RunPayload, discard_in, handed_to, queued_in
 from muliao.runtime.pending import (
     DEFERRED_TOOLS,
     Delegated,
@@ -277,6 +277,7 @@ class RunHandler:
     async def execute(self, task: Task) -> Commit:
         if task.session_id is None:
             raise RuntimeError(f"run {task.id} has no session")
+        RunPayload.of(task)  # 在第一现场校验存下的 payload，不等到唤醒或失败收尾时才读到它
         return await self._consumer.run(task.id, task.session_id)
 
     async def failed_in(self, s: AsyncSession, task: Task) -> None:

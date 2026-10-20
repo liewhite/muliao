@@ -18,12 +18,12 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
-from muliao.errors import NotFound
+from muliao.errors import CorruptState, NotFound
 from muliao.models import Mail, MailKind, MailState, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.history import load_context
 from muliao.runtime.pending import delegated_in, waiting
@@ -160,7 +160,10 @@ class RunPayload(BaseModel):
     def of(cls, run: Task) -> RunPayload:
         if run.kind != TaskKind.RUN:
             raise RuntimeError(f"task {run.id} is a {run.kind}, not a run")
-        return cls.model_validate(run.payload)
+        try:
+            return cls.model_validate(run.payload)
+        except ValidationError as e:
+            raise CorruptState(f"run {run.id} has a malformed payload {run.payload!r}: {e}") from e
 
 
 def handed_to(mail: Mail, run: Task) -> bool:

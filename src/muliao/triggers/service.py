@@ -191,6 +191,7 @@ class TriggerService:
                 trigger.config, trigger.state = derived_config, {**trigger.state, **derived}
             if enabled is not None:
                 trigger.enabled = enabled
+                # 重新启用只清停用的原因；前置检查的错误留着（界面一直显示它），它恢复之前不会再告警一次
                 if reenabled:
                     trigger.disabled_reason = None
         self._changed()

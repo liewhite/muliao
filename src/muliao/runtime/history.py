@@ -20,8 +20,8 @@ class SessionContext:
     summary: str | None
     messages: list[ModelMessage]
     # 最近一次压缩写入之前就有的模型回复条数（在 messages 里）：它们报告的 token 数是压缩前的上下文大小，
-    # 判断要不要再压缩只看之后的回复（runtime.compaction.Compactor.verdict）；没压缩过为 0
-    stale_responses: int
+    # 判断要不要再压缩只看之后的回复（runtime.compaction.Compactor.verdict）；没压缩过为 None
+    stale_responses: int | None
 
 
 async def latest_compaction(s: AsyncSession, session_id: str) -> Compaction | None:
@@ -48,10 +48,14 @@ async def load_context(s: AsyncSession, session_id: str) -> SessionContext:
     compaction = await latest_compaction(s, session_id)
     rows = await rows_after(s, session_id, compaction.through_message_id if compaction else 0)
     messages = load_messages(r.payload for r in rows)
-    stale = sum(
-        1
-        for r, m in zip(rows, messages, strict=True)
-        if compaction is not None and r.id <= compaction.at_message_id and isinstance(m, ModelResponse)
+    stale = (
+        None
+        if compaction is None
+        else sum(
+            1
+            for r, m in zip(rows, messages, strict=True)
+            if r.id <= compaction.at_message_id and isinstance(m, ModelResponse)
+        )
     )
     if messages and isinstance(messages[0], ModelResponse):
         messages.insert(0, ModelRequest(parts=[UserPromptPart(CONTINUATION)]))

@@ -52,7 +52,7 @@ class RunState:
     messages: list[ModelMessage] = field(default_factory=list)
     last_row: Message | None = None
     # 上下文里最近一次压缩之前就有的模型回复条数（runtime.history.SessionContext.stale_responses），加载上下文时更新
-    stale_responses: int = 0
+    stale_responses: int | None = None
     # 压缩不下去了（保留窗口之外没有可压缩的，或刚压缩过仍超阈值）：这次运行不再因为上下文大小停下
     compaction_exhausted: bool = False
 
@@ -112,10 +112,6 @@ class Steps:
             return False
         verdict = self._compactor.verdict(state.session.id, messages, state.stale_responses)
         if verdict == Verdict.HOPELESS:
-            log.warning(
-                "context still over the compaction threshold right after compacting; not compacting again this run",
-                extra={"session_id": state.session.id, "run_id": state.run_id},
-            )
             state.compaction_exhausted = True
         return verdict == Verdict.DUE
 

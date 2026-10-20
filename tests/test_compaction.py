@@ -316,8 +316,8 @@ async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
 
     # 回复的上下文大小由脚本标在回复上（流式的 function model 自己估算 usage）：标了 big 的算超阈值
     def tokens(history):  # noqa: ANN001, ANN202
-        last = next(m for m in reversed(history) if isinstance(m, ModelResponse))
-        return 5000 if "big" in str(last.parts) else 100
+        last = next((m for m in reversed(history) if isinstance(m, ModelResponse)), None)
+        return None if last is None else 5000 if "big" in str(last.parts) else 100
 
     monkeypatch.setattr(compaction, "context_tokens", tokens)
     monkeypatch.setattr(container.compactor, "_threshold", 1000)

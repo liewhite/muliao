@@ -87,6 +87,8 @@ class AgentDefaultsOut(BaseModel):
     reflect_every: int
     # 当前配置下可选的工具组，按目录顺序
     groups: list[ToolGroupOut]
+    # 新建 agent 默认开启的组
+    default_tool_groups: list[str]
 
 
 @router.get("/agent-defaults")
@@ -100,6 +102,7 @@ async def agent_defaults(c: C) -> AgentDefaultsOut:
             ToolGroupOut(name=g.name, label=g.label, full_access=g.full_access, default=g.default)
             for g in d.groups
         ],
+        default_tool_groups=d.tool_groups,
     )
 
 

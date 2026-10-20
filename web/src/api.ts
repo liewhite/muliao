@@ -366,6 +366,8 @@ export interface AgentDefaults {
   reflect_every: number
   /** 当前配置下可选的工具组，按目录顺序 */
   groups: ToolGroup[]
+  /** 新建 agent 默认开启的组 */
+  default_tool_groups: string[]
 }
 
 export const api = {

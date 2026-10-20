@@ -87,11 +87,10 @@ function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentI
     model: defaults.model,
     instructions: '',
     reflect_every: defaults.reflect_every,
-    tool_groups: defaults.groups.filter((g) => g.default).map((g) => g.name),
+    tool_groups: defaults.default_tool_groups,
   }
 }
 
-/** 工具组的中文说明；名称本身来自服务端，未登记的原样显示 */
 // 「≈全部权限」：拿到它就能间接做任何事（shell、借别的 agent 之手、改自己的配置、起任意命令的 MCP……）
 /** 工具组的说明与风险由后端给出（tool_catalog），这里只负责展示 */
 function groupLabel(group: ToolGroup): string {

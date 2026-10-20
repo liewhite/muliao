@@ -128,14 +128,22 @@ class Compactor:
             return False
         return tokens > self._threshold
 
-    def verdict(self, session_id: str, history: Sequence[ModelMessage], stale_responses: int) -> Verdict:
+    def verdict(
+        self, session_id: str, history: Sequence[ModelMessage], stale_responses: int | None
+    ) -> Verdict:
         """该不该压缩，唯一规则。只认最近一次压缩之后的回复报告的 token 数（stale_responses 之前的反映的是压缩前的
         上下文）。压缩后的第一次回复就超阈值，说明保留窗口本身就超了，再压也压不下去（HOPELESS）：这次运行不再压缩，
         上下文继续变大直到超出模型的上限时运行失败可见，重试时重新判断（用最终正确性换掉「保留窗口也要切」的复杂度）。"""
         responses = sum(isinstance(m, ModelResponse) for m in history)
-        if responses <= stale_responses or not self.over_threshold(session_id, history):
+        if (stale_responses is not None and responses <= stale_responses) or not self.over_threshold(
+            session_id, history
+        ):
             return Verdict.NOT_DUE
-        if stale_responses and responses == stale_responses + 1:
+        if stale_responses is not None and responses == stale_responses + 1:
+            log.warning(
+                "context still over the compaction threshold right after compacting; not compacting again this run",
+                extra={"session_id": session_id},
+            )
             return Verdict.HOPELESS
         return Verdict.DUE
 

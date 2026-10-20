@@ -117,6 +117,7 @@ async def test_agent_defaults_endpoint_reflects_config(client, container):
             {"name": g.name, "label": g.label, "full_access": g.full_access, "default": g.default}
             for g in container.agents.defaults.groups
         ],
+        "default_tool_groups": container.agents.defaults.tool_groups,
     }
     assert container.settings.runtime.default_reflect_every == 30
 

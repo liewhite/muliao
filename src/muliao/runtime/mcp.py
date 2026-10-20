@@ -37,17 +37,18 @@ class McpTransport(StrEnum):
 
 class McpConfig(BaseModel):
     """一个 MCP server 的配置，也是文件里存的内容：除归属与名称以外的字段（这两项由文件位置决定，不存第二份）。
-    传输方式与字段的搭配在这里校验，写入与读回同一条规则。"""
+    传输方式与字段的搭配在这里校验，写入与读回同一条规则。字段全部必填：存下的文件总是写全（_dump），缺字段就是
+    被改坏了；调用方输入里可以省略的字段由 mcp_config 补上。"""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     transport: McpTransport
-    command: str | None = None
-    args: list[str] = []
-    url: str | None = None
-    env: dict[str, str] = {}
-    headers: dict[str, str] = {}
-    enabled: bool = True
+    command: str | None
+    args: list[str]
+    url: str | None
+    env: dict[str, str]
+    headers: dict[str, str]
+    enabled: bool
 
     @model_validator(mode="after")
     def _fits_transport(self) -> McpConfig:
@@ -61,8 +62,25 @@ class McpConfig(BaseModel):
         return self
 
 
-def mcp_config(**fields: object) -> McpConfig:
-    """调用方（用户、agent）给出的配置：不合法是输入错误。"""
+def mcp_config(
+    *,
+    transport: McpTransport,
+    command: str | None = None,
+    args: list[str] | None = None,
+    url: str | None = None,
+    env: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> McpConfig:
+    """调用方（用户、agent）给出的新配置，可以省略与传输方式无关的字段；新增的 server 是启用的。不合法是输入错误。"""
+    fields = {
+        "transport": transport,
+        "command": command,
+        "args": args or [],
+        "url": url,
+        "env": env or {},
+        "headers": headers or {},
+        "enabled": True,
+    }
     try:
         return McpConfig.model_validate(fields)
     except ValidationError as e:

@@ -65,13 +65,11 @@ class SessionService:
         live = self._live.snapshot(session_id)
         async with self._db.transaction() as s:
             session = await self._get(s, session_id)
-            rows = (
-                await s.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id))
-            ).all()
+            history = await _history_in(s, session_id)
             shown = [
-                r
-                for r in rows
-                if live is None or live.after_message_id is None or r.id <= live.after_message_id
+                (message_id, message)
+                for message_id, message in history
+                if live is None or live.after_message_id is None or message_id <= live.after_message_id
             ]
             compactions = list(
                 (
@@ -83,9 +81,7 @@ class SessionService:
             latest = await latest_run(s, session_id)
             return SessionView(
                 session=session,
-                history=list(
-                    zip([r.id for r in shown], load_messages(r.payload for r in shown), strict=True)
-                ),
+                history=shown,
                 compactions=compactions,
                 mail=await visible_in(s, session_id),
                 run=None if latest is None or latest.status == TaskStatus.DONE else latest,
@@ -140,10 +136,7 @@ class SessionService:
         """完整原始历史（不受压缩影响），附消息 id。"""
         async with self._db.transaction() as s:
             await self._get(s, session_id)
-            rows = (
-                await s.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id))
-            ).all()
-        return list(zip([r.id for r in rows], load_messages(r.payload for r in rows), strict=True))
+            return await _history_in(s, session_id)
 
     async def mark_read(self, session_id: str) -> None:
         async with self._db.transaction() as s:
@@ -159,3 +152,11 @@ class SessionService:
                     f"session {session_id} is a private thread; delete the session that asked it instead"
                 )
             await delete_sessions(s, self._queue, [session])
+
+
+async def _history_in(s: AsyncSession, session_id: str) -> list[tuple[int, ModelMessage]]:
+    """完整原始历史（不受压缩影响），附消息 id，按保存顺序。"""
+    rows = (
+        await s.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id))
+    ).all()
+    return list(zip([r.id for r in rows], load_messages(r.payload for r in rows), strict=True))
