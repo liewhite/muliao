@@ -2,8 +2,8 @@
 
 不保留迁移历史：表结构变化时重新生成这一个版本，数据库重建（见 docs/architecture.md「数据库迁移」）。
 
-Revision ID: dcdfc8219751
-Create Date: 2026-10-20 16:30:56.533608
+Revision ID: dd730251da31
+Create Date: 2026-10-20 16:36:48.492565
 Revises:
 """
 
@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "dcdfc8219751"
+revision: str = "dd730251da31"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -146,6 +146,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("session_id", sa.String(length=36), nullable=False),
         sa.Column("through_message_id", sa.Integer(), nullable=False),
+        sa.Column("at_message_id", sa.Integer(), nullable=False),
         sa.Column("summary", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),

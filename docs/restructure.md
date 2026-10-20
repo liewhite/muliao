@@ -44,7 +44,7 @@
 - **Consumer 拆分**：逐步执行与保存（`runtime/steps.py`）、停止会话（`runtime/halt.py`）、收尾（`runtime/finish.py`：推送、反思、委派结局、唤醒）、编排（`consumer.py`）。
 - **规则只写一遍**：`conventions.is_stopped(message)`、`conventions.answer_text(messages)`、`questions.pending_calls(history)`、`questions.waiting(history, queued)`；`pending_in_session` 改为从完整历史推导。
 - **「之后才到」按信件 id**：运行投递时在 payload 记下当时最大的信件 id（`RunPayload.through_mail_id`，唯一读写处在 mailbox），不再比较两张表的时间。
-- **错误分类**：存储的数据坏了或缺了统一抛 `errors.CorruptState`（不是 `DomainError`，不交还模型、不映射成 4xx）；`UpstreamFailed` 移出 `DomainError`，`PrecheckFailed` 继承它。
+- **错误分类**：存储的数据坏了或缺了统一抛 `errors.CorruptState`（不是 `DomainError`，不交还模型、不映射成 4xx）；`UpstreamFailed` 移出 `DomainError`（API 单独映射 502）。`PrecheckFailed` 留在 `DomainError`：检查脚本坏了是 agent 能改的，`trigger_run` 要把原因交还模型。
 - **会话详情读模型**收进会话服务（`SessionService.detail`），路由只做 DTO 映射。
 - **触发器**：`last_error` 拆成 `disabled_reason` 与 `precheck_error`。
 - **通知**：读模型从 `delivery/` 移到 `notifications.py`，`delivery/` 只留投递。

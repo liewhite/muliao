@@ -7,10 +7,8 @@ from pydantic import BaseModel
 from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.container import Container
-from muliao.errors import NotFound
 from muliao.models import Mail, MailKind, MailState, Origin, Session, Task, TaskKind, TaskStatus
-from muliao.runtime.conversation import Inbound, NewSession, answerable_questions
-from muliao.runtime.mailbox import latest_run, visible_in
+from muliao.runtime.conversation import Inbound, NewSession
 from muliao.runtime.pending import CallResult, call_result
 from muliao.runtime.questions import Question, QuestionAnswer
 from muliao.runtime.sessions import default_title
@@ -193,37 +191,25 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
 
 @router.get("/sessions/{session_id}")
 async def get_session(c: C, session_id: str) -> SessionDetail:
-    session = await c.sessions.get(session_id)
-    # 先取快照再取历史：快照这一段已在展示的回复不在历史里重复显示（bus.LiveRuns）；之间换了段时，新保存的消息
-    # 照旧由旧快照展示，saved 事件随后让前端重新拉取
-    run = c.live.snapshot(session_id)
-    history = await c.sessions.history_with_ids(session_id)
-    items = [
-        {**item, "message_id": message_id}
-        for message_id, message in history
-        if run is None or run.after_message_id is None or message_id <= run.after_message_id
-        for item in to_items([message])
-    ]
-    compactions = [
-        CompactionOut(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
-        for x in await c.sessions.compactions(session_id)
-    ]
-    async with c.db.transaction() as s:
-        mail = await visible_in(s, session_id)
-        latest = await latest_run(s, session_id)
-        # 与 receive 同一个判断：已经提交了回答的提问不再显示表单
-        pending = await answerable_questions(s, session_id)
+    view = await c.sessions.detail(session_id)
     return SessionDetail(
-        session=SessionOut.of(session),
-        items=items,
-        compactions=compactions,
-        mail=await mail_outs(c, mail),
-        run=None if latest is None or latest.status == TaskStatus.DONE else TaskOut.of(latest),
-        threads=[SessionOut.of(t) for t in await c.sessions.threads(session_id)],
-        live=None if run is None else LiveRunOut(run_id=run.run_id, events=run.events),
+        session=SessionOut.of(view.session),
+        items=[
+            {**item, "message_id": message_id}
+            for message_id, message in view.history
+            for item in to_items([message])
+        ],
+        compactions=[
+            CompactionOut(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
+            for x in view.compactions
+        ],
+        mail=await mail_outs(c, view.mail),
+        run=None if view.run is None else TaskOut.of(view.run),
+        threads=[SessionOut.of(t) for t in view.threads],
+        live=None if view.live is None else LiveRunOut(run_id=view.live.run_id, events=view.live.events),
         pending_questions=[
             PendingQuestionsOut(tool_call_id=call_id, questions=questions)
-            for call_id, questions in pending.items()
+            for call_id, questions in view.questions.items()
         ],
     )
 
@@ -260,11 +246,7 @@ class CompactOut(BaseModel):
 @router.post("/sessions/{session_id}/compact", status_code=202)
 async def compact(c: C, session_id: str) -> CompactOut:
     """手动压缩上下文（自动压缩见 runtime.compaction）：排在正在进行与排队的运行之后。"""
-    async with c.db.transaction() as s:
-        session = await s.get(Session, session_id)
-        if session is None:
-            raise NotFound(f"session {session_id!r} not found")
-        return CompactOut(queued=await c.compactor.request_in(s, session))
+    return CompactOut(queued=await c.compactor.request(session_id))
 
 
 @router.post("/sessions/{session_id}/read", status_code=204)

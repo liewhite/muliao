@@ -233,7 +233,7 @@ def build_container(
         AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, tool_group_names),
     )
     agent_lifecycle = AgentLifecycle(db, agents, queue)
-    sessions = SessionService(db, queue)
+    sessions = SessionService(db, queue, live)
     threads = Threads(queue)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(resources, vault)

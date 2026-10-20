@@ -14,13 +14,15 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from enum import StrEnum
 
 from pydantic_ai.messages import ModelMessage, ModelResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.conventions import calls_in, results_in
 from muliao.db import Database
+from muliao.errors import NotFound
 from muliao.models import Agent, Compaction, Message, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.codec import load_messages
 from muliao.runtime.history import latest_compaction, rows_after
@@ -95,6 +97,13 @@ def compaction_prompt(previous_summary: str | None, steps: list[list[Message]]) 
     return f"{previous}<conversation>\n{transcript}\n</conversation>\n\nWrite the updated summary."
 
 
+class Verdict(StrEnum):
+    NOT_DUE = "not_due"
+    DUE = "due"
+    # 刚压缩过，上下文仍超阈值：保留窗口本身就超了
+    HOPELESS = "hopeless"
+
+
 class Compactor:
     def __init__(
         self, db: Database, runtime: AgentRuntime, queue: TaskQueue, *, threshold_tokens: int, keep_steps: int
@@ -119,6 +128,17 @@ class Compactor:
             return False
         return tokens > self._threshold
 
+    def verdict(self, session_id: str, history: Sequence[ModelMessage], stale_responses: int) -> Verdict:
+        """该不该压缩，唯一规则。只认最近一次压缩之后的回复报告的 token 数（stale_responses 之前的反映的是压缩前的
+        上下文）。压缩后的第一次回复就超阈值，说明保留窗口本身就超了，再压也压不下去（HOPELESS）：这次运行不再压缩，
+        上下文继续变大直到超出模型的上限时运行失败可见，重试时重新判断（用最终正确性换掉「保留窗口也要切」的复杂度）。"""
+        responses = sum(isinstance(m, ModelResponse) for m in history)
+        if responses <= stale_responses or not self.over_threshold(session_id, history):
+            return Verdict.NOT_DUE
+        if stale_responses and responses == stale_responses + 1:
+            return Verdict.HOPELESS
+        return Verdict.DUE
+
     async def compact(self, session: Session, agent: Agent) -> int:
         """压缩到保留窗口之外没有可压缩的为止（每一批一次模型调用）。返回压缩的步数；为 0 表示没有可压缩的。"""
         compacted = 0
@@ -137,7 +157,16 @@ class Compactor:
             )
             through = chosen[-1][-1].id
             async with self._db.transaction() as s:
-                s.add(Compaction(session_id=session.id, through_message_id=through, summary=summary))
+                s.add(
+                    Compaction(
+                        session_id=session.id,
+                        through_message_id=through,
+                        at_message_id=await s.scalar(
+                            select(func.max(Message.id)).where(Message.session_id == session.id)
+                        ),
+                        summary=summary,
+                    )
+                )
             compacted += len(chosen)
             log.info(
                 "session compacted",
@@ -152,8 +181,16 @@ class Compactor:
                 break
         return compacted
 
-    async def request_in(self, s: AsyncSession, session: Session) -> bool:
-        """用户手动压缩：在会话的 lane 上投递一次（排在正在进行与排队的运行之后）；已有待执行的不重复投递。"""
+    async def request(self, session_id: str) -> bool:
+        """用户手动压缩：在会话的 lane 上投递一次（排在正在进行与排队的运行之后）；已有待执行的不重复投递。
+        返回是否新投递了。"""
+        async with self._db.transaction() as s:
+            session = await s.get(Session, session_id)
+            if session is None:
+                raise NotFound(f"session {session_id!r} not found")
+            return await self._request_in(s, session)
+
+    async def _request_in(self, s: AsyncSession, session: Session) -> bool:
         lane = session_lane(session.id)
         pending = await s.scalar(
             select(Task.id)

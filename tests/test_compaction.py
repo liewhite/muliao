@@ -306,3 +306,53 @@ async def test_a_run_that_compacts_at_its_start_does_not_compact_again_before_a_
 
     # 运行开始时压缩一次；第一次请求时上一条回复的 token 数还是压缩前的，不能据此再压
     assert len(recorder.compactions) == 1
+
+
+async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
+    container, make_agent, models, monkeypatch
+):
+    """手动压缩只写摘要、不产生新回复：之后那次运行开头不能拿压缩前的 token 数判断，更不能因此整次运行不再压缩。"""
+    import muliao.runtime.compaction as compaction
+
+    # 回复的上下文大小由脚本标在回复上（流式的 function model 自己估算 usage）：标了 big 的算超阈值
+    def tokens(history):  # noqa: ANN001, ANN202
+        last = next(m for m in reversed(history) if isinstance(m, ModelResponse))
+        return 5000 if "big" in str(last.parts) else 100
+
+    monkeypatch.setattr(compaction, "context_tokens", tokens)
+    monkeypatch.setattr(container.compactor, "_threshold", 1000)
+    monkeypatch.setattr(container.compactor, "_keep_steps", 1)
+    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    summaries = {"n": 0}
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if info.instructions == COMPACTION_INSTRUCTIONS:
+            summaries["n"] += 1
+            return ModelResponse(parts=[TextPart(f"SUMMARY#{summaries['n']}")])
+        if last_user_prompt(messages) != "long task":
+            return ModelResponse(parts=[TextPart("big answer")])
+        # 长任务：第一步上下文小，第二步变大，第三步收尾
+        done = sum(1 for m in messages if isinstance(m, ModelResponse) and "c-" in str(m.parts))
+        if done == 0:
+            return ModelResponse(
+                parts=[ToolCallPart("memory_append", {"entry": "- a"}, tool_call_id="c-small")]
+            )
+        if done == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("memory_append", {"entry": "- b"}, tool_call_id="c-big")]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    models.models["m"] = scripted(fn)
+    session = await start(container, alpha, "first", origin=Origin.TRIGGER)
+    await drain(container)
+    await reply(container, session.id, "second")
+    await drain(container)
+    await _enqueue_compaction(container, session)
+    await drain(container)
+    manual = summaries["n"]
+    assert manual >= 1
+
+    await reply(container, session.id, "long task")
+    await drain(container)
+    assert summaries["n"] > manual

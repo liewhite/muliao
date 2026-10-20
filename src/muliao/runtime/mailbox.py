@@ -18,6 +18,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,7 +108,12 @@ async def wake_in(
         # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型
         return None
     run = queue.enqueue(
-        s, kind=TaskKind.RUN, lane=lane, agent_id=session.agent_id, session_id=session.id, payload={}
+        s,
+        kind=TaskKind.RUN,
+        lane=lane,
+        agent_id=session.agent_id,
+        session_id=session.id,
+        payload=RunPayload(through_mail_id=queued[-1].id).model_dump(),
     )
     log.info("consumer woken", extra={"session_id": session.id, "queued": len(queued)})
     return run
@@ -143,11 +149,24 @@ async def latest_run(s: AsyncSession, session_id: str) -> Task | None:
     )
 
 
+class RunPayload(BaseModel):
+    """一次运行（run task）的 payload，唯一读写处在这里。输入都在信箱里；这里只记投递它时信箱里最新的信件 id。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    through_mail_id: int
+
+    @classmethod
+    def of(cls, run: Task) -> RunPayload:
+        if run.kind != TaskKind.RUN:
+            raise RuntimeError(f"task {run.id} is a {run.kind}, not a run")
+        return cls.model_validate(run.payload)
+
+
 def handed_to(mail: Mail, run: Task) -> bool:
-    """这封排队的信件已经交给过这次运行：不晚于它创建（它每一次尝试开头都会取走当时排着的信件）。唤醒（wake_in 的
-    「之后才到」）与最终失败时了结委派（RunHandler.failed_in）共用这一条规则。两张表的 created_at 出自同一个时钟
-    （db.utcnow），依赖系统时间不回拨。"""
-    return mail.created_at <= run.created_at
+    """这封排队的信件已经交给过这次运行：投递它时就在信箱里了（它每一次尝试开头都会取走当时排着的信件）。唤醒
+    （wake_in 的「之后才到」）与最终失败时了结委派（RunHandler.failed_in）共用这一条规则，按信件 id 比较。"""
+    return mail.id <= RunPayload.of(run).through_mail_id
 
 
 async def consume_in(s: AsyncSession, ids: Sequence[int], run_id: int) -> None:

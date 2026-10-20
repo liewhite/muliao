@@ -153,6 +153,8 @@ class Compaction(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
     through_message_id: Mapped[int]
+    # 写入时会话最后一条消息的 id：在它之前的模型回复报告的 token 数反映的是压缩前的上下文（runtime.compaction）
+    at_message_id: Mapped[int]
     summary: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 

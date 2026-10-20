@@ -24,7 +24,7 @@ from muliao.conventions import answer_text, is_stopped, unanswered_calls
 from muliao.db import Database
 from muliao.models import Mail, Message, ReplyTo, Task
 from muliao.runtime.codec import load_messages
-from muliao.runtime.compaction import Compactor
+from muliao.runtime.compaction import Compactor, Verdict
 from muliao.runtime.content import ContentBuilder
 from muliao.runtime.conversation import failure_of
 from muliao.runtime.delegations import Ending, Outcome, in_session_in, running_for_in, settle_all_in
@@ -142,12 +142,9 @@ class Consumer:
             session, agent = await load_session(s, session_id)
         # 上下文超过阈值时先压缩（之后每一步之前同样检查，见 runtime.steps.CompactionDue）
         async with self._db.transaction() as s:
-            history = (await load_context(s, session.id)).messages
-        compacted = (
-            await self._compactor.compact(session, agent)
-            if self._compactor.over_threshold(session.id, history)
-            else None
-        )
+            context = await load_context(s, session.id)
+        verdict = self._compactor.verdict(session.id, context.messages, context.stale_responses)
+        compacted = await self._compactor.compact(session, agent) if verdict == Verdict.DUE else None
         async with self._db.transaction() as s:
             context = await load_context(s, session.id)
             queued = await queued_in(s, session.id)
@@ -170,8 +167,8 @@ class Consumer:
             messages=load_messages(r.payload for r in saved_rows),
             last_row=saved_rows[-1] if saved_rows else None,
         )
-        if compacted is not None:
-            state.after_compaction(history, compacted)
+        state.stale_responses = context.stale_responses
+        state.compaction_exhausted = verdict == Verdict.HOPELESS or compacted == 0
         self._active[session_id] = state
         prompt, deferred = await self._opening(state, history, queued, delegated)
         if prompt is None and deferred is None and not resumable(history, delegated):
@@ -212,7 +209,8 @@ class Consumer:
                 async with self._db.transaction() as s:
                     context = await load_context(s, session.id)
                 history, prompt, deferred = context.messages, None, None
-                state.after_compaction(history, compacted)
+                state.stale_responses = context.stale_responses
+                state.compaction_exhausted = compacted == 0
                 state.resending = True
         await self._steps.save_tail(state)
         return self._finisher.commit(state, end_of(result.output))
