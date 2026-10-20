@@ -195,8 +195,8 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 做法同 Claude Code 的后台子 agent：`delegate_task(report_back: true)` 不等结果，thread 那一轮结束时结果作为会话事件（来源 `thread:<子会话 id>`）交回发起委派的会话。turn task 的 payload 带 `report_to`（父会话与发起委派那一轮的去向，`conversation.ReportTo`），只在这里写入。
 
 - **完成或被停止**：随 thread 那一轮的提交（`TurnRunner.commit_in`）在同一个事务里投递，内容是 thread 的回答（被停止时说明停止了、附上停止前说的话）。thread 的回答不再直接推送给用户：交给父 agent 处理，父会话那一轮按原来的去向推送，不重复打扰。
-- **最终失败**：任务处理器接口有一个与成功时 `Commit` 对称的收尾点：task 最终失败（不再重试）时，队列在记下失败的同一个事务里调用处理器的 `failed_in`。turn 用它把失败原因交回；其他种类的 task 没有等着结果的一方，失败只需可见。
-- **运行中检查**：与后台任务同一个节奏（`runtime.job_check_seconds`，同一个检查循环），给还在排队或运行的这种 thread 轮次向发起方发检查事件（不推送），同一个 thread 已有事件在队列里时不再发；不需要了就用 `stop_thread` 停止它。
+- **最终失败**：任务处理器接口有一个与成功时 `Commit` 对称的收尾点：task 最终失败（不再重试）时，队列在记下失败的同一个事务里调用处理器的 `failed_in`。turn 用它把失败原因交回；其他种类的 task 没有等着结果的一方，失败只需可见。收尾钩子自己失败时（整个事务回滚），worker 记下钩子的失败后不带钩子再记一次：task 一定落到 failed，不会卡在 running 占住 lane 直到重启；没交回的结果见那条 error 日志。
+- **运行中检查**：与后台任务同一个节奏（`runtime.job_check_seconds`，同一个检查循环），给还在排队或运行的这种 thread 轮次向发起方发检查事件（不推送），同一个 thread 已有事件在队列里时不再发；不需要了就用 `stop_thread` 停止它（只能停正在运行的那一轮，排队中的不能取消，检查文案也只在运行中时提示它）。
 - **边界**：私有 thread 的发问方在同步等回答，不能用 `report_back`；公开 thread 在父会话删除后仍然保留，那时结果无处可交，记下日志后跳过。
 
 ## 5. 上下文压缩

@@ -41,8 +41,21 @@ RunInline = Callable[[str, str], Awaitable[Answer]]
 StopTurn = Callable[[str], bool]
 
 
+_DELEGATE_DESCRIPTION = """\
+Hand a task to an agent and keep going without waiting. It runs in a thread the user can see and reply in. \
+By default the user is notified with its answer and you do NOT get it back. With `report_back: true` the answer \
+(or its failure) comes back to you as an event in this conversation instead, with a check-in event about every \
+{check:g} seconds while it is still working (each one is a turn of yours), so you can keep going and act on the \
+result when it arrives. If you need the answer before you can continue, use `ask_agent`."""
+
+
 def delegation_toolset(
-    db: Database, agents: AgentService, threads: Threads, run_inline: RunInline, stop_turn: StopTurn
+    db: Database,
+    agents: AgentService,
+    threads: Threads,
+    run_inline: RunInline,
+    stop_turn: StopTurn,
+    check_seconds: float,
 ) -> FunctionToolset[RunScope]:
     """委派：thread 是这个会话开出的、以名字区分的子会话，同名即续聊（保留对方上下文）。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
@@ -52,15 +65,12 @@ def delegation_toolset(
         """List all agents and what each one is for. Use before delegating."""
         return [AgentInfo(name=a.name, description=a.description) for a in await agents.list()]
 
-    @ts.tool
+    # 检查间隔是配置的值（runtime.job_check_seconds），写进说明
+    @ts.tool(description=_DELEGATE_DESCRIPTION.format(check=check_seconds))
     async def delegate_task(
         ctx: RunContext[RunScope], agent: str, task: str, thread: str, report_back: bool = False
     ) -> ToolReturn:
-        """Hand a task to an agent and keep going without waiting. It runs in a thread the user can see and
-        reply in. By default the user is notified with its answer and you do NOT get it back. With
-        `report_back: true` the answer (or its failure) comes back to you as an event in this conversation
-        instead, with a check-in event every few minutes while it is still working, so you can keep going and
-        act on the result when it arrives. If you need the answer before you can continue, use `ask_agent`.
+        """The description is `_DELEGATE_DESCRIPTION` (it carries the configured check-in interval).
 
         Args:
             agent: Target agent name from `list_agents`.
@@ -109,8 +119,9 @@ def delegation_toolset(
 
     @ts.tool
     async def stop_thread(ctx: RunContext[RunScope], thread: str) -> str:
-        """Stop the task a thread of this conversation is running right now (what it already did is kept).
-        With `report_back` you then get an event saying it was stopped.
+        """Stop the turn a thread of this conversation is running right now (what it already did is kept); a
+        turn still waiting in the queue cannot be stopped. With `report_back` you then get an event saying it
+        was stopped.
 
         Args:
             thread: The thread name used with `delegate_task`.

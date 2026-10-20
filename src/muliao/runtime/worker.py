@@ -49,6 +49,10 @@ class TaskHandler(Protocol):
         ...
 
 
+async def _unsettled(_s: AsyncSession, _task: Task) -> None:
+    """不收尾：收尾钩子本身失败时的退路（见 Worker._record_failure）。"""
+
+
 class Worker:
     def __init__(
         self,
@@ -132,9 +136,19 @@ class Worker:
     async def _record_failure(self, task: Task, exc: Exception, ctx: dict[str, object]) -> None:
         error = f"{type(exc).__name__}: {exc}"
         try:
-            failed = await self._queue.fail(
-                task.id, error, retryable=is_transient(exc), on_final=self._handlers[task.kind].failed_in
-            )
+            try:
+                failed = await self._queue.fail(
+                    task.id, error, retryable=is_transient(exc), on_final=self._handlers[task.kind].failed_in
+                )
+            except Exception:
+                # 收尾钩子（如把失败交回等着的会话）自己失败了，整个事务回滚：task 不能因此卡在 running、占住 lane
+                # 直到重启。记下钩子的失败，再不带钩子记一次：失败照样可见，没交回的结果在这条日志里
+                log.exception(
+                    "settling the failed task failed; recording the failure without settling it", extra=ctx
+                )
+                failed = await self._queue.fail(
+                    task.id, error, retryable=is_transient(exc), on_final=_unsettled
+                )
         except Exception:
             # 记账本身失败（如 task 已被删除）：留下完整上下文，不能让异常无人接收
             log.exception("could not record task failure: %s", error, extra=ctx)

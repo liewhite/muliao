@@ -311,6 +311,7 @@ def build_container(
                         threads,
                         lambda session_id, prompt: turn_runner.run_inline(session_id, prompt),
                         lambda session_id: turn_runner.stop(session_id),
+                        settings.runtime.job_check_seconds,
                     )
                 ]
             ),

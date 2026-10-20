@@ -117,7 +117,13 @@ class ReportWatcher:
 def _check_text(child: Session, agent: Agent, turn: Task, now: datetime) -> str:
     name = thread_name(child)
     if turn.status == TaskStatus.PENDING:
-        state = "is queued and has not started yet"
+        state = (
+            f"failed temporarily and will retry (attempt {turn.attempts} so far)"
+            if turn.attempts
+            else "is queued and has not started yet"
+        )
+        # stop_thread 只能停正在运行的一轮
+        return f"Thread {name!r} ({agent.name}) {state}. Keep waiting; you will get an event with its answer."
     else:
         if turn.started_at is None:
             raise RuntimeError(f"running turn {turn.id} has no start time")

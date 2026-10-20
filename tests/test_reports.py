@@ -157,3 +157,43 @@ async def test_report_back_is_refused_in_a_private_thread(container, make_agent,
     history = await container.sessions.history(parent.id)
     returns = [str(p.content) for m in history for p in m.parts if isinstance(p, ToolReturnPart)]
     assert any("not available in a private thread" in r for r in returns)
+
+
+async def test_a_failing_settle_hook_still_records_the_failure_instead_of_leaving_it_running(
+    container, make_agent, models, monkeypatch
+):
+    """收尾钩子自己失败：task 不能卡在 running 占住 lane 直到重启；失败照样记下、可见。"""
+    from muliao.runtime.turn import TurnHandler
+
+    agent = (await make_agent("alpha", model="m")).id
+
+    def broken(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(status_code=400, model_name="m", body="bad request")
+
+    async def failing_settle(self, s, task):  # noqa: ANN001, ANN202
+        raise RuntimeError("could not report the failure")
+
+    models.models["m"] = scripted(broken)
+    monkeypatch.setattr(TurnHandler, "failed_in", failing_settle)
+    session = await start(container, agent, "go")
+    await drain(container)
+
+    [turn] = [t for t in await tasks_of(container, TaskKind.TURN) if t.session_id == session.id]
+    assert turn.status == TaskStatus.FAILED and "bad request" in (turn.error or "")
+
+
+def test_check_text_for_a_queued_thread_does_not_offer_stop_thread():
+    from datetime import UTC, datetime
+
+    from muliao.models import Agent, Session, Task
+    from muliao.runtime.reports import _check_text, finished_text
+
+    child = Session(id="c", agent_id="a", title="t", thread="review")
+    agent = Agent(id="a", name="reviewer")
+    queued = Task(id=1, kind=TaskKind.TURN, status=TaskStatus.PENDING, attempts=0)
+    retrying = Task(id=2, kind=TaskKind.TURN, status=TaskStatus.PENDING, attempts=2)
+    now = datetime.now(UTC)
+    assert "stop_thread" not in _check_text(child, agent, queued, now)
+    assert "retry" in _check_text(child, agent, retrying, now)
+    # 被停止时如实说明，附上停止前说的话
+    assert "was stopped" in finished_text(child, agent, "", stopped=True)
