@@ -3,7 +3,7 @@ import { useTheme } from '@heroui/react'
 import { Bell, Bot, MessageSquare, Settings as SettingsIcon, Zap } from 'lucide-react'
 import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
-import { closeServerEvents } from './events'
+import { closeServerEvents, useUiOutdated } from './events'
 import { useUnreadCount, useUnreadSync } from './unread'
 import { AgentCreate, AgentDetail, AgentList } from './pages/Agents'
 import { Login, Settings, Tasks, Vault } from './pages/Admin'
@@ -90,8 +90,18 @@ function SessionRoute() {
 function Shell() {
   useUnreadSync()
   const unread = useUnreadCount()
+  const outdated = useUiOutdated()
   return (
     <div className="flex h-full flex-col">
+      {outdated && (
+        <button
+          type="button"
+          className="bg-accent px-3 pt-[calc(env(safe-area-inset-top)+0.25rem)] pb-1 text-center text-sm text-accent-foreground"
+          onClick={() => location.reload()}
+        >
+          新版本已上线，点这里刷新
+        </button>
+      )}
       <div className="min-h-0 flex-1">
         <Routes>
           <Route path="/" element={<Sessions />} />

@@ -211,3 +211,13 @@ async def test_without_web_config_there_is_no_web_group_and_agents_using_it_bloc
     with pytest.raises(RuntimeError, match=r"reader .*\['web'\]"):
         await without_web._check_agent_tool_groups()
     await without_web.db.engine.dispose()
+
+
+def test_ui_version_changes_with_the_build_and_is_absent_without_one(tmp_path):
+    from muliao.api.app import ui_version
+
+    assert ui_version(tmp_path) is None
+    (tmp_path / "index.html").write_text('<script src="/assets/index-AAA.js"></script>')
+    first = ui_version(tmp_path)
+    (tmp_path / "index.html").write_text('<script src="/assets/index-BBB.js"></script>')
+    assert first is not None and ui_version(tmp_path) not in (None, first)

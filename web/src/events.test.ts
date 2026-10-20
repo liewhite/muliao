@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isStale, liveToItems, mergeLive, needsReconnect, type RunEvent } from './events'
+import { isOutdated, isStale, liveToItems, mergeLive, needsReconnect, type RunEvent } from './events'
 
 const ev = (event: RunEvent['event'], text: string, tool_call_id: string | null = null): RunEvent =>
   event === 'text' || event === 'thinking'
@@ -109,5 +109,16 @@ describe('needsReconnect', () => {
   it('rebuilds a silent connection once the interval is known', () => {
     expect(needsReconnect(false, 0, 35_001, 15)).toBe(true)
     expect(needsReconnect(false, 0, 35_000, 15)).toBe(false)
+  })
+})
+
+describe('isOutdated', () => {
+  it('flags a page whose build differs from the one the server now serves', () => {
+    expect(isOutdated('aaa', 'bbb')).toBe(true)
+    expect(isOutdated('aaa', 'aaa')).toBe(false)
+  })
+  it('never flags when either side has no build (development)', () => {
+    expect(isOutdated(null, 'bbb')).toBe(false)
+    expect(isOutdated('aaa', null)).toBe(false)
   })
 })

@@ -1,6 +1,6 @@
 // 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { api, type Attachment, type Item, type TaskKind, type TaskStatus } from './api'
 
 interface RunEventBase {
@@ -111,6 +111,13 @@ type Listener = (e: ServerEvent) => void
 interface HeartbeatEvent {
   type: 'heartbeat'
   interval_seconds: number
+  /** 服务端当前前端构建的版本；没有构建前端（开发时）为 null */
+  ui_version: string | null
+}
+
+/** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
+export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {
+  return loadedVersion !== null && serverVersion !== null && loadedVersion !== serverVersion
 }
 
 /**
@@ -139,6 +146,10 @@ let lastMessageAt = 0
 // 心跳间隔来自服务端的心跳；收到第一个之前不判断
 let heartbeatSeconds: number | null = null
 let watchdog: ReturnType<typeof setInterval> | null = null
+// 页面加载后第一次心跳里的前端版本（这个页面跑的就是它）；之后的心跳与它不同就是服务端升级了
+let loadedUiVersion: string | null | undefined
+let outdated = false
+const outdatedSubscribers = new Set<() => void>()
 
 function connect() {
   source = new EventSource('/api/events')
@@ -160,6 +171,11 @@ function connect() {
     const event = JSON.parse(msg.data) as ServerEvent | HeartbeatEvent
     if (event.type === 'heartbeat') {
       heartbeatSeconds = event.interval_seconds
+      if (loadedUiVersion === undefined) loadedUiVersion = event.ui_version
+      else if (!outdated && isOutdated(loadedUiVersion, event.ui_version)) {
+        outdated = true
+        outdatedSubscribers.forEach((s) => s())
+      }
       return
     }
     listeners.forEach((l) => l(event))
@@ -202,6 +218,19 @@ export function useServerEvents(listener: Listener) {
       listeners.delete(l)
     }
   }, [])
+}
+
+/** 服务端已经换了前端版本，这个页面该刷新了（不自动刷新：会丢掉正在输入的草稿） */
+export function useUiOutdated(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      outdatedSubscribers.add(onChange)
+      return () => {
+        outdatedSubscribers.delete(onChange)
+      }
+    },
+    () => outdated,
+  )
 }
 
 export function closeServerEvents() {

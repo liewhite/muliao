@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -30,9 +31,23 @@ from muliao.triggers.precheck import PrecheckFailed
 log = logging.getLogger(__name__)
 
 _HEARTBEAT_SECONDS = 15.0
-# 心跳是一个真正的事件（不是 SSE 注释行，那种前端读不到）：前端据此判断连接是否还活着。
-# 手机切后台、代理链路断开时 EventSource 往往收不到任何错误，只能靠「多久没收到消息」发现；间隔随心跳下发，前端不另存一份
-_HEARTBEAT = f"data: {json.dumps({'type': 'heartbeat', 'interval_seconds': _HEARTBEAT_SECONDS})}\n\n"
+
+
+def _heartbeat(ui_version: str | None) -> str:
+    """心跳是一个真正的事件（不是 SSE 注释行，那种前端读不到），连上就发一次、之后每隔一段时间发一次：
+    - 前端据此判断连接是否还活着：手机切后台、代理链路断开时 EventSource 往往收不到任何错误，只能靠「多久没收到
+      消息」发现；间隔随心跳下发，前端不另存一份；
+    - ui_version 是服务端当前前端构建的版本：手机主屏应用常驻内存，升级后旧页面还在跑，前端据此提示刷新。"""
+    event = {"type": "heartbeat", "interval_seconds": _HEARTBEAT_SECONDS, "ui_version": ui_version}
+    return f"data: {json.dumps(event)}\n\n"
+
+
+def ui_version(web_dir: Path) -> str | None:
+    """前端构建的版本：index.html 引用的资源文件名带内容哈希，它的内容变了就是换了构建。没有构建前端时为 None。"""
+    index = web_dir / "index.html"
+    return hashlib.sha256(index.read_bytes()).hexdigest()[:12] if index.exists() else None
+
+
 _STATUS = {
     NotFound: 404,
     Conflict: 409,
@@ -82,7 +97,7 @@ def _public_routes(secure_cookie: bool) -> APIRouter:
     return router
 
 
-def _private_routes() -> APIRouter:
+def _private_routes(heartbeat: str) -> APIRouter:
     router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
     router.include_router(agents.router)
     router.include_router(sessions.router)
@@ -102,12 +117,12 @@ def _private_routes() -> APIRouter:
         async def stream() -> AsyncIterator[str]:
             async with c.bus.subscribe() as sub:
                 # 连上就先发一次心跳：前端立刻知道间隔
-                yield "retry: 3000\n\n" + _HEARTBEAT
+                yield "retry: 3000\n\n" + heartbeat
                 while True:
                     try:
                         event = await asyncio.wait_for(sub.next(), timeout=_HEARTBEAT_SECONDS)
                     except TimeoutError:
-                        yield _HEARTBEAT
+                        yield heartbeat
                         continue
                     except SubscriberOverflow:
                         return
@@ -163,6 +178,6 @@ def create_app(container: Container, web_dir: Path) -> FastAPI:
     app.include_router(_public_routes(secure_cookie=settings.server.public_url.startswith("https://")))
     # webhook 的事件入口凭触发器 token 鉴权，不走登录
     app.include_router(webhook.public_router)
-    app.include_router(_private_routes())
+    app.include_router(_private_routes(_heartbeat(ui_version(web_dir))))
     _mount_web(app, web_dir)
     return app
