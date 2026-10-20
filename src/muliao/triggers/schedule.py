@@ -43,8 +43,11 @@ class ScheduleKind:
         self._clock = clock
 
     def next_run(self, expr: str, after: datetime) -> datetime:
-        if not croniter.is_valid(expr):
-            raise InvalidInput(f"invalid cron expression {expr!r}")
+        # 契约是 5 段表达式（分 时 日 月 周）。croniter 也接受带秒的 6 段，`* * * * * *` 会每秒到期
+        if len(expr.split()) != 5 or not croniter.is_valid(expr):
+            raise InvalidInput(
+                f"invalid cron expression {expr!r}: expected 5 fields (minute hour day month weekday)"
+            )
         return croniter(expr, after.astimezone(self._tz)).get_next(datetime)
 
     def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:

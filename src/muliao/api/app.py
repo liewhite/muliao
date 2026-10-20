@@ -25,6 +25,7 @@ from muliao.errors import (
     Unauthorized,
     UpstreamFailed,
 )
+from muliao.triggers.precheck import PrecheckFailed
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,8 @@ _STATUS = {
     Forbidden: 403,
     TooLarge: 413,
     UpstreamFailed: 502,
+    # 手动运行触发器时前置检查失败：原因（可能含脚本 stderr）给已登录的用户看
+    PrecheckFailed: 502,
 }
 
 

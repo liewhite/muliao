@@ -205,3 +205,32 @@ async def test_a_change_too_large_to_hand_over_is_recorded_and_alerted(container
     assert failed.last_error is not None and "event limit" in failed.last_error
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
     assert await tasks_of(container, TaskKind.TURN) == []
+
+
+async def test_a_failing_precheck_on_a_manual_run_is_a_502_with_the_reason(client, container, make_agent):
+    alpha = (await make_agent()).id
+    trigger, _ = await _schedule(container, alpha, Precheck(command="echo boom >&2; exit 4"))
+    await login(client)
+    resp = await client.post(f"/api/triggers/{trigger.id}/run")
+    assert resp.status_code == 502 and "boom" in resp.json()["detail"]
+
+
+async def test_enabling_an_enabled_trigger_keeps_its_error_and_does_not_alert_again(container, make_agent):
+    alpha = (await make_agent()).id
+    trigger, _ = await _schedule(container, alpha, Precheck(command="exit 3"))
+    await _tick(container, trigger.id)
+    await container.triggers.update(trigger.id, enabled=True)
+    assert (await container.triggers.get_by_name("watch")).last_error is not None
+    await _tick(container, trigger.id)
+    assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
+
+
+async def test_changing_the_precheck_clears_the_old_commands_error(container, make_agent):
+    """旧命令的失败不记到新配置上：新命令也失败时要再告警一次。"""
+    alpha = (await make_agent()).id
+    trigger, _ = await _schedule(container, alpha, Precheck(command="exit 3"))
+    await _tick(container, trigger.id)
+    await container.triggers.update(trigger.id, precheck=Precheck(command="exit 5"))
+    assert (await container.triggers.get_by_name("watch")).last_error is None
+    await _tick(container, trigger.id)
+    assert len(await tasks_of(container, TaskKind.DELIVER)) == 2

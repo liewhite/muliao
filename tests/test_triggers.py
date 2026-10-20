@@ -216,3 +216,14 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     items = to_items(await container.sessions.history(session.id))
     results = [i["text"] for i in items if i["type"] == "tool_result"]
     assert results == ["tok-123"]
+
+
+async def test_a_cron_expression_with_seconds_is_refused(container, make_agent):
+    """契约是 5 段表达式；带秒的 6 段（croniter 也接受）`* * * * * *` 会每秒触发一次。"""
+    from muliao.errors import InvalidInput
+
+    alpha = (await make_agent()).id
+    with pytest.raises(InvalidInput, match="5 fields"):
+        await container.triggers.create(
+            name="every-second", agent_id=alpha, kind="schedule", prompt="p", config={"cron": "* * * * * *"}
+        )
