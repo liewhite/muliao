@@ -3,7 +3,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 import { api } from './api'
-import { useServerEvents, type ServerEvent } from './events'
+import { useServerEvents, type PageEvent } from './events'
 
 let unread = 0
 // 请求序号：并发刷新时只让最新一次的结果落下，晚到的旧响应不能覆盖新值
@@ -43,7 +43,7 @@ export function useUnreadCount(): number {
 export const refreshUnreadLogged = () => void refreshUnread().catch((e) => console.error('unread count refresh failed', e))
 
 /** 这个服务端事件之后通知可能变了：新通知投递，或断线期间可能错过了事件 */
-export const notificationsMayHaveChanged = (e: ServerEvent) =>
+export const notificationsMayHaveChanged = (e: PageEvent) =>
   e.type === 'reconnected' || (e.type === 'task' && e.kind === 'deliver')
 
 /** 登录后在应用根部调用一次：新通知投递、断线重连、回到前台、收到推送时刷新 */

@@ -115,7 +115,8 @@ def _private_routes() -> APIRouter:
         return None
 
     # FastAPI 的 SSE：每条 data 按 ServerEvent 校验并序列化，OpenAPI 里登记为事件流的条目类型，前端类型由此生成。
-    # 断线重连的间隔用浏览器的默认值（几秒），连接是否还活着由心跳与前端的看门狗判断
+    # 断线重连的间隔用浏览器的默认值（几秒），连接是否还活着由心跳与前端的看门狗判断。FastAPI 自己空闲时发的
+    # `: ping` 注释行只防代理断开，EventSource 不把注释交给页面，所以心跳仍然需要
     @router.get("/events", response_class=EventSourceResponse)
     async def events(request: Request, c: C) -> AsyncIterator[ServerEvent]:
         heartbeat = _heartbeat(request.app.state.ui_version)

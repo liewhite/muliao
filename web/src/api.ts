@@ -118,9 +118,12 @@ async function send<T>(method: string, path: string, query: Query | undefined, b
     }
     throw new ApiError(resp.status, `${resp.status}: ${message}`)
   }
-  // 没有响应体的接口（204，或 stop 这类 202）在接口描述里就是没有 content，类型为 void
+  // 按响应声明的类型解码：JSON 响应体缺失时 resp.json() 直接报错；没有响应体的接口（204，或 stop 这类 202，
+  // 接口描述里没有 content，类型为 void）必须真的没有响应体
+  if (resp.headers.get('Content-Type')?.startsWith('application/json')) return (await resp.json()) as T
   const text = await resp.text()
-  return (text === '' ? undefined : JSON.parse(text)) as T
+  if (text !== '') throw new Error(`${method} ${path} answered ${resp.status} with an unexpected non-JSON body`)
+  return undefined as T
 }
 
 // ---- 按接口描述（schema.d.ts 的 paths）类型化的调用：路径模板、参数、请求体、响应各只对应一次 ----
@@ -144,7 +147,7 @@ type WithoutNever<T> = { [K in keyof T as [T[K]] extends [never] ? never : K]: T
 type QueryArg<Q> = [Q] extends [never] ? object : object extends Q ? { query?: Q } : { query: Q }
 type Args<O> = WithoutNever<{ path: PathParams<O>; body: Body<O> }> & QueryArg<QueryParams<O>>
 
-function call<P extends Path, M extends MethodOf<P>>(
+export function call<P extends Path, M extends MethodOf<P>>(
   method: M,
   path: P,
   ...[args]: object extends Args<Operation<P, M>> ? [Args<Operation<P, M>>?] : [Args<Operation<P, M>>]
@@ -155,13 +158,23 @@ function call<P extends Path, M extends MethodOf<P>>(
     if (value === undefined) throw new Error(`missing path parameter ${name} for ${path}`)
     return encodeURIComponent(String(value))
   })
-  // FastAPI 对没有请求体的 POST 也接受空 JSON 对象；有 requestBody 的接口按描述必须给出
+  // 只有接口描述里有 JSON 请求体的调用才发请求体
   const body = given.body === undefined ? undefined : { type: 'application/json', data: JSON.stringify(given.body) }
   return send(method.toUpperCase(), url, given.query, body)
 }
 
-/** 接口返回的 agent id 都是字符串；这里是给它们打上 AgentId 品牌的边界（字段由 WithAgentId 决定） */
-const branded = <T>(p: Promise<unknown>) => p as Promise<T>
+/** 把 AgentId 换回接口里的 string：品牌类型去掉品牌后必须就是接口推出的类型 */
+type Unbranded<T> = T extends AgentId
+  ? string
+  : T extends readonly (infer U)[]
+    ? Unbranded<U>[]
+    : T extends object
+      ? { [K in keyof T]: Unbranded<T[K]> }
+      : T
+
+/** 接口返回的 agent id 都是字符串；这里是给它们打上 AgentId 品牌的边界（字段由 WithAgentId 决定）。
+ * 入参必须是 T 去掉品牌后的类型，所以 call 推出的响应类型仍然被检查，这里只收窄 agent id */
+export const branded = <T>(p: Promise<Unbranded<T>>) => p as Promise<unknown> as Promise<T>
 
 /** 前端路由：agent 名称可含中文，必须编码 */
 export const agentRoute = (id: AgentId) => `/agents/${id}`

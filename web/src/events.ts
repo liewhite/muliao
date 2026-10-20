@@ -65,9 +65,9 @@ export interface ReconnectEvent {
 type HeartbeatEvent = Schemas['HeartbeatEvent']
 
 /** 交给页面的事件：服务端发的（除了心跳），加上前端自己的重连事件 */
-export type ServerEvent = Exclude<Schemas['ServerEvent'], HeartbeatEvent> | ReconnectEvent
+export type PageEvent = Exclude<Schemas['ServerEvent'], HeartbeatEvent> | ReconnectEvent
 
-type Listener = (e: ServerEvent) => void
+type Listener = (e: PageEvent) => void
 
 /** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
 export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {
