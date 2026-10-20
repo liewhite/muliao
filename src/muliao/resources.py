@@ -9,8 +9,11 @@
 回滚就是把旧版本的内容写回并作为新的一次提交，历史只增不改。
 
 写入是原子的：读取—变换—写入—提交在同一把锁里（update），任何一步失败都把涉及的路径在文件系统上还原成写入前
-的样子（不依赖 git），所以「报错」等于「没有生效」，调用方可以放心重试；还原本身失败时记 error 并一起抛出。只有进程在写入中途被杀会留下不一致，由启动时的 recover
-统一收敛（删遗留的锁和半写的文件，把写完未提交的变化提交为一次 reconcile）。
+的样子（不依赖 git），所以「报错」等于「没有生效」，调用方可以放心重试；还原本身失败时记 error 并一起抛出。
+
+仓库外也会有写入：agent 有 shell，能直接改自己的 skill 目录（read_skill 会给出目录），进程在写入中途被杀也会留下
+写完未提交的变化。两者用同一个机制收敛：每次提交前、以及启动时（recover），把工作区里不经本模块的变化先整体提交为一次
+reconcile，作者记为系统。这样外部写入最迟在下一次任何资源写入时进入历史，也不会被并进下一个作者的提交里。
 secret 不在这里：它们加密存在数据库的 vault 里，不需要版本管理。
 """
 
@@ -32,6 +35,7 @@ log = logging.getLogger(__name__)
 USER = "user"
 # 系统自己做的提交（初始化、启动时的收敛）
 SYSTEM = "muliao"
+RECONCILE_MESSAGE = "reconcile changes made outside the resource tools"
 _PUBLIC = "public"
 _AGENTS = "agents"
 _FIELD = "\x1f"
@@ -179,14 +183,18 @@ class ResourceRepo:
             for stale in [*(self.root / ".git").rglob("*.lock"), *self._partial_writes()]:
                 stale.unlink()
                 log.warning("removed leftover of a killed process", extra={"path": str(stale)})
-            await self._git("add", "-A")
-            _, staged = await self._git("diff", "--cached", "--name-only")
-            if not staged.strip():
-                return
-            await self._git(
-                "commit", "-q", "-m", "reconcile uncommitted changes", f"--author={SYSTEM} <{SYSTEM}@muliao>"
-            )
-        log.warning("committed resource changes left uncommitted", extra={"paths": staged.splitlines()})
+            await self._reconcile_locked()
+
+    async def _reconcile_locked(self) -> None:
+        """把工作区里不经本模块的变化（shell 直接写入、被杀的进程写完未提交的）整体提交为一次 reconcile。"""
+        await self._git("add", "-A")
+        _, staged = await self._git("diff", "--cached", "--name-only")
+        if not staged.strip():
+            return
+        await self._git("commit", "-q", "-m", RECONCILE_MESSAGE, f"--author={SYSTEM} <{SYSTEM}@muliao>")
+        log.warning(
+            "committed resource changes made outside the resource tools", extra={"paths": staged.splitlines()}
+        )
 
     def _partial_writes(self) -> list[Path]:
         return [p for p in self.root.rglob(f"*{_TMP}") if ".git" not in p.relative_to(self.root).parts]
@@ -210,6 +218,8 @@ class ResourceRepo:
         self, changes: Mapping[Path, str | None], message: str, author: str
     ) -> str | None:
         await self.ensure()
+        # 外部写入先单独记一版：不能算在这次的作者名下，失败回滚时也要能还原到它
+        await self._reconcile_locked()
         rel = [self.relative(p) for p in changes]
         # 写入之前的内容，失败时直接在文件系统上还原：不依赖 git（失败的往往正是 git，比如锁被占用）
         before = {path: _snapshot(path) for path in changes}

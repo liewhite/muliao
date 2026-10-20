@@ -42,7 +42,7 @@ data/
   tmp/                         # 临时 agent 的工作目录，用完即删
 ```
 
-**资源的版本管理**：agent 能改的文本资源都存成文件，用一个 git 仓库（`data/resources/`）管理版本：每次修改提交一次，作者是 `user` 或做出修改的 agent 的 id；历史与回滚都来自 git（回滚 = 把旧版本内容写回并作为新的一次提交）。secret 不在这里——它们加密存在数据库的 vault 里，不需要版本管理。
+**资源的版本管理**：agent 能改的文本资源都存成文件，用一个 git 仓库（`data/resources/`）管理版本：每次修改提交一次，作者是 `user` 或做出修改的 agent 的 id；历史与回滚都来自 git（回滚 = 把旧版本内容写回并作为新的一次提交）。仓库也会被绕过工具写入：agent 有 shell，能直接改自己的 skill 目录；进程在写入中途被杀也会留下写完未提交的变化。两者用同一个机制收敛：每次提交之前、以及启动时，把工作区里的这类变化先整体提交为一次 reconcile（作者记为系统），所以外部写入最迟在下一次任何资源写入时进入历史，也不会被并进下一个作者的提交。工具说明要求 agent 只用工具改 skill，局部修改用 `edit_skill`，不必整篇重写。secret 不在这里——它们加密存在数据库的 vault 里，不需要版本管理。
 
 用最终正确性换简化：文件与 git 不在数据库事务里，不追求两者的强一致。
 - 换掉的：跨数据库与文件的分布式事务（例如删除 agent 时数据库行与资源目录同时成功）。
@@ -115,7 +115,7 @@ Web / 触发器（定时、webhook……）/ delegate_task
 - **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定（`runtime.runner.ToolGroups`，名称在组合根 `TOOL_GROUPS` 唯一声明）：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`、`web`（只在配置了 `[web]` 时存在）；私有 skill、memory 与自己的指令（自我改进）总是开放，读公共 skill 也总是可以；向用户提问（`ask_user`，见第 4 节）也总是开放，但只在这一轮的回答交给用户时出现。反思只开放自我改进，以及该 agent 本来就有的 `public_skills`。新建 agent 默认全部开放；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP 与配置了的网页搜索，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
   - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `share_file`（把文件发给用户，见第 4 节「附件与文件」）/ `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
-  - `skills`：`read_skill`（私有或公共）/ `write_skill` / `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `delete_public_skill`。
+  - `skills`：`read_skill`（私有或公共）/ `write_skill` / `edit_skill`（改正文的一部分，规则同指令：替换恰好出现一次的片段，或追加）/ `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `edit_public_skill` / `delete_public_skill`。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
   - `instructions`：`instructions_replace`（改自己的指令：替换恰好出现一次的片段，或追加），每次修改记一版、作者是自己。
   - `agents`：`get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己） / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。

@@ -165,7 +165,10 @@ async def test_recover_commits_leftovers_and_clears_a_stale_lock(repo: ResourceR
 
     assert not (repo.root / ".git" / "index.lock").exists()
     [revision] = await repo.history(left, 10)
-    assert (revision.author, revision.message) == ("muliao", "reconcile uncommitted changes")
+    assert (revision.author, revision.message) == (
+        "muliao",
+        "reconcile changes made outside the resource tools",
+    )
     # 收敛后正常提交照常进行
     assert await repo.apply({left: "next"}, "memory", ALPHA) is not None
 
@@ -248,3 +251,38 @@ async def test_write_blocked_by_a_held_git_lock_is_undone_on_disk(memory: Memory
 
     await memory.append(ALPHA, "- blocked", ALPHA)
     assert memory.read(ALPHA) == "- kept\n\n- blocked\n"
+
+
+async def test_a_change_made_outside_the_tools_is_recorded_before_the_next_write(repo: ResourceRepo):
+    """agent 用 shell 直接改了资源文件：下一次写入前单独记一版，不并进下一个作者的提交。"""
+    path = repo.owner_dir(ALPHA) / "MEMORY.md"
+    await repo.apply({path: "first\n"}, "memory", ALPHA)
+    path.write_text("first\nedited by shell\n")
+
+    await repo.apply({path: "first\nedited by shell\nsecond\n"}, "memory", "user")
+
+    newest, outside, _ = await repo.history(path, 10)
+    assert (outside.author, outside.message) == (
+        "muliao",
+        "reconcile changes made outside the resource tools",
+    )
+    assert newest.author == "user"
+    assert await repo.read_at(outside.rev, path) == "first\nedited by shell\n"
+
+
+async def test_editing_a_skill_replaces_or_appends_to_its_body_and_keeps_name_and_description(
+    repo: ResourceRepo,
+):
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "step one\nstep two", ALPHA)
+
+    await skills.edit(ALPHA, "digest", "step two", "step 2", ALPHA)
+    await skills.edit(ALPHA, "digest", "", "## pitfalls\n- none", ALPHA)
+
+    skill = skills.read(ALPHA, "digest")
+    assert (skill.meta.name, skill.meta.description) == ("digest", "When digesting")
+    assert skill.body == "step one\nstep 2\n\n## pitfalls\n- none"
+    with pytest.raises(InvalidInput, match="exactly once"):
+        await skills.edit(ALPHA, "digest", "missing", "x", ALPHA)
+    with pytest.raises(NotFound):
+        await skills.edit(ALPHA, "nope", "", "x", ALPHA)

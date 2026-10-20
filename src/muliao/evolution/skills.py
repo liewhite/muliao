@@ -12,6 +12,7 @@ from pathlib import Path
 import frontmatter
 
 from muliao.errors import InvalidInput, NotFound
+from muliao.evolution import text_edit
 from muliao.naming import validate_slug
 from muliao.ownership import Scope, scope_of, visible
 from muliao.resources import ResourceRepo
@@ -99,6 +100,27 @@ class SkillStore:
             {path: frontmatter.dumps(post) + "\n"}, f"{scope_of(owner)} skill {name}", author
         )
         return SkillMeta(name, description, owner, path)
+
+    async def edit(self, owner: str | None, name: str, old: str, new: str, author: str) -> SkillMeta:
+        """改正文的一部分（规则同记忆与指令，见 text_edit）：old 恰好出现一次时替换为 new，old 为空时把 new 追加到末尾。
+        名称与描述不变，改它们用 write。"""
+        meta = self.read(owner, name).meta
+
+        def transform(current: str | None) -> str:
+            if current is None:
+                raise NotFound(f"skill {name!r} was deleted")
+            post = frontmatter.loads(current)
+            what = f"skill {name}"
+            body = (
+                text_edit.replace_once(post.content, old, new, what)
+                if old
+                else text_edit.append(post.content, new)
+            )
+            post.content = body.strip() + "\n"
+            return frontmatter.dumps(post) + "\n"
+
+        await self._repo.update(meta.path, transform, f"edit {scope_of(owner)} skill {name}", author)
+        return meta
 
     async def delete(self, owner: str | None, name: str, author: str) -> None:
         skill = self.read(owner, name)
