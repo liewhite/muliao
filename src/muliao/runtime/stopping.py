@@ -80,18 +80,21 @@ def stopped_messages(
     """用户停止的一轮要保存的消息：停止前已经产生的部分（工具已经执行过，下一轮的模型要知道），没出结果的调用补上
     结果，最后一条标上 TURN_STOPPED。正在生成的那段回答由 pydantic-ai 以 state='interrupted' 留在运行历史里，一起保存，
     其中参数还没生成完的工具调用同样补上结果（参数在落库前脱敏，截断的 vault_set 参数整体替换，见 redaction）。
-    new 为空表示 pydantic-ai 还没组装出这一轮的第一条请求（还没开始第一次模型请求，或停在处理挂起提问结果的途中）：
-    按它会组装的样子补上——挂起提问的结果（用户的回答或「没回答」）与用户这条消息在同一条请求里。不能只存用户消息：
-    历史里的提问调用就一直没有结果，下一轮会把结果接在这条用户消息之后，提供方拒绝这种顺序，会话从此每一轮都失败。"""
-    if not new:
-        parts: list[ModelRequestPart] = [
-            ToolReturnPart(ASK_USER, result, tool_call_id=call_id)
-            for call_id, result in (deferred.calls.items() if deferred is not None else ())
-        ]
-        if user_prompt is not None:
-            parts.append(UserPromptPart(user_prompt))
-        new = [ModelRequest(parts=parts)] if parts else []
-    messages = list(new)
+    这一轮的第一条请求（挂起提问的结果与用户这条消息，同在一条请求里）可能还没被 pydantic-ai 记下：还没开始第一次模型
+    请求时 new 为 None；停在处理挂起结果的途中时，new 里只有一条 state='interrupted'、不含用户消息的请求。缺的部分
+    按它会组装的样子补在最前面（已经记下的结果不重复补）。不能只存用户消息：历史里的提问调用就一直没有结果，下一轮会把
+    结果接在这条用户消息之后，提供方拒绝这种顺序，会话从此每一轮都失败。"""
+    recorded = [m for m in new or () if m.parts]
+    returned = {p.tool_call_id for m in recorded for p in m.parts if isinstance(p, ToolReturnPart)}
+    opening: list[ModelRequestPart] = [
+        ToolReturnPart(ASK_USER, result, tool_call_id=call_id)
+        for call_id, result in (deferred.calls.items() if deferred is not None else ())
+        if call_id not in returned
+    ]
+    has_prompt = any(isinstance(p, UserPromptPart) for m in recorded for p in m.parts)
+    if user_prompt is not None and not has_prompt:
+        opening.append(UserPromptPart(user_prompt))
+    messages = [ModelRequest(parts=opening), *recorded] if opening else list(recorded)
     if dangling := unanswered_calls(messages):
         messages.append(
             ModelRequest(

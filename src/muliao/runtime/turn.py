@@ -255,8 +255,9 @@ class TurnRunner:
                     )
                     await s.flush()
                     await self.commit_in(s, turn.id, out, reply_to)
-            except Exception as e:
-                # 运行成功、提交前失败（如 thread 已被删除）时 commit_in 没被调用到
+            except BaseException as e:
+                # 运行成功、提交前失败（如 thread 已被删除）时 commit_in 没被调用到；发问方那一轮被停止或取消时，
+                # 取消也从这里经过，同样要结束运行事件并通知打开着这个 thread 的页面
                 self._live.end(session_id)
                 log.warning("inline turn failed: %r", e, extra={"session_id": session_id})
                 self._publish_inline(None, None, session_id, TaskStatus.FAILED, f"{type(e).__name__}: {e}")

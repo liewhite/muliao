@@ -262,3 +262,26 @@ async def test_a_second_run_in_the_same_session_is_refused():
         await runs.run("s", wait)
     gate.set()
     assert await first == "done"
+
+
+def test_a_turn_stopped_while_handling_answers_keeps_the_answers_and_the_message():
+    """停在处理挂起结果的途中：pydantic-ai 只留下一条被打断的空请求（不含用户消息），回答与消息都要补上。"""
+    from pydantic_ai.tools import DeferredToolResults
+
+    from muliao.runtime.questions import NOT_ANSWERED
+
+    deferred = DeferredToolResults(calls={"q1": NOT_ANSWERED.model_dump(), "q2": NOT_ANSWERED.model_dump()})
+    # q1 的结果已经处理完记下了，q2 还没有
+    interrupted = ModelRequest(
+        parts=[ToolReturnPart("ask_user", NOT_ANSWERED.model_dump(), tool_call_id="q1")], state="interrupted"
+    )
+
+    messages = stopped_messages([interrupted], "直接分析", deferred)
+
+    returns = [p.tool_call_id for m in messages for p in m.parts if isinstance(p, ToolReturnPart)]
+    prompts = [p.content for m in messages for p in m.parts if isinstance(p, UserPromptPart)]
+    assert sorted(returns) == ["q1", "q2"] and prompts == ["直接分析"]
+    assert (
+        stopped_messages([ModelRequest(parts=[], state="interrupted")], "hi", None)[0].parts[0].content
+        == "hi"
+    )
