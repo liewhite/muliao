@@ -240,12 +240,13 @@ def build_container(
         AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, groups),
     )
     activity = SessionActivity(queue)
-    # 反思调度在后面构造：延迟绑定
+    agent_history = AgentHistory(db)
+    reflection = ReflectionScheduler(db, queue, agents, agent_history)
     agent_lifecycle = AgentLifecycle(
         db,
         agents,
         messaging,
-        [activity.blocks_agent_deletion_in, lambda s, agent_id: reflection.blocks_agent_deletion_in(s, agent_id)],
+        {"sessions": activity.blocks_agent_deletion_in, "reflection": reflection.blocks_agent_deletion_in},
     )
     sessions = SessionService(
         db, queue, live, messaging, lambda session_id: consumer.stop_session(session_id)
@@ -286,12 +287,11 @@ def build_container(
     )
     jobs = JobRunner(
         db,
-        queue,
         vault,
         agents.workspace,
         settings.runtime.job_check_seconds,
         messaging,
-        SessionWork(db, queue),
+        SessionWork(db),
     )
     thread_checks = ThreadChecks(db, queue)
     # 跨领域的反应：会话领域的命令处理者与各领域的订阅
@@ -358,8 +358,6 @@ def build_container(
         keep_steps=settings.runtime.compaction_keep_steps,
     )
     content = ContentBuilder(files, runtime)
-    agent_history = AgentHistory(db)
-    reflection = ReflectionScheduler(db, queue, agents, agent_history)
     # 删除 agent 与会话时各领域清理自己的数据
     notifications.subscribe(messaging)
     agent_lifecycle.subscribe(messaging)

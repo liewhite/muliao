@@ -9,7 +9,7 @@
 """
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +35,7 @@ class AgentLifecycle:
         db: Database,
         agents: AgentService,
         messaging: Messaging,
-        blockers: Sequence[DeletionBlocker],
+        blockers: Mapping[str, DeletionBlocker],
     ):
         self._db = db
         self._agents = agents
@@ -52,9 +52,9 @@ class AgentLifecycle:
             agent = await _get_in(s, agent_id)
             if agent.deleting_by is not None:
                 raise Conflict(f"agent {agent.name!r} is already being deleted")
-            busy = await self._blocked_in(s, agent_id)
-        if busy:
-            log.info("agent deletion refused: busy", extra={"agent": agent_id})
+            blocking = await self._blocking_in(s, agent_id)
+        if blocking:
+            log.info("agent deletion refused: busy", extra={"agent": agent_id, "blocked_by": blocking})
             raise Conflict(f"agent {agent.name!r} is working right now; stop its sessions first, then delete")
         async with self._db.transaction() as s:
             agent = await _get_in(s, agent_id)
@@ -64,8 +64,9 @@ class AgentLifecycle:
             self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))
         log.info("agent deletion started", extra={"agent": agent_id, "author": author})
 
-    async def _blocked_in(self, s: AsyncSession, agent_id: str) -> bool:
-        return any([await blocked(s, agent_id) for blocked in self._blockers])
+    async def _blocking_in(self, s: AsyncSession, agent_id: str) -> list[str]:
+        """还在挡着删除的查询的名字（空表示可以删除）。"""
+        return [name for name, blocked in self._blockers.items() if await blocked(s, agent_id)]
 
     async def on_sessions_cleared(self, event: AgentSessionsCleared, _delivery: Delivery) -> Commit:
         async with self._db.transaction() as s:
@@ -77,9 +78,9 @@ class AgentLifecycle:
                     f"agent {event.agent_id} had its sessions cleared but is not being deleted"
                 )
             author = agent.deleting_by
-            if await self._blocked_in(s, event.agent_id):
-                # 会话已清理，剩下的只可能是正在执行的反思（它会写资源）：等它结束再删
-                raise TransientError(f"agent {event.agent_id} still has work running (a reflection)")
+            if blocking := await self._blocking_in(s, event.agent_id):
+                # 会话已经删光；还在进行的工作（例如执行中的反思会写资源）结束后再删
+                raise TransientError(f"agent {event.agent_id} still has work running: {blocking}")
         # 资源目录不在数据库事务里：重放时它已经不在，删除是空操作
         await self._agents.remove_files(event.agent_id, author)
         log.info("resources of a deleted agent removed", extra={"agent": event.agent_id})

@@ -275,7 +275,7 @@ async def test_a_session_turned_busy_between_the_check_and_the_mark_is_stopped_a
     async def not_busy(_s, _agent_id):  # noqa: ANN202  检查时还不忙
         return False
 
-    monkeypatch.setattr(container.agent_lifecycle, "_blockers", [not_busy])
+    monkeypatch.setattr(container.agent_lifecycle, "_blockers", {"sessions": not_busy})
     await container.agent_lifecycle.delete(agent.id, author="user")
     await drain(container)
     ended = await wait_until_done(container, job.id)
@@ -351,7 +351,7 @@ async def test_deleting_an_agent_whose_run_is_executing_stops_it_and_completes(
     async def not_busy(_s, _agent_id):  # noqa: ANN202  检查时还不忙
         return False
 
-    monkeypatch.setattr(container.agent_lifecycle, "_blockers", [not_busy])
+    monkeypatch.setattr(container.agent_lifecycle, "_blockers", {"sessions": not_busy})
     worker = asyncio.create_task(container.worker.run_forever())
     try:
         await asyncio.wait_for(started.wait(), 5)

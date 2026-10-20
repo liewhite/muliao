@@ -1,7 +1,7 @@
-"""删除会话的唯一规则与会话「忙」的两种查询（docs/architecture.md 第 7 节「thread 与结果路由」）。"""
+"""删除会话的唯一规则与删除 agent 流程里会话领域的一步（docs/architecture.md 第 7 节「thread 与结果路由」）。"""
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable
 
 import anyio
 from sqlalchemy import select
@@ -12,13 +12,13 @@ from muliao.errors import Conflict, TransientError
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
+from muliao.sessions.activity import blocking_deletion_in, sessions_blocking_agent_deletion_in
 from muliao.sessions.events import AgentSessionsCleared, Ending, SessionDeleted
 from muliao.sessions.halt import Halted
-from muliao.sessions.holds import has_active_in
-from muliao.sessions.kinds import OWNED_BY_PARENT
-from muliao.sessions.lanes import agent_deleting_lane, receive_lane, session_lane
+from muliao.sessions.lanes import agent_deleting_lane
 from muliao.sessions.settlement import settle_in, unsettled_in
 from muliao.sessions.tables import MailState, Session
+from muliao.sessions.threads import owned_threads_in
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ async def delete_sessions(
     任一被删会话忙时拒绝（判断只看会话自己的数据），避免运行结果无处提交、工具写到被删的目录。交给被删会话、
     还没结清的委派结清为「被删除」，结局交回发起方（sessions.delegation）。
     """
-    doomed = await _with_owned_threads_in(s, roots)
+    doomed = await owned_threads_in(s, roots)
     for session_id in await blocking_deletion_in(s, queue, doomed):
         # 错误也会交还给模型，不带 id；定位信息记在日志里
         log.info("session deletion refused: busy", extra={"session_id": session_id})
@@ -58,64 +58,6 @@ async def delete_sessions(
     # 立即执行删除：同一事务里随后的查询（如删除 agent 的流程）看到的是删除之后的状态
     await s.flush()
     log.info("sessions deleted", extra={"session_ids": sorted(doomed)})
-
-
-async def _with_owned_threads_in(s: AsyncSession, roots: Sequence[Session]) -> dict[str, Session]:
-    """这些会话连同（逐层）归它们所有的 thread（KindPolicy.owned_by_parent）：删除时一起删除。"""
-    doomed = {x.id: x for x in roots}
-    frontier = list(doomed)
-    while frontier:
-        children = (
-            await s.scalars(
-                select(Session).where(
-                    Session.parent_session_id.in_(frontier), Session.kind.in_(OWNED_BY_PARENT)
-                )
-            )
-        ).all()
-        frontier = [c.id for c in children if c.id not in doomed]
-        doomed |= {c.id: c for c in children}
-    return doomed
-
-
-async def blocking_deletion_in(
-    s: AsyncSession, queue: TaskQueue, sessions: Mapping[str, Session]
-) -> list[str]:
-    """其中忙、因而不能删除的会话：lane 上有排队或运行中的任务（运行、压缩），或有人替它在外面做事（后台任务、委派
-    出去的工作）。与「有没有排着的事」（session_has_pending_work_in）回答的是不同的问题。"""
-    return [x for x in sessions if await queue.lane_busy(s, session_lane(x)) or await has_active_in(s, x)]
-
-
-async def sessions_blocking_agent_deletion_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> list[str]:
-    """删除这个 agent 时会被删除、此刻忙着的会话（它的会话与它们的私有 thread）。"""
-    roots = list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())
-    return await blocking_deletion_in(s, queue, await _with_owned_threads_in(s, roots))
-
-
-async def agent_deletion_blocked_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> bool:
-    """删除这个 agent 时会被删除的会话里有忙的（删除 agent 前的检查，与删除时的判断同一条规则）。"""
-    return bool(await sessions_blocking_agent_deletion_in(s, queue, agent_id))
-
-
-async def session_has_pending_work_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> bool:
-    """会话有没有排着或正在做的事：它的 lane 上有排队或进行中的任务，或有投给它、还没投递的来信（Receive）。触发器
-    据此避免重叠触发。与「能不能删除」（blocking_deletion_in：lane 加 active 占用）回答的是不同的问题。"""
-    return await queue.lane_busy(s, session_lane(session_id)) or await queue.lane_busy(
-        s, receive_lane(session_id)
-    )
-
-
-class SessionActivity:
-    """别的领域问「会话忙不忙」的查询（只读，在调用方的事务里）：看哪些 lane、哪些占用是会话领域的实现细节，不交给
-    调用方。两个问题不同：有没有排着或正在做的事（触发器避免重叠触发），删除会不会打断工作（删除 agent 的检查）。"""
-
-    def __init__(self, queue: TaskQueue):
-        self._queue = queue
-
-    async def has_pending_work_in(self, s: AsyncSession, session_id: str) -> bool:
-        return await session_has_pending_work_in(s, self._queue, session_id)
-
-    async def blocks_agent_deletion_in(self, s: AsyncSession, agent_id: str) -> bool:
-        return await agent_deletion_blocked_in(s, self._queue, agent_id)
 
 
 # 删除 agent 时停止它忙的会话之后，等它们空闲的时限与查看间隔

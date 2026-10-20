@@ -71,11 +71,11 @@ async def list_reflections_of(db: Database, agent_id: str, limit: int) -> list[R
 class ReflectionScheduler:
     """反思的调度（反思领域）：订阅 RunEnded，按该 agent 自检查点以来的步数决定是否投递反思；检查点在自己的表里。"""
 
-    def __init__(self, db: Database, queue: TaskQueue, agents: AgentService, work: AgentHistory):
+    def __init__(self, db: Database, queue: TaskQueue, agents: AgentService, history: AgentHistory):
         self._db = db
         self._queue = queue
         self._agents = agents
-        self._work = work
+        self._history = history
 
     def subscribe(self, messaging: Messaging) -> None:
         # 同一个 agent 的两种事件在同一条 lane 上按发布顺序处理。通常 RunEnded 先于 AgentDeleting 发布（agent 有会话忙时
@@ -112,7 +112,7 @@ class ReflectionScheduler:
             checkpoint = await s.get(ReflectionCheckpoint, event.agent_id)
             from_id = checkpoint.message_id if checkpoint is not None else 0
         # 步数与区间上界取自同一个快照：有步数就一定有更晚的消息
-        steps, to_id = await self._work.window_after(event.agent_id, from_id)
+        steps, to_id = await self._history.window_after(event.agent_id, from_id)
         if steps < agent.reflect_every:
             return no_commit
         if to_id is None or to_id <= from_id:
@@ -157,7 +157,7 @@ class ReflectionScheduler:
                     )
                 ).all()
             }
-        return {a.id: await self._work.steps_after(a.id, checkpoints.get(a.id, 0)) for a in agents}
+        return {a.id: await self._history.steps_after(a.id, checkpoints.get(a.id, 0)) for a in agents}
 
 
 def reflection_lane(agent_id: str) -> str:
@@ -184,13 +184,13 @@ class ReflectionHandler:
         runtime: AgentRuntime,
         tool_groups: ToolGroups,
         agents: AgentService,
-        work: AgentHistory,
+        history: AgentHistory,
     ):
         self._db = db
         self._runtime = runtime
         self._tool_groups = tool_groups
         self._agents = agents
-        self._work = work
+        self._history = history
 
     async def failed_in(self, s: AsyncSession, task: Task) -> None:
         """失败只需可见（任务记录、日志），没有等着结果的一方。"""
@@ -207,7 +207,7 @@ class ReflectionHandler:
             # 投递之后 agent 进入删除流程：删除流程会结束排队的反思，这一次（已开始）不做
             log.info("reflection of a deleting agent skipped", extra={"agent": task.agent_id})
             return no_commit
-        transcript = await self._work.transcript(agent.id, from_id, to_id, max_item_chars=_ITEM_CHARS)
+        transcript = await self._history.transcript(agent.id, from_id, to_id, max_item_chars=_ITEM_CHARS)
         if transcript:
             prompt = REFLECTION_PROMPT.format(transcript=bounded(transcript))
             scope = self._runtime.scope(agent, session_id=None, origin=None, audience=None)
@@ -223,6 +223,7 @@ class ReflectionHandler:
                 else "its sessions were deleted"
             )
             output, messages = f"Skipped: nothing to reflect on in this window ({reason}).", "[]"
+
         async def commit(s: AsyncSession) -> None:
             try:
                 # agent 只会从可用变为删除（单向），在本事务里检查没有竞态（docs/architecture.md 2.2）

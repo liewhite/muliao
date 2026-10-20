@@ -30,9 +30,8 @@ log = logging.getLogger(__name__)
 class SessionWork:
     """别的领域在会话之外做一项工作时对会话的命令，每个在会话领域自己的事务里执行。"""
 
-    def __init__(self, db: Database, queue: TaskQueue):
+    def __init__(self, db: Database):
         self._db = db
-        self._queue = queue
 
     async def hold(self, session_id: str, holder: str, *, awaited: bool) -> None:
         """登记一项进行中的工作（重放幂等）：会话据此知道工作还没做完。awaited：用户是否在等它的结局。"""

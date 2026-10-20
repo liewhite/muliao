@@ -461,7 +461,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 | kind | config | state | 激活机制 |
 |---|---|---|---|
-| `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at` | `ScheduleRunner` 循环：到点先推进下次时间并提交，再调用 `fire`（前置检查不能占着事务；进程恰好死在两者之间时这一次被跳过，至多一次）；上一次触发的会话仍有没做完的事时跳过本次（会话领域的 `session_has_pending_work_in`：会话的 lane 上有任务，或有投给它、还没投递的 `Receive`）；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起）；触发前按最新的行重新判断（列出之后被删除、停用或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason` |
+| `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at` | `ScheduleRunner` 循环：到点先推进下次时间并提交，再调用 `fire`（前置检查不能占着事务；进程恰好死在两者之间时这一次被跳过，至多一次）；上一次触发的会话仍有没做完的事时跳过本次（会话领域的 `SessionActivity.has_pending_work_in`：会话的 lane 上有任务，或有投给它、还没投递的 `Receive`）；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起）；触发前按最新的行重新判断（列出之后被删除、停用或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason` |
 | `webhook` | `{}` | `token_hash` | `Webhooks`：`POST /api/hooks/{name}[?session_id=]` 凭 token 鉴权 |
 
 **前置检查**（`triggers/precheck.py`，所有触发方式共用，触发器的公共字段 `precheck`）：做法同 Hermes 的 script / monitor 模式——触发前先跑一条便宜、确定性的命令，有事才调用 agent，没事不花模型调用。命令在该 agent 的工作目录里用 `bash -o pipefail` 执行（管道里任何一步失败都算检查失败：`curl … | jq` 里 curl 失败时 jq 照样退出 0，否则故障会变成静默的「没事」；与 `run_shell` 共用 `platform/shell.py`：最小环境变量、按 key 注入 secret、输出里的 secret 替换掉、超时杀进程组），stdin 是原始事件内容（webhook 请求体，定时与手动为空），在数据库事务之外执行，时限 `runtime.precheck_timeout_seconds`（默认 30 秒：webhook 的调用方在同步等它，检查本该便宜），这个时限写进 `trigger_create` 的工具说明，agent 写检查脚本时知道上限（包括重试在内）。同一轮到期的定时触发器并发执行，一个慢的检查不拖住其他触发器。退出码 0 时按 `fire_when` 决定（`decide`，纯逻辑）：

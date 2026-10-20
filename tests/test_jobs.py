@@ -497,3 +497,50 @@ async def test_a_job_whose_session_was_deleted_is_kept_as_interrupted_after_a_cr
         from muliao.platform.tables import Task, TaskStatus
 
         assert (await s.scalars(select(Task).where(Task.status == TaskStatus.FAILED))).all() == []
+
+
+async def test_a_job_that_ends_while_a_check_is_being_prepared_gets_no_check(container, make_agent, models):
+    """检查读快照之后、发出之前任务结束：确认仍在运行的事务看到它已结束，不发检查；信箱里只有完成事件。"""
+    import threading
+
+    from muliao.jobs import runner as runner_module
+
+    session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
+    real_tail = runner_module.tail
+    entered, gate = threading.Event(), threading.Event()
+    calls = {"n": 0}
+
+    def slow_tail(path):  # noqa: ANN001, ANN202  只拦住检查读的第一次，结束时读最后几行照常
+        calls["n"] += 1
+        if calls["n"] == 1:
+            entered.set()
+            gate.wait(10)
+        return real_tail(path)
+
+    runner_module.tail = slow_tail
+    try:
+        check = asyncio.create_task(container.jobs.check())
+        await asyncio.to_thread(entered.wait, 5)
+        await container.jobs.kill(job.id, job.agent_id)
+        await wait_until_done(container, job.id)
+        gate.set()
+        assert await check == 0
+    finally:
+        gate.set()
+        runner_module.tail = real_tail
+    await deliver(container)
+
+    events = [m.content for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
+    assert len(events) == 1 and "was killed" in events[0]
+
+
+async def test_a_check_sent_before_the_job_ends_arrives_before_its_end(container, make_agent, models):
+    session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
+
+    assert await container.jobs.check() == 1
+    await container.jobs.kill(job.id, job.agent_id)
+    await wait_until_done(container, job.id)
+    await deliver(container)
+
+    events = [m.content for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
+    assert len(events) == 2 and "still running" in events[0] and "was killed" in events[1]

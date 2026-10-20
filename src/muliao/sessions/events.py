@@ -81,13 +81,13 @@ class WorkEnded(Command):
 
 class WorkCheckIn(Command):
     """在会话之外进行的一项工作还在进行：给会话投一封检查信件（规则见 mailbox.post_check_in）。发送方在确认工作仍在
-    进行的事务里发出；与这项工作的 WorkEnded 同一条 lane，所以检查信件不会排在结束之后。"""
+    进行的事务里发出；与这项工作的 WorkEnded 同一条 lane，所以检查信件不会排在结束之后。失败后被人工重试时可能晚于
+    结束执行：那时占用已释放，post_check_in 不投。"""
 
     TYPE = "session.work_check_in"
     session_id: str
     holder: str
     text: str
-
 
 
 class ReceiveNewSession(BaseModel):

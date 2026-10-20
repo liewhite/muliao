@@ -1,5 +1,6 @@
-"""会话领域用到的全部 lane（docs/architecture.md「任务队列即 actor 调度」）：lane 名在任务表里是全局的，会话领域的都在
-这里定义，别的领域不拼它们（要问会话忙不忙，用 SessionActivity）。"""
+"""会话领域自己命名的 lane（docs/architecture.md「任务队列即 actor 调度」）：lane 名在任务表里是全局的，会话领域命名的
+都在这里定义，别的领域不拼它们（要问会话忙不忙，用 SessionActivity）。没有给 lane 的订阅与命令（如 StopThread）用平台
+默认的按接收方一条 lane。"""
 
 
 def session_lane(session_id: str) -> str:

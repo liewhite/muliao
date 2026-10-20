@@ -4,6 +4,7 @@
 ask_agent 投给私有 thread（用户只读），发问方停在这次调用上，结局作为它的结果交回（sessions.delegation）。"""
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -20,7 +21,7 @@ from muliao.sessions.history import latest_answer
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.inbound import Inbound, NewSession, Received, create_session, receive
-from muliao.sessions.kinds import SessionKind, policy_of
+from muliao.sessions.kinds import OWNED_BY_PARENT, SessionKind, policy_of
 from muliao.sessions.mailbox import latest_run
 from muliao.sessions.settlement import failure_of
 from muliao.sessions.tables import Mail, Session
@@ -194,3 +195,20 @@ class Threads:
                 return ThreadState("failed", failure_of(run))
             case _:
                 return ThreadState("running", "")
+
+
+async def owned_threads_in(s: AsyncSession, roots: Sequence[Session]) -> dict[str, Session]:
+    """这些会话连同（逐层）归它们所有的 thread（KindPolicy.owned_by_parent）：删除时一起删除。"""
+    doomed = {x.id: x for x in roots}
+    frontier = list(doomed)
+    while frontier:
+        children = (
+            await s.scalars(
+                select(Session).where(
+                    Session.parent_session_id.in_(frontier), Session.kind.in_(OWNED_BY_PARENT)
+                )
+            )
+        ).all()
+        frontier = [c.id for c in children if c.id not in doomed]
+        doomed |= {c.id: c for c in children}
+    return doomed

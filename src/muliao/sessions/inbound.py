@@ -191,8 +191,6 @@ async def check_receivable_in(s: AsyncSession, inbound: Inbound) -> None:
     await _existing_target_in(s, inbound)
 
 
-
-
 def receive_target(command: Receive) -> str:
     if command.new_session is not None:
         return command.new_session.id
