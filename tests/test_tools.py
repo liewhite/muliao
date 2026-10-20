@@ -455,3 +455,9 @@ async def test_run_shell_tells_the_model_its_configured_time_limits(container):
     runtime = container.settings.runtime
     assert f"after {runtime.shell_default_timeout:g} seconds" in run_shell.description
     assert f"at most {runtime.shell_max_timeout:g}" in run_shell.description
+
+
+async def test_run_shell_rejects_a_zero_timeout_instead_of_using_the_default(container, make_agent, models):
+    me = await make_agent("alpha", model="tools")
+    [output] = await run_tools(container, models, me.id, [("run_shell", {"command": "echo hi", "timeout": 0})])
+    assert "timeout must be in" in output

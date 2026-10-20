@@ -151,7 +151,7 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
                 variables of the same name.
                 Secret values in the output are replaced by `[secret:KEY]`.
         """
-        timeout = timeout or limits.default_timeout
+        timeout = limits.default_timeout if timeout is None else timeout
         if not 0 < timeout <= limits.max_timeout:
             raise InvalidInput(f"timeout must be in (0, {limits.max_timeout}] seconds")
         secret_values = await vault.resolve_many(ctx.deps.agent_id, list(secrets))
