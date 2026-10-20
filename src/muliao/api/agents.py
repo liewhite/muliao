@@ -96,7 +96,10 @@ async def agent_defaults(c: C) -> AgentDefaultsOut:
     return AgentDefaultsOut(
         model=d.model,
         reflect_every=d.reflect_every,
-        groups=[ToolGroupOut(name=g.name, label=g.label, full_access=g.full_access, default=g.default) for g in d.groups],
+        groups=[
+            ToolGroupOut(name=g.name, label=g.label, full_access=g.full_access, default=g.default)
+            for g in d.groups
+        ],
     )
 
 

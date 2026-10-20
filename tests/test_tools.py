@@ -11,7 +11,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 
 from muliao.models import Origin
-from muliao.runtime.mcp import McpSpec, McpTransport
+from muliao.runtime.mcp import McpTransport, mcp_config
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
@@ -90,10 +90,8 @@ async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_age
     await container.triggers.create(
         name="daily", agent_id=me.id, kind="schedule", prompt="report", config={"cron": "0 9 * * *"}
     )
-    spec = McpSpec(
-        name="echo", transport=McpTransport.HTTP, command=None, args=(), url="http://x", env=(), headers=()
-    )
-    await container.mcp.add(me.id, spec, probe=False, author="user")
+    spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
+    await container.mcp.add(me.id, "echo", spec, probe=False, author="user")
     # 停用的 server 不会在这一轮被连接；agent 看得到它并重新启用（下一轮起生效）
     await container.mcp.set_enabled(me.id, "echo", False, "user")
 
@@ -396,10 +394,10 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
 async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container, models):
     from muliao.agents import AgentSpec
 
-    spec = McpSpec(
-        name="echo", transport=McpTransport.HTTP, command=None, args=(), url="http://x", env=(), headers=()
-    )
-    await container.mcp.add(None, spec, probe=False, author="user")  # 公共 MCP：受限 agent 也看不到它的工具
+    spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
+    await container.mcp.add(
+        None, "echo", spec, probe=False, author="user"
+    )  # 公共 MCP：受限 agent 也看不到它的工具
     triage = await container.agents.create(
         AgentSpec(name="triage", description="d", instructions="", model="m", tool_groups=["notify"]),
         author="user",

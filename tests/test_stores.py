@@ -229,10 +229,10 @@ def test_owner_ids_cannot_escape_the_repository(repo: ResourceRepo):
 
 
 async def test_corrupt_mcp_config_is_rejected_with_its_path_but_can_be_deleted(container):
-    from muliao.runtime.mcp import McpSpec, McpTransport
+    from muliao.runtime.mcp import McpTransport, mcp_config
 
-    spec = McpSpec(name="echo", transport=McpTransport.HTTP, url="http://x")
-    await container.mcp.add(None, spec, probe=False, author="user")
+    spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
+    await container.mcp.add(None, "echo", spec, probe=False, author="user")
     path = container.resources.owner_dir(None) / "mcp" / "echo.json"
     for broken in ('{"not json"', path.read_text().replace("true", '"false"')):
         path.write_text(broken)
@@ -316,23 +316,15 @@ async def test_files_outside_the_resource_layout_never_enter_history(repo: Resou
 
 async def test_every_file_the_stores_write_is_in_the_resource_layout(container, make_agent):
     """RESOURCE_FILES 与各 store 的文件名必须一致：不在布局里的资源文件，外部写入就不会被收敛。"""
-    from muliao.runtime.mcp import McpSpec, McpTransport
+    from muliao.runtime.mcp import McpTransport, mcp_config
 
     agent = (await make_agent(ALPHA)).id
     await container.memory.append(agent, "fact", agent)
     await container.prompts.set(None, "public rules", "user")
     for owner in (agent, None):
         await container.skills.write(owner, "digest", "When digesting", "steps", "user")
-        spec = McpSpec(
-            name="echo",
-            transport=McpTransport.HTTP,
-            command=None,
-            args=(),
-            url="http://x",
-            env=(),
-            headers=(),
-        )
-        await container.mcp.add(owner, spec, probe=False, author="user")
+        spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
+        await container.mcp.add(owner, "echo", spec, probe=False, author="user")
 
     root = container.resources.root
     files = (await asyncio.to_thread(_git, "-C", str(root), "ls-files")).split()

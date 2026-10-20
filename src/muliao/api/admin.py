@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from muliao.api.deps import C
 from muliao.models import Notification
 from muliao.resources import USER
-from muliao.runtime.mcp import McpServer, McpSpec, McpTransport
+from muliao.runtime.mcp import McpServer, McpTransport, mcp_config
 from muliao.vault import SecretInfo
 
 router = APIRouter()
@@ -69,18 +69,17 @@ async def list_mcp(c: C) -> list[McpOut]:
 
 @router.post("/mcp", status_code=201)
 async def add_mcp(c: C, body: McpIn) -> McpOut:
-    spec = McpSpec(
-        name=body.name,
+    config = mcp_config(
         transport=body.transport,
         command=body.command,
-        args=tuple(body.args),
+        args=list(body.args),
         url=body.url,
-        env=tuple(body.env.items()),
-        headers=tuple(body.headers.items()),
+        env=dict(body.env),
+        headers=dict(body.headers),
     )
     if body.owner is not None:
         await c.agents.get(body.owner)
-    row, tools = await c.mcp.add(body.owner, spec, probe=body.probe, author=USER)
+    row, tools = await c.mcp.add(body.owner, body.name, config, probe=body.probe, author=USER)
     return McpOut.of(row, tools)
 
 

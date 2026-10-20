@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from fastmcp.client.transports import StdioTransport
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset
 
@@ -33,44 +33,38 @@ class McpTransport(StrEnum):
     HTTP = "http"
 
 
-@dataclass(frozen=True)
-class McpSpec:
-    name: str
-    transport: McpTransport
-    command: str | None = None
-    args: tuple[str, ...] = ()
-    url: str | None = None
-    env: tuple[tuple[str, str], ...] = ()
-    headers: tuple[tuple[str, str], ...] = ()
-
-    def validate(self) -> None:
-        validate_slug("mcp server", self.name)
-        if self.transport == McpTransport.STDIO:
-            if not self.command or self.url or self.headers:
-                raise InvalidInput("stdio MCP server requires 'command' and must not set 'url' or 'headers'")
-        elif self.transport == McpTransport.HTTP:
-            if not self.url or self.command or self.args or self.env:
-                raise InvalidInput(
-                    "http MCP server requires 'url' and must not set 'command', 'args' or 'env'"
-                )
-            if not self.url.startswith(("http://", "https://")):
-                raise InvalidInput("MCP url must start with http:// or https://")
-        else:
-            raise InvalidInput(f"unknown MCP transport {self.transport!r}")
-
-
 class McpConfig(BaseModel):
-    """文件里存的内容：除归属与名称以外的字段（这两项由文件位置决定，不存第二份）。加载时严格校验。"""
+    """一个 MCP server 的配置，也是文件里存的内容：除归属与名称以外的字段（这两项由文件位置决定，不存第二份）。
+    传输方式与字段的搭配在这里校验，写入与读回同一条规则。"""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     transport: McpTransport
-    command: str | None
-    args: list[str]
-    url: str | None
-    env: dict[str, str]
-    headers: dict[str, str]
-    enabled: bool
+    command: str | None = None
+    args: list[str] = []
+    url: str | None = None
+    env: dict[str, str] = {}
+    headers: dict[str, str] = {}
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _fits_transport(self) -> McpConfig:
+        if self.transport == McpTransport.STDIO:
+            if not self.command or self.url or self.headers:
+                raise ValueError("stdio MCP server requires 'command' and must not set 'url' or 'headers'")
+        elif not self.url or self.command or self.args or self.env:
+            raise ValueError("http MCP server requires 'url' and must not set 'command', 'args' or 'env'")
+        elif not self.url.startswith(("http://", "https://")):
+            raise ValueError("MCP url must start with http:// or https://")
+        return self
+
+
+def mcp_config(**fields: object) -> McpConfig:
+    """调用方（用户、agent）给出的配置：不合法是输入错误。"""
+    try:
+        return McpConfig.model_validate(fields)
+    except ValidationError as e:
+        raise InvalidInput(f"invalid MCP server config: {e}") from e
 
 
 @dataclass(frozen=True)
@@ -109,17 +103,8 @@ class McpRegistry:
     def _load(self, owner: str | None, path: Path) -> McpServer:
         """手工改坏的文件在这里报错（带路径），不带着错误的类型或含义继续运行；可以用 remove 删掉。"""
         try:
+            validate_slug("mcp server", path.stem)
             config = McpConfig.model_validate_json(path.read_text(encoding="utf-8"))
-            spec = McpSpec(
-                name=validate_slug("mcp server", path.stem),
-                transport=config.transport,
-                command=config.command,
-                args=tuple(config.args),
-                url=config.url,
-                env=tuple(config.env.items()),
-                headers=tuple(config.headers.items()),
-            )
-            spec.validate()
         except (ValueError, InvalidInput) as e:
             # 文件数据损坏（多半是手工改坏的）：不是调用方的输入错误，交给人修复
             raise CorruptState(f"corrupt MCP config {path}: {e}") from e
@@ -190,31 +175,22 @@ class McpRegistry:
         return self._load(owner, path)
 
     async def add(
-        self, owner: str | None, spec: McpSpec, *, probe: bool, author: str
+        self, owner: str | None, name: str, config: McpConfig, *, probe: bool, author: str
     ) -> tuple[McpServer, list[str]]:
         """新增 server。probe=True 时先连接验证，验证失败不写入。owner 对应的 agent 由调用方确认存在。"""
-        spec.validate()
-        config = McpConfig(
-            transport=spec.transport,
-            command=spec.command,
-            args=list(spec.args),
-            url=spec.url,
-            env=dict(spec.env),
-            headers=dict(spec.headers),
-            enabled=True,
-        )
-        server = McpServer(owner=owner, name=spec.name, config=config)
+        validate_slug("mcp server", name)
+        server = McpServer(owner=owner, name=name, config=config)
         tools = await self.probe(server) if probe else []
 
         def create(current: str | None) -> str:
             if current is not None:
-                raise Conflict(f"MCP server {spec.name!r} already exists in {scope_of(owner)} scope")
+                raise Conflict(f"MCP server {name!r} already exists in {scope_of(owner)} scope")
             return _dump(config)
 
         await self._repo.update(
-            self._path(owner, spec.name), create, f"add {scope_of(owner)} MCP server {spec.name}", author
+            self._path(owner, name), create, f"add {scope_of(owner)} MCP server {name}", author
         )
-        log.info("mcp server added", extra={"owner": owner, "mcp": spec.name, "tools": len(tools)})
+        log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
 
     async def remove(self, owner: str | None, name: str, author: str) -> None:

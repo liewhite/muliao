@@ -7,7 +7,7 @@ import pytest
 from muliao.errors import InvalidInput
 from muliao.models import MailKind, Origin
 from muliao.runtime.mailbox import queued_in
-from muliao.runtime.mcp import McpSpec, McpTransport
+from muliao.runtime.mcp import McpTransport, mcp_config
 from tests.test_flow import drain, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
@@ -162,15 +162,14 @@ async def test_manual_run_starts_a_session_with_just_the_prompt(container, make_
 async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent):
     alpha = (await make_agent()).id
     await container.vault.set(None, "ECHO_TOKEN", "tok-123")
-    spec = McpSpec(
-        name="echo",
+    spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
-        args=(ECHO_SERVER,),
-        env=(("TOKEN", "${vault:ECHO_TOKEN}"),),
+        args=[ECHO_SERVER],
+        env={"TOKEN": "${vault:ECHO_TOKEN}"},
     )
 
-    row, tools = await container.mcp.add(alpha, spec, probe=True, author="user")
+    row, tools = await container.mcp.add(alpha, "echo", spec, probe=True, author="user")
 
     assert sorted(tools) == ["echo", "token"]
     assert row.config.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
@@ -179,15 +178,12 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
 
 
 async def test_mcp_add_failing_probe_saves_nothing(container):
-    spec = McpSpec(
-        name="broken",
-        transport=McpTransport.STDIO,
-        command=sys.executable,
-        args=("-c", "raise SystemExit(1)"),
+    spec = mcp_config(
+        transport=McpTransport.STDIO, command=sys.executable, args=["-c", "raise SystemExit(1)"]
     )
 
     with pytest.raises(InvalidInput, match="could not connect"):
-        await container.mcp.add(None, spec, probe=True, author="user")
+        await container.mcp.add(None, "broken", spec, probe=True, author="user")
     assert container.mcp.list_all() == []
 
 
@@ -196,14 +192,13 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
 
     alpha = (await make_agent("alpha", model="m")).id
     await container.vault.set(None, "ECHO_TOKEN", "tok-123")
-    spec = McpSpec(
-        name="echo",
+    spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
-        args=(ECHO_SERVER,),
-        env=(("TOKEN", "${vault:ECHO_TOKEN}"),),
+        args=[ECHO_SERVER],
+        env={"TOKEN": "${vault:ECHO_TOKEN}"},
     )
-    await container.mcp.add(alpha, spec, probe=False, author="user")
+    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
     models.models["m"] = call_then_answer("echo_token", {}, "got it")
 
     session = await start(container, alpha, "token?")
@@ -237,15 +232,7 @@ async def test_a_failing_probe_does_not_leak_the_secrets_it_was_given(container,
         raise RuntimeError("401 for https://mcp.example/sse?token=tok-secret-9")
 
     monkeypatch.setattr(MCPToolset, "__aenter__", refuse)
-    spec = McpSpec(
-        name="remote",
-        transport=McpTransport.HTTP,
-        command=None,
-        args=(),
-        url="https://mcp.example/sse?token=${vault:API_TOKEN}",
-        env=(),
-        headers=(),
-    )
+    spec = mcp_config(transport=McpTransport.HTTP, url="https://mcp.example/sse?token=${vault:API_TOKEN}")
     with pytest.raises(InvalidInput) as raised:
-        await container.mcp.add(None, spec, probe=True, author="user")
+        await container.mcp.add(None, "remote", spec, probe=True, author="user")
     assert "tok-secret-9" not in str(raised.value) and "[secret:API_TOKEN]" in str(raised.value)

@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.ownership import Scope, owner_of, scope_of
-from muliao.runtime.mcp import McpRegistry, McpSpec, McpTransport
+from muliao.runtime.mcp import McpRegistry, McpTransport, mcp_config
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 
@@ -80,17 +80,16 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
             headers: HTTP headers for http, e.g. {"Authorization": "Bearer ${vault:GITHUB_TOKEN}"}.
             scope: `private` (only you) or `public` (all agents).
         """
-        spec = McpSpec(
-            name=name,
+        config = mcp_config(
             transport=McpTransport(transport),
             command=command,
-            args=args,
+            args=list(args),
             url=url,
-            env=tuple(env.items()),
-            headers=tuple(headers.items()),
+            env=env,
+            headers=headers,
         )
         _, tools = await registry.add(
-            owner_of(scope, ctx.deps.agent_id), spec, probe=True, author=ctx.deps.agent_id
+            owner_of(scope, ctx.deps.agent_id), name, config, probe=True, author=ctx.deps.agent_id
         )
         return f"registered {scope} MCP server {name} with tools: {', '.join(tools) or '(none)'}"
 
