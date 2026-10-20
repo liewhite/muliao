@@ -271,7 +271,7 @@ async def delete_sessions(
     for session in doomed.values():
         await s.delete(session)
         messaging.publish_in(s, SessionDeleted(session_id=session.id, agent_id=session.agent_id))
-    # 立即执行删除：调用方随后可能删除 agent，数据库级联会抢先删掉这些行
+    # 立即执行删除：同一事务里随后的查询（如删除 agent 的流程）看到的是删除之后的状态
     await s.flush()
     log.info("sessions deleted", extra={"session_ids": sorted(doomed)})
 

@@ -200,10 +200,10 @@
 
 **删除 agent**：
 
-1. `Agents.delete(agent)`：`Sessions.agent_busy(agent)` 为真时拒绝（409，与删除会话的规则一致）；否则把 agent 标为 `deleting`（不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。
+1. `Agents.delete(agent)`：它的会话有忙的、或它的反思在排队或运行时拒绝（409，与删除会话的规则一致）；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据（secret、触发器、资源、配置）之前用 `agents.service.active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。
 2. 订阅者：
-   - 会话：记入 `retired_agents`（之后 `receive`、`dispatch` 在本地事务里拒绝这个 agent，无先查后写竞态）；删除它的全部会话。期间若有会话忙（检查与标记之间的极小窗口），这次投递按契约内的暂时失败重试；超过重试上限时投递记为 failed，agent 停在 `deleting`，在「任务」页可见，人工重试即可继续。全部删除后发布 `AgentSessionsCleared`（没有会话时立即发布）。
-   - 反思：取消该 agent 排队的反思任务，删除检查点与记录；正在执行的反思任务结束后不再推进。
+   - 会话：先单独提交退役（`retired_agents`，之后 `receive`、`dispatch` 在本地事务里拒绝这个 agent），同一事务发出自己的定向命令 `ClearAgentSessions`；这条命令删除它的全部会话，有会话忙（检查与标记之间的极小窗口）就按暂时失败重试——退役已经生效，重试期间不会有新的来信让会话再变忙；重试用完时投递记为 failed，在「任务」页可见，人工重试即可继续。全部删除后发布 `AgentSessionsCleared`（没有会话时立即发布）。
+   - 反思：取消该 agent 排队的反思任务，删除检查点与记录；正在执行的反思（删除前的检查之后才开始的极小窗口）结束时发现 agent 正在删除，不写记录。
    - 触发器、vault：删除它的触发器与私有 secret。
 3. agents 订阅 `AgentSessionsCleared`：删除行与资源目录。
 

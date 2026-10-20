@@ -67,18 +67,6 @@ def _claimable():  # noqa: ANN202
     )
 
 
-async def running_task_ids(
-    s: AsyncSession, *, session_id: str | None = None, agent_id: str | None = None
-) -> list[int]:
-    """正在运行的 task id。删除 session/agent 前用它保证不会删掉执行中的工作。"""
-    query = select(Task.id).where(Task.status == TaskStatus.RUNNING)
-    if session_id is not None:
-        query = query.where(Task.session_id == session_id)
-    if agent_id is not None:
-        query = query.where(Task.agent_id == agent_id)
-    return list((await s.scalars(query)).all())
-
-
 class TaskQueue:
     def __init__(self, db: Database, *, max_attempts: int, retry_base_seconds: float, clock: Clock = utcnow):
         self._db = db

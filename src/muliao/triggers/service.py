@@ -27,8 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from muliao.agents.events import AgentDeleting
+from muliao.agents.service import active_agent_in
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.models import Agent, Notification, Origin, Session, Trigger
+from muliao.models import Notification, Origin, Session, Trigger
 from muliao.notifications.service import Notifier
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
@@ -160,8 +161,8 @@ class TriggerService:
         )
         try:
             async with self._db.transaction() as s:
-                if await s.get(Agent, agent_id) is None:
-                    raise NotFound(f"agent {agent_id!r} not found")
+                # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又建的触发器没人认领
+                await active_agent_in(s, agent_id)
                 s.add(trigger)
         except IntegrityError as e:
             raise Conflict(f"trigger {name!r} already exists") from e

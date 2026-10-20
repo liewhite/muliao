@@ -60,7 +60,7 @@ from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
 from muliao.sessions.mailbox import MailReconciler
 from muliao.sessions.service import SessionService
-from muliao.sessions.settlement import handle_post_event, reconcile_failures_in
+from muliao.sessions.settlement import handle_post_event, reconcile_failures
 from muliao.sessions.steps import Steps
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
@@ -396,7 +396,7 @@ def build_container(
         worker=worker,
         messaging=messaging,
         threads=threads,
-        mail=MailReconciler(db, queue, lambda s: reconcile_failures_in(s, messaging)),
+        mail=MailReconciler(db, queue, lambda: reconcile_failures(db, messaging)),
         jobs=jobs,
         delegations=delegations,
         work=WorkWatcher([jobs, delegations], settings.runtime.job_check_seconds),

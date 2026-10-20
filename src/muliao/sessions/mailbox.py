@@ -227,7 +227,7 @@ class MailReconciler:
         self,
         db: Database,
         queue: TaskQueue,
-        settle_failures: Callable[[AsyncSession], Awaitable[list[str]]],
+        settle_failures: Callable[[], Awaitable[list[str]]],
         interval_seconds: float = _RECONCILE_SECONDS,
     ):
         self._db = db
@@ -250,8 +250,7 @@ class MailReconciler:
         if woken:
             # 正常路径也会走到这里（最终失败的运行期间到达的信件），所以是 info；补了什么仍然可查
             log.info("reconcile woke consumers for queued mail", extra={"session_ids": woken})
-        async with self._db.transaction() as s:
-            settled = await self._settle_failures(s)
+        settled = await self._settle_failures()
         if settled:
             # 只有收尾钩子失败时才会走到这里
             log.warning("reconcile settled delegations of failed runs", extra={"session_ids": settled})

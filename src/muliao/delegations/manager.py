@@ -27,6 +27,7 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Clock, Commit, TaskQueue, no_commit
 from muliao.sessions.events import DelegationDispatched, Ending, SessionSettled, SessionStopped
+from muliao.sessions.halt import Halted
 from muliao.sessions.mailbox import latest_run
 from muliao.sessions.pending import AgentAnswer, pending_in
 from muliao.sessions.settlement import deliver_in
@@ -72,7 +73,7 @@ class Delegations:
         self,
         db: Database,
         queue: TaskQueue,
-        stop_session: Callable[[str], Awaitable[object]],
+        stop_session: Callable[[str], Awaitable[Halted]],
         clock: Clock = utcnow,
     ):
         self._db = db

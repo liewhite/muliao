@@ -177,7 +177,7 @@ async def get_memory(c: C, agent_id: str) -> MemoryOut:
 
 @router.put("/agents/{agent_id}/memory")
 async def put_memory(c: C, agent_id: str, body: MemoryIn) -> MemoryOut:
-    await c.agents.get(agent_id)
+    await c.agents.get_active(agent_id)
     return MemoryOut(content=await c.memory.write(agent_id, body.content, USER), max_chars=c.memory.max_chars)
 
 
@@ -222,8 +222,9 @@ class SkillIn(BaseModel):
 
 
 async def _check_owner(c: C, owner: str | None) -> None:
+    """为 owner 写私有资源之前：正在删除的 agent 按不存在处理。"""
     if owner is not None:
-        await c.agents.get(owner)
+        await c.agents.get_active(owner)
 
 
 @router.get("/skills")

@@ -1,7 +1,8 @@
 """删除 agent（docs/domain-design.md 4.4）：agent 领域发起、各领域清理自己的数据的流程。
 
-1. delete：它的会话有忙的就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除（不再出现在列表与名称解析里），
-   同一事务发布 AgentDeleting。
+1. delete：它的会话有忙的、或它的反思在排队或运行，就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除
+   （不再出现在列表与名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in），同一事务发布
+   AgentDeleting。
 2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域记下它已退役并删除它的全部会话，然后发布
    AgentSessionsCleared；触发器、vault、反思各自删除。
 3. 收到 AgentSessionsCleared：它的反思还在跑就等（重试），否则删除资源目录与这一行。
@@ -41,12 +42,16 @@ class AgentLifecycle:
             agent = await self._agents.get_in(s, agent_id)
             if agent.deleting_by is not None:
                 raise Conflict(f"agent {agent.name!r} is already being deleted")
-            busy = await agent_busy_in(s, self._queue, agent_id)
+            busy = await agent_busy_in(s, self._queue, agent_id) or await self._queue.lane_busy(
+                s, reflection_lane(agent_id)
+            )
         if busy:
             log.info("agent deletion refused: busy", extra={"agent": agent_id})
             raise Conflict(f"agent {agent.name!r} is working right now; stop its sessions first, then delete")
         async with self._db.transaction() as s:
             agent = await self._agents.get_in(s, agent_id)
+            if agent.deleting_by is not None:
+                raise Conflict(f"agent {agent.name!r} is already being deleted")
             agent.deleting_by = author
             self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))
         log.info("agent deletion started", extra={"agent": agent_id, "author": author})
@@ -66,6 +71,7 @@ class AgentLifecycle:
                 raise TransientError(f"agent {event.agent_id} still has a reflection running")
         # 资源目录不在数据库事务里：重放时它已经不在，删除是空操作
         await self._agents.remove_files(event.agent_id, author)
+        log.info("resources of a deleted agent removed", extra={"agent": event.agent_id})
 
         async def commit(s: AsyncSession) -> None:
             agent = await s.get(Agent, event.agent_id)

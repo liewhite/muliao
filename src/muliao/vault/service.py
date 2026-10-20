@@ -17,8 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.events import AgentDeleting
 from muliao.agents.ownership import owned_by, scope_of, visible, visible_owners
+from muliao.agents.service import active_agent_in
 from muliao.errors import InvalidInput, NotFound
-from muliao.models import Agent, Secret
+from muliao.models import Secret
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit
@@ -70,8 +71,9 @@ class Vault:
             raise InvalidInput("secret value must not be empty")
         ciphertext = self._fernet.encrypt(value.encode())
         async with self._db.transaction() as s:
-            if owner is not None and await s.get(Agent, owner) is None:
-                raise NotFound(f"agent {owner!r} not found")
+            if owner is not None:
+                # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又写进来的 secret 没人认领
+                await active_agent_in(s, owner)
             row = await s.scalar(select(Secret).where(owned_by(Secret.owner, owner), Secret.key == key))
             if row is None:
                 s.add(Secret(owner=owner, key=key, ciphertext=ciphertext, description=description))

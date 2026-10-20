@@ -27,7 +27,7 @@ from muliao.sessions.conversation import (
     receive,
     threads_of,
 )
-from muliao.sessions.events import AgentSessionsCleared
+from muliao.sessions.events import AgentSessionsCleared, ClearAgentSessions
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.transcript import Item, annotate_asks, to_items
 
@@ -156,25 +156,39 @@ class SessionService:
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(AgentDeleting, "sessions.agent_deleting", self.on_agent_deleting)
+        messaging.handle(ClearAgentSessions, "sessions.clear_agent_sessions", self.on_clear_agent_sessions)
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
-        """删除 agent 的流程：记下它已退役（之后的来信与委派在本地事务里拒绝它），删除它的全部会话，发布
-        AgentSessionsCleared（没有会话也发）。有会话忙（检查与标记之间的极小窗口）就按暂时失败重试。"""
+        """删除 agent 的流程第一步：记下它已退役（之后的来信与委派在本地事务里拒绝它），并发出清理它会话的命令。两步
+        分开提交：清理因会话忙而重试期间，退役一直生效，不会有新的来信让会话再变忙。"""
 
         async def commit(s: AsyncSession) -> None:
             if await s.get(RetiredAgent, event.agent_id) is None:
                 s.add(RetiredAgent(agent_id=event.agent_id))
+                log.info("agent retired", extra={"agent": event.agent_id})
+            self._messaging.send_in(s, ClearAgentSessions(agent_id=event.agent_id))
+
+        return commit
+
+    async def on_clear_agent_sessions(self, command: ClearAgentSessions, _delivery: Delivery) -> Commit:
+        """删除已退役 agent 的全部会话，发布 AgentSessionsCleared（没有会话也发）。有会话忙（退役之前已经开始的工作）就
+        按暂时失败重试；重试用完时投递记为失败，在「任务」页可见，人工重试即可继续。"""
+
+        async def commit(s: AsyncSession) -> None:
             sessions = list(
-                (await s.scalars(select(Session).where(Session.agent_id == event.agent_id))).all()
+                (await s.scalars(select(Session).where(Session.agent_id == command.agent_id))).all()
             )
             try:
                 await delete_sessions(s, self._queue, self._messaging, sessions)
             except Conflict as e:
-                raise TransientError(f"agent {event.agent_id} still has a busy session: {e}") from e
-            self._messaging.publish_in(s, AgentSessionsCleared(agent_id=event.agent_id))
+                log.info(
+                    "deleted agent still has a busy session, will retry", extra={"agent": command.agent_id}
+                )
+                raise TransientError(f"agent {command.agent_id} still has a busy session: {e}") from e
+            self._messaging.publish_in(s, AgentSessionsCleared(agent_id=command.agent_id))
             log.info(
                 "sessions of a deleted agent removed",
-                extra={"agent": event.agent_id, "session_ids": [x.id for x in sessions]},
+                extra={"agent": command.agent_id, "session_ids": [x.id for x in sessions]},
             )
 
         return commit

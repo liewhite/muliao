@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.models import Agent, HoldStatus, Mail, MailKind, MailState, Session, Task, TaskStatus
+from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.conventions import Attachment
@@ -115,27 +116,41 @@ async def settle_failure_in(s: AsyncSession, messaging: Messaging, session: Sess
     return settled
 
 
-async def reconcile_failures_in(s: AsyncSession, messaging: Messaging) -> list[str]:
+async def reconcile_failures(db: Database, messaging: Messaging) -> list[str]:
     """failed_in 没做成（收尾钩子自己失败，worker 不带钩子记下了失败）时补做：最近一次运行已失败、仍有已交给模型
-    还没结清的关联的会话，按 settle_failure_in 结清。返回补做的会话。"""
-    candidates = (
-        await s.scalars(
-            select(Mail.session_id)
-            .where(
-                Mail.correlation.is_not(None),
-                Mail.correlation_settled.is_(False),
-                Mail.state == MailState.CONSUMED,
+    还没结清的关联的会话，按 settle_failure_in 结清。返回补做的会话。
+
+    每个会话一个事务、各自的异常边界：钩子失败多半是确定性的 bug，补做时会再撞上它；它只记 error（带会话与运行），
+    不回滚别的会话的补做，也不让对账循环崩溃、把整个服务拖进重启循环。"""
+    async with db.transaction() as s:
+        candidates = (
+            await s.scalars(
+                select(Mail.session_id)
+                .where(
+                    Mail.correlation.is_not(None),
+                    Mail.correlation_settled.is_(False),
+                    Mail.state == MailState.CONSUMED,
+                )
+                .distinct()
             )
-            .distinct()
-        )
-    ).all()
+        ).all()
     done = []
     for session_id in candidates:
-        run = await latest_run(s, session_id)
-        session = await s.get(Session, session_id)
-        if run is None or run.status != TaskStatus.FAILED or session is None:
+        run_id = None
+        try:
+            async with db.transaction() as s:
+                run = await latest_run(s, session_id)
+                session = await s.get(Session, session_id)
+                if run is None or run.status != TaskStatus.FAILED or session is None:
+                    continue
+                run_id = run.id
+                await settle_failure_in(s, messaging, session, run)
+        except Exception:
+            log.exception(
+                "settling the delegations of a failed run failed again",
+                extra={"session_id": session_id, "run_id": run_id},
+            )
             continue
-        await settle_failure_in(s, messaging, session, run)
         done.append(session_id)
     return done
 

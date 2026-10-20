@@ -75,6 +75,15 @@ class _AgentFields:
     tool_groups: list[str]
 
 
+async def active_agent_in(s: AsyncSession, agent_id: str) -> Agent:
+    """还可用的 agent（正在删除的按不存在处理）。别的领域在自己的写事务里为某个 agent 写数据之前用它检查：事务串行，
+    agent 只会从可用变为正在删除、再变为不存在，检查与写入之间不会插进删除，删除流程的清理一定看得到这次写入。"""
+    agent = await s.get(Agent, agent_id)
+    if agent is None or agent.deleting_by is not None:
+        raise NotFound(f"agent {agent_id!r} not found")
+    return agent
+
+
 class AgentService:
     """agent 以系统生成的 id 标识（主键、目录名、外键）；名称只用于展示，可改、唯一。"""
 
@@ -158,13 +167,13 @@ class AgentService:
         先校验全部字段，再写指令（资源仓库），最后改数据库行：校验或指令写入失败时什么都没生效。只有写完指令后
         恰好被并发改名撞了名字，才会出现指令已更新、其余字段报错（窗口极小，报错可见，重试即可）。"""
         async with self._db.transaction() as s:
-            fields = self._validated(await self._get(s, agent_id), patch)
+            fields = self._validated(await active_agent_in(s, agent_id), patch)
             await self._ensure_name_free(s, fields.name, agent_id)
         instructions_changed = patch.instructions is not None and await self._prompts.set(
             agent_id, patch.instructions, author
         )
         async with self._db.transaction() as s:
-            agent = await self._get(s, agent_id)
+            agent = await active_agent_in(s, agent_id)
             fields = self._validated(agent, patch)
             await self._ensure_name_free(s, fields.name, agent_id)
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
@@ -197,6 +206,11 @@ class AgentService:
         if agent is None:
             raise NotFound(f"agent {agent_id!r} not found")
         return agent
+
+    async def get_active(self, agent_id: str) -> Agent:
+        """还可用的 agent：正在删除的按不存在处理。为它写数据（资源、配置）之前用这个检查。"""
+        async with self._db.transaction() as s:
+            return await active_agent_in(s, agent_id)
 
     async def get(self, agent_id: str) -> Agent:
         async with self._db.transaction() as s:

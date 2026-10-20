@@ -35,7 +35,7 @@ class _Resource:
 
 async def _resource(c: C, kind: ResourceKind, owner: str | None) -> _Resource:
     if owner is not None:
-        await c.agents.get(owner)
+        await c.agents.get_active(owner)
     match kind:
         case ResourceKind.PROMPT:
             return _Resource(

@@ -13,7 +13,7 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.models import HoldStatus, MailKind
+from muliao.models import HoldStatus, MailKind, Session
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.mailbox import has_queued_from, post_in
@@ -33,7 +33,11 @@ async def post_check_in(
     """在调用方事务里给发起会话投一封检查信件；这个来源已有信件排着时不投。工作的占用已不是 active（会话被停止，或
     会话已删除）时也不投：停止之后不唤醒会话。返回是否投了。"""
     hold = await get_hold_in(s, owner_session_id, holder)
-    if hold is None or hold.status != HoldStatus.ACTIVE:
+    if hold is None:
+        if await s.get(Session, owner_session_id) is not None:
+            raise RuntimeError(f"session {owner_session_id} has no hold {holder} for its running work")
+        return False
+    if hold.status != HoldStatus.ACTIVE:
         return False
     if await has_queued_from(s, owner_session_id, source):
         return False

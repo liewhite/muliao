@@ -219,6 +219,11 @@ class ReflectionHandler:
             output, messages = f"Skipped: nothing to reflect on in this window ({reason}).", "[]"
 
         async def commit(s: AsyncSession) -> None:
+            current = await s.get(Agent, agent.id)
+            if current is None or current.deleting_by is not None:
+                # 反思期间 agent 进入删除流程：它的反思记录已被清理，这条不再写
+                log.info("reflection of a deleted agent not recorded", extra={"agent": agent.id})
+                return
             s.add(
                 Reflection(
                     agent_id=agent.id,
