@@ -54,6 +54,10 @@ class UserAnswered(BaseModel):
     tool: Literal["ask_user"]
     result: AskResult
 
+    @classmethod
+    def of(cls, result: AskResult) -> "UserAnswered":
+        return cls(tool=ASK_USER, result=result)
+
     def tool_return(self) -> object:
         return self.result.model_dump()
 
@@ -63,6 +67,10 @@ class AgentAnswered(BaseModel):
 
     tool: Literal["ask_agent"]
     result: AgentAnswer
+
+    @classmethod
+    def of(cls, result: AgentAnswer) -> "AgentAnswered":
+        return cls(tool=ASK_AGENT, result=result)
 
     def tool_return(self) -> object:
         return self.result.to_tool_return()

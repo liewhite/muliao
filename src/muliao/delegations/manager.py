@@ -169,9 +169,10 @@ class Delegations:
 
     async def on_stopped(self, event: SessionStopped, _delivery: Delivery) -> Commit:
         """发起方被停止：被清掉的委派放弃（不再交回），做这些工作的 thread 一起停下（逐层，由它们自己的停止继续）。"""
-        held = [h for h in event.cleared if h.startswith("delegation:")]
-        if not held:
+        # 占用者对委派领域也是不透明的：被清掉的占用里哪些是委派，看自己的委派行
+        if not event.cleared:
             return no_commit
+        held = list(event.cleared)
         async with self._db.transaction() as s:
             rows = list(
                 (

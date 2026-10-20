@@ -52,11 +52,12 @@ from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.worker import TaskHandler, Worker
 from muliao.reflection.service import ReflectionHandler, ReflectionScheduler
+from muliao.sessions.api import agent_busy_in
 from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import CompactionHandler, Compactor
 from muliao.sessions.consumer import Consumer, RunHandler
 from muliao.sessions.content import ContentBuilder
-from muliao.sessions.conversation import Threads, agent_busy_in
+from muliao.sessions.conversation import Threads
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
 from muliao.sessions.live import LiveRuns

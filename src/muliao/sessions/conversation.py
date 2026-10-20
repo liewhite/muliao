@@ -315,7 +315,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
                 session.id,
                 kind=MailKind.ANSWER,
                 content="",
-                answers={k: UserAnswered(tool="ask_user", result=v).model_dump() for k, v in answers.items()},
+                answers={k: UserAnswered.of(v).model_dump() for k, v in answers.items()},
                 awaited=inbound.awaited,
             )
         )

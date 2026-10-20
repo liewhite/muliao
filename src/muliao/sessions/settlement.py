@@ -102,7 +102,7 @@ async def settle_failure_in(s: AsyncSession, messaging: Messaging, session: Sess
     信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：它们会唤醒新的运行。
 
     两条执行路径共用这一个函数：队列记下最终失败时（RunHandler.failed_in），以及它没做成时信箱对账补做
-    （reconcile_failures_in）。"""
+    （reconcile_failures）。"""
     stranded = [m for m in await unsettled_in(s, session.id, [MailState.QUEUED]) if handed_to(m, run)]
     settled = await settle_in(
         s,
@@ -117,8 +117,9 @@ async def settle_failure_in(s: AsyncSession, messaging: Messaging, session: Sess
 
 
 async def reconcile_failures(db: Database, messaging: Messaging) -> list[str]:
-    """failed_in 没做成（收尾钩子自己失败，worker 不带钩子记下了失败）时补做：最近一次运行已失败、仍有已交给模型
-    还没结清的关联的会话，按 settle_failure_in 结清。返回补做的会话。
+    """failed_in 没做成（收尾钩子自己失败，worker 不带钩子记下了失败）时补做：最近一次运行已失败、仍有还没结清的关联
+    的会话（已交给模型的，或交给过那次运行、还排着的），按 settle_failure_in 结清——候选范围与它的范围一致，由它按
+    同一条规则筛选。返回确实结清了关联的会话。
 
     每个会话一个事务、各自的异常边界：钩子失败多半是确定性的 bug，补做时会再撞上它；它只记 error（带会话与运行），
     不回滚别的会话的补做，也不让对账循环崩溃、把整个服务拖进重启循环。"""
@@ -129,7 +130,7 @@ async def reconcile_failures(db: Database, messaging: Messaging) -> list[str]:
                 .where(
                     Mail.correlation.is_not(None),
                     Mail.correlation_settled.is_(False),
-                    Mail.state == MailState.CONSUMED,
+                    Mail.state.in_([MailState.CONSUMED, MailState.QUEUED]),
                 )
                 .distinct()
             )
@@ -144,14 +145,16 @@ async def reconcile_failures(db: Database, messaging: Messaging) -> list[str]:
                 if run is None or run.status != TaskStatus.FAILED or session is None:
                     continue
                 run_id = run.id
-                await settle_failure_in(s, messaging, session, run)
+                settled = await settle_failure_in(s, messaging, session, run)
         except Exception:
             log.exception(
                 "settling the delegations of a failed run failed again",
                 extra={"session_id": session_id, "run_id": run_id},
             )
             continue
-        done.append(session_id)
+        if settled:
+            # 排着的只是失败之后才到的信件时什么都不结清：它们会唤醒新的运行
+            done.append(session_id)
     return done
 
 
@@ -206,7 +209,7 @@ async def deliver_in(
             session_id,
             kind=MailKind.ANSWER,
             content="",
-            answers={hold.call_id: AgentAnswered(tool="ask_agent", result=answer).model_dump()},
+            answers={hold.call_id: AgentAnswered.of(answer).model_dump()},
             awaited=awaited,
             dedupe_key=key,
         )

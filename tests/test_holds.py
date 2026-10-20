@@ -366,3 +366,52 @@ async def test_an_outcome_is_delivered_even_if_the_threads_agent_was_deleted_mea
     async with container.db.transaction() as s:
         assert (await s.scalars(select(Delegation))).one().status == DelegationStatus.SETTLED
     assert any("(reviewer) was stopped" in p for p in recorder.prompts[-1])
+
+
+async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is_settled_by_reconciliation(
+    container, make_agent, models
+):
+    """运行在第一次保存之前就最终失败、失败的收尾钩子自己又失败：委派信件还排着，不会再唤醒运行。信箱对账按同一条
+    规则补做结清，发起方拿到失败的结局，不会一直挂起。"""
+    from muliao.platform.tables import TaskStatus
+    from muliao.sessions.settlement import reconcile_failures
+
+    lead = (await make_agent("lead", model="l")).id
+    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
+    models.models["l"] = scripted(Recorder())
+    parent = await start(container, lead, "go")
+    await drain(container)
+    async with container.db.transaction() as s:
+        child = await container.threads.dispatch(
+            s,
+            owner_id=parent.id,
+            agent=reviewer,
+            thread="review",
+            prompt="look",
+            kind=SessionKind.THREAD,
+            call_id=None,
+            awaited=False,
+            key="k",
+        )
+    from tests.test_flow import deliver
+
+    await deliver(container)
+    run = await container.queue.claim([TaskKind.RUN])
+    assert run is not None and run.session_id == child.id
+
+    async def no_hook(_s, _task):  # noqa: ANN202  模拟 failed_in 没做成：worker 不带钩子记下失败
+        return None
+
+    failed = await container.queue.fail(run.id, "boom", retryable=False, on_final=no_hook)
+    assert failed.status == TaskStatus.FAILED
+
+    assert await reconcile_failures(container.db, container.messaging) == [child.id]
+    assert await reconcile_failures(container.db, container.messaging) == []
+    await deliver(container)
+    events = [m for m in await _mail_of(container, parent.id) if m.source == f"thread:{child.id}"]
+    assert len(events) == 1 and "boom" in events[0].content
+
+
+async def _mail_of(container, session_id: str) -> list[Mail]:
+    async with container.db.transaction() as s:
+        return list((await s.scalars(select(Mail).where(Mail.session_id == session_id))).all())

@@ -174,7 +174,7 @@ def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text
         answers=[AnsweredQuestion(question="看哪个周期？", selected=["日线"], other="也看周线")],
         note=None,
     )
-    text = late_text([UserAnswered(tool="ask_user", result=answered)])
+    text = late_text([UserAnswered.of(answered)])
     assert "already been closed" in text and "看哪个周期？: 日线; 也看周线" in text
 
 
@@ -500,6 +500,6 @@ def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():
     from muliao.sessions.pending import AgentAnswer, AgentAnswered, deferred_results
 
     call = ToolCallPart("ask_user", {"questions": []}, tool_call_id="c")
-    wrong = AgentAnswered(tool="ask_agent", result=AgentAnswer(text="hi", attachments=[], thread="t"))
+    wrong = AgentAnswered.of(AgentAnswer(text="hi", attachments=[], thread="t"))
     with pytest.raises(RuntimeError, match="got an answer for ask_agent"):
         deferred_results({"c": call}, {"c": wrong}, delegated=frozenset())

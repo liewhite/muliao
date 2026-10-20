@@ -163,7 +163,7 @@ class JobRunner:
         awaited: bool,
     ) -> Job:
         """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。只在有会话的运行里能开
-        （agent_runtime.workspace_tools.session_workspace_toolset）。"""
+        （jobs.tools.session_workspace_toolset）。"""
         group = self._group
         if group is None:
             raise RuntimeError("background jobs can only start while the job runner is running")

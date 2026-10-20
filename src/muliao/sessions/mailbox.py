@@ -233,7 +233,7 @@ class MailReconciler:
     ):
         self._db = db
         self._queue = queue
-        # 最终失败的运行没能结清的委派（settlement.reconcile_failures_in），同一个对账节奏补做
+        # 最终失败的运行没能结清的委派（settlement.reconcile_failures），同一个对账节奏补做
         self._settle_failures = settle_failures
         self._interval = interval_seconds
 
