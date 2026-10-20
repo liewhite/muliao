@@ -6,6 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
+import anyio
 from pydantic_ai.messages import ModelMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,9 @@ from muliao.sessions.transcript import Item, annotate_asks, to_items
 log = logging.getLogger(__name__)
 
 _TITLE_MAX = 60
+# 删除 agent 时停止它忙的会话之后，等它们空闲的时限与查看间隔
+_IDLE_WAIT_SECONDS = 30.0
+_IDLE_POLL_SECONDS = 0.1
 
 
 def default_title(prompt: str) -> str:
@@ -197,17 +201,10 @@ class SessionService:
 
         标记删除之后它的会话不再收到来信（ensure_agent_active_in），但仍可能有会话忙：删除前的检查与标记分属两个
         事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会让会话变忙。
-        忙的会话先停止（停止幂等，也本来是删除的前提：它们的工作随 agent 一起放弃），再删除。停止之后到删除之间
-        又变忙（只可能是人为重跑）就按暂时失败重试，重试时同样先停止。"""
-        async with self._db.transaction() as s:
-            busy = await busy_sessions_of_agent_in(s, self._queue, event.agent_id)
-        for session_id in busy:
-            halted = await self._stop_session(session_id)
-            log.info(
-                "busy session of a deleted agent stopped",
-                extra={"agent": event.agent_id, "session_id": session_id, "halted": halted},
-            )
-
+        忙的会话先停止（每个只停一次；停止也本来是删除的前提：它们的工作随 agent 一起放弃），再在时限内等它们空闲：
+        正在执行的运行被取消后，停止事务在它退出之后才执行（清掉占用、结束排队的任务），正在执行的压缩做完才空闲。
+        时限内没有空闲（压缩卡住、或停止之后又被人为重跑）就按暂时失败重试，重试时同样先停止再等。"""
+        await self._stop_and_wait_idle(event.agent_id)
         async def commit(s: AsyncSession) -> None:
             sessions = list(
                 (await s.scalars(select(Session).where(Session.agent_id == event.agent_id))).all()
@@ -226,6 +223,27 @@ class SessionService:
             )
 
         return commit
+
+    async def _stop_and_wait_idle(self, agent_id: str) -> None:
+        stopped: set[str] = set()
+        with anyio.move_on_after(_IDLE_WAIT_SECONDS):
+            while True:
+                async with self._db.transaction() as s:
+                    busy = await busy_sessions_of_agent_in(s, self._queue, agent_id)
+                if not busy:
+                    return
+                for session_id in sorted(set(busy) - stopped):
+                    halted = await self._stop_session(session_id)
+                    stopped.add(session_id)
+                    log.info(
+                        "busy session of a deleted agent stopped",
+                        extra={"agent": agent_id, "session_id": session_id, "halted": halted},
+                    )
+                await anyio.sleep(_IDLE_POLL_SECONDS)
+        log.warning(
+            "sessions of a deleted agent still busy after stopping them",
+            extra={"agent": agent_id, "waited_seconds": _IDLE_WAIT_SECONDS},
+        )
 
     async def delete(self, session_id: str) -> None:
         """用户删除会话（规则见 conversation.delete_sessions）。私有 thread 属于发问的会话，随它删除，不能单独删除。"""

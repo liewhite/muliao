@@ -87,7 +87,6 @@ class AgentInfo:
     tool_groups: tuple[str, ...]
     reflect_every: int
     created_at: datetime
-    updated_at: datetime
 
 
 def info_of(agent: Agent) -> AgentInfo:
@@ -99,7 +98,6 @@ def info_of(agent: Agent) -> AgentInfo:
         tool_groups=tuple(agent.tool_groups),
         reflect_every=agent.reflect_every,
         created_at=agent.created_at,
-        updated_at=agent.updated_at,
     )
 
 

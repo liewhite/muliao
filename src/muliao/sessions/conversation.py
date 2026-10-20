@@ -376,11 +376,8 @@ async def busy_sessions_of_agent_in(s: AsyncSession, queue: TaskQueue, agent_id:
 
 
 async def agent_busy_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> bool:
-    """这个 agent 有会话忙（删除 agent 前的检查，规则同删除会话）。"""
-    for session_id in (await s.scalars(select(Session.id).where(Session.agent_id == agent_id))).all():
-        if await queue.lane_busy(s, session_lane(session_id)) or await has_active_in(s, session_id):
-            return True
-    return False
+    """删除这个 agent 时会被删除的会话里有忙的（删除 agent 前的检查，与删除时的判断同一条规则）。"""
+    return bool(await busy_sessions_of_agent_in(s, queue, agent_id))
 
 
 # ---- thread ----

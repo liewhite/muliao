@@ -321,3 +321,47 @@ async def test_a_failed_run_ended_retried_after_the_session_was_deleted_writes_n
 
     assert await container.notifications.list(10) == []
     assert await _failed_tasks(container) == []
+
+
+async def test_deleting_an_agent_whose_run_is_executing_stops_it_and_completes(
+    container, make_agent, models, monkeypatch
+):
+    """标记删除时有一次运行正在执行（检查与标记之间排上的）：删除流程停止它、等停止事务做完再删，一次完成。"""
+    import asyncio
+
+    from pydantic_ai.messages import ModelMessage
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    agent = await make_agent("alpha", model="m")
+    started = asyncio.Event()
+
+    async def slow(messages: list[ModelMessage], info: AgentInfo):  # noqa: ANN202
+        started.set()
+        await asyncio.sleep(30)
+        yield "never"
+
+    models.models["m"] = FunctionModel(stream_function=slow)
+    session = await start(container, agent.id, "go")
+
+    async def not_busy(_s, _agent_id):  # noqa: ANN202  检查时还不忙
+        return False
+
+    monkeypatch.setattr(container.agent_lifecycle, "_agent_busy", not_busy)
+    worker = asyncio.create_task(container.worker.run_forever())
+    try:
+        await asyncio.wait_for(started.wait(), 5)
+        await container.agent_lifecycle.delete(agent.id, author="user")
+        from tests.test_flow import idle
+
+        await idle(container)
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    async with container.db.transaction() as s:
+        assert await s.get(Agent, agent.id) is None
+        retried = (await s.scalars(select(Task).where(Task.kind == TaskKind.EVENT, Task.attempts > 1))).all()
+    assert retried == []
+    with pytest.raises(NotFound):
+        await container.sessions.get(session.id)
+    assert await _failed_tasks(container) == []

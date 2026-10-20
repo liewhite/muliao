@@ -158,9 +158,10 @@ def delegation_toolset(
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
         """List the threads this conversation has opened, with the state of each one's latest task."""
         parent_id = _require_session(ctx)
-        names = {a.id: a.name for a in await agents.list()}
         async with db.transaction() as s:
             views = await threads.list_in(s, parent_id)
+        # agents.get 也取得到正在删除的 agent（它的 thread 在删除流程里随后删除）
+        names = {agent_id: (await agents.get(agent_id)).name for agent_id in {v.agent_id for v in views}}
         return [
             ThreadInfo(
                 thread=v.thread,

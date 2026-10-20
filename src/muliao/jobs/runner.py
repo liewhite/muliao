@@ -249,9 +249,12 @@ class JobRunner:
     async def _close_unsupervised_in(
         self, s: AsyncSession, job: Job, reason: str, *, may_be_alive: bool
     ) -> None:
-        """没有监督者的任务行（启动失败、监督意外结束）的唯一收敛规则：会话上还没登记占用，说明任务没开始过，删掉
-        这一行；登记过了，就记为被中断，交回会话并释放占用。"""
-        if not await hold_registered_in(s, job.session_id, job_source(job.id)):
+        """没有监督者的任务行（启动失败、监督意外结束）的唯一收敛规则：会话还在、上面没登记过占用，说明任务没开始过，
+        删掉这一行；否则记为被中断，交回会话并释放占用（会话已删除时交回得到「会话已不在」，行照样保留终态）。占用行
+        随会话删除，所以「没登记过」只在会话还在时成立；会话与占用的存在都只会单向变化，在本事务里读没有竞态。"""
+        if await session_in(s, job.session_id) is not None and not await hold_registered_in(
+            s, job.session_id, job_source(job.id)
+        ):
             await s.delete(job)
             log.info("background job that never started discarded", extra={"job_id": job.id})
             return

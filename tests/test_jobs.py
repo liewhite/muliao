@@ -465,3 +465,33 @@ async def test_a_check_while_a_job_is_starting_skips_it(container, make_agent, m
         release.set()
     [row] = await _job_rows(container)
     assert (await wait_until_done(container, row.id)).status == JobStatus.EXITED
+
+
+async def test_a_job_whose_session_was_deleted_is_kept_as_interrupted_after_a_crash(container, make_agent):
+    """占用行随会话删除：会话已不在时不能把运行过的任务当成「没开始过」删掉，记为被中断，交回得到「会话已不在」。"""
+    from tests.test_flow import drain
+
+    session, agent = await _session_for_jobs(container, make_agent)
+    async with container.db.transaction() as s:
+        job = Job(
+            session_id=session.id,
+            agent_id=agent.id,
+            command="sleep 100",
+            secrets=[],
+            log_path="jobs/x.log",
+            awaited=False,
+            pid=424242,
+        )
+        s.add(job)
+    await drain(container)
+    await container.sessions.delete(session.id)
+
+    await container.jobs.recover()
+    await drain(container)
+
+    [row] = await _job_rows(container)
+    assert row.status == JobStatus.INTERRUPTED
+    async with container.db.transaction() as s:
+        from muliao.platform.tables import Task, TaskStatus
+
+        assert (await s.scalars(select(Task).where(Task.status == TaskStatus.FAILED))).all() == []

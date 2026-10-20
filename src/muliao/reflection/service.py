@@ -111,11 +111,14 @@ class ReflectionScheduler:
         async with self._db.transaction() as s:
             checkpoint = await s.get(ReflectionCheckpoint, event.agent_id)
             from_id = checkpoint.message_id if checkpoint is not None else 0
-        if await self._work.steps_after(event.agent_id, from_id) < agent.reflect_every:
+        # 步数与区间上界取自同一个快照：有步数就一定有更晚的消息
+        steps, to_id = await self._work.window_after(event.agent_id, from_id)
+        if steps < agent.reflect_every:
             return no_commit
-        to_id = await self._work.last_message_id(event.agent_id)
-        if to_id is None:
-            raise RuntimeError(f"agent {event.agent_id} has steps to reflect on but no messages")
+        if to_id is None or to_id <= from_id:
+            raise RuntimeError(
+                f"agent {event.agent_id} has {steps} steps after message {from_id} but its last message is {to_id}"
+            )
 
         async def commit(s: AsyncSession) -> None:
             checkpoint = await _checkpoint_in(s, event.agent_id)
@@ -187,11 +190,13 @@ class ReflectionHandler:
         if task.agent_id is None:
             raise RuntimeError(f"reflection task {task.id} must reference an agent")
         from_id, to_id = task.payload["from_message_id"], task.payload["to_message_id"]
+        # 反思的 lane 忙时 agent 的行不会被删（删除流程的最后一步等这条 lane 空闲）：行不在是 bug，agent_in 报错
+        await self._agents.get(task.agent_id)
         try:
             agent = await self._agents.get_active(task.agent_id)
         except NotFound:
             # 投递之后 agent 进入删除流程：删除流程会结束排队的反思，这一次（已开始）不做
-            log.info("reflection of a deleted agent skipped", extra={"agent": task.agent_id})
+            log.info("reflection of a deleting agent skipped", extra={"agent": task.agent_id})
             return no_commit
         transcript = await self._work.transcript(agent.id, from_id, to_id, max_item_chars=_ITEM_CHARS)
         if transcript:

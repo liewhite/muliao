@@ -3,6 +3,7 @@
 因为会话被删除而减少。"""
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.db import Database
 from muliao.sessions.codec import KIND_PATH, RESPONSE_KIND, load_messages
@@ -17,24 +18,19 @@ class AgentWork:
     async def steps_after(self, agent_id: str, after_message_id: int) -> int:
         """这个 agent 在消息 after_message_id 之后的模型回复条数（每条回复就是一步）。"""
         async with self._db.transaction() as s:
-            count = await s.scalar(
-                select(func.count(Message.id))
-                .join(Session, Session.id == Message.session_id)
-                .where(
-                    Session.agent_id == agent_id,
-                    Message.id > after_message_id,
-                    func.json_extract(Message.payload, KIND_PATH) == RESPONSE_KIND,
-                )
-            )
-            return count or 0
+            return await _steps_after_in(s, agent_id, after_message_id)
 
-    async def last_message_id(self, agent_id: str) -> int | None:
+    async def window_after(self, agent_id: str, after_message_id: int) -> tuple[int, int | None]:
+        """同一个快照里的步数与这个 agent 最后一条消息的 id（没有消息为 None）：有步数时后者一定大于
+        after_message_id。"""
         async with self._db.transaction() as s:
-            return await s.scalar(
+            steps = await _steps_after_in(s, agent_id, after_message_id)
+            last = await s.scalar(
                 select(func.max(Message.id))
                 .join(Session, Session.id == Message.session_id)
                 .where(Session.agent_id == agent_id)
             )
+            return steps, last
 
     async def transcript(self, agent_id: str, from_id: int, to_id: int, *, max_item_chars: int) -> str:
         """消息 (from_id, to_id] 的文字记录，按会话分段（按会话在区间里首次出现的先后）；区间里没有消息时为空串。"""
@@ -65,3 +61,16 @@ class AgentWork:
             header = f"### Session: {session.title} (origin: {session.origin})"
             blocks.append(f"{header}\n{to_text(items, max_item_chars=max_item_chars)}")
         return "\n\n".join(blocks)
+
+
+async def _steps_after_in(s: AsyncSession, agent_id: str, after_message_id: int) -> int:
+    result = await s.execute(
+        select(func.count(Message.id))
+        .join(Session, Session.id == Message.session_id)
+        .where(
+            Session.agent_id == agent_id,
+            Message.id > after_message_id,
+            func.json_extract(Message.payload, KIND_PATH) == RESPONSE_KIND,
+        )
+    )
+    return result.scalar_one()
