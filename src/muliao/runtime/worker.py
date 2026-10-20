@@ -1,9 +1,9 @@
-import asyncio
 import logging
 import traceback
 from typing import Protocol
 
 import anthropic
+import anyio
 import httpx
 import httpx2
 import openai
@@ -72,8 +72,7 @@ class Worker:
         self._queue = queue
         self._handlers = handlers
         self._bus = bus
-        self._slots = asyncio.Semaphore(concurrency)
-        self._running: set[asyncio.Task[None]] = set()
+        self._slots = anyio.Semaphore(concurrency)
 
     def _publish(self, task: Task, status: TaskStatus, error: str | None = None) -> None:
         self._bus.publish(
@@ -93,7 +92,8 @@ class Worker:
                 "recovered interrupted task",
                 extra={"task_id": task.id, "kind": task.kind, "lane": task.lane, "attempt": task.attempts},
             )
-        try:
+        # 执行中的任务都属于这个任务组：worker 被取消（关停）时它们一起被取消，不会留在后台
+        async with anyio.create_task_group() as group:
             while True:
                 await self._slots.acquire()
                 task = await self._queue.claim()
@@ -101,22 +101,14 @@ class Worker:
                     self._slots.release()
                     await self._wait_for_work()
                     continue
-                t = asyncio.create_task(self._process(task), name=f"task-{task.id}")
-                self._running.add(t)
-                t.add_done_callback(self._running.discard)
-        finally:
-            for t in self._running:
-                t.cancel()
-            await asyncio.gather(*self._running, return_exceptions=True)
+                group.start_soon(self._process, task, name=f"task-{task.id}")
 
     async def _wait_for_work(self) -> None:
         self._queue.wake.clear()
         due = await self._queue.next_due()
         timeout = _IDLE_POLL_SECONDS if due is None else max(0.05, (due - self._queue.now()).total_seconds())
-        try:
-            await asyncio.wait_for(self._queue.wake.wait(), timeout=min(timeout, _IDLE_POLL_SECONDS))
-        except TimeoutError:
-            pass
+        with anyio.move_on_after(min(timeout, _IDLE_POLL_SECONDS)):
+            await self._queue.wake.wait()
 
     async def _process(self, task: Task) -> None:
         ctx = {"task_id": task.id, "kind": task.kind, "lane": task.lane, "attempt": task.attempts}
@@ -124,13 +116,14 @@ class Worker:
         self._publish(task, TaskStatus.RUNNING)
         try:
             # 总时限：卡死的工具或模型连接不能永久占住 lane 和 worker 槽位；超时按暂时性失败重试
-            async with asyncio.timeout(self._task_timeout):
+            with anyio.fail_after(self._task_timeout):
                 commit = await self._handlers[task.kind].execute(task)
             await self._queue.complete(task.id, commit)
-        except asyncio.CancelledError:
+        except anyio.get_cancelled_exc_class():
             log.warning("task cancelled by shutdown, will be recovered on next start", extra=ctx)
             raise
         except Exception as e:
+            # 每个任务的异常在这里记账（重试或失败），不向上传播：一个任务出错不影响别的任务
             await self._record_failure(task, e, ctx)
         else:
             log.info("task done", extra=ctx)

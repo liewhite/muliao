@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import anyio
+
 from muliao.errors import InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
@@ -165,13 +167,15 @@ class ResourceRepo:
         except BaseException:
             # 被取消时不留下继续运行的 git（它会占着锁，或在调用方以为失败之后才提交）。
             # 先 SIGTERM：git 会自己删掉锁文件；不退出才 SIGKILL（留下的锁由下次启动的 recover 清理）
+            # 被取消后还要等它退出：清理不能被取消打断
             if proc.returncode is None:
                 proc.terminate()
-                try:
-                    await asyncio.wait_for(proc.wait(), _GIT_EXIT_SECONDS)
-                except TimeoutError:
-                    proc.kill()
-                    await proc.wait()
+                with anyio.CancelScope(shield=True):
+                    with anyio.move_on_after(_GIT_EXIT_SECONDS):
+                        await proc.wait()
+                    if proc.returncode is None:
+                        proc.kill()
+                        await proc.wait()
             raise
         if check and proc.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed ({proc.returncode}): {err.decode().strip()}")
@@ -323,8 +327,9 @@ class ResourceRepo:
                 extra={"paths": list(rel), "error": repr(error)},
             )
             raise restore_error from error
-        # 索引里可能已暂存了新内容：撤销暂存失败无妨，下一次 add 会重新暂存当时的文件
-        code, _ = await self._git("reset", "-q", "--", *rel, check=False)
+        # 索引里可能已暂存了新内容：撤销暂存失败无妨，下一次 add 会重新暂存当时的文件。写入被取消时也做（屏蔽取消）
+        with anyio.CancelScope(shield=True):
+            code, _ = await self._git("reset", "-q", "--", *rel, check=False)
         log.warning(
             "resource write rolled back",
             extra={"paths": list(rel), "error": repr(error), "unstaged": code == 0},

@@ -134,7 +134,7 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
 
 
-def test_runs_without_a_session_get_no_background_jobs(container):
+async def test_runs_without_a_session_get_no_background_jobs(container):
     """后台任务属于会话：临时 agent 用的那份工作区工具没有 background 参数，也没有 job 工具（靠不提供，不靠运行时检查）。"""
     from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
 

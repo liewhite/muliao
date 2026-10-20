@@ -10,12 +10,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import anyio
 from croniter import croniter
 
 from muliao.db import Database, utcnow
@@ -98,9 +98,9 @@ class ScheduleRunner:
         ]
         # 到期的触发器并发执行：一个慢的前置检查不拖住同一轮里的其他触发器。意外的异常（契约之外）让整组取消并上抛，
         # 由后台循环的崩溃处理暴露，不会留下没人接收的异常
-        async with asyncio.TaskGroup() as group:
+        async with anyio.create_task_group() as group:
             for trigger_id in due:
-                group.create_task(self._fire_one(trigger_id, now))
+                group.start_soon(self._fire_one, trigger_id, now)
         return len(due)
 
     async def _fire_one(self, trigger_id: int, now: datetime) -> None:
@@ -159,7 +159,5 @@ class ScheduleRunner:
         while True:
             await self.fire_due()
             self._changed.clear()
-            try:
-                await asyncio.wait_for(self._changed.wait(), timeout=await self._next_wake())
-            except TimeoutError:
-                pass
+            with anyio.move_on_after(await self._next_wake()):
+                await self._changed.wait()

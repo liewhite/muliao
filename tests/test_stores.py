@@ -111,7 +111,7 @@ async def test_memory_over_limit_is_rejected_and_unchanged(memory: MemoryStore):
     assert memory.read(ALPHA) == "short\n"
 
 
-def test_a_missing_memory_file_is_corrupt_state_not_a_caller_error(memory: MemoryStore):
+async def test_a_missing_memory_file_is_corrupt_state_not_a_caller_error(memory: MemoryStore):
     with pytest.raises(CorruptState):
         memory.read("c3c3c3c3c3c3")
 

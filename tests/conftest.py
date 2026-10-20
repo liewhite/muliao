@@ -17,6 +17,14 @@ from tests.scripted import scripted
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
 
+# 测试用 anyio 的 pytest 插件运行：异步 fixture 与测试在同一个任务里，任务组可以跨 fixture 的 yield（Container
+# 与 JobRunner 的 running 就是这样）。协程测试由 anyio_mode = auto 收集（pyproject），在 asyncio 后端上运行；
+# 用到异步 fixture 的测试必须是协程
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
 class ModelSlot:
     """测试中按 agent 的 model 字符串返回预设的模型对象；未预设的返回固定回复 "ok" 的模型。"""
 
@@ -55,7 +63,9 @@ def models() -> ModelSlot:
 async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Container]:
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
     migrate(settings.db_path)
-    yield c
+    # 后台任务的监督者需要它的任务组（服务里由 Container.running 打开）；worker 等循环由测试自己驱动
+    async with c.jobs.running():
+        yield c
     await c.db.engine.dispose()
 
 

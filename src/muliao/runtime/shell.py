@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+import anyio
+
 # 只继承这些环境变量，不把服务进程的其余环境带给命令
 _INHERITED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "USER", "SHELL")
 # 进程结束（或被杀）后读完管道里剩余输出的时限：脱离进程组的后代可能一直持有管道
@@ -109,25 +111,28 @@ async def run_bash(
 
     async def run() -> None:
         # 写入与读取并发：输入大、命令又先输出很多时，顺序进行会让两边的管道都写满而互相等待。
-        # TaskGroup：其中一个意外失败时其余的一起取消，不留在后台
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(feed())
+        # 任务组：其中一个意外失败时其余的一起取消，不留在后台
+        async with anyio.create_task_group() as group:
+            group.start_soon(feed)
             for stream, buf in streams:
-                tg.create_task(_collect(stream, buf))
-            tg.create_task(proc.wait())
+                group.start_soon(_collect, stream, buf)
+            group.start_soon(proc.wait)
+
+    async def drain() -> None:
+        # 把杀掉之前写进管道、还没读的部分读完；脱离进程组的后代可能仍持有管道，所以收尾也有时限
+        with anyio.move_on_after(DRAIN_SECONDS):
+            async with anyio.create_task_group() as group:
+                for stream, buf in streams:
+                    group.start_soon(_collect, stream, buf)
 
     exit_code: int | None
     try:
-        await asyncio.wait_for(run(), timeout=timeout)
+        with anyio.fail_after(timeout):
+            await run()
         exit_code = proc.returncode
     except TimeoutError:
         kill_group(proc.pid)
-        # 把杀掉之前写进管道、还没读的部分读完；脱离进程组的后代可能仍持有管道，所以收尾也有时限
-        drain = [asyncio.create_task(_collect(stream, buf)) for stream, buf in streams]
-        _, unfinished = await asyncio.wait(drain, timeout=DRAIN_SECONDS)
-        for task in unfinished:
-            task.cancel()
-        await asyncio.gather(*unfinished, return_exceptions=True)
+        await drain()
         exit_code = None
     except BaseException:
         # 被取消（关停、停止一轮）或读写意外失败：不留下还在跑的命令

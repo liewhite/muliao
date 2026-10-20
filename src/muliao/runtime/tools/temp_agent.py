@@ -13,6 +13,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import anyio
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolReturn
 from pydantic_ai.exceptions import UsageLimitExceeded
 
@@ -122,10 +123,12 @@ def temp_agent_toolset(
                 f"the temporary agent did not finish within {request_limit} model requests ({e}); "
                 "split the job into smaller tasks"
             ) from e
-        except asyncio.CancelledError:
+        except anyio.get_cancelled_exc_class():
             outcome = "cancelled"
             raise
         finally:
-            await _discard(workspace, parent.id, outcome)
+            # 被取消时也要删掉工作目录：清理不能被取消打断（删不掉的留给下次启动的 clear_temp_dirs）
+            with anyio.CancelScope(shield=True):
+                await _discard(workspace, parent.id, outcome)
 
     return ts

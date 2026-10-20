@@ -209,7 +209,7 @@ async def test_files_shared_by_a_temp_agent_reach_the_user_through_the_caller(
     ]
 
 
-def test_unfinished_uploads_are_removed_on_recover(container):
+async def test_unfinished_uploads_are_removed_on_recover(container):
     tmp = container.settings.files_dir / "tmp"
     tmp.mkdir(parents=True)
     (tmp / "half").write_bytes(b"x")

@@ -313,7 +313,8 @@
 
 **取消**：
 
-- 用户停止 = 取消这次运行自己的取消作用域；关停或总时限取消的是外层，自然向下传播。`stopping.py` 的计数判断删除。停止事务在作用域退出之后执行（4.1）。
+- 用户停止 = 不带消息地取消这次运行自己的原生任务；关停或总时限取消的是外层，宿主收到后同样取消运行的任务再照原语义抛出。用 `asyncio.wait` 等运行结束（运行被取消时不抛出、宿主被取消时才抛出），`stopping.py` 的计数判断删除。停止事务在运行退出之后执行（4.1）。
+- **唯一的例外**是上面这一处用原生任务（`runtime/stopping.py`，带 noqa 与说明）。实测原因：pydantic-ai 把每个工具调用放进原生任务并 await 它，被取消的任务会把取消连同消息传给它正在 await 的任务；如果用 anyio 作用域停止运行，anyio 的取消消息就传进工具任务，工具里的 anyio 任务组（如 shell）把它当成自己的取消吞掉，工具照常返回结果（被停止的命令得到「超时被杀」的结果）。不带消息的原生取消不会被误认。`tests/test_stopping.py` 固定了三种取消下工具都如实收到取消。
 - anyio 的取消是电平触发的：作用域被取消后，里面每一次 await 都会再抛出取消，直到退出作用域。因此**被取消后还要 await 的清理一律放进屏蔽作用域并加时限**（`CancelScope(shield=True)` + `move_on_after`）。
 
 **需要屏蔽的清理点**与超时后的收敛：
@@ -334,7 +335,7 @@
 
 **运行开始与停止的竞态**：运行任务已被领取、但还没登记取消作用域时，`stop` 看不到正在进行的运行，会直接执行停止事务（现状也有这个竞态）。修正：运行开始的第一个事务里检查自己的 task 是否已被停止事务记为完成，是就不执行。
 
-**规则用 lint 固定**：ruff banned-api 禁止 `asyncio.create_task`、`asyncio.gather`、`asyncio.wait_for`、`asyncio.shield`。停止、关停、超时三种取消各写测试。
+**规则用 lint 固定**：ruff banned-api 禁止 `asyncio.create_task`、`asyncio.ensure_future`、`asyncio.gather`、`asyncio.wait`、`asyncio.wait_for`、`asyncio.shield`、`asyncio.timeout`、`asyncio.TaskGroup`（测试除外）。停止、关停、超时三种取消各写测试。测试用 anyio 的 pytest 插件（`anyio_mode = auto`）：异步 fixture 与测试在同一个任务里，任务组可以跨 fixture 的 yield。
 
 ## 10. 模块与依赖规则
 

@@ -130,23 +130,22 @@ async def test_startup_rejects_agents_with_unresolvable_models(settings, models)
     from muliao.container import build_container
 
     c = build_container(settings, resolve_model=models)  # 使用真实的配置校验
-    try:
-        await c.start()
+    async with c.running():
         agent = await c.agents.create(
             AgentSpec(name="ok", description="d", model="fake:m", instructions="", reflect_every=5),
             author="user",
         )
-        await c.stop()
+    try:
         async with c.db.transaction() as s:
             from muliao.models import Agent
 
             (await s.get(Agent, agent.id)).model = "gone:m"  # 模拟配置里删掉了 provider
-        c2 = build_container(settings, resolve_model=models)
-        with pytest.raises(RuntimeError, match=f"ok \\({agent.id}\\): model 'gone:m'"):
-            await c2.start()
-        await c2.stop()
     finally:
         await c.db.engine.dispose()
+    c2 = build_container(settings, resolve_model=models)
+    with pytest.raises(RuntimeError, match=f"ok \\({agent.id}\\): model 'gone:m'"):
+        async with c2.running():
+            pass
 
 
 def test_a_default_shell_timeout_above_the_maximum_is_rejected():

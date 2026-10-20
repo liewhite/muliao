@@ -4,10 +4,12 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import Callable, Coroutine
-from dataclasses import dataclass, field
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from zoneinfo import ZoneInfo
+
+import anyio
 
 from muliao import tool_catalog
 from muliao.agent_lifecycle import AgentLifecycle
@@ -104,14 +106,26 @@ class Container:
     files: FileStore
     # 默认就是 models.check，单独持有只为测试替换
     _model_checker: Callable[[str], None]
-    _background: list[asyncio.Task[None]] = field(default_factory=list)
 
-    def _spawn(self, name: str, coro: Coroutine[Any, Any, None]) -> None:
-        task = asyncio.create_task(coro, name=name)
-        task.add_done_callback(_crash_on_failure)
-        self._background.append(task)
+    @asynccontextmanager
+    async def running(self) -> AsyncIterator[None]:
+        """服务的整个生命周期：启动检查与恢复，然后在根任务组里跑后台循环；退出时先结束后台任务的进程，再取消
+        根任务组（docs/domain-design.md「并发模型」）。"""
+        try:
+            await self._prepare()
+            async with self.jobs.running(), anyio.create_task_group() as root:
+                root.start_soon(_loop, "worker", self.worker.run_forever)
+                root.start_soon(_loop, "schedules", self.schedules.run_forever)
+                root.start_soon(_loop, "mail", self.mail.run_forever)
+                root.start_soon(_loop, "checks", self.work.run_forever)
+                try:
+                    yield
+                finally:
+                    root.cancel_scope.cancel()
+        finally:
+            await self.db.engine.dispose()
 
-    async def start(self) -> None:
+    async def _prepare(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path)
         # git 不可用或仓库损坏时在启动时暴露；上次进程留下的未提交修改与 git 锁在这里收敛（worker 还没开始）
         await self.resources.recover()
@@ -123,10 +137,6 @@ class Container:
         await asyncio.to_thread(self.files.recover)
         # 上次运行留下的「运行中」后台任务：进程已随服务结束，记为被中断并通知 agent（worker 处理这些事件之前）
         await self.jobs.recover()
-        self._spawn("worker", self.worker.run_forever())
-        self._spawn("schedules", self.schedules.run_forever())
-        self._spawn("mail", self.mail.run_forever())
-        self._spawn("checks", self.work.run_forever())
 
     async def _check_orphan_resources(self) -> None:
         """数据库里已删除、资源仓库里还留着目录的 agent（删除时提交失败所致）：记录出来，由人决定是否清理。"""
@@ -161,21 +171,17 @@ class Container:
                 "agents use tool groups unavailable with current config:\n" + "\n".join(broken)
             )
 
-    async def stop(self) -> None:
-        # 后台任务的进程不随服务退出（自成进程组），主动杀掉；下次启动时记为被中断
-        await self.jobs.stop()
-        for task in self._background:
-            task.cancel()
-        await asyncio.gather(*self._background, return_exceptions=True)
-        await self.db.engine.dispose()
 
-
-def _crash_on_failure(task: asyncio.Task[None]) -> None:
-    """后台循环意外退出属于 bug 或不可恢复的配置错误：停止进程，交给进程管理器重启并告警。"""
-    if task.cancelled():
+async def _loop(name: str, run_forever: Callable[[], Awaitable[None]]) -> None:
+    """根任务组里的后台循环：意外退出属于 bug 或不可恢复的配置错误，停止进程，交给进程管理器重启并告警。
+    不把异常抛给任务组：那会立刻取消所有正在进行的运行，而 SIGTERM 走正常关停（先结束后台任务的进程）。"""
+    try:
+        await run_forever()
+    except Exception:
+        log.critical("background loop %s died, shutting down", name, exc_info=True)
+        os.kill(os.getpid(), signal.SIGTERM)
         return
-    exc = task.exception()
-    log.critical("background loop %s died, shutting down: %r", task.get_name(), exc, exc_info=exc)
+    log.critical("background loop %s returned, shutting down", name)
     os.kill(os.getpid(), signal.SIGTERM)
 
 

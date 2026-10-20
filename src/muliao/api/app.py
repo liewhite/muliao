@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 import logging
@@ -7,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import anyio
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.sse import EventSourceResponse
@@ -125,13 +125,11 @@ def _private_routes() -> APIRouter:
             yield heartbeat
             while True:
                 try:
-                    event = await asyncio.wait_for(sub.next(), timeout=_HEARTBEAT_SECONDS)
-                except TimeoutError:
-                    yield heartbeat
-                    continue
+                    with anyio.move_on_after(_HEARTBEAT_SECONDS) as waited:
+                        event = await sub.next()
                 except SubscriberOverflow:
                     return
-                yield event
+                yield heartbeat if waited.cancelled_caught else event
 
     return router
 
@@ -157,11 +155,8 @@ def _mount_web(app: FastAPI, web_dir: Path) -> None:
 def create_app(container: Container, web_dir: Path) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        await container.start()
-        try:
+        async with container.running():
             yield
-        finally:
-            await container.stop()
 
     app = FastAPI(title=TITLE, lifespan=lifespan)
     settings = container.settings

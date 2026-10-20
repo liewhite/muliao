@@ -148,7 +148,7 @@ def _response(tokens: int) -> list[ModelMessage]:
     return [ModelResponse(parts=[TextPart("x")], usage=RequestUsage(input_tokens=tokens))]
 
 
-def test_threshold_is_the_size_of_the_last_request(container):
+async def test_threshold_is_the_size_of_the_last_request(container):
     compactor = container.compactor
     threshold = container.settings.runtime.compaction_threshold_tokens
     assert not compactor.over_threshold("s", [])
@@ -156,7 +156,7 @@ def test_threshold_is_the_size_of_the_last_request(container):
     assert compactor.over_threshold("s", _response(threshold + 1))
 
 
-def test_zero_usage_warns_instead_of_silently_never_compacting(container, caplog):
+async def test_zero_usage_warns_instead_of_silently_never_compacting(container, caplog):
     assert not container.compactor.over_threshold("s", _response(0))
     assert "no input token usage" in caplog.text
 

@@ -439,7 +439,7 @@ async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, 
     assert "run_shell" not in seen and "notify_user" in seen
 
 
-def test_public_skills_group_can_edit_part_of_a_public_skill(container):
+async def test_public_skills_group_can_edit_part_of_a_public_skill(container):
     [toolset] = container.consumer._tool_groups.groups["public_skills"]  # noqa: SLF001
     assert set(toolset.tools) == {"write_public_skill", "edit_public_skill", "delete_public_skill"}
 

@@ -20,11 +20,14 @@ from __future__ import annotations
 import asyncio
 import codecs
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import anyio
+from anyio.abc import TaskGroup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -92,7 +95,14 @@ class _Running:
     killed: bool = False
     # 随会话停止（stop_session）：监督者照常记下结局，但不再投信（会话的信箱刚被清空）
     halted: bool = False
-    supervisor: asyncio.Task[None] | None = field(default=None)
+    # 监督者自己的取消作用域：只取消这一个监督者（启动时记录写不进去）；关停取消的是整个任务组
+    scope: anyio.CancelScope = field(default_factory=anyio.CancelScope)
+    # 监督者结束（结局写完、失败或被取消）
+    finished: anyio.Event = field(default_factory=anyio.Event)
+
+
+# 被取消后的清理（结束监督者、删掉没起来的任务行）最多等这么久
+_CLEANUP_SECONDS = 2 * DRAIN_SECONDS
 
 
 class JobRunner:
@@ -112,6 +122,21 @@ class JobRunner:
         self.check_seconds = check_seconds
         self._clock = clock
         self._running: dict[int, _Running] = {}
+        # 监督者所在的任务组：服务运行期间（running）存在
+        self._group: TaskGroup | None = None
+
+    @asynccontextmanager
+    async def running(self) -> AsyncIterator[None]:
+        """后台任务的监督者都在这个任务组里。退出时先按关停结束所有进程（stop），再取消剩下的监督者。"""
+        async with anyio.create_task_group() as group:
+            self._group = group
+            try:
+                yield
+            finally:
+                with anyio.CancelScope(shield=True):
+                    await self.stop()
+                self._group = None
+                group.cancel_scope.cancel()
 
     async def start(
         self,
@@ -124,6 +149,9 @@ class JobRunner:
     ) -> Job:
         """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。只在有会话的运行里能开
         （tools.workspace.session_workspace_toolset）。"""
+        group = self._group
+        if group is None:
+            raise RuntimeError("background jobs can only start while the job runner is running")
         # vault 自己开事务，不能放进下面的事务
         values = await self._vault.resolve_many(agent_id, secrets)
         async with self._db.transaction() as s:
@@ -148,17 +176,14 @@ class JobRunner:
             await asyncio.to_thread(log_file.parent.mkdir, parents=True, exist_ok=True)
             proc = await spawn_bash(command, cwd=workspace, secrets=values, merge_stderr=True)
         except BaseException:
-            # 进程没起来：这个任务不存在
-            async with self._db.transaction() as s:
-                await s.delete(await s.get(Job, job.id))
+            # 进程没起来：这个任务不存在。被取消（这次运行被停止）时同样要删掉，清理不能被取消打断
+            with anyio.CancelScope(shield=True), anyio.move_on_after(_CLEANUP_SECONDS):
+                await self._discard_row(job.id)
             raise
         # 进程一起来就有人管：先登记、起监督者，再记 pid
         handle = _Running(proc)
         self._running[job.id] = handle
-        handle.supervisor = asyncio.create_task(
-            self._supervise(job.id, handle, log_file, values), name=f"job-{job.id}"
-        )
-        handle.supervisor.add_done_callback(_log_supervisor_failure)
+        group.start_soon(self._supervise, job.id, handle, log_file, values, name=f"job-{job.id}")
         try:
             async with self._db.transaction() as s:
                 row = await s.get(Job, job.id)
@@ -166,28 +191,40 @@ class JobRunner:
                     raise RuntimeError(f"job {job.id} vanished right after it was created")
                 row.pid = job.pid = proc.pid
         except BaseException:
-            # 记录写不进去，或这次运行恰好被停止：不能留下没有记录、没人能结束的进程（取消监督者会杀掉进程组）
-            handle.supervisor.cancel()
-            await asyncio.gather(handle.supervisor, return_exceptions=True)
-            async with self._db.transaction() as s:
-                await s.delete(await s.get(Job, job.id))
+            # 记录写不进去，或这次运行恰好被停止：不能留下没有记录、没人能结束的进程（取消监督者会杀掉进程组）。
+            # 清理不能被取消打断；超时则行留在 running、没有 pid 之外的监督，由对账收敛
+            with anyio.CancelScope(shield=True), anyio.move_on_after(_CLEANUP_SECONDS):
+                handle.scope.cancel()
+                await handle.finished.wait()
+                await self._discard_row(job.id)
             raise
         log.info(
             "background job started", extra={"job_id": job.id, "session_id": session_id, "pid": proc.pid}
         )
         return job
 
+    async def _discard_row(self, job_id: int) -> None:
+        async with self._db.transaction() as s:
+            row = await s.get(Job, job_id)
+            if row is not None:
+                await s.delete(row)
+
     async def _supervise(
         self, job_id: int, handle: _Running, log_file: Path, secrets: Mapping[str, str]
     ) -> None:
         """看着进程直到结局写进库。「有人监督」（_running）一直保持到结局写完（成功、失败或被取消），
-        对账才不会把正在记结局的任务当成没人管的。"""
+        对账才不会把正在记结局的任务当成没人管的。这是每个监督者的异常边界：意外异常只记日志，这一行停在
+        running，由 check 的对账记为被中断并告诉 agent，不影响别的监督者与运行。"""
         try:
-            status, exit_code, note = await self._watch(job_id, handle, log_file, secrets)
-            # 写结局失败（如数据库暂时不可用）时这一行停在 running；撤销登记后由 check 的对账收敛
-            await self._finish(job_id, handle, status, exit_code, note)
+            with handle.scope:
+                status, exit_code, note = await self._watch(job_id, handle, log_file, secrets)
+                # 写结局失败（如数据库暂时不可用）时这一行停在 running；撤销登记后由 check 的对账收敛
+                await self._finish(job_id, handle, status, exit_code, note)
+        except Exception:
+            log.exception("background job supervisor crashed", extra={"job_id": job_id})
         finally:
             self._running.pop(job_id, None)
+            handle.finished.set()
 
     async def _watch(
         self, job_id: int, handle: _Running, log_file: Path, secrets: Mapping[str, str]
@@ -195,39 +232,36 @@ class JobRunner:
         """以进程退出为准：退出后在有限时间内把管道里剩下的输出读完（脱离进程组的后代可能一直持有管道）。
         返回结局（状态、退出码、补充说明或被中断的原因）。"""
         proc = handle.proc
-        recorder = asyncio.create_task(_record(proc, log_file, secrets))
-        waiter = asyncio.create_task(_exit_code(proc))
+        recorder = _Recorder(proc, log_file, secrets)
         try:
-            done, _ = await asyncio.wait({recorder, waiter}, return_when=asyncio.FIRST_COMPLETED)
-            if recorder in done:
-                recorder.result()  # 记录输出失败：下面的 except 杀掉进程、记为被中断
-            exit_code = await waiter
-            ended = JobStatus.KILLED if handle.killed else JobStatus.EXITED
-            _, unfinished = await asyncio.wait({recorder}, timeout=DRAIN_SECONDS)
-            if not unfinished:
-                recorder.result()
-                return ended, exit_code, None
-            recorder.cancel()
-            await asyncio.gather(recorder, return_exceptions=True)
-            return (
-                ended,
-                exit_code,
-                "Processes it left running in the background still hold its output; their later output is not recorded.",
-            )
-        except asyncio.CancelledError:
+            async with anyio.create_task_group() as group:
+                group.start_soon(recorder.run)
+                exit_code = await _exit_code(proc)
+                with anyio.move_on_after(DRAIN_SECONDS):
+                    await recorder.done.wait()
+                drained = recorder.done.is_set()
+                # 后代还占着管道时不再等它的输出
+                group.cancel_scope.cancel()
+        except anyio.get_cancelled_exc_class():
             # 关停（stop 随后记为被中断）或启动时记录写不进去：进程不随服务退出，在这里杀掉
             kill_group(proc.pid)
-            for task in (recorder, waiter):
-                task.cancel()
-            await asyncio.gather(recorder, waiter, return_exceptions=True)
             raise
-        except Exception:
-            # 读输出、写日志意外失败：进程不能没人管地留着；记为被中断，失败原因进日志，agent 收到事件
-            log.exception("background job supervision failed", extra={"job_id": job_id})
-            kill_group(proc.pid)
-            waiter.cancel()
-            await asyncio.gather(waiter, return_exceptions=True)
+        if recorder.error is not None:
+            # 读输出、写日志意外失败（记录者已杀掉进程）：记为被中断，失败原因进日志，agent 收到事件
+            log.error(
+                "background job output could not be recorded",
+                exc_info=recorder.error,
+                extra={"job_id": job_id},
+            )
             return JobStatus.INTERRUPTED, None, "its output could not be recorded (see server log)"
+        ended = JobStatus.KILLED if handle.killed else JobStatus.EXITED
+        if drained:
+            return ended, exit_code, None
+        return (
+            ended,
+            exit_code,
+            "Processes it left running in the background still hold its output; their later output is not recorded.",
+        )
 
     async def _finish(
         self, job_id: int, handle: _Running, status: JobStatus, exit_code: int | None, note: str | None
@@ -401,20 +435,20 @@ class JobRunner:
     async def stop(self) -> None:
         """正常关停：杀掉所有后台任务的进程组，记为被中断并告诉 agent（事件在重启后处理）。"""
         handles = dict(self._running)
-        supervisors = [h.supervisor for h in handles.values() if h.supervisor is not None]
         for handle in handles.values():
             if handle.proc.returncode is not None:
                 # 进程已经自己结束、正在记结局：给它时间写完，保留真实的退出码
                 continue
             kill_group(handle.proc.pid)
-            if handle.supervisor is not None:
-                handle.supervisor.cancel()
-        if supervisors:
-            # 进程退出后监督者自己还要最多 DRAIN_SECONDS 读完剩余输出，再写结局
-            _, unfinished = await asyncio.wait(supervisors, timeout=2 * DRAIN_SECONDS)
-            for task in unfinished:
-                task.cancel()
-            await asyncio.gather(*supervisors, return_exceptions=True)
+            handle.scope.cancel()
+        # 进程退出后监督者自己还要最多 DRAIN_SECONDS 读完剩余输出，再写结局；超时的取消掉
+        with anyio.move_on_after(_CLEANUP_SECONDS):
+            for handle in handles.values():
+                await handle.finished.wait()
+        for handle in handles.values():
+            handle.scope.cancel()
+        for handle in handles.values():
+            await handle.finished.wait()
         if not handles:
             return
         async with self._db.transaction() as s:
@@ -423,12 +457,6 @@ class JobRunner:
                 if job is not None and job.status == JobStatus.RUNNING:
                     await self._interrupt_in(s, job, "the service was stopped", may_be_alive=False)
         log.info("background jobs stopped with the service", extra={"job_ids": list(handles)})
-
-
-def _log_supervisor_failure(task: asyncio.Task[None]) -> None:
-    """监督任务里的异常没有人 await：记下来（任务停在运行中，check 的对账把它记为被中断并通知 agent）。"""
-    if not task.cancelled() and (exc := task.exception()) is not None:
-        log.error("background job supervisor crashed: %r", exc, exc_info=exc, extra={"task": task.get_name()})
 
 
 async def _own(s, job_id: int, agent_id: str) -> Job:  # noqa: ANN001
@@ -475,6 +503,26 @@ def _safe_cut(text: str, cut: int, secrets: Mapping[str, str]) -> int:
         if moved == cut:
             return cut
         cut = moved
+
+
+class _Recorder:
+    """把输出写进日志。意外失败时杀掉进程组（进程不能没人管地留着），失败交给监督者记为被中断。"""
+
+    def __init__(self, proc: asyncio.subprocess.Process, log_file: Path, secrets: Mapping[str, str]):
+        self._proc = proc
+        self._log_file = log_file
+        self._secrets = secrets
+        self.done = anyio.Event()
+        self.error: Exception | None = None
+
+    async def run(self) -> None:
+        try:
+            await _record(self._proc, self._log_file, self._secrets)
+        except Exception as e:
+            self.error = e
+            kill_group(self._proc.pid)
+        finally:
+            self.done.set()
 
 
 async def _record(proc: asyncio.subprocess.Process, log_file: Path, secrets: Mapping[str, str]) -> None:
