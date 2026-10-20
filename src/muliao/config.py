@@ -144,7 +144,7 @@ class Settings(_Section):
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "muliao.platform.db"
+        return self.data_dir / "muliao.db"
 
     @property
     def resources_dir(self) -> Path:

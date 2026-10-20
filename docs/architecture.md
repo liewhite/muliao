@@ -26,7 +26,7 @@
 
 ```
 data/
-  muliao.platform.db
+  muliao.db
   vapid_private.pem            # Web Push 密钥，首次启动生成
   files/<sha前两位>/<sha256>   # 对话里的文件内容（元数据在 files 表），相同内容只存一份
   files/tmp/                   # 上传中的临时文件，启动时清空
