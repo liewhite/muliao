@@ -194,6 +194,31 @@ def test_check_text_for_a_queued_thread_does_not_offer_stop_thread():
     retrying = Task(id=2, kind=TaskKind.TURN, status=TaskStatus.PENDING, attempts=2)
     now = datetime.now(UTC)
     assert "stop_thread" not in _check_text(child, agent, queued, now)
-    assert "retry" in _check_text(child, agent, retrying, now)
+    assert "waiting to run again" in _check_text(child, agent, retrying, now)
     # 被停止时如实说明，附上停止前说的话
     assert "was stopped" in finished_text(child, agent, "", stopped=True)
+
+
+async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_hook(container, monkeypatch):
+    """记账本身失败（如数据库暂时不可用）不走「跳过收尾」的退路：那条退路只为收尾钩子自己的失败准备。"""
+    from muliao.models import Task
+    from muliao.runtime.worker import Worker
+
+    calls = {"n": 0}
+
+    async def fake_fail(task_id, error, *, retryable, on_final):  # noqa: ANN001, ANN202
+        calls["n"] += 1
+        raise RuntimeError("database is locked")
+
+    class Handler:
+        async def failed_in(self, s, task):  # noqa: ANN001, ANN202
+            """不会被调到。"""
+
+    worker = Worker(
+        container.queue, {TaskKind.TURN: Handler()}, container.bus, concurrency=1, task_timeout_seconds=5
+    )
+    monkeypatch.setattr(container.queue, "fail", fake_fail)
+
+    await worker._record_failure(Task(id=1, kind=TaskKind.TURN), RuntimeError("boom"), {})  # noqa: SLF001
+    # 只尝试一次：没有因为记账失败就去掉钩子重来
+    assert calls["n"] == 1

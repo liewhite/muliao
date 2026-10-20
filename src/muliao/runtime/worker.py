@@ -49,6 +49,10 @@ class TaskHandler(Protocol):
         ...
 
 
+class _SettleFailed(Exception):
+    """task 最终失败时的收尾钩子（TaskHandler.failed_in）抛出了异常；与记账本身的失败区分开。"""
+
+
 async def _unsettled(_s: AsyncSession, _task: Task) -> None:
     """不收尾：收尾钩子本身失败时的退路（见 Worker._record_failure）。"""
 
@@ -135,14 +139,23 @@ class Worker:
 
     async def _record_failure(self, task: Task, exc: Exception, ctx: dict[str, object]) -> None:
         error = f"{type(exc).__name__}: {exc}"
+        settle = self._handlers[task.kind].failed_in
+
+        async def settle_or_mark(s: AsyncSession, failing: Task) -> None:
+            try:
+                await settle(s, failing)
+            except Exception as e:
+                raise _SettleFailed from e
+
         try:
             try:
                 failed = await self._queue.fail(
-                    task.id, error, retryable=is_transient(exc), on_final=self._handlers[task.kind].failed_in
+                    task.id, error, retryable=is_transient(exc), on_final=settle_or_mark
                 )
-            except Exception:
-                # 收尾钩子（如把失败交回等着的会话）自己失败了，整个事务回滚：task 不能因此卡在 running、占住 lane
-                # 直到重启。记下钩子的失败，再不带钩子记一次：失败照样可见，没交回的结果在这条日志里
+            except _SettleFailed:
+                # 只有收尾钩子（如把失败交回等着的会话）自己失败时走这里；记账本身的失败（如数据库暂时不可用）
+                # 照常交给外层。事务已整体回滚：task 不能因此卡在 running、占住 lane 直到重启，记下钩子的失败后
+                # 不带钩子再记一次——失败照样可见，没交回的结果在这条日志里
                 log.exception(
                     "settling the failed task failed; recording the failure without settling it", extra=ctx
                 )

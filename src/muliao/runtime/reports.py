@@ -118,7 +118,7 @@ def _check_text(child: Session, agent: Agent, turn: Task, now: datetime) -> str:
     name = thread_name(child)
     if turn.status == TaskStatus.PENDING:
         state = (
-            f"failed temporarily and will retry (attempt {turn.attempts} so far)"
+            f"is waiting to run again (attempt {turn.attempts} so far)"
             if turn.attempts
             else "is queued and has not started yet"
         )

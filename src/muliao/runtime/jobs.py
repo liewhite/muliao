@@ -376,7 +376,8 @@ class JobRunner:
             if handle.supervisor is not None:
                 handle.supervisor.cancel()
         if supervisors:
-            _, unfinished = await asyncio.wait(supervisors, timeout=DRAIN_SECONDS)
+            # 进程退出后监督者自己还要最多 DRAIN_SECONDS 读完剩余输出，再写结局
+            _, unfinished = await asyncio.wait(supervisors, timeout=2 * DRAIN_SECONDS)
             for task in unfinished:
                 task.cancel()
             await asyncio.gather(*supervisors, return_exceptions=True)
