@@ -237,3 +237,45 @@ async def test_stopping_the_service_reports_jobs_as_interrupted(container, make_
         assert (await s.get(Job, job.id)).status == JobStatus.INTERRUPTED
     [event] = await queued_events(container, session.id)
     assert "the service was stopped" in event.content and "pgrep" not in event.content
+
+
+async def test_a_check_while_a_job_records_its_outcome_does_not_report_it_interrupted(
+    container, make_agent, models, monkeypatch
+):
+    """进程自然退出、结局正在写的那一刻碰上检查：监督者还登记着，对账不能抢先记成被中断。"""
+    session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 0.3")
+    real_finish = container.jobs._finish  # noqa: SLF001
+    writing = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_finish(*args, **kwargs):
+        writing.set()
+        await release.wait()
+        await real_finish(*args, **kwargs)
+
+    monkeypatch.setattr(container.jobs, "_finish", slow_finish)
+    await asyncio.wait_for(writing.wait(), 5)
+    await container.jobs.check()
+    release.set()
+    finished = await wait_until_done(container, job.id)
+
+    assert finished.status == JobStatus.EXITED
+    contents = [e.content for e in await queued_events(container, session.id)]
+    assert not any("interrupted" in c for c in contents)
+    assert sum("finished with exit code 0" in c for c in contents) == 1
+
+
+async def test_killing_a_job_that_just_exited_is_a_clear_conflict(container, make_agent, models):
+    _session, job, _recorder, _agent = await start_job(container, make_agent, models, "true")
+    await wait_until_done(container, job.id)
+    with pytest.raises(Conflict):
+        await container.jobs.kill(job.id, job.agent_id)
+
+
+def test_the_cut_also_avoids_secrets_overlapping_each_other():
+    from muliao.runtime.jobs import _safe_cut
+
+    # 挪过一次之后，另一个 secret 跨到了新切口上，要继续挪
+    text = "....ABCDEFGH...."
+    # ABCD 先查时还没跨在切口 9 上；DEFGH 把切口挪到 7 之后它才跨上去
+    assert _safe_cut(text, 9, {"B": "ABCD", "A": "DEFGH"}) == 4

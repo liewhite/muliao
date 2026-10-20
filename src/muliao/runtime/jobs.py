@@ -185,43 +185,54 @@ class JobRunner:
     async def _supervise(
         self, job_id: int, handle: _Running, log_file: Path, secrets: Mapping[str, str]
     ) -> None:
-        """以进程退出为准：退出后在有限时间内把管道里剩下的输出读完（脱离进程组的后代可能一直持有管道）。"""
+        """看着进程直到结局写进库。「有人监督」（_running）一直保持到结局写完（成功、失败或被取消），
+        对账才不会把正在记结局的任务当成没人管的。"""
+        try:
+            status, exit_code, note = await self._watch(job_id, handle, log_file, secrets)
+            # 写结局失败（如数据库暂时不可用）时这一行停在 running；撤销登记后由 check 的对账收敛
+            await self._finish(job_id, status, exit_code, note)
+        finally:
+            self._running.pop(job_id, None)
+
+    async def _watch(
+        self, job_id: int, handle: _Running, log_file: Path, secrets: Mapping[str, str]
+    ) -> tuple[JobStatus, int | None, str | None]:
+        """以进程退出为准：退出后在有限时间内把管道里剩下的输出读完（脱离进程组的后代可能一直持有管道）。
+        返回结局（状态、退出码、补充说明或被中断的原因）。"""
         proc = handle.proc
         recorder = asyncio.create_task(_record(proc, log_file, secrets))
         waiter = asyncio.create_task(_exit_code(proc))
-        note = None
         try:
             done, _ = await asyncio.wait({recorder, waiter}, return_when=asyncio.FIRST_COMPLETED)
             if recorder in done:
                 recorder.result()  # 记录输出失败：下面的 except 杀掉进程、记为被中断
             exit_code = await waiter
+            ended = JobStatus.KILLED if handle.killed else JobStatus.EXITED
             _, unfinished = await asyncio.wait({recorder}, timeout=DRAIN_SECONDS)
-            if unfinished:
-                recorder.cancel()
-                await asyncio.gather(recorder, return_exceptions=True)
-                note = "Processes it left running in the background still hold its output; their later output is not recorded."
-            else:
+            if not unfinished:
                 recorder.result()
+                return ended, exit_code, None
+            recorder.cancel()
+            await asyncio.gather(recorder, return_exceptions=True)
+            return (
+                ended,
+                exit_code,
+                "Processes it left running in the background still hold its output; their later output is not recorded.",
+            )
         except asyncio.CancelledError:
             # 关停（stop 随后记为被中断）或启动时记录写不进去：进程不随服务退出，在这里杀掉
             kill_group(proc.pid)
             for task in (recorder, waiter):
                 task.cancel()
+            await asyncio.gather(recorder, waiter, return_exceptions=True)
             raise
         except Exception:
             # 读输出、写日志意外失败：进程不能没人管地留着；记为被中断，失败原因进日志，agent 收到事件
             log.exception("background job supervision failed", extra={"job_id": job_id})
             kill_group(proc.pid)
             waiter.cancel()
-            self._running.pop(job_id, None)
-            await self._finish(
-                job_id, JobStatus.INTERRUPTED, None, "its output could not be recorded (see server log)"
-            )
-            return
-        finally:
-            self._running.pop(job_id, None)
-        # 记下结局失败时（如数据库暂时不可用）这一行停在 running、已不在 _running：check 的对账把它收敛
-        await self._finish(job_id, JobStatus.KILLED if handle.killed else JobStatus.EXITED, exit_code, note)
+            await asyncio.gather(waiter, return_exceptions=True)
+            return JobStatus.INTERRUPTED, None, "its output could not be recorded (see server log)"
 
     async def _finish(self, job_id: int, status: JobStatus, exit_code: int | None, note: str | None) -> None:
         async with self._db.transaction() as s:
@@ -229,6 +240,9 @@ class JobRunner:
             if job is None:
                 # 有后台任务在跑的会话不能删除（conversation.delete_sessions）
                 raise RuntimeError(f"job {job_id} vanished while it was running")
+            if job.status != JobStatus.RUNNING:
+                # 结局只记一次：监督者在写完之前一直登记着，对账与关停不会抢先记
+                raise RuntimeError(f"job {job_id} already ended as {job.status}, cannot record {status}")
             now = self._clock()
             job.status, job.exit_code, job.finished_at = status, exit_code, now
             text = _final_text(job, now, tail(self._workspace_of(job.agent_id) / job.log_path), note)
@@ -358,13 +372,19 @@ class JobRunner:
     async def stop(self) -> None:
         """正常关停：杀掉所有后台任务的进程组，记为被中断并告诉 agent（事件在重启后处理）。"""
         handles = dict(self._running)
+        supervisors = [h.supervisor for h in handles.values() if h.supervisor is not None]
         for handle in handles.values():
+            if handle.proc.returncode is not None:
+                # 进程已经自己结束、正在记结局：给它时间写完，保留真实的退出码
+                continue
             kill_group(handle.proc.pid)
             if handle.supervisor is not None:
                 handle.supervisor.cancel()
-        await asyncio.gather(
-            *(h.supervisor for h in handles.values() if h.supervisor), return_exceptions=True
-        )
+        if supervisors:
+            _, unfinished = await asyncio.wait(supervisors, timeout=DRAIN_SECONDS)
+            for task in unfinished:
+                task.cancel()
+            await asyncio.gather(*supervisors, return_exceptions=True)
         if not handles:
             return
         async with self._db.transaction() as s:
@@ -412,14 +432,19 @@ async def _exit_code(proc: asyncio.subprocess.Process) -> int:
 
 
 def _safe_cut(text: str, cut: int, secrets: Mapping[str, str]) -> int:
-    """把切口挪到任何 secret 出现位置之前：切口两侧分开脱敏时，跨在切口上的 secret 会漏出明文。"""
-    for value in secrets.values():
-        start = text.find(value, max(0, cut - len(value) + 1))
-        while start != -1 and start < cut:
-            if start + len(value) > cut:
-                cut = start
-            start = text.find(value, start + 1)
-    return cut
+    """把切口挪到任何 secret 出现位置之前：切口两侧分开脱敏时，跨在切口上的 secret 会漏出明文。
+    挪一次可能让别的 secret（或同一个 secret 的另一次出现）跨到新切口上，所以挪到不再变化为止。"""
+    while True:
+        moved = cut
+        for value in secrets.values():
+            start = text.find(value, max(0, moved - len(value) + 1))
+            while start != -1 and start < moved:
+                if start + len(value) > moved:
+                    moved = start
+                start = text.find(value, start + 1)
+        if moved == cut:
+            return cut
+        cut = moved
 
 
 async def _record(proc: asyncio.subprocess.Process, log_file: Path, secrets: Mapping[str, str]) -> None:
