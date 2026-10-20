@@ -82,7 +82,7 @@ async def test_broken_schedule_trigger_is_disabled_without_blocking_others(conta
     await schedules.fire_due()
 
     bad, good = await triggers.get_by_name("bad"), await triggers.get_by_name("good")
-    assert not bad.enabled and "message must not be empty" in bad.last_error
+    assert not bad.enabled and "message must not be empty" in bad.disabled_reason
     assert good.last_session_id is not None
 
 
@@ -113,7 +113,7 @@ async def test_trigger_deleted_or_paused_after_being_listed_is_skipped(container
         triggers.list = real_list  # type: ignore[method-assign]
 
     paused = await triggers.get_by_name("paused")
-    assert not paused.enabled and paused.last_error is None and paused.last_session_id is None
+    assert not paused.enabled and paused.disabled_reason is None and paused.last_session_id is None
     assert await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0) == []
 
 

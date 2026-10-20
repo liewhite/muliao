@@ -2,8 +2,8 @@
 
 不保留迁移历史：表结构变化时重新生成这一个版本，数据库重建（见 docs/architecture.md「数据库迁移」）。
 
-Revision ID: dd730251da31
-Create Date: 2026-10-20 16:36:48.492565
+Revision ID: 57377d09ac81
+Create Date: 2026-10-20 16:49:24.861046
 Revises:
 """
 
@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "dd730251da31"
+revision: str = "57377d09ac81"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -134,7 +134,8 @@ def upgrade() -> None:
         sa.Column("precheck", sa.JSON(), nullable=True),
         sa.Column("last_checked_at", sa.DateTime(), nullable=True),
         sa.Column("precheck_output", sa.Text(), nullable=True),
-        sa.Column("last_error", sa.Text(), nullable=True),
+        sa.Column("disabled_reason", sa.Text(), nullable=True),
+        sa.Column("precheck_error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),

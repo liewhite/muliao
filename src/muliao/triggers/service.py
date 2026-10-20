@@ -176,11 +176,9 @@ class TriggerService:
             trigger = await self.get_in(s, trigger_id)
             if precheck is not KEEP:
                 trigger.precheck = None if precheck is None else precheck.model_dump()
-                # 新的检查从新的基线开始比较；旧命令的失败也不记到新配置上（新命令失败时要能再告警一次）。
-                # 停用中的触发器的 last_error 是它被停用的原因，与检查无关，保留
+                # 新的检查从新的基线开始比较；旧命令的失败也不记到新配置上（新命令失败时要能再告警一次）
                 trigger.precheck_output = None
-                if trigger.enabled:
-                    trigger.last_error = None
+                trigger.precheck_error = None
             if prompt is not None:
                 trigger.prompt = prompt
             reenabled = enabled is True and not trigger.enabled
@@ -193,10 +191,8 @@ class TriggerService:
                 trigger.config, trigger.state = derived_config, {**trigger.state, **derived}
             if enabled is not None:
                 trigger.enabled = enabled
-                # 只在停用后重新启用时清除：对本来就启用的触发器再设一次 enabled=True，不能抹掉正在出错的状态
-                # （否则下一次失败会被当成「刚变坏」再推送一次告警）
                 if reenabled:
-                    trigger.last_error = None
+                    trigger.disabled_reason = None
         self._changed()
         log.info("trigger updated", extra={"trigger": trigger.name, "enabled": trigger.enabled})
         return trigger
@@ -334,17 +330,17 @@ class TriggerService:
                 await self._fail_in(s, trigger, error)
 
     def _succeed_in(self, trigger: Trigger) -> None:
-        if trigger.last_error is not None:
+        if trigger.precheck_error is not None:
             log.info(
                 "trigger precheck recovered",
-                extra={"trigger": trigger.name, "previous_error": trigger.last_error},
+                extra={"trigger": trigger.name, "previous_error": trigger.precheck_error},
             )
-        trigger.last_checked_at, trigger.last_error = self._clock(), None
+        trigger.last_checked_at, trigger.precheck_error = self._clock(), None
 
     async def _fail_in(self, s: AsyncSession, trigger: Trigger, error: str) -> None:
         """记下失败原因；从正常变为出错时通知用户一次（每分钟检查一次的触发器坏了不会每分钟推送一条）。"""
-        healthy_before = trigger.last_error is None
-        trigger.last_checked_at, trigger.last_error = self._clock(), error
+        healthy_before = trigger.precheck_error is None
+        trigger.last_checked_at, trigger.precheck_error = self._clock(), error
         log.warning(
             "trigger precheck failed: %s", error, extra={"trigger": trigger.name, "alert": healthy_before}
         )

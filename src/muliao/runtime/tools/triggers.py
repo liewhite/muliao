@@ -31,7 +31,9 @@ class TriggerInfo(BaseModel):
     status: dict[str, Any]
     enabled: bool
     precheck: Precheck | None
-    last_error: str | None
+    # 被自动停用的原因；最近一次前置检查失败的原因
+    disabled_reason: str | None
+    precheck_error: str | None
 
 
 _CREATE_DESCRIPTION = """\
@@ -66,7 +68,8 @@ def triggers_toolset(
             status=triggers.kind(t.kind).status(t),
             enabled=t.enabled,
             precheck=None if t.precheck is None else Precheck.model_validate(t.precheck),
-            last_error=t.last_error,
+            disabled_reason=t.disabled_reason,
+            precheck_error=t.precheck_error,
         )
 
     @ts.tool_plain

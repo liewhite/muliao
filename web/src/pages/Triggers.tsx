@@ -325,8 +325,9 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
             </>
           )}
         </div>
-        {trigger.last_error && (
-          <ErrorAlert title={trigger.enabled ? '前置检查出错，本次未触发' : '触发失败，已自动停用'} error={trigger.last_error} />
+        {trigger.disabled_reason && <ErrorAlert title="触发失败，已自动停用" error={trigger.disabled_reason} />}
+        {trigger.precheck_error && (
+          <ErrorAlert title="前置检查出错，本次未触发" error={trigger.precheck_error} />
         )}
         {editing ? (
           <>

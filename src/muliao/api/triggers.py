@@ -52,7 +52,9 @@ class TriggerOut(BaseModel):
     last_checked_at: datetime | None
     last_fired_at: datetime | None
     last_session_id: str | None
-    last_error: str | None
+    # 被自动停用的原因；最近一次前置检查失败的原因
+    disabled_reason: str | None
+    precheck_error: str | None
 
 
 class FiredOut(BaseModel):
@@ -74,7 +76,8 @@ def _out(c: C, t: Trigger) -> TriggerOut:
         last_checked_at=t.last_checked_at,
         last_fired_at=t.last_fired_at,
         last_session_id=t.last_session_id,
-        last_error=t.last_error,
+        disabled_reason=t.disabled_reason,
+        precheck_error=t.precheck_error,
     )
 
 

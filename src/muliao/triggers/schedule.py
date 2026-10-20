@@ -146,7 +146,7 @@ class ScheduleRunner:
                 )
                 return
             trigger.enabled = False
-            trigger.last_error = error
+            trigger.disabled_reason = error
         log.error("schedule trigger disabled after failed fire: %s", error, extra={"trigger_id": trigger_id})
 
     async def _next_wake(self) -> float:

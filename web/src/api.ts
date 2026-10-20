@@ -245,7 +245,10 @@ export interface Trigger {
   last_checked_at: string | null
   last_fired_at: string | null
   last_session_id: string | null
-  last_error: string | null
+  /** 被自动停用的原因 */
+  disabled_reason: string | null
+  /** 最近一次前置检查失败的原因 */
+  precheck_error: string | null
 }
 
 /** agent 能改的、有版本历史的文本资源 */

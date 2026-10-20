@@ -102,16 +102,20 @@ async def test_failing_precheck_is_recorded_alerts_once_and_keeps_the_trigger_en
     await _tick(container, trigger.id)
 
     failed = await container.triggers.get_by_name("watch")
-    assert failed.enabled and failed.last_error is not None and "exited with 3: no token" in failed.last_error
+    assert (
+        failed.enabled
+        and failed.precheck_error is not None
+        and "exited with 3: no token" in failed.precheck_error
+    )
     assert await tasks_of(container, TaskKind.RUN) == []
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
-    # 告警留在通知页里：检查恢复、last_error 清除之后仍然看得到
+    # 告警留在通知页里：检查恢复、precheck_error 清除之后仍然看得到
     [alert] = await container.notifications.list(10)
     assert "watch" in alert.title and "no token" in alert.body and alert.session_id is None
 
     (workspace / "ok").write_text("")
     await _tick(container, trigger.id)
-    assert (await container.triggers.get_by_name("watch")).last_error is None
+    assert (await container.triggers.get_by_name("watch")).precheck_error is None
 
 
 async def test_a_failing_step_inside_a_pipeline_fails_the_precheck(container, make_agent):
@@ -119,7 +123,7 @@ async def test_a_failing_step_inside_a_pipeline_fails_the_precheck(container, ma
     # 像 curl 失败而 jq 对空输入照样退出 0：不能被当成「没事」
     trigger, _ = await _schedule(container, alpha, Precheck(command="false | cat"))
     await _tick(container, trigger.id)
-    assert "exited with 1" in (await container.triggers.get_by_name("watch")).last_error
+    assert "exited with 1" in (await container.triggers.get_by_name("watch")).precheck_error
 
 
 async def test_precheck_secrets_must_exist_when_the_trigger_is_created(container, make_agent):
@@ -201,7 +205,7 @@ async def test_a_change_too_large_to_hand_over_is_recorded_and_alerted(container
     await _tick(container, trigger.id)
 
     failed = await container.triggers.get_by_name("watch")
-    assert failed.last_error is not None and "event limit" in failed.last_error
+    assert failed.precheck_error is not None and "event limit" in failed.precheck_error
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
     assert await tasks_of(container, TaskKind.RUN) == []
 
@@ -219,7 +223,7 @@ async def test_enabling_an_enabled_trigger_keeps_its_error_and_does_not_alert_ag
     trigger, _ = await _schedule(container, alpha, Precheck(command="exit 3"))
     await _tick(container, trigger.id)
     await container.triggers.update(trigger.id, enabled=True)
-    assert (await container.triggers.get_by_name("watch")).last_error is not None
+    assert (await container.triggers.get_by_name("watch")).precheck_error is not None
     await _tick(container, trigger.id)
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
 
@@ -230,6 +234,6 @@ async def test_changing_the_precheck_clears_the_old_commands_error(container, ma
     trigger, _ = await _schedule(container, alpha, Precheck(command="exit 3"))
     await _tick(container, trigger.id)
     await container.triggers.update(trigger.id, precheck=Precheck(command="exit 5"))
-    assert (await container.triggers.get_by_name("watch")).last_error is None
+    assert (await container.triggers.get_by_name("watch")).precheck_error is None
     await _tick(container, trigger.id)
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 2
