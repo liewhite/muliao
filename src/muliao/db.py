@@ -157,7 +157,12 @@ class Database:
             raise RuntimeError("Database.exclusive() inside a transaction would deadlock")
         with anyio.CancelScope(shield=True):
             async with self._lock:
-                yield
+                # 在这里面开事务会自锁：transaction 按持有者报错
+                self._holder = current
+                try:
+                    yield
+                finally:
+                    self._holder = None
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[AsyncSession]:

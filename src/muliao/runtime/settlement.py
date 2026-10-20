@@ -16,10 +16,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.conventions import Attachment
-from muliao.models import HoldStatus, Mail, MailKind, MailState, Session
+from muliao.models import Agent, HoldStatus, Mail, MailKind, MailState, Session, Task, TaskStatus
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.runtime.holds import get_in, release_in
-from muliao.runtime.mailbox import post_in
+from muliao.runtime.mailbox import discard_in, handed_to, latest_run, post_in
 from muliao.runtime.pending import AgentAnswer, pending_in
 from muliao.runtime.session_events import Ending, PostEvent, SessionSettled
 from muliao.runtime.tasks import Commit, TaskQueue
@@ -42,7 +42,7 @@ async def unsettled_in(s: AsyncSession, session_id: str, states: Sequence[MailSt
     return list(rows.all())
 
 
-def settle_in(
+async def settle_in(
     s: AsyncSession,
     messaging: Messaging,
     session: Session,
@@ -62,11 +62,15 @@ def settle_in(
         return []
     if session.thread is None:
         raise RuntimeError(f"session {session.id} carries correlations {correlations} but is not a thread")
+    agent = await s.get(Agent, session.agent_id)
+    if agent is None:
+        raise RuntimeError(f"session {session.id} references missing agent {session.agent_id}")
     messaging.publish_in(
         s,
         SessionSettled(
             session_id=session.id,
             agent_id=session.agent_id,
+            agent_name=agent.name,
             thread=session.thread,
             ending=ending,
             text=text,
@@ -79,6 +83,61 @@ def settle_in(
         extra={"session_id": session.id, "ending": ending, "correlations": correlations},
     )
     return correlations
+
+
+def failure_of(run: Task) -> str:
+    """失败的运行的错误说明；队列契约保证 failed 一定带 error。"""
+    if run.status != TaskStatus.FAILED or run.error is None:
+        raise RuntimeError(
+            f"run {run.id} is {run.status} with error {run.error!r}, expected a recorded failure"
+        )
+    return run.error
+
+
+async def settle_failure_in(s: AsyncSession, messaging: Messaging, session: Session, run: Task) -> list[str]:
+    """运行最终失败：交给这个会话、没能做完的委派以「失败」结清（发起方不会一直等）。按会话范围：已交给模型、还没结清
+    的全部（包括早先停在挂起调用上的运行处理过的、被续跑接管的），加上交给过这次运行、还排着的——运行在第一次保存
+    之前就失败时，开头取走的信件一直排着，也不会再有运行因为它们被唤醒（mailbox.handed_to）；它们随结清一起退出
+    信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：它们会唤醒新的运行。
+
+    两条执行路径共用这一个函数：队列记下最终失败时（RunHandler.failed_in），以及它没做成时信箱对账补做
+    （reconcile_failures_in）。"""
+    stranded = [m for m in await unsettled_in(s, session.id, [MailState.QUEUED]) if handed_to(m, run)]
+    settled = await settle_in(
+        s,
+        messaging,
+        session,
+        [*await unsettled_in(s, session.id, [MailState.CONSUMED]), *stranded],
+        Ending.FAILED,
+        failure_of(run),
+    )
+    await discard_in(s, session.id, stranded)
+    return settled
+
+
+async def reconcile_failures_in(s: AsyncSession, messaging: Messaging) -> list[str]:
+    """failed_in 没做成（收尾钩子自己失败，worker 不带钩子记下了失败）时补做：最近一次运行已失败、仍有已交给模型
+    还没结清的关联的会话，按 settle_failure_in 结清。返回补做的会话。"""
+    candidates = (
+        await s.scalars(
+            select(Mail.session_id)
+            .where(
+                Mail.correlation.is_not(None),
+                Mail.correlation_settled.is_(False),
+                Mail.state == MailState.CONSUMED,
+            )
+            .distinct()
+        )
+    ).all()
+    done = []
+    for session_id in candidates:
+        run = await latest_run(s, session_id)
+        session = await s.get(Session, session_id)
+        if run is None or run.status != TaskStatus.FAILED or session is None:
+            continue
+        await settle_failure_in(s, messaging, session, run)
+        done.append(session_id)
+    return done
 
 
 class Delivered(StrEnum):
@@ -114,9 +173,17 @@ async def deliver_in(
     hold = await get_in(s, session_id, holder)
     if hold is None:
         raise RuntimeError(f"session {session_id} has no hold {holder}")
-    if await release_in(s, session_id, holder) == HoldStatus.CLEARED:
+    before = await release_in(s, session_id, holder)
+    if before == HoldStatus.CLEARED:
         log.info("outcome for a stopped session dropped", extra={"session_id": session_id, "holder": holder})
         return Delivered.DROPPED
+    if (
+        before == HoldStatus.RELEASED
+        and (await s.scalar(select(Mail.id).where(Mail.session_id == session_id, Mail.dedupe_key == key)))
+        is None
+    ):
+        # 重放带的是同一个 key（按它去重）；换了 key 再交回一次，是同一项工作被交回了两次
+        raise RuntimeError(f"hold {holder} of session {session_id} was already released by another delivery")
     if answer is not None and hold.call_id is not None and hold.call_id in await pending_in(s, session_id):
         await post_in(
             s,

@@ -80,7 +80,7 @@ class RunFinisher:
                 await self._reflection.after_run_in(s, agent)
             if not end.stopped and not end.paused and await self._work_done(s, session.id):
                 # 处理中的委派结清。委派可能跨几次运行：停在挂起的调用上、或还有工作没做完时，由之后那次做完的运行结清
-                settle_in(
+                await settle_in(
                     s,
                     self._messaging,
                     session,

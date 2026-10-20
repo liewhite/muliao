@@ -23,6 +23,8 @@ class SessionSettled(DomainEvent):
     TYPE = "session.settled"
     session_id: str
     agent_id: str
+    # 结清时 agent 的展示名：交回结局的文字里用它，发布时 agent 一定存在（之后它可能被删除）
+    agent_name: str
     # thread 名（委派来的工作一定在 thread 里）
     thread: str
     ending: Ending

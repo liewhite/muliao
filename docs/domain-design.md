@@ -125,7 +125,7 @@
 | `receive(Inbound)` | 外部来信的唯一入口（用户消息、对 `ask_user` 的回答、触发器），现有规则不变 |
 | `post(session, mail, key, *, coalesce=False, release=None)` | 代码里的生产者投信（事件、检查）。`coalesce`：同一来源已有信件排着就不投。`release=h`：同一事务里把占用 `h` 记为 released。占用 `h` 已是 `cleared` 时什么都不投，返回 `Dropped`（记 info 日志，带 holder）；会话已不存在返回 `Gone`；会话存在而占用从未登记过则报错（bug） |
 | `hold(session, holder)` | 登记一个占用（后台任务用），幂等 |
-| `dispatch(owner, call_id?, thread, content, awaited, key)` | **委派投递，一个事务**：校验并打开或找到 thread（同名续聊，agent 或种类不符返回 `ThreadMismatch`，什么都不写）；在发起方登记占用，`holder` 由幂等键确定性派生（`delegation:<owner>:<key>`）；往 thread 投一封以同一个 `holder` 为关联 id 的信件；发布 `DelegationDispatched`。返回 holder 与子会话 id |
+| `dispatch(owner, call_id?, thread, content, awaited, key)` | **委派投递，一个事务**：校验并打开或找到 thread（同名续聊，agent 或种类不符抛出可纠正的 `InvalidInput`，交还模型；事务回滚，什么都不写）；在发起方登记占用，`holder` 由幂等键确定性派生（`delegation:<owner>:<key>`）；往 thread 投一封以同一个 `holder` 为关联 id 的信件；发布 `DelegationDispatched`。返回 holder 与子会话 id |
 | `send_to_thread(parent, thread, content, awaited, key)` | 不交回结局的 `delegate_task`：打开或找到公开 thread 并投信，不登记占用 |
 | `reply(owner, holder, result, key)` | 交回占用的结局：发起方还停在 `holder` 对应的挂起调用上 → 回答信件；否则 → 事件信件。同一事务把占用记为 released。占用已 `cleared` → `Dropped`；会话已不存在 → `Gone`。「迟到的回答改为事件」只在这里 |
 | `stop(session)` | 有运行在进行时只取消它的取消作用域；运行保存完被停止的那一步、作用域退出之后，由会话 actor 执行停止事务（与现状一致）。没有运行时直接执行。停止事务：关闭历史、丢弃信件、lane 上排队的任务记为完成、全部 `active` 占用记为 `cleared`、未结清的关联以 `stopped` 结清。因为停止事务在运行完全退出之后，运行退出途中登记的占用也会被清掉；万一仍有遗漏（bug），再停止一次即可清掉 |
@@ -166,7 +166,7 @@
 
 **拥有的表**：`delegations`，主键是 `holder`（`owner_session_id`、`child_session_id` 是不透明 id，无外键）。状态：`running` → `settled` / `abandoned`。委派行**只由 `sub:delegations` 这一条 lane 创建和修改**，没有第二个写者。
 
-**发起（工具里）**：`Sessions.dispatch(owner, call_id, thread, ..., key=工具调用 id)`，一个事务完成占用、投信与发布 `DelegationDispatched`。返回 `ThreadMismatch` 时什么都没写，把原因作为可纠正的错误交还模型；否则 `ask_agent` 抛出 `CallDeferred`，`delegate_task(report_back)` 返回。续跑重新执行这次调用时 `dispatch` 按键去重。发起没有中间状态，因此不需要补偿，也不需要对账。
+**发起（工具里）**：`Sessions.dispatch(owner, call_id, thread, ..., key=工具调用 id)`，一个事务完成占用、投信与发布 `DelegationDispatched`。thread 不合用时抛出 `InvalidInput`，事务回滚、什么都没写，原因作为可纠正的错误交还模型；否则 `ask_agent` 抛出 `CallDeferred`，`delegate_task(report_back)` 返回。续跑重新执行这次调用时 `dispatch` 按键去重。发起没有中间状态，因此不需要补偿，也不需要对账。
 
 普通 `delegate_task`（不交回）只调用 `Sessions.send_to_thread`，不产生委派。
 

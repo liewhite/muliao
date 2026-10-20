@@ -72,7 +72,7 @@ class Delegations:
         self,
         db: Database,
         queue: TaskQueue,
-        stop_session: Callable[[str], Awaitable[None]],
+        stop_session: Callable[[str], Awaitable[object]],
         clock: Clock = utcnow,
     ):
         self._db = db
@@ -120,10 +120,7 @@ class Delegations:
                     raise CorruptState(f"thread {event.session_id} settled unknown delegation {holder}")
                 if delegation.status == DelegationStatus.RUNNING:
                     delegations.append(delegation)
-            agent = await s.get(Agent, event.agent_id)
-            if agent is None:
-                raise RuntimeError(f"session {event.session_id} references missing agent {event.agent_id}")
-            agent_name = agent.name
+        agent_name = event.agent_name
         for delegation in delegations:
             async with self._db.transaction() as s:
                 delivered = await deliver_in(
@@ -179,6 +176,7 @@ class Delegations:
             )
         children = list(dict.fromkeys(d.child_session_id for d in rows))
         for child in children:
+            # thread 可能已被用户删除（不忙时可以删）：停止返回 GONE，照常放弃委派
             await self._stop_session(child)
         if children:
             log.info(

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+from enum import StrEnum
 
 from pydantic_ai.messages import ModelRequest
 from sqlalchemy import select
@@ -53,23 +54,32 @@ async def close_history_in(s: AsyncSession, session_id: str) -> None:
         row.payload = dump_message(marked_stopped(message))
 
 
+class Halted(StrEnum):
+    """停止的结果（命令的结果类型）。"""
+
+    STOPPED = "stopped"
+    # 会话已删除（例如委派领域停止一个刚被用户删掉的 thread）：契约内的情况，不是错误
+    GONE = "gone"
+
+
 class SessionHalt:
     def __init__(self, db: Database, queue: TaskQueue, messaging: Messaging):
         self._db = db
         self._queue = queue
         self._messaging = messaging
 
-    async def __call__(self, session_id: str) -> None:
+    async def __call__(self, session_id: str) -> Halted:
         async with self._db.transaction() as s:
             session = await s.get(Session, session_id)
             if session is None:
-                raise RuntimeError(f"session {session_id} vanished while being stopped")
+                log.info("stopping a deleted session: nothing to do", extra={"session_id": session_id})
+                return Halted.GONE
             await close_history_in(s, session_id)
             dropped = [
                 t.id for t in await self._queue.finish_pending_in(s, session_lane(session_id), TaskKind.RUN)
             ]
             cleared = await clear_in(s, session_id)
-            settled = settle_in(
+            settled = await settle_in(
                 s,
                 self._messaging,
                 session,
@@ -89,3 +99,4 @@ class SessionHalt:
                 "settled_correlations": settled,
             },
         )
+        return Halted.STOPPED

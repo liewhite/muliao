@@ -16,7 +16,7 @@ from muliao.db import utcnow
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.files import load_metas
 from muliao.ids import new_id
-from muliao.models import Agent, Mail, MailKind, MailState, Origin, Session, Task, TaskStatus
+from muliao.models import Agent, Mail, MailKind, MailState, Origin, Session, TaskStatus
 from muliao.platform.messaging import Messaging
 from muliao.runtime.history import latest_answer, load_context
 from muliao.runtime.holds import get_in as get_hold_in
@@ -25,7 +25,7 @@ from muliao.runtime.mailbox import latest_run, post_in, queued_in
 from muliao.runtime.pending import pending_questions
 from muliao.runtime.questions import AskResult, Question, QuestionAnswer, answer_result
 from muliao.runtime.session_events import DelegationDispatched, Ending
-from muliao.runtime.settlement import settle_in, unsettled_in
+from muliao.runtime.settlement import failure_of, settle_in, unsettled_in
 from muliao.runtime.tasks import TaskQueue, session_lane
 
 log = logging.getLogger(__name__)
@@ -219,15 +219,6 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
     return Received(session, mail)
 
 
-def failure_of(run: Task) -> str:
-    """失败的运行的错误说明；队列契约保证 failed 一定带 error。"""
-    if run.status != TaskStatus.FAILED or run.error is None:
-        raise RuntimeError(
-            f"run {run.id} is {run.status} with error {run.error!r}, expected a recorded failure"
-        )
-    return run.error
-
-
 async def delete_sessions(
     s: AsyncSession, queue: TaskQueue, messaging: Messaging, roots: list[Session]
 ) -> None:
@@ -260,7 +251,7 @@ async def delete_sessions(
             )
     for session in doomed.values():
         # 交给被删会话、还没结清的工作交回「被删除」
-        settle_in(
+        await settle_in(
             s,
             messaging,
             session,

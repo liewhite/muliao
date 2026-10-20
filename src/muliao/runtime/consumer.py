@@ -22,17 +22,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.bus import LiveRuns
 from muliao.conventions import answer_text, is_stopped, unanswered_calls
 from muliao.db import Database
-from muliao.models import Mail, MailState, Message, Task
+from muliao.models import Mail, Message, Task
 from muliao.platform.messaging import Messaging
 from muliao.runtime.codec import load_messages
 from muliao.runtime.compaction import Compactor, Verdict
 from muliao.runtime.content import ContentBuilder
-from muliao.runtime.conversation import failure_of
 from muliao.runtime.finish import RunEnd, RunFinisher, load_session
-from muliao.runtime.halt import SessionHalt
+from muliao.runtime.halt import Halted, SessionHalt
 from muliao.runtime.history import load_context
 from muliao.runtime.holds import called_in
-from muliao.runtime.mailbox import RunPayload, discard_in, handed_to, queued_in
+from muliao.runtime.mailbox import RunPayload, queued_in
 from muliao.runtime.pending import (
     DEFERRED_TOOLS,
     Delegated,
@@ -45,8 +44,7 @@ from muliao.runtime.pending import (
 from muliao.runtime.questions import ASK_USER, questions_of, waiting_text
 from muliao.runtime.runner import AgentRuntime, ToolGroups
 from muliao.runtime.scope import Audience
-from muliao.runtime.session_events import Ending
-from muliao.runtime.settlement import settle_in, unsettled_in
+from muliao.runtime.settlement import settle_failure_in
 from muliao.runtime.steps import CompactionDue, RunState, Steps
 from muliao.runtime.stopping import StoppableRuns, Stopped
 from muliao.runtime.tasks import Commit, no_commit
@@ -241,16 +239,20 @@ class Consumer:
         """停止这个会话正在进行的运行；没有在运行的返回 False（调用方仍会停止会话，见 stop_session）。"""
         return await self._runs.stop(session_id)
 
-    async def stop_session(self, session_id: str) -> None:
-        """用户停止会话：停下正在进行的运行（它在 _stopped 里收尾），没有在运行时直接停止会话（runtime.halt）。"""
-        if not await self.stop(session_id):
-            await self._halt(session_id)
+    async def stop_session(self, session_id: str) -> Halted:
+        """用户停止会话：停下正在进行的运行（它在 _stopped 里收尾），没有在运行时直接停止会话（runtime.halt）。
+        会话已删除时返回 GONE。"""
+        if await self.stop(session_id):
+            return Halted.STOPPED
+        return await self._halt(session_id)
 
     async def _stopped(self, run_id: int, session_id: str) -> Commit:
         state = self._active.get(session_id)
         saved = 0 if state is None else await self._steps.save_stopped(state)
         log.info("run stopped by user", extra={"session_id": session_id, "run_id": run_id, "saved": saved})
-        await self._halt(session_id)
+        if await self._halt(session_id) == Halted.GONE:
+            # 正在运行的会话忙，不能被删除：走到这里是 bug
+            raise RuntimeError(f"session {session_id} was deleted while its run was being stopped")
         if state is None:
             # 停在这次运行读出状态之前：它什么都没做
             return no_commit
@@ -289,16 +291,5 @@ class RunHandler:
         退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：它们会唤醒新的运行。"""
         if task.session_id is None:
             raise RuntimeError(f"run {task.id} has no session")
-        stranded = [
-            m for m in await unsettled_in(s, task.session_id, [MailState.QUEUED]) if handed_to(m, task)
-        ]
         child, _agent = await load_session(s, task.session_id)
-        settle_in(
-            s,
-            self._messaging,
-            child,
-            [*await unsettled_in(s, task.session_id, [MailState.CONSUMED]), *stranded],
-            Ending.FAILED,
-            failure_of(task),
-        )
-        await discard_in(s, task.session_id, stranded)
+        await settle_failure_in(s, self._messaging, child, task)

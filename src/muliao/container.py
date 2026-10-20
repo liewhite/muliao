@@ -42,7 +42,7 @@ from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler, ReflectionScheduler
 from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroups
 from muliao.runtime.sessions import SessionService
-from muliao.runtime.settlement import handle_post_event
+from muliao.runtime.settlement import handle_post_event, reconcile_failures_in
 from muliao.runtime.steps import Steps
 from muliao.runtime.tasks import TaskQueue
 from muliao.runtime.tools.agents import agents_toolset
@@ -387,7 +387,7 @@ def build_container(
         worker=worker,
         messaging=messaging,
         threads=threads,
-        mail=MailReconciler(db, queue),
+        mail=MailReconciler(db, queue, lambda s: reconcile_failures_in(s, messaging)),
         jobs=jobs,
         delegations=delegations,
         work=WorkWatcher([jobs, delegations], settings.runtime.job_check_seconds),

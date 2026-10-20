@@ -331,7 +331,8 @@ class JobRunner:
         async with self._db.transaction() as s:
             job = await s.get(Job, job_id)
             if job is None:
-                # 有后台任务在跑的会话不能删除（conversation.delete_sessions）
+                # 任务行在会话删除时随外键级联删除（会话不忙才能删，但停止之后占用已清掉、监督者可能还在写结局）；
+                # 第 2 阶段去掉跨领域外键、任务行保留终态后这里不再可能
                 raise RuntimeError(f"job {job_id} vanished while it was running")
             if job.status != JobStatus.RUNNING:
                 # 结局只记一次：监督者在写完之前一直登记着，对账与关停不会抢先记

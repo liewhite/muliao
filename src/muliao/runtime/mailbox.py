@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -223,9 +223,17 @@ async def has_queued_from(s: AsyncSession, session_id: str, source: str) -> bool
 class MailReconciler:
     """定期对账：有信件在排队、却没有被及时唤醒的会话（投递时的事务失败、进程重启），按同一条规则补上。"""
 
-    def __init__(self, db: Database, queue: TaskQueue, interval_seconds: float = _RECONCILE_SECONDS):
+    def __init__(
+        self,
+        db: Database,
+        queue: TaskQueue,
+        settle_failures: Callable[[AsyncSession], Awaitable[list[str]]],
+        interval_seconds: float = _RECONCILE_SECONDS,
+    ):
         self._db = db
         self._queue = queue
+        # 最终失败的运行没能结清的委派（settlement.reconcile_failures_in），同一个对账节奏补做
+        self._settle_failures = settle_failures
         self._interval = interval_seconds
 
     async def reconcile(self) -> int:
@@ -242,6 +250,11 @@ class MailReconciler:
         if woken:
             # 正常路径也会走到这里（最终失败的运行期间到达的信件），所以是 info；补了什么仍然可查
             log.info("reconcile woke consumers for queued mail", extra={"session_ids": woken})
+        async with self._db.transaction() as s:
+            settled = await self._settle_failures(s)
+        if settled:
+            # 只有收尾钩子失败时才会走到这里
+            log.warning("reconcile settled delegations of failed runs", extra={"session_ids": settled})
         return len(woken)
 
     async def run_forever(self) -> None:
