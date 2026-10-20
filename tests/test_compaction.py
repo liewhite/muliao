@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from muliao.models import Compaction, Message, Origin, Task, TaskKind, TaskStatus
 from muliao.runtime.compaction import COMPACTION_INSTRUCTIONS, CompactionScheduler, select_turns
-from muliao.runtime.tasks import turn_lane
+from muliao.runtime.tasks import session_lane
 from tests.scripted import scripted
 from tests.test_flow import drain, last_user_prompt, reply, start
 
@@ -31,7 +31,7 @@ async def _enqueue_compaction(container, session) -> None:
         container.queue.enqueue(
             s,
             kind=TaskKind.COMPACTION,
-            lane=turn_lane(session.id),
+            lane=session_lane(session.id),
             agent_id=session.agent_id,
             session_id=session.id,
             payload={},
@@ -126,12 +126,12 @@ async def test_scheduler_enqueues_above_threshold_once_per_session(container, ma
     scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
 
     async with container.db.transaction() as s:
-        await scheduler.after_turn(s, session, "m", _response(1000))
-        await scheduler.after_turn(s, session, "m", _response(1001))
+        await scheduler.after_run(s, session, "m", _response(1000))
+        await scheduler.after_run(s, session, "m", _response(1001))
     async with container.db.transaction() as s:
-        await scheduler.after_turn(s, session, "m", _response(5000))  # 已有待执行的压缩，不重复
+        await scheduler.after_run(s, session, "m", _response(5000))  # 已有待执行的压缩，不重复
 
-    assert [t.lane for t in await _compaction_tasks(container)] == [turn_lane(session.id)]
+    assert [t.lane for t in await _compaction_tasks(container)] == [session_lane(session.id)]
 
 
 async def test_zero_usage_warns_instead_of_silently_never_compacting(container, make_agent, caplog):
@@ -140,7 +140,7 @@ async def test_zero_usage_warns_instead_of_silently_never_compacting(container, 
     scheduler = CompactionScheduler(container.queue, threshold_tokens=1000)
 
     async with container.db.transaction() as s:
-        await scheduler.after_turn(s, session, "m", _response(0))
+        await scheduler.after_run(s, session, "m", _response(0))
 
     assert "no input token usage" in caplog.text
     assert await _compaction_tasks(container) == []

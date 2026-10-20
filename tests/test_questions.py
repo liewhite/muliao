@@ -75,7 +75,7 @@ async def test_turn_stops_on_questions_and_answers_come_back_as_the_tool_result(
 
     # 一轮在提问处结束：模型只被请求了一次，turn 完成，用户收到通知
     assert asker.requests == 1
-    turns = await tasks_of(container, TaskKind.TURN)
+    turns = await tasks_of(container, TaskKind.RUN)
     assert [t.status for t in turns] == [TaskStatus.DONE]
     [note] = (await client.get("/api/notifications")).json()
     assert "看哪个周期？" in note["body"] and note["session_id"] == session_id
@@ -181,7 +181,7 @@ async def test_a_failed_answer_holds_the_questions_until_it_is_retried(client, c
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
     await drain(container)
-    failed = (await tasks_of(container, TaskKind.TURN))[-1]
+    failed = (await tasks_of(container, TaskKind.RUN))[-1]
     assert failed.status == TaskStatus.FAILED
 
     # 失败的回答还占着这次提问：不显示表单，不能再答，只能重试
@@ -227,7 +227,7 @@ async def test_rejected_question_arguments_do_not_leave_a_pending_question(
     )
     assert resp.status_code == 202
     await drain(container)
-    assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == [TaskStatus.DONE, TaskStatus.DONE]
+    assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.DONE, TaskStatus.DONE]
 
 
 async def test_ask_user_is_offered_only_when_the_user_reads_the_answer(container, make_agent, models):
@@ -272,7 +272,7 @@ async def test_a_later_run_finishes_a_failed_answer_and_retrying_it_does_nothing
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
     await drain(container)
-    failed = (await tasks_of(container, TaskKind.TURN))[-1]
+    failed = (await tasks_of(container, TaskKind.RUN))[-1]
     assert failed.status == TaskStatus.FAILED
 
     models.models["asker"] = original
@@ -285,7 +285,7 @@ async def test_a_later_run_finishes_a_failed_answer_and_retrying_it_does_nothing
     before = await container.sessions.history(session_id)
     assert (await client.post(f"/api/tasks/{failed.id}/retry")).status_code == 200
     await drain(container)
-    retried = next(t for t in await tasks_of(container, TaskKind.TURN) if t.id == failed.id)
+    retried = next(t for t in await tasks_of(container, TaskKind.RUN) if t.id == failed.id)
     assert retried.status == TaskStatus.DONE
     assert await container.sessions.history(session_id) == before
     assert len((await client.get("/api/notifications")).json()) == 3
@@ -425,7 +425,7 @@ async def test_a_question_asked_alongside_another_tool_is_answered_as_its_result
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
     await drain(container)
 
-    assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == [TaskStatus.DONE, TaskStatus.DONE]
+    assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.DONE, TaskStatus.DONE]
     # 发给模型时 pydantic-ai 把相邻的两条请求合成一条：别的工具的结果与提问的结果在一起
     assert [name for name, _ in results] == ["memory_append", "ask_user"]
     assert json.loads(results[1][1])["answered"] is True

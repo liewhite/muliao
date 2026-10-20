@@ -1,11 +1,10 @@
 """初始结构
 
-首次部署之前，所有表结构变化都直接改这一个版本（重新 autogenerate），不积累迁移历史；
-首次部署之后，每次结构变化新增一个迁移。
+不保留迁移历史：表结构变化时重新生成这一个版本，数据库重建（见 docs/architecture.md「数据库迁移」）。
 
-Revision ID: 4a351a020890
+Revision ID: 7dacfa5e05e6
+Create Date: 2026-10-20 15:53:14.659311
 Revises:
-Create Date: 2026-10-19 19:52:08.718460
 """
 
 from collections.abc import Sequence
@@ -13,7 +12,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "4a351a020890"
+revision: str = "7dacfa5e05e6"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -35,6 +34,16 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name"),
+    )
+    op.create_table(
+        "files",
+        sa.Column("id", sa.String(length=36), nullable=False),
+        sa.Column("sha256", sa.String(length=64), nullable=False),
+        sa.Column("name", sa.String(length=255), nullable=False),
+        sa.Column("media_type", sa.String(length=255), nullable=False),
+        sa.Column("size", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
         "push_subscriptions",
@@ -123,6 +132,9 @@ def upgrade() -> None:
         sa.Column("enabled", sa.Boolean(), nullable=False),
         sa.Column("last_fired_at", sa.DateTime(), nullable=True),
         sa.Column("last_session_id", sa.String(length=36), nullable=True),
+        sa.Column("precheck", sa.JSON(), nullable=True),
+        sa.Column("last_checked_at", sa.DateTime(), nullable=True),
+        sa.Column("precheck_output", sa.Text(), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
@@ -144,6 +156,30 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f("ix_compactions_session_id"), ["session_id"], unique=False)
 
     op.create_table(
+        "jobs",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("session_id", sa.String(length=36), nullable=False),
+        sa.Column("agent_id", sa.String(length=32), nullable=False),
+        sa.Column("command", sa.Text(), nullable=False),
+        sa.Column("secrets", sa.JSON(), nullable=False),
+        sa.Column("status", sa.String(length=16), nullable=False),
+        sa.Column("exit_code", sa.Integer(), nullable=True),
+        sa.Column("log_path", sa.String(length=255), nullable=False),
+        sa.Column("pid", sa.Integer(), nullable=True),
+        sa.Column("awaited", sa.Boolean(), nullable=False),
+        sa.Column("started_at", sa.DateTime(), nullable=False),
+        sa.Column("finished_at", sa.DateTime(), nullable=True),
+        sa.ForeignKeyConstraint(["agent_id"], ["agents.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("jobs", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_jobs_agent_id"), ["agent_id"], unique=False)
+        batch_op.create_index(batch_op.f("ix_jobs_session_id"), ["session_id"], unique=False)
+        batch_op.create_index(batch_op.f("ix_jobs_status"), ["status"], unique=False)
+
+    op.create_table(
         "messages",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("session_id", sa.String(length=36), nullable=False),
@@ -156,6 +192,22 @@ def upgrade() -> None:
     )
     with op.batch_alter_table("messages", schema=None) as batch_op:
         batch_op.create_index(batch_op.f("ix_messages_session_id"), ["session_id"], unique=False)
+
+    op.create_table(
+        "notifications",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("title", sa.Text(), nullable=False),
+        sa.Column("body", sa.Text(), nullable=False),
+        sa.Column("session_id", sa.String(length=36), nullable=True),
+        sa.Column("unread", sa.Boolean(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("notifications", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_notifications_session_id"), ["session_id"], unique=False)
+        batch_op.create_index(batch_op.f("ix_notifications_unread"), ["unread"], unique=False)
 
     op.create_table(
         "tasks",
@@ -182,21 +234,62 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f("ix_tasks_session_id"), ["session_id"], unique=False)
         batch_op.create_index("ix_tasks_status_lane", ["status", "lane"], unique=False)
 
+    op.create_table(
+        "mail",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("session_id", sa.String(length=36), nullable=False),
+        sa.Column("kind", sa.String(length=16), nullable=False),
+        sa.Column("source", sa.String(length=100), nullable=True),
+        sa.Column("content", sa.Text(), nullable=False),
+        sa.Column("attachments", sa.JSON(), nullable=False),
+        sa.Column("answers", sa.JSON(), nullable=False),
+        sa.Column("awaited", sa.Boolean(), nullable=False),
+        sa.Column("report_to", sa.JSON(none_as_null=True), nullable=True),
+        sa.Column("state", sa.String(length=16), nullable=False),
+        sa.Column("consumed_by", sa.Integer(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(["consumed_by"], ["tasks.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("mail", schema=None) as batch_op:
+        batch_op.create_index(
+            "ix_mail_queued", ["session_id"], unique=False, sqlite_where=sa.text("state = 'queued'")
+        )
+        batch_op.create_index(batch_op.f("ix_mail_session_id"), ["session_id"], unique=False)
+
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
+    with op.batch_alter_table("mail", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_mail_session_id"))
+        batch_op.drop_index("ix_mail_queued", sqlite_where=sa.text("state = 'queued'"))
+
+    op.drop_table("mail")
     with op.batch_alter_table("tasks", schema=None) as batch_op:
         batch_op.drop_index("ix_tasks_status_lane")
         batch_op.drop_index(batch_op.f("ix_tasks_session_id"))
         batch_op.drop_index(batch_op.f("ix_tasks_agent_id"))
 
     op.drop_table("tasks")
+    with op.batch_alter_table("notifications", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_notifications_unread"))
+        batch_op.drop_index(batch_op.f("ix_notifications_session_id"))
+
+    op.drop_table("notifications")
     with op.batch_alter_table("messages", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_messages_session_id"))
 
     op.drop_table("messages")
+    with op.batch_alter_table("jobs", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_jobs_status"))
+        batch_op.drop_index(batch_op.f("ix_jobs_session_id"))
+        batch_op.drop_index(batch_op.f("ix_jobs_agent_id"))
+
+    op.drop_table("jobs")
     with op.batch_alter_table("compactions", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_compactions_session_id"))
 
@@ -220,5 +313,6 @@ def downgrade() -> None:
 
     op.drop_table("reflections")
     op.drop_table("push_subscriptions")
+    op.drop_table("files")
     op.drop_table("agents")
     # ### end Alembic commands ###

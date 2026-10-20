@@ -31,7 +31,7 @@ from muliao.delivery.base import Notifier
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.models import Agent, Notification, Origin, Session, Trigger
 from muliao.runtime.conversation import Inbound, NewSession, receive
-from muliao.runtime.tasks import Clock, TaskQueue, turn_lane
+from muliao.runtime.tasks import Clock, TaskQueue, session_lane
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 
 log = logging.getLogger(__name__)
@@ -238,7 +238,7 @@ class TriggerService:
     async def busy_in(self, s: AsyncSession, trigger: Trigger) -> bool:
         """上一次触发的会话是否还有未完成的运行（定时触发据此避免重叠）。"""
         return trigger.last_session_id is not None and await self._queue.lane_busy(
-            s, turn_lane(trigger.last_session_id)
+            s, session_lane(trigger.last_session_id)
         )
 
     async def _deliver_in(

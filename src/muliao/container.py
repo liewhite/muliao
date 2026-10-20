@@ -335,7 +335,7 @@ def build_container(
         db, runtime, tool_groups, queue, notifier, compaction, files, live, bus, jobs.stop_session
     )
     handlers: dict[TaskKind, TaskHandler] = {
-        TaskKind.TURN: RunHandler(consumer, queue),
+        TaskKind.RUN: RunHandler(consumer, queue),
         TaskKind.COMPACTION: CompactionHandler(
             db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),

@@ -14,7 +14,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.conventions import STOPPED_TOOL_RESULT, TURN_STOPPED
+from muliao.conventions import RUN_STOPPED, STOPPED_TOOL_RESULT
 from muliao.models import MailKind, MailState, TaskKind, TaskStatus
 from muliao.runtime.mailbox import post_in
 from tests.conftest import login
@@ -82,7 +82,7 @@ async def test_stopping_keeps_what_already_happened_and_marks_the_turn_stopped(
     assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code == 202
     await worker
 
-    turns = await tasks_of(container, TaskKind.TURN)
+    turns = await tasks_of(container, TaskKind.RUN)
     assert [t.status for t in turns] == [TaskStatus.DONE]
     # 信箱清空：事件记为被丢弃，不唤醒新的运行；界面上显示为被丢弃
     assert [(m.content, m.state) for m in await mail_of(container)][-1] == ("done", MailState.DISCARDED)
@@ -149,7 +149,7 @@ async def test_shutdown_is_not_a_stop_the_turn_is_left_for_recovery(client, cont
     await asyncio.gather(worker, return_exceptions=True)
 
     # 关停不是停止：已经保存的步骤留着，不标「已停止」，下次启动由队列恢复、从上一步续跑
-    assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == [TaskStatus.RUNNING]
+    assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.RUNNING]
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
     items = [(i["type"], i["tool_call_id"]) for i in detail["items"]]
     assert ("tool_result", "fast") in items and "stopped" not in [kind for kind, _ in items]
@@ -287,7 +287,7 @@ async def test_stopping_during_a_pending_retry_stops_the_retry(container, make_a
 
     session_id, calls = await _failed_after_saving_a_request(container, make_agent, models)
     # 如同在退避里等重试：排着、还没到时间
-    [run] = await tasks_of(container, TaskKind.TURN)
+    [run] = await tasks_of(container, TaskKind.RUN)
     async with container.db.transaction() as s:
         task = await s.get(Task, run.id)
         task.status, task.not_before = TaskStatus.PENDING, container.queue.now() + timedelta(hours=1)
@@ -295,9 +295,9 @@ async def test_stopping_during_a_pending_retry_stops_the_retry(container, make_a
     await container.consumer.stop_session(session_id)
     await drain(container)
 
-    assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == [TaskStatus.DONE]
+    assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.DONE]
     history = await container.sessions.history(session_id)
-    assert history[-1].metadata == {TURN_STOPPED: True}
+    assert history[-1].metadata == {RUN_STOPPED: True}
     # 之后的消息不会把停下的请求再发一遍
     from tests.test_flow import reply
 
@@ -335,7 +335,7 @@ async def test_stopping_a_resumed_run_before_its_first_step_closes_the_history(
     assert len(calls) == 1
     history = await container.sessions.history(session_id)
     assert [type(m).__name__ for m in history] == ["ModelRequest"]
-    assert history[-1].metadata == {TURN_STOPPED: True}
+    assert history[-1].metadata == {RUN_STOPPED: True}
     assert [m.state for m in await mail_of(container)][-1] == MailState.DISCARDED
 
 
@@ -368,5 +368,5 @@ async def test_stopping_a_run_before_it_reads_its_state_still_stops_the_session(
     await worker
 
     assert called == []
-    assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == [TaskStatus.DONE]
+    assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.DONE]
     assert [m.state for m in await mail_of(container)] == [MailState.DISCARDED]

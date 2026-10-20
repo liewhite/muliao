@@ -7,11 +7,11 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 |---|---|---|---|
 | `TOOL_ATTACHMENTS`：工具挂给用户的文件 | ToolReturnPart.metadata | share_file、run_temp_agent、ask_agent（runtime.answers） | 会话条目、实时事件、转交给调用方 |
 | `TOOL_THREADS`：工具开出或续写的子会话 | ToolReturnPart.metadata | delegate_task、ask_agent | 会话条目、实时事件 |
-| `TURN_STOPPED`：运行被用户停止 | 停止时最后保存的那条消息的 metadata | runtime.consumer | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
+| `RUN_STOPPED`：运行被用户停止 | 停止时最后保存的那条消息的 metadata | runtime.consumer | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
 | `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | runtime.consumer | 模型（之后的运行） |
 | `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | runtime.consumer | 模型、会话条目 |
 | 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart | — | unanswered_calls：挂起的提问、压缩切点、停止时补结果 |
-| `TURN_EVENTS`：这一步交给模型的事件信件 | 事件各占用户消息内容的一段（format_event），metadata 记下是第几段 | runtime.consumer | 模型、会话条目 |
+| `RUN_EVENTS`：这一步交给模型的事件信件 | 事件各占用户消息内容的一段（format_event），metadata 记下是第几段 | runtime.consumer | 模型、会话条目 |
 
 metadata 的键都带 `muliao_` 前缀：metadata 是 pydantic-ai 开放给所有工具（含 MCP 包装）的字段，通用的键名可能撞上形状
 不同的数据。
@@ -34,14 +34,14 @@ from pydantic_ai.messages import (
 from muliao.files import FileMeta, parse_file_url
 
 # 用户停止的一轮：它保存下来的最后一条消息的 metadata 带这个标记，展示为「已停止」
-TURN_STOPPED = "muliao_stopped"
+RUN_STOPPED = "muliao_stopped"
 # 停止时还没出结果的工具调用的结果：工具的副作用可能已经发生，告诉模型它没有完成
 STOPPED_TOOL_RESULT = "Stopped by the user before this tool call finished; it may have partly run."
 
 
 # 交给模型的事件信件（runtime.mailbox）：每条事件是用户消息内容里独立的一段，格式见 format_event；
-# 那条 ModelRequest 的 metadata[TURN_EVENTS] 是这些段在内容里的下标
-TURN_EVENTS = "muliao_events"
+# 那条 ModelRequest 的 metadata[RUN_EVENTS] 是这些段在内容里的下标
+RUN_EVENTS = "muliao_events"
 _EVENT = re.compile(r'\A<event source="(?P<source>[^"]*)">\n(?P<content>.*)\n</event>\Z', re.DOTALL)
 
 
@@ -59,8 +59,8 @@ def parse_event(text: str) -> tuple[str, str]:
 
 
 def event_indices(message: ModelMessage) -> list[int]:
-    """这条消息里哪些内容段是会话事件（TURN_EVENTS）；没有事件为空。"""
-    return list((message.metadata or {}).get(TURN_EVENTS, []))
+    """这条消息里哪些内容段是会话事件（RUN_EVENTS）；没有事件为空。"""
+    return list((message.metadata or {}).get(RUN_EVENTS, []))
 
 
 class Attachment(TypedDict):

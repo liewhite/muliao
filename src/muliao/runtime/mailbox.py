@@ -24,7 +24,7 @@ from muliao.db import Database
 from muliao.errors import Conflict, NotFound
 from muliao.models import Mail, MailKind, MailState, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.questions import pending_in_session
-from muliao.runtime.tasks import TaskQueue, turn_lane
+from muliao.runtime.tasks import TaskQueue, session_lane
 
 log = logging.getLogger(__name__)
 
@@ -96,8 +96,8 @@ async def wake_in(
     queued = await queued_in(s, session.id)
     if not queued:
         return None
-    lane = turn_lane(session.id)
-    runs = select(Task).where(Task.lane == lane, Task.kind == TaskKind.TURN)
+    lane = session_lane(session.id)
+    runs = select(Task).where(Task.lane == lane, Task.kind == TaskKind.RUN)
     busy = runs.where(Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
     if finished is not None:
         busy = busy.where(Task.id != finished)
@@ -112,7 +112,7 @@ async def wake_in(
         # 停在提问上：等回答或新消息（跳过），事件到时一起交给模型
         return None
     run = queue.enqueue(
-        s, kind=TaskKind.TURN, lane=lane, agent_id=session.agent_id, session_id=session.id, payload={}
+        s, kind=TaskKind.RUN, lane=lane, agent_id=session.agent_id, session_id=session.id, payload={}
     )
     log.info("consumer woken", extra={"session_id": session.id, "queued": len(queued)})
     return run
@@ -142,7 +142,7 @@ async def latest_run(s: AsyncSession, session_id: str) -> Task | None:
     """会话最近一次运行。"""
     return await s.scalar(
         select(Task)
-        .where(Task.lane == turn_lane(session_id), Task.kind == TaskKind.TURN)
+        .where(Task.lane == session_lane(session_id), Task.kind == TaskKind.RUN)
         .order_by(Task.id.desc())
         .limit(1)
     )

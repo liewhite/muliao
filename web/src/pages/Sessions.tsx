@@ -43,7 +43,7 @@ export default function Sessions() {
     [filter, agent],
   )
   useServerEvents((e) => {
-    if (e.type === 'reconnected' || (e.type === 'task' && e.kind === 'turn')) void sessions.reload()
+    if (e.type === 'reconnected' || (e.type === 'task' && e.kind === 'run')) void sessions.reload()
   })
 
   return (

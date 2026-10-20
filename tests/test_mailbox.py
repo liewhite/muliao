@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
-from muliao.conventions import TURN_EVENTS, format_event
+from muliao.conventions import RUN_EVENTS, format_event
 from muliao.models import Mail, MailKind, MailState, Origin, TaskKind, TaskStatus
 from muliao.runtime.mailbox import post_in, queued_in
 from muliao.transcript import to_items, to_text
@@ -115,7 +115,7 @@ async def test_mail_arriving_during_a_run_reaches_the_model_between_tool_calls(c
     assert [r.tool_call_id for r in returns] == ["m1"]
     assert [p.content for p in prompts] == [[event("job 7 finished: exit 0", "job:7")]]
     # 同一次运行处理完，没有为它另开一次
-    assert len([t for t in await tasks_of(container, TaskKind.TURN) if t.session_id == session.id]) == 1
+    assert len([t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == session.id]) == 1
     [_, mail] = await mail_of(container)
     assert mail.state == MailState.CONSUMED
     history = await container.sessions.history(session.id)
@@ -141,7 +141,7 @@ async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_t
     models.models["flaky"] = scripted(fn)
     session = await start(container, agent.id, "remember", origin=Origin.TRIGGER)
     await drain(container)
-    [failed] = await tasks_of(container, TaskKind.TURN)
+    [failed] = await tasks_of(container, TaskKind.RUN)
     assert failed.status == TaskStatus.FAILED
 
     await container.queue.retry(failed.id)
@@ -173,7 +173,7 @@ async def test_events_wait_for_an_answer_and_ride_along_with_it(client, containe
     # 等用户回答时事件留在信箱里，不开新的一次运行（否则会把提问记成没回答）
     await post(container, session_id, "check: still running")
     await drain(container)
-    assert len(await tasks_of(container, TaskKind.TURN)) == 1
+    assert len(await tasks_of(container, TaskKind.RUN)) == 1
     assert await queued(container, session_id) == ["check: still running"]
 
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
@@ -197,7 +197,7 @@ async def test_a_failed_run_is_not_redispatched_forever(container, make_agent, m
     models.models["rec"] = scripted(broken)
     await post(container, session.id, "first")
     await drain(container)
-    assert (await tasks_of(container, TaskKind.TURN))[-1].status == TaskStatus.FAILED
+    assert (await tasks_of(container, TaskKind.RUN))[-1].status == TaskStatus.FAILED
 
     # 信件随那次请求保存、已经交给过模型：对账不重复投递
     assert await container.mail.reconcile() == 0
@@ -276,7 +276,7 @@ async def test_a_user_message_that_looks_like_an_event_is_still_a_user_message(c
 
 def test_events_read_as_events_in_transcripts_for_reflection_and_compaction():
     request = ModelRequest(
-        parts=[UserPromptPart([format_event("job:7", "exit 0"), "thanks"])], metadata={TURN_EVENTS: [0]}
+        parts=[UserPromptPart([format_event("job:7", "exit 0"), "thanks"])], metadata={RUN_EVENTS: [0]}
     )
     text = to_text(to_items([request]), max_item_chars=1000)
     assert text.splitlines() == ["[EVENT job:7] exit 0", "[USER] thanks"]

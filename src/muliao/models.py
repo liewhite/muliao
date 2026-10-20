@@ -30,7 +30,7 @@ class ReplyTo(StrEnum):
 
 
 class TaskKind(StrEnum):
-    TURN = "turn"
+    RUN = "run"
     REFLECTION = "reflection"
     DELIVER = "deliver"
     COMPACTION = "compaction"

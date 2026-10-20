@@ -205,7 +205,7 @@ async def test_transient_model_error_is_retried_and_converges(container, make_ag
     session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
 
-    turn = (await tasks_of(container, TaskKind.TURN))[0]
+    turn = (await tasks_of(container, TaskKind.RUN))[0]
     assert turn.status == TaskStatus.DONE and turn.attempts == 2
     assert len(await container.sessions.history(session.id)) == 2
 
@@ -220,7 +220,7 @@ async def test_contract_violation_error_fails_without_retry(container, make_agen
     await start(container, alpha, "hi")
     await drain(container)
 
-    turn = (await tasks_of(container, TaskKind.TURN))[0]
+    turn = (await tasks_of(container, TaskKind.RUN))[0]
     assert turn.status == TaskStatus.FAILED and turn.attempts == 1
     assert "400" in turn.error
 
@@ -269,7 +269,7 @@ async def test_domain_error_in_tool_is_returned_to_model_for_correction(containe
     await drain(container)
 
     assert "not found" in retry_texts[0]
-    assert (await tasks_of(container, TaskKind.TURN))[0].status == TaskStatus.DONE
+    assert (await tasks_of(container, TaskKind.RUN))[0].status == TaskStatus.DONE
 
 
 async def test_run_events_are_published_to_bus(container, make_agent, models):

@@ -21,7 +21,7 @@ from pydantic_ai.messages import (
 )
 
 from muliao.conventions import (
-    TURN_STOPPED,
+    RUN_STOPPED,
     Attachment,
     event_indices,
     parse_event,
@@ -69,7 +69,7 @@ def _item(
 
 
 def _prompt_items(content: str | Sequence[Any], events: Sequence[int]) -> list[Item]:
-    """一条用户消息展示成的条目：会话事件（TURN_EVENTS 标出的内容段）各自成条，其余连续的内容合成一条用户消息。"""
+    """一条用户消息展示成的条目：会话事件（RUN_EVENTS 标出的内容段）各自成条，其余连续的内容合成一条用户消息。"""
     if not events:
         return [_user_item(content)]
     if isinstance(content, str):
@@ -144,7 +144,7 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
                     items.append(
                         _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id)
                     )
-        if msg.metadata is not None and msg.metadata.get(TURN_STOPPED):
+        if msg.metadata is not None and msg.metadata.get(RUN_STOPPED):
             items.append(_item("stopped", ""))
     return items
 

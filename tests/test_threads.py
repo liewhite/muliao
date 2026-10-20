@@ -56,7 +56,7 @@ async def last_answer(container, session_id: str) -> str:
 
 
 async def turns_in(container, session_id: str):
-    return [t for t in await tasks_of(container, TaskKind.TURN) if t.session_id == session_id]
+    return [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == session_id]
 
 
 async def test_ask_agent_returns_answer_and_follow_up_keeps_thread_context(container, make_agent, models):
@@ -389,7 +389,7 @@ async def test_inline_turns_announce_their_end_like_queued_turns(container, make
     [child] = await threads_of(container, parent.id)
     [child_turn] = await turns_in(container, child.id)
     ended = [e for e in events if e.get("type") == "task" and e["session_id"] == child.id]
-    assert [(e["task_id"], e["kind"], e["status"]) for e in ended] == [(child_turn.id, "turn", "done")]
+    assert [(e["task_id"], e["kind"], e["status"]) for e in ended] == [(child_turn.id, "run", "done")]
 
 
 async def test_a_question_after_a_failed_ask_gets_its_own_answer(container, make_agent, models):

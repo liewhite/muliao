@@ -1,7 +1,6 @@
 """对话里的文件：上传与下载的安全头、附件进入模型的形态、数据库里只存引用、agent 用 share_file 发出文件。"""
 
 import json
-import sqlite3
 
 from pydantic_ai.messages import (
     BinaryContent,
@@ -15,7 +14,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
-from muliao.db import migrate
 from muliao.models import Message
 from tests.conftest import login
 from tests.scripted import scripted
@@ -217,27 +215,6 @@ def test_unfinished_uploads_are_removed_on_recover(container):
     (tmp / "half").write_bytes(b"x")
     container.files.recover()
     assert list(tmp.iterdir()) == []
-
-
-def test_migrations_add_empty_attachments_and_answers_to_existing_turns(tmp_path):
-    path = tmp_path / "m.db"
-    migrate(path, "4a351a020890")
-    with sqlite3.connect(path) as conn:
-        conn.execute(
-            "INSERT INTO tasks (kind, lane, payload, status, attempts, not_before, created_at)"
-            " VALUES ('turn', 'l', '{\"prompt\": \"hi\", \"reply_to\": \"user\"}', 'failed', 1,"
-            " '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
-        )
-    migrate(path, "a3339b22b82a")
-    with sqlite3.connect(path) as conn:
-        payload = conn.execute("SELECT payload FROM tasks").fetchone()[0]
-    assert json.loads(payload) == {
-        "prompt": "hi",
-        "reply_to": "user",
-        "attachments": [],
-        "answers": {},
-        "report_to": None,
-    }
 
 
 async def test_image_from_an_earlier_turn_is_still_expanded_after_loading_history(

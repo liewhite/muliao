@@ -55,13 +55,13 @@ async def test_schedule_runs_the_agent_only_when_the_precheck_has_output(contain
     )
 
     await _tick(container, trigger.id)
-    assert await tasks_of(container, TaskKind.TURN) == []
+    assert await tasks_of(container, TaskKind.RUN) == []
     checked = await container.triggers.get_by_name("watch")
     assert checked.last_checked_at is not None and checked.last_session_id is None
 
     (workspace / "inbox.txt").write_text("alice: deploy is broken\n")
     await _tick(container, trigger.id)
-    turns = await tasks_of(container, TaskKind.TURN)
+    turns = await tasks_of(container, TaskKind.RUN)
     [prompt] = [m.content for m in await mail_of(container)]
     assert len(turns) == 1
     assert prompt.endswith("<event>\nalice: deploy is broken\n\n</event>")
@@ -76,11 +76,11 @@ async def test_changed_precheck_skips_the_baseline_and_unchanged_runs(container,
 
     await _tick(container, trigger.id)  # 基线
     await _tick(container, trigger.id)  # 没变
-    assert await tasks_of(container, TaskKind.TURN) == []
+    assert await tasks_of(container, TaskKind.RUN) == []
 
     (workspace / "price.txt").write_text("ETH 2600\n")
     await _tick(container, trigger.id)
-    turns = await tasks_of(container, TaskKind.TURN)
+    turns = await tasks_of(container, TaskKind.RUN)
     [prompt] = [m.content for m in await mail_of(container)]
     assert len(turns) == 1 and "-ETH 2400" in prompt and "+ETH 2600" in prompt
 
@@ -89,7 +89,7 @@ async def test_changed_precheck_skips_the_baseline_and_unchanged_runs(container,
         trigger.id, precheck=Precheck(command="cat price.txt; echo v2", fire_when="changed")
     )
     await _tick(container, trigger.id)
-    assert len(await tasks_of(container, TaskKind.TURN)) == 1
+    assert len(await tasks_of(container, TaskKind.RUN)) == 1
 
 
 async def test_failing_precheck_is_recorded_alerts_once_and_keeps_the_trigger_enabled(container, make_agent):
@@ -103,7 +103,7 @@ async def test_failing_precheck_is_recorded_alerts_once_and_keeps_the_trigger_en
 
     failed = await container.triggers.get_by_name("watch")
     assert failed.enabled and failed.last_error is not None and "exited with 3: no token" in failed.last_error
-    assert await tasks_of(container, TaskKind.TURN) == []
+    assert await tasks_of(container, TaskKind.RUN) == []
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
     # 告警留在通知页里：检查恢复、last_error 清除之后仍然看得到
     [alert] = await container.notifications.list(10)
@@ -144,7 +144,7 @@ async def test_webhook_precheck_filters_the_event_and_hides_failures_from_the_ca
     assert quiet.status_code == 202 and quiet.json()["session_id"] is None
     loud = await client.post("/api/hooks/github", content="ok\nURGENT: prod down\n", headers=_bearer(token))
     assert loud.json()["session_id"] is not None
-    turns = await tasks_of(container, TaskKind.TURN)
+    turns = await tasks_of(container, TaskKind.RUN)
     [prompt] = [m.content for m in await mail_of(container)]
     assert len(turns) == 1 and "URGENT: prod down" in prompt
     assert "routine" not in prompt and "ok\n" not in prompt
@@ -170,7 +170,7 @@ async def test_manual_run_goes_through_the_precheck(client, container, make_agen
     await login(client)
     resp = await client.post(f"/api/triggers/{trigger.id}/run")
     assert resp.status_code == 202 and resp.json()["session_id"] is None
-    assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == []
+    assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == []
 
 
 async def test_a_precheck_with_secrets_can_be_changed_and_unknown_secrets_are_refused(container, make_agent):
@@ -186,7 +186,7 @@ async def test_a_precheck_with_secrets_can_be_changed_and_unknown_secrets_are_re
         await container.triggers.update(trigger.id, precheck=Precheck(command="true", secrets=["MISSING"]))
 
     await _tick(container, trigger.id)
-    assert len(await tasks_of(container, TaskKind.TURN)) == 1
+    assert len(await tasks_of(container, TaskKind.RUN)) == 1
 
 
 async def test_a_change_too_large_to_hand_over_is_recorded_and_alerted(container, make_agent):
@@ -203,7 +203,7 @@ async def test_a_change_too_large_to_hand_over_is_recorded_and_alerted(container
     failed = await container.triggers.get_by_name("watch")
     assert failed.last_error is not None and "event limit" in failed.last_error
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
-    assert await tasks_of(container, TaskKind.TURN) == []
+    assert await tasks_of(container, TaskKind.RUN) == []
 
 
 async def test_a_failing_precheck_on_a_manual_run_is_a_502_with_the_reason(client, container, make_agent):

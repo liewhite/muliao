@@ -21,7 +21,7 @@ from muliao.db import Database
 from muliao.models import Agent, Compaction, Message, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.codec import load_messages
 from muliao.runtime.runner import AgentRuntime
-from muliao.runtime.tasks import Commit, TaskQueue, no_commit, turn_lane
+from muliao.runtime.tasks import Commit, TaskQueue, no_commit, session_lane
 from muliao.transcript import to_items, to_text
 
 log = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class CompactionScheduler:
         pending = await s.scalar(
             select(Task.id)
             .where(
-                Task.lane == turn_lane(session_id),
+                Task.lane == session_lane(session_id),
                 Task.kind == TaskKind.COMPACTION,
                 Task.status == TaskStatus.PENDING,
             )
@@ -98,14 +98,14 @@ class CompactionScheduler:
         self._queue.enqueue(
             s,
             kind=TaskKind.COMPACTION,
-            lane=turn_lane(session_id),
+            lane=session_lane(session_id),
             agent_id=agent_id,
             session_id=session_id,
             payload={},
         )
         return True
 
-    async def after_turn(
+    async def after_run(
         self, s: AsyncSession, session: Session, model: str, new_messages: list[ModelMessage]
     ) -> None:
         tokens = context_tokens(new_messages)

@@ -4,7 +4,7 @@ import type { LiveRun } from './events'
 
 export type Origin = 'user' | 'trigger' | 'delegation'
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed'
-export type TaskKind = 'turn' | 'reflection' | 'deliver' | 'compaction'
+export type TaskKind = 'run' | 'reflection' | 'deliver' | 'compaction'
 
 /** agent 的 id 与名称都是字符串；品牌类型让编译器拦住「把名称当 id 传」 */
 export type AgentId = string & { readonly __brand: 'AgentId' }

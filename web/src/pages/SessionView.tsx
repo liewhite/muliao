@@ -489,7 +489,7 @@ export default function SessionView() {
       if (e.type === 'run') setLive((prev) => [...prev, e])
       // 又保存了一步：重新拉取历史；新快照换成新的一段，合并时丢掉上一段的事件
       else if (e.type === 'saved') void detail.reload()
-      else if (e.kind === 'turn' || e.kind === 'compaction') {
+      else if (e.kind === 'run' || e.kind === 'compaction') {
         // 运行状态变化后以数据库为准重新拉取，清空临时流
         if (e.status !== 'running') setLive([])
         void detail.reload()

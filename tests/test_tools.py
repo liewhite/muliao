@@ -293,7 +293,7 @@ async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
     await run_tools(container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})])
 
     assert list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240
-    [turn] = await tasks_of(container, TaskKind.TURN)
+    [turn] = await tasks_of(container, TaskKind.RUN)
     assert turn.status == TaskStatus.FAILED and "400" in turn.error
 
 

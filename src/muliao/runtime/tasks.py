@@ -37,7 +37,7 @@ async def no_commit(_s: AsyncSession) -> None:
     """handler 没有需要与「标记 done」一起提交的结果时返回它。"""
 
 
-def turn_lane(session_id: str) -> str:
+def session_lane(session_id: str) -> str:
     return f"session:{session_id}"
 
 
@@ -130,7 +130,7 @@ class TaskQueue:
         结束时照常 complete 或 fail。它的 lane 不参与排队（inline_lane）。"""
         now = self._clock()
         task = Task(
-            kind=TaskKind.TURN,
+            kind=TaskKind.RUN,
             lane=inline_lane(session_id),
             agent_id=agent_id,
             session_id=session_id,

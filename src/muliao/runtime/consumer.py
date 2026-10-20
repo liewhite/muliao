@@ -37,9 +37,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.bus import EventBus, LiveRuns, task_event
 from muliao.conventions import (
+    RUN_EVENTS,
+    RUN_STOPPED,
     STOPPED_TOOL_RESULT,
-    TURN_EVENTS,
-    TURN_STOPPED,
     event_indices,
     format_event,
     unanswered_calls,
@@ -79,7 +79,7 @@ from muliao.runtime.redaction import redact_messages
 from muliao.runtime.reports import failed_text, finished_text, open_reports, settle_in
 from muliao.runtime.runner import AgentRuntime, StepHooks, ToolGroups
 from muliao.runtime.stopping import StoppableRuns, Stopped
-from muliao.runtime.tasks import Commit, TaskQueue, no_commit, reflection_lane, turn_lane
+from muliao.runtime.tasks import Commit, TaskQueue, no_commit, reflection_lane, session_lane
 
 log = logging.getLogger(__name__)
 
@@ -290,7 +290,7 @@ class Consumer:
             return False
         last = history[-1]
         if isinstance(last, ModelRequest):
-            return not (last.metadata or {}).get(TURN_STOPPED)
+            return not (last.metadata or {}).get(RUN_STOPPED)
         return any(c.tool_name != ASK_USER for c in unanswered_calls(history))
 
     async def _content(self, state: _Run, mail: Sequence[Mail]) -> _Content:
@@ -422,7 +422,7 @@ class Consumer:
             session, agent = await _load(s, session_id)
             await _close_history_in(s, session_id)
             dropped = [
-                t.id for t in await self._queue.finish_pending_in(s, turn_lane(session_id), TaskKind.TURN)
+                t.id for t in await self._queue.finish_pending_in(s, session_lane(session_id), TaskKind.RUN)
             ]
             unsettled = await s.scalars(
                 select(Mail).where(
@@ -471,7 +471,7 @@ class Consumer:
                     s, self._queue, mail, session, finished_text(session, agent, answer, stopped=stopped)
                 )
             if not stopped and state.messages:
-                await self._compaction.after_turn(s, session, agent.model, state.messages)
+                await self._compaction.after_run(s, session, agent.model, state.messages)
                 if any(m.awaited for m in handled) and not inline:
                     await self._notifier.enqueue_in(
                         s,
@@ -563,7 +563,7 @@ class Consumer:
         self._bus.publish(
             task_event(
                 task_id=run_id,
-                kind=TaskKind.TURN,
+                kind=TaskKind.RUN,
                 status=status,
                 session_id=session_id,
                 agent_id=None,
@@ -600,8 +600,8 @@ def _stopped_results(history: list[ModelMessage]) -> list[ModelMessage]:
 
 
 def _marked_stopped(message: ModelMessage) -> ModelMessage:
-    """标上「已停止」（TURN_STOPPED）：界面据此显示，续跑据此不重发这条请求。"""
-    return replace(message, metadata={**(message.metadata or {}), TURN_STOPPED: True})
+    """标上「已停止」（RUN_STOPPED）：界面据此显示，续跑据此不重发这条请求。"""
+    return replace(message, metadata={**(message.metadata or {}), RUN_STOPPED: True})
 
 
 async def _close_history_in(s: AsyncSession, session_id: str) -> None:
@@ -619,7 +619,7 @@ async def _close_history_in(s: AsyncSession, session_id: str) -> None:
     if (
         history
         and isinstance(history[-1], ModelRequest)
-        and not (history[-1].metadata or {}).get(TURN_STOPPED)
+        and not (history[-1].metadata or {}).get(RUN_STOPPED)
     ):
         row = await s.scalar(
             select(Message).where(Message.session_id == session_id).order_by(Message.id.desc()).limit(1)
@@ -643,10 +643,10 @@ def _append_content(request: ModelRequest, content: _Content) -> None:
 
 
 def _mark_events(request: ModelRequest, offset: int, events: list[int]) -> None:
-    """在请求上记下用户消息里哪些段是事件（TURN_EVENTS），界面把它们单独显示。"""
+    """在请求上记下用户消息里哪些段是事件（RUN_EVENTS），界面把它们单独显示。"""
     if events:
         marked = event_indices(request)
-        request.metadata = {**(request.metadata or {}), TURN_EVENTS: [*marked, *(offset + i for i in events)]}
+        request.metadata = {**(request.metadata or {}), RUN_EVENTS: [*marked, *(offset + i for i in events)]}
 
 
 async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:

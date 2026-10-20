@@ -70,7 +70,7 @@ async def test_a_thread_that_fails_for_good_reports_its_failure(container, make_
     await drain(container)
 
     [child] = await threads_of(container, parent.id)
-    child_turn = [t for t in await tasks_of(container, TaskKind.TURN) if t.session_id == child.id][-1]
+    child_turn = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == child.id][-1]
     assert child_turn.status == TaskStatus.FAILED
     reports = [c for p in recorder.prompts for c in p if f'source="thread:{child.id}"' in c]
     assert len(reports) == 1 and "failed" in reports[0] and "review" in reports[0]
@@ -180,7 +180,7 @@ async def test_a_failing_settle_hook_still_records_the_failure_instead_of_leavin
     session = await start(container, agent, "go")
     await drain(container)
 
-    [turn] = [t for t in await tasks_of(container, TaskKind.TURN) if t.session_id == session.id]
+    [turn] = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == session.id]
     assert turn.status == TaskStatus.FAILED and "bad request" in (turn.error or "")
 
 
@@ -192,8 +192,8 @@ def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running()
 
     child = Session(id="c", agent_id="a", title="t", thread="review")
     agent = Agent(id="a", name="reviewer")
-    queued = Task(id=1, kind=TaskKind.TURN, status=TaskStatus.PENDING, attempts=0)
-    retrying = Task(id=2, kind=TaskKind.TURN, status=TaskStatus.PENDING, attempts=2)
+    queued = Task(id=1, kind=TaskKind.RUN, status=TaskStatus.PENDING, attempts=0)
+    retrying = Task(id=2, kind=TaskKind.RUN, status=TaskStatus.PENDING, attempts=2)
     now = datetime.now(UTC)
     # 排队中的 thread 也能停：停止清空它的信箱，并交回「被停止」
     assert "stop_thread('review')" in _check_text(child, agent, queued, now)
@@ -218,11 +218,11 @@ async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_h
             """不会被调到。"""
 
     worker = Worker(
-        container.queue, {TaskKind.TURN: Handler()}, container.bus, concurrency=1, task_timeout_seconds=5
+        container.queue, {TaskKind.RUN: Handler()}, container.bus, concurrency=1, task_timeout_seconds=5
     )
     monkeypatch.setattr(container.queue, "fail", fake_fail)
 
-    await worker._record_failure(Task(id=1, kind=TaskKind.TURN), RuntimeError("boom"), {})  # noqa: SLF001
+    await worker._record_failure(Task(id=1, kind=TaskKind.RUN), RuntimeError("boom"), {})  # noqa: SLF001
     # 只尝试一次：没有因为记账失败就去掉钩子重来
     assert calls["n"] == 1
 
@@ -273,7 +273,7 @@ async def test_stopping_the_parent_stops_its_reported_threads_and_they_do_not_re
         await asyncio.gather(worker, return_exceptions=True)
 
     [child] = await threads_of(container, parent.id)
-    [child_run] = [t for t in await tasks_of(container, TaskKind.TURN) if t.session_id == child.id]
+    [child_run] = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == child.id]
     assert child_run.status == TaskStatus.DONE
     history = await container.sessions.history(child.id)
     assert history[-1].metadata and history[-1].metadata.get("muliao_stopped")

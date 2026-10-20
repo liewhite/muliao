@@ -391,7 +391,7 @@ class Threads:
         """thread 的状态：看最近一次运行；完成时给出会话最近的回答。"""
         turn = await s.scalar(
             select(Task)
-            .where(Task.session_id == child.id, Task.kind == TaskKind.TURN)
+            .where(Task.session_id == child.id, Task.kind == TaskKind.RUN)
             .order_by(Task.id.desc())
             .limit(1)
         )
