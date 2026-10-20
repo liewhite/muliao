@@ -11,7 +11,7 @@ import openai
 from google.genai import errors as google_errors
 from google.genai import types as google_types
 from pydantic_ai.models import Model
-from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.providers import Provider
@@ -35,6 +35,19 @@ OFFICIAL_BASE_URLS: dict[ProviderType, str] = {
     "openai-responses": "https://api.openai.com/v1",
     "google": "https://generativelanguage.googleapis.com/",
 }
+
+
+# Anthropic 的 prompt caching（https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching）：
+# 在每次请求都原样重发的前缀上放缓存断点——指令（instructions，含公共 prompt、记忆、skill 目录）、工具定义，
+# 以及消息末尾（让已经发过的历史在下一次请求里命中缓存）。三个断点，不超过 Anthropic 一次请求最多 4 个的上限
+# （超出的断点 pydantic_ai.models.anthropic._limit_cache_points 会按从旧到新剔除，我们不依赖它）。
+# 用 anthropic_cache_messages 而不是服务端自动放断点的 anthropic_cache：type = "anthropic" 也用于 Anthropic
+# 兼容的网关，它们不一定支持顶层的自动缓存参数，而逐块的 cache_control 是协议本身的一部分。
+ANTHROPIC_CACHE_SETTINGS = AnthropicModelSettings(
+    anthropic_cache_instructions=True,
+    anthropic_cache_tool_definitions=True,
+    anthropic_cache_messages=True,
+)
 
 
 def _build_provider(cfg: ProviderConfig) -> Provider:  # type: ignore[type-arg]
@@ -130,7 +143,11 @@ class ModelRegistry:
         provider = self._provider(name, cfg)
         match cfg.type:
             case "anthropic":
-                return AnthropicModel(model_name, provider=provider)
+                return AnthropicModel(
+                    model_name,
+                    provider=provider,
+                    settings=ANTHROPIC_CACHE_SETTINGS if cfg.prompt_cache else None,
+                )
             case "openai":
                 return OpenAIChatModel(model_name, provider=provider)
             case "openai-responses":

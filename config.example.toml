@@ -46,6 +46,9 @@ default_model = "claude:claude-sonnet-5-5"
 [llm.providers.claude]
 type = "anthropic"
 api_key = ""
+# 可选，默认 true，只对 type = "anthropic" 有效（填在别的 type 上会启动失败）：开启 Anthropic 的 prompt
+# caching，在指令、工具定义与消息末尾放缓存断点，长上下文的重复前缀按缓存价计费。关掉就不发送任何缓存设置
+# prompt_cache = true
 
 # [llm.providers.openai]
 # type = "openai"

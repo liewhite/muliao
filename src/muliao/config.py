@@ -65,6 +65,15 @@ class ProviderConfig(_Section):
     # 为空时显式使用该类型的官方地址（llm.OFFICIAL_BASE_URLS），不会回退到 SDK 的环境变量；
     # OpenAI 兼容服务（DeepSeek、OpenRouter、vLLM…）填其地址
     base_url: str | None = None
+    # 只对 type = "anthropic" 有意义：是否在请求里放 prompt caching 的缓存断点（llm.ANTHROPIC_CACHE_SETTINGS）。
+    # 其他协议下填它多半是误解（它不会生效），所以显式填写即报错，而不是静默忽略
+    prompt_cache: bool = True
+
+    @model_validator(mode="after")
+    def _prompt_cache_only_for_anthropic(self) -> "ProviderConfig":
+        if self.type != "anthropic" and "prompt_cache" in self.model_fields_set:
+            raise ValueError(f'prompt_cache only applies to type = "anthropic", not {self.type!r}')
+        return self
 
 
 class LlmConfig(_Section):
