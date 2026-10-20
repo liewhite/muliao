@@ -17,6 +17,7 @@ from muliao.models import Agent, Message, Reflection, Session, Task, TaskKind
 from muliao.runtime.codec import KIND_PATH, RESPONSE_KIND, load_messages
 from muliao.runtime.runner import AgentRuntime, ToolGroups
 from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane
+from muliao.tool_catalog import REFLECTION_GROUPS
 from muliao.transcript import to_items, to_text
 
 log = logging.getLogger(__name__)
@@ -72,10 +73,6 @@ async def list_reflections_of(db: Database, agent_id: str, limit: int) -> list[R
             .limit(limit)
         )
         return list((await s.scalars(query)).all())
-
-
-# 反思能用到的可选工具组（自我改进之外）
-REFLECTION_GROUPS = frozenset({"public_skills"})
 
 
 def _steps_after(agent_id: str, checkpoint: int):  # noqa: ANN202  返回 SQL 查询

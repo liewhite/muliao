@@ -46,7 +46,7 @@ def agents_toolset(
             instructions=prompts.current(target.id),
             reflect_every=target.reflect_every,
             tool_groups=target.tool_groups,
-            available_tool_groups=list(agents.defaults.tool_groups),
+            available_tool_groups=agents.defaults.group_names,
         )
 
     @ts.tool

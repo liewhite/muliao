@@ -11,6 +11,7 @@ import {
   type AgentDefaults,
   type AgentId,
   type AgentInput,
+  type ToolGroup,
 } from '../api'
 import { ActionButton,
   copyText,
@@ -86,40 +87,34 @@ function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentI
     model: defaults.model,
     instructions: '',
     reflect_every: defaults.reflect_every,
-    tool_groups: defaults.tool_groups,
+    tool_groups: defaults.groups.filter((g) => g.default).map((g) => g.name),
   }
 }
 
 /** 工具组的中文说明；名称本身来自服务端，未登记的原样显示 */
 // 「≈全部权限」：拿到它就能间接做任何事（shell、借别的 agent 之手、改自己的配置、起任意命令的 MCP……）
-const TOOL_GROUP_LABELS: Record<string, string> = {
-  workspace: '文件与 shell（≈全部权限）',
-  temp_agent: '临时 agent（≈全部权限）',
-  delegation: '委派给其他 agent（≈全部权限）',
-  notify: '推送通知',
-  agents: '管理 agent 与公共指令（≈全部权限）',
-  public_skills: '写公共 skill',
-  mcp: '使用 MCP',
-  mcp_admin: '管理 MCP（≈全部权限）',
-  vault: '管理 vault',
-  triggers: '管理触发器（≈全部权限）',
-  web: '网页搜索与抓取',
+/** 工具组的说明与风险由后端给出（tool_catalog），这里只负责展示 */
+function groupLabel(group: ToolGroup): string {
+  return group.full_access ? `${group.label}（≈全部权限）` : group.label
 }
 
-function ToolGroupsInput({ all, value, onChange }: { all: string[]; value: string[]; onChange: (v: string[]) => void }) {
+function ToolGroupsInput({ all, value, onChange }: { all: ToolGroup[]; value: string[]; onChange: (v: string[]) => void }) {
+  const names = all.map((g) => g.name)
   return (
     <div className="flex flex-col gap-2">
       <div className="text-sm font-medium">可用工具</div>
       <div className="text-xs text-muted">记忆、私有 skill 和自己的指令总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的；标着「≈全部权限」的任何一项都能间接做到其余所有事</div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {all.map((group) => (
-          <label key={group} className="flex items-center gap-2 text-sm">
+          <label key={group.name} className="flex items-center gap-2 text-sm">
             <ToggleSwitch
-              label={TOOL_GROUP_LABELS[group] ?? group}
-              isSelected={value.includes(group)}
-              onChange={(on) => onChange(on ? all.filter((g) => g === group || value.includes(g)) : value.filter((g) => g !== group))}
+              label={groupLabel(group)}
+              isSelected={value.includes(group.name)}
+              onChange={(on) =>
+                onChange(on ? names.filter((g) => g === group.name || value.includes(g)) : value.filter((g) => g !== group.name))
+              }
             />
-            {TOOL_GROUP_LABELS[group] ?? group}
+            {groupLabel(group)}
           </label>
         ))}
       </div>
@@ -210,7 +205,7 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         value={input.reflect_every === null ? '' : String(input.reflect_every)}
         onChange={(v) => set({ reflect_every: v ? Number(v) : null })}
       />
-      <ToolGroupsInput all={defaults.tool_groups} value={input.tool_groups} onChange={(tool_groups) => set({ tool_groups })} />
+      <ToolGroupsInput all={defaults.groups} value={input.tool_groups} onChange={(tool_groups) => set({ tool_groups })} />
       <ErrorAlert error={action.error} />
       <ActionButton isPending={action.busy} onPress={() => void save()}>
         保存

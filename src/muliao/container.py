@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from muliao import tool_catalog
 from muliao.agent_lifecycle import AgentLifecycle
 from muliao.agents import AgentDefaults, AgentService
 from muliao.bus import EventBus, LiveRuns
@@ -65,21 +66,6 @@ from muliao.vault import Vault
 from muliao.web import WebProvider, build_web_provider
 
 log = logging.getLogger(__name__)
-
-# agent 可选用的工具组（名称是 agent 配置的一部分，在这里唯一声明；注册表必须与它完全一致）。
-# 依赖可选配置的组（web 依赖 [web]）只在配置了时追加在后面，见 build_container 里的 optional_groups
-TOOL_GROUPS = (
-    "workspace",
-    "temp_agent",
-    "delegation",
-    "notify",
-    "agents",
-    "public_skills",
-    "mcp",
-    "mcp_admin",
-    "vault",
-    "triggers",
-)
 
 
 @dataclass
@@ -163,7 +149,7 @@ class Container:
 
     async def _check_agent_tool_groups(self) -> None:
         """已存 agent 选用的工具组必须都可用：去掉 [web] 配置后，选了 web 的 agent 在启动时暴露，而不是每轮都失败。"""
-        available = set(self.agents.defaults.tool_groups)
+        available = set(self.agents.defaults.group_names)
         broken = [
             f"{a.name} ({a.id}): {sorted(set(a.tool_groups) - available)}"
             for a in await self.agents.list()
@@ -206,8 +192,7 @@ def build_container(
         web = build_web_provider(settings.web)
     # 「配置了哪些可选能力」只在这里判断一次，工具组名称、注册表与临时 agent 的工具都由它导出
     web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
-    optional_groups = {"web": ToolGroup(web_tools)} if web_tools else {}
-    tool_group_names = (*TOOL_GROUPS, *optional_groups)
+    groups = tool_catalog.available(web_configured=bool(web_tools))
     tz = ZoneInfo(settings.timezone)
     db = Database(create_engine(settings.db_path))
     bus = EventBus()
@@ -230,7 +215,7 @@ def build_container(
         memory,
         model_checker or models.check,
         prompts,
-        AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, tool_group_names),
+        AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, groups),
     )
     agent_lifecycle = AgentLifecycle(db, agents, queue)
     sessions = SessionService(db, queue, live)
@@ -287,48 +272,47 @@ def build_container(
     temp_profile = RunProfile(
         toolsets=[workspace_toolset(vault, limits, files), *web_tools], include_mcp=True
     )
-    tool_groups = ToolGroups(
-        groups={
-            # 对话里用的这份带后台任务（只有会话运行会选用工具组；反思不开放它）
-            "workspace": ToolGroup([session_workspace_toolset(vault, limits, files, jobs)]),
-            "temp_agent": ToolGroup(
-                [
-                    temp_agent_toolset(
-                        runtime,
-                        agents,
-                        temp_profile,
-                        settings.temp_dir,
-                        settings.runtime.temp_agent_request_limit,
-                    )
-                ]
-            ),
-            # stop_thread 用消费者停止会话，而消费者又用这组工具：通过延迟绑定的调用打破构造顺序上的环
-            "delegation": ToolGroup(
-                [
-                    delegation_toolset(
-                        db,
-                        agents,
-                        threads,
-                        lambda session_id: consumer.stop_session(session_id),
-                        settings.runtime.job_check_seconds,
-                    )
-                ]
-            ),
-            "notify": ToolGroup([notify_toolset(notifier)]),
-            "agents": ToolGroup([agents_toolset(agents, agent_lifecycle, prompts)]),
-            "public_skills": ToolGroup([public_skills_toolset(skills)]),
-            "mcp": ToolGroup(uses_mcp=True),
-            "mcp_admin": ToolGroup([mcp_admin_toolset(mcp)]),
-            "vault": ToolGroup([vault_toolset(vault)]),
-            "triggers": ToolGroup(
-                [triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)]
-            ),
-            **optional_groups,
-        },
-        always=always_tools,
-    )
-    if tuple(tool_groups.groups) != tool_group_names:
-        raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {tool_group_names}")
+    # 每个组的实现，按目录取：目录里有、这里没有的组是代码不一致，在启动时报出
+    implementations = {
+        # 对话里用的这份带后台任务（只有会话运行会选用工具组；反思不开放它）
+        "workspace": ToolGroup([session_workspace_toolset(vault, limits, files, jobs)]),
+        "temp_agent": ToolGroup(
+            [
+                temp_agent_toolset(
+                    runtime,
+                    agents,
+                    temp_profile,
+                    settings.temp_dir,
+                    settings.runtime.temp_agent_request_limit,
+                )
+            ]
+        ),
+        # stop_thread 用消费者停止会话，而消费者又用这组工具：通过延迟绑定的调用打破构造顺序上的环
+        "delegation": ToolGroup(
+            [
+                delegation_toolset(
+                    db,
+                    agents,
+                    threads,
+                    lambda session_id: consumer.stop_session(session_id),
+                    settings.runtime.job_check_seconds,
+                )
+            ]
+        ),
+        "notify": ToolGroup([notify_toolset(notifier)]),
+        "agents": ToolGroup([agents_toolset(agents, agent_lifecycle, prompts)]),
+        "public_skills": ToolGroup([public_skills_toolset(skills)]),
+        "mcp": ToolGroup(uses_mcp=True),
+        "mcp_admin": ToolGroup([mcp_admin_toolset(mcp)]),
+        "vault": ToolGroup([vault_toolset(vault)]),
+        "triggers": ToolGroup(
+            [triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)]
+        ),
+        "web": ToolGroup(web_tools),
+    }
+    if missing := [g.name for g in tool_catalog.CATALOG if g.name not in implementations]:
+        raise RuntimeError(f"tool groups in the catalog without an implementation: {missing}")
+    tool_groups = ToolGroups(groups={g.name: implementations[g.name] for g in groups}, always=always_tools)
     compactor = Compactor(
         db,
         runtime,

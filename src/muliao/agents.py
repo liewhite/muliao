@@ -18,6 +18,7 @@ from muliao.ids import new_agent_id
 from muliao.models import Agent
 from muliao.naming import normalize_agent_name
 from muliao.resources import ResourceRepo
+from muliao.tool_catalog import ToolGroupInfo
 
 
 @dataclass(frozen=True)
@@ -26,8 +27,17 @@ class AgentDefaults:
 
     model: str
     reflect_every: int
-    # 所有可选的工具组名称（运行时注册的 ToolGroups）；新建 agent 默认全部开放
-    tool_groups: tuple[str, ...]
+    # 当前配置下可选的工具组（tool_catalog.available）：校验与默认值都从它取
+    groups: tuple[ToolGroupInfo, ...]
+
+    @property
+    def tool_groups(self) -> list[str]:
+        """新建 agent 默认开启的组。"""
+        return [g.name for g in self.groups if g.default]
+
+    @property
+    def group_names(self) -> list[str]:
+        return [g.name for g in self.groups]
 
 
 @dataclass(frozen=True)
@@ -94,10 +104,10 @@ class AgentService:
             raise InvalidInput("agent description must not be empty")
         if reflect_every < 1:
             raise InvalidInput("reflect_every must be >= 1")
-        unknown = [g for g in tool_groups if g not in self.defaults.tool_groups]
+        unknown = [g for g in tool_groups if g not in self.defaults.group_names]
         if unknown or len(set(tool_groups)) != len(tool_groups):
             raise InvalidInput(
-                f"tool groups must be distinct names from {list(self.defaults.tool_groups)}, got {tool_groups}"
+                f"tool groups must be distinct names from {self.defaults.group_names}, got {tool_groups}"
             )
         self._check_model(model)
 

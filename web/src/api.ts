@@ -348,11 +348,21 @@ const del = (path: string, query?: Query) => request<void>('DELETE', path, undef
 export const agentRoute = (id: AgentId) => `/agents/${id}`
 export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
 
+/** 一个可选的工具组（后端 tool_catalog） */
+export interface ToolGroup {
+  name: string
+  label: string
+  /** 开了它就能间接做任何事：给处理不可信输入的 agent 开要谨慎 */
+  full_access: boolean
+  /** 新建 agent 时默认开启 */
+  default: boolean
+}
+
 export interface AgentDefaults {
   model: string
   reflect_every: number
-  /** 所有可选的工具组；新建 agent 默认全部开放 */
-  tool_groups: string[]
+  /** 当前配置下可选的工具组，按目录顺序 */
+  groups: ToolGroup[]
 }
 
 export const api = {

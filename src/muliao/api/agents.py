@@ -71,18 +71,33 @@ async def _out(c: C, agent: Agent) -> AgentOut:
     return out
 
 
+class ToolGroupOut(BaseModel):
+    """一个可选的工具组（tool_catalog）。"""
+
+    name: str
+    label: str
+    # 开了它就能间接做任何事：给处理不可信输入的 agent 开要谨慎
+    full_access: bool
+    # 新建 agent 时默认开启
+    default: bool
+
+
 class AgentDefaultsOut(BaseModel):
     model: str
     reflect_every: int
-    # 所有可选的工具组；新建 agent 默认全部开放
-    tool_groups: list[str]
+    # 当前配置下可选的工具组，按目录顺序
+    groups: list[ToolGroupOut]
 
 
 @router.get("/agent-defaults")
 async def agent_defaults(c: C) -> AgentDefaultsOut:
     """新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。"""
     d = c.agents.defaults
-    return AgentDefaultsOut(model=d.model, reflect_every=d.reflect_every, tool_groups=list(d.tool_groups))
+    return AgentDefaultsOut(
+        model=d.model,
+        reflect_every=d.reflect_every,
+        groups=[ToolGroupOut(name=g.name, label=g.label, full_access=g.full_access, default=g.default) for g in d.groups],
+    )
 
 
 @router.get("/providers")
