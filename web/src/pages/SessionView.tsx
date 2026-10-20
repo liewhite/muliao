@@ -126,6 +126,8 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
 /** 渲染会话条目要用到的会话信息：还在等回答的提问与提交方式、这个会话开出的 thread、agent 名称 */
 interface SessionContext {
   pending: Map<string, Question[]>
+  /** 排队或运行中的轮次带着回答的提问：回答显示在那一轮里，提问处不再显示「提问中」 */
+  answering: Set<string>
   answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
   threads: Map<string, Session>
   agents: Agent[] | undefined
@@ -140,7 +142,7 @@ interface SessionContext {
 function AskBlock({ ask, ctx }: { ask: AskView; ctx: SessionContext }) {
   const questions = ctx.pending.get(ask.callId)
   if (questions) return <QuestionForm questions={questions} onSubmit={(answers) => ctx.answer(ask.callId, answers)} />
-  if (ask.result === null) return <QuestionNote text="提问中…" />
+  if (ask.result === null) return ctx.answering.has(ask.callId) ? null : <QuestionNote text="提问中…" />
   // 运行中的提问结果是截断过的展示文本；这次回答已经显示在上方排队的这一轮里，一轮结束后从历史完整显示
   if (ctx.view === 'live') return null
   const result = askResult(ask.result)
@@ -578,6 +580,7 @@ export default function SessionView() {
         {(d) => {
           const ctx: SessionContext = {
             pending: new Map(d.pending_questions.map((p) => [p.tool_call_id, p.questions])),
+            answering: new Set(d.open_turns.flatMap((t) => Object.keys(t.answers))),
             answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
             threads: new Map(d.threads.map((t) => [t.id, t])),
             agents: agents.data,
