@@ -348,65 +348,81 @@ function Composer({
   )
 }
 
-/** 最近的可滚动祖先：页面怎么布局由 Page 决定，这里不依赖它的结构 */
-function scrollParent(el: HTMLElement): HTMLElement | null {
-  for (let p = el.parentElement; p !== null; p = p.parentElement) {
-    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p
-  }
-  return null
+// 离底部这么近仍算「在底部」
+const PINNED_SLACK_PX = 50
+
+function toEndOf(el: HTMLElement | null) {
+  if (el !== null) el.scrollTop = el.scrollHeight
 }
 
 /**
  * 新内容到来时只在用户本来就在底部时跟随；往上翻看历史时不把人拽下来。
  *
- * 「在不在底部」只有一个来源：底部锚点是否可见（IntersectionObserver）。高度的任何变化（新数据、流式输出、图片
- * 加载完、输入框变高）都由 ResizeObserver 发现：按 HTML 规范它在同一帧里先于 IntersectionObserver 执行，此时
- * 读到的可见状态必然是变化之前的，于是「之前在底部」就滚到新的底部。打开会话、发送消息后要跳到底，是一次性的标记。
+ * 「在不在底部」只有一个来源：滚动容器的 scroll 事件里记下的 pinned。内容变高既不改变 scrollTop 也不触发 scroll
+ * 事件，所以高度变化时（ResizeObserver：新数据、流式输出、图片加载完、输入框变高使容器变矮）读到的 pinned 必然是
+ * 变化之前的，不依赖浏览器在同一帧里先算哪个观察者。打开会话、发送消息就是把 pinned 设回 true。
  * 代价：在底部展开最后一个折叠块时，页面会跟着滚到它的末尾。
  */
 function useFollowBottom() {
-  const anchor = useRef<HTMLDivElement | null>(null)
-  const visible = useRef(false)
-  const jump = useRef(true)
-  // null：锚点没挂载（加载中），不显示「回到底部」
+  const scroller = useRef<HTMLElement | null>(null)
+  const pinned = useRef(true)
+  // null：内容没挂载（加载中），不显示「回到底部」
   const [atBottom, setAtBottom] = useState<boolean | null>(null)
-  const observers = useRef<{ disconnect(): void }[]>([])
+  const content = useRef<HTMLElement | null>(null)
 
-  const follow = useCallback(() => {
-    if (!jump.current && !visible.current) return
-    jump.current = false
-    anchor.current?.scrollIntoView({ block: 'end' })
+  const toEnd = useCallback(() => toEndOf(scroller.current), [])
+  const onScroll = useCallback(() => {
+    const el = scroller.current
+    if (el === null) return
+    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight <= PINNED_SLACK_PX
+    setAtBottom(pinned.current)
   }, [])
+  // 观察滚动容器（输入框变高时它变矮）与内容（新数据、流式输出、图片加载）的尺寸；两个 ref 各自登记，不依赖挂载先后
+  const observer = useRef<ResizeObserver | null>(null)
+  const resize = useCallback(
+    () =>
+      (observer.current ??= new ResizeObserver(() => {
+        if (pinned.current) toEndOf(scroller.current)
+      })),
+    [],
+  )
+  useEffect(() => () => observer.current?.disconnect(), [])
 
-  // 锚点在数据加载后才出现，用回调 ref 在它挂载时开始观察、卸载时停止
-  const ref = useCallback(
+  const scrollRef = useCallback(
+    (el: HTMLElement | null) => {
+      if (scroller.current !== null) {
+        scroller.current.removeEventListener('scroll', onScroll)
+        resize().unobserve(scroller.current)
+      }
+      scroller.current = el
+      if (el !== null) {
+        el.addEventListener('scroll', onScroll, { passive: true })
+        resize().observe(el)
+      }
+    },
+    [onScroll, resize],
+  )
+  // 内容末尾的锚点：数据加载后才出现，观察它所在的内容容器
+  const contentEndRef = useCallback(
     (el: HTMLDivElement | null) => {
-      observers.current.forEach((o) => o.disconnect())
-      observers.current = []
-      anchor.current = el
-      if (el === null) {
+      if (content.current !== null) resize().unobserve(content.current)
+      content.current = el?.parentElement ?? null
+      if (content.current === null) {
         setAtBottom(null)
         return
       }
-      const intersection = new IntersectionObserver(([entry]) => {
-        visible.current = entry.isIntersecting
-        setAtBottom(entry.isIntersecting)
-      })
-      intersection.observe(el)
-      const resize = new ResizeObserver(follow)
-      for (const box of [el.parentElement, scrollParent(el)]) if (box !== null) resize.observe(box)
-      observers.current = [intersection, resize]
+      resize().observe(content.current)
+      setAtBottom(pinned.current)
     },
-    [follow],
+    [resize],
   )
-  /** 下一次高度变化时跳到底（打开会话、发送消息） */
-  const jumpNext = useCallback(() => {
-    jump.current = true
-  }, [])
-  const toBottom = useCallback(() => {
-    anchor.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
-  }, [])
-  return { ref, atBottom, jumpNext, toBottom }
+  /** 回到底部并跟随之后的新内容（打开会话、发送消息、点「回到底部」） */
+  const pin = useCallback(() => {
+    pinned.current = true
+    setAtBottom(true)
+    toEnd()
+  }, [toEnd])
+  return { scrollRef, contentEndRef, atBottom, pin }
 }
 
 export default function SessionView() {
@@ -458,8 +474,8 @@ export default function SessionView() {
   }, [id, unread])
 
   // 打开（或切换到）一个会话时从底部看起
-  const { jumpNext } = bottom
-  useEffect(() => jumpNext(), [id, jumpNext])
+  const { pin } = bottom
+  useEffect(() => pin(), [id, pin])
 
   async function send() {
     // Enter 键不经过按钮的禁用状态：请求进行中再按一次不能重复发送
@@ -469,7 +485,7 @@ export default function SessionView() {
     const ok = await action.run(() => api.reply(id, text.trim(), sent.ids))
     if (ok) {
       // 自己发的消息总要看到
-      jumpNext()
+      pin()
       // 发送过程中又改了输入框就保留新内容
       setDraft((current) => (current === text ? '' : current))
       uploads.removeMany(sent.keys)
@@ -495,6 +511,7 @@ export default function SessionView() {
   const parentRoute = session?.parent_session_id ? `/sessions/${session.parent_session_id}` : '/'
   return (
     <Page
+      scrollRef={bottom.scrollRef}
       back={parentRoute}
       title={session?.title ?? '会话'}
       actions={
@@ -524,7 +541,7 @@ export default function SessionView() {
                 variant="secondary"
                 className="absolute -top-14 right-0 rounded-full shadow"
                 aria-label="回到底部"
-                onPress={bottom.toBottom}
+                onPress={pin}
               >
                 <ArrowDown className="size-4" />
               </Button>
@@ -585,8 +602,7 @@ export default function SessionView() {
                 </div>
               )}
               <UnlinkedThreads threads={unlinkedThreads(d.items, d.threads)} agents={agents.data} />
-              {/* 底部锚点：净高度为 0，减去上方 12px 的间距后与内容最后约 50px 重叠，离底部这么近仍算「在底部」 */}
-              <div ref={bottom.ref} aria-hidden className="pointer-events-none -mt-16 h-16" />
+              <div ref={bottom.contentEndRef} aria-hidden />
             </div>
           )
         }}
