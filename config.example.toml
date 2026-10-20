@@ -81,6 +81,7 @@ api_key = ""
 # shell_default_timeout = 120.0
 # shell_max_timeout = 600.0
 # precheck_timeout_seconds = 30.0  # 触发器前置检查的时限
+# job_check_seconds = 60.0  # 后台任务运行期间，每隔多久让 agent 检查一次（继续等还是结束它）
 # tool_output_max_chars = 20000
 # temp_agent_request_limit = 30    # 临时 agent 单次运行最多的模型请求数
 # upload_max_bytes = 52428800      # 单个文件（附件、agent 发出的文件）的字节上限

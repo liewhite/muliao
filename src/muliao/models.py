@@ -36,6 +36,15 @@ class TaskKind(StrEnum):
     COMPACTION = "compaction"
 
 
+class JobStatus(StrEnum):
+    """后台任务（runtime.jobs）的状态。结束的三种：自己退出（看 exit_code）、被 job_kill 结束、因服务重启被中断。"""
+
+    RUNNING = "running"
+    EXITED = "exited"
+    KILLED = "killed"
+    INTERRUPTED = "interrupted"
+
+
 class TaskStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -211,6 +220,31 @@ class Secret(Base):
         Index("uq_secrets_private", "owner", "key", unique=True, sqlite_where=owner.isnot(None)),
         Index("uq_secrets_public", "key", unique=True, sqlite_where=owner.is_(None)),
     )
+
+
+class Job(Base):
+    """agent 在后台跑的一条 shell 命令：不占住这一轮，结束时、运行中每隔一段时间给发起它的会话发事件（runtime.jobs）。"""
+
+    __tablename__ = "jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    agent_id: Mapped[str] = mapped_column(_fk_agent(), index=True)
+    command: Mapped[str] = mapped_column(Text)
+    # 注入的 vault key（不存值）
+    secrets: Mapped[list[str]] = mapped_column(JSON)
+    status: Mapped[JobStatus] = mapped_column(StrEnumType(JobStatus), default=JobStatus.RUNNING, index=True)
+    exit_code: Mapped[int | None]
+    # 输出日志，相对 agent 工作目录（agent 用 read_file 读）
+    log_path: Mapped[str] = mapped_column(String(255))
+    # 进程（组）号；进程还没起来时为 None
+    pid: Mapped[int | None]
+    # 发起它的那一轮的去向：完成通知随它推送（运行中的检查不推送）
+    reply_to: Mapped[ReplyTo] = mapped_column(StrEnumType(ReplyTo))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = {"sqlite_autoincrement": True}
 
 
 class SessionEvent(Base):

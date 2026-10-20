@@ -27,6 +27,7 @@ from muliao.resources import ResourceRepo
 from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
 from muliao.runtime.conversation import Threads
 from muliao.runtime.events import EventDispatcher
+from muliao.runtime.jobs import JobRunner
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
 from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroup, ToolGroups
@@ -100,6 +101,7 @@ class Container:
     vapid: VapidKeys
     worker: Worker
     events: EventDispatcher
+    jobs: JobRunner
     compaction: CompactionScheduler
     turns: TurnRunner
     models: ModelRegistry
@@ -123,9 +125,12 @@ class Container:
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
         await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)
         await asyncio.to_thread(self.files.recover)
+        # 上次运行留下的「运行中」后台任务：进程已随服务结束，记为被中断并通知 agent（worker 处理这些事件之前）
+        await self.jobs.recover()
         self._spawn("worker", self.worker.run_forever())
         self._spawn("schedules", self.schedules.run_forever())
         self._spawn("events", self.events.run_forever())
+        self._spawn("jobs", self.jobs.run_forever())
 
     async def _check_orphan_resources(self) -> None:
         """数据库里已删除、资源仓库里还留着目录的 agent（删除时提交失败所致）：记录出来，由人决定是否清理。"""
@@ -161,6 +166,8 @@ class Container:
             )
 
     async def stop(self) -> None:
+        # 后台任务的进程不随服务退出（自成进程组），主动杀掉；下次启动时记为被中断
+        await self.jobs.stop()
         for task in self._background:
             task.cancel()
         await asyncio.gather(*self._background, return_exceptions=True)
@@ -252,6 +259,7 @@ def build_container(
         resolve_model=resolve_model or models.resolve,
         files=files,
     )
+    jobs = JobRunner(db, queue, vault, agents.workspace, settings.runtime.job_check_seconds)
     workspace_tools = workspace_toolset(
         vault,
         ShellLimits(
@@ -260,6 +268,7 @@ def build_container(
             settings.runtime.tool_output_max_chars,
         ),
         files,
+        jobs,
     )
     # 总是开放：自我改进，以及向用户提问（没有用户会回答的运行里由工具自己隐藏，见 runtime.tools.ask_user）
     always_tools = [
@@ -354,6 +363,7 @@ def build_container(
         vapid=vapid,
         worker=worker,
         events=events,
+        jobs=jobs,
         compaction=compaction,
         turns=turn_runner,
         models=models,

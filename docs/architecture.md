@@ -115,7 +115,7 @@ Web / 触发器（定时、webhook……）/ delegate_task
 - **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
 - **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定（`runtime.runner.ToolGroups`，名称在组合根 `TOOL_GROUPS` 唯一声明）：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`、`web`（只在配置了 `[web]` 时存在）；私有 skill、memory 与自己的指令（自我改进）总是开放，读公共 skill 也总是可以；向用户提问（`ask_user`，见第 4 节）也总是开放，但只在这一轮的回答交给用户时出现。反思只开放自我改进，以及该 agent 本来就有的 `public_skills`。新建 agent 默认全部开放；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP 与配置了的网页搜索，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
   - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
-  - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `share_file`（把文件发给用户，见第 4 节「附件与文件」）/ `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`）。不做强隔离——按需求为单人本机使用。
+  - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `share_file`（把文件发给用户，见第 4 节「附件与文件」）/ `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`；`background: true` 时作为后台任务运行，见第 4 节「后台任务」）/ `job_status` / `job_kill`（只在有会话的运行里出现）。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill`（私有或公共）/ `write_skill` / `edit_skill`（改正文的一部分，规则同指令：替换恰好出现一次的片段，或追加）/ `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `edit_public_skill` / `delete_public_skill`。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
   - `instructions`：`instructions_replace`（改自己的指令：替换恰好出现一次的片段，或追加），每次修改记一版、作者是自己。
@@ -177,6 +177,17 @@ agent 之间的委派有两种形态，都是「对某个 thread 发起一轮」
 - **推送**：事件自带「处理它的那一轮要不要推送给用户」：后台任务的完成通知随发起任务的那一轮，运行中的检查不推送。一轮带上的事件里有要推送的，这一轮的回答就推送（它本来交给用户时不变）。这一轮因此交给用户，`ask_user` 也随之可用：只有回答交给用户时才有人能回答，两者是同一个事实。
 - **停止**：用户停止的是正在运行的那一轮，不是会话的事件流。停止的一轮照常提交，运行期间到达的事件随即投递新的一轮；要让后台任务不再报告，就结束那个任务（`job_kill`）。
 - **记录**：处理掉的事件行只作记录（内容已随那一轮的消息保存，不再读它）；队列查询只看 `consumed_by` 为空的行（部分索引）。
+
+### 后台任务（`runtime/jobs.py`）
+
+做法同 Claude Code 的后台 bash：`run_shell(background: true)` 立即返回任务 id，命令在后台跑，不占住这一轮、不设时限（同步的 `run_shell` 仍有上限，因为它占着这一轮）。任务属于发起它的会话（`jobs` 表），它的消息都作为会话事件（来源 `job:<id>`）交给这个会话的 agent：
+
+- **结束**：进程退出（或被 `job_kill` 结束）时，在同一个事务里记下状态与退出码并投递完成事件（退出码、运行时长、命令、最后几行输出、日志路径）。完成事件随发起任务的那一轮的去向（那一轮交给用户，处理完成事件的那一轮也推送）。
+- **运行中检查**：每 `runtime.job_check_seconds`（默认 60 秒）给每个运行中的任务投递一个检查事件（已运行多久、最后几行输出），不推送；agent 据此决定继续等还是 `job_kill`。这个任务上一条事件还在队列里等着时不再发，事件不会在等用户回答提问、或这一轮很长时堆积。不限制频率与任务数（按用户决定）。
+- **输出**：stdout 与 stderr 合并，按行脱敏（注入的 secret 替换为 `[secret:KEY]`）后写进 agent 工作目录的 `jobs/<id>.log`，agent 用 `read_file` 读完整输出，`job_status` 看状态与最后几行。
+- **进程**：自成进程组（`shell.spawn_bash`，与同步 shell 共用环境与 secret 注入），`job_kill` 与关停杀掉整棵进程树。
+- **重启**：正常关停时杀掉所有后台任务；启动时（worker 开始之前）把还记为运行中的任务记为被中断，并投递事件告诉 agent，不接管旧进程。
+- **边界**：私有 thread（发问方在同步等它的回答）、反思与临时 agent（没有会话）没有自己的队列轮次来处理事件，不能开后台任务，`job_*` 工具在没有会话的运行里不出现；有后台任务在跑的会话不能删除（进程不随会话结束，结束时也无处投递），先结束它们。
 
 ## 5. 上下文压缩
 

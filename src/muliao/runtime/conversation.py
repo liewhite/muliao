@@ -18,7 +18,7 @@ from muliao.db import utcnow
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.files import load_metas
 from muliao.ids import new_id
-from muliao.models import Agent, Message, Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
+from muliao.models import Agent, Job, JobStatus, Message, Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.codec import load_messages
 from muliao.runtime.questions import (
     AskResult,
@@ -305,6 +305,17 @@ async def delete_sessions(s: AsyncSession, roots: list[Session]) -> None:
             )
             what = "the session" if session.id in {x.id for x in roots} else "one of its private threads"
             raise Conflict(f"{what} has a task running right now; wait for it to finish, then delete")
+    # 后台任务的进程不随会话删除结束，结束时也无处投递：先由 agent 或用户结束它们
+    if running_jobs := (
+        await s.scalars(
+            select(Job.id).where(Job.session_id.in_(list(doomed)), Job.status == JobStatus.RUNNING)
+        )
+    ).all():
+        log.info("session deletion refused: background jobs running", extra={"jobs": list(running_jobs)})
+        raise Conflict(
+            f"the session has background jobs running ({', '.join(map(str, running_jobs))}); "
+            "kill them (job_kill) or wait for them to finish, then delete"
+        )
     for session in doomed.values():
         await s.delete(session)
     # 立即执行删除：调用方随后可能删除 agent，数据库级联会抢先删掉这些行

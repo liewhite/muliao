@@ -108,6 +108,8 @@ class RuntimeConfig(_Section):
     shell_max_timeout: float = 600.0
     # 触发器前置检查的时限：webhook 的调用方在同步等它，检查本该便宜，比 shell 的默认时限短得多
     precheck_timeout_seconds: float = Field(default=30.0, gt=0)
+    # 后台任务（runtime.jobs）运行期间，每隔这么久给发起它的会话发一个检查事件，由 agent 决定继续等还是结束它
+    job_check_seconds: float = Field(default=60.0, gt=0)
     tool_output_max_chars: int = 20000
     # 临时 agent 单次运行最多的模型请求数：做不完就尽早失败，交回调用方拆分任务，而不是靠整轮超时反复重试
     temp_agent_request_limit: int = Field(default=30, ge=1)
