@@ -1,12 +1,9 @@
 """会话拥有的异步工作：会话发起、在它之外进行、结束时把结局投回发起会话的工作——后台任务（runtime.jobs）与要交回
 结局的委派（runtime.delegations）。设计见 docs/architecture.md「会话拥有的异步工作」。
 
-它们共用的规则只写在这里：
-- 运行中检查：每隔 job_check_seconds 给每项还在进行的工作向发起会话投一封检查信件（不推送），同一来源已有信件在
-  信箱里排着时不再发（不堆积）——post_check_in。
-- 随会话停止：会话被用户停止时，它发起的工作一起停下，之后不再给它投信——SessionWork.halt。
-- 会话的工作是否做完：会话还有进行中的这类工作时，交给它的委派不结清（runtime.finish），结局等工作结束后的
-  那次运行给出——SessionWork.active_in。
+这里只有运行中检查的共用规则：每隔 job_check_seconds 给每项还在进行的工作向发起会话投一封检查信件（不推送），同一
+来源已有信件在信箱里排着时不再发（不堆积）——post_check_in。其余共用的部分在会话领域：工作进行期间在会话上登记
+占用（runtime.holds，会话据此判断工作是否做完），会话被停止时发布 SessionStopped，各自停下自己的工作。
 """
 
 import asyncio
@@ -26,14 +23,6 @@ log = logging.getLogger(__name__)
 class SessionWork(Protocol):
     async def check(self) -> int:
         """给还在进行的工作投检查信件（经 post_check_in），返回投出的封数。"""
-        ...
-
-    async def halt(self, owner_session_id: str) -> None:
-        """会话被用户停止：结束它发起、还在进行的这种工作，之后不再给它投信。"""
-        ...
-
-    async def active_in(self, s: AsyncSession, owner_session_id: str) -> bool:
-        """会话发起的这种工作还有在进行的。"""
         ...
 
 
@@ -63,16 +52,3 @@ class WorkWatcher:
             posted = await self.check()
             if posted:
                 log.info("check-in events posted", extra={"posted": posted})
-
-
-async def any_active_in(works: Sequence[SessionWork], s: AsyncSession, owner_session_id: str) -> bool:
-    for work in works:
-        if await work.active_in(s, owner_session_id):
-            return True
-    return False
-
-
-async def halt_all(works: Sequence[SessionWork], owner_session_id: str) -> None:
-    """停下会话发起的全部异步工作（Consumer 停止会话时先调用：之后结束的工作不再投信）。"""
-    for work in works:
-        await work.halt(owner_session_id)

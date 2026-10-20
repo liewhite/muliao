@@ -22,22 +22,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.bus import LiveRuns
 from muliao.conventions import answer_text, is_stopped, unanswered_calls
 from muliao.db import Database
-from muliao.models import Mail, Message, Task
+from muliao.models import Mail, MailState, Message, Task
+from muliao.platform.messaging import Messaging
 from muliao.runtime.codec import load_messages
 from muliao.runtime.compaction import Compactor, Verdict
 from muliao.runtime.content import ContentBuilder
 from muliao.runtime.conversation import failure_of
-from muliao.runtime.delegations import Ending, Outcome, in_session_in, running_for_in, settle_all_in
 from muliao.runtime.finish import RunEnd, RunFinisher, load_session
 from muliao.runtime.halt import SessionHalt
 from muliao.runtime.history import load_context
+from muliao.runtime.holds import called_in
 from muliao.runtime.mailbox import RunPayload, discard_in, handed_to, queued_in
 from muliao.runtime.pending import (
     DEFERRED_TOOLS,
     Delegated,
     answered_in,
     deferred_results,
-    delegated_in,
     is_on_time,
     pending_calls,
     waiting,
@@ -45,9 +45,11 @@ from muliao.runtime.pending import (
 from muliao.runtime.questions import ASK_USER, questions_of, waiting_text
 from muliao.runtime.runner import AgentRuntime, ToolGroups
 from muliao.runtime.scope import Audience
+from muliao.runtime.session_events import Ending
+from muliao.runtime.settlement import settle_in, unsettled_in
 from muliao.runtime.steps import CompactionDue, RunState, Steps
 from muliao.runtime.stopping import StoppableRuns, Stopped
-from muliao.runtime.tasks import Commit, TaskQueue, no_commit
+from muliao.runtime.tasks import Commit, no_commit
 
 log = logging.getLogger(__name__)
 
@@ -150,7 +152,7 @@ class Consumer:
             context = await load_context(s, session.id)
             queued = await queued_in(s, session.id)
             earlier = list((await s.scalars(select(Mail).where(Mail.consumed_by == run_id))).all())
-            delegated = await delegated_in(s, session.id)
+            delegated = await called_in(s, session.id)
             adopted = await _adopted(s, session.id, run_id) if resumable(context.messages, delegated) else []
             saved_rows = list(
                 (await s.scalars(select(Message).where(Message.task_id == run_id).order_by(Message.id))).all()
@@ -270,9 +272,9 @@ async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
 class RunHandler:
     """队列里的运行（run task）。"""
 
-    def __init__(self, consumer: Consumer, queue: TaskQueue):
+    def __init__(self, consumer: Consumer, messaging: Messaging):
         self._consumer = consumer
-        self._queue = queue
+        self._messaging = messaging
 
     async def execute(self, task: Task) -> Commit:
         if task.session_id is None:
@@ -281,22 +283,22 @@ class RunHandler:
         return await self._consumer.run(task.id, task.session_id)
 
     async def failed_in(self, s: AsyncSession, task: Task) -> None:
-        """最终失败：交给这个会话、没能做完的委派把失败原因交给发起方，它不会一直等。包括处理中的，和交给过这次运行、
-        还排着的——运行在第一次保存之前就失败时，开头取走的信件一直排着，也不会再有运行因为它们被唤醒
-        （mailbox.handed_to）；它们随失败交回一起退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：
-        它们会唤醒新的运行。"""
+        """最终失败：交给这个会话、没能做完的委派以「失败」结清（发起方不会一直等）。按会话范围：已交给模型、还没结清的
+        全部（包括早先停在挂起调用上的运行处理过的、被续跑接管的），加上交给过这次运行、还排着的——运行在第一次保存
+        之前就失败时，开头取走的信件一直排着，也不会再有运行因为它们被唤醒（mailbox.handed_to）；它们随结清一起
+        退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：它们会唤醒新的运行。"""
         if task.session_id is None:
             raise RuntimeError(f"run {task.id} has no session")
         stranded = [
-            m
-            for m in await queued_in(s, task.session_id)
-            if m.delegation_id is not None and handed_to(m, task)
+            m for m in await unsettled_in(s, task.session_id, [MailState.QUEUED]) if handed_to(m, task)
         ]
-        delegations = [
-            *await in_session_in(s, task.session_id, consumed_only=True),
-            *await running_for_in(s, stranded),
-        ]
-        if delegations:
-            child, _agent = await load_session(s, task.session_id)
-            await settle_all_in(s, self._queue, delegations, child, Outcome(Ending.FAILED, failure_of(task)))
+        child, _agent = await load_session(s, task.session_id)
+        settle_in(
+            s,
+            self._messaging,
+            child,
+            [*await unsettled_in(s, task.session_id, [MailState.CONSUMED]), *stranded],
+            Ending.FAILED,
+            failure_of(task),
+        )
         await discard_in(s, task.session_id, stranded)

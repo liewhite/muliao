@@ -339,7 +339,8 @@ async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_
         # 私有 thread 不能单独删除；随父会话删除时，它正在运行就拒绝
         with pytest.raises(Conflict, match="private thread"):
             await container.sessions.delete(child.id)
-        with pytest.raises(Conflict, match="one of its private threads"):
+        # 父会话也在等这个 thread（它的占用还在）：忙
+        with pytest.raises(Conflict, match="busy"):
             await container.sessions.delete(parent.id)
         with pytest.raises(Conflict):
             await container.agent_lifecycle.delete(slow, author="user")

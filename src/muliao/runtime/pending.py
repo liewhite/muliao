@@ -17,13 +17,13 @@ from typing import Final
 from pydantic import BaseModel, TypeAdapter
 from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage, ToolCallPart
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.conventions import Attachment, unanswered_calls
-from muliao.models import Delegation, Mail, MailKind
+from muliao.models import Mail, MailKind
 from muliao.runtime.answers import Answer
 from muliao.runtime.history import load_context
+from muliao.runtime.holds import called_in
 from muliao.runtime.questions import (
     ASK_USER,
     NOT_ANSWERED,
@@ -65,14 +65,14 @@ STILL_WORKING = (
     "in this conversation when it is ready."
 )
 
-# 这个会话里已经委派出去的 ask_agent 调用 id（委派行是事实来源，见 delegated_in）
+# 这个会话里已经交出去的 ask_agent 调用 id（带 call_id 的占用是事实来源，runtime.holds.called_in）
 Delegated = AbstractSet[str]
 
 
 def pending_calls(history: Sequence[ModelMessage], delegated: Delegated) -> dict[str, ToolCallPart]:
     """还在等回信的调用，按出现顺序：没有结果的 ask_user 调用（参数被拒绝、交还模型重试的有结果，不算），以及已经
-    委派出去、还没有结果的 ask_agent 调用。没有委派行的 ask_agent 不是在等回信：工具还没执行完（回复保存后、委派
-    提交前失败），它是待执行的调用，续跑时再执行（tools.delegation 按调用 id 幂等）。"""
+    交出去、还没有结果的 ask_agent 调用。没有占用的 ask_agent 不是在等回信：工具还没执行完（回复保存后、投递
+    提交前失败），它是待执行的调用，续跑时再执行（Threads.dispatch 按调用 id 幂等）。"""
     return {
         c.tool_call_id: c
         for c in unanswered_calls(history)
@@ -85,19 +85,9 @@ def pending_questions(history: Sequence[ModelMessage]) -> dict[str, list[Questio
     return {c.tool_call_id: questions_of(c) for c in unanswered_calls(history) if c.tool_name == ASK_USER}
 
 
-async def delegated_in(s: AsyncSession, session_id: str) -> set[str]:
-    """这个会话委派出去的 ask_agent 调用（Delegated）。"""
-    rows = await s.scalars(
-        select(Delegation.call_id).where(
-            Delegation.owner_session_id == session_id, Delegation.call_id.is_not(None)
-        )
-    )
-    return {call_id for call_id in rows.all() if call_id is not None}
-
-
 async def pending_in(s: AsyncSession, session_id: str) -> dict[str, ToolCallPart]:
     """会话现在挂着的调用，从库里的历史推导（压缩的切点不会落在挂起的调用之前）。"""
-    return pending_calls((await load_context(s, session_id)).messages, await delegated_in(s, session_id))
+    return pending_calls((await load_context(s, session_id)).messages, await called_in(s, session_id))
 
 
 def answered_in(queued: Sequence[Mail], pending: Mapping[str, ToolCallPart]) -> dict[str, CallResult]:

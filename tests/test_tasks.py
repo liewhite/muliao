@@ -26,13 +26,13 @@ async def test_lane_is_fifo_and_exclusive_while_other_lanes_run(container, make_
     b1 = await _enqueue(container, "b", alpha)
     q = container.queue
 
-    first = await q.claim()
-    second = await q.claim()
+    first = await q.claim(list(TaskKind))
+    second = await q.claim(list(TaskKind))
     assert (first.id, second.id) == (a1.id, b1.id)
-    assert await q.claim() is None  # a2 被 a1 阻塞
+    assert await q.claim(list(TaskKind)) is None  # a2 被 a1 阻塞
 
     await q.complete(first.id, no_commit)
-    third = await q.claim()
+    third = await q.claim(list(TaskKind))
     assert third.id == a2.id
 
 
@@ -43,13 +43,13 @@ async def test_transient_failure_backs_off_then_fails_after_max_attempts(contain
     max_attempts = container.settings.runtime.task_max_attempts
 
     for attempt in range(1, max_attempts + 1):
-        claimed = await q.claim()
+        claimed = await q.claim(list(TaskKind))
         if claimed is None:  # 退避尚未到期，直接把 not_before 拨到现在
             async with container.db.transaction() as s:
                 from muliao.models import Task
 
                 (await s.get(Task, task.id)).not_before = utcnow() - timedelta(seconds=1)
-            claimed = await q.claim()
+            claimed = await q.claim(list(TaskKind))
         assert claimed.attempts == attempt
         failed = await q.fail(claimed.id, "boom", retryable=True, on_final=_nothing)
 
@@ -61,21 +61,21 @@ async def test_non_retryable_failure_fails_immediately_and_can_be_retried_manual
     alpha = (await make_agent()).id
     task = await _enqueue(container, "a", alpha)
     q = container.queue
-    await q.claim()
+    await q.claim(list(TaskKind))
 
     failed = await q.fail(task.id, "bug", retryable=False, on_final=_nothing)
     assert failed.status == TaskStatus.FAILED
 
     retried = await q.retry(task.id)
     assert retried.status == TaskStatus.PENDING and retried.attempts == 0
-    assert (await q.claim()).id == task.id
+    assert (await q.claim(list(TaskKind))).id == task.id
 
 
 async def test_retry_is_refused_while_lane_has_newer_unfinished_work(container, make_agent):
     alpha = (await make_agent()).id
     q = container.queue
     old = await _enqueue(container, "a", alpha)
-    await q.claim()
+    await q.claim(list(TaskKind))
     await q.fail(old.id, "bug", retryable=False, on_final=_nothing)
     await _enqueue(container, "a", alpha)
 
@@ -86,7 +86,7 @@ async def test_retry_is_refused_while_lane_has_newer_unfinished_work(container, 
 async def test_recover_resets_running_tasks(container, make_agent):
     alpha = (await make_agent()).id
     task = await _enqueue(container, "a", alpha)
-    await container.queue.claim()
+    await container.queue.claim(list(TaskKind))
 
     assert [t.id for t in await container.queue.recover()] == [task.id]
-    assert (await container.queue.claim()).id == task.id
+    assert (await container.queue.claim(list(TaskKind))).id == task.id

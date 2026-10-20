@@ -14,6 +14,7 @@ from muliao.db import Database
 from muliao.errors import Conflict, NotFound
 from muliao.models import Compaction, Mail, Message, Origin, Session, Task, TaskStatus
 from muliao.notifications import mark_session_read_in
+from muliao.platform.messaging import Messaging
 from muliao.runtime.codec import load_messages
 from muliao.runtime.conversation import (
     Inbound,
@@ -53,10 +54,11 @@ class SessionView:
 
 
 class SessionService:
-    def __init__(self, db: Database, queue: TaskQueue, live: LiveRuns):
+    def __init__(self, db: Database, queue: TaskQueue, live: LiveRuns, messaging: Messaging):
         self._db = db
         self._queue = queue
         self._live = live
+        self._messaging = messaging
 
     async def detail(self, session_id: str) -> SessionView:
         # 先取快照再读库：快照这一段已在展示的消息不在历史里重复；之间换了段时，新保存的消息照旧由旧快照展示，
@@ -155,7 +157,7 @@ class SessionService:
                 raise Conflict(
                     f"session {session_id} is a private thread; delete the session that asked it instead"
                 )
-            await delete_sessions(s, self._queue, [session])
+            await delete_sessions(s, self._queue, self._messaging, [session])
 
 
 async def _history_in(s: AsyncSession, session_id: str) -> list[tuple[int, ModelMessage]]:

@@ -26,7 +26,8 @@ from muliao.db import Database
 from muliao.errors import CorruptState, NotFound
 from muliao.models import Mail, MailKind, MailState, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.history import load_context
-from muliao.runtime.pending import delegated_in, waiting
+from muliao.runtime.holds import called_in
+from muliao.runtime.pending import waiting
 from muliao.runtime.tasks import TaskQueue, session_lane
 
 log = logging.getLogger(__name__)
@@ -46,14 +47,22 @@ async def post_in(
     source: str | None = None,
     attachments: Sequence[str] = (),
     answers: Mapping[str, Any] | None = None,
-    delegation_id: int | None = None,
+    correlation: str | None = None,
+    dedupe_key: str | None = None,
 ) -> Mail:
-    """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。"""
+    """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。带 dedupe_key 的投信只投一次：已经投过就返回那封。"""
     if kind == MailKind.EVENT and (not source or len(source) > _SOURCE_MAX or '"' in source):
         raise ValueError(f"event source must be 1-{_SOURCE_MAX} characters without quotes, got {source!r}")
     session = await s.get(Session, session_id)
     if session is None:
         raise NotFound(f"session {session_id!r} not found")
+    if dedupe_key is not None and (
+        existing := await s.scalar(
+            select(Mail).where(Mail.session_id == session_id, Mail.dedupe_key == dedupe_key)
+        )
+    ):
+        log.info("duplicate mail ignored", extra={"session_id": session_id, "key": dedupe_key})
+        return existing
     mail = Mail(
         session_id=session_id,
         kind=kind,
@@ -62,7 +71,8 @@ async def post_in(
         attachments=list(attachments),
         answers=dict(answers or {}),
         awaited=awaited,
-        delegation_id=delegation_id,
+        correlation=correlation,
+        dedupe_key=dedupe_key,
     )
     s.add(mail)
     await s.flush()
@@ -104,7 +114,7 @@ async def wake_in(
     if finished is None and latest is not None and all(handed_to(m, latest) for m in queued):
         # 都已经交给过一次运行（它失败了、等重试）：由它或之后新信件唤醒的运行处理，不重复投递
         return None
-    if waiting((await load_context(s, session.id)).messages, queued, await delegated_in(s, session.id)):
+    if waiting((await load_context(s, session.id)).messages, queued, await called_in(s, session.id)):
         # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型
         return None
     run = queue.enqueue(

@@ -3,21 +3,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.conventions import shared_attachments
 from muliao.db import utcnow
-from muliao.models import Agent, Notification, Session
+from muliao.models import Agent, MailState, Notification, Session
 from muliao.notifications import Notifier
-from muliao.runtime.delegations import Ending, Outcome, in_session_in, settle_all_in
+from muliao.platform.messaging import Messaging
+from muliao.runtime.holds import has_active_in
 from muliao.runtime.mailbox import queued_in, wake_in
 from muliao.runtime.reflection import ReflectionScheduler
+from muliao.runtime.session_events import Ending
+from muliao.runtime.settlement import settle_in, unsettled_in
 from muliao.runtime.steps import RunState
 from muliao.runtime.tasks import Commit, TaskQueue
-from muliao.runtime.work import SessionWork, any_active_in
 
 
 @dataclass(frozen=True)
@@ -49,17 +50,17 @@ class RunFinisher:
         queue: TaskQueue,
         notifier: Notifier,
         reflection: ReflectionScheduler,
-        works: Sequence[SessionWork],
+        messaging: Messaging,
     ):
         self._queue = queue
         self._notifier = notifier
         self._reflection = reflection
-        self._works = works
+        self._messaging = messaging
 
     async def _work_done(self, s: AsyncSession, session_id: str) -> bool:
-        """会话的工作做完了：它发起的异步工作都结束了，信箱里也没有还要交给模型的信件（比如在最后一次请求期间才到的
-        后台任务结局，它会唤醒下一次运行，结局由那次运行给出）。"""
-        return not await any_active_in(self._works, s, session_id) and not await queued_in(s, session_id)
+        """会话的工作做完了：没有人替它在外面做事（没有 active 占用），信箱里也没有还要交给模型的信件（比如在最后
+        一次请求期间才到的后台任务结局，它会唤醒下一次运行，结清由那次运行做）。只看会话自己的数据。"""
+        return not await has_active_in(s, session_id) and not await queued_in(s, session_id)
 
     def idle(self, state: RunState) -> Commit:
         """运行没有可交给模型的、也没有之前的尝试要收尾（信箱空了，或还在等挂起调用的回答）：只看要不要唤醒下一次。"""
@@ -78,10 +79,15 @@ class RunFinisher:
                 session.unread = not session.private
                 await self._reflection.after_run_in(s, agent)
             if not end.stopped and not end.paused and await self._work_done(s, session.id):
-                # 处理中的委派交回结局。委派可能跨几次运行：停在挂起的调用上、或还有工作没做完时，由之后那次做完的运行交回
-                outcome = Outcome(Ending.FINISHED, end.answer, shared_attachments(state.messages))
-                await settle_all_in(
-                    s, self._queue, await in_session_in(s, session.id, consumed_only=True), session, outcome
+                # 处理中的委派结清。委派可能跨几次运行：停在挂起的调用上、或还有工作没做完时，由之后那次做完的运行结清
+                settle_in(
+                    s,
+                    self._messaging,
+                    session,
+                    await unsettled_in(s, session.id, [MailState.CONSUMED]),
+                    Ending.FINISHED,
+                    end.answer,
+                    shared_attachments(state.messages),
                 )
             if not end.stopped and state.messages:
                 # 推送：处理过的信件里有用户在等的，且有话要告诉用户（做完了，或停下来问用户）

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -114,9 +114,12 @@ class TaskQueue:
         event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
         return task
 
-    async def claim(self) -> Task | None:
+    async def claim(self, kinds: Collection[TaskKind]) -> Task | None:
+        """领取一个可以执行的 task，只在调用方能处理的这些种类里找。"""
         now = self._clock()
-        query = _claimable().where(Task.not_before <= now).order_by(Task.id).limit(1)
+        query = (
+            _claimable().where(Task.not_before <= now, Task.kind.in_(list(kinds))).order_by(Task.id).limit(1)
+        )
         async with self._db.transaction() as s:  # 事务串行化保证同一 task 不会被领取两次
             task = await s.scalar(query)
             if task is None:
@@ -206,9 +209,9 @@ class TaskQueue:
             event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
             return task
 
-    async def next_due(self) -> datetime | None:
+    async def next_due(self, kinds: Collection[TaskKind]) -> datetime | None:
         """最早一个「可领取、只是还没到时间」的 task 的时间；被同 lane 挡住的 task 由 complete/fail 唤醒。"""
-        claimable = _claimable().subquery()
+        claimable = _claimable().where(Task.kind.in_(list(kinds))).subquery()
         async with self._db.transaction() as s:
             return await s.scalar(select(func.min(claimable.c.not_before)))
 

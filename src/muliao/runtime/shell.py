@@ -39,6 +39,10 @@ def kill_group(pid: int) -> None:
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass  # 进程恰好已经退出
+    except PermissionError:
+        # macOS：组里只剩已退出、还没被回收的进程时 killpg 返回 EPERM（还有活着的成员时信号照常送达）。组属于我们
+        # 自己起的进程，不会是权限问题；pid 已被别人复用的情形不会走到这里（调用方只对自己还持有的进程调用）
+        pass
 
 
 async def _collect(stream: asyncio.StreamReader | None, buf: bytearray) -> None:

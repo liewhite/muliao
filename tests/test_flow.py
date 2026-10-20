@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from muliao.models import Mail, Origin, Reflection, Task, TaskKind, TaskStatus
 from muliao.runtime.conversation import Inbound, NewSession
+from muliao.runtime.worker import Worker
 from tests.scripted import scripted
 
 
@@ -28,6 +29,36 @@ async def drain(container, limit_seconds: float = 10.0) -> None:
     finally:
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
+
+
+async def deliver(container, limit_seconds: float = 10.0) -> None:
+    """只执行事件与定向命令的投递（不执行运行）：投进信箱的信件留着排队，测试可以直接看它们。"""
+    worker = Worker(
+        container.queue,
+        {TaskKind.EVENT: container.messaging},
+        container.bus,
+        concurrency=1,
+        task_timeout_seconds=5,
+    )
+    task = asyncio.create_task(worker.run_forever())
+    try:
+        async with asyncio.timeout(limit_seconds):
+            while True:
+                await asyncio.sleep(0.02)
+                async with container.db.transaction() as s:
+                    busy = await s.scalar(
+                        select(Task.id)
+                        .where(
+                            Task.kind == TaskKind.EVENT,
+                            Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]),
+                        )
+                        .limit(1)
+                    )
+                if busy is None:
+                    return
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def idle(container, limit_seconds: float = 10.0) -> None:

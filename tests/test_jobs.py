@@ -10,9 +10,10 @@ from sqlalchemy import select
 
 from muliao.errors import Conflict
 from muliao.models import Job, JobStatus, Mail, MailState, Origin, TaskKind
+from muliao.runtime.holds import has_active_in, hold_in
 from muliao.runtime.mailbox import queued_in
 from tests.scripted import scripted
-from tests.test_flow import drain, start, tasks_of
+from tests.test_flow import deliver, drain, start, tasks_of
 from tests.test_mailbox import Recorder
 
 
@@ -104,32 +105,35 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
     container, make_agent, models
 ):
     agent = await make_agent("alpha", model="rec")
-    models.models["rec"] = scripted(Recorder())
+    recorder = Recorder()
+    models.models["rec"] = scripted(recorder)
     session = await start(container, agent.id, "hi", origin=Origin.TRIGGER)
     await drain(container)
     async with container.db.transaction() as s:
-        s.add(
-            Job(
-                session_id=session.id,
-                agent_id=agent.id,
-                command="sleep 100",
-                secrets=[],
-                log_path="jobs/x.log",
-                awaited=True,
-                pid=424242,
-            )
+        job = Job(
+            session_id=session.id,
+            agent_id=agent.id,
+            command="sleep 100",
+            secrets=[],
+            log_path="jobs/x.log",
+            awaited=True,
+            pid=424242,
         )
+        s.add(job)
+        await s.flush()
+        # 上一个进程启动它时已在会话上登记了占用
+        await hold_in(s, session.id, f"job:{job.id}")
 
     await container.jobs.recover()
+    await drain(container)
 
     async with container.db.transaction() as s:
         [job] = (await s.scalars(select(Job))).all()
     assert job.status == JobStatus.INTERRUPTED
-    [event] = await queued_events(container, session.id)
-    assert "interrupted" in event.content and "stopped unexpectedly" in event.content
+    [event_text] = recorder.prompts[-1]
+    assert "interrupted" in event_text and "stopped unexpectedly" in event_text
     # 进程自成进程组、可能还活着：如实告诉 agent 怎么核实，不盲杀
-    assert "pgrep -g 424242" in event.content
-    await drain(container)
+    assert "pgrep -g 424242" in event_text
     # 发起它的运行有用户在等：处理中断通知的运行推送
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
 
@@ -148,7 +152,7 @@ async def test_runs_without_a_session_get_no_background_jobs(container):
 
 async def test_a_session_with_a_running_job_cannot_be_deleted(container, make_agent, models):
     session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
-    with pytest.raises(Conflict, match="background jobs running"):
+    with pytest.raises(Conflict, match="busy"):
         await container.sessions.delete(session.id)
     await container.jobs.kill(job.id, job.agent_id)
     await wait_until_done(container, job.id)
@@ -161,6 +165,8 @@ async def test_stopping_the_session_kills_its_jobs_without_waking_it_again(conta
     prompts = len(recorder.prompts)
 
     await container.consumer.stop_session(session.id)
+    # 后台任务领域收到 SessionStopped 后结束进程
+    await drain(container)
 
     killed = await wait_until_done(container, job.id)
     await asyncio.sleep(0.2)  # 被一起停下的任务不再投信
@@ -226,6 +232,7 @@ async def test_a_job_whose_outcome_could_not_be_recorded_is_reconciled(
     monkeypatch.undo()
 
     await container.jobs.check()
+    await deliver(container)
 
     async with container.db.transaction() as s:
         assert (await s.get(Job, job.id)).status == JobStatus.INTERRUPTED
@@ -245,6 +252,7 @@ async def test_a_long_line_is_split_without_leaking_a_secret_or_breaking_charact
 async def test_stopping_the_service_reports_jobs_as_interrupted(container, make_agent, models):
     session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
     await container.jobs.stop()
+    await deliver(container)
     async with container.db.transaction() as s:
         assert (await s.get(Job, job.id)).status == JobStatus.INTERRUPTED
     [event] = await queued_events(container, session.id)
@@ -270,6 +278,7 @@ async def test_a_check_while_a_job_records_its_outcome_does_not_report_it_interr
     await container.jobs.check()
     release.set()
     finished = await wait_until_done(container, job.id)
+    await deliver(container)
 
     assert finished.status == JobStatus.EXITED
     contents = [e.content for e in await queued_events(container, session.id)]
@@ -304,7 +313,31 @@ async def _job_rows(container) -> list[Job]:
         return list((await s.scalars(select(Job))).all())
 
 
-async def test_a_job_whose_process_cannot_start_leaves_no_row(container, make_agent, monkeypatch):
+async def test_a_job_that_fails_before_holding_its_session_leaves_no_row(container, make_agent, monkeypatch):
+    session, agent = await _session_for_jobs(container, make_agent)
+
+    async def broken_hold(*_args, **_kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr("muliao.runtime.jobs.hold_in", broken_hold)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await container.jobs.start(
+            session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
+        )
+    assert await _job_rows(container) == []
+
+
+async def _held_job_outcome(container, session_id: str) -> tuple[Job, str]:
+    """启动失败、已经占用了会话的任务：按被中断结束，结局交回会话并释放占用。"""
+    await deliver(container)
+    [row] = await _job_rows(container)
+    [event] = [m for m in await queued_events(container, session_id) if m.source == f"job:{row.id}"]
+    async with container.db.transaction() as s:
+        assert not await has_active_in(s, session_id)
+    return row, event.content
+
+
+async def test_a_job_whose_process_cannot_start_is_reported_interrupted(container, make_agent, monkeypatch):
     session, agent = await _session_for_jobs(container, make_agent)
 
     async def broken_spawn(*_args, **_kwargs):
@@ -315,10 +348,16 @@ async def test_a_job_whose_process_cannot_start_leaves_no_row(container, make_ag
         await container.jobs.start(
             session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
         )
-    assert await _job_rows(container) == []
+
+    row, content = await _held_job_outcome(container, session.id)
+    assert (
+        row.status == JobStatus.INTERRUPTED
+        and "could not be started" in content
+        and "bash missing" in content
+    )
 
 
-async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_leaves_no_row(
+async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_is_reported_interrupted(
     container, make_agent, monkeypatch
 ):
     session, agent = await _session_for_jobs(container, make_agent)
@@ -340,9 +379,10 @@ async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_leaves_n
             session_id=session.id, agent_id=agent.id, command="sleep 30", secrets=[], awaited=False
         )
 
-    assert await _job_rows(container) == []
     [proc] = spawned
     await asyncio.wait_for(proc.wait(), 5)
+    row, content = await _held_job_outcome(container, session.id)
+    assert row.status == JobStatus.INTERRUPTED and "process id could not be recorded" in content
 
 
 async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
@@ -353,11 +393,11 @@ async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
     async def broken_spawn(*_args, **_kwargs):
         raise OSError("bash missing")
 
-    async def stuck_discard(_self, _job_id):
+    async def stuck_close(_self, _job_id, _reason):
         await asyncio.sleep(60)
 
     monkeypatch.setattr("muliao.runtime.jobs.spawn_bash", broken_spawn)
-    monkeypatch.setattr("muliao.runtime.jobs.JobRunner._discard_row", stuck_discard)
+    monkeypatch.setattr("muliao.runtime.jobs.JobRunner._close_unstarted", stuck_close)
     monkeypatch.setattr("muliao.runtime.jobs._CLEANUP_SECONDS", 0.1)
     with pytest.raises(OSError):
         await container.jobs.start(
@@ -367,10 +407,8 @@ async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
     [row] = await _job_rows(container)
     assert row.status == JobStatus.RUNNING and row.pid is None
     await container.jobs.check()
-    [row] = await _job_rows(container)
-    assert row.status == JobStatus.INTERRUPTED
-    [event] = [m for m in await queued_events(container, session.id) if m.source == f"job:{row.id}"]
-    assert "supervision ended unexpectedly" in event.content
+    row, content = await _held_job_outcome(container, session.id)
+    assert row.status == JobStatus.INTERRUPTED and "supervision ended unexpectedly" in content
 
 
 async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_stopped(settings, models):

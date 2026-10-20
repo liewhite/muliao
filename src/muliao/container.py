@@ -42,6 +42,7 @@ from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler, ReflectionScheduler
 from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroups
 from muliao.runtime.sessions import SessionService
+from muliao.runtime.settlement import handle_post_event
 from muliao.runtime.steps import Steps
 from muliao.runtime.tasks import TaskQueue
 from muliao.runtime.tools.agents import agents_toolset
@@ -97,6 +98,7 @@ class Container:
     vapid: VapidKeys
     worker: Worker
     messaging: Messaging
+    threads: Threads
     mail: MailReconciler
     jobs: JobRunner
     delegations: Delegations
@@ -230,9 +232,9 @@ def build_container(
         prompts,
         AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, groups),
     )
-    agent_lifecycle = AgentLifecycle(db, agents, queue)
-    sessions = SessionService(db, queue, live)
-    threads = Threads(queue)
+    agent_lifecycle = AgentLifecycle(db, agents, queue, messaging)
+    sessions = SessionService(db, queue, live, messaging)
+    threads = Threads(queue, messaging)
     notifier = Notifier(db, queue)
     mcp = McpRegistry(resources, vault)
     schedule_kind = ScheduleKind(tz)
@@ -265,9 +267,13 @@ def build_container(
         resolve_model=resolve_model or models.resolve,
         files=files,
     )
-    jobs = JobRunner(db, queue, vault, agents.workspace, settings.runtime.job_check_seconds)
+    jobs = JobRunner(db, queue, vault, agents.workspace, settings.runtime.job_check_seconds, messaging)
     # 委派停下 thread 要用消费者，消费者停止会话又要停下委派：延迟绑定打破构造顺序上的环
     delegations = Delegations(db, queue, lambda session_id: consumer.stop_session(session_id))
+    # 跨领域的反应：会话领域的命令处理者与各领域的订阅
+    handle_post_event(messaging, queue)
+    jobs.subscribe(messaging)
+    delegations.subscribe(messaging)
     limits = ShellLimits(
         settings.runtime.shell_default_timeout,
         settings.runtime.shell_max_timeout,
@@ -337,13 +343,13 @@ def build_container(
         live,
         content,
         Steps(db, live, content, compactor),
-        RunFinisher(queue, notifier, reflection, [jobs, delegations]),
-        SessionHalt(db, queue, [jobs, delegations]),
+        RunFinisher(queue, notifier, reflection, messaging),
+        SessionHalt(db, queue, messaging),
         compactor,
     )
     handlers: dict[TaskKind, TaskHandler] = {
         TaskKind.EVENT: messaging,
-        TaskKind.RUN: RunHandler(consumer, queue),
+        TaskKind.RUN: RunHandler(consumer, messaging),
         TaskKind.COMPACTION: CompactionHandler(db, compactor),
         TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups),
         TaskKind.DELIVER: DeliverHandler(db, pusher),
@@ -380,6 +386,7 @@ def build_container(
         vapid=vapid,
         worker=worker,
         messaging=messaging,
+        threads=threads,
         mail=MailReconciler(db, queue),
         jobs=jobs,
         delegations=delegations,

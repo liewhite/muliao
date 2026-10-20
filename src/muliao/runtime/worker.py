@@ -96,7 +96,7 @@ class Worker:
         async with anyio.create_task_group() as group:
             while True:
                 await self._slots.acquire()
-                task = await self._queue.claim()
+                task = await self._queue.claim(self._handlers.keys())
                 if task is None:
                     self._slots.release()
                     await self._wait_for_work()
@@ -105,7 +105,7 @@ class Worker:
 
     async def _wait_for_work(self) -> None:
         self._queue.wake.clear()
-        due = await self._queue.next_due()
+        due = await self._queue.next_due(self._handlers.keys())
         timeout = _IDLE_POLL_SECONDS if due is None else max(0.05, (due - self._queue.now()).total_seconds())
         with anyio.move_on_after(min(timeout, _IDLE_POLL_SECONDS)):
             await self._queue.wake.wait()

@@ -2,8 +2,8 @@
 
 不保留迁移历史：表结构变化时重新生成这一个版本，数据库重建（见 docs/architecture.md「数据库迁移」）。
 
-Revision ID: 57377d09ac81
-Create Date: 2026-10-20 16:49:24.861046
+Revision ID: edbc8f09dd26
+Create Date: 2026-10-20 20:00:56.856305
 Revises:
 """
 
@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "57377d09ac81"
+revision: str = "edbc8f09dd26"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -34,6 +34,30 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name"),
     )
+    op.create_table(
+        "delegations",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("holder", sa.String(length=200), nullable=False),
+        sa.Column("owner_session_id", sa.String(length=36), nullable=False),
+        sa.Column("child_session_id", sa.String(length=36), nullable=False),
+        sa.Column("call_id", sa.String(length=100), nullable=True),
+        sa.Column("awaited", sa.Boolean(), nullable=False),
+        sa.Column("status", sa.String(length=16), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("settled_at", sa.DateTime(), nullable=True),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("holder"),
+        sqlite_autoincrement=True,
+    )
+    with op.batch_alter_table("delegations", schema=None) as batch_op:
+        batch_op.create_index(
+            batch_op.f("ix_delegations_child_session_id"), ["child_session_id"], unique=False
+        )
+        batch_op.create_index(
+            batch_op.f("ix_delegations_owner_session_id"), ["owner_session_id"], unique=False
+        )
+        batch_op.create_index(batch_op.f("ix_delegations_status"), ["status"], unique=False)
+
     op.create_table(
         "files",
         sa.Column("id", sa.String(length=36), nullable=False),
@@ -157,31 +181,6 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f("ix_compactions_session_id"), ["session_id"], unique=False)
 
     op.create_table(
-        "delegations",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("owner_session_id", sa.String(length=36), nullable=False),
-        sa.Column("child_session_id", sa.String(length=36), nullable=True),
-        sa.Column("call_id", sa.String(length=100), nullable=True),
-        sa.Column("awaited", sa.Boolean(), nullable=False),
-        sa.Column("status", sa.String(length=16), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("settled_at", sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(["child_session_id"], ["sessions.id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["owner_session_id"], ["sessions.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sqlite_autoincrement=True,
-    )
-    with op.batch_alter_table("delegations", schema=None) as batch_op:
-        batch_op.create_index(
-            batch_op.f("ix_delegations_child_session_id"), ["child_session_id"], unique=False
-        )
-        batch_op.create_index(
-            batch_op.f("ix_delegations_owner_session_id"), ["owner_session_id"], unique=False
-        )
-        batch_op.create_index(batch_op.f("ix_delegations_status"), ["status"], unique=False)
-        batch_op.create_index("ux_delegations_call", ["owner_session_id", "call_id"], unique=True)
-
-    op.create_table(
         "jobs",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("session_id", sa.String(length=36), nullable=False),
@@ -236,6 +235,22 @@ def upgrade() -> None:
         batch_op.create_index(batch_op.f("ix_notifications_unread"), ["unread"], unique=False)
 
     op.create_table(
+        "session_holds",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("session_id", sa.String(length=36), nullable=False),
+        sa.Column("holder", sa.String(length=200), nullable=False),
+        sa.Column("call_id", sa.String(length=100), nullable=True),
+        sa.Column("status", sa.String(length=16), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("ended_at", sa.DateTime(), nullable=True),
+        sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    with op.batch_alter_table("session_holds", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_session_holds_session_id"), ["session_id"], unique=False)
+        batch_op.create_index("uq_session_holds", ["session_id", "holder"], unique=True)
+
+    op.create_table(
         "tasks",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("kind", sa.String(length=16), nullable=False),
@@ -270,21 +285,34 @@ def upgrade() -> None:
         sa.Column("attachments", sa.JSON(), nullable=False),
         sa.Column("answers", sa.JSON(), nullable=False),
         sa.Column("awaited", sa.Boolean(), nullable=False),
-        sa.Column("delegation_id", sa.Integer(), nullable=True),
+        sa.Column("correlation", sa.String(length=200), nullable=True),
+        sa.Column("correlation_settled", sa.Boolean(), nullable=False),
+        sa.Column("dedupe_key", sa.String(length=200), nullable=True),
         sa.Column("state", sa.String(length=16), nullable=False),
         sa.Column("consumed_by", sa.Integer(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["consumed_by"], ["tasks.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["delegation_id"], ["delegations.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sqlite_autoincrement=True,
     )
     with op.batch_alter_table("mail", schema=None) as batch_op:
         batch_op.create_index(
+            "ix_mail_correlation",
+            ["correlation"],
+            unique=False,
+            sqlite_where=sa.text("correlation IS NOT NULL"),
+        )
+        batch_op.create_index(
             "ix_mail_queued", ["session_id"], unique=False, sqlite_where=sa.text("state = 'queued'")
         )
         batch_op.create_index(batch_op.f("ix_mail_session_id"), ["session_id"], unique=False)
+        batch_op.create_index(
+            "uq_mail_dedupe_key",
+            ["session_id", "dedupe_key"],
+            unique=True,
+            sqlite_where=sa.text("dedupe_key IS NOT NULL"),
+        )
 
     # ### end Alembic commands ###
 
@@ -292,8 +320,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     with op.batch_alter_table("mail", schema=None) as batch_op:
+        batch_op.drop_index("uq_mail_dedupe_key", sqlite_where=sa.text("dedupe_key IS NOT NULL"))
         batch_op.drop_index(batch_op.f("ix_mail_session_id"))
         batch_op.drop_index("ix_mail_queued", sqlite_where=sa.text("state = 'queued'"))
+        batch_op.drop_index("ix_mail_correlation", sqlite_where=sa.text("correlation IS NOT NULL"))
 
     op.drop_table("mail")
     with op.batch_alter_table("tasks", schema=None) as batch_op:
@@ -302,6 +332,11 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f("ix_tasks_agent_id"))
 
     op.drop_table("tasks")
+    with op.batch_alter_table("session_holds", schema=None) as batch_op:
+        batch_op.drop_index("uq_session_holds")
+        batch_op.drop_index(batch_op.f("ix_session_holds_session_id"))
+
+    op.drop_table("session_holds")
     with op.batch_alter_table("notifications", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_notifications_unread"))
         batch_op.drop_index(batch_op.f("ix_notifications_session_id"))
@@ -317,13 +352,6 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f("ix_jobs_agent_id"))
 
     op.drop_table("jobs")
-    with op.batch_alter_table("delegations", schema=None) as batch_op:
-        batch_op.drop_index("ux_delegations_call")
-        batch_op.drop_index(batch_op.f("ix_delegations_status"))
-        batch_op.drop_index(batch_op.f("ix_delegations_owner_session_id"))
-        batch_op.drop_index(batch_op.f("ix_delegations_child_session_id"))
-
-    op.drop_table("delegations")
     with op.batch_alter_table("compactions", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_compactions_session_id"))
 
@@ -348,5 +376,11 @@ def downgrade() -> None:
     op.drop_table("reflections")
     op.drop_table("push_subscriptions")
     op.drop_table("files")
+    with op.batch_alter_table("delegations", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_delegations_status"))
+        batch_op.drop_index(batch_op.f("ix_delegations_owner_session_id"))
+        batch_op.drop_index(batch_op.f("ix_delegations_child_session_id"))
+
+    op.drop_table("delegations")
     op.drop_table("agents")
     # ### end Alembic commands ###

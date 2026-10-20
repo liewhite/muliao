@@ -10,8 +10,8 @@ from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext, T
 from muliao.agents import AgentService
 from muliao.conventions import TOOL_THREADS
 from muliao.db import Database
-from muliao.runtime.conversation import ReportBack, Threads, threads_of, validate_thread
-from muliao.runtime.delegations import for_call_in, thread_name
+from muliao.runtime.conversation import Threads, threads_of, validate_thread
+from muliao.runtime.delegations import thread_name
 from muliao.runtime.scope import RunScope
 from muliao.runtime.tools.errors import TOOL_MAX_RETRIES
 from muliao.transcript import truncate
@@ -78,15 +78,30 @@ def delegation_toolset(
             report_back: Get the thread's answer back as an event in this conversation.
         """
         parent_id = _require_session(ctx)
-        report = ReportBack(call_id=None, awaited=ctx.deps.user_waits) if report_back else None
         target = await agents.find_by_name(agent)
         async with db.transaction() as s:
-            received = await threads.send(
-                s, parent_id=parent_id, agent=target, thread=thread, prompt=task, private=False, report=report
-            )
+            if report_back:
+                if ctx.tool_call_id is None:
+                    raise RuntimeError("delegate_task was called without a tool call id")
+                # 续跑重新执行这次调用时按调用 id 去重
+                child = await threads.dispatch(
+                    s,
+                    owner_id=parent_id,
+                    agent=target,
+                    thread=thread,
+                    prompt=task,
+                    private=False,
+                    call_id=None,
+                    awaited=ctx.deps.user_waits,
+                    key=ctx.tool_call_id,
+                )
+            else:
+                child = (
+                    await threads.send(s, parent_id=parent_id, agent=target, thread=thread, prompt=task)
+                ).session
         return ToolReturn(
             return_value=f"delegated to {target.name} in thread {validate_thread(thread)!r}",
-            metadata={TOOL_THREADS: [received.session.id]},
+            metadata={TOOL_THREADS: [child.id]},
         )
 
     @ts.tool
@@ -109,17 +124,18 @@ def delegation_toolset(
         if ctx.tool_call_id is None:
             raise RuntimeError("ask_agent was called without a tool call id")
         async with db.transaction() as s:
-            # 续跑时重新执行这次调用：已经投过就只再挂起（runtime.delegations.for_call_in）
-            if await for_call_in(s, parent_id, ctx.tool_call_id) is None:
-                await threads.send(
-                    s,
-                    parent_id=parent_id,
-                    agent=target,
-                    thread=thread,
-                    prompt=message,
-                    private=True,
-                    report=ReportBack(call_id=ctx.tool_call_id, awaited=ctx.deps.user_waits),
-                )
+            # 续跑时重新执行这次调用：已经投过就只再挂起（Threads.dispatch 按调用 id 幂等）
+            await threads.dispatch(
+                s,
+                owner_id=parent_id,
+                agent=target,
+                thread=thread,
+                prompt=message,
+                private=True,
+                call_id=ctx.tool_call_id,
+                awaited=ctx.deps.user_waits,
+                key=ctx.tool_call_id,
+            )
         # 发问方的运行停在这次调用上，不占 worker；对方的结局作为这次调用的结果交回（runtime.pending）
         raise CallDeferred()
 

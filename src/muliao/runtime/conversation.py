@@ -16,25 +16,17 @@ from muliao.db import utcnow
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.files import load_metas
 from muliao.ids import new_id
-from muliao.models import (
-    Agent,
-    Delegation,
-    DelegationStatus,
-    Job,
-    JobStatus,
-    Mail,
-    MailKind,
-    Origin,
-    Session,
-    Task,
-    TaskStatus,
-)
-from muliao.runtime.delegations import Ending, Outcome, settle_all_in, start_in
+from muliao.models import Agent, Mail, MailKind, MailState, Origin, Session, Task, TaskStatus
+from muliao.platform.messaging import Messaging
 from muliao.runtime.history import latest_answer, load_context
+from muliao.runtime.holds import get_in as get_hold_in
+from muliao.runtime.holds import has_active_in, hold_in
 from muliao.runtime.mailbox import latest_run, post_in, queued_in
 from muliao.runtime.pending import pending_questions
 from muliao.runtime.questions import AskResult, Question, QuestionAnswer, answer_result
-from muliao.runtime.tasks import TaskQueue, running_task_ids
+from muliao.runtime.session_events import DelegationDispatched, Ending
+from muliao.runtime.settlement import settle_in, unsettled_in
+from muliao.runtime.tasks import TaskQueue, session_lane
 
 log = logging.getLogger(__name__)
 
@@ -81,8 +73,8 @@ class Inbound:
     attachments: tuple[str, ...] = ()
     # 对这个会话里挂起提问的回答：tool_call_id -> 每题的回答（runtime.questions）；只有用户会带
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
-    # 要交回结局的委派（runtime.delegations）；只有 Threads.send 会带
-    delegation_id: int | None = None
+    # 委派来的信件：关联 id（发起方的占用者），结局按它交回；只有 Threads.dispatch 会带
+    correlation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -217,7 +209,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
                 content=inbound.content,
                 attachments=inbound.attachments,
                 awaited=inbound.awaited,
-                delegation_id=inbound.delegation_id,
+                correlation=inbound.correlation,
             )
         )
     log.info(
@@ -236,13 +228,15 @@ def failure_of(run: Task) -> str:
     return run.error
 
 
-async def delete_sessions(s: AsyncSession, queue: TaskQueue, roots: list[Session]) -> None:
+async def delete_sessions(
+    s: AsyncSession, queue: TaskQueue, messaging: Messaging, roots: list[Session]
+) -> None:
     """删除会话的唯一规则（删会话、删 agent 都经过这里）。
 
     私有 thread 只对父会话有意义，逐层随父会话删除（用户不能单独删除它，见 SessionService.delete）；用户可见的
     thread 保留为独立会话（parent 置空）。
-    任一被删会话正在执行时拒绝，避免运行结果无处提交、工具写到被删的目录。还在等被删 thread 交回结局的委派
-    交回「被删除」（发起会话本身也被删除的除外：委派随它删除）。
+    任一被删会话忙时拒绝（判断只看会话自己的数据），避免运行结果无处提交、工具写到被删的目录。交给被删会话、
+    还没结清的委派结清为「被删除」（SessionSettled，委派领域交回发起方）。
     """
     doomed = {x.id: x for x in roots}
     frontier = list(doomed)
@@ -255,35 +249,24 @@ async def delete_sessions(s: AsyncSession, queue: TaskQueue, roots: list[Session
         frontier = [c.id for c in children if c.id not in doomed]
         doomed |= {c.id: c for c in children}
     for session in doomed.values():
-        running = await running_task_ids(s, session_id=session.id)
-        if running:
+        # 忙：lane 上有排队或运行中的任务（运行、压缩），或有人替它在外面做事（后台任务、委派出去的工作）
+        if await queue.lane_busy(s, session_lane(session.id)) or await has_active_in(s, session.id):
             # 错误也会交还给模型，不带 id；定位信息记在日志里
-            log.info(
-                "session deletion refused: tasks running", extra={"session_id": session.id, "tasks": running}
-            )
+            log.info("session deletion refused: busy", extra={"session_id": session.id})
             what = "the session" if session.id in {x.id for x in roots} else "one of its private threads"
-            raise Conflict(f"{what} has a task running right now; wait for it to finish, then delete")
-    # 后台任务的进程不随会话删除结束，结束时也无处投递：先由 agent 或用户结束它们
-    if running_jobs := (
-        await s.scalars(
-            select(Job.id).where(Job.session_id.in_(list(doomed)), Job.status == JobStatus.RUNNING)
-        )
-    ).all():
-        log.info("session deletion refused: background jobs running", extra={"jobs": list(running_jobs)})
-        raise Conflict(
-            f"the session has background jobs running ({', '.join(map(str, running_jobs))}); "
-            "kill them (job_kill) or wait for them to finish, then delete"
-        )
-    pending = await s.scalars(
-        select(Delegation).where(
-            Delegation.child_session_id.in_(list(doomed)),
-            Delegation.owner_session_id.not_in(list(doomed)),
-            Delegation.status == DelegationStatus.RUNNING,
-        )
-    )
-    for delegation in pending.all():
-        await settle_all_in(
-            s, queue, [delegation], doomed[delegation.child_session_id], Outcome(Ending.DELETED, "")
+            raise Conflict(
+                f"{what} is busy (a run is queued or running, or background jobs or delegated work are still "
+                "going); stop it first, then delete"
+            )
+    for session in doomed.values():
+        # 交给被删会话、还没结清的工作交回「被删除」
+        settle_in(
+            s,
+            messaging,
+            session,
+            await unsettled_in(s, session.id, [MailState.QUEUED, MailState.CONSUMED]),
+            Ending.DELETED,
+            "",
         )
     for session in doomed.values():
         await s.delete(session)
@@ -302,15 +285,6 @@ async def threads_of(s: AsyncSession, parent_id: str) -> list[Session]:
 
 
 @dataclass(frozen=True)
-class ReportBack:
-    """委派要交回结局：call_id 为 ask_agent 的那次调用（结局作为它的结果），report_back 时为 None（作为事件）；
-    awaited 为用户是否在等发起方的回答。"""
-
-    call_id: str | None
-    awaited: bool
-
-
-@dataclass(frozen=True)
 class ThreadState:
     # 最近一次运行的状态；idle：还没有运行
     status: Literal["done", "failed", "running", "idle"]
@@ -318,9 +292,15 @@ class ThreadState:
     text: str
 
 
+def delegation_holder(owner_id: str, key: str) -> str:
+    """委派在发起方会话上的占用者，也是 thread 信件的关联 id 与委派行的主键（runtime.holds）。"""
+    return f"delegation:{owner_id}:{key}"
+
+
 class Threads:
-    def __init__(self, queue: TaskQueue):
+    def __init__(self, queue: TaskQueue, messaging: Messaging):
         self._queue = queue
+        self._messaging = messaging
 
     async def find(self, s: AsyncSession, parent_id: str, thread: str) -> Session | None:
         return await s.scalar(
@@ -358,37 +338,76 @@ class Threads:
         )
 
     async def send(
+        self, s: AsyncSession, *, parent_id: str, agent: Agent, thread: str, prompt: str
+    ) -> Received:
+        """不交回结局的委派（delegate_task）：往公开 thread 的信箱投一封用户在等的信（thread 不存在则新建）。"""
+        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, private=False)
+        inbound = Inbound(
+            origin=Origin.DELEGATION, origin_ref=parent_id, content=prompt, session=child.id, awaited=True
+        )
+        return await receive(s, self._queue, inbound)
+
+    async def dispatch(
         self,
         s: AsyncSession,
         *,
-        parent_id: str,
+        owner_id: str,
         agent: Agent,
         thread: str,
         prompt: str,
         private: bool,
-        report: ReportBack | None,
-    ) -> Received:
-        """往 thread 的信箱投信（thread 不存在则新建），返回投递到的会话与投进的信件。
-
-        要交回结局时（report）建一个委派，信件带着它，没有人等 thread 的回答（发起方处理结局）；否则用户在等它
-        （delegate_task 的回答推送给用户）。"""
-        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, private=private)
-        delegation = (
-            None
-            if report is None
-            else await start_in(
-                s, owner_id=parent_id, child_id=child.id, call_id=report.call_id, awaited=report.awaited
-            )
+        call_id: str | None,
+        awaited: bool,
+        key: str,
+    ) -> Session:
+        """要交回结局的委派（ask_agent、delegate_task(report_back)），在调用方的一个事务里：打开或找到 thread，在发起方
+        登记占用（带 call_id 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件，发布
+        DelegationDispatched（委派领域据此建委派行）。thread 不合用时抛 InvalidInput，什么都没写。按 key 幂等：
+        续跑重新执行这次调用时只返回已经投递到的 thread。awaited：用户是否在等发起方的回答。"""
+        holder = delegation_holder(owner_id, key)
+        if await get_hold_in(s, owner_id, holder) is not None:
+            existing = await s.scalar(select(Mail.session_id).where(Mail.correlation == holder).limit(1))
+            if existing is None:
+                raise RuntimeError(f"delegation {holder} is held but its thread mail is missing")
+            child = await s.get(Session, existing)
+            if child is None:
+                raise RuntimeError(f"delegation {holder} points to a missing thread {existing}")
+            return child
+        child = await self.open(s, parent_id=owner_id, agent=agent, thread=thread, private=private)
+        await hold_in(s, owner_id, holder, call_id)
+        await receive(
+            s,
+            self._queue,
+            Inbound(
+                origin=Origin.DELEGATION,
+                origin_ref=owner_id,
+                content=prompt,
+                session=child.id,
+                # 没有人等 thread 的回答：结局交回发起方，由它处理
+                awaited=False,
+                correlation=holder,
+            ),
         )
-        inbound = Inbound(
-            origin=Origin.DELEGATION,
-            origin_ref=parent_id,
-            content=prompt,
-            session=child.id,
-            awaited=report is None,
-            delegation_id=None if delegation is None else delegation.id,
+        self._messaging.publish_in(
+            s,
+            DelegationDispatched(
+                holder=holder,
+                owner_session_id=owner_id,
+                child_session_id=child.id,
+                call_id=call_id,
+                awaited=awaited,
+            ),
         )
-        return await receive(s, self._queue, inbound)
+        log.info(
+            "delegation dispatched",
+            extra={
+                "session_id": owner_id,
+                "thread_session_id": child.id,
+                "holder": holder,
+                "call_id": call_id,
+            },
+        )
+        return child
 
     async def state(self, s: AsyncSession, child: Session) -> ThreadState:
         """thread 的状态：看最近一次运行；完成时给出会话最近的回答。"""

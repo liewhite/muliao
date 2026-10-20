@@ -1,15 +1,16 @@
 """委派的结局（完成、被停止、最终失败、被删除）只交回一次：delegate_task(report_back) 作为事件，ask_agent 作为它
 的结果（发问方已经不等时作为事件）；运行中检查；随发起方停止。"""
 
+import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
-from muliao.models import Mail, MailKind, MailState, TaskKind, TaskStatus
-from muliao.runtime.conversation import ReportBack, Threads
+from muliao.errors import Conflict
+from muliao.models import Delegation, DelegationStatus, Mail, MailKind, MailState, TaskKind, TaskStatus
 from tests.scripted import scripted
-from tests.test_flow import drain, start, tasks_of
+from tests.test_flow import deliver, drain, start, tasks_of
 from tests.test_mailbox import Recorder
 from tests.test_threads import call, echo, threads_of
 
@@ -86,16 +87,21 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
     # 子 thread 的信件排着、还没交给模型
     target = await container.agents.get(reviewer)
     async with container.db.transaction() as s:
-        received = await Threads(container.queue).send(
+        received = await container.threads.dispatch(
             s,
-            parent_id=parent.id,
+            owner_id=parent.id,
             agent=target,
             thread="review",
             prompt="check",
             private=False,
-            report=ReportBack(call_id=None, awaited=True),
+            call_id=None,
+            awaited=True,
+            key="call-1",
         )
     [child] = await threads_of(container, parent.id)
+    assert child.id == received.id
+    # 委派行由委派领域收到 DelegationDispatched 后建立
+    await deliver(container)
 
     assert await container.delegations.check() == 1
     assert await container.delegations.check() == 0
@@ -103,9 +109,10 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
         [event] = (
             await s.scalars(select(Mail).where(Mail.session_id == parent.id, Mail.state == MailState.QUEUED))
         ).all()
+        child_mail = (await s.scalars(select(Mail).where(Mail.session_id == child.id))).all()
     assert event.source == f"thread:{child.id}" and "queued" in event.content
     assert not event.awaited
-    assert [m.state for m in received.mail] == [MailState.QUEUED]
+    assert [m.state for m in child_mail] == [MailState.QUEUED]
 
 
 async def test_nothing_is_reported_once_the_parent_session_is_gone(container, make_agent, models):
@@ -117,20 +124,26 @@ async def test_nothing_is_reported_once_the_parent_session_is_gone(container, ma
     await drain(container)
     target = await container.agents.get(reviewer)
     async with container.db.transaction() as s:
-        await Threads(container.queue).send(
+        await container.threads.dispatch(
             s,
-            parent_id=parent.id,
+            owner_id=parent.id,
             agent=target,
             thread="review",
             prompt="check",
             private=False,
-            report=ReportBack(call_id=None, awaited=True),
+            call_id=None,
+            awaited=True,
+            key="call-2",
         )
-    # 公开 thread 在父会话删除后作为独立会话保留
+    # 父会话在等这个 thread（占用还在）：先停止它（委派放弃、thread 一起停下），才能删除。公开 thread 在父会话
+    # 删除后作为独立会话保留，它之后的结局不再交回任何地方
+    await container.consumer.stop_session(parent.id)
     await container.sessions.delete(parent.id)
     await drain(container)
     async with container.db.transaction() as s:
         assert (await s.scalars(select(Mail).where(Mail.source.is_not(None)))).all() == []
+        [delegation] = (await s.scalars(select(Delegation))).all()
+    assert delegation.status == DelegationStatus.ABANDONED
 
 
 async def test_a_failing_settle_hook_still_records_the_failure_instead_of_leaving_it_running(
@@ -160,7 +173,8 @@ def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running()
     from datetime import UTC, datetime
 
     from muliao.models import Agent, Session, Task
-    from muliao.runtime.delegations import Ending, Outcome, _event_text, check_text
+    from muliao.runtime.delegations import _event_text, check_text
+    from muliao.runtime.session_events import Ending
 
     child = Session(id="c", agent_id="a", title="t", thread="review")
     agent = Agent(id="a", name="reviewer")
@@ -171,7 +185,7 @@ def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running()
     assert "stop_thread('review')" in check_text(child, agent, queued, now)
     assert "waiting to run again" in check_text(child, agent, retrying, now)
     # 被停止时如实说明，附上停止前说的话
-    assert "was stopped" in _event_text(child, agent, Outcome(Ending.STOPPED, ""))
+    assert "was stopped" in _event_text("review", agent.name, Ending.STOPPED, "")
 
 
 async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_hook(container, monkeypatch):
@@ -305,24 +319,27 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
     await drain(container)
     target = await container.agents.get(reviewer)
     async with container.db.transaction() as s:
-        await Threads(container.queue).send(
+        await container.threads.dispatch(
             s,
-            parent_id=parent.id,
+            owner_id=parent.id,
             agent=target,
             thread="review",
             prompt="check",
             private=False,
-            report=ReportBack(call_id=None, awaited=True),
+            call_id=None,
+            awaited=True,
+            key="call-3",
         )
     [child] = await threads_of(container, parent.id)
 
     await container.consumer.stop_session(child.id)
+    await deliver(container)
 
     async with container.db.transaction() as s:
         [event] = (
             await s.scalars(select(Mail).where(Mail.session_id == parent.id, Mail.state == MailState.QUEUED))
         ).all()
-        state = await Threads(container.queue).state(s, child)
+        state = await container.threads.state(s, child)
     assert event.source == f"thread:{child.id}" and "was stopped" in event.content
     # 排着的运行记为完成、没有任何消息：thread 的状态照样能读
     assert (state.status, state.text) == ("done", "")
@@ -347,14 +364,16 @@ async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_r
 
     async def send(prompt: str) -> None:
         async with container.db.transaction() as s:
-            await Threads(container.queue).send(
+            await container.threads.dispatch(
                 s,
-                parent_id=parent.id,
+                owner_id=parent.id,
                 agent=target,
                 thread="review",
                 prompt=prompt,
                 private=False,
-                report=ReportBack(call_id=None, awaited=False),
+                call_id=None,
+                awaited=False,
+                key=prompt,
             )
 
     async def stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
@@ -484,7 +503,9 @@ async def test_stopping_a_private_thread_answers_the_waiting_ask_with_stopped(co
     assert len(seen) == 1 and "was stopped" in seen[0]
 
 
-async def test_deleting_a_reported_thread_tells_the_delegator(container, make_agent, models):
+async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegator_hears_once(
+    container, make_agent, models
+):
     lead = (await make_agent("lead", model="l")).id
     reviewer = (await make_agent("reviewer", model="v")).id
     models.models["l"] = scripted(Recorder())
@@ -492,29 +513,37 @@ async def test_deleting_a_reported_thread_tells_the_delegator(container, make_ag
     await drain(container)
     target = await container.agents.get(reviewer)
     async with container.db.transaction() as s:
-        received = await Threads(container.queue).send(
+        received = await container.threads.dispatch(
             s,
-            parent_id=parent.id,
+            owner_id=parent.id,
             agent=target,
             thread="review",
             prompt="check",
             private=False,
-            report=ReportBack(call_id=None, awaited=False),
+            call_id=None,
+            awaited=False,
+            key="call-5",
         )
-    await container.sessions.delete(received.session.id)
+    await deliver(container)
+    # 排着运行的 thread 忙：先停止才能删除；停止时委派结清为「被停止」，删除不再重复交回
+    with pytest.raises(Conflict, match="busy"):
+        await container.sessions.delete(received.id)
+    await container.consumer.stop_session(received.id)
+    await container.sessions.delete(received.id)
+    await deliver(container)
 
     async with container.db.transaction() as s:
         [event] = (
             await s.scalars(select(Mail).where(Mail.session_id == parent.id, Mail.state == MailState.QUEUED))
         ).all()
-    assert "was deleted" in event.content
+    assert "was stopped" in event.content
     assert await container.delegations.check() == 0
 
 
 async def test_no_check_ins_while_the_delegator_waits_on_the_ask(container, make_agent, models):
     parent, _seen = await _asking(container, make_agent, models, scripted(Recorder()))
     # 只跑发问方那次运行：它停在 ask_agent 上，子 thread 的运行还排着
-    run = await container.queue.claim()
+    run = await container.queue.claim(list(TaskKind))
     assert run is not None and run.session_id == parent.id
     await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
     # 检查信件要等回答一起才交给模型，这时不发
@@ -534,12 +563,12 @@ async def _until(predicate) -> None:  # noqa: ANN001
 async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retry(
     container, make_agent, models, monkeypatch
 ):
-    """回复（含 ask_agent）已保存、委派还没提交时失败：这次调用不算在等回信（没有委派行），重试时重新执行它，只委派一次。"""
+    """回复（含 ask_agent）已保存、投递还没提交时失败：这次调用不算在等回信（没有占用），重试时重新执行它，只委派一次。"""
     from muliao.models import Delegation
     from muliao.runtime.conversation import Threads as ThreadsClass
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
-    original = ThreadsClass.send
+    original = ThreadsClass.dispatch
     failures = {"n": 0}
 
     async def flaky(self, s, **kwargs):  # noqa: ANN001, ANN003, ANN202
@@ -548,7 +577,7 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
             raise RuntimeError("database went away")
         return await original(self, s, **kwargs)
 
-    monkeypatch.setattr(ThreadsClass, "send", flaky)
+    monkeypatch.setattr(ThreadsClass, "dispatch", flaky)
     await drain(container)
     [failed] = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == parent.id]
     assert failed.status == TaskStatus.FAILED
@@ -566,7 +595,7 @@ async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, mak
     from muliao.models import Delegation, DelegationStatus
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
-    run = await container.queue.claim()
+    run = await container.queue.claim(list(TaskKind))
     assert run is not None and run.session_id == parent.id
     await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
 

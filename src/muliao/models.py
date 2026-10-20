@@ -278,9 +278,12 @@ class Mail(Base):
     answers: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # 用户是否在等它的回答：一次运行处理过的信件里有一封是，结束时就把回答推送给用户
     awaited: Mapped[bool] = mapped_column(default=False)
-    # 委派来的任务里要交回结局的（ask_agent、delegate_task(report_back)）：处理它的运行结束时按这个委派交回
-    # （runtime.delegations）。发起会话删除时委派随之删除，这里置空，结局无处可交
-    delegation_id: Mapped[int | None] = mapped_column(ForeignKey("delegations.id", ondelete="SET NULL"))
+    # 不透明的关联 id：发送方要知道这封信件带来的工作什么时候结束（委派来的信件是它的 holder，runtime.holds）。
+    # 会话在结束时结清它并发布 SessionSettled（runtime.settlement），每个关联只结清一次
+    correlation: Mapped[str | None] = mapped_column(String(200))
+    correlation_settled: Mapped[bool] = mapped_column(default=False)
+    # 幂等键：带同一个键的投信只投一次（命令按键去重，docs/domain-design.md 3.6）
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
     state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
     # 处理掉它的运行（turn task）
     consumed_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
@@ -289,8 +292,40 @@ class Mail(Base):
     # 查询几乎只看还在排队的，用部分索引
     __table_args__ = (
         Index("ix_mail_queued", "session_id", sqlite_where=state == MailState.QUEUED),
+        Index(
+            "uq_mail_dedupe_key", "session_id", "dedupe_key", unique=True, sqlite_where=dedupe_key.isnot(None)
+        ),
+        Index("ix_mail_correlation", "correlation", sqlite_where=correlation.isnot(None)),
         {"sqlite_autoincrement": True},
     )
+
+
+class HoldStatus(StrEnum):
+    # 工作还在进行
+    ACTIVE = "active"
+    # 结局已经交回（和一封信件同一事务）
+    RELEASED = "released"
+    # 会话被停止，工作被放弃，之后的结局不再投
+    CLEARED = "cleared"
+
+
+class SessionHold(Base):
+    """占用：别的领域替这个会话在外面做的一项异步工作（runtime.holds）。行永久保留：带 call_id 的占用是「这次挂起
+    调用已经交出去」的永久事实。"""
+
+    __tablename__ = "session_holds"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    # 不透明的占用者，如 job:12、delegation:<会话>:<键>
+    holder: Mapped[str] = mapped_column(String(200))
+    # 这项工作的结局作为这次挂起调用的结果交回（ask_agent）
+    call_id: Mapped[str | None] = mapped_column(String(100))
+    status: Mapped[HoldStatus] = mapped_column(StrEnumType(HoldStatus), default=HoldStatus.ACTIVE)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("uq_session_holds", "session_id", "holder", unique=True),)
 
 
 class DelegationStatus(StrEnum):
@@ -302,20 +337,18 @@ class DelegationStatus(StrEnum):
 
 
 class Delegation(Base):
-    """会话交给另一个 agent、要交回结局的一项工作（runtime.delegations）：ask_agent 等它作为挂起调用的结果，
-    delegate_task(report_back) 等它作为事件。结局只交回一次（状态从 running 离开）。"""
+    """会话交给另一个 agent、要交回结局的一项工作（runtime.delegations，流程管理者）：ask_agent 等它作为挂起调用
+    的结果，delegate_task(report_back) 等它作为事件。只由委派的投递 lane 创建和修改；会话 id 是不透明引用（没有
+    外键），行永久保留（只进入终态）。"""
 
     __tablename__ = "delegations"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # 发起委派的会话：结局交回这里，随它删除
-    owner_session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
-    # 做这项工作的 thread；它被删除前委派先交回「被删除」（conversation.delete_sessions），委派行留着（它的调用 id 是
-    # 发起方「这次调用已经委派出去」的事实来源，见 runtime.pending.delegated_in），这里置空
-    child_session_id: Mapped[str | None] = mapped_column(
-        ForeignKey("sessions.id", ondelete="SET NULL"), index=True
-    )
-    # ask_agent 的那次调用：发起方还停在它上面时，结局作为它的结果交回；否则（或 report_back）作为事件
+    # 发起方会话上的占用者，也是 thread 信件的关联 id（runtime.holds）
+    holder: Mapped[str] = mapped_column(String(200), unique=True)
+    owner_session_id: Mapped[str] = mapped_column(String(36), index=True)
+    child_session_id: Mapped[str] = mapped_column(String(36), index=True)
+    # ask_agent 的那次调用；report_back 时为 None
     call_id: Mapped[str | None] = mapped_column(String(100))
     # 发起委派时用户是否在等发起方的回答：交回结局的信件随它推送
     awaited: Mapped[bool]
@@ -325,11 +358,7 @@ class Delegation(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     settled_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
-    __table_args__ = (
-        # 同一次 ask_agent 调用只委派一次：续跑重新执行这次调用时据此不重复投信
-        Index("ux_delegations_call", "owner_session_id", "call_id", unique=True),
-        {"sqlite_autoincrement": True},
-    )
+    __table_args__ = {"sqlite_autoincrement": True}
 
 
 class Notification(Base):
