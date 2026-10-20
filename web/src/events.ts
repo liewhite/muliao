@@ -93,7 +93,7 @@ export interface TaskEvent {
   kind: TaskKind
   status: TaskStatus
   session_id: string | null
-  /** 系统通知的投递、失败的内联轮次没有（或不知道）所属 agent */
+  /** 系统通知的投递没有所属 agent */
   agent: string | null
   error: string | null
 }

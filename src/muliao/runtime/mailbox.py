@@ -25,7 +25,7 @@ from muliao.db import Database
 from muliao.errors import NotFound
 from muliao.models import Mail, MailKind, MailState, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.history import load_context
-from muliao.runtime.pending import waiting
+from muliao.runtime.pending import delegated_in, waiting
 from muliao.runtime.tasks import TaskQueue, session_lane
 
 log = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ async def wake_in(
     if finished is None and latest is not None and all(handed_to(m, latest) for m in queued):
         # 都已经交给过一次运行（它失败了、等重试）：由它或之后新信件唤醒的运行处理，不重复投递
         return None
-    if waiting((await load_context(s, session.id)).messages, queued):
+    if waiting((await load_context(s, session.id)).messages, queued, await delegated_in(s, session.id)):
         # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型
         return None
     run = queue.enqueue(

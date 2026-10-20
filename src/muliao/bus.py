@@ -25,7 +25,7 @@ def task_event(
     agent_id: str | None,
     error: str | None,
 ) -> Event:
-    """一个 task 的状态变化（前端据此从数据库重新拉取）。worker 执行的 task 与内联跑完的私有 thread 运行共用这一个形状。"""
+    """一个 task 的状态变化（前端据此从数据库重新拉取）。由 worker 发出。"""
     return {
         "type": "task",
         "task_id": task_id,
@@ -115,7 +115,7 @@ class LiveRuns:
 
     def begin(self, session_id: str, after_message_id: int | None) -> None:
         if session_id in self._runs:
-            # 同一会话同时只有一次运行（lane 串行、内联运行有锁）；已有记录说明上一次漏了 end 或这个前提被打破
+            # 同一会话同时只有一次运行（会话的 lane 串行）；已有记录说明上一次漏了 end 或这个前提被打破
             raise RuntimeError(f"session {session_id} already has a live run")
         self._runs[session_id] = LiveRun(uuid.uuid4().hex, after_message_id, [])
 

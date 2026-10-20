@@ -25,7 +25,7 @@ def _cancelling() -> bool:
 
 
 class StoppableRuns[T]:
-    """按会话登记正在进行的运行，用户可以停止它。同一会话同时只有一次运行（lane 串行、内联轮次有锁）。"""
+    """按会话登记正在进行的运行，用户可以停止它。同一会话同时只有一次运行（会话的 lane 串行）。"""
 
     def __init__(self) -> None:
         self._running: dict[str, asyncio.Task[T]] = {}

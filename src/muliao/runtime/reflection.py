@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
 from muliao.models import Agent, Message, Reflection, Session, Task, TaskKind
-from muliao.runtime.codec import load_messages
+from muliao.runtime.codec import KIND_PATH, RESPONSE_KIND, load_messages
 from muliao.runtime.runner import AgentRuntime, ToolGroups
 from muliao.runtime.tasks import Commit, TaskQueue, reflection_lane
 from muliao.transcript import to_items, to_text
@@ -86,7 +86,7 @@ def _steps_after(agent_id: str, checkpoint: int):  # noqa: ANN202  返回 SQL �
         .where(
             Session.agent_id == agent_id,
             Message.id > checkpoint,
-            func.json_extract(Message.payload, "$.kind") == "response",
+            func.json_extract(Message.payload, KIND_PATH) == RESPONSE_KIND,
         )
     )
 

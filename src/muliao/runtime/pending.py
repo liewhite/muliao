@@ -16,10 +16,11 @@ from typing import Final
 from pydantic import BaseModel, TypeAdapter
 from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage, ToolCallPart
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.conventions import Attachment, unanswered_calls
-from muliao.models import Mail, MailKind
+from muliao.models import Agent, Delegation, Mail, MailKind, Session
 from muliao.runtime.answers import Answer
 from muliao.runtime.history import load_context
 from muliao.runtime.questions import (
@@ -58,26 +59,47 @@ def call_result(value: object) -> CallResult:
 
 
 def still_working(agent_name: str) -> str:
-    """用户在 ask_agent 答复之前发了新消息：这次调用不再等，模型知道回答之后会作为事件送达。"""
+    """ask_agent 答复之前来了新消息：这次调用不再等，模型知道回答之后会作为事件送达。"""
     return (
-        f"The user sent a new message before {agent_name} answered. Its answer will reach you as an event "
+        f"A new message arrived before {agent_name} answered. Its answer will reach you as an event "
         "in this conversation when it is ready."
     )
 
 
-def pending_calls(history: Sequence[ModelMessage]) -> dict[str, ToolCallPart]:
-    """还在等回信的调用：没有结果的 ask_user / ask_agent 调用（参数被拒绝、交还模型重试的有结果，不算）。按出现顺序。"""
-    return {c.tool_call_id: c for c in unanswered_calls(history) if c.tool_name in DEFERRED_TOOLS}
+# ask_agent 调用 id -> 被问 agent 的名称：这个会话里已经委派出去的 ask_agent（委派行是事实来源，见 delegated_in）
+Delegated = Mapping[str, str]
+
+
+def pending_calls(history: Sequence[ModelMessage], delegated: Delegated) -> dict[str, ToolCallPart]:
+    """还在等回信的调用，按出现顺序：没有结果的 ask_user 调用（参数被拒绝、交还模型重试的有结果，不算），以及已经
+    委派出去、还没有结果的 ask_agent 调用。没有委派行的 ask_agent 不是在等回信：工具还没执行完（回复保存后、委派
+    提交前失败），它是待执行的调用，续跑时再执行（tools.delegation 按调用 id 幂等）。"""
+    return {
+        c.tool_call_id: c
+        for c in unanswered_calls(history)
+        if c.tool_name == ASK_USER or (c.tool_name == ASK_AGENT and c.tool_call_id in delegated)
+    }
 
 
 def pending_questions(history: Sequence[ModelMessage]) -> dict[str, list[Question]]:
     """挂起的 ask_user 调用里的问题。"""
-    return {k: questions_of(c) for k, c in pending_calls(history).items() if c.tool_name == ASK_USER}
+    return {c.tool_call_id: questions_of(c) for c in unanswered_calls(history) if c.tool_name == ASK_USER}
+
+
+async def delegated_in(s: AsyncSession, session_id: str) -> dict[str, str]:
+    """这个会话委派出去的 ask_agent 调用（Delegated）。"""
+    rows = await s.execute(
+        select(Delegation.call_id, Agent.name)
+        .join(Session, Session.id == Delegation.child_session_id)
+        .join(Agent, Agent.id == Session.agent_id)
+        .where(Delegation.owner_session_id == session_id, Delegation.call_id.is_not(None))
+    )
+    return {call_id: name for call_id, name in rows.all()}
 
 
 async def pending_in(s: AsyncSession, session_id: str) -> dict[str, ToolCallPart]:
     """会话现在挂着的调用，从库里的历史推导（压缩的切点不会落在挂起的调用之前）。"""
-    return pending_calls((await load_context(s, session_id)).messages)
+    return pending_calls((await load_context(s, session_id)).messages, await delegated_in(s, session_id))
 
 
 def answered_in(queued: Sequence[Mail], pending: Mapping[str, ToolCallPart]) -> dict[str, CallResult]:
@@ -95,20 +117,19 @@ def is_on_time(mail: Mail, pending: Mapping[str, ToolCallPart]) -> bool:
     return mail.kind == MailKind.ANSWER and set(mail.answers) <= set(pending)
 
 
-def waiting(history: Sequence[ModelMessage], queued: Sequence[Mail]) -> bool:
-    """停在挂起的调用上、还不能继续：有挂起的调用，用户没发新消息，回答也没覆盖全部挂起的调用。"""
-    pending = pending_calls(history)
+def waiting(history: Sequence[ModelMessage], queued: Sequence[Mail], delegated: Delegated) -> bool:
+    """停在挂起的调用上、还不能继续：有挂起的调用，没有新消息，回答也没覆盖全部挂起的调用。"""
+    pending = pending_calls(history, delegated)
     if not pending or any(m.kind == MailKind.MESSAGE for m in queued):
         return False
     return not set(pending) <= set(answered_in(queued, pending))
 
 
 def deferred_results(
-    pending: Mapping[str, ToolCallPart], answers: Mapping[str, CallResult], agent_names: Mapping[str, str]
+    pending: Mapping[str, ToolCallPart], answers: Mapping[str, CallResult], delegated: Delegated
 ) -> dict[str, object]:
-    """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（用户发了新消息，或这次只回答了一部分）：ask_user 记为
-    没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后作为事件送达。agent_names：ask_agent 调用 id ->
-    被问 agent 的名称。"""
+    """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（来了新消息，或这次只回答了一部分）：ask_user 记为
+    没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后作为事件送达。"""
     any_answered = any(isinstance(r, AskResult) for r in answers.values())
     results: dict[str, object] = {}
     for call_id, call in pending.items():
@@ -120,7 +141,7 @@ def deferred_results(
         elif call.tool_name == ASK_USER:
             results[call_id] = (SKIPPED if any_answered else NOT_ANSWERED).model_dump()
         else:
-            results[call_id] = still_working(agent_names[call_id])
+            results[call_id] = still_working(delegated[call_id])
     return results
 
 

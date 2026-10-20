@@ -299,6 +299,17 @@ class JobRunner:
         kill_group(handle.proc.pid)
         log.info("background job kill requested", extra={"job_id": job_id})
 
+    async def active_in(self, s: AsyncSession, owner_session_id: str) -> bool:
+        return bool(
+            await s.scalar(
+                select(
+                    select(Job.id)
+                    .where(Job.session_id == owner_session_id, Job.status == JobStatus.RUNNING)
+                    .exists()
+                )
+            )
+        )
+
     async def halt(self, owner_session_id: str) -> None:
         """用户停止会话：结束它正在跑的后台任务（同 job_kill），结局照常由监督者记下（KILLED），但不再给这个会话投信。
         调用方在清空信箱之前调用：标记在这里同步设上，之后监督者的结局事务一定看得到。"""

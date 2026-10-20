@@ -438,3 +438,15 @@ async def test_reconcile_converges_from_any_mix_of_staged_and_unstaged_changes(
     assert await asyncio.to_thread(_git, "-C", str(repo.root), "status", "--porcelain") == ""
     # 收敛后正常写入照常进行
     assert await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA) is not None
+
+
+def test_stored_responses_carry_the_kind_that_step_counting_queries():
+    import json
+
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+
+    from muliao.runtime.codec import KIND_PATH, RESPONSE_KIND, dump_message
+
+    field = KIND_PATH.removeprefix("$.")
+    assert json.loads(dump_message(ModelResponse(parts=[TextPart("x")])))[field] == RESPONSE_KIND
+    assert json.loads(dump_message(ModelRequest(parts=[UserPromptPart("x")])))[field] != RESPONSE_KIND

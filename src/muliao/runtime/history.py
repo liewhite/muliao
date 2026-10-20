@@ -1,14 +1,16 @@
 """会话历史：发给模型的上下文（最新摘要 + 压缩切点之后的原始消息）。原始消息不删除，压缩只决定从哪里开始发。"""
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, UserPromptPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolReturnPart, UserPromptPart
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.conventions import answer_text
+from muliao.conventions import RUN_STOPPED, STOPPED_TOOL_RESULT, answer_text, unanswered_calls
 from muliao.models import Compaction, Message
 from muliao.runtime.codec import load_messages
+from muliao.runtime.questions import ASK_USER
 
 
 @dataclass(frozen=True)
@@ -58,3 +60,23 @@ async def latest_answer(s: AsyncSession, session_id: str) -> str:
         if isinstance(message, ModelResponse):
             return answer_text(message)
     return ""
+
+
+def stopped_results(history: Sequence[ModelMessage]) -> list[ModelMessage]:
+    """没出结果的工具调用（等用户回答的提问除外）补上「被用户停止、可能已部分执行」的结果；没有则为空。"""
+    dangling = [c for c in unanswered_calls(history) if c.tool_name != ASK_USER]
+    if not dangling:
+        return []
+    return [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(c.tool_name, STOPPED_TOOL_RESULT, tool_call_id=c.tool_call_id)
+                for c in dangling
+            ]
+        )
+    ]
+
+
+def marked_stopped(message: ModelMessage) -> ModelMessage:
+    """标上「已停止」（RUN_STOPPED）：界面据此显示，续跑据此不重发这条请求。"""
+    return replace(message, metadata={**(message.metadata or {}), RUN_STOPPED: True})

@@ -529,3 +529,195 @@ async def _until(predicate) -> None:  # noqa: ANN001
             return
         await asyncio.sleep(0.02)
     raise AssertionError("condition not reached")
+
+
+async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retry(
+    container, make_agent, models, monkeypatch
+):
+    """回复（含 ask_agent）已保存、委派还没提交时失败：这次调用不算在等回信（没有委派行），重试时重新执行它，只委派一次。"""
+    from muliao.models import Delegation
+    from muliao.runtime.conversation import Threads as ThreadsClass
+
+    parent, seen = await _asking(container, make_agent, models, echo("checked"))
+    original = ThreadsClass.send
+    failures = {"n": 0}
+
+    async def flaky(self, s, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        if failures["n"] == 0:
+            failures["n"] += 1
+            raise RuntimeError("database went away")
+        return await original(self, s, **kwargs)
+
+    monkeypatch.setattr(ThreadsClass, "send", flaky)
+    await drain(container)
+    [failed] = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == parent.id]
+    assert failed.status == TaskStatus.FAILED
+
+    await container.queue.retry(failed.id)
+    await drain(container)
+
+    assert seen == ["checked check"]
+    async with container.db.transaction() as s:
+        assert len((await s.scalars(select(Delegation))).all()) == 1
+
+
+async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, make_agent, models):
+    from muliao.conventions import STOPPED_TOOL_RESULT
+    from muliao.models import Delegation, DelegationStatus
+
+    parent, seen = await _asking(container, make_agent, models, echo("checked"))
+    run = await container.queue.claim()
+    assert run is not None and run.session_id == parent.id
+    await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
+
+    await container.consumer.stop_session(parent.id)
+    await drain(container)
+
+    async with container.db.transaction() as s:
+        [delegation] = (await s.scalars(select(Delegation))).all()
+        mail = (await s.scalars(select(Mail).where(Mail.session_id == parent.id))).all()
+    assert delegation.status == DelegationStatus.ABANDONED
+    # 发问方的这次调用补上了「被停止」，之后没有回答投回来，也没有再运行
+    history = await container.sessions.history(parent.id)
+    from pydantic_ai.messages import ToolReturnPart
+
+    returns = [p for m in history for p in m.parts if isinstance(p, ToolReturnPart)]
+    assert [r.content for r in returns] == [STOPPED_TOOL_RESULT]
+    assert [m.kind for m in mail] == [MailKind.MESSAGE] and seen == []
+
+
+async def test_a_question_and_an_ask_in_one_reply_wait_for_both(client, container, make_agent, models):
+    from pydantic_ai.messages import ToolCallPart
+
+    from tests.conftest import login
+    from tests.test_flow import tool_returns
+    from tests.test_questions import QUESTIONS
+
+    await login(client)
+    lead = await make_agent("lead", model="l")
+    await make_agent("helper", model="h")
+    models.models["h"] = echo("checked")
+    results: list[str] = []
+
+    def lead_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if returns := tool_returns(messages):
+            results.extend(r.tool_name for r in returns)
+            return ModelResponse(parts=[TextPart("ok")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart("ask_user", {"questions": QUESTIONS[:1]}, tool_call_id="q"),
+                ToolCallPart(
+                    "ask_agent", {"agent": "helper", "message": "x", "thread": "h"}, tool_call_id="a"
+                ),
+            ]
+        )
+
+    models.models["l"] = scripted(lead_fn)
+    session_id = (await client.post("/api/sessions", json={"agent_id": lead.id, "prompt": "go"})).json()["id"]
+    await drain(container)
+    # helper 已经答了，用户还没答：还在等
+    assert results == []
+
+    await client.post(
+        f"/api/sessions/{session_id}/messages",
+        json={"prompt": "", "answers": {"q": [{"selected": ["日线"]}]}},
+    )
+    await drain(container)
+    assert sorted(results) == ["ask_agent", "ask_user"]
+
+
+async def test_an_answer_arriving_mid_run_reaches_the_model_as_late_text(
+    client, container, make_agent, models
+):
+    """提问已被跳过（用户发了消息）、运行进行中才到的回答：作为迟到的回答并进下一次请求，不丢。"""
+    from collections.abc import AsyncIterator
+
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+    from pydantic_ai.models.function import DeltaToolCall, FunctionModel
+
+    from muliao.runtime.mailbox import post_in
+    from muliao.runtime.questions import AnsweredQuestion, AskResult
+    from tests.conftest import login
+    from tests.test_questions import QUESTIONS
+
+    await login(client)
+    agent = await make_agent("analyst", model="m")
+    requests: list[ModelRequest] = []
+
+    async def stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator:
+        responses = sum(isinstance(m, ModelResponse) for m in messages)
+        requests.append(messages[-1])
+        if responses == 0:
+            yield {
+                0: DeltaToolCall(
+                    name="ask_user", json_args=json.dumps({"questions": QUESTIONS[:1]}), tool_call_id="q"
+                )
+            }
+        elif responses == 1:
+            # 用户跳过了提问；这次运行进行中，那次提问的回答才到
+            answer = AskResult(
+                answered=True,
+                answers=[AnsweredQuestion(question="看哪个周期？", selected=["日线"], other=None)],
+                note=None,
+            )
+            async with container.db.transaction() as s:
+                await post_in(
+                    s,
+                    container.queue,
+                    session_id,
+                    kind=MailKind.ANSWER,
+                    content="",
+                    answers={"q": answer.model_dump()},
+                    awaited=True,
+                )
+            yield {0: DeltaToolCall(name="memory_append", json_args='{"entry": "- x"}', tool_call_id="m")}
+        else:
+            yield "ok"
+
+    import json
+
+    models.models["m"] = FunctionModel(stream_function=stream)
+    session_id = (await client.post("/api/sessions", json={"agent_id": agent.id, "prompt": "go"})).json()[
+        "id"
+    ]
+    await drain(container)
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "skip it"})
+    await drain(container)
+
+    prompts = [str(p.content) for p in requests[-1].parts if isinstance(p, UserPromptPart)]
+    assert any("already been closed" in p and "日线" in p for p in prompts)
+
+
+async def test_a_private_thread_answers_only_after_its_background_job_finishes(container, make_agent, models):
+    """私有 thread 开了后台任务就先回了一句：它的工作还没做完，委派不结清；任务结束后的那次运行给出的才是结局。"""
+    import asyncio
+
+    from pydantic_ai.messages import ToolCallPart
+
+    from tests.test_flow import last_user_prompt, tool_returns
+
+    def helper_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if "job:" in last_user_prompt(messages):
+            return ModelResponse(parts=[TextPart("job finished: all good")])
+        if tool_returns(messages):
+            return ModelResponse(parts=[TextPart("started, will report")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "run_shell", {"command": "sleep 0.2; echo hi", "background": True}, tool_call_id="bg"
+                )
+            ]
+        )
+
+    parent, seen = await _asking(container, make_agent, models, scripted(helper_fn))
+    worker = asyncio.create_task(container.worker.run_forever())
+    try:
+        await _until(lambda: _has(seen))
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+    assert seen == ["job finished: all good"]
+
+
+async def _has(items: list) -> bool:  # noqa: ANN001
+    return bool(items)

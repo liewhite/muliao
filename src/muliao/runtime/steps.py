@@ -16,7 +16,7 @@ from muliao.models import Agent, Mail, Message, Session
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import Compactor
 from muliao.runtime.content import ContentBuilder, append_content, mark_events
-from muliao.runtime.halt import marked_stopped, stopped_results
+from muliao.runtime.history import marked_stopped, stopped_results
 from muliao.runtime.mailbox import consume_in, queued_in
 from muliao.runtime.redaction import redact_messages
 from muliao.runtime.runner import StepHooks

@@ -12,44 +12,22 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import replace
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.messages import ModelRequest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.conventions import RUN_STOPPED, STOPPED_TOOL_RESULT, is_stopped, unanswered_calls
+from muliao.conventions import is_stopped
 from muliao.db import Database
 from muliao.models import Message, Session, TaskKind
 from muliao.runtime.codec import dump_message, load_messages
 from muliao.runtime.delegations import Ending, Outcome, in_session_in, settle_all_in
-from muliao.runtime.history import latest_answer, load_context
+from muliao.runtime.history import latest_answer, load_context, marked_stopped, stopped_results
 from muliao.runtime.mailbox import discard_in, latest_run
-from muliao.runtime.questions import ASK_USER
 from muliao.runtime.tasks import TaskQueue, session_lane
 from muliao.runtime.work import SessionWork, halt_all
 
 log = logging.getLogger(__name__)
-
-
-def stopped_results(history: Sequence[ModelMessage]) -> list[ModelMessage]:
-    """没出结果的工具调用（等用户回答的提问除外）补上「被用户停止、可能已部分执行」的结果；没有则为空。"""
-    dangling = [c for c in unanswered_calls(history) if c.tool_name != ASK_USER]
-    if not dangling:
-        return []
-    return [
-        ModelRequest(
-            parts=[
-                ToolReturnPart(c.tool_name, STOPPED_TOOL_RESULT, tool_call_id=c.tool_call_id)
-                for c in dangling
-            ]
-        )
-    ]
-
-
-def marked_stopped(message: ModelMessage) -> ModelMessage:
-    """标上「已停止」（RUN_STOPPED）：界面据此显示，续跑据此不重发这条请求。"""
-    return replace(message, metadata={**(message.metadata or {}), RUN_STOPPED: True})
 
 
 async def close_history_in(s: AsyncSession, session_id: str) -> None:

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,7 @@ from muliao.runtime.mailbox import wake_in
 from muliao.runtime.reflection import ReflectionScheduler
 from muliao.runtime.steps import RunState
 from muliao.runtime.tasks import Commit, TaskQueue
+from muliao.runtime.work import SessionWork, any_active_in
 
 
 @dataclass(frozen=True)
@@ -47,10 +49,12 @@ class RunFinisher:
         queue: TaskQueue,
         notifier: Notifier,
         reflection: ReflectionScheduler,
+        works: Sequence[SessionWork],
     ):
         self._queue = queue
         self._notifier = notifier
         self._reflection = reflection
+        self._works = works
 
     def idle(self, state: RunState) -> Commit:
         """运行没有可交给模型的、也没有之前的尝试要收尾（信箱空了，或还在等挂起调用的回答）：只看要不要唤醒下一次。"""
@@ -68,8 +72,9 @@ class RunFinisher:
                 session.updated_at = utcnow()
                 session.unread = not session.private
                 await self._reflection.after_run_in(s, agent)
-            if not end.stopped and not end.paused:
-                # 工作做完了：处理中的委派交回结局（可能跨几次运行，停在挂起的调用上时等后面的运行接着做完）
+            if not end.stopped and not end.paused and not await any_active_in(self._works, s, session.id):
+                # 工作做完了（没有停在挂起的调用上，它发起的异步工作也都结束了）：处理中的委派交回结局。委派可能跨几次
+                # 运行：停在挂起的调用上、或等它发起的工作时，由之后那次做完的运行交回
                 outcome = Outcome(Ending.FINISHED, end.answer, shared_attachments(state.messages))
                 await settle_all_in(
                     s, self._queue, await in_session_in(s, session.id, consumed_only=True), session, outcome

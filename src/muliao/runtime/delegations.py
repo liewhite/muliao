@@ -131,8 +131,8 @@ async def settle_in(
         )
     delegation.status, delegation.settled_at = DelegationStatus.SETTLED, utcnow()
     owner, call_id = delegation.owner_session_id, delegation.call_id
-    as_result = call_id is not None and call_id in await pending_in(s, owner)
-    if call_id is not None and as_result:
+    if call_id is not None and call_id in await pending_in(s, owner):
+        delivered = MailKind.ANSWER
         answer = AgentAnswer(
             text=_result_text(child, agent, outcome), attachments=list(outcome.attachments), thread=child.id
         )
@@ -146,6 +146,7 @@ async def settle_in(
             awaited=delegation.awaited,
         )
     else:
+        delivered = MailKind.EVENT
         await post_in(
             s,
             queue,
@@ -162,7 +163,7 @@ async def settle_in(
             "session_id": owner,
             "thread_session_id": child.id,
             "ending": outcome.ending,
-            "as_call_result": as_result,
+            "delivered_as": delivered,
         },
     )
 
@@ -197,7 +198,7 @@ def _event_text(child: Session, agent: Agent, outcome: Outcome) -> str:
                 f"{who} was stopped before it finished. What it said so far:\n{outcome.text or '(nothing)'}"
             )
         case Ending.FAILED:
-            return f"{who} failed: {outcome.text}\nThe user can retry it from the app, or you can delegate again."
+            return f"{who} failed: {outcome.text}\nYou can ask it again, or delegate to another agent."
         case Ending.DELETED:
             return f"{who} was deleted by the user before it finished."
 
@@ -248,6 +249,20 @@ class Delegations:
                 )
         return posted
 
+    async def active_in(self, s: AsyncSession, owner_session_id: str) -> bool:
+        return bool(
+            await s.scalar(
+                select(
+                    select(Delegation.id)
+                    .where(
+                        Delegation.owner_session_id == owner_session_id,
+                        Delegation.status == DelegationStatus.RUNNING,
+                    )
+                    .exists()
+                )
+            )
+        )
+
     async def halt(self, owner_session_id: str) -> None:
         """发起方被停止：它发起的委派放弃（不再交回），做这些工作的 thread 一起停下（逐层）。"""
         async with self._db.transaction() as s:
@@ -272,15 +287,19 @@ class Delegations:
 
 
 def check_text(child: Session, agent: Agent, run: Task | None, now: datetime) -> str:
-    """run 为 None：委派信件还排着，thread 还没有运行。"""
+    """run 为 None：委派信件还排着，thread 还没有运行。最近一次运行已经结束（委派却还没结清）：thread 停在它自己的
+    挂起调用上，或在等它发起的后台任务、委派。"""
     name = thread_name(child)
     stop = f"if it is no longer needed, call stop_thread({name!r})."
     if run is None or run.status in (TaskStatus.PENDING, TaskStatus.DONE, TaskStatus.FAILED):
-        state = (
-            f"is waiting to run again (attempt {run.attempts} so far)"
-            if run is not None and run.status == TaskStatus.PENDING and run.attempts
-            else "is queued and has not started yet"
-        )
+        if run is not None and run.status == TaskStatus.PENDING and run.attempts:
+            state = f"is waiting to run again (attempt {run.attempts} so far)"
+        elif run is not None and run.status == TaskStatus.DONE:
+            state = (
+                "is waiting for work it started (background jobs, other agents) or for answers it asked for"
+            )
+        else:
+            state = "is queued and has not started yet"
         return f"Thread {name!r} ({agent.name}) {state}. Keep waiting, you will get an event with its answer; {stop}"
     if run.started_at is None:
         raise RuntimeError(f"running run {run.id} has no start time")

@@ -5,6 +5,8 @@
 - 运行中检查：每隔 job_check_seconds 给每项还在进行的工作向发起会话投一封检查信件（不推送），同一来源已有信件在
   信箱里排着时不再发（不堆积）——post_check_in。
 - 随会话停止：会话被用户停止时，它发起的工作一起停下，之后不再给它投信——SessionWork.halt。
+- 会话的工作是否做完：会话还有进行中的这类工作时，交给它的委派不结清（runtime.finish），结局等工作结束后的
+  那次运行给出——SessionWork.active_in。
 """
 
 import asyncio
@@ -28,6 +30,10 @@ class SessionWork(Protocol):
 
     async def halt(self, owner_session_id: str) -> None:
         """会话被用户停止：结束它发起、还在进行的这种工作，之后不再给它投信。"""
+        ...
+
+    async def active_in(self, s: AsyncSession, owner_session_id: str) -> bool:
+        """会话发起的这种工作还有在进行的。"""
         ...
 
 
@@ -57,6 +63,13 @@ class WorkWatcher:
             posted = await self.check()
             if posted:
                 log.info("check-in events posted", extra={"posted": posted})
+
+
+async def any_active_in(works: Sequence[SessionWork], s: AsyncSession, owner_session_id: str) -> bool:
+    for work in works:
+        if await work.active_in(s, owner_session_id):
+            return True
+    return False
 
 
 async def halt_all(works: Sequence[SessionWork], owner_session_id: str) -> None:

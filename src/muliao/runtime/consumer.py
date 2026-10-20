@@ -12,9 +12,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 from pydantic_ai import DeferredToolRequests, DeferredToolResults
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, UserContent
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart, UserContent
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,13 +33,13 @@ from muliao.runtime.halt import SessionHalt
 from muliao.runtime.history import load_context
 from muliao.runtime.mailbox import discard_in, handed_to, queued_in
 from muliao.runtime.pending import (
-    ASK_AGENT,
     DEFERRED_TOOLS,
+    Delegated,
     answered_in,
     deferred_results,
+    delegated_in,
     is_on_time,
     pending_calls,
-    pending_questions,
     waiting,
 )
 from muliao.runtime.questions import ASK_USER, questions_of, waiting_text
@@ -50,30 +51,24 @@ from muliao.runtime.tasks import Commit, TaskQueue, no_commit
 log = logging.getLogger(__name__)
 
 
-def resumable(history: list[ModelMessage]) -> bool:
-    """历史从中途续跑：停在一条没得到回复、也没被停止的请求上，或最后的回复里有没执行完的工具调用（挂起的调用除外）。
+def resumable(history: list[ModelMessage], delegated: Delegated) -> bool:
+    """历史从中途续跑：停在一条没得到回复、也没被停止的请求上，或最后的回复里有没执行完的工具调用（挂起的调用除外，
+    包括没委派出去、还要再执行的 ask_agent，见 pending.pending_calls）。
 
     停在挂起的调用上时不是续跑，哪怕末尾是一条请求：挂起的调用与别的工具在同一个回复里时，pydantic-ai 以挂起结束时
     把别的工具的结果追加成一条请求，这时要等回答（或跳过）作为 DeferredToolResults 交回，不能把那条请求重发出去。"""
-    if not history or pending_calls(history):
+    pending = pending_calls(history, delegated)
+    if not history or pending:
         return False
     last = history[-1]
     if isinstance(last, ModelRequest):
         return not is_stopped(last)
-    return any(c.tool_name not in DEFERRED_TOOLS for c in unanswered_calls(history))
+    return bool(unanswered_calls(history))
 
 
-def end_of(output: str | DeferredToolRequests) -> RunEnd:
-    """模型运行的输出怎么收尾：最终回答，或停在挂起的调用上（ask_user 的问题要告诉用户）。"""
-    if isinstance(output, str):
-        return RunEnd(answer=output, paused=False, asked_user=False, stopped=False)
-    if output.approvals or any(c.tool_name not in DEFERRED_TOOLS for c in output.calls):
-        # 只有 ask_user / ask_agent 会挂起；其他挂起说明工具与这里的约定不一致
-        raise RuntimeError(
-            f"run deferred unexpected tool calls: calls={[c.tool_name for c in output.calls]} "
-            f"approvals={[c.tool_name for c in output.approvals]}"
-        )
-    questions = [q for c in output.calls if c.tool_name == ASK_USER for q in questions_of(c)]
+def paused_end(calls: Sequence[ToolCallPart]) -> RunEnd:
+    """停在这些挂起的调用上：ask_user 的问题要告诉用户。"""
+    questions = [q for c in calls if c.tool_name == ASK_USER for q in questions_of(c)]
     return RunEnd(
         answer=waiting_text(questions) if questions else "",
         paused=True,
@@ -82,16 +77,23 @@ def end_of(output: str | DeferredToolRequests) -> RunEnd:
     )
 
 
-def settled_end(history: list[ModelMessage]) -> RunEnd:
-    """之前的尝试已经跑完、只差收尾：从保存的历史得出它怎么结束的。"""
-    if pending_calls(history):
-        questions = [q for qs in pending_questions(history).values() for q in qs]
-        return RunEnd(
-            answer=waiting_text(questions) if questions else "",
-            paused=True,
-            asked_user=bool(questions),
-            stopped=False,
+def end_of(output: str | DeferredToolRequests) -> RunEnd:
+    """模型运行的输出怎么收尾：最终回答，或停在挂起的调用上。"""
+    if isinstance(output, str):
+        return RunEnd(answer=output, paused=False, asked_user=False, stopped=False)
+    if output.approvals or any(c.tool_name not in DEFERRED_TOOLS for c in output.calls):
+        # 只有 ask_user / ask_agent 会挂起；其他挂起说明工具与这里的约定不一致
+        raise RuntimeError(
+            f"run deferred unexpected tool calls: calls={[c.tool_name for c in output.calls]} "
+            f"approvals={[c.tool_name for c in output.approvals]}"
         )
+    return paused_end(output.calls)
+
+
+def settled_end(history: list[ModelMessage], delegated: Delegated) -> RunEnd:
+    """之前的尝试已经跑完、只差收尾：从保存的历史得出它怎么结束的。"""
+    if pending := pending_calls(history, delegated):
+        return paused_end(list(pending.values()))
     last = history[-1]
     if not isinstance(last, ModelResponse):
         raise RuntimeError(f"a settled run must end with a model response, history ends with {last!r}")
@@ -147,7 +149,8 @@ class Consumer:
             context = await load_context(s, session.id)
             queued = await queued_in(s, session.id)
             earlier = list((await s.scalars(select(Mail).where(Mail.consumed_by == run_id))).all())
-            adopted = await _adopted(s, session.id, run_id) if resumable(context.messages) else []
+            delegated = await delegated_in(s, session.id)
+            adopted = await _adopted(s, session.id, run_id) if resumable(context.messages, delegated) else []
             saved_rows = list(
                 (await s.scalars(select(Message).where(Message.task_id == run_id).order_by(Message.id))).all()
             )
@@ -159,14 +162,14 @@ class Consumer:
             run_id=run_id,
             session=session,
             agent=agent,
-            resending=resumable(history) and isinstance(history[-1], ModelRequest),
+            resending=resumable(history, delegated) and isinstance(history[-1], ModelRequest),
             handled=[*earlier, *adopted],
             messages=load_messages(r.payload for r in saved_rows),
             last_row=saved_rows[-1] if saved_rows else None,
         )
         self._active[session_id] = state
-        prompt, deferred = await self._opening(state, history, queued)
-        if prompt is None and deferred is None and not resumable(history):
+        prompt, deferred = await self._opening(state, history, queued, delegated)
+        if prompt is None and deferred is None and not resumable(history, delegated):
             # 没有要交给模型的：信箱空了，或停在挂起的调用上、还不能继续。之前的尝试已经跑完、只差收尾时（它保存的就是
             # 历史的末尾），按保存的历史收尾；之后的运行已经接着它保存的部分继续了（重试一个过时的失败运行），推送与
             # 委派的结局由那些运行做过，这里只了结它自己
@@ -174,7 +177,7 @@ class Consumer:
                 state.messages, state.handled = [], []
             log.info("nothing to consume", extra={"session_id": session_id, "run_id": run_id})
             return (
-                self._finisher.commit(state, settled_end(history))
+                self._finisher.commit(state, settled_end(history, delegated))
                 if state.messages
                 else self._finisher.idle(state)
             )
@@ -210,15 +213,16 @@ class Consumer:
         return self._finisher.commit(state, end_of(result.output))
 
     async def _opening(
-        self, state: RunState, history: list[ModelMessage], queued: list[Mail]
+        self, state: RunState, history: list[ModelMessage], queued: list[Mail], delegated: Delegated
     ) -> tuple[list[UserContent] | None, DeferredToolResults | None]:
         """这次运行开头交给模型的：新信件的内容，以及挂起调用的结果。从历史续跑、或还在等挂起调用的回答时什么都不交。"""
-        if resumable(history) or waiting(history, queued):
+        if resumable(history, delegated) or waiting(history, queued, delegated):
             return None, None
-        pending = pending_calls(history)
+        pending = pending_calls(history, delegated)
         answers = answered_in(queued, pending)
-        names = {k: str(c.args_as_dict()["agent"]) for k, c in pending.items() if c.tool_name == ASK_AGENT}
-        deferred = DeferredToolResults(calls=deferred_results(pending, answers, names)) if pending else None
+        deferred = (
+            DeferredToolResults(calls=deferred_results(pending, answers, delegated)) if pending else None
+        )
         state.taken = list(queued)
         content = await self._content.of(state.agent.id, [m for m in queued if not is_on_time(m, pending)])
         # 开头的内容由 pydantic-ai 放进第一次请求的用户消息（下标从 0 起），事件在那次请求保存前标上

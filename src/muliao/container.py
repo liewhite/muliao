@@ -347,7 +347,7 @@ def build_container(
         live,
         content,
         Steps(db, live, content, compactor),
-        RunFinisher(queue, notifier, reflection),
+        RunFinisher(queue, notifier, reflection, [jobs, delegations]),
         SessionHalt(db, queue, [jobs, delegations]),
         compactor,
     )

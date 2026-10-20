@@ -308,7 +308,9 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
         )
 
 
-async def test_private_thread_running_inline_cannot_be_deleted_nor_its_agent(container, make_agent, models):
+async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_its_agent(
+    container, make_agent, models
+):
     import asyncio
     from collections.abc import AsyncIterator
 
@@ -334,8 +336,11 @@ async def test_private_thread_running_inline_cannot_be_deleted_nor_its_agent(con
             await running.wait()
         [child] = await threads_of(container, parent.id)
 
-        with pytest.raises(Conflict):
+        # 私有 thread 不能单独删除；随父会话删除时，它正在运行就拒绝
+        with pytest.raises(Conflict, match="private thread"):
             await container.sessions.delete(child.id)
+        with pytest.raises(Conflict, match="one of its private threads"):
+            await container.sessions.delete(parent.id)
         with pytest.raises(Conflict):
             await container.agent_lifecycle.delete(slow, author="user")
     finally:
