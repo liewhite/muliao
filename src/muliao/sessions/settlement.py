@@ -101,6 +101,9 @@ async def settle_failure_in(s: AsyncSession, messaging: Messaging, session: Sess
     之前就失败时，开头取走的信件一直排着，也不会再有运行因为它们被唤醒（mailbox.handed_to）；它们随结清一起退出
     信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：它们会唤醒新的运行。
 
+    例外：收尾钩子失败、对账补做之前又有新信件到达，投信当场唤醒的新运行会把这些信件一起取走执行；它们之后随那次
+    运行的正常结清交回，发起方照样拿到结局。
+
     两条执行路径共用这一个函数：队列记下最终失败时（RunHandler.failed_in），以及它没做成时信箱对账补做
     （reconcile_failures）。"""
     stranded = [m for m in await unsettled_in(s, session.id, [MailState.QUEUED]) if handed_to(m, run)]

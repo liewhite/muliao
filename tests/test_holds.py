@@ -415,3 +415,57 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
 async def _mail_of(container, session_id: str) -> list[Mail]:
     async with container.db.transaction() as s:
         return list((await s.scalars(select(Mail).where(Mail.session_id == session_id))).all())
+
+
+async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_failed_run(
+    container, make_agent, models
+):
+    """候选会话范围放宽后，结清仍按同一条规则筛选：失败的运行之后才到的委派信件不结清，留给新的运行。"""
+    from muliao.platform.tables import TaskStatus
+    from muliao.sessions.settlement import reconcile_failures
+    from muliao.sessions.tables import MailState
+
+    lead = (await make_agent("lead", model="l")).id
+    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
+    models.models["l"] = scripted(Recorder())
+    parent = await start(container, lead, "go")
+    await drain(container)
+
+    async def dispatch(key: str):  # noqa: ANN202
+        async with container.db.transaction() as s:
+            return await container.threads.dispatch(
+                s,
+                owner_id=parent.id,
+                agent=reviewer,
+                thread="review",
+                prompt=key,
+                kind=SessionKind.THREAD,
+                call_id=None,
+                awaited=False,
+                key=key,
+            )
+
+    child = await dispatch("first")
+    run = await container.queue.claim([TaskKind.RUN])
+    assert run is not None and run.session_id == child.id
+
+    async def no_hook(_s, _task):  # noqa: ANN202
+        return None
+
+    await container.queue.fail(run.id, "boom", retryable=False, on_final=no_hook)
+    # 失败之后才到：不属于那次运行
+    await dispatch("second")
+    async with container.db.transaction() as s:
+        # 新信件当场唤醒了一次新运行；删掉它，让失败的运行仍是最近一次，只看对账怎么对待这封信
+        [woken] = (
+            await s.scalars(
+                select(Task).where(Task.session_id == child.id, Task.status == TaskStatus.PENDING)
+            )
+        ).all()
+        await s.delete(woken)
+
+    assert await reconcile_failures(container.db, container.messaging) == [child.id]
+    late = [m for m in await _mail_of(container, child.id) if m.content.endswith("second")]
+    assert [(m.state, m.correlation_settled) for m in late] == [(MailState.QUEUED, False)]
+    first = [m for m in await _mail_of(container, child.id) if m.content.endswith("first")]
+    assert [(m.state, m.correlation_settled) for m in first] == [(MailState.DISCARDED, True)]

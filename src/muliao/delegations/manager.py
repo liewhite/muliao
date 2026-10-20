@@ -172,13 +172,12 @@ class Delegations:
         # 占用者对委派领域也是不透明的：被清掉的占用里哪些是委派，看自己的委派行
         if not event.cleared:
             return no_commit
-        held = list(event.cleared)
         async with self._db.transaction() as s:
             rows = list(
                 (
                     await s.scalars(
                         select(Delegation).where(
-                            Delegation.holder.in_(held), Delegation.status == DelegationStatus.RUNNING
+                            Delegation.holder.in_(event.cleared), Delegation.status == DelegationStatus.RUNNING
                         )
                     )
                 ).all()

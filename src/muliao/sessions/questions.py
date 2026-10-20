@@ -3,14 +3,14 @@
 """
 
 from collections.abc import Sequence
-from typing import Annotated
+from typing import Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic_ai.messages import ToolCallPart
 
 from muliao.errors import InvalidInput
 
-ASK_USER = "ask_user"
+ASK_USER: Final = "ask_user"
 
 
 class Option(BaseModel):
