@@ -469,3 +469,9 @@ async def test_run_shell_rejects_a_zero_timeout_instead_of_using_the_default(con
         container, models, me.id, [("run_shell", {"command": "echo hi", "timeout": 0})]
     )
     assert "timeout must be in" in output
+
+
+async def test_read_file_rejects_negative_offsets(container, make_agent, models):
+    me = await make_agent("alpha", model="tools")
+    [output] = await run_tools(container, models, me.id, [("read_file", {"path": "x.txt", "offset": -10})])
+    assert "offset must be >= 0" in output

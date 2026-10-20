@@ -45,6 +45,9 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
             offset: First line to return (0-based).
             limit: Maximum number of lines to return.
         """
+        if offset < 0 or limit < 1:
+            # 负数在切片里有别的意思（从末尾数），会返回看起来正常、其实不对的内容
+            raise InvalidInput(f"offset must be >= 0 and limit >= 1, got offset={offset} limit={limit}")
         target = resolve(ctx.deps, path)
         if not target.is_file():
             raise NotFound(f"file not found: {target}")

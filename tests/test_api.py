@@ -146,3 +146,9 @@ async def test_a_failed_resource_write_leaves_no_half_created_agent(client, cont
 
     assert (await client.get("/api/agents")).status_code == 200
     assert (await client.post("/api/agents", json={"name": "half", "description": "d"})).status_code == 201
+
+
+async def test_list_limits_must_be_positive(client):
+    await login(client)
+    assert (await client.get("/api/sessions", params={"limit": -1})).status_code == 422
+    assert (await client.get("/api/sessions", params={"offset": -1})).status_code == 422

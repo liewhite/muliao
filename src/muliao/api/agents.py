@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from muliao.agents import AgentPatch, AgentSpec
@@ -162,7 +162,7 @@ class ReflectionOut(BaseModel):
 
 
 @router.get("/agents/{agent_id}/reflections")
-async def list_reflections(c: C, agent_id: str, limit: int = 50) -> list[ReflectionOut]:
+async def list_reflections(c: C, agent_id: str, limit: int = Query(50, ge=1, le=200)) -> list[ReflectionOut]:
     await c.agents.get(agent_id)
     return [
         ReflectionOut(
