@@ -55,9 +55,9 @@ from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import CompactionHandler, Compactor
 from muliao.sessions.consumer import Consumer, RunHandler
 from muliao.sessions.content import ContentBuilder
-from muliao.sessions.conversation import Threads
 from muliao.sessions.delegation import ThreadChecks
 from muliao.sessions.delegation_tools import delegation_toolset
+from muliao.sessions.deletion import AgentSessionsCleanup
 from muliao.sessions.delivery import SessionWork, handle_post_event
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
@@ -66,6 +66,7 @@ from muliao.sessions.mailbox import MailReconciler
 from muliao.sessions.service import SessionService
 from muliao.sessions.settlement import reconcile_failures
 from muliao.sessions.steps import Steps
+from muliao.sessions.threads import Threads
 from muliao.sessions.work import AgentWork
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
@@ -361,6 +362,9 @@ def build_container(
     notifier.subscribe(messaging)
     agent_lifecycle.subscribe(messaging)
     sessions.subscribe(messaging)
+    AgentSessionsCleanup(
+        db, queue, messaging, lambda session_id: consumer.stop_session(session_id)
+    ).subscribe(messaging)
     vault.subscribe(messaging)
     triggers.subscribe(messaging)
     reflection.subscribe(messaging)

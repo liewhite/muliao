@@ -1,7 +1,7 @@
 """结清：会话自己判断委派来的工作（带关联 id 的信件）什么时候结束（docs/architecture.md 第 7 节「占用与结清」），
 结局在同一个事务里交回发起方（sessions.delegation）。时机只有这几个：运行正常结束且工作做完（sessions.finish）、
 运行最终失败（sessions.consumer.RunHandler.failed_in）、停止（sessions.halt）、删除
-（sessions.conversation.delete_sessions）。每个关联只结清一次（mail.correlation_settled）。
+（sessions.deletion.delete_sessions）。每个关联只结清一次（mail.correlation_settled）。
 """
 
 from __future__ import annotations

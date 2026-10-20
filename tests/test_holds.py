@@ -28,7 +28,7 @@ async def _holds(container, session_id: str) -> list[SessionHold]:
 async def test_an_answered_ask_is_not_executed_again_and_its_hold_stays_as_the_record(
     container, make_agent, models, monkeypatch
 ):
-    from muliao.sessions.conversation import Threads
+    from muliao.sessions.threads import Threads
 
     dispatched: list[str] = []
     original = Threads.dispatch

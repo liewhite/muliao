@@ -243,7 +243,7 @@ async def test_a_job_whose_outcome_could_not_be_recorded_is_reconciled(
 
 
 async def test_a_long_line_is_split_without_leaking_a_secret_or_breaking_characters(tmp_path):
-    from muliao.jobs.runner import _safe_cut
+    from muliao.jobs.process import _safe_cut
 
     text = "x" * 10 + "SECRET" + "y" * 10
     # 切口落在 secret 中间时挪到它前面
@@ -296,7 +296,7 @@ async def test_killing_a_job_that_just_exited_is_a_clear_conflict(container, mak
 
 
 def test_the_cut_also_avoids_secrets_overlapping_each_other():
-    from muliao.jobs.runner import _safe_cut
+    from muliao.jobs.process import _safe_cut
 
     # 挪过一次之后，另一个 secret 跨到了新切口上，要继续挪
     text = "....ABCDEFGH...."

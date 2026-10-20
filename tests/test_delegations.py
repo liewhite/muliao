@@ -569,7 +569,7 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
     container, make_agent, models, monkeypatch
 ):
     """回复（含 ask_agent）已保存、投递还没提交时失败：这次调用不算在等回信（没有占用），重试时重新执行它，只委派一次。"""
-    from muliao.sessions.conversation import Threads as ThreadsClass
+    from muliao.sessions.threads import Threads as ThreadsClass
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
     original = ThreadsClass.dispatch

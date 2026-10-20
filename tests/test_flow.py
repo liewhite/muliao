@@ -21,7 +21,7 @@ from muliao.platform.tooling import Origin
 from muliao.platform.worker import Worker
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
 from muliao.sessions.consumer import RunHandler
-from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.tables import Mail
 from tests.scripted import scripted

@@ -1,4 +1,4 @@
-"""Session 的查询、删除与在独立事务里接收事件。投递规则在 conversation.receive。"""
+"""Session 的查询、删除与在独立事务里接收事件。投递规则在 inbound.receive。"""
 
 from __future__ import annotations
 
@@ -6,46 +6,40 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
-import anyio
 from pydantic_ai.messages import ModelMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.events import AgentDeleting
-from muliao.errors import Conflict, NotFound, TransientError
+from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.platform.tooling import Origin
 from muliao.sessions.codec import load_messages
-from muliao.sessions.conversation import (
+from muliao.sessions.deletion import delete_sessions
+from muliao.sessions.events import Receive, StopThread
+from muliao.sessions.halt import Halted
+from muliao.sessions.inbound import (
     Inbound,
     Received,
-    busy_sessions_of_agent_in,
     check_receivable_in,
-    delete_sessions,
     inbound_of,
     open_asks,
     receive,
     receive_lane,
     receive_target,
-    threads_of,
 )
-from muliao.sessions.events import AgentSessionsCleared, Receive, StopThread
-from muliao.sessions.halt import Halted
 from muliao.sessions.kinds import LISTED, policy_of
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.tables import Compaction, Mail, Message, Session
+from muliao.sessions.threads import threads_of
 from muliao.sessions.transcript import Item, annotate_asks, to_items
 
 log = logging.getLogger(__name__)
 
 _TITLE_MAX = 60
-# 删除 agent 时停止它忙的会话之后，等它们空闲的时限与查看间隔
-_IDLE_WAIT_SECONDS = 30.0
-_IDLE_POLL_SECONDS = 0.1
 
 
 def default_title(prompt: str) -> str:
@@ -122,7 +116,7 @@ class SessionService:
             )
 
     async def receive(self, inbound: Inbound) -> Received:
-        """在独立事务里接收一个事件（规则见 conversation.receive）。"""
+        """在独立事务里接收一个事件（规则见 inbound.receive）。"""
         async with self._db.transaction() as s:
             return await receive(s, self._queue, inbound)
 
@@ -178,17 +172,13 @@ class SessionService:
         messaging.handle(
             Receive, "sessions.receive", self.on_receive, lane=lambda c: receive_lane(receive_target(c))
         )
-        messaging.subscribe(
-            AgentDeleting,
-            "sessions.agent_deleting",
-            self.on_agent_deleting,
-            lane=lambda e: f"sessions.agent_deleting:{e.agent_id}",
-        )
 
     async def on_stop_thread(self, command: StopThread, _delivery: Delivery) -> Commit:
         """一个 thread 做的委派的发起方被停止了：停止它（已被删除时是 GONE，什么都不做）。"""
         halted = await self._stop_session(command.session_id)
-        log.info("thread of a stopped session stopped", extra={"session_id": command.session_id, "halted": halted})
+        log.info(
+            "thread of a stopped session stopped", extra={"session_id": command.session_id, "halted": halted}
+        )
         return no_commit
 
     async def on_receive(self, command: Receive, delivery: Delivery) -> Commit:
@@ -208,58 +198,8 @@ class SessionService:
 
         return commit
 
-    async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
-        """删除 agent 的流程：删除它的全部会话（连同私有 thread），发布 AgentSessionsCleared（没有会话也发）。
-
-        标记删除之后它的会话不再收到来信（ensure_agent_active_in），但仍可能有会话忙：删除前的检查与标记分属两个
-        事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会让会话变忙。
-        忙的会话先停止（每个只停一次；停止也本来是删除的前提：它们的工作随 agent 一起放弃），再在时限内等它们空闲：
-        正在执行的运行被取消后，停止事务在它退出之后才执行（清掉占用、结束排队的任务），正在执行的压缩做完才空闲。
-        时限内没有空闲（压缩卡住、或停止之后又被人为重跑）就按暂时失败重试，重试时同样先停止再等。"""
-        await self._stop_and_wait_idle(event.agent_id)
-
-        async def commit(s: AsyncSession) -> None:
-            sessions = list(
-                (await s.scalars(select(Session).where(Session.agent_id == event.agent_id))).all()
-            )
-            try:
-                await delete_sessions(s, self._queue, self._messaging, sessions)
-            except Conflict as e:
-                log.warning(
-                    "deleted agent still has a busy session, will retry", extra={"agent": event.agent_id}
-                )
-                raise TransientError(f"agent {event.agent_id} still has a busy session: {e}") from e
-            self._messaging.publish_in(s, AgentSessionsCleared(agent_id=event.agent_id))
-            log.info(
-                "sessions of a deleted agent removed",
-                extra={"agent": event.agent_id, "session_ids": [x.id for x in sessions]},
-            )
-
-        return commit
-
-    async def _stop_and_wait_idle(self, agent_id: str) -> None:
-        stopped: set[str] = set()
-        with anyio.move_on_after(_IDLE_WAIT_SECONDS):
-            while True:
-                async with self._db.transaction() as s:
-                    busy = await busy_sessions_of_agent_in(s, self._queue, agent_id)
-                if not busy:
-                    return
-                for session_id in sorted(set(busy) - stopped):
-                    halted = await self._stop_session(session_id)
-                    stopped.add(session_id)
-                    log.info(
-                        "busy session of a deleted agent stopped",
-                        extra={"agent": agent_id, "session_id": session_id, "halted": halted},
-                    )
-                await anyio.sleep(_IDLE_POLL_SECONDS)
-        log.warning(
-            "sessions of a deleted agent still busy after stopping them",
-            extra={"agent": agent_id, "waited_seconds": _IDLE_WAIT_SECONDS},
-        )
-
     async def delete(self, session_id: str) -> None:
-        """用户删除会话（规则见 conversation.delete_sessions）。归父会话所有的 thread 随它删除，不能单独删除。"""
+        """用户删除会话（规则见 deletion.delete_sessions）。归父会话所有的 thread 随它删除，不能单独删除。"""
         async with self._db.transaction() as s:
             session = await self._get(s, session_id)
             if policy_of(session.kind).owned_by_parent:

@@ -12,8 +12,8 @@ from muliao.agents.api import AgentService
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-from muliao.sessions.conversation import Threads, validate_thread
 from muliao.sessions.kinds import SessionKind, policy_of
+from muliao.sessions.threads import Threads, validate_thread
 
 _ANSWER_PREVIEW = 500
 

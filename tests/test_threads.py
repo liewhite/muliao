@@ -10,7 +10,7 @@ from sqlalchemy import select
 from muliao.errors import Conflict, Forbidden
 from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
-from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Message, Session

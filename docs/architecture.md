@@ -178,11 +178,11 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 
 我们在 pydantic-ai 消息上加的约定（工具结果 metadata 的键、停止标记、合成的工具结果、「调用是否已有结果」的定义）都登记在 `muliao.agent_runtime.conventions` 的模块说明里，解析也只在那里写一份；新增约定先在那里登记。
 
-所有触发源只做一件事：**创建 session（或选中已有 session），往它的信箱投一封信件**（`conversation.receive` → `mailbox.post_in`）。消费信箱的运行是一条 `run` task，之后的执行、重试、反思、通知全部由同一个任务队列驱动，没有例外：`ask_agent` 也只是往私有 thread 的信箱投信，发问方停在这次调用上等回信（第 7 节「挂起的调用」）。
+所有触发源只做一件事：**创建 session（或选中已有 session），往它的信箱投一封信件**（`inbound.receive` → `mailbox.post_in`）。消费信箱的运行是一条 `run` task，之后的执行、重试、反思、通知全部由同一个任务队列驱动，没有例外：`ask_agent` 也只是往私有 thread 的信箱投信，发问方停在这次调用上等回信（第 7 节「挂起的调用」）。
 
 ```
 Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务与委派的结局、运行中检查
-          │  conversation.receive(Inbound)                               │  deliver_in / post_check_in
+          │  inbound.receive(Inbound)                               │  deliver_in / post_check_in
           ▼                                                               ▼
        mail（会话信箱，mailbox.post_in）──── wake_in：需要时投递一次运行
           │
@@ -287,7 +287,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 - **推送按信件、不按 session**：每封信件带「用户是否在等它的回答」（`awaited`，由投信的入口设置，见第 14 节）。一次运行处理过的信件里有用户在等的，就把它的回答推送给用户；否则不推，agent 可以自己 `notify_user`。同一个公开 thread 里，父 agent 委派的任务与用户的追问都推送；`report_back` 的委派不推送，结果交回父 agent。
 - **回答交给谁**（`platform.tooling.Audience`，不入库，`KindPolicy.audience`）：运行开始时由会话种类与它处理的信件推导一次，决定开放哪些工具（`ask_user`）与指令里怎么说：私有 thread 是 `agent`；处理过的和信箱里排着的信件有用户在等就是 `user`；否则 `none`。运行中途才到的、用户在等的消息会被这次运行处理、收尾时推送，但这次运行的工具与指令不随之改变（工具集在 pydantic-ai 运行开始时固定）；提问要等下一次运行。
 - **私有 thread** 有自己的信箱和消费者，可以开后台任务、`report_back`、被停止（发问方那次调用拿到「被停止」）。`ask_user` 在私有 thread 里不提供（没有用户在等）。
-- **删除**（`conversation.delete_sessions`，删会话与删 agent 唯一的规则）：一个事务删除会话与（逐层）归它所有的私有 thread；公开 thread 保留（`parent_session_id` 置空）。任一被删会话忙时拒绝（判断只看会话自己的数据，无异步窗口）。交给被删会话、还没结清的关联以「被删除」结清并交回发起方；它自己发起的委派（占用）随它删除，之后 thread 的结局没有收件人。发布 `SessionDeleted`，其他领域各自清理引用它的数据（指向它的通知）；job 行保留终态。
+- **删除**（`deletion.delete_sessions`，删会话与删 agent 唯一的规则）：一个事务删除会话与（逐层）归它所有的私有 thread；公开 thread 保留（`parent_session_id` 置空）。任一被删会话忙时拒绝（判断只看会话自己的数据，无异步窗口）。交给被删会话、还没结清的关联以「被删除」结清并交回发起方；它自己发起的委派（占用）随它删除，之后 thread 的结局没有收件人。发布 `SessionDeleted`，其他领域各自清理引用它的数据（指向它的通知）；job 行保留终态。
 
 ### 占用与结清
 
@@ -337,14 +337,14 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 **`ask_user`**：做法同 Claude Code 的 AskUserQuestion、Codex 的提问：一次 1 到 4 个选择题（单选或多选，每题 2 到 6 个选项），界面上每题总能在「其他」里自己写。只在 `Audience.USER` 时由工具的 `prepare` 提供（`sessions/ask_user.py`）。
 
 - 运行停在提问上时通知用户「等你回答：…」。
-- 界面把回答随消息提交（`answers: {tool_call_id: [每题的回答]}`，可以没有文字），`conversation.receive` 校验它针对现在能回答的提问（`conversation.open_asks`：还挂着、也还没有回答在信箱里排着的），选项属于该题、单选至多一个、每题都有选择或「其他」，然后把交给模型的结果（`AskResult`：`answered` 加每题的选择，或没回答时的说明）存在回答信件里。回答交给模型之前一直排着（运行失败重试时也还在），所以不需要别的条件。
+- 界面把回答随消息提交（`answers: {tool_call_id: [每题的回答]}`，可以没有文字），`inbound.receive` 校验它针对现在能回答的提问（`inbound.open_asks`：还挂着、也还没有回答在信箱里排着的），选项属于该题、单选至多一个、每题都有选择或「其他」，然后把交给模型的结果（`AskResult`：`answered` 加每题的选择，或没回答时的说明）存在回答信件里。回答交给模型之前一直排着（运行失败重试时也还在），所以不需要别的条件。
 - 展示：提问不收进过程组。每个 `ask_user` 条目的状态由后端按唯一规则给出（`transcript.annotate_asks`，会话接口与实时条目共用投影）：`asking`（运行还没停下）、`pending`（显示表单）、`submitted`（回答已提交、还排着，回答显示在信箱里）、`answered`（显示问题与选择）、`not_answered`；被退回的调用（参数被工具 schema 拒绝，或这次运行不提供提问）不是提问，按普通工具错误展示。前端不解析工具结果文本。
 
 ### 附件与文件
 
 做法同主流 IM 的媒体仓库（Matrix media repository、Slack files）：先上传得到 id，消息里只放引用。
 
-- **上传**：`POST /api/files?name=<名称>`，请求体就是文件内容，`Content-Type` 是它的类型（同 Matrix `/media/upload`，不用 multipart），边读边写边算 sha256，超过 `runtime.upload_max_bytes`（默认 50MB）立即停止。名称必须是单个路径段，不合法直接拒绝，不做修正。发消息时 `attachments` 带上 id（可以只有附件没有文字），`conversation.receive` 校验它们存在，记在消息信件上。
+- **上传**：`POST /api/files?name=<名称>`，请求体就是文件内容，`Content-Type` 是它的类型（同 Matrix `/media/upload`，不用 multipart），边读边写边算 sha256，超过 `runtime.upload_max_bytes`（默认 50MB）立即停止。名称必须是单个路径段，不合法直接拒绝，不做修正。发消息时 `attachments` 带上 id（可以只有附件没有文字），`inbound.receive` 校验它们存在，记在消息信件上。
 - **在消息里的两种形态**（`agent_runtime/attachments.py`）：存储形态是 `UserPromptPart` 里的 `ImageUrl` / `DocumentUrl`，url 即文件引用，数据库、界面、重放都用它；每次模型请求前由 pydantic-ai 的 `before_model_request` 钩子（`AttachmentsForModel`）展开成模型形态：一段说明（名称、类型、大小、工作目录里的路径），可内联的图片（png/jpeg/gif/webp）再附上内容。展开只替换这一次请求的消息列表，持久化的历史不变，所以文件内容在数据库里没有副本。模型不支持图片时，provider 的报错让运行失败，不悄悄丢掉图片。
 - **交给工具**：信件交给模型时把附件复制到 agent 工作目录的 `uploads/<id>/<名称>`（重试时覆盖成原件），供文件工具与 shell 处理；这是派生副本，原件只在文件存储里。
 - **agent 发出文件**：`share_file(path)` 把工作目录里的文件存一份快照，通过 `ToolReturn.metadata`（`conventions.TOOL_ATTACHMENTS`）挂到这次工具结果上。metadata 不发给模型、随消息持久化，所以文件一定显示给用户（图片内联、其他为下载链接，显示在过程组外），不依赖模型在回答里转写引用；模型只收到一句「已发给用户」。任何工具都可以用同一约定挂文件。临时 agent 与 `ask_agent` 的被问 agent 挂上的文件，随调用方那次工具调用的结果一起交给用户（`agent_runtime/answers.py`），出现在用户正在看的会话里；临时 agent 超过请求数上限时，这次已共享的文件不交付，由调用方拆分后重做时重新共享。
@@ -431,7 +431,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 触发点有两类：用户在网页发起对话，以及触发器。agent 之间的委派是 agent 内部能力，在父会话下开 thread（第 7 节）。
 
-**统一入口**：用户消息、触发器、agent 委派都是同一件事——把一段内容投进某个 agent 的某个会话的信箱。各来源只做适配（鉴权、触发时机、组装内容），然后构造一个 `Inbound` 交给 `conversation.receive`（用户消息与委派同步调用；触发器经定向命令 `Receive`，见下文「投信」）：
+**统一入口**：用户消息、触发器、agent 委派都是同一件事——把一段内容投进某个 agent 的某个会话的信箱。各来源只做适配（鉴权、触发时机、组装内容），然后构造一个 `Inbound` 交给 `inbound.receive`（用户消息与委派同步调用；触发器经定向命令 `Receive`，见下文「投信」）：
 
 | 字段 | 含义 |
 |---|---|

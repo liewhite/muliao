@@ -90,7 +90,7 @@ class ReceiveNewSession(BaseModel):
 
 
 class Receive(Command):
-    """把一封来信投进会话的信箱（conversation.receive），在会话领域自己的事务里。发送方在自己的事务里先用
+    """把一封来信投进会话的信箱（inbound.receive），在会话领域自己的事务里。发送方在自己的事务里先用
     check_receivable_in 校验、记下自己的状态，同一事务发出它（触发器到点、收到 webhook）。投递时会话或 agent 已被
     删除（校验之后的变化）就不投，记日志。"""
 

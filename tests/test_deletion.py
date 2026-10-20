@@ -9,7 +9,7 @@ from muliao.errors import Conflict, NotFound
 from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
-from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.inbound import Inbound, NewSession
 from tests.test_flow import deliver, drain, start
 from tests.test_jobs import start_job, wait_until_done
 
