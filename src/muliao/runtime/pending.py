@@ -11,6 +11,7 @@ pydantic-ai 的 CallDeferred，这次运行停在这里正常结束，不在 wor
 """
 
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from typing import Final
 
 from pydantic import BaseModel, TypeAdapter
@@ -20,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.conventions import Attachment, unanswered_calls
-from muliao.models import Agent, Delegation, Mail, MailKind, Session
+from muliao.models import Delegation, Mail, MailKind
 from muliao.runtime.answers import Answer
 from muliao.runtime.history import load_context
 from muliao.runtime.questions import (
@@ -58,16 +59,14 @@ def call_result(value: object) -> CallResult:
     return _CALL_RESULT.validate_python(value)
 
 
-def still_working(agent_name: str) -> str:
-    """ask_agent 答复之前来了新消息：这次调用不再等，模型知道回答之后会作为事件送达。"""
-    return (
-        f"A new message arrived before {agent_name} answered. Its answer will reach you as an event "
-        "in this conversation when it is ready."
-    )
+# ask_agent 答复之前来了新消息：这次调用不再等，模型知道回答之后会作为事件送达
+STILL_WORKING = (
+    "A new message arrived before the agent you asked answered. Its answer will reach you as an event "
+    "in this conversation when it is ready."
+)
 
-
-# ask_agent 调用 id -> 被问 agent 的名称：这个会话里已经委派出去的 ask_agent（委派行是事实来源，见 delegated_in）
-Delegated = Mapping[str, str]
+# 这个会话里已经委派出去的 ask_agent 调用 id（委派行是事实来源，见 delegated_in）
+Delegated = AbstractSet[str]
 
 
 def pending_calls(history: Sequence[ModelMessage], delegated: Delegated) -> dict[str, ToolCallPart]:
@@ -86,15 +85,14 @@ def pending_questions(history: Sequence[ModelMessage]) -> dict[str, list[Questio
     return {c.tool_call_id: questions_of(c) for c in unanswered_calls(history) if c.tool_name == ASK_USER}
 
 
-async def delegated_in(s: AsyncSession, session_id: str) -> dict[str, str]:
+async def delegated_in(s: AsyncSession, session_id: str) -> set[str]:
     """这个会话委派出去的 ask_agent 调用（Delegated）。"""
-    rows = await s.execute(
-        select(Delegation.call_id, Agent.name)
-        .join(Session, Session.id == Delegation.child_session_id)
-        .join(Agent, Agent.id == Session.agent_id)
-        .where(Delegation.owner_session_id == session_id, Delegation.call_id.is_not(None))
+    rows = await s.scalars(
+        select(Delegation.call_id).where(
+            Delegation.owner_session_id == session_id, Delegation.call_id.is_not(None)
+        )
     )
-    return {call_id: name for call_id, name in rows.all()}
+    return {call_id for call_id in rows.all() if call_id is not None}
 
 
 async def pending_in(s: AsyncSession, session_id: str) -> dict[str, ToolCallPart]:
@@ -141,7 +139,7 @@ def deferred_results(
         elif call.tool_name == ASK_USER:
             results[call_id] = (SKIPPED if any_answered else NOT_ANSWERED).model_dump()
         else:
-            results[call_id] = still_working(delegated[call_id])
+            results[call_id] = STILL_WORKING
     return results
 
 

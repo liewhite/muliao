@@ -19,7 +19,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.conventions import unanswered_calls
+from muliao.conventions import calls_in, results_in
 from muliao.db import Database
 from muliao.models import Agent, Compaction, Message, Session, Task, TaskKind, TaskStatus
 from muliao.runtime.codec import load_messages
@@ -54,14 +54,16 @@ def steps_of(rows: Sequence[Message]) -> list[list[Message]]:
     回答总在同一组里，切点落在组与组之间，留下的结果一定找得到它的调用。留下的部分可能从一条模型回复开始，发给
     模型时补一条接续的用户消息（runtime.history.load_context）。"""
     steps: list[list[Message]] = []
-    messages: list[ModelMessage] = []
+    # 到目前为止还没有结果的调用 id（与 conventions.unanswered_calls 同一个定义，逐条维护）
+    open_calls: set[str] = set()
     for row in rows:
         (message,) = load_messages([row.payload])
-        if steps and unanswered_calls(messages):
+        if steps and open_calls:
             steps[-1].append(row)
         else:
             steps.append([row])
-        messages.append(message)
+        open_calls |= {c.tool_call_id for c in calls_in(message)}
+        open_calls -= results_in(message)
     return steps
 
 

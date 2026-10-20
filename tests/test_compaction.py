@@ -249,3 +249,60 @@ async def test_manual_compaction_endpoint(container, make_agent, tmp_path):
     assert (first.status_code, first.json()) == (202, {"queued": True})
     assert second.json() == {"queued": False}
     assert missing.status_code == 404
+
+
+async def test_stopping_while_compacting_between_steps_leaves_one_result_per_call(
+    container, make_agent, models, monkeypatch
+):
+    """停在步间压缩的途中：那次请求（带着工具结果）已经保存，停止不能再给这些调用补一份「被停止」的结果。"""
+    import asyncio
+
+    from muliao.conventions import calls_in, results_in
+    from muliao.runtime.runner import AgentRuntime
+    from tests.test_flow import idle
+
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_keep_steps", 1)
+    entered = asyncio.Event()
+
+    async def blocked(self, agent, instructions, prompt):  # noqa: ANN001, ANN202
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(AgentRuntime, "summarize", blocked)
+    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart("memory_append", {"entry": "- x"}, tool_call_id="c")])
+
+    models.models["m"] = scripted(fn)
+    session = await start(container, alpha, "go", origin=Origin.TRIGGER)
+    worker = asyncio.create_task(container.worker.run_forever())
+    try:
+        async with asyncio.timeout(5):
+            await entered.wait()
+        await container.consumer.stop_session(session.id)
+        await idle(container)
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    history = await container.sessions.history(session.id)
+    results = [r for m in history for r in results_in(m)]
+    assert sorted(results) == sorted(c.tool_call_id for m in history for c in calls_in(m))
+    assert len(results) == len(set(results))
+
+
+async def test_a_run_that_compacts_at_its_start_does_not_compact_again_before_a_new_reply(
+    container, make_agent, models, monkeypatch
+):
+    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    session, recorder = await _session_with_exchanges(container, models, alpha, 3)
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_keep_steps", 1)
+
+    await reply(container, session.id, "go on")
+    await drain(container)
+
+    # 运行开始时压缩一次；第一次请求时上一条回复的 token 数还是压缩前的，不能据此再压
+    assert len(recorder.compactions) == 1

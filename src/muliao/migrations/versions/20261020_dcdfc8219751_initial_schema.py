@@ -2,8 +2,8 @@
 
 不保留迁移历史：表结构变化时重新生成这一个版本，数据库重建（见 docs/architecture.md「数据库迁移」）。
 
-Revision ID: ddd9a2f2224a
-Create Date: 2026-10-20 16:06:59.365068
+Revision ID: dcdfc8219751
+Create Date: 2026-10-20 16:30:56.533608
 Revises:
 """
 
@@ -12,7 +12,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "ddd9a2f2224a"
+revision: str = "dcdfc8219751"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -158,13 +158,13 @@ def upgrade() -> None:
         "delegations",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("owner_session_id", sa.String(length=36), nullable=False),
-        sa.Column("child_session_id", sa.String(length=36), nullable=False),
+        sa.Column("child_session_id", sa.String(length=36), nullable=True),
         sa.Column("call_id", sa.String(length=100), nullable=True),
         sa.Column("awaited", sa.Boolean(), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("settled_at", sa.DateTime(), nullable=True),
-        sa.ForeignKeyConstraint(["child_session_id"], ["sessions.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["child_session_id"], ["sessions.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["owner_session_id"], ["sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sqlite_autoincrement=True,

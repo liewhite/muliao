@@ -13,7 +13,7 @@ from muliao.db import utcnow
 from muliao.delivery.base import Notifier
 from muliao.models import Agent, Notification, Session
 from muliao.runtime.delegations import Ending, Outcome, in_session_in, settle_all_in
-from muliao.runtime.mailbox import wake_in
+from muliao.runtime.mailbox import queued_in, wake_in
 from muliao.runtime.reflection import ReflectionScheduler
 from muliao.runtime.steps import RunState
 from muliao.runtime.tasks import Commit, TaskQueue
@@ -56,6 +56,11 @@ class RunFinisher:
         self._reflection = reflection
         self._works = works
 
+    async def _work_done(self, s: AsyncSession, session_id: str) -> bool:
+        """会话的工作做完了：它发起的异步工作都结束了，信箱里也没有还要交给模型的信件（比如在最后一次请求期间才到的
+        后台任务结局，它会唤醒下一次运行，结局由那次运行给出）。"""
+        return not await any_active_in(self._works, s, session_id) and not await queued_in(s, session_id)
+
     def idle(self, state: RunState) -> Commit:
         """运行没有可交给模型的、也没有之前的尝试要收尾（信箱空了，或还在等挂起调用的回答）：只看要不要唤醒下一次。"""
 
@@ -72,9 +77,8 @@ class RunFinisher:
                 session.updated_at = utcnow()
                 session.unread = not session.private
                 await self._reflection.after_run_in(s, agent)
-            if not end.stopped and not end.paused and not await any_active_in(self._works, s, session.id):
-                # 工作做完了（没有停在挂起的调用上，它发起的异步工作也都结束了）：处理中的委派交回结局。委派可能跨几次
-                # 运行：停在挂起的调用上、或等它发起的工作时，由之后那次做完的运行交回
+            if not end.stopped and not end.paused and await self._work_done(s, session.id):
+                # 处理中的委派交回结局。委派可能跨几次运行：停在挂起的调用上、或还有工作没做完时，由之后那次做完的运行交回
                 outcome = Outcome(Ending.FINISHED, end.answer, shared_attachments(state.messages))
                 await settle_all_in(
                     s, self._queue, await in_session_in(s, session.id, consumed_only=True), session, outcome

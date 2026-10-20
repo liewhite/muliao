@@ -7,6 +7,8 @@
   失败时随队列记下失败（RunHandler.failed_in）；thread 被停止时随停止（Consumer 的停止）；thread 被删除时随删除
   （conversation.delete_sessions）。发起方还停在那次 ask_agent 调用上时，结局作为调用的结果交回（回答信件）；否则
   （report_back，或用户已经跳过了那次调用）作为事件信件。
+- 什么时候算做完（runtime.finish）：thread 的运行正常结束、没有停在挂起的调用上、它发起的异步工作都结束了、信箱里
+  也没有还要交给模型的信件。最终失败与被停止时不等这些：发起方拿到失败或「被停止」就够了，thread 之后的结局不再交回。
 - 发起方被用户停止时，它发起的委派一起放弃（不再交回），thread 一起停下。
 - 运行中检查：发起方没在等这次调用时（它在等时检查信件交不到模型），给发起方投检查信件。
 """
@@ -230,6 +232,10 @@ class Delegations:
             ).all()
             seen: set[tuple[str, str]] = set()
             for delegation in running:
+                if delegation.child_session_id is None:
+                    raise RuntimeError(
+                        f"running delegation {delegation.id} has no thread; deletion settles it first"
+                    )
                 key = (delegation.owner_session_id, delegation.child_session_id)
                 if key in seen:
                     continue
@@ -274,9 +280,15 @@ class Delegations:
                     )
                 )
             ).all()
+            children: list[str] = []
             for delegation in owned:
+                if delegation.child_session_id is None:
+                    raise RuntimeError(
+                        f"running delegation {delegation.id} has no thread; deletion settles it first"
+                    )
                 delegation.status, delegation.settled_at = DelegationStatus.ABANDONED, self._clock()
-            children = list(dict.fromkeys(d.child_session_id for d in owned))
+                children.append(delegation.child_session_id)
+            children = list(dict.fromkeys(children))
         if children:
             log.info(
                 "delegations abandoned with their session",

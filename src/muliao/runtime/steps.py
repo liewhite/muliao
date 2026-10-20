@@ -51,8 +51,20 @@ class RunState:
     # 这次运行保存的消息（包括之前几次尝试保存的），和最后保存的那一行
     messages: list[ModelMessage] = field(default_factory=list)
     last_row: Message | None = None
-    # 压缩过但保留窗口之外已经没有可压缩的：这次运行不再因为上下文大小停下（再停也压缩不了）
+    # 这次运行最近一次压缩之后，上下文里的模型回复数：在它之后出现的回复，token 数才反映压缩后的上下文
+    compacted_at: int | None = None
+    # 压缩不下去了（保留窗口之外没有可压缩的，或压缩后的第一次回复仍超阈值）：这次运行不再因为上下文大小停下
     compaction_exhausted: bool = False
+
+    def after_compaction(self, history: Sequence[ModelMessage], compacted: int) -> None:
+        """压缩过（compacted 为压缩的步数）、重新加载了上下文之后调用。"""
+        self.compacted_at = responses_in(history)
+        if not compacted:
+            self.compaction_exhausted = True
+
+
+def responses_in(history: Sequence[ModelMessage]) -> int:
+    return sum(isinstance(m, ModelResponse) for m in history)
 
 
 class Steps:
@@ -99,8 +111,29 @@ class Steps:
         state.handled += state.taken
         state.taken = []
         state.saved = len(messages) + 1
-        if not state.compaction_exhausted and self._compactor.over_threshold(state.session.id, messages):
+        if self._compaction_due(state, messages):
+            # 全部已经保存：被停止时没有运行中的部分要补，停止从库里补齐历史（runtime.halt）
+            state.live = None
             raise CompactionDue()
+
+    def _compaction_due(self, state: RunState, messages: list[ModelMessage]) -> bool:
+        """上下文超过阈值、该停下压缩了。只认最近一次压缩之后的回复报告的 token 数（之前的反映的是压缩前的上下文）；
+        压缩后的第一次回复仍超阈值，说明保留窗口本身就超了，再压也压不下去。"""
+        if state.compaction_exhausted:
+            return False
+        responses = responses_in(messages)
+        if state.compacted_at is not None and responses <= state.compacted_at:
+            return False
+        if not self._compactor.over_threshold(state.session.id, messages):
+            return False
+        if state.compacted_at is not None and responses == state.compacted_at + 1:
+            log.warning(
+                "context still over the compaction threshold right after compacting; not compacting again this run",
+                extra={"session_id": state.session.id, "run_id": state.run_id},
+            )
+            state.compaction_exhausted = True
+            return False
+        return True
 
     async def _after_response(
         self, state: RunState, response: ModelResponse, messages: list[ModelMessage]

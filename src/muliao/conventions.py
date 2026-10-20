@@ -127,20 +127,24 @@ def shared_attachments(messages: Sequence[ModelMessage]) -> list[Attachment]:
     ]
 
 
+def calls_in(message: ModelMessage) -> list[ToolCallPart]:
+    """这条消息发出的工具调用（只有模型回复会有）。"""
+    return (
+        [p for p in message.parts if isinstance(p, ToolCallPart)]
+        if isinstance(message, ModelResponse)
+        else []
+    )
+
+
+def results_in(message: ModelMessage) -> set[str]:
+    """这条消息给出结果的调用 id：ToolReturnPart，或参数被拒绝、交还模型重试的 RetryPromptPart。"""
+    if not isinstance(message, ModelRequest):
+        return set()
+    return {p.tool_call_id for p in message.parts if isinstance(p, ToolReturnPart | RetryPromptPart)}
+
+
 def unanswered_calls(messages: Sequence[ModelMessage]) -> list[ToolCallPart]:
-    """还没有结果的工具调用，按出现顺序。结果是 ToolReturnPart，或参数被拒绝、交还模型重试的 RetryPromptPart。
-    「调用是否已有结果」只在这里定义（挂起的提问、压缩切点都用它）。"""
-    done = {
-        p.tool_call_id
-        for m in messages
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if isinstance(p, ToolReturnPart | RetryPromptPart)
-    }
-    return [
-        p
-        for m in messages
-        if isinstance(m, ModelResponse)
-        for p in m.parts
-        if isinstance(p, ToolCallPart) and p.tool_call_id not in done
-    ]
+    """还没有结果的工具调用，按出现顺序。「调用是否已有结果」只在这里定义（calls_in / results_in；挂起的调用、
+    压缩切点、停止时补结果都用它）。"""
+    done = set().union(*(results_in(m) for m in messages))
+    return [c for m in messages for c in calls_in(m) if c.tool_call_id not in done]

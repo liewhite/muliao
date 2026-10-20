@@ -143,8 +143,11 @@ class Consumer:
         # 上下文超过阈值时先压缩（之后每一步之前同样检查，见 runtime.steps.CompactionDue）
         async with self._db.transaction() as s:
             history = (await load_context(s, session.id)).messages
-        if self._compactor.over_threshold(session.id, history):
+        compacted = (
             await self._compactor.compact(session, agent)
+            if self._compactor.over_threshold(session.id, history)
+            else None
+        )
         async with self._db.transaction() as s:
             context = await load_context(s, session.id)
             queued = await queued_in(s, session.id)
@@ -167,6 +170,8 @@ class Consumer:
             messages=load_messages(r.payload for r in saved_rows),
             last_row=saved_rows[-1] if saved_rows else None,
         )
+        if compacted is not None:
+            state.after_compaction(history, compacted)
         self._active[session_id] = state
         prompt, deferred = await self._opening(state, history, queued, delegated)
         if prompt is None and deferred is None and not resumable(history, delegated):
@@ -203,11 +208,11 @@ class Consumer:
                 break
             except CompactionDue:
                 # 这次请求已经保存：压缩，再从库里加载上下文（摘要 + 切点之后），从它续跑
-                if not await self._compactor.compact(session, agent):
-                    state.compaction_exhausted = True
+                compacted = await self._compactor.compact(session, agent)
                 async with self._db.transaction() as s:
                     context = await load_context(s, session.id)
                 history, prompt, deferred = context.messages, None, None
+                state.after_compaction(history, compacted)
                 state.resending = True
         await self._steps.save_tail(state)
         return self._finisher.commit(state, end_of(result.output))

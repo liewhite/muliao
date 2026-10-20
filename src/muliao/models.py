@@ -315,8 +315,11 @@ class Delegation(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     # 发起委派的会话：结局交回这里，随它删除
     owner_session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
-    # 做这项工作的 thread；它被删除前委派先交回「被删除」（conversation.delete_sessions）
-    child_session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    # 做这项工作的 thread；它被删除前委派先交回「被删除」（conversation.delete_sessions），委派行留着（它的调用 id 是
+    # 发起方「这次调用已经委派出去」的事实来源，见 runtime.pending.delegated_in），这里置空
+    child_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sessions.id", ondelete="SET NULL"), index=True
+    )
     # ask_agent 的那次调用：发起方还停在它上面时，结局作为它的结果交回；否则（或 report_back）作为事件
     call_id: Mapped[str | None] = mapped_column(String(100))
     # 发起委派时用户是否在等发起方的回答：交回结局的信件随它推送

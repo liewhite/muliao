@@ -721,3 +721,39 @@ async def test_a_private_thread_answers_only_after_its_background_job_finishes(c
 
 async def _has(items: list) -> bool:  # noqa: ANN001
     return bool(items)
+
+
+async def test_an_outcome_arriving_during_the_threads_last_request_is_waited_for(
+    container, make_agent, models
+):
+    """thread 最后一次请求期间，它的后台工作的结局才进信箱：这次的回答没看到它，委派不结清，等处理它的那次运行。"""
+    from collections.abc import AsyncIterator
+
+    from pydantic_ai.models.function import FunctionModel
+
+    from muliao.runtime.mailbox import post_in
+    from tests.test_flow import last_user_prompt
+
+    calls = {"n": 0}
+
+    async def helper(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            [child] = await threads_of(container, parent.id)
+            async with container.db.transaction() as s:
+                await post_in(
+                    s,
+                    container.queue,
+                    child.id,
+                    kind=MailKind.EVENT,
+                    source="job:1",
+                    content="exit 0",
+                    awaited=False,
+                )
+            yield "started, will report"
+        else:
+            yield f"final: {last_user_prompt(messages)[:20]}"
+
+    parent, seen = await _asking(container, make_agent, models, FunctionModel(stream_function=helper))
+    await drain(container)
+    assert len(seen) == 1 and seen[0].startswith("final:")
