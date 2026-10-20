@@ -134,16 +134,24 @@ async def test_a_failed_resource_write_leaves_no_half_created_agent(client, cont
     """资源仓库提交失败时，agent 不能只剩数据库行（之后它的每一轮与 agent 列表都会因缺指令文件失败）。"""
     await login(client)
 
-    async def failing_apply(*_args, **_kwargs):
-        raise RuntimeError("git index.lock is held")
+    # 文件照常写下，只有 git 提交失败（如 index.lock 被占用）：apply 要把写下的东西连同建出来的目录一起撤掉
+    real_git = container.resources._git  # noqa: SLF001
+
+    async def failing_git(*args, check=True):  # noqa: ANN001, ANN202
+        if args and args[0] == "commit":
+            raise RuntimeError("git index.lock is held")
+        return await real_git(*args, check=check)
 
     from muliao.agents import AgentSpec
 
-    monkeypatch.setattr(container.resources, "apply", failing_apply)
+    await container.resources.ensure()
+    monkeypatch.setattr(container.resources, "_git", failing_git)
     with pytest.raises(RuntimeError, match="index.lock"):
         await container.agents.create(AgentSpec(name="half", description="d", instructions=""), author="user")
     monkeypatch.undo()
 
+    # 资源仓库里也没留下这个从未存在的 agent 的目录（否则启动检查会把它报成已删除 agent 的残留）
+    assert container.resources.agent_owners() == []
     assert (await client.get("/api/agents")).status_code == 200
     assert (await client.post("/api/agents", json={"name": "half", "description": "d"})).status_code == 201
 

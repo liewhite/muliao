@@ -82,3 +82,22 @@ async def test_any_transport_failure_is_retried_and_does_not_stop_other_devices(
     with pytest.raises(TransientError):
         await delivery.send(Notification(id=1, title="t", body="b", session_id=None), unread=1)
     assert len(reached) == 2
+
+
+async def test_a_local_request_error_is_not_retried_as_transient(container, monkeypatch):
+    """URL、请求头不合法这类本端问题重试也不会好；当成暂时性失败会让其他设备把同一条通知收到好几次。"""
+    import requests
+
+    import muliao.delivery.webpush as webpush_module
+    from muliao.errors import TransientError
+
+    await container.push_subscriptions.add("https://push.example/a", "k", "a")
+
+    def fake_webpush(subscription_info, **_kwargs):  # noqa: ANN001, ANN202
+        raise requests.exceptions.InvalidHeader("bad header value")
+
+    monkeypatch.setattr(webpush_module, "webpush", fake_webpush)
+    delivery = WebPushDelivery(container.push_subscriptions, container.vapid, "mailto:a@b.c")
+    with pytest.raises(requests.exceptions.InvalidHeader):
+        await delivery.send(Notification(id=1, title="t", body="b", session_id=None), unread=1)
+    assert not issubclass(requests.exceptions.InvalidHeader, TransientError)

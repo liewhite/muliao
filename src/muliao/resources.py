@@ -299,12 +299,23 @@ class ResourceRepo:
         _, out = await self._git("ls-files", "--", rel)
         return bool(out.strip())
 
+    def _prune_empty_parents(self, path: Path) -> None:
+        """删掉一次回滚的新路径为它建出来、现在空了的上级目录（如新 agent 的 agents/<id>/），直到仓库根目录：
+        空目录在 git 里不存在，留着只会被启动检查误报成已删除 agent 的残留。"""
+        root = self.root.resolve()
+        for parent in path.resolve().parents:
+            if parent == root or not parent.is_relative_to(root) or any(parent.iterdir()):
+                return
+            parent.rmdir()
+
     async def _restore(
         self, before: Mapping[Path, Snapshot], rel: Sequence[str], error: BaseException
     ) -> None:
         try:
             for path, snapshot in before.items():
                 _restore_snapshot(path, snapshot)
+                if snapshot is None:
+                    self._prune_empty_parents(path)
         except Exception as restore_error:
             log.error(
                 "resource write failed and could not be rolled back; recover on next start will commit it: %r",

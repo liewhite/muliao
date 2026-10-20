@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -23,6 +24,12 @@ _GONE = {404, 410}
 # 网络层失败（无 HTTP 响应）用 0 表示
 _NO_RESPONSE = 0
 _TRANSIENT = {_NO_RESPONSE, 408, 429, 500, 502, 503, 504}
+_TRANSPORT_FAILURES = (
+    requests.ConnectionError,
+    requests.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ContentDecodingError,
+)
 # 推送服务限制载荷约 4KB（加密后），正文截断留足余量
 _BODY_MAX_CHARS = 600
 _TTL_SECONDS = 24 * 3600
@@ -156,8 +163,13 @@ class WebPushDelivery:
         except WebPushException as e:
             # 没有响应即网络层失败
             return e.response.status_code if e.response is not None else _NO_RESPONSE
-        except requests.RequestException:
-            # 传输层的任何失败（连接、超时、读到一半断开……）都是没有拿到推送服务的响应：按暂时性失败处理，
-            # 而不是中断循环、让剩下的设备收不到
+        except _TRANSPORT_FAILURES as e:
+            # 没有拿到推送服务的响应（连接、超时、读到一半断开）：按暂时性失败处理，不中断循环、不让剩下的设备收不到。
+            # 其余 requests 异常（URL、请求头不合法……）是本端问题，重试也不会好，照常抛出
+            log.warning(
+                "push transport failed: %s",
+                type(e).__name__,
+                extra={"push_host": urlsplit(sub.endpoint).hostname, "error": str(e)},
+            )
             return _NO_RESPONSE
         return None

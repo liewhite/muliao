@@ -86,8 +86,13 @@ async def run_bash(
             pass
 
     async def run() -> None:
-        # 写入与读取并发：输入大、命令又先输出很多时，顺序进行会让两边的管道都写满而互相等待
-        await asyncio.gather(feed(), *(_collect(stream, buf) for stream, buf in streams), proc.wait())
+        # 写入与读取并发：输入大、命令又先输出很多时，顺序进行会让两边的管道都写满而互相等待。
+        # TaskGroup：其中一个意外失败时其余的一起取消，不留在后台
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(feed())
+            for stream, buf in streams:
+                tg.create_task(_collect(stream, buf))
+            tg.create_task(proc.wait())
 
     exit_code: int | None
     try:
@@ -102,7 +107,8 @@ async def run_bash(
             task.cancel()
         await asyncio.gather(*unfinished, return_exceptions=True)
         exit_code = None
-    except asyncio.CancelledError:
+    except BaseException:
+        # 被取消（关停、停止一轮）或读写意外失败：不留下还在跑的命令
         _kill_group(proc.pid)
         raise
     return ShellResult(

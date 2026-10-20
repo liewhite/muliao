@@ -122,7 +122,6 @@ class AgentService:
         # 资源写入失败时什么都没留下（apply 原子），报错就是没有生效；只有并发创建同名 agent 时下面的检查会冲突，
         # 留下的资源目录由启动时的孤儿检查报告（与删除 agent 时提交失败同一种情况）
         agent_id = new_agent_id()
-        self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
         await self._repo.apply(
             {self._memory.path(agent_id): "", self._prompts.path(agent_id): spec.instructions},
             f"create agent {agent_id}",
@@ -139,13 +138,15 @@ class AgentService:
                 tool_groups=tool_groups,
             )
             s.add(agent)
+            # 工作目录与数据库行同事务：建不出来则不插行
+            self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
         return agent
 
     async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> Agent:
         """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。指令有变化时追加一版（author 同 create）。
 
-        先校验全部字段，再写指令（资源仓库），最后改数据库行：任何一步报错时，之后的都没有发生，不会出现「报错了、
-        其实一部分已经生效」。"""
+        先校验全部字段，再写指令（资源仓库），最后改数据库行：校验或指令写入失败时什么都没生效。只有写完指令后
+        恰好被并发改名撞了名字，才会出现指令已更新、其余字段报错（窗口极小，报错可见，重试即可）。"""
         async with self._db.transaction() as s:
             fields = self._validated(await self._get(s, agent_id), patch)
             await self._ensure_name_free(s, fields.name, agent_id)
