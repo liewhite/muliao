@@ -18,15 +18,14 @@ Event = dict[str, Any]
 
 def task_event(
     *,
-    task_id: int | None,
+    task_id: int,
     kind: str,
     status: str,
     session_id: str | None,
     agent_id: str | None,
     error: str | None,
 ) -> Event:
-    """一个 task 的状态变化（前端据此从数据库重新拉取）。worker 执行的 task 与内联跑完的私有 thread 轮次共用这一个形状；
-    内联轮次失败时没有 task 记录（失败不入库），task_id 为 None。"""
+    """一个 task 的状态变化（前端据此从数据库重新拉取）。worker 执行的 task 与内联跑完的私有 thread 运行共用这一个形状。"""
     return {
         "type": "task",
         "task_id": task_id,
@@ -94,26 +93,38 @@ class EventBus:
 @dataclass(frozen=True)
 class LiveRun:
     run_id: str
+    # 这一段开始时会话最后一条已保存消息的 id：这之后保存的消息（这一段的回复）由这一段的事件展示，历史里先不显示
+    after_message_id: int | None
     events: list[Event]
 
 
 class LiveRuns:
-    """每个会话正在进行的那一轮的运行事件，在内存里留一份，让中途打开会话页的人从这一轮的开头看起。
+    """每个会话正在进行的运行里、当前这一段的运行事件，在内存里留一份，让中途打开会话页的人从这一段的开头看起。
 
-    和事件总线一样只是展示加速：一轮提交（或失败）后由数据库接管（end），进程重启时这一轮本来也会重跑，缓存丢了无妨。
-    事件带上这一轮的 run_id 与递增的 seq，前端用它们把快照与之后经 SSE 收到的事件合并，并发现两者之间的缺口。
-    没有会话的运行（反思、临时 agent）不缓存，照常推给总线。生命周期只由 TurnRunner 管（begin / end）。
+    一段从一次模型请求保存之后开始，包括模型的回复与它调用的工具，到下一次请求保存（或运行结束）为止。消费者每保存
+    一次请求就换一段（step），发 saved 事件让前端重新拉取历史；回复在工具执行前就已保存，但这一段的事件已经在展示它，
+    会话接口不在历史里重复显示（after_message_id）。和事件总线一样只是展示加速：进程重启时没保存的部分本来也会
+    重跑，缓存丢了无妨。事件带上这一段的 run_id 与递增的 seq，前端用它们把快照与之后经 SSE 收到的事件合并，并发现
+    两者之间的缺口。没有会话的运行（反思、临时 agent）不缓存，照常推给总线。生命周期只由消费者管
+    （runtime.consumer，begin / step / end）。
     """
 
     def __init__(self, bus: EventBus):
         self._bus = bus
         self._runs: dict[str, LiveRun] = {}
 
-    def begin(self, session_id: str) -> None:
+    def begin(self, session_id: str, after_message_id: int | None) -> None:
         if session_id in self._runs:
-            # 同一会话同时只有一轮（lane 串行、内联轮次有锁）；已有记录说明上一轮漏了 end 或这个前提被打破
+            # 同一会话同时只有一次运行（lane 串行、内联运行有锁）；已有记录说明上一次漏了 end 或这个前提被打破
             raise RuntimeError(f"session {session_id} already has a live run")
-        self._runs[session_id] = LiveRun(uuid.uuid4().hex, [])
+        self._runs[session_id] = LiveRun(uuid.uuid4().hex, after_message_id, [])
+
+    def step(self, session_id: str, after_message_id: int) -> None:
+        """一次请求已经保存（事务已提交）：之后的事件属于新的一段。"""
+        if session_id not in self._runs:
+            raise RuntimeError(f"step saved for session {session_id} outside a begun run")
+        self._runs[session_id] = LiveRun(uuid.uuid4().hex, after_message_id, [])
+        self._bus.publish({"type": "saved", "session_id": session_id})
 
     def end(self, session_id: str) -> None:
         self._runs.pop(session_id, None)
@@ -122,7 +133,7 @@ class LiveRuns:
         if session_id is not None:
             run = self._runs.get(session_id)
             if run is None:
-                # 会话的每一轮都由 TurnRunner 先 begin；没有说明调用方漏了这一步
+                # 会话的每次运行都由消费者先 begin；没有说明调用方漏了这一步
                 raise RuntimeError(f"run event for session {session_id} outside a begun run")
             event = {**event, "run_id": run.run_id, "seq": len(run.events)}
             run.events.append(event)
@@ -130,4 +141,4 @@ class LiveRuns:
 
     def snapshot(self, session_id: str) -> LiveRun | None:
         run = self._runs.get(session_id)
-        return None if run is None else LiveRun(run.run_id, list(run.events))
+        return None if run is None else LiveRun(run.run_id, run.after_message_id, list(run.events))

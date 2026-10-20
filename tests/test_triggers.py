@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from muliao.errors import InvalidInput
-from muliao.models import Origin, ReplyTo
+from muliao.models import MailKind, Origin
+from muliao.runtime.mailbox import queued_in
 from muliao.runtime.mcp import McpSpec, McpTransport
 from tests.test_flow import drain, start
 
@@ -36,14 +37,10 @@ async def test_schedule_fires_new_session_without_notifying_and_schedules_next(c
     sessions = await container.sessions.list(agent_id=alpha, origins=[Origin.TRIGGER], limit=10, offset=0)
     assert len(sessions) == 1
     assert sessions[0].origin_ref == str(trigger.id)
-    turn = (await container.queue.list(status=None, session_id=sessions[0].id, limit=1))[0]
-    assert turn.payload == {
-        "prompt": "check slack",
-        "reply_to": ReplyTo.NONE,
-        "attachments": [],
-        "answers": {},
-        "report_to": None,
-    }
+    async with container.db.transaction() as s:
+        [mail] = await queued_in(s, sessions[0].id)
+    # 定时触发的消息没有人在等回答：处理它的运行结束时不推送
+    assert (mail.kind, mail.content, mail.awaited) == (MailKind.MESSAGE, "check slack", False)
     trigger = await triggers.get_by_name("slack")
     assert trigger.last_session_id == sessions[0].id
     assert datetime.fromisoformat(trigger.state["next_run_at"]) > datetime.now().astimezone()

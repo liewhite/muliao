@@ -8,8 +8,9 @@ from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.container import Container
 from muliao.errors import Conflict, NotFound
-from muliao.models import Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
-from muliao.runtime.conversation import Inbound, NewSession, TurnPayload, answerable_questions
+from muliao.models import Mail, MailKind, MailState, Origin, Session, Task, TaskKind, TaskStatus
+from muliao.runtime.conversation import Inbound, NewSession, answerable_questions
+from muliao.runtime.mailbox import latest_run, visible_in
 from muliao.runtime.questions import AskResult, Question, QuestionAnswer
 from muliao.runtime.sessions import default_title
 from muliao.transcript import Item, to_items
@@ -56,18 +57,12 @@ class TaskOut(BaseModel):
     status: TaskStatus
     attempts: int
     error: str | None
-    prompt: str | None
-    # turn 随消息发送的文件
-    attachments: list[FileOut]
-    # turn 带的对挂起提问的回答：tool_call_id -> 交给模型的结果
-    answers: dict[str, AskResult]
     not_before: datetime
     created_at: datetime
     finished_at: datetime | None
 
     @classmethod
-    def of(cls, t: Task, files: dict[str, FileOut]) -> "TaskOut":
-        turn = _turn_payload(t)
+    def of(cls, t: Task) -> "TaskOut":
         return cls(
             id=t.id,
             kind=t.kind,
@@ -76,25 +71,44 @@ class TaskOut(BaseModel):
             status=t.status,
             attempts=t.attempts,
             error=t.error,
-            prompt=None if turn is None else turn.prompt,
-            attachments=[] if turn is None else [files[i] for i in turn.attachments],
-            answers={} if turn is None else turn.answers,
             not_before=t.not_before,
             created_at=t.created_at,
             finished_at=t.finished_at,
         )
 
 
-def _turn_payload(t: Task) -> TurnPayload | None:
-    """只有 turn 有输入（prompt、附件、回答）；其他种类的 task 没有。"""
-    return TurnPayload.of(t) if t.kind == TaskKind.TURN else None
+class MailOut(BaseModel):
+    """会话信箱里的一封信件（runtime.mailbox）。"""
+
+    id: int
+    kind: MailKind
+    # 事件的发送方（如 job:12）；用户消息与回答为 null
+    source: str | None
+    content: str
+    attachments: list[FileOut]
+    # 回答信件：tool_call_id -> 交给模型的结果
+    answers: dict[str, AskResult]
+    state: MailState
+    created_at: datetime
 
 
-async def task_outs(c: Container, tasks: list[Task]) -> list[TaskOut]:
-    """TaskOut 的唯一构造入口：一次取齐这些 task 的附件。"""
-    ids = list(dict.fromkeys(i for t in tasks if (turn := _turn_payload(t)) for i in turn.attachments))
+async def mail_outs(c: Container, mail: list[Mail]) -> list[MailOut]:
+    """MailOut 的唯一构造入口：一次取齐这些信件的附件。"""
+    ids = list(dict.fromkeys(i for m in mail for i in m.attachments))
     files = {f.id: FileOut.of(f) for f in await c.files.referenced(ids)}
-    return [TaskOut.of(t, files) for t in tasks]
+    return [
+        MailOut(
+            id=m.id,
+            kind=m.kind,
+            source=m.source,
+            content=m.content,
+            attachments=[files[i] for i in m.attachments],
+            answers={k: AskResult.model_validate(v) for k, v in m.answers.items()},
+            state=m.state,
+            created_at=m.created_at,
+        )
+        for m in mail
+    ]
 
 
 class CompactionOut(BaseModel):
@@ -120,13 +134,16 @@ class SessionDetail(BaseModel):
     items: list[Item]
     # 压缩点：through_message_id 及之前的消息已由 summary 代替发给模型（原文仍完整展示）
     compactions: list[CompactionOut]
-    # 尚未完成或失败的轮次：前端据此显示「处理中」的用户消息与错误
-    open_turns: list[TaskOut]
+    # 显示在历史之后的信件：排队中的（处理中的用户消息、已提交的回答），以及最近一次停止丢弃的
+    mail: list[MailOut]
+    # 最近一次运行，还没正常结束时（排队、运行中、等重试或失败）；前端据此显示「处理中」与错误、重试
+    run: TaskOut | None
     # 这个会话开出的 thread
     threads: list[SessionOut]
-    # 现在可以回答的提问（已提交的回答显示在 open_turns 里）
+    # 现在可以回答的提问（已提交、还没交给模型的回答显示在 mail 里）
     pending_questions: list[PendingQuestionsOut]
-    # 正在进行的这一轮已经产生的运行事件（与 SSE 的 run 事件同一形状），让中途打开页面也能从头看起；没有则为 null
+    # 正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状，见 bus.LiveRuns），让中途打开页面也能从这一段
+    # 的开头看起；没有则为 null
     live: LiveRunOut | None
 
 
@@ -166,7 +183,7 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
             origin_ref=None,
             content=body.prompt,
             session=NewSession(agent_id=body.agent_id, title=default_title(body.prompt.strip() or names)),
-            reply_to=ReplyTo.USER,
+            awaited=True,
             attachments=tuple(body.attachments),
         )
     )
@@ -176,29 +193,33 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
 @router.get("/sessions/{session_id}")
 async def get_session(c: C, session_id: str) -> SessionDetail:
     session = await c.sessions.get(session_id)
+    # 先取快照再取历史：快照这一段已在展示的回复不在历史里重复显示（bus.LiveRuns）；之间换了段时，新保存的消息
+    # 照旧由旧快照展示，saved 事件随后让前端重新拉取
+    run = c.live.snapshot(session_id)
     history = await c.sessions.history_with_ids(session_id)
     items = [
-        {**item, "message_id": message_id} for message_id, message in history for item in to_items([message])
+        {**item, "message_id": message_id}
+        for message_id, message in history
+        if run is None or run.after_message_id is None or message_id <= run.after_message_id
+        for item in to_items([message])
     ]
     compactions = [
         CompactionOut(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
         for x in await c.sessions.compactions(session_id)
     ]
-    tasks = await c.queue.list(status=None, session_id=session_id, limit=50)
-    open_tasks = [t for t in reversed(tasks) if t.kind == TaskKind.TURN and t.status != TaskStatus.DONE]
-    open_turns = await task_outs(c, open_tasks)
-    # 与 receive 同一个判断：有会先执行的轮次时提问已不能回答，不显示表单
     async with c.db.transaction() as s:
-        pending = await answerable_questions(s, session_id) or {}
+        mail = await visible_in(s, session_id)
+        latest = await latest_run(s, session_id)
+        # 与 receive 同一个判断：已经提交了回答的提问不再显示表单
+        pending = await answerable_questions(s, session_id)
     return SessionDetail(
         session=SessionOut.of(session),
         items=items,
         compactions=compactions,
-        open_turns=open_turns,
+        mail=await mail_outs(c, mail),
+        run=None if latest is None or latest.status == TaskStatus.DONE else TaskOut.of(latest),
         threads=[SessionOut.of(t) for t in await c.sessions.threads(session_id)],
-        live=None
-        if (run := c.live.snapshot(session_id)) is None
-        else LiveRunOut(run_id=run.run_id, events=run.events),
+        live=None if run is None else LiveRunOut(run_id=run.run_id, events=run.events),
         pending_questions=[
             PendingQuestionsOut(tool_call_id=call_id, questions=questions)
             for call_id, questions in pending.items()
@@ -207,30 +228,30 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
 
 
 @router.post("/sessions/{session_id}/messages", status_code=202)
-async def reply(c: C, session_id: str, body: ReplyIn) -> TaskOut:
+async def reply(c: C, session_id: str, body: ReplyIn) -> list[MailOut]:
     received = await c.sessions.receive(
         Inbound(
             origin=Origin.USER,
             origin_ref=None,
             content=body.prompt,
             session=session_id,
-            reply_to=ReplyTo.USER,
+            awaited=True,
             attachments=tuple(body.attachments),
             answers=body.answers,
         )
     )
-    return (await task_outs(c, [received.turn]))[0]
+    return await mail_outs(c, received.mail)
 
 
 @router.post("/sessions/{session_id}/stop", status_code=202)
 async def stop(c: C, session_id: str) -> None:
-    """停止这个会话正在运行的一轮。停止前已经产生的部分（文字、工具调用与结果）照常保存。
-    私有 thread 的轮次属于发问的 agent（在它那一轮里内联运行），只能停止发问方所在的会话。"""
+    """停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的后台任务和
+    report_back 的 thread（docs/architecture.md「会话信箱」）。私有 thread 在发问方那一步里内联运行，
+    只能停止发问方所在的会话。"""
     session = await c.sessions.get(session_id)
     if session.private:
         raise Conflict(f"session {session_id!r} is a private thread; stop the asking session instead")
-    if not c.turns.stop(session_id):
-        raise Conflict(f"session {session_id!r} has no running turn")
+    await c.consumer.stop_session(session_id)
 
 
 class CompactOut(BaseModel):
@@ -240,7 +261,7 @@ class CompactOut(BaseModel):
 
 @router.post("/sessions/{session_id}/compact", status_code=202)
 async def compact(c: C, session_id: str) -> CompactOut:
-    """手动压缩上下文：单轮内上下文超限导致失败时，压缩后再重试该轮。"""
+    """手动压缩上下文：上下文超限导致运行失败时，压缩后再重试。"""
     async with c.db.transaction() as s:
         session = await s.get(Session, session_id)
         if session is None:
@@ -262,9 +283,9 @@ async def delete_session(c: C, session_id: str) -> None:
 async def list_tasks(
     c: C, status: TaskStatus | None = None, limit: int = Query(100, le=500)
 ) -> list[TaskOut]:
-    return await task_outs(c, await c.queue.list(status=status, session_id=None, limit=limit))
+    return [TaskOut.of(t) for t in await c.queue.list(status=status, session_id=None, limit=limit)]
 
 
 @router.post("/tasks/{task_id}/retry")
 async def retry_task(c: C, task_id: int) -> TaskOut:
-    return (await task_outs(c, [await c.queue.retry(task_id)]))[0]
+    return TaskOut.of(await c.queue.retry(task_id))

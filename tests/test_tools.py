@@ -442,13 +442,13 @@ async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, 
 
 
 def test_public_skills_group_can_edit_part_of_a_public_skill(container):
-    [toolset] = container.turns._tool_groups.groups["public_skills"].toolsets  # noqa: SLF001
+    [toolset] = container.consumer._tool_groups.groups["public_skills"].toolsets  # noqa: SLF001
     assert set(toolset.tools) == {"write_public_skill", "edit_public_skill", "delete_public_skill"}
 
 
 async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):
     """agent 写检查脚本时要知道时限：生产上一个「正常 15 秒、网络抖动时重试 30~60 秒」的脚本反复超时。"""
-    toolset = container.turns._tool_groups.groups["triggers"].toolsets[0]  # noqa: SLF001
+    toolset = container.consumer._tool_groups.groups["triggers"].toolsets[0]  # noqa: SLF001
     create = toolset.tools["trigger_create"]
     limit = container.settings.runtime.precheck_timeout_seconds
     assert f"longer than {limit:g} seconds" in create.description
@@ -457,7 +457,7 @@ async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit
 
 
 async def test_run_shell_tells_the_model_its_configured_time_limits(container):
-    run_shell = container.turns._tool_groups.groups["workspace"].toolsets[0].tools["run_shell"]  # noqa: SLF001
+    run_shell = container.consumer._tool_groups.groups["workspace"].toolsets[0].tools["run_shell"]  # noqa: SLF001
     runtime = container.settings.runtime
     assert f"after {runtime.shell_default_timeout:g} seconds" in run_shell.description
     assert f"at most {runtime.shell_max_timeout:g}" in run_shell.description

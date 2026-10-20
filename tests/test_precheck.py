@@ -6,7 +6,7 @@ from muliao.errors import NotFound
 from muliao.models import TaskKind
 from muliao.triggers.precheck import Precheck, PrecheckFailed, decide
 from tests.conftest import login
-from tests.test_flow import tasks_of
+from tests.test_flow import mail_of, tasks_of
 from tests.test_triggers import _make_due
 from tests.test_webhooks import _bearer, _create
 
@@ -62,8 +62,9 @@ async def test_schedule_runs_the_agent_only_when_the_precheck_has_output(contain
     (workspace / "inbox.txt").write_text("alice: deploy is broken\n")
     await _tick(container, trigger.id)
     turns = await tasks_of(container, TaskKind.TURN)
+    [prompt] = [m.content for m in await mail_of(container)]
     assert len(turns) == 1
-    assert turns[0].payload["prompt"].endswith("<event>\nalice: deploy is broken\n\n</event>")
+    assert prompt.endswith("<event>\nalice: deploy is broken\n\n</event>")
 
 
 async def test_changed_precheck_skips_the_baseline_and_unchanged_runs(container, make_agent):
@@ -80,11 +81,8 @@ async def test_changed_precheck_skips_the_baseline_and_unchanged_runs(container,
     (workspace / "price.txt").write_text("ETH 2600\n")
     await _tick(container, trigger.id)
     turns = await tasks_of(container, TaskKind.TURN)
-    assert (
-        len(turns) == 1
-        and "-ETH 2400" in turns[0].payload["prompt"]
-        and "+ETH 2600" in turns[0].payload["prompt"]
-    )
+    [prompt] = [m.content for m in await mail_of(container)]
+    assert len(turns) == 1 and "-ETH 2400" in prompt and "+ETH 2600" in prompt
 
     # 换了检查就从新的基线开始
     await container.triggers.update(
@@ -147,8 +145,9 @@ async def test_webhook_precheck_filters_the_event_and_hides_failures_from_the_ca
     loud = await client.post("/api/hooks/github", content="ok\nURGENT: prod down\n", headers=_bearer(token))
     assert loud.json()["session_id"] is not None
     turns = await tasks_of(container, TaskKind.TURN)
-    assert len(turns) == 1 and "URGENT: prod down" in turns[0].payload["prompt"]
-    assert "routine" not in turns[0].payload["prompt"] and "ok\n" not in turns[0].payload["prompt"]
+    [prompt] = [m.content for m in await mail_of(container)]
+    assert len(turns) == 1 and "URGENT: prod down" in prompt
+    assert "routine" not in prompt and "ok\n" not in prompt
 
     await client.patch(
         f"/api/triggers/{trigger['id']}", json={"precheck": {"command": "echo secret-ish >&2; exit 1"}}

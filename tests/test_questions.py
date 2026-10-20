@@ -12,9 +12,10 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.models import Message, Origin, TaskKind, TaskStatus
+from muliao.models import Mail, MailKind, Message, Origin, TaskKind, TaskStatus
 from muliao.runtime.codec import dump_message
 from muliao.runtime.compaction import _group_turns
+from muliao.runtime.consumer import _Run
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tasks_of
@@ -83,7 +84,7 @@ async def test_turn_stops_on_questions_and_answers_come_back_as_the_tool_result(
 
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量", "持仓量"], "other": "还有链上数据"}]}
     resp = await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
-    assert resp.status_code == 202 and resp.json()["answers"]["q1"]["answers"][0]["selected"] == ["日线"]
+    assert resp.status_code == 202 and resp.json()[0]["answers"]["q1"]["answers"][0]["selected"] == ["日线"]
     # 已提交、还没执行的回答不再显示成待回答的表单
     assert (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"] == []
     await drain(container)
@@ -128,17 +129,45 @@ async def test_replying_without_answering_interrupts_the_questions(client, conta
     assert (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"] == []
 
 
-async def test_questions_cannot_be_answered_behind_a_queued_message(client, container, make_agent, models):
+async def test_an_answer_behind_a_queued_message_still_answers_the_questions(
+    client, container, make_agent, models
+):
     session_id, asker = await _asked(client, container, make_agent, models)
-    # 先发的消息会先执行并把提问记为没回答，之后的回答已经没有意义
+    # 消息还在信箱里排着、没交给模型：之后的回答照样作为提问的结果交回，消息接在后面
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "先看看别的"})
-
-    assert (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"] == []
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
     resp = await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
-    assert resp.status_code == 409
+    assert resp.status_code == 202
     await drain(container)
-    assert [json.loads(r)["answered"] for r in asker.results] == [False]
+
+    assert [json.loads(r)["answered"] for r in asker.results] == [True]
+    history = await container.sessions.history(session_id)
+    assert "先看看别的" in str(history[-2].parts[-1].content)
+
+
+async def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text(container, make_agent):
+    """回答投信后、交给模型前，提问已被别的运行结束（它带着「没回答」继续了）：回答作为一段文字交给模型。"""
+    from muliao.runtime.consumer import Consumer
+    from muliao.runtime.questions import AskResult
+
+    agent = await make_agent("alpha")
+    mail = Mail(
+        id=1,
+        session_id="s",
+        kind=MailKind.ANSWER,
+        content="",
+        attachments=[],
+        answers={
+            "q1": AskResult(
+                answered=True,
+                answers=[{"question": "看哪个周期？", "selected": ["日线"], "other": "也看周线"}],
+                note=None,
+            ).model_dump()
+        },
+    )
+    state = _Run(run_id=1, session=None, agent=agent, resending=False)  # type: ignore[arg-type]
+    [text] = (await Consumer._content(container.consumer, state, [mail])).items  # noqa: SLF001
+    assert "already been closed" in text and "看哪个周期？: 日线; 也看周线" in text
 
 
 async def test_a_failed_answer_holds_the_questions_until_it_is_retried(client, container, make_agent, models):
@@ -229,10 +258,10 @@ def test_compaction_never_separates_a_question_from_its_answer():
     assert [[r.id for r in turn] for turn in _group_turns(rows)] == [[1, 2, 3], [4]]
 
 
-async def test_retrying_an_answer_voided_by_a_later_turn_fails_clearly_and_the_session_goes_on(
+async def test_a_later_run_finishes_a_failed_answer_and_retrying_it_does_nothing(
     client, container, make_agent, models
 ):
-    """回答失败后又跑过别的轮次（把提问记为没回答），重试这个回答以明确的错误失败，且不影响这个会话之后的轮次。"""
+    """回答交给模型后运行失败；之后的消息唤醒的运行从失败处续跑（回答不丢、推送由它做），再重试失败的运行什么都不做。"""
     session_id, asker = await _asked(client, container, make_agent, models)
     original = models.models["asker"]
 
@@ -249,14 +278,17 @@ async def test_retrying_an_answer_voided_by_a_later_turn_fails_clearly_and_the_s
     models.models["asker"] = original
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "算了，先聊别的"})
     await drain(container)
+    assert [json.loads(r)["answered"] for r in asker.results] == [True]
+    notes = (await client.get("/api/notifications")).json()
+    assert len(notes) == 3  # 提问、接手的运行回答了回答、之后的消息
+
+    before = await container.sessions.history(session_id)
     assert (await client.post(f"/api/tasks/{failed.id}/retry")).status_code == 200
     await drain(container)
     retried = next(t for t in await tasks_of(container, TaskKind.TURN) if t.id == failed.id)
-    assert retried.status == TaskStatus.FAILED and "are void" in (retried.error or "")
-
-    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "还在吗"})
-    await drain(container)
-    assert (await tasks_of(container, TaskKind.TURN))[-1].status == TaskStatus.DONE
+    assert retried.status == TaskStatus.DONE
+    assert await container.sessions.history(session_id) == before
+    assert len((await client.get("/api/notifications")).json()) == 3
 
 
 async def test_a_voided_failed_answer_does_not_block_later_questions(client, container, make_agent, models):
@@ -273,17 +305,23 @@ async def test_a_voided_failed_answer_does_not_block_later_questions(client, con
     await drain(container)
 
     # 之后的轮次关闭了 q1，又问了一次（Asker 第一次请求之外都回答文字，这里换一个会再问的模型）
+    asked = 0
+
     def ask_again(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        return ModelResponse(parts=[ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="q2")])
+        nonlocal asked
+        asked += 1
+        return ModelResponse(
+            parts=[ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id=f"q2-{asked}")]
+        )
 
     models.models["asker"] = scripted(ask_again)
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "换个问题"})
     await drain(container)
 
     pending = (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"]
-    assert [p["tool_call_id"] for p in pending] == ["q2"]
+    [latest] = [p["tool_call_id"] for p in pending]
     models.models["asker"] = original
-    answers = {"q2": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
+    answers = {latest: [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
     resp = await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
     assert resp.status_code == 202
 
@@ -347,3 +385,48 @@ async def test_answering_one_of_two_questions_tells_the_model_the_other_was_skip
     answered, skipped = results
     assert answered["answered"] is True
     assert skipped["answered"] is False and "new message" not in skipped["note"]
+
+
+async def test_a_question_asked_alongside_another_tool_is_answered_as_its_result(
+    client, container, make_agent, models
+):
+    """同一个回复里既提问又调了别的工具：挂起结束时别的工具的结果已经追加成一条请求。回答要作为提问的结果交回，
+    不能把那条请求当作被打断的请求重发（重发会让提问没有结果，真实提供方拒绝这样的请求）。"""
+    await login(client)
+    agent = await make_agent("analyst", model="both")
+    results: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if not any(isinstance(m, ModelResponse) for m in messages):
+            return ModelResponse(
+                parts=[
+                    ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="q1"),
+                    ToolCallPart("memory_append", {"entry": "- asked"}, tool_call_id="m1"),
+                ]
+            )
+        last = messages[-1]
+        assert isinstance(last, ModelRequest)
+        results.extend(
+            (p.tool_name, p.model_response_str()) for p in last.parts if isinstance(p, ToolReturnPart)
+        )
+        return ModelResponse(parts=[TextPart("好的")])
+
+    models.models["both"] = scripted(fn)
+    session_id = (await client.post("/api/sessions", json={"agent_id": agent.id, "prompt": "分析"})).json()[
+        "id"
+    ]
+    await drain(container)
+    assert [
+        p["tool_call_id"]
+        for p in (await client.get(f"/api/sessions/{session_id}")).json()["pending_questions"]
+    ] == ["q1"]
+
+    answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
+    await drain(container)
+
+    assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == [TaskStatus.DONE, TaskStatus.DONE]
+    # 发给模型时 pydantic-ai 把相邻的两条请求合成一条：别的工具的结果与提问的结果在一起
+    assert [name for name, _ in results] == ["memory_append", "ask_user"]
+    assert json.loads(results[1][1])["answered"] is True
+    assert container.memory.read(agent.id) == "- asked\n"  # 别的工具只执行了一次

@@ -8,10 +8,11 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.errors import Conflict, Forbidden
-from muliao.models import Message, Origin, ReplyTo, Session, TaskKind, TaskStatus
+from muliao.models import Message, Origin, Session, TaskKind, TaskStatus
 from muliao.runtime.conversation import Inbound, NewSession
+from muliao.runtime.mailbox import queued_in
 from tests.scripted import scripted
-from tests.test_flow import drain, last_user_prompt, reply, start, tasks_of, tool_returns
+from tests.test_flow import drain, idle, last_user_prompt, reply, start, tasks_of, tool_returns
 
 
 def steps(*responses):
@@ -168,7 +169,9 @@ async def test_delegate_task_runs_in_public_thread_without_returning_the_answer(
     assert sorted(d.session_id for d in deliveries) == sorted([parent.id, child.id])
 
 
-async def test_failed_ask_fails_the_callers_turn_and_leaves_no_child_record(container, make_agent, models):
+async def test_failed_ask_fails_the_callers_run_and_records_the_childs_failed_run(
+    container, make_agent, models
+):
     lead = (await make_agent("lead", model="l")).id
     await make_agent("broken", model="x")
 
@@ -186,8 +189,11 @@ async def test_failed_ask_fails_the_callers_turn_and_leaves_no_child_record(cont
     [turn] = await turns_in(container, parent.id)
     assert turn.status == TaskStatus.FAILED and "400" in turn.error
     [child] = await threads_of(container, parent.id)
-    assert await turns_in(container, child.id) == []
-    assert await container.sessions.history(child.id) == []
+    # 子 thread 的运行如实记为失败；发出的问题已经保存（逐步保存），发问方的运行随之失败
+    [child_run] = await turns_in(container, child.id)
+    assert child_run.status == TaskStatus.FAILED and "400" in (child_run.error or "")
+    [question] = await container.sessions.history(child.id)
+    assert "do" in str(question.parts[-1].content)
 
 
 async def test_thread_kind_and_owner_are_fixed_at_creation(container, make_agent, models):
@@ -286,7 +292,7 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
                 origin_ref="someone-else",
                 content="x",
                 session=cron_session.id,
-                reply_to=ReplyTo.AGENT,
+                awaited=False,
             )
         )
     with pytest.raises(ValueError, match="only delegation creates child sessions"):
@@ -296,7 +302,7 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
                 origin_ref=None,
                 content="x",
                 session=NewSession(agent_id=alpha, title="t", parent_session_id=cron_session.id, thread="t"),
-                reply_to=ReplyTo.USER,
+                awaited=True,
             )
         )
 
@@ -327,14 +333,13 @@ async def test_private_thread_running_inline_cannot_be_deleted_nor_its_agent(con
             await running.wait()
         [child] = await threads_of(container, parent.id)
 
-        # 内联轮次不留 running 记录：看承载它的父会话
         with pytest.raises(Conflict):
             await container.sessions.delete(child.id)
         with pytest.raises(Conflict):
             await container.agent_lifecycle.delete(slow, author="user")
     finally:
         gate.set()
-        await drain(container)
+        await idle(container)
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
 
@@ -385,3 +390,46 @@ async def test_inline_turns_announce_their_end_like_queued_turns(container, make
     [child_turn] = await turns_in(container, child.id)
     ended = [e for e in events if e.get("type") == "task" and e["session_id"] == child.id]
     assert [(e["task_id"], e["kind"], e["status"]) for e in ended] == [(child_turn.id, "turn", "done")]
+
+
+async def test_a_question_after_a_failed_ask_gets_its_own_answer(container, make_agent, models):
+    """私有 thread 上一次内联运行失败、历史停在它保存的请求上：下一次 ask 先续跑那次请求，再接着处理新投来的问题，
+    直到信箱空（私有 thread 不被唤醒，这条规则在内联路径上执行），不留下问题夹带进之后的 ask。"""
+    lead = (await make_agent("lead", model="l")).id
+    await make_agent("helper", model="h")
+    asks = {"n": 0}
+
+    def lead_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if results := tool_returns(messages):
+            return ModelResponse(parts=[TextPart(f"a: {results[0].content}")])
+        asks["n"] += 1
+        question = last_user_prompt(messages)
+        return call("ask_agent", {"agent": "helper", "message": question, "thread": "t"}, f"c{asks['n']}")(
+            messages
+        )
+
+    helper_calls = {"n": 0}
+
+    def helper_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        helper_calls["n"] += 1
+        if helper_calls["n"] == 1:
+            raise ModelHTTPError(status_code=400, model_name="h", body="bad request")
+        return ModelResponse(parts=[TextPart(f"re {last_user_prompt(messages)}")])
+
+    models.models["l"] = scripted(lead_fn)
+    models.models["h"] = scripted(helper_fn)
+    parent = await start(container, lead, "first")
+    await drain(container)
+    assert [t.status for t in await turns_in(container, parent.id)] == [TaskStatus.FAILED]
+
+    # 父会话续跑时重新执行那次 ask：子 thread 先重发保存的请求，再处理重新投来的同一个问题，信箱清空
+    await reply(container, parent.id, "second")
+    await drain(container)
+    [child] = await threads_of(container, parent.id)
+    async with container.db.transaction() as s:
+        assert await queued_in(s, child.id) == []
+
+    # 之后的问题得到它自己的回答，没有夹带上次剩下的问题
+    await reply(container, parent.id, "third")
+    await drain(container)
+    assert await last_answer(container, parent.id) == "a: re third"

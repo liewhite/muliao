@@ -64,6 +64,6 @@ async def test_a_failed_turn_leaves_no_live_events_behind(client, container, mak
     await drain(container)
 
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
-    assert detail["open_turns"][0]["status"] == "failed"
+    assert detail["run"]["status"] == "failed"
     assert detail["live"] is None
     assert container.live.snapshot(session_id) is None

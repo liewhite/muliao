@@ -104,7 +104,7 @@ async def test_image_reaches_the_model_as_content_but_is_stored_as_a_reference(
     assert resp.status_code == 201
     session_id = resp.json()["id"]
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
-    assert [f["name"] for f in detail["open_turns"][0]["attachments"]] == ["cat.png", "data.csv"]
+    assert [f["name"] for f in detail["mail"][0]["attachments"]] == ["cat.png", "data.csv"]
     await drain(container)
 
     content = seen[0]
@@ -228,7 +228,7 @@ def test_migrations_add_empty_attachments_and_answers_to_existing_turns(tmp_path
             " VALUES ('turn', 'l', '{\"prompt\": \"hi\", \"reply_to\": \"user\"}', 'failed', 1,"
             " '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
         )
-    migrate(path)
+    migrate(path, "a3339b22b82a")
     with sqlite3.connect(path) as conn:
         payload = conn.execute("SELECT payload FROM tasks").fetchone()[0]
     assert json.loads(payload) == {

@@ -125,7 +125,113 @@ def test_existing_turn_payloads_get_an_empty_report_to(tmp_path):
             '(\'turn\', \'l\', \'{"prompt": "hi", "reply_to": "user", "attachments": [], "answers": {}}\', '
             "'done', 1, '2026-01-01', '2026-01-01')"
         )
-    migrate(path)
+    migrate(path, "a3339b22b82a")
     with sqlite3.connect(path) as conn:
         [(payload,)] = conn.execute("select payload from tasks").fetchall()
     assert '"report_to":null' in payload.replace(" ", "")
+
+
+def test_unfinished_turns_and_queued_events_become_mail(tmp_path):
+    path = tmp_path / "m.db"
+    migrate(path, "a3339b22b82a")
+    turn = (
+        "INSERT INTO tasks (id, kind, lane, session_id, agent_id, payload, status, attempts, not_before, created_at) "
+        "VALUES (?, 'turn', 'session:s', 's', 'a', ?, ?, 1, '2026-01-01', ?)"
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO agents (id, name, description, model, tool_groups, reflect_every, turns_since_reflection, "
+            "reflection_checkpoint, created_at, updated_at) VALUES ('a', 'a', '', 'm', '[]', 5, 0, 0, "
+            "'2026-01-01', '2026-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO sessions (id, agent_id, title, origin, private, unread, created_at, updated_at) "
+            "VALUES ('s', 'a', 't', 'user', 0, 0, '2026-01-01', '2026-01-01')"
+        )
+        # 失败之后会话又完成过别的 turn：旧系统里它只是一条失败记录，不转成信件
+        conn.execute(
+            turn,
+            (
+                1,
+                '{"prompt": "superseded", "reply_to": "user", "attachments": [], "answers": {}, "report_to": null}',
+                "failed",
+                "2026-01-01 00:00:00",
+            ),
+        )
+        conn.execute(
+            turn,
+            (
+                2,
+                '{"prompt": "old", "reply_to": "user", "attachments": [], "answers": {}, "report_to": null}',
+                "done",
+                "2026-01-01 00:00:01",
+            ),
+        )
+        conn.execute(
+            turn,
+            (
+                3,
+                '{"prompt": "go on", "reply_to": "user", "attachments": ["f1"], '
+                '"answers": {"q1": {"answered": true, "answers": [], "note": null}}, '
+                '"report_to": {"session_id": "p", "reply_to": "user"}}',
+                "pending",
+                "2026-01-01 00:00:02",
+            ),
+        )
+        conn.execute(
+            turn,
+            (
+                4,
+                '{"prompt": "failed one", "reply_to": "none", "attachments": [], '
+                '"answers": {}, "report_to": {"session_id": "p", "reply_to": "user"}}',
+                "failed",
+                "2026-01-01 00:00:03",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO session_events (session_id, source, content, reply_to, created_at) "
+            "VALUES ('s', 'job:1', 'done', 'user', '2026-01-01 00:00:04')"
+        )
+        conn.execute(
+            "INSERT INTO jobs (session_id, agent_id, command, secrets, status, log_path, reply_to, started_at) "
+            "VALUES ('s', 'a', 'true', '[]', 'exited', 'jobs/1.log', 'user', '2026-01-01')"
+        )
+    migrate(path)
+
+    with sqlite3.connect(path) as conn:
+        mail = conn.execute(
+            "select kind, source, content, attachments, answers, awaited, report_to, state, created_at "
+            "from mail order by id"
+        ).fetchall()
+        tasks = conn.execute("select id, status, payload from tasks order by id").fetchall()
+        awaited = conn.execute("select awaited from jobs").fetchall()
+    assert mail == [
+        (
+            "answer",
+            None,
+            "",
+            "[]",
+            '{"q1":{"answered":true,"answers":[],"note":null}}',
+            1,
+            None,
+            "queued",
+            "2026-01-01 00:00:02",
+        ),
+        (
+            "message",
+            None,
+            "go on",
+            '["f1"]',
+            "{}",
+            1,
+            '{"session_id":"p","awaited":true}',
+            "queued",
+            "2026-01-01 00:00:02",
+        ),
+        ("message", None, "failed one", "[]", "{}", 0, None, "queued", "2026-01-01 00:00:03"),
+        ("event", "job:1", "done", "[]", "{}", 1, None, "queued", "2026-01-01 00:00:04"),
+    ]
+    # 信件按到达顺序编号；失败 turn 的委派当时已经交回过失败，信件不再带交回地址
+    # 排队的 turn 删除，失败的保留等用户重试；payload 都清空
+    assert tasks == [(1, "failed", "{}"), (2, "done", "{}"), (4, "failed", "{}")]
+    assert awaited == [(1,)]

@@ -19,9 +19,9 @@ class Origin(StrEnum):
 
 
 class ReplyTo(StrEnum):
-    """一轮结束后结果交给谁，按轮决定（见 docs/architecture.md「会话领域」）。
-
-    只有 USER 会推送通知。AGENT 表示这一轮由另一个 agent 用 ask_agent 发问，回答作为工具结果直接交回给它。
+    """一次运行的回答交给谁，运行开始时由它处理的信件决定（见 docs/architecture.md「会话领域」），决定开放哪些工具与
+    指令里怎么说。USER：有用户在等（运行结束时推送）；AGENT：私有 thread 的内联运行，回答作为工具结果交回发问方；
+    NONE：没有人在等。
     """
 
     USER = "user"
@@ -170,7 +170,7 @@ class Reflection(Base):
 
 
 class Trigger(Base):
-    """触发器：具名、持久的事件来源，把外部刺激变成交给某个 agent 的一轮。
+    """触发器：具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件。
 
     怎么被触发由 kind 决定（定时、webhook……），只在代码里多态实现（triggers/），表里不为某种方式开专门的列：
     config 是这种方式的配置（用户或 agent 设置），state 是这种方式自己维护的运行状态（如下次触发时间、token 摘要）。
@@ -223,7 +223,7 @@ class Secret(Base):
 
 
 class Job(Base):
-    """agent 在后台跑的一条 shell 命令：不占住这一轮，结束时、运行中每隔一段时间给发起它的会话发事件（runtime.jobs）。"""
+    """agent 在后台跑的一条 shell 命令：不占住运行，结束时、运行中每隔一段时间往发起它的会话的信箱投事件（runtime.jobs）。"""
 
     __tablename__ = "jobs"
 
@@ -239,37 +239,61 @@ class Job(Base):
     log_path: Mapped[str] = mapped_column(String(255))
     # 进程（组）号；进程还没起来时为 None
     pid: Mapped[int | None]
-    # 发起它的那一轮的去向：完成通知随它推送（运行中的检查不推送）
-    reply_to: Mapped[ReplyTo] = mapped_column(StrEnumType(ReplyTo))
+    # 发起它的那次运行里用户是否在等回答：完成通知的信件随它（运行中的检查不推送）
+    awaited: Mapped[bool]
     started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = {"sqlite_autoincrement": True}
 
 
-class SessionEvent(Base):
-    """交给某个会话的 agent、等下一轮一起处理的事件（后台任务完成、运行中的检查……）。设计见 runtime/events。
+class MailKind(StrEnum):
+    """信箱里的信件（runtime.mailbox）。"""
 
-    一轮开始时取走会话里所有还没处理的事件，提交时记下 consumed_by；会话在等用户回答提问时事件留着，回答或跳过的
-    那一轮一起带上。
-    """
+    # 交给模型的原文：用户在界面发的消息（可带附件）、触发器事件、另一个 agent 委派来的任务
+    MESSAGE = "message"
+    # 用户对挂起提问（ask_user）的回答：作为那次调用的结果交回，不是一段新消息
+    ANSWER = "answer"
+    # 后台任务、交回的结果、运行中检查：套上来源交给模型（conventions.format_event），界面单独显示
+    EVENT = "event"
 
-    __tablename__ = "session_events"
+
+class MailState(StrEnum):
+    QUEUED = "queued"
+    # 交给模型的那一步已经保存
+    CONSUMED = "consumed"
+    # 用户停止会话时信箱清空：没交给模型，留着记录
+    DISCARDED = "discarded"
+
+
+class Mail(Base):
+    """会话信箱里的一封信件：一切要交给 agent 的东西都是信件，消费者按到达顺序交给模型（runtime.mailbox）。"""
+
+    __tablename__ = "mail"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
-    # 谁发的，如 "job:12"（交给模型时标在事件上）
-    source: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[MailKind] = mapped_column(StrEnumType(MailKind))
+    # 发送方：事件的来源（如 job:12、thread:<会话 id>，交给模型时标在事件上）；用户消息为 None
+    source: Mapped[str | None] = mapped_column(String(100))
     content: Mapped[str] = mapped_column(Text)
-    # 处理它的那一轮的回答要不要推送给用户（运行中的检查不推送，完成通知随发起任务的那一轮）
-    reply_to: Mapped[ReplyTo] = mapped_column(StrEnumType(ReplyTo))
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-    # 处理掉它的 turn task；None 表示还在队列里
+    # 随消息发送的文件 id（muliao.files）
+    attachments: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # ANSWER：tool_call_id -> 交给模型的结果（runtime.questions.AskResult 的 dump）
+    answers: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # 用户是否在等它的回答：一次运行处理过的信件里有一封是，结束时就把回答推送给用户
+    awaited: Mapped[bool] = mapped_column(default=False)
+    # 委派来的任务（delegate_task(report_back)）：处理它的运行结束时把结果交回的会话（runtime.reports）
+    # none_as_null：没有交回地址存 SQL NULL（默认会存成 JSON 的 null），查询才能用 IS NULL
+    report_to: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True))
+    state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
+    # 处理掉它的运行（turn task）
     consumed_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
-    # 处理掉之后这一行只作记录（内容已随那一轮的消息保存）；查询只看还在队列里的，用部分索引
+    # 查询几乎只看还在排队的，用部分索引
     __table_args__ = (
-        Index("ix_session_events_queued", "session_id", sqlite_where=consumed_by.is_(None)),
+        Index("ix_mail_queued", "session_id", sqlite_where=state == MailState.QUEUED),
         {"sqlite_autoincrement": True},
     )
 

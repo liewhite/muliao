@@ -29,24 +29,24 @@ class ThreadInfo(BaseModel):
     agent: str
     # true：ask_agent 开出的、只有你能继续的 thread；false：用户也能看到并回复
     private: bool
-    # 最近一轮的状态。私有 thread 只报告已完成的轮次（done，或还没有完成过任何一轮时为 idle）
+    # 最近一次运行的状态（idle：还没有运行）
     status: Literal["done", "failed", "running", "idle"]
-    # 最近一轮已完成时的回答摘录
+    # 最近一次运行完成时，会话最近的回答摘录
     answer: str | None
 
 
-# 在私有 thread 里内联跑完一轮并返回回答（runtime.turn.TurnRunner.run_inline）：(session_id, prompt) -> answer
+# 在私有 thread 里内联跑完一次运行并返回回答（runtime.consumer.Consumer.run_inline）：(session_id, prompt) -> answer
 RunInline = Callable[[str, str], Awaitable[Answer]]
-# 停止一个会话正在运行的一轮（runtime.turn.TurnRunner.stop）：session_id -> 是否有在运行的
-StopTurn = Callable[[str], bool]
+# 停止一个会话：停下它的消费、清空信箱（runtime.consumer.Consumer.stop_session）
+StopSession = Callable[[str], Awaitable[None]]
 
 
 _DELEGATE_DESCRIPTION = """\
 Hand a task to an agent and keep going without waiting. It runs in a thread the user can see and reply in. \
 By default the user is notified with its answer and you do NOT get it back. With `report_back: true` the answer \
 (or its failure) comes back to you as an event in this conversation instead, with a check-in event about every \
-{check:g} seconds while it is still working (each one is a turn of yours), so you can keep going and act on the \
-result when it arrives. If you need the answer before you can continue, use `ask_agent`."""
+{check:g} seconds while it is still working (events reach you like messages, between your tool calls if you are \
+busy), so you can keep going and act on the result when it arrives. If you need the answer before you can continue, use `ask_agent`."""
 
 
 def delegation_toolset(
@@ -54,7 +54,7 @@ def delegation_toolset(
     agents: AgentService,
     threads: Threads,
     run_inline: RunInline,
-    stop_turn: StopTurn,
+    stop_session: StopSession,
     check_seconds: float,
 ) -> FunctionToolset[RunScope]:
     """委派：thread 是这个会话开出的、以名字区分的子会话，同名即续聊（保留对方上下文）。"""
@@ -84,9 +84,9 @@ def delegation_toolset(
         report_to = None
         if report_back:
             if ctx.deps.reply_to not in (ReplyTo.USER, ReplyTo.NONE):
-                # 私有 thread 的发问方在同步等它的回答，没有自己的队列轮次来处理交回的事件
+                # 私有 thread 的发问方在同步等它的回答，交回的事件没有信箱可投（私有 thread 只收问题）
                 raise ModelRetry("report_back is not available in a private thread; use ask_agent instead")
-            report_to = ReportTo(session_id=parent_id, reply_to=ctx.deps.reply_to)
+            report_to = ReportTo(session_id=parent_id, awaited=ctx.deps.reply_to == ReplyTo.USER)
         target = await agents.find_by_name(agent)
         async with db.transaction() as s:
             received = await threads.send(
@@ -114,14 +114,14 @@ def delegation_toolset(
             raise ModelRetry("message must not be empty")
         async with db.transaction() as s:
             child = await threads.open(s, parent_id=parent_id, agent=target, thread=thread, private=True)
-        # 在调用方这一轮里直接跑完：失败随调用方这一轮失败，由队列统一重试
+        # 在调用方那一步里直接跑完：失败随调用方的运行失败，由队列统一重试（续跑时重新执行这次调用）
         return (await run_inline(child.id, message)).to_tool_return(thread_id=child.id)
 
     @ts.tool
     async def stop_thread(ctx: RunContext[RunScope], thread: str) -> str:
-        """Stop the turn a thread of this conversation is running right now (what it already did is kept); a
-        turn still waiting in the queue cannot be stopped. With `report_back` you then get an event saying it
-        was stopped.
+        """Stop a thread of this conversation, whether it is running or still queued: its current run stops (what it
+        already did is kept) and the work queued for it is dropped. With `report_back` you then get an event saying
+        it was stopped.
 
         Args:
             thread: The thread name used with `delegate_task`.
@@ -131,9 +131,8 @@ def delegation_toolset(
             child = await threads.find(s, parent_id, validate_thread(thread))
         if child is None:
             raise ModelRetry(f"this conversation has no thread named {thread!r}; see list_threads")
-        if not stop_turn(child.id):
-            raise ModelRetry(f"thread {thread!r} is not running anything right now")
-        return f"stopping thread {thread!r}"
+        await stop_session(child.id)
+        return f"stopped thread {thread!r}"
 
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:

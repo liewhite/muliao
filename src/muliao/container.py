@@ -25,9 +25,10 @@ from muliao.llm import ModelRegistry, ModelResolver
 from muliao.models import TaskKind
 from muliao.resources import ResourceRepo
 from muliao.runtime.compaction import CompactionHandler, CompactionScheduler
+from muliao.runtime.consumer import Consumer, RunHandler
 from muliao.runtime.conversation import Threads
-from muliao.runtime.events import EventDispatcher
 from muliao.runtime.jobs import JobRunner
+from muliao.runtime.mailbox import MailReconciler
 from muliao.runtime.mcp import McpRegistry
 from muliao.runtime.reflection import ReflectionHandler
 from muliao.runtime.reports import ReportWatcher
@@ -50,7 +51,6 @@ from muliao.runtime.tools.triggers import triggers_toolset
 from muliao.runtime.tools.vault import vault_toolset
 from muliao.runtime.tools.web import web_toolset
 from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
-from muliao.runtime.turn import TurnHandler, TurnRunner
 from muliao.runtime.worker import TaskHandler, Worker
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
@@ -101,11 +101,11 @@ class Container:
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
     worker: Worker
-    events: EventDispatcher
+    mail: MailReconciler
     jobs: JobRunner
     reports: ReportWatcher
     compaction: CompactionScheduler
-    turns: TurnRunner
+    consumer: Consumer
     models: ModelRegistry
     files: FileStore
     # 默认就是 models.check，单独持有只为测试替换
@@ -131,11 +131,11 @@ class Container:
         await self.jobs.recover()
         self._spawn("worker", self.worker.run_forever())
         self._spawn("schedules", self.schedules.run_forever())
-        self._spawn("events", self.events.run_forever())
+        self._spawn("mail", self.mail.run_forever())
         self._spawn("checks", self._check_running_work())
 
     async def _check_running_work(self) -> None:
-        """运行中的检查：每隔 job_check_seconds，给还在跑的后台任务、结果要交回的 thread 轮次各发一个检查事件。"""
+        """运行中的检查：每隔 job_check_seconds，给还在跑的后台任务、结果要交回的 thread 各投一封检查信件。"""
         while True:
             await asyncio.sleep(self.settings.runtime.job_check_seconds)
             await self.jobs.check()
@@ -302,15 +302,15 @@ def build_container(
                     )
                 ]
             ),
-            # ask_agent 用回合执行器跑子 agent，而执行器又用这组工具：通过延迟绑定的调用打破构造顺序上的环
+            # ask_agent 用消费者跑子 agent，而消费者又用这组工具：通过延迟绑定的调用打破构造顺序上的环
             "delegation": ToolGroup(
                 [
                     delegation_toolset(
                         db,
                         agents,
                         threads,
-                        lambda session_id, prompt: turn_runner.run_inline(session_id, prompt),
-                        lambda session_id: turn_runner.stop(session_id),
+                        lambda session_id, prompt: consumer.run_inline(session_id, prompt),
+                        lambda session_id: consumer.stop_session(session_id),
                         settings.runtime.job_check_seconds,
                     )
                 ]
@@ -331,9 +331,11 @@ def build_container(
     if tuple(tool_groups.groups) != tool_group_names:
         raise RuntimeError(f"tool group registry {tuple(tool_groups.groups)} differs from {tool_group_names}")
     compaction = CompactionScheduler(queue, settings.runtime.compaction_threshold_tokens)
-    turn_runner = TurnRunner(db, runtime, tool_groups, queue, notifier, compaction, files, live, bus)
+    consumer = Consumer(
+        db, runtime, tool_groups, queue, notifier, compaction, files, live, bus, jobs.stop_session
+    )
     handlers: dict[TaskKind, TaskHandler] = {
-        TaskKind.TURN: TurnHandler(turn_runner, queue),
+        TaskKind.TURN: RunHandler(consumer, queue),
         TaskKind.COMPACTION: CompactionHandler(
             db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),
@@ -347,8 +349,6 @@ def build_container(
         concurrency=settings.runtime.worker_concurrency,
         task_timeout_seconds=settings.runtime.task_timeout_seconds,
     )
-
-    events = EventDispatcher(db, queue)
 
     return Container(
         settings=settings,
@@ -373,11 +373,11 @@ def build_container(
         push_subscriptions=push_subscriptions,
         vapid=vapid,
         worker=worker,
-        events=events,
+        mail=MailReconciler(db, queue),
         jobs=jobs,
         reports=ReportWatcher(db, queue),
         compaction=compaction,
-        turns=turn_runner,
+        consumer=consumer,
         models=models,
         files=files,
         _model_checker=model_checker or models.check,

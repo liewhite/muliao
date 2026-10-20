@@ -1,4 +1,5 @@
-"""停止正在运行的一轮：停止前已经产生的部分照常保存（下一轮的模型知道做过什么），不推送，展示为「已停止」。"""
+"""停止会话：正在进行的运行结束，停止前已经产生的部分照常保存（之后的模型知道做过什么），不推送，展示为「已停止」；
+信箱清空（没交给模型的信件记为被丢弃）。"""
 
 import asyncio
 
@@ -14,11 +15,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 
 from muliao.conventions import STOPPED_TOOL_RESULT, TURN_STOPPED
-from muliao.models import TaskKind, TaskStatus
-from muliao.runtime.stopping import stopped_messages
+from muliao.models import MailKind, MailState, TaskKind, TaskStatus
+from muliao.runtime.mailbox import post_in
 from tests.conftest import login
 from tests.scripted import scripted
-from tests.test_flow import drain, tasks_of
+from tests.test_flow import drain, mail_of, tasks_of
 
 
 class TwoSteps:
@@ -30,7 +31,7 @@ class TwoSteps:
     def __call__(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         last = messages[-1]
         prompts = [p.content for m in messages for p in m.parts if isinstance(p, UserPromptPart)]
-        if prompts[-1] == "next":
+        if prompts[-1] == ["next"]:
             self.second_turn = list(messages)
             return ModelResponse(parts=[TextPart("ok")])
         if isinstance(last, ModelRequest) and any(isinstance(p, ToolReturnPart) for p in last.parts):
@@ -73,14 +74,22 @@ async def test_stopping_keeps_what_already_happened_and_marks_the_turn_stopped(
         return live is not None and any(e.get("tool_call_id") == "slow" for e in live.events)
 
     await _wait_for(slow_tool_running)
+    # 慢工具还在跑时到达的事件：还没交给模型
+    async with container.db.transaction() as s:
+        await post_in(
+            s, container.queue, session_id, kind=MailKind.EVENT, source="job:9", content="done", awaited=False
+        )
     assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code == 202
     await worker
 
     turns = await tasks_of(container, TaskKind.TURN)
     assert [t.status for t in turns] == [TaskStatus.DONE]
+    # 信箱清空：事件记为被丢弃，不唤醒新的运行；界面上显示为被丢弃
+    assert [(m.content, m.state) for m in await mail_of(container)][-1] == ("done", MailState.DISCARDED)
     assert await tasks_of(container, TaskKind.DELIVER) == []  # 用户自己停的，不推送
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
-    assert detail["live"] is None
+    assert detail["live"] is None and detail["run"] is None
+    assert [(m["content"], m["state"]) for m in detail["mail"]] == [("done", "discarded")]
     items = [(i["type"], i["tool_call_id"], i["text"]) for i in detail["items"]]
     assert ("tool_result", "fast", "exit_code: 0\nquick\n") in items
     assert ("tool_result", "slow", STOPPED_TOOL_RESULT) in items
@@ -93,49 +102,33 @@ async def test_stopping_keeps_what_already_happened_and_marks_the_turn_stopped(
     assert "exit_code: 0\nquick\n" in seen and STOPPED_TOOL_RESULT in seen
 
 
-async def test_stop_without_a_running_turn_is_refused(client, make_agent):
+async def test_stopping_an_idle_session_clears_its_mailbox(client, container, make_agent, models):
     await login(client)
-    agent = await make_agent()
+    agent = await make_agent("worker", model="never")
+    called: list[bool] = []
+
+    def never(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        called.append(True)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["never"] = scripted(never)
     session_id = (await client.post("/api/sessions", json={"agent_id": agent.id, "prompt": "hi"})).json()[
         "id"
     ]
-    assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code == 409
 
+    # 消息还排着、没有在运行：停止就是清空信箱，已经投递的运行开始时没有可交给模型的
+    assert (await client.post(f"/api/sessions/{session_id}/stop")).status_code == 202
+    await drain(container)
 
-def test_a_turn_stopped_before_its_first_model_request_keeps_the_user_message():
-    messages = stopped_messages(None, "hello", None)
-    assert [type(p).__name__ for m in messages for p in m.parts] == ["UserPromptPart"]
-    assert messages[-1].metadata == {TURN_STOPPED: True}
-    assert stopped_messages(None, None, None) == []
-    # pydantic-ai 停在处理挂起结果的途中时给出的是空列表，同样保留用户消息
-    assert stopped_messages([], "hello", None)[0].parts[0].content == "hello"
-
-
-def test_a_turn_stopped_early_still_closes_the_questions_it_was_answering():
-    """停在第一次请求之前，也要把挂起提问的结果（回答或「没回答」）存下：否则历史里的提问一直没有结果，
-    下一轮会把结果接在用户消息之后，提供方拒绝这种顺序，会话从此每一轮都失败。"""
-    from pydantic_ai.tools import DeferredToolResults
-
-    from muliao.runtime.questions import NOT_ANSWERED, pending_questions
-
-    asked = ModelResponse(
-        parts=[
-            ToolCallPart(
-                "ask_user",
-                {"questions": [{"question": "q", "header": "h", "options": [{"label": "a"}]}]},
-                tool_call_id="q1",
-            )
-        ]
-    )
-    deferred = DeferredToolResults(calls={"q1": NOT_ANSWERED.model_dump()})
-
-    messages = stopped_messages(None, "直接分析", deferred)
-
-    [request] = messages
-    assert [type(p).__name__ for p in request.parts] == ["ToolReturnPart", "UserPromptPart"]
-    assert request.parts[0].tool_call_id == "q1" and request.parts[0].content == NOT_ANSWERED.model_dump()
-    assert request.metadata == {TURN_STOPPED: True}
-    assert pending_questions([asked, *messages]) == {}
+    assert called == []
+    detail = (await client.get(f"/api/sessions/{session_id}")).json()
+    assert [(m["content"], m["state"]) for m in detail["mail"]] == [("hi", "discarded")]
+    assert detail["items"] == [] and detail["run"] is None
+    # 之后的消息照常唤醒
+    await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "again"})
+    await drain(container)
+    assert called == [True]
+    assert (await client.get(f"/api/sessions/{session_id}")).json()["mail"] == []
 
 
 async def test_shutdown_is_not_a_stop_the_turn_is_left_for_recovery(client, container, make_agent, models):
@@ -155,11 +148,13 @@ async def test_shutdown_is_not_a_stop_the_turn_is_left_for_recovery(client, cont
     worker.cancel()
     await asyncio.gather(worker, return_exceptions=True)
 
-    # 关停打断的一轮不留任何记录，下次启动由队列恢复重跑
+    # 关停不是停止：已经保存的步骤留着，不标「已停止」，下次启动由队列恢复、从上一步续跑
     assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == [TaskStatus.RUNNING]
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
-    assert [i["type"] for i in detail["items"]] == [] and detail["live"] is None
-    assert not container.turns.stop(session_id)
+    items = [(i["type"], i["tool_call_id"]) for i in detail["items"]]
+    assert ("tool_result", "fast") in items and "stopped" not in [kind for kind, _ in items]
+    assert detail["live"] is None
+    assert not container.consumer.stop(session_id)
 
 
 async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_truncated_secret(
@@ -258,30 +253,120 @@ async def test_a_second_run_in_the_same_session_is_refused():
 
     first = asyncio.create_task(runs.run("s", wait))
     await asyncio.sleep(0)
-    with pytest.raises(RuntimeError, match="already has a running turn"):
+    with pytest.raises(RuntimeError, match="already has a running"):
         await runs.run("s", wait)
     gate.set()
     assert await first == "done"
 
 
-def test_a_turn_stopped_while_handling_answers_keeps_the_answers_and_the_message():
-    """停在处理挂起结果的途中：pydantic-ai 只留下一条被打断的空请求（不含用户消息），回答与消息都要补上。"""
-    from pydantic_ai.tools import DeferredToolResults
+async def _failed_after_saving_a_request(container, make_agent, models) -> tuple[str, list[int]]:
+    """会话的运行把第一次请求保存后在模型处失败：历史停在一条会被续跑重发的请求上。返回会话与模型调用计数。"""
+    from pydantic_ai.exceptions import ModelHTTPError
 
-    from muliao.runtime.questions import NOT_ANSWERED
+    from tests.test_flow import start
 
-    deferred = DeferredToolResults(calls={"q1": NOT_ANSWERED.model_dump(), "q2": NOT_ANSWERED.model_dump()})
-    # q1 的结果已经处理完记下了，q2 还没有
-    interrupted = ModelRequest(
-        parts=[ToolReturnPart("ask_user", NOT_ANSWERED.model_dump(), tool_call_id="q1")], state="interrupted"
+    agent = await make_agent("worker", model="flaky")
+    calls: list[int] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls.append(1)
+        if len(calls) == 1:
+            raise ModelHTTPError(status_code=400, model_name="flaky", body="bad request")
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["flaky"] = scripted(fn)
+    session = await start(container, agent.id, "go")
+    await drain(container)
+    return session.id, calls
+
+
+async def test_stopping_during_a_pending_retry_stops_the_retry(container, make_agent, models):
+    from datetime import timedelta
+
+    from muliao.models import Task
+
+    session_id, calls = await _failed_after_saving_a_request(container, make_agent, models)
+    # 如同在退避里等重试：排着、还没到时间
+    [run] = await tasks_of(container, TaskKind.TURN)
+    async with container.db.transaction() as s:
+        task = await s.get(Task, run.id)
+        task.status, task.not_before = TaskStatus.PENDING, container.queue.now() + timedelta(hours=1)
+
+    await container.consumer.stop_session(session_id)
+    await drain(container)
+
+    assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == [TaskStatus.DONE]
+    history = await container.sessions.history(session_id)
+    assert history[-1].metadata == {TURN_STOPPED: True}
+    # 之后的消息不会把停下的请求再发一遍
+    from tests.test_flow import reply
+
+    await reply(container, session_id, "next")
+    await drain(container)
+    assert len(calls) == 2
+    history = await container.sessions.history(session_id)
+    assert [type(m).__name__ for m in history] == ["ModelRequest", "ModelRequest", "ModelResponse"]
+
+
+async def test_stopping_a_resumed_run_before_its_first_step_closes_the_history(
+    container, make_agent, models, monkeypatch
+):
+    """停在运行拿到运行中的历史之前（组装指令、连接 MCP 期间）：从库里的历史补上停止，续跑不会重发停下的请求。"""
+    from muliao.runtime.runner import AgentRuntime
+    from tests.test_flow import reply
+
+    session_id, calls = await _failed_after_saving_a_request(container, make_agent, models)
+    entered, gate = asyncio.Event(), asyncio.Event()
+    original = AgentRuntime.instructions
+
+    async def slow(self, agent, scope, summary):  # noqa: ANN001, ANN202
+        entered.set()
+        await gate.wait()
+        return await original(self, agent, scope, summary)
+
+    monkeypatch.setattr(AgentRuntime, "instructions", slow)
+    await reply(container, session_id, "again")
+    worker = asyncio.create_task(drain(container))
+    async with asyncio.timeout(5):
+        await entered.wait()
+    await container.consumer.stop_session(session_id)
+    await worker
+
+    assert len(calls) == 1
+    history = await container.sessions.history(session_id)
+    assert [type(m).__name__ for m in history] == ["ModelRequest"]
+    assert history[-1].metadata == {TURN_STOPPED: True}
+    assert [m.state for m in await mail_of(container)][-1] == MailState.DISCARDED
+
+
+async def test_stopping_a_run_before_it_reads_its_state_still_stops_the_session(
+    container, make_agent, models, monkeypatch
+):
+    import muliao.runtime.consumer as consumer_module
+    from tests.test_flow import start
+
+    agent = await make_agent("worker", model="never")
+    called: list[bool] = []
+    models.models["never"] = scripted(
+        lambda m, i: called.append(True) or ModelResponse(parts=[TextPart("x")])
     )
+    entered, gate = asyncio.Event(), asyncio.Event()
+    original = consumer_module.load_context
 
-    messages = stopped_messages([interrupted], "直接分析", deferred)
+    async def slow(s, session_id):  # noqa: ANN001, ANN202
+        entered.set()
+        await gate.wait()
+        return await original(s, session_id)
 
-    returns = [p.tool_call_id for m in messages for p in m.parts if isinstance(p, ToolReturnPart)]
-    prompts = [p.content for m in messages for p in m.parts if isinstance(p, UserPromptPart)]
-    assert sorted(returns) == ["q1", "q2"] and prompts == ["直接分析"]
-    assert (
-        stopped_messages([ModelRequest(parts=[], state="interrupted")], "hi", None)[0].parts[0].content
-        == "hi"
-    )
+    monkeypatch.setattr(consumer_module, "load_context", slow)
+    session = await start(container, agent.id, "hi")
+    worker = asyncio.create_task(drain(container))
+    async with asyncio.timeout(5):
+        await entered.wait()
+    await container.consumer.stop_session(session.id)
+    gate.set()
+    await worker
+
+    assert called == []
+    assert [t.status for t in await tasks_of(container, TaskKind.TURN)] == [TaskStatus.DONE]
+    assert [m.state for m in await mail_of(container)] == [MailState.DISCARDED]

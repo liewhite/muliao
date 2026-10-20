@@ -1,4 +1,4 @@
-"""触发器：具名、持久的事件来源，把外部刺激变成交给某个 agent 的一轮（见 models.Trigger）。
+"""触发器：具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件（见 models.Trigger）。
 
 触发方式是多态的，分两部分实现，新增一种方式（例如消息队列）只需各加一个实现并在组合根注册：
 - TriggerKind：纯逻辑——校验配置、推导运行状态，注册给 TriggerService；
@@ -7,7 +7,7 @@
 
 fire 先跑触发器的前置检查（若有，见 triggers.precheck）：没有事件就不调用 agent。检查在数据库事务之外执行。
 
-所有触发产生的一轮都不推送（reply_to = none），需要通知时由 agent 调用 notify_user。
+触发投的信件都没有用户在等（awaited = False），处理它的运行不推送，需要通知时由 agent 调用 notify_user。
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from sqlalchemy.orm import undefer
 from muliao.db import Database, utcnow
 from muliao.delivery.base import Notifier
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.models import Agent, Notification, Origin, ReplyTo, Session, Trigger
+from muliao.models import Agent, Notification, Origin, Session, Trigger
 from muliao.runtime.conversation import Inbound, NewSession, receive
 from muliao.runtime.tasks import Clock, TaskQueue, turn_lane
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
@@ -236,7 +236,7 @@ class TriggerService:
             return trigger
 
     async def busy_in(self, s: AsyncSession, trigger: Trigger) -> bool:
-        """上一次触发的会话是否还有未完成的一轮（定时触发据此避免重叠）。"""
+        """上一次触发的会话是否还有未完成的运行（定时触发据此避免重叠）。"""
         return trigger.last_session_id is not None and await self._queue.lane_busy(
             s, turn_lane(trigger.last_session_id)
         )
@@ -261,7 +261,7 @@ class TriggerService:
                 )
                 if session_id is None
                 else session_id,
-                reply_to=ReplyTo.NONE,
+                awaited=False,
             ),
         )
         trigger.last_fired_at = now

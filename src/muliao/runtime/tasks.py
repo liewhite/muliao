@@ -1,10 +1,11 @@
 """持久化任务队列。
 
-所有工作（对话一轮、反思、投递）都是 task。语义：
+所有工作（会话的一次运行、压缩、反思、投递）都是 task。语义：
 - 同一 lane 内严格 FIFO、最多一个 running；不同 lane 并发。
 - 契约内的暂时性失败按指数退避重试，超过上限置 failed；其他失败直接 failed。
 - 进程崩溃遗留的 running 在启动时复位为 pending（见 docs/architecture.md「用最终正确性换架构简化」）。
-- 不经队列、在别处已经执行完的工作（ask_agent 内联跑完的一轮）用 record_done 补记，保持「每一轮都是一个 task」。
+- 不经 worker 执行的运行（ask_agent 在发问方那一步里内联驱动私有 thread）用 start_inline 直接记为 running，
+  保持「每一次运行都是一个 task」；它们不能被重启后恢复，recover 记为失败。
 """
 
 from __future__ import annotations
@@ -40,6 +41,14 @@ def turn_lane(session_id: str) -> str:
     return f"session:{session_id}"
 
 
+_INLINE = "inline:"
+
+
+def inline_lane(session_id: str) -> str:
+    """私有 thread 的运行：在发问方那一步里内联执行，不经过队列领取（TaskQueue.start_inline）。"""
+    return f"{_INLINE}{session_id}"
+
+
 def reflection_lane(agent_id: str) -> str:
     return f"reflection:{agent_id}"
 
@@ -71,11 +80,8 @@ def _claimable():  # noqa: ANN202
 async def running_task_ids(
     s: AsyncSession, *, session_id: str | None = None, agent_id: str | None = None
 ) -> list[int]:
-    """正在运行的 task id。删除 session/agent 前用它保证不会删掉执行中的工作。
-
-    只看队列里的 task：ask_agent 的内联轮次不留 running 记录，判断私有 thread 是否在跑见
-    conversation.delete_sessions。
-    """
+    """正在运行的 task id（包括私有 thread 的内联运行，见 TaskQueue.start_inline）。删除 session/agent 前用它保证
+    不会删掉执行中的工作。"""
     query = select(Task.id).where(Task.status == TaskStatus.RUNNING)
     if session_id is not None:
         query = query.where(Task.session_id == session_id)
@@ -119,30 +125,20 @@ class TaskQueue:
         event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
         return task
 
-    def record_done(
-        self,
-        s: AsyncSession,
-        *,
-        kind: TaskKind,
-        lane: str,
-        agent_id: str | None,
-        session_id: str | None,
-        payload: dict[str, Any],
-        started_at: datetime,
-    ) -> Task:
-        """在调用方事务内补记一条已在别处执行完的 task（不会被领取）。"""
+    def start_inline(self, s: AsyncSession, *, agent_id: str, session_id: str) -> Task:
+        """在调用方事务内记下一次在别处（发问方那一步里）执行的运行，从一开始就是 running、不会被领取；
+        结束时照常 complete 或 fail。它的 lane 不参与排队（inline_lane）。"""
         now = self._clock()
         task = Task(
-            kind=kind,
-            lane=lane,
+            kind=TaskKind.TURN,
+            lane=inline_lane(session_id),
             agent_id=agent_id,
             session_id=session_id,
-            payload=payload,
-            status=TaskStatus.DONE,
+            payload={},
+            status=TaskStatus.RUNNING,
             attempts=1,
-            not_before=started_at,
-            started_at=started_at,
-            finished_at=now,
+            not_before=now,
+            started_at=now,
         )
         s.add(task)
         return task
@@ -192,19 +188,41 @@ class TaskQueue:
         self.wake.set()
         return task
 
+    async def finish_pending_in(self, s: AsyncSession, lane: str, kind: TaskKind) -> list[Task]:
+        """在调用方事务里把这个 lane 上排队（含等重试）的这种 task 记为完成，不再执行（用户停止会话）。"""
+        tasks = list(
+            (
+                await s.scalars(
+                    select(Task).where(
+                        Task.lane == lane, Task.kind == kind, Task.status == TaskStatus.PENDING
+                    )
+                )
+            ).all()
+        )
+        for task in tasks:
+            task.status, task.finished_at = TaskStatus.DONE, self._clock()
+        return tasks
+
     async def recover(self) -> list[Task]:
-        """启动时调用：上次进程遗留的 running 复位为 pending，返回被恢复的 task。"""
+        """启动时调用：上次进程遗留的 running 复位为 pending，返回被恢复的 task。
+
+        内联运行（私有 thread）不复位：发问方那次运行续跑时会重新发问，交给 worker 接手会让同一个 thread 同时有两个
+        消费者。记为失败。"""
         async with self._db.transaction() as s:
             tasks = list((await s.scalars(select(Task).where(Task.status == TaskStatus.RUNNING))).all())
             for task in tasks:
-                task.status = TaskStatus.PENDING
-            return tasks
+                if task.lane.startswith(_INLINE):
+                    task.status, task.finished_at = TaskStatus.FAILED, self._clock()
+                    task.error = "interrupted by a restart; the asking agent asks again when its run resumes"
+                else:
+                    task.status = TaskStatus.PENDING
+            return [t for t in tasks if t.status == TaskStatus.PENDING]
 
     async def retry(self, task_id: int) -> Task:
         """人工重试一个 failed task。
 
-        同 lane 还有未结束的 task 时拒绝：重试沿用原来的 id，会按 FIFO 插到更新的工作前面，
-        旧 prompt 落在更新的历史之后，顺序错乱。
+        同 lane 还有未结束的 task 时拒绝：重试沿用原来的 id，会按 FIFO 插到更新的工作前面，和正在进行的运行
+        争同一个会话。
         """
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)

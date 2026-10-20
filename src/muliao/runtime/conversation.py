@@ -1,13 +1,13 @@
-"""会话领域：子会话 thread、按轮的结果路由、所有新一轮对话的唯一入口。设计见 docs/architecture.md「会话领域」。
+"""会话领域：子会话 thread、来信的唯一入口（投进会话信箱，runtime.mailbox）。设计见 docs/architecture.md「会话领域」。
 
-一轮对话就是一个 turn task。委派有两种：delegate_task 往公开 thread 投递一轮（走队列，调用方不等）；
-ask_agent 在调用方这一轮里直接跑完私有 thread 的一轮（见 runtime/turn.TurnRunner.run_inline）。
+委派有两种：delegate_task 往公开 thread 的信箱投信（由它的消费者处理，调用方不等）；ask_agent 在发问方那一步里
+直接驱动私有 thread（见 runtime.consumer.Consumer.run_inline）。
 """
 
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 from pydantic_ai.messages import ModelResponse, TextPart
@@ -18,8 +18,21 @@ from muliao.db import utcnow
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.files import load_metas
 from muliao.ids import new_id
-from muliao.models import Agent, Job, JobStatus, Message, Origin, ReplyTo, Session, Task, TaskKind, TaskStatus
+from muliao.models import (
+    Agent,
+    Job,
+    JobStatus,
+    Mail,
+    MailKind,
+    Message,
+    Origin,
+    Session,
+    Task,
+    TaskKind,
+    TaskStatus,
+)
 from muliao.runtime.codec import load_messages
+from muliao.runtime.mailbox import post_in, queued_in
 from muliao.runtime.questions import (
     AskResult,
     Question,
@@ -27,7 +40,7 @@ from muliao.runtime.questions import (
     answer_result,
     pending_in_session,
 )
-from muliao.runtime.tasks import TaskQueue, running_task_ids, turn_lane
+from muliao.runtime.tasks import TaskQueue, running_task_ids
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +54,7 @@ def validate_thread(name: str) -> str:
     return name
 
 
-# ---- 入口：一切「交给 agent 处理一轮」的事件 ----
+# ---- 入口：一切投进会话信箱的来信 ----
 
 
 @dataclass(frozen=True)
@@ -57,19 +70,19 @@ class NewSession:
 
 
 class ReportTo(BaseModel):
-    """这一轮结束（完成、被停止或最终失败）时把结果作为事件交给哪个会话：delegate_task(report_back) 的父会话
+    """处理委派信件的运行结束（完成、被停止或最终失败）时把结果交给哪个会话：delegate_task(report_back) 的父会话
     （runtime.reports）。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     session_id: str
-    # 父会话发起委派的那一轮的去向：结果事件随它推送
-    reply_to: ReplyTo
+    # 发起委派时用户是否在等父会话的回答：交回的结果信件随它推送
+    awaited: bool
 
 
 @dataclass(frozen=True)
 class Inbound:
-    """一个事件：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 交给某个 agent 处理一轮」。
+    """一封来信：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 投进某个会话的信箱」（runtime.mailbox）。
 
     session 为已有会话的 id 时在其中继续，为 NewSession 时新建会话。
     origin_ref 标识具体的发送方：触发器 id、委派方（父）会话 id；用户为 None。
@@ -79,19 +92,21 @@ class Inbound:
     origin_ref: str | None
     content: str
     session: str | NewSession
-    reply_to: ReplyTo
+    # 用户是否在等它的回答（处理它的运行结束时推送）
+    awaited: bool
     # 随消息发送的文件 id（muliao.files）；只有用户在界面上发的消息会带
     attachments: tuple[str, ...] = ()
     # 对这个会话里挂起提问的回答：tool_call_id -> 每题的回答（runtime.questions）；只有用户会带
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
-    # 这一轮的结果要交回的会话；只有 delegate_task(report_back) 会带
+    # 处理它的运行结束时把结果交回的会话；只有 delegate_task(report_back) 会带
     report_to: ReportTo | None = None
 
 
 @dataclass(frozen=True)
 class Received:
     session: Session
-    turn: Task
+    # 投进信箱的信件（回答一封、文字或附件一封）
+    mail: list[Mail]
 
 
 def _sender_of(session: Session) -> tuple[Origin, str | None]:
@@ -147,73 +162,22 @@ async def create_session(
     return session
 
 
-class TurnPayload(BaseModel):
-    """turn task 的 payload：一轮的输入，在 receive（与内联轮次）里写入、执行时读出。字段只在这里定义，
-    读写都经过它；存量数据由迁移补齐，所以读取时严格校验，不认识的形状就是数据与代码不一致。"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    prompt: str
-    reply_to: ReplyTo
-    # 随消息发送的文件 id（muliao.files）
-    attachments: list[str]
-    # 对这个会话里挂起提问的回答：tool_call_id -> 交给模型的结果（runtime.questions）
-    answers: dict[str, AskResult]
-    # 这一轮结束时把结果交回的会话（delegate_task(report_back)），否则为 None
-    report_to: ReportTo | None
-
-    @classmethod
-    def of(cls, task: Task) -> "TurnPayload":
-        if task.kind != TaskKind.TURN:
-            raise RuntimeError(f"task {task.id} is a {task.kind} task, not a turn")
-        return cls.model_validate(task.payload)
-
-    def dump(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
+# ---- 回答挂起的提问 ----
 
 
-# ---- 回答挂起的提问：回答必须紧接在提问那一轮后面执行（取决于这个会话里各轮的排队顺序） ----
-
-
-def answering_blocked(open_turns: Sequence[Task], pending: Mapping[str, object]) -> bool:
-    """回答必须紧接在提问那一轮后面执行。排队或运行中的轮次会先跑完并把提问记为没回答；失败待重试的回答
-    还占着它回答的那次提问。这两种情况下不接受回答（界面也不显示表单），失败的回答只能重试。
-    失败的回答针对的提问已经被之后的轮次关闭时，它不再占着什么（重试会以明确的错误失败），不能挡住之后的提问。"""
-    return any(
-        t.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
-        or (t.status == TaskStatus.FAILED and not TurnPayload.of(t).answers.keys().isdisjoint(pending))
-        for t in open_turns
-    )
-
-
-async def answerable_questions(s: AsyncSession, session_id: str) -> dict[str, list[Question]] | None:
-    """这个会话现在能回答的提问；有会先执行的轮次或失败待重试的回答时为 None（见 answering_blocked）。
-    界面展示与 receive 校验都经过这里。"""
+async def answerable_questions(s: AsyncSession, session_id: str) -> dict[str, list[Question]]:
+    """这个会话现在能回答的提问：在等回答、还没有回答在信箱里排队的。界面展示与投信校验都经过这里。
+    回答在交给模型之前一直排着（运行失败重试时也还在），所以不需要别的条件。"""
     pending = await pending_in_session(s, session_id)
-    if answering_blocked(await _open_turns(s, session_id), pending):
-        return None
-    return pending
-
-
-async def _open_turns(s: AsyncSession, session_id: str) -> list[Task]:
-    rows = await s.scalars(
-        select(Task).where(
-            Task.session_id == session_id, Task.kind == TaskKind.TURN, Task.status != TaskStatus.DONE
-        )
-    )
-    return list(rows.all())
+    answered = {k for m in await queued_in(s, session_id) if m.kind == MailKind.ANSWER for k in m.answers}
+    return {k: v for k, v in pending.items() if k not in answered}
 
 
 async def _resolve_answers(
     s: AsyncSession, session_id: str, answers: Mapping[str, Sequence[QuestionAnswer]]
 ) -> dict[str, AskResult]:
-    """用户提交的回答：会话里没有会先执行的轮次，且每个都对应还在等回答的提问。返回交给模型的结果。"""
+    """用户提交的回答：每个都对应还在等回答的提问。返回交给模型的结果。"""
     pending = await answerable_questions(s, session_id)
-    if pending is None:
-        raise Conflict(
-            f"session {session_id} has a turn that runs first (or a failed answer to retry); "
-            "it would close these questions, so they can no longer be answered"
-        )
     resolved = {}
     for call_id, given in answers.items():
         if call_id not in pending:
@@ -223,7 +187,7 @@ async def _resolve_answers(
 
 
 async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Received:
-    """所有新一轮对话的唯一入口：确定会话（继续或新建），投递一轮。"""
+    """所有来信的唯一入口：确定会话（继续或新建），把它投进会话的信箱。"""
     if not inbound.content.strip() and not inbound.attachments and not inbound.answers:
         raise InvalidInput("message must not be empty")
     await load_metas(s, inbound.attachments)
@@ -236,42 +200,55 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
         if session is None:
             raise NotFound(f"session {inbound.session!r} not found")
         _check_may_continue(session, inbound.origin, inbound.origin_ref)
-    answers = await _resolve_answers(s, session.id, inbound.answers) if inbound.answers else {}
     session.updated_at = utcnow()
-    turn = queue.enqueue(
-        s,
-        kind=TaskKind.TURN,
-        lane=turn_lane(session.id),
-        agent_id=session.agent_id,
-        session_id=session.id,
-        payload=TurnPayload(
-            prompt=inbound.content,
-            reply_to=inbound.reply_to,
-            attachments=list(inbound.attachments),
-            answers=answers,
-            report_to=inbound.report_to,
-        ).dump(),
-    )
+    mail = []
+    if inbound.answers:
+        answers = await _resolve_answers(s, session.id, inbound.answers)
+        mail.append(
+            await post_in(
+                s,
+                queue,
+                session.id,
+                kind=MailKind.ANSWER,
+                content="",
+                answers={k: v.model_dump() for k, v in answers.items()},
+                awaited=inbound.awaited,
+            )
+        )
+    if inbound.content.strip() or inbound.attachments:
+        mail.append(
+            await post_in(
+                s,
+                queue,
+                session.id,
+                kind=MailKind.MESSAGE,
+                content=inbound.content,
+                attachments=inbound.attachments,
+                awaited=inbound.awaited,
+                report_to=None if inbound.report_to is None else inbound.report_to.model_dump(),
+            )
+        )
     log.info(
         "message received",
         extra={"session_id": session.id, "origin": inbound.origin, "origin_ref": inbound.origin_ref},
     )
-    return Received(session, turn)
+    return Received(session, mail)
 
 
-async def answer_of(s: AsyncSession, turn_id: int) -> str:
-    """已完成的一轮的最终回答：该轮最后一条模型响应里的文本。"""
-    payloads = (
-        await s.scalars(select(Message.payload).where(Message.task_id == turn_id).order_by(Message.id))
-    ).all()
-    for message in reversed(load_messages(payloads)):
+async def latest_answer(s: AsyncSession, session_id: str) -> str:
+    """会话最近的回答：最后一条模型回复里的文本；还没有回复时为空（运行停在第一次回复之前、或没有可交给模型的）。"""
+    payloads = await s.scalars(
+        select(Message.payload).where(Message.session_id == session_id).order_by(Message.id.desc())
+    )
+    for payload in payloads:
+        (message,) = load_messages([payload])
         if isinstance(message, ModelResponse):
             return "\n".join(p.content for p in message.parts if isinstance(p, TextPart))
-    raise RuntimeError(f"turn {turn_id} finished without a model response")
+    return ""
 
 
 def failure_of(turn: Task) -> str:
-    """失败的一轮的错误说明；队列契约保证 failed 一定带 error。"""
+    """失败的运行的错误说明；队列契约保证 failed 一定带 error。"""
     if turn.status != TaskStatus.FAILED or turn.error is None:
         raise RuntimeError(
             f"turn {turn.id} is {turn.status} with error {turn.error!r}, expected a recorded failure"
@@ -279,26 +256,12 @@ def failure_of(turn: Task) -> str:
     return turn.error
 
 
-async def _queue_session(s: AsyncSession, session: Session) -> Session:
-    """承载这个会话执行的、走队列的会话：私有 thread 的轮次只在它最近的非私有祖先那一轮里内联运行。"""
-    while session.private:
-        if session.parent_session_id is None:
-            raise RuntimeError(f"private thread {session.id} has no parent")
-        parent = await s.get(Session, session.parent_session_id)
-        if parent is None:
-            raise RuntimeError(
-                f"private thread {session.id} references missing parent {session.parent_session_id}"
-            )
-        session = parent
-    return session
-
-
 async def delete_sessions(s: AsyncSession, roots: list[Session]) -> None:
     """删除会话的唯一规则（删会话、删 agent 都经过这里）。
 
     私有 thread 只对父会话有意义，逐层随之删除；用户可见的 thread 保留为独立会话（parent 置空）。
-    任一被删会话正在执行时拒绝，避免运行结果无处提交、工具写到被删的目录。私有 thread 的内联运行不留
-    running 记录，所以看承载它的、走队列的祖先会话（偏保守：祖先在跑任何一轮都视为它可能在跑）。
+    任一被删会话正在执行时拒绝，避免运行结果无处提交、工具写到被删的目录。私有 thread 的内联运行同样记为
+    running（TaskQueue.start_inline），所以只看各会话自己的运行中 task。
     """
     doomed = {x.id: x for x in roots}
     frontier = list(doomed)
@@ -311,9 +274,7 @@ async def delete_sessions(s: AsyncSession, roots: list[Session]) -> None:
         frontier = [c.id for c in children if c.id not in doomed]
         doomed |= {c.id: c for c in children}
     for session in doomed.values():
-        # 私有 thread 自己也可能有走队列的 task（内联轮次之后排的压缩），一并检查
-        carriers = dict.fromkeys([(await _queue_session(s, session)).id, session.id])
-        running = [i for carrier in carriers for i in await running_task_ids(s, session_id=carrier)]
+        running = await running_task_ids(s, session_id=session.id)
         if running:
             # 错误也会交还给模型，不带 id；定位信息记在日志里
             log.info(
@@ -357,10 +318,9 @@ def thread_name(session: Session) -> str:
 
 @dataclass(frozen=True)
 class ThreadState:
-    # idle：还没有任何一轮的记录。私有 thread 的内联轮次只在完成时记录，所以只会是 done 或 idle
-    # （第一次 ask 还在跑、或失败了，都是 idle；续聊还在跑时报告的是上一轮）
+    # 最近一次运行的状态；idle：还没有运行
     status: Literal["done", "failed", "running", "idle"]
-    # done 时为最终回答，failed 时为错误说明，其余为空
+    # done 时为会话最近的回答（可能为空：运行停在第一次回复之前），failed 时为错误说明，其余为空
     text: str
 
 
@@ -381,7 +341,7 @@ class Threads:
         """取已有 thread 或新建。
 
         归属在创建时确定：thread 固定属于一个 agent；私有 thread 只能用 ask_agent 续聊，公开 thread 只能用
-        delegate_task（公开 thread 的轮次走队列、用户也能插话，不能在调用方这一轮里直接跑）。
+        delegate_task（公开 thread 由自己的消费者处理、用户也能插话，不能在调用方那一步里直接跑）。
         """
         thread = validate_thread(thread)
         existing = await self.find(s, parent_id, thread)
@@ -413,7 +373,7 @@ class Threads:
         prompt: str,
         report_to: ReportTo | None,
     ) -> Received:
-        """在公开 thread 里投递一轮（thread 不存在则新建），调用方不等。返回投递到的会话与这一轮。
+        """往公开 thread 的信箱投信（thread 不存在则新建），调用方不等。返回投递到的会话与投进的信件。
 
         回答推送给用户；要交回调用方时（report_to）不推送，结果作为事件交给调用方的会话，由它决定怎么告诉用户。"""
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, private=False)
@@ -422,13 +382,13 @@ class Threads:
             origin_ref=parent_id,
             content=prompt,
             session=child.id,
-            reply_to=ReplyTo.USER if report_to is None else ReplyTo.NONE,
+            awaited=report_to is None,
             report_to=report_to,
         )
         return await receive(s, self._queue, inbound)
 
     async def state(self, s: AsyncSession, child: Session) -> ThreadState:
-        """thread 最近一轮的状态。"""
+        """thread 的状态：看最近一次运行；完成时给出会话最近的回答。"""
         turn = await s.scalar(
             select(Task)
             .where(Task.session_id == child.id, Task.kind == TaskKind.TURN)
@@ -439,7 +399,7 @@ class Threads:
             return ThreadState("idle", "")
         match turn.status:
             case TaskStatus.DONE:
-                return ThreadState("done", await answer_of(s, turn.id))
+                return ThreadState("done", await latest_answer(s, child.id))
             case TaskStatus.FAILED:
                 return ThreadState("failed", failure_of(turn))
             case _:

@@ -135,6 +135,16 @@ def deferred_results(pending: Mapping[str, object], answers: Mapping[str, AskRes
     return {call_id: answers.get(call_id, unanswered).model_dump() for call_id in pending}
 
 
+def late_answer_text(results: Sequence[AskResult]) -> str:
+    """用户的回答到达时那次提问已经结束（模型已经带着「没回答」继续了）：作为一段用户消息交给模型，回答不丢。"""
+    lines = ["The user answered questions that had already been closed:"]
+    for result in results:
+        for a in result.answers:
+            given = [*a.selected, *([a.other] if a.other else [])]
+            lines.append(f"- {a.question}: {'; '.join(given)}")
+    return "\n".join(lines)
+
+
 def waiting_text(questions: Sequence[Question]) -> str:
     """一轮停在提问上时给用户的通知正文。"""
     return "等你回答：" + "；".join(q.question for q in questions)

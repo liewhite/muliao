@@ -100,7 +100,7 @@ class ReflectionHandler:
             scope = self._runtime.scope(agent, session_id=None, origin=None, reply_to=None)
             # 反思读的转录里可能有不可信输入：只开放自我改进，以及该 agent 本来就有的写公共 skill 的权限
             profile = self._tool_groups.profile(agent.id, agent.tool_groups, within=REFLECTION_GROUPS)
-            result = await self._runtime.run(agent, scope, prompt, [], profile)
+            result = await self._runtime.run_once(agent, scope, prompt, profile)
             output, messages = result.output, result.all_messages_json().decode()
         else:
             # 不浪费一次模型调用，如实记录是哪种情况：区间本来就是空的（如被停止、没有产生消息的轮次凑满了阈值），

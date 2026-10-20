@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
 from sqlalchemy import select
 
-from muliao.models import Origin, Reflection, ReplyTo, Task, TaskKind, TaskStatus
+from muliao.models import Mail, Origin, Reflection, Task, TaskKind, TaskStatus
 from muliao.runtime.conversation import Inbound, NewSession
 from tests.scripted import scripted
 
@@ -24,20 +24,23 @@ from tests.scripted import scripted
 async def drain(container, limit_seconds: float = 10.0) -> None:
     worker = asyncio.create_task(container.worker.run_forever())
     try:
-        async with asyncio.timeout(limit_seconds):
-            while True:
-                await asyncio.sleep(0.02)
-                async with container.db.transaction() as s:
-                    busy = await s.scalar(
-                        select(Task.id)
-                        .where(Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
-                        .limit(1)
-                    )
-                if busy is None:
-                    return
+        await idle(container, limit_seconds)
     finally:
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
+
+
+async def idle(container, limit_seconds: float = 10.0) -> None:
+    """等已经在跑的 worker 把任务做完（不另起 worker：worker 启动时会把 running 的任务当作上次遗留的来恢复）。"""
+    async with asyncio.timeout(limit_seconds):
+        while True:
+            await asyncio.sleep(0.02)
+            async with container.db.transaction() as s:
+                busy = await s.scalar(
+                    select(Task.id).where(Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING])).limit(1)
+                )
+            if busy is None:
+                return
 
 
 def last_user_prompt(messages: list[ModelMessage]) -> str:
@@ -45,7 +48,9 @@ def last_user_prompt(messages: list[ModelMessage]) -> str:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
                 if isinstance(part, UserPromptPart):
-                    return str(part.content)
+                    # 信件内容以列表交给模型（runtime.consumer），一段文字时取出它
+                    content = part.content
+                    return content if isinstance(content, str) else "\n".join(str(c) for c in content)
     raise AssertionError("no user prompt")
 
 
@@ -63,9 +68,6 @@ def call_then_answer(tool: str, args: dict, answer: str) -> FunctionModel:
     return scripted(fn)
 
 
-_REPLY_TO = {Origin.USER: ReplyTo.USER, Origin.TRIGGER: ReplyTo.NONE}
-
-
 async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER):
     received = await container.sessions.receive(
         Inbound(
@@ -73,20 +75,25 @@ async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER
             origin_ref=None,
             content=prompt,
             session=NewSession(agent_id=agent, title=prompt[:20]),
-            reply_to=_REPLY_TO[origin],
+            awaited=origin == Origin.USER,
         )
     )
     return received.session
 
 
-async def reply(container, session_id: str, prompt: str):
-    """用户在会话里追问，返回这一轮的 task。"""
+async def reply(container, session_id: str, prompt: str) -> Mail:
+    """用户在会话里追问，返回投进信箱的信件。"""
     received = await container.sessions.receive(
-        Inbound(
-            origin=Origin.USER, origin_ref=None, content=prompt, session=session_id, reply_to=ReplyTo.USER
-        )
+        Inbound(origin=Origin.USER, origin_ref=None, content=prompt, session=session_id, awaited=True)
     )
-    return received.turn
+    [mail] = received.mail
+    return mail
+
+
+async def mail_of(container) -> list[Mail]:
+    """所有会话信箱里的信件，按到达顺序。"""
+    async with container.db.transaction() as s:
+        return list((await s.scalars(select(Mail).order_by(Mail.id))).all())
 
 
 async def tasks_of(container, kind: TaskKind) -> list[Task]:

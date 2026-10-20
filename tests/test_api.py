@@ -28,7 +28,10 @@ async def test_agent_session_lifecycle_over_http(client):
 
     detail = (await client.get(f"/api/sessions/{session['id']}")).json()
     assert detail["items"] == []
-    assert [t["prompt"] for t in detail["open_turns"]] == ["hello there"]
+    assert [(m["kind"], m["content"], m["state"]) for m in detail["mail"]] == [
+        ("message", "hello there", "queued")
+    ]
+    assert detail["run"]["status"] == "pending"
     assert (await client.get("/api/sessions/nope")).status_code == 404
 
 

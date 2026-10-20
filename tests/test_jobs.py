@@ -9,10 +9,11 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.errors import Conflict, InvalidInput
-from muliao.models import Job, JobStatus, Origin, ReplyTo, SessionEvent, TaskKind
+from muliao.models import Job, JobStatus, Mail, MailState, Origin, ReplyTo, TaskKind
+from muliao.runtime.mailbox import queued_in
 from tests.scripted import scripted
-from tests.test_events import Recorder
 from tests.test_flow import drain, start, tasks_of
+from tests.test_mailbox import Recorder
 
 
 async def wait_until_done(container, job_id: int, seconds: float = 10) -> Job:
@@ -25,14 +26,9 @@ async def wait_until_done(container, job_id: int, seconds: float = 10) -> Job:
     raise AssertionError(f"job {job_id} still running")
 
 
-async def queued_events(container, session_id: str) -> list[SessionEvent]:
+async def queued_events(container, session_id: str) -> list[Mail]:
     async with container.db.transaction() as s:
-        rows = await s.scalars(
-            select(SessionEvent).where(
-                SessionEvent.session_id == session_id, SessionEvent.consumed_by.is_(None)
-            )
-        )
-        return list(rows.all())
+        return await queued_in(s, session_id)
 
 
 async def start_job(container, make_agent, models, command: str, secrets: tuple[str, ...] = ()):
@@ -90,7 +86,7 @@ async def test_running_jobs_get_check_events_without_piling_up_and_can_be_killed
     # 输出写进日志之后再检查
     await asyncio.sleep(0.3)
     assert await container.jobs.check() == 1
-    # 上一条检查还在队列里（这里还没执行那一轮）：不再堆一条
+    # 上一条检查还在信箱里（还没交给模型）：不再堆一条
     assert await container.jobs.check() == 0
     await drain(container)
     assert "still running" in recorder.prompts[-1][0] and "started" in recorder.prompts[-1][0]
@@ -119,7 +115,7 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
                 command="sleep 100",
                 secrets=[],
                 log_path="jobs/x.log",
-                reply_to=ReplyTo.USER,
+                awaited=True,
                 pid=424242,
             )
         )
@@ -134,7 +130,7 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
     # 进程自成进程组、可能还活着：如实告诉 agent 怎么核实，不盲杀
     assert "pgrep -g 424242" in event.content
     await drain(container)
-    # 完成通知随发起它的那一轮推送
+    # 发起它的运行有用户在等：处理中断通知的运行推送
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
 
 
@@ -158,6 +154,22 @@ async def test_a_session_with_a_running_job_cannot_be_deleted(container, make_ag
     await wait_until_done(container, job.id)
     await drain(container)
     await container.sessions.delete(session.id)
+
+
+async def test_stopping_the_session_kills_its_jobs_without_waking_it_again(container, make_agent, models):
+    session, job, recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
+    prompts = len(recorder.prompts)
+
+    await container.consumer.stop_session(session.id)
+
+    killed = await wait_until_done(container, job.id)
+    await asyncio.sleep(0.2)  # 被一起停下的任务不再投信
+    await drain(container)
+    assert killed.status == JobStatus.KILLED
+    assert len(recorder.prompts) == prompts
+    async with container.db.transaction() as s:
+        mail = (await s.scalars(select(Mail).where(Mail.session_id == session.id))).all()
+    assert all(m.state != MailState.QUEUED for m in mail)
 
 
 async def test_stopping_the_service_kills_running_jobs(container, make_agent, models):

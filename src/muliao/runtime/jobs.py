@@ -1,17 +1,17 @@
-"""后台任务：agent 在后台跑的 shell 命令。做法同 Claude Code 的后台 bash：不占住这一轮、不设时限，
-结束时给发起它的会话发事件（runtime.events），运行期间每隔一段时间发一个检查事件，由 agent 决定继续等还是结束它。
+"""后台任务：agent 在后台跑的 shell 命令。做法同 Claude Code 的后台 bash：不占住运行、不设时限，
+结束时往发起它的会话的信箱投事件信件（runtime.mailbox），运行期间每隔一段时间发一个检查事件，由 agent 决定继续等还是结束它。
 
 - 输出（stdout 与 stderr 合并）逐块脱敏后写进 agent 工作目录的 jobs/<id>.log，agent 用 read_file 读完整输出；
   事件里只带最后几行。
 - 进程自成进程组（shell.spawn_bash），job_kill 与关停杀掉整棵进程树。
-- 结束与投递完成事件在同一个事务里：任务记为结束，事件就一定在队列里。
+- 结束与投递完成事件在同一个事务里：任务记为结束，事件就一定在信箱里（会话被停止时除外：结局照记，不投信）。
 - 以进程退出为准（不是输出管道关闭）：退出后在有限时间内读完剩余输出，后台孙进程一直占着管道也不会让任务结束不了。
 - 不再有人监督的任务一律记为被中断并告诉 agent，同一条路径（_interrupt_in）：正常关停时杀掉进程后；服务意外退出
   （被强杀、崩溃）后启动时（recover）——进程自成进程组、可能还活着，如实告知，不盲杀（pid 可能已被复用）；以及运行中
   监督意外结束（如记下结局时数据库失败），由每次检查前的对账发现。
 - 任务对 agent 可见（工作目录本来就是 agent 级的，job_status / job_kill 按 agent 检查归属），事件归发起它的会话。
   日志大小不设上限（按「不限制」的决定）。
-- 私有 thread、反思与临时 agent 没有自己的队列轮次来处理事件，不能开后台任务。
+- 私有 thread（只收发问方的问题）、反思与临时 agent（没有会话）没有信箱接收事件，不能开后台任务。
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database, utcnow
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.models import Job, JobStatus, ReplyTo, Session, SessionEvent
-from muliao.runtime.events import post_in
+from muliao.models import Job, JobStatus, MailKind, ReplyTo, Session
+from muliao.runtime.mailbox import has_queued_from, post_in
 from muliao.runtime.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash
 from muliao.runtime.tasks import Clock, TaskQueue
 from muliao.vault import Vault
@@ -88,6 +88,8 @@ class _Running:
     proc: asyncio.subprocess.Process
     # job_kill 设置：进程结束后记为 KILLED 而不是 EXITED
     killed: bool = False
+    # 随会话停止（stop_session）：监督者照常记下结局，但不再投信（会话的信箱刚被清空）
+    halted: bool = False
     supervisor: asyncio.Task[None] | None = field(default=None)
 
 
@@ -140,7 +142,7 @@ class JobRunner:
                 agent_id=agent_id,
                 command=command,
                 secrets=list(secrets),
-                reply_to=reply_to,
+                awaited=reply_to == ReplyTo.USER,
                 log_path="",
                 started_at=self._clock(),
             )
@@ -171,7 +173,7 @@ class JobRunner:
                     raise RuntimeError(f"job {job.id} vanished right after it was created")
                 row.pid = job.pid = proc.pid
         except BaseException:
-            # 记录写不进去，或这一轮恰好被停止：不能留下没有记录、没人能结束的进程（取消监督者会杀掉进程组）
+            # 记录写不进去，或这次运行恰好被停止：不能留下没有记录、没人能结束的进程（取消监督者会杀掉进程组）
             handle.supervisor.cancel()
             await asyncio.gather(handle.supervisor, return_exceptions=True)
             async with self._db.transaction() as s:
@@ -190,7 +192,7 @@ class JobRunner:
         try:
             status, exit_code, note = await self._watch(job_id, handle, log_file, secrets)
             # 写结局失败（如数据库暂时不可用）时这一行停在 running；撤销登记后由 check 的对账收敛
-            await self._finish(job_id, status, exit_code, note)
+            await self._finish(job_id, handle, status, exit_code, note)
         finally:
             self._running.pop(job_id, None)
 
@@ -234,7 +236,9 @@ class JobRunner:
             await asyncio.gather(waiter, return_exceptions=True)
             return JobStatus.INTERRUPTED, None, "its output could not be recorded (see server log)"
 
-    async def _finish(self, job_id: int, status: JobStatus, exit_code: int | None, note: str | None) -> None:
+    async def _finish(
+        self, job_id: int, handle: _Running, status: JobStatus, exit_code: int | None, note: str | None
+    ) -> None:
         async with self._db.transaction() as s:
             job = await s.get(Job, job_id)
             if job is None:
@@ -246,8 +250,18 @@ class JobRunner:
             now = self._clock()
             job.status, job.exit_code, job.finished_at = status, exit_code, now
             text = _final_text(job, now, tail(self._workspace_of(job.agent_id) / job.log_path), note)
+            # 在事务里读：stop_session 设置它与这个事务之间没有交错（单线程，事务串行）
+            if handle.halted:
+                log.info("background job ended with its stopped session", extra={"job_id": job_id})
+                return
             await post_in(
-                s, self._queue, job.session_id, source=job_source(job_id), content=text, reply_to=job.reply_to
+                s,
+                self._queue,
+                job.session_id,
+                kind=MailKind.EVENT,
+                source=job_source(job_id),
+                content=text,
+                awaited=job.awaited,
             )
         log.info(
             "background job finished", extra={"job_id": job_id, "status": status, "exit_code": exit_code}
@@ -266,7 +280,13 @@ class JobRunner:
             )
         text = _final_text(job, now, tail(self._workspace_of(job.agent_id) / job.log_path), note)
         await post_in(
-            s, self._queue, job.session_id, source=job_source(job.id), content=text, reply_to=job.reply_to
+            s,
+            self._queue,
+            job.session_id,
+            kind=MailKind.EVENT,
+            source=job_source(job.id),
+            content=text,
+            awaited=job.awaited,
         )
 
     async def kill(self, job_id: int, agent_id: str) -> None:
@@ -282,6 +302,31 @@ class JobRunner:
         handle.killed = True
         kill_group(handle.proc.pid)
         log.info("background job kill requested", extra={"job_id": job_id})
+
+    async def stop_session(self, session_id: str) -> None:
+        """用户停止会话：结束它正在跑的后台任务（同 job_kill），结局照常由监督者记下（KILLED），但不再给这个会话投信。
+        调用方在清空信箱之前调用：标记在这里同步设上，之后监督者的结局事务一定看得到。"""
+        async with self._db.transaction() as s:
+            ids = list(
+                (
+                    await s.scalars(
+                        select(Job.id).where(Job.session_id == session_id, Job.status == JobStatus.RUNNING)
+                    )
+                ).all()
+            )
+        stopped = []
+        for job_id in ids:
+            handle = self._running.get(job_id)
+            # 没有监督者的（监督意外结束）由 check 的对账收敛
+            if handle is not None:
+                handle.killed = handle.halted = True
+                kill_group(handle.proc.pid)
+                stopped.append(job_id)
+        if stopped:
+            log.info(
+                "background jobs stopped with their session",
+                extra={"session_id": session_id, "job_ids": stopped},
+            )
 
     async def info(self, job_id: int, agent_id: str) -> JobInfo:
         async with self._db.transaction() as s:
@@ -331,23 +376,17 @@ class JobRunner:
                 job = await s.get(Job, stale.id)
                 if job is None or job.status != JobStatus.RUNNING:
                     continue
-                waiting = await s.scalar(
-                    select(
-                        select(SessionEvent.id)
-                        .where(SessionEvent.source == job_source(job.id), SessionEvent.consumed_by.is_(None))
-                        .exists()
-                    )
-                )
-                if waiting:
+                if await has_queued_from(s, job.session_id, job_source(job.id)):
                     continue
                 text = _check_text(job, self._clock(), tails[job.id])
                 await post_in(
                     s,
                     self._queue,
                     job.session_id,
+                    kind=MailKind.EVENT,
                     source=job_source(job.id),
                     content=text,
-                    reply_to=ReplyTo.NONE,
+                    awaited=False,
                 )
                 posted += 1
         return posted
