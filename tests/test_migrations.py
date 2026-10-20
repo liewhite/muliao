@@ -6,8 +6,8 @@ from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
-import muliao.db
-from muliao.db import Base, Database, alembic_config, create_engine, migrate
+import muliao.platform.db
+from muliao.platform.db import Base, Database, alembic_config, create_engine, migrate
 
 
 def _tables(path) -> set[str]:  # noqa: ANN001
@@ -58,7 +58,7 @@ def test_failed_migration_rolls_back_ddl_completely(tmp_path, monkeypatch):
         conn.exec_driver_sql("DROP TABLE compactions")
         raise RuntimeError("migration bug")
 
-    monkeypatch.setattr(muliao.db.command, "upgrade", broken_upgrade)
+    monkeypatch.setattr(muliao.platform.db.command, "upgrade", broken_upgrade)
     with pytest.raises(RuntimeError, match="migration bug"):
         migrate(path)
 
@@ -74,7 +74,7 @@ def test_foreign_key_violation_rolls_back_migration(tmp_path, monkeypatch):
             "INSERT INTO messages (session_id, task_id, payload, created_at) VALUES ('ghost', 1, '{}', '2026-01-01')"
         )
 
-    monkeypatch.setattr(muliao.db.command, "upgrade", orphaning_upgrade)
+    monkeypatch.setattr(muliao.platform.db.command, "upgrade", orphaning_upgrade)
     with pytest.raises(RuntimeError, match="foreign key violations"):
         migrate(path)
 

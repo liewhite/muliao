@@ -11,7 +11,7 @@ from pydantic_ai.models import Model
 from muliao.api.app import create_app
 from muliao.config import Settings
 from muliao.container import Container, build_container
-from muliao.db import migrate
+from muliao.platform.db import migrate
 from tests.scripted import scripted
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
@@ -72,7 +72,7 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Cont
 @pytest.fixture
 def make_agent(container: Container) -> Callable:
     """创建 agent 并返回它；测试通过返回值的 .id 引用它（id 由系统生成）。"""
-    from muliao.agents import AgentSpec
+    from muliao.agents.service import AgentSpec
 
     async def _make(
         name: str = "alpha", *, model: str = "test", reflect_every: int = 10, description: str = "test agent"

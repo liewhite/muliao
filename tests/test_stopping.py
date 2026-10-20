@@ -1,4 +1,4 @@
-"""三种取消各自的语义（runtime.stopping，docs/domain-design.md「并发模型」）：用户停止只停这次运行并返回 Stopped；
+"""三种取消各自的语义（sessions.stopping，docs/domain-design.md「并发模型」）：用户停止只停这次运行并返回 Stopped；
 关停与总时限的取消照常向外抛出；无论哪种，运行里工具的子任务（pydantic-ai 的工具在原生任务里执行）都如实收到取消，
 不会被工具内部的 anyio 作用域吞掉、当成正常结束。"""
 
@@ -9,7 +9,7 @@ import anyio
 import anyio.lowlevel
 import pytest
 
-from muliao.runtime.stopping import StoppableRuns, Stopped
+from muliao.sessions.stopping import StoppableRuns, Stopped
 
 
 @asynccontextmanager
@@ -18,7 +18,7 @@ async def _no_gate():
 
 
 class Tool:
-    """像 pydantic-ai 那样把工具放进原生任务并 await 它；工具内部用 anyio 的任务组与时限（同 runtime.shell）。"""
+    """像 pydantic-ai 那样把工具放进原生任务并 await 它；工具内部用 anyio 的任务组与时限（同 platform.shell）。"""
 
     def __init__(self) -> None:
         self.outcome: str | None = None
@@ -156,7 +156,7 @@ async def test_a_shutdown_during_a_stopped_runs_cleanup_does_not_interrupt_it():
 
 
 async def test_a_run_that_swallows_its_cancellation_stays_registered(monkeypatch):
-    monkeypatch.setattr("muliao.runtime.stopping._WIND_DOWN_SECONDS", 0.1)
+    monkeypatch.setattr("muliao.sessions.stopping._WIND_DOWN_SECONDS", 0.1)
     runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = CleaningTool(cleanup_seconds=1.0)
 
@@ -207,7 +207,7 @@ async def test_a_user_stop_never_cancels_a_statement_in_flight(tmp_path, caplog)
     没有等不到的关闭任务。"""
     from sqlalchemy import text
 
-    from muliao.db import Database, create_engine
+    from muliao.platform.db import Database, create_engine
 
     db = Database(create_engine(tmp_path / "x.db"))
     async with db.transaction() as s:

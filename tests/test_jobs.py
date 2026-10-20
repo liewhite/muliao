@@ -10,8 +10,8 @@ from sqlalchemy import select
 
 from muliao.errors import Conflict
 from muliao.models import Job, JobStatus, Mail, MailState, Origin, TaskKind
-from muliao.runtime.holds import has_active_in, hold_in
-from muliao.runtime.mailbox import queued_in
+from muliao.sessions.holds import has_active_in, hold_in
+from muliao.sessions.mailbox import queued_in
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, start, tasks_of
 from tests.test_mailbox import Recorder
@@ -140,7 +140,7 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
 
 async def test_runs_without_a_session_get_no_background_jobs(container):
     """后台任务属于会话：临时 agent 用的那份工作区工具没有 background 参数，也没有 job 工具（靠不提供，不靠运行时检查）。"""
-    from muliao.runtime.tools.workspace import ShellLimits, workspace_toolset
+    from muliao.agent_runtime.workspace_tools import ShellLimits, workspace_toolset
 
     plain = workspace_toolset(container.vault, ShellLimits(10, 20, 1000), container.files)
     assert "job_status" not in plain.tools and "job_kill" not in plain.tools
@@ -203,7 +203,7 @@ async def test_background_runs_have_no_timeout_argument(container, make_agent, m
 async def test_a_job_ends_when_its_process_exits_even_if_a_grandchild_keeps_the_output_open(
     container, make_agent, models, monkeypatch
 ):
-    import muliao.runtime.jobs as jobs_module
+    import muliao.jobs.runner as jobs_module
 
     monkeypatch.setattr(jobs_module, "DRAIN_SECONDS", 0.3)
     # 留在后台的孙进程继承了输出管道：等管道关闭就要等它 30 秒
@@ -241,7 +241,7 @@ async def test_a_job_whose_outcome_could_not_be_recorded_is_reconciled(
 
 
 async def test_a_long_line_is_split_without_leaking_a_secret_or_breaking_characters(tmp_path):
-    from muliao.runtime.jobs import _safe_cut
+    from muliao.jobs.runner import _safe_cut
 
     text = "x" * 10 + "SECRET" + "y" * 10
     # 切口落在 secret 中间时挪到它前面
@@ -294,7 +294,7 @@ async def test_killing_a_job_that_just_exited_is_a_clear_conflict(container, mak
 
 
 def test_the_cut_also_avoids_secrets_overlapping_each_other():
-    from muliao.runtime.jobs import _safe_cut
+    from muliao.jobs.runner import _safe_cut
 
     # 挪过一次之后，另一个 secret 跨到了新切口上，要继续挪
     text = "....ABCDEFGH...."
@@ -319,7 +319,7 @@ async def test_a_job_that_fails_before_holding_its_session_leaves_no_row(contain
     async def broken_hold(*_args, **_kwargs):
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr("muliao.runtime.jobs.hold_in", broken_hold)
+    monkeypatch.setattr("muliao.jobs.runner.hold_in", broken_hold)
     with pytest.raises(RuntimeError, match="database unavailable"):
         await container.jobs.start(
             session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
@@ -343,7 +343,7 @@ async def test_a_job_whose_process_cannot_start_is_reported_interrupted(containe
     async def broken_spawn(*_args, **_kwargs):
         raise OSError("bash missing")
 
-    monkeypatch.setattr("muliao.runtime.jobs.spawn_bash", broken_spawn)
+    monkeypatch.setattr("muliao.jobs.runner.spawn_bash", broken_spawn)
     with pytest.raises(OSError, match="bash missing"):
         await container.jobs.start(
             session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
@@ -362,7 +362,7 @@ async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_is_repor
 ):
     session, agent = await _session_for_jobs(container, make_agent)
     spawned = []
-    real_spawn = __import__("muliao.runtime.jobs", fromlist=["spawn_bash"]).spawn_bash
+    real_spawn = __import__("muliao.jobs.runner", fromlist=["spawn_bash"]).spawn_bash
 
     async def recording_spawn(*args, **kwargs):
         proc = await real_spawn(*args, **kwargs)
@@ -372,8 +372,8 @@ async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_is_repor
     async def broken_record(_self, _job, _pid):
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr("muliao.runtime.jobs.spawn_bash", recording_spawn)
-    monkeypatch.setattr("muliao.runtime.jobs.JobRunner._record_pid", broken_record)
+    monkeypatch.setattr("muliao.jobs.runner.spawn_bash", recording_spawn)
+    monkeypatch.setattr("muliao.jobs.runner.JobRunner._record_pid", broken_record)
     with pytest.raises(RuntimeError, match="database unavailable"):
         await container.jobs.start(
             session_id=session.id, agent_id=agent.id, command="sleep 30", secrets=[], awaited=False
@@ -396,9 +396,9 @@ async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
     async def stuck_close(_self, _job_id, _reason):
         await asyncio.sleep(60)
 
-    monkeypatch.setattr("muliao.runtime.jobs.spawn_bash", broken_spawn)
-    monkeypatch.setattr("muliao.runtime.jobs.JobRunner._close_unstarted", stuck_close)
-    monkeypatch.setattr("muliao.runtime.jobs._CLEANUP_SECONDS", 0.1)
+    monkeypatch.setattr("muliao.jobs.runner.spawn_bash", broken_spawn)
+    monkeypatch.setattr("muliao.jobs.runner.JobRunner._close_unstarted", stuck_close)
+    monkeypatch.setattr("muliao.jobs.runner._CLEANUP_SECONDS", 0.1)
     with pytest.raises(OSError):
         await container.jobs.start(
             session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
@@ -413,7 +413,7 @@ async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
 
 async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_stopped(settings, models):
     """Container.running 的退出顺序：先取消运行与循环，再结束后台任务的进程并记为被中断。"""
-    from muliao.agents import AgentSpec
+    from muliao.agents.service import AgentSpec
     from muliao.container import build_container
 
     c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)

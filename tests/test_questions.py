@@ -14,8 +14,8 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 
 from muliao.models import Message, Origin, TaskKind, TaskStatus
-from muliao.runtime.codec import dump_message
-from muliao.runtime.compaction import steps_of
+from muliao.sessions.codec import dump_message
+from muliao.sessions.compaction import steps_of
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tasks_of
@@ -163,8 +163,8 @@ async def test_an_answer_behind_a_queued_message_still_answers_the_questions(
 
 def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text():
     """回答投信后、交给模型前，提问已被别的运行结束（它带着「没回答」继续了）：回答作为一段文字交给模型。"""
-    from muliao.runtime.pending import late_text
-    from muliao.runtime.questions import AnsweredQuestion, AskResult
+    from muliao.sessions.pending import late_text
+    from muliao.sessions.questions import AnsweredQuestion, AskResult
 
     answered = AskResult(
         answered=True,
@@ -401,7 +401,7 @@ async def test_an_answered_question_is_not_replayed_as_a_live_item(client, conta
 async def test_two_questions_wait_for_both_answers_and_a_message_skips_the_rest(
     client, container, make_agent, models
 ):
-    """同一次运行里问了两次：两次都回答了才继续（runtime.pending.waiting）；只回答了一次就发消息，另一次是被跳过，
+    """同一次运行里问了两次：两次都回答了才继续（sessions.pending.waiting）；只回答了一次就发消息，另一次是被跳过，
     不是「发了新消息」。"""
     await login(client)
     agent = await make_agent("analyst", model="twice")

@@ -1,10 +1,10 @@
-"""Alembic 环境。运行时由 muliao.db.migrate 传入已关闭外键的连接；开发时由仓库根目录 alembic.ini 驱动。"""
+"""Alembic 环境。运行时由 muliao.platform.db.migrate 传入已关闭外键的连接；开发时由仓库根目录 alembic.ini 驱动。"""
 
 from alembic import context
 from sqlalchemy import create_engine
 
 from muliao import models  # noqa: F401  注册所有表
-from muliao.db import Base, StrEnumType, UTCDateTime
+from muliao.platform.db import Base, StrEnumType, UTCDateTime
 
 config = context.config
 

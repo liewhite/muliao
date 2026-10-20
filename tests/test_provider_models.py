@@ -7,7 +7,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from muliao import llm
+from muliao.agent_runtime import llm
 from muliao.config import LlmConfig, ProviderConfig
 from muliao.errors import UpstreamFailed
 from tests.conftest import login

@@ -8,11 +8,11 @@ from pydantic import ValidationError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agents import AgentSpec
+from muliao.agent_runtime.web import DeepSeekWeb, Page, SearchHit
+from muliao.agents.service import AgentSpec
 from muliao.container import build_container
-from muliao.db import migrate
 from muliao.errors import InvalidInput, TransientError
-from muliao.web import DeepSeekWeb, Page, SearchHit
+from muliao.platform.db import migrate
 from tests.scripted import scripted
 from tests.test_tools import run_tools
 
@@ -111,8 +111,8 @@ async def test_deepseek_transient_error_without_json_body_reports_raw_text():
 def test_deepseek_without_base_url_uses_the_official_address():
     from pydantic import SecretStr
 
+    from muliao.agent_runtime.web import build_web_provider
     from muliao.config import WebConfig
-    from muliao.web import build_web_provider
 
     web = build_web_provider(WebConfig(type="deepseek", api_key=SecretStr("k")))
     assert isinstance(web, DeepSeekWeb) and web._base_url == "https://api.deepseek.com"

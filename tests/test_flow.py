@@ -17,8 +17,8 @@ from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionMo
 from sqlalchemy import select
 
 from muliao.models import Mail, Origin, Reflection, ReflectionCheckpoint, Task, TaskKind, TaskStatus
-from muliao.runtime.conversation import Inbound, NewSession
-from muliao.runtime.worker import Worker
+from muliao.platform.worker import Worker
+from muliao.sessions.conversation import Inbound, NewSession
 from tests.scripted import scripted
 
 
@@ -79,7 +79,7 @@ def last_user_prompt(messages: list[ModelMessage]) -> str:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
                 if isinstance(part, UserPromptPart):
-                    # 信件内容以列表交给模型（runtime.consumer），一段文字时取出它
+                    # 信件内容以列表交给模型（sessions.consumer），一段文字时取出它
                     content = part.content
                     return content if isinstance(content, str) else "\n".join(str(c) for c in content)
     raise AssertionError("no user prompt")

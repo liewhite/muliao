@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from muliao.errors import Conflict, NotFound
 from muliao.models import Agent, Job, JobStatus, Origin, RetiredAgent, Task, TaskStatus
-from muliao.runtime.conversation import Inbound, NewSession
+from muliao.sessions.conversation import Inbound, NewSession
 from tests.test_flow import drain, start
 from tests.test_jobs import start_job, wait_until_done
 

@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-import muliao.db
+import muliao.platform.db
 ${imports if imports else ""}
 
 revision: str = ${repr(up_revision)}

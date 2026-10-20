@@ -149,7 +149,7 @@ async def test_a_failed_resource_write_leaves_no_half_created_agent(client, cont
             raise RuntimeError("git index.lock is held")
         return await real_git(*args, check=check)
 
-    from muliao.agents import AgentSpec
+    from muliao.agents.service import AgentSpec
 
     await container.resources.ensure()
     monkeypatch.setattr(container.resources, "_git", failing_git)

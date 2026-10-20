@@ -150,7 +150,7 @@ async def test_a_failing_settle_hook_still_records_the_failure_instead_of_leavin
     container, make_agent, models, monkeypatch
 ):
     """收尾钩子自己失败：task 不能卡在 running 占住 lane 直到重启；失败照样记下、可见。"""
-    from muliao.runtime.consumer import RunHandler
+    from muliao.sessions.consumer import RunHandler
 
     agent = (await make_agent("alpha", model="m")).id
 
@@ -172,9 +172,9 @@ async def test_a_failing_settle_hook_still_records_the_failure_instead_of_leavin
 def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running():
     from datetime import UTC, datetime
 
+    from muliao.delegations.manager import _event_text, check_text
     from muliao.models import Agent, Session, Task
-    from muliao.runtime.delegations import _event_text, check_text
-    from muliao.runtime.session_events import Ending
+    from muliao.sessions.events import Ending
 
     child = Session(id="c", agent_id="a", title="t", thread="review")
     agent = Agent(id="a", name="reviewer")
@@ -191,7 +191,7 @@ def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running()
 async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_hook(container, monkeypatch):
     """记账本身失败（如数据库暂时不可用）不走「跳过收尾」的退路：那条退路只为收尾钩子自己的失败准备。"""
     from muliao.models import Task
-    from muliao.runtime.worker import Worker
+    from muliao.platform.worker import Worker
 
     calls = {"n": 0}
 
@@ -275,7 +275,7 @@ async def test_a_thread_failing_before_its_first_step_reports_the_failure_once(
     container, make_agent, models, monkeypatch
 ):
     """运行在第一次保存之前就最终失败（如组装指令出错）：委派信件一直排着、不会再被唤醒，也要交回失败，之后不再检查。"""
-    from muliao.runtime.runner import AgentRuntime
+    from muliao.agent_runtime.runner import AgentRuntime
 
     lead = (await make_agent("lead", model="l")).id
     reviewer = (await make_agent("reviewer", model="v")).id
@@ -565,7 +565,7 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
 ):
     """回复（含 ask_agent）已保存、投递还没提交时失败：这次调用不算在等回信（没有占用），重试时重新执行它，只委派一次。"""
     from muliao.models import Delegation
-    from muliao.runtime.conversation import Threads as ThreadsClass
+    from muliao.sessions.conversation import Threads as ThreadsClass
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
     original = ThreadsClass.dispatch
@@ -591,8 +591,8 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
 
 
 async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, make_agent, models):
-    from muliao.conventions import STOPPED_TOOL_RESULT
     from muliao.models import Delegation, DelegationStatus
+    from muliao.sessions.conventions import STOPPED_TOOL_RESULT
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
     run = await container.queue.claim(list(TaskKind))
@@ -664,8 +664,8 @@ async def test_an_answer_arriving_mid_run_reaches_the_model_as_late_text(
     from pydantic_ai.messages import ModelRequest, UserPromptPart
     from pydantic_ai.models.function import DeltaToolCall, FunctionModel
 
-    from muliao.runtime.mailbox import post_in
-    from muliao.runtime.questions import AnsweredQuestion, AskResult
+    from muliao.sessions.mailbox import post_in
+    from muliao.sessions.questions import AnsweredQuestion, AskResult
     from tests.conftest import login
     from tests.test_questions import QUESTIONS
 
@@ -760,7 +760,7 @@ async def test_an_outcome_arriving_during_the_threads_last_request_is_waited_for
 
     from pydantic_ai.models.function import FunctionModel
 
-    from muliao.runtime.mailbox import post_in
+    from muliao.sessions.mailbox import post_in
     from tests.test_flow import last_user_prompt
 
     calls = {"n": 0}

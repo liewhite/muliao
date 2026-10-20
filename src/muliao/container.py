@@ -11,64 +11,64 @@ from zoneinfo import ZoneInfo
 
 import anyio
 
-from muliao import tool_catalog
-from muliao.agent_lifecycle import AgentLifecycle
-from muliao.agents import AgentDefaults, AgentService
-from muliao.bus import EventBus, LiveRuns
-from muliao.config import Settings
-from muliao.db import Database, create_engine, migrate
-from muliao.delivery.base import DeliverHandler
-from muliao.delivery.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
-from muliao.errors import InvalidInput
-from muliao.evolution.memory import MemoryStore
-from muliao.evolution.prompts import PromptStore
-from muliao.evolution.skills import SkillStore
-from muliao.files import FileStore
-from muliao.llm import ModelRegistry, ModelResolver
-from muliao.models import TaskKind
-from muliao.notifications import Notifications, Notifier
-from muliao.platform.messaging import Messaging
-from muliao.resources import ResourceRepo
-from muliao.runtime.compaction import CompactionHandler, Compactor
-from muliao.runtime.consumer import Consumer, RunHandler
-from muliao.runtime.content import ContentBuilder
-from muliao.runtime.conversation import Threads
-from muliao.runtime.delegations import Delegations
-from muliao.runtime.finish import RunFinisher
-from muliao.runtime.halt import SessionHalt
-from muliao.runtime.jobs import JobRunner
-from muliao.runtime.mailbox import MailReconciler
-from muliao.runtime.mcp import McpRegistry
-from muliao.runtime.reflection import ReflectionHandler, ReflectionScheduler
-from muliao.runtime.runner import AgentRuntime, RunProfile, ToolGroups
-from muliao.runtime.sessions import SessionService
-from muliao.runtime.settlement import handle_post_event, reconcile_failures_in
-from muliao.runtime.steps import Steps
-from muliao.runtime.tasks import TaskQueue
-from muliao.runtime.tools.agents import agents_toolset
-from muliao.runtime.tools.ask_user import ask_user_toolset
-from muliao.runtime.tools.delegation import delegation_toolset
-from muliao.runtime.tools.evolution import (
+from muliao.agent_runtime import tool_catalog
+from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
+from muliao.agent_runtime.mcp import McpRegistry
+from muliao.agent_runtime.mcp_tools import mcp_admin_toolset
+from muliao.agent_runtime.runner import AgentRuntime, RunProfile, ToolGroups
+from muliao.agent_runtime.temp_agent import clear_temp_dirs, temp_agent_toolset
+from muliao.agent_runtime.web import WebProvider, build_web_provider
+from muliao.agent_runtime.web_tools import web_toolset
+from muliao.agent_runtime.workspace_tools import ShellLimits, session_workspace_toolset, workspace_toolset
+from muliao.agents.evolution_tools import (
     instructions_toolset,
     memory_toolset,
     public_skills_toolset,
     skills_toolset,
 )
-from muliao.runtime.tools.mcp import mcp_admin_toolset
-from muliao.runtime.tools.notify import notify_toolset
-from muliao.runtime.tools.temp_agent import clear_temp_dirs, temp_agent_toolset
-from muliao.runtime.tools.triggers import triggers_toolset
-from muliao.runtime.tools.vault import vault_toolset
-from muliao.runtime.tools.web import web_toolset
-from muliao.runtime.tools.workspace import ShellLimits, session_workspace_toolset, workspace_toolset
-from muliao.runtime.work import WorkWatcher
-from muliao.runtime.worker import TaskHandler, Worker
+from muliao.agents.lifecycle import AgentLifecycle
+from muliao.agents.memory import MemoryStore
+from muliao.agents.prompts import PromptStore
+from muliao.agents.resources import ResourceRepo
+from muliao.agents.service import AgentDefaults, AgentService
+from muliao.agents.skills import SkillStore
+from muliao.agents.tools import agents_toolset
+from muliao.config import Settings
+from muliao.delegations.manager import Delegations
+from muliao.delegations.tools import delegation_toolset
+from muliao.errors import InvalidInput
+from muliao.files.store import FileStore
+from muliao.jobs.runner import JobRunner
+from muliao.models import TaskKind
+from muliao.notifications.delivery import DeliverHandler
+from muliao.notifications.service import Notifications, Notifier
+from muliao.notifications.tools import notify_toolset
+from muliao.notifications.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
+from muliao.platform.bus import EventBus, LiveRuns
+from muliao.platform.checks import WorkWatcher
+from muliao.platform.db import Database, create_engine, migrate
+from muliao.platform.messaging import Messaging
+from muliao.platform.tasks import TaskQueue
+from muliao.platform.worker import TaskHandler, Worker
+from muliao.reflection.service import ReflectionHandler, ReflectionScheduler
+from muliao.sessions.ask_user import ask_user_toolset
+from muliao.sessions.compaction import CompactionHandler, Compactor
+from muliao.sessions.consumer import Consumer, RunHandler
+from muliao.sessions.content import ContentBuilder
+from muliao.sessions.conversation import Threads
+from muliao.sessions.finish import RunFinisher
+from muliao.sessions.halt import SessionHalt
+from muliao.sessions.mailbox import MailReconciler
+from muliao.sessions.service import SessionService
+from muliao.sessions.settlement import handle_post_event, reconcile_failures_in
+from muliao.sessions.steps import Steps
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
 from muliao.triggers.service import EVENT_MAX_BYTES, TriggerService
+from muliao.triggers.tools import triggers_toolset
 from muliao.triggers.webhook import WebhookKind, Webhooks
-from muliao.vault import Vault
-from muliao.web import WebProvider, build_web_provider
+from muliao.vault.service import Vault
+from muliao.vault.tools import vault_toolset
 
 log = logging.getLogger(__name__)
 
@@ -279,7 +279,7 @@ def build_container(
         settings.runtime.shell_max_timeout,
         settings.runtime.tool_output_max_chars,
     )
-    # 总是开放：自我改进，以及向用户提问（没有用户会回答的运行里由工具自己隐藏，见 runtime.tools.ask_user）
+    # 总是开放：自我改进，以及向用户提问（没有用户会回答的运行里由工具自己隐藏，见 sessions.ask_user）
     always_tools = [
         skills_toolset(skills),
         memory_toolset(memory),

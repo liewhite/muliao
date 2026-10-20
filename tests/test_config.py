@@ -7,9 +7,9 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 
+from muliao.agent_runtime.llm import OFFICIAL_BASE_URLS, ModelRegistry
 from muliao.config import LlmConfig, load_settings
 from muliao.errors import InvalidInput
-from muliao.llm import OFFICIAL_BASE_URLS, ModelRegistry
 
 EXAMPLE = Path(__file__).parents[1] / "config.example.toml"
 
@@ -126,7 +126,7 @@ def test_vapid_subject_scheme_is_checked(tmp_path):
 
 
 async def test_startup_rejects_agents_with_unresolvable_models(settings, models):
-    from muliao.agents import AgentSpec
+    from muliao.agents.service import AgentSpec
     from muliao.container import build_container
 
     c = build_container(settings, resolve_model=models)  # 使用真实的配置校验

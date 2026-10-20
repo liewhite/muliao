@@ -7,11 +7,11 @@ from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, TextPart
 from sqlalchemy import select
 
-from muliao.delivery.webpush import WebPushDelivery
 from muliao.errors import Conflict, TransientError
 from muliao.models import Message, Notification, Origin, TaskKind, TaskStatus
-from muliao.runtime.worker import is_transient
-from muliao.transcript import to_items
+from muliao.notifications.webpush import WebPushDelivery
+from muliao.platform.worker import is_transient
+from muliao.sessions.transcript import to_items
 from tests.test_flow import call_then_answer, drain, start
 
 
@@ -152,7 +152,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
 
 
 def test_vapid_private_key_is_owner_only(tmp_path):
-    from muliao.delivery.webpush import VapidKeys
+    from muliao.notifications.webpush import VapidKeys
 
     path = tmp_path / "vapid.pem"
     VapidKeys(path)
@@ -166,14 +166,14 @@ def test_vapid_private_key_is_owner_only(tmp_path):
 async def test_subscriber_survives_heartbeat_timeouts():
     import asyncio
 
-    from muliao.bus import EventBus
+    from muliao.platform.bus import EventBus
 
     bus = EventBus()
     async with bus.subscribe() as sub:
         for _ in range(3):  # SSE 每次心跳都是一次超时
             with pytest.raises(TimeoutError):
                 await asyncio.wait_for(sub.next(), timeout=0.01)
-        from muliao.events import SavedEvent
+        from muliao.api.events import SavedEvent
 
         bus.publish(SavedEvent(session_id="s"))
         assert await asyncio.wait_for(sub.next(), timeout=1) == SavedEvent(session_id="s")
@@ -182,7 +182,7 @@ async def test_subscriber_survives_heartbeat_timeouts():
 def test_unparseable_secret_tool_arguments_are_redacted_wholesale():
     from pydantic_ai.messages import ModelResponse, ToolCallPart
 
-    from muliao.runtime.redaction import redact_messages
+    from muliao.agent_runtime.redaction import redact_messages
 
     cut = ModelResponse(
         parts=[ToolCallPart("vault_set", '{"key": "T", "value": "super-sec', tool_call_id="v")]

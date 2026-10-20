@@ -8,8 +8,8 @@ from sqlalchemy import select
 from muliao.errors import TransientError
 from muliao.models import Task, TaskKind, TaskStatus
 from muliao.platform.messaging import Command, Delivery, DomainEvent, Messaging
-from muliao.runtime.tasks import no_commit
-from muliao.runtime.worker import Worker
+from muliao.platform.tasks import no_commit
+from muliao.platform.worker import Worker
 from tests.test_flow import idle
 
 

@@ -9,8 +9,8 @@ from sqlalchemy import select
 
 from muliao.errors import Conflict, Forbidden
 from muliao.models import Message, Origin, Session, TaskKind, TaskStatus
-from muliao.runtime.conversation import Inbound, NewSession
-from muliao.runtime.mailbox import queued_in
+from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.mailbox import queued_in
 from tests.scripted import scripted
 from tests.test_flow import drain, idle, last_user_prompt, reply, start, tasks_of, tool_returns
 

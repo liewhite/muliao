@@ -311,7 +311,7 @@ export interface paths {
         put?: never;
         /**
          * Compact
-         * @description 手动压缩上下文（自动压缩见 runtime.compaction）：排在正在进行与排队的运行之后。
+         * @description 手动压缩上下文（自动压缩见 sessions.compaction）：排在正在进行与排队的运行之后。
          */
         post: operations["compact_api_sessions__session_id__compact_post"];
         delete?: never;
@@ -791,7 +791,7 @@ export interface components {
     schemas: {
         /**
          * AgentAnswer
-         * @description 被问的 agent 交回的结局（runtime.delegations）：给发问方模型的文字，它挂给用户的文件，所在的 thread。
+         * @description 被问的 agent 交回的结局（delegations.manager）：给发问方模型的文字，它挂给用户的文件，所在的 thread。
          */
         AgentAnswer: {
             /** Text */
@@ -1036,13 +1036,13 @@ export interface components {
         };
         /**
          * MailKind
-         * @description 信箱里的信件（runtime.mailbox）。
+         * @description 信箱里的信件（sessions.mailbox）。
          * @enum {string}
          */
         MailKind: "message" | "answer" | "event";
         /**
          * MailOut
-         * @description 会话信箱里的一封信件（runtime.mailbox）。
+         * @description 会话信箱里的一封信件（sessions.mailbox）。
          */
         MailOut: {
             /** Id */

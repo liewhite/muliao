@@ -10,8 +10,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
+from muliao.agent_runtime.mcp import McpTransport, mcp_config
 from muliao.models import Origin
-from muliao.runtime.mcp import McpTransport, mcp_config
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
@@ -311,7 +311,7 @@ async def test_temp_agent_over_request_limit_is_returned_to_caller(container, ma
 async def test_workspace_removal_failure_keeps_answer_and_is_cleared_on_next_start(
     container, make_agent, models, monkeypatch, caplog
 ):
-    import muliao.runtime.tools.temp_agent as temp_agent
+    import muliao.agent_runtime.temp_agent as temp_agent
 
     me = await make_agent("manager", model="tools")
     models.models["helper"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("answer")]))
@@ -333,7 +333,7 @@ async def test_workspace_removal_failure_keeps_answer_and_is_cleared_on_next_sta
 
 
 def test_unremovable_leftover_is_logged_and_does_not_block_startup(tmp_path, monkeypatch, caplog):
-    import muliao.runtime.tools.temp_agent as temp_agent
+    import muliao.agent_runtime.temp_agent as temp_agent
 
     for name in ("temp-agent-a", "temp-agent-b"):
         (tmp_path / name).mkdir()
@@ -354,7 +354,7 @@ def test_unremovable_leftover_is_logged_and_does_not_block_startup(tmp_path, mon
 async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, models):
     import pytest
 
-    from muliao.agents import AgentSpec
+    from muliao.agents.service import AgentSpec
     from muliao.errors import InvalidInput
 
     triage = await container.agents.create(
@@ -392,7 +392,7 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
 
 
 async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container, models):
-    from muliao.agents import AgentSpec
+    from muliao.agents.service import AgentSpec
 
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     await container.mcp.add(
@@ -417,7 +417,7 @@ async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container,
 
 
 async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, models):
-    from muliao.agents import AgentSpec
+    from muliao.agents.service import AgentSpec
 
     await container.agents.create(
         AgentSpec(name="narrow", description="d", instructions="", model="n", tool_groups=["notify"]),

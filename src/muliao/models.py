@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import JSON, ForeignKey, Index, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from muliao.db import Base, StrEnumType, UTCDateTime, utcnow
+from muliao.platform.db import Base, StrEnumType, UTCDateTime, utcnow
 
 
 class Origin(StrEnum):
@@ -28,7 +28,7 @@ class TaskKind(StrEnum):
 
 
 class JobStatus(StrEnum):
-    """后台任务（runtime.jobs）的状态。结束的三种：自己退出（看 exit_code）、被 job_kill 结束、因服务重启被中断。"""
+    """后台任务（jobs.runner）的状态。结束的三种：自己退出（看 exit_code）、被 job_kill 结束、因服务重启被中断。"""
 
     RUNNING = "running"
     EXITED = "exited"
@@ -62,10 +62,10 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
-    # 选用的工具组名称（见 runtime.runner.ToolGroups）；自我改进的工具总是开放
+    # 选用的工具组名称（见 agent_runtime.runner.ToolGroups）；自我改进的工具总是开放
     tool_groups: Mapped[list[str]] = mapped_column(JSON)
-    # 指令不在这里：它在资源仓库的 agents/<id>/PROMPT.md（读写都经过 evolution.prompts.PromptStore）
-    # 两次反思之间的步数（模型回复数，见 runtime.reflection.ReflectionScheduler）
+    # 指令不在这里：它在资源仓库的 agents/<id>/PROMPT.md（读写都经过 agents.prompts.PromptStore）
+    # 两次反思之间的步数（模型回复数，见 reflection.service.ReflectionScheduler）
     reflect_every: Mapped[int]
     # 正在删除时是发起删除的作者（docs/domain-design.md 4.4）：不出现在列表与名称解析里，各领域清理完它的数据后删除
     # 这一行与资源目录（资源仓库的删除提交记这个作者）
@@ -160,7 +160,7 @@ class Compaction(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
     through_message_id: Mapped[int]
-    # 写入时会话最后一条消息的 id：在它之前的模型回复报告的 token 数反映的是压缩前的上下文（runtime.compaction）
+    # 写入时会话最后一条消息的 id：在它之前的模型回复报告的 token 数反映的是压缩前的上下文（sessions.compaction）
     at_message_id: Mapped[int]
     summary: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
@@ -179,7 +179,7 @@ class Reflection(Base):
 
 
 class ReflectionCheckpoint(Base):
-    """反思领域的检查点：该 agent 已纳入反思的最大 message id，下一次反思从它之后开始（runtime.reflection）。"""
+    """反思领域的检查点：该 agent 已纳入反思的最大 message id，下一次反思从它之后开始（reflection.service）。"""
 
     __tablename__ = "reflection_checkpoints"
 
@@ -243,7 +243,7 @@ class Secret(Base):
 
 
 class Job(Base):
-    """agent 在后台跑的一条 shell 命令：不占住运行，结束时、运行中每隔一段时间往发起它的会话的信箱投事件（runtime.jobs）。"""
+    """agent 在后台跑的一条 shell 命令：不占住运行，结束时、运行中每隔一段时间往发起它的会话的信箱投事件（jobs.runner）。"""
 
     __tablename__ = "jobs"
 
@@ -268,7 +268,7 @@ class Job(Base):
 
 
 class MailKind(StrEnum):
-    """信箱里的信件（runtime.mailbox）。"""
+    """信箱里的信件（sessions.mailbox）。"""
 
     # 交给模型的原文：用户在界面发的消息（可带附件）、触发器事件、另一个 agent 委派来的任务
     MESSAGE = "message"
@@ -287,7 +287,7 @@ class MailState(StrEnum):
 
 
 class Mail(Base):
-    """会话信箱里的一封信件：一切要交给 agent 的东西都是信件，消费者按到达顺序交给模型（runtime.mailbox）。"""
+    """会话信箱里的一封信件：一切要交给 agent 的东西都是信件，消费者按到达顺序交给模型（sessions.mailbox）。"""
 
     __tablename__ = "mail"
 
@@ -297,14 +297,14 @@ class Mail(Base):
     # 发送方：事件的来源（如 job:12、thread:<会话 id>，交给模型时标在事件上）；用户消息为 None
     source: Mapped[str | None] = mapped_column(String(100))
     content: Mapped[str] = mapped_column(Text)
-    # 随消息发送的文件 id（muliao.files）
+    # 随消息发送的文件 id（muliao.files.store）
     attachments: Mapped[list[str]] = mapped_column(JSON, default=list)
-    # ANSWER：tool_call_id -> 那次调用的结果（runtime.pending.CallResult 的 dump）
+    # ANSWER：tool_call_id -> 那次调用的结果（sessions.pending.CallResult 的 dump）
     answers: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     # 用户是否在等它的回答：一次运行处理过的信件里有一封是，结束时就把回答推送给用户
     awaited: Mapped[bool] = mapped_column(default=False)
-    # 不透明的关联 id：发送方要知道这封信件带来的工作什么时候结束（委派来的信件是它的 holder，runtime.holds）。
-    # 会话在结束时结清它并发布 SessionSettled（runtime.settlement），每个关联只结清一次
+    # 不透明的关联 id：发送方要知道这封信件带来的工作什么时候结束（委派来的信件是它的 holder，sessions.holds）。
+    # 会话在结束时结清它并发布 SessionSettled（sessions.settlement），每个关联只结清一次
     correlation: Mapped[str | None] = mapped_column(String(200))
     correlation_settled: Mapped[bool] = mapped_column(default=False)
     # 幂等键：带同一个键的投信只投一次（命令按键去重，docs/domain-design.md 3.6）
@@ -335,7 +335,7 @@ class HoldStatus(StrEnum):
 
 
 class SessionHold(Base):
-    """占用：别的领域替这个会话在外面做的一项异步工作（runtime.holds）。行永久保留：带 call_id 的占用是「这次挂起
+    """占用：别的领域替这个会话在外面做的一项异步工作（sessions.holds）。行永久保留：带 call_id 的占用是「这次挂起
     调用已经交出去」的永久事实。"""
 
     __tablename__ = "session_holds"
@@ -362,14 +362,14 @@ class DelegationStatus(StrEnum):
 
 
 class Delegation(Base):
-    """会话交给另一个 agent、要交回结局的一项工作（runtime.delegations，流程管理者）：ask_agent 等它作为挂起调用
+    """会话交给另一个 agent、要交回结局的一项工作（delegations.manager，流程管理者）：ask_agent 等它作为挂起调用
     的结果，delegate_task(report_back) 等它作为事件。只由委派的投递 lane 创建和修改；会话 id 是不透明引用（没有
     外键），行永久保留（只进入终态）。"""
 
     __tablename__ = "delegations"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # 发起方会话上的占用者，也是 thread 信件的关联 id（runtime.holds）
+    # 发起方会话上的占用者，也是 thread 信件的关联 id（sessions.holds）
     holder: Mapped[str] = mapped_column(String(200), unique=True)
     owner_session_id: Mapped[str] = mapped_column(String(36), index=True)
     child_session_id: Mapped[str] = mapped_column(String(36), index=True)
@@ -414,7 +414,7 @@ class PushSubscription(Base):
 
 
 class StoredFile(Base):
-    """对话里出现的一个文件的元数据；内容按 sha256 存在文件目录里（见 muliao.files）。写入后不再改变。"""
+    """对话里出现的一个文件的元数据；内容按 sha256 存在文件目录里（见 muliao.files.store）。写入后不再改变。"""
 
     __tablename__ = "files"
 

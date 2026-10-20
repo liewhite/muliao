@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from muliao.delivery.base import DeliverHandler
-from muliao.delivery.webpush import WebPushDelivery
 from muliao.models import Notification, Task, TaskKind
+from muliao.notifications.delivery import DeliverHandler
+from muliao.notifications.webpush import WebPushDelivery
 from tests.test_flow import drain, start
 
 
@@ -66,7 +66,7 @@ async def test_deleting_a_session_deletes_the_notifications_pointing_to_it(conta
 async def test_any_transport_failure_is_retried_and_does_not_stop_other_devices(container, monkeypatch):
     import requests
 
-    import muliao.delivery.webpush as webpush_module
+    import muliao.notifications.webpush as webpush_module
     from muliao.errors import TransientError
 
     for name in ("broken", "ok"):
@@ -90,7 +90,7 @@ async def test_a_local_request_error_is_not_retried_as_transient(container, monk
     """URL、请求头不合法这类本端问题重试也不会好；当成暂时性失败会让其他设备把同一条通知收到好几次。"""
     import requests
 
-    import muliao.delivery.webpush as webpush_module
+    import muliao.notifications.webpush as webpush_module
 
     await container.push_subscriptions.add("https://push.example/a", "k", "a")
 

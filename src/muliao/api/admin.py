@@ -5,11 +5,11 @@ from datetime import datetime
 from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
+from muliao.agent_runtime.mcp import McpServer, McpTransport, mcp_config
+from muliao.agents.resources import USER
 from muliao.api.deps import C
 from muliao.models import Notification
-from muliao.resources import USER
-from muliao.runtime.mcp import McpServer, McpTransport, mcp_config
-from muliao.vault import SecretInfo
+from muliao.vault.service import SecretInfo
 
 router = APIRouter()
 

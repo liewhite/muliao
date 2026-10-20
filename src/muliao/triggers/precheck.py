@@ -21,8 +21,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from muliao.errors import DomainError, NotFound
-from muliao.runtime.shell import run_bash
-from muliao.vault import Vault
+from muliao.platform.shell import run_bash
+from muliao.vault.service import Vault
 
 log = logging.getLogger(__name__)
 

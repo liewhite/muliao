@@ -1,4 +1,4 @@
-"""agent 能改的文本资源的版本历史与恢复（git，见 muliao.resources），以及公共 prompt 的编辑。
+"""agent 能改的文本资源的版本历史与恢复（git，见 muliao.agents.resources），以及公共 prompt 的编辑。
 
 agent 的指令随 agent 配置修改（PUT /agents/{id}），记忆在 /agents/{id}/memory 修改；这里只提供历史与恢复。
 """
@@ -12,9 +12,9 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from muliao.agents.resources import USER
 from muliao.api.deps import C
 from muliao.errors import InvalidInput
-from muliao.resources import USER
 
 router = APIRouter()
 

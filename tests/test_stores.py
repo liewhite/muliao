@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from muliao.agents.memory import MemoryFull, MemoryStore
+from muliao.agents.resources import RESOURCE_PATHSPEC, ResourceRepo
+from muliao.agents.skills import SkillStore
 from muliao.errors import CorruptState, InvalidInput, NotFound
-from muliao.evolution.memory import MemoryFull, MemoryStore
-from muliao.evolution.skills import SkillStore
-from muliao.resources import RESOURCE_PATHSPEC, ResourceRepo
 from tests.test_flow import drain
 
 # agent id 的格式（与 ids.new_agent_id 一致）
@@ -234,7 +234,7 @@ def test_owner_ids_cannot_escape_the_repository(repo: ResourceRepo):
 
 
 async def test_corrupt_mcp_config_is_rejected_with_its_path_but_can_be_deleted(container):
-    from muliao.runtime.mcp import McpTransport, mcp_config
+    from muliao.agent_runtime.mcp import McpTransport, mcp_config
 
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     await container.mcp.add(None, "echo", spec, probe=False, author="user")
@@ -326,7 +326,7 @@ async def test_files_outside_the_resource_layout_never_enter_history(repo: Resou
 
 async def test_every_file_the_stores_write_is_in_the_resource_layout(container, make_agent):
     """RESOURCE_FILES 与各 store 的文件名必须一致：不在布局里的资源文件，外部写入就不会被收敛。"""
-    from muliao.runtime.mcp import McpTransport, mcp_config
+    from muliao.agent_runtime.mcp import McpTransport, mcp_config
 
     agent = (await make_agent(ALPHA)).id
     await container.memory.append(agent, "fact", agent)
@@ -447,7 +447,7 @@ def test_stored_responses_carry_the_kind_that_step_counting_queries():
 
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-    from muliao.runtime.codec import KIND_PATH, RESPONSE_KIND, dump_message
+    from muliao.sessions.codec import KIND_PATH, RESPONSE_KIND, dump_message
 
     field = KIND_PATH.removeprefix("$.")
     assert json.loads(dump_message(ModelResponse(parts=[TextPart("x")])))[field] == RESPONSE_KIND

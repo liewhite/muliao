@@ -26,11 +26,11 @@
 
 ```
 data/
-  muliao.db
+  muliao.platform.db
   vapid_private.pem            # Web Push 密钥，首次启动生成
   files/<sha前两位>/<sha256>   # 对话里的文件内容（元数据在 files 表），相同内容只存一份
   files/tmp/                   # 上传中的临时文件，启动时清空
-  resources/                   # git 仓库：agent 能改的文本资源，每次修改提交一版（见 muliao.resources）
+  resources/                   # git 仓库：agent 能改的文本资源，每次修改提交一版（见 muliao.agents.resources）
     public/
       PROMPT.md                # 公共 prompt（合并进所有 agent）
       skills/<name>/SKILL.md   # 公共 skill
@@ -54,7 +54,7 @@ data/
 
 ## 2. 核心数据流：一切都是 Task
 
-我们在 pydantic-ai 消息上加的约定（工具结果 metadata 的键、停止标记、合成的工具结果、「调用是否已有结果」的定义）都登记在 `muliao.conventions` 的模块说明里，解析也只在那里写一份；新增约定先在那里登记。
+我们在 pydantic-ai 消息上加的约定（工具结果 metadata 的键、停止标记、合成的工具结果、「调用是否已有结果」的定义）都登记在 `muliao.sessions.conventions` 的模块说明里，解析也只在那里写一份；新增约定先在那里登记。
 
 所有触发源只做一件事：**创建 session（或选中已有 session），在同一事务里往它的信箱投一封信件**（`conversation.receive` → `mailbox.post_in`）。消费信箱的运行是一条 `run` task，之后的执行、重试、反思、通知全部由同一个任务队列驱动，没有例外：`ask_agent` 也只是往私有 thread 的信箱投信，发问方停在这次调用上等回信（见第 4 节「挂起的调用」）。
 
@@ -68,7 +68,7 @@ Web / 触发器（定时、webhook……）/ delegate_task / ask_agent     后�
                                               │ 每一步一个事务：
                                               ├─ 请求模型之前：这次请求 + 它带上的信件（记为已处理）；上下文超过阈值就先压缩
                                               └─ 模型回复之后：这条回复
-                                              │ 运行结束（与 task 记为完成同一事务，runtime.finish）：
+                                              │ 运行结束（与 task 记为完成同一事务，sessions.finish）：
                                               ├─ session.unread / updated_at
                                               ├─ 该 agent 自检查点以来的步数达到阈值 → tasks(reflection)
                                               ├─ 处理过的信件有用户在等 → notifications + tasks(deliver)
@@ -120,10 +120,10 @@ Web / 触发器（定时、webhook……）/ delegate_task / ask_agent     后�
 
 - **原则：给模型看的是名称和描述，给程序用的是 id。** 工具参数、返回值、instructions 里只出现 agent 名称；名称唯一，由工具层（`AgentService.find_by_name`）解析为 id，写错时把可用名称列表作为错误交还模型。id 只会作为文件路径的一部分（`agents/<id>/…`）出现在工作目录里。`tests/test_flow.py::test_model_sees_agent_names_never_ids` 守住这条规则。
 - **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、当前时间、session 来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。
-- **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定。组的目录在 `tool_catalog.py` 唯一登记（组名、界面标签、是否等同全部权限、新建时是否默认开启、是否依赖 `[web]`）：`AgentService` 用它校验，`/api/agent-defaults` 把标签与风险下发给界面，反思的限制用它导出的常量，组合根按它给每组接上实现（`runtime.runner.ToolGroups`）。组：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`、`web`（只在配置了 `[web]` 时存在）；私有 skill、memory 与自己的指令（自我改进）总是开放，读公共 skill 也总是可以；向用户提问（`ask_user`，见第 4 节）也总是开放，但只在用户等着这次运行的回答（`Audience.USER`）时出现。每种运行各用自己的工具组合（`RunProfile`），工具里不做「这是哪种运行」的运行时检查：有会话的运行按 `tool_groups` 组合，反思只开放自我改进以及该 agent 本来就有的 `public_skills`（`tool_catalog.REFLECTION_GROUPS`），临时 agent 是固定的一组。新建 agent 默认开启目录里标为默认的组；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP 与配置了的网页搜索，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
+- **toolsets**（每个领域一个模块，在 `runtime/tools/` 下）。对话里开放哪些由 agent 的 `tool_groups` 决定。组的目录在 `tool_catalog.py` 唯一登记（组名、界面标签、是否等同全部权限、新建时是否默认开启、是否依赖 `[web]`）：`AgentService` 用它校验，`/api/agent-defaults` 把标签与风险下发给界面，反思的限制用它导出的常量，组合根按它给每组接上实现（`agent_runtime.runner.ToolGroups`）。组：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`、`web`（只在配置了 `[web]` 时存在）；私有 skill、memory 与自己的指令（自我改进）总是开放，读公共 skill 也总是可以；向用户提问（`ask_user`，见第 4 节）也总是开放，但只在用户等着这次运行的回答（`Audience.USER`）时出现。每种运行各用自己的工具组合（`RunProfile`），工具里不做「这是哪种运行」的运行时检查：有会话的运行按 `tool_groups` 组合，反思只开放自我改进以及该 agent 本来就有的 `public_skills`（`tool_catalog.REFLECTION_GROUPS`），临时 agent 是固定的一组。新建 agent 默认开启目录里标为默认的组；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP 与配置了的网页搜索，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
   - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `share_file`（把文件发给用户，见第 4 节「附件与文件」）/ `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`；`background: true` 时作为后台任务运行，见第 4 节「后台任务」）/ `job_status` / `job_kill`。后台任务的部分只在会话版的工具集里（`session_workspace_toolset`，有会话的运行用它；临时 agent 用不带后台任务的 `workspace_toolset`），所以没有会话的运行里根本没有这些工具。不做强隔离——按需求为单人本机使用。
-  - `skills`：`read_skill`（私有或公共）/ `write_skill` / `edit_skill`（改正文的一部分：替换恰好出现一次的片段，或追加；这条规则只在 `evolution.text_edit.edit` 写一次，指令、skill 正文与 `edit_file` 共用）/ `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `edit_public_skill` / `delete_public_skill`。
+  - `skills`：`read_skill`（私有或公共）/ `write_skill` / `edit_skill`（改正文的一部分：替换恰好出现一次的片段，或追加；这条规则只在 `agents.text_edit.edit` 写一次，指令、skill 正文与 `edit_file` 共用）/ `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `edit_public_skill` / `delete_public_skill`。
   - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
   - `instructions`：`instructions_replace`（改自己的指令：替换恰好出现一次的片段，或追加），每次修改记一版、作者是自己。
   - `agents`：`get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己） / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
@@ -133,7 +133,7 @@ Web / 触发器（定时、webhook……）/ delegate_task / ask_agent     后�
   - `mcp_admin`：`mcp_list`（含已停用的）/ `mcp_add`（写入前实际连接并列出工具，连接失败直接把错误还给 agent）/ `mcp_set_enabled` / `mcp_remove`。改动从下一次运行起生效。
   - `vault`：`vault_list` / `vault_set` / `vault_delete`（scope = `private` | `public`，默认私有）。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`（`runtime/redaction.py`）。
   - `triggers`：`trigger_kinds` / `trigger_list` / `trigger_create(name, kind, prompt, config, agent?)` / `trigger_update` / `trigger_run` / `trigger_delete`，一组工具覆盖所有触发方式，差异只在 `kind` 与 `config`。agent 同样按名称指定。webhook 的 token 只能由用户在界面上生成，agent 拿不到也不需要。
-  - `web`：`web_search(query, count)` / `web_fetch(url)`，经 `muliao.web.WebProvider` 完成；具体服务由配置 `[web]` 的 `type` 选择（现有 `deepseek`，即 DeepSeek 的 Search / Fetch API），新增一种服务 = 一个实现加一个 `type`。query 长度、条数上限、URL 规则以服务端校验为准，不在本地重复：服务端拒绝（400/403/404/413）作为可纠正的错误交还模型；限流、超时、5xx 是暂时性失败，按运行失败统一重试；key 无效、余额不足等配置问题让运行失败。抓取的正文按 `runtime.tool_output_max_chars` 截断。没配置 `[web]` 时没有这个组，已有 agent 仍选着它会让启动失败并列出这些 agent。
+  - `web`：`web_search(query, count)` / `web_fetch(url)`，经 `muliao.agent_runtime.web.WebProvider` 完成；具体服务由配置 `[web]` 的 `type` 选择（现有 `deepseek`，即 DeepSeek 的 Search / Fetch API），新增一种服务 = 一个实现加一个 `type`。query 长度、条数上限、URL 规则以服务端校验为准，不在本地重复：服务端拒绝（400/403/404/413）作为可纠正的错误交还模型；限流、超时、5xx 是暂时性失败，按运行失败统一重试；key 无效、余额不足等配置问题让运行失败。抓取的正文按 `runtime.tool_output_max_chars` 截断。没配置 `[web]` 时没有这个组，已有 agent 仍选着它会让启动失败并列出这些 agent。
   - `mcp`：该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀。它和其他组一样是一组工具，实现是 pydantic-ai 的 `DynamicToolset`，每次运行按当时的配置构建（`McpRegistry.toolset()`），所以改动从下一次运行起生效；配置只有一个类型（`McpConfig`，存储的配置缺字段直接报错，不补默认值）。配置中的 `${vault:KEY}` 在运行时按 server 归属者的视角解析（公共 server 只能引用公共 secret），引用不可见的 key 直接报错。
 - **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。界面上选模型时，provider 下拉框来自配置（`GET /api/providers`），模型名由 `ModelRegistry.list_models` 向该 provider 实时查询（`GET /api/providers/{name}/models`，即各家的 models 接口），不维护本地模型清单；查询失败返回 502 并带上原因，不用猜测的列表兜底。
 
@@ -151,7 +151,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `thread`，同一父 session 内唯一）。模型只用 thread 名，不接触 session id。同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。thread 的 agent 与种类在创建时确定：私有 thread 只能用 `ask_agent` 续聊，公开 thread 只能用 `delegate_task`。
 - **推送按信件、不按 session**：每封信件带「用户是否在等它的回答」（`awaited`，由投信的入口设置，见第 8 节）。一次运行处理过的信件里有用户在等的，就把它的回答推送给用户；否则不推，agent 可以自己 `notify_user`。同一个公开 thread 里，父 agent 委派的任务与用户的追问都推送；`report_back` 的委派不推送，结果交回父 agent。
-- **回答交给谁**（`runtime.scope.Audience`，不入库）：运行开始时由会话与它处理的信件推导一次，决定开放哪些工具（`ask_user`）与指令里怎么说：私有 thread 是 `agent`（回答作为 `ask_agent` 的结果交回发问方）；处理过的和信箱里排着的信件有用户在等就是 `user`；否则 `none`。运行中途才到的、用户在等的消息会被这次运行处理、收尾时推送，但这次运行的工具与指令不随之改变（工具集在 pydantic-ai 运行开始时固定）；提问要等下一次运行。
+- **回答交给谁**（`agent_runtime.scope.Audience`，不入库）：运行开始时由会话与它处理的信件推导一次，决定开放哪些工具（`ask_user`）与指令里怎么说：私有 thread 是 `agent`（回答作为 `ask_agent` 的结果交回发问方）；处理过的和信箱里排着的信件有用户在等就是 `user`；否则 `none`。运行中途才到的、用户在等的消息会被这次运行处理、收尾时推送，但这次运行的工具与指令不随之改变（工具集在 pydantic-ai 运行开始时固定）；提问要等下一次运行。
 - **私有 thread** 的含义只剩「用户只读、只收发问方的信」：它有自己的信箱和消费者，可以开后台任务、`report_back`、被停止（发问方那次调用拿到「被停止」）。`ask_user` 在私有 thread 里不提供（没有用户在等）。不能单独删除，随发问的会话删除。
 - **删除**：删除父 session 会一并删除它的私有 thread（逐层）；用户可见的 thread 保留（`parent_session_id` 置空）。会话或它的私有 thread 有任务正在运行、或有后台任务在跑时拒绝删除（409）。交给被删除的 thread、还没交回的委派交回「thread 已删除」。
 
@@ -185,7 +185,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 每个会话是一个**信箱**加一个**消费者**。一切要交给 agent 的东西都是往信箱里投一封信件：用户消息（含附件）、对提问的回答、触发器与委派来的任务、后台任务的完成与检查、thread 交回的结果，按到达顺序排列。消费者把信件喂给模型：信箱里有信件就开始一次**运行**（一条 run task，payload 只记投递时最大的信件 id `through_mail_id`，输入都在信箱里），把排着的信件交给模型；每次请求模型之前，把这期间新到的信件接在工具结果后面一起交给模型（同 Claude Code：两次工具调用之间就能处理，不等这次运行结束）；模型不再调用工具时这次运行结束，信箱里还有信件就接着跑下一次。异步工作（后台 shell、交回结局的委派）发起后立即返回，结局与运行中检查都只是往发起方的信箱里投信（见下文「会话拥有的异步工作」）。
 
-- **信件交给模型的样子**：消息是原文加附件引用；事件是用户消息内容里独立的一段（`conventions.format_event`，`<event source="job:12">…</event>`），那条请求的 metadata 记下是第几段（`RUN_EVENTS`，`runtime.content` 构造内容时就记下，不从文字反推），界面据此把事件单独显示；一次请求里的信件都并进同一段用户消息。
+- **信件交给模型的样子**：消息是原文加附件引用；事件是用户消息内容里独立的一段（`conventions.format_event`，`<event source="job:12">…</event>`），那条请求的 metadata 记下是第几段（`RUN_EVENTS`，`sessions.content` 构造内容时就记下，不从文字反推），界面据此把事件单独显示；一次请求里的信件都并进同一段用户消息。
 - **每一步保存**（`runtime/steps.py`）：一步 = 一次模型请求及其返回的工具调用。请求模型之前，这次请求与它带上的信件（记为已处理，`consumed_by` 是这次运行）在同一个事务里提交；模型回复之后提交这条回复。失败或进程重启后从上一步续跑（见第 2 节）。pydantic-ai 在运行开始时会规整传入的历史（合并相邻的请求、补齐悬空调用的结果，从请求续跑时取出末尾那条准备重发），条数可能和库里不同，所以「已保存到哪」的基准在规整之后取（`StepHooks.started`）。请求模型之前上下文超过压缩阈值时，这次请求照常保存为一步，然后停下驱动、压缩、从库里重新加载上下文续跑（见第 5 节），之后历史只在末尾追加。
 - **从哪里开始**（`Consumer._opening`）：历史停在挂起的调用上时不是续跑，哪怕末尾是一条请求——挂起的调用与别的工具在同一个回复里时，pydantic-ai 以挂起结束时把别的工具的结果追加成一条请求，这时回答（或跳过）作为 `DeferredToolResults` 交回，pydantic-ai 把已有结果的调用跳过。否则历史停在没得到回复、没标停止的请求上就重发它，停在带工具调用的回复上就执行这些调用。
 - **续跑接管**：一次运行最终失败后，新到的信件会唤醒新的运行；它从失败处续跑（历史末尾是失败那次保存的步骤），也接管那次运行处理过的信件——推送由它做（委派的失败已经交回过，不再交回）。之后再重试那次失败的运行时，它没有可交给模型的、历史末尾也不是它保存的，什么都不做。
@@ -218,10 +218,10 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 做法同 Claude Code 的子 agent：`ask_agent` 与 `delegate_task(report_back: true)` 都是要交回结局的委派。发起时在 thread 的信箱投一封带委派的信件（`conversation.Threads.send`，信件的 `delegation_id` 指向它），委派行记下发起会话、thread、`ask_agent` 的调用 id、用户是否在等发起方。普通 `delegate_task`（不交回）不建委派行：它只是往公开 thread 投一封用户在等的信。
 
 - **结局只交回一次**（`settle_in`，唯一出口，状态离开 running）：
-  - 处理委派信件的运行结束时，随它的收尾（`runtime.finish`）。**什么时候算做完**：thread 的运行正常结束、没有停在挂起的调用上、它发起的异步工作都结束了、信箱里也没有还要交给模型的信件；否则等之后的运行。
+  - 处理委派信件的运行结束时，随它的收尾（`sessions.finish`）。**什么时候算做完**：thread 的运行正常结束、没有停在挂起的调用上、它发起的异步工作都结束了、信箱里也没有还要交给模型的信件；否则等之后的运行。
   - 最终失败时随队列记下失败（`RunHandler.failed_in`，见第 2 节「用最终正确性换架构简化」）：它处理过的委派信件，以及交给过它、还排着的——运行在第一次保存之前就失败（组装指令、连接 MCP、复制附件）时，开头取走的信件一直排着，它们不晚于这次运行，不会再有运行因为它们被唤醒（`mailbox.handed_to`）；它们随失败交回一起记为被丢弃，不会在之后的运行里被悄悄执行。运行开始之后才到的委派不动，它们会唤醒新的运行、交回真实的结局。
   - thread 被停止时随停止（`SessionHalt`）；thread 被删除时随删除（`conversation.delete_sessions`）。
-- **交回的形态**：发起方还停在那次 `ask_agent` 调用上时，结局是一封回答信件，作为调用的结果交回（`AgentAnswer`：回答文字、它挂给用户的文件、thread，经 `runtime.answers` 带上 `TOOL_THREADS` 与 `TOOL_ATTACHMENTS`）；否则（`report_back`，或用户已经跳过了那次调用）是一封事件信件（来源 `thread:<子会话 id>`）。thread 的回答不直接推送给用户：交给父 agent 处理，父会话处理它的运行按 `awaited` 推送。
+- **交回的形态**：发起方还停在那次 `ask_agent` 调用上时，结局是一封回答信件，作为调用的结果交回（`AgentAnswer`：回答文字、它挂给用户的文件、thread，经 `sessions.answers` 带上 `TOOL_THREADS` 与 `TOOL_ATTACHMENTS`）；否则（`report_back`，或用户已经跳过了那次调用）是一封事件信件（来源 `thread:<子会话 id>`）。thread 的回答不直接推送给用户：交给父 agent 处理，父会话处理它的运行按 `awaited` 推送。
 - **运行中检查**：发起方没在等这次调用时（它在等时检查信件交不到模型），给发起方投检查信件。
 - **发起方被停止**：它发起的委派一起放弃（状态 abandoned，不再交回），thread 逐层停下。
 - **边界**：公开 thread 在父会话删除后仍然保留，发起会话的委派行随它删除，结局不再交回。thread 被删除时委派行的 `child_session_id` 置空，交回「thread 已删除」。
@@ -232,7 +232,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 - **触发**：发给模型的上下文（上一次模型请求的输入 token，pydantic-ai 已计入缓存 token）超过 `runtime.compaction_threshold_tokens` 时，由消费者在步与步之间压缩：运行开始时，以及每次请求模型之前（这次请求照常保存为一步，然后停下驱动、压缩、从库里重新加载上下文续跑，pydantic-ai 重发末尾那条请求）。「该不该压缩」只有一条规则（`Compactor.verdict`）：只认最近一次压缩之后的回复报告的 token 数（之前的反映的是压缩前的上下文，按压缩记录的 `at_message_id` 推导）；压缩后的第一次回复就超阈值，说明保留窗口本身就超了，这次运行不再压缩，上下文继续变大直到超出模型的上限时运行失败可见，重试时重新判断。模型不返回 usage（部分 OpenAI 兼容服务流式时如此）时记 warn 日志，自动压缩对该模型失效。也可在会话页手动触发：同一个会话 lane 上的一个 `compaction` task，处理器只调用同一个压缩方法。
 - **执行**：把最近 `runtime.compaction_keep_steps` 步之前的消息连同上一份摘要交给该 agent 的模型总结，写入 `compactions` 表（`through_message_id` + `summary`）。切点在步与步之间、之前的消息里没有悬空调用的地方（`compaction.steps_of`）：工具调用与其结果、挂起的调用与之后的回答不会被拆开；一次运行中途也有切点（每一批工具结果之后），长任务在运行中也能压缩。单次只取总长不超过上限的最早若干步，不截断内容，剩下的接着压缩，直到保留窗口之外没有可压缩的。
-- **使用**：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息（`runtime.history.load_context`；切点之后的第一条是回复时，前面补一条说明「接着之前的工作」的请求）。原始消息不删除，UI 显示完整原文并标出压缩点；反思读取的仍是原始消息。
+- **使用**：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息（`sessions.history.load_context`；切点之后的第一条是回复时，前面补一条说明「接着之前的工作」的请求）。原始消息不删除，UI 显示完整原文并标出压缩点；反思读取的仍是原始消息。
 
 ## 6. 数据库迁移
 

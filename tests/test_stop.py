@@ -14,9 +14,9 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.conventions import RUN_STOPPED, STOPPED_TOOL_RESULT
 from muliao.models import MailKind, MailState, TaskKind, TaskStatus
-from muliao.runtime.mailbox import post_in
+from muliao.sessions.conventions import RUN_STOPPED, STOPPED_TOOL_RESULT
+from muliao.sessions.mailbox import post_in
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, mail_of, tasks_of
@@ -213,7 +213,7 @@ async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_t
 async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation(container):
     import pytest
 
-    from muliao.runtime.stopping import StoppableRuns, Stopped
+    from muliao.sessions.stopping import StoppableRuns, Stopped
 
     runs: StoppableRuns[str] = StoppableRuns(container.db.exclusive)
     started = asyncio.Event()
@@ -248,7 +248,7 @@ async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation(contai
 async def test_a_second_run_in_the_same_session_is_refused(container):
     import pytest
 
-    from muliao.runtime.stopping import StoppableRuns
+    from muliao.sessions.stopping import StoppableRuns
 
     runs: StoppableRuns[str] = StoppableRuns(container.db.exclusive)
     gate = asyncio.Event()
@@ -318,7 +318,7 @@ async def test_stopping_a_resumed_run_before_its_first_step_closes_the_history(
     container, make_agent, models, monkeypatch
 ):
     """停在运行拿到运行中的历史之前（组装指令、连接 MCP 期间）：从库里的历史补上停止，续跑不会重发停下的请求。"""
-    from muliao.runtime.runner import AgentRuntime
+    from muliao.agent_runtime.runner import AgentRuntime
     from tests.test_flow import reply
 
     session_id, calls = await _failed_after_saving_a_request(container, make_agent, models)
@@ -348,7 +348,7 @@ async def test_stopping_a_resumed_run_before_its_first_step_closes_the_history(
 async def test_stopping_a_run_before_it_reads_its_state_still_stops_the_session(
     container, make_agent, models, monkeypatch
 ):
-    import muliao.runtime.consumer as consumer_module
+    import muliao.sessions.consumer as consumer_module
     from tests.test_flow import start
 
     agent = await make_agent("worker", model="never")

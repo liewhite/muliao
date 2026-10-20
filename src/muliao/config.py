@@ -84,7 +84,7 @@ WebProviderType = Literal["deepseek"]
 
 
 class WebConfig(_Section):
-    """网页搜索与抓取服务（muliao.web）。不配置时没有 web 工具组。"""
+    """网页搜索与抓取服务（muliao.agent_runtime.web）。不配置时没有 web 工具组。"""
 
     type: WebProviderType
     api_key: SecretStr = Field(min_length=1)
@@ -109,7 +109,7 @@ class RuntimeConfig(_Section):
     shell_max_timeout: float = Field(default=600.0, gt=0)
     # 触发器前置检查的时限：webhook 的调用方在同步等它，检查本该便宜，比 shell 的默认时限短得多
     precheck_timeout_seconds: float = Field(default=30.0, gt=0)
-    # 后台任务（runtime.jobs）运行期间，每隔这么久给发起它的会话发一个检查事件，由 agent 决定继续等还是结束它
+    # 后台任务（jobs.runner）运行期间，每隔这么久给发起它的会话发一个检查事件，由 agent 决定继续等还是结束它
     job_check_seconds: float = Field(default=60.0, gt=0)
     tool_output_max_chars: int = Field(default=20000, ge=1000)
     # 临时 agent 单次运行最多的模型请求数：做不完就尽早失败，交回调用方拆分任务，而不是靠整轮超时反复重试
@@ -144,11 +144,11 @@ class Settings(_Section):
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "muliao.db"
+        return self.data_dir / "muliao.platform.db"
 
     @property
     def resources_dir(self) -> Path:
-        """agent 能改的文本资源（指令、记忆、skill、MCP 配置），是一个 git 仓库，见 muliao.resources。"""
+        """agent 能改的文本资源（指令、记忆、skill、MCP 配置），是一个 git 仓库，见 muliao.agents.resources。"""
         return self.data_dir / "resources"
 
     @property
@@ -163,7 +163,7 @@ class Settings(_Section):
 
     @property
     def files_dir(self) -> Path:
-        """对话里出现的文件，内容不可变，见 muliao.files。"""
+        """对话里出现的文件，内容不可变，见 muliao.files.store。"""
         return self.data_dir / "files"
 
     @property

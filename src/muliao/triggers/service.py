@@ -26,14 +26,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from muliao.agent_events import AgentDeleting
-from muliao.db import Database, utcnow
+from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.models import Agent, Notification, Origin, Session, Trigger
-from muliao.notifications import Notifier
+from muliao.notifications.service import Notifier
+from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.runtime.conversation import Inbound, NewSession, receive
-from muliao.runtime.tasks import Clock, Commit, TaskQueue, session_lane
+from muliao.platform.tasks import Clock, Commit, TaskQueue, session_lane
+from muliao.sessions.conversation import Inbound, NewSession, receive
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 
 log = logging.getLogger(__name__)

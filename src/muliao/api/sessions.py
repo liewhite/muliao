@@ -4,15 +4,15 @@ from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel
 
 from muliao.api.deps import C
+from muliao.api.events import RunEvent
 from muliao.api.files import FileOut
 from muliao.container import Container
-from muliao.events import RunEvent
 from muliao.models import Mail, MailKind, MailState, Origin, Session, Task, TaskKind, TaskStatus
-from muliao.runtime.conversation import Inbound, NewSession
-from muliao.runtime.pending import CallResult, call_result
-from muliao.runtime.questions import QuestionAnswer
-from muliao.runtime.sessions import default_title
-from muliao.transcript import Item
+from muliao.sessions.conversation import Inbound, NewSession
+from muliao.sessions.pending import CallResult, call_result
+from muliao.sessions.questions import QuestionAnswer
+from muliao.sessions.service import default_title
+from muliao.sessions.transcript import Item
 
 router = APIRouter()
 
@@ -77,7 +77,7 @@ class TaskOut(BaseModel):
 
 
 class MailOut(BaseModel):
-    """会话信箱里的一封信件（runtime.mailbox）。"""
+    """会话信箱里的一封信件（sessions.mailbox）。"""
 
     id: int
     kind: MailKind
@@ -228,7 +228,7 @@ class CompactOut(BaseModel):
 
 @router.post("/sessions/{session_id}/compact", status_code=202)
 async def compact(c: C, session_id: str) -> CompactOut:
-    """手动压缩上下文（自动压缩见 runtime.compaction）：排在正在进行与排队的运行之后。"""
+    """手动压缩上下文（自动压缩见 sessions.compaction）：排在正在进行与排队的运行之后。"""
     return CompactOut(queued=await c.compactor.request(session_id))
 
 

@@ -283,7 +283,7 @@ async def test_storing_existing_content_never_rewrites_the_original(container, m
 
     first = await container.files.put("a.txt", "text/plain", chunks())
     replaced: list[object] = []
-    monkeypatch.setattr("muliao.files.os.replace", lambda *a: replaced.append(a))
+    monkeypatch.setattr("muliao.files.store.os.replace", lambda *a: replaced.append(a))
     second = await container.files.put("b.txt", "text/plain", chunks())
     assert replaced == [] and container.files.read(second) == container.files.read(first) == b"same"
     assert list((container.settings.files_dir / "tmp").iterdir()) == []  # noqa: ASYNC240
@@ -331,7 +331,7 @@ def test_attachments_must_reference_the_file_store():
     import pytest
     from pydantic_ai.messages import ToolReturnPart
 
-    from muliao.conventions import TOOL_ATTACHMENTS, tool_attachments
+    from muliao.sessions.conventions import TOOL_ATTACHMENTS, tool_attachments
 
     bad = {"url": "https://evil.example/x.png", "name": "x.png", "media_type": "image/png", "inline": True}
     part = ToolReturnPart("t", "ok", tool_call_id="c", metadata={TOOL_ATTACHMENTS: [bad]})

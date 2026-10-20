@@ -2,8 +2,8 @@ import unicodedata
 
 import pytest
 
+from muliao.agents.naming import normalize_agent_name
 from muliao.errors import InvalidInput
-from muliao.naming import normalize_agent_name
 
 
 @pytest.mark.parametrize(

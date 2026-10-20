@@ -2,10 +2,10 @@ from datetime import timedelta
 
 import pytest
 
-from muliao.db import utcnow
 from muliao.errors import Conflict
 from muliao.models import TaskKind, TaskStatus
-from muliao.runtime.tasks import no_commit
+from muliao.platform.db import utcnow
+from muliao.platform.tasks import no_commit
 
 
 async def _nothing(_s, _task) -> None:  # noqa: ANN001

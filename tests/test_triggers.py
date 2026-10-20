@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from muliao.agent_runtime.mcp import McpTransport, mcp_config
 from muliao.errors import InvalidInput
 from muliao.models import MailKind, Origin
-from muliao.runtime.mailbox import queued_in
-from muliao.runtime.mcp import McpTransport, mcp_config
+from muliao.sessions.mailbox import queued_in
 from tests.test_flow import drain, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
@@ -204,7 +204,7 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     session = await start(container, alpha, "token?")
     await drain(container, limit_seconds=30)
 
-    from muliao.transcript import to_items
+    from muliao.sessions.transcript import to_items
 
     items = to_items(await container.sessions.history(session.id))
     results = [i.text for i in items if i.type == "tool_result"]
@@ -242,7 +242,7 @@ async def test_a_temp_agent_sees_the_mcp_servers_of_its_caller(container, make_a
     from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
     from pydantic_ai.models.function import AgentInfo
 
-    from muliao.runtime.runner import RunProfile
+    from muliao.agent_runtime.runner import RunProfile
     from tests.scripted import scripted
 
     parent = await make_agent("alpha", model="m")

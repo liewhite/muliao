@@ -1,4 +1,4 @@
-"""占用与结清（runtime.holds、runtime.settlement，docs/domain-design.md 4.1、4.2）：会话只看自己的数据判断工作是否
+"""占用与结清（sessions.holds、sessions.settlement，docs/domain-design.md 4.1、4.2）：会话只看自己的数据判断工作是否
 做完、什么时候结清；委派的结局只交回一次；停止之后迟到的结局不投。"""
 
 import pytest
@@ -9,8 +9,8 @@ from sqlalchemy import select
 
 from muliao.errors import InvalidInput
 from muliao.models import Delegation, DelegationStatus, HoldStatus, Mail, SessionHold, Task, TaskKind
-from muliao.runtime.holds import hold_in
-from muliao.runtime.settlement import Delivered, deliver_in
+from muliao.sessions.holds import hold_in
+from muliao.sessions.settlement import Delivered, deliver_in
 from tests.scripted import scripted
 from tests.test_delegations import _asking
 from tests.test_flow import drain, start, tool_returns
@@ -26,7 +26,7 @@ async def _holds(container, session_id: str) -> list[SessionHold]:
 async def test_an_answered_ask_is_not_executed_again_and_its_hold_stays_as_the_record(
     container, make_agent, models, monkeypatch
 ):
-    from muliao.runtime.conversation import Threads
+    from muliao.sessions.conversation import Threads
 
     dispatched: list[str] = []
     original = Threads.dispatch
@@ -161,7 +161,7 @@ async def test_a_thread_that_settles_before_the_dispatch_is_delivered_still_repo
 ):
     """子会话的运行在 DelegationDispatched 投递之前就结清了：两条投递在同一条 lane 上按发布顺序处理，委派行先建立，
     结局照常交回。"""
-    from muliao.runtime.worker import Worker
+    from muliao.platform.worker import Worker
 
     lead = (await make_agent("lead", model="l")).id
     reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
@@ -218,7 +218,7 @@ async def test_a_hold_registered_while_the_run_winds_down_is_cleared_by_the_stop
     """停止事务在运行退出之后执行：运行退出途中才登记的占用也被清掉，会话不会因此一直「忙」。"""
     import asyncio
 
-    from muliao.runtime import consumer as consumer_module
+    from muliao.sessions import consumer as consumer_module
 
     agent = (await make_agent("alpha", model="m")).id
     started = asyncio.Event()
@@ -277,7 +277,7 @@ async def test_a_run_stopped_right_after_it_was_claimed_does_not_execute(contain
 async def test_reconcile_settles_delegations_whose_failure_hook_failed(
     container, make_agent, models, monkeypatch
 ):
-    from muliao.runtime.consumer import RunHandler
+    from muliao.sessions.consumer import RunHandler
 
     lead = (await make_agent("lead", model="l")).id
     reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
@@ -321,7 +321,7 @@ async def test_reconcile_settles_delegations_whose_failure_hook_failed(
 
 
 async def test_stopping_a_thread_the_user_already_deleted_is_not_an_error(container, make_agent, models):
-    from muliao.runtime.halt import Halted
+    from muliao.sessions.halt import Halted
 
     agent = (await make_agent("alpha")).id
     session = await start(container, agent, "go")

@@ -14,10 +14,10 @@ from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
 from muliao.models import Compaction, Message, Origin, Task, TaskKind, TaskStatus
-from muliao.runtime.codec import dump_message
-from muliao.runtime.compaction import COMPACTION_INSTRUCTIONS, select_steps, steps_of
-from muliao.runtime.history import CONTINUATION
-from muliao.runtime.tasks import session_lane
+from muliao.platform.tasks import session_lane
+from muliao.sessions.codec import dump_message
+from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS, select_steps, steps_of
+from muliao.sessions.history import CONTINUATION
 from tests.scripted import scripted
 from tests.test_flow import drain, last_user_prompt, reply, start
 
@@ -179,7 +179,7 @@ def test_select_steps_bounds_batch_without_truncating():
 async def test_oversized_backlog_is_compacted_in_batches_until_converged(
     container, make_agent, models, monkeypatch
 ):
-    import muliao.runtime.compaction as compaction
+    import muliao.sessions.compaction as compaction
 
     monkeypatch.setattr(compaction, "_TRANSCRIPT_CHARS", 1)  # 每批只取一步
     alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
@@ -257,8 +257,8 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
     """停在步间压缩的途中：那次请求（带着工具结果）已经保存，停止不能再给这些调用补一份「被停止」的结果。"""
     import asyncio
 
-    from muliao.conventions import calls_in, results_in
-    from muliao.runtime.runner import AgentRuntime
+    from muliao.agent_runtime.runner import AgentRuntime
+    from muliao.sessions.conventions import calls_in, results_in
     from tests.test_flow import idle
 
     monkeypatch.setattr(container.compactor, "_threshold", 1)
@@ -312,7 +312,7 @@ async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
     container, make_agent, models, monkeypatch
 ):
     """手动压缩只写摘要、不产生新回复：之后那次运行开头不能拿压缩前的 token 数判断，更不能因此整次运行不再压缩。"""
-    import muliao.runtime.compaction as compaction
+    import muliao.sessions.compaction as compaction
 
     # 回复的上下文大小由脚本标在回复上（流式的 function model 自己估算 usage）：标了 big 的算超阈值
     def tokens(history):  # noqa: ANN001, ANN202

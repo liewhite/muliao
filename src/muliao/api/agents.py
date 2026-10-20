@@ -3,11 +3,11 @@ from datetime import datetime
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from muliao.agents import AgentPatch, AgentSpec
+from muliao.agents.resources import USER
+from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.api.deps import C
 from muliao.models import Agent
-from muliao.resources import USER
-from muliao.runtime.reflection import list_reflections_of
+from muliao.reflection.service import list_reflections_of
 
 router = APIRouter()
 

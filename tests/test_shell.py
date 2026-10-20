@@ -1,6 +1,6 @@
 """run_bash：run_shell 工具与前置检查共用的命令执行。"""
 
-from muliao.runtime.shell import run_bash
+from muliao.platform.shell import run_bash
 
 
 async def test_a_timed_out_command_keeps_the_output_it_produced_before_being_killed(tmp_path):

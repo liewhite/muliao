@@ -17,9 +17,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from muliao.db import Database
 from muliao.errors import InvalidInput, Unauthorized
 from muliao.models import Session, Trigger
+from muliao.platform.db import Database
 from muliao.triggers.service import TriggerService
 
 log = logging.getLogger(__name__)

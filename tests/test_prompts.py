@@ -3,7 +3,7 @@
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agents import AgentPatch
+from muliao.agents.service import AgentPatch
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start
