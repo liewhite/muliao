@@ -89,7 +89,6 @@ async def test_a_local_request_error_is_not_retried_as_transient(container, monk
     import requests
 
     import muliao.delivery.webpush as webpush_module
-    from muliao.errors import TransientError
 
     await container.push_subscriptions.add("https://push.example/a", "k", "a")
 
@@ -100,4 +99,3 @@ async def test_a_local_request_error_is_not_retried_as_transient(container, monk
     delivery = WebPushDelivery(container.push_subscriptions, container.vapid, "mailto:a@b.c")
     with pytest.raises(requests.exceptions.InvalidHeader):
         await delivery.send(Notification(id=1, title="t", body="b", session_id=None), unread=1)
-    assert not issubclass(requests.exceptions.InvalidHeader, TransientError)

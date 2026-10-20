@@ -48,7 +48,9 @@ function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
 export async function enablePush(): Promise<void> {
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') throw new Error(`通知权限未授予（${permission}）`)
-  const registration = await navigator.serviceWorker.ready
+  // 不用 serviceWorker.ready：注册失败时它永远不返回，按钮会一直转圈
+  const registration = await navigator.serviceWorker.getRegistration()
+  if (registration === undefined) throw new Error('Service Worker 没有注册成功，刷新页面后再试')
   const { public_key } = await api.vapidKey()
   const existing = await registration.pushManager.getSubscription()
   const subscription =

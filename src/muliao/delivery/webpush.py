@@ -169,7 +169,8 @@ class WebPushDelivery:
             log.warning(
                 "push transport failed: %s",
                 type(e).__name__,
-                extra={"push_host": urlsplit(sub.endpoint).hostname, "error": str(e)},
+                # 不记异常文本：它带着 endpoint 的完整路径，即订阅凭据
+                extra={"push_host": urlsplit(sub.endpoint).hostname},
             )
             return _NO_RESPONSE
         return None
