@@ -120,6 +120,7 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
                 secrets=[],
                 log_path="jobs/x.log",
                 reply_to=ReplyTo.USER,
+                pid=424242,
             )
         )
 
@@ -129,7 +130,9 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
         [job] = (await s.scalars(select(Job))).all()
     assert job.status == JobStatus.INTERRUPTED
     [event] = await queued_events(container, session.id)
-    assert "interrupted" in event.content and "the service restarted" in event.content
+    assert "interrupted" in event.content and "stopped unexpectedly" in event.content
+    # 进程自成进程组、可能还活着：如实告诉 agent 怎么核实，不盲杀
+    assert "pgrep -g 424242" in event.content
     await drain(container)
     # 完成通知随发起它的那一轮推送
     assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
@@ -177,3 +180,60 @@ async def test_background_runs_have_no_timeout_argument(container, make_agent, m
         container, models, agent.id, [("run_shell", {"command": "true", "background": True, "timeout": 5})]
     )
     assert "no timeout" in output
+
+
+async def test_a_job_ends_when_its_process_exits_even_if_a_grandchild_keeps_the_output_open(
+    container, make_agent, models, monkeypatch
+):
+    import muliao.runtime.jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module, "DRAIN_SECONDS", 0.3)
+    # 留在后台的孙进程继承了输出管道：等管道关闭就要等它 30 秒
+    _session, job, recorder, _agent = await start_job(
+        container, make_agent, models, "echo main; sleep 30 & exit 0"
+    )
+    finished = await wait_until_done(container, job.id)
+    await drain(container)
+    assert (finished.status, finished.exit_code) == (JobStatus.EXITED, 0)
+    assert "still hold its output" in recorder.prompts[-1][0]
+
+
+async def test_a_job_whose_outcome_could_not_be_recorded_is_reconciled(
+    container, make_agent, models, monkeypatch
+):
+    session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 0.5")
+
+    async def failing_finish(*_args, **_kwargs):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(container.jobs, "_finish", failing_finish)
+    for _ in range(100):
+        if job.id not in container.jobs._running:  # noqa: SLF001
+            break
+        await asyncio.sleep(0.05)
+    monkeypatch.undo()
+
+    await container.jobs.check()
+
+    async with container.db.transaction() as s:
+        assert (await s.get(Job, job.id)).status == JobStatus.INTERRUPTED
+    [event] = await queued_events(container, session.id)
+    assert "supervision ended unexpectedly" in event.content
+
+
+async def test_a_long_line_is_split_without_leaking_a_secret_or_breaking_characters(tmp_path):
+    from muliao.runtime.jobs import _safe_cut
+
+    text = "x" * 10 + "SECRET" + "y" * 10
+    # 切口落在 secret 中间时挪到它前面
+    assert _safe_cut(text, 13, {"K": "SECRET"}) == 10
+    assert _safe_cut(text, 5, {"K": "SECRET"}) == 5
+
+
+async def test_stopping_the_service_reports_jobs_as_interrupted(container, make_agent, models):
+    session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
+    await container.jobs.stop()
+    async with container.db.transaction() as s:
+        assert (await s.get(Job, job.id)).status == JobStatus.INTERRUPTED
+    [event] = await queued_events(container, session.id)
+    assert "the service was stopped" in event.content and "pgrep" not in event.content

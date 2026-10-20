@@ -13,7 +13,8 @@ from pathlib import Path
 
 # 只继承这些环境变量，不把服务进程的其余环境带给命令
 _INHERITED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "USER", "SHELL")
-_DRAIN_SECONDS = 5.0
+# 进程结束（或被杀）后读完管道里剩余输出的时限：脱离进程组的后代可能一直持有管道
+DRAIN_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,7 @@ async def run_bash(
         kill_group(proc.pid)
         # 把杀掉之前写进管道、还没读的部分读完；脱离进程组的后代可能仍持有管道，所以收尾也有时限
         drain = [asyncio.create_task(_collect(stream, buf)) for stream, buf in streams]
-        _, unfinished = await asyncio.wait(drain, timeout=_DRAIN_SECONDS)
+        _, unfinished = await asyncio.wait(drain, timeout=DRAIN_SECONDS)
         for task in unfinished:
             task.cancel()
         await asyncio.gather(*unfinished, return_exceptions=True)
