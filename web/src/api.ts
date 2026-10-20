@@ -33,6 +33,10 @@ export type Item = Schemas['Item']
 export type CompactionInfo = Schemas['CompactionOut']
 export type Task = WithAgentId<Schemas['TaskOut'], 'agent_id'>
 
+/** 一个分组的用量汇总；没有参与分组的维度为 null。input_tokens 已含缓存读写，不要相加 */
+export type Usage = WithAgentId<Schemas['UsageOut'], 'agent_id'>
+export type UsageGroup = Schemas['UsageGroup']
+
 export type QuestionOption = Schemas['Option']
 export type Question = Schemas['Question']
 export type QuestionAnswer = Schemas['QuestionAnswer']
@@ -235,6 +239,11 @@ export const api = {
   deleteSession: (session_id: string) => call('delete', '/api/sessions/{session_id}', { path: { session_id } }),
 
   tasks: (status?: TaskStatus) => branded<Task[]>(call('get', '/api/tasks', { query: { status } })),
+  /** [since, until) 之间的 token 用量，按给出的维度分组；天按服务端配置的时区划分 */
+  usage: (since: Date, until: Date, group_by: UsageGroup[]) =>
+    branded<Usage[]>(
+      call('get', '/api/usage', { query: { since: since.toISOString(), until: until.toISOString(), group_by } }),
+    ),
   retryTask: (task_id: number) => branded<Task>(call('post', '/api/tasks/{task_id}/retry', { path: { task_id } })),
 
   triggerKinds: () => call('get', '/api/trigger-kinds'),

@@ -15,6 +15,7 @@ import Notifications from './pages/Notifications'
 import SessionView from './pages/SessionView'
 import Sessions from './pages/Sessions'
 import { PublicSkills, SkillEditor } from './pages/Skills'
+import UsagePage from './pages/Usage'
 import { syncPushSubscription } from './push'
 import { ErrorAlert, errorMessage } from './ui'
 
@@ -110,6 +111,7 @@ function Shell() {
           <Route path="/mcp" element={<Mcp />} />
           <Route path="/vault" element={<Vault />} />
           <Route path="/tasks" element={<Tasks />} />
+          <Route path="/usage" element={<UsagePage />} />
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

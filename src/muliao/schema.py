@@ -10,6 +10,7 @@ from muliao.platform.db import Base  # noqa: E402  先导入全部表定义，�
 from muliao.reflection import tables as reflection  # noqa: F401
 from muliao.sessions import tables as sessions  # noqa: F401
 from muliao.triggers import tables as triggers  # noqa: F401
+from muliao.usage import tables as usage  # noqa: F401
 from muliao.vault import tables as vault  # noqa: F401
 
 # 平台的表（任务队列）是每个领域的 outbox，可以和任何一个领域的表在同一个事务里写

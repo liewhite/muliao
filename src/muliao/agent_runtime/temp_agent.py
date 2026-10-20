@@ -110,6 +110,7 @@ def temp_agent_toolset(
                 profile=profile,
                 workspace=workspace,
                 request_limit=request_limit,
+                session_id=ctx.deps.session_id,
             )
             outcome = "ok"
             return result.to_tool_return()

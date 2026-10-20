@@ -162,6 +162,7 @@ class Compactor:
             chosen, more = select_steps(steps, self._keep_steps, _TRANSCRIPT_CHARS)
             summary = await self._runtime.summarize(
                 agent,
+                session.id,
                 COMPACTION_INSTRUCTIONS,
                 compaction_prompt(previous.summary if previous else None, chosen),
             )

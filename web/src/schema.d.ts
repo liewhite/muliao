@@ -751,6 +751,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Usage Summary
+         * @description [since, until) 之间的用量，按给出的维度分组；不给维度就只有一行总计。
+         *
+         *     since / until 必须带时区（`2026-03-01T00:00:00Z`）：不带时区的时刻没有确定含义，在边界上拒绝。
+         *     「天」按服务端配置的时区（`timezone`）划分日历日，与客户端所在时区无关。
+         */
+        get: operations["usage_summary_api_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/me": {
         parameters: {
             query?: never;
@@ -1685,6 +1708,37 @@ export interface components {
         UnreadOut: {
             /** Count */
             count: number;
+        };
+        /**
+         * UsageGroup
+         * @description 汇总时的分组维度，可以任意组合；没有选中的维度在结果里为 None。
+         * @enum {string}
+         */
+        UsageGroup: "agent" | "model" | "day";
+        /**
+         * UsageOut
+         * @description 一个分组的汇总。没有参与分组的维度为 null。
+         *
+         *     input_tokens 是输入总数，**已包含** cache_read_tokens 与 cache_write_tokens（pydantic-ai 的口径），
+         *     展示时是总数与其中两部分的关系，不要相加。
+         */
+        UsageOut: {
+            /** Agent Id */
+            agent_id: string | null;
+            /** Model */
+            model: string | null;
+            /** Day */
+            day: string | null;
+            /** Requests */
+            requests: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Cache Write Tokens */
+            cache_write_tokens: number;
         };
         /**
          * UserAnswered
@@ -3300,6 +3354,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    usage_summary_api_usage_get: {
+        parameters: {
+            query: {
+                since: string;
+                until: string;
+                group_by?: components["schemas"]["UsageGroup"][] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageOut"][];
+                };
             };
             /** @description Validation Error */
             422: {

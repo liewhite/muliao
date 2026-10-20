@@ -20,6 +20,7 @@ DOMAINS = {
     "reflection",
     "sessions",
     "triggers",
+    "usage",
     "vault",
 }
 # 一个领域对外公开的模块

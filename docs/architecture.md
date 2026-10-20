@@ -22,6 +22,7 @@
 | Secret | 加密保存的密码/token，通过 key 引用；公共或 agent 私有 | `secrets` 表（Fernet 加密） |
 | File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
 | Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，deliver task 只引用它，内容不另存一份 | `notifications` 表 |
+| ModelUsage（用量） | 一次模型运行报告的 token 用量：时间、agent、会话（没有就为空）、运行类型（对话 / 压缩 / 反思 / 临时 agent）、模型、请求数与各项 token。只增不改，也不随 agent 与会话的删除而消失——它是账目 | `model_usage` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件；触发方式（定时、webhook……）多态实现 | `triggers` 表 |
 
 目录：
@@ -65,6 +66,7 @@ muliao/
   sessions/        会话：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、压缩、停止、删除、种类
   jobs/            后台任务
   agents/          agent 目录、资源仓库、自我改进工具、工具组目录
+  usage/           模型用量：每次运行记一条，按时间范围汇总
   vault/  files/  reflection/  notifications/  triggers/
   api/             HTTP 适配
   container.py     组合根：构造领域、注册事件订阅、组装工具组
@@ -103,7 +105,7 @@ muliao/
 - `platform` 不 import 任何领域；领域不 import HTTP 适配层（`api/`）与组合根。
 - HTTP 适配层经领域的 `api`（与 `events`）调用领域，另外可以 import 领域的 `tables`，把领域交给它的行序列化成响应（它是适配器，不是领域，不另造一套读模型）。
 
-经 `api` 的依赖无环：`files`、`agents` → `vault` → `agent_runtime` → `sessions` → `jobs`、`reflection`、`notifications`、`triggers`。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
+经 `api` 的依赖无环：`files`、`agents`、`usage` → `vault` → `agent_runtime` → `sessions` → `jobs`、`reflection`、`notifications`、`triggers`。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
 
 **一个写事务只写一个领域的表**（外加平台的任务表，它是每个领域的 outbox）：`Database(check_writes=...)` 记下每个事务的 ORM 写入与 insert / update / delete 语句，测试的容器打开 `schema.single_domain_writes` 作为开发期断言。数据库层的级联（`ON DELETE CASCADE`）不在记录里，它们都在会话领域内部。
 
@@ -254,7 +256,7 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
   - `web`：`web_search(query, count)` / `web_fetch(url)`，经 `muliao.agent_runtime.web.WebProvider` 完成；具体服务由配置 `[web]` 的 `type` 选择（现有 `deepseek`，即 DeepSeek 的 Search / Fetch API），新增一种服务 = 一个实现加一个 `type`。query 长度、条数上限、URL 规则以服务端校验为准，不在本地重复：服务端拒绝（400/403/404/413）作为可纠正的错误交还模型；限流、超时、5xx 是暂时性失败，按运行失败统一重试；key 无效、余额不足等配置问题让运行失败。抓取的正文按 `runtime.tool_output_max_chars` 截断。没配置 `[web]` 时没有这个组，已有 agent 仍选着它会让启动失败并列出这些 agent。
   - `mcp`：该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀。它和其他组一样是一组工具，实现是 pydantic-ai 的 `DynamicToolset`，每次运行按当时的配置构建（`McpRegistry.toolset()`），所以改动从下一次运行起生效；配置只有一个类型（`McpConfig`，存储的配置缺字段直接报错，不补默认值）。配置中的 `${vault:KEY}` 在运行时按 server 归属者的视角解析（公共 server 只能引用公共 secret），引用不可见的 key 直接报错。
 - **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。界面上选模型时，provider 下拉框来自配置（`GET /api/providers`），模型名由 `ModelRegistry.list_models` 向该 provider 实时查询（`GET /api/providers/{name}/models`，即各家的 models 接口），不维护本地模型清单；查询失败返回 502 并带上原因，不用猜测的列表兜底。
-- **prompt caching**：`type = "anthropic"` 的 provider 默认开启 Anthropic 的 prompt caching（`llm.ANTHROPIC_CACHE_SETTINGS`，作为 `AnthropicModel` 的默认 settings，运行时不再逐次合并）。缓存断点放在每次请求都原样重发的前缀上：指令（含公共 prompt、记忆、skill 目录）、工具定义、消息末尾，共三个，不超过 Anthropic 一次请求最多 4 个的上限。用逐块的 `anthropic_cache_messages` 而不是服务端自动放断点的 `anthropic_cache`：这个类型也用于 Anthropic 兼容的网关，它们不一定支持顶层的自动缓存参数。配置里 `prompt_cache = false` 可以关掉（不发送任何缓存设置）；它只对这个类型有意义，填在别的类型上直接报错而不是静默忽略。
+- **prompt caching**：`type = "anthropic"` 的 provider 默认开启 Anthropic 的 prompt caching（`llm.ANTHROPIC_CACHE_SETTINGS`，作为 `AnthropicModel` 的默认 settings，运行时不再逐次合并）。缓存断点放在每次请求都原样重发的前缀上：指令（含公共 prompt、记忆、skill 目录）、工具定义、消息末尾，共三个，不超过 Anthropic 一次请求最多 4 个的上限。用逐块的 `anthropic_cache_messages` 而不是服务端自动放断点的 `anthropic_cache`：这个类型也用于 Anthropic 兼容的网关，它们不一定支持顶层的自动缓存参数。配置里 `prompt_cache = false` 可以关掉（不发送任何缓存设置）；它只对这个类型有意义，填在别的类型上直接报错而不是静默忽略。缓存命中与写入的 token 记在用量里（第 19 节）。
 
 ## 7. 会话领域
 
@@ -545,7 +547,21 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 | 后台任务的发起中途失败或崩溃 | 行留在 running，可查 | 没有监督者的行只有一条收敛规则，检查前与启动时对账 | 对账前多占一行 |
 | 触发器投信 | 投递任务失败可见 | 记下触发与投信恰好一次（定向命令）；马上执行，做不到由 worker 投递 | 极少数情况下会话晚几毫秒出现 |
 
-## 19. 暂缓的项
+## 19. 用量
+
+**职责**：记下每次模型运行花掉的 token，按时间范围汇总给界面看（`usage/`，表 `model_usage`）。
+
+- **唯一的写入方是 `agent_runtime`**（它是唯一调用模型的地方）：四个模型调用入口各对应一种运行类型——会话的运行（`run_steps`）、上下文压缩（`summarize`）、强制反思（`run_once`）、临时 agent（`run_temp`）。入口与类型一一对应，不靠参数分发。
+- **怎么拿到用量**：每个入口在调用 pydantic-ai 之前建一个 `RunUsage` 并交给它，pydantic-ai 把每次请求的用量累加进这个对象，所以运行成功、失败还是被取消，收尾时拿到的都是**已经花掉的那部分**。收尾在 `finally` 里（`AgentRuntime._bill`）。
+- **记账不属于这次运行**：写入失败只记 error 日志，不改变运行的结果或异常——一次记账故障不该让已经做完的工作白做，也不该把一个真正的失败换成另一个。完全没有用量（还没发出请求就失败了）就跳过，不留空行。写入放在屏蔽作用域里并加时限：被取消的运行同样花了 token，取消之后也要记下来（屏蔽挡得住 anyio 的电平取消；用户停止用的原生取消是边沿触发的，对已被停止的运行来说在这之前就发出过了，见第 4 节）。剩下一个窄窗口——运行正常跑完、正在等数据库锁时用户才按停止——这一条用量随取消丢掉，不为它加防御：结局与「停止早到一瞬」相同，代价只是一条账目。
+- **归属**：记到 agent 与会话名下。反思不属于任何会话，会话为空；临时 agent 自己不属于任何会话（`RunScope.session_id` 仍是 None），但它的开销是发起它的那次运行的，记到那个会话名下。
+- **token 的口径**沿用 pydantic-ai 的归一化约定：`input_tokens` 是输入总数，**已经包含** `cache_read_tokens` 与 `cache_write_tokens`（Anthropic 原始响应把它们分开报，pydantic-ai 统一过），所以展示时是「总数与其中两部分」，不相加。
+- **重试会重复计数，这是对的**：失败的运行重试一次就真的再花一次 token，每次尝试各记一条。
+- **汇总**：`GET /api/usage?since=&until=&group_by=agent|model|day`（可多选，左闭右开；时刻必须带时区，不带的在边界上 422）。取出区间内的行后在内存里按选中的维度相加（`usage.service._summarize`，纯函数，分组规则只有这一份）；「天」按配置的 `timezone` 划分日历日，和人看日历的方式对齐。个人规模下一次取几千行可接受，换来分组规则与时区处理都只写一遍。
+- **只增不改、不参与删除清理**：删掉 agent 或会话不等于这笔钱没花过，所以 `agent_id` / `session_id` 可能指向已经不存在的东西，界面上显示为 id 或「未知」。这个领域没有事件、没有任务，也不订阅别人的删除。
+- **界面**：设置 → Token 用量（`web/src/pages/Usage.tsx`）：近 7 / 30 天，合计与缓存命中比例、按 agent、按模型，以及按天的输入 token 条形图（深色部分是缓存命中）。
+
+## 20. 暂缓的项
 
 - **临时 agent 改为用完即删的 thread**：运行只剩一种模型，失败只重做自己。等占用与结清稳定之后再定。
 - **自己写 agent loop**（框架只做模型客户端）：改动限于 `agent_runtime` 的运行端口（第 2.1 节）。

@@ -73,6 +73,7 @@ from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
 from muliao.triggers.service import EVENT_MAX_BYTES, TriggerService
 from muliao.triggers.tools import triggers_toolset
 from muliao.triggers.webhook import WebhookKind, Webhooks
+from muliao.usage.service import UsageLog
 from muliao.vault.service import Vault
 from muliao.vault.tools import vault_toolset
 
@@ -113,6 +114,7 @@ class Container:
     consumer: Consumer
     models: ModelRegistry
     files: FileStore
+    usage: UsageLog
     # 默认就是 models.check，单独持有只为测试替换
     _model_checker: Callable[[str], None]
 
@@ -276,6 +278,7 @@ def build_container(
 
     pusher = WebPushDelivery(push_subscriptions, vapid, settings.push.vapid_subject)
 
+    usage = UsageLog(db, tz)
     runtime = AgentRuntime(
         agents=agents,
         skills=skills,
@@ -284,6 +287,7 @@ def build_container(
         tz=tz,
         resolve_model=resolve_model or models.resolve,
         files=files,
+        usage=usage,
     )
     jobs = JobRunner(
         db,
@@ -427,5 +431,6 @@ def build_container(
         consumer=consumer,
         models=models,
         files=files,
+        usage=usage,
         _model_checker=model_checker or models.check,
     )

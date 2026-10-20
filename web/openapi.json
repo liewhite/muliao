@@ -2115,6 +2115,80 @@
         }
       }
     },
+    "/api/usage": {
+      "get": {
+        "summary": "Usage Summary",
+        "description": "[since, until) 之间的用量，按给出的维度分组；不给维度就只有一行总计。\n\nsince / until 必须带时区（`2026-03-01T00:00:00Z`）：不带时区的时刻没有确定含义，在边界上拒绝。\n「天」按服务端配置的时区（`timezone`）划分日历日，与客户端所在时区无关。",
+        "operationId": "usage_summary_api_usage_get",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "title": "Since"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "title": "Until"
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UsageGroup"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group By"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UsageOut"
+                  },
+                  "title": "Response Usage Summary Api Usage Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/me": {
       "get": {
         "summary": "Me",
@@ -4496,6 +4570,87 @@
           "count"
         ],
         "title": "UnreadOut"
+      },
+      "UsageGroup": {
+        "type": "string",
+        "enum": [
+          "agent",
+          "model",
+          "day"
+        ],
+        "title": "UsageGroup",
+        "description": "汇总时的分组维度，可以任意组合；没有选中的维度在结果里为 None。"
+      },
+      "UsageOut": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "day": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day"
+          },
+          "requests": {
+            "type": "integer",
+            "title": "Requests"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          },
+          "cache_read_tokens": {
+            "type": "integer",
+            "title": "Cache Read Tokens"
+          },
+          "cache_write_tokens": {
+            "type": "integer",
+            "title": "Cache Write Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "model",
+          "day",
+          "requests",
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_write_tokens"
+        ],
+        "title": "UsageOut",
+        "description": "一个分组的汇总。没有参与分组的维度为 null。\n\ninput_tokens 是输入总数，**已包含** cache_read_tokens 与 cache_write_tokens（pydantic-ai 的口径），\n展示时是总数与其中两部分的关系，不要相加。"
       },
       "UserAnswered": {
         "properties": {

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+import anyio
 from pydantic_ai import Agent as PaiAgent
 from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, RunContext, UsageLimits
 from pydantic_ai.messages import (
@@ -28,6 +29,7 @@ from pydantic_ai.messages import (
     UserContent,
 )
 from pydantic_ai.toolsets import AbstractToolset
+from pydantic_ai.usage import RunUsage
 from pydantic_graph import End
 
 from muliao.agent_runtime.answers import Answer
@@ -40,10 +42,14 @@ from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
 from muliao.platform.tooling import Audience, DomainErrorsAsRetry, Origin, RunScope
+from muliao.usage.api import RunKind, UsageEntry, UsageLog
 
 log = logging.getLogger(__name__)
 
 TextKind = Literal["assistant", "thinking"]
+
+# 运行结束后记用量最多等这么久。记账在屏蔽作用域里进行（被取消的运行也花了 token），加时限是为了关停不被它拖住
+_BILLING_SECONDS = 10.0
 
 EventHandler = Callable[[RunContext[RunScope], AsyncIterable[AgentStreamEvent]], Awaitable[None]]
 
@@ -118,6 +124,7 @@ class AgentRuntime:
         clock: Clock = utcnow,
         resolve_model: ModelResolver,
         files: FileStore,
+        usage: UsageLog,
     ):
         self._agents = agents
         self._skills = skills
@@ -126,6 +133,7 @@ class AgentRuntime:
         self._tz = tz
         self._clock = clock
         self._resolve_model = resolve_model
+        self._usage = usage
         self._pai = PaiAgent(deps_type=RunScope, output_type=str, capabilities=[AttachmentsForModel(files)])
 
     def workspace(self, agent_id: str) -> Path:
@@ -189,53 +197,49 @@ class AgentRuntime:
         log.info("agent run started", extra={**ctx, "history": len(history)})
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred.calls) if deferred is not None else frozenset()
-        async with self._pai.iter(
-            None if prompt is None else list(prompt),
-            model=self._resolve_model(model),
-            instructions=await self.instructions(agent, scope, summary),
-            message_history=list(history),
-            deps=scope,
-            toolsets=self._toolsets(profile),
-            output_type=[str, DeferredToolRequests],
-            deferred_tool_results=deferred,
-        ) as run:
-            node = run.next_node
-            if not PaiAgent.is_user_prompt_node(node):
-                raise RuntimeError(f"agent run did not start with the user prompt node: {node!r}")
-            node = await run.next(node)
-            await hooks.started(run.ctx.state.message_history)
-            while not isinstance(node, End):
-                if PaiAgent.is_model_request_node(node):
-                    await hooks.before_request(node.request, run.ctx.state.message_history)
-                    async with node.stream(run.ctx) as stream:
-                        await _forward_events(stream, hooks, resumed)
-                    node = await run.next(node)
-                    messages = run.ctx.state.message_history
-                    response = messages[-1]
-                    if not isinstance(response, ModelResponse):
-                        raise RuntimeError(
-                            f"model request ended without a response, history ends with {response!r}"
-                        )
-                    await hooks.after_response(response, messages)
-                elif PaiAgent.is_call_tools_node(node):
-                    async with node.stream(run.ctx) as stream:
-                        await _forward_events(stream, hooks, resumed)
-                    node = await run.next(node)
-                else:
-                    node = await run.next(node)
-            result = run.result
+        # pydantic-ai 把用量累加进交给它的这个对象：运行无论成功、失败还是被取消，到这里都拿得到已花掉的部分
+        usage = RunUsage()
+        try:
+            async with self._pai.iter(
+                None if prompt is None else list(prompt),
+                model=self._resolve_model(model),
+                instructions=await self.instructions(agent, scope, summary),
+                message_history=list(history),
+                deps=scope,
+                toolsets=self._toolsets(profile),
+                output_type=[str, DeferredToolRequests],
+                deferred_tool_results=deferred,
+                usage=usage,
+            ) as run:
+                node = run.next_node
+                if not PaiAgent.is_user_prompt_node(node):
+                    raise RuntimeError(f"agent run did not start with the user prompt node: {node!r}")
+                node = await run.next(node)
+                await hooks.started(run.ctx.state.message_history)
+                while not isinstance(node, End):
+                    if PaiAgent.is_model_request_node(node):
+                        await hooks.before_request(node.request, run.ctx.state.message_history)
+                        async with node.stream(run.ctx) as stream:
+                            await _forward_events(stream, hooks, resumed)
+                        node = await run.next(node)
+                        messages = run.ctx.state.message_history
+                        response = messages[-1]
+                        if not isinstance(response, ModelResponse):
+                            raise RuntimeError(
+                                f"model request ended without a response, history ends with {response!r}"
+                            )
+                        await hooks.after_response(response, messages)
+                    elif PaiAgent.is_call_tools_node(node):
+                        async with node.stream(run.ctx) as stream:
+                            await _forward_events(stream, hooks, resumed)
+                        node = await run.next(node)
+                    else:
+                        node = await run.next(node)
+                result = run.result
+        finally:
+            await self._bill(RunKind.RUN, scope.agent_id, session_id, model, usage, ctx)
         if result is None:
             raise RuntimeError("agent run ended without a result")
-        usage = result.usage
-        log.info(
-            "agent run finished",
-            extra={
-                **ctx,
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "requests": usage.requests,
-            },
-        )
         return result
 
     async def run_once(
@@ -249,6 +253,8 @@ class AgentRuntime:
             scope=scope,
             prompt=prompt,
             history=(),
+            kind=RunKind.REFLECTION,
+            billed_to=scope.session_id,
         )
 
     async def run_temp(
@@ -261,12 +267,16 @@ class AgentRuntime:
         profile: RunProfile,
         workspace: Path,
         request_limit: int,
+        session_id: str | None,
     ) -> Answer:
         """一次性的临时 agent：替 parent 做一件事，返回最终回答，以及它用工具挂给用户的文件（如 share_file）。
 
         没有记忆、skill、历史与反思；工具来自 profile（不含委派与再开临时 agent），MCP 与 secret 按 parent 的视角。
         也不带公共 prompt：公共 prompt 约定的是长期 agent 之间的共同规则，临时 agent 只执行调用方交给它的任务。
         不属于任何会话，运行事件不推到会话页。模型请求数超过 request_limit 时抛出 UsageLimitExceeded。
+
+        session_id 是发起它的那个会话：临时 agent 自己不属于任何会话（RunScope 里仍是 None），但它花的 token
+        是那次运行的开销，记到那个会话名下。
         """
         scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, origin=None, audience=None)
         result = await self._execute(
@@ -282,6 +292,8 @@ class AgentRuntime:
             prompt=task,
             history=(),
             usage_limits=UsageLimits(request_limit=request_limit),
+            kind=RunKind.TEMP_AGENT,
+            billed_to=session_id,
         )
         return Answer.of_run(result.output, result.new_messages())
 
@@ -298,6 +310,8 @@ class AgentRuntime:
         scope: RunScope,
         prompt: str,
         history: Sequence[ModelMessage],
+        kind: RunKind,
+        billed_to: str | None,
         usage_limits: UsageLimits | None = None,
     ) -> AgentRunResult[str]:
         ctx = {
@@ -307,33 +321,88 @@ class AgentRuntime:
             "workspace": str(scope.workspace),
         }
         log.info("agent run started", extra={**ctx, "history": len(history)})
-        result = await self._pai.run(
-            prompt,
-            model=self._resolve_model(model),
-            instructions=instructions,
-            message_history=list(history),
-            deps=scope,
-            toolsets=toolsets,
-            usage_limits=usage_limits,
-        )
-        usage = result.usage
+        usage = RunUsage()
+        try:
+            result = await self._pai.run(
+                prompt,
+                model=self._resolve_model(model),
+                instructions=instructions,
+                message_history=list(history),
+                deps=scope,
+                toolsets=toolsets,
+                usage_limits=usage_limits,
+                usage=usage,
+            )
+        finally:
+            await self._bill(kind, scope.agent_id, billed_to, model, usage, ctx)
+        return result
+
+    async def summarize(self, agent: AgentInfo, session_id: str, instructions: str, prompt: str) -> str:
+        """用该 agent 的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文）。不转发事件到前端。"""
+        ctx = {"agent": agent.id, "session_id": session_id, "model": agent.model}
+        usage = RunUsage()
+        try:
+            result = await self._pai.run(
+                prompt, model=self._resolve_model(agent.model), instructions=instructions, usage=usage
+            )
+        finally:
+            await self._bill(RunKind.COMPACTION, agent.id, session_id, agent.model, usage, ctx)
+        return result.output
+
+    async def _bill(
+        self,
+        kind: RunKind,
+        agent_id: str,
+        session_id: str | None,
+        model: str,
+        usage: RunUsage,
+        ctx: Mapping[str, object],
+    ) -> None:
+        """记下这次模型运行花掉的 token，并把结果写进「agent run finished」日志。
+
+        用量是账目，不是这次运行的一部分：记不上只记 error 日志，不改变运行的结果或异常——一次记账故障不该让
+        已经做完的工作白做，也不该把一个真正的失败换成另一个。没有任何用量（例如还没发出请求就失败了）就跳过。
+
+        放在屏蔽作用域里并加时限：被取消的运行（用户停止、关停）同样花了 token，取消之后也要把它记下来。
+        屏蔽挡得住 anyio 的电平取消；用户停止用的原生取消是边沿触发的，对已经被停止的运行来说它在这里之前就
+        发出过了，不会再打断这次写入（sessions.stopping）。剩下一个窄窗口：运行正常跑完、正在这里等数据库锁时
+        用户才按停止，这一条用量会随取消一起丢掉。不为它加防御——结局和「停止早到一瞬」一样，消息都已逐步保存，
+        代价只是一条账目。
+        """
         log.info(
             "agent run finished",
             extra={
                 **ctx,
+                "requests": usage.requests,
                 "input_tokens": usage.input_tokens,
                 "output_tokens": usage.output_tokens,
-                "requests": usage.requests,
+                "cache_read_tokens": usage.cache_read_tokens,
+                "cache_write_tokens": usage.cache_write_tokens,
             },
         )
-        return result
-
-    async def summarize(self, agent: AgentInfo, instructions: str, prompt: str) -> str:
-        """用该 agent 的模型做一次无工具的文本生成（上下文压缩用）。不转发事件到前端。"""
-        result = await self._pai.run(
-            prompt, model=self._resolve_model(agent.model), instructions=instructions
+        if not (usage.requests or usage.input_tokens or usage.output_tokens):
+            return
+        entry = UsageEntry(
+            agent_id=agent_id,
+            session_id=session_id,
+            kind=kind,
+            model=model,
+            requests=usage.requests,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
         )
-        return result.output
+        failed: Exception | None = None
+        with anyio.CancelScope(shield=True), anyio.move_on_after(_BILLING_SECONDS) as limited:
+            try:
+                await self._usage.record(entry)
+            except Exception as e:
+                failed = e
+        if failed is not None:
+            log.error("recording model usage failed: %r", failed, extra={**ctx, "kind": kind.value})
+        elif limited.cancelled_caught:
+            log.error("recording model usage timed out", extra={**ctx, "kind": kind.value})
 
 
 async def _forward_events(

@@ -13,7 +13,7 @@ from fastapi.sse import EventSourceResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from muliao.api import admin, agents, files, notifications, resources, sessions, triggers, webhook
+from muliao.api import admin, agents, files, notifications, resources, sessions, triggers, usage, webhook
 from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, require_auth
 from muliao.api.deps import C
 from muliao.api.events import HeartbeatEvent, ServerEvent
@@ -109,6 +109,7 @@ def _private_routes() -> APIRouter:
     router.include_router(webhook.router)
     router.include_router(files.router)
     router.include_router(notifications.router)
+    router.include_router(usage.router)
 
     @router.get("/auth/me", status_code=204)
     async def me() -> None:

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
-import { Activity, BellRing, ChevronRight, KeyRound, LogOut, Plug, RotateCcw, ScrollText, Sparkles, Trash2 } from 'lucide-react'
+import { Activity, BarChart3, BellRing, ChevronRight, KeyRound, LogOut, Plug, RotateCcw, ScrollText, Sparkles, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent, type SecretInfo, type TaskStatus, sessionRoute } from '../api'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
@@ -211,6 +211,7 @@ const LINKS = [
   { to: '/mcp', label: 'MCP servers', Icon: Plug },
   { to: '/vault', label: 'Vault', Icon: KeyRound },
   { to: '/tasks', label: '任务与失败记录', Icon: Activity },
+  { to: '/usage', label: 'Token 用量', Icon: BarChart3 },
 ] as const
 
 export function Settings() {

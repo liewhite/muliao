@@ -267,7 +267,7 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
     entered = asyncio.Event()
 
-    async def blocked(self, agent, instructions, prompt):  # noqa: ANN001, ANN202
+    async def blocked(self, agent, session_id, instructions, prompt):  # noqa: ANN001, ANN202
         entered.set()
         await asyncio.Event().wait()
 
