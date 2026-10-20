@@ -801,6 +801,18 @@ export interface components {
             /** Thread */
             thread: string;
         };
+        /**
+         * AgentAnswered
+         * @description 回答信件里一次 ask_agent 调用的结果：被问的 agent 的结局。
+         */
+        AgentAnswered: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            tool: "ask_agent";
+            result: components["schemas"]["AgentAnswer"];
+        };
         /** AgentCreate */
         AgentCreate: {
             /** Name */
@@ -1056,7 +1068,7 @@ export interface components {
             attachments: components["schemas"]["FileOut"][];
             /** Answers */
             answers: {
-                [key: string]: components["schemas"]["AskResult"] | components["schemas"]["AgentAnswer"];
+                [key: string]: components["schemas"]["UserAnswered"] | components["schemas"]["AgentAnswered"];
             };
             state: components["schemas"]["MailState"];
             /**
@@ -1673,6 +1685,18 @@ export interface components {
         UnreadOut: {
             /** Count */
             count: number;
+        };
+        /**
+         * UserAnswered
+         * @description 回答信件里一次 ask_user 调用的结果：用户的回答。
+         */
+        UserAnswered: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            tool: "ask_user";
+            result: components["schemas"]["AskResult"];
         };
         /** ValidationError */
         ValidationError: {

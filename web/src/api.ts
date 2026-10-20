@@ -37,12 +37,7 @@ export type QuestionOption = Schemas['Option']
 export type Question = Schemas['Question']
 export type QuestionAnswer = Schemas['QuestionAnswer']
 export type AnsweredQuestion = Schemas['AnsweredQuestion']
-export type AskResult = Schemas['AskResult']
-export type AgentAnswer = Schemas['AgentAnswer']
 export type AskView = Schemas['AskView']
-
-/** 回答信件里一次调用的结果：ask_user 是用户的回答，ask_agent 是对方的结局。两者字段不重叠，按形状区分（后端 runtime.pending.CallResult） */
-export const isAskResult = (result: AskResult | AgentAnswer): result is AskResult => 'answered' in result
 
 export type MailKind = Schemas['MailKind']
 export type MailState = Schemas['MailState']

@@ -27,7 +27,7 @@ from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import has_active_in, hold_in
 from muliao.sessions.kinds import OWNED_BY_PARENT, SessionKind, policy_of
 from muliao.sessions.mailbox import latest_run, post_in, queued_in
-from muliao.sessions.pending import pending_questions
+from muliao.sessions.pending import UserAnswered, pending_questions
 from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
 from muliao.sessions.settlement import failure_of, settle_in, unsettled_in
 from muliao.sessions.tables import Mail, MailKind, MailState, Session
@@ -312,7 +312,7 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
                 session.id,
                 kind=MailKind.ANSWER,
                 content="",
-                answers={k: v.model_dump() for k, v in answers.items()},
+                answers={k: UserAnswered(result=v).model_dump() for k, v in answers.items()},
                 awaited=inbound.awaited,
             )
         )

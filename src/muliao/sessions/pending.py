@@ -12,9 +12,9 @@ pydantic-ai 的 CallDeferred，这次运行停在这里正常结束，不在 wor
 
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Final
+from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
 from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage, ToolCallPart
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,8 +48,28 @@ class AgentAnswer(BaseModel):
         return Answer(self.text, list(self.attachments)).to_tool_return(thread_id=self.thread)
 
 
-# 回答信件里一次调用的结果：ask_user 是用户的回答，ask_agent 是对方的结局（两者字段不重叠，按形状区分）
-CallResult = AskResult | AgentAnswer
+class UserAnswered(BaseModel):
+    """回答信件里一次 ask_user 调用的结果：用户的回答。"""
+
+    tool: Literal["ask_user"] = ASK_USER
+    result: AskResult
+
+    def tool_return(self) -> object:
+        return self.result.model_dump()
+
+
+class AgentAnswered(BaseModel):
+    """回答信件里一次 ask_agent 调用的结果：被问的 agent 的结局。"""
+
+    tool: Literal["ask_agent"] = ASK_AGENT
+    result: AgentAnswer
+
+    def tool_return(self) -> object:
+        return self.result.to_tool_return()
+
+
+# 回答信件里一次调用的结果（mail.answers 的值）：信封带着调用的工具名，按它区分
+CallResult = Annotated[UserAnswered | AgentAnswered, Field(discriminator="tool")]
 _CALL_RESULT: TypeAdapter[CallResult] = TypeAdapter(CallResult)
 
 
@@ -117,14 +137,14 @@ def deferred_results(
 ) -> dict[str, object]:
     """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（来了新消息，或这次只回答了一部分）：ask_user 记为
     没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后作为事件送达。"""
-    any_answered = any(isinstance(r, AskResult) for r in answers.values())
+    any_answered = any(r.tool == ASK_USER for r in answers.values())
     results: dict[str, object] = {}
     for call_id, call in pending.items():
         result = answers.get(call_id)
-        if isinstance(result, AgentAnswer):
-            results[call_id] = result.to_tool_return()
-        elif isinstance(result, AskResult):
-            results[call_id] = result.model_dump()
+        if result is not None:
+            if result.tool != call.tool_name:
+                raise RuntimeError(f"call {call_id} of {call.tool_name} got an answer for {result.tool}")
+            results[call_id] = result.tool_return()
         elif call.tool_name == ASK_USER:
             results[call_id] = (SKIPPED if any_answered else NOT_ANSWERED).model_dump()
         else:
@@ -135,10 +155,12 @@ def deferred_results(
 def late_text(results: Sequence[CallResult]) -> str:
     """回答到达时那次调用已经结束（模型已经带着「没回答」或「之后送达」继续了）：作为一段用户消息交给模型，回答不丢。"""
     lines: list[str] = []
-    asked = [r for r in results if isinstance(r, AskResult)]
+    asked = [r.result for r in results if isinstance(r, UserAnswered)]
     if asked:
         lines += ["The user answered questions that had already been closed:", *late_answer_lines(asked)]
     lines += [
-        f"An agent you asked earlier answered:\n{r.text}" for r in results if isinstance(r, AgentAnswer)
+        f"An agent you asked earlier answered:\n{r.result.text}"
+        for r in results
+        if isinstance(r, AgentAnswered)
     ]
     return "\n".join(lines)

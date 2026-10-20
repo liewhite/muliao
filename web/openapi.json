@@ -2196,6 +2196,25 @@
         "title": "AgentAnswer",
         "description": "被问的 agent 交回的结局（delegations.manager）：给发问方模型的文字，它挂给用户的文件，所在的 thread。"
       },
+      "AgentAnswered": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "const": "ask_agent",
+            "title": "Tool",
+            "default": "ask_agent"
+          },
+          "result": {
+            "$ref": "#/components/schemas/AgentAnswer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "title": "AgentAnswered",
+        "description": "回答信件里一次 ask_agent 调用的结果：被问的 agent 的结局。"
+      },
       "AgentCreate": {
         "properties": {
           "name": {
@@ -2906,14 +2925,21 @@
           },
           "answers": {
             "additionalProperties": {
-              "anyOf": [
+              "oneOf": [
                 {
-                  "$ref": "#/components/schemas/AskResult"
+                  "$ref": "#/components/schemas/UserAnswered"
                 },
                 {
-                  "$ref": "#/components/schemas/AgentAnswer"
+                  "$ref": "#/components/schemas/AgentAnswered"
                 }
-              ]
+              ],
+              "discriminator": {
+                "propertyName": "tool",
+                "mapping": {
+                  "ask_agent": "#/components/schemas/AgentAnswered",
+                  "ask_user": "#/components/schemas/UserAnswered"
+                }
+              }
             },
             "type": "object",
             "title": "Answers"
@@ -4470,6 +4496,25 @@
           "count"
         ],
         "title": "UnreadOut"
+      },
+      "UserAnswered": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "const": "ask_user",
+            "title": "Tool",
+            "default": "ask_user"
+          },
+          "result": {
+            "$ref": "#/components/schemas/AskResult"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "title": "UserAnswered",
+        "description": "回答信件里一次 ask_user 调用的结果：用户的回答。"
       },
       "ValidationError": {
         "properties": {

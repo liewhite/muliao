@@ -100,7 +100,8 @@ async def test_turn_stops_on_questions_and_answers_come_back_as_the_tool_result(
 
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量", "持仓量"], "other": "还有链上数据"}]}
     resp = await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
-    assert resp.status_code == 202 and resp.json()[0]["answers"]["q1"]["answers"][0]["selected"] == ["日线"]
+    assert resp.status_code == 202 and resp.json()[0]["answers"]["q1"]["tool"] == "ask_user"
+    assert resp.json()[0]["answers"]["q1"]["result"]["answers"][0]["selected"] == ["日线"]
     # 已提交、还没执行的回答不再显示成待回答的表单
     assert ask_states((await client.get(f"/api/sessions/{session_id}")).json()) == {"q1": "submitted"}
     await drain(container)
@@ -165,7 +166,7 @@ async def test_an_answer_behind_a_queued_message_still_answers_the_questions(
 
 def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text():
     """回答投信后、交给模型前，提问已被别的运行结束（它带着「没回答」继续了）：回答作为一段文字交给模型。"""
-    from muliao.sessions.pending import late_text
+    from muliao.sessions.pending import UserAnswered, late_text
     from muliao.sessions.questions import AnsweredQuestion, AskResult
 
     answered = AskResult(
@@ -173,7 +174,7 @@ def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text
         answers=[AnsweredQuestion(question="看哪个周期？", selected=["日线"], other="也看周线")],
         note=None,
     )
-    text = late_text([answered])
+    text = late_text([UserAnswered(result=answered)])
     assert "already been closed" in text and "看哪个周期？: 日线; 也看周线" in text
 
 

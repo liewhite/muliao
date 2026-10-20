@@ -24,7 +24,7 @@ from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.events import Ending, PostEvent, SessionSettled
 from muliao.sessions.holds import get_in, release_in
 from muliao.sessions.mailbox import discard_in, handed_to, latest_run, post_in
-from muliao.sessions.pending import AgentAnswer, pending_in
+from muliao.sessions.pending import AgentAnswer, AgentAnswered, pending_in
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
@@ -206,7 +206,7 @@ async def deliver_in(
             session_id,
             kind=MailKind.ANSWER,
             content="",
-            answers={hold.call_id: answer.model_dump()},
+            answers={hold.call_id: AgentAnswered(result=answer).model_dump()},
             awaited=awaited,
             dedupe_key=key,
         )

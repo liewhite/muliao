@@ -11,6 +11,7 @@ from muliao.delegations.tables import Delegation, DelegationStatus
 from muliao.errors import Conflict
 from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.sessions.kinds import SessionKind
+from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import Mail, MailKind, MailState
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, start, tasks_of
@@ -701,7 +702,7 @@ async def test_an_answer_arriving_mid_run_reaches_the_model_as_late_text(
                     session_id,
                     kind=MailKind.ANSWER,
                     content="",
-                    answers={"q": answer.model_dump()},
+                    answers={"q": UserAnswered(result=answer).model_dump()},
                     awaited=True,
                 )
             yield {0: DeltaToolCall(name="memory_append", json_args='{"entry": "- x"}', tool_call_id="m")}
