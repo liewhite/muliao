@@ -12,9 +12,8 @@ from pywebpush import WebPushException, webpush
 from sqlalchemy import select
 
 from muliao.db import Database
-from muliao.delivery.base import Notification
 from muliao.errors import InvalidInput, TransientError
-from muliao.models import PushSubscription
+from muliao.models import Notification, PushSubscription
 from muliao.transcript import truncate
 
 log = logging.getLogger(__name__)
@@ -81,7 +80,7 @@ class WebPushDelivery:
         self._keys = keys
         self._subject = subject
 
-    async def send(self, notification: Notification) -> None:
+    async def send(self, notification: Notification, unread: int) -> None:
         """逐个订阅独立投递：失效订阅删除，暂时性失败汇总后抛出交给任务重试，载荷错误属于本端 bug。"""
         subs = await self._subs.list()
         if not subs:
@@ -93,8 +92,12 @@ class WebPushDelivery:
             {
                 "title": notification.title,
                 "body": truncate(notification.body, _BODY_MAX_CHARS),
-                "url": f"/sessions/{notification.session_id}" if notification.session_id else "/",
+                # 系统通知不指向会话，点开看通知页
+                "url": f"/sessions/{notification.session_id}"
+                if notification.session_id
+                else "/notifications",
                 "session_id": notification.session_id,
+                "badge": unread,
             },
             ensure_ascii=False,
         )
@@ -118,6 +121,7 @@ class WebPushDelivery:
         log.info(
             "web push sent",
             extra={
+                "notification_id": notification.id,
                 "session_id": notification.session_id,
                 "sent": sent,
                 "gone": gone,

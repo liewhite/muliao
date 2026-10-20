@@ -20,9 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.bus import LiveRuns
 from muliao.db import Database, utcnow
-from muliao.delivery.base import Notification, Notifier
+from muliao.delivery.base import Notifier
 from muliao.files import FileStore
-from muliao.models import Agent, Message, ReplyTo, Session, Task, TaskKind
+from muliao.models import Agent, Message, Notification, ReplyTo, Session, Task, TaskKind
 from muliao.runtime.answers import Answer
 from muliao.runtime.attachments import copy_to_workspace, references
 from muliao.runtime.codec import dump_message
@@ -219,7 +219,7 @@ class TurnRunner:
             return
         await self._compaction.after_turn(s, session, agent.model, out.messages)
         if reply_to == ReplyTo.USER:
-            self._notifier.enqueue_in(
+            await self._notifier.enqueue_in(
                 s,
                 agent.id,
                 Notification(title=f"{agent.name} · {session.title}", body=out.answer, session_id=session.id),

@@ -32,6 +32,7 @@ import { ActionButton,
 } from '../ui'
 import { ResourceHistory } from './Prompts'
 import { SkillList } from './Skills'
+import { refreshUnreadLogged } from '../unread'
 
 export function AgentList() {
   const agents = useAgents()
@@ -328,7 +329,11 @@ export function AgentDetail() {
       confirmLabel: '删除',
       danger: true,
     })
-    if (ok && (await action.run(() => api.deleteAgent(id)))) navigate('/agents')
+    if (ok && (await action.run(() => api.deleteAgent(id)))) {
+      // 它的会话连同指向它们的通知一起删除
+      refreshUnreadLogged()
+      navigate('/agents')
+    }
   }
 
   return (

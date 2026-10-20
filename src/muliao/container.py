@@ -14,7 +14,7 @@ from muliao.agents import AgentDefaults, AgentService
 from muliao.bus import EventBus, LiveRuns
 from muliao.config import Settings
 from muliao.db import Database, create_engine, migrate
-from muliao.delivery.base import DeliverHandler, Notifier
+from muliao.delivery.base import DeliverHandler, Notifications, Notifier
 from muliao.delivery.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
 from muliao.errors import InvalidInput
 from muliao.evolution.memory import MemoryStore
@@ -90,6 +90,7 @@ class Container:
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
     notifier: Notifier
+    notifications: Notifications
     mcp: McpRegistry
     triggers: TriggerService
     schedules: ScheduleRunner
@@ -312,7 +313,7 @@ def build_container(
             db, runtime, compaction, settings.runtime.compaction_keep_turns
         ),
         TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups),
-        TaskKind.DELIVER: DeliverHandler(pusher),
+        TaskKind.DELIVER: DeliverHandler(db, pusher),
     }
     worker = Worker(
         queue,
@@ -337,6 +338,7 @@ def build_container(
         agent_lifecycle=agent_lifecycle,
         sessions=sessions,
         notifier=notifier,
+        notifications=Notifications(db),
         mcp=mcp,
         triggers=triggers,
         schedules=schedules,

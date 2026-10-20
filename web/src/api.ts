@@ -51,6 +51,17 @@ export interface Session {
   updated_at: string
 }
 
+/** 一条通知（不叫 Notification：那是浏览器的全局对象） */
+export interface AppNotification {
+  id: number
+  title: string
+  body: string
+  /** 点开打开的会话；系统通知（前置检查告警、推送测试）为 null */
+  session_id: string | null
+  unread: boolean
+  created_at: string
+}
+
 /** 引用文件的地址前缀（与后端 muliao.files.FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
 export const FILES_PATH = '/api/files'
 
@@ -364,7 +375,12 @@ export const api = {
   /** 请求体就是文件内容，Content-Type 是它的类型；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
   uploadFile: (file: File) =>
     send<FileInfo>('POST', FILES_PATH, { name: file.name }, { type: file.type || 'application/octet-stream', data: file }),
+  /** 同时把指向这个会话的通知标为已读 */
   markRead: (id: string) => post<void>(`/api/sessions/${id}/read`),
+  notifications: () => get<AppNotification[]>('/api/notifications'),
+  unreadNotifications: () => get<{ count: number }>('/api/notifications/unread'),
+  /** 标记到 throughId（用户看到的最新一条）为止已读，之后才到的保持未读 */
+  markNotificationsRead: (throughId: number) => post<void>('/api/notifications/read', { through_id: throughId }),
   /** 停止正在运行的一轮；停止前已经产生的部分照常保存 */
   stop: (id: string) => post<void>(`/api/sessions/${id}/stop`),
   compact: (id: string) => post<{ queued: boolean }>(`/api/sessions/${id}/compact`),

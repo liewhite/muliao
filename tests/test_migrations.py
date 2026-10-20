@@ -81,3 +81,36 @@ def test_foreign_key_violation_rolls_back_migration(tmp_path, monkeypatch):
 
     with sqlite3.connect(path) as conn:
         assert conn.execute("select count(*) from sessions").fetchone()[0] == 0
+
+
+def test_existing_deliver_tasks_become_notifications_and_only_reference_them(tmp_path):
+    path = tmp_path / "m.db"
+    migrate(path, "0e63aa5dab99")
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO tasks (id, kind, lane, payload, status, attempts, not_before, created_at) "
+            "VALUES (?, 'deliver', 'deliver:system', ?, ?, 0, '2026-01-01', '2026-01-02 03:04:05')",
+            [
+                (7, '{"title": "前置检查出错", "body": "timed out", "session_id": null}', "done"),
+                (9, '{"title": "t", "body": "b", "session_id": null}', "pending"),
+            ],
+        )
+    migrate(path)
+
+    with sqlite3.connect(path) as conn:
+        notes = conn.execute(
+            "select id, title, body, session_id, unread, created_at from notifications"
+        ).fetchall()
+        payloads = conn.execute("select payload from tasks order by id").fetchall()
+        conn.execute(
+            "INSERT INTO notifications (title, body, unread, created_at) VALUES ('n', 'n', 1, '2026-01-03')"
+        )
+        next_id = conn.execute("select max(id) from notifications").fetchone()[0]
+    # 投递过的视为已读，还没投递的保持未读
+    assert notes == [
+        (7, "前置检查出错", "timed out", None, 0, "2026-01-02 03:04:05"),
+        (9, "t", "b", None, 1, "2026-01-02 03:04:05"),
+    ]
+    assert payloads == [('{"notification_id":7}',), ('{"notification_id":9}',)]
+    # 沿用 task id 后，新通知的 id 仍在它们之后（「已读到哪一条」的游标单调）
+    assert next_id == 10

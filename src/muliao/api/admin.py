@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from muliao.api.deps import C
-from muliao.delivery.base import Notification
+from muliao.models import Notification
 from muliao.resources import USER
 from muliao.runtime.mcp import McpServer, McpSpec, McpTransport
 from muliao.vault import SecretInfo

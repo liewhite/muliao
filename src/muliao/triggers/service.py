@@ -27,9 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from muliao.db import Database, utcnow
-from muliao.delivery.base import Notification, Notifier
+from muliao.delivery.base import Notifier
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.models import Agent, Origin, ReplyTo, Session, Trigger
+from muliao.models import Agent, Notification, Origin, ReplyTo, Session, Trigger
 from muliao.runtime.conversation import Inbound, NewSession, receive
 from muliao.runtime.tasks import Clock, TaskQueue, turn_lane
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
@@ -326,7 +326,7 @@ class TriggerService:
         async with self._db.transaction() as s:
             trigger = await self._current(s, trigger_id, checked)
             if trigger is not None:
-                self._fail_in(s, trigger, error)
+                await self._fail_in(s, trigger, error)
 
     def _succeed_in(self, trigger: Trigger) -> None:
         if trigger.last_error is not None:
@@ -336,7 +336,7 @@ class TriggerService:
             )
         trigger.last_checked_at, trigger.last_error = self._clock(), None
 
-    def _fail_in(self, s: AsyncSession, trigger: Trigger, error: str) -> None:
+    async def _fail_in(self, s: AsyncSession, trigger: Trigger, error: str) -> None:
         """记下失败原因；从正常变为出错时通知用户一次（每分钟检查一次的触发器坏了不会每分钟推送一条）。"""
         healthy_before = trigger.last_error is None
         trigger.last_checked_at, trigger.last_error = self._clock(), error
@@ -344,7 +344,7 @@ class TriggerService:
             "trigger precheck failed: %s", error, extra={"trigger": trigger.name, "alert": healthy_before}
         )
         if healthy_before:
-            self._notifier.enqueue_in(
+            await self._notifier.enqueue_in(
                 s,
                 trigger.agent_id,
                 Notification(

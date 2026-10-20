@@ -17,6 +17,7 @@
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `resources/{public,agents/<id>}/mcp/<name>.json` |
 | Secret | 加密保存的密码/token，通过 key 引用；公共或 agent 私有 | `secrets` 表（Fernet 加密） |
 | File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
+| Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，deliver task 只引用它，内容不另存一份 | `notifications` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成交给某个 agent 的一轮；触发方式（定时、webhook……）多态实现 | `triggers` 表 |
 
 目录：
@@ -69,7 +70,7 @@ Web / 触发器（定时、webhook……）/ delegate_task
                                       ├─ session.unread / updated_at
                                       ├─ agent.turns_since_reflection += 1
                                       ├─ 达到阈值 → tasks(reflection)
-                                      └─ reply_to = user → tasks(deliver)
+                                      └─ reply_to = user → notifications + tasks(deliver)
                                                      │
                               ReflectionHandler ◄────┘     DeliverHandler ──► Web Push
 ```
@@ -238,7 +239,7 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 **前置检查**（`triggers/precheck.py`，所有触发方式共用，触发器的公共字段 `precheck`）：做法同 Hermes 的 script / monitor 模式——触发前先跑一条便宜、确定性的命令，有事才调用 agent，没事不花模型调用。命令在该 agent 的工作目录里用 `bash -o pipefail` 执行（管道里任何一步失败都算检查失败：`curl … | jq` 里 curl 失败时 jq 照样退出 0，否则故障会变成静默的「没事」；与 `run_shell` 共用 `runtime/shell.py`：最小环境变量、按 key 注入 secret、输出里的 secret 替换掉、超时杀进程组），stdin 是原始事件内容（webhook 请求体，定时与手动为空），在数据库事务之外执行，时限 `runtime.precheck_timeout_seconds`（默认 30 秒：webhook 的调用方在同步等它，检查本该便宜）。同一轮到期的定时触发器并发执行，一个慢的检查不拖住其他触发器。退出码 0 时按 `fire_when` 决定（`decide`，纯逻辑）：
 - `output`（默认）：输出非空就触发，输出作为事件内容交给 agent（替换原始事件，可借此过滤、裁剪）；为空不触发。增量由命令自己做（游标存在工作目录）。
 - `changed`：与上一次成功检查的输出（存在触发器的 `precheck_output`）逐字比较，变了才触发，交给 agent 的是统一 diff 加完整输出（所以实际可用的输出上限约为事件上限的一半）；命令只需打印当前状态。第一次运行只记基线、不触发（Hermes 首轮会白调一次模型）。修改前置检查时清空基线。
-- 非 0 退出、超时、输出（或 diff 加输出）超过事件上限、secret 不可见：检查本身失败，不触发，原因记在 `last_error`，触发器保持启用（脚本的故障往往是暂时的）；从正常变为出错时推送一次告警（不调用模型），之后持续出错不再重复推送，检查成功即清除。webhook 的外部调用方只收到 502，看不到原因（可能含脚本的 stderr）。
+- 非 0 退出、超时、输出（或 diff 加输出）超过事件上限、secret 不可见：检查本身失败，不触发，原因记在 `last_error`，触发器保持启用（脚本的故障往往是暂时的）；从正常变为出错时发一条通知（不调用模型，记在通知页，见下文「通知」），之后持续出错不再重复推送，检查成功即清除。webhook 的外部调用方只收到 502，看不到原因（可能含脚本的 stderr）。
 - 检查期间触发器被删除、停用或改了检查，这次结果作废，成功与失败都一样（旧命令的失败不会记到新配置上）。同一个触发器的两次检查恰好并发（如手动运行撞上定时）时，后提交的以先提交的输出为基线，最坏多触发一次，自然收敛，不加锁。`last_checked_at` 记最近一次检查的时间，让用户看到「在检查、只是没事」。
 - 不提供 Hermes 的 no_agent（输出原样推送、不经过 agent）：它绕过「一切都是一轮对话」，推送的内容不属于任何会话；需要省模型调用时用 `changed` 只在变化时叫 agent。
 
@@ -257,6 +258,8 @@ agent 私有、有长度上限（`memory_max_chars`），每轮全文注入 inst
 - 不走登录 cookie，**先鉴权再读请求体**：未鉴权的调用方不能让进程读入任何内容；请求体按字节上限分块读取，超限返回 413。触发器不存在、不是 webhook、还没有 token、token 不匹配，都返回同一个 401，不暴露哪些名称存在；停用的返回 409；续写不是本触发器发起的会话返回 403。
 - token 是我们签发给外部系统的凭证，事实来源是触发器自己：`state` 里只存 SHA-256，明文只在生成时返回一次，**只能由用户在界面上生成**（agent 创建的 webhook 在用户生成 token 之前收不到事件）。不放进 vault——vault 存的是外部系统发给我们的凭证。
 - 不校验各平台自己的签名格式（GitHub、Slack 等各不相同）。需要时由发送方把 token 放进 Authorization 头，或在中间加一层转发。
+
+**通知**（`delivery/base.py`）：一轮回答给用户（`reply_to = user`）、agent 调 `notify_user`、前置检查告警、推送测试，都经 `Notifier.enqueue_in` 在业务事务里写一条 `notifications` 行并排一个只带 `notification_id` 的 deliver task。DeliverHandler 投递时读出通知和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到 deliver 事件和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话同时标记指向它的通知。通知随它指向的会话删除；系统通知点开进通知页，所以前置检查告警在检查恢复、`last_error` 清除之后仍看得到。
 
 通知只有 Web Push 一种渠道。不支持主动推送的外部消息源（例如只能拉取的 Slack 未读）用定时触发器拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
 

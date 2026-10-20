@@ -111,3 +111,18 @@ async def test_agent_defaults_endpoint_reflects_config(client, container):
         "tool_groups": list(container.agents.defaults.tool_groups),
     }
     assert container.settings.runtime.default_reflect_every == 5
+
+
+async def test_marking_notifications_read_stops_at_the_one_the_user_saw(client):
+    await login(client)
+    for _ in range(2):
+        await client.post("/api/push/test")
+    first, _ = sorted((await client.get("/api/notifications")).json(), key=lambda n: n["id"])
+    assert (await client.get("/api/notifications/unread")).json() == {"count": 2}
+
+    assert (await client.post("/api/notifications/read", json={"through_id": first["id"]})).status_code == 204
+
+    # 后到的那条用户还没看到，保持未读
+    notes = (await client.get("/api/notifications")).json()
+    assert [n["unread"] for n in notes] == [True, False]
+    assert (await client.get("/api/notifications/unread")).json() == {"count": 1}

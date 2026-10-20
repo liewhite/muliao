@@ -106,8 +106,10 @@ async def test_failing_precheck_is_recorded_alerts_once_and_keeps_the_trigger_en
     failed = await container.triggers.get_by_name("watch")
     assert failed.enabled and failed.last_error is not None and "exited with 3: no token" in failed.last_error
     assert await tasks_of(container, TaskKind.TURN) == []
-    alerts = await tasks_of(container, TaskKind.DELIVER)
-    assert len(alerts) == 1 and "watch" in alerts[0].payload["title"]
+    assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
+    # 告警留在通知页里：检查恢复、last_error 清除之后仍然看得到
+    [alert] = await container.notifications.list(10)
+    assert "watch" in alert.title and "no token" in alert.body and alert.session_id is None
 
     (workspace / "ok").write_text("")
     await _tick(container, trigger.id)

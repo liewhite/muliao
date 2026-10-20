@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react'
 import { useTheme } from '@heroui/react'
-import { Bot, MessageSquare, Settings as SettingsIcon, Zap } from 'lucide-react'
+import { Bell, Bot, MessageSquare, Settings as SettingsIcon, Zap } from 'lucide-react'
 import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
 import { closeServerEvents } from './events'
+import { useUnreadCount, useUnreadSync } from './unread'
 import { AgentCreate, AgentDetail, AgentList } from './pages/Agents'
 import { Login, Settings, Tasks, Vault } from './pages/Admin'
 import Triggers from './pages/Triggers'
 import Mcp from './pages/Mcp'
 import PublicPrompt from './pages/Prompts'
 import NewSession from './pages/NewSession'
+import Notifications from './pages/Notifications'
 import SessionView from './pages/SessionView'
 import Sessions from './pages/Sessions'
 import { PublicSkills, SkillEditor } from './pages/Skills'
@@ -20,6 +22,7 @@ type AuthState = 'checking' | 'in' | 'out'
 
 const TABS = [
   { to: '/', label: '会话', Icon: MessageSquare },
+  { to: '/notifications', label: '通知', Icon: Bell },
   { to: '/agents', label: 'Agents', Icon: Bot },
   { to: '/triggers', label: '触发', Icon: Zap },
   { to: '/settings', label: '设置', Icon: SettingsIcon },
@@ -74,13 +77,20 @@ export default function App() {
       </Routes>
     )
   }
+  return <Shell />
+}
 
+/** 登录后的界面：页面与底部导航 */
+function Shell() {
+  useUnreadSync()
+  const unread = useUnreadCount()
   return (
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1">
         <Routes>
           <Route path="/" element={<Sessions />} />
           <Route path="/new" element={<NewSession />} />
+          <Route path="/notifications" element={<Notifications />} />
           <Route path="/sessions/:id" element={<SessionView />} />
           <Route path="/agents" element={<AgentList />} />
           <Route path="/agents/new" element={<AgentCreate />} />
@@ -107,7 +117,15 @@ export default function App() {
               `flex h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] ${isActive ? 'text-accent' : 'text-muted'}`
             }
           >
-            <Icon className="size-5" />
+            <span className="relative">
+              <Icon className="size-5" />
+              {to === '/notifications' && unread > 0 && (
+                <span className="absolute -top-1.5 left-3 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] leading-4 text-danger-foreground">
+                  {unread > 99 ? '99+' : unread}
+                  <span className="sr-only">条未读</span>
+                </span>
+              )}
+            </span>
             <span>{label}</span>
           </NavLink>
         ))}

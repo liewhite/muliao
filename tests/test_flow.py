@@ -109,7 +109,14 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(contain
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "Noted!"
     deliver = await tasks_of(container, TaskKind.DELIVER)
     assert len(deliver) == 1 and deliver[0].status == TaskStatus.DONE
-    assert deliver[0].payload["body"] == "Noted!"
+    [note] = await container.notifications.list(10)
+    assert deliver[0].payload == {"notification_id": note.id}
+    assert (note.body, note.session_id, note.unread) == ("Noted!", session.id, True)
+    assert await container.notifications.unread_count() == 1
+
+    # 打开会话即看过了指向它的通知
+    await container.sessions.mark_read(session.id)
+    assert await container.notifications.unread_count() == 0
 
 
 async def test_triggered_session_does_not_notify_automatically(container, make_agent):

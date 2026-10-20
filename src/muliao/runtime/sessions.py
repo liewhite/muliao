@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.db import Database
+from muliao.delivery.base import mark_session_read_in
 from muliao.errors import NotFound
 from muliao.models import Compaction, Message, Origin, Session
 from muliao.runtime.codec import load_messages
@@ -87,6 +88,7 @@ class SessionService:
     async def mark_read(self, session_id: str) -> None:
         async with self._db.transaction() as s:
             (await self._get(s, session_id)).unread = False
+            await mark_session_read_in(s, session_id)
 
     async def delete(self, session_id: str) -> None:
         """删除 session（规则见 conversation.delete_sessions）。"""

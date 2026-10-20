@@ -76,8 +76,8 @@ async def test_turn_stops_on_questions_and_answers_come_back_as_the_tool_result(
     assert asker.requests == 1
     turns = await tasks_of(container, TaskKind.TURN)
     assert [t.status for t in turns] == [TaskStatus.DONE]
-    deliver = await tasks_of(container, TaskKind.DELIVER)
-    assert "看哪个周期？" in deliver[0].payload["body"]
+    [note] = (await client.get("/api/notifications")).json()
+    assert "看哪个周期？" in note["body"] and note["session_id"] == session_id
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
     assert [(p["tool_call_id"], len(p["questions"])) for p in detail["pending_questions"]] == [("q1", 2)]
 

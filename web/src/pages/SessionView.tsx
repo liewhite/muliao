@@ -31,6 +31,7 @@ import {
 import { AnsweredQuestions, QuestionForm, QuestionNote } from '../questions'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
 import { liveToItems, mergeLive, useServerEvents, type RunEvent } from '../events'
+import { refreshUnread, refreshUnreadLogged } from '../unread'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
 function Collapsible({ title, children }: { title: ReactNode; children: ReactNode }) {
@@ -385,9 +386,14 @@ export default function SessionView() {
     if (merged.gap) void reload()
   }, [merged.gap, reload])
 
+  // 打开会话、以及看着它时又有了新回答，都标记已读。不按 session.unread 判断要不要调用：指向这个会话的通知
+  // 是另一个事实（notify_user 写的通知可能出现在一轮失败、会话没变未读时），标记本身幂等
   const unread = detail.data?.session.unread
   useEffect(() => {
-    if (unread) void api.markRead(id)
+    void api
+      .markRead(id)
+      .then(refreshUnread)
+      .catch((e) => console.error('marking session read failed', e))
   }, [id, unread])
 
   useEffect(() => {
@@ -415,7 +421,11 @@ export default function SessionView() {
       confirmLabel: '删除',
       danger: true,
     })
-    if (ok && (await action.run(() => api.deleteSession(id)))) navigate(parentRoute)
+    if (ok && (await action.run(() => api.deleteSession(id)))) {
+      // 指向它的通知随会话删除
+      refreshUnreadLogged()
+      navigate(parentRoute)
+    }
   }
 
   const session = detail.data?.session

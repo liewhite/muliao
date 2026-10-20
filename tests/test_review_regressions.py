@@ -7,10 +7,9 @@ from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, TextPart
 from sqlalchemy import select
 
-from muliao.delivery.base import Notification
 from muliao.delivery.webpush import WebPushDelivery
 from muliao.errors import Conflict, TransientError
-from muliao.models import Message, Origin, TaskKind, TaskStatus
+from muliao.models import Message, Notification, Origin, TaskKind, TaskStatus
 from muliao.runtime.worker import is_transient
 from muliao.transcript import to_items
 from tests.test_flow import call_then_answer, drain, start
@@ -122,14 +121,14 @@ async def test_webpush_isolates_subscriptions(container, monkeypatch):
 
     # 403 等其他 4xx 多半是本端问题：任务失败可见，但不删用户的订阅
     with pytest.raises(RuntimeError, match="403"):
-        await delivery.send(note)
+        await delivery.send(note, unread=1)
 
     assert sorted(sent) == ["bad", "busy", "gone", "ok"]
     assert sorted(s.endpoint.rsplit("/", 1)[1] for s in await subs.list()) == ["bad", "busy", "ok"]
 
     statuses["bad"] = None
     with pytest.raises(TransientError):
-        await delivery.send(note)
+        await delivery.send(note, unread=1)
 
 
 async def test_retried_task_keeps_last_error_while_running(container, make_agent, models):
