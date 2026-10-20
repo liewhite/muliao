@@ -21,8 +21,8 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskKind
 from muliao.platform.tasks import Commit, TaskQueue, no_commit, reflection_lane
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
+from muliao.sessions.api import AgentWork
 from muliao.sessions.events import RunEnded
-from muliao.sessions.work import AgentWork
 
 log = logging.getLogger(__name__)
 

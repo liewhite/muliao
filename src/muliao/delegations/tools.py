@@ -9,11 +9,10 @@ from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext, T
 
 from muliao.agent_runtime.api import TOOL_THREADS
 from muliao.agents.api import AgentService
-from muliao.delegations.manager import thread_name
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-from muliao.sessions.conversation import Threads, threads_of, validate_thread
+from muliao.sessions.api import Threads, validate_thread
 
 _ANSWER_PREVIEW = 500
 
@@ -149,10 +148,10 @@ def delegation_toolset(
         """
         parent_id = _require_session(ctx)
         async with db.transaction() as s:
-            child = await threads.find(s, parent_id, validate_thread(thread))
-        if child is None:
+            child_id = await threads.thread_id_in(s, parent_id, validate_thread(thread))
+        if child_id is None:
             raise ModelRetry(f"this conversation has no thread named {thread!r}; see list_threads")
-        await stop_session(child.id)
+        await stop_session(child_id)
         return f"stopped thread {thread!r}"
 
     @ts.tool
@@ -161,19 +160,17 @@ def delegation_toolset(
         parent_id = _require_session(ctx)
         names = {a.id: a.name for a in await agents.list()}
         async with db.transaction() as s:
-            result = []
-            for child in await threads_of(s, parent_id):
-                state = await threads.state(s, child)
-                result.append(
-                    ThreadInfo(
-                        thread=thread_name(child),
-                        agent=names[child.agent_id],
-                        private=child.private,
-                        status=state.status,
-                        answer=truncate(state.text, _ANSWER_PREVIEW) if state.status == "done" else None,
-                    )
-                )
-        return result
+            views = await threads.list_in(s, parent_id)
+        return [
+            ThreadInfo(
+                thread=v.thread,
+                agent=names[v.agent_id],
+                private=v.private,
+                status=v.state.status,
+                answer=truncate(v.state.text, _ANSWER_PREVIEW) if v.state.status == "done" else None,
+            )
+            for v in views
+        ]
 
     return ts
 

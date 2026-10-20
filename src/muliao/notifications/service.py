@@ -8,6 +8,7 @@
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.notifications.events import Notify
 from muliao.notifications.tables import Notification
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
@@ -41,6 +42,17 @@ class Notifier:
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended, lane=session_events_lane)
+        messaging.handle(Notify, "notifications.notify", self.on_notify)
+
+    async def on_notify(self, command: Notify, _delivery: Delivery) -> Commit:
+        async def commit(s: AsyncSession) -> None:
+            await self.enqueue_in(
+                s,
+                command.agent_id,
+                Notification(title=command.title, body=command.body, session_id=command.session_id),
+            )
+
+        return commit
 
     async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
         """推送一次运行的回答：处理过的信件里有用户在等的，且有话要告诉用户（做完了，或停下来问用户）；用户自己停止的
@@ -61,24 +73,15 @@ class Notifier:
 
         return commit
 
-    async def notify(self, agent_id: str | None, notification: Notification) -> None:
-        """agent_id 为 None 表示系统通知，不属于任何 agent。"""
+    async def notify(self, agent_id: str | None, title: str, body: str, session_id: str | None) -> None:
+        """agent_id 为 None 表示系统通知，不属于任何 agent；session_id 是点开通知打开的会话。"""
         async with self._db.transaction() as s:
-            await self.enqueue_in(s, agent_id, notification)
+            await self.enqueue_in(s, agent_id, Notification(title=title, body=body, session_id=session_id))
 
 
 async def unread_count_in(s: AsyncSession) -> int:
     query = select(func.count()).select_from(Notification).where(Notification.unread.is_(True))
     return (await s.execute(query)).scalar_one()
-
-
-async def mark_session_read_in(s: AsyncSession, session_id: str) -> None:
-    """打开会话即看过了指向它的通知。"""
-    await s.execute(
-        update(Notification)
-        .where(Notification.session_id == session_id, Notification.unread.is_(True))
-        .values(unread=False)
-    )
 
 
 class Notifications:
@@ -97,6 +100,15 @@ class Notifications:
             await s.execute(delete(Notification).where(Notification.session_id == event.session_id))
 
         return commit
+
+    async def mark_session_read(self, session_id: str) -> None:
+        """打开会话即看过了指向它的通知。"""
+        async with self._db.transaction() as s:
+            await s.execute(
+                update(Notification)
+                .where(Notification.session_id == session_id, Notification.unread.is_(True))
+                .values(unread=False)
+            )
 
     async def list(self, limit: int) -> list[Notification]:
         async with self._db.transaction() as s:

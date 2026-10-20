@@ -51,11 +51,11 @@ async def hook(c: C, name: str, request: Request, session_id: str | None = None)
     except UnicodeDecodeError as e:
         raise InvalidInput("event payload must be UTF-8 text") from e
     try:
-        session = await c.webhooks.deliver(trigger_id, text, session_id)
+        delivered = await c.webhooks.deliver(trigger_id, text, session_id)
     except PrecheckFailed as e:
         # 原因（可能含脚本的 stderr）只记在触发器上给用户看，不交给外部调用方
         raise HTTPException(status_code=502, detail="trigger precheck failed") from e
-    return HookOut(session_id=None if session is None else session.id)
+    return HookOut(session_id=delivered)
 
 
 @router.post("/triggers/{trigger_id}/webhook/token")

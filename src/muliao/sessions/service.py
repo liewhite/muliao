@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, NotFound, TransientError
-from muliao.notifications.service import mark_session_read_in
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskStatus
@@ -154,7 +153,6 @@ class SessionService:
     async def mark_read(self, session_id: str) -> None:
         async with self._db.transaction() as s:
             (await self._get(s, session_id)).unread = False
-            await mark_session_read_in(s, session_id)
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(

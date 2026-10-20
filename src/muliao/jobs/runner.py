@@ -38,11 +38,8 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash
 from muliao.platform.tasks import Clock, Commit, TaskQueue, no_commit
+from muliao.sessions.api import hold_in, hold_registered_in, post_check_in, session_in
 from muliao.sessions.events import PostEvent, SessionStopped
-from muliao.sessions.holds import get_in as get_hold_in
-from muliao.sessions.holds import hold_in
-from muliao.sessions.mailbox import post_check_in
-from muliao.sessions.tables import Session
 from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
@@ -175,8 +172,7 @@ class JobRunner:
         job: Job | None = None
         try:
             async with self._db.transaction() as s:
-                session = await s.get(Session, session_id)
-                if session is None:
+                if await session_in(s, session_id) is None:
                     raise NotFound(f"session {session_id!r} not found")
                 job = Job(
                     session_id=session_id,
@@ -255,7 +251,7 @@ class JobRunner:
     ) -> None:
         """没有监督者的任务行（启动失败、监督意外结束）的唯一收敛规则：会话上还没登记占用，说明任务没开始过，删掉
         这一行；登记过了，就记为被中断，交回会话并释放占用。"""
-        if await get_hold_in(s, job.session_id, job_source(job.id)) is None:
+        if not await hold_registered_in(s, job.session_id, job_source(job.id)):
             await s.delete(job)
             log.info("background job that never started discarded", extra={"job_id": job.id})
             return

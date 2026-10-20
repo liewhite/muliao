@@ -27,12 +27,17 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Clock, Commit, TaskQueue, no_commit
+from muliao.sessions.api import (
+    AgentAnswer,
+    Halted,
+    SessionInfo,
+    deliver_in,
+    latest_run,
+    pending_in,
+    post_check_in,
+    session_in,
+)
 from muliao.sessions.events import DelegationDispatched, Ending, SessionSettled, SessionStopped
-from muliao.sessions.halt import Halted
-from muliao.sessions.mailbox import latest_run, post_check_in
-from muliao.sessions.pending import AgentAnswer, pending_in
-from muliao.sessions.settlement import deliver_in
-from muliao.sessions.tables import Session
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +47,7 @@ def thread_source(child_id: str) -> str:
     return f"thread:{child_id}"
 
 
-def thread_name(child: Session) -> str:
+def thread_name(child: SessionInfo) -> str:
     if child.thread is None:
         raise RuntimeError(f"session {child.id} is not a thread")
     return child.thread
@@ -212,7 +217,7 @@ class Delegations:
                 if key in seen:
                     continue
                 seen.add(key)
-                if await s.get(Session, delegation.owner_session_id) is None:
+                if await session_in(s, delegation.owner_session_id) is None:
                     # 发起方已删除（它不忙时才能删，删前委派已结清或放弃；这里只会是交回途中的窗口）
                     continue
                 if delegation.call_id is not None and delegation.call_id in await pending_in(
@@ -220,7 +225,7 @@ class Delegations:
                 ):
                     # 发起方停在这次调用上：检查信件要等回答一起才交给模型，没有意义
                     continue
-                child = await s.get(Session, delegation.child_session_id)
+                child = await session_in(s, delegation.child_session_id)
                 if child is None:
                     # thread 已删除：它的结清正在交回途中
                     continue
@@ -245,7 +250,7 @@ async def _by_holder(s: AsyncSession, holder: str) -> Delegation | None:
     return await s.scalar(select(Delegation).where(Delegation.holder == holder))
 
 
-def check_text(child: Session, agent: AgentInfo, run: Task | None, now: datetime) -> str:
+def check_text(child: SessionInfo, agent: AgentInfo, run: Task | None, now: datetime) -> str:
     """run 为 None：委派信件还排着，thread 还没有运行。最近一次运行已经结束（委派却还没结清）：thread 停在它自己的
     挂起调用上，或在等它发起的后台任务、委派。"""
     name = thread_name(child)

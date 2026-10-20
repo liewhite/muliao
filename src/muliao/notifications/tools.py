@@ -3,7 +3,6 @@
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.notifications.service import Notifier
-from muliao.notifications.tables import Notification
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
@@ -18,14 +17,7 @@ def notify_toolset(notifier: Notifier) -> FunctionToolset[RunScope]:
             title: Short title.
             body: Notification text, a few sentences at most.
         """
-        await notifier.notify(
-            ctx.deps.agent_id,
-            Notification(
-                title=title,
-                body=body,
-                session_id=ctx.deps.session_id,
-            ),
-        )
+        await notifier.notify(ctx.deps.agent_id, title, body, ctx.deps.session_id)
         return "notification queued"
 
     return ts

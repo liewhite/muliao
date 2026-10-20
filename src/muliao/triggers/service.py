@@ -29,14 +29,12 @@ from sqlalchemy.orm import undefer
 from muliao.agents.api import active_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.notifications.service import Notifier
-from muliao.notifications.tables import Notification
+from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Clock, Commit, TaskQueue, session_lane
 from muliao.platform.tooling import Origin
-from muliao.sessions.conversation import Inbound, NewSession, receive
-from muliao.sessions.tables import Session
+from muliao.sessions.api import Inbound, NewSession, receive
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 from muliao.triggers.tables import Trigger
 
@@ -97,11 +95,11 @@ class TriggerService:
         kinds: Mapping[str, TriggerKind],
         tz: ZoneInfo,
         precheck: PrecheckRunner,
-        notifier: Notifier,
+        messaging: Messaging,
         clock: Clock = utcnow,
     ):
         self._precheck = precheck
-        self._notifier = notifier
+        self._messaging = messaging
         self._db = db
         self._queue = queue
         self.kinds = dict(kinds)
@@ -258,8 +256,8 @@ class TriggerService:
 
     async def _deliver_in(
         self, s: AsyncSession, trigger: Trigger, payload: str | None, session_id: str | None
-    ) -> Session:
-        """组装成事件交给会话领域（只由 fire 调用）。
+    ) -> str:
+        """组装成事件交给会话领域（只由 fire 调用），返回会话 id。
 
         payload 为事件内容（无则只有处理说明）；session_id 为空时新建会话，否则续写——只能续写本触发器发起的会话。
         """
@@ -285,12 +283,12 @@ class TriggerService:
             "trigger fired",
             extra={"trigger": trigger.name, "kind": trigger.kind, "session_id": received.session.id},
         )
-        return received.session
+        return received.session.id
 
     async def fire(
         self, trigger_id: int, payload: str | None = None, session_id: str | None = None
-    ) -> Session | None:
-        """所有触发方式的唯一出口。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
+    ) -> str | None:
+        """所有触发方式的唯一出口，返回交给的会话 id。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
         检查失败记在触发器上并抛出 PrecheckFailed（触发器保持启用：脚本的故障往往是暂时的）。"""
         async with self._db.transaction() as s:
             trigger = await self.get_in(s, trigger_id)
@@ -364,11 +362,13 @@ class TriggerService:
             "trigger precheck failed: %s", error, extra={"trigger": trigger.name, "alert": healthy_before}
         )
         if healthy_before:
-            await self._notifier.enqueue_in(
+            self._messaging.send_in(
                 s,
-                trigger.agent_id,
-                Notification(
-                    title=f"触发器 {trigger.name} 的前置检查出错", body=error[:500], session_id=None
+                Notify(
+                    agent_id=trigger.agent_id,
+                    title=f"触发器 {trigger.name} 的前置检查出错",
+                    body=error[:500],
+                    session_id=None,
                 ),
             )
 

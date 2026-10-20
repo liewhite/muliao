@@ -36,6 +36,11 @@ async def get_in(s: AsyncSession, session_id: str, holder: str) -> SessionHold |
     )
 
 
+async def registered_in(s: AsyncSession, session_id: str, holder: str) -> bool:
+    """这项工作在会话上登记过占用（行永久保留，随会话删除）。"""
+    return await get_in(s, session_id, holder) is not None
+
+
 async def release_in(s: AsyncSession, session_id: str, holder: str) -> HoldStatus:
     """把占用记为已释放，返回释放前的状态。已经被停止清掉（cleared）的不变：调用方不再投信。会话存在而占用从未登记
     过是 bug，直接报错。"""

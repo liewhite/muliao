@@ -162,8 +162,8 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(contain
     assert (note.body, note.session_id, note.unread) == ("Noted!", session.id, True)
     assert await container.notifications.unread_count() == 1
 
-    # 打开会话即看过了指向它的通知
-    await container.sessions.mark_read(session.id)
+    # 打开会话即看过了指向它的通知（界面调用的接口同时标记两边）
+    await container.notifications.mark_session_read(session.id)
     assert await container.notifications.unread_count() == 0
 
 

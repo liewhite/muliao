@@ -156,7 +156,7 @@ async def test_trigger_config_is_validated_by_its_kind(container, make_agent, ki
 async def test_manual_run_starts_a_session_with_just_the_prompt(container, make_agent):
     alpha = (await make_agent()).id
     trigger = await container.triggers.create(name="h", agent_id=alpha, kind="webhook", prompt="p", config={})
-    session = await container.triggers.fire(trigger.id)
+    session = await container.sessions.get(await container.triggers.fire(trigger.id))
     assert session.origin == Origin.TRIGGER and session.origin_ref == str(trigger.id)
 
 

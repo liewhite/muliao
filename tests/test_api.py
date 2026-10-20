@@ -167,3 +167,18 @@ async def test_list_limits_must_be_positive(client):
     await login(client)
     assert (await client.get("/api/sessions", params={"limit": -1})).status_code == 422
     assert (await client.get("/api/sessions", params={"offset": -1})).status_code == 422
+
+
+async def test_opening_a_session_marks_it_and_its_notifications_read(client, container, make_agent):
+    from tests.test_flow import drain, start
+
+    agent = await make_agent("alpha")
+    session = await start(container, agent.id, "hi")
+    await drain(container)
+    await login(client)
+    assert (await client.get("/api/notifications/unread")).json() == {"count": 1}
+
+    assert (await client.post(f"/api/sessions/{session.id}/read")).status_code == 204
+
+    assert (await client.get("/api/notifications/unread")).json() == {"count": 0}
+    assert not (await container.sessions.get(session.id)).unread

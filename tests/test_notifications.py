@@ -32,7 +32,7 @@ async def test_push_carries_the_unread_count_and_system_notifications_open_the_n
 
 async def test_deliver_counts_the_notification_itself_as_unread(container):
     pusher = RecordingPusher()
-    await container.notifier.notify(None, Notification(title="t", body="b", session_id=None))
+    await container.notifier.notify(None, "t", "b", None)
     [note] = await container.notifications.list(10)
     task = Task(kind=TaskKind.DELIVER, payload={"notification_id": note.id}, session_id=None)
 
@@ -54,7 +54,7 @@ async def test_deleting_a_session_deletes_the_notifications_pointing_to_it(conta
     alpha = (await make_agent("alpha")).id
     session = await start(container, alpha, "hi")
     await drain(container)
-    await container.notifier.notify(None, Notification(title="system", body="b", session_id=None))
+    await container.notifier.notify(None, "system", "b", None)
     assert await container.notifications.unread_count() == 2
 
     await container.sessions.delete(session.id)

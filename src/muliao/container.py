@@ -253,7 +253,7 @@ def build_container(
         {k.name: k for k in (schedule_kind, WebhookKind(settings.server.public_url))},
         tz,
         precheck,
-        notifier,
+        messaging,
     )
     schedules = ScheduleRunner(db, triggers, schedule_kind)
     webhooks = Webhooks(db, triggers)

@@ -87,6 +87,25 @@ class Received:
     mail: list[Mail]
 
 
+@dataclass(frozen=True)
+class SessionInfo:
+    """别的领域看到的会话（读模型）：ORM 行不出会话领域。"""
+
+    id: str
+    agent_id: str
+    title: str
+    # 委派开出的 thread：它在父会话里的名字
+    thread: str | None
+
+
+async def session_in(s: AsyncSession, session_id: str) -> SessionInfo | None:
+    """会话（已删除为 None）。会话只会从存在变为删除，在调用方的事务里读没有先查后写的竞态。"""
+    session = await s.get(Session, session_id)
+    if session is None:
+        return None
+    return SessionInfo(id=session.id, agent_id=session.agent_id, title=session.title, thread=session.thread)
+
+
 def _sender_of(session: Session) -> tuple[Origin, str | None]:
     """会话的发起方。委派会话的发起方就是它的父会话（存在 parent_session_id，不另存副本）。"""
     if session.origin == Origin.DELEGATION:
@@ -302,6 +321,17 @@ class ThreadState:
     text: str
 
 
+@dataclass(frozen=True)
+class ThreadView:
+    """父会话开出的一个 thread（list_threads 看到的）。"""
+
+    session_id: str
+    thread: str
+    agent_id: str
+    private: bool
+    state: ThreadState
+
+
 def delegation_holder(owner_id: str, key: str) -> str:
     """委派在发起方会话上的占用者，也是 thread 信件的关联 id 与委派行的主键（sessions.holds）。"""
     return f"delegation:{owner_id}:{key}"
@@ -419,6 +449,24 @@ class Threads:
         )
         return child
 
+    async def thread_id_in(self, s: AsyncSession, parent_id: str, thread: str) -> str | None:
+        """父会话里名为 thread 的子会话 id；没有这个 thread 时为 None。"""
+        child = await self.find(s, parent_id, thread)
+        return None if child is None else child.id
+
+    async def list_in(self, s: AsyncSession, parent_id: str) -> list[ThreadView]:
+        """父会话开出的 thread（含私有的），按创建顺序，带各自的状态。"""
+        return [
+            ThreadView(
+                session_id=child.id,
+                thread=_thread_of(child),
+                agent_id=child.agent_id,
+                private=child.private,
+                state=await self.state(s, child),
+            )
+            for child in await threads_of(s, parent_id)
+        ]
+
     async def state(self, s: AsyncSession, child: Session) -> ThreadState:
         """thread 的状态：看最近一次运行；完成时给出会话最近的回答。"""
         run = await latest_run(s, child.id)
@@ -431,3 +479,9 @@ class Threads:
                 return ThreadState("failed", failure_of(run))
             case _:
                 return ThreadState("running", "")
+
+
+def _thread_of(child: Session) -> str:
+    if child.thread is None:
+        raise RuntimeError(f"session {child.id} is a child session without a thread name")
+    return child.thread

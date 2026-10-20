@@ -19,7 +19,6 @@ from sqlalchemy import select
 
 from muliao.errors import InvalidInput, Unauthorized
 from muliao.platform.db import Database
-from muliao.sessions.tables import Session
 from muliao.triggers.service import TriggerService
 from muliao.triggers.tables import Trigger
 
@@ -73,7 +72,7 @@ class Webhooks:
                 raise Unauthorized("unknown webhook or wrong token")
             return trigger.id
 
-    async def deliver(self, trigger_id: int, payload: str, session_id: str | None) -> Session | None:
+    async def deliver(self, trigger_id: int, payload: str, session_id: str | None) -> str | None:
         """None 表示前置检查判定这次不触发。"""
         if not payload.strip():
             raise InvalidInput("event payload must not be empty")

@@ -236,7 +236,9 @@ async def compact(c: C, session_id: str) -> CompactOut:
 
 @router.post("/sessions/{session_id}/read", status_code=204)
 async def mark_read(c: C, session_id: str) -> None:
+    # 两个领域各自的已读，各自幂等：中途失败时请求报错，前端重试即可
     await c.sessions.mark_read(session_id)
+    await c.notifications.mark_session_read(session_id)
 
 
 @router.delete("/sessions/{session_id}", status_code=204)

@@ -6,7 +6,7 @@ from muliao.errors import NotFound
 from muliao.platform.tables import TaskKind
 from muliao.triggers.precheck import Precheck, PrecheckFailed, decide
 from tests.conftest import login
-from tests.test_flow import mail_of, tasks_of
+from tests.test_flow import deliver, mail_of, tasks_of
 from tests.test_triggers import _make_due
 from tests.test_webhooks import _bearer, _create
 
@@ -44,8 +44,10 @@ async def _schedule(container, agent_id: str, precheck: Precheck):
 
 
 async def _tick(container, trigger_id: int) -> None:
+    """到点触发一次；告警是发给通知领域的命令，随后投递。"""
     await _make_due(container, trigger_id)
     await container.schedules.fire_due()
+    await deliver(container)
 
 
 async def test_schedule_runs_the_agent_only_when_the_precheck_has_output(container, make_agent):

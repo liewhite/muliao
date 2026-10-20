@@ -8,7 +8,6 @@ from pydantic import BaseModel
 from muliao.agent_runtime.mcp import McpServer, McpTransport, mcp_config
 from muliao.agents.resources import USER
 from muliao.api.deps import C
-from muliao.notifications.tables import Notification
 from muliao.vault.service import SecretInfo
 
 router = APIRouter()
@@ -163,11 +162,4 @@ async def subscribe(c: C, body: PushSubscriptionIn) -> None:
 
 @router.post("/push/test", status_code=202, response_class=Response)
 async def test_push(c: C) -> None:
-    await c.notifier.notify(
-        None,
-        Notification(
-            title="Muliao",
-            body="推送通知已开启。",
-            session_id=None,
-        ),
-    )
+    await c.notifier.notify(None, "Muliao", "推送通知已开启。", None)
