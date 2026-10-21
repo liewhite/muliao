@@ -26,7 +26,7 @@ const TABS = [
   { to: '/', label: '会话', Icon: MessageSquare },
   { to: '/notifications', label: '通知', Icon: Bell },
   { to: '/agents', label: 'Agents', Icon: Bot },
-  { to: '/triggers', label: '定时任务', Icon: Zap },
+  { to: '/triggers', label: '触发', Icon: Zap },
   { to: '/settings', label: '设置', Icon: SettingsIcon },
 ] as const
 
