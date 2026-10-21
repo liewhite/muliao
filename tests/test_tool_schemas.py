@@ -14,6 +14,9 @@ NULL_MEANS_SOMETHING = {
     ("trigger_update", "config"): "None = 不改",
     ("trigger_create", "precheck"): "None = 不设前置检查（Precheck 没有「空检查」可以代替）",
     ("trigger_update", "precheck"): "None = 不改",
+    # 枚举以 $ref 出现，被当作对象
+    ("issue_update", "status"): "None = 不改",
+    ("issue_update", "priority"): "None = 不改",
 }
 
 

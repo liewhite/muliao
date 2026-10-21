@@ -42,7 +42,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
 
     @ts.tool_plain
     async def issue_list(
-        statuses: list[IssueStatus] | None = None, assignee: str | None = None
+        statuses: tuple[IssueStatus, ...] = (), assignee: str | None = None
     ) -> list[IssueSummary]:
         """List issues on the muliao issue board, most recently updated first.
 
@@ -52,7 +52,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         """
         names = {a.id: a.name for a in await agents.list()} | {USER: USER}
         found = await issues.list(
-            statuses=statuses, assignee=None if assignee is None else await assignee_id(assignee)
+            statuses=list(statuses), assignee=None if assignee is None else await assignee_id(assignee)
         )
         return [await summary(i, names) for i in found]
 
