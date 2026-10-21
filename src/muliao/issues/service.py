@@ -495,13 +495,12 @@ class IssueService:
         )
         if agent is None:
             return None
-        # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线（flush 让新动态有 created_at）
-        await s.flush()
-        news = self._view_with(issue, happened, links, await agent_names_in(s))
+        # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线
+        letter = self._view_with(issue, happened, links, await agent_names_in(s))
         inbound = Inbound(
             origin=Origin.ISSUE,
             origin_ref=str(issue.id),
-            content=delivery_message(news),
+            content=delivery_message(letter),
             session=SessionKey(agent_id=agent, title=f"#{issue.id} {issue.title}"[:200]),
             awaited=False,
         )
