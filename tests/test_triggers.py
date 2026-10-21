@@ -545,7 +545,7 @@ def rejecting_http_server():
 
 
 async def test_a_failing_mcp_server_keeps_its_secrets_out_of_task_errors_and_logs(
-    container, make_agent, models, rejecting_http_server, caplog
+    container, make_agent, models, rejecting_http_server, caplog, monkeypatch
 ):
     import logging
 
@@ -557,6 +557,9 @@ async def test_a_failing_mcp_server_keeps_its_secrets_out_of_task_errors_and_log
 
     # 与服务一样：INFO 级别，HTTP 客户端的逐请求日志关掉（它们带完整 URL）
     caplog.set_level(logging.INFO)
+    for name in ("httpx", "httpx2"):
+        # 测试结束后恢复原级别
+        monkeypatch.setattr(logging.getLogger(name), "level", logging.getLogger(name).level)
     quiet_http_clients()
     alpha = (await make_agent("alpha", model="m")).id
     await container.vault.set(None, "MCP_TOKEN", "tok-in-url-123")

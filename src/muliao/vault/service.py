@@ -128,10 +128,3 @@ class Vault:
             where = "public secrets" if agent_id is None else "private or public secrets"
             raise NotFound(f"secret(s) {missing} not found in {where}")
         return {k: self._fernet.decrypt(rows[k].ciphertext).decode() for k in keys}
-
-    async def render(self, template: str, agent_id: str | None) -> str:
-        """把字符串中的 ${vault:KEY} 按 agent_id 的视角替换为明文；引用不可见的 key 抛 NotFound。"""
-        keys = list(dict.fromkeys(VAULT_REF.findall(template)))
-        if not keys:
-            return template
-        return fill(template, await self.resolve_many(agent_id, keys))

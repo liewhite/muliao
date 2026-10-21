@@ -121,10 +121,12 @@ async def test_vault_renders_references_and_fails_on_missing_key(container):
     vault = container.vault
     await vault.set(None, "TOKEN", "s3cret", "api token")
 
-    assert await vault.render("Bearer ${vault:TOKEN}", None) == "Bearer s3cret"
+    from muliao.vault.api import fill
+
+    assert fill("Bearer ${vault:TOKEN}", await vault.resolve_many(None, ["TOKEN"])) == "Bearer s3cret"
     assert [(s.key, shadowed) for s, shadowed in await vault.view(None)] == [("TOKEN", False)]
     with pytest.raises(NotFound):
-        await vault.render("${vault:MISSING}", None)
+        await vault.resolve_many(None, ["MISSING"])
     with pytest.raises(InvalidInput):
         await vault.set(None, "bad-key", "v")
 
@@ -139,7 +141,7 @@ async def test_private_secret_shadows_public_and_is_invisible_to_others(containe
     assert await vault.resolve_many(alpha, ["TOKEN"]) == {"TOKEN": "alpha-only"}
     assert await vault.resolve_many(beta, ["TOKEN"]) == {"TOKEN": "public"}
     # 公共视角（公共 MCP server 的配置）只看公共 secret
-    assert await vault.render("${vault:TOKEN}", None) == "public"
+    assert await vault.resolve_many(None, ["TOKEN"]) == {"TOKEN": "public"}
     with pytest.raises(NotFound):
         await vault.resolve_many(beta, ["ALPHA_KEY"])
     assert [(s.key, s.owner) for s in await vault.visible_to(alpha)] == [
