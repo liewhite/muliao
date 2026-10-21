@@ -73,11 +73,12 @@ api_key = ""
 
 # 可选：语音输入（界面上的麦克风按钮）。用支持音频输入的 Chat Completions 模型把语音转成文字
 # [transcription]
-# type = "openai"
-# base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-# model = "qwen3.8-omni-flash"
+# type = "dashscope"              # 阿里云百炼录音文件识别
+# model = "qwen-audio-3.0-asr-flash"
 # api_key = ""
 # max_bytes = 7340032             # 一段录音的上限（字节）
+# vocabulary = { Grafana = 5 }    # 可选：即时热词，权重 1–5（50 为超级热词）
+# language_hints = ["zh", "en"]   # 可选：语种提示，为空时自动识别
 
 # 可选：运行参数，以下为默认值
 # [runtime]

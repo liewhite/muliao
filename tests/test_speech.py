@@ -1,4 +1,4 @@
-"""语音输入：OpenAI Chat Completions 音频输入的实现按协议收发与归类错误；接口只在配置了 [transcription] 时可用。"""
+"""语音输入：百炼语音识别的实现按协议收发与归类错误；接口只在配置了 [transcription] 时可用。"""
 
 import base64
 import json
@@ -12,56 +12,65 @@ from muliao.config import TranscriptionConfig
 from muliao.container import build_container
 from muliao.errors import InvalidInput, UpstreamFailed
 from muliao.platform.db import migrate
-from muliao.speech.transcriber import TRANSCRIBE_INSTRUCTIONS, OpenAIChatTranscriber, audio_format
+from muliao.speech.transcriber import DashScopeTranscriber, audio_type
 from tests.conftest import login
 
 
-def _sse(*chunks: object) -> bytes:
-    lines = [f"data: {json.dumps(c, ensure_ascii=False)}\n\n" for c in chunks]
-    return ("".join(lines) + "data: [DONE]\n\n").encode()
-
-
-def _delta(text: str) -> dict:
-    return {"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]}
-
-
-def _transcriber(handler, max_bytes: int = 1000) -> OpenAIChatTranscriber:
+def _transcriber(handler, max_bytes: int = 1000, **kw) -> DashScopeTranscriber:
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    return OpenAIChatTranscriber(
-        "sk-test", "https://dash.example/compatible-mode/v1/", "omni", max_bytes, client
+    return DashScopeTranscriber(
+        "sk-test", "asr", max_bytes, base_url="https://dash.example/api/v1/", client=client, **kw
     )
 
 
-async def test_transcribe_streams_audio_as_input_audio_and_joins_the_text_deltas():
+def _result(text: str) -> httpx.Response:
+    return httpx.Response(200, json={"output": {"text": text}, "usage": {"duration": 3}, "request_id": "r"})
+
+
+async def test_transcribe_posts_the_audio_inline_with_its_format_and_returns_the_text():
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        usage = {"choices": [], "usage": {"prompt_tokens": 140, "completion_tokens": 22}}
-        return httpx.Response(
-            200, content=_sse(_delta(""), _delta("帮我看一下 pull"), _delta(" request 的 CI。\n"), usage)
-        )
+        return _result("帮我看一下 pull request 的 CI。 ")
 
-    text = await _transcriber(handler).transcribe(b"RIFFwav", "audio/webm;codecs=opus")
+    t = _transcriber(handler, vocabulary={"Grafana": 5}, language_hints=["zh", "en"])
+    text = await t.transcribe(b"opus", "audio/webm;codecs=opus")
 
     assert text == "帮我看一下 pull request 的 CI。"
-    assert str(seen[0].url) == "https://dash.example/compatible-mode/v1/chat/completions"
+    assert str(seen[0].url) == "https://dash.example/api/v1/services/aigc/multimodal-generation/generation"
     assert seen[0].headers["authorization"] == "Bearer sk-test"
     body = json.loads(seen[0].content)
-    assert body["model"] == "omni" and body["stream"] is True
-    assert body["messages"][0] == {"role": "system", "content": TRANSCRIBE_INSTRUCTIONS}
-    [part] = body["messages"][1]["content"]
-    assert part == {
-        "type": "input_audio",
-        "input_audio": {"data": "data:;base64," + base64.b64encode(b"RIFFwav").decode(), "format": "webm"},
+    assert body["model"] == "asr"
+    assert body["parameters"] == {
+        "format": "webm",
+        "vocabulary": {"Grafana": 5},
+        "language_hints": ["zh", "en"],
     }
+    [message] = body["input"]["messages"]
+    assert message["content"] == [
+        {
+            "type": "input_audio",
+            "input_audio": {"data": "data:audio/webm;base64," + base64.b64encode(b"opus").decode()},
+        }
+    ]
+
+
+async def test_optional_parameters_are_left_out_when_not_configured():
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _result("hi")
+
+    await _transcriber(handler).transcribe(b"x", "audio/mp4")
+    assert seen[0]["parameters"] == {"format": "mp4"}
 
 
 async def test_silence_transcribes_to_empty_text():
-    text = await _transcriber(lambda _r: httpx.Response(200, content=_sse(_delta("  ")))).transcribe(
-        b"x", "audio/mp4"
-    )
-    assert text == ""
+    assert await _transcriber(lambda _r: _result("  ")).transcribe(b"x", "audio/mp4") == ""
+    no_text = httpx.Response(200, json={"output": {}, "request_id": "r"})
+    assert await _transcriber(lambda _r: no_text).transcribe(b"x", "audio/mp4") == ""
 
 
 @pytest.mark.parametrize(
@@ -69,7 +78,7 @@ async def test_silence_transcribes_to_empty_text():
     [("audio/webm;codecs=opus", "webm"), ("audio/mp4", "mp4"), ("Audio/WAV", "wav"), ("audio/mpeg", "mp3")],
 )
 def test_browser_recording_types_map_to_audio_formats(media_type, fmt):
-    assert audio_format(media_type) == fmt
+    assert audio_type(media_type)[1] == fmt
 
 
 async def test_non_audio_type_and_empty_audio_are_rejected_before_calling_the_service():
@@ -84,16 +93,10 @@ async def test_non_audio_type_and_empty_audio_are_rejected_before_calling_the_se
 
 async def test_service_errors_surface_as_upstream_failed_with_the_reason():
     def http_error(_r: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, json={"error": {"message": "Incorrect API key provided"}})
+        return httpx.Response(400, json={"code": "UNSUPPORTED_FORMAT", "message": "format is empty"})
 
-    with pytest.raises(UpstreamFailed, match="HTTP 401.*Incorrect API key"):
+    with pytest.raises(UpstreamFailed, match="HTTP 400.*format is empty"):
         await _transcriber(http_error).transcribe(b"x", "audio/webm")
-
-    def stream_error(_r: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=_sse({"error": {"message": "audio too long"}}))
-
-    with pytest.raises(UpstreamFailed, match="audio too long"):
-        await _transcriber(stream_error).transcribe(b"x", "audio/webm")
 
     def unreachable(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
@@ -102,13 +105,13 @@ async def test_service_errors_surface_as_upstream_failed_with_the_reason():
         await _transcriber(unreachable).transcribe(b"x", "audio/webm")
 
 
-def test_config_requires_model_and_base_url():
+def test_config_requires_type_model_and_key():
+    with pytest.raises(ValidationError):
+        TranscriptionConfig.model_validate({"type": "dashscope", "api_key": "k"})
     with pytest.raises(ValidationError):
         TranscriptionConfig.model_validate({"type": "openai", "api_key": "k", "model": "m"})
-    cfg = TranscriptionConfig.model_validate(
-        {"type": "openai", "api_key": "k", "model": "m", "base_url": "https://x"}
-    )
-    assert cfg.max_bytes > 0
+    cfg = TranscriptionConfig.model_validate({"type": "dashscope", "api_key": "k", "model": "m"})
+    assert cfg.max_bytes > 0 and cfg.base_url is None and cfg.vocabulary == {}
 
 
 async def test_without_config_features_say_no_transcription_and_the_endpoint_is_404(client):
@@ -121,7 +124,7 @@ async def test_without_config_features_say_no_transcription_and_the_endpoint_is_
 @pytest.fixture
 async def speech_client(settings, models, tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=_sse(_delta("deploy 到 production")))
+        return _result("deploy 到 production")
 
     c = build_container(
         settings,
