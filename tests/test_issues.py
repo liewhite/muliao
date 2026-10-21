@@ -130,6 +130,26 @@ async def test_an_agent_assigning_itself_works_on_it_in_its_current_session(cont
     assert (await container.issues.get(issue.id)).issue.sessions == {alpha: session.id}
 
 
+async def test_reassigning_itself_from_the_issue_session_keeps_that_session(container, make_agent):
+    # #18 回归：agent 在 issue 会话里把交给用户的 issue 拿回来，登记的必须是会话 id（曾误存 agent id），
+    # 之后用户评论续写同一个会话，不另开
+    alpha = (await make_agent()).id
+    issue = await container.issues.create(
+        None, owner=alpha, title="t", status=IssueStatus.TODO, assignee=alpha
+    )
+    await drain(container)
+    [session] = await _issue_sessions(container)
+    await container.issues.update(alpha, issue.id, session_id=session.id, status=REVIEW, assignee=USER)
+    await container.issues.update(None, issue.id, status=PROGRESS)
+    await container.issues.update(alpha, issue.id, session_id=session.id, assignee=alpha)
+    assert (await container.issues.get(issue.id)).issue.sessions == {alpha: session.id}
+
+    await container.issues.comment(None, issue.id, "where is it?")
+    await deliver(container)
+    assert [s.id for s in await _issue_sessions(container)] == [session.id]
+    assert "where is it?" in (await _mail(container, session.id))[-1]
+
+
 async def test_the_assignee_acting_from_another_session_does_not_wake_itself(container, make_agent):
     from tests.test_flow import start
 
