@@ -14,6 +14,7 @@ from muliao.sessions.api import (
     COMPACTION_TASK,
     RUN_TASK,
     CallResult,
+    DerivedTitle,
     Inbound,
     Item,
     LiveRun,
@@ -217,7 +218,7 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
             origin=Origin.USER,
             origin_ref=None,
             content=body.prompt,
-            session=NewSession(agent_id=body.agent_id, title=None),
+            session=NewSession(agent_id=body.agent_id, title=DerivedTitle.FROM_MESSAGE),
             awaited=True,
             attachments=tuple(body.attachments),
         )

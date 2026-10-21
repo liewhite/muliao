@@ -9,13 +9,14 @@
 import logging
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from enum import Enum
 
 from pydantic_ai.messages import ModelMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import active_agent_in
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
-from muliao.files.api import load_metas
+from muliao.files.api import FileMeta, load_metas
 from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
@@ -41,13 +42,19 @@ def default_title(text: str) -> str:
     return first if len(first) <= _TITLE_MAX else first[: _TITLE_MAX - 1] + "…"
 
 
+class DerivedTitle(Enum):
+    """新会话的标题不由发送方给出，而由 receive 按这封来信推导（default_title：文字的第一行，只有附件时用文件名）。
+    只有同步投信（receive）接受它：用户在界面上新建会话时没有标题；别的入口（定向命令 Receive、thread）必须给出。"""
+
+    FROM_MESSAGE = "from_message"
+
+
 @dataclass(frozen=True)
 class NewSession:
     """事件要求新建会话时的会话描述。"""
 
     agent_id: str
-    # None：由 receive 按这封来信推导（default_title：文字的第一行，只有附件时用文件名）；别的入口必须给出
-    title: str | None
+    title: str | DerivedTitle
     # 委派产生的 thread：父会话、thread 名与种类
     parent_session_id: str | None = None
     thread: str | None = None
@@ -128,8 +135,8 @@ async def create_session(
     s: AsyncSession, *, origin: Origin, origin_ref: str | None, spec: NewSession
 ) -> Session:
     """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
-    if spec.title is None:
-        raise ValueError(f"a new session needs a title by now (receive derives a missing one), got {spec}")
+    if not isinstance(spec.title, str):
+        raise ValueError(f"a new session needs a title by now (receive derives one), got {spec}")
     await ensure_agent_active_in(s, spec.agent_id)
     is_thread = origin == Origin.DELEGATION
     if (
@@ -212,35 +219,35 @@ async def _resolve_answers(
     return resolved
 
 
-async def _existing_target_in(s: AsyncSession, inbound: Inbound) -> Session | None:
-    """来信的校验规则（只读）：内容不为空、附件存在、目标会话存在且发送方可以续写、agent 还可用。返回要续写的会话，
-    新建时为 None。"""
+async def _target_in(s: AsyncSession, inbound: Inbound) -> tuple[Session | None, list[FileMeta]]:
+    """来信的校验规则（只读）：内容不为空、附件存在、目标会话存在且发送方可以续写、agent 还可用。返回要续写的会话
+    （新建时为 None）与附件的元数据（推导标题时用，不再读一遍）。"""
     if not inbound.content.strip() and not inbound.attachments and not inbound.answers:
         raise InvalidInput("message must not be empty")
-    await load_metas(s, inbound.attachments)
+    attachments = await load_metas(s, inbound.attachments)
     if isinstance(inbound.session, NewSession):
         await ensure_agent_active_in(s, inbound.session.agent_id)
-        return None
+        return None, attachments
     if isinstance(inbound.session, SessionKey):
         key = inbound.session
         session = await keyed_session_in(s, inbound.origin, _key_ref(inbound), key.agent_id)
         if session is None:
             await ensure_agent_active_in(s, key.agent_id)
-            return None
+            return None, attachments
     else:
         session = await s.get(Session, inbound.session)
         if session is None:
             raise NotFound(f"session {inbound.session!r} not found")
     _check_may_continue(session, inbound.origin, inbound.origin_ref)
     await ensure_agent_active_in(s, session.agent_id)
-    return session
+    return session, attachments
 
 
 async def check_receivable_in(s: AsyncSession, inbound: Inbound) -> None:
     """在发送方的事务里校验一封来信（不写入），之后经定向命令 Receive 投递。校验读的都是只会单向变化或不变的事实
     （会话与 agent 是否还在、会话的发起方、文件），投递时只剩「期间被删除」这一种契约内的变化（docs/architecture.md
     2.2）。"""
-    await _existing_target_in(s, inbound)
+    await _target_in(s, inbound)
 
 
 def receive_lane_of(command: Receive) -> str:
@@ -273,7 +280,7 @@ def _receive_command(inbound: Inbound) -> Receive:
             raise ValueError(
                 f"a Receive command creates a top-level session with a preassigned id, got {target}"
             )
-        if target.title is None:
+        if not isinstance(target.title, str):
             raise ValueError(
                 f"a Receive command creates a session with a title given by its sender, got {target}"
             )
@@ -318,24 +325,24 @@ def inbound_of(command: Receive) -> Inbound:
     )
 
 
-async def _derived_title(s: AsyncSession, inbound: Inbound) -> str:
-    """没给标题的新会话：文字的第一行；只发了文件时用文件名。"""
+def _derived_title(inbound: Inbound, attachments: Sequence[FileMeta]) -> str:
+    """DerivedTitle 的新会话：文字的第一行；只发了文件时用文件名。"""
     if inbound.content.strip():
         return default_title(inbound.content)
-    return default_title(", ".join(m.name for m in await load_metas(s, inbound.attachments)))
+    return default_title(", ".join(m.name for m in attachments))
 
 
 async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Received:
     """所有来信的唯一入口：确定会话（继续或新建），把它投进会话的信箱。"""
-    session = await _existing_target_in(s, inbound)
+    session, attachments = await _target_in(s, inbound)
     if session is None:
         target = inbound.session
         if isinstance(target, str):
             raise RuntimeError(f"inbound for session {target!r} resolved to no session")
         if isinstance(target, SessionKey):
             spec = NewSession(agent_id=target.agent_id, title=target.title)
-        elif target.title is None:
-            spec = replace(target, title=await _derived_title(s, inbound))
+        elif isinstance(target.title, DerivedTitle):
+            spec = replace(target, title=_derived_title(inbound, attachments))
         else:
             spec = target
         session = await create_session(s, origin=inbound.origin, origin_ref=inbound.origin_ref, spec=spec)

@@ -13,7 +13,7 @@
 from muliao.sessions.activity import SessionActivity, WorkState
 from muliao.sessions.agent_history import AgentHistory
 from muliao.sessions.holds import registered_in as hold_registered_in
-from muliao.sessions.inbound import Inbound, NewSession, SessionKey, receive_command_in
+from muliao.sessions.inbound import DerivedTitle, Inbound, NewSession, SessionKey, receive_command_in
 from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
@@ -44,6 +44,7 @@ __all__ = [
     "SessionService",
     "Item",
     "AgentHistory",
+    "DerivedTitle",
     "Inbound",
     "NewSession",
     "SessionInfo",
