@@ -111,16 +111,11 @@ nothing you do is remembered: your final answer is returned to that agent as a t
 and self-contained. Do not ask questions back; if something is missing, say what and do what you can.
 
 ## Runtime context
-- Current local time: {now} ({tz})
 - Temporary workspace (base for relative paths and shell cwd, deleted when you finish): {workspace}
 - Secrets are referenced by key as the agent you work for would (`run_shell(secrets=[KEY])`)."""
 
 
-def build_temp_instructions(*, parent_name: str, workspace: Path, now_local: datetime, extra: str) -> str:
-    base = TEMP_AGENT_INSTRUCTIONS.format(
-        parent_name=parent_name,
-        now=now_local.isoformat(timespec="minutes"),
-        tz=now_local.tzname(),
-        workspace=workspace,
-    )
+def build_temp_instructions(*, parent_name: str, workspace: Path, extra: str) -> str:
+    """临时 agent 的指令。同样只放稳定内容：当前时间随任务一起交给它（AgentRuntime.run_temp）。"""
+    base = TEMP_AGENT_INSTRUCTIONS.format(parent_name=parent_name, workspace=workspace)
     return f"{extra.strip()}\n\n{base}" if extra.strip() else base

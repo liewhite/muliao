@@ -172,7 +172,7 @@ class AgentRuntime:
 
     def run_context(self, audience: Audience | None) -> str:
         """这次运行开头交给模型的运行上下文（当前时间等，见 instructions.build_run_context）。会话的运行由
-        sessions.steps 挂到本次新增的第一条请求上；没有历史的运行（反思）直接放在 prompt 前面。"""
+        sessions.steps 挂到本次新增的第一条请求上；没有历史的运行（反思、临时 agent）直接放在 prompt 前面。"""
         return build_run_context(now_local=self._clock().astimezone(self._tz), audience=audience)
 
     async def run_steps(
@@ -291,14 +291,12 @@ class AgentRuntime:
         result = await self._execute(
             model=model,
             instructions=build_temp_instructions(
-                parent_name=parent.name,
-                workspace=workspace,
-                now_local=self._clock().astimezone(self._tz),
-                extra=instructions,
+                parent_name=parent.name, workspace=workspace, extra=instructions
             ),
             toolsets=self._toolsets(profile),
+            # 临时 agent 没有听众（回答交回调用方那次工具调用），运行上下文只有当前时间
+            prompt=f"{self.run_context(None)}\n\n{task}",
             scope=scope,
-            prompt=task,
             history=(),
             usage_limits=UsageLimits(request_limit=request_limit),
             kind=RunKind.TEMP_AGENT,
