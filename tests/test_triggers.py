@@ -208,8 +208,33 @@ async def test_a_trigger_corrupted_after_being_listed_is_disabled_when_it_fires(
     await schedules._fire_one(trigger.id, datetime.now().astimezone())
 
     trigger = await triggers.get_by_name("bad")
-    assert not trigger.enabled and trigger.disabled_reason.startswith("CorruptState: ")
+    assert not trigger.enabled and trigger.disabled_reason.startswith(
+        f"CorruptState: trigger {trigger.id} (bad)"
+    )
     assert trigger.last_session_id is None
+
+
+async def test_corrupt_state_outside_the_trigger_itself_is_not_blamed_on_it(
+    container, make_agent, monkeypatch
+):
+    """触发链路上别处的数据坏了（不是这个触发器自己存的）按程序错误上抛，不停用触发器。"""
+    from muliao.errors import CorruptState
+
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    trigger = await triggers.create(
+        name="ok", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
+    )
+    await _make_due(container, trigger.id)
+
+    async def broken_fire(_trigger_id):  # noqa: ANN001, ANN202
+        raise CorruptState("agent resources missing")
+
+    monkeypatch.setattr(triggers, "fire", broken_fire)
+    with pytest.raises(ExceptionGroup) as raised:
+        await schedules.fire_due()
+    assert raised.group_contains(CorruptState, match="agent resources missing")
+    assert (await triggers.get_by_name("ok")).enabled
 
 
 @pytest.mark.parametrize(
