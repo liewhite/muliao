@@ -38,6 +38,10 @@ class ActivityKind(StrEnum):
     OWNER = "owner"
     TITLE = "title"
     DESCRIPTION = "description"
+    # 依赖（上游）列表被修改：change 为 {"from": [issue id...], "to": [issue id...]}
+    DEPENDS_ON = "depends_on"
+    # 一个上游完成（done / cancelled）：change 为 {"issue": 上游 id, "from": 原状态, "to": 新状态}
+    DEPENDENCY = "dependency"
 
 
 class Issue(Base):
@@ -84,3 +88,14 @@ class IssueActivity(Base):
     change: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     __table_args__ = ({"sqlite_autoincrement": True},)
+
+
+class IssueDependency(Base):
+    """issue 之间的依赖（有向无环图）：issue_id 依赖 depends_on_id（上游）。任一端被删除，这条边随之删除。"""
+
+    __tablename__ = "issue_dependencies"
+
+    issue_id: Mapped[int] = mapped_column(ForeignKey("issues.id", ondelete="CASCADE"), primary_key=True)
+    depends_on_id: Mapped[int] = mapped_column(
+        ForeignKey("issues.id", ondelete="CASCADE"), primary_key=True, index=True
+    )

@@ -306,7 +306,7 @@ def build_container(
     # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
     due_triggers = DueRunner(db, triggers, [ScheduleDue(triggers, schedule_kind), OnceDue(triggers)])
     webhooks = Webhooks(db, triggers)
-    issues = IssueService(db, agents, messaging, tz, lambda task_id: worker.run_now(task_id), activity)
+    issues = IssueService(db, messaging, tz, lambda task_id: worker.run_now(task_id), activity)
     push_subscriptions = PushSubscriptions(db)
     vapid = VapidKeys(settings.vapid_key_path)
 

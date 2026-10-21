@@ -4,9 +4,9 @@ import pytest
 from sqlalchemy import select
 
 from muliao.agents.events import AgentDeleting
-from muliao.errors import NotFound
+from muliao.errors import InvalidInput, NotFound
 from muliao.issues.api import USER, ActivityKind, IssueStatus, WorkState
-from muliao.issues.rules import Snapshot, recipient, stalled
+from muliao.issues.rules import Snapshot, cycle_through, recipient, stalled
 from muliao.platform.messaging import Delivery
 from muliao.platform.tooling import Origin
 from muliao.sessions.tables import Mail, Session
@@ -24,14 +24,14 @@ TODO, BACKLOG, PROGRESS, REVIEW, DONE = (
 @pytest.mark.parametrize(
     ("issue", "from_its_session", "to"),
     [
-        (Snapshot(TODO, "a"), None, "a"),
-        (Snapshot(PROGRESS, "a"), "b", "a"),
-        (Snapshot(PROGRESS, "a"), "a", None),
-        (Snapshot(BACKLOG, "a"), None, None),
-        (Snapshot(REVIEW, "a"), None, None),
-        (Snapshot(DONE, "a"), None, None),
-        (Snapshot(TODO, USER), None, None),
-        (Snapshot(TODO, None), None, None),
+        (Snapshot(TODO, "a", ()), None, "a"),
+        (Snapshot(PROGRESS, "a", ()), "b", "a"),
+        (Snapshot(PROGRESS, "a", ()), "a", None),
+        (Snapshot(BACKLOG, "a", ()), None, None),
+        (Snapshot(REVIEW, "a", ()), None, None),
+        (Snapshot(DONE, "a", ()), None, None),
+        (Snapshot(TODO, USER, ()), None, None),
+        (Snapshot(TODO, None, ()), None, None),
     ],
     ids=[
         "active",
@@ -49,13 +49,13 @@ def test_recipient_rules(issue, from_its_session, to):
 
 
 def test_stalled_means_an_active_agent_issue_nobody_works_on():
-    assert stalled(Snapshot(TODO, "a"), None)
-    assert stalled(Snapshot(PROGRESS, "a"), WorkState.IDLE)
-    assert not stalled(Snapshot(PROGRESS, "a"), WorkState.RUNNING)
-    assert not stalled(Snapshot(TODO, "a"), WorkState.WAITING)
-    assert not stalled(Snapshot(BACKLOG, "a"), WorkState.IDLE)
-    assert not stalled(Snapshot(TODO, USER), None)
-    assert not stalled(Snapshot(TODO, None), None)
+    assert stalled(Snapshot(TODO, "a", ()), None)
+    assert stalled(Snapshot(PROGRESS, "a", ()), WorkState.IDLE)
+    assert not stalled(Snapshot(PROGRESS, "a", ()), WorkState.RUNNING)
+    assert not stalled(Snapshot(TODO, "a", ()), WorkState.WAITING)
+    assert not stalled(Snapshot(BACKLOG, "a", ()), WorkState.IDLE)
+    assert not stalled(Snapshot(TODO, USER, ()), None)
+    assert not stalled(Snapshot(TODO, None, ()), None)
 
 
 async def _issue_sessions(container) -> list[Session]:
@@ -306,3 +306,119 @@ async def test_acting_from_the_session_of_another_issue_is_delivered(container, 
     await deliver(container)
     assert "from x" in (await _mail(container, sessions[str(y.id)]))[-1]
     assert len(await _mail(container, sessions[str(x.id)])) == 1
+
+
+# ---- 依赖（DAG）----
+
+
+def test_an_issue_waiting_on_upstream_is_neither_delivered_nor_stalled():
+    waiting = Snapshot(TODO, "a", (3,))
+    assert recipient(waiting, None) is None
+    assert not stalled(waiting, None)
+
+
+@pytest.mark.parametrize(
+    ("issue_id", "depends_on", "edges", "cycle"),
+    [
+        (1, [1], [], [1, 1]),
+        (1, [2], [(2, 1)], [1, 2, 1]),
+        (1, [2], [(2, 3), (3, 1)], [1, 2, 3, 1]),
+        (1, [2, 3], [(2, 3)], None),
+        # 自己原有的上游正被替换，不算
+        (1, [2], [(1, 3), (3, 2)], None),
+        (1, [2], [(4, 1), (2, 4)], [1, 2, 4, 1]),
+    ],
+    ids=["self", "two-cycle", "long-cycle", "diamond", "own-edges-replaced", "through-other"],
+)
+def test_cycle_through(issue_id, depends_on, edges, cycle):
+    assert cycle_through(issue_id, depends_on, edges) == cycle
+
+
+async def test_a_downstream_issue_is_delivered_when_its_last_upstream_finishes(container, make_agent):
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    up1 = await container.issues.create(None, owner=alpha, title="up1", status=TODO, assignee=alpha)
+    up2 = await container.issues.create(None, owner=alpha, title="up2", status=TODO)
+    down = await container.issues.create(
+        None, owner=beta, title="down", status=TODO, assignee=beta, depends_on=[up1.id, up2.id]
+    )
+    await container.issues.comment(None, down.id, "wait for them")
+    await drain(container)
+    assert {s.origin_ref for s in await _issue_sessions(container)} == {str(up1.id)}
+    work = (await container.issues.work([down]))[down.id]
+    assert (work.waiting_on, work.stalled) == ((up1.id, up2.id), False)
+    assert [d.id for d in (await container.issues.work([up1]))[up1.id].blocks] == [down.id]
+
+    # 上游 agent 在自己的 issue 会话里完成：不是下游的会话，照常投给下游；但还在等 up2，只记时间线
+    [up1_session] = await _issue_sessions(container)
+    await container.issues.update(alpha, up1.id, session_id=up1_session.id, status=DONE)
+    await deliver(container)
+    assert {s.origin_ref for s in await _issue_sessions(container)} == {str(up1.id)}
+    detail = await container.issues.get(down.id)
+    assert detail.activities[-1].kind == ActivityKind.DEPENDENCY
+    assert detail.activities[-1].change == {"issue": up1.id, "from": "todo", "to": "done"}
+
+    # 最后一个上游取消也算完成：投给下游，信里是这次的动态与完整视图（含之前没投的评论）
+    await container.issues.update(None, up2.id, status=IssueStatus.CANCELLED)
+    await deliver(container)
+    [session] = [s for s in await _issue_sessions(container) if s.origin_ref == str(down.id)]
+    [mail] = await _mail(container, session.id)
+    news = mail.split("\n\n")[0]
+    assert f"user changed status of dependency #{up2.id}: todo -> cancelled" in news
+    assert "wait for them" in mail and f"depends on: #{up1.id} (done), #{up2.id} (cancelled)" in mail
+    assert (await container.issues.work([down]))[down.id].waiting_on == ()
+
+    # 已完成的上游再改到另一个完成状态不再通知
+    await container.issues.update(None, up2.id, status=DONE)
+    await deliver(container)
+    assert len(await _mail(container, session.id)) == 1
+
+
+async def test_dependencies_must_exist_and_not_form_a_cycle(container, make_agent):
+    alpha = (await make_agent()).id
+    a = await container.issues.create(None, owner=alpha, title="a")
+    b = await container.issues.create(None, owner=alpha, title="b", depends_on=[a.id])
+    c = await container.issues.create(None, owner=alpha, title="c", depends_on=[b.id])
+    with pytest.raises(InvalidInput, match=f"#{a.id} -> #{c.id} -> #{b.id} -> #{a.id}"):
+        await container.issues.update(None, a.id, depends_on=[c.id])
+    with pytest.raises(InvalidInput, match="cycle"):
+        await container.issues.update(None, a.id, depends_on=[a.id])
+    with pytest.raises(InvalidInput, match="not found"):
+        await container.issues.update(None, a.id, depends_on=[999])
+    with pytest.raises(InvalidInput, match="more than once"):
+        await container.issues.update(None, c.id, depends_on=[a.id, a.id])
+    assert (await container.issues.work([a]))[a.id].depends_on == []
+
+    # 整体替换，记一条时间线；没变不记
+    await container.issues.update(None, c.id, depends_on=[a.id, b.id])
+    await container.issues.update(None, c.id, depends_on=[b.id, a.id])
+    detail = await container.issues.get(c.id)
+    assert [x.kind for x in detail.activities] == [ActivityKind.CREATED, ActivityKind.DEPENDS_ON]
+    assert detail.activities[-1].change == {"from": [b.id], "to": [a.id, b.id]}
+    assert f"user changed depends_on: #{b.id} -> #{a.id}, #{b.id}" in await container.issues.render(c.id)
+
+
+async def test_dropping_the_last_waiting_upstream_delivers(container, make_agent):
+    alpha = (await make_agent()).id
+    up = await container.issues.create(None, owner=alpha, title="up")
+    down = await container.issues.create(
+        None, owner=alpha, title="down", status=TODO, assignee=alpha, depends_on=[up.id]
+    )
+    await deliver(container)
+    assert await _issue_sessions(container) == []
+    await container.issues.update(None, down.id, depends_on=[])
+    await deliver(container)
+    [session] = await _issue_sessions(container)
+    assert f"changed depends_on: #{up.id} -> none" in (await _mail(container, session.id))[0]
+
+
+async def test_deleting_an_upstream_frees_its_downstream(container, make_agent):
+    alpha = (await make_agent()).id
+    up = await container.issues.create(None, owner=alpha, title="up")
+    down = await container.issues.create(
+        None, owner=alpha, title="down", status=TODO, assignee=alpha, depends_on=[up.id]
+    )
+    await container.issues.delete(up.id)
+    await deliver(container)
+    [session] = await _issue_sessions(container)
+    assert session.origin_ref == str(down.id)
+    assert (await container.issues.work([down]))[down.id].depends_on == []
