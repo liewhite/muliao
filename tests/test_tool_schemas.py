@@ -74,4 +74,5 @@ async def test_deferred_tools_and_thread_tools_are_registered_under_their_table_
     toolsets += list(container.consumer._tool_groups.always)  # noqa: SLF001
     names = {tool for ts in toolsets if isinstance(ts, FunctionToolset) for tool in ts.tools}
     continued_by = {p.continued_by for k in SessionKind if (p := policy_of(k)).continued_by is not None}
-    assert set(DEFERRED_TOOLS) | continued_by <= names
+    missing = (set(DEFERRED_TOOLS) | continued_by) - names
+    assert not missing, missing

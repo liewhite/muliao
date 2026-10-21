@@ -20,10 +20,10 @@ from pydantic_ai.messages import ModelMessage, ToolCallPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import Answer, Attachment, unanswered_calls
-from muliao.sessions.deferred import ASK_AGENT, DEFERRED_TOOLS, asks_user, deferred_tool
+from muliao.sessions.deferred import ASK_AGENT, DEFERRED_TOOLS, asks_user, deferred_tool, questions_in
 from muliao.sessions.history import since_last_response
 from muliao.sessions.holds import called_in
-from muliao.sessions.questions import ASK_USER, AskResult, Question, late_answer_lines, questions_of
+from muliao.sessions.questions import ASK_USER, AskResult, Question, late_answer_lines
 from muliao.sessions.tables import Mail, MailKind
 
 
@@ -95,7 +95,7 @@ def _is_pending(call: ToolCallPart, delegated: Delegated) -> bool:
 
 def pending_questions(history: Sequence[ModelMessage]) -> dict[str, list[Question]]:
     """挂起的 ask_user 调用里的问题。"""
-    return {c.tool_call_id: questions_of(c) for c in unanswered_calls(history) if asks_user(c.tool_name)}
+    return {c.tool_call_id: questions_in(c) for c in unanswered_calls(history) if asks_user(c.tool_name)}
 
 
 async def pending_in(s: AsyncSession, session_id: str) -> dict[str, ToolCallPart]:
@@ -133,7 +133,7 @@ def deferred_results(
     """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（来了新消息，或这次只回答了一部分）用工具的
     DeferredTool.skipped_result：ask_user 记为没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后
     作为事件送达。"""
-    any_answered = any(asks_user(r.tool) for r in answers.values())
+    any_answered = any(isinstance(r, UserAnswered) for r in answers.values())
     results: dict[str, object] = {}
     for call_id, call in pending.items():
         result = answers.get(call_id)

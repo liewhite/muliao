@@ -33,8 +33,8 @@ from muliao.agent_runtime.api import (
 )
 from muliao.files.api import parse_file_url
 from muliao.platform.text_edit import truncate
-from muliao.sessions.deferred import asks_user
-from muliao.sessions.questions import AnsweredQuestion, AskResult, Question, questions_of
+from muliao.sessions.deferred import asks_user, questions_in
+from muliao.sessions.questions import AnsweredQuestion, AskResult, Question
 
 ItemType = Literal[
     "user", "event", "assistant", "thinking", "tool_call", "tool_result", "tool_error", "stopped"
@@ -94,7 +94,7 @@ def call_item(part: ToolCallPart) -> Item:
     item = _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id)
     if asks_user(part.tool_name):
         try:
-            questions = questions_of(part)
+            questions = questions_in(part)
         except (ValidationError, KeyError):
             # 参数被工具 schema 拒绝、交还模型重试的提问（它有 tool_error 结果）：按普通工具调用展示
             return item
