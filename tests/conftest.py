@@ -1,4 +1,6 @@
+import asyncio
 import os
+import shutil
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from cryptography.fernet import Fernet
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models import Model
 
+from muliao.agents.resources import ResourceRepo
 from muliao.api.app import create_app
 from muliao.config import Settings
 from muliao.container import Container, build_container
@@ -37,8 +40,32 @@ class ModelSlot:
         return self.models.get(name, self._default)
 
 
+@pytest.fixture(scope="session")
+def resources_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """初始化过一次的资源仓库（init、config、初始提交，与生产的 ResourceRepo.ensure 相同）。
+
+    每个用例新建仓库要跑 4 个 git 子进程，测试总耗时里占了很大一块；用例改用它的副本（见 seed_resources），
+    ensure() 看到 .git 已存在就直接跳过。
+    """
+    root = tmp_path_factory.mktemp("resources-template") / "resources"
+    asyncio.run(ResourceRepo(root).ensure())
+    return root
+
+
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
+def seed_resources(resources_template: Path) -> Callable[[Path], Path]:
+    """把模板仓库复制到 path（不能已存在），返回 path。"""
+
+    def _seed(path: Path) -> Path:
+        shutil.copytree(resources_template, path)
+        return path
+
+    return _seed
+
+
+@pytest.fixture
+def settings(tmp_path: Path, seed_resources: Callable[[Path], Path]) -> Settings:
+    seed_resources(tmp_path / "data" / "resources")
     return Settings.model_validate(
         {
             "data_dir": tmp_path / "data",

@@ -19,8 +19,8 @@ def _git(*args: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> ResourceRepo:
-    return ResourceRepo(tmp_path / "resources")
+def repo(tmp_path: Path, seed_resources) -> ResourceRepo:
+    return ResourceRepo(seed_resources(tmp_path / "resources"))
 
 
 @pytest.fixture

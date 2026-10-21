@@ -145,6 +145,49 @@ async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recover
     assert failed.exc_info is not None and "Interrupted" in caplog.text
 
 
+async def test_a_worker_cancelled_while_claiming_keeps_its_slot_for_the_next_start(
+    container, make_agent, monkeypatch
+):
+    """同一个 worker 停了再启动（测试的 drain 每次都这样）：停在领取中途时槽位曾经漏掉，漏够 concurrency 次后
+    再启动的 worker 永远领不到任务（test_compaction 在并行跑测试时偶发超时）。"""
+    alpha = (await make_agent()).id
+    executed: list[int] = []
+    done = asyncio.Event()
+
+    class Handler:
+        async def execute(self, task: Task):  # noqa: ANN202
+            executed.append(task.id)
+            done.set()
+            return no_commit
+
+        async def failed_in(self, _s, _task: Task) -> None:  # noqa: ANN001
+            pass
+
+    worker = Worker(container.queue, {TaskKind.DELIVER: Handler()}, container.bus, concurrency=1)
+    claim = container.queue.claim
+    claiming = asyncio.Event()
+
+    async def stuck_claim(_kinds):  # noqa: ANN001, ANN202
+        claiming.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(container.queue, "claim", stuck_claim)
+    running = asyncio.create_task(worker.run_forever())
+    await asyncio.wait_for(claiming.wait(), 5)
+    running.cancel()
+    await asyncio.gather(running, return_exceptions=True)
+
+    monkeypatch.setattr(container.queue, "claim", claim)
+    task = await _enqueue(container, "a", alpha)
+    running = asyncio.create_task(worker.run_forever())
+    try:
+        await asyncio.wait_for(done.wait(), 5)
+    finally:
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+    assert executed == [task.id]
+
+
 async def test_retention_prunes_only_old_done_event_and_deliver_tasks(container, make_agent):
     """保留策略：7 天前完成的 event/deliver 删掉；failed、run、排队中的与较新的保留（为什么见 docs/architecture.md 3.2「保留」）。"""
     alpha = (await make_agent()).id

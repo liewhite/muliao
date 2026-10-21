@@ -79,7 +79,13 @@ class Worker:
         async with anyio.create_task_group() as group:
             while True:
                 await self._slots.acquire()
-                task = await self._queue.claim(self._handlers.keys())
+                try:
+                    task = await self._queue.claim(self._handlers.keys())
+                except BaseException:
+                    # 领取中被取消（关停）也要还回槽位：槽位属于 Worker 而不是这次 run_forever，同一个 worker 再次
+                    # 启动时少了它，漏够 concurrency 次就再也领不到任务
+                    self._slots.release()
+                    raise
                 if task is None:
                     self._slots.release()
                     await self._wait_for_work()

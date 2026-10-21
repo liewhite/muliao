@@ -36,11 +36,14 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.17.1",
 ]
 
 [tool.pytest.ini_options]
 anyio_mode = "auto"
+# 并行跑（pytest-xdist）；单独调试一个用例用 -n0（-s、--pdb 也需要 -n0）
+addopts = "-n auto"
 testpaths = ["tests"]
 
 [tool.ruff]
