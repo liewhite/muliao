@@ -7,20 +7,25 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any, Self
 
 from fastmcp.client.transports import StdioTransport
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from pydantic_ai import RunContext
+from pydantic_ai.exceptions import ApprovalRequired, CallDeferred, ModelRetry, ToolFailed
 from pydantic_ai.mcp import MCPToolset
-from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset
+from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset, ToolsetTool, WrapperToolset
 
 from muliao.agents.api import ResourceRepo, scope_of, shadowing, validate_slug
-from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
+from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound, TransientError
 from muliao.platform.shell import redact
 from muliao.platform.tooling import RunScope
+from muliao.platform.worker import is_transient
 from muliao.vault.api import VAULT_REF, Vault
 
 log = logging.getLogger(__name__)
@@ -107,6 +112,50 @@ class McpServer:
         return f"{scope_of(self.owner)}:{self.owner or ''}:{self.name}"
 
 
+class McpFailed(Exception):
+    """MCP server 连接或通信失败。信息已脱敏，原始异常不挂在后面（见 _SecretSafe）。"""
+
+
+# 工具调用的正常结局（交还模型、延后执行等），不是 server 故障，原样放行
+_TOOL_OUTCOMES = (ModelRetry, ToolFailed, CallDeferred, ApprovalRequired)
+
+
+@dataclass
+class _SecretSafe(WrapperToolset[RunScope]):
+    """MCP 的连接、列工具、调用工具失败时，异常文本可能带着已代入 secret 的 URL、参数或请求头（如 HTTP 错误里的
+    完整 URL），它会进 tasks.error、服务日志（带 traceback）并交还给调用方。运行期与 probe 都经 guard：换成信息里
+    secret 明文已替换为 [secret:KEY] 的异常（与 run_shell 同一份 redact），不带原始异常链；暂时性失败仍是
+    TransientError，照常由任务队列重试。"""
+
+    server: str
+    secrets: Mapping[str, str]
+
+    @contextmanager
+    def guard(self) -> Iterator[None]:
+        try:
+            yield
+        except _TOOL_OUTCOMES:
+            raise
+        except Exception as e:
+            message = redact(f"MCP server {self.server!r} failed: {type(e).__name__}: {e}", self.secrets)
+            raise (TransientError if is_transient(e) else McpFailed)(message) from None
+
+    async def __aenter__(self) -> Self:
+        with self.guard():
+            await self.wrapped.__aenter__()
+        return self
+
+    async def get_tools(self, ctx: RunContext[RunScope]) -> dict[str, ToolsetTool[RunScope]]:
+        with self.guard():
+            return await self.wrapped.get_tools(ctx)
+
+    async def call_tool(
+        self, name: str, tool_args: dict[str, Any], ctx: RunContext[RunScope], tool: ToolsetTool[RunScope]
+    ) -> Any:
+        with self.guard():
+            return await self.wrapped.call_tool(name, tool_args, ctx, tool)
+
+
 # 「使用 MCP」组的工具：每次运行按 agent 可见的 server 构建，工具名带 server 前缀（给模型看的工具组说明用它）
 MCP_TOOL_NAMES = "<server>_<tool> for every tool of the MCP servers the agent can see"
 
@@ -151,7 +200,8 @@ class McpRegistry:
                 headers=await self._vault.render_map(c.headers, server.owner) or None,
                 init_timeout=_CONNECT_TIMEOUT,
             )
-        return toolset.prefixed(server.name)
+        secrets = await self._vault.resolve_many(server.owner, _vault_keys(c))
+        return _SecretSafe(toolset, server=server.name, secrets=secrets).prefixed(server.name)
 
     def toolset(self) -> DynamicToolset[RunScope]:
         """「使用 MCP」：每次运行时按这次运行的 agent（RunScope.agent_id；临时 agent 用调用方的视角）取可见的 server
@@ -172,20 +222,18 @@ class McpRegistry:
         各种传输层异常（进程退出、HTTP 错误、协议错误）统一转为 InvalidInput，把原因交还给调用方修正。
         vault 引用缺失在构建阶段以 NotFound 报出，不在此转换。
         """
-        toolset = await self.build_toolset(server)
-        inner = toolset.wrapped
+        safe = (await self.build_toolset(server)).wrapped
+        assert isinstance(safe, _SecretSafe)
+        inner = safe.wrapped
         assert isinstance(inner, MCPToolset)
         try:
-            async with inner:
-                return [t.name for t in await inner.list_tools()]
-        except Exception as e:
-            # 异常文本可能带着已代入 secret 的 URL、参数或请求头（如 HTTP 错误里的完整 URL），它会进日志、
-            # 交还给模型并返回给调用方：先把这次用到的 secret 明文替换掉（与 run_shell 同一份实现）
-            secrets = await self._vault.resolve_many(server.owner, _vault_keys(server.config))
-            log.info("mcp probe failed", extra={"mcp": server.name, "error": redact(repr(e), secrets)})
-            raise InvalidInput(
-                redact(f"could not connect to MCP server {server.name!r}: {type(e).__name__}: {e}", secrets)
-            ) from e
+            # 与运行期同一个脱敏入口
+            with safe.guard():
+                async with inner:
+                    return [t.name for t in await inner.list_tools()]
+        except (McpFailed, TransientError) as e:
+            log.info("mcp probe failed", extra={"mcp": server.name, "error": str(e)})
+            raise InvalidInput(f"could not connect: {e}") from None
 
     def list(self, owner: str | None) -> list[McpServer]:
         directory = self._dir(owner)

@@ -519,3 +519,58 @@ async def test_disabling_a_trigger_notifies_watchers_and_reports_a_deleted_one(c
 
     await container.triggers.delete(t.id)
     assert not await container.triggers.disable(t.id, "boom")
+
+
+@pytest.fixture
+def rejecting_http_server():
+    """所有请求都回 401 的 HTTP server：SSE 传输（URL 以 /sse 结尾）的客户端会抛出带完整 URL 的 HTTPStatusError。"""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Reject(BaseHTTPRequestHandler):
+        def _reject(self):
+            self.send_response(401)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_POST = do_DELETE = _reject
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Reject)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+
+
+async def test_a_failing_mcp_server_keeps_its_secrets_out_of_task_errors_and_logs(
+    container, make_agent, models, rejecting_http_server, caplog
+):
+    from sqlalchemy import select
+
+    from muliao.platform.tables import Task, TaskKind, TaskStatus
+    from tests.test_flow import call_then_answer
+
+    alpha = (await make_agent("alpha", model="m")).id
+    await container.vault.set(None, "MCP_TOKEN", "tok-in-url-123")
+    spec = mcp_config(
+        transport=McpTransport.HTTP, url=f"{rejecting_http_server}/sse?token=${{vault:MCP_TOKEN}}"
+    )
+    await container.mcp.add(alpha, "remote", spec, probe=False, author="user")
+    models.models["m"] = call_then_answer("remote_x", {}, "done")
+
+    await start(container, alpha, "go", origin=Origin.TRIGGER)
+    await drain(container, limit_seconds=30)
+
+    async with container.db.transaction() as s:
+        [task] = (await s.scalars(select(Task).where(Task.kind == TaskKind.RUN))).all()
+    assert task.status == TaskStatus.FAILED
+    assert "remote" in task.error and "[secret:MCP_TOKEN]" in task.error
+    assert "tok-in-url-123" not in task.error
+    assert "tok-in-url-123" not in caplog.text
+
+    # 添加时的探测走同一个脱敏入口
+    with pytest.raises(InvalidInput, match="could not connect") as probe:
+        await container.mcp.add(alpha, "remote2", spec, probe=True, author="user")
+    assert "tok-in-url-123" not in str(probe.value) and "[secret:MCP_TOKEN]" in str(probe.value)
