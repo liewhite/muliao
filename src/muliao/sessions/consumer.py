@@ -34,7 +34,7 @@ from muliao.sessions.history import interrupted_results, latest_compaction, load
 from muliao.sessions.holds import called_in
 from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRuns
-from muliao.sessions.mailbox import RunPayload, hand_over_in, queued_in
+from muliao.sessions.mailbox import RunPayload, hand_over_in, queued_in, wake_in
 from muliao.sessions.pending import (
     ASK_AGENT,
     DEFERRED_TOOLS,
@@ -358,8 +358,10 @@ class RunHandler:
         """最终失败：交给这个会话、没能做完的委派以「失败」结清（发起方不会一直等）。按会话范围：已交给模型、还没结清的
         全部（包括早先停在挂起调用上的运行处理过的、被续跑接管的），加上交给过这次运行、还排着的——运行在第一次保存
         之前就失败时，开头取走的信件一直排着，也不会再有运行因为它们被唤醒（mailbox.handed_to）；它们随结清一起
-        退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：它们会唤醒新的运行。"""
+        退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：同一个事务里立即唤醒新的运行处理它们（如对
+        同一 thread 的第二项委派），不等信箱对账。队列已把这次运行记为 failed，唤醒不会把它当成忙。"""
         if task.session_id is None:
             raise RuntimeError(f"run {task.id} has no session")
         child, _agent = await load_session(s, task.session_id)
         await settle_failure_in(s, self._queue, child, task)
+        await wake_in(s, self._queue, child)

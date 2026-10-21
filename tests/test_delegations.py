@@ -81,6 +81,41 @@ async def test_a_thread_that_fails_for_good_reports_its_failure(container, make_
     assert len(reports) == 1 and "failed" in reports[0] and "review" in reports[0]
 
 
+async def test_listing_threads_gives_each_its_own_answer_and_failure(container, make_agent, models):
+    """list_threads 批量取各 thread 的回答与最近运行：一个答完、一个最终失败，各归各的。"""
+    lead = (await make_agent("lead", model="l")).id
+    models.models["l"] = scripted(Recorder())
+    parent = await start(container, lead, "go")
+    await drain(container)
+
+    def broken(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise ModelHTTPError(status_code=400, model_name="b", body="bad request")
+
+    models.models["ok"] = echo("answered")
+    models.models["b"] = scripted(broken)
+    for name, model in (("good", "ok"), ("bad", "b")):
+        agent = await make_agent(name, model=model)
+        async with container.db.transaction() as s:
+            await container.threads.dispatch(
+                s,
+                owner_id=parent.id,
+                agent=agent,
+                thread=name,
+                prompt="task",
+                kind=SessionKind.THREAD,
+                call_id=None,
+                awaited=False,
+                key=name,
+            )
+    await drain(container)
+
+    async with container.db.transaction() as s:
+        views = {v.thread: v.state for v in await container.threads.list_in(s, parent.id)}
+    assert views["good"].failure is None and "answered" in views["good"].answer
+    assert views["bad"].failure is not None and "bad request" in views["bad"].failure
+    assert views["bad"].answer == ""
+
+
 async def test_open_reported_threads_get_check_events_without_piling_up(container, make_agent, models):
     lead = (await make_agent("lead", model="l")).id
     reviewer = (await make_agent("reviewer", model="v")).id
@@ -401,10 +436,9 @@ async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_r
 
     models.models["v"] = FunctionModel(stream_function=stream)
     await send("first task")
+    # 最终失败的收尾当场唤醒下一次运行处理之后才到的委派，不等信箱对账
     await drain(container)
-    # 失败的运行不唤醒下一次；之后才到的委派由对账唤醒
-    assert await container.mail.reconcile() >= 1
-    await drain(container)
+    assert await container.mail.reconcile() == 0
 
     [child] = await threads_of(container, parent.id)
     async with container.db.transaction() as s:

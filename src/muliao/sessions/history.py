@@ -126,7 +126,15 @@ async def load_context(s: AsyncSession, session_id: str) -> SessionContext:
 
 async def latest_answer(s: AsyncSession, session_id: str) -> str:
     """会话最近的回答：最后一条模型回复的文字；还没有回复时为空（运行停在第一次回复之前）。"""
-    tail = await since_last_response(s, session_id)
+    return _answer_of(await since_last_response(s, session_id))
+
+
+async def latest_answers_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, str]:
+    """latest_answer 的批量版本（since_last_response_among）。"""
+    return {x: _answer_of(tail) for x, tail in (await since_last_response_among(s, session_ids)).items()}
+
+
+def _answer_of(tail: Sequence[ModelMessage]) -> str:
     return answer_text(tail[0]) if tail and isinstance(tail[0], ModelResponse) else ""
 
 

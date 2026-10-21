@@ -286,7 +286,7 @@ class MailReconciler:
             ).all()
             woken = [session.id for session in waiting if await wake_in(s, self._queue, session)]
         if woken:
-            # 正常路径也会走到这里（最终失败的运行期间到达的信件），所以是 info；补了什么仍然可查
+            # 投信时与运行结束（含最终失败）时都已唤醒过；到这里多半是那次没做成（事务失败、重启），补了什么要可查
             log.info("reconcile woke consumers for queued mail", extra={"session_ids": woken})
         return len(woken)
 

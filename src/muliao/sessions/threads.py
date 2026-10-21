@@ -11,17 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentInfo
 from muliao.errors import InvalidInput
-from muliao.platform.tables import TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import Origin
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.delegation import delegation_holder, thread_name
-from muliao.sessions.history import latest_answer
+from muliao.sessions.history import latest_answers_among
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.inbound import Inbound, NewSession, Received, create_session, receive
 from muliao.sessions.kinds import SessionKind, policy_of
-from muliao.sessions.mailbox import latest_run
+from muliao.sessions.mailbox import latest_runs_among
 from muliao.sessions.settlement import failure_of
 from muliao.sessions.tables import Mail, Session
 
@@ -175,7 +175,10 @@ class Threads:
     async def list_in(self, s: AsyncSession, parent_id: str) -> list[ThreadView]:
         """父会话开出的 thread（含私有的），按创建顺序，带各自的状态。"""
         children = await threads_of(s, parent_id)
-        works = await work_states_in(s, self._queue, [c.id for c in children])
+        ids = [c.id for c in children]
+        works = await work_states_in(s, self._queue, ids)
+        runs = await latest_runs_among(s, ids)
+        answers = await latest_answers_among(s, ids)
         return [
             ThreadView(
                 session_id=child.id,
@@ -184,15 +187,14 @@ class Threads:
                 kind=child.kind,
                 state=ThreadState(
                     work=works[child.id],
-                    failure=await _failure_in(s, child.id),
-                    answer=await latest_answer(s, child.id),
+                    failure=_failure_of(runs.get(child.id)),
+                    answer=answers[child.id],
                 ),
             )
             for child in children
         ]
 
 
-async def _failure_in(s: AsyncSession, session_id: str) -> str | None:
+def _failure_of(run: Task | None) -> str | None:
     """最近一次运行最终失败时的错误说明（之后又有运行排上就不再算）。"""
-    run = await latest_run(s, session_id)
     return failure_of(run) if run is not None and run.status == TaskStatus.FAILED else None
