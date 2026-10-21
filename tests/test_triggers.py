@@ -393,27 +393,77 @@ async def test_a_temp_agent_sees_the_mcp_servers_of_its_caller(container, make_a
     assert answer.text == "ok" and {"echo_echo", "echo_token"} <= set(seen)
 
 
-async def test_a_missing_vault_reference_in_an_mcp_config_fails_the_run_visibly(
-    container, make_agent, models
+def _recording_model(models, name: str) -> tuple[list[str], list[str]]:
+    """回答 ok 的模型，记下每次请求的最后一条消息与可用的工具名。"""
+    from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+    from pydantic_ai.models.function import AgentInfo
+
+    from tests.scripted import scripted
+
+    requests: list[str] = []
+    tools: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        requests.append(str(messages[-1]))
+        tools.extend(t.name for t in info.function_tools)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models[name] = scripted(fn)
+    return requests, tools
+
+
+async def test_an_mcp_server_with_a_missing_secret_is_skipped_and_the_model_is_told(
+    container, make_agent, models, caplog
 ):
+    """一个 server 引用的 secret 不在了：这次运行没有它的工具，别的 server 照常可用，模型从运行上下文得知原因。"""
     from muliao.platform.tables import TaskKind, TaskStatus
-    from tests.test_flow import call_then_answer, tasks_of
+    from tests.test_flow import tasks_of
 
     alpha = (await make_agent("alpha", model="m")).id
-    config = mcp_config(
+    broken = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
         args=[ECHO_SERVER],
         env={"TOKEN": "${vault:MISSING}"},
     )
-    await container.mcp.add(alpha, "echo", config, probe=False, author="user")
-    models.models["m"] = call_then_answer("echo_token", {}, "got it")
+    await container.mcp.add(alpha, "echo", broken, probe=False, author="user")
+    good = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
+    await container.mcp.add(None, "good", good, probe=False, author="user")
+    requests, tools = _recording_model(models, "m")
 
     await start(container, alpha, "token?")
     await drain(container)
 
     [run] = await tasks_of(container, TaskKind.RUN)
-    assert run.status == TaskStatus.FAILED and "MISSING" in (run.error or "")
+    assert run.status == TaskStatus.DONE
+    assert "good_echo" in tools and not any(t.startswith("echo_") for t in tools)
+    assert "MCP server 'echo'" in requests[0] and "MISSING" in requests[0]
+    assert "mcp server unavailable" in caplog.text
+
+
+async def test_a_corrupt_public_mcp_config_is_reported_to_a_temp_agent_without_failing_it(
+    container, make_agent, models, tmp_path
+):
+    from muliao.agent_runtime.runner import RunProfile
+
+    parent = await make_agent("alpha", model="m")
+    good = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
+    await container.mcp.add(None, "good", good, probe=False, author="user")
+    (container.resources.owner_dir(None) / "mcp" / "bad.json").write_text("{not json")
+    requests, tools = _recording_model(models, "temp")
+
+    answer = await container.consumer._runtime.run_temp(  # noqa: SLF001
+        parent,
+        task="the task",
+        instructions="",
+        model="temp",
+        profile=RunProfile(toolsets=[container.mcp.toolset()]),
+        workspace=tmp_path,
+        session_id=None,
+    )
+
+    assert answer.text == "ok" and "good_echo" in tools
+    assert "public MCP server 'bad' is corrupt" in requests[0] and "the task" in requests[0]
 
 
 async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_meanwhile(container, make_agent):
@@ -544,16 +594,14 @@ def rejecting_http_server():
     server.shutdown()
 
 
-async def test_a_failing_mcp_server_keeps_its_secrets_out_of_task_errors_and_logs(
+async def test_an_unreachable_mcp_server_is_skipped_and_keeps_its_secrets_out_of_the_context_and_logs(
     container, make_agent, models, rejecting_http_server, caplog, monkeypatch
 ):
     import logging
 
-    from sqlalchemy import select
-
     from muliao.logging_setup import quiet_http_clients
-    from muliao.platform.tables import Task, TaskKind, TaskStatus
-    from tests.test_flow import call_then_answer
+    from muliao.platform.tables import TaskKind, TaskStatus
+    from tests.test_flow import tasks_of
 
     # 与服务一样：INFO 级别，HTTP 客户端的逐请求日志关掉（它们带完整 URL）
     caplog.set_level(logging.INFO)
@@ -567,17 +615,17 @@ async def test_a_failing_mcp_server_keeps_its_secrets_out_of_task_errors_and_log
         transport=McpTransport.HTTP, url=f"{rejecting_http_server}/sse?token=${{vault:MCP_TOKEN}}"
     )
     await container.mcp.add(alpha, "remote", spec, probe=False, author="user")
-    models.models["m"] = call_then_answer("remote_x", {}, "done")
+    requests, tools = _recording_model(models, "m")
 
     await start(container, alpha, "go", origin=Origin.TRIGGER)
     await drain(container, limit_seconds=30)
 
-    async with container.db.transaction() as s:
-        [task] = (await s.scalars(select(Task).where(Task.kind == TaskKind.RUN))).all()
-    assert task.status == TaskStatus.FAILED
-    assert "remote" in task.error and "[secret:MCP_TOKEN]" in task.error
-    assert "tok-in-url-123" not in task.error
-    assert "tok-in-url-123" not in caplog.text
+    # 连不上的 server 只是这次没有它的工具，运行照常完成；告诉模型的原因与日志都已脱敏
+    [run] = await tasks_of(container, TaskKind.RUN)
+    assert run.status == TaskStatus.DONE and not any(t.startswith("remote_") for t in tools)
+    assert "MCP server 'remote' failed" in requests[0] and "[secret:MCP_TOKEN]" in requests[0]
+    assert "tok-in-url-123" not in requests[0]
+    assert "mcp server unavailable" in caplog.text and "tok-in-url-123" not in caplog.text
 
     # 添加时的探测走同一个脱敏入口
     with pytest.raises(InvalidInput, match="could not connect") as probe:

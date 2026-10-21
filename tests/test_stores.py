@@ -274,7 +274,7 @@ def test_owner_ids_cannot_escape_the_repository(repo: ResourceRepo):
             repo.owner_dir(bad)
 
 
-async def test_corrupt_mcp_config_is_rejected_with_its_path_but_can_be_deleted(container):
+async def test_corrupt_mcp_config_is_reported_with_its_path_on_its_own_and_can_be_deleted(container):
     from muliao.agent_runtime.mcp import McpTransport, mcp_config
 
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
@@ -288,7 +288,12 @@ async def test_corrupt_mcp_config_is_rejected_with_its_path_but_can_be_deleted(c
     for broken in ('{"not json"', original.replace("true", '"false"'), missing):
         path.write_text(broken)
         with pytest.raises(CorruptState, match=f"corrupt MCP config {path}"):
-            container.mcp.list(None)
+            container.mcp.get(None, "echo")
+        # 列出时单独报出，不连累别的 server
+        assert container.mcp.list(None) == []
+        [corrupt] = container.mcp.corrupt("a1a1a1a1a1a1")
+        assert (corrupt.kind, corrupt.name, corrupt.path) == ("MCP server", "echo", path)
+        assert f"corrupt MCP config {path}" in corrupt.problem
 
     await container.mcp.remove(None, "echo", "user")
     assert container.mcp.list(None) == []

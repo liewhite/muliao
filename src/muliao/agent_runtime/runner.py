@@ -3,7 +3,7 @@
 import logging
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -39,6 +39,7 @@ from muliao.agent_runtime.instructions import (
     build_instructions,
     build_run_context,
     build_temp_instructions,
+    with_notices,
 )
 from muliao.agent_runtime.llm import ModelResolver
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
@@ -71,8 +72,9 @@ class StepHooks:
     （用户停止）之后，消费者从它取回还没保存的部分。"""
 
     # 运行开始、第一步之前：pydantic-ai 已经规整过传入的历史（合并相邻请求、补齐悬空调用的结果；从请求续跑时取出
-    # 末尾那条请求准备重发），条数可能和传入的不同。之后历史只在末尾追加，这里的条数就是「已经保存」的基准
-    started: Callable[[list[ModelMessage]], Awaitable[None]]
+    # 末尾那条请求准备重发），条数可能和传入的不同。之后历史只在末尾追加，这里的条数就是「已经保存」的基准。
+    # notices：工具组连接时发现、要并进这次运行上下文的问题（RunScope.notices，见 instructions.with_notices）
+    started: Callable[[list[ModelMessage], Sequence[str]], Awaitable[None]]
 
     # 请求模型之前：request 还没加进 history，可以往里追加内容（新到的信件），并保存它
     before_request: Callable[[ModelRequest, list[ModelMessage]], Awaitable[None]]
@@ -209,6 +211,8 @@ class AgentRuntime:
             "model": model,
             "workspace": str(scope.workspace),
         }
+        # 每次驱动一份 notices：压缩后续跑会重新连接工具组
+        scope = replace(scope, notices=[])
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred.calls) if deferred is not None else frozenset()
         async with self._billed(RunKind.RUN, scope.agent_id, model, session_id, ctx, len(history)) as usage:
@@ -229,7 +233,8 @@ class AgentRuntime:
                     if not PaiAgent.is_user_prompt_node(node):
                         raise RuntimeError(f"agent run did not start with the user prompt node: {node!r}")
                     node = await run.next(node)
-                    await hooks.started(run.ctx.state.message_history)
+                    # 工具组在进入 iter 时已经构建、连接（notices 已经齐了）
+                    await hooks.started(run.ctx.state.message_history, scope.notices)
                     while not isinstance(node, End):
                         if PaiAgent.is_model_request_node(node):
                             await hooks.before_request(node.request, run.ctx.state.message_history)
@@ -263,7 +268,8 @@ class AgentRuntime:
             instructions=await self.instructions(agent, scope, None),
             toolsets=self._toolsets(profile),
             scope=scope,
-            prompt=f"{self.run_context(scope.audience)}\n\n{prompt}",
+            context=self.run_context(scope.audience),
+            prompt=prompt,
             history=(),
             kind=RunKind.REFLECTION,
             billed_to=scope.session_id,
@@ -297,7 +303,8 @@ class AgentRuntime:
             ),
             toolsets=self._toolsets(profile),
             # 临时 agent 没有听众（回答交回调用方那次工具调用），运行上下文只有当前时间
-            prompt=f"{self.run_context(None)}\n\n{task}",
+            context=self.run_context(None),
+            prompt=task,
             scope=scope,
             history=(),
             kind=RunKind.TEMP_AGENT,
@@ -316,11 +323,14 @@ class AgentRuntime:
         instructions: str,
         toolsets: list[AbstractToolset[RunScope]],
         scope: RunScope,
+        context: str,
         prompt: str,
         history: Sequence[ModelMessage],
         kind: RunKind,
         billed_to: str | None,
     ) -> AgentRunResult[str]:
+        """没有历史逐步保存的一次运行：运行上下文（context）放在 prompt 前面。"""
+        scope = replace(scope, notices=[])
         ctx = {
             "agent": scope.agent_id,
             "session_id": scope.session_id,
@@ -329,8 +339,8 @@ class AgentRuntime:
         }
         async with self._billed(kind, scope.agent_id, model, billed_to, ctx, len(history)) as usage:
             with tool_input_kept_out_of_failures():
-                result = await self._pai.run(
-                    prompt,
+                async with self._pai.iter(
+                    f"{context}\n\n{prompt}",
                     model=self._resolve_model(model),
                     instructions=instructions,
                     message_history=list(history),
@@ -338,7 +348,18 @@ class AgentRuntime:
                     toolsets=toolsets,
                     usage_limits=_UNLIMITED,
                     usage=usage,
-                )
+                ) as run:
+                    node = run.next_node
+                    if not PaiAgent.is_user_prompt_node(node):
+                        raise RuntimeError(f"agent run did not start with the user prompt node: {node!r}")
+                    if scope.notices:
+                        # 工具组在进入 iter 时已经连接，notices 这时才齐；prompt 还没交给模型
+                        node.user_prompt = f"{with_notices(context, scope.notices)}\n\n{prompt}"
+                    async for _ in run:
+                        pass
+                    result = run.result
+        if result is None:
+            raise RuntimeError("agent run ended without a result")
         return result
 
     async def summarize(self, agent: AgentInfo, session_id: str, instructions: str, prompt: str) -> str:

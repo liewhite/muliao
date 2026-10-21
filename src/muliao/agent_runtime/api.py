@@ -26,6 +26,7 @@ from muliao.agent_runtime.conventions import (
     tool_threads,
     unanswered_calls,
 )
+from muliao.agent_runtime.instructions import with_notices
 from muliao.agent_runtime.mcp import McpServer, McpTransport, mcp_config
 from muliao.agent_runtime.redaction import redact_messages
 from muliao.agent_runtime.runner import AgentRuntime, RunProfile, StepHooks, ToolGroups
@@ -68,4 +69,5 @@ __all__ = [
     "tool_attachments",
     "tool_threads",
     "unanswered_calls",
+    "with_notices",
 ]

@@ -2,14 +2,17 @@
 
 配置是资源仓库里的 JSON 文件（public/mcp/<name>.json、agents/<id>/mcp/<name>.json，见 muliao.agents.resources）：
 归属与名称由文件位置决定，每次修改提交一版。agent 看到的 server 按 ownership.shadowing 合并公共与私有。
+
+一个 server 出问题只影响它自己：配置文件坏了（CorruptResource）、引用的 secret 不在了、连不上，这次运行就没有它的
+工具，其余 server 照常可用；原因记日志，并作为 RunScope.notices 放进这次运行开头的运行上下文告诉模型。
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
-from dataclasses import dataclass
+from contextlib import AsyncExitStack, contextmanager
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Self
@@ -21,7 +24,7 @@ from pydantic_ai.exceptions import ApprovalRequired, CallDeferred, ModelRetry, T
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset, ToolsetTool, WrapperToolset
 
-from muliao.agents.api import ResourceRepo, scope_of, shadowing, validate_slug
+from muliao.agents.api import CorruptResource, ResourceRepo, scope_of, shadowing, validate_slug
 from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound, TransientError
 from muliao.platform.shell import redact
 from muliao.platform.tooling import RunScope
@@ -170,6 +173,33 @@ class _SecretSafe(WrapperToolset[RunScope]):
             return await self.wrapped.call_tool(name, tool_args, ctx, tool)
 
 
+@dataclass
+class _Reachable(CombinedToolset[RunScope]):
+    """一次运行用到的 server：逐个连接，连不上的（McpFailed、TransientError，信息已脱敏）跳过并记进 notices，
+    其余照常组合。"""
+
+    notices: list[str] = field(default_factory=list)
+
+    async def __aenter__(self) -> Self:
+        reachable: list[AbstractToolset[RunScope]] = []
+        async with AsyncExitStack() as stack:
+            for toolset in self.toolsets:
+                try:
+                    await stack.enter_async_context(toolset)
+                except (McpFailed, TransientError) as e:
+                    log.warning("mcp server unavailable", extra={"error": str(e)})
+                    self.notices.append(_unavailable(str(e)))
+                    continue
+                reachable.append(toolset)
+            self._exit_stack = stack.pop_all()
+        self.toolsets = reachable
+        return self
+
+
+def _unavailable(reason: str) -> str:
+    return f"An MCP server is unavailable this run, so its tools are missing: {reason}"
+
+
 # 「使用 MCP」组的工具：每次运行按 agent 可见的 server 构建，工具名带 server 前缀（给模型看的工具组说明用它）
 MCP_TOOL_NAMES = "<server>_<tool> for every tool of the MCP servers the agent can see"
 
@@ -186,7 +216,8 @@ class McpRegistry:
         return self._dir(owner) / f"{validate_slug('mcp server', name)}.json"
 
     def _load(self, owner: str | None, path: Path) -> McpServer:
-        """手工改坏的文件在这里报错（带路径），不带着错误的类型或含义继续运行；可以用 remove 删掉。"""
+        """手工改坏的文件在这里报错（带路径），不带着错误的类型或含义继续运行；可以用 remove 删掉。列出 server 时
+        它单独报出（_scan），不连累别的 server。"""
         try:
             validate_slug("mcp server", path.stem)
             config = McpConfig.model_validate_json(path.read_text(encoding="utf-8"))
@@ -223,10 +254,17 @@ class McpRegistry:
         构建，与其他工具组一样是一个 toolset，没有可见的 server 时为空。"""
 
         async def build(ctx: RunContext[RunScope]) -> AbstractToolset[RunScope] | None:
-            servers = self.visible_to(ctx.deps.agent_id)
-            if not servers:
-                return None
-            return CombinedToolset([await self.build_toolset(s) for s in servers])
+            agent, notices = ctx.deps.agent_id, ctx.deps.notices
+            notices += [c.describe() for c in self.corrupt(agent)]
+            toolsets: list[AbstractToolset[RunScope]] = []
+            for server in self.visible_to(agent):
+                try:
+                    toolsets.append(await self.build_toolset(server))
+                except NotFound as e:
+                    # 配置引用的 secret 不在了（vault.resolve_many）
+                    log.warning("mcp server unavailable", extra={"mcp": server.name, "error": str(e)})
+                    notices.append(_unavailable(f"MCP server {server.name!r}: {e}"))
+            return _Reachable(toolsets, notices=notices) if toolsets else None
 
         return DynamicToolset(build, per_run_step=False)
 
@@ -250,11 +288,28 @@ class McpRegistry:
             log.info("mcp probe failed", extra={"mcp": server.name, "error": str(e)})
             raise InvalidInput(f"could not connect: {e}") from None
 
-    def list(self, owner: str | None) -> list[McpServer]:
+    def _scan(self, owner: str | None) -> tuple[list[McpServer], list[CorruptResource]]:
+        """owner 名下的 server：读得出来的，和配置坏了的（CorruptResource，每次读到都记 error）。"""
         directory = self._dir(owner)
         if not directory.exists():
-            return []
-        return [self._load(owner, p) for p in sorted(directory.glob("*.json"))]
+            return [], []
+        servers: list[McpServer] = []
+        corrupt: list[CorruptResource] = []
+        for path in sorted(directory.glob("*.json")):
+            try:
+                servers.append(self._load(owner, path))
+            except CorruptState as e:
+                log.error("corrupt mcp config", extra={"owner": owner, "mcp": path.stem, "error": str(e)})
+                corrupt.append(CorruptResource("MCP server", owner, path.stem, path, str(e)))
+        return servers, corrupt
+
+    def list(self, owner: str | None) -> list[McpServer]:
+        """owner 名下配置读得出来的 server；坏的见 corrupt。"""
+        return self._scan(owner)[0]
+
+    def corrupt(self, agent_id: str) -> list[CorruptResource]:
+        """agent 看得到的（它私有的与公共的）配置坏了的 server。它们不参与同名遮蔽（是否启用都读不出来）。"""
+        return self._scan(agent_id)[1] + self._scan(None)[1]
 
     def view(self, owner: str | None) -> list[tuple[McpServer, bool]]:
         """管理界面：owner 视角下的 server，即它私有的（在前）与公共的，各自标明是否被同名私有 server 遮蔽。

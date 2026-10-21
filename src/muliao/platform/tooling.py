@@ -1,7 +1,7 @@
 """工具的共同契约（各领域的工具集都依赖它，它只依赖平台）：一次运行的上下文 RunScope 与它的词汇（会话来源、回答交给谁），
 工具连续失败的容忍次数，以及把领域错误交还模型修正的包装。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,9 @@ class RunScope:
     session_id: str | None
     origin: Origin | None
     audience: Audience | None
+    # 运行开始时工具组发现、要告诉模型的问题（如这次连不上的 MCP server）：工具组构建、连接时追加，运行把它们放进
+    # 开头交给模型的运行上下文（AgentRuntime）。每次运行一份
+    notices: list[str] = field(default_factory=list, compare=False)
 
     @property
     def user_waits(self) -> bool:

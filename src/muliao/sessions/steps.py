@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
 
-from muliao.agent_runtime.api import StepHooks, attach_run_context, redact_messages
+from muliao.agent_runtime.api import StepHooks, attach_run_context, redact_messages, with_notices
 from muliao.agents.api import AgentInfo
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
@@ -76,7 +76,7 @@ class Steps:
 
     def hooks(self, state: RunState) -> StepHooks:
         return StepHooks(
-            started=lambda messages: self._started(state, messages),
+            started=lambda messages, notices: self._started(state, messages, notices),
             before_request=lambda request, messages: self._before_request(state, request, messages),
             after_response=lambda response, messages: self._after_response(state, response, messages),
             on_text=lambda kind, text: self._live.publish_delta(
@@ -90,9 +90,12 @@ class Steps:
             ),
         )
 
-    async def _started(self, state: RunState, messages: list[ModelMessage]) -> None:
+    async def _started(self, state: RunState, messages: list[ModelMessage], notices: Sequence[str]) -> None:
         state.live = messages
         state.saved = len(messages)
+        if notices:
+            # 和运行上下文挂在同一条请求上；运行上下文已经挂出去了（压缩后续跑）就单独挂在下一条新请求上
+            state.run_context = with_notices(state.run_context, notices)
 
     async def _before_request(
         self, state: RunState, request: ModelRequest, messages: list[ModelMessage]
