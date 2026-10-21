@@ -149,8 +149,10 @@ class Container:
                 finally:
                     root.cancel_scope.cancel()
         finally:
-            await self.http.aclose()
-            await self.db.engine.dispose()
+            try:
+                await self.db.engine.dispose()
+            finally:
+                await self.http.aclose()
 
     async def _prepare(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path)
@@ -226,8 +228,8 @@ def build_container(
     测试打开的开发期断言（schema.single_domain_writes）。"""
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     models = ModelRegistry(settings.llm)
-    # 联网搜索与语音转写共用的出站 HTTP 客户端（超时按请求给）；容器关停时关闭
-    http = httpx.AsyncClient()
+    # 联网搜索与语音转写共用的出站 HTTP 客户端；不设默认超时，每个调用必须自己传 timeout。容器关停时关闭
+    http = httpx.AsyncClient(timeout=None)
     if web is None and settings.web is not None:
         web = build_web_provider(settings.web, http)
     if transcriber is None and settings.transcription is not None:

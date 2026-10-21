@@ -375,6 +375,8 @@ class ResourceRepo:
             header = out[pos:end].split()
             if header[-1] == b"missing":
                 raise NotFound(f"{relative} does not exist at revision {rev}")
+            if len(header) != 3 or not header[2].isdigit():
+                raise RuntimeError(f"git cat-file gave an unexpected header for {rev}:{relative}: {header!r}")
             size = int(header[2])
             contents.append(out[end + 1 : end + 1 + size].decode())
             pos = end + 1 + size + 1

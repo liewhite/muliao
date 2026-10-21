@@ -341,7 +341,7 @@ class AgentRuntime:
     async def summarize(self, agent: AgentInfo, session_id: str, instructions: str, prompt: str) -> str:
         """用该 agent 的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文）。不转发事件到前端。"""
         ctx = {"agent": agent.id, "session_id": session_id, "model": agent.model}
-        async with self._billed(RunKind.COMPACTION, agent.id, agent.model, session_id, ctx, 0) as usage:
+        async with self._billed(RunKind.COMPACTION, agent.id, agent.model, session_id, ctx) as usage:
             result = await self._pai.run(
                 prompt, model=self._resolve_model(agent.model), instructions=instructions, usage=usage
             )
@@ -355,11 +355,11 @@ class AgentRuntime:
         model: str,
         session_id: str | None,
         ctx: Mapping[str, object],
-        history: int,
+        history: int | None = None,
     ) -> AsyncIterator[RunUsage]:
-        """一次模型运行的记账：记「agent run started」日志（ctx 与历史条数），交出给 pydantic-ai 累加用量的
+        """一次模型运行的记账：记「agent run started」日志（ctx 与带上的历史条数；压缩没有历史这一说，不记），交出给 pydantic-ai 累加用量的
         RunUsage；运行无论成功、失败还是被取消，退出时都把已花掉的部分记到 session_id 名下（_bill）。"""
-        log.info("agent run started", extra={**ctx, "history": history})
+        log.info("agent run started", extra=dict(ctx) if history is None else {**ctx, "history": history})
         usage = RunUsage()
         try:
             yield usage

@@ -82,11 +82,14 @@ async def test_broken_schedule_trigger_is_disabled_without_blocking_others(conta
         await _make_due(container, trigger_id)
     async with container.db.transaction() as s:
         (await triggers.get_in(s, bad.id)).prompt = "   "  # 模拟绕过校验写入的坏数据
+    changed = triggers.watch()
 
     await schedules.fire_due()
 
     bad, good = await triggers.get_by_name("bad"), await triggers.get_by_name("good")
     assert not bad.enabled and "message must not be empty" in bad.disabled_reason
+    # 停用经 TriggerService，和别的修改一样通知监听者
+    assert changed.is_set()
     assert good.last_session_id is not None
 
 
@@ -407,3 +410,17 @@ async def test_trigger_list_returns_each_kinds_typed_status(client, container, m
     assert set(listed["schedule"]["status"]) == {"next_run_at"}
     assert listed["once"]["status"]["run_at"].startswith("2099-01-01T10:00")
     assert listed["webhook"]["status"] == {"url": "http://test/api/hooks/w", "has_token": False}
+
+
+async def test_disabling_a_trigger_notifies_watchers_and_reports_a_deleted_one(container, make_agent):
+    alpha = (await make_agent()).id
+    t = await container.triggers.create(name="t", agent_id=alpha, kind="webhook", prompt="p", config={})
+    changed = container.triggers.watch()
+
+    assert await container.triggers.disable(t.id, "boom")
+    assert changed.is_set()
+    disabled = await container.triggers.get_by_name("t")
+    assert not disabled.enabled and disabled.disabled_reason == "boom"
+
+    await container.triggers.delete(t.id)
+    assert not await container.triggers.disable(t.id, "boom")
