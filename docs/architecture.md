@@ -480,7 +480,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 | `once` | `{"at": "<ISO 8601 时间>"}`，不带时区的按配置的时区解释，创建时必须在将来 | `{}`（到期时间就是配置本身） | `DueRunner` + `OnceDue`：消耗这次到期 = 归档（`finished_at`）。到点只触发一次，之后从列表里消失 |
 | `webhook` | `{}` | `token_hash` | `Webhooks`：`POST /api/hooks/{name}[?session_id=]` 凭 token 鉴权 |
 
-**按到期时间触发**（`triggers/due.py`，`schedule` 与 `once` 共用）：`DueRunner` 一个循环扫描所有还会到期的触发器，到期的并发触发。每种方式只给出两件事（`DueKind`）：到期时间从哪来（`due_at`），以及**消耗这次到期**时这一行怎么变（`consume_in`：定时推进到下次，一次性归档）。消耗与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）：先提交消耗，再调用 `fire`，所以进程恰好死在两者之间时这一次被跳过，**至多触发一次**；触发前按最新的行重新判断（列出之后被删除、停用、归档或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason`（经 `TriggerService.disable`，和别的修改一样通知监听者）。
+**按到期时间触发**（`triggers/due.py`，`schedule` 与 `once` 共用）：`DueRunner` 一个循环扫描所有还会到期的触发器，到期的并发触发。每种方式只给出两件事（`DueKind`）：到期时间从哪来（`due_at`），以及**消耗这次到期**时这一行怎么变（`consume_in`：定时推进到下次，一次性归档）。消耗与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）：先提交消耗，再调用 `fire`，所以进程恰好死在两者之间时这一次被跳过，**至多触发一次**；触发前按最新的行重新判断（列出之后被删除、停用、归档或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason`（经 `TriggerService.disable`，和别的修改一样通知监听者）；存下的配置或状态坏了、算不出到期时间的（`due_at` / `consume_in` 抛 `CorruptState`）同样只停用这一个，扫描循环照常继续。
 
 **归档**（`finished_at`，触发器的公共概念，不属于某一种方式）：这个触发器不会再触发了。一次性触发器在它那次到期被消耗时归档——无论随后是真的投递、前置检查判定没事，还是触发失败（失败另记 `disabled_reason`）。归档之后：不出现在默认列表（`trigger_list`、`GET /triggers`、界面主列表），不能再 `update` / 启用 / 立即运行（`Conflict`），可以删除；名称只在**未归档**的触发器之间唯一（部分唯一索引 `WHERE finished_at IS NULL`），所以同名的可以重新创建，按名称（`get_by_name`、webhook 的鉴权）找到的也只有未归档的那个。行永久保留，`id` 永不复用，它发起过的会话（`origin='trigger'`、`origin_ref` 是它的 id）因此一直查得到是谁发的：`GET /triggers?finished=true` 列出归档的，`GET /sessions?origin=trigger&origin_ref=<id>` 列出某个触发器发起过的会话（走会话领域的查询，触发器领域不碰 `sessions` 表），`trigger_list(finished=true)` 让 agent 查一次性任务的结果（带 `finished_at` 与 `last_session_id`）。
 
