@@ -26,6 +26,11 @@ class TooLarge(DomainError):
     """输入超过契约规定的大小上限。"""
 
 
+class ScriptFailed(DomainError):
+    """系统替调用方执行它写的脚本（如触发器的前置检查），脚本本身失败（非 0 退出、超时、输出过大）。API 映射为 502
+    并带出原因（可能含脚本的 stderr，只给已登录的用户）；工具层照常交还模型，由它修改脚本。"""
+
+
 class UpstreamFailed(Exception):
     """界面同步查询的外部服务（如向 LLM provider 查模型列表）报错或不可达，API 映射为 502 并原样带出原因。
 

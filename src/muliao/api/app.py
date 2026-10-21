@@ -36,12 +36,12 @@ from muliao.errors import (
     Forbidden,
     InvalidInput,
     NotFound,
+    ScriptFailed,
     TooLarge,
     Unauthorized,
     UpstreamFailed,
 )
 from muliao.platform.bus import SubscriberOverflow
-from muliao.triggers.api import PrecheckFailed
 
 log = logging.getLogger(__name__)
 
@@ -70,8 +70,8 @@ _STATUS = {
     Unauthorized: 401,
     Forbidden: 403,
     TooLarge: 413,
-    # 手动运行触发器时前置检查失败：原因（可能含脚本 stderr）给已登录的用户看
-    PrecheckFailed: 502,
+    # 如手动运行触发器时前置检查失败：原因（可能含脚本 stderr）给已登录的用户看
+    ScriptFailed: 502,
 }
 
 

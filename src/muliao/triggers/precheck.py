@@ -20,7 +20,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from muliao.errors import DomainError, NotFound
+from muliao.errors import NotFound, ScriptFailed
 from muliao.platform.shell import run_bash
 from muliao.vault.api import Vault
 
@@ -41,7 +41,7 @@ class Precheck(BaseModel):
     )
 
 
-class PrecheckFailed(DomainError):
+class PrecheckFailed(ScriptFailed):
     """前置检查本身失败。原因给用户与 agent 看（可能含脚本的 stderr），不交给 webhook 的外部调用方。"""
 
 
