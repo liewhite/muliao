@@ -3,7 +3,7 @@ import { Button, Card } from '@heroui/react'
 import { MessageSquare, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, asAgentId, sessionRoute, type Agent, type IssueDetail, type IssuePriority, type IssueStatus } from '../api'
-import { shouldRefetch, useServerEvents } from '../events'
+import { useRefetch } from '../events'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
@@ -66,8 +66,10 @@ function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | u
 }
 
 function Editor({ detail, onSaved, onCancel }: { detail: IssueDetail; onSaved: () => void; onCancel: () => void }) {
-  const [title, setTitle] = useState(detail.issue.title)
-  const [description, setDescription] = useState(detail.issue.description)
+  // 打开编辑时的值；编辑期间详情会随 agent 的改动重新拉取，比较改没改要以打开时为准
+  const [opened] = useState(detail.issue)
+  const [title, setTitle] = useState(opened.title)
+  const [description, setDescription] = useState(opened.description)
   const save = useAction()
   return (
     <Card>
@@ -81,7 +83,11 @@ function Editor({ detail, onSaved, onCancel }: { detail: IssueDetail; onSaved: (
             isDisabled={!title.trim()}
             onPress={() =>
               void save.run(async () => {
-                await api.updateIssue(detail.issue.id, { title, description })
+                // 只提交改过的字段：编辑期间 agent 可能改了另一个，不能用打开编辑时的旧值盖掉
+                await api.updateIssue(detail.issue.id, {
+                  ...(title !== opened.title && { title }),
+                  ...(description !== opened.description && { description }),
+                })
                 onSaved()
               })
             }
@@ -227,9 +233,7 @@ export default function IssueView() {
   const { id = '' } = useParams()
   const issueId = Number(id)
   const detail = useLoad(() => api.issue(issueId), [issueId])
-  useServerEvents((e) => {
-    if (shouldRefetch(e)) void detail.reload()
-  })
+  useRefetch('issues', detail.reload)
   return (
     <Loading state={detail}>{(d) => <Issue detail={d} reload={detail.reload} />}</Loading>
   )

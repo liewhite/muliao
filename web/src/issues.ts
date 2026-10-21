@@ -88,9 +88,18 @@ export function foldIssues(issues: Issue[], expanded: boolean): Issue[] {
   return expanded ? issues : issues.slice(0, FOLD_LIMIT)
 }
 
-/** 拖拽、本地乐观更新：把 issue 移到新状态，并按服务端的做法刷新更新时间 */
-export function moveIssue(issues: Issue[], id: number, status: IssueStatus, now: string): Issue[] {
-  return issues.map((i) => (i.id === id ? { ...i, status, updated_at: now } : i))
+/** 一次还没被服务端确认的拖拽：移到的状态与拖拽的时刻 */
+export interface PendingMove {
+  status: IssueStatus
+  at: string
+}
+
+/** 拖拽、本地乐观更新：把每个还在提交的 issue 移到新状态，并按服务端的做法刷新更新时间 */
+export function moveIssues(issues: Issue[], moves: ReadonlyMap<number, PendingMove>): Issue[] {
+  return issues.map((i) => {
+    const m = moves.get(i.id)
+    return m ? { ...i, status: m.status, updated_at: m.at } : i
+  })
 }
 
 function valueLabel(agents: Agent[] | undefined, a: IssueActivity, v: unknown): string {

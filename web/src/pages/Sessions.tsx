@@ -3,7 +3,7 @@ import { Card, Chip, Spinner } from '@heroui/react'
 import { ChevronDown, ChevronRight, Hourglass, Plus } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
 import { api, asAgentId, type AgentId, type Origin, type SessionListItem, sessionRoute } from '../api'
-import { shouldRefetch, useServerEvents } from '../events'
+import { useRefetch } from '../events'
 import { groupByAgent, splitActive } from '../sessionGroups'
 import {
   EmptyHint,
@@ -125,9 +125,7 @@ export default function Sessions() {
       }),
     [filter, agent],
   )
-  useServerEvents((e) => {
-    if (shouldRefetch(e)) void sessions.reload()
-  })
+  useRefetch('sessions', sessions.reload)
 
   return (
     <Page

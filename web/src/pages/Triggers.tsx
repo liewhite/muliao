@@ -165,7 +165,7 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
             label="触发条件"
             value={fireWhen}
             onChange={(value) => {
-              const next = (value ?? 'output') as Precheck['fire_when']
+              const next = value as Precheck['fire_when']
               setFireWhen(next)
               emit({ fireWhen: next })
             }}

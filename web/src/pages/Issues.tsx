@@ -1,9 +1,9 @@
 import { useRef, useState } from 'react'
 import { Card, Chip } from '@heroui/react'
-import { DndContext, MouseSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { DndContext, KeyboardSensor, MouseSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, type Agent, type Issue, type IssuePriority, type IssueStatus } from '../api'
-import { shouldRefetch, useServerEvents } from '../events'
+import { useRefetch } from '../events'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
@@ -19,7 +19,8 @@ import {
   ownerLabel,
   groupByStatus,
   issueRoute,
-  moveIssue,
+  moveIssues,
+  type PendingMove,
   WORK_LABEL,
 } from '../issues'
 import {
@@ -33,6 +34,7 @@ import {
   SelectInput,
   TextAreaInput,
   TextInput,
+  errorMessage,
   relativeTime,
   useAction,
   useAgents,
@@ -156,6 +158,8 @@ function Board({ issues, agents, onMove }: { issues: Issue[]; agents: Agent[] | 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+    // 键盘：空格拿起，方向键移动，空格或回车放下、Esc 取消；回车留给「打开」，不用来拿起
+    useSensor(KeyboardSensor, { keyboardCodes: { start: ['Space'], cancel: ['Escape'], end: ['Space', 'Enter'] } }),
   )
   const navigate = useNavigate()
   // 拖拽中、以及刚结束的这一刻：松手后浏览器紧接着会派发一次 click，不能把它当成「单击打开」
@@ -293,28 +297,37 @@ export default function Issues() {
   // 按负责项目筛选：看一个项目的全部 issue（含已完成、已取消）
   const [owner, setOwner] = useState(ALL_OWNERS)
   const loaded = useLoad(() => api.issues(owner === ALL_OWNERS ? undefined : owner), [owner])
-  // 拖拽后先在本地挪动，接口返回、重新拉取之后以服务端为准
-  const [moving, setMoving] = useState<{ id: number; status: IssueStatus; at: string } | null>(null)
-  const issues = loaded.data && moving ? moveIssue(loaded.data, moving.id, moving.status, moving.at) : loaded.data
-  const move = useAction()
-  useServerEvents((e) => {
-    // agent 的运行里可能改了 issue：运行结束、或重连后重新拉取
-    if (shouldRefetch(e)) void loaded.reload()
-  })
+  // 拖拽后先在本地挪动，接口返回、重新拉取之后以服务端为准；连着拖几张时每张各占一项
+  const [moving, setMoving] = useState<ReadonlyMap<number, PendingMove>>(new Map())
+  const issues = loaded.data && moveIssues(loaded.data, moving)
+  // 拖拽失败的错误：留到下一轮拖拽（之前的都已结束）开始时才清掉，不被同时进行的另一次冲掉
+  const [moveError, setMoveError] = useState<string | null>(null)
+  // agent 的运行里可能改了 issue：运行结束、或重连后重新拉取
+  useRefetch('issues', loaded.reload)
   const changeView = (v: View) => {
     localStorage.setItem(VIEW_KEY, v)
     setView(v)
   }
   const onMove = (id: number, status: IssueStatus) => {
-    setMoving({ id, status, at: new Date().toISOString() })
-    void move.run(async () => {
+    const pending: PendingMove = { status, at: new Date().toISOString() }
+    if (moving.size === 0) setMoveError(null)
+    setMoving((prev) => new Map(prev).set(id, pending))
+    void (async () => {
       try {
         await api.updateIssue(id, { status })
+      } catch (e) {
+        setMoveError(errorMessage(e))
       } finally {
         await loaded.reload()
-        setMoving(null)
+        // 同一张又被拖了一次：那一次还在提交，留着它的
+        setMoving((prev) => {
+          if (prev.get(id) !== pending) return prev
+          const next = new Map(prev)
+          next.delete(id)
+          return next
+        })
       }
-    })
+    })()
   }
   const toolbar = (
     <div className="flex flex-col gap-3">
@@ -334,7 +347,7 @@ export default function Issues() {
         options={[{ id: ALL_OWNERS, label: '所有项目' }, ...(agents.data ?? []).map((a) => ({ id: a.id as string, label: a.name }))]}
       />
       <NewIssueForm agents={agents.data} onCreated={() => void loaded.reload()} />
-      <ErrorAlert error={move.error} />
+      <ErrorAlert error={moveError} />
     </div>
   )
   return (

@@ -1,4 +1,15 @@
-import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+  type Ref,
+} from 'react'
 import {
   Alert,
   AlertDialog,
@@ -30,6 +41,7 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import 'katex/dist/katex.min.css'
 import { FILES_PATH, api, type Agent, type AgentId } from './api'
+import { listenServerEvents, shouldRefetch } from './events'
 import { normalizeMath } from './markdown'
 import { isSendShortcut, SEND_HINT } from './sendKey'
 
@@ -106,9 +118,48 @@ export function useAction() {
   return { busy, error, run, setError }
 }
 
-/** agent 列表（选择器与 id→名称显示共用）。 */
+// agent 列表的共享缓存：选择器、id→名称显示等各处共用一份，不各自请求。有组件在用时订阅服务端事件，
+// shouldRefetch 时重新拉取；没人用了就退订，下次有人用时先显示上次的结果、同时重新拉取
+type AgentsState = Omit<Loaded<Agent[]>, 'reload'>
+let agentsState: AgentsState = { data: undefined, error: null, loading: true }
+let agentsLatest = 0
+let agentsUnlisten: (() => void) | null = null
+const agentsSubscribers = new Set<() => void>()
+
+async function reloadAgents(): Promise<void> {
+  // 只让最新一次请求的结果落下，晚到的旧响应不能覆盖新值
+  const id = ++agentsLatest
+  let next: AgentsState
+  try {
+    next = { data: await api.agents(), error: null, loading: false }
+  } catch (e) {
+    next = { ...agentsState, error: errorMessage(e), loading: false }
+  }
+  if (id !== agentsLatest) return
+  agentsState = next
+  agentsSubscribers.forEach((s) => s())
+}
+
+function subscribeAgents(onChange: () => void) {
+  agentsSubscribers.add(onChange)
+  if (agentsUnlisten === null) {
+    agentsUnlisten = listenServerEvents((e) => {
+      if (shouldRefetch(e, 'agents')) void reloadAgents()
+    })
+    void reloadAgents()
+  }
+  return () => {
+    agentsSubscribers.delete(onChange)
+    if (agentsSubscribers.size === 0 && agentsUnlisten !== null) {
+      agentsUnlisten()
+      agentsUnlisten = null
+    }
+  }
+}
+
+/** agent 列表（选择器与 id→名称显示共用，见上面的共享缓存）。 */
 export function useAgents(): Loaded<Agent[]> {
-  return useLoad(() => api.agents(), [])
+  return { ...useSyncExternalStore(subscribeAgents, () => agentsState), reload: reloadAgents }
 }
 
 /** 按 id 显示 agent 名称；agent 列表尚未加载完时先显示 id。 */

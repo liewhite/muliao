@@ -27,8 +27,18 @@ export interface MergedLive {
 export function mergeLive(snapshot: LiveRun | null, current: RunEvent[]): MergedLive {
   if (snapshot === null) return { events: current, gap: current.length > 0 && current[0].seq !== 0 }
   const last = snapshot.events.at(-1)?.seq ?? -1
-  const after = current.filter((e) => e.run_id === snapshot.run_id && e.seq > last)
+  const after = notInSnapshot(snapshot, current)
   return { events: [...snapshot.events, ...after], gap: after.length > 0 && after[0].seq !== last + 1 }
+}
+
+/**
+ * 经 SSE 收到的事件里还要留着的：快照之后的同一段事件（没有快照时全部留着）。快照已经覆盖的、别的段的，合并时
+ * 本来就丢弃，收新事件时一并删掉，免得一轮长运行里越积越多。
+ */
+export function notInSnapshot(snapshot: LiveRun | null, current: RunEvent[]): RunEvent[] {
+  if (snapshot === null) return current
+  const last = snapshot.events.at(-1)?.seq ?? -1
+  return current.filter((e) => e.run_id === snapshot.run_id && e.seq > last)
 }
 
 /** 这一段的条目：完整条目原样接上，文字增量接在同类的最后一条后面（思考与回答交替时各自成条） */
@@ -56,21 +66,38 @@ export function liveItems(events: RunEvent[]): Item[] {
   return items
 }
 
-/** 重新连上了（前端自己产生）：期间可能丢了事件，页面要重新拉取 */
-export interface ReconnectEvent {
-  type: 'reconnected'
+/**
+ * 连上了（前端自己产生），第一次连接与重连都算：订阅建立之前、断线期间都可能错过事件，页面要重新拉取。
+ * 第一次也要算：页面的首次请求可能早于订阅建立，中间的事件（如运行结束）两边都没有，页面会一直停在旧状态。
+ */
+export interface ConnectedEvent {
+  type: 'connected'
+}
+
+/** 前端页面可以自己改的几类数据：列表与详情分屏并排时，详情里的改动要让列表重新拉取 */
+export type Resource = 'sessions' | 'agents' | 'issues'
+
+/**
+ * 这个页面自己改了某类数据（前端自己产生，见 announceChange）。服务端不为这些改动发事件（删会话、标已读、
+ * 增删改 agent），同一页面上并排展示同类数据的列表据此重新拉取。
+ */
+export interface ChangedEvent {
+  type: 'changed'
+  resource: Resource
 }
 
 /** 服务端定时发的心跳（api/app.py），只用来判断连接是否还活着，不交给页面 */
 type HeartbeatEvent = Schemas['HeartbeatEvent']
 
-/** 交给页面的事件：服务端发的（除了心跳），加上前端自己的重连事件 */
-export type PageEvent = Exclude<Schemas['ServerEvent'], HeartbeatEvent> | ReconnectEvent
+/** 交给页面的事件：服务端发的（除了心跳），加上前端自己产生的连上、改动事件 */
+export type PageEvent = Exclude<Schemas['ServerEvent'], HeartbeatEvent> | ConnectedEvent | ChangedEvent
 
 type Listener = (e: PageEvent) => void
 
-/** 列表/详情页是否要从 API 重新拉取：断线重连（期间可能丢了事件），或某次运行的状态变了 */
-export const shouldRefetch = (e: PageEvent) => e.type === 'reconnected' || (e.type === 'task' && e.kind === 'run')
+/** 展示 resource 的列表/详情页是否要从 API 重新拉取：连上了（之前可能丢了事件）、某次运行的状态变了（运行里
+ * 可能改了它），或这个页面自己改了它 */
+export const shouldRefetch = (e: PageEvent, resource: Resource) =>
+  e.type === 'connected' || (e.type === 'task' && e.kind === 'run') || (e.type === 'changed' && e.resource === resource)
 
 /** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
 export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {
@@ -97,8 +124,6 @@ const WATCHDOG_MS = 5000
 
 const listeners = new Set<Listener>()
 let source: EventSource | null = null
-// 是否连上过：之后的每次 open 都是重连，期间可能丢了事件，页面要重新拉取
-let everOpened = false
 let lastMessageAt = 0
 // 心跳间隔来自服务端的心跳；收到第一个之前不判断
 let heartbeatSeconds: number | null = null
@@ -112,8 +137,7 @@ function connect() {
   source = new EventSource('/api/events')
   lastMessageAt = Date.now()
   source.onopen = () => {
-    if (everOpened) listeners.forEach((l) => l({ type: 'reconnected' }))
-    everOpened = true
+    emit({ type: 'connected' })
   }
   source.onerror = (e) => {
     // 网络错误时 EventSource 自己重连（readyState 回到 CONNECTING）；非 200 响应会让它永久关闭，由看门狗重建。
@@ -135,11 +159,27 @@ function connect() {
       }
       return
     }
-    listeners.forEach((l) => l(event))
+    emit(event)
   }
 }
 
-/** 连接已死就丢掉它重新连接；重连成功时页面收到 reconnected，从数据库重新拉取 */
+/** 交给每个 listener；一个抛错不能让后面的收不到，错误照常报告（控制台、window error 事件） */
+function emit(event: PageEvent) {
+  listeners.forEach((l) => {
+    try {
+      l(event)
+    } catch (e) {
+      reportError(e)
+    }
+  })
+}
+
+/** 这个页面改了 resource（删会话、标已读、增删改 agent 之类）：通知并排展示它的列表重新拉取 */
+export function announceChange(resource: Resource) {
+  emit({ type: 'changed', resource })
+}
+
+/** 连接已死就丢掉它重新连接；连上时页面收到 connected，从数据库重新拉取 */
 function checkAlive() {
   if (source === null) return
   const closed = source.readyState === EventSource.CLOSED
@@ -164,17 +204,26 @@ function start() {
   document.addEventListener('visibilitychange', onVisible)
 }
 
+/** 订阅页面事件（组件外用，如共享缓存）；第一个订阅者建立连接。返回取消订阅 */
+export function listenServerEvents(listener: Listener): () => void {
+  listeners.add(listener)
+  if (source === null) start()
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
 export function useServerEvents(listener: Listener) {
   const ref = useRef(listener)
   ref.current = listener
-  useEffect(() => {
-    const l: Listener = (e) => ref.current(e)
-    listeners.add(l)
-    if (source === null) start()
-    return () => {
-      listeners.delete(l)
-    }
-  }, [])
+  useEffect(() => listenServerEvents((e) => ref.current(e)), [])
+}
+
+/** 展示 resource 的页面：shouldRefetch 时重新拉取 */
+export function useRefetch(resource: Resource, reload: () => Promise<void>) {
+  useServerEvents((e) => {
+    if (shouldRefetch(e, resource)) void reload()
+  })
 }
 
 /** 服务端已经换了前端版本，这个页面该刷新了（不自动刷新：会丢掉正在输入的草稿） */
@@ -193,7 +242,6 @@ export function useUiOutdated(): boolean {
 export function closeServerEvents() {
   source?.close()
   source = null
-  everOpened = false
   heartbeatSeconds = null
   if (watchdog !== null) clearInterval(watchdog)
   watchdog = null

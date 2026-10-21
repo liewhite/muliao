@@ -116,9 +116,10 @@ export function useVoiceInput(onText: (text: string) => void) {
     setStartedAt(began)
   }, [])
 
-  // 离开页面：停止录音（onstop 里释放麦克风），不再转写
+  // 离开页面：停止录音（onstop 里释放麦克风），不再转写；还在等麦克风授权的，拿到后不开始录音
   useEffect(
     () => () => {
+      held.current = false
       const rec = recorder.current
       if (rec?.state === 'recording') {
         rec.onstop = null

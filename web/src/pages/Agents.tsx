@@ -36,6 +36,7 @@ import { ResourceHistory } from './Prompts'
 import { SkillList } from './Skills'
 import { SecretManager } from './Vault'
 import { refreshUnreadLogged } from '../unread'
+import { announceChange } from '../events'
 
 export function AgentList() {
   const agents = useAgents()
@@ -177,6 +178,8 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
     await action.run(async () => {
       const saved = agent ? await api.updateAgent(agent.id, updateOf(input)) : await api.createAgent(input)
       toast.success(agent ? '已保存' : '已创建')
+      // 分屏时旁边的 agent 列表（以及各处的 agent 名称）跟着更新
+      announceChange('agents')
       onSaved(saved)
     })
   }
@@ -335,6 +338,7 @@ export function AgentDetail() {
     if (ok && (await action.run(() => api.deleteAgent(id)))) {
       // 它的会话连同指向它们的通知一起删除
       refreshUnreadLogged()
+      announceChange('agents')
       navigate('/agents')
     }
   }

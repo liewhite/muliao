@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isOutdated, isStale, liveItems, mergeLive, needsReconnect, type RunEvent } from './events'
+import { isOutdated, isStale, liveItems, mergeLive, needsReconnect, notInSnapshot, type RunEvent } from './events'
 
 const base = { type: 'run', session_id: 's', agent: 'a', run_id: 'r', seq: 0 } as const
 
@@ -70,6 +70,12 @@ describe('mergeLive', () => {
   it('drops events of another run and keeps received events when there is no snapshot', () => {
     expect(mergeLive({ run_id: 'new', events: [at('new', 0)] }, [at('old', 7)]).events.map((e) => e.run_id)).toEqual(['new'])
     expect(mergeLive(null, [at('r', 0)]).events).toHaveLength(1)
+  })
+
+  it('keeps only received events the snapshot does not cover yet', () => {
+    const snapshot = { run_id: 'r', events: [at('r', 0), at('r', 1)] }
+    expect(notInSnapshot(snapshot, [at('old', 5), at('r', 1), at('r', 2)]).map((e) => [e.run_id, e.seq])).toEqual([['r', 2]])
+    expect(notInSnapshot(null, [at('r', 0)])).toHaveLength(1)
   })
 })
 

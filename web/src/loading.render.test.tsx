@@ -35,9 +35,14 @@ describe('shouldRefetch', () => {
   const task = (kind: 'run' | 'deliver') =>
     ({ type: 'task', task_id: 1, kind, status: 'done', session_id: 's', agent: 'a', error: null }) as const
 
-  it('refetches after a reconnect or a run status change, not on deliveries', () => {
-    expect(shouldRefetch({ type: 'reconnected' })).toBe(true)
-    expect(shouldRefetch(task('run'))).toBe(true)
-    expect(shouldRefetch(task('deliver'))).toBe(false)
+  it('refetches after connecting or a run status change, not on deliveries', () => {
+    expect(shouldRefetch({ type: 'connected' }, 'sessions')).toBe(true)
+    expect(shouldRefetch(task('run'), 'sessions')).toBe(true)
+    expect(shouldRefetch(task('deliver'), 'sessions')).toBe(false)
+  })
+
+  it('refetches after this page changed the same resource only', () => {
+    expect(shouldRefetch({ type: 'changed', resource: 'sessions' }, 'sessions')).toBe(true)
+    expect(shouldRefetch({ type: 'changed', resource: 'agents' }, 'sessions')).toBe(false)
   })
 })

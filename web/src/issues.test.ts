@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Issue, IssueActivity } from './api'
-import { FOLD_LIMIT, activityText, assigneeLabel, foldIssues, groupByStatus, moveIssue } from './issues'
+import { FOLD_LIMIT, activityText, assigneeLabel, foldIssues, groupByStatus, moveIssues } from './issues'
 
 const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   id,
@@ -42,10 +42,15 @@ describe('issues', () => {
     expect(groups.backlog).toEqual([])
   })
 
-  it('moves an issue to another status', () => {
-    const moved = moveIssue([issue(1), issue(2)], 2, 'done', '2026-10-21T09:00:00Z')
-    expect(moved.map((i) => i.status)).toEqual(['todo', 'done'])
+  it('moves every pending issue to its new status', () => {
+    const moves = new Map([
+      [2, { status: 'done' as const, at: '2026-10-21T09:00:00Z' }],
+      [3, { status: 'blocked' as const, at: '2026-10-21T09:00:01Z' }],
+    ])
+    const moved = moveIssues([issue(1), issue(2), issue(3)], moves)
+    expect(moved.map((i) => i.status)).toEqual(['todo', 'done', 'blocked'])
     expect(moved[1].updated_at).toBe('2026-10-21T09:00:00Z')
+    expect(moved[2].updated_at).toBe('2026-10-21T09:00:01Z')
   })
 
   it('labels assignees', () => {
