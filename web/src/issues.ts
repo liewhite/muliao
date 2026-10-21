@@ -102,12 +102,26 @@ export function moveIssues(issues: Issue[], moves: ReadonlyMap<number, PendingMo
   })
 }
 
+const statusLabel = (v: unknown) => STATUS_LABEL[v as IssueStatus] ?? String(v)
+
 function valueLabel(agents: Agent[] | undefined, a: IssueActivity, v: unknown): string {
   if (a.kind === 'assignee') return assigneeLabel(agents, (v as string | null) ?? null)
   if (a.kind === 'owner') return ownerLabel(agents, (v as string | null) ?? null)
-  if (a.kind === 'status') return STATUS_LABEL[v as IssueStatus] ?? String(v)
+  if (a.kind === 'status') return statusLabel(v)
   if (a.kind === 'priority') return PRIORITY_LABEL[v as IssuePriority] ?? String(v)
   return String(v)
+}
+
+/** issue 编号列表的文字：「#1, #2」，空为「无」 */
+export function issueRefs(ids: readonly number[]): string {
+  return ids.map((i) => `#${i}`).join(', ') || '无'
+}
+
+/** 解析用户输入的依赖列表（「#1, 2 #3」）；有不是编号的内容返回 null */
+export function parseIssueRefs(text: string): number[] | null {
+  const parts = text.split(/[\s,，]+/).filter(Boolean)
+  const ids = parts.map((p) => (/^#?\d+$/.test(p) ? Number(p.replace('#', '')) : NaN))
+  return ids.some(Number.isNaN) ? null : ids
 }
 
 /** 时间线上一条属性变化的文字（评论另行渲染） */
@@ -119,6 +133,10 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
       return '修改了描述'
     case 'comment':
       return '评论了'
+    case 'depends_on':
+      return `把依赖从「${issueRefs(a.change?.from as number[])}」改为「${issueRefs(a.change?.to as number[])}」`
+    case 'dependency':
+      return `把依赖 #${a.change?.issue} 的状态从「${statusLabel(a.change?.from)}」改为「${statusLabel(a.change?.to)}」`
     default: {
       const what = { status: '状态', assignee: '指派', owner: '负责项目', priority: '优先级', title: '标题' }[a.kind]
       return `把${what}从「${valueLabel(agents, a, a.change?.from)}」改为「${valueLabel(agents, a, a.change?.to)}」`

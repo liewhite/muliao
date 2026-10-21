@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Issue, IssueActivity } from './api'
-import { FOLD_LIMIT, activityText, assigneeLabel, foldIssues, groupByStatus, moveIssues } from './issues'
+import { FOLD_LIMIT, activityText, assigneeLabel, foldIssues, groupByStatus, moveIssues, parseIssueRefs } from './issues'
 
 const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   id,
@@ -14,6 +14,9 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   sessions: {},
   assignee_session: null,
   stalled: false,
+  depends_on: [],
+  blocks: [],
+  waiting_on: [],
   created_at: '2026-10-21T00:00:00Z',
   updated_at: '2026-10-21T00:00:00Z',
   ...over,
@@ -70,5 +73,17 @@ describe('issues', () => {
     })
     expect(activityText(agents, change('status', 'todo', 'done'))).toBe('把状态从「Todo」改为「完成」')
     expect(activityText(agents, change('assignee', null, 'a1'))).toBe('把指派从「未指派」改为「alpha」')
+    expect(activityText(agents, change('depends_on', [1, 2], []))).toBe('把依赖从「#1, #2」改为「无」')
+    expect(activityText(agents, { ...change('dependency', 'todo', 'done'), change: { issue: 3, from: 'todo', to: 'done' } })).toBe(
+      '把依赖 #3 的状态从「Todo」改为「完成」',
+    )
+  })
+})
+
+describe('parseIssueRefs', () => {
+  it('reads numbers with or without #, separated by commas or spaces', () => {
+    expect(parseIssueRefs('#1, 2 ，#30')).toEqual([1, 2, 30])
+    expect(parseIssueRefs('  ')).toEqual([])
+    expect(parseIssueRefs('#1, abc')).toBeNull()
   })
 })

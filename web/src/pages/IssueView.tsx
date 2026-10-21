@@ -13,6 +13,9 @@ import {
   assigneeOf,
   assigneeOptions,
   assigneeValue,
+  issueRefs,
+  issueRoute,
+  parseIssueRefs,
 } from '../issues'
 import {
   ActionButton,
@@ -65,28 +68,45 @@ function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | u
   )
 }
 
+function IssueLinks({ ids }: { ids: number[] }) {
+  return ids.map((i) => (
+    <Link key={i} to={issueRoute(i)} className="text-accent">
+      #{i}
+    </Link>
+  ))
+}
+
 function Editor({ detail, onSaved, onCancel }: { detail: IssueDetail; onSaved: () => void; onCancel: () => void }) {
   // 打开编辑时的值；编辑期间详情会随 agent 的改动重新拉取，比较改没改要以打开时为准
   const [opened] = useState(detail.issue)
   const [title, setTitle] = useState(opened.title)
   const [description, setDescription] = useState(opened.description)
+  const [dependsOn, setDependsOn] = useState(opened.depends_on.map((i) => `#${i}`).join(', '))
+  const parsed = parseIssueRefs(dependsOn)
   const save = useAction()
   return (
     <Card>
       <Card.Content className="flex flex-col gap-3">
         <TextInput label="标题" value={title} onChange={setTitle} isRequired />
         <TextAreaInput label="描述（Markdown）" value={description} onChange={setDescription} rows={8} />
+        <TextInput
+          label="依赖的 issue（编号，逗号分隔；全部完成或取消后才交给被指派的 agent）"
+          value={dependsOn}
+          onChange={setDependsOn}
+        />
+        {parsed === null && <p className="text-xs text-danger">只能填 issue 编号，如 #12, #15</p>}
         <ErrorAlert error={save.error} />
         <div className="flex gap-2">
           <ActionButton
             isPending={save.busy}
-            isDisabled={!title.trim()}
+            isDisabled={!title.trim() || parsed === null}
             onPress={() =>
               void save.run(async () => {
                 // 只提交改过的字段：编辑期间 agent 可能改了另一个，不能用打开编辑时的旧值盖掉；都没改就不请求
                 const patch = {
                   ...(title !== opened.title && { title }),
                   ...(description !== opened.description && { description }),
+                  ...(parsed !== null && parsed.join() !== opened.depends_on.join() && { depends_on: parsed }),
                 }
                 if (Object.keys(patch).length > 0) await api.updateIssue(detail.issue.id, patch)
                 onSaved()
@@ -202,6 +222,26 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
         />
       </div>
       <ErrorAlert error={change.error} />
+
+      {(issue.depends_on.length > 0 || issue.blocks.length > 0) && (
+        <div className="flex flex-col gap-1 text-sm">
+          {issue.depends_on.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-muted">依赖</span>
+              <IssueLinks ids={issue.depends_on} />
+              <span className="text-muted">
+                {issue.waiting_on.length > 0 ? `等待 ${issueRefs(issue.waiting_on)} 完成` : '已全部完成'}
+              </span>
+            </div>
+          )}
+          {issue.blocks.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-muted">被依赖</span>
+              <IssueLinks ids={issue.blocks} />
+            </div>
+          )}
+        </div>
+      )}
 
       {sessions.length > 0 && (
         <div className="flex flex-wrap gap-2">

@@ -22,6 +22,8 @@ import {
   moveIssues,
   type PendingMove,
   WORK_LABEL,
+  issueRefs,
+  parseIssueRefs,
 } from '../issues'
 import {
   ActionButton,
@@ -73,6 +75,11 @@ function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefine
             <Chip size="sm" variant="soft">
               → {assigneeLabel(agents, issue.assignee)}
             </Chip>
+            {issue.waiting_on.length > 0 && (
+              <Chip size="sm" variant="soft">
+                等待 {issueRefs(issue.waiting_on)}
+              </Chip>
+            )}
             {issue.stalled ? (
               <Chip size="sm" variant="soft" color="warning">
                 没人在处理
@@ -249,13 +256,25 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
   const [assignee, setAssignee] = useState(UNASSIGNED)
   // 负责的项目必填：不猜
   const [owner, setOwner] = useState<string | null>(null)
+  const [dependsOn, setDependsOn] = useState('')
+  const parsed = parseIssueRefs(dependsOn)
   const action = useAction()
   const submit = () =>
     action.run(async () => {
       if (owner === null) throw new Error('请选择负责的项目（owner）')
-      await api.createIssue({ title, owner, description, status, priority, assignee: assigneeOf(assignee) })
+      if (parsed === null) throw new Error('依赖只能填 issue 编号，如 #12, #15')
+      await api.createIssue({
+        title,
+        owner,
+        description,
+        status,
+        priority,
+        assignee: assigneeOf(assignee),
+        depends_on: parsed,
+      })
       setTitle('')
       setDescription('')
+      setDependsOn('')
       onCreated()
     })
   return (
@@ -284,9 +303,16 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
         />
         <SelectInput label="指派给" value={assignee} onChange={setAssignee} options={assigneeOptions(agents)} />
       </div>
-      <p className="text-xs text-muted">指派给 agent 且状态为 Todo / 进行中时，会唤醒它来处理。</p>
+      <TextInput label="依赖的 issue（编号，逗号分隔，可不填）" value={dependsOn} onChange={setDependsOn} />
+      <p className="text-xs text-muted">
+        指派给 agent 且状态为 Todo / 进行中时，会唤醒它来处理；有依赖的要等依赖全部完成或取消后才唤醒。
+      </p>
       <ErrorAlert error={action.error} />
-      <ActionButton isPending={action.busy} isDisabled={!title.trim() || owner === null} onPress={submit}>
+      <ActionButton
+        isPending={action.busy}
+        isDisabled={!title.trim() || owner === null || parsed === null}
+        onPress={submit}
+      >
         创建
       </ActionButton>
     </CollapsibleForm>
