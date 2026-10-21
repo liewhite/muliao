@@ -297,7 +297,11 @@ class TriggerService:
             if live:
                 return live[0]
             if same_name:
-                raise _finished(name)
+                # 按名称的操作（含删除）都指不到归档的：别提示「可以删除」，说清楚它已是历史、无需清理
+                raise Conflict(
+                    f"trigger {name!r} has finished and will not fire again; it is archived as history "
+                    "(see trigger_list(finished=true)), so there is nothing to change, run or delete"
+                )
             raise NotFound(f"trigger {name!r} not found")
 
     async def busy_in(self, s: AsyncSession, trigger: Trigger) -> bool:

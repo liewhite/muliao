@@ -226,3 +226,7 @@ async def test_the_agent_creates_a_once_trigger_and_later_looks_up_what_came_of_
     assert str((await container.triggers.list(finished=True))[0].last_session_id) in archived
     # 归档的按名称指不了，但错误说清楚是跑完归档了，不是找不到
     assert "has finished" in rerun
+    # 按名称删除同样指不到归档的；提示不能自相矛盾地说「可以删除」
+    (deleted,) = set(await run_tools(container, models, me.id, [("trigger_delete", {"name": "remind"})]))
+    assert "has finished" in deleted and "nothing to change, run or delete" in deleted
+    assert "can only be viewed or deleted" not in deleted
