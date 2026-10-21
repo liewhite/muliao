@@ -16,7 +16,7 @@ from muliao.sessions.api import Origin
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Message
 from muliao.sessions.transcript import to_items
-from tests.test_flow import ALL_TASK_KINDS, call_then_answer, drain, history_of, start
+from tests.test_flow import call_then_answer, drain, history_of, start
 
 
 async def test_message_ids_never_reused_after_deleting_latest_session(container, make_agent):
@@ -42,16 +42,16 @@ async def test_next_due_ignores_tasks_blocked_by_running_lane(container, make_ag
             container.queue.enqueue(
                 s, kind=DELIVER_TASK, lane="x", agent_id=alpha, session_id=None, payload={}
             )
-    await container.queue.claim(ALL_TASK_KINDS)
+    await container.queue.claim(container.worker.kinds)
 
     # 第二个 task 被同 lane 的 running 挡住，不应让 worker 以为马上有活可干
-    assert await container.queue.next_due(ALL_TASK_KINDS) is None
+    assert await container.queue.next_due(container.worker.kinds) is None
 
 
 async def test_deleting_session_or_agent_with_running_task_is_rejected(container, make_agent):
     alpha = (await make_agent()).id
     session = await start(container, alpha, "hi")
-    await container.queue.claim(ALL_TASK_KINDS)
+    await container.queue.claim(container.worker.kinds)
 
     with pytest.raises(Conflict):
         await container.sessions.delete(session.id)
@@ -144,7 +144,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
 
     models.models["m"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("ok")]))
     await container.queue.retry(turn.id)
-    claimed = await container.queue.claim(ALL_TASK_KINDS)
+    claimed = await container.queue.claim(container.worker.kinds)
     assert claimed.error is not None  # 运行期间仍能看到上次为什么失败
 
 
@@ -294,3 +294,25 @@ async def test_running_out_of_vault_set_retries_keeps_the_value_out_of_the_logge
     async with container.db.transaction() as s:
         payloads = (await s.scalars(select(Message.payload).where(Message.session_id == session.id))).all()
     assert all("super-secret" not in p for p in payloads)
+
+
+async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_transient_error(
+    container, make_agent, models
+):
+    """worker 不认识 SDK 的异常：压缩（summarize）与反思（run_once）这些入口同样要换成 TransientError 才会重试。"""
+    from muliao.agent_runtime.runner import RunProfile
+
+    agent = await make_agent("alpha", model="m")
+
+    def overloaded(_m, _i) -> ModelResponse:
+        raise ModelHTTPError(status_code=503, model_name="m")
+
+    from tests.scripted import scripted
+
+    models.models["m"] = scripted(overloaded)
+    runtime = container.consumer._runtime  # noqa: SLF001
+    with pytest.raises(TransientError, match="503"):
+        await runtime.summarize(agent, "s1", "summarize", "text")
+    scope = runtime.scope(agent, session_id=None, audience=None)
+    with pytest.raises(TransientError, match="503"):
+        await runtime.run_once(agent, scope, "reflect", RunProfile(toolsets=[]))

@@ -14,7 +14,7 @@ from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, SessionHold
 from tests.scripted import scripted
-from tests.test_flow import ALL_TASK_KINDS, deliver, drain, history_of, start, tasks_of
+from tests.test_flow import deliver, drain, history_of, start, tasks_of
 from tests.test_mailbox import Recorder
 from tests.test_threads import call, echo, threads_of
 
@@ -590,7 +590,7 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
 async def test_no_check_ins_while_the_delegator_waits_on_the_ask(container, make_agent, models):
     parent, _seen = await _asking(container, make_agent, models, scripted(Recorder()))
     # 只跑发问方那次运行：它停在 ask_agent 上，子 thread 的运行还排着
-    run = await container.queue.claim(ALL_TASK_KINDS)
+    run = await container.queue.claim(container.worker.kinds)
     assert run is not None and run.session_id == parent.id
     await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
     # 检查信件要等回答一起才交给模型，这时不发
@@ -643,7 +643,7 @@ async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, mak
     from muliao.agent_runtime.conventions import STOPPED_TOOL_RESULT
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
-    run = await container.queue.claim(ALL_TASK_KINDS)
+    run = await container.queue.claim(container.worker.kinds)
     assert run is not None and run.session_id == parent.id
     await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
 

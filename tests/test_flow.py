@@ -28,12 +28,9 @@ from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
-from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
+from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Mail, Message
 from tests.scripted import scripted
-
-# 组合根登记的全部任务种类（领取时不限种类用）
-ALL_TASK_KINDS = (EVENT_TASK, RUN_TASK, COMPACTION_TASK, REFLECTION_TASK, DELIVER_TASK)
 
 
 async def drain(container, limit_seconds: float = 10.0) -> None:

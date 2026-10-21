@@ -56,6 +56,11 @@ class Worker:
         self._bus = bus
         self._slots = anyio.Semaphore(concurrency)
 
+    @property
+    def kinds(self) -> frozenset[str]:
+        """这个 worker 处理的任务种类（组合根登记的处理器）。"""
+        return frozenset(self._handlers)
+
     def _publish(self, task: Task, status: TaskStatus, error: str | None = None) -> None:
         self._bus.publish(
             TaskEvent(

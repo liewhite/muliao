@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import anyio
 import httpx
 from pydantic_ai import FunctionToolset
-from pydantic_ai.toolsets import AbstractToolset
+from pydantic_ai.toolsets import AbstractToolset, DynamicToolset
 
 from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
 from muliao.agent_runtime.mcp import MCP_TOOL_NAMES, McpConnector
@@ -109,7 +109,8 @@ class Container:
     sessions: SessionService
     notifications: Notifications
     mcp: McpRegistry
-    mcp_connector: McpConnector
+    # 「使用 MCP」组（临时 agent 也用它）
+    mcp_tools: DynamicToolset[RunScope]
     triggers: TriggerService
     due_triggers: DueRunner
     webhooks: Webhooks
@@ -167,11 +168,19 @@ class Container:
         await self._check_agent_models()
         await self._check_agent_tool_groups()
         await self._check_orphan_resources()
+        await self._check_task_kinds()
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
         await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)
         await asyncio.to_thread(self.files.recover)
         # 上次运行留下的「运行中」后台任务：进程已随服务结束，记为被中断并通知 agent（worker 处理这些事件之前）
         await self.jobs.recover()
+
+    async def _check_task_kinds(self) -> None:
+        """任务种类是不透明的字符串（platform.tables）：库里还没完成的 task 若是没有处理器登记的种类（例如改名后留下的
+        旧值），它永远不会被领取，还挡住它的 lane。启动时报出来，由人处理（「任务」页可见）。"""
+        unknown = sorted(await self.queue.unfinished_kinds() - self.worker.kinds)
+        if unknown:
+            log.error("unfinished tasks of kinds no handler is registered for", extra={"kinds": unknown})
 
     async def _check_orphan_resources(self) -> None:
         """数据库里已删除、还留着资源目录（删除时提交失败所致）或工作目录（删除时没删干净）的 agent：记录出来，由人决定
@@ -456,7 +465,7 @@ def build_container(
         sessions=sessions,
         notifications=notifications,
         mcp=mcp,
-        mcp_connector=mcp_connector,
+        mcp_tools=mcp_tools,
         triggers=triggers,
         due_triggers=due_triggers,
         webhooks=webhooks,

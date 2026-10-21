@@ -224,6 +224,14 @@ class TaskQueue:
             )
             return result.rowcount
 
+    async def unfinished_kinds(self) -> set[str]:
+        """还没完成（pending、running）的 task 有哪些种类（启动时核对每种都有处理器，见 Container._check_task_kinds）。"""
+        async with self._db.transaction() as s:
+            query = (
+                select(Task.kind).where(Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING])).distinct()
+            )
+            return set((await s.scalars(query)).all())
+
     async def next_due(self, kinds: Collection[str]) -> datetime | None:
         """最早一个「可领取、只是还没到时间」的 task 的时间；被同 lane 挡住的 task 由 complete/fail 唤醒。"""
         claimable = _claimable().where(Task.kind.in_(list(kinds))).subquery()

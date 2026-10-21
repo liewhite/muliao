@@ -12,12 +12,12 @@ from sqlalchemy import select
 
 from muliao.sessions.api import Origin
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS
-from muliao.sessions.lanes import COMPACTION_TASK, session_lane
+from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, session_lane
 from muliao.usage.api import RunKind, UsageEntry, UsageGroup
 from muliao.usage.tables import ModelUsage
 from tests.conftest import login
 from tests.scripted import scripted
-from tests.test_flow import drain, start
+from tests.test_flow import drain, start, tasks_of
 from tests.test_tools import run_tools
 
 # 一次模型调用报告的用量：input 是输入总数，其中 80 命中缓存、10 写入缓存（pydantic-ai 的口径）。
@@ -130,8 +130,13 @@ async def test_a_run_that_fails_still_records_what_it_already_spent(container, m
     await drain(container)
 
     rows = await usage_rows(container)
-    # 这次运行失败后按队列规则重试，每次尝试都真的花了第一次请求的 token，所以每次都记一条
-    assert rows and all(r.kind == RunKind.RUN and r.requests == 1 and r.input_tokens > 0 for r in rows)
+    # 暂时性失败按队列规则重试到用完次数；只有第一次尝试的那次请求真的花了 token（之后的尝试从已保存的回复续跑，
+    # 请求一发就失败），所以只记一条
+    [turn] = await tasks_of(container, RUN_TASK)
+    assert turn.attempts == container.settings.runtime.task_max_attempts
+    assert len(rows) == 1 and all(
+        r.kind == RunKind.RUN and r.requests == 1 and r.input_tokens > 0 for r in rows
+    )
 
 
 async def test_a_stopped_run_still_records_what_it_spent(client, container, make_agent, models):
