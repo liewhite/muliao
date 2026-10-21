@@ -153,14 +153,18 @@ async def test_changes_notify_every_activation_independently(container):
     [
         ("schedule", {"state": {}}),
         ("schedule", {"state": {"next_run_at": "soon"}}),
+        ("schedule", {"state": {"next_run_at": "2000-01-01T00:00"}}),
         ("schedule", {"config": {}}),
         ("once", {"config": {}}),
+        ("once", {"config": {"at": "2000-01-01T00:00"}}),
     ],
     ids=[
         "schedule-without-next-run",
         "schedule-with-unparsable-next-run",
+        "schedule-next-run-without-timezone",
         "schedule-without-cron",
         "once-without-time",
+        "once-time-without-timezone",
     ],
 )
 async def test_a_trigger_with_corrupt_stored_data_is_disabled_and_the_scan_goes_on(
@@ -187,8 +191,25 @@ async def test_a_trigger_with_corrupt_stored_data_is_disabled_and_the_scan_goes_
     await schedules._next_wake()
 
     bad, good = await triggers.get_by_name("bad"), await triggers.get_by_name("good")
-    assert not bad.enabled and bad.disabled_reason.startswith("CorruptState: ")
+    assert not bad.enabled and bad.disabled_reason.startswith(f"CorruptState: trigger {bad.id} (bad)")
     assert good.last_session_id is not None
+
+
+async def test_a_trigger_corrupted_after_being_listed_is_disabled_when_it_fires(container, make_agent):
+    """列出到期之后、触发之前才被改坏的：按最新的行重新判断时发现，同样只停用它。"""
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    trigger = await triggers.create(
+        name="bad", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
+    )
+    async with container.db.transaction() as s:
+        (await triggers.get_in(s, trigger.id)).state = {}
+
+    await schedules._fire_one(trigger.id, datetime.now().astimezone())
+
+    trigger = await triggers.get_by_name("bad")
+    assert not trigger.enabled and trigger.disabled_reason.startswith("CorruptState: ")
+    assert trigger.last_session_id is None
 
 
 @pytest.mark.parametrize(

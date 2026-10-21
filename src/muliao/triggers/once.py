@@ -19,9 +19,10 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import CorruptState, InvalidInput
+from muliao.errors import InvalidInput
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
+from muliao.triggers.due import stored_time
 from muliao.triggers.service import TriggerService
 from muliao.triggers.tables import Trigger
 
@@ -70,14 +71,11 @@ class OnceKind:
         return at if at.tzinfo is not None else at.replace(tzinfo=self._tz)
 
     def status(self, trigger: Trigger) -> OnceStatus:
-        return OnceStatus(run_at=run_at(trigger.config))
+        return OnceStatus(run_at=run_at(trigger))
 
 
-def run_at(config: dict[str, Any]) -> datetime:
-    try:
-        return datetime.fromisoformat(config["at"])
-    except (KeyError, TypeError, ValueError) as e:
-        raise CorruptState(f"once trigger config has no valid time: {config!r}") from e
+def run_at(trigger: Trigger) -> datetime:
+    return stored_time(trigger, trigger.config.get("at"), "time")
 
 
 class OnceDue:
@@ -89,7 +87,7 @@ class OnceDue:
         self._triggers = triggers
 
     def due_at(self, trigger: Trigger) -> datetime:
-        return run_at(trigger.config)
+        return run_at(trigger)
 
     async def consume_in(self, _s: AsyncSession, trigger: Trigger, _now: datetime) -> str | None:
         self._triggers.finish_in(trigger)

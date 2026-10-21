@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.errors import CorruptState, InvalidInput
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
+from muliao.triggers.due import stored_time
 from muliao.triggers.service import TriggerService
 from muliao.triggers.tables import Trigger
 
@@ -66,20 +67,19 @@ class ScheduleKind:
         return {"cron": expr}, {"next_run_at": self.next_run(expr, self._clock()).isoformat()}
 
     def status(self, trigger: Trigger) -> ScheduleStatus:
-        return ScheduleStatus(next_run_at=next_run_at(trigger.state))
+        return ScheduleStatus(next_run_at=next_run_at(trigger))
 
 
-def next_run_at(state: dict[str, Any]) -> datetime:
-    try:
-        return datetime.fromisoformat(state["next_run_at"])
-    except (KeyError, TypeError, ValueError) as e:
-        raise CorruptState(f"schedule trigger state has no valid next_run_at: {state!r}") from e
+def next_run_at(trigger: Trigger) -> datetime:
+    return stored_time(trigger, trigger.state.get("next_run_at"), "next_run_at")
 
 
-def _cron(config: dict[str, Any]) -> str:
-    cron = config.get("cron")
+def _cron(trigger: Trigger) -> str:
+    cron = trigger.config.get("cron")
     if not isinstance(cron, str):
-        raise CorruptState(f"schedule trigger config has no cron expression: {config!r}")
+        raise CorruptState(
+            f"trigger {trigger.id} ({trigger.name}) has no cron expression: {trigger.config!r}"
+        )
     return cron
 
 
@@ -93,12 +93,10 @@ class ScheduleDue:
         self._kind = kind
 
     def due_at(self, trigger: Trigger) -> datetime:
-        return next_run_at(trigger.state)
+        return next_run_at(trigger)
 
     async def consume_in(self, s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
-        self._triggers.set_state(
-            trigger, next_run_at=self._kind.next_run(_cron(trigger.config), now).isoformat()
-        )
+        self._triggers.set_state(trigger, next_run_at=self._kind.next_run(_cron(trigger), now).isoformat())
         if await self._triggers.busy_in(s, trigger):
             return "previous run still in progress"
         return None

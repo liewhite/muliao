@@ -47,6 +47,18 @@ class DueKind(Protocol):
         ...
 
 
+def stored_time(trigger: Trigger, value: object, what: str) -> datetime:
+    """读出触发器存下的到期时间（ISO 8601、带时区，配置时总是这样写入）。缺失、解析不了或不带时区都是存下的数据坏了：
+    抛 CorruptState，信息里带上是哪个触发器。"""
+    try:
+        at = datetime.fromisoformat(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as e:
+        raise CorruptState(f"trigger {trigger.id} ({trigger.name}) has no valid {what}: {value!r}") from e
+    if at.tzinfo is None:
+        raise CorruptState(f"trigger {trigger.id} ({trigger.name}) has a {what} without timezone: {value!r}")
+    return at
+
+
 class DueRunner:
     """到期扫描循环：列出到期的触发器，并发地各触发一次。"""
 
@@ -93,10 +105,21 @@ class DueRunner:
         except (Conflict, NotFound) as e:
             # 消耗这次到期之后、触发之前被用户停用或删除：不是触发失败，不覆盖失败原因
             log.info("due fire skipped: %s", e, extra={"trigger_id": trigger_id})
-        except (DomainError, CorruptState) as e:
+        except DomainError as e:
             await self._disable(trigger_id, f"{type(e).__name__}: {e}")
 
     async def _fire(self, trigger_id: int, now: datetime) -> None:
+        try:
+            if not await self._consume(trigger_id, now):
+                return
+        except CorruptState as e:
+            # 只有这个触发器自己存下的数据（到期规则读的配置与状态）坏了才停用它；触发链路上别处的 CorruptState 照常上抛
+            await self._disable(trigger_id, f"{type(e).__name__}: {e}")
+            return
+        await self._triggers.fire(trigger_id)
+
+    async def _consume(self, trigger_id: int, now: datetime) -> bool:
+        """按最新的行消耗这次到期；返回是否应当触发。"""
         async with self._db.transaction() as s:
             trigger = await s.get(Trigger, trigger_id)
             # 列出之后可能已被删除、停用、归档或改了配置：按最新的行重新判断
@@ -105,12 +128,12 @@ class DueRunner:
                 log.info(
                     "due fire skipped: trigger %s since it was due", skip, extra={"trigger_id": trigger_id}
                 )
-                return
+                return False
             skipped = await self._kinds[trigger.kind].consume_in(s, trigger, now)
             if skipped is not None:
                 log.info("due fire skipped: %s", skipped, extra={"trigger": trigger.name})
-                return
-        await self._triggers.fire(trigger_id)
+                return False
+        return True
 
     def _skip_reason(self, trigger: Trigger | None, now: datetime) -> str | None:
         """列出到期之后、触发之前触发器发生的变化；None 表示仍应触发。"""
@@ -128,7 +151,7 @@ class DueRunner:
         if not await self._triggers.disable(trigger_id, error):
             log.info("failed trigger was deleted meanwhile", extra={"trigger_id": trigger_id, "error": error})
             return
-        log.error("trigger disabled after failed fire: %s", error, extra={"trigger_id": trigger_id})
+        log.error("trigger disabled: %s", error, extra={"trigger_id": trigger_id})
 
     async def _next_wake(self) -> float:
         times = [at for _, at in await self._pending()]
