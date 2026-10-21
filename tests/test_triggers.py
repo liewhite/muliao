@@ -5,7 +5,7 @@ from typing import get_args
 
 import pytest
 
-from muliao.agent_runtime.mcp import McpTransport, mcp_config
+from muliao.agents.api import McpTransport, mcp_config
 from muliao.api.triggers import TriggerKindName, TriggerOut
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
@@ -386,7 +386,7 @@ async def test_a_temp_agent_sees_the_mcp_servers_of_its_caller(container, make_a
         task="t",
         instructions="",
         model="temp",
-        profile=RunProfile(toolsets=[container.mcp.toolset()]),
+        profile=RunProfile(toolsets=[container.mcp_connector.toolset(container.mcp.index)]),
         workspace=tmp_path,
         session_id=None,
     )
@@ -458,7 +458,7 @@ async def test_a_corrupt_public_mcp_config_is_reported_to_a_temp_agent_without_f
         task="the task",
         instructions="",
         model="temp",
-        profile=RunProfile(toolsets=[container.mcp.toolset()]),
+        profile=RunProfile(toolsets=[container.mcp_connector.toolset(container.mcp.index)]),
         workspace=tmp_path,
         session_id=None,
     )

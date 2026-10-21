@@ -5,8 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
-from muliao.agent_runtime.api import McpServer, McpTransport, mcp_config
-from muliao.agents.api import USER
+from muliao.agents.api import USER, McpServer, McpTransport, mcp_config
 from muliao.api.deps import C
 from muliao.api.resources import CorruptOut
 from muliao.vault.api import SecretInfo

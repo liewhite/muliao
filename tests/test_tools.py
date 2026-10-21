@@ -11,7 +11,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agent_runtime.mcp import MCP_TOOL_NAMES, McpTransport, mcp_config
+from muliao.agent_runtime.mcp import MCP_TOOL_NAMES
+from muliao.agents.api import McpTransport, mcp_config
 from muliao.sessions.api import Origin
 from tests.conftest import login
 from tests.scripted import scripted

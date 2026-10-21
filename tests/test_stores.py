@@ -280,7 +280,7 @@ def test_owner_ids_cannot_escape_the_repository(repo: ResourceRepo):
 
 
 async def test_corrupt_mcp_config_is_reported_with_its_path_on_its_own_and_can_be_deleted(container):
-    from muliao.agent_runtime.mcp import McpTransport, mcp_config
+    from muliao.agents.api import McpTransport, mcp_config
 
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     await container.mcp.add(None, "echo", spec, probe=False, author="user")
@@ -417,7 +417,7 @@ async def test_files_outside_the_resource_layout_never_enter_history(repo: Resou
 
 async def test_every_file_the_stores_write_is_in_the_resource_layout(container, make_agent):
     """RESOURCE_FILES 与各 store 的文件名必须一致：不在布局里的资源文件，外部写入就不会被收敛。"""
-    from muliao.agent_runtime.mcp import McpTransport, mcp_config
+    from muliao.agents.api import McpTransport, mcp_config
 
     agent = (await make_agent(ALPHA)).id
     await container.memory.append(agent, "fact", agent)

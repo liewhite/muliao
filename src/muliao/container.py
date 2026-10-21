@@ -15,8 +15,7 @@ from pydantic_ai import FunctionToolset
 from pydantic_ai.toolsets import AbstractToolset
 
 from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
-from muliao.agent_runtime.mcp import MCP_TOOL_NAMES, McpRegistry
-from muliao.agent_runtime.mcp_tools import mcp_admin_toolset
+from muliao.agent_runtime.mcp import MCP_TOOL_NAMES, McpConnector
 from muliao.agent_runtime.runner import AgentRuntime, RunProfile, ToolGroups
 from muliao.agent_runtime.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.agent_runtime.web import WebProvider, build_web_provider
@@ -30,6 +29,8 @@ from muliao.agents.evolution_tools import (
     skills_toolset,
 )
 from muliao.agents.lifecycle import AgentLifecycle
+from muliao.agents.mcp import McpRegistry
+from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
 from muliao.agents.prompts import PromptStore
 from muliao.agents.resources import ResourceRepo
@@ -108,6 +109,7 @@ class Container:
     sessions: SessionService
     notifications: Notifications
     mcp: McpRegistry
+    mcp_connector: McpConnector
     triggers: TriggerService
     due_triggers: DueRunner
     webhooks: Webhooks
@@ -291,7 +293,10 @@ def build_container(
     )
     threads = Threads(queue)
     notifications = Notifications(db, queue, bus)
-    mcp = McpRegistry(resources, vault)
+    # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，「使用 MCP」组按配置的可用 server 连接
+    mcp_connector = McpConnector(vault)
+    mcp = McpRegistry(resources, mcp_connector.probe)
+    mcp_tools = mcp_connector.toolset(mcp.index)
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
     precheck = PrecheckRunner(
@@ -352,7 +357,7 @@ def build_container(
         ask_user_toolset(),
     ]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
-    temp_profile = RunProfile(toolsets=[workspace_toolset(vault, limits, files), *web_tools, mcp.toolset()])
+    temp_profile = RunProfile(toolsets=[workspace_toolset(vault, limits, files), *web_tools, mcp_tools])
     # 每个组的实现，按目录取：目录里有、这里没有的组是代码不一致，在启动时报出
     implementations = {
         # 对话里用的这份带后台任务（只有会话运行会选用工具组；反思不开放它）
@@ -372,7 +377,7 @@ def build_container(
         ),
         "notify": [notify_toolset(notifications)],
         "public_skills": [public_skills_toolset(skills)],
-        "mcp": [mcp.toolset()],
+        "mcp": [mcp_tools],
         "mcp_admin": [mcp_admin_toolset(mcp)],
         "vault": [vault_toolset(vault)],
         "triggers": ([triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)]),
@@ -451,6 +456,7 @@ def build_container(
         sessions=sessions,
         notifications=notifications,
         mcp=mcp,
+        mcp_connector=mcp_connector,
         triggers=triggers,
         due_triggers=due_triggers,
         webhooks=webhooks,
