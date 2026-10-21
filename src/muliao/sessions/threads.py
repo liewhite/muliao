@@ -49,7 +49,7 @@ class ThreadState:
     # 工作状态（activity.work_states_in，唯一规则）：waiting 是 thread 在等它自己开出的后台任务、委派或提问的回答，
     # 工作还没做完
     work: WorkState
-    # 最近一次运行最终失败时的错误说明，否则为 None
+    # 最近一次运行最终失败时的错误说明，否则为 None；与 work 无关（失败后它开出的后台任务可能还在跑：waiting）
     failure: str | None
     # 会话最近的回答（还没有回复时为空）；work 不是 idle 时它是中间的回答
     answer: str

@@ -173,14 +173,11 @@ class ThreadChecks:
 
 def check_text(child: Session, agent: AgentInfo, work: WorkState, run: Task | None, now: datetime) -> str:
     """还没结清的委派的检查信件，按 thread 的工作状态（activity.work_states_in）说；run 是它最近一次运行（还没有
-    运行时为 None），只用来补充 running 的细节：在跑多久了、在等重试，还是还排着。"""
+    运行时为 None），只用来补充细节：在跑多久了、在等重试，还是还没开始处理。"""
     name = thread_name(child)
     who = f"Thread {name!r} ({agent.name})"
     keep = f"Keep waiting, you will get an event with its answer; if it is no longer needed, call stop_thread({name!r})."
     match work:
-        case WorkState.IDLE:
-            # 不变量断言：委派在 thread 空闲之前就结清了（运行做完、最终失败、被停止都在同一个事务里结清）
-            raise RuntimeError(f"thread {child.id} is idle but a delegation to it is still unsettled")
         case WorkState.WAITING:
             doing = (
                 "is waiting for work it started (background jobs, other agents) or for answers it asked for"
@@ -192,6 +189,7 @@ def check_text(child: Session, agent: AgentInfo, work: WorkState, run: Task | No
             return f"{who} is still working on your task ({minutes} min so far).\n{keep}"
         case WorkState.RUNNING if run is not None and run.status == TaskStatus.PENDING and run.attempts:
             doing = f"is waiting to run again (attempt {run.attempts} so far)"
-        case WorkState.RUNNING:
-            doing = "is queued and has not started yet"
+        case WorkState.RUNNING | WorkState.IDLE:
+            # idle 也会出现：最终失败的运行期间才到的委派信件，要等定期对账（MailReconciler）唤醒下一次运行
+            doing = "has your task queued and has not started on it yet"
     return f"{who} {doing}. {keep}"

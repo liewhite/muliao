@@ -12,14 +12,11 @@ from muliao.errors import Conflict, TransientError
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
-from muliao.sessions.activity import (
-    blocking_deletion_in,
-    owned_threads_in,
-    sessions_blocking_agent_deletion_in,
-)
+from muliao.sessions.activity import blocking_deletion_in, sessions_blocking_agent_deletion_in
 from muliao.sessions.events import AgentSessionsCleared, Ending, SessionDeleted
 from muliao.sessions.halt import Halted
 from muliao.sessions.lanes import agent_deleting_lane
+from muliao.sessions.ownership import owned_threads_in
 from muliao.sessions.settlement import settle_in, unsettled_in
 from muliao.sessions.tables import MailState, Session
 

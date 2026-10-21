@@ -193,13 +193,13 @@ def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
     now = datetime.now(UTC)
     # 排队中的 thread 也能停：停止清空它的信箱，并交回「被停止」
     assert "stop_thread('review')" in check_text(child, agent, WorkState.RUNNING, queued, now)
-    assert "not started yet" in check_text(child, agent, WorkState.RUNNING, None, now)
+    assert "queued and has not started" in check_text(child, agent, WorkState.RUNNING, None, now)
     assert "waiting to run again" in check_text(child, agent, WorkState.RUNNING, retrying, now)
     assert "still working" in check_text(child, agent, WorkState.RUNNING, running, now)
     # 最近一次运行做完了但在等自己开出的工作：照工作状态说在等，不是还排着
     assert "waiting for work it started" in check_text(child, agent, WorkState.WAITING, done, now)
-    with pytest.raises(RuntimeError, match="idle"):
-        check_text(child, agent, WorkState.IDLE, done, now)
+    # 最终失败的运行期间才到的委派信件等定期对账唤醒：thread 此刻空闲，委派还没开始处理（不是错误）
+    assert "queued and has not started" in check_text(child, agent, WorkState.IDLE, done, now)
     # 被停止时如实说明，附上停止前说的话
     assert "was stopped" in _event_text("review", agent.name, Ending.STOPPED, "")
 
@@ -781,7 +781,7 @@ async def test_a_thread_waiting_on_its_own_background_job_is_listed_as_waiting_n
         if tool_returns(messages):
             return ModelResponse(parts=[TextPart("started, will report")])
         return ModelResponse(
-            parts=[ToolCallPart("run_shell", {"command": "sleep 1", "background": True}, tool_call_id="bg")]
+            parts=[ToolCallPart("run_shell", {"command": "sleep 2", "background": True}, tool_call_id="bg")]
         )
 
     parent, seen = await _asking(container, make_agent, models, scripted(helper_fn))
@@ -790,14 +790,15 @@ async def test_a_thread_waiting_on_its_own_background_job_is_listed_as_waiting_n
         async with container.db.transaction() as s:
             return [v.state for v in await container.threads.list_in(s, parent.id)]
 
-    async def answered_for_now() -> bool:
-        return [x.answer for x in await states()] == ["started, will report"]
+    async def waiting_with_its_first_answer() -> bool:
+        # 回答先于运行的收尾提交：等收尾之后再看
+        return [(x.work, x.answer) for x in await states()] == [(WorkState.WAITING, "started, will report")]
 
     worker = asyncio.create_task(container.worker.run_forever())
     try:
-        await _until(answered_for_now)
+        await _until(waiting_with_its_first_answer)
         [state] = await states()
-        assert (state.work, state.failure) == (WorkState.WAITING, None)
+        assert state.failure is None
         # 它最近一次运行已经做完（按最近一次运行判断会把它当成做完、把中间的回答当结局）
         [child] = await threads_of(container, parent.id)
         async with container.db.transaction() as s:

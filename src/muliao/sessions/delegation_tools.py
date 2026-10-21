@@ -159,7 +159,10 @@ def delegation_toolset(
 
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
-        """List the threads this conversation has opened, with the state of each one's latest task."""
+        """List the threads this conversation has opened. `status`: running (working now), waiting (its run ended \
+but it is waiting for work it started or answers it asked for: not finished yet), idle (nothing in progress). \
+`answer` is its latest reply; while it is not idle that reply is intermediate, not its result. `failure` is set \
+when its latest run failed for good."""
         parent_id = _require_session(ctx)
         async with db.transaction() as s:
             views = await threads.list_in(s, parent_id)
