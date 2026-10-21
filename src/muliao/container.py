@@ -51,6 +51,7 @@ from muliao.platform.bus import EventBus
 from muliao.platform.checks import WorkWatcher
 from muliao.platform.db import Database, WriteCheck, create_engine, migrate
 from muliao.platform.messaging import Messaging
+from muliao.platform.retention import TaskRetention
 from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import RunScope
@@ -118,6 +119,7 @@ class Container:
     jobs: JobRunner
     thread_checks: ThreadChecks
     work: WorkWatcher
+    retention: TaskRetention
     compactor: Compactor
     reflection: ReflectionScheduler
     consumer: Consumer
@@ -144,6 +146,7 @@ class Container:
                 root.start_soon(_loop, "due", self.due_triggers.run_forever)
                 root.start_soon(_loop, "mail", self.mail.run_forever)
                 root.start_soon(_loop, "checks", self.work.run_forever)
+                root.start_soon(_loop, "retention", self.retention.run_forever)
                 try:
                     yield
                 finally:
@@ -458,6 +461,7 @@ def build_container(
         jobs=jobs,
         thread_checks=thread_checks,
         work=WorkWatcher([jobs, thread_checks], settings.runtime.job_check_seconds),
+        retention=TaskRetention(queue),
         compactor=compactor,
         reflection=reflection,
         consumer=consumer,

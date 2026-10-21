@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, event, func, select
+from sqlalchemy import Select, delete, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -211,6 +211,19 @@ class TaskQueue:
             task.finished_at = None
             self._wake_after_commit(s)
             return task
+
+    async def prune_done(self, kinds: Collection[TaskKind], *, finished_before: datetime) -> int:
+        """删掉这些种类里在 finished_before 之前就已完成的 task，返回删除的条数。只删 done：failed 留着排查与重试，
+        排队、进行中的还要执行。"""
+        async with self._db.transaction() as s:
+            result = await s.execute(
+                delete(Task).where(
+                    Task.kind.in_(list(kinds)),
+                    Task.status == TaskStatus.DONE,
+                    Task.finished_at < finished_before,
+                )
+            )
+            return result.rowcount
 
     async def next_due(self, kinds: Collection[TaskKind]) -> datetime | None:
         """最早一个「可领取、只是还没到时间」的 task 的时间；被同 lane 挡住的 task 由 complete/fail 唤醒。"""

@@ -139,3 +139,32 @@ async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recover
     # 失败日志带的是这次失败本身，而不是此刻并不存在的「当前异常」（曾打出 NoneType: None）
     [failed] = [r for r in caplog.records if r.getMessage().startswith("task failed")]
     assert failed.exc_info is not None and "Interrupted" in caplog.text
+
+
+async def test_retention_prunes_only_old_done_event_and_deliver_tasks(container, make_agent):
+    """保留策略：7 天前完成的 event/deliver 删掉；failed、run、排队中的与较新的保留（run 被信件引用，见 retention.py）。"""
+    alpha = (await make_agent()).id
+    old, recent = utcnow() - timedelta(days=8), utcnow() - timedelta(days=6)
+    rows = {
+        "old_event": (TaskKind.EVENT, TaskStatus.DONE, old),
+        "old_deliver": (TaskKind.DELIVER, TaskStatus.DONE, old),
+        "recent_event": (TaskKind.EVENT, TaskStatus.DONE, recent),
+        "old_failed_event": (TaskKind.EVENT, TaskStatus.FAILED, old),
+        "old_run": (TaskKind.RUN, TaskStatus.DONE, old),
+        "old_reflection": (TaskKind.REFLECTION, TaskStatus.DONE, old),
+        "pending_event": (TaskKind.EVENT, TaskStatus.PENDING, None),
+    }
+    ids = {}
+    async with container.db.transaction() as s:
+        for name, (kind, status, finished) in rows.items():
+            task = Task(kind=kind, lane=f"l-{name}", agent_id=alpha, session_id=None, payload={})
+            task.status, task.finished_at = status, finished
+            s.add(task)
+            await s.flush()
+            ids[name] = task.id
+
+    assert await container.retention.prune() == 2
+
+    async with container.db.transaction() as s:
+        left = {name for name, i in ids.items() if await s.get(Task, i) is not None}
+    assert left == set(rows) - {"old_event", "old_deliver"}
