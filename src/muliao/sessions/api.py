@@ -7,7 +7,7 @@
 - 会话种类与 HTTP 层用的读模型、展示事件；停止的结果：Halted。
 """
 
-from muliao.sessions.activity import SessionActivity
+from muliao.sessions.activity import SessionActivity, WorkState
 from muliao.sessions.agent_history import AgentHistory
 from muliao.sessions.halt import Halted
 from muliao.sessions.holds import registered_in as hold_registered_in
@@ -23,6 +23,7 @@ from muliao.sessions.work import SessionWork
 
 __all__ = [
     "SessionActivity",
+    "WorkState",
     "KindPolicy",
     "SessionKind",
     "policy_of",

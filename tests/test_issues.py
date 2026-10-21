@@ -200,3 +200,17 @@ async def test_http_issue_lifecycle(client, container, make_agent):
     assert [i["id"] for i in listed] == [issue_id]
     assert (await client.delete(f"/api/issues/{issue_id}")).status_code == 204
     assert (await client.get(f"/api/issues/{issue_id}")).status_code == 404
+
+
+async def test_work_state_of_the_assignee_session(container, make_agent):
+    from muliao.issues.api import WorkState
+
+    alpha = (await make_agent()).id
+    issue = await container.issues.create(None, title="t", status=IssueStatus.TODO, assignee=alpha)
+    unassigned = await container.issues.create(None, title="u", status=IssueStatus.TODO)
+    await deliver(container)
+    states = await container.issues.work_states(await container.issues.list())
+    assert states == {issue.id: WorkState.RUNNING, unassigned.id: None}  # 运行排着
+    await drain(container)
+    states = await container.issues.work_states(await container.issues.list())
+    assert states[issue.id] == WorkState.IDLE  # 运行结束了，issue 还在 todo：没人在做

@@ -3373,6 +3373,16 @@
             "type": "object",
             "title": "Sessions"
           },
+          "assignee_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -3394,6 +3404,7 @@
           "assignee",
           "creator_agent_id",
           "sessions",
+          "assignee_session",
           "created_at",
           "updated_at"
         ],
@@ -5516,6 +5527,16 @@
           "public_key"
         ],
         "title": "VapidOut"
+      },
+      "WorkState": {
+        "type": "string",
+        "enum": [
+          "running",
+          "waiting",
+          "idle"
+        ],
+        "title": "WorkState",
+        "description": "会话此刻在不在处理事情（给别的领域看，如 issue 看板判断被指派的 agent 是否在处理）。"
       }
     }
   }

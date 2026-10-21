@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Issue, IssueActivity } from './api'
-import { activityText, assigneeLabel, groupByStatus, moveIssue } from './issues'
+import { activityText, assigneeLabel, groupByStatus, moveIssue, stalled } from './issues'
 
 const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   id,
@@ -11,6 +11,7 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   assignee: null,
   creator_agent_id: null,
   sessions: {},
+  assignee_session: null,
   created_at: '2026-10-21T00:00:00Z',
   updated_at: '2026-10-21T00:00:00Z',
   ...over,
@@ -51,5 +52,16 @@ describe('issues', () => {
     })
     expect(activityText(agents, change('status', 'todo', 'done'))).toBe('把状态从「Todo」改为「完成」')
     expect(activityText(agents, change('assignee', null, 'a1'))).toBe('把指派从「未指派」改为「alpha」')
+  })
+})
+
+describe('stalled', () => {
+  const base = { id: 1, title: '', description: '', priority: 'none', creator_agent_id: null, sessions: {}, created_at: '', updated_at: '' } as const
+  it('flags an active agent issue that nobody is working on', () => {
+    expect(stalled({ ...base, status: 'todo', assignee: 'a1', assignee_session: 'idle' })).toBe(true)
+    expect(stalled({ ...base, status: 'todo', assignee: 'a1', assignee_session: null })).toBe(true)
+    expect(stalled({ ...base, status: 'in_progress', assignee: 'a1', assignee_session: 'running' })).toBe(false)
+    expect(stalled({ ...base, status: 'backlog', assignee: 'a1', assignee_session: 'idle' })).toBe(false)
+    expect(stalled({ ...base, status: 'todo', assignee: 'user', assignee_session: null })).toBe(false)
   })
 })

@@ -1209,6 +1209,7 @@ export interface components {
             sessions: {
                 [key: string]: string;
             };
+            assignee_session: components["schemas"]["WorkState"] | null;
             /**
              * Created At
              * Format: date-time
@@ -2023,6 +2024,12 @@ export interface components {
             /** Public Key */
             public_key: string;
         };
+        /**
+         * WorkState
+         * @description 会话此刻在不在处理事情（给别的领域看，如 issue 看板判断被指派的 agent 是否在处理）。
+         * @enum {string}
+         */
+        WorkState: "running" | "waiting" | "idle";
     };
     responses: never;
     parameters: never;

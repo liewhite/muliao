@@ -11,6 +11,7 @@ from muliao.issues.rules import USER
 from muliao.issues.service import KEEP, IssueService, Keep
 from muliao.issues.tables import Issue, IssuePriority, IssueStatus
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.sessions.api import WorkState
 
 
 class IssueSummary(BaseModel):
@@ -20,6 +21,9 @@ class IssueSummary(BaseModel):
     priority: IssuePriority
     # agent 名、`user`，或 null（未指派）
     assignee: str | None
+    # 被指派 agent 在这个 issue 会话里的状态：running（在跑）、waiting（等后台任务、委派或用户回答）、idle（空闲）；
+    # 没指派给 agent 或它还没有这个 issue 的会话时为 null
+    assignee_session: WorkState | None
     updated_at: datetime
 
 
@@ -29,7 +33,9 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
     async def assignee_id(name: str) -> str:
         return USER if name == USER else (await agents.find_by_name(name)).id
 
-    async def summary(issue: Issue, names: dict[str, str]) -> IssueSummary:
+    async def summary(
+        issue: Issue, names: dict[str, str], states: dict[int, WorkState | None]
+    ) -> IssueSummary:
         assignee = USER if issue.assigned_to_user else issue.assignee_agent_id
         return IssueSummary(
             id=issue.id,
@@ -37,6 +43,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             status=issue.status,
             priority=issue.priority,
             assignee=None if assignee is None else names.get(assignee, assignee),
+            assignee_session=states[issue.id],
             updated_at=issue.updated_at,
         )
 
@@ -44,7 +51,9 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
     async def issue_list(
         statuses: tuple[IssueStatus, ...] = (), assignee: str | None = None
     ) -> list[IssueSummary]:
-        """List issues on the muliao issue board, most recently updated first.
+        """List issues on the muliao issue board, most recently updated first. `assignee_session` tells whether
+        the assigned agent is working on it in the issue's conversation: running, waiting (on a background job,
+        delegated work or the user's answer), idle, or null (no agent assignee or no conversation yet).
 
         Args:
             statuses: Only these statuses; all when omitted.
@@ -54,7 +63,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         found = await issues.list(
             statuses=list(statuses), assignee=None if assignee is None else await assignee_id(assignee)
         )
-        return [await summary(i, names) for i in found]
+        states = await issues.work_states(found)
+        return [await summary(i, names, states) for i in found]
 
     @ts.tool_plain
     async def issue_show(issue_id: int) -> str:

@@ -42,7 +42,15 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit
 from muliao.platform.tooling import Origin
-from muliao.sessions.api import Inbound, NewSession, check_receivable_in, receive_command, session_in
+from muliao.sessions.api import (
+    Inbound,
+    NewSession,
+    SessionActivity,
+    WorkState,
+    check_receivable_in,
+    receive_command,
+    session_in,
+)
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +106,9 @@ class IssueService:
         messaging: Messaging,
         tz: ZoneInfo,
         run_now: Callable[[int], Awaitable[None]],
+        activity: SessionActivity,
     ):
+        self._activity = activity
         self._db = db
         self._agents = agents
         self._messaging = messaging
@@ -148,6 +158,20 @@ class IssueService:
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
             return IssueDetail(issue, await self._activities_in(s, issue_id))
+
+    async def work_states(self, issues: list[Issue]) -> dict[int, WorkState | None]:
+        """被指派的 agent 在每个 issue 自己的会话里的状态：在跑、在等外面的结果、还是空闲。没指派给 agent、它还没有
+        这个 issue 的会话（或会话已删除）时为 None。用来发现「该有人在做、却没人在做」的 issue。"""
+        states: dict[int, WorkState | None] = {}
+        async with self._db.transaction() as s:
+            for issue in issues:
+                agent = issue.assignee_agent_id
+                session_id = None if agent is None else issue.sessions.get(agent)
+                if session_id is None or await session_in(s, session_id) is None:
+                    states[issue.id] = None
+                else:
+                    states[issue.id] = await self._activity.work_state_in(s, session_id)
+        return states
 
     async def render(self, issue_id: int) -> str:
         detail = await self.get(issue_id)

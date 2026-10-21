@@ -102,3 +102,20 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
     }
   }
 }
+
+/** 被指派 agent 在 issue 会话里的状态；该有人做（todo / 进行中、指派给 agent）却空闲时要提醒 */
+export const WORK_LABEL: Record<NonNullable<Issue['assignee_session']>, string> = {
+  running: '处理中',
+  waiting: '等待中',
+  idle: '空闲',
+}
+
+export function stalled(issue: Issue): boolean {
+  return (
+    (issue.status === 'todo' || issue.status === 'in_progress') &&
+    issue.assignee !== null &&
+    issue.assignee !== USER &&
+    issue.assignee_session !== 'running' &&
+    issue.assignee_session !== 'waiting'
+  )
+}

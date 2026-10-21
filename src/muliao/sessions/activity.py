@@ -7,12 +7,14 @@
 """
 
 from collections.abc import Mapping
+from enum import StrEnum
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.holds import has_active_in
+from muliao.sessions.inbound import open_asks
 from muliao.sessions.lanes import receive_lane, session_lane
 from muliao.sessions.tables import Session
 from muliao.sessions.threads import owned_threads_in
@@ -24,6 +26,25 @@ async def session_has_pending_work_in(s: AsyncSession, queue: TaskQueue, session
     return await queue.lane_busy(s, session_lane(session_id)) or await queue.lane_busy(
         s, receive_lane(session_id)
     )
+
+
+class WorkState(StrEnum):
+    """会话此刻在不在处理事情（给别的领域看，如 issue 看板判断被指派的 agent 是否在处理）。"""
+
+    # 有排着或正在进行的运行，或有投给它、还没投递的来信
+    RUNNING = "running"
+    # 运行停了，但在等外面的结果：后台任务、委派出去的工作，或挂起的提问等用户回答
+    WAITING = "waiting"
+    # 没有任何进行中的事
+    IDLE = "idle"
+
+
+async def work_state_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> WorkState:
+    if await session_has_pending_work_in(s, queue, session_id):
+        return WorkState.RUNNING
+    if await has_active_in(s, session_id) or (await open_asks(s, session_id)).answerable:
+        return WorkState.WAITING
+    return WorkState.IDLE
 
 
 async def blocking_deletion_in(
@@ -54,6 +75,9 @@ class SessionActivity:
 
     async def has_pending_work_in(self, s: AsyncSession, session_id: str) -> bool:
         return await session_has_pending_work_in(s, self._queue, session_id)
+
+    async def work_state_in(self, s: AsyncSession, session_id: str) -> WorkState:
+        return await work_state_in(s, self._queue, session_id)
 
     async def blocks_agent_deletion_in(self, s: AsyncSession, agent_id: str) -> bool:
         return await agent_deletion_blocked_in(s, self._queue, agent_id)

@@ -3,6 +3,7 @@
 from muliao.issues.rules import USER
 from muliao.issues.service import KEEP, IssueDetail, IssueService, Keep
 from muliao.issues.tables import ActivityKind, IssuePriority, IssueStatus
+from muliao.sessions.api import WorkState
 
 __all__ = [
     "KEEP",
@@ -13,4 +14,5 @@ __all__ = [
     "IssueService",
     "IssueStatus",
     "Keep",
+    "WorkState",
 ]

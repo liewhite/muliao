@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from muliao.api.deps import C
-from muliao.issues.api import KEEP, USER, ActivityKind, IssuePriority, IssueStatus, Keep
+from muliao.issues.api import KEEP, USER, ActivityKind, IssuePriority, IssueStatus, Keep, WorkState
 from muliao.issues.tables import Issue, IssueActivity
 
 router = APIRouter()
@@ -25,11 +25,13 @@ class IssueOut(BaseModel):
     creator_agent_id: str | None
     # 每个 agent 在这个 issue 上的会话：agent id -> 会话 id
     sessions: dict[str, str]
+    # 被指派 agent 在这个 issue 会话里的状态；没指派给 agent 或还没有会话时为 null
+    assignee_session: WorkState | None
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def of(cls, i: Issue) -> "IssueOut":
+    def of(cls, i: Issue, state: WorkState | None) -> "IssueOut":
         return cls(
             id=i.id,
             title=i.title,
@@ -39,6 +41,7 @@ class IssueOut(BaseModel):
             assignee=USER if i.assigned_to_user else i.assignee_agent_id,
             creator_agent_id=i.creator_agent_id,
             sessions=i.sessions,
+            assignee_session=state,
             created_at=i.created_at,
             updated_at=i.updated_at,
         )
@@ -95,11 +98,17 @@ class CommentIn(BaseModel):
     body: str
 
 
+async def _out(c: C, issue: Issue) -> IssueOut:
+    return IssueOut.of(issue, (await c.issues.work_states([issue]))[issue.id])
+
+
 @router.get("/issues")
 async def list_issues(
     c: C, status: list[IssueStatus] | None = Query(None), assignee: str | None = None
 ) -> list[IssueOut]:
-    return [IssueOut.of(i) for i in await c.issues.list(statuses=status, assignee=assignee)]
+    found = await c.issues.list(statuses=status, assignee=assignee)
+    states = await c.issues.work_states(found)
+    return [IssueOut.of(i, states[i.id]) for i in found]
 
 
 @router.post("/issues", status_code=201)
@@ -112,14 +121,14 @@ async def create_issue(c: C, body: IssueCreate) -> IssueOut:
         priority=body.priority,
         assignee=body.assignee,
     )
-    return IssueOut.of(issue)
+    return await _out(c, issue)
 
 
 @router.get("/issues/{issue_id}")
 async def get_issue(c: C, issue_id: int) -> IssueDetailOut:
     detail = await c.issues.get(issue_id)
     return IssueDetailOut(
-        issue=IssueOut.of(detail.issue), activities=[ActivityOut.of(a) for a in detail.activities]
+        issue=await _out(c, detail.issue), activities=[ActivityOut.of(a) for a in detail.activities]
     )
 
 
@@ -135,7 +144,7 @@ async def update_issue(c: C, issue_id: int, body: IssuePatch) -> IssueOut:
         priority=body.priority,
         assignee=assignee,
     )
-    return IssueOut.of(issue)
+    return await _out(c, issue)
 
 
 @router.post("/issues/{issue_id}/comments", status_code=201)
