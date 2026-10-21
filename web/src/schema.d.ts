@@ -332,7 +332,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Mark Read */
+        /**
+         * Mark Read
+         * @description 标记会话已读；指向它的通知由通知领域随 SessionRead 标为已读。
+         */
         post: operations["mark_read_api_sessions__session_id__read_post"];
         delete?: never;
         options?: never;
