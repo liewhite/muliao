@@ -7,7 +7,7 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 
-from muliao.agent_runtime.llm import OFFICIAL_BASE_URLS, ModelRegistry
+from muliao.agent_runtime.llm import KINDS, ModelRegistry
 from muliao.config import LlmConfig, load_settings
 from muliao.errors import InvalidInput
 
@@ -105,8 +105,8 @@ def test_sdk_base_url_env_vars_are_ignored(monkeypatch):
         {"a": {"type": "anthropic", "api_key": "k"}, "o": {"type": "openai", "api_key": "k"}}
     )
 
-    assert str(registry.resolve("a:m").base_url).rstrip("/") == OFFICIAL_BASE_URLS["anthropic"]
-    assert str(registry.resolve("o:m").base_url).rstrip("/") == OFFICIAL_BASE_URLS["openai"]
+    assert str(registry.resolve("a:m").base_url).rstrip("/") == KINDS["anthropic"].official_base_url
+    assert str(registry.resolve("o:m").base_url).rstrip("/") == KINDS["openai"].official_base_url
 
 
 def test_default_model_with_empty_model_name_is_rejected():

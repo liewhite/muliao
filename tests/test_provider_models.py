@@ -1,5 +1,8 @@
 """模型选择：provider 来自配置，模型名向 provider 实时查询；查询失败原样报出。"""
 
+from dataclasses import replace
+from typing import get_args
+
 import httpx2
 import pytest
 from pydantic import SecretStr
@@ -8,7 +11,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from muliao.agent_runtime import llm
-from muliao.config import LlmConfig, ProviderConfig
+from muliao.config import LlmConfig, ProviderConfig, ProviderType
 from muliao.errors import UpstreamFailed
 from tests.conftest import login
 
@@ -24,7 +27,7 @@ async def test_openai_models_are_read_from_the_models_endpoint():
         return httpx2.Response(200, json={"object": "list", "data": data})
 
     provider = OpenAIProvider(api_key="k", base_url="https://api.example/v1", http_client=_client(handler))
-    assert await llm._fetch_model_names("openai-responses", provider) == ["chat", "reasoner"]
+    assert await llm.KINDS["openai-responses"].model_names(provider) == ["chat", "reasoner"]
 
 
 async def test_anthropic_models_follow_every_page():
@@ -42,7 +45,7 @@ async def test_anthropic_models_follow_every_page():
         return httpx2.Response(200, json={**page, "data": data})
 
     provider = AnthropicProvider(api_key="k", base_url="https://api.example", http_client=_client(handler))
-    assert await llm._fetch_model_names("anthropic", provider) == ["a", "b"]
+    assert await llm.KINDS["anthropic"].model_names(provider) == ["a", "b"]
 
 
 async def test_google_keeps_chat_models_without_prefix_across_pages():
@@ -67,7 +70,7 @@ async def test_google_keeps_chat_models_without_prefix_across_pages():
         return httpx2.Response(200, json=pages[request.url.params.get("pageToken")])
 
     provider = GoogleProvider(api_key="k", base_url="https://api.example/", http_client=_client(handler))
-    assert await llm._fetch_model_names("google", provider) == ["gemini-pro", "gemini-flash"]
+    assert await llm.KINDS["google"].model_names(provider) == ["gemini-pro", "gemini-flash"]
 
 
 async def test_google_model_without_supported_actions_is_a_contract_violation():
@@ -76,7 +79,7 @@ async def test_google_model_without_supported_actions_is_a_contract_violation():
 
     provider = GoogleProvider(api_key="k", base_url="https://api.example/", http_client=_client(handler))
     with pytest.raises(RuntimeError, match="supported actions"):
-        await llm._fetch_model_names("google", provider)
+        await llm.KINDS["google"].model_names(provider)
 
 
 async def test_real_sdk_error_becomes_upstream_failure_with_reason():
@@ -97,12 +100,20 @@ async def test_real_sdk_error_becomes_upstream_failure_with_reason():
         await registry.list_models("a")
 
 
+def _stub_model_names(monkeypatch, fetch) -> None:
+    """测试配置里唯一的 provider「fake」是 anthropic 类型：换掉这一类型的模型名查询。"""
+    monkeypatch.setitem(llm.KINDS, "anthropic", replace(llm.KINDS["anthropic"], model_names=fetch))
+
+
+def test_every_provider_type_has_a_kind():
+    assert set(llm.KINDS) == set(get_args(ProviderType))
+
+
 async def test_api_lists_configured_providers_and_their_models(client, monkeypatch):
-    async def fetch(kind, _provider):
-        assert kind == "anthropic"
+    async def fetch(_provider):
         return ["z-model", "a-model"]
 
-    monkeypatch.setattr(llm, "_fetch_model_names", fetch)
+    _stub_model_names(monkeypatch, fetch)
     await login(client)
 
     assert (await client.get("/api/providers")).json() == ["fake"]
@@ -111,10 +122,10 @@ async def test_api_lists_configured_providers_and_their_models(client, monkeypat
 
 
 async def test_provider_failure_is_reported_as_bad_gateway_with_reason(client, monkeypatch):
-    async def fetch(_kind, _provider):
+    async def fetch(_provider):
         raise httpx2.ConnectError("connection refused")
 
-    monkeypatch.setattr(llm, "_fetch_model_names", fetch)
+    _stub_model_names(monkeypatch, fetch)
     await login(client)
 
     resp = await client.get("/api/providers/fake/models")

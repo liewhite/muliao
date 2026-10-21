@@ -2,8 +2,8 @@
 `[llm.providers.<名>]` 的键。密钥与地址只来自配置文件。"""
 
 import logging
-from collections.abc import Callable
-from typing import assert_never
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 import anthropic
 import httpx2
@@ -27,16 +27,6 @@ log = logging.getLogger(__name__)
 ModelResolver = Callable[[str], Model]
 
 
-# 各 SDK 在 base_url 为 None 时会读环境变量（ANTHROPIC_BASE_URL、OPENAI_BASE_URL、GOOGLE_GEMINI_BASE_URL）
-# 或本地 profile，可能把配置里的 key 发往别处。所以永远显式传地址。取值与各 SDK 内置默认一致。
-OFFICIAL_BASE_URLS: dict[ProviderType, str] = {
-    "anthropic": "https://api.anthropic.com",
-    "openai": "https://api.openai.com/v1",
-    "openai-responses": "https://api.openai.com/v1",
-    "google": "https://generativelanguage.googleapis.com/",
-}
-
-
 # Anthropic 的 prompt caching（https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching）：
 # 在每次请求都原样重发的前缀上放缓存断点——指令（instructions，含公共 prompt、记忆、skill 目录）、工具定义，
 # 以及消息末尾（让已经发过的历史在下一次请求里命中缓存）。三个断点，不超过 Anthropic 一次请求最多 4 个的上限
@@ -50,20 +40,6 @@ ANTHROPIC_CACHE_SETTINGS = AnthropicModelSettings(
 )
 
 
-def _build_provider(cfg: ProviderConfig) -> Provider:  # type: ignore[type-arg]
-    key = cfg.api_key.get_secret_value()
-    base_url = cfg.base_url or OFFICIAL_BASE_URLS[cfg.type]
-    match cfg.type:
-        case "anthropic":
-            return AnthropicProvider(api_key=key, base_url=base_url)
-        case "openai" | "openai-responses":
-            return OpenAIProvider(api_key=key, base_url=base_url)
-        case "google":
-            return GoogleProvider(api_key=key, base_url=base_url)
-        case _:
-            assert_never(cfg.type)
-
-
 # 查询模型列表时 provider 按其契约可能出现的失败：鉴权、限流、5xx、网络不可达。
 # anthropic / openai 把网络错误包成自己的 APIError；google 不包，直接抛其 HTTP 客户端（httpx2）的错误
 _LIST_ERRORS = (anthropic.APIError, openai.APIError, google_errors.APIError, httpx2.HTTPError)
@@ -71,28 +47,75 @@ _LIST_ERRORS = (anthropic.APIError, openai.APIError, google_errors.APIError, htt
 LIST_TIMEOUT_SECONDS = 30.0
 
 
-async def _fetch_model_names(kind: ProviderType, provider: Provider) -> list[str]:  # type: ignore[type-arg]
-    """向 provider 查询它提供的模型名（即 "<provider 名>:<模型名>" 里的模型名）。"""
-    match kind:
-        case "anthropic" | "openai" | "openai-responses":
-            # 两个 SDK 的分页器都会自动翻完所有页
-            return [m.id async for m in provider.client.models.list(timeout=LIST_TIMEOUT_SECONDS)]
-        case "google":
-            config = google_types.ListModelsConfig(
-                http_options=google_types.HttpOptions(timeout=int(LIST_TIMEOUT_SECONDS * 1000))
-            )
-            names = []
-            async for m in await provider.client.aio.models.list(config=config):
-                # 配置只能指向 Gemini API（api_key + base_url，不是 Vertex），它的 Model 总带 name 与
-                # supportedGenerationMethods；缺了就是契约之外的响应，报错而不猜
-                if m.name is None or m.supported_actions is None:
-                    raise RuntimeError(f"google listed a model without name or supported actions: {m!r}")
-                # 只要能对话的模型（排除 embedding 等）
-                if "generateContent" in m.supported_actions:
-                    names.append(m.name.removeprefix("models/"))
-            return names
-        case _:
-            assert_never(kind)
+async def _sdk_model_names(provider: Provider) -> list[str]:  # type: ignore[type-arg]
+    # anthropic 与 openai 两个 SDK 的分页器都会自动翻完所有页
+    return [m.id async for m in provider.client.models.list(timeout=LIST_TIMEOUT_SECONDS)]
+
+
+async def _google_model_names(provider: Provider) -> list[str]:  # type: ignore[type-arg]
+    config = google_types.ListModelsConfig(
+        http_options=google_types.HttpOptions(timeout=int(LIST_TIMEOUT_SECONDS * 1000))
+    )
+    names = []
+    async for m in await provider.client.aio.models.list(config=config):
+        # 配置只能指向 Gemini API（api_key + base_url，不是 Vertex），它的 Model 总带 name 与
+        # supportedGenerationMethods；缺了就是契约之外的响应，报错而不猜
+        if m.name is None or m.supported_actions is None:
+            raise RuntimeError(f"google listed a model without name or supported actions: {m!r}")
+        # 只要能对话的模型（排除 embedding 等）
+        if "generateContent" in m.supported_actions:
+            names.append(m.name.removeprefix("models/"))
+    return names
+
+
+@dataclass(frozen=True)
+class ProviderKind:
+    """一种 provider 类型（配置里的 type）怎么接：官方地址、构造客户端、构造模型、查询模型名。"""
+
+    # 各 SDK 在 base_url 为 None 时会读环境变量（ANTHROPIC_BASE_URL、OPENAI_BASE_URL、GOOGLE_GEMINI_BASE_URL）
+    # 或本地 profile，可能把配置里的 key 发往别处。所以永远显式传地址。取值与各 SDK 内置默认一致。
+    official_base_url: str
+    # (api_key, base_url) → 客户端
+    provider: Callable[[str, str], Provider]  # type: ignore[type-arg]
+    # (模型名, 客户端, provider 配置) → 模型
+    model: Callable[[str, Provider, ProviderConfig], Model]  # type: ignore[type-arg]
+    # 向 provider 查询它提供的模型名（即 "<provider 名>:<模型名>" 里的模型名）
+    model_names: Callable[[Provider], Awaitable[list[str]]]  # type: ignore[type-arg]
+
+
+def _openai(api_key: str, base_url: str) -> Provider:  # type: ignore[type-arg]
+    return OpenAIProvider(api_key=api_key, base_url=base_url)
+
+
+# 每种 provider 类型一行；新增类型只在这里加（覆盖 ProviderType 的全部取值，由测试保证）
+KINDS: dict[ProviderType, ProviderKind] = {
+    "anthropic": ProviderKind(
+        official_base_url="https://api.anthropic.com",
+        provider=lambda key, url: AnthropicProvider(api_key=key, base_url=url),
+        model=lambda name, provider, cfg: AnthropicModel(
+            name, provider=provider, settings=ANTHROPIC_CACHE_SETTINGS if cfg.prompt_cache else None
+        ),
+        model_names=_sdk_model_names,
+    ),
+    "openai": ProviderKind(
+        official_base_url="https://api.openai.com/v1",
+        provider=_openai,
+        model=lambda name, provider, _cfg: OpenAIChatModel(name, provider=provider),
+        model_names=_sdk_model_names,
+    ),
+    "openai-responses": ProviderKind(
+        official_base_url="https://api.openai.com/v1",
+        provider=_openai,
+        model=lambda name, provider, _cfg: OpenAIResponsesModel(name, provider=provider),
+        model_names=_sdk_model_names,
+    ),
+    "google": ProviderKind(
+        official_base_url="https://generativelanguage.googleapis.com/",
+        provider=lambda key, url: GoogleProvider(api_key=key, base_url=url),
+        model=lambda name, provider, _cfg: GoogleModel(name, provider=provider),
+        model_names=_google_model_names,
+    ),
+}
 
 
 class ModelRegistry:
@@ -116,7 +139,9 @@ class ModelRegistry:
     def _provider(self, name: str, cfg: ProviderConfig) -> Provider:  # type: ignore[type-arg]
         provider = self._providers.get(name)
         if provider is None:
-            provider = self._providers[name] = _build_provider(cfg)
+            kind = KINDS[cfg.type]
+            key = cfg.api_key.get_secret_value()
+            provider = self._providers[name] = kind.provider(key, cfg.base_url or kind.official_base_url)
         return provider
 
     def check(self, model: str) -> None:
@@ -131,7 +156,7 @@ class ModelRegistry:
         if cfg is None:
             raise NotFound(f"provider {provider_name!r} is not configured, have {self.provider_names()}")
         try:
-            names = await _fetch_model_names(cfg.type, self._provider(provider_name, cfg))
+            names = await KINDS[cfg.type].model_names(self._provider(provider_name, cfg))
         except _LIST_ERRORS as e:
             log.warning("listing models failed", extra={"provider": provider_name, "error": repr(e)})
             raise UpstreamFailed(f"provider {provider_name!r} failed to list models: {e}") from e
@@ -140,19 +165,4 @@ class ModelRegistry:
 
     def resolve(self, model: str) -> Model:
         name, cfg, model_name = self._split(model)
-        provider = self._provider(name, cfg)
-        match cfg.type:
-            case "anthropic":
-                return AnthropicModel(
-                    model_name,
-                    provider=provider,
-                    settings=ANTHROPIC_CACHE_SETTINGS if cfg.prompt_cache else None,
-                )
-            case "openai":
-                return OpenAIChatModel(model_name, provider=provider)
-            case "openai-responses":
-                return OpenAIResponsesModel(model_name, provider=provider)
-            case "google":
-                return GoogleModel(model_name, provider=provider)
-            case _:
-                assert_never(cfg.type)
+        return KINDS[cfg.type].model(model_name, self._provider(name, cfg), cfg)
