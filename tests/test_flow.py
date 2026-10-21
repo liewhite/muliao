@@ -357,7 +357,7 @@ async def test_long_run_is_not_capped_by_pydantic_ai_default_request_limit(conta
         done = sum(isinstance(m, ModelResponse) for m in messages)
         if done >= steps:
             return ModelResponse(parts=[TextPart("finished")])
-        return ModelResponse(parts=[ToolCallPart("list_files", {})])
+        return ModelResponse(parts=[ToolCallPart("write_file", {"path": "x.txt", "content": "x"})])
 
     models.models["m"] = scripted(fn)
     session = await start(container, alpha, "long task", origin=Origin.TRIGGER)

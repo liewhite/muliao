@@ -22,7 +22,7 @@ from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 
-_LIST_LIMIT = 500
+_MAX_LINE_CHARS = 2000
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,10 @@ def resolve(scope: RunScope, path: str) -> Path:
 
 SHELL_DESCRIPTION = (
     "Run a shell command (bash) in your workspace and return its exit code and combined output. "
-    "Commands are killed after {default:g} seconds unless you pass a longer `timeout` (at most {max:g})."
+    "Commands are killed after {default:g} seconds unless you pass a longer `timeout` (at most {max:g}). "
+    "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
+    "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules. "
+    "Read files with read_file and change them with edit_file / write_file rather than cat, sed or heredocs."
 )
 def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
     """文件与前台 shell。"""
@@ -110,8 +113,13 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         if not target.is_file():
             raise NotFound(f"file not found: {target}")
         lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+        if offset and offset >= len(lines):
+            raise InvalidInput(f"offset {offset} is past the end: {target} has {len(lines)} lines")
         selected = lines[offset : offset + limit]
-        body = "\n".join(f"{i + offset + 1}\t{line}" for i, line in enumerate(selected))
+        # 一行压缩过的 JS/JSON 能吃掉整个输出预算，单行截断
+        body = "\n".join(
+            f"{i + offset + 1}\t{_clip(line)}" for i, line in enumerate(selected)
+        )
         more = len(lines) - offset - len(selected)
         return truncate(body, limits.max_output_chars) + (f"\n… {more} more lines" if more > 0 else "")
 
@@ -129,37 +137,29 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         return f"wrote {len(content)} chars to {target}"
 
     @ts.tool
-    async def edit_file(ctx: RunContext[RunScope], path: str, old_text: str, new_text: str) -> str:
-        """Replace text in a file. `old_text` must occur exactly once.
+    async def edit_file(
+        ctx: RunContext[RunScope], path: str, old_text: str, new_text: str, replace_all: bool = False
+    ) -> str:
+        """Replace text in a file. `old_text` must occur exactly once, unless `replace_all` is set.
+        Copy `old_text` exactly from the file as it is now (without read_file's line-number prefix), with enough
+        surrounding lines to be unique.
 
         Args:
             path: File path.
             old_text: Exact text to replace.
             new_text: Replacement text.
+            replace_all: Replace every occurrence (e.g. renaming a variable) instead of exactly one.
         """
         target = resolve(ctx.deps, path)
         if not target.is_file():
             raise NotFound(f"file not found: {target}")
         content = target.read_text(encoding="utf-8")
-        target.write_text(text_edit.replace_once(content, old_text, new_text, str(target)), encoding="utf-8")
-        return f"edited {target}"
-
-    @ts.tool
-    async def list_files(ctx: RunContext[RunScope], path: str = ".", recursive: bool = False) -> str:
-        """List directory entries. Directories end with '/'.
-
-        Args:
-            path: Directory path.
-            recursive: List all descendants instead of direct children.
-        """
-        target = resolve(ctx.deps, path)
-        if not target.is_dir():
-            raise NotFound(f"directory not found: {target}")
-        entries = sorted(target.rglob("*") if recursive else target.iterdir())
-        lines = [f"{e.relative_to(target)}{'/' if e.is_dir() else ''}" for e in entries[:_LIST_LIMIT]]
-        if len(entries) > _LIST_LIMIT:
-            lines.append(f"… {len(entries) - _LIST_LIMIT} more entries")
-        return "\n".join(lines) or "(empty)"
+        if replace_all:
+            content, count = text_edit.replace_all(content, old_text, new_text, str(target))
+        else:
+            content, count = text_edit.replace_once(content, old_text, new_text, str(target)), 1
+        target.write_text(content, encoding="utf-8")
+        return f"edited {target} ({count} replacement{'s' if count > 1 else ''})"
 
     @ts.tool
     async def share_file(ctx: RunContext[RunScope], path: str) -> ToolReturn:
@@ -188,3 +188,8 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         )
 
     return ts
+
+
+def _clip(line: str) -> str:
+    return line if len(line) <= _MAX_LINE_CHARS else f"{line[:_MAX_LINE_CHARS]}…[line truncated]"
+

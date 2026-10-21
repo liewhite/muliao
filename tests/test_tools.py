@@ -222,7 +222,7 @@ async def test_temp_agent_runs_once_in_a_discarded_workspace_and_returns_its_ans
     assert workspace.startswith(str(container.settings.temp_dir)) and "has-key" in str(seen["shell"])
     assert workspace and list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240  测试里的同步检查
     # 只有文件与 shell：没有记忆、skill、委派，也不能再开临时 agent
-    assert seen["tools"] == ["edit_file", "list_files", "read_file", "run_shell", "share_file", "write_file"]
+    assert seen["tools"] == ["edit_file", "read_file", "run_shell", "share_file", "write_file"]
     assert "temporary helper agent working for agent 'manager'" in str(seen["instructions"])
     # 不留下会话
     assert len(await container.sessions.list(agent_id=None, origins=None, limit=10, offset=0)) == 1
@@ -297,7 +297,7 @@ async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
 
 async def test_temp_agent_over_request_limit_is_returned_to_caller(container, make_agent, models):
     me = await make_agent("manager", model="tools")
-    endless = scripted(lambda m, i: ModelResponse(parts=[ToolCallPart("list_files", {}, tool_call_id="l")]))
+    endless = scripted(lambda m, i: ModelResponse(parts=[ToolCallPart("write_file", {"path": "x.txt", "content": "x"}, tool_call_id="l")]))
     models.models["helper"] = endless
     outputs = await run_tools(
         container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})]
@@ -474,3 +474,37 @@ async def test_read_file_rejects_negative_offsets(container, make_agent, models)
     me = await make_agent("alpha", model="tools")
     [output] = await run_tools(container, models, me.id, [("read_file", {"path": "x.txt", "offset": -10})])
     assert "offset must be >= 0" in output
+
+
+async def test_edit_file_replace_all_and_helpful_misses(container, make_agent, models):
+    me = await make_agent("alpha", model="tools")
+    content = "def f():\n    x = 1\n    return x\n\nx = 2\n"
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("write_file", {"path": "a.py", "content": content}),
+            ("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y"}),
+            ("edit_file", {"path": "a.py", "old_text": "x = 1\nreturn x", "new_text": "z"}),
+            ("edit_file", {"path": "a.py", "old_text": "    x = 1\n    return 0", "new_text": "z"}),
+            ("edit_file", {"path": "a.py", "old_text": "x", "new_text": "y", "replace_all": True}),
+            ("read_file", {"path": "a.py"}),
+        ],
+    )
+    assert "at lines 2, 3, 5" in outputs[1]
+    assert "lines 2-3 match it except for whitespace" in outputs[2]
+    assert "first non-blank line is at line 2" in outputs[3]
+    assert "3 replacements" in outputs[4]
+    assert "y = 1" in outputs[5] and "return y" in outputs[5] and "y = 2" in outputs[5]
+
+
+async def test_read_file_truncates_very_long_lines(container, make_agent, models):
+    me = await make_agent("alpha", model="tools")
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [("write_file", {"path": "min.js", "content": "a" * 5000 + "\nok\n"}), ("read_file", {"path": "min.js"})],
+    )
+    assert "[line truncated]" in outputs[1] and "2\tok" in outputs[1] and len(outputs[1]) < 2100
