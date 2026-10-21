@@ -20,11 +20,11 @@ import {
 
 const ORIGIN_LABEL: Record<Origin, string> = {
   user: '对话',
-  trigger: '触发',
+  trigger: '定时任务',
   delegation: '委派',
 }
 
-// 触发器（定时、外部事件）每次触发都会产生会话，默认不显示以免淹没收件箱
+// 定时任务（定时、外部事件）每次触发都会产生会话，默认不显示以免淹没收件箱
 const FILTERS = {
   inbox: { label: '收件箱', origins: ['user', 'delegation'] as Origin[] },
   auto: { label: '自动', origins: ['trigger'] as Origin[] },

@@ -287,7 +287,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
     })
 
   async function remove() {
-    const ok = await confirm({ title: `删除触发器「${trigger.name}」？`, confirmLabel: '删除', danger: true })
+    const ok = await confirm({ title: `删除定时任务「${trigger.name}」？`, confirmLabel: '删除', danger: true })
     if (ok) await action.run(() => api.deleteTrigger(trigger.id).then(onChange))
   }
 
@@ -307,7 +307,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           </div>
         </div>
         <ToggleSwitch
-          label={`启用触发器「${trigger.name}」`}
+          label={`启用定时任务「${trigger.name}」`}
           isSelected={trigger.enabled}
           isDisabled={action.busy}
           onChange={(enabled) => void action.run(() => api.updateTrigger(trigger.id, { enabled }).then(onChange))}
@@ -406,7 +406,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
       if (kind === null || agentId === null) throw new Error('请选择触发方式和 agent')
       if (config === null) throw new Error('配置不合法')
       await api.createTrigger({ name, agent_id: asAgentId(agentId), kind, prompt, config, precheck })
-      toast.success('触发器已创建')
+      toast.success('定时任务已创建')
     })
     if (ok) {
       setName('')
@@ -416,7 +416,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   }
 
   return (
-    <CollapsibleForm title="新建触发器">
+    <CollapsibleForm title="新建定时任务">
       <SelectInput
         label="触发方式"
         value={kind}
@@ -468,7 +468,7 @@ export default function Triggers() {
   const kinds = useLoad(() => api.triggerKinds(), [])
   const agents = useAgents()
   return (
-    <Page title="触发">
+    <Page title="定时任务">
       <div className="flex flex-col gap-3">
         <Loading state={kinds}>
           {(list) => <TriggerForm kinds={list} agents={agents.data} onCreated={() => void triggers.reload()} />}
@@ -476,7 +476,7 @@ export default function Triggers() {
         <Loading state={triggers}>
           {(list) =>
             list.length === 0 ? (
-              <EmptyHint>没有触发器</EmptyHint>
+              <EmptyHint>没有定时任务</EmptyHint>
             ) : (
               <div className="flex flex-col gap-3">
                 {list.map((t) => (
