@@ -94,6 +94,8 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
       return '创建了 issue'
     case 'description':
       return '修改了描述'
+    case 'released':
+      return '让出了 issue（断开处理会话）'
     case 'comment':
       return '评论了'
     default: {

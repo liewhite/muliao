@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentService, active_agent_in, agent_in
 from muliao.agents.events import AgentDeleting
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.issues.rules import (
     USER,
     ActivityView,
@@ -274,6 +274,32 @@ class IssueService:
         log.info("issue commented", extra={"issue_id": issue_id, "actor": actor})
         await self._deliver(wake)
         return activity
+
+    async def release(self, actor: str, issue_id: int, session_id: str) -> bool:
+        """agent 让出 issue：断开登记的处理会话（必须就是它现在所在的会话）。issue 仍是 todo / 进行中、指派给它时，
+        马上开 issue 自己的新会话接手（返回 True）；否则只断开，等下次被唤醒。"""
+        async with self._db.transaction() as s:
+            issue = await self._get_in(s, issue_id)
+            if issue.sessions.get(actor) != session_id:
+                raise Conflict(
+                    f"this conversation is not the one working on issue #{issue_id}; nothing to release"
+                )
+            issue.sessions = {k: v for k, v in issue.sessions.items() if k != actor}
+            self._record(s, issue, actor, ActivityKind.RELEASED)
+            issue.updated_at = utcnow()
+            wake = None
+            if wake_target(None, _snapshot(issue), None) == actor:
+                wake = await self._wake_in(
+                    s,
+                    issue,
+                    actor,
+                    f"Issue #{issue.id} was released by the conversation working on it; take it over.",
+                )
+        log.info(
+            "issue released", extra={"issue_id": issue_id, "agent": actor, "handed_over": wake is not None}
+        )
+        await self._deliver(wake)
+        return wake is not None
 
     async def delete(self, issue_id: int) -> None:
         async with self._db.transaction() as s:

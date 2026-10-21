@@ -37,6 +37,8 @@ class ActivityKind(StrEnum):
     PRIORITY = "priority"
     TITLE = "title"
     DESCRIPTION = "description"
+    # agent 让出 issue：断开它的处理会话
+    RELEASED = "released"
 
 
 class Issue(Base):

@@ -2603,7 +2603,8 @@
           "assignee",
           "priority",
           "title",
-          "description"
+          "description",
+          "released"
         ],
         "title": "ActivityKind"
       },

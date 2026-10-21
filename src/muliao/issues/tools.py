@@ -158,4 +158,19 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         await issues.comment(ctx.deps.agent_id, issue_id, body, session_id=ctx.deps.session_id)
         return f"commented on issue #{issue_id}"
 
+    @ts.tool
+    async def issue_release(ctx: RunContext[RunScope], issue_id: int) -> str:
+        """Stop working on an issue in this conversation, e.g. it turned out to be separate from what you are doing
+        here. If it is still `todo`/`in_progress` and assigned to you, a fresh conversation dedicated to the issue
+        takes it over right away; otherwise it is simply detached.
+
+        Args:
+            issue_id: Issue number.
+        """
+        if ctx.deps.session_id is None:
+            raise InvalidInput("issue_release only works inside a conversation")
+        if await issues.release(ctx.deps.agent_id, issue_id, ctx.deps.session_id):
+            return f"released issue #{issue_id}; a new conversation for it has been started"
+        return f"released issue #{issue_id}"
+
     return ts

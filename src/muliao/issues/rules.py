@@ -86,6 +86,8 @@ def render_issue(issue: IssueView) -> str:
             lines.append(f"- [{a.at}] {a.actor} commented:\n  " + (a.body or "").replace("\n", "\n  "))
         elif a.kind == ActivityKind.CREATED:
             lines.append(f"- [{a.at}] {a.actor} created the issue")
+        elif a.kind == ActivityKind.RELEASED:
+            lines.append(f"- [{a.at}] {a.actor} released the issue from the conversation working on it")
         elif a.kind == ActivityKind.DESCRIPTION:
             lines.append(f"- [{a.at}] {a.actor} edited the description")
         else:

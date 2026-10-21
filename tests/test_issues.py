@@ -228,3 +228,34 @@ async def test_work_state_of_the_assignee_session(container, make_agent):
     await drain(container)
     states = await container.issues.work_states(await container.issues.list())
     assert states[issue.id] == WorkState.IDLE  # 运行结束了，issue 还在 todo：没人在做
+
+
+async def test_an_agent_releases_an_issue_to_a_fresh_session(container, make_agent):
+    from muliao.errors import Conflict
+    from tests.test_flow import start
+
+    alpha = (await make_agent()).id
+    chat = await start(container, alpha, "chat")
+    issue = await container.issues.create(
+        alpha, session_id=chat.id, title="t", status=IssueStatus.TODO, assignee=alpha
+    )
+    with pytest.raises(Conflict):
+        await container.issues.release(alpha, issue.id, "another-session")
+
+    assert await container.issues.release(alpha, issue.id, chat.id)
+    await deliver(container)
+    [session] = await _issue_sessions(container)
+    detail = await container.issues.get(issue.id)
+    assert detail.issue.sessions == {alpha: session.id}
+    assert detail.activities[-1].kind == ActivityKind.RELEASED
+    assert "released" in (await _mail(container, session.id))[0]
+
+    # 不再是 todo / 进行中的只断开，不开会话
+    later = await container.issues.create(
+        alpha, session_id=chat.id, title="later", status=IssueStatus.TODO, assignee=alpha
+    )
+    await container.issues.update(alpha, later.id, session_id=chat.id, status=IssueStatus.BACKLOG)
+    assert not await container.issues.release(alpha, later.id, chat.id)
+    await deliver(container)
+    assert len(await _issue_sessions(container)) == 1
+    assert (await container.issues.get(later.id)).issue.sessions == {}
