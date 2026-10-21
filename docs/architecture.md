@@ -21,7 +21,7 @@
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `resources/{public,agents/<id>}/mcp/<name>.json` |
 | Secret | 加密保存的密码/token，通过 key 引用；公共或 agent 私有 | `secrets` 表（Fernet 加密） |
 | File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
-| Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，deliver task 只引用它，内容不另存一份 | `notifications` 表 |
+| Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，每台设备（推送订阅）一个 deliver task，只引用通知与订阅，内容不另存一份 | `notifications` 表 |
 | ModelUsage（用量） | 一次模型运行报告的 token 用量：时间、agent、会话（没有就为空）、运行类型（对话 / 压缩 / 反思 / 临时 agent）、模型、请求数与各项 token。只增不改，也不随 agent 与会话的删除而消失——它是账目 | `model_usage` 表 |
 | Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、负责项目（owner agent，必填、不随指派变）、指派人（agent / 用户 / 无）、时间线（评论与属性变化）。处于 todo / in_progress 时，每条动态投进被指派 agent 在这个 issue 上唯一的会话 | `issues`、`issue_activities` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件；触发方式（定时、一次性、webhook……）多态实现。跑完不会再触发的归档（`finished_at`），离开列表但留下历史 | `triggers` 表 |
@@ -120,7 +120,7 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 
 ### 3.2 任务队列即 actor 调度
 
-`tasks` 表是持久化的任务队列，也是 actor 调度器：每个 task 带 `lane`，同一 lane 内严格 FIFO（更早的排队任务、或进行中的任务挡住后面的）、同一时刻最多一个 running；不同 lane 并发。平台只提供 lane 的机制，lane 名由用它的领域定义：会话领域的都在 `sessions/lanes.py`（会话 actor 的邮箱 `session:<id>`，运行、压缩都在这条 lane 上串行执行；`Receive` 与会话之外的工作各自的 lane），反思的 `reflection:<agent id>` 在反思领域，deliver 的 `deliver:<会话>`（系统通知按 agent，没有 agent 的是 `deliver:system`）在通知领域。别的领域不拼这些名字，要问会话忙不忙用会话领域的 `SessionActivity`。
+`tasks` 表是持久化的任务队列，也是 actor 调度器：每个 task 带 `lane`，同一 lane 内严格 FIFO（更早的排队任务、或进行中的任务挡住后面的）、同一时刻最多一个 running；不同 lane 并发。平台只提供 lane 的机制，lane 名由用它的领域定义：会话领域的都在 `sessions/lanes.py`（会话 actor 的邮箱 `session:<id>`，运行、压缩都在这条 lane 上串行执行；`Receive` 与会话之外的工作各自的 lane），反思的 `reflection:<agent id>` 在反思领域，deliver 的 `deliver:<会话>:<设备>`（系统通知按 agent，没有 agent 的是 `deliver:system:<设备>`；设备是 endpoint 的摘要，lane 会进日志而 endpoint 是订阅凭据）在通知领域。别的领域不拼这些名字，要问会话忙不忙用会话领域的 `SessionActivity`。
 
 - **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。处理器分两段：`execute` 做事（可以开自己的事务、调用别的领域的命令），返回的 `Commit` 与「task 记为完成」在同一个事务里提交（`TaskQueue.complete`）。每个 task 有总时限（`task_timeout_seconds`），超时按暂时性失败重试。
 - **失败**：契约内的失败（第 5 节）按指数退避重试，上限 `task_max_attempts`；最终失败时处理器的 `failed_in` 在记下失败的同一事务里收尾（如把失败交回等着的会话）。「任务」页可查并可手动重试（沿用原 id，所以仍按原顺序；重试把尝试次数清零）。进程崩溃后启动时把 `running` 复位为 `pending`（`Worker._recover`），尝试次数已经用完的除外：任务自己会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去、还一直占住它的 lane，这时按最终失败记账（同一个上限，收尾钩子照常执行，失败照常可见）。
@@ -215,7 +215,7 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
 
 1. **失败可见**：task 失败记录 `error`、打 error 日志，UI 的「任务」页可查并可手动重试；session 页显示最近一次运行失败；重试运行期间保留上一次的错误。
 2. **可收敛**：契约内的失败（模型接口 408/409/425/429/5xx/529、底层为连接错误的 `ModelAPIError`、网络错误、超时、推送服务 5xx/429）按指数退避重试，上限 `task_max_attempts`；进程崩溃后启动时把 `running` 复位为 `pending` 重新执行（恢复次数同样受 `task_max_attempts` 约束，见第 4 节）。运行**每一步保存**（这次请求与它带上的信件同一个事务、回复一个事务），收尾与 task 记为完成同一个事务，所以重试从上一步续跑：历史停在一条没得到回复的请求上就重发它，停在带工具调用的回复上就给那些没出结果的调用补上「被中断、没有重新执行」的结果再重发（见第 7 节「从哪里开始」），已经保存的步骤不会重放，也不会产生重复消息。领域之间的反应经事件投递，处理器的写入与投递完成同一事务（第 3.3 节）。
-3. **代价可控**：中断那一步里正在执行的工具不重放（它的副作用是否已经发生无从知道，模型拿到「被中断」的结果自己判断），所以重复的副作用只来自一步之内的并行调用——同一次模型回复里的其他工具已经做完、结果还没保存时整步一起补结果，模型可能重做它们；`web` 工具按次计费，重做的搜索与抓取会再付一次费（抓取按目标域名限流时也可能再次撞上限流）。临时 agent 把「一步」撑得很大：它整个在调用方的一步里运行，一步里可能并行多条模型调用链，任何一条失败都会取消其余（已经做过的 shell 与 MCP 副作用留在那里）；这一步不会自动重放，模型拿到「被中断」的结果后自己决定要不要再做一遍。任何运行（会话轮次、反思、临时 agent）都不设请求数上限（显式传 `UsageLimits(request_limit=None)`，盖掉 pydantic-ai 默认的 50）：开发类任务一轮上百步是常态，运行靠用户停止与 `runtime.task_timeout_seconds` 收束。Web Push 每个订阅（设备）一个 deliver task，只有 404/410（RFC 8030 的订阅失效）才删除订阅，其他 4xx 视为本端问题让该 task 失败、不删数据；暂时性失败只重试失败的那一台，已送达的设备不会重复收到。领域之间的反应晚几百毫秒（推送、委派的结局、反思调度、删除后的清理）。
+3. **代价可控**：中断那一步里正在执行的工具不重放（它的副作用是否已经发生无从知道，模型拿到「被中断」的结果自己判断），所以重复的副作用只来自一步之内的并行调用——同一次模型回复里的其他工具已经做完、结果还没保存时整步一起补结果，模型可能重做它们；`web` 工具按次计费，重做的搜索与抓取会再付一次费（抓取按目标域名限流时也可能再次撞上限流）。临时 agent 把「一步」撑得很大：它整个在调用方的一步里运行，一步里可能并行多条模型调用链，任何一条失败都会取消其余（已经做过的 shell 与 MCP 副作用留在那里）；这一步不会自动重放，模型拿到「被中断」的结果后自己决定要不要再做一遍。任何运行（会话轮次、反思、临时 agent）都不设请求数上限（显式传 `UsageLimits(request_limit=None)`，盖掉 pydantic-ai 默认的 50）：开发类任务一轮上百步是常态，运行靠用户停止与 `runtime.task_timeout_seconds` 收束。Web Push 每个订阅（设备）一个 deliver task，只有 404/410（RFC 8030 的订阅失效）才删除订阅，其他 4xx 视为本端问题让该 task 失败、不删数据；暂时性失败只重试失败的那一台（各设备的 lane 互不阻塞），不会再推给已送达的设备；只有推送成功后、task 记为完成前进程崩溃，才会对这一台重推一次。领域之间的反应晚几百毫秒（推送、委派的结局、反思调度、删除后的清理）。
 
 契约外的失败（代码 bug、模型返回 400、请求超限、响应解码失败、配置错误、存下的消息与代码不一致）不重试，task 直接 `failed` 并告警。
 
@@ -510,7 +510,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - token 是我们签发给外部系统的凭证，事实来源是触发器自己：`state` 里只存 SHA-256，明文只在生成时返回一次，**只能由用户在界面上生成**（agent 创建的 webhook 在用户生成 token 之前收不到事件）。不放进 vault——vault 存的是外部系统发给我们的凭证。
 - 不校验各平台自己的签名格式（GitHub、Slack 等各不相同）。需要时由发送方把 token 放进 Authorization 头，或在中间加一层转发。
 
-**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警（定向命令 `Notify`）、推送测试，都经 `Notifications.enqueue_in` 在通知领域的事务里写一条 `notifications` 行，并给当时的每个推送订阅各排一个 deliver task（只带 `notification_id` 与订阅的 endpoint；没有订阅就只留在通知页）。DeliverHandler 投递时读出通知、订阅（排队后已退订就跳过）和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到 deliver 事件和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时只由会话领域标记（`SessionService.mark_read`），同一事务发布 `SessionRead`，通知领域订阅它把指向这个会话的通知标为已读（提交后 `run_now` 马上投递，通常请求返回时未读数已更新；同一 lane 上有更早的投递时由 worker 稍后处理，界面在 `event` 投递完成时重新取未读数）。通知随它指向的会话删除（订阅 `SessionDeleted`）；`RunEnded`、`SessionRead`、`SessionDeleted` 在同一条按会话的 lane 上；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
+**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警（定向命令 `Notify`）、推送测试，都经 `Notifications.enqueue_in` 在通知领域的事务里写一条 `notifications` 行，并给当时的每个推送订阅各排一个 deliver task（只带 `notification_id` 与订阅的 endpoint；没有订阅就只留在通知页）。DeliverHandler 投递时读出通知、订阅（排队后已退订就跳过）和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到新通知事件（SSE `notification`，写下通知的事务提交后发出，与有没有推送订阅无关）和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时只由会话领域标记（`SessionService.mark_read`），同一事务发布 `SessionRead`，通知领域订阅它把指向这个会话的通知标为已读（提交后 `run_now` 马上投递，通常请求返回时未读数已更新；同一 lane 上有更早的投递时由 worker 稍后处理，界面在 `event` 投递完成时重新取未读数）。通知随它指向的会话删除（订阅 `SessionDeleted`）；`RunEnded`、`SessionRead`、`SessionDeleted` 在同一条按会话的 lane 上；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
 
 通知只有 Web Push 一种渠道。不支持主动推送的外部消息源（例如只能拉取的 Slack 未读）用定时触发器拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
 

@@ -1,18 +1,22 @@
 """通知：发给用户的一条消息（标题、正文、指向的会话、是否未读）。通知页与应用角标的未读数是它的展示；投递
-（Web Push）是 delivery 的事，deliver task 只引用通知，内容只存在 notifications 表。
+（Web Push）是 delivery 的事，deliver task 只引用通知与一个推送订阅，内容只存在 notifications 表。
 
 Notifications 是这个领域的唯一服务：写下通知并给每个推送订阅（设备）各排一个 deliver task（notify、定向命令 Notify、
 订阅 RunEnded），通知页与未读数，随会话已读（订阅 SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在同一条 lane 上
 （session_events_lane）。
 """
 
+import hashlib
 import logging
+from typing import Literal
 
-from sqlalchemy import delete, func, select, update
+from pydantic import BaseModel
+from sqlalchemy import delete, event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.notifications.events import Notify
 from muliao.notifications.tables import Notification, PushSubscription
+from muliao.platform.bus import EventBus
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import TaskKind
@@ -23,9 +27,19 @@ from muliao.sessions.events import RunEnded, SessionDeleted, SessionRead
 log = logging.getLogger(__name__)
 
 
-def deliver_lane(session_id: str | None, agent_id: str | None) -> str:
-    """投递通知的 lane：同一会话（没有会话时同一 agent、系统通知一条）的推送按顺序。"""
-    return f"deliver:{session_id or agent_id or 'system'}"
+def deliver_lane(session_id: str | None, agent_id: str | None, endpoint: str) -> str:
+    """投递通知的 lane：同一会话（没有会话时同一 agent、系统通知一条）推给同一台设备的按顺序；设备之间互不阻塞，
+    一台在等重试不耽误别的设备。设备用 endpoint 的摘要表示：lane 会进日志，endpoint 本身是订阅凭据。"""
+    device = hashlib.sha256(endpoint.encode()).hexdigest()[:12]
+    return f"deliver:{session_id or agent_id or 'system'}:{device}"
+
+
+class NotificationEvent(BaseModel):
+    """写下了一条新通知（推给前端 SSE，前端据此刷新通知页与未读数）。与有没有推送订阅无关。"""
+
+    type: Literal["notification"] = "notification"
+    notification_id: int
+    session_id: str | None
 
 
 def session_events_lane(event: RunEnded | SessionRead | SessionDeleted) -> str:
@@ -36,17 +50,20 @@ def session_events_lane(event: RunEnded | SessionRead | SessionDeleted) -> str:
 
 
 class Notifications:
-    def __init__(self, db: Database, queue: TaskQueue):
+    def __init__(self, db: Database, queue: TaskQueue, bus: EventBus):
         self._db = db
         self._queue = queue
+        self._bus = bus
 
     async def enqueue_in(self, s: AsyncSession, agent_id: str | None, notification: Notification) -> None:
-        """写下通知，每个设备一个 deliver task：一台设备暂时失败只重试它自己，已经送达的设备不会再收到一次。"""
+        """写下通知，每个设备一个 deliver task：一台设备暂时失败只重试它自己，不会再推给已经送达的设备。"""
         s.add(notification)
         await s.flush()
+        created = NotificationEvent(notification_id=notification.id, session_id=notification.session_id)
+        event.listen(s.sync_session, "after_commit", lambda _s: self._bus.publish(created), once=True)
         endpoints = (await s.scalars(select(PushSubscription.endpoint))).all()
         if not endpoints:
-            log.warning(
+            log.info(
                 "no push subscriptions, notification not pushed",
                 extra={"notification_id": notification.id, "session_id": notification.session_id},
             )
@@ -54,7 +71,7 @@ class Notifications:
             self._queue.enqueue(
                 s,
                 kind=TaskKind.DELIVER,
-                lane=deliver_lane(notification.session_id, agent_id),
+                lane=deliver_lane(notification.session_id, agent_id, endpoint),
                 agent_id=agent_id,
                 session_id=notification.session_id,
                 payload={"notification_id": notification.id, "endpoint": endpoint},

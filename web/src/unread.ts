@@ -42,11 +42,10 @@ export function useUnreadCount(): number {
 /** 刷新未读数，失败只记日志：用于后台同步，不打断用户的操作 */
 export const refreshUnreadLogged = () => void refreshUnread().catch((e) => console.error('unread count refresh failed', e))
 
-/** 这个服务端事件之后通知可能变了：新通知投递、一条领域事件处理完（如 SessionRead 排在更早的投递后面、由 worker
- * 稍后标记通知已读），或断线期间可能错过了事件 */
+/** 这个服务端事件之后通知可能变了：写下了新通知（不论有没有推送订阅）、一条领域事件处理完（如 SessionRead 排在
+ * 更早的投递后面、由 worker 稍后标记通知已读），或断线期间可能错过了事件 */
 export const notificationsMayHaveChanged = (e: PageEvent) =>
-  e.type === 'reconnected' ||
-  (e.type === 'task' && (e.kind === 'deliver' || (e.kind === 'event' && e.status === 'done')))
+  e.type === 'reconnected' || e.type === 'notification' || (e.type === 'task' && e.kind === 'event' && e.status === 'done')
 
 /** 登录后在应用根部调用一次：新通知投递、断线重连、回到前台、收到推送时刷新 */
 export function useUnreadSync() {

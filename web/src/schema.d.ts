@@ -1420,6 +1420,22 @@ export interface components {
             /** Max Chars */
             max_chars: number;
         };
+        /**
+         * NotificationEvent
+         * @description 写下了一条新通知（推给前端 SSE，前端据此刷新通知页与未读数）。与有没有推送订阅无关。
+         */
+        NotificationEvent: {
+            /**
+             * Type
+             * @default notification
+             * @constant
+             */
+            type: "notification";
+            /** Notification Id */
+            notification_id: number;
+            /** Session Id */
+            session_id: string | null;
+        };
         /** NotificationOut */
         NotificationOut: {
             /** Id */
@@ -1783,7 +1799,7 @@ export interface components {
          * @description SSE 里每条 data 的形状（api.app 的 /events）。具名是为了在 OpenAPI 里成为一个组件：前端的事件联合直接取它，
          *     不另列一遍（openapi-typescript 还不认识 OpenAPI 3.2 的 itemSchema）。OpenAPI 的 discriminator 不能嵌套，这里不标。
          */
-        ServerEvent: components["schemas"]["TaskEvent"] | components["schemas"]["SavedEvent"] | components["schemas"]["RunItemEvent"] | components["schemas"]["RunDeltaEvent"] | components["schemas"]["HeartbeatEvent"];
+        ServerEvent: components["schemas"]["TaskEvent"] | components["schemas"]["SavedEvent"] | components["schemas"]["RunItemEvent"] | components["schemas"]["RunDeltaEvent"] | components["schemas"]["NotificationEvent"] | components["schemas"]["HeartbeatEvent"];
         /** SessionDetail */
         SessionDetail: {
             session: components["schemas"]["SessionOut"];

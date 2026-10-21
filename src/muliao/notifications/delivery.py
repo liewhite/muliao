@@ -36,8 +36,7 @@ class DeliverHandler:
         async with self._db.transaction() as s:
             notification = await s.get(Notification, notification_id)
             if notification is None:
-                # 通知随会话删除，而 deliver task 已经在运行（未运行的随会话一起删除了）。用户可见的会话有运行中的
-                # task 时拒绝删除，所以只有私有 thread 走到这里：它随父会话删除，删除时不检查 thread 自己的 deliver task
+                # 通知随它指向的会话删除（订阅 SessionDeleted），deliver task 不随之删除：还在排队的执行时到这里跳过
                 log.info(
                     "notification deleted before delivery, not pushing",
                     extra={"notification_id": notification_id, "session_id": task.session_id},

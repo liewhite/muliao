@@ -17,6 +17,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionMo
 from sqlalchemy import select
 
 from muliao.agent_runtime.conventions import run_context_index
+from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.platform.worker import Worker
@@ -148,8 +149,13 @@ async def tasks_of(container, kind: TaskKind) -> list[Task]:
         return list((await s.scalars(select(Task).where(Task.kind == kind).order_by(Task.id))).all())
 
 
-async def test_turn_runs_tools_persists_messages_and_queues_notification(container, make_agent, models):
+async def test_turn_runs_tools_persists_messages_and_queues_notification(
+    container, make_agent, models, monkeypatch
+):
     alpha = (await make_agent("alpha", model="m")).id
+    await container.push_subscriptions.add("https://push.example/phone", "k", "a")
+    pushed: list[str] = []
+    monkeypatch.setattr(WebPushDelivery, "_push", lambda _self, sub, _data: pushed.append(sub.endpoint))
     models.models["m"] = call_then_answer("memory_append", {"entry": "- user likes tea"}, "Noted!")
 
     session = await start(container, alpha, "I like tea")
@@ -164,7 +170,8 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(contain
     deliver = await tasks_of(container, TaskKind.DELIVER)
     assert len(deliver) == 1 and deliver[0].status == TaskStatus.DONE
     [note] = await container.notifications.list(10)
-    assert deliver[0].payload == {"notification_id": note.id}
+    assert deliver[0].payload == {"notification_id": note.id, "endpoint": "https://push.example/phone"}
+    assert pushed == ["https://push.example/phone"]
     assert (note.body, note.session_id, note.unread) == ("Noted!", session.id, True)
     assert await container.notifications.unread_count() == 1
 
@@ -213,7 +220,7 @@ async def test_triggered_session_does_not_notify_automatically(container, make_a
     await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
 
-    assert await tasks_of(container, TaskKind.DELIVER) == []
+    assert await container.notifications.list(10) == []
 
 
 async def test_reply_continues_with_full_history(container, make_agent, models):
@@ -327,8 +334,7 @@ async def test_delegate_task_opens_public_thread_and_notifies_user(container, ma
     assert child.origin == Origin.DELEGATION and child.parent_session_id == parent.id
     assert child.thread == "x" and child.kind == SessionKind.THREAD
     assert (await container.sessions.history(child.id))[-1].parts[0].content == "summary of X"
-    deliver = await tasks_of(container, TaskKind.DELIVER)
-    assert [d.session_id for d in deliver] == [child.id]
+    assert [n.session_id for n in await container.notifications.list(10)] == [child.id]
 
 
 async def test_domain_error_in_tool_is_returned_to_model_for_correction(container, make_agent, models):

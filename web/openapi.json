@@ -4119,6 +4119,38 @@
         ],
         "title": "MemoryOut"
       },
+      "NotificationEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "notification",
+            "title": "Type",
+            "default": "notification"
+          },
+          "notification_id": {
+            "type": "integer",
+            "title": "Notification Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "notification_id",
+          "session_id"
+        ],
+        "title": "NotificationEvent",
+        "description": "写下了一条新通知（推给前端 SSE，前端据此刷新通知页与未读数）。与有没有推送订阅无关。"
+      },
       "NotificationOut": {
         "properties": {
           "id": {
@@ -4979,6 +5011,9 @@
           },
           {
             "$ref": "#/components/schemas/RunDeltaEvent"
+          },
+          {
+            "$ref": "#/components/schemas/NotificationEvent"
           },
           {
             "$ref": "#/components/schemas/HeartbeatEvent"

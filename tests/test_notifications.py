@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -56,10 +57,17 @@ async def test_a_notification_is_one_deliver_task_per_device(container):
         "https://push.example/laptop",
         "https://push.example/phone",
     ]
+    # 设备之间不在同一条 lane 上：一台等重试不挡另一台；lane 会进日志，不带 endpoint（订阅凭据）
+    assert len({t.lane for t in tasks}) == 2
+    assert all("push.example" not in t.lane for t in tasks)
 
 
 async def test_without_devices_the_notification_is_kept_but_nothing_is_delivered(container):
-    await container.notifications.notify(None, "t", "b", None)
+    async with container.bus.subscribe() as sub:
+        await container.notifications.notify(None, "t", "b", None)
+        # 前端靠这个事件刷新通知页与未读数，不靠投递任务：没开推送的浏览器也要看到新通知
+        created = await asyncio.wait_for(sub.next(), 1)
+    assert created.type == "notification"
 
     assert await tasks_of(container, TaskKind.DELIVER) == []
     assert [n.title for n in await container.notifications.list(10)] == ["t"]

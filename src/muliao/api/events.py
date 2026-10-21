@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, RootModel
 
+from muliao.notifications.service import NotificationEvent
 from muliao.platform.bus import TaskEvent
 from muliao.sessions.api import RunDeltaEvent, RunItemEvent, SavedEvent
 
@@ -20,6 +21,8 @@ class HeartbeatEvent(BaseModel):
     ui_version: str | None
 
 
-class ServerEvent(RootModel[TaskEvent | SavedEvent | RunItemEvent | RunDeltaEvent | HeartbeatEvent]):
+class ServerEvent(
+    RootModel[TaskEvent | SavedEvent | RunItemEvent | RunDeltaEvent | NotificationEvent | HeartbeatEvent]
+):
     """SSE 里每条 data 的形状（api.app 的 /events）。具名是为了在 OpenAPI 里成为一个组件：前端的事件联合直接取它，
     不另列一遍（openapi-typescript 还不认识 OpenAPI 3.2 的 itemSchema）。OpenAPI 的 discriminator 不能嵌套，这里不标。"""

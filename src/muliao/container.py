@@ -274,7 +274,7 @@ def build_container(
         lambda task_id: worker.run_now(task_id),
     )
     threads = Threads(queue)
-    notifications = Notifications(db, queue)
+    notifications = Notifications(db, queue, bus)
     mcp = McpRegistry(resources, vault)
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
