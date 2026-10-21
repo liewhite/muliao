@@ -22,10 +22,11 @@ from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.platform.worker import Worker
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
+from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
-from muliao.sessions.tables import Mail
+from muliao.sessions.tables import Mail, Message
 from tests.scripted import scripted
 
 
@@ -140,7 +141,11 @@ async def reply(container, session_id: str, prompt: str) -> Mail:
 
 async def history_of(container, session_id: str) -> list[ModelMessage]:
     """会话的完整原始历史（不带消息 id）。"""
-    return [m for _, m in await container.sessions.history_with_ids(session_id)]
+    async with container.db.transaction() as s:
+        rows = await s.scalars(
+            select(Message.payload).where(Message.session_id == session_id).order_by(Message.id)
+        )
+        return load_messages(rows.all())
 
 
 async def mail_of(container) -> list[Mail]:

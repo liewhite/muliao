@@ -6,7 +6,6 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
-from pydantic_ai.messages import ModelMessage
 from sqlalchemy import ColumnElement, and_, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,20 +85,18 @@ class SessionService:
         # 先取快照再读库：快照这一段已在展示的消息不在历史里重复；之间换了段时，新保存的消息照旧由旧快照展示，
         # saved 事件随后让前端重新拉取
         live = self._live.snapshot(session_id)
+        # 事务（全局写锁）里只取原始行；反序列化与转成条目在事务之外：运行每保存一步前端都会重新拉取，长会话的这部分
+        # 不该挡住别的事务
         async with self._db.transaction() as s:
             session = await self._get(s, session_id)
-            history = await _history_in(s, session_id)
+            rows = (
+                await s.execute(
+                    select(Message.id, Message.payload)
+                    .where(Message.session_id == session_id)
+                    .order_by(Message.id)
+                )
+            ).all()
             asks = await open_asks(s, session_id)
-            items = annotate_asks(
-                [
-                    item.model_copy(update={"message_id": message_id})
-                    for message_id, message in history
-                    if live is None or live.after_message_id is None or message_id <= live.after_message_id
-                    for item in to_items([message])
-                ],
-                answerable=asks.answerable.keys(),
-                submitted=asks.submitted,
-            )
             compactions = list(
                 (
                     await s.scalars(
@@ -108,15 +105,31 @@ class SessionService:
                 ).all()
             )
             latest = await latest_run(s, session_id)
-            return SessionView(
-                session=session,
-                items=items,
-                compactions=compactions,
-                mail=await visible_in(s, session_id),
-                run=None if latest is None or latest.status == TaskStatus.DONE else latest,
-                threads=await threads_of(s, session_id),
-                live=live,
-            )
+            mail = await visible_in(s, session_id)
+            threads = await threads_of(s, session_id)
+        shown = [
+            (message_id, payload)
+            for message_id, payload in rows
+            if live is None or live.after_message_id is None or message_id <= live.after_message_id
+        ]
+        items = annotate_asks(
+            [
+                item.model_copy(update={"message_id": message_id})
+                for (message_id, _), message in zip(shown, load_messages(p for _, p in shown), strict=True)
+                for item in to_items([message])
+            ],
+            answerable=asks.answerable.keys(),
+            submitted=asks.submitted,
+        )
+        return SessionView(
+            session=session,
+            items=items,
+            compactions=compactions,
+            mail=mail,
+            run=None if latest is None or latest.status == TaskStatus.DONE else latest,
+            threads=threads,
+            live=live,
+        )
 
     async def receive(self, inbound: Inbound) -> Received:
         """在独立事务里接收一个事件（规则见 inbound.receive）。"""
@@ -168,18 +181,6 @@ class SessionService:
         """这些会话的工作状态（会话列表每一行的标记，与 issue 看板、触发器同一条规则）。"""
         async with self._db.transaction() as s:
             return await work_states_in(s, self._queue, session_ids)
-
-    async def threads(self, parent_id: str) -> list[Session]:
-        """父会话开出的 thread（含私有的），按创建顺序。"""
-        async with self._db.transaction() as s:
-            await self._get(s, parent_id)
-            return await threads_of(s, parent_id)
-
-    async def history_with_ids(self, session_id: str) -> list[tuple[int, ModelMessage]]:
-        """完整原始历史（不受压缩影响），附消息 id。"""
-        async with self._db.transaction() as s:
-            await self._get(s, session_id)
-            return await _history_in(s, session_id)
 
     async def mark_read(self, session_id: str) -> None:
         """用户看过了会话：清掉会话的未读，同一事务发布 SessionRead（通知领域据此把指向它的通知标为已读）。提交后
@@ -235,11 +236,3 @@ class SessionService:
 def _running_run() -> ColumnElement[bool]:
     """进行中的运行任务（不含排队的运行与压缩）。"""
     return and_(Task.kind == TaskKind.RUN, Task.status == TaskStatus.RUNNING)
-
-
-async def _history_in(s: AsyncSession, session_id: str) -> list[tuple[int, ModelMessage]]:
-    """完整原始历史（不受压缩影响），附消息 id，按保存顺序。"""
-    rows = (
-        await s.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.id))
-    ).all()
-    return list(zip([r.id for r in rows], load_messages(r.payload for r in rows), strict=True))

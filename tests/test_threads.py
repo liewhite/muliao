@@ -14,6 +14,7 @@ from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Message, Session
+from muliao.sessions.threads import threads_of as sessions_threads_of
 from tests.scripted import scripted
 from tests.test_flow import drain, history_of, idle, last_user_prompt, reply, start, tasks_of, tool_returns
 
@@ -49,7 +50,8 @@ def echo(prefix: str, seen: list[int] | None = None):
 
 
 async def threads_of(container, parent_id: str) -> list[Session]:
-    return await container.sessions.threads(parent_id)
+    async with container.db.transaction() as s:
+        return await sessions_threads_of(s, parent_id)
 
 
 async def last_answer(container, session_id: str) -> str:

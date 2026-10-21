@@ -30,11 +30,11 @@ from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
 from muliao.sessions.finish import RunEnd, RunFinisher, load_session
 from muliao.sessions.halt import Halted, SessionHalt
-from muliao.sessions.history import interrupted_results, load_context
+from muliao.sessions.history import interrupted_results, latest_compaction, load_context
 from muliao.sessions.holds import called_in
 from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRuns
-from muliao.sessions.mailbox import RunPayload, queued_in
+from muliao.sessions.mailbox import RunPayload, hand_over_in, queued_in
 from muliao.sessions.pending import (
     ASK_AGENT,
     DEFERRED_TOOLS,
@@ -164,13 +164,27 @@ class Consumer:
         verdict = self._compactor.verdict(session.id, context.messages, context.stale_responses)
         compacted = await self._compactor.compact(session, agent) if verdict == Verdict.DUE else None
         async with self._db.transaction() as s:
-            context = await load_context(s, session.id)
+            if compacted is not None:
+                context = await load_context(s, session.id)
             queued = await queued_in(s, session.id)
-            earlier = list((await s.scalars(select(Mail).where(Mail.consumed_by == run_id))).all())
+            # 都带上会话条件：task_id、consumed_by 没有索引，按会话的索引只扫这个会话的行
+            earlier = list(
+                (
+                    await s.scalars(
+                        select(Mail).where(Mail.session_id == session_id, Mail.consumed_by == run_id)
+                    )
+                ).all()
+            )
             delegated = await called_in(s, session.id)
             adopted = await _adopted(s, session.id, run_id) if resumable(context.messages, delegated) else []
             saved_rows = list(
-                (await s.scalars(select(Message).where(Message.task_id == run_id).order_by(Message.id))).all()
+                (
+                    await s.scalars(
+                        select(Message)
+                        .where(Message.session_id == session_id, Message.task_id == run_id)
+                        .order_by(Message.id)
+                    )
+                ).all()
             )
             last_message = await s.scalar(
                 select(func.max(Message.id)).where(Message.session_id == session_id)
@@ -209,8 +223,9 @@ class Consumer:
         if prompt is None and deferred is None and not resumable(history, delegated):
             # 没有要交给模型的：信箱空了，或停在挂起的调用上、还不能继续。之前的尝试已经跑完、只差收尾时（它保存的就是
             # 历史的末尾），按保存的历史收尾；之后的运行已经接着它保存的部分继续了（重试一个过时的失败运行），推送与
-            # 委派的结局由那些运行做过，这里只了结它自己
-            if state.last_row is None or state.last_row.id != last_message:
+            # 委派的结局由那些运行做过，这里只了结它自己。历史停在标着停止的地方时，会话在这次运行登记可停止之前、或在它
+            # 最终失败之后、被手动重试之前被停止了：结局由停止做过（sessions.halt），也只了结它自己
+            if state.last_row is None or state.last_row.id != last_message or is_stopped(history[-1]):
                 state.messages, state.handled = [], []
             log.info("nothing to consume", extra={"session_id": session_id, "run_id": run_id})
             return (
@@ -246,6 +261,15 @@ class Consumer:
                 compacted = await self._compactor.compact(session, agent)
                 async with self._db.transaction() as s:
                     context = await load_context(s, session.id)
+                    compaction = await latest_compaction(s, session.id)
+                if (
+                    compaction is not None
+                    and state.run_context_row is not None
+                    and state.run_context_row <= compaction.through_message_id
+                ):
+                    # 挂着运行上下文的那条请求被压进了摘要，模型不再看得到它：下一条新请求重新挂一段（时间取现在）
+                    state.run_context = self._runtime.run_context(audience)
+                    state.run_context_row = None
                 history, prompt, deferred = context.messages, None, None
                 state.stale_responses = context.stale_responses
                 state.compaction_exhausted = compacted == 0
@@ -265,6 +289,11 @@ class Consumer:
             DeferredToolResults(calls=deferred_results(pending, answers, delegated)) if pending else None
         )
         state.taken = list(queued)
+        if queued:
+            # 开头取走的信件都交给了这次运行（mailbox.handed_to），哪怕它在第一次保存之前就最终失败：失败的结清据此
+            # 了结它们，也不会为它们再唤醒一次运行
+            async with self._db.transaction() as s:
+                await hand_over_in(s, state.run_id, queued[-1].id)
         content = await self._content.of(state.agent.id, [m for m in queued if not is_on_time(m, pending)])
         # 开头的内容由 pydantic-ai 放进第一次请求的用户消息（下标从 0 起），事件在那次请求保存前标上
         state.opening_events = content.events
@@ -305,7 +334,11 @@ async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
     )
     if tail_run is None or tail_run == run_id:
         return []
-    return list((await s.scalars(select(Mail).where(Mail.consumed_by == tail_run))).all())
+    return list(
+        (
+            await s.scalars(select(Mail).where(Mail.session_id == session_id, Mail.consumed_by == tail_run))
+        ).all()
+    )
 
 
 class RunHandler:

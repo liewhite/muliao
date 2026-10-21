@@ -126,14 +126,8 @@ async def load_context(s: AsyncSession, session_id: str) -> SessionContext:
 
 async def latest_answer(s: AsyncSession, session_id: str) -> str:
     """会话最近的回答：最后一条模型回复的文字；还没有回复时为空（运行停在第一次回复之前）。"""
-    payloads = await s.scalars(
-        select(Message.payload).where(Message.session_id == session_id).order_by(Message.id.desc())
-    )
-    for payload in payloads:
-        (message,) = load_messages([payload])
-        if isinstance(message, ModelResponse):
-            return answer_text(message)
-    return ""
+    tail = await since_last_response(s, session_id)
+    return answer_text(tail[0]) if tail and isinstance(tail[0], ModelResponse) else ""
 
 
 def _results_for(

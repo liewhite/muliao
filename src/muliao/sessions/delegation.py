@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 
 from sqlalchemy import select
@@ -28,7 +28,7 @@ from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Clock, TaskQueue
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.events import Ending
-from muliao.sessions.mailbox import latest_run, post_check_in
+from muliao.sessions.mailbox import latest_runs_among, post_check_in
 from muliao.sessions.pending import AgentAnswer, pending_in
 from muliao.sessions.tables import HoldStatus, Mail, Session, SessionHold
 from muliao.sessions.work import deliver_in
@@ -90,7 +90,9 @@ async def hand_back_in(
     if owner_id is None:
         # 发起方的唯一来源是 thread 的父会话（Threads.dispatch 总在发起方下开 thread）；holder 对这里是不透明的键。
         # 父会话置空说明发起方已被删除，结局没有收件人
-        log.info("delegation outcomes of a thread whose asker is gone dropped", extra={"holders": list(holders)})
+        log.info(
+            "delegation outcomes of a thread whose asker is gone dropped", extra={"holders": list(holders)}
+        )
         return
     agent = await agent_in(s, child.agent_id)
     for holder in holders:
@@ -126,7 +128,9 @@ async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> list[s
     这样的信件。"""
     if not holders:
         return []
-    rows = await s.scalars(select(Mail.session_id).where(Mail.correlation.in_(list(holders))).order_by(Mail.id))
+    rows = await s.scalars(
+        select(Mail.session_id).where(Mail.correlation.in_(list(holders))).order_by(Mail.id)
+    )
     return list(dict.fromkeys(rows.all()))
 
 
@@ -150,21 +154,36 @@ class ThreadChecks:
                 )
             ).all()
             due: dict[tuple[str, str], SessionHold] = {}
+            # 按发起会话取一次（一个会话可能同时有几个委派）
+            pending: dict[str, Collection[str]] = {}
             for hold, child_id in rows:
                 if (hold.session_id, child_id) in due:
                     continue
-                if hold.call_id is not None and hold.call_id in await pending_in(s, hold.session_id):
-                    # 发起方停在这次调用上：检查信件要等回答一起才交给模型，没有意义
-                    continue
+                if hold.call_id is not None:
+                    if hold.session_id not in pending:
+                        pending[hold.session_id] = (await pending_in(s, hold.session_id)).keys()
+                    if hold.call_id in pending[hold.session_id]:
+                        # 发起方停在这次调用上：检查信件要等回答一起才交给模型，没有意义
+                        continue
                 due[(hold.session_id, child_id)] = hold
-            works = await work_states_in(s, self._queue, {child_id for _, child_id in due})
+            child_ids = {child_id for _, child_id in due}
+            works = await work_states_in(s, self._queue, child_ids)
+            runs = await latest_runs_among(s, child_ids)
+            children = {
+                x.id: x
+                for x in (await s.scalars(select(Session).where(Session.id.in_(list(child_ids))))).all()
+            }
+            agents: dict[str, AgentInfo] = {}
             for (_, child_id), hold in due.items():
-                child = await s.get(Session, child_id)
+                child = children.get(child_id)
                 if child is None:
                     # 不变量断言：信件随会话删除，join 不会给出已删除的 thread
                     raise RuntimeError(f"delegation {hold.holder} has mail in a missing thread {child_id}")
-                agent = await agent_in(s, child.agent_id)
-                text = check_text(child, agent, works[child_id], await latest_run(s, child.id), self._clock())
+                if child.agent_id not in agents:
+                    agents[child.agent_id] = await agent_in(s, child.agent_id)
+                text = check_text(
+                    child, agents[child.agent_id], works[child_id], runs.get(child_id), self._clock()
+                )
                 posted += await post_check_in(
                     s, self._queue, hold.session_id, hold.holder, thread_source(child.id), text
                 )

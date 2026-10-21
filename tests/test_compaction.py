@@ -13,9 +13,10 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
+from muliao.agent_runtime.conventions import run_context_index
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
-from muliao.sessions.codec import dump_message
+from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS, select_steps, steps_of
 from muliao.sessions.history import CONTINUATION
 from muliao.sessions.lanes import session_lane
@@ -358,3 +359,48 @@ async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
     await reply(container, session.id, "long task")
     await drain(container)
     assert summaries["n"] > manual
+
+
+async def test_a_run_compacted_past_its_own_start_gets_its_run_context_again(
+    container, make_agent, models, monkeypatch
+):
+    """长运行中途压缩切过了它自己的第一条请求（挂着运行上下文的那条）：之后的新请求重新挂一段，模型仍看得到当前时间。"""
+    monkeypatch.setattr(container.compactor, "_threshold", 1)
+    monkeypatch.setattr(container.compactor, "_keep_steps", 1)
+    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    seen: list[list[ModelMessage]] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if info.instructions == COMPACTION_INSTRUCTIONS:
+            return ModelResponse(parts=[TextPart("SUMMARY")])
+        seen.append(list(messages))
+        if len(seen) <= 2:
+            entry = f"- step {len(seen)}"
+            return ModelResponse(
+                parts=[ToolCallPart("memory_append", {"entry": entry}, tool_call_id=f"c{len(seen)}")]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    models.models["m"] = scripted(fn)
+    session = await start(container, alpha, "go", origin=Origin.TRIGGER)
+    await drain(container)
+
+    assert len(seen) == 3
+    async with container.db.transaction() as s:
+        through = (await s.scalars(select(Compaction.through_message_id))).all()
+    first_request = (await _rows(container, session.id))[0]
+    assert run_context_index(first_request[1]) is not None and first_request[0] <= max(through)
+    # 第一段已经压进摘要，模型最后一次看到的上下文里仍有一段运行上下文
+    assert any(run_context_index(m) is not None for m in seen[-1])
+
+
+async def _rows(container, session_id: str) -> list[tuple[int, ModelMessage]]:
+    async with container.db.transaction() as s:
+        rows = (
+            await s.execute(
+                select(Message.id, Message.payload)
+                .where(Message.session_id == session_id)
+                .order_by(Message.id)
+            )
+        ).all()
+    return [(i, m) for (i, _), m in zip(rows, load_messages(p for _, p in rows), strict=True)]

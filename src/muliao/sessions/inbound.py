@@ -11,7 +11,6 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import active_agent_in
@@ -23,6 +22,7 @@ from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import Origin
 from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
 from muliao.sessions.history import since_last_response, since_last_response_among
+from muliao.sessions.info import keyed_rows_among
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import post_in, queued_among, queued_in
@@ -151,19 +151,8 @@ async def create_session(
 
 
 async def keyed_session_in(s: AsyncSession, origin: Origin, origin_ref: str, agent_id: str) -> Session | None:
-    """按发送方定位的会话（SessionKey）：这个发送方给这个 agent 开过的最新一个顶层会话。"""
-    query = (
-        select(Session)
-        .where(
-            Session.origin == origin,
-            Session.origin_ref == origin_ref,
-            Session.agent_id == agent_id,
-            Session.kind == SessionKind.CONVERSATION,
-        )
-        .order_by(Session.created_at.desc(), Session.id.desc())
-        .limit(1)
-    )
-    return (await s.scalars(query)).first()
+    """按发送方定位的会话（SessionKey）：这个发送方给这个 agent 开过的最新一个顶层会话（规则在 info.keyed_rows_among）。"""
+    return (await keyed_rows_among(s, origin, [origin_ref], agent_id)).get((origin_ref, agent_id))
 
 
 def _key_ref(inbound: Inbound) -> str:

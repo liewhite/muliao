@@ -27,7 +27,7 @@ from muliao.platform.tasks import TaskQueue
 from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.delegation import threads_of_holds_in
 from muliao.sessions.events import Ending, SessionStopped, StopThread
-from muliao.sessions.history import latest_answer, load_context, marked_stopped, stopped_results
+from muliao.sessions.history import latest_answer, marked_stopped, since_last_response, stopped_results
 from muliao.sessions.holds import clear_in
 from muliao.sessions.lanes import session_lane
 from muliao.sessions.mailbox import discard_in, latest_run
@@ -38,8 +38,9 @@ log = logging.getLogger(__name__)
 
 
 async def close_history_in(s: AsyncSession, session_id: str) -> None:
-    """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时运行已经保存了这些，这里没事可做。"""
-    history = (await load_context(s, session_id)).messages
+    """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时运行已经保存了这些，这里没事可做。
+    只看最后一条模型回复起的那一段（history.since_last_response）：没出结果的调用只可能在那里。"""
+    history = await since_last_response(s, session_id)
     if closing := stopped_results(history):
         run = await latest_run(s, session_id)
         if run is None:

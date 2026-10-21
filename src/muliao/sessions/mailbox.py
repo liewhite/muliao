@@ -167,16 +167,23 @@ async def visible_in(s: AsyncSession, session_id: str) -> list[Mail]:
 
 async def latest_run(s: AsyncSession, session_id: str) -> Task | None:
     """会话最近一次运行。"""
-    return await s.scalar(
-        select(Task)
-        .where(Task.lane == session_lane(session_id), Task.kind == TaskKind.RUN)
-        .order_by(Task.id.desc())
-        .limit(1)
+    return (await latest_runs_among(s, [session_id])).get(session_id)
+
+
+async def latest_runs_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, Task]:
+    """这些会话各自最近一次运行（一次查询）；还没有运行的会话不在结果里。"""
+    lanes = {session_lane(x): x for x in session_ids}
+    latest = (
+        select(func.max(Task.id))
+        .where(Task.lane.in_(list(lanes)), Task.kind == TaskKind.RUN)
+        .group_by(Task.lane)
     )
+    return {lanes[t.lane]: t for t in (await s.scalars(select(Task).where(Task.id.in_(latest)))).all()}
 
 
 class RunPayload(BaseModel):
-    """一次运行（run task）的 payload，唯一读写处在这里。输入都在信箱里；这里只记投递它时信箱里最新的信件 id。"""
+    """一次运行（run task）的 payload，唯一读写处在这里。输入都在信箱里；这里只记交给过它的最新信件 id：投递它时信箱里
+    最新的，运行开头取走了更新的信件时推进到那里（hand_over_in）。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -193,9 +200,19 @@ class RunPayload(BaseModel):
 
 
 def handed_to(mail: Mail, run: Task) -> bool:
-    """这封排队的信件已经交给过这次运行：投递它时就在信箱里了（它每一次尝试开头都会取走当时排着的信件）。唤醒
+    """这封排队的信件已经交给过这次运行：投递它时就在信箱里了，或它某次尝试开头取走了它（hand_over_in）。唤醒
     （wake_in 的「之后才到」）与最终失败时了结委派（RunHandler.failed_in）共用这一条规则，按信件 id 比较。"""
     return mail.id <= RunPayload.of(run).through_mail_id
+
+
+async def hand_over_in(s: AsyncSession, run_id: int, through_mail_id: int) -> None:
+    """运行开头取走了截至这封的排队信件：记进它的 payload（只前进），它们从此算交给过这次运行（handed_to）。"""
+    run = await s.get(Task, run_id)
+    if run is None:
+        raise RuntimeError(f"run {run_id} vanished while it was taking mail")
+    payload = RunPayload.of(run)
+    if through_mail_id > payload.through_mail_id:
+        run.payload = RunPayload(through_mail_id=through_mail_id).model_dump()
 
 
 async def consume_in(s: AsyncSession, ids: Sequence[int], run_id: int) -> None:

@@ -161,3 +161,57 @@ def test_unparseable_secret_tool_arguments_are_redacted_wholesale():
         parts=[ToolCallPart("vault_set", '{"key": "T", "value": "super-sec', tool_call_id="v")]
     )
     assert "super-sec" not in str(redact_messages([cut])[0].parts[0].args)
+
+
+async def test_retrying_a_failed_run_after_the_session_was_stopped_ends_quietly(
+    container, make_agent, models
+):
+    """最终失败的运行，会话被停止之后再手动重试：历史停在标着停止的请求上，没有要交给模型的，按「没有要交给模型的」
+    收尾，不当成「已跑完只差收尾」（那要求历史停在一条回复上）。"""
+    from muliao.agent_runtime.api import is_stopped
+    from tests.scripted import scripted
+    from tests.test_flow import tasks_of
+
+    alpha = (await make_agent("alpha", model="m")).id
+    calls = {"n": 0}
+
+    def fail(_m, _i) -> ModelResponse:
+        calls["n"] += 1
+        raise ModelHTTPError(status_code=400, model_name="m", body="bad request")
+
+    models.models["m"] = scripted(fail)
+    session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
+    await drain(container)
+    [failed] = await tasks_of(container, TaskKind.RUN)
+    assert failed.status == TaskStatus.FAILED
+
+    await container.consumer.stop_session(session.id)
+    await container.queue.retry(failed.id)
+    await drain(container)
+
+    [run] = await tasks_of(container, TaskKind.RUN)
+    assert run.status == TaskStatus.DONE
+    assert calls["n"] == 1
+    history = await history_of(container, session.id)
+    assert is_stopped(history[-1])
+
+
+async def test_mail_taken_at_a_runs_start_counts_as_handed_to_it(container, make_agent, models):
+    """运行开头取走的信件比投递它时记下的多：记进它的 payload，最终失败时据此了结、不为它们再唤醒一次。"""
+    from muliao.sessions.mailbox import RunPayload
+    from tests.scripted import scripted
+    from tests.test_flow import mail_of, reply, tasks_of
+
+    alpha = (await make_agent("alpha", model="m")).id
+    models.models["m"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("ok")]))
+    session = await start(container, alpha, "one", origin=Origin.TRIGGER)
+    # 运行还在排队：这封信不另外唤醒，由它开头一起取走
+    later = await reply(container, session.id, "two")
+    [run] = await tasks_of(container, TaskKind.RUN)
+    assert RunPayload.of(run).through_mail_id < later.id
+
+    await drain(container)
+
+    [run] = await tasks_of(container, TaskKind.RUN)
+    assert RunPayload.of(run).through_mail_id == later.id
+    assert {m.consumed_by for m in await mail_of(container)} == {run.id}
