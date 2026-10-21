@@ -71,6 +71,14 @@ api_key = ""
 # type = "deepseek"
 # api_key = ""
 
+# 可选：语音输入（界面上的麦克风按钮）。用支持音频输入的 Chat Completions 模型把语音转成文字
+# [transcription]
+# type = "openai"
+# base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# model = "qwen3.8-omni-flash"
+# api_key = ""
+# max_bytes = 7340032             # 一段录音的上限（字节）
+
 # 可选：运行参数，以下为默认值
 # [runtime]
 # worker_concurrency = 4          # 同时运行的任务数

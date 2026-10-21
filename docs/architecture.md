@@ -67,6 +67,7 @@ muliao/
   jobs/            后台任务
   agents/          agent 目录、资源仓库、自我改进工具、工具组目录
   usage/           模型用量：每次运行记一条，按时间范围汇总
+  speech/          语音输入：把界面录下的语音转成文字（可选，配置 [transcription] 才有）
   vault/  files/  reflection/  notifications/  triggers/
   api/             HTTP 适配
   container.py     组合根：构造领域、注册事件订阅、组装工具组
@@ -571,7 +572,16 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - **只增不改、不参与删除清理**：删掉 agent 或会话不等于这笔钱没花过，所以 `agent_id` / `session_id` 可能指向已经不存在的东西，界面上显示为 id 或「未知」。这个领域没有事件、没有任务，也不订阅别人的删除。
 - **界面**：设置 → Token 用量（`web/src/pages/Usage.tsx`）：近 7 / 30 天，合计与缓存命中比例、按 agent、按模型，以及按天的输入 token 条形图（深色部分是缓存命中）。
 
-## 20. 暂缓的项
+## 20. 语音输入
+
+**职责**：用户在界面上说话代替打字（常常中英混杂），转成文字后照常作为消息发出（`speech/`）。agent 只看到文字，消息、历史、模型请求都不知道语音的存在。
+
+- **流程**：界面用 `MediaRecorder` 录音（Chrome/Firefox 是 webm/ogg 的 opus，iOS/Safari 是 mp4 的 aac），停止后把原始音频 `POST /api/transcriptions`（请求体就是音频，Content-Type 是它的类型，同 `/api/files`），拿回 `{text}`。会话页拿到文字就接在输入框内容后面、连同附件一起发出（发不了或发送失败时留在输入框里）；新对话还要选 agent，文字只填进输入框。录音不落盘、不进数据库。
+- **转写服务**：`muliao.speech.api.Transcriber`，具体服务由配置 `[transcription]` 的 `type` 选择。现有 `openai`：OpenAI Chat Completions 的音频输入（`input_audio`，流式拼接文字增量），用于阿里云百炼 Qwen-Omni（`qwen3.8-omni-flash`）这类全模态模型——系统提示要求原样转写、英文保持英文、不翻译不回答。新增一种服务 = 一个实现加一个 `type`。
+- **错误**：不认识的音频类型、空录音 422；超过 `max_bytes` 413；服务端出错、网络不通是 502（`UpstreamFailed`，带上服务给的原因），界面显示后用户重录即可，不重试。听不到说话时返回空文字，界面提示「没有听到说话内容」。
+- **开关**：没配置 `[transcription]` 时 `/api/transcriptions` 是 404，`GET /api/features` 的 `transcription` 为假，界面不显示麦克风按钮；浏览器不能录音（非 HTTPS、没有 `MediaRecorder`）时也不显示。
+
+## 21. 暂缓的项
 
 - **临时 agent 改为用完即删的 thread**：运行只剩一种模型，失败只重做自己。等占用与结清稳定之后再定。
 - **自己写 agent loop**（框架只做模型客户端）：改动限于 `agent_runtime` 的运行端口（第 2.1 节）。

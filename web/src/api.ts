@@ -191,6 +191,8 @@ export const api = {
 
   agents: () => branded<Agent[]>(call('get', '/api/agents')),
   agentDefaults: () => call('get', '/api/agent-defaults'),
+  /** 服务端配置决定的可选能力（如语音输入） */
+  features: () => call('get', '/api/features'),
   /** 服务端配置的 LLM provider 名 */
   providers: () => call('get', '/api/providers'),
   /** 向 provider 实时查询的模型名 */
@@ -228,6 +230,9 @@ export const api = {
   /** 请求体就是文件内容，Content-Type 是它的类型（接口描述里没有 JSON 请求体）；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
   uploadFile: (file: File) =>
     send<FileInfo>('POST', FILES_PATH, { name: file.name }, { type: file.type || 'application/octet-stream', data: file }),
+  /** 请求体是一段录音，Content-Type 是它的类型；返回转写出的文字（听不到人说话时为空） */
+  transcribe: (audio: Blob) =>
+    send<Schemas['TranscriptOut']>('POST', '/api/transcriptions', undefined, { type: audio.type || 'audio/webm', data: audio }),
   /** 同时把指向这个会话的通知标为已读 */
   markRead: (session_id: string) => call('post', '/api/sessions/{session_id}/read', { path: { session_id } }),
   notifications: () => call('get', '/api/notifications'),

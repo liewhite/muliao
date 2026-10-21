@@ -3,6 +3,8 @@ import { Card } from '@heroui/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, asAgentId, sessionRoute } from '../api'
 import { AttachButton, PendingUploads, useUploads } from '../attachments'
+import { appendTranscript, useVoiceInput } from '../voice'
+import { VoiceButton } from '../VoiceButton'
 import { ActionButton, EmptyHint, ErrorAlert, LinkButton, Loading, Page, SelectInput, TextAreaInput, useAction, useAgents } from '../ui'
 
 export default function NewSession() {
@@ -13,6 +15,8 @@ export default function NewSession() {
   const [prompt, setPrompt] = useState('')
   const uploads = useUploads()
   const action = useAction()
+  // 新对话还要选 agent：转写结果先填进输入框，由用户点「开始」
+  const voice = useVoiceInput((text) => setPrompt((p) => appendTranscript(p, text)))
   const canStart = agent !== null && (prompt.trim() !== '' || uploads.ids.length > 0) && !uploads.blocking
 
   async function start() {
@@ -46,9 +50,10 @@ export default function NewSession() {
                   <TextAreaInput label="消息" value={prompt} onChange={setPrompt} rows={6} autoFocus />
                 </div>
                 <PendingUploads uploads={uploads} />
-                <ErrorAlert error={action.error} />
+                <ErrorAlert error={action.error ?? voice.error} />
                 <div className="flex items-center gap-2">
                   <AttachButton uploads={uploads} isDisabled={action.busy} />
+                  <VoiceButton voice={voice} isDisabled={action.busy} />
                   <ActionButton isDisabled={!canStart} isPending={action.busy} onPress={() => void start()}>
                     开始
                   </ActionButton>

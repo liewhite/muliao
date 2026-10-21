@@ -30,6 +30,8 @@ import {
 } from '../blocks'
 import { AnsweredQuestions, QuestionForm, QuestionNote } from '../questions'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
+import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
+import { VoiceButton } from '../VoiceButton'
 import { liveItems, mergeLive, useServerEvents, type RunEvent } from '../events'
 import { refreshUnread, refreshUnreadLogged } from '../unread'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
@@ -346,6 +348,7 @@ function Composer({
   draft,
   setDraft,
   uploads,
+  voice,
   busy,
   running,
   onSend,
@@ -354,6 +357,7 @@ function Composer({
   draft: string
   setDraft: (v: string) => void
   uploads: Uploads
+  voice: VoiceInput
   busy: boolean
   /** 这个会话有一轮正在运行：显示停止按钮（运行中也可以继续发消息，会排在后面） */
   running: boolean
@@ -372,6 +376,7 @@ function Composer({
       <PendingUploads uploads={uploads} />
       <div className="flex items-end gap-2">
         <AttachButton uploads={uploads} isDisabled={busy} />
+        <VoiceButton voice={voice} isDisabled={busy} />
         <TextField value={draft} onChange={setDraft} aria-label="回复" variant="secondary" className="flex-1">
           <TextArea
             placeholder="回复…"
@@ -489,6 +494,13 @@ export default function SessionView() {
   const uploads = useUploads()
   const action = useAction()
   const bottom = useFollowBottom()
+  // 说完就发：转写出的文字接在已输入的内容后面，连同附件一起发出；暂时发不了（附件还在上传、上一条还在发）
+  // 或发送失败时留在输入框里，不丢
+  const voice = useVoiceInput((text) => {
+    const content = appendTranscript(draft, text)
+    if (action.busy || !canSend(content, uploads)) setDraft(content)
+    else void send(content).then((ok) => ok || setDraft(content))
+  })
 
   useServerEvents((e) => {
     if (e.type === 'reconnected') {
@@ -528,20 +540,22 @@ export default function SessionView() {
   const { pin } = bottom
   useEffect(() => pin(), [pin])
 
-  async function send() {
+  /** content：要发的文字，默认是输入框里的；语音输入时是输入框内容接上转写结果 */
+  async function send(content: string = draft) {
     // Enter 键不经过按钮的禁用状态：请求进行中再按一次不能重复发送
-    if (action.busy || !canSend(draft, uploads)) return
+    if (action.busy || !canSend(content, uploads)) return false
     const sent = uploads.batch()
-    const text = draft
-    const ok = await action.run(() => api.reply(id, text.trim(), sent.ids))
+    const shown = draft
+    const ok = await action.run(() => api.reply(id, content.trim(), sent.ids))
     if (ok) {
       // 自己发的消息总要看到
       pin()
       // 发送过程中又改了输入框就保留新内容
-      setDraft((current) => (current === text ? '' : current))
+      setDraft((current) => (current === shown ? '' : current))
       uploads.removeMany(sent.keys)
       await detail.reload()
     }
+    return ok
   }
 
   async function remove() {
@@ -600,7 +614,7 @@ export default function SessionView() {
                 <ArrowDown className="size-4" />
               </Button>
             )}
-            <ErrorAlert error={action.error} />
+            <ErrorAlert error={action.error ?? voice.error} />
             {session && !session.user_writable ? (
               <div className="flex items-center justify-center gap-1.5 py-1 text-sm text-muted">
                 <Lock className="size-4" />
@@ -611,6 +625,7 @@ export default function SessionView() {
                 draft={draft}
                 setDraft={setDraft}
                 uploads={uploads}
+                voice={voice}
                 busy={action.busy}
                 running={detail.data?.run?.status === 'running'}
                 onSend={() => void send()}
