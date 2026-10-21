@@ -915,7 +915,7 @@ export interface components {
          * ActivityKind
          * @enum {string}
          */
-        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "released" | "claimed";
+        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description";
         /** ActivityOut */
         ActivityOut: {
             /** Id */
@@ -1214,6 +1214,8 @@ export interface components {
                 [key: string]: string;
             };
             assignee_session: components["schemas"]["WorkState"] | null;
+            /** Stalled */
+            stalled: boolean;
             /**
              * Created At
              * Format: date-time

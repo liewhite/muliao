@@ -28,10 +28,9 @@ from muliao.sessions.inbound import (
     inbound_of,
     open_asks,
     receive,
-    receive_target,
+    receive_lane_of,
 )
 from muliao.sessions.kinds import LISTED, policy_of
-from muliao.sessions.lanes import receive_lane
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.tables import Compaction, Mail, Message, Session
@@ -188,9 +187,7 @@ class SessionService:
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.handle(StopThread, "sessions.stop_thread", self.on_stop_thread)
-        messaging.handle(
-            Receive, "sessions.receive", self.on_receive, lane=lambda c: receive_lane(receive_target(c))
-        )
+        messaging.handle(Receive, "sessions.receive", self.on_receive, lane=receive_lane_of)
 
     async def on_stop_thread(self, command: StopThread, _delivery: Delivery) -> Commit:
         """一个 thread 做的委派的发起方被停止了：停止它（已被删除时是 GONE，什么都不做）。"""

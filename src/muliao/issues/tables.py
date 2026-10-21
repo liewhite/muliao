@@ -38,19 +38,14 @@ class ActivityKind(StrEnum):
     OWNER = "owner"
     TITLE = "title"
     DESCRIPTION = "description"
-    # agent 让出 issue：断开它的处理会话
-    RELEASED = "released"
-    # agent 认领 issue：把调用所在的会话登记为它的处理会话
-    CLAIMED = "claimed"
 
 
 class Issue(Base):
     """人与 agent 协作的一件事。
 
     owner_agent_id 是负责这件事的项目（agent），被指派人是现在谁在做。
-    被指派人：assignee_agent_id 为 agent；assigned_to_user 为真时指派给用户（只有一个用户）；两者都空为未指派。
-    sessions 记每个 agent 在这个 issue 上的会话（agent id -> 会话 id）：同一个 agent 每次被唤醒都续写那个会话，
-    上下文连贯；会话被删了就新开一个。
+    被指派人 assignee：agent id、rules.USER（用户，只有一个），或 None（未指派）。
+    每个 agent 在这个 issue 上的会话归会话领域：按发送方（origin=issue, origin_ref=issue id）与 agent 定位，这里不存。
     """
 
     __tablename__ = "issues"
@@ -60,14 +55,12 @@ class Issue(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[IssueStatus] = mapped_column(StrEnumType(IssueStatus))
     priority: Mapped[IssuePriority] = mapped_column(StrEnumType(IssuePriority))
-    assignee_agent_id: Mapped[str | None] = mapped_column(agent_ref(), index=True)
-    assigned_to_user: Mapped[bool] = mapped_column(default=False)
+    assignee: Mapped[str | None] = mapped_column(agent_ref(), index=True)
     # 负责的项目（agent）：创建时必填，不随指派变化，只能显式修改；按它筛选看一个项目的全部来龙去脉。
     # 只在负责的 agent 被删除时变为空
     owner_agent_id: Mapped[str | None] = mapped_column(agent_ref(), index=True)
     # 创建者：agent id，用户创建的为 None
     creator_agent_id: Mapped[str | None] = mapped_column(agent_ref())
-    sessions: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 

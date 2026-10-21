@@ -20,7 +20,6 @@ import {
   groupByStatus,
   issueRoute,
   moveIssue,
-  stalled,
   WORK_LABEL,
 } from '../issues'
 import {
@@ -72,7 +71,7 @@ function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefine
             <Chip size="sm" variant="soft">
               → {assigneeLabel(agents, issue.assignee)}
             </Chip>
-            {stalled(issue) ? (
+            {issue.stalled ? (
               <Chip size="sm" variant="soft" color="warning">
                 没人在处理
               </Chip>

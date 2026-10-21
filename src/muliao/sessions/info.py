@@ -1,10 +1,13 @@
 """别的领域看到的会话（读模型）：ORM 行不出会话领域。"""
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tooling import Origin
+from muliao.sessions.kinds import SessionKind
 from muliao.sessions.tables import Session
 
 
@@ -27,6 +30,30 @@ async def session_in(s: AsyncSession, session_id: str) -> SessionInfo | None:
     session = await s.get(Session, session_id)
     if session is None:
         return None
+    return _info(session)
+
+
+async def keyed_sessions_among(
+    s: AsyncSession, origin: Origin, origin_refs: Collection[str]
+) -> dict[str, dict[str, SessionInfo]]:
+    """按发送方定位的会话（inbound.SessionKey）：每个发送方身份 -> {agent id -> 它的会话}，同一规则（最新的顶层会话），
+    一次查询。用来展示、判断一批 issue 各自的会话（发送方不另存会话 id）。"""
+    found: dict[str, dict[str, SessionInfo]] = {ref: {} for ref in origin_refs}
+    query = (
+        select(Session)
+        .where(
+            Session.origin == origin,
+            Session.origin_ref.in_(origin_refs),
+            Session.kind == SessionKind.CONVERSATION,
+        )
+        .order_by(Session.created_at, Session.id)
+    )
+    for session in (await s.scalars(query)).all():
+        found[session.origin_ref or ""][session.agent_id] = _info(session)
+    return found
+
+
+def _info(session: Session) -> SessionInfo:
     return SessionInfo(
         id=session.id,
         agent_id=session.agent_id,

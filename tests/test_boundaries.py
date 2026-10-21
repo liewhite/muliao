@@ -104,9 +104,11 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
     "files": {"load_metas"},
     "sessions": {
         "session_in",
-        "check_receivable_in",
+        "receive_command_in",
+        "keyed_sessions_among",
         "hold_registered_in",
         "SessionActivity.work_state_in",
+        "SessionActivity.work_states_in",
         "SessionActivity.blocks_agent_deletion_in",
     },
 }

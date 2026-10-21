@@ -1,7 +1,8 @@
 """来信：一切投进会话信箱的东西的唯一入口（docs/architecture.md 第 14 节「触发源与通知」）。
 
-- receive：用户消息、对提问的回答、委派来的任务，在调用方的事务里；check_receivable_in 是同一套校验规则（只读），
-  触发器先在自己的事务里校验，再发出定向命令 Receive（receive_command / inbound_of）。
+- receive：用户消息、对提问的回答、委派来的任务，在调用方的事务里；别的领域（触发器、issue）用 receive_command_in 在
+  自己的事务里校验（同一套规则，只读）、得到定向命令 Receive 发出，由会话领域在自己的事务里投信。
+- 目标会话三种：续写已有的、新建、按发送方定位（SessionKey：同一发送方给同一个 agent 的来信进同一个会话，没有就建）。
 - 续写规则：用户可以在任何用户能写的会话里继续；其他来源只能续写自己发起的会话。
 - 新建会话只有 create_session 一处实现（来信与 thread 都经过它）。"""
 
@@ -10,6 +11,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import active_agent_in
@@ -19,9 +21,10 @@ from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import Origin
-from muliao.sessions.events import Receive, ReceiveNewSession
+from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
 from muliao.sessions.history import since_last_response, since_last_response_among
 from muliao.sessions.kinds import SessionKind, policy_of
+from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import post_in, queued_among, queued_in
 from muliao.sessions.pending import UserAnswered, pending_questions
 from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
@@ -45,17 +48,26 @@ class NewSession:
 
 
 @dataclass(frozen=True)
+class SessionKey:
+    """按发送方定位的会话：来信的发送方（origin, origin_ref）给这个 agent 的会话，没有就以 title 新建。发送方因此不用
+    记会话 id（issue：每个 issue 与 agent 对应唯一一个会话）。有多个时（同一发送方新建过多个会话）取最新的。"""
+
+    agent_id: str
+    title: str
+
+
+@dataclass(frozen=True)
 class Inbound:
     """一封来信：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 投进某个会话的信箱」（sessions.mailbox）。
 
-    session 为已有会话的 id 时在其中继续，为 NewSession 时新建会话。
+    session 为已有会话的 id 时在其中继续，为 NewSession 时新建会话，为 SessionKey 时按发送方定位（没有就新建）。
     origin_ref 标识具体的发送方：触发器 id、委派方（父）会话 id；用户为 None。
     """
 
     origin: Origin
     origin_ref: str | None
     content: str
-    session: str | NewSession
+    session: str | NewSession | SessionKey
     # 用户是否在等它的回答（处理它的运行结束时推送）
     awaited: bool
     # 随消息发送的文件 id（muliao.files.store）；只有用户在界面上发的消息会带
@@ -138,6 +150,28 @@ async def create_session(
     return session
 
 
+async def keyed_session_in(s: AsyncSession, origin: Origin, origin_ref: str, agent_id: str) -> Session | None:
+    """按发送方定位的会话（SessionKey）：这个发送方给这个 agent 开过的最新一个顶层会话。"""
+    query = (
+        select(Session)
+        .where(
+            Session.origin == origin,
+            Session.origin_ref == origin_ref,
+            Session.agent_id == agent_id,
+            Session.kind == SessionKind.CONVERSATION,
+        )
+        .order_by(Session.created_at.desc(), Session.id.desc())
+        .limit(1)
+    )
+    return (await s.scalars(query)).first()
+
+
+def _key_ref(inbound: Inbound) -> str:
+    if inbound.origin in (Origin.USER, Origin.DELEGATION) or inbound.origin_ref is None:
+        raise ValueError(f"only a sender with an identity can address a session by key, got {inbound.origin}")
+    return inbound.origin_ref
+
+
 @dataclass(frozen=True)
 class OpenAsks:
     """还没有结果的提问分成两种：现在能回答的（answerable），与回答已提交、还在信箱里排队的（submitted）。
@@ -187,9 +221,16 @@ async def _existing_target_in(s: AsyncSession, inbound: Inbound) -> Session | No
     if isinstance(inbound.session, NewSession):
         await ensure_agent_active_in(s, inbound.session.agent_id)
         return None
-    session = await s.get(Session, inbound.session)
-    if session is None:
-        raise NotFound(f"session {inbound.session!r} not found")
+    if isinstance(inbound.session, SessionKey):
+        key = inbound.session
+        session = await keyed_session_in(s, inbound.origin, _key_ref(inbound), key.agent_id)
+        if session is None:
+            await ensure_agent_active_in(s, key.agent_id)
+            return None
+    else:
+        session = await s.get(Session, inbound.session)
+        if session is None:
+            raise NotFound(f"session {inbound.session!r} not found")
     _check_may_continue(session, inbound.origin, inbound.origin_ref)
     await ensure_agent_active_in(s, session.agent_id)
     return session
@@ -202,52 +243,73 @@ async def check_receivable_in(s: AsyncSession, inbound: Inbound) -> None:
     await _existing_target_in(s, inbound)
 
 
-def receive_target(command: Receive) -> str:
+def receive_lane_of(command: Receive) -> str:
+    """Receive 投递所在的 lane：同一个目标的来信按发送顺序投递。按 key 定位的目标在会话存在之前就要有 lane。"""
+    if command.key is not None:
+        if command.origin_ref is None:
+            raise ValueError(f"a keyed Receive needs the sender's identity, got {command}")
+        return keyed_receive_lane(command.origin, command.origin_ref, command.key.agent_id)
     if command.new_session is not None:
-        return command.new_session.id
+        return receive_lane(command.new_session.id)
     if command.session_id is None:
-        raise ValueError(f"Receive needs a session id or a new session, got {command}")
-    return command.session_id
+        raise ValueError(f"Receive needs a target session, got {command}")
+    return receive_lane(command.session_id)
 
 
-def receive_command(inbound: Inbound) -> Receive:
-    """一封要经定向命令投递的来信（发送方先 check_receivable_in）。新建会话必须带预先分配的 id；只有文字内容的来信
-    才能这样投（附件、回答、关联只来自同步的入口）。"""
+def _receive_command(inbound: Inbound) -> Receive:
+    """一封要经定向命令投递的来信。新建会话必须带预先分配的 id；只有文字内容的来信才能这样投（附件、回答、关联只来自
+    同步的入口）。"""
     if inbound.attachments or inbound.answers or inbound.correlation is not None:
         raise ValueError("only plain text inbound mail can be sent as a Receive command")
-    if isinstance(inbound.session, str):
-        return Receive(
-            origin=inbound.origin,
-            origin_ref=inbound.origin_ref,
-            content=inbound.content,
-            awaited=inbound.awaited,
-            session_id=inbound.session,
-            new_session=None,
-        )
-    spec = inbound.session
-    if spec.id is None or spec.kind != SessionKind.CONVERSATION:
-        raise ValueError(f"a Receive command creates a top-level session with a preassigned id, got {spec}")
+    target = inbound.session
+    session_id = new_session = key = None
+    if isinstance(target, str):
+        session_id = target
+    elif isinstance(target, SessionKey):
+        _key_ref(inbound)
+        key = ReceiveKey(agent_id=target.agent_id, title=target.title)
+    else:
+        if target.id is None or target.kind != SessionKind.CONVERSATION:
+            raise ValueError(
+                f"a Receive command creates a top-level session with a preassigned id, got {target}"
+            )
+        new_session = ReceiveNewSession(id=target.id, agent_id=target.agent_id, title=target.title)
     return Receive(
         origin=inbound.origin,
         origin_ref=inbound.origin_ref,
         content=inbound.content,
         awaited=inbound.awaited,
-        session_id=None,
-        new_session=ReceiveNewSession(id=spec.id, agent_id=spec.agent_id, title=spec.title),
+        session_id=session_id,
+        new_session=new_session,
+        key=key,
     )
 
 
+async def receive_command_in(s: AsyncSession, inbound: Inbound) -> Receive:
+    """别的领域投信的唯一入口（只读）：在发送方的事务里校验这封来信（不合规的当场报错给发送方），返回定向命令
+    Receive。发送方在同一事务里 send_in 它，由会话领域在自己的事务里投进信箱——发送方记下的状态与投信一起提交，
+    投递恰好一次；提交后可以让投递任务马上执行（run_now）。"""
+    await check_receivable_in(s, inbound)
+    return _receive_command(inbound)
+
+
 def inbound_of(command: Receive) -> Inbound:
-    if (command.session_id is None) == (command.new_session is None):
-        raise ValueError(f"Receive needs exactly one of session_id and new_session, got {command}")
-    new = command.new_session
+    targets = [x for x in (command.session_id, command.new_session, command.key) if x is not None]
+    if len(targets) != 1:
+        raise ValueError(f"Receive needs exactly one target session, got {command}")
+    session: str | NewSession | SessionKey
+    if command.new_session is not None:
+        new = command.new_session
+        session = NewSession(agent_id=new.agent_id, title=new.title, id=new.id)
+    elif command.key is not None:
+        session = SessionKey(agent_id=command.key.agent_id, title=command.key.title)
+    else:
+        session = targets[0]
     return Inbound(
         origin=command.origin,
         origin_ref=command.origin_ref,
         content=command.content,
-        session=command.session_id
-        if new is None
-        else NewSession(agent_id=new.agent_id, title=new.title, id=new.id),
+        session=session,
         awaited=command.awaited,
     )
 
@@ -256,11 +318,15 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
     """所有来信的唯一入口：确定会话（继续或新建），把它投进会话的信箱。"""
     session = await _existing_target_in(s, inbound)
     if session is None:
-        if not isinstance(inbound.session, NewSession):
-            raise RuntimeError(f"inbound for session {inbound.session!r} resolved to no session")
-        session = await create_session(
-            s, origin=inbound.origin, origin_ref=inbound.origin_ref, spec=inbound.session
+        target = inbound.session
+        if isinstance(target, str):
+            raise RuntimeError(f"inbound for session {target!r} resolved to no session")
+        spec = (
+            NewSession(agent_id=target.agent_id, title=target.title)
+            if isinstance(target, SessionKey)
+            else target
         )
+        session = await create_session(s, origin=inbound.origin, origin_ref=inbound.origin_ref, spec=spec)
     session.updated_at = utcnow()
     mail = []
     if inbound.answers:

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from muliao.api.deps import C
-from muliao.issues.api import KEEP, USER, ActivityKind, IssuePriority, IssueStatus, Keep, WorkState
+from muliao.issues.api import KEEP, ActivityKind, IssuePriority, IssueStatus, IssueWork, Keep, WorkState
 from muliao.issues.tables import Issue, IssueActivity
 
 router = APIRouter()
@@ -29,11 +29,13 @@ class IssueOut(BaseModel):
     sessions: dict[str, str]
     # 被指派 agent 在这个 issue 会话里的状态；没指派给 agent 或还没有会话时为 null
     assignee_session: WorkState | None
+    # todo / in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
+    stalled: bool
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def of(cls, i: Issue, state: WorkState | None) -> "IssueOut":
+    def of(cls, i: Issue, work: IssueWork) -> "IssueOut":
         return cls(
             id=i.id,
             title=i.title,
@@ -41,10 +43,11 @@ class IssueOut(BaseModel):
             status=i.status,
             priority=i.priority,
             owner=i.owner_agent_id,
-            assignee=USER if i.assigned_to_user else i.assignee_agent_id,
+            assignee=i.assignee,
             creator_agent_id=i.creator_agent_id,
-            sessions=i.sessions,
-            assignee_session=state,
+            sessions=work.sessions,
+            assignee_session=work.assignee_session,
+            stalled=work.stalled,
             created_at=i.created_at,
             updated_at=i.updated_at,
         )
@@ -105,7 +108,7 @@ class CommentIn(BaseModel):
 
 
 async def _out(c: C, issue: Issue) -> IssueOut:
-    return IssueOut.of(issue, (await c.issues.work_states([issue]))[issue.id])
+    return IssueOut.of(issue, (await c.issues.work([issue]))[issue.id])
 
 
 @router.get("/issues")
@@ -116,8 +119,8 @@ async def list_issues(
     owner: str | None = None,
 ) -> list[IssueOut]:
     found = await c.issues.list(statuses=status, assignee=assignee, owner=owner)
-    states = await c.issues.work_states(found)
-    return [IssueOut.of(i, states[i.id]) for i in found]
+    work = await c.issues.work(found)
+    return [IssueOut.of(i, work[i.id]) for i in found]
 
 
 @router.post("/issues", status_code=201)

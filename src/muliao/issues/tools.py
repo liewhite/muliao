@@ -8,7 +8,7 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agents.api import AgentService
 from muliao.errors import InvalidInput
 from muliao.issues.rules import USER
-from muliao.issues.service import KEEP, IssueService, Keep
+from muliao.issues.service import KEEP, IssueService, IssueWork, Keep
 from muliao.issues.tables import Issue, IssuePriority, IssueStatus
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.api import WorkState
@@ -26,6 +26,8 @@ class IssueSummary(BaseModel):
     # 被指派 agent 在这个 issue 会话里的状态：running（在跑）、waiting（等后台任务、委派或用户回答）、idle（空闲）；
     # 没指派给 agent 或它还没有这个 issue 的会话时为 null
     assignee_session: WorkState | None
+    # todo / in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
+    stalled: bool
     updated_at: datetime
 
 
@@ -35,10 +37,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
     async def assignee_id(name: str) -> str:
         return USER if name == USER else (await agents.find_by_name(name)).id
 
-    async def summary(
-        issue: Issue, names: dict[str, str], states: dict[int, WorkState | None]
-    ) -> IssueSummary:
-        assignee = USER if issue.assigned_to_user else issue.assignee_agent_id
+    def summary(issue: Issue, names: dict[str, str], work: IssueWork) -> IssueSummary:
+        assignee = issue.assignee
         return IssueSummary(
             id=issue.id,
             title=issue.title,
@@ -48,7 +48,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             status=issue.status,
             priority=issue.priority,
             assignee=None if assignee is None else names.get(assignee, assignee),
-            assignee_session=states[issue.id],
+            assignee_session=work.assignee_session,
+            stalled=work.stalled,
             updated_at=issue.updated_at,
         )
 
@@ -58,7 +59,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
     ) -> list[IssueSummary]:
         """List issues on the muliao issue board, most recently updated first. `assignee_session` tells whether
         the assigned agent is working on it in the issue's conversation: running, waiting (on a background job,
-        delegated work or the user's answer), idle, or null (no agent assignee or no conversation yet).
+        delegated work or the user's answer), idle, or null (no agent assignee or no conversation yet). `stalled`
+        marks a `todo`/`in_progress` issue assigned to an agent whose issue conversation is idle or missing.
 
         Args:
             statuses: Only these statuses; all when omitted.
@@ -71,8 +73,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             assignee=None if assignee is None else await assignee_id(assignee),
             owner=None if owner is None else (await agents.find_by_name(owner)).id,
         )
-        states = await issues.work_states(found)
-        return [await summary(i, names, states) for i in found]
+        work = await issues.work(found)
+        return [summary(i, names, work[i.id]) for i in found]
 
     @ts.tool_plain
     async def issue_show(issue_id: int) -> str:
@@ -93,8 +95,9 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         priority: IssuePriority = IssuePriority.NONE,
         assignee: str | None = None,
     ) -> str:
-        """Create an issue. An agent assigned an issue in `todo` or `in_progress` is woken up to work on it;
-        if that is you, this conversation becomes the one working on it (use `backlog` for later work).
+        """Create an issue. Each agent works on an issue in one conversation dedicated to it; while the issue is
+        `todo` or `in_progress`, its creation and every later change by others are delivered there to the assigned
+        agent (also when that is you: create it here, it is worked on there). Use `backlog` for later work.
 
         Args:
             title: One-line summary.
@@ -129,11 +132,10 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         assignee: str | None = None,
         unassign: bool = False,
     ) -> str:
-        """Change an issue; only the given fields change. Moving an agent's issue into `todo`/`in_progress`, or
-        assigning an issue in those statuses to an agent, wakes that agent up. If that agent is you, nothing is
-        started: this conversation becomes the one working on it, so carry on with it here (or leave it in
-        `backlog` if it is for later). Finished work goes to `in_review` with assignee `user`, never straight to
-        `done`: the user moves it to `done` after reviewing.
+        """Change an issue; only the given fields change. When the issue is (or now becomes) `todo`/`in_progress`
+        and assigned to an agent, the change is delivered to that agent in its conversation for the issue, except
+        when the agent makes it from that very conversation. Finished work goes to `in_review` with assignee
+        `user`, never straight to `done`: the user moves it to `done` after reviewing.
 
         Args:
             issue_id: Issue number.
@@ -165,7 +167,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
 
     @ts.tool
     async def issue_comment(ctx: RunContext[RunScope], issue_id: int, body: str) -> str:
-        """Comment on an issue (Markdown): progress, findings, results, questions for the user.
+        """Comment on an issue (Markdown): progress, findings, results, questions for the user. Delivered like any
+        other change (see `issue_update`).
 
         Args:
             issue_id: Issue number.
@@ -173,34 +176,5 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         """
         await issues.comment(ctx.deps.agent_id, issue_id, body, session_id=ctx.deps.session_id)
         return f"commented on issue #{issue_id}"
-
-    @ts.tool
-    async def issue_claim(ctx: RunContext[RunScope], issue_id: int) -> str:
-        """Make this conversation the one working on an issue assigned to you, when you work on it here rather than
-        in the issue's own conversation. The issue watch then sees this conversation's activity; when it stops with
-        the issue still `todo`/`in_progress`, the next wake-up goes to the issue's own conversation.
-
-        Args:
-            issue_id: Issue number.
-        """
-        if ctx.deps.session_id is None:
-            raise InvalidInput("issue_claim only works inside a conversation")
-        await issues.claim(ctx.deps.agent_id, issue_id, ctx.deps.session_id)
-        return f"this conversation is now the one working on issue #{issue_id}"
-
-    @ts.tool
-    async def issue_release(ctx: RunContext[RunScope], issue_id: int) -> str:
-        """Stop working on an issue in this conversation, e.g. it turned out to be separate from what you are doing
-        here. If it is still `todo`/`in_progress` and assigned to you, a fresh conversation dedicated to the issue
-        takes it over right away; otherwise it is simply detached.
-
-        Args:
-            issue_id: Issue number.
-        """
-        if ctx.deps.session_id is None:
-            raise InvalidInput("issue_release only works inside a conversation")
-        if await issues.release(ctx.deps.agent_id, issue_id, ctx.deps.session_id):
-            return f"released issue #{issue_id}; a new conversation for it has been started"
-        return f"released issue #{issue_id}"
 
     return ts

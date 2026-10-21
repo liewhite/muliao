@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.holds import has_active_in, with_active_among
 from muliao.sessions.inbound import open_asks_among
-from muliao.sessions.lanes import receive_lane, session_lane
+from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
 from muliao.sessions.tables import Session
 from muliao.sessions.threads import owned_threads_in
 
@@ -41,7 +41,15 @@ async def work_states_in(
 ) -> dict[str, WorkState]:
     """一批会话的工作状态，查询次数与会话数无关（会话列表一次要几百个，事务持有全局写锁）：running 有排队或进行中
     的运行、还没投递的来信；waiting 有 active 占用（后台任务、委派）或还能回答的提问；否则 idle。"""
-    lanes = {x: (session_lane(x), receive_lane(x)) for x in session_ids}
+    lanes: dict[str, tuple[str, ...]] = {x: (session_lane(x), receive_lane(x)) for x in session_ids}
+    # 按发送方定位（inbound.SessionKey）投给它、还没投递的来信在按 key 命名的 lane 上
+    keyed = await s.execute(
+        select(Session.id, Session.origin, Session.origin_ref, Session.agent_id).where(
+            Session.id.in_(session_ids), Session.origin_ref.is_not(None)
+        )
+    )
+    for x, origin, origin_ref, agent_id in keyed:
+        lanes[x] = (*lanes[x], keyed_receive_lane(origin, origin_ref, agent_id))
     busy = await queue.busy_lanes(s, [lane for pair in lanes.values() for lane in pair])
     held = await with_active_among(s, session_ids)
     asks = await open_asks_among(s, session_ids)
@@ -84,6 +92,9 @@ class SessionActivity:
 
     async def work_state_in(self, s: AsyncSession, session_id: str) -> WorkState:
         return await work_state_in(s, self._queue, session_id)
+
+    async def work_states_in(self, s: AsyncSession, session_ids: Collection[str]) -> dict[str, WorkState]:
+        return await work_states_in(s, self._queue, session_ids)
 
     async def blocks_agent_deletion_in(self, s: AsyncSession, agent_id: str) -> bool:
         return await agent_deletion_blocked_in(s, self._queue, agent_id)

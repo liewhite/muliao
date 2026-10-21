@@ -1,13 +1,11 @@
-"""issue 看板：人与 agent 协作的事项（docs/architecture.md「issue」一节）。
+"""issue 看板：人与 agent 协作的事项（docs/architecture.md「issue 看板」一节）。
 
-每次修改在一个事务里写 issue、记时间线，并按 rules.wake_target 判定是否唤醒被指派的 agent：要唤醒时同一事务发出
-定向命令 Receive（来源 Origin.ISSUE，origin_ref 是 issue id），提交后马上投递（run_now）。同一个 agent 在同一个
-issue 上续写同一个会话（Issue.sessions）。
+每次修改在一个事务里写 issue、记时间线，并按 rules.recipient 判定这次的动态投给谁：投给被指派的 agent 时，同一事务
+发出定向命令 Receive，提交后马上投递（run_now）。信投进这个 agent 在这个 issue 上唯一的会话：会话领域按发送方
+（Origin.ISSUE，origin_ref 为 issue id）与 agent 定位，没有就新建（sessions.api.SessionKey）；这里不存会话 id。
 
-actor 是做这件事的 agent id，用户为 None；session_id 是 agent 动手时所在的会话。agent 自己的修改、评论从不唤醒
-它自己（不论在哪个会话里做的），否则它的 issue 会话会和动手的会话并发处理同一件事。处理会话（Issue.sessions，巡检
-据此判断有没有人在做）只显式登记：agent 在当前会话里给自己建、派、转 todo 的 issue 登记当前会话；在别的会话里接手
-用 claim，让出用 release。登记的会话停下后的下一次唤醒（评论、巡检）才开 issue 自己的会话。
+actor 是做这件事的 agent id，用户为 None；session_id 是 agent 动手时所在的会话。它在自己这个 issue 会话里的动作
+不投回那个会话（避免自激）；issue 只在它自己的会话里做，普通对话只建、派 issue。
 """
 
 from __future__ import annotations
@@ -20,37 +18,36 @@ from enum import Enum
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentService, active_agent_in, agent_in
 from muliao.agents.events import AgentDeleting
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import InvalidInput, NotFound
 from muliao.issues.rules import (
     USER,
     ActivityView,
     IssueView,
     Snapshot,
-    comment_wakes,
+    delivery_message,
+    recipient,
     render_issue,
-    wake_message,
-    wake_target,
+    stalled,
 )
 from muliao.issues.tables import ActivityKind, Issue, IssueActivity, IssuePriority, IssueStatus
 from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
-from muliao.platform.ids import new_id
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit
 from muliao.platform.tooling import Origin
 from muliao.sessions.api import (
     Inbound,
-    NewSession,
     SessionActivity,
+    SessionKey,
     WorkState,
-    check_receivable_in,
-    receive_command,
+    keyed_sessions_among,
+    receive_command_in,
     session_in,
 )
 
@@ -74,6 +71,18 @@ class IssueDetail:
     activities: list[IssueActivity]
 
 
+@dataclass(frozen=True)
+class IssueWork:
+    """谁在这个 issue 上做事（从会话领域派生，不存）。"""
+
+    # 每个 agent 在这个 issue 上的会话：agent id -> 会话 id
+    sessions: dict[str, str]
+    # 被指派 agent 的 issue 会话的工作状态；没指派给 agent 或它还没有这个会话时为 None
+    assignee_session: WorkState | None
+    # 该有人做却没人在做（rules.stalled）
+    stalled: bool
+
+
 def _title(title: str) -> str:
     title = title.strip()
     if not title:
@@ -83,22 +92,8 @@ def _title(title: str) -> str:
     return title
 
 
-def _assignee_of(issue: Issue) -> str | None:
-    if issue.assigned_to_user:
-        return USER
-    return issue.assignee_agent_id
-
-
-def _working(issue: Issue, actor: str | None, session_id: str | None) -> str | None:
-    """这次修改不该唤醒的 agent：被指派人在某个会话里自己动手时就是它（它知道自己做了什么，唤醒只会多开一个并发的
-    会话）。不在会话里（没有地方接着做）的修改照常唤醒。"""
-    if actor is not None and session_id is not None and actor == issue.assignee_agent_id:
-        return actor
-    return None
-
-
 def _snapshot(issue: Issue) -> Snapshot:
-    return Snapshot(status=issue.status, assignee=_assignee_of(issue))
+    return Snapshot(status=issue.status, assignee=issue.assignee)
 
 
 class IssueService:
@@ -123,26 +118,19 @@ class IssueService:
         messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
-        """删除 agent 的流程：指派给它、归它负责的 issue 改为未指派、无负责人（记在时间线上），忘掉它的会话。"""
+        """删除 agent 的流程：指派给它、归它负责的 issue 改为未指派、无负责人（记在时间线上）。它的会话由会话领域删除。"""
 
         async def commit(s: AsyncSession) -> None:
-            # sessions 是 JSON：按 agent id 粗筛（id 是不含特殊字符的十六进制），再在下面精确判断
             query = select(Issue).where(
-                or_(
-                    Issue.assignee_agent_id == event.agent_id,
-                    Issue.owner_agent_id == event.agent_id,
-                    cast(Issue.sessions, String).contains(event.agent_id),
-                )
+                or_(Issue.assignee == event.agent_id, Issue.owner_agent_id == event.agent_id)
             )
             for issue in (await s.scalars(query)).all():
-                if issue.assignee_agent_id == event.agent_id:
-                    issue.assignee_agent_id = None
+                if issue.assignee == event.agent_id:
+                    issue.assignee = None
                     self._record(s, issue, None, ActivityKind.ASSIGNEE, change=(event.agent_id, None))
                 if issue.owner_agent_id == event.agent_id:
                     issue.owner_agent_id = None
                     self._record(s, issue, None, ActivityKind.OWNER, change=(event.agent_id, None))
-                if event.agent_id in issue.sessions:
-                    issue.sessions = {k: v for k, v in issue.sessions.items() if k != event.agent_id}
 
         return commit
 
@@ -160,10 +148,8 @@ class IssueService:
             query = query.where(Issue.owner_agent_id == owner)
         if statuses:
             query = query.where(Issue.status.in_(statuses))
-        if assignee == USER:
-            query = query.where(Issue.assigned_to_user)
-        elif assignee is not None:
-            query = query.where(Issue.assignee_agent_id == assignee)
+        if assignee is not None:
+            query = query.where(Issue.assignee == assignee)
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
 
@@ -172,19 +158,27 @@ class IssueService:
             issue = await self._get_in(s, issue_id)
             return IssueDetail(issue, await self._activities_in(s, issue_id))
 
-    async def work_states(self, issues: list[Issue]) -> dict[int, WorkState | None]:
-        """被指派的 agent 在每个 issue 自己的会话里的状态：在跑、在等外面的结果、还是空闲。没指派给 agent、它还没有
-        这个 issue 的会话（或会话已删除）时为 None。用来发现「该有人在做、却没人在做」的 issue。"""
-        states: dict[int, WorkState | None] = {}
+    async def work(self, issues: list[Issue]) -> dict[int, IssueWork]:
+        """每个 issue 上谁在做事：各 agent 的 issue 会话、被指派 agent 的会话在跑 / 在等外面的结果 / 空闲，以及是否停滞。
+        查询次数与 issue 数无关。"""
         async with self._db.transaction() as s:
-            for issue in issues:
-                agent = issue.assignee_agent_id
-                session_id = None if agent is None else issue.sessions.get(agent)
-                if session_id is None or await session_in(s, session_id) is None:
-                    states[issue.id] = None
-                else:
-                    states[issue.id] = await self._activity.work_state_in(s, session_id)
-        return states
+            keyed = await keyed_sessions_among(s, Origin.ISSUE, [str(i.id) for i in issues])
+            assignee_sessions = {
+                i.id: keyed[str(i.id)][i.assignee].id
+                for i in issues
+                if i.assignee is not None and i.assignee in keyed[str(i.id)]
+            }
+            states = await self._activity.work_states_in(s, list(assignee_sessions.values()))
+        work = {}
+        for i in issues:
+            sid = assignee_sessions.get(i.id)
+            state = None if sid is None else states[sid]
+            work[i.id] = IssueWork(
+                sessions={agent: info.id for agent, info in keyed[str(i.id)].items()},
+                assignee_session=state,
+                stalled=stalled(_snapshot(i), state),
+            )
+        return work
 
     async def render(self, issue_id: int) -> str:
         detail = await self.get(issue_id)
@@ -214,17 +208,15 @@ class IssueService:
                 description=description,
                 status=status,
                 priority=priority,
-                assignee_agent_id=None if assignee in (None, USER) else assignee,
-                assigned_to_user=assignee == USER,
+                assignee=assignee,
                 creator_agent_id=actor,
-                sessions={},
                 created_at=now,
                 updated_at=now,
             )
             s.add(issue)
             await s.flush()
-            self._record(s, issue, actor, ActivityKind.CREATED)
-            wake = await self._after_change_in(s, None, issue, actor, session_id)
+            created = self._record(s, issue, actor, ActivityKind.CREATED)
+            wake = await self._after_change_in(s, None, issue, actor, session_id, [created])
         log.info("issue created", extra={"issue_id": issue.id, "actor": actor, "assignee": assignee})
         await self._deliver(wake)
         return issue
@@ -246,33 +238,35 @@ class IssueService:
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
             before = _snapshot(issue)
-            changed = False
+            happened: list[IssueActivity] = []
+
+            def record(kind: ActivityKind, change: tuple[Any, Any] | None = None) -> None:
+                happened.append(self._record(s, issue, actor, kind, change=change))
+
             if title is not None and _title(title) != issue.title:
-                self._record(s, issue, actor, ActivityKind.TITLE, change=(issue.title, _title(title)))
-                issue.title, changed = _title(title), True
+                record(ActivityKind.TITLE, (issue.title, _title(title)))
+                issue.title = _title(title)
             if description is not None and description != issue.description:
-                self._record(s, issue, actor, ActivityKind.DESCRIPTION)
-                issue.description, changed = description, True
+                record(ActivityKind.DESCRIPTION)
+                issue.description = description
             if status is not None and status != issue.status:
-                self._record(s, issue, actor, ActivityKind.STATUS, change=(issue.status, status))
-                issue.status, changed = status, True
+                record(ActivityKind.STATUS, (issue.status, status))
+                issue.status = status
             if owner is not None and owner != issue.owner_agent_id:
                 await active_agent_in(s, owner)
-                self._record(s, issue, actor, ActivityKind.OWNER, change=(issue.owner_agent_id, owner))
-                issue.owner_agent_id, changed = owner, True
+                record(ActivityKind.OWNER, (issue.owner_agent_id, owner))
+                issue.owner_agent_id = owner
             if priority is not None and priority != issue.priority:
-                self._record(s, issue, actor, ActivityKind.PRIORITY, change=(issue.priority, priority))
-                issue.priority, changed = priority, True
-            if not isinstance(assignee, Keep) and assignee != before.assignee:
+                record(ActivityKind.PRIORITY, (issue.priority, priority))
+                issue.priority = priority
+            if not isinstance(assignee, Keep) and assignee != issue.assignee:
                 await self._check_assignee_in(s, assignee)
-                self._record(s, issue, actor, ActivityKind.ASSIGNEE, change=(before.assignee, assignee))
-                issue.assignee_agent_id = None if assignee in (None, USER) else assignee
-                issue.assigned_to_user = assignee == USER
-                changed = True
-            if not changed:
+                record(ActivityKind.ASSIGNEE, (issue.assignee, assignee))
+                issue.assignee = assignee
+            if not happened:
                 return issue
             issue.updated_at = utcnow()
-            wake = await self._after_change_in(s, before, issue, actor, session_id)
+            wake = await self._after_change_in(s, before, issue, actor, session_id, happened)
         log.info("issue updated", extra={"issue_id": issue_id, "actor": actor, "status": issue.status})
         await self._deliver(wake)
         return issue
@@ -286,53 +280,10 @@ class IssueService:
             issue = await self._get_in(s, issue_id)
             activity = self._record(s, issue, actor, ActivityKind.COMMENT, body=body)
             issue.updated_at = utcnow()
-            await s.flush()
-            wake = None
-            if (agent := comment_wakes(_snapshot(issue), _working(issue, actor, session_id))) is not None:
-                who = "The user" if actor is None else f"Agent {await self._name_in(s, actor)}"
-                wake = await self._wake_in(s, issue, agent, f"{who} commented on issue #{issue.id}.")
+            wake = await self._deliver_in(s, issue, actor, session_id, [activity])
         log.info("issue commented", extra={"issue_id": issue_id, "actor": actor})
         await self._deliver(wake)
         return activity
-
-    async def claim(self, actor: str, issue_id: int, session_id: str) -> None:
-        """agent 在当前会话里接手指派给它的 issue：把这个会话登记为处理会话（巡检看它在不在做事）。"""
-        async with self._db.transaction() as s:
-            issue = await self._get_in(s, issue_id)
-            if issue.assignee_agent_id != actor:
-                raise Conflict(f"issue #{issue_id} is not assigned to you; only the assignee can claim it")
-            if issue.sessions.get(actor) == session_id:
-                return
-            issue.sessions = {**issue.sessions, actor: session_id}
-            self._record(s, issue, actor, ActivityKind.CLAIMED)
-            issue.updated_at = utcnow()
-        log.info("issue claimed", extra={"issue_id": issue_id, "agent": actor, "session_id": session_id})
-
-    async def release(self, actor: str, issue_id: int, session_id: str) -> bool:
-        """agent 让出 issue：断开登记的处理会话（必须就是它现在所在的会话）。issue 仍是 todo / 进行中、指派给它时，
-        马上开 issue 自己的新会话接手（返回 True）；否则只断开，等下次被唤醒。"""
-        async with self._db.transaction() as s:
-            issue = await self._get_in(s, issue_id)
-            if issue.sessions.get(actor) != session_id:
-                raise Conflict(
-                    f"this conversation is not the one working on issue #{issue_id}; nothing to release"
-                )
-            issue.sessions = {k: v for k, v in issue.sessions.items() if k != actor}
-            self._record(s, issue, actor, ActivityKind.RELEASED)
-            issue.updated_at = utcnow()
-            wake = None
-            if wake_target(None, _snapshot(issue), None) == actor:
-                wake = await self._wake_in(
-                    s,
-                    issue,
-                    actor,
-                    f"Issue #{issue.id} was released by the conversation working on it; take it over.",
-                )
-        log.info(
-            "issue released", extra={"issue_id": issue_id, "agent": actor, "handed_over": wake is not None}
-        )
-        await self._deliver(wake)
-        return wake is not None
 
     async def delete(self, issue_id: int) -> None:
         async with self._db.transaction() as s:
@@ -391,67 +342,59 @@ class IssueService:
         issue: Issue,
         actor: str | None,
         session_id: str | None,
+        happened: list[IssueActivity],
     ) -> Task | None:
-        after = _snapshot(issue)
-        if actor is not None and after.assignee == USER and (before is None or before.assignee != USER):
-            # agent 把 issue 交给用户：推送通知，点开是它在这个 issue 上的会话
+        if actor is not None and issue.assignee == USER and (before is None or before.assignee != USER):
+            # agent 把 issue 交给用户：推送通知，点开是它交出 issue 的那个会话
             self._messaging.send_in(
                 s,
                 Notify(
                     agent_id=actor,
                     title=f"#{issue.id} 指派给你：{issue.title}"[:200],
                     body=f"状态 {issue.status}",
-                    session_id=issue.sessions.get(actor),
+                    session_id=session_id,
                 ),
             )
-        if session_id is not None and actor is not None and wake_target(before, after, None) == actor:
-            # agent 在当前会话里给自己建、派、转 todo 的 issue：就在这个会话里做，登记它为处理会话，不另开会话。
-            # 这个会话停下而 issue 还没做完时，下一次唤醒（评论、巡检）再开 issue 自己的会话（见 _wake_in）
-            issue.sessions = {**issue.sessions, actor: session_id}
-            log.info(
-                "issue adopted by the session that assigned it", extra={"issue_id": issue.id, "agent": actor}
-            )
-        agent = wake_target(before, after, _working(issue, actor, session_id))
+        return await self._deliver_in(s, issue, actor, session_id, happened)
+
+    async def _from_its_session_in(
+        self, s: AsyncSession, issue: Issue, actor: str | None, session_id: str | None
+    ) -> str | None:
+        """动作是不是 agent 在它自己这个 issue 会话里做的：是则返回它（这次动态不投回那里）。"""
+        if actor is None or session_id is None:
+            return None
+        info = await session_in(s, session_id)
+        if (
+            info is None
+            or info.agent_id != actor
+            or (info.origin, info.origin_ref) != (Origin.ISSUE, str(issue.id))
+        ):
+            return None
+        return actor
+
+    async def _deliver_in(
+        self,
+        s: AsyncSession,
+        issue: Issue,
+        actor: str | None,
+        session_id: str | None,
+        happened: list[IssueActivity],
+    ) -> Task | None:
+        """在调用方的事务里把这次的动态投给该收到的 agent（rules.recipient），进它在这个 issue 上唯一的会话。"""
+        agent = recipient(_snapshot(issue), await self._from_its_session_in(s, issue, actor, session_id))
         if agent is None:
             return None
-        if before is None:
-            reason = f"Issue #{issue.id} was created and assigned to you."
-        elif before.assignee != agent:
-            reason = f"Issue #{issue.id} was assigned to you."
-        else:
-            reason = f"Issue #{issue.id} moved from {before.status} to {issue.status}."
-        who = "the user" if actor is None else await self._name_in(s, actor)
-        return await self._wake_in(s, issue, agent, f"{reason} (by {who})")
-
-    async def _wake_in(self, s: AsyncSession, issue: Issue, agent_id: str, reason: str) -> Task:
-        """在调用方的事务里给 agent 投一封信：续写它在这个 issue 上的会话，没有（或已删除）就新开。"""
         view = await self._view_in(s, issue)
-        existing = issue.sessions.get(agent_id)
-        if existing is not None:
-            info = await session_in(s, existing)
-            # 只续写这个 issue 自己开的会话；登记的处理会话可能是 agent 的别的会话（如用户的对话），不往里投信
-            if info is None or (info.origin, info.origin_ref) != (Origin.ISSUE, str(issue.id)):
-                existing = None
-        session: str | NewSession = (
-            existing
-            if existing is not None
-            else NewSession(agent_id=agent_id, title=f"#{issue.id} {issue.title}"[:200], id=new_id())
-        )
+        news = view.activities[-len(happened) :]
         inbound = Inbound(
             origin=Origin.ISSUE,
             origin_ref=str(issue.id),
-            content=wake_message(reason, render_issue(view)),
-            session=session,
+            content=delivery_message(issue.id, news, render_issue(view)),
+            session=SessionKey(agent_id=agent, title=f"#{issue.id} {issue.title}"[:200]),
             awaited=False,
         )
-        await check_receivable_in(s, inbound)
-        delivery = self._messaging.send_in(s, receive_command(inbound))
-        target = session if isinstance(session, str) else session.id
-        if target is None:
-            raise RuntimeError("a new issue session must have a preassigned id")
-        if existing is None:
-            issue.sessions = {**issue.sessions, agent_id: target}
-        log.info("issue wakes agent", extra={"issue_id": issue.id, "agent": agent_id, "session_id": target})
+        delivery = self._messaging.send_in(s, await receive_command_in(s, inbound))
+        log.info("issue activity delivered", extra={"issue_id": issue.id, "agent": agent, "actor": actor})
         return delivery
 
     async def _deliver(self, wake: Task | None) -> None:
@@ -510,7 +453,7 @@ class IssueService:
             description=issue.description,
             status=issue.status,
             priority=issue.priority,
-            assignee=await assignee(_assignee_of(issue)),
+            assignee=await assignee(issue.assignee),
             owner="none" if issue.owner_agent_id is None else await name(issue.owner_agent_id),
             creator=await who(issue.creator_agent_id),
             activities=views,

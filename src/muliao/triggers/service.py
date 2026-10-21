@@ -46,8 +46,7 @@ from muliao.sessions.api import (
     NewSession,
     SessionActivity,
     WorkState,
-    check_receivable_in,
-    receive_command,
+    receive_command_in,
 )
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 from muliao.triggers.tables import Trigger
@@ -324,22 +323,19 @@ class TriggerService:
         出现。
         """
         now = self._clock()
+        target = new_id() if session_id is None else session_id
         inbound = Inbound(
             origin=Origin.TRIGGER,
             origin_ref=str(trigger.id),
             content=event_prompt(trigger.prompt, payload),
             session=NewSession(
-                agent_id=trigger.agent_id, title=f"{trigger.name} · {_local(now, self._tz)}", id=new_id()
+                agent_id=trigger.agent_id, title=f"{trigger.name} · {_local(now, self._tz)}", id=target
             )
             if session_id is None
             else session_id,
             awaited=False,
         )
-        await check_receivable_in(s, inbound)
-        delivery = self._messaging.send_in(s, receive_command(inbound))
-        target = inbound.session if isinstance(inbound.session, str) else inbound.session.id
-        if target is None:
-            raise RuntimeError("a new trigger session must have a preassigned id")
+        delivery = self._messaging.send_in(s, await receive_command_in(s, inbound))
         trigger.last_fired_at = now
         trigger.last_session_id = target
         log.info("trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "session_id": target})

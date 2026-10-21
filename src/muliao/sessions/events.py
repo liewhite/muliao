@@ -99,9 +99,17 @@ class ReceiveNewSession(BaseModel):
     title: str
 
 
+class ReceiveKey(BaseModel):
+    """Receive 投进按发送方定位的会话（inbound.SessionKey）：没有就以 title 新建。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    agent_id: str
+    title: str
+
+
 class Receive(Command):
     """把一封来信投进会话的信箱（inbound.receive），在会话领域自己的事务里。发送方在自己的事务里先用
-    check_receivable_in 校验、记下自己的状态，同一事务发出它（触发器到点、收到 webhook）。投递时会话或 agent 已被
+    receive_command_in 校验、记下自己的状态，同一事务发出它（触发器到点、收到 webhook）。投递时会话或 agent 已被
     删除（校验之后的变化）就不投，记日志。"""
 
     TYPE = "session.receive"
@@ -109,6 +117,7 @@ class Receive(Command):
     origin_ref: str | None
     content: str
     awaited: bool
-    # 续写的会话；新建时为 None
+    # 目标会话，三者恰好给出一个：续写的会话、新建的会话、按发送方定位的会话
     session_id: str | None
     new_session: ReceiveNewSession | None
+    key: ReceiveKey | None

@@ -2620,9 +2620,7 @@
           "priority",
           "owner",
           "title",
-          "description",
-          "released",
-          "claimed"
+          "description"
         ],
         "title": "ActivityKind"
       },
@@ -3418,6 +3416,10 @@
               }
             ]
           },
+          "stalled": {
+            "type": "boolean",
+            "title": "Stalled"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -3441,6 +3443,7 @@
           "creator_agent_id",
           "sessions",
           "assignee_session",
+          "stalled",
           "created_at",
           "updated_at"
         ],
