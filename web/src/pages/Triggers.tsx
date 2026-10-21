@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from 'react'
-import { Alert, Button, Card, Chip, toast } from '@heroui/react'
-import { Copy, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
+import { Alert, Button, Card, Chip, Disclosure, toast } from '@heroui/react'
+import { Archive, Copy, History, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, asAgentId, type Agent, type Precheck, type Trigger, type TriggerKind, sessionRoute } from '../api'
+import { inAnHour, wallClock } from '../wallClock'
 import {
   ActionButton,
   CODE_BLOCK,
@@ -32,7 +33,8 @@ type ConfigChange = (c: Config | null) => void
 
 interface KindView {
   label: string
-  emptyConfig: Config
+  /** 新建时的初始配置。是函数而不是常量：一次性触发器的默认时间要在打开表单时才算 */
+  emptyConfig: () => Config
   ConfigEditor: (props: { config: Config; onChange: ConfigChange }) => ReactNode
   Status: (props: { trigger: Trigger }) => ReactNode
   Actions?: (props: { trigger: Trigger; onChange: () => void }) => ReactNode
@@ -74,6 +76,22 @@ function CronEditor({ config, onChange }: { config: Config; onChange: ConfigChan
         onChange({ cron: value })
       }}
       mono
+    />
+  )
+}
+
+function RunAtEditor({ config, onChange }: { config: Config; onChange: ConfigChange }) {
+  const [at, setAt] = useState(wallClock(String(config.at ?? '')))
+  return (
+    <TextInput
+      label="触发时间"
+      hint="按服务端配置文件中的 timezone 解释；必须是将来的时间。触发一次之后它就从列表里消失，在「已完成」里还能看到结果"
+      type="datetime-local"
+      value={at}
+      onChange={(value) => {
+        setAt(value)
+        onChange(value ? { at: value } : null)
+      }}
     />
   )
 }
@@ -232,7 +250,7 @@ function WebhookToken({ trigger, onChange }: { trigger: Trigger; onChange: () =>
 const KIND_VIEWS: Record<string, KindView> = {
   schedule: {
     label: '定时',
-    emptyConfig: { cron: '*/5 * * * *' },
+    emptyConfig: () => ({ cron: '*/5 * * * *' }),
     ConfigEditor: CronEditor,
     Status: ({ trigger }) => (
       <span>
@@ -241,9 +259,15 @@ const KIND_VIEWS: Record<string, KindView> = {
       </span>
     ),
   },
+  once: {
+    label: '一次性',
+    emptyConfig: () => ({ at: inAnHour(new Date()) }),
+    ConfigEditor: RunAtEditor,
+    Status: ({ trigger }) => <span>计划 {formatTime(String(trigger.status.run_at))}</span>,
+  },
   webhook: {
     label: 'Webhook',
-    emptyConfig: {},
+    emptyConfig: () => ({}),
     ConfigEditor: () => null,
     Status: ({ trigger }) => (
       <span className="break-all">
@@ -256,7 +280,53 @@ const KIND_VIEWS: Record<string, KindView> = {
 }
 
 function viewOf(kind: string): KindView {
-  return KIND_VIEWS[kind] ?? { label: kind, emptyConfig: {}, ConfigEditor: JsonConfigEditor, Status: RawStatus }
+  return KIND_VIEWS[kind] ?? { label: kind, emptyConfig: () => ({}), ConfigEditor: JsonConfigEditor, Status: RawStatus }
+}
+
+/** 这个触发器发起过的会话（后端按 origin=trigger 与它的 id 查），展开时才取 */
+function TriggerSessions({ trigger }: { trigger: Trigger }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Disclosure className="rounded-xl border border-separator px-3 py-2" onExpandedChange={setOpen}>
+      <Disclosure.Heading>
+        <Disclosure.Trigger className="flex w-full items-center gap-2 text-sm text-muted">
+          <History className="size-4" />
+          历史会话
+          <Disclosure.Indicator className="ml-auto" />
+        </Disclosure.Trigger>
+      </Disclosure.Heading>
+      <Disclosure.Content>
+        <Disclosure.Body className="pt-2">{open && <SessionList triggerId={trigger.id} />}</Disclosure.Body>
+      </Disclosure.Content>
+    </Disclosure>
+  )
+}
+
+function SessionList({ triggerId }: { triggerId: number }) {
+  const sessions = useLoad(
+    () => api.sessions({ origin: ['trigger'], origin_ref: String(triggerId), limit: 50 }),
+    [triggerId],
+  )
+  return (
+    <Loading state={sessions}>
+      {(list) =>
+        list.length === 0 ? (
+          <EmptyHint>还没有触发过</EmptyHint>
+        ) : (
+          <ul className="flex flex-col gap-1.5 text-sm">
+            {list.map((s) => (
+              <li key={s.id} className="flex flex-wrap items-baseline gap-2">
+                <Link className="text-accent" to={sessionRoute(s.id)}>
+                  {s.title}
+                </Link>
+                <span className="text-xs text-muted">{formatTime(s.created_at)}</span>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+    </Loading>
+  )
 }
 
 function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
@@ -339,6 +409,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           <>
             <PrecheckSummary trigger={trigger} />
             <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
+            <TriggerSessions trigger={trigger} />
           </>
         )}
         <ErrorAlert error={action.error} />
@@ -396,7 +467,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   const [name, setName] = useState('')
   const [agentId, setAgentId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
-  const [config, setConfig] = useState<Config | null>(kind ? viewOf(kind).emptyConfig : {})
+  const [config, setConfig] = useState<Config | null>(kind ? viewOf(kind).emptyConfig() : {})
   const [precheck, setPrecheck] = useState<Precheck | null>(null)
   const action = useAction()
   const view = kind ? viewOf(kind) : null
@@ -422,7 +493,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
         value={kind}
         onChange={(k) => {
           setKind(k)
-          if (k) setConfig(viewOf(k).emptyConfig)
+          if (k) setConfig(viewOf(k).emptyConfig())
         }}
         options={kinds.map((k) => ({ id: k.name, label: viewOf(k.name).label, description: k.description }))}
       />
@@ -441,7 +512,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
         placeholder="选择 agent"
         options={(agents ?? []).map((a) => ({ id: a.id, label: a.name }))}
       />
-      {view && kind && <view.ConfigEditor key={kind} config={viewOf(kind).emptyConfig} onChange={setConfig} />}
+      {view && kind && <view.ConfigEditor key={kind} config={config ?? {}} onChange={setConfig} />}
       <PrecheckEditor precheck={null} onChange={setPrecheck} />
       <TextAreaInput
         label="处理说明"
@@ -462,11 +533,86 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   )
 }
 
+/** 已归档的触发器：跑完的一次性触发器。只能看结果与删除，不能再改、启用或运行 */
+function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
+  const confirm = useConfirm()
+  const action = useAction()
+  const view = viewOf(trigger.kind)
+
+  async function remove() {
+    const ok = await confirm({ title: `删除「${trigger.name}」的记录？`, body: '它发起的会话不会被删除。', confirmLabel: '删除', danger: true })
+    if (ok) await action.run(() => api.deleteTrigger(trigger.id).then(onChange))
+  }
+
+  return (
+    <Card variant="secondary">
+      <Card.Header className="flex flex-row items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <Card.Title>{trigger.name}</Card.Title>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+            <Chip size="sm" variant="soft">
+              {view.label}
+            </Chip>
+            <Chip size="sm" color="accent" variant="soft">
+              {agentLabel(agents, trigger.agent_id)}
+            </Chip>
+            <view.Status trigger={trigger} />
+            {trigger.finished_at && <span>· 完成 {formatTime(trigger.finished_at)}</span>}
+          </div>
+        </div>
+      </Card.Header>
+      <Card.Content className="flex flex-col gap-3">
+        <div className="text-xs text-muted">
+          {trigger.last_session_id ? (
+            <Link className="text-accent" to={sessionRoute(trigger.last_session_id)}>
+              这次触发的会话
+            </Link>
+          ) : (
+            '没有触发会话（前置检查判定没事，或触发失败）'
+          )}
+        </div>
+        {trigger.disabled_reason && <ErrorAlert title="触发失败" error={trigger.disabled_reason} />}
+        {trigger.precheck_error && <ErrorAlert title="前置检查出错，未触发" error={trigger.precheck_error} />}
+        <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
+        <TriggerSessions trigger={trigger} />
+        <ErrorAlert error={action.error} />
+      </Card.Content>
+      <Card.Footer>
+        <Button size="sm" variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
+          <Trash2 className="size-4" />
+          删除记录
+        </Button>
+      </Card.Footer>
+    </Card>
+  )
+}
+
+function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
+  const finished = useLoad(() => api.triggers(true), [])
+  return (
+    <Loading state={finished}>
+      {(list) =>
+        list.length === 0 ? (
+          <EmptyHint>还没有跑完的一次性触发器</EmptyHint>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {list.map((t) => (
+              <FinishedTrigger key={t.id} trigger={t} agents={agents} onChange={() => void finished.reload()} />
+            ))}
+          </div>
+        )
+      }
+    </Loading>
+  )
+}
+
 /** 自动发起会话的入口：定时、webhook……方式的差异只在各自的配置与操作 */
 export default function Triggers() {
   const triggers = useLoad(() => api.triggers(), [])
   const kinds = useLoad(() => api.triggerKinds(), [])
   const agents = useAgents()
+  // 展开时才取已完成的列表，顺便每次展开都是最新的
+  const [showFinished, setShowFinished] = useState(false)
   return (
     <Page title="触发">
       <div className="flex flex-col gap-3">
@@ -491,6 +637,22 @@ export default function Triggers() {
             )
           }
         </Loading>
+        <Card>
+          <Disclosure onExpandedChange={setShowFinished}>
+            <Disclosure.Heading>
+              <Disclosure.Trigger className="flex w-full items-center gap-2 px-1 font-medium">
+                <Archive className="size-4" />
+                已完成
+                <Disclosure.Indicator className="ml-auto" />
+              </Disclosure.Trigger>
+            </Disclosure.Heading>
+            <Disclosure.Content>
+              <Disclosure.Body className="flex flex-col gap-3 pt-4">
+                {showFinished && <FinishedTriggers agents={agents.data} />}
+              </Disclosure.Body>
+            </Disclosure.Content>
+          </Disclosure>
+        </Card>
       </div>
     </Page>
   )

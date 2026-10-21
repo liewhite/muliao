@@ -635,6 +635,8 @@ export interface paths {
         /**
          * Run Trigger
          * @description 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。
+         *
+         *     不消耗一次性触发器预定的那一次；已归档的触发器不能再运行。
          */
         post: operations["run_trigger_api_triggers__trigger_id__run_post"];
         delete?: never;
@@ -1688,6 +1690,8 @@ export interface components {
             disabled_reason: string | null;
             /** Precheck Error */
             precheck_error: string | null;
+            /** Finished At */
+            finished_at: string | null;
         };
         /**
          * TriggerPatch
@@ -2310,6 +2314,8 @@ export interface operations {
             query?: {
                 agent_id?: string | null;
                 origin?: components["schemas"]["Origin"][] | null;
+                /** @description 发起方在它那个 origin 里的身份，如触发器的 id */
+                origin_ref?: string | null;
                 limit?: number;
                 offset?: number;
             };
@@ -3044,7 +3050,10 @@ export interface operations {
     };
     list_triggers_api_triggers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 列已归档的（跑完的一次性触发器）而不是还会触发的 */
+                finished?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3058,6 +3067,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TriggerOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

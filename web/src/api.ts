@@ -210,7 +210,8 @@ export const api = {
   saveSkill: (body: Schemas['SkillIn']) => call('put', '/api/skill', { body }),
   deleteSkill: (owner: string | null, name: string) => call('delete', '/api/skill', { query: { owner, name } }),
 
-  sessions: (query: { agent_id?: AgentId; origin?: Origin[]; limit?: number; offset?: number }) =>
+  /** origin_ref 是发起方在它那个 origin 里的身份：触发器的 id，用来列出某个触发器发起过的会话 */
+  sessions: (query: { agent_id?: AgentId; origin?: Origin[]; origin_ref?: string; limit?: number; offset?: number }) =>
     branded<Session[]>(call('get', '/api/sessions', { query })),
   session: (session_id: string) =>
     branded<SessionDetail>(call('get', '/api/sessions/{session_id}', { path: { session_id } })),
@@ -247,7 +248,8 @@ export const api = {
   retryTask: (task_id: number) => branded<Task>(call('post', '/api/tasks/{task_id}/retry', { path: { task_id } })),
 
   triggerKinds: () => call('get', '/api/trigger-kinds'),
-  triggers: () => branded<Trigger[]>(call('get', '/api/triggers')),
+  /** finished 为 true 时列已归档的（跑完的一次性触发器），它们只能查看与删除 */
+  triggers: (finished = false) => branded<Trigger[]>(call('get', '/api/triggers', { query: { finished } })),
   createTrigger: (body: Schemas['TriggerCreate'] & { agent_id: AgentId }) => branded<Trigger>(call('post', '/api/triggers', { body })),
   /** 只修改给出的字段；precheck 不给表示不变，给 null 表示去掉 */
   updateTrigger: (trigger_id: number, body: Schemas['TriggerPatch']) =>

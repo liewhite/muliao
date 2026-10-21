@@ -332,7 +332,11 @@ export function TextInput({
   mono,
   autoFocus,
   ...field
-}: FieldProps & { type?: 'text' | 'password' | 'number'; placeholder?: string; mono?: boolean }) {
+}: FieldProps & {
+  type?: 'text' | 'password' | 'number' | 'datetime-local'
+  placeholder?: string
+  mono?: boolean
+}) {
   return (
     <TextField type={type} fullWidth variant="secondary" {...field}>
       <Label>{label}</Label>
