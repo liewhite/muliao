@@ -40,9 +40,8 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
         tools are offered to you. Values of env/headers are hidden. `corrupt` lists servers whose stored config
         cannot be read; remove and re-add them."""
         agent = ctx.deps.agent_id
-        # 哪些真正生效由合并规则决定（registry.index），这里不复述规则
-        usable, corrupt = registry.index(agent)
-        active = {s.key for s in usable}
+        # 哪些真正生效由合并规则决定（registry.listing），这里不复述规则
+        listing, corrupt = registry.listing(agent)
         servers = [
             McpInfo(
                 name=s.name,
@@ -54,9 +53,9 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
                 env_keys=sorted(s.config.env),
                 header_keys=sorted(s.config.headers),
                 enabled=s.enabled,
-                active=s.key in active,
+                active=active,
             )
-            for s in registry.list(agent) + registry.list(None)
+            for s, active in listing
         ]
         return McpListing(servers=servers, corrupt=[c.describe() for c in corrupt])
 

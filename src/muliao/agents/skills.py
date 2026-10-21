@@ -17,7 +17,7 @@ import yaml
 from muliao.agents.active import OwnerCheck
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import Scope, scope_of, visible
-from muliao.agents.resources import CorruptResource, ResourceRepo
+from muliao.agents.resources import CorruptResource, ResourceRepo, scan_index, scan_resources
 from muliao.errors import CorruptState, InvalidInput, NotFound
 from muliao.platform import text_edit
 
@@ -74,21 +74,18 @@ class SkillStore:
         root = self._root(owner)
         if not root.exists():
             return [], []
-        skills: list[SkillMeta] = []
-        corrupt: list[CorruptResource] = []
-        for d in sorted(root.iterdir()):
-            if not (d.is_dir() and (d / SKILL_FILE).exists()):
-                continue
-            try:
-                skills.append(self._load(owner, d).meta)
-            except CorruptState as e:
-                log.error("corrupt skill", extra={"owner": owner, "skill": d.name, "error": str(e)})
-                corrupt.append(
-                    CorruptResource(
-                        "skill", owner, d.name, d / SKILL_FILE, str(e), repair="rewritten or deleted"
-                    )
-                )
-        return skills, corrupt
+        files = [
+            (d.name, d / SKILL_FILE)
+            for d in sorted(root.iterdir())
+            if d.is_dir() and (d / SKILL_FILE).exists()
+        ]
+        return scan_resources(
+            "skill",
+            owner,
+            files,
+            lambda path: self._load(owner, path.parent).meta,
+            repair="rewritten or deleted",
+        )
 
     def list(self, owner: str | None) -> list[SkillMeta]:
         """owner 名下读得出来的 skill；坏的见 corrupt_in。"""
@@ -102,10 +99,8 @@ class SkillStore:
         """agent 的 skill 索引：看得到的 skill（合并规则见 ownership.shadowing），以及它私有的与公共的里读不出来的
         （索引里逐项说明，不让整次运行失败）。坏的不参与同名遮蔽——读不出来就不知道它是什么——所以坏掉的私有 skill
         的同名公共 skill 照常可见。每个目录只扫一次。"""
-        private, private_corrupt = self._scan(agent)
-        public, public_corrupt = self._scan(None)
-        skills = visible(private + public, agent_id=agent, owner=lambda s: s.owner, name=lambda s: s.name)
-        return skills, private_corrupt + public_corrupt
+        skills, corrupt = scan_index(agent, self._scan)
+        return visible(skills, agent_id=agent, owner=lambda s: s.owner, name=lambda s: s.name), corrupt
 
     def visible_to(self, agent: str) -> list[SkillMeta]:
         return self.index(agent)[0]

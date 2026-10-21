@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from muliao.agents.active import OwnerCheck
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import scope_of, shadowing
-from muliao.agents.resources import CorruptResource, ResourceRepo
+from muliao.agents.resources import CorruptResource, ResourceRepo, scan_index, scan_resources
 from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
@@ -143,19 +143,10 @@ class McpRegistry:
         directory = self._dir(owner)
         if not directory.exists():
             return [], []
-        servers: list[McpServer] = []
-        corrupt: list[CorruptResource] = []
-        for path in sorted(directory.glob("*.json")):
-            try:
-                servers.append(self._load(owner, path))
-            except CorruptState as e:
-                log.error("corrupt mcp config", extra={"owner": owner, "mcp": path.stem, "error": str(e)})
-                corrupt.append(
-                    CorruptResource(
-                        "MCP server", owner, path.stem, path, str(e), repair="removed and added again"
-                    )
-                )
-        return servers, corrupt
+        files = [(path.stem, path) for path in sorted(directory.glob("*.json"))]
+        return scan_resources(
+            "MCP server", owner, files, lambda path: self._load(owner, path), repair="removed and added again"
+        )
 
     def list(self, owner: str | None) -> list[McpServer]:
         """owner 名下配置读得出来的 server；坏的见 corrupt_in。"""
@@ -172,15 +163,18 @@ class McpRegistry:
         """
         return _with_shadowing((self.list(owner) if owner is not None else []) + self.list(None), owner)
 
+    def listing(self, agent_id: str) -> tuple[list[tuple[McpServer, bool]], list[CorruptResource]]:
+        """agent 视角下的全部 server（它私有的在前，然后公共的，含停用的），各自标明是否生效（已启用且未被同名私有
+        server 遮蔽），以及它私有的与公共的里配置坏了的。坏的不参与同名遮蔽（是否启用都读不出来）。每个目录只扫一次。"""
+        servers, corrupt = scan_index(agent_id, self._scan)
+        return [
+            (s, s.enabled and not shadowed) for s, shadowed in _with_shadowing(servers, agent_id)
+        ], corrupt
+
     def index(self, agent_id: str) -> tuple[list[McpServer], list[CorruptResource]]:
-        """agent 可用的 server（view 里已启用且未被遮蔽的），以及它私有的与公共的里配置坏了的。坏的不参与同名遮蔽
-        （是否启用都读不出来）。每个目录只扫一次。"""
-        private, private_corrupt = self._scan(agent_id)
-        public, public_corrupt = self._scan(None)
-        usable = [
-            s for s, shadowed in _with_shadowing(private + public, agent_id) if s.enabled and not shadowed
-        ]
-        return usable, private_corrupt + public_corrupt
+        """agent 可用的 server（listing 里生效的），以及配置坏了的。"""
+        listing, corrupt = self.listing(agent_id)
+        return [s for s, active in listing if active], corrupt
 
     def visible_to(self, agent_id: str) -> list[McpServer]:
         return self.index(agent_id)[0]

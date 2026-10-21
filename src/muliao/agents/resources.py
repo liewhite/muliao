@@ -27,7 +27,7 @@ import asyncio
 import logging
 import re
 import shutil
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +35,7 @@ from pathlib import Path
 import anyio
 
 from muliao.agents.ownership import scope_of
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import CorruptState, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +94,34 @@ class CorruptResource:
             f"{scope_of(self.owner)} {self.kind} {self.name!r} is corrupt and cannot be used until it is "
             f"{self.repair}: {self.problem}"
         )
+
+
+def scan_resources[T](
+    kind: str, owner: str | None, files: Iterable[tuple[str, Path]], load: Callable[[Path], T], repair: str
+) -> tuple[list[T], list[CorruptResource]]:
+    """owner 名下一种资源的全部文件（名称与路径），各读一次：读得出来的，和读不出来的（load 抛 CorruptState：
+    CorruptResource，每次读到都记 error）。坏的只是这一项，不连累别的。"""
+    loaded: list[T] = []
+    corrupt: list[CorruptResource] = []
+    for name, path in files:
+        try:
+            loaded.append(load(path))
+        except CorruptState as e:
+            log.error(
+                "corrupt resource", extra={"kind": kind, "owner": owner, "resource": name, "error": str(e)}
+            )
+            corrupt.append(CorruptResource(kind, owner, name, path, str(e), repair=repair))
+    return loaded, corrupt
+
+
+def scan_index[T](
+    agent_id: str, scan: Callable[[str | None], tuple[list[T], list[CorruptResource]]]
+) -> tuple[list[T], list[CorruptResource]]:
+    """agent 的索引要的两个目录（它私有的在前，然后公共的）各扫一次：读得出来的（交给调用方按同名遮蔽合并），和
+    两边读不出来的。坏的不参与遮蔽——读不出来就不知道它是什么。"""
+    private, private_corrupt = scan(agent_id)
+    public, public_corrupt = scan(None)
+    return private + public, private_corrupt + public_corrupt
 
 
 @dataclass(frozen=True)
