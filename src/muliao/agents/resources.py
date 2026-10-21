@@ -149,6 +149,12 @@ class ResourceRepo:
         return resolved.relative_to(root).as_posix()
 
     async def _git(self, *args: str, check: bool = True) -> tuple[int, str]:
+        code, out = await self._git_bytes(*args, check=check)
+        return code, out.decode()
+
+    async def _git_bytes(
+        self, *args: str, check: bool = True, stdin: bytes | None = None
+    ) -> tuple[int, bytes]:
         proc = await asyncio.create_subprocess_exec(
             "git",
             "-C",
@@ -159,11 +165,12 @@ class ResourceRepo:
             "-c",
             "commit.gpgsign=false",
             *args,
+            stdin=None if stdin is None else asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            out, err = await proc.communicate()
+            out, err = await proc.communicate(stdin)
         except BaseException:
             # 被取消时不留下继续运行的 git（它会占着锁，或在调用方以为失败之后才提交）。
             # 先 SIGTERM：git 会自己删掉锁文件；不退出才 SIGKILL（留下的锁由下次启动的 recover 清理）
@@ -179,7 +186,7 @@ class ResourceRepo:
             raise
         if check and proc.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed ({proc.returncode}): {err.decode().strip()}")
-        return proc.returncode or 0, out.decode()
+        return proc.returncode or 0, out
 
     async def ensure(self) -> None:
         """首次使用时初始化仓库；git 不可用时直接报错。"""
@@ -348,6 +355,30 @@ class ResourceRepo:
             rev, author, at, message = line.split(_FIELD, 3)
             revisions.append(Revision(rev, author, datetime.fromisoformat(at), message))
         return revisions
+
+    async def contents_at(self, revs: Sequence[str], path: Path) -> list[str]:
+        """这个文件在每个版本（history 列出的）时的内容，与 revs 一一对应：一次 git cat-file --batch 读完，
+        不按版本逐个起进程。某个版本里没有这个文件时报错。"""
+        if not revs:
+            return []
+        relative = self.relative(path)
+        async with self._lock:
+            await self.ensure()
+            _, out = await self._git_bytes(
+                "cat-file", "--batch", stdin="".join(f"{rev}:{relative}\n" for rev in revs).encode()
+            )
+        contents = []
+        pos = 0
+        for rev in revs:
+            # 每个对象一行头「<oid> <type> <size>」，随后 size 字节内容与一个换行；找不到时只有「<name> missing」
+            end = out.index(b"\n", pos)
+            header = out[pos:end].split()
+            if header[-1] == b"missing":
+                raise NotFound(f"{relative} does not exist at revision {rev}")
+            size = int(header[2])
+            contents.append(out[end + 1 : end + 1 + size].decode())
+            pos = end + 1 + size + 1
+        return contents
 
     async def read_at(self, rev: str, path: Path) -> str:
         """某个版本时的文件内容；那个版本里没有这个文件时报错。"""

@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from muliao.agents.api import USER
+from muliao.agents.api import USER, Revision
 from muliao.api.deps import C
 from muliao.errors import InvalidInput
 
@@ -56,6 +56,10 @@ class RevisionOut(BaseModel):
     author: str
     created_at: datetime
 
+    @classmethod
+    def of(cls, r: Revision, content: str) -> "RevisionOut":
+        return cls(rev=r.rev, content=content, author=r.author, created_at=r.at)
+
 
 class RestoreIn(BaseModel):
     owner: str | None = None
@@ -70,15 +74,9 @@ class ContentIn(BaseModel):
 async def history(c: C, kind: ResourceKind, owner: str | None = None) -> list[RevisionOut]:
     """owner 缺省为公共资源；新的在前，第一条即当前生效的一版。只列最近 50 版，更早的仍保留在仓库里。"""
     resource = await _resource(c, kind, owner)
-    return [
-        RevisionOut(
-            rev=r.rev,
-            content=await c.resources.read_at(r.rev, resource.path),
-            author=r.author,
-            created_at=r.at,
-        )
-        for r in await c.resources.history(resource.path, HISTORY_LIMIT)
-    ]
+    revisions = await c.resources.history(resource.path, HISTORY_LIMIT)
+    contents = await c.resources.contents_at([r.rev for r in revisions], resource.path)
+    return [RevisionOut.of(r, content) for r, content in zip(revisions, contents, strict=True)]
 
 
 @router.post("/resources/{kind}/restore", status_code=204)

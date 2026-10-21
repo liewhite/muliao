@@ -11,7 +11,7 @@ from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import Scope, owned_by, owner_of, scope_of, shadowing, visible, visible_owners
 from muliao.agents.prompts import PromptStore
-from muliao.agents.resources import USER, ResourceRepo
+from muliao.agents.resources import USER, ResourceRepo, Revision
 from muliao.agents.service import (
     AgentInfo,
     AgentNames,
@@ -36,6 +36,7 @@ __all__ = [
     "MemoryStore",
     "PromptStore",
     "ResourceRepo",
+    "Revision",
     "Scope",
     "SkillMeta",
     "SkillStore",
