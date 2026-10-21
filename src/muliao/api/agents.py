@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from muliao.agents.api import USER, AgentInfo, AgentPatch, AgentSpec, SkillMeta, ToolGroupInfo
-from muliao.api.deps import C
+from muliao.api.deps import C, check_owner
 from muliao.api.resources import CorruptOut
 from muliao.reflection.tables import Reflection
 
@@ -223,29 +223,23 @@ class SkillIn(BaseModel):
     body: str
 
 
-async def _check_owner(c: C, owner: str | None) -> None:
-    """读 owner 的私有资源：正在删除的 agent 按不存在处理。写入时由 store 自己检查（agents.active）。"""
-    if owner is not None:
-        await c.agents.get_active(owner)
-
-
 @router.get("/skills")
 async def list_skills(c: C, owner: str | None = None) -> list[SkillOut]:
     """owner 为空列出公共 skill，否则列出该 agent 的私有 skill。"""
-    await _check_owner(c, owner)
+    await check_owner(c, owner)
     return [SkillOut.of(s) for s in c.skills.list(owner)]
 
 
 @router.get("/skills/corrupt")
 async def list_corrupt_skills(c: C, owner: str | None = None) -> list[CorruptOut]:
     """owner 名下（缺省为公共）读不出来的 skill，GET /skills 不列它们。"""
-    await _check_owner(c, owner)
+    await check_owner(c, owner)
     return [CorruptOut.of(x) for x in c.skills.corrupt_in(owner)]
 
 
 @router.get("/skill")
 async def get_skill(c: C, name: str, owner: str | None = None) -> SkillDetail:
-    await _check_owner(c, owner)
+    await check_owner(c, owner)
     skill = c.skills.read(owner, name)
     return SkillDetail(name=skill.meta.name, description=skill.meta.description, owner=owner, body=skill.body)
 

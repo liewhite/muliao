@@ -6,7 +6,7 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
 from muliao.agents.api import USER, McpServer, McpTransport, mcp_config
-from muliao.api.deps import C
+from muliao.api.deps import C, check_owner
 from muliao.api.resources import CorruptOut
 from muliao.vault.api import SecretInfo
 
@@ -68,16 +68,14 @@ class EnabledIn(BaseModel):
 async def list_mcp(c: C, owner: str | None = None) -> list[McpOut]:
     """owner 视角下的 server：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 server。"""
     # env/headers 中的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回
-    if owner is not None:
-        await c.agents.get_active(owner)
+    await check_owner(c, owner)
     return [McpOut.of(m, shadowed=shadowed) for m, shadowed in c.mcp.view(owner)]
 
 
 @router.get("/mcp/corrupt")
 async def list_corrupt_mcp(c: C, owner: str | None = None) -> list[CorruptOut]:
     """owner 名下（缺省为公共）配置坏了的 server，GET /mcp 不列它们。"""
-    if owner is not None:
-        await c.agents.get_active(owner)
+    await check_owner(c, owner)
     return [CorruptOut.of(x) for x in c.mcp.corrupt_in(owner)]
 
 
@@ -138,8 +136,7 @@ class SecretOut(BaseModel):
 @router.get("/vault")
 async def list_secrets(c: C, owner: str | None = None) -> list[SecretOut]:
     """owner 视角下的 secret（不含值）：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 secret。"""
-    if owner is not None:
-        await c.agents.get_active(owner)
+    await check_owner(c, owner)
     return [SecretOut.of(s, shadowed) for s, shadowed in await c.vault.view(owner)]
 
 

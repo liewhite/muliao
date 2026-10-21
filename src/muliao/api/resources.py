@@ -13,7 +13,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from muliao.agents.api import USER, CorruptResource, Revision
-from muliao.api.deps import C
+from muliao.api.deps import C, check_owner
 from muliao.errors import InvalidInput
 
 router = APIRouter()
@@ -47,9 +47,8 @@ class _Resource:
 
 
 async def _resource(c: C, kind: ResourceKind, owner: str | None) -> _Resource:
-    # 读历史与恢复一版之前：正在删除的 agent 按不存在处理；恢复的写入仍由 store 在锁里检查（agents.active）
-    if owner is not None:
-        await c.agents.get_active(owner)
+    # 读历史与恢复一版之前；恢复的写入仍由 store 在锁里检查（agents.active）
+    await check_owner(c, owner)
     match kind:
         case ResourceKind.PROMPT:
             return _Resource(

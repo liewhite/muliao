@@ -13,6 +13,12 @@ def _container(request: Request) -> Container:
 C = Annotated[Container, Depends(_container)]
 
 
+async def check_owner(c: Container, owner: str | None) -> None:
+    """读 owner 的私有资源之前（列出、读历史）：正在删除的 agent 按不存在处理。写入时由 store 自己检查（agents.active）。"""
+    if owner is not None:
+        await c.agents.get_active(owner)
+
+
 async def read_limited(request: Request, limit: int) -> bytes:
     """按字节上限读取请求体：声明的长度超限直接拒绝，未声明长度的分块读取，超限即停。"""
     declared = request.headers.get("content-length")
