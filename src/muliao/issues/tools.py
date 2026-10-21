@@ -132,14 +132,15 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         """Change an issue; only the given fields change. Moving an agent's issue into `todo`/`in_progress`, or
         assigning an issue in those statuses to an agent, wakes that agent up. If that agent is you, nothing is
         started: this conversation becomes the one working on it, so carry on with it here (or leave it in
-        `backlog` if it is for later).
+        `backlog` if it is for later). Finished work goes to `in_review` with assignee `user`, never straight to
+        `done`: the user moves it to `done` after reviewing.
 
         Args:
             issue_id: Issue number.
             owner: New owner agent (by name): the project this issue belongs to.
             title: New title.
             description: New description (replaces the old one).
-            status: New status.
+            status: New status; `done` is for the user, set `in_review` when you have finished.
             priority: New priority.
             assignee: Agent name, or `user` to hand it to the user (they get a notification).
             unassign: Remove the assignee.

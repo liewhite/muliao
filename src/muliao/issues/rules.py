@@ -100,9 +100,10 @@ def render_issue(issue: IssueView) -> str:
 WAKE_GUIDE = """\
 You are the assignee of this issue on the muliao issue board. Work on it, then record the outcome on the issue \
 with the `issue_*` tools: comment with what you did or found (`issue_comment`), and move it on with \
-`issue_update` — e.g. status `in_progress` while working, `in_review` (and assignee `user`) when it needs the \
-user's review, `done` when finished, `blocked` with a comment explaining why. Hand it to another agent by \
-changing the assignee. The user reads the issue, not this conversation."""
+`issue_update` — e.g. status `in_progress` while working, `blocked` with a comment explaining why. When you \
+have finished, do not set `done` yourself: set status `in_review` and assignee `user`, and the user moves it to \
+`done` after reviewing. Hand it to another agent by changing the assignee. The user reads the issue, not this \
+conversation."""
 
 
 def wake_message(reason: str, rendered: str) -> str:

@@ -597,6 +597,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - **投信**：与触发器同一套路——在 issue 的事务里 `check_receivable_in`、发出定向命令 `Receive`（来源 `Origin.ISSUE`，`origin_ref` 为 issue id），提交后 `run_now`。同一个 agent 在同一个 issue 上续写同一个会话（`Issue.sessions`，agent id → 会话 id），会话被删了就新开。信件内容是 issue 的全文（描述与时间线）加上处理指引；没有用户在等（awaited = False），结果记在 issue 上。
 - **有没有人在做**：`IssueService.work_states` 给出被指派 agent 在 issue 会话里的状态（会话领域的 `SessionActivity.work_state_in`：running 有排着或进行中的运行/来信，waiting 在等后台任务、委派或用户回答，idle 空闲），出现在 `issue_list` 与接口的 `assignee_session` 里；界面在 todo / 进行中、指派给 agent 却不在 running / waiting 的卡片上标「没人在处理」。巡检 agent 据此发现停滞的 issue，评论它来唤醒被指派的 agent。
 - **交给用户**：agent 把 issue 指派给用户时发 `Notify` 推送，点开是它在这个 issue 上的会话。
+- **先审核再完成**：agent 做完不自己设 done，而是设 in_review 并指派给用户，由用户审核后拖进 done。这是约定，写在唤醒说明（`rules.WAKE_GUIDE`）和 `issue_update` 的工具说明里，代码不拦。
 - **删除 agent**：订阅 `AgentDeleting`，指派给它的 issue 改为未指派（记一条时间线），忘掉它的会话。
 
 ## 22. 暂缓的项
