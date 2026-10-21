@@ -4,8 +4,8 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from muliao.agents.api import USER, AgentInfo, AgentPatch, AgentSpec, SkillMeta, ToolGroupInfo
-from muliao.api.admin import CorruptOut
 from muliao.api.deps import C
+from muliao.api.resources import CorruptOut
 from muliao.reflection.api import list_reflections_of
 from muliao.reflection.tables import Reflection
 

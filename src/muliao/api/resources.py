@@ -12,11 +12,24 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from muliao.agents.api import USER, Revision
+from muliao.agents.api import USER, CorruptResource, Revision
 from muliao.api.deps import C
 from muliao.errors import InvalidInput
 
 router = APIRouter()
+
+
+class CorruptOut(BaseModel):
+    """一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除或重写。"""
+
+    owner: str | None
+    name: str
+    problem: str
+
+    @classmethod
+    def of(cls, c: CorruptResource) -> "CorruptOut":
+        return cls(owner=c.owner, name=c.name, problem=c.problem)
+
 
 HISTORY_LIMIT = 50
 

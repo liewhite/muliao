@@ -6,8 +6,9 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
 from muliao.agent_runtime.api import McpServer, McpTransport, mcp_config
-from muliao.agents.api import USER, CorruptResource
+from muliao.agents.api import USER
 from muliao.api.deps import C
+from muliao.api.resources import CorruptOut
 from muliao.vault.api import SecretInfo
 
 router = APIRouter()
@@ -71,18 +72,6 @@ async def list_mcp(c: C, owner: str | None = None) -> list[McpOut]:
     if owner is not None:
         await c.agents.get_active(owner)
     return [McpOut.of(m, shadowed=shadowed) for m, shadowed in c.mcp.view(owner)]
-
-
-class CorruptOut(BaseModel):
-    """一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除或重写。"""
-
-    owner: str | None
-    name: str
-    problem: str
-
-    @classmethod
-    def of(cls, c: CorruptResource) -> "CorruptOut":
-        return cls(owner=c.owner, name=c.name, problem=c.problem)
 
 
 @router.get("/mcp/corrupt")
