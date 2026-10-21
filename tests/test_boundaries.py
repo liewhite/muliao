@@ -43,11 +43,11 @@ def _imports(path: Path, root: Path = SRC) -> list[tuple[int, str]]:
         if isinstance(node, ast.ImportFrom):
             if node.level:
                 package = _module_of(path, root)
-                base = package[: len(package) - node.level + 1]
-                if not base:
+                if node.level > len(package):
                     raise AssertionError(
                         f"{path}:{node.lineno} relative import goes above the muliao package"
                     )
+                base = package[: len(package) - node.level + 1]
                 module = ".".join(base + ([node.module] if node.module else []))
             else:
                 module = node.module or ""
@@ -98,6 +98,8 @@ def test_domains_only_use_each_others_api():
 
 
 def test_relative_imports_are_resolved_to_the_module_they_name(tmp_path):
+    import pytest
+
     root = tmp_path / "muliao"
     module = root / "jobs" / "x.py"
     module.parent.mkdir(parents=True)
@@ -109,6 +111,11 @@ def test_relative_imports_are_resolved_to_the_module_they_name(tmp_path):
         (2, "muliao.jobs.runner.y"),
         (3, "muliao.sessions.mailbox.z"),
     ]
+    module.write_text("from .. import x\n")
+    assert _imports(module, root) == [(1, "muliao.x")]
+    module.write_text("from ... import x\n")
+    with pytest.raises(AssertionError, match="above the muliao package"):
+        _imports(module, root)
 
 
 async def test_a_transaction_writing_two_domains_tables_fails(container, make_agent):

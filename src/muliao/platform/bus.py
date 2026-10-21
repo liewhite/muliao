@@ -36,7 +36,7 @@ class SubscriberOverflow(Exception):
     pass
 
 
-class _Subscriber:
+class Subscriber:
     def __init__(self, maxsize: int):
         self.queue: asyncio.Queue[Event | None] = asyncio.Queue(maxsize)
         self.overflowed = False
@@ -56,7 +56,7 @@ class _Subscriber:
 
 class EventBus:
     def __init__(self, subscriber_buffer: int = 1000):
-        self._subscribers: set[_Subscriber] = set()
+        self._subscribers: set[Subscriber] = set()
         self._buffer = subscriber_buffer
 
     def publish(self, event: Event) -> None:
@@ -74,8 +74,8 @@ class EventBus:
                 sub.queue.put_nowait(None)
 
     @asynccontextmanager
-    async def subscribe(self) -> AsyncIterator[_Subscriber]:
-        sub = _Subscriber(self._buffer)
+    async def subscribe(self) -> AsyncIterator[Subscriber]:
+        sub = Subscriber(self._buffer)
         self._subscribers.add(sub)
         try:
             yield sub
@@ -90,5 +90,5 @@ class EventFeed:
     def __init__(self, bus: EventBus):
         self._bus = bus
 
-    def subscribe(self) -> AbstractAsyncContextManager[_Subscriber]:
+    def subscribe(self) -> AbstractAsyncContextManager[Subscriber]:
         return self._bus.subscribe()
