@@ -29,6 +29,9 @@ class IssueSummary(BaseModel):
     assignee_session: WorkState | None
     # todo / in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
     stalled: bool
+    # 它依赖的上游 issue，与其中还没完成（不是 done / cancelled）的：waiting_on 非空时它还轮不到，动态不投、不算停滞
+    depends_on: list[int]
+    waiting_on: list[int]
     updated_at: datetime
 
 
@@ -49,6 +52,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             assignee=None if assignee is None else USER if assignee == USER else names[assignee],
             assignee_session=work.assignee_session,
             stalled=work.stalled,
+            depends_on=[d.id for d in work.depends_on],
+            waiting_on=list(work.waiting_on),
             updated_at=issue.updated_at,
         )
 
@@ -60,6 +65,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         the assigned agent is working on it in the issue's conversation: running, waiting (on a background job,
         delegated work or the user's answer), idle, or null (no agent assignee or no conversation yet). `stalled`
         marks a `todo`/`in_progress` issue assigned to an agent whose issue conversation is idle or missing.
+        `waiting_on` lists dependencies not yet `done`/`cancelled`; such an issue is not delivered or stalled.
 
         Args:
             statuses: Only these statuses; all when omitted.
@@ -77,7 +83,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
 
     @ts.tool_plain
     async def issue_show(issue_id: int) -> str:
-        """Show an issue with its description, comments and history.
+        """Show an issue with its description, dependencies, comments and history.
 
         Args:
             issue_id: Issue number.
@@ -93,10 +99,13 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         status: IssueStatus = IssueStatus.BACKLOG,
         priority: IssuePriority = IssuePriority.NONE,
         assignee: str | None = None,
+        depends_on: tuple[int, ...] = (),
     ) -> str:
         """Create an issue. Each agent works on an issue in one conversation dedicated to it; while the issue is
         `todo` or `in_progress`, its creation and every later change by others are delivered there to the assigned
         agent (also when that is you: create it here, it is worked on there). Use `backlog` for later work.
+        To run issues in order, give `depends_on`: the issue is delivered only once all of them are `done` or
+        `cancelled` (changes before that are only recorded), so a chain can be created as `todo` up front.
 
         Args:
             title: One-line summary.
@@ -106,6 +115,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             status: Initial status.
             priority: Priority.
             assignee: Agent name, `user`, or omit for unassigned.
+            depends_on: Issue numbers this one waits for; dependencies must not form a cycle.
         """
         issue = await issues.create(
             ctx.deps.agent_id,
@@ -116,6 +126,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             status=status,
             priority=priority,
             assignee=None if assignee is None else await assignee_id(assignee),
+            depends_on=depends_on,
         )
         return f"created issue #{issue.id}"
 
@@ -130,6 +141,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         priority: IssuePriority | None = None,
         assignee: str | None = None,
         unassign: bool = False,
+        depends_on: tuple[int, ...] | None = None,
     ) -> str:
         """Change an issue; only the given fields change. When the issue is (or now becomes) `todo`/`in_progress`
         and assigned to an agent, the change is delivered to that agent in its conversation for the issue, except
@@ -145,6 +157,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             priority: New priority.
             assignee: Agent name, or `user` to hand it to the user (they get a notification).
             unassign: Remove the assignee.
+            depends_on: The full new list of issue numbers this one waits for (replaces the old list; `[]` removes
+                all); dependencies must not form a cycle.
         """
         if assignee is not None and unassign:
             raise InvalidInput("give either assignee or unassign, not both")
@@ -161,6 +175,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             status=status,
             priority=priority,
             assignee=target,
+            depends_on=depends_on,
         )
         return f"issue #{issue.id} is now {issue.status}"
 

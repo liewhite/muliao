@@ -32,6 +32,10 @@ class IssueOut(BaseModel):
     assignee_session: WorkState | None
     # todo / in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
     stalled: bool
+    # 它依赖的上游 issue id、依赖它的下游 issue id、还没完成（不是 done / cancelled）的上游：非空时还轮不到它
+    depends_on: list[int]
+    blocks: list[int]
+    waiting_on: list[int]
     created_at: datetime
     updated_at: datetime
 
@@ -49,6 +53,9 @@ class IssueOut(BaseModel):
             sessions=work.sessions,
             assignee_session=work.assignee_session,
             stalled=work.stalled,
+            depends_on=[d.id for d in work.depends_on],
+            blocks=[d.id for d in work.blocks],
+            waiting_on=list(work.waiting_on),
             created_at=i.created_at,
             updated_at=i.updated_at,
         )
@@ -91,6 +98,8 @@ class IssueCreate(BaseModel):
     priority: IssuePriority = IssuePriority.NONE
     # agent id、"user"，或 null
     assignee: str | None = None
+    # 依赖的上游 issue id；不能成环
+    depends_on: list[int] = []
 
 
 class IssuePatch(BaseModel):
@@ -102,6 +111,8 @@ class IssuePatch(BaseModel):
     status: IssueStatus | None = None
     priority: IssuePriority | None = None
     assignee: str | None = Field(default=None)
+    # 依赖的上游 issue id，整体替换（[] 去掉全部）；不出现表示不变
+    depends_on: list[int] | None = None
 
 
 class CommentIn(BaseModel):
@@ -134,6 +145,7 @@ async def create_issue(c: C, body: IssueCreate) -> IssueOut:
         status=body.status,
         priority=body.priority,
         assignee=body.assignee,
+        depends_on=body.depends_on,
     )
     return await _out(c, issue)
 
@@ -158,6 +170,7 @@ async def update_issue(c: C, issue_id: int, body: IssuePatch) -> IssueOut:
         status=body.status,
         priority=body.priority,
         assignee=assignee,
+        depends_on=body.depends_on,
     )
     return await _out(c, issue)
 

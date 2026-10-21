@@ -17,6 +17,7 @@ NULL_MEANS_SOMETHING = {
     # 枚举以 $ref 出现，被当作对象
     ("issue_update", "status"): "None = 不改",
     ("issue_update", "priority"): "None = 不改",
+    ("issue_update", "depends_on"): "None = 不改（[] 是去掉全部依赖）",
 }
 
 

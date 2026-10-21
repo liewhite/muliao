@@ -422,3 +422,22 @@ async def test_deleting_an_upstream_frees_its_downstream(container, make_agent):
     [session] = await _issue_sessions(container)
     assert session.origin_ref == str(down.id)
     assert (await container.issues.work([down]))[down.id].depends_on == []
+
+
+async def test_http_dependencies(client, container, make_agent):
+    from tests.conftest import login
+
+    await login(client)
+    alpha = (await make_agent()).id
+    up = (await client.post("/api/issues", json={"title": "up", "owner": alpha})).json()["id"]
+    resp = await client.post("/api/issues", json={"title": "down", "owner": alpha, "depends_on": [up]})
+    down = resp.json()
+    assert (down["depends_on"], down["waiting_on"], down["blocks"]) == ([up], [up], [])
+    assert (await client.get(f"/api/issues/{up}")).json()["issue"]["blocks"] == [down["id"]]
+
+    resp = await client.patch(f"/api/issues/{up}", json={"depends_on": [down["id"]]})
+    assert resp.status_code == 422 and "cycle" in resp.text
+    await client.patch(f"/api/issues/{up}", json={"status": "done"})
+    assert (await client.get(f"/api/issues/{down['id']}")).json()["issue"]["waiting_on"] == []
+    resp = await client.patch(f"/api/issues/{down['id']}", json={"depends_on": []})
+    assert resp.json()["depends_on"] == []

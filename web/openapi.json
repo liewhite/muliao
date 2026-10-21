@@ -2736,7 +2736,9 @@
           "priority",
           "owner",
           "title",
-          "description"
+          "description",
+          "depends_on",
+          "dependency"
         ],
         "title": "ActivityKind"
       },
@@ -3433,6 +3435,14 @@
               }
             ],
             "title": "Assignee"
+          },
+          "depends_on": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Depends On",
+            "default": []
           }
         },
         "type": "object",
@@ -3536,6 +3546,27 @@
             "type": "boolean",
             "title": "Stalled"
           },
+          "depends_on": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Depends On"
+          },
+          "blocks": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Blocks"
+          },
+          "waiting_on": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Waiting On"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -3560,6 +3591,9 @@
           "sessions",
           "assignee_session",
           "stalled",
+          "depends_on",
+          "blocks",
+          "waiting_on",
           "created_at",
           "updated_at"
         ],
@@ -3630,6 +3664,20 @@
               }
             ],
             "title": "Assignee"
+          },
+          "depends_on": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depends On"
           }
         },
         "type": "object",

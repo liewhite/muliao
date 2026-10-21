@@ -924,7 +924,7 @@ export interface components {
          * ActivityKind
          * @enum {string}
          */
-        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description";
+        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "depends_on" | "dependency";
         /** ActivityOut */
         ActivityOut: {
             /** Id */
@@ -1195,6 +1195,11 @@ export interface components {
             priority: components["schemas"]["IssuePriority"];
             /** Assignee */
             assignee?: string | null;
+            /**
+             * Depends On
+             * @default []
+             */
+            depends_on: number[];
         };
         /** IssueDetailOut */
         IssueDetailOut: {
@@ -1225,6 +1230,12 @@ export interface components {
             assignee_session: components["schemas"]["WorkState"] | null;
             /** Stalled */
             stalled: boolean;
+            /** Depends On */
+            depends_on: number[];
+            /** Blocks */
+            blocks: number[];
+            /** Waiting On */
+            waiting_on: number[];
             /**
              * Created At
              * Format: date-time
@@ -1251,6 +1262,8 @@ export interface components {
             priority?: components["schemas"]["IssuePriority"] | null;
             /** Assignee */
             assignee?: string | null;
+            /** Depends On */
+            depends_on?: number[] | null;
         };
         /**
          * IssuePriority
