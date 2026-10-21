@@ -54,7 +54,7 @@ class Worker:
         self._queue = queue
         self._handlers = handlers
         self._bus = bus
-        self._slots = anyio.Semaphore(concurrency)
+        self._concurrency = concurrency
 
     @property
     def kinds(self) -> frozenset[str]:
@@ -75,22 +75,19 @@ class Worker:
 
     async def run_forever(self) -> None:
         await self._recover()
+        # 槽位属于这一次运行（与任务组同生命周期）：停在领取中途时没还的槽位随这次运行一起丢弃，同一个 worker
+        # 再次启动时槽位是满的（槽位曾放在实例上，漏够 concurrency 次后再启动的 worker 永远领不到任务）
+        slots = anyio.Semaphore(self._concurrency)
         # 执行中的任务都属于这个任务组：worker 被取消（关停）时它们一起被取消，不会留在后台
         async with anyio.create_task_group() as group:
             while True:
-                await self._slots.acquire()
-                try:
-                    task = await self._queue.claim(self._handlers.keys())
-                except BaseException:
-                    # 领取中被取消（关停）也要还回槽位：槽位属于 Worker 而不是这次 run_forever，同一个 worker 再次
-                    # 启动时少了它，漏够 concurrency 次就再也领不到任务
-                    self._slots.release()
-                    raise
+                await slots.acquire()
+                task = await self._queue.claim(self._handlers.keys())
                 if task is None:
-                    self._slots.release()
+                    slots.release()
                     await self._wait_for_work()
                     continue
-                group.start_soon(self._process_in_slot, task, name=f"task-{task.id}")
+                group.start_soon(self._process_in_slot, task, slots, name=f"task-{task.id}")
 
     async def _recover(self) -> None:
         """启动时把上次进程遗留的 running 复位为 pending 重新执行（队列的 recover），尝试次数已经用完的除外：
@@ -142,11 +139,11 @@ class Worker:
                 )
             raise
 
-    async def _process_in_slot(self, task: Task) -> None:
+    async def _process_in_slot(self, task: Task, slots: anyio.Semaphore) -> None:
         try:
             await self._process(task)
         finally:
-            self._slots.release()
+            slots.release()
 
     async def _wait_for_work(self) -> None:
         self._queue.wake.clear()

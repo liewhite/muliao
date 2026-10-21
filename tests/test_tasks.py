@@ -1,6 +1,7 @@
 import asyncio
 from datetime import timedelta
 
+import anyio
 import pytest
 from sqlalchemy import text
 
@@ -169,7 +170,7 @@ async def test_a_worker_cancelled_while_claiming_keeps_its_slot_for_the_next_sta
 
     async def stuck_claim(_kinds):  # noqa: ANN001, ANN202
         claiming.set()
-        await asyncio.Event().wait()
+        await anyio.sleep_forever()
 
     monkeypatch.setattr(container.queue, "claim", stuck_claim)
     running = asyncio.create_task(worker.run_forever())

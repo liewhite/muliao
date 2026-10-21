@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from muliao.agents.memory import MemoryFull, MemoryStore
-from muliao.agents.resources import RESOURCE_PATHSPEC, ResourceRepo
+from muliao.agents.resources import RESOURCE_PATHSPEC, SYSTEM, ResourceRepo
 from muliao.agents.skills import SkillStore
 from muliao.errors import CorruptState, InvalidInput, NotFound
 from tests.test_flow import drain
@@ -21,6 +21,15 @@ def _git(*args: str) -> str:
 @pytest.fixture
 def repo(tmp_path: Path, seed_resources) -> ResourceRepo:
     return ResourceRepo(seed_resources(tmp_path / "resources"))
+
+
+async def test_ensure_initialises_a_fresh_repository(tmp_path: Path):
+    """其余用例用的是 conftest 里初始化过一次的模板仓库的副本，初始化本身在这里测。"""
+    root = tmp_path / "fresh"
+    await ResourceRepo(root).ensure()
+
+    assert _git("-C", str(root), "rev-list", "--count", "HEAD").strip() == "1"
+    assert _git("-C", str(root), "config", "user.name").strip() == SYSTEM
 
 
 @pytest.fixture
