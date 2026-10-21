@@ -442,6 +442,40 @@ async def test_an_mcp_server_with_a_missing_secret_is_skipped_and_the_model_is_t
     assert "mcp server unavailable" in caplog.text
 
 
+async def test_an_mcp_server_that_fails_to_list_its_tools_is_skipped_and_the_model_is_told(
+    container, make_agent, models, caplog, monkeypatch
+):
+    """握手正常、列工具（tools/list）失败：与连不上一样只跳过它，不在请求模型时拖垮整次运行。"""
+    from pydantic_ai.mcp import MCPToolset
+
+    from muliao.platform.tables import TaskStatus
+    from muliao.sessions.lanes import RUN_TASK
+    from tests.test_flow import tasks_of
+
+    list_tools = MCPToolset.list_tools
+
+    async def fail_for_broken(self):  # noqa: ANN001, ANN202
+        if "broken" in (self.id or ""):
+            raise RuntimeError("tools/list exploded")
+        return await list_tools(self)
+
+    monkeypatch.setattr(MCPToolset, "list_tools", fail_for_broken)
+    alpha = (await make_agent("alpha", model="m")).id
+    spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
+    await container.mcp.add(alpha, "broken", spec, probe=False, author="user")
+    await container.mcp.add(None, "good", spec, probe=False, author="user")
+    requests, tools = _recording_model(models, "m")
+
+    await start(container, alpha, "go")
+    await drain(container, limit_seconds=30)
+
+    [run] = await tasks_of(container, RUN_TASK)
+    assert run.status == TaskStatus.DONE
+    assert "good_echo" in tools and not any(t.startswith("broken_") for t in tools)
+    assert "MCP server 'broken' failed" in requests[0] and "tools/list exploded" in requests[0]
+    assert "mcp server unavailable" in caplog.text
+
+
 async def test_a_corrupt_public_mcp_config_is_reported_to_a_temp_agent_without_failing_it(
     container, make_agent, models, tmp_path
 ):

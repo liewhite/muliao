@@ -1,7 +1,7 @@
 """把 MCP 配置变成一次运行的工具（「使用 MCP」组）与连接验证。配置本身是 agent 领域的资源（agents.mcp.McpRegistry）。
 
 一个 server 出问题只影响它自己：配置文件坏了（CorruptResource）、引用的 secret 不在了、连不上，这次运行就没有它的
-工具，其余 server 照常可用；原因记日志，并作为 RunScope.notices 放进这次运行开头的运行上下文告诉模型。
+工具，其余 server 照常可用（列工具失败同样只跳过它）；原因记日志，并作为 RunScope.notices 放进这次运行开头的运行上下文告诉模型。
 """
 
 from __future__ import annotations
@@ -84,6 +84,13 @@ class _SecretSafe(WrapperToolset[RunScope]):
         with self.guard():
             return await self.wrapped.get_tools(ctx)
 
+    async def list_tools(self) -> list[str]:
+        """连接期间列出 server 的工具名；MCPToolset 会缓存结果，此后的 get_tools 直接用缓存。"""
+        inner = self.wrapped
+        assert isinstance(inner, MCPToolset)
+        with self.guard():
+            return [t.name for t in await inner.list_tools()]
+
     async def call_tool(
         self, name: str, tool_args: dict[str, Any], ctx: RunContext[RunScope], tool: ToolsetTool[RunScope]
     ) -> Any:
@@ -93,9 +100,10 @@ class _SecretSafe(WrapperToolset[RunScope]):
 
 @dataclass
 class _Reachable(CombinedToolset[RunScope]):
-    """一次运行用到的 server：逐个连接，连不上的（McpFailed、TransientError，信息已脱敏）跳过并记进 notices，
-    其余照常组合。暂时性失败也是跳过（这次运行没有它的工具），不让整次运行失败重试。只进入一次（每次运行由
-    toolset() 新建一个）。"""
+    """一次运行用到的 server：逐个连接并列一次工具，连不上或列不出工具的（McpFailed、TransientError，信息已
+    脱敏）跳过并记进 notices，其余照常组合。工具在进入时就列好（MCPToolset 缓存它），之后每步的 get_tools 用缓存，
+    不会在请求模型时才失败、拖垮整次运行，notices 也赶得上这次运行开头的运行上下文。暂时性失败也是跳过（这次运行
+    没有它的工具），不让整次运行失败重试。只进入一次（每次运行由 toolset() 新建一个）。"""
 
     # 与 toolsets 一一对应的 server 名，以及这次运行的 agent：记日志用
     servers: list[str] = field(default_factory=list)
@@ -107,12 +115,13 @@ class _Reachable(CombinedToolset[RunScope]):
         async with AsyncExitStack() as stack:
             for name, toolset in zip(self.servers, self.toolsets, strict=True):
                 try:
-                    await stack.enter_async_context(toolset)
+                    # 一个 server 一个栈：列工具失败时只断开它自己
+                    async with AsyncExitStack() as one:
+                        await one.enter_async_context(toolset)
+                        await _secret_safe(toolset).list_tools()
+                        await stack.enter_async_context(one.pop_all())
                 except (McpFailed, TransientError) as e:
-                    log.warning(
-                        "mcp server unavailable", extra={"agent": self.agent, "mcp": name, "error": str(e)}
-                    )
-                    self.notices.append(_unavailable(str(e)))
+                    _skip(self.notices, agent=self.agent, server=name, reason=str(e))
                     continue
                 reachable.append(toolset)
             self._exit_stack = stack.pop_all()
@@ -120,8 +129,18 @@ class _Reachable(CombinedToolset[RunScope]):
         return self
 
 
-def _unavailable(reason: str) -> str:
-    return f"An MCP server is unavailable this run, so its tools are missing: {reason}"
+def _secret_safe(toolset: AbstractToolset[RunScope]) -> _SecretSafe:
+    """build_toolset 构建的 toolset（带前缀）里的 _SecretSafe。"""
+    assert isinstance(toolset, WrapperToolset)
+    safe = toolset.wrapped
+    assert isinstance(safe, _SecretSafe)
+    return safe
+
+
+def _skip(notices: list[str], *, agent: str, server: str, reason: str) -> None:
+    """这次运行跳过一个 server：记日志，并告诉模型（notices）。reason 已脱敏。"""
+    log.warning("mcp server unavailable", extra={"agent": agent, "mcp": server, "error": reason})
+    notices.append(f"An MCP server is unavailable this run, so its tools are missing: {reason}")
 
 
 # 「使用 MCP」组的工具：每次运行按 agent 可见的 server 构建，工具名带 server 前缀（给模型看的工具组说明用它）
@@ -172,10 +191,7 @@ class McpConnector:
                     toolsets.append(await self.build_toolset(server))
                 except NotFound as e:
                     # 配置引用的 secret 不在了（vault.resolve_many）
-                    log.warning(
-                        "mcp server unavailable", extra={"agent": agent, "mcp": server.name, "error": str(e)}
-                    )
-                    notices.append(_unavailable(f"MCP server {server.name!r}: {e}"))
+                    _skip(notices, agent=agent, server=server.name, reason=f"MCP server {server.name!r}: {e}")
                     continue
                 names.append(server.name)
             return _Reachable(toolsets, servers=names, agent=agent, notices=notices) if toolsets else None
@@ -189,15 +205,11 @@ class McpConnector:
         各种传输层异常（进程退出、HTTP 错误、协议错误）统一转为 InvalidInput，把原因交还给调用方修正。
         vault 引用缺失在构建阶段以 NotFound 报出，不在此转换。
         """
-        safe = (await self.build_toolset(server)).wrapped
-        assert isinstance(safe, _SecretSafe)
-        inner = safe.wrapped
-        assert isinstance(inner, MCPToolset)
+        safe = _secret_safe(await self.build_toolset(server))
         try:
-            # 与运行期同一个脱敏入口
-            with safe.guard():
-                async with inner:
-                    return [t.name for t in await inner.list_tools()]
+            # 与运行期同一个连接、列工具与脱敏入口
+            async with safe:
+                return await safe.list_tools()
         except (McpFailed, TransientError) as e:
             log.info("mcp probe failed", extra={"mcp": server.name, "error": str(e)})
             raise InvalidInput(f"could not connect: {e}") from None
