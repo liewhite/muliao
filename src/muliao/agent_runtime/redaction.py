@@ -10,8 +10,9 @@ from typing import Any
 
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 
-# 工具名 → 需要脱敏的参数名
-SECRET_TOOL_ARGS: dict[str, frozenset[str]] = {"vault_set": frozenset({"value"})}
+# SECRET_TOOL_ARGS（工具名 → 需要脱敏的参数名）由定义这些工具的 vault 领域声明
+from muliao.vault.api import SECRET_TOOL_ARGS
+
 REDACTED = "[redacted]"
 
 

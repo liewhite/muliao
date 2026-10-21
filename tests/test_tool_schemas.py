@@ -43,3 +43,21 @@ async def test_array_and_object_parameters_are_not_nullable_unless_null_means_so
         if (tool.name, param) not in NULL_MEANS_SOMETHING
     ]
     assert offending == []
+
+
+async def test_redacted_secret_arguments_exist_in_the_registered_tool_schemas(container):
+    """脱敏表若与工具定义脱节（改了工具名或参数名），secret 明文会悄悄进入 messages 表和 SSE。"""
+    from muliao.vault.api import SECRET_TOOL_ARGS
+
+    toolsets = [t for g in container.consumer._tool_groups.groups.values() for t in g]  # noqa: SLF001
+    toolsets += list(container.consumer._tool_groups.always)  # noqa: SLF001
+    params = {
+        tool.name: set(tool.function_schema.json_schema.get("properties", {}))
+        for ts in toolsets
+        if isinstance(ts, FunctionToolset)
+        for tool in ts.tools.values()
+    }
+    assert SECRET_TOOL_ARGS
+    for name, secret in SECRET_TOOL_ARGS.items():
+        assert name in params, f"{name} is not a registered tool"
+        assert secret <= params[name], f"{name} has no parameter {set(secret - params[name])}"
