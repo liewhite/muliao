@@ -40,16 +40,26 @@ def resolve(scope: RunScope, path: str) -> Path:
 SHELL_DESCRIPTION = (
     "Run a shell command (bash) in your workspace and return its exit code and combined output. "
     "Commands are killed after {default:g} seconds unless you pass a longer `timeout` (at most {max:g}). "
+    "Output beyond {max_output} characters is cut off, so limit it yourself: pipe through `| head` or `| tail`, "
+    "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
     "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
     "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules. "
     "Read files with read_file and change them with edit_file / write_file rather than cat, sed or heredocs."
 )
+
+
+def shell_description(limits: ShellLimits) -> str:
+    """时限与输出上限是配置的值，写进说明：模型不知道它们，长命令被杀、长输出被截了才学会。"""
+    return SHELL_DESCRIPTION.format(
+        default=limits.default_timeout, max=limits.max_timeout, max_output=limits.max_output_chars
+    )
+
+
 def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
     """文件与前台 shell。"""
     ts = file_toolset(limits, files)
 
-    # 时限是配置的值，写进说明：模型不知道默认时限，长命令会被杀了才学会加 timeout
-    @ts.tool(description=SHELL_DESCRIPTION.format(default=limits.default_timeout, max=limits.max_timeout))
+    @ts.tool(description=shell_description(limits))
     async def run_shell(
         ctx: RunContext[RunScope],
         command: str,
@@ -117,9 +127,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             raise InvalidInput(f"offset {offset} is past the end: {target} has {len(lines)} lines")
         selected = lines[offset : offset + limit]
         # 一行压缩过的 JS/JSON 能吃掉整个输出预算，单行截断
-        body = "\n".join(
-            f"{i + offset + 1}\t{_clip(line)}" for i, line in enumerate(selected)
-        )
+        body = "\n".join(f"{i + offset + 1}\t{_clip(line)}" for i, line in enumerate(selected))
         more = len(lines) - offset - len(selected)
         return truncate(body, limits.max_output_chars) + (f"\n… {more} more lines" if more > 0 else "")
 
@@ -192,4 +200,3 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
 
 def _clip(line: str) -> str:
     return line if len(line) <= _MAX_LINE_CHARS else f"{line[:_MAX_LINE_CHARS]}…[line truncated]"
-

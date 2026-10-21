@@ -505,6 +505,7 @@ async def test_run_shell_tells_the_model_its_configured_time_limits(container):
     runtime = container.settings.runtime
     assert f"after {runtime.shell_default_timeout:g} seconds" in run_shell.description
     assert f"at most {runtime.shell_max_timeout:g}" in run_shell.description
+    assert f"beyond {runtime.tool_output_max_chars} characters is cut off" in run_shell.description
 
 
 async def test_run_shell_rejects_a_zero_timeout_instead_of_using_the_default(container, make_agent, models):
@@ -550,6 +551,9 @@ async def test_read_file_truncates_very_long_lines(container, make_agent, models
         container,
         models,
         me.id,
-        [("write_file", {"path": "min.js", "content": "a" * 5000 + "\nok\n"}), ("read_file", {"path": "min.js"})],
+        [
+            ("write_file", {"path": "min.js", "content": "a" * 5000 + "\nok\n"}),
+            ("read_file", {"path": "min.js"}),
+        ],
     )
     assert "[line truncated]" in outputs[1] and "2\tok" in outputs[1] and len(outputs[1]) < 2100

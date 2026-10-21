@@ -3,7 +3,7 @@ job_status、job_kill。后台任务属于会话（结局投回发起它的会�
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agent_runtime.api import SHELL_DESCRIPTION, ShellLimits, file_toolset, run_foreground
+from muliao.agent_runtime.api import ShellLimits, file_toolset, run_foreground, shell_description
 from muliao.errors import InvalidInput
 from muliao.files.api import FileStore
 from muliao.jobs.runner import JobRunner
@@ -25,10 +25,7 @@ def session_workspace_toolset(
     """文件、shell 与后台任务。"""
     ts = file_toolset(limits, files)
 
-    @ts.tool(
-        description=SHELL_DESCRIPTION.format(default=limits.default_timeout, max=limits.max_timeout)
-        + _BACKGROUND_DESCRIPTION.format(check=jobs.check_seconds)
-    )
+    @ts.tool(description=shell_description(limits) + _BACKGROUND_DESCRIPTION.format(check=jobs.check_seconds))
     async def run_shell(
         ctx: RunContext[RunScope],
         command: str,
