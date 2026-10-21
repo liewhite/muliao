@@ -83,11 +83,12 @@ function Editor({ detail, onSaved, onCancel }: { detail: IssueDetail; onSaved: (
             isDisabled={!title.trim()}
             onPress={() =>
               void save.run(async () => {
-                // 只提交改过的字段：编辑期间 agent 可能改了另一个，不能用打开编辑时的旧值盖掉
-                await api.updateIssue(detail.issue.id, {
+                // 只提交改过的字段：编辑期间 agent 可能改了另一个，不能用打开编辑时的旧值盖掉；都没改就不请求
+                const patch = {
                   ...(title !== opened.title && { title }),
                   ...(description !== opened.description && { description }),
-                })
+                }
+                if (Object.keys(patch).length > 0) await api.updateIssue(detail.issue.id, patch)
                 onSaved()
               })
             }

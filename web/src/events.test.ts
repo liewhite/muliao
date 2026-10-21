@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isOutdated, isStale, liveItems, mergeLive, needsReconnect, notInSnapshot, type RunEvent } from './events'
+import { isOutdated, isStale, liveItems, mergeLive, needsReconnect, withoutCovered, type RunEvent } from './events'
 
 const base = { type: 'run', session_id: 's', agent: 'a', run_id: 'r', seq: 0 } as const
 
@@ -72,10 +72,17 @@ describe('mergeLive', () => {
     expect(mergeLive(null, [at('r', 0)]).events).toHaveLength(1)
   })
 
-  it('keeps only received events the snapshot does not cover yet', () => {
+  it('drops received events the snapshot covers when the next one is in the same segment', () => {
     const snapshot = { run_id: 'r', events: [at('r', 0), at('r', 1)] }
-    expect(notInSnapshot(snapshot, [at('old', 5), at('r', 1), at('r', 2)]).map((e) => [e.run_id, e.seq])).toEqual([['r', 2]])
-    expect(notInSnapshot(null, [at('r', 0)])).toHaveLength(1)
+    const kept = withoutCovered(snapshot, [at('old', 5), at('r', 1), at('r', 2)], at('r', 3))
+    expect(kept.map((e) => [e.run_id, e.seq])).toEqual([['r', 2]])
+  })
+
+  it('keeps every received event of a newer segment until its snapshot arrives', () => {
+    // 快照还是上一段 a，新一段 b 的事件陆续到达：都要留着，新快照可能早于其中一些生成
+    const snapshot = { run_id: 'a', events: [at('a', 0)] }
+    expect(withoutCovered(snapshot, [at('b', 0), at('b', 1)], at('b', 2))).toHaveLength(2)
+    expect(withoutCovered(null, [at('r', 0)], at('r', 1))).toHaveLength(1)
   })
 })
 

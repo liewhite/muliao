@@ -27,16 +27,17 @@ export interface MergedLive {
 export function mergeLive(snapshot: LiveRun | null, current: RunEvent[]): MergedLive {
   if (snapshot === null) return { events: current, gap: current.length > 0 && current[0].seq !== 0 }
   const last = snapshot.events.at(-1)?.seq ?? -1
-  const after = notInSnapshot(snapshot, current)
+  const after = current.filter((e) => e.run_id === snapshot.run_id && e.seq > last)
   return { events: [...snapshot.events, ...after], gap: after.length > 0 && after[0].seq !== last + 1 }
 }
 
 /**
- * 经 SSE 收到的事件里还要留着的：快照之后的同一段事件（没有快照时全部留着）。快照已经覆盖的、别的段的，合并时
- * 本来就丢弃，收新事件时一并删掉，免得一轮长运行里越积越多。
+ * 收到新事件 next 时，已收到的事件里还要留着的，免得一轮长运行里越积越多。next 与快照同一段时，快照已覆盖的、
+ * 更早的段的都可以删（SSE 按顺序到达，之前收到的不会比 next 新）。next 是快照之后的新一段（保存了一步、新快照还没
+ * 拉回来）或还没有快照时全部留着：新快照可能生成得比这些事件早，要靠它们接上。
  */
-export function notInSnapshot(snapshot: LiveRun | null, current: RunEvent[]): RunEvent[] {
-  if (snapshot === null) return current
+export function withoutCovered(snapshot: LiveRun | null, current: RunEvent[], next: RunEvent): RunEvent[] {
+  if (snapshot === null || next.run_id !== snapshot.run_id) return current
   const last = snapshot.events.at(-1)?.seq ?? -1
   return current.filter((e) => e.run_id === snapshot.run_id && e.seq > last)
 }

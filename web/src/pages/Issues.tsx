@@ -103,6 +103,8 @@ function DraggableCard({ issue, agents, onOpen }: { issue: Issue; agents: Agent[
       {...attributes}
       onClick={() => onOpen(issue.id)}
       onKeyDown={(e) => {
+        // 键盘拖拽也从 onKeyDown 起手（KeyboardSensor），不能被这里盖掉
+        listeners?.onKeyDown?.(e)
         if (e.key === 'Enter') onOpen(issue.id)
       }}
     >

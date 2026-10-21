@@ -33,7 +33,7 @@ import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads 
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
 import { isSendShortcut, SEND_HINT } from '../sendKey'
-import { announceChange, liveItems, mergeLive, notInSnapshot, useServerEvents, type RunEvent } from '../events'
+import { announceChange, liveItems, mergeLive, useServerEvents, withoutCovered, type RunEvent } from '../events'
 import { refreshUnread, refreshUnreadLogged } from '../unread'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
@@ -507,9 +507,7 @@ export default function SessionView() {
       setLive([])
       void detail.reload()
     } else if (e.type !== 'changed' && e.session_id === id) {
-      // 快照已经覆盖的事件顺手删掉，一轮长运行里不越积越多
-      const snapshot = detail.data?.live ?? null
-      if (e.type === 'run') setLive((prev) => [...notInSnapshot(snapshot, prev), e])
+      if (e.type === 'run') setLive((prev) => [...withoutCovered(detail.data?.live ?? null, prev, e), e])
       // 又保存了一步：重新拉取历史；新快照换成新的一段，合并时丢掉上一段的事件
       else if (e.type === 'saved') void detail.reload()
       else if (e.type === 'task' && (e.kind === 'run' || e.kind === 'compaction')) {
