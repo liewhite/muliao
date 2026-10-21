@@ -244,7 +244,7 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
   - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
   - `workspace`：`read_file` / `write_file` / `edit_file` / `list_files` / `share_file`（把文件发给用户，见第 7 节「附件与文件」）/ `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`；`background: true` 时作为后台任务运行，见第 9 节）/ `job_status` / `job_kill`。后台任务的部分只在会话版的工具集里（`jobs.tools.session_workspace_toolset`，有会话的运行用它；临时 agent 用不带后台任务的 `agent_runtime.workspace_tools.workspace_toolset`），所以没有会话的运行里根本没有这些工具。不做强隔离——按需求为单人本机使用。
   - `skills`：`read_skill`（私有或公共）/ `write_skill` / `edit_skill`（改正文的一部分：替换恰好出现一次的片段，或追加；这条规则只在 `platform.text_edit.edit` 写一次，指令、skill 正文与 `edit_file` 共用）/ `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `edit_public_skill` / `delete_public_skill`。
-  - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 要求先精简。
+  - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 告诉模型至少要腾出多少字。工具的领域错误一律先 `ModelRetry` 交还模型修正；同一工具连续失败用完重试预算（`TOOL_MAX_RETRIES`）后改为 `ToolFailed`，模型看到失败结果、换做法或跳过这步，不终止整轮运行（`DomainErrorsAsRetry`）。
   - `instructions`：`instructions_replace`（改自己的指令：替换恰好出现一次的片段，或追加），每次修改记一版、作者是自己。
   - `agents`：`get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己） / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
   - `delegation`：`list_agents`（返回 name、description）/ `delegate_task` / `ask_agent` / `list_threads` / `stop_thread`（停止一个 thread：结束它正在进行的运行、清空它的信箱）（按名称指定目标 agent、按 thread 名指定子会话，见第 7 节）。

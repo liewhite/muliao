@@ -52,9 +52,12 @@ class MemoryStore:
                 raise CorruptState(f"memory file for agent {agent!r} does not exist: {path}")
             updated = edit(current)
             if len(updated) > self.max_chars:
+                # 给出要腾出的确切字数：只说「超了」时模型往往一次只缩短新条目几个字，反复撞墙
+                over = len(updated) - self.max_chars
                 raise MemoryFull(
-                    f"memory would be {len(updated)} chars, limit is {self.max_chars}; "
-                    "condense or remove existing entries first"
+                    f"memory would be {len(updated)} chars, limit is {self.max_chars} (now {len(current)}): "
+                    f"free at least {over} chars first by condensing or deleting existing entries with "
+                    "memory_replace (aim for a few hundred chars of headroom), then retry"
                 )
             result.append(updated)
             return updated

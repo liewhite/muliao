@@ -317,6 +317,32 @@ async def test_domain_error_in_tool_is_returned_to_model_for_correction(containe
     assert (await tasks_of(container, TaskKind.RUN))[0].status == TaskStatus.DONE
 
 
+async def test_tool_that_keeps_failing_does_not_abort_the_run(container, make_agent, models):
+    """重试预算用完的领域错误以失败结果交给模型，不终止整轮运行（10-21 记忆满时连续 append 把整轮打成失败）。"""
+    alpha = (await make_agent("alpha", model="m")).id
+    await container.memory.write(alpha, "x" * container.memory.max_chars, alpha)
+    seen: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        from pydantic_ai.messages import RetryPromptPart
+
+        last = messages[-1]
+        parts = last.parts if isinstance(last, ModelRequest) else []
+        seen.extend(str(p.content) for p in parts if isinstance(p, RetryPromptPart | ToolReturnPart))
+        if len(seen) >= 6:
+            return ModelResponse(parts=[TextPart("gave up on memory")])
+        return ModelResponse(parts=[ToolCallPart("memory_append", {"entry": f"- fact {len(seen)}"})])
+
+    models.models["m"] = scripted(fn)
+    await start(container, alpha, "remember", origin=Origin.TRIGGER)
+    await drain(container)
+
+    assert (await tasks_of(container, TaskKind.RUN))[0].status == TaskStatus.DONE
+    assert all("free at least" in text for text in seen)
+    assert "stop retrying" in seen[3] and "stop retrying" not in seen[2]
+    assert container.memory.read(alpha) == "x" * container.memory.max_chars
+
+
 async def test_run_events_are_published_to_bus(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = call_then_answer("list_agents", {}, "there is one agent")
