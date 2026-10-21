@@ -15,18 +15,12 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import sqlite
 
+from muliao.platform.migration_ops import keep_sequence
+
 revision: str = "6bba488992eb"
 down_revision: str | None = "663aa18d63fb"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
-
-
-def _keep_sequence(alter) -> None:  # noqa: ANN001
-    """batch 重建表会把 sqlite_sequence 重置为现存的最大 id：记下原值并恢复，删掉的最大编号也不复用。"""
-    seq = op.get_bind().exec_driver_sql("SELECT seq FROM sqlite_sequence WHERE name = 'issues'").scalar()
-    alter()
-    if seq is not None:
-        op.execute(f"UPDATE sqlite_sequence SET seq = MAX(seq, {int(seq)}) WHERE name = 'issues'")
 
 
 def upgrade() -> None:
@@ -36,7 +30,8 @@ def upgrade() -> None:
         "UPDATE issues SET assignee = CASE WHEN assigned_to_user THEN 'user' ELSE assignee_agent_id END"
     )
     op.execute("DELETE FROM issue_activities WHERE kind IN ('claimed', 'released')")
-    _keep_sequence(_drop_old_columns)
+    with keep_sequence("issues"):
+        _drop_old_columns()
 
 
 def _drop_old_columns() -> None:
@@ -60,7 +55,8 @@ def downgrade() -> None:
         "UPDATE issues SET assigned_to_user = (assignee IS 'user'), "
         "assignee_agent_id = CASE WHEN assignee = 'user' THEN NULL ELSE assignee END"
     )
-    _keep_sequence(_drop_new_column)
+    with keep_sequence("issues"):
+        _drop_new_column()
 
 
 def _drop_new_column() -> None:

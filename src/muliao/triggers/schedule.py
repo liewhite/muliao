@@ -14,11 +14,11 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from croniter import croniter
+from croniter import CroniterBadDateError, croniter
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import InvalidInput
+from muliao.errors import CorruptState, InvalidInput
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
 from muliao.triggers.service import TriggerService
@@ -53,7 +53,11 @@ class ScheduleKind:
             raise InvalidInput(
                 f"invalid cron expression {expr!r}: expected 5 fields (minute hour day month weekday)"
             )
-        return croniter(expr, after.astimezone(self._tz)).get_next(datetime)
+        try:
+            return croniter(expr, after.astimezone(self._tz)).get_next(datetime)
+        except CroniterBadDateError as e:
+            # 语法合法但永远不会到期（如 2 月 30 日）：croniter 找不到下一个时间
+            raise InvalidInput(f"cron expression {expr!r} never fires: {e}") from e
 
     def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         if set(config) != {"cron"} or not isinstance(config["cron"], str):
@@ -66,7 +70,17 @@ class ScheduleKind:
 
 
 def next_run_at(state: dict[str, Any]) -> datetime:
-    return datetime.fromisoformat(state["next_run_at"])
+    try:
+        return datetime.fromisoformat(state["next_run_at"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise CorruptState(f"schedule trigger state has no valid next_run_at: {state!r}") from e
+
+
+def _cron(config: dict[str, Any]) -> str:
+    cron = config.get("cron")
+    if not isinstance(cron, str):
+        raise CorruptState(f"schedule trigger config has no cron expression: {config!r}")
+    return cron
 
 
 class ScheduleDue:
@@ -83,7 +97,7 @@ class ScheduleDue:
 
     async def consume_in(self, s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
         self._triggers.set_state(
-            trigger, next_run_at=self._kind.next_run(trigger.config["cron"], now).isoformat()
+            trigger, next_run_at=self._kind.next_run(_cron(trigger.config), now).isoformat()
         )
         if await self._triggers.busy_in(s, trigger):
             return "previous run still in progress"

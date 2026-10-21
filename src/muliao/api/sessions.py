@@ -277,7 +277,7 @@ async def delete_session(c: C, session_id: str) -> None:
 
 @router.get("/tasks")
 async def list_tasks(
-    c: C, status: TaskStatus | None = None, limit: int = Query(100, le=500)
+    c: C, status: TaskStatus | None = None, limit: int = Query(100, ge=1, le=500)
 ) -> list[TaskOut]:
     return [TaskOut.of(t) for t in await c.queue.list(status=status, session_id=None, limit=limit)]
 

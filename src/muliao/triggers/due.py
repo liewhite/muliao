@@ -17,7 +17,7 @@ from typing import Protocol
 import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import Conflict, DomainError, NotFound
+from muliao.errors import Conflict, CorruptState, DomainError, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock
 from muliao.triggers.precheck import PrecheckFailed
@@ -36,7 +36,7 @@ class DueKind(Protocol):
     kind: str
 
     def due_at(self, trigger: Trigger) -> datetime:
-        """这个触发器下次到期的时间。"""
+        """这个触发器下次到期的时间。存下的配置或状态不合法时抛 CorruptState（扫描只停用这一个）。"""
         ...
 
     async def consume_in(self, s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
@@ -60,12 +60,19 @@ class DueRunner:
         self._changed = triggers.watch()
 
     async def _pending(self) -> list[tuple[Trigger, datetime]]:
-        """还会到期的触发器与它们的到期时间（已归档与停用的不在列表里）。"""
-        return [
-            (t, self._kinds[t.kind].due_at(t))
-            for t in await self._triggers.list(enabled_only=True)
-            if t.kind in self._kinds
-        ]
+        """还会到期的触发器与它们的到期时间（已归档与停用的不在列表里）。
+
+        存下的数据坏了、算不出到期时间的停用（记 disabled_reason），不让一行坏数据拖垮整个扫描循环。
+        """
+        pending = []
+        for t in await self._triggers.list(enabled_only=True):
+            if t.kind not in self._kinds:
+                continue
+            try:
+                pending.append((t, self._kinds[t.kind].due_at(t)))
+            except CorruptState as e:
+                await self._disable(t.id, f"{type(e).__name__}: {e}")
+        return pending
 
     async def fire_due(self) -> int:
         now = self._clock()
@@ -86,7 +93,7 @@ class DueRunner:
         except (Conflict, NotFound) as e:
             # 消耗这次到期之后、触发之前被用户停用或删除：不是触发失败，不覆盖失败原因
             log.info("due fire skipped: %s", e, extra={"trigger_id": trigger_id})
-        except DomainError as e:
+        except (DomainError, CorruptState) as e:
             await self._disable(trigger_id, f"{type(e).__name__}: {e}")
 
     async def _fire(self, trigger_id: int, now: datetime) -> None:

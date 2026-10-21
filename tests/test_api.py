@@ -186,6 +186,8 @@ async def test_list_limits_must_be_positive(client):
     await login(client)
     assert (await client.get("/api/sessions", params={"limit": -1})).status_code == 422
     assert (await client.get("/api/sessions", params={"offset": -1})).status_code == 422
+    assert (await client.get("/api/tasks", params={"limit": -1})).status_code == 422
+    assert (await client.get("/api/tasks", params={"limit": 0})).status_code == 422
 
 
 async def test_opening_a_session_marks_it_and_its_notifications_read(client, container, make_agent):

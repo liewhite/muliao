@@ -5,7 +5,8 @@
 
 SQLite 不能直接去掉建表时的 UNIQUE(name)，用 batch 模式重建这张表：copy_from 给出重建后的结构（不含
 那条唯一约束），数据按列拷贝过去。recreate="always" 是必须的——只加一列的话 batch 默认走 ALTER TABLE，
-那条唯一约束会原样留下。
+那条唯一约束会原样留下。重建会把 sqlite_sequence 重置为现存的最大 id，用 keep_sequence 保住原值：
+触发器 id 永不复用（它发起的会话的 origin_ref 指向它）。
 
 Revision ID: a7f3c1d20b64
 Revises: cd85203e73a8
@@ -16,6 +17,8 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+
+from muliao.platform.migration_ops import keep_sequence
 
 revision: str = "a7f3c1d20b64"
 down_revision: str | None = "cd85203e73a8"
@@ -60,7 +63,10 @@ def _triggers(*, unique_name: bool, finished: bool) -> sa.Table:
 
 def upgrade() -> None:
     copy_from = _triggers(unique_name=False, finished=False)
-    with op.batch_alter_table("triggers", copy_from=copy_from, recreate="always", schema=None) as batch_op:
+    with (
+        keep_sequence("triggers"),
+        op.batch_alter_table("triggers", copy_from=copy_from, recreate="always", schema=None) as batch_op,
+    ):
         batch_op.add_column(sa.Column("finished_at", sa.DateTime(), nullable=True))
     op.create_index(_NAME_UNFINISHED, "triggers", ["name"], unique=True, sqlite_where=_UNFINISHED)
 
@@ -68,5 +74,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(_NAME_UNFINISHED, table_name="triggers", sqlite_where=_UNFINISHED)
     copy_from = _triggers(unique_name=True, finished=True)
-    with op.batch_alter_table("triggers", copy_from=copy_from, recreate="always", schema=None) as batch_op:
+    with (
+        keep_sequence("triggers"),
+        op.batch_alter_table("triggers", copy_from=copy_from, recreate="always", schema=None) as batch_op,
+    ):
         batch_op.drop_column("finished_at")

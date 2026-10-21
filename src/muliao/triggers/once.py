@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import InvalidInput
+from muliao.errors import CorruptState, InvalidInput
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
 from muliao.triggers.service import TriggerService
@@ -74,7 +74,10 @@ class OnceKind:
 
 
 def run_at(config: dict[str, Any]) -> datetime:
-    return datetime.fromisoformat(config["at"])
+    try:
+        return datetime.fromisoformat(config["at"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise CorruptState(f"once trigger config has no valid time: {config!r}") from e
 
 
 class OnceDue:

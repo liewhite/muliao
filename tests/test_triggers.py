@@ -149,9 +149,58 @@ async def test_changes_notify_every_activation_independently(container):
 
 
 @pytest.mark.parametrize(
+    ("kind", "corrupt"),
+    [
+        ("schedule", {"state": {}}),
+        ("schedule", {"state": {"next_run_at": "soon"}}),
+        ("schedule", {"config": {}}),
+        ("once", {"config": {}}),
+    ],
+    ids=[
+        "schedule-without-next-run",
+        "schedule-with-unparsable-next-run",
+        "schedule-without-cron",
+        "once-without-time",
+    ],
+)
+async def test_a_trigger_with_corrupt_stored_data_is_disabled_and_the_scan_goes_on(
+    container, make_agent, kind, corrupt
+):
+    """坏的一行（绕过校验写入、或旧版本留下的）只停用它自己，不让扫描循环崩掉、拖累别的触发器。"""
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    config = {"cron": "* * * * *"} if kind == "schedule" else {"at": "2099-01-01T00:00"}
+    bad = await triggers.create(name="bad", agent_id=alpha, kind=kind, prompt="x", config=config)
+    good = await triggers.create(
+        name="good", agent_id=alpha, kind="schedule", prompt="y", config={"cron": "* * * * *"}
+    )
+    await _make_due(container, good.id)
+    async with container.db.transaction() as s:
+        row = await triggers.get_in(s, bad.id)
+        if kind == "schedule" and "config" in corrupt:
+            # 到期了才会去读 cron：先让它到期，再弄坏配置
+            row.state = {"next_run_at": (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()}
+        for column, value in corrupt.items():
+            setattr(row, column, value)
+
+    assert await schedules.fire_due() >= 1
+    await schedules._next_wake()
+
+    bad, good = await triggers.get_by_name("bad"), await triggers.get_by_name("good")
+    assert not bad.enabled and bad.disabled_reason.startswith("CorruptState: ")
+    assert good.last_session_id is not None
+
+
+@pytest.mark.parametrize(
     ("kind", "config"),
-    [("schedule", {"cron": "every minute"}), ("schedule", {}), ("webhook", {"x": 1}), ("mq", {})],
-    ids=["bad-cron", "missing-cron", "webhook-takes-no-config", "unknown-kind"],
+    [
+        ("schedule", {"cron": "every minute"}),
+        ("schedule", {"cron": "0 0 30 2 *"}),
+        ("schedule", {}),
+        ("webhook", {"x": 1}),
+        ("mq", {}),
+    ],
+    ids=["bad-cron", "cron-that-never-fires", "missing-cron", "webhook-takes-no-config", "unknown-kind"],
 )
 async def test_trigger_config_is_validated_by_its_kind(container, make_agent, kind, config):
     alpha = (await make_agent()).id

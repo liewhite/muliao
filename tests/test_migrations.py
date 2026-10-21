@@ -115,6 +115,39 @@ def test_existing_triggers_survive_the_finished_at_upgrade_and_only_then_share_n
         assert conn.execute("select count(*) from triggers where name = 'daily'").fetchone()[0] == 2
 
 
+def test_rebuilding_the_triggers_table_does_not_reuse_deleted_ids(tmp_path):
+    """finished_at 迁移重建了 triggers 表：被删掉的最大 id 升级、降级之后都不复用（会话的 origin_ref 指向它）。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "cd85203e73a8")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, tool_groups, reflect_every, created_at, "
+            "updated_at) values ('a1a1a1a1a1a1', 'alpha', '', 'm', '[]', 0, '2026-01-01', '2026-01-01')"
+        )
+        for name in ("a", "b", "c"):
+            _insert_trigger(conn, name)
+        conn.execute("delete from triggers where name in ('b', 'c')")
+
+    def next_id(conn: sqlite3.Connection, name: str) -> int:
+        _insert_trigger(conn, name)
+        return conn.execute("select id from triggers where name = ?", (name,)).fetchone()[0]
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert next_id(conn, "d") == 4
+        conn.execute("delete from triggers")
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "cd85203e73a8")
+    with sqlite3.connect(path) as conn:
+        # 降级重建时表是空的：新表没有序号行，也要补回去
+        assert next_id(conn, "e") == 5
+
+
 def test_issue_assignees_merge_into_one_column_and_back(tmp_path):
     """被指派人两列合成一列（agent id / "user" / NULL），降级换算回来；认领、让出的时间线删除；编号仍不复用。"""
     from alembic import command
