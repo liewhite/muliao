@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, RootModel
 
-from muliao.notifications.service import NotificationEvent
+from muliao.notifications.events import NotificationEvent
 from muliao.platform.bus import TaskEvent
 from muliao.sessions.api import RunDeltaEvent, RunItemEvent, SavedEvent
 

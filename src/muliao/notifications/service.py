@@ -8,13 +8,11 @@ Notifications 是这个领域的唯一服务：写下通知并给每个推送订
 
 import hashlib
 import logging
-from typing import Literal
 
-from pydantic import BaseModel
 from sqlalchemy import delete, event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.notifications.events import Notify
+from muliao.notifications.events import NotificationEvent, Notify
 from muliao.notifications.tables import Notification, PushSubscription
 from muliao.platform.bus import EventBus
 from muliao.platform.db import Database
@@ -32,14 +30,6 @@ def deliver_lane(session_id: str | None, agent_id: str | None, endpoint: str) ->
     一台在等重试不耽误别的设备。设备用 endpoint 的摘要表示：lane 会进日志，endpoint 本身是订阅凭据。"""
     device = hashlib.sha256(endpoint.encode()).hexdigest()[:12]
     return f"deliver:{session_id or agent_id or 'system'}:{device}"
-
-
-class NotificationEvent(BaseModel):
-    """写下了一条新通知（推给前端 SSE，前端据此刷新通知页与未读数）。与有没有推送订阅无关。"""
-
-    type: Literal["notification"] = "notification"
-    notification_id: int
-    session_id: str | None
 
 
 def session_events_lane(event: RunEnded | SessionRead | SessionDeleted) -> str:

@@ -1,4 +1,8 @@
-"""通知领域接收的命令。"""
+"""通知领域接收的命令，以及推给前端的新通知事件。"""
+
+from typing import Literal
+
+from pydantic import BaseModel
 
 from muliao.platform.messaging import Command
 
@@ -13,4 +17,12 @@ class Notify(Command):
     title: str
     body: str
     # 点开通知打开的会话；系统通知为 None
+    session_id: str | None
+
+
+class NotificationEvent(BaseModel):
+    """写下了一条新通知（推给前端 SSE，前端据此刷新通知页与未读数）。与有没有推送订阅无关。"""
+
+    type: Literal["notification"] = "notification"
+    notification_id: int
     session_id: str | None
