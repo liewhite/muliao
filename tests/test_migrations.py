@@ -190,3 +190,32 @@ def test_issue_assignees_merge_into_one_column_and_back(tmp_path):
         assert conn.execute(
             "select id, assignee_agent_id, assigned_to_user from issues order by id"
         ).fetchall() == [(1, "a1a1a1a1a1a1", 0), (2, None, 1), (4, None, 0)]
+
+
+def test_issue_dependencies_downgrade_drops_the_table_and_its_activities(tmp_path):
+    """降级删掉依赖表与两种依赖动态（旧版本读到未知的 kind 会报错），其余时间线保留。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        for id_ in (1, 2):
+            conn.execute(
+                "insert into issues (id, title, description, status, priority, created_at, updated_at) "
+                "values (?, 't', '', 'todo', 'none', '2026-01-01', '2026-01-01')",
+                (id_,),
+            )
+        conn.execute("insert into issue_dependencies (issue_id, depends_on_id) values (2, 1)")
+        for kind in ("comment", "depends_on", "dependency"):
+            conn.execute(
+                "insert into issue_activities (issue_id, created_at, kind) values (2, '2026-01-01', ?)",
+                (kind,),
+            )
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "6bba488992eb")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select kind from issue_activities").fetchall() == [("comment",)]
+        tables = {r[0] for r in conn.execute("select name from sqlite_master where type = 'table'")}
+        assert "issue_dependencies" not in tables

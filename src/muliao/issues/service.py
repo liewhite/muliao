@@ -201,7 +201,8 @@ class IssueService:
 
     async def render(self, issue_id: int) -> str:
         async with self._db.transaction() as s:
-            view = await self._view_in(s, await self._get_in(s, issue_id))
+            issue = await self._get_in(s, issue_id)
+            view = await self._view_in(s, issue, (await self._links_in(s, [issue_id]))[issue_id])
         return render_issue(view)
 
     # ---- 修改 ----
@@ -371,9 +372,10 @@ class IssueService:
         wanted = sorted(set(depends_on))
         if len(wanted) != len(depends_on):
             raise InvalidInput(f"depends_on lists an issue more than once: {list(depends_on)}")
-        for up in wanted:
-            if await s.get(Issue, up) is None:
-                raise InvalidInput(f"issue #{issue.id} cannot depend on #{up}: issue #{up} not found")
+        existing = set(await s.scalars(select(Issue.id).where(Issue.id.in_(wanted))))
+        missing = [f"#{up}" for up in wanted if up not in existing]
+        if missing:
+            raise InvalidInput(f"issue #{issue.id} cannot depend on {', '.join(missing)}: not found")
         edges = [
             (down, up)
             for down, up in await s.execute(select(IssueDependency.issue_id, IssueDependency.depends_on_id))
@@ -493,7 +495,7 @@ class IssueService:
         )
         if agent is None:
             return None
-        view = await self._view_in(s, issue)
+        view = await self._view_in(s, issue, links)
         news = view.activities[-len(happened) :]
         inbound = Inbound(
             origin=Origin.ISSUE,
@@ -511,9 +513,8 @@ class IssueService:
             if task is not None:
                 await self._run_now(task.id)
 
-    async def _view_in(self, s: AsyncSession, issue: Issue) -> IssueView:
+    async def _view_in(self, s: AsyncSession, issue: Issue, links: Links) -> IssueView:
         await s.flush()
-        links = (await self._links_in(s, [issue.id]))[issue.id]
         return self._view_with(issue, await self._activities_in(s, issue.id), links, await agent_names_in(s))
 
     def _view_with(

@@ -441,3 +441,32 @@ async def test_http_dependencies(client, container, make_agent):
     assert (await client.get(f"/api/issues/{down['id']}")).json()["issue"]["waiting_on"] == []
     resp = await client.patch(f"/api/issues/{down['id']}", json={"depends_on": []})
     assert resp.json()["depends_on"] == []
+
+
+async def test_waiting_is_derived_from_the_current_upstream_state(container, make_agent):
+    alpha = (await make_agent()).id
+    done = await container.issues.create(None, owner=alpha, title="done", status=DONE)
+    up = await container.issues.create(None, owner=alpha, title="up")
+    other = await container.issues.create(None, owner=alpha, title="other")
+    # 上游创建时已经完成：立即投递
+    ready = await container.issues.create(
+        None, owner=alpha, title="ready", status=TODO, assignee=alpha, depends_on=[done.id]
+    )
+    down = await container.issues.create(None, owner=alpha, title="down", depends_on=[up.id, other.id])
+    # 等待期间改状态、改指派：只记时间线
+    await container.issues.update(None, down.id, status=TODO, assignee=alpha)
+    await container.issues.delete(other.id)  # 还在等 up
+    await deliver(container)
+    assert [s.origin_ref for s in await _issue_sessions(container)] == [str(ready.id)]
+    assert (await container.issues.get(down.id)).activities[-1].kind == ActivityKind.DEPENDS_ON
+
+    await container.issues.update(None, up.id, status=DONE)
+    await container.issues.update(None, up.id, status=TODO)  # 重新打开：下游回到等待
+    await drain(container)
+    [_, session] = await _issue_sessions(container)
+    assert session.origin_ref == str(down.id)
+    work = (await container.issues.work([down]))[down.id]
+    assert (work.waiting_on, work.stalled) == ((up.id,), False)
+    await container.issues.comment(None, down.id, "not yet")
+    await deliver(container)
+    assert len(await _mail(container, session.id)) == 1
