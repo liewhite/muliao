@@ -259,7 +259,7 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
   - `triggers`：`trigger_kinds` / `trigger_list(finished?)` / `trigger_create(name, kind, prompt, config, agent?)` / `trigger_update` / `trigger_run` / `trigger_delete`，一组工具覆盖所有触发方式，差异只在 `kind` 与 `config`。agent 同样按名称指定；`trigger_list(finished=true)` 列已归档的（跑完的一次性触发器），只能看不能改。webhook 的 token 只能由用户在界面上生成，agent 拿不到也不需要。
   - `web`：`web_search(query, count)` / `web_fetch(url)`，经 `muliao.agent_runtime.web.WebProvider` 完成；具体服务由配置 `[web]` 的 `type` 选择（现有 `deepseek`，即 DeepSeek 的 Search / Fetch API），新增一种服务 = 一个实现加一个 `type`。query 长度、条数上限、URL 规则以服务端校验为准，不在本地重复：服务端拒绝（400/403/404/413）作为可纠正的错误交还模型；限流、超时、5xx 是暂时性失败，按运行失败统一重试；key 无效、余额不足等配置问题让运行失败。抓取的正文按 `runtime.tool_output_max_chars` 截断。没配置 `[web]` 时没有这个组，已有 agent 仍选着它会让启动失败并列出这些 agent。
   - `mcp`：该 agent 可见的 MCP server（公共 + 私有），以 `<server名>_` 为工具前缀。它和其他组一样是一组工具，实现是 pydantic-ai 的 `DynamicToolset`，每次运行按当时的配置构建（`McpRegistry.toolset()`），所以改动从下一次运行起生效；配置只有一个类型（`McpConfig`，存储的配置缺字段直接报错，不补默认值）。配置中的 `${vault:KEY}` 在运行时按 server 归属者的视角解析（公共 server 只能引用公共 secret），引用不可见的 key 直接报错。
-- **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。界面上选模型时，provider 下拉框来自配置（`GET /api/providers`），模型名由 `ModelRegistry.list_models` 向该 provider 实时查询（`GET /api/providers/{name}/models`，即各家的 models 接口），不维护本地模型清单；查询失败返回 502 并带上原因，不用猜测的列表兜底。
+- **model**：agent 的 `model` 字段格式为 `<provider 名>:<模型名>`，provider 在配置文件 `[llm.providers.<名>]` 中定义（类型、api_key、base_url）。`llm.ModelRegistry` 是唯一按配置构造模型的地方，每个 provider 复用一个客户端；每种类型怎么接（官方地址、客户端、模型、模型名查询）在 `llm.KINDS` 里各登记一行（`ProviderKind`），不按类型分支。API key 与 base_url 只来自配置：base_url 未填时显式传入该类型的官方地址，不让 SDK 回退到 `*_BASE_URL` 环境变量。SDK 仍可能读取少数无法通过参数关闭的环境变量（如 `OPENAI_ORG_ID`、自定义请求头），launchd 服务只设置 `PATH`，不会带入这些变量。界面上选模型时，provider 下拉框来自配置（`GET /api/providers`），模型名由 `ModelRegistry.list_models` 向该 provider 实时查询（`GET /api/providers/{name}/models`，即各家的 models 接口），不维护本地模型清单；查询失败返回 502 并带上原因，不用猜测的列表兜底。
 - **prompt caching**：`type = "anthropic"` 的 provider 默认开启 Anthropic 的 prompt caching（`llm.ANTHROPIC_CACHE_SETTINGS`，作为 `AnthropicModel` 的默认 settings，运行时不再逐次合并）。缓存断点放在每次请求都原样重发的前缀上：指令（含公共 prompt、记忆、skill 目录）、工具定义、消息末尾，共三个，不超过 Anthropic 一次请求最多 4 个的上限。这三个断点要起作用，前缀必须逐字节稳定：指令里不放随运行变化的值（当前时间等走运行上下文，见第 6 节），已经保存的消息不再修改。用逐块的 `anthropic_cache_messages` 而不是服务端自动放断点的 `anthropic_cache`：这个类型也用于 Anthropic 兼容的网关，它们不一定支持顶层的自动缓存参数。配置里 `prompt_cache = false` 可以关掉（不发送任何缓存设置）；它只对这个类型有意义，填在别的类型上直接报错而不是静默忽略。缓存命中与写入的 token 记在用量里（第 19 节）。
 
 ## 7. 会话领域
@@ -378,7 +378,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 ## 8. 委派（`sessions/delegation.py`）
 
-做法同 Claude Code 的子 agent：`ask_agent` 与 `delegate_task(report_back: true)` 都是要交回结局的委派。委派完全在会话领域里，由两个对称的事务完成，**状态只有发起方的占用一处**（active / released / cleared）；做这项工作的 thread 由以 holder 为关联 id 的信件推出，不另存。普通 `delegate_task`（不交回）不产生委派：`Threads.send` 只往公开 thread 投一封用户在等的信。委派工具（`delegate_task`、`ask_agent`、`list_threads`、`stop_thread`、`list_agents`）在 `sessions/delegation_tools.py`。
+做法同 Claude Code 的子 agent：`ask_agent` 与 `delegate_task(report_back: true)` 都是要交回结局的委派。委派完全在会话领域里，由两个对称的事务完成，状态分在两侧、各管一件事：**发起方的占用**（active / released / cleared）记这项委派还要不要交回；**thread 一侧以 holder 为关联 id 的信件**上的 `mail.correlation_settled` 记这个关联有没有结清过，保证只结清一次（第 7 节「关联与结清」）。做这项工作的 thread 由这些信件推出，不另存。普通 `delegate_task`（不交回）不产生委派：`Threads.send` 只往公开 thread 投一封用户在等的信。委派工具（`delegate_task`、`ask_agent`、`list_threads`、`stop_thread`、`list_agents`）在 `sessions/delegation_tools.py`。
 
 - **发出**（工具里，`Threads.dispatch`，一个事务）：校验并打开或找到 thread（同名续聊，agent 或种类不符抛出可纠正的 `InvalidInput`，事务回滚、什么都没写）；在发起方登记占用（holder 由工具调用 id 确定性派生，带 `call_id` 与「用户是否在等发起方」）；往 thread 投一封以 holder 为关联 id 的信件。然后 `ask_agent` 抛出 `CallDeferred` 挂起，`delegate_task(report_back)` 返回。续跑重新执行这次调用时按 holder 幂等，只返回已经投递到的 thread。
 - **交回**（`hand_back_in`，thread 结清关联的同一个事务里，第 7 节「关联与结清」）：按 holder 找到发起方的占用，经 `deliver_in` 交回结局并释放占用。每个关联只结清一次，所以每项委派只交回一次；占用已 cleared（发起方被停止）不投，占用随发起方删除了就没有收件人（记日志）。没有中间状态，没有事件、没有投递顺序要证明。
@@ -480,7 +480,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 | `once` | `{"at": "<ISO 8601 时间>"}`，不带时区的按配置的时区解释，创建时必须在将来 | `{}`（到期时间就是配置本身） | `DueRunner` + `OnceDue`：消耗这次到期 = 归档（`finished_at`）。到点只触发一次，之后从列表里消失 |
 | `webhook` | `{}` | `token_hash` | `Webhooks`：`POST /api/hooks/{name}[?session_id=]` 凭 token 鉴权 |
 
-**按到期时间触发**（`triggers/due.py`，`schedule` 与 `once` 共用）：`DueRunner` 一个循环扫描所有还会到期的触发器，到期的并发触发。每种方式只给出两件事（`DueKind`）：到期时间从哪来（`due_at`），以及**消耗这次到期**时这一行怎么变（`consume_in`：定时推进到下次，一次性归档）。消耗与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）：先提交消耗，再调用 `fire`，所以进程恰好死在两者之间时这一次被跳过，**至多触发一次**；触发前按最新的行重新判断（列出之后被删除、停用、归档或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason`。
+**按到期时间触发**（`triggers/due.py`，`schedule` 与 `once` 共用）：`DueRunner` 一个循环扫描所有还会到期的触发器，到期的并发触发。每种方式只给出两件事（`DueKind`）：到期时间从哪来（`due_at`），以及**消耗这次到期**时这一行怎么变（`consume_in`：定时推进到下次，一次性归档）。消耗与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）：先提交消耗，再调用 `fire`，所以进程恰好死在两者之间时这一次被跳过，**至多触发一次**；触发前按最新的行重新判断（列出之后被删除、停用、归档或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason`（经 `TriggerService.disable`，和别的修改一样通知监听者）。
 
 **归档**（`finished_at`，触发器的公共概念，不属于某一种方式）：这个触发器不会再触发了。一次性触发器在它那次到期被消耗时归档——无论随后是真的投递、前置检查判定没事，还是触发失败（失败另记 `disabled_reason`）。归档之后：不出现在默认列表（`trigger_list`、`GET /triggers`、界面主列表），不能再 `update` / 启用 / 立即运行（`Conflict`），可以删除；名称只在**未归档**的触发器之间唯一（部分唯一索引 `WHERE finished_at IS NULL`），所以同名的可以重新创建，按名称（`get_by_name`、webhook 的鉴权）找到的也只有未归档的那个。行永久保留，`id` 永不复用，它发起过的会话（`origin='trigger'`、`origin_ref` 是它的 id）因此一直查得到是谁发的：`GET /triggers?finished=true` 列出归档的，`GET /sessions?origin=trigger&origin_ref=<id>` 列出某个触发器发起过的会话（走会话领域的查询，触发器领域不碰 `sessions` 表），`trigger_list(finished=true)` 让 agent 查一次性任务的结果（带 `finished_at` 与 `last_session_id`）。
 
@@ -571,7 +571,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 **职责**：记下每次模型运行花掉的 token，按时间范围汇总给界面看（`usage/`，表 `model_usage`）。
 
 - **唯一的写入方是 `agent_runtime`**（它是唯一调用模型的地方）：四个模型调用入口各对应一种运行类型——会话的运行（`run_steps`）、上下文压缩（`summarize`）、强制反思（`run_once`）、临时 agent（`run_temp`）。入口与类型一一对应，不靠参数分发。
-- **怎么拿到用量**：每个入口在调用 pydantic-ai 之前建一个 `RunUsage` 并交给它，pydantic-ai 把每次请求的用量累加进这个对象，所以运行成功、失败还是被取消，收尾时拿到的都是**已经花掉的那部分**。收尾在 `finally` 里（`AgentRuntime._bill`）。
+- **怎么拿到用量**：每个入口在调用 pydantic-ai 之前建一个 `RunUsage` 并交给它，pydantic-ai 把每次请求的用量累加进这个对象，所以运行成功、失败还是被取消，收尾时拿到的都是**已经花掉的那部分**。三种运行（会话的逐步运行、反思与临时 agent、压缩）共用一个上下文管理器 `AgentRuntime._billed`：记开始日志、交出 `RunUsage`，退出时在 `finally` 里记账（`_bill`）。
 - **记账不属于这次运行**：写入失败只记 error 日志，不改变运行的结果或异常——一次记账故障不该让已经做完的工作白做，也不该把一个真正的失败换成另一个。完全没有用量（还没发出请求就失败了）就跳过，不留空行。写入放在屏蔽作用域里并加时限：被取消的运行同样花了 token，取消之后也要记下来（屏蔽挡得住 anyio 的电平取消；用户停止用的原生取消是边沿触发的，对已被停止的运行来说在这之前就发出过了，见第 4 节）。剩下一个窄窗口——运行正常跑完、正在等数据库锁时用户才按停止——这一条用量随取消丢掉，不为它加防御：结局与「停止早到一瞬」相同，代价只是一条账目。
 - **归属**：记到 agent 与会话名下。反思不属于任何会话，会话为空；临时 agent 自己不属于任何会话（`RunScope.session_id` 仍是 None），但它的开销是发起它的那次运行的，记到那个会话名下。
 - **token 的口径**沿用 pydantic-ai 的归一化约定：`input_tokens` 是输入总数，**已经包含** `cache_read_tokens` 与 `cache_write_tokens`（Anthropic 原始响应把它们分开报，pydantic-ai 统一过），所以展示时是「总数与其中两部分」，不相加。
