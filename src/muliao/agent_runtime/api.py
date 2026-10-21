@@ -27,12 +27,14 @@ from muliao.agent_runtime.conventions import (
     unanswered_calls,
 )
 from muliao.agent_runtime.instructions import with_notices
+from muliao.agent_runtime.llm import ModelRegistry
 from muliao.agent_runtime.redaction import redact_messages
 from muliao.agent_runtime.runner import AgentRuntime, RunProfile, StepHooks, ToolGroups
 from muliao.agent_runtime.workspace_tools import ShellLimits, file_toolset, run_foreground, shell_description
 
 __all__ = [
     "INTERRUPTED_TOOL_RESULT",
+    "ModelRegistry",
     "RUN_CONTEXT",
     "RUN_EVENTS",
     "RUN_STOPPED",

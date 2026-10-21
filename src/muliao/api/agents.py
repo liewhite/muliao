@@ -175,7 +175,6 @@ async def get_memory(c: C, agent_id: str) -> MemoryOut:
 
 @router.put("/agents/{agent_id}/memory")
 async def put_memory(c: C, agent_id: str, body: MemoryIn) -> MemoryOut:
-    await c.agents.get_active(agent_id)
     return MemoryOut(content=await c.memory.write(agent_id, body.content, USER), max_chars=c.memory.max_chars)
 
 

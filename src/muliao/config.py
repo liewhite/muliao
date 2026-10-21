@@ -138,7 +138,8 @@ class RuntimeConfig(_Section):
     shell_max_timeout: float = Field(default=600.0, gt=0)
     # 触发器前置检查的时限：webhook 的调用方在同步等它，检查本该便宜，比 shell 的默认时限短得多
     precheck_timeout_seconds: float = Field(default=30.0, gt=0)
-    # 后台任务（jobs.runner）运行期间，每隔这么久给发起它的会话发一个检查事件，由 agent 决定继续等还是结束它
+    # 运行中检查的节奏（platform.checks）：后台任务与委派还在进行时，每隔这么久给发起它的会话投一封检查信件，由
+    # agent 决定继续等还是结束它（job_kill / stop_thread）；委派工具的说明里也写着这个间隔（名字是只有后台任务时起的）
     job_check_seconds: float = Field(default=60.0, gt=0)
     tool_output_max_chars: int = Field(default=20000, ge=1000)
     # 单个文件（用户上传的附件、agent 发出的文件）的字节上限，默认与 Matrix Synapse 一致

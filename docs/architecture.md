@@ -72,7 +72,7 @@ muliao/
   speech/          语音输入：把界面录下的语音转成文字（可选，配置 [transcription] 才有）
   vault/  files/  reflection/  notifications/  triggers/
   api/             HTTP 适配
-  container.py     组合根：构造领域、注册事件订阅、组装工具组
+  container.py     组合根：构造领域、注册事件订阅、组装工具组；只做装配，不含业务规则
   schema.py        汇总全部领域的表（Alembic、迁移测试、单领域写入断言）
 ```
 
@@ -107,7 +107,9 @@ muliao/
 - 领域之间只能 import 对方的 `api` 模块（命令、查询、读模型）与 `events` 模块（它发布的事件、接收的定向命令）；不 import 别的领域的表，也不拿别的领域的 ORM 对象。
 - `platform` 不 import 任何领域；领域不 import HTTP 适配层（`api/`）与组合根。
 - 每个领域都有 `api.py`（`__all__` 只列公开接口），缺了测试就失败：在调用方事务里执行的公开函数（参数里有调用方的事务）只能是登记过的只读查询，这条检查只看得到 `api` 模块。领域内部在自己事务里的写入（如通知的 `_enqueue_in`）是私有的。平台不认识领域的词汇：任务种类、会话来源、LLM SDK 的异常都在各自的领域里（3.2、第 5 节）。
-- HTTP 适配层经领域的 `api`（与 `events`）调用领域，另外可以 import 领域的 `tables`，把领域交给它的行序列化成响应（它是适配器，不是领域，不另造一套读模型）。
+- HTTP 适配层经领域的 `api`（与 `events`）调用领域，另外可以 import 领域的 `tables`，把领域交给它的行序列化成响应（它是适配器，不是领域，不另造一套读模型）。它拿到的对象只有 `container.Container` 上的：各领域的门面（字段类型都由领域的 `api` 导出，测试检查）、平台的展示事件流与任务列表、服务的生命周期；装配出的全部对象在 `container.Assembly`，服务入口只把它的 `container` 交给 HTTP 层，测试夹具直接持有 `Assembly`。业务规则（例如写私有资源前 owner 必须还可用、只发文件时用文件名作标题、启动时已存 agent 的模型与工具组必须可用）都在领域里，HTTP 层与组合根不另写一份。
+
+**组合根没有构造环**：用到「停止会话」的领域（会话门面、委派工具、删除 agent 的会话清理）拿的是 `sessions.halt.SessionStopper`，它由正在进行的运行的登记（`StoppableRuns`）与 `SessionHalt` 组成，先于消费者构造，消费者用同一份登记运行；要马上执行自己提交的投递的领域（会话、触发器、issue）拿的是 `platform.worker.RunNow` 端口，worker 由各领域的处理器组成、在最后构造，构造后绑定到端口，绑定之前调用当场报错。
 
 经 `api` 的依赖无环：`files`、`agents`、`usage` → `vault` → `agent_runtime` → `sessions` → `jobs`、`reflection`、`notifications`、`triggers`。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
 
@@ -123,7 +125,7 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 
 `tasks` 表是持久化的任务队列，也是 actor 调度器：每个 task 带 `lane`，同一 lane 内严格 FIFO（更早的排队任务、或进行中的任务挡住后面的）、同一时刻最多一个 running；不同 lane 并发。平台只提供 lane 的机制，lane 名由用它的领域定义：会话领域的都在 `sessions/lanes.py`（会话 actor 的邮箱 `session:<id>`，运行、压缩都在这条 lane 上串行执行；`Receive` 与会话之外的工作各自的 lane），反思的 `reflection:<agent id>` 在反思领域，deliver 的 `deliver:<会话>:<设备>`（系统通知按 agent，没有 agent 的是 `deliver:system:<设备>`；设备是 endpoint 的摘要，lane 会进日志而 endpoint 是订阅凭据）在通知领域。别的领域不拼这些名字，要问会话忙不忙用会话领域的 `SessionActivity`。
 
-- **任务种类**：`tasks.kind` 是不透明的字符串，由各领域定义（会话的 `run`、`compaction` 在 `sessions/lanes.py`，反思的 `reflection`、通知的 `deliver` 在各自的 service），在组合根为它登记处理器；平台只有自己的 `event`（`platform.tables.EVENT_TASK`），不枚举领域的种类。库里还没完成的 task 若是没有处理器的种类（如改名后留下的旧值），启动时记 error（`Container._check_task_kinds`）：它永远不会被领取，还挡住它的 lane。
+- **任务种类**：`tasks.kind` 是不透明的字符串，由各领域定义（会话的 `run`、`compaction` 在 `sessions/lanes.py`，反思的 `reflection`、通知的 `deliver` 在各自的 service），在组合根为它登记处理器；平台只有自己的 `event`（`platform.tables.EVENT_TASK`），不枚举领域的种类。库里还没完成的 task 若是没有处理器的种类（如改名后留下的旧值），启动时记 error（`Assembly._check_task_kinds`）：它永远不会被领取，还挡住它的 lane。
 - **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。处理器分两段：`execute` 做事（可以开自己的事务、调用别的领域的命令），返回的 `Commit` 与「task 记为完成」在同一个事务里提交（`TaskQueue.complete`）。task 不设总时限：一次运行跑多久由 agent 自己判断，卡住的单个调用由各自的时限兜底（`run_shell` 的 timeout、MCP 工具调用的读超时、web 工具与推送的请求时限、模型 HTTP 请求每次读的空闲时限等；持续慢速输出的流不受后者约束），会话轮次与临时 agent 整体靠用户停止。反思运行没有停止入口：失控时只能重启，并等它耗尽 `task_max_attempts`（反思只开放改资源的短工具，这种情况罕见）。
 - **失败**：契约内的失败（第 5 节）按指数退避重试，上限 `task_max_attempts`；最终失败时处理器的 `failed_in` 在记下失败的同一事务里收尾（如把失败交回等着的会话）。「任务」页可查并可手动重试（沿用原 id，所以仍按原顺序；重试把尝试次数清零）。进程崩溃后启动时把 `running` 复位为 `pending`（`Worker._recover`），尝试次数已经用完的除外：任务自己会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去、还一直占住它的 lane，这时按最终失败记账（同一个上限，收尾钩子照常执行，失败照常可见）。
 - **保留**（`platform/retention.py`）：启动时与之后每天一次，删掉 7 天前已完成（done）的 `event`、`deliver` 任务（这两种由组合根交给它），它们完成后没有别的数据引用；failed 一律保留供排查与重试。`run` 不删：`mail.consumed_by` 指向它且 ON DELETE CASCADE，删了会连带删掉它处理过的信件与幂等键；`reflection`、`compaction` 量小，留着。
@@ -411,7 +413,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 ## 10. 删除 agent
 
-1. `AgentLifecycle.delete`：组合根注入的删除阻止查询有一个为真时拒绝（409）——它的会话有忙的（与删除会话同一条规则，会话领域的 `SessionActivity.blocks_agent_deletion_in`）、它的反思在排队或执行（反思领域的 `blocks_agent_deletion_in`）；agent 领域不知道别的领域的 lane；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据库数据（会话来信与手动压缩、委派、secret、触发器）之前在同一事务里用 `active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。资源文件与配置不在数据库事务里，写入前在单独的事务里检查（`get_active`），极小的窗口里可能留下孤儿目录，由启动时的检查报告（第 1 节「资源的版本管理」）。
+1. `AgentLifecycle.delete`：组合根注入的删除阻止查询有一个为真时拒绝（409）——它的会话有忙的（与删除会话同一条规则，会话领域的 `SessionActivity.blocks_agent_deletion_in`）、它的反思在排队或执行（反思领域的 `blocks_agent_deletion_in`）；agent 领域不知道别的领域的 lane；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据库数据（会话来信与手动压缩、委派、secret、触发器）之前在同一事务里用 `active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。私有资源（skill、记忆、指令、MCP 配置）不在数据库事务里：由各 store 在资源仓库的锁里、写入之前检查（`agents.active.ActiveOwners`，经 `ResourceRepo.apply/update` 的 precondition），删除流程在提交删除标记之后、在同一把锁里删掉资源目录，所以检查通过的写入一定落在删除之前、被一起删掉。HTTP 层只在读 owner 的私有资源时按 `get_active` 把正在删除的当作不存在。
 2. 订阅者：
    - 会话：删除它的全部会话（连同私有 thread），发布 `AgentSessionsCleared`（没有会话时立即发布）。标记一提交就不再为它新排工作，但仍可能有会话忙：删除前的检查与标记分属两个事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会。处理器先停止这些会话（每个只停一次；它们的工作随 agent 一起放弃），再在时限内（30 秒）等它们空闲——正在执行的运行被取消后，停止事务在它退出之后才执行，正在执行的压缩做完才空闲——然后删除。时限内没有空闲就按暂时失败重试，重试时同样先停止再等；重试用完时投递记为 failed，可见，人工重试。
    - 反思：结束该 agent 排队的反思任务，删除检查点与记录；正在执行的反思结束时发现 agent 正在删除，不写记录。

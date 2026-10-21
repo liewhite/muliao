@@ -225,7 +225,7 @@ class TaskQueue:
             return result.rowcount
 
     async def unfinished_kinds(self) -> set[str]:
-        """还没完成（pending、running）的 task 有哪些种类（启动时核对每种都有处理器，见 Container._check_task_kinds）。"""
+        """还没完成（pending、running）的 task 有哪些种类（启动时核对每种都有处理器，见 container.Assembly._check_task_kinds）。"""
         async with self._db.transaction() as s:
             query = (
                 select(Task.kind).where(Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING])).distinct()

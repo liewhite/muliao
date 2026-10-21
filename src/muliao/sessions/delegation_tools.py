@@ -38,7 +38,7 @@ class ThreadInfo(BaseModel):
     answer: str | None
 
 
-# 停止一个会话：停下它的消费、清空信箱（sessions.consumer.Consumer.stop_session）
+# 停止一个会话：停下它的消费、清空信箱（sessions.halt.SessionStopper）
 StopSession = Callable[[str], Awaitable[Halted]]
 
 

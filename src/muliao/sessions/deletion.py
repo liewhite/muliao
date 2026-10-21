@@ -67,7 +67,7 @@ _IDLE_POLL_SECONDS = 0.1
 
 class AgentSessionsCleanup:
     """删除 agent 流程里会话领域的一步（docs/architecture.md 第 10 节）：订阅 AgentDeleting，删除它的全部会话，发布
-    AgentSessionsCleared。stop_session 是停止会话的命令（组合根延迟绑定消费者）。"""
+    AgentSessionsCleared。stop_session 是停止会话的命令（sessions.halt.SessionStopper）。"""
 
     def __init__(
         self,

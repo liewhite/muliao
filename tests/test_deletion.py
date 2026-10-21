@@ -426,3 +426,33 @@ async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(con
 
     await drain(container)
     assert (await container.agents.names())[agent.id] == f"(deleted agent {agent.id})"
+
+
+async def test_a_deleting_agents_private_resources_can_no_longer_be_written(container, make_agent):
+    """写私有资源之前 owner 必须还可用：由各 store 在资源仓库的锁里检查（agents.active），不论写入来自 HTTP、工具
+    还是反思；删除流程之后在同一把锁里删掉资源目录，所以不会留下孤儿目录。公共资源不受影响。"""
+    from muliao.agents.api import McpTransport, mcp_config
+
+    agent = await make_agent("alpha")
+    await container.skills.write(agent.id, "s", "d", "b", "user")
+    await container.agent_lifecycle.delete(agent.id, author="user")
+
+    writes = [
+        lambda: container.skills.write(agent.id, "t", "d", "b", "user"),
+        lambda: container.skills.edit(agent.id, "s", "user", new="more"),
+        lambda: container.skills.delete(agent.id, "s", "user"),
+        lambda: container.memory.append(agent.id, "fact", "user"),
+        lambda: container.prompts.set(agent.id, "new", "user"),
+        lambda: container.mcp.add(
+            agent.id,
+            "m",
+            mcp_config(transport=McpTransport.HTTP, url="http://example.invalid/mcp"),
+            probe=False,
+            author="user",
+        ),
+    ]
+    for write in writes:
+        with pytest.raises(NotFound, match="not found"):
+            await write()
+    assert not (container.resources.owner_dir(agent.id) / "skills" / "t").exists()
+    await container.skills.write(None, "pub", "d", "b", "user")

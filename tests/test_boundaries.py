@@ -126,6 +126,8 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
         "SessionActivity.keyed_work_states_in",
         "SessionActivity.blocks_agent_deletion_in",
     },
+    # 触发器领域内部（各触发方式）用的查询；TriggerService 由 api 导出给 HTTP 层
+    "triggers": {"TriggerService.get_in", "TriggerService.busy_in"},
 }
 
 
@@ -177,3 +179,34 @@ READ_ONLY_DELETION_BLOCKERS = {
 async def test_injected_agent_deletion_blockers_are_reviewed_read_only_queries(container):
     blockers = container.agent_lifecycle._blockers  # noqa: SLF001
     assert {b.__qualname__ for b in blockers.values()} == READ_ONLY_DELETION_BLOCKERS
+
+
+def test_the_http_layer_sees_only_domain_facades():
+    """HTTP 层只经 Container 调用领域（docs/architecture.md 2.3）：它的字段类型都由领域的 api 模块导出，或是平台的
+    类型与配置；领域内部的对象（消费者、压缩、信箱……）不在其中。import 检查拦不住经 Container 取到的对象，由这里拦。"""
+    import dataclasses
+    import importlib
+    import types
+    import typing
+
+    from muliao.config import Settings
+    from muliao.container import Container
+
+    exported = [
+        getattr(module, name)
+        for module in (importlib.import_module(f"muliao.{d}.api") for d in sorted(DOMAINS))
+        for name in module.__all__
+    ]
+    hints = typing.get_type_hints(Container)
+    problems = []
+    for field in dataclasses.fields(Container):
+        if field.name == "running":
+            continue
+        hint = hints[field.name]
+        members = typing.get_args(hint) if isinstance(hint, types.UnionType) else (hint,)
+        for t in members:
+            if t is type(None) or t is Settings or t.__module__.startswith("muliao.platform."):
+                continue
+            if not any(t is e for e in exported):
+                problems.append(f"Container.{field.name}: {t.__module__}.{t.__qualname__}")
+    assert problems == []

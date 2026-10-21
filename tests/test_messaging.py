@@ -186,6 +186,32 @@ async def test_run_now_executes_a_committed_command_at_once(container):
     assert [t.status for t in await deliveries(container)] == [TaskStatus.DONE]
 
 
+async def test_the_run_now_port_runs_through_the_bound_worker_and_refuses_before_binding(container):
+    """各领域拿到的是 RunNow 端口，worker 在装配的最后才绑定：绑定之前调用、重复绑定都是装配的 bug，当场报错。"""
+    from muliao.platform.worker import RunNow
+
+    messaging = Messaging(container.queue)
+    done: list[str] = []
+
+    async def handle(command: DoIt, _d: Delivery):
+        done.append(command.what)
+        return no_commit
+
+    messaging.handle(DoIt, "do", handle)
+    async with container.db.transaction() as s:
+        task = messaging.send_in(s, DoIt(what="x"))
+    run_now = RunNow()
+    with pytest.raises(RuntimeError, match="before a worker was bound"):
+        await run_now(task.id)
+    worker = _now_worker(container, messaging)
+    run_now.bind(worker)
+    with pytest.raises(RuntimeError, match="already bound"):
+        run_now.bind(worker)
+    await run_now(task.id)
+
+    assert done == ["x"]
+
+
 async def test_run_now_leaves_a_task_behind_an_earlier_one_on_its_lane_to_the_worker(container):
     messaging = Messaging(container.queue)
     done: list[str] = []

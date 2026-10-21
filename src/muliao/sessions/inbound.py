@@ -274,7 +274,9 @@ def _receive_command(inbound: Inbound) -> Receive:
                 f"a Receive command creates a top-level session with a preassigned id, got {target}"
             )
         if target.title is None:
-            raise ValueError(f"a Receive command creates a session with a title given by its sender, got {target}")
+            raise ValueError(
+                f"a Receive command creates a session with a title given by its sender, got {target}"
+            )
         new_session = ReceiveNewSession(id=target.id, agent_id=target.agent_id, title=target.title)
     return Receive(
         origin=inbound.origin,

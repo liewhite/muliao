@@ -16,9 +16,9 @@ from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.codec import load_messages
+from muliao.sessions.compaction import Compactor
 from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.events import Receive, SessionRead, StopThread
-from muliao.sessions.compaction import Compactor
 from muliao.sessions.halt import Halted, SessionStopper
 from muliao.sessions.inbound import (
     Inbound,
