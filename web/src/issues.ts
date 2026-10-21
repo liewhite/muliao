@@ -56,6 +56,12 @@ export function assigneeOptions(agents: Agent[] | undefined) {
 export const assigneeValue = (assignee: string | null) => assignee ?? UNASSIGNED
 export const assigneeOf = (value: string) => (value === UNASSIGNED ? null : value)
 
+/** 负责项目的显示名；负责的 agent 被删除后为 null */
+export function ownerLabel(agents: Agent[] | undefined, owner: string | null): string {
+  if (owner === null) return '无负责项目'
+  return agents?.find((a) => a.id === owner)?.name ?? owner
+}
+
 export function assigneeLabel(agents: Agent[] | undefined, assignee: string | null): string {
   if (assignee === null) return '未指派'
   if (assignee === USER) return '我'
@@ -82,6 +88,7 @@ export function moveIssue(issues: Issue[], id: number, status: IssueStatus): Iss
 
 function valueLabel(agents: Agent[] | undefined, a: IssueActivity, v: unknown): string {
   if (a.kind === 'assignee') return assigneeLabel(agents, (v as string | null) ?? null)
+  if (a.kind === 'owner') return ownerLabel(agents, (v as string | null) ?? null)
   if (a.kind === 'status') return STATUS_LABEL[v as IssueStatus] ?? String(v)
   if (a.kind === 'priority') return PRIORITY_LABEL[v as IssuePriority] ?? String(v)
   return String(v)
@@ -99,7 +106,7 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
     case 'comment':
       return '评论了'
     default: {
-      const what = { status: '状态', assignee: '指派', priority: '优先级', title: '标题' }[a.kind]
+      const what = { status: '状态', assignee: '指派', owner: '负责项目', priority: '优先级', title: '标题' }[a.kind]
       return `把${what}从「${valueLabel(agents, a, a.change?.from)}」改为「${valueLabel(agents, a, a.change?.to)}」`
     }
   }

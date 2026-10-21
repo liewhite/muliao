@@ -121,13 +121,14 @@ class IssueService:
         messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
-        """删除 agent 的流程：指派给它的 issue 改为未指派（记在时间线上），忘掉它的会话。"""
+        """删除 agent 的流程：指派给它、归它负责的 issue 改为未指派、无负责人（记在时间线上），忘掉它的会话。"""
 
         async def commit(s: AsyncSession) -> None:
             # sessions 是 JSON：按 agent id 粗筛（id 是不含特殊字符的十六进制），再在下面精确判断
             query = select(Issue).where(
                 or_(
                     Issue.assignee_agent_id == event.agent_id,
+                    Issue.owner_agent_id == event.agent_id,
                     cast(Issue.sessions, String).contains(event.agent_id),
                 )
             )
@@ -135,6 +136,9 @@ class IssueService:
                 if issue.assignee_agent_id == event.agent_id:
                     issue.assignee_agent_id = None
                     self._record(s, issue, None, ActivityKind.ASSIGNEE, change=(event.agent_id, None))
+                if issue.owner_agent_id == event.agent_id:
+                    issue.owner_agent_id = None
+                    self._record(s, issue, None, ActivityKind.OWNER, change=(event.agent_id, None))
                 if event.agent_id in issue.sessions:
                     issue.sessions = {k: v for k, v in issue.sessions.items() if k != event.agent_id}
 
@@ -143,9 +147,15 @@ class IssueService:
     # ---- 查询 ----
 
     async def list(
-        self, *, statuses: list[IssueStatus] | None = None, assignee: str | None = None
+        self,
+        *,
+        statuses: list[IssueStatus] | None = None,
+        assignee: str | None = None,
+        owner: str | None = None,
     ) -> list[Issue]:
         query = select(Issue).order_by(Issue.updated_at.desc())
+        if owner is not None:
+            query = query.where(Issue.owner_agent_id == owner)
         if statuses:
             query = query.where(Issue.status.in_(statuses))
         if assignee == USER:
@@ -185,6 +195,7 @@ class IssueService:
         actor: str | None,
         *,
         session_id: str | None = None,
+        owner: str,
         title: str,
         description: str = "",
         status: IssueStatus = IssueStatus.BACKLOG,
@@ -194,7 +205,9 @@ class IssueService:
         now = utcnow()
         async with self._db.transaction() as s:
             await self._check_assignee_in(s, assignee)
+            await active_agent_in(s, owner)
             issue = Issue(
+                owner_agent_id=owner,
                 title=_title(title),
                 description=description,
                 status=status,
@@ -220,6 +233,7 @@ class IssueService:
         issue_id: int,
         *,
         session_id: str | None = None,
+        owner: str | None = None,
         title: str | None = None,
         description: str | None = None,
         status: IssueStatus | None = None,
@@ -240,6 +254,10 @@ class IssueService:
             if status is not None and status != issue.status:
                 self._record(s, issue, actor, ActivityKind.STATUS, change=(issue.status, status))
                 issue.status, changed = status, True
+            if owner is not None and owner != issue.owner_agent_id:
+                await active_agent_in(s, owner)
+                self._record(s, issue, actor, ActivityKind.OWNER, change=(issue.owner_agent_id, owner))
+                issue.owner_agent_id, changed = owner, True
             if priority is not None and priority != issue.priority:
                 self._record(s, issue, actor, ActivityKind.PRIORITY, change=(issue.priority, priority))
                 issue.priority, changed = priority, True
@@ -458,7 +476,7 @@ class IssueService:
         for a in activities:
             before = after = None
             if a.change is not None:
-                if a.kind == ActivityKind.ASSIGNEE:
+                if a.kind in (ActivityKind.ASSIGNEE, ActivityKind.OWNER):
                     before, after = await assignee(a.change["from"]), await assignee(a.change["to"])
                 else:
                     before, after = str(a.change["from"]), str(a.change["to"])
@@ -479,6 +497,7 @@ class IssueService:
             status=issue.status,
             priority=issue.priority,
             assignee=await assignee(_assignee_of(issue)),
+            owner="none" if issue.owner_agent_id is None else await name(issue.owner_agent_id),
             creator=await who(issue.creator_agent_id),
             activities=views,
         )

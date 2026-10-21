@@ -14,6 +14,7 @@ import {
   assigneeLabel,
   assigneeOf,
   assigneeOptions,
+  ownerLabel,
   groupByStatus,
   issueRoute,
   moveIssue,
@@ -38,6 +39,8 @@ import {
 } from '../ui'
 
 type View = 'board' | 'list'
+// 「所有项目」选项的 id；查询时映射为不过滤
+const ALL_OWNERS = '@all'
 const VIEW_KEY = 'muliao.issues.view'
 
 export function StatusDot({ status }: { status: IssueStatus }) {
@@ -59,8 +62,13 @@ function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefine
                 {PRIORITY_LABEL[issue.priority]}
               </Chip>
             )}
+            {issue.owner !== null && (
+              <Chip size="sm" variant="secondary">
+                {ownerLabel(agents, issue.owner)}
+              </Chip>
+            )}
             <Chip size="sm" variant="soft">
-              {assigneeLabel(agents, issue.assignee)}
+              → {assigneeLabel(agents, issue.assignee)}
             </Chip>
             {stalled(issue) ? (
               <Chip size="sm" variant="soft" color="warning">
@@ -212,10 +220,13 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
   const [status, setStatus] = useState<IssueStatus>('todo')
   const [priority, setPriority] = useState<IssuePriority>('none')
   const [assignee, setAssignee] = useState(UNASSIGNED)
+  // 负责的项目必填：不猜
+  const [owner, setOwner] = useState<string | null>(null)
   const action = useAction()
   const submit = () =>
     action.run(async () => {
-      await api.createIssue({ title, description, status, priority, assignee: assigneeOf(assignee) })
+      if (owner === null) throw new Error('请选择负责的项目（owner）')
+      await api.createIssue({ title, owner, description, status, priority, assignee: assigneeOf(assignee) })
       setTitle('')
       setDescription('')
       onCreated()
@@ -224,7 +235,14 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
     <CollapsibleForm title="新建 issue">
       <TextInput label="标题" value={title} onChange={setTitle} isRequired />
       <TextAreaInput label="描述（Markdown）" value={description} onChange={setDescription} rows={4} />
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <SelectInput
+          label="负责项目（owner）"
+          hint="转派给别人做也不变"
+          value={owner}
+          onChange={setOwner}
+          options={(agents ?? []).map((a) => ({ id: a.id as string, label: a.name }))}
+        />
         <SelectInput
           label="状态"
           value={status}
@@ -241,7 +259,7 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
       </div>
       <p className="text-xs text-muted">指派给 agent 且状态为 Todo / 进行中时，会唤醒它来处理。</p>
       <ErrorAlert error={action.error} />
-      <ActionButton isPending={action.busy} isDisabled={!title.trim()} onPress={submit}>
+      <ActionButton isPending={action.busy} isDisabled={!title.trim() || owner === null} onPress={submit}>
         创建
       </ActionButton>
     </CollapsibleForm>
@@ -251,7 +269,9 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
 export default function Issues() {
   const [view, setView] = useState<View>(() => (localStorage.getItem(VIEW_KEY) as View | null) ?? 'board')
   const agents = useAgents()
-  const loaded = useLoad(() => api.issues(), [])
+  // 按负责项目筛选：看一个项目的全部 issue（含已完成、已取消）
+  const [owner, setOwner] = useState(ALL_OWNERS)
+  const loaded = useLoad(() => api.issues(owner === ALL_OWNERS ? undefined : owner), [owner])
   // 拖拽后先在本地挪动，接口返回、重新拉取之后以服务端为准
   const [moving, setMoving] = useState<{ id: number; status: IssueStatus } | null>(null)
   const issues = loaded.data && moving ? moveIssue(loaded.data, moving.id, moving.status) : loaded.data
@@ -285,6 +305,12 @@ export default function Issues() {
           { id: 'board', label: '看板' },
           { id: 'list', label: '列表' },
         ]}
+      />
+      <SelectInput
+        label="负责项目"
+        value={owner}
+        onChange={setOwner}
+        options={[{ id: ALL_OWNERS, label: '所有项目' }, ...(agents.data ?? []).map((a) => ({ id: a.id as string, label: a.name }))]}
       />
       <NewIssueForm agents={agents.data} onCreated={() => void loaded.reload()} />
       <ErrorAlert error={move.error} />

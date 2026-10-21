@@ -2271,6 +2271,22 @@
               ],
               "title": "Assignee"
             }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
           }
         ],
         "responses": {
@@ -2602,6 +2618,7 @@
           "status",
           "assignee",
           "priority",
+          "owner",
           "title",
           "description",
           "released"
@@ -3274,6 +3291,10 @@
             "type": "string",
             "title": "Title"
           },
+          "owner": {
+            "type": "string",
+            "title": "Owner"
+          },
           "description": {
             "type": "string",
             "title": "Description",
@@ -3301,7 +3322,8 @@
         },
         "type": "object",
         "required": [
-          "title"
+          "title",
+          "owner"
         ],
         "title": "IssueCreate"
       },
@@ -3344,6 +3366,17 @@
           },
           "priority": {
             "$ref": "#/components/schemas/IssuePriority"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
           },
           "assignee": {
             "anyOf": [
@@ -3402,6 +3435,7 @@
           "description",
           "status",
           "priority",
+          "owner",
           "assignee",
           "creator_agent_id",
           "sessions",
@@ -3413,6 +3447,17 @@
       },
       "IssuePatch": {
         "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
           "title": {
             "anyOf": [
               {

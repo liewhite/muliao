@@ -915,7 +915,7 @@ export interface components {
          * ActivityKind
          * @enum {string}
          */
-        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "title" | "description" | "released";
+        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "released";
         /** ActivityOut */
         ActivityOut: {
             /** Id */
@@ -1173,6 +1173,8 @@ export interface components {
         IssueCreate: {
             /** Title */
             title: string;
+            /** Owner */
+            owner: string;
             /**
              * Description
              * @default
@@ -1201,6 +1203,8 @@ export interface components {
             description: string;
             status: components["schemas"]["IssueStatus"];
             priority: components["schemas"]["IssuePriority"];
+            /** Owner */
+            owner: string | null;
             /** Assignee */
             assignee: string | null;
             /** Creator Agent Id */
@@ -1226,6 +1230,8 @@ export interface components {
          * @description 只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。
          */
         IssuePatch: {
+            /** Owner */
+            owner?: string | null;
             /** Title */
             title?: string | null;
             /** Description */
@@ -3678,6 +3684,7 @@ export interface operations {
             query?: {
                 status?: components["schemas"]["IssueStatus"][] | null;
                 assignee?: string | null;
+                owner?: string | null;
             };
             header?: never;
             path?: never;

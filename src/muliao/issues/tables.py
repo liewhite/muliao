@@ -35,6 +35,7 @@ class ActivityKind(StrEnum):
     STATUS = "status"
     ASSIGNEE = "assignee"
     PRIORITY = "priority"
+    OWNER = "owner"
     TITLE = "title"
     DESCRIPTION = "description"
     # agent 让出 issue：断开它的处理会话
@@ -44,6 +45,7 @@ class ActivityKind(StrEnum):
 class Issue(Base):
     """人与 agent 协作的一件事。
 
+    owner_agent_id 是负责这件事的项目（agent），被指派人是现在谁在做。
     被指派人：assignee_agent_id 为 agent；assigned_to_user 为真时指派给用户（只有一个用户）；两者都空为未指派。
     sessions 记每个 agent 在这个 issue 上的会话（agent id -> 会话 id）：同一个 agent 每次被唤醒都续写那个会话，
     上下文连贯；会话被删了就新开一个。
@@ -58,6 +60,9 @@ class Issue(Base):
     priority: Mapped[IssuePriority] = mapped_column(StrEnumType(IssuePriority))
     assignee_agent_id: Mapped[str | None] = mapped_column(agent_ref(), index=True)
     assigned_to_user: Mapped[bool] = mapped_column(default=False)
+    # 负责的项目（agent）：创建时必填，不随指派变化，只能显式修改；按它筛选看一个项目的全部来龙去脉。
+    # 只在负责的 agent 被删除时变为空
+    owner_agent_id: Mapped[str | None] = mapped_column(agent_ref(), index=True)
     # 创建者：agent id，用户创建的为 None
     creator_agent_id: Mapped[str | None] = mapped_column(agent_ref())
     sessions: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)

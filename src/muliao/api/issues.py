@@ -19,6 +19,8 @@ class IssueOut(BaseModel):
     description: str
     status: IssueStatus
     priority: IssuePriority
+    # 负责的项目（agent id）；只在负责的 agent 被删除后为 null
+    owner: str | None
     # agent id、"user"，或 null（未指派）
     assignee: str | None
     # 创建者 agent id；用户创建的为 null
@@ -38,6 +40,7 @@ class IssueOut(BaseModel):
             description=i.description,
             status=i.status,
             priority=i.priority,
+            owner=i.owner_agent_id,
             assignee=USER if i.assigned_to_user else i.assignee_agent_id,
             creator_agent_id=i.creator_agent_id,
             sessions=i.sessions,
@@ -77,6 +80,8 @@ class IssueDetailOut(BaseModel):
 
 class IssueCreate(BaseModel):
     title: str
+    # 负责的项目（agent id），必填
+    owner: str
     description: str = ""
     status: IssueStatus = IssueStatus.BACKLOG
     priority: IssuePriority = IssuePriority.NONE
@@ -87,6 +92,7 @@ class IssueCreate(BaseModel):
 class IssuePatch(BaseModel):
     """只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。"""
 
+    owner: str | None = None
     title: str | None = None
     description: str | None = None
     status: IssueStatus | None = None
@@ -104,9 +110,12 @@ async def _out(c: C, issue: Issue) -> IssueOut:
 
 @router.get("/issues")
 async def list_issues(
-    c: C, status: list[IssueStatus] | None = Query(None), assignee: str | None = None
+    c: C,
+    status: list[IssueStatus] | None = Query(None),
+    assignee: str | None = None,
+    owner: str | None = None,
 ) -> list[IssueOut]:
-    found = await c.issues.list(statuses=status, assignee=assignee)
+    found = await c.issues.list(statuses=status, assignee=assignee, owner=owner)
     states = await c.issues.work_states(found)
     return [IssueOut.of(i, states[i.id]) for i in found]
 
@@ -115,6 +124,7 @@ async def list_issues(
 async def create_issue(c: C, body: IssueCreate) -> IssueOut:
     issue = await c.issues.create(
         None,
+        owner=body.owner,
         title=body.title,
         description=body.description,
         status=body.status,
@@ -138,6 +148,7 @@ async def update_issue(c: C, issue_id: int, body: IssuePatch) -> IssueOut:
     issue = await c.issues.update(
         None,
         issue_id,
+        owner=body.owner,
         title=body.title,
         description=body.description,
         status=body.status,

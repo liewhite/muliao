@@ -66,6 +66,7 @@ class IssueView:
     status: str
     priority: str
     assignee: str
+    owner: str
     creator: str
     activities: Sequence[ActivityView]
 
@@ -74,8 +75,8 @@ def render_issue(issue: IssueView) -> str:
     """issue 的完整文本（交给模型：唤醒信件与 issue_show 共用）。"""
     lines = [
         f"# Issue #{issue.id}: {issue.title}",
-        f"status: {issue.status} | priority: {issue.priority} | assignee: {issue.assignee} | "
-        f"created by: {issue.creator}",
+        f"owner (project): {issue.owner} | status: {issue.status} | priority: {issue.priority} | "
+        f"assignee: {issue.assignee} | created by: {issue.creator}",
         "",
         issue.description.strip() or "(no description)",
         "",

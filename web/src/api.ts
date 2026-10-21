@@ -291,7 +291,8 @@ export const api = {
     call('put', '/api/vault/{key}', { path: { key }, query: { owner }, body: { value, description } }),
   deleteSecret: (owner: AgentId | null, key: string) => call('delete', '/api/vault/{key}', { path: { key }, query: { owner } }),
 
-  issues: () => call('get', '/api/issues'),
+  /** owner 给出时只列这个项目（agent）负责的 issue */
+  issues: (owner?: string) => call('get', '/api/issues', { query: { owner } }),
   issue: (issue_id: number) => call('get', '/api/issues/{issue_id}', { path: { issue_id } }),
   createIssue: (body: Schemas['IssueCreate']) => call('post', '/api/issues', { body }),
   /** 只修改给出的字段；assignee 给 null 表示取消指派 */

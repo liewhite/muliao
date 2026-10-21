@@ -17,6 +17,8 @@ from muliao.sessions.api import WorkState
 class IssueSummary(BaseModel):
     id: int
     title: str
+    # 负责的项目（agent 名）；负责的 agent 被删除后为 null
+    owner: str | None
     status: IssueStatus
     priority: IssuePriority
     # agent 名、`user`，或 null（未指派）
@@ -40,6 +42,9 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         return IssueSummary(
             id=issue.id,
             title=issue.title,
+            owner=None
+            if issue.owner_agent_id is None
+            else names.get(issue.owner_agent_id, issue.owner_agent_id),
             status=issue.status,
             priority=issue.priority,
             assignee=None if assignee is None else names.get(assignee, assignee),
@@ -49,7 +54,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
 
     @ts.tool_plain
     async def issue_list(
-        statuses: tuple[IssueStatus, ...] = (), assignee: str | None = None
+        statuses: tuple[IssueStatus, ...] = (), assignee: str | None = None, owner: str | None = None
     ) -> list[IssueSummary]:
         """List issues on the muliao issue board, most recently updated first. `assignee_session` tells whether
         the assigned agent is working on it in the issue's conversation: running, waiting (on a background job,
@@ -58,10 +63,13 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         Args:
             statuses: Only these statuses; all when omitted.
             assignee: Only issues assigned to this agent (by name) or `user`.
+            owner: Only issues owned by this agent (by name): the whole history of its project.
         """
         names = {a.id: a.name for a in await agents.list()} | {USER: USER}
         found = await issues.list(
-            statuses=list(statuses), assignee=None if assignee is None else await assignee_id(assignee)
+            statuses=list(statuses),
+            assignee=None if assignee is None else await assignee_id(assignee),
+            owner=None if owner is None else (await agents.find_by_name(owner)).id,
         )
         states = await issues.work_states(found)
         return [await summary(i, names, states) for i in found]
@@ -79,6 +87,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
     async def issue_create(
         ctx: RunContext[RunScope],
         title: str,
+        owner: str,
         description: str = "",
         status: IssueStatus = IssueStatus.BACKLOG,
         priority: IssuePriority = IssuePriority.NONE,
@@ -89,6 +98,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
 
         Args:
             title: One-line summary.
+            owner: The agent (by name) whose project this is; it stays the owner when the issue is reassigned.
+                Usually yourself for your own project's work.
             description: Markdown details: context, what done looks like.
             status: Initial status.
             priority: Priority.
@@ -97,6 +108,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         issue = await issues.create(
             ctx.deps.agent_id,
             session_id=ctx.deps.session_id,
+            owner=(await agents.find_by_name(owner)).id,
             title=title,
             description=description,
             status=status,
@@ -109,6 +121,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
     async def issue_update(
         ctx: RunContext[RunScope],
         issue_id: int,
+        owner: str | None = None,
         title: str | None = None,
         description: str | None = None,
         status: IssueStatus | None = None,
@@ -123,6 +136,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
 
         Args:
             issue_id: Issue number.
+            owner: New owner agent (by name): the project this issue belongs to.
             title: New title.
             description: New description (replaces the old one).
             status: New status.
@@ -139,6 +153,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             ctx.deps.agent_id,
             issue_id,
             session_id=ctx.deps.session_id,
+            owner=None if owner is None else (await agents.find_by_name(owner)).id,
             title=title,
             description=description,
             status=status,

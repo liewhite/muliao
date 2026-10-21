@@ -72,7 +72,7 @@ async def _mail(container, session_id: str) -> list[str]:
 async def test_moving_an_assigned_issue_to_todo_wakes_the_agent_in_one_session(container, make_agent):
     alpha = (await make_agent()).id
     issue = await container.issues.create(
-        None, title="Fix the build", description="CI is red", assignee=alpha
+        None, owner=alpha, title="Fix the build", description="CI is red", assignee=alpha
     )
     await deliver(container)
     assert await _issue_sessions(container) == []  # backlog：不唤醒
@@ -93,7 +93,9 @@ async def test_moving_an_assigned_issue_to_todo_wakes_the_agent_in_one_session(c
 
 async def test_an_agent_working_in_the_issue_session_does_not_wake_itself(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, title="t", status=IssueStatus.TODO, assignee=alpha)
+    issue = await container.issues.create(
+        None, owner=alpha, title="t", status=IssueStatus.TODO, assignee=alpha
+    )
     await drain(container)
     [session] = await _issue_sessions(container)
     # 在这个 issue 自己的会话里改状态、评论：它正在处理，不再唤醒
@@ -111,7 +113,7 @@ async def test_an_agent_assigning_itself_works_on_it_in_its_current_session(cont
     alpha = (await make_agent()).id
     chat = await start(container, alpha, "track this")
     issue = await container.issues.create(
-        alpha, session_id=chat.id, title="mine", status=IssueStatus.IN_PROGRESS, assignee=alpha
+        alpha, owner=alpha, session_id=chat.id, title="mine", status=IssueStatus.IN_PROGRESS, assignee=alpha
     )
     await deliver(container)
     # 不另开会话：当前会话登记为处理会话，它在跑就算有人在做
@@ -130,7 +132,7 @@ async def test_an_agent_assigning_itself_works_on_it_in_its_current_session(cont
 
 async def test_handing_over_wakes_the_new_assignee_and_records_the_timeline(container, make_agent):
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
-    issue = await container.issues.create(alpha, title="t", assignee=alpha)
+    issue = await container.issues.create(alpha, owner=alpha, title="t", assignee=alpha)
     await container.issues.update(alpha, issue.id, assignee=beta, status=IssueStatus.IN_PROGRESS)
     await deliver(container)
     [session] = await _issue_sessions(container)
@@ -148,7 +150,7 @@ async def test_an_agent_handing_an_issue_to_the_user_notifies_them(container, ma
     from muliao.notifications.tables import Notification
 
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, title="Review me", status=IssueStatus.TODO)
+    issue = await container.issues.create(None, owner=alpha, title="Review me", status=IssueStatus.TODO)
     await container.issues.update(alpha, issue.id, status=IssueStatus.IN_REVIEW, assignee=USER)
     await deliver(container)
     async with container.db.transaction() as s:
@@ -158,7 +160,9 @@ async def test_an_agent_handing_an_issue_to_the_user_notifies_them(container, ma
 
 async def test_a_deleted_issue_session_is_replaced_on_the_next_wake(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, title="t", status=IssueStatus.TODO, assignee=alpha)
+    issue = await container.issues.create(
+        None, owner=alpha, title="t", status=IssueStatus.TODO, assignee=alpha
+    )
     await deliver(container)
     await drain(container)  # 跑完这次运行，会话才能删除
     [first] = await _issue_sessions(container)
@@ -174,7 +178,9 @@ async def test_a_deleted_issue_session_is_replaced_on_the_next_wake(container, m
 
 async def test_deleting_an_agent_unassigns_its_issues(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, title="t", status=IssueStatus.TODO, assignee=alpha)
+    issue = await container.issues.create(
+        None, owner=alpha, title="t", status=IssueStatus.TODO, assignee=alpha
+    )
     await deliver(container)
     commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m", 0))
     async with container.db.transaction() as s:
@@ -184,9 +190,10 @@ async def test_deleting_an_agent_unassigns_its_issues(container, make_agent):
     assert detail.activities[-1].change == {"from": alpha, "to": None}
 
 
-async def test_assigning_to_an_unknown_agent_is_refused(container):
+async def test_assigning_to_an_unknown_agent_is_refused(container, make_agent):
+    alpha = (await make_agent()).id
     with pytest.raises(NotFound):
-        await container.issues.create(None, title="t", assignee="nobody")
+        await container.issues.create(None, owner=alpha, title="t", assignee="nobody")
 
 
 async def test_http_issue_lifecycle(client, container, make_agent):
@@ -194,7 +201,7 @@ async def test_http_issue_lifecycle(client, container, make_agent):
 
     await login(client)
     alpha = (await make_agent()).id
-    resp = await client.post("/api/issues", json={"title": "Write docs", "assignee": alpha})
+    resp = await client.post("/api/issues", json={"title": "Write docs", "owner": alpha, "assignee": alpha})
     assert resp.status_code == 201
     issue_id = resp.json()["id"]
 
@@ -220,8 +227,10 @@ async def test_work_state_of_the_assignee_session(container, make_agent):
     from muliao.issues.api import WorkState
 
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, title="t", status=IssueStatus.TODO, assignee=alpha)
-    unassigned = await container.issues.create(None, title="u", status=IssueStatus.TODO)
+    issue = await container.issues.create(
+        None, owner=alpha, title="t", status=IssueStatus.TODO, assignee=alpha
+    )
+    unassigned = await container.issues.create(None, owner=alpha, title="u", status=IssueStatus.TODO)
     await deliver(container)
     states = await container.issues.work_states(await container.issues.list())
     assert states == {issue.id: WorkState.RUNNING, unassigned.id: None}  # 运行排着
@@ -237,7 +246,7 @@ async def test_an_agent_releases_an_issue_to_a_fresh_session(container, make_age
     alpha = (await make_agent()).id
     chat = await start(container, alpha, "chat")
     issue = await container.issues.create(
-        alpha, session_id=chat.id, title="t", status=IssueStatus.TODO, assignee=alpha
+        alpha, owner=alpha, session_id=chat.id, title="t", status=IssueStatus.TODO, assignee=alpha
     )
     with pytest.raises(Conflict):
         await container.issues.release(alpha, issue.id, "another-session")
@@ -252,10 +261,36 @@ async def test_an_agent_releases_an_issue_to_a_fresh_session(container, make_age
 
     # 不再是 todo / 进行中的只断开，不开会话
     later = await container.issues.create(
-        alpha, session_id=chat.id, title="later", status=IssueStatus.TODO, assignee=alpha
+        alpha, owner=alpha, session_id=chat.id, title="later", status=IssueStatus.TODO, assignee=alpha
     )
     await container.issues.update(alpha, later.id, session_id=chat.id, status=IssueStatus.BACKLOG)
     assert not await container.issues.release(alpha, later.id, chat.id)
     await deliver(container)
     assert len(await _issue_sessions(container)) == 1
     assert (await container.issues.get(later.id)).issue.sessions == {}
+
+
+async def test_the_owner_stays_when_the_issue_is_reassigned_and_filters_a_project(container, make_agent):
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    issue = await container.issues.create(alpha, owner=alpha, title="t", assignee=alpha)
+    other = await container.issues.create(None, owner=beta, title="u")
+    await container.issues.update(alpha, issue.id, assignee=beta)
+    assert [i.id for i in await container.issues.list(owner=alpha)] == [issue.id]
+    assert [i.id for i in await container.issues.list(owner=beta)] == [other.id]
+
+    await container.issues.update(None, issue.id, owner=beta)
+    detail = await container.issues.get(issue.id)
+    assert detail.activities[-1].kind == ActivityKind.OWNER
+    assert "user changed owner: alpha -> beta" in await container.issues.render(issue.id)
+
+    with pytest.raises(NotFound):
+        await container.issues.create(None, owner="nobody", title="x")
+
+
+async def test_deleting_the_owner_agent_clears_ownership(container, make_agent):
+    alpha = (await make_agent()).id
+    issue = await container.issues.create(None, owner=alpha, title="t")
+    commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m", 0))
+    async with container.db.transaction() as s:
+        await commit(s)
+    assert (await container.issues.get(issue.id)).issue.owner_agent_id is None

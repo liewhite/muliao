@@ -23,7 +23,7 @@
 | File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
 | Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，deliver task 只引用它，内容不另存一份 | `notifications` 表 |
 | ModelUsage（用量） | 一次模型运行报告的 token 用量：时间、agent、会话（没有就为空）、运行类型（对话 / 压缩 / 反思 / 临时 agent）、模型、请求数与各项 token。只增不改，也不随 agent 与会话的删除而消失——它是账目 | `model_usage` 表 |
-| Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、指派人（agent / 用户 / 无）、时间线（评论与属性变化）。转入 todo / in_progress 或在这两个状态被指派时唤醒被指派的 agent | `issues`、`issue_activities` 表 |
+| Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、负责项目（owner agent，必填、不随指派变）、指派人（agent / 用户 / 无）、时间线（评论与属性变化）。转入 todo / in_progress 或在这两个状态被指派时唤醒被指派的 agent | `issues`、`issue_activities` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件；触发方式（定时、一次性、webhook……）多态实现。跑完不会再触发的归档（`finished_at`），离开列表但留下历史 | `triggers` 表 |
 
 目录：
@@ -589,7 +589,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 **职责**：人与 agent 协作的事项（`issues/`，表 `issues` 与 `issue_activities`）。界面上有看板（拖拽改状态）、列表与详情页；agent 用工具组 `issues`（`issue_list/show/create/update/comment`）读写。
 
-- **状态**：backlog / todo / in_progress / in_review / blocked / done / cancelled。**指派人**：一个 agent、用户（`"user"`），或未指派。界面上的操作以用户身份进行（actor 为 None），工具以调用它的 agent 身份进行。
+- **状态**：backlog / todo / in_progress / in_review / blocked / done / cancelled。**负责项目（owner）**：一个 agent（一个 agent 负责一个项目），创建时必填，不随指派变化，只能显式修改（时间线记一条）；按它筛选（`issue_list(owner=)`、`GET /api/issues?owner=`、界面的「负责项目」）看一个项目的全部来龙去脉。负责的 agent 被删除时置空。**指派人**：一个 agent、用户（`"user"`），或未指派——现在谁在做。界面上的操作以用户身份进行（actor 为 None），工具以调用它的 agent 身份进行。
 - **时间线**：每次创建、评论、每个真正变了的字段各记一条 `IssueActivity`，只增不改；删除 issue 一起删。
 - **唤醒**（`issues.rules.wake_target`，纯函数）：被指派人是 agent、且这次修改不是它在这个 issue 自己的会话里做的时，状态从别处转入 todo / in_progress，或处于这两个状态时被指派给它（含新建时就指派好）——唤醒它。评论也唤醒处于这两个状态的被指派 agent（`comment_wakes`）。只有 agent 在这个 issue 的会话里（`Issue.sessions[agent]`，即正在处理它）改状态、评论不唤醒自己；在别的会话里给自己建、派、转 todo 的 issue 不另开会话：当前会话登记为它的处理会话（`Issue.sessions`），巡检据此判断；那个会话停下后的下一次唤醒（评论、巡检）才新开 issue 自己的会话——只续写 `origin=issue`、`origin_ref` 为本 issue 的会话，不往别的会话（如用户的对话）投信。agent 可以 `issue_release` 让出：断开它登记的处理会话（必须是调用所在的会话），issue 仍是 todo / 进行中、指派给它时马上开 issue 自己的新会话接手，否则只断开；时间线记一条 released。工具把调用所在的会话（RunScope.session_id）交给服务判定。
 - **投信**：与触发器同一套路——在 issue 的事务里 `check_receivable_in`、发出定向命令 `Receive`（来源 `Origin.ISSUE`，`origin_ref` 为 issue id），提交后 `run_now`。同一个 agent 在同一个 issue 上续写同一个会话（`Issue.sessions`，agent id → 会话 id），会话被删了就新开。信件内容是 issue 的全文（描述与时间线）加上处理指引；没有用户在等（awaited = False），结果记在 issue 上。

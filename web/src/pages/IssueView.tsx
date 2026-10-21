@@ -154,7 +154,15 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <SelectInput
+          label="负责项目（owner）"
+          value={issue.owner}
+          placeholder="无负责项目"
+          onChange={(v) => patch({ owner: v })}
+          options={(agents.data ?? []).map((a) => ({ id: a.id as string, label: a.name }))}
+          isDisabled={change.busy}
+        />
         <SelectInput
           label="状态"
           value={issue.status}

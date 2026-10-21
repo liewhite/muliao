@@ -8,6 +8,7 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   description: '',
   status: 'todo',
   priority: 'none',
+  owner: null,
   assignee: null,
   creator_agent_id: null,
   sessions: {},
@@ -56,7 +57,7 @@ describe('issues', () => {
 })
 
 describe('stalled', () => {
-  const base = { id: 1, title: '', description: '', priority: 'none', creator_agent_id: null, sessions: {}, created_at: '', updated_at: '' } as const
+  const base = { id: 1, owner: null, title: '', description: '', priority: 'none', creator_agent_id: null, sessions: {}, created_at: '', updated_at: '' } as const
   it('flags an active agent issue that nobody is working on', () => {
     expect(stalled({ ...base, status: 'todo', assignee: 'a1', assignee_session: 'idle' })).toBe(true)
     expect(stalled({ ...base, status: 'todo', assignee: 'a1', assignee_session: null })).toBe(true)
