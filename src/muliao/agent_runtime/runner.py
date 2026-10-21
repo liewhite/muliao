@@ -41,7 +41,7 @@ from muliao.agent_runtime.instructions import (
     build_temp_instructions,
 )
 from muliao.agent_runtime.llm import ModelResolver
-from muliao.agent_runtime.redaction import redact_call
+from muliao.agent_runtime.redaction import redact_call, redact_retry
 from muliao.agents.api import AgentInfo, AgentService, MemoryStore, PromptStore, SkillStore
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
@@ -450,4 +450,5 @@ async def _forward_events(
         elif isinstance(event, FunctionToolCallEvent):
             hooks.on_tool_call(redact_call(event.part))
         elif isinstance(event, FunctionToolResultEvent):
-            hooks.on_tool_result(event.part)
+            part = event.part
+            hooks.on_tool_result(redact_retry(part) if isinstance(part, RetryPromptPart) else part)

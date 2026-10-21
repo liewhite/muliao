@@ -8,7 +8,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, RetryPromptPart, ToolCallPart
 
 # SECRET_TOOL_ARGS（工具名 → 需要脱敏的参数名）由定义这些工具的 vault 领域声明
 from muliao.vault.api import SECRET_TOOL_ARGS
@@ -51,14 +51,25 @@ def redact_call(part: ToolCallPart) -> ToolCallPart:
     return dataclasses.replace(part, args=args)
 
 
+def redact_retry(part: RetryPromptPart) -> RetryPromptPart:
+    """参数校验失败时交还模型的错误：pydantic 的每条错误都带着 input（出错的那部分参数，缺字段时是整个参数
+    dict），里面就有明文。去掉 input，错误位置与原因（loc、msg、type）照常留给模型看。工具自己报的错误（字符串）
+    由工具负责不带明文。"""
+    if part.tool_name not in SECRET_TOOL_ARGS or isinstance(part.content, str):
+        return part
+    return dataclasses.replace(part, content=[{**e, "input": REDACTED} for e in part.content])
+
+
 def redact_messages(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
     result: list[ModelMessage] = []
     for msg in messages:
-        if isinstance(msg, ModelResponse) and any(
-            isinstance(p, ToolCallPart) and p.tool_name in SECRET_TOOL_ARGS for p in msg.parts
-        ):
+        if isinstance(msg, ModelResponse):
             msg = dataclasses.replace(
                 msg, parts=[redact_call(p) if isinstance(p, ToolCallPart) else p for p in msg.parts]
+            )
+        elif isinstance(msg, ModelRequest):
+            msg = dataclasses.replace(
+                msg, parts=[redact_retry(p) if isinstance(p, RetryPromptPart) else p for p in msg.parts]
             )
         result.append(msg)
     return result

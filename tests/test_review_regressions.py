@@ -215,3 +215,33 @@ async def test_mail_taken_at_a_runs_start_counts_as_handed_to_it(container, make
     [run] = await tasks_of(container, TaskKind.RUN)
     assert RunPayload.of(run).through_mail_id == later.id
     assert {m.consumed_by for m in await mail_of(container)} == {run.id}
+
+
+async def test_a_vault_set_call_failing_validation_keeps_the_value_out_of_history_and_live_events(
+    container, make_agent, models, monkeypatch
+):
+    from pydantic_ai.messages import ModelRequest, RetryPromptPart, ToolCallPart
+
+    alpha = (await make_agent("alpha", model="m")).id
+
+    def fn(messages, info):
+        last = messages[-1]
+        if isinstance(last, ModelRequest) and any(isinstance(p, RetryPromptPart) for p in last.parts):
+            return ModelResponse(parts=[TextPart("gave up")])
+        # 缺必填的 key：校验失败的错误里带着整个参数 dict
+        return ModelResponse(parts=[ToolCallPart("vault_set", {"value": "super-secret"})])
+
+    from tests.test_flow import scripted
+
+    models.models["m"] = scripted(fn)
+    published = []
+    real = container.live.publish_item
+    monkeypatch.setattr(container.live, "publish_item", lambda *a: (published.append(a[2]), real(*a))[1])
+    session = await start(container, alpha, "save my token", origin=Origin.TRIGGER)
+    await drain(container)
+
+    async with container.db.transaction() as s:
+        payloads = (await s.scalars(select(Message.payload).where(Message.session_id == session.id))).all()
+    assert any("RetryPromptPart" in p or "retry-prompt" in p for p in payloads)
+    assert all("super-secret" not in p for p in payloads)
+    assert published and all("super-secret" not in item.model_dump_json() for item in published)

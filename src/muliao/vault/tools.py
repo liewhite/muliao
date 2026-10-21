@@ -33,7 +33,7 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
 
     @ts.tool
     async def vault_set(
-        ctx: RunContext[RunScope], key: str, value: str, description: str, scope: Scope = "private"
+        ctx: RunContext[RunScope], key: str, value: str, description: str = "", scope: Scope = "private"
     ) -> str:
         """Store a secret the user gave you so it never has to appear in files, skills, memory or MCP configs.
         The value is redacted from the saved conversation.
