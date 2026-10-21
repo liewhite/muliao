@@ -32,6 +32,7 @@ import { AnsweredQuestions, QuestionForm, QuestionNote } from '../questions'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
+import { isSendShortcut, SEND_HINT } from '../sendKey'
 import { liveItems, mergeLive, useServerEvents, type RunEvent } from '../events'
 import { refreshUnread, refreshUnreadLogged } from '../unread'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
@@ -365,8 +366,7 @@ function Composer({
   onStop: () => void
 }) {
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    // 桌面端 Enter 发送、Shift+Enter 换行；输入法组字时不触发
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && window.matchMedia('(pointer: fine)').matches) {
+    if (isSendShortcut(e)) {
       e.preventDefault()
       onSend()
     }
@@ -379,7 +379,7 @@ function Composer({
         <VoiceButton voice={voice} isDisabled={busy} />
         <TextField value={draft} onChange={setDraft} aria-label="回复" variant="secondary" className="flex-1">
           <TextArea
-            placeholder="回复…"
+            placeholder={`回复…（${SEND_HINT}）`}
             rows={Math.min(6, Math.max(1, draft.split('\n').length))}
             onKeyDown={onKeyDown}
             onPaste={uploads.onPaste}
@@ -542,7 +542,7 @@ export default function SessionView() {
 
   /** content：要发的文字，默认是输入框里的；语音输入时是输入框内容接上转写结果 */
   async function send(content: string = draft) {
-    // Enter 键不经过按钮的禁用状态：请求进行中再按一次不能重复发送
+    // 快捷键不经过按钮的禁用状态：请求进行中再按一次不能重复发送
     if (action.busy || !canSend(content, uploads)) return false
     const sent = uploads.batch()
     const shown = draft

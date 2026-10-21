@@ -20,6 +20,8 @@ export default function NewSession() {
   const canStart = agent !== null && (prompt.trim() !== '' || uploads.ids.length > 0) && !uploads.blocking
 
   async function start() {
+    // 快捷键不经过按钮的禁用状态
+    if (action.busy || !canStart) return
     await action.run(async () => {
       if (agent === null) throw new Error('请选择 agent')
       const session = await api.startSession(asAgentId(agent), prompt.trim(), uploads.ids)
@@ -47,7 +49,7 @@ export default function NewSession() {
                   options={list.map((a) => ({ id: a.id, label: a.name, description: a.description }))}
                 />
                 <div onPaste={uploads.onPaste}>
-                  <TextAreaInput label="消息" value={prompt} onChange={setPrompt} rows={6} autoFocus />
+                  <TextAreaInput label="消息" value={prompt} onChange={setPrompt} rows={6} autoFocus onSubmit={() => void start()} />
                 </div>
                 <PendingUploads uploads={uploads} />
                 <ErrorAlert error={action.error ?? voice.error} />

@@ -118,6 +118,15 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
       navigate('/issues')
     })
   }
+  const postComment = () => {
+    // 快捷键不经过按钮的禁用状态：请求进行中再按一次不能重复发表
+    if (send.busy || !comment.trim()) return
+    void send.run(async () => {
+      await api.commentIssue(issue.id, comment)
+      setComment('')
+      await reload()
+    })
+  }
   const sessions = Object.entries(issue.sessions)
 
   return (
@@ -203,19 +212,9 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
 
       <Card>
         <Card.Content className="flex flex-col gap-2">
-          <TextAreaInput label="评论" value={comment} onChange={setComment} rows={3} />
+          <TextAreaInput label="评论" value={comment} onChange={setComment} rows={3} onSubmit={postComment} />
           <ErrorAlert error={send.error} />
-          <ActionButton
-            isPending={send.busy}
-            isDisabled={!comment.trim()}
-            onPress={() =>
-              void send.run(async () => {
-                await api.commentIssue(issue.id, comment)
-                setComment('')
-                await reload()
-              })
-            }
-          >
+          <ActionButton isPending={send.busy} isDisabled={!comment.trim()} onPress={postComment}>
             发表评论
           </ActionButton>
         </Card.Content>

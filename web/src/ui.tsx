@@ -30,6 +30,7 @@ import remarkMath from 'remark-math'
 import 'katex/dist/katex.min.css'
 import { FILES_PATH, api, type Agent, type AgentId } from './api'
 import { normalizeMath } from './markdown'
+import { isSendShortcut, SEND_HINT } from './sendKey'
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
@@ -355,12 +356,32 @@ export function TextAreaInput({
   rows = 4,
   mono,
   autoFocus,
+  onSubmit,
   ...field
-}: FieldProps & { rows?: number; mono?: boolean }) {
+}: FieldProps & {
+  rows?: number
+  mono?: boolean
+  /** 有它时 ⌘+Enter（Ctrl+Enter）调用它提交，Enter 照常换行；调用方自己判断当前能否提交 */
+  onSubmit?: () => void
+}) {
   return (
     <TextField fullWidth variant="secondary" {...field}>
       <Label>{label}</Label>
-      <TextArea rows={rows} className={mono ? 'font-mono text-sm' : undefined} autoFocus={autoFocus} />
+      <TextArea
+        rows={rows}
+        className={mono ? 'font-mono text-sm' : undefined}
+        autoFocus={autoFocus}
+        placeholder={onSubmit ? SEND_HINT : undefined}
+        onKeyDown={
+          onSubmit &&
+          ((e) => {
+            if (isSendShortcut(e)) {
+              e.preventDefault()
+              onSubmit()
+            }
+          })
+        }
+      />
       {hint && <Description>{hint}</Description>}
     </TextField>
   )
