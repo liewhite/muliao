@@ -261,6 +261,21 @@ export function EmptyHint({ children }: { children: ReactNode }) {
   return <p className="py-10 text-center text-sm text-muted">{children}</p>
 }
 
+/** 只读列出继承来的公共资源（见 ownership.ts）：私有视角里能看到它们，但只能在设置页管理。 */
+export function InheritedSection({ title, to, children }: { title: string; to: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-medium text-muted">{title}</h2>
+        <RouterLink to={to} className="shrink-0 text-sm text-accent">
+          去设置页管理
+        </RouterLink>
+      </div>
+      {children}
+    </section>
+  )
+}
+
 const isFileUrl = (src: string) => src.startsWith(`${FILES_PATH}/`)
 
 // 只渲染本站文件存储里的图片：外链图片会在打开会话时由浏览器自动请求，被注入的模型可以借它把对话内容
@@ -551,20 +566,4 @@ export async function copyText(text: string, what: string): Promise<void> {
   if (!navigator.clipboard) throw new Error(`当前页面无法访问剪贴板（需要 HTTPS），请手动选中${what}复制`)
   await navigator.clipboard.writeText(text)
   toast.success(`已复制${what}`)
-}
-
-/** 「归属」下拉框里代表公共资源的选项 id；提交时映射为 owner = null */
-export const PUBLIC_OWNER = '@public'
-
-export function ownerOptions(agents: Agent[] | undefined) {
-  return [
-    { id: PUBLIC_OWNER, label: '公共（所有 agent）' },
-    ...(agents ?? []).map((a) => ({ id: a.id, label: `${a.name}（私有）` })),
-  ]
-}
-
-export const ownerOf = (option: string): AgentId | null => (option === PUBLIC_OWNER ? null : (option as AgentId))
-
-export function ownerLabel(agents: Agent[] | undefined, owner: AgentId | null): string {
-  return owner === null ? '公共' : agentLabel(agents, owner)
 }

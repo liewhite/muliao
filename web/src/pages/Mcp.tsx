@@ -1,22 +1,18 @@
 import { useState } from 'react'
 import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plug, Trash2 } from 'lucide-react'
-import { api, type Agent, type McpInput, type McpServer } from '../api'
+import { api, type AgentId, type McpInput, type McpServer } from '../api'
+import { inheritedPublic, ownedBy, type Inherited } from '../ownership'
 import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
+  InheritedSection,
   Loading,
-  PUBLIC_OWNER,
   Page,
   Segmented,
-  SelectInput,
   TextAreaInput,
   TextInput,
-  ownerLabel,
-  ownerOf,
-  ownerOptions,
   useAction,
-  useAgents,
   useConfirm,
   useLoad,
 } from '../ui'
@@ -49,8 +45,7 @@ function ToolChips({ tools }: { tools: string[] }) {
   )
 }
 
-function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated: () => void }) {
-  const [owner, setOwner] = useState(PUBLIC_OWNER)
+function McpForm({ owner, onCreated }: { owner: AgentId | null; onCreated: () => void }) {
   const [name, setName] = useState('')
   const [transport, setTransport] = useState<'stdio' | 'http'>('stdio')
   const [command, setCommand] = useState('')
@@ -64,7 +59,7 @@ function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated
     const ok = await action.run(async () => {
       const kv = parsePairs(pairs)
       const input: McpInput = {
-        owner: ownerOf(owner),
+        owner,
         name,
         transport,
         command: transport === 'stdio' ? command : null,
@@ -90,12 +85,6 @@ function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated
   return (
     <CollapsibleForm title="添加 MCP server">
             <p className="text-sm text-muted">也可以直接在对话里把 MCP 信息告诉 agent，让它自己调用 mcp_add 创建。</p>
-            <SelectInput
-              label="归属"
-              value={owner}
-              onChange={setOwner}
-              options={ownerOptions(agents)}
-            />
             <TextInput label="名称" hint="工具名会以「名称_」为前缀" value={name} onChange={setName} mono isRequired />
             <div>
               <Segmented
@@ -134,12 +123,29 @@ function McpForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated
   )
 }
 
-function McpItem({ server, agents, onChange }: { server: McpServer; agents: Agent[] | undefined; onChange: () => void }) {
+/** 连接地址与环境变量 / 请求头：管理与只读展示共用。 */
+function McpTarget({ server }: { server: McpServer }) {
+  const pairs = { ...server.env, ...server.headers }
+  return (
+    <>
+      <code className="block whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs">
+        {server.command ? [server.command, ...server.args].join(' ') : server.url}
+      </code>
+      {Object.keys(pairs).length > 0 && (
+        <code className="block whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs">
+          {Object.entries(pairs)
+            .map(([k, v]) => `${k}=${v}`)
+            .join('\n')}
+        </code>
+      )}
+    </>
+  )
+}
+
+function McpItem({ server, onChange }: { server: McpServer; onChange: () => void }) {
   const confirm = useConfirm()
   const [tools, setTools] = useState<string[] | null>(null)
   const action = useAction()
-  const target = server.command ? [server.command, ...server.args].join(' ') : server.url
-  const pairs = { ...server.env, ...server.headers }
 
   async function remove() {
     const ok = await confirm({ title: `删除 MCP server「${server.name}」？`, confirmLabel: '删除', danger: true })
@@ -152,9 +158,6 @@ function McpItem({ server, agents, onChange }: { server: McpServer; agents: Agen
         <div className="min-w-0 flex-1">
           <Card.Title className="font-mono text-base">{server.name}</Card.Title>
           <div className="mt-1 flex flex-wrap gap-1.5">
-            <Chip size="sm" color="accent" variant="soft">
-              {ownerLabel(agents, server.owner)}
-            </Chip>
             <Chip size="sm" variant="secondary">
               {server.transport}
             </Chip>
@@ -168,14 +171,7 @@ function McpItem({ server, agents, onChange }: { server: McpServer; agents: Agen
         />
       </Card.Header>
       <Card.Content className="flex flex-col gap-2">
-        <code className="block whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs">{target}</code>
-        {Object.keys(pairs).length > 0 && (
-          <code className="block whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs">
-            {Object.entries(pairs)
-              .map(([k, v]) => `${k}=${v}`)
-              .join('\n')}
-          </code>
-        )}
+        <McpTarget server={server} />
         {tools && <ToolChips tools={tools} />}
         <ErrorAlert error={action.error} />
       </Card.Content>
@@ -198,25 +194,78 @@ function McpItem({ server, agents, onChange }: { server: McpServer; agents: Agen
   )
 }
 
-export default function Mcp() {
-  const servers = useLoad(() => api.mcp(), [])
-  const agents = useAgents()
+/** 继承来的公共 server：只能看，管理入口在设置页。 */
+function InheritedMcpItem({ entry: { item, shadowed } }: { entry: Inherited<McpServer> }) {
   return (
-    <Page title="MCP" back="/settings">
-      <McpForm agents={agents.data} onCreated={() => void servers.reload()} />
+    <Card>
+      <Card.Header>
+        <Card.Title className="font-mono text-base">{item.name}</Card.Title>
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          <Chip size="sm" variant="secondary">
+            {item.transport}
+          </Chip>
+          {!item.enabled && (
+            <Chip size="sm" variant="secondary">
+              已停用
+            </Chip>
+          )}
+          {shadowed && (
+            <Chip size="sm" color="warning" variant="soft">
+              已被私有项覆盖
+            </Chip>
+          )}
+        </div>
+      </Card.Header>
+      <Card.Content className="flex flex-col gap-2">
+        <McpTarget server={item} />
+      </Card.Content>
+    </Card>
+  )
+}
+
+/** owner 为 null 时管理公共 MCP server；否则管理该 agent 的私有 server，并只读列出它继承的公共 server。 */
+export function McpManager({ owner }: { owner: AgentId | null }) {
+  const servers = useLoad(() => api.mcp(), [])
+  return (
+    <div className="flex flex-col gap-3">
+      <McpForm owner={owner} onCreated={() => void servers.reload()} />
       <Loading state={servers}>
-        {(list) =>
-          list.length === 0 ? (
-            <EmptyHint>没有 MCP server</EmptyHint>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {list.map((s) => (
-                <McpItem key={`${s.owner ?? '@public'}/${s.name}-${s.enabled}`} server={s} agents={agents.data} onChange={() => void servers.reload()} />
-              ))}
+        {(all) => {
+          const own = ownedBy(all, owner)
+          const inherited = inheritedPublic(all, owner, (s) => s.name)
+          return (
+            <div className="flex flex-col gap-4">
+              {own.length === 0 ? (
+                <EmptyHint>没有 MCP server</EmptyHint>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {own.map((s) => (
+                    <McpItem key={`${s.name}-${s.enabled}`} server={s} onChange={() => void servers.reload()} />
+                  ))}
+                </div>
+              )}
+              {inherited.length > 0 && (
+                <InheritedSection title="继承的公共 MCP" to="/mcp">
+                  {inherited.map((e) => (
+                    <InheritedMcpItem key={e.item.name} entry={e} />
+                  ))}
+                </InheritedSection>
+              )}
             </div>
           )
-        }
+        }}
       </Loading>
+    </div>
+  )
+}
+
+export default function Mcp() {
+  return (
+    <Page title="公共 MCP servers" back="/settings">
+      <p className="text-sm text-muted">
+        公共 MCP server 对所有 agent 可见，只能引用公共 secret；agent 私有的 MCP 在该 agent 详情页的 MCP 标签里管理，同名时遮蔽公共的。
+      </p>
+      <McpManager owner={null} />
     </Page>
   )
 }
