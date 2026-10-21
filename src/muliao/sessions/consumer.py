@@ -288,9 +288,7 @@ class Consumer:
             return None, None
         pending = pending_calls(history, delegated)
         answers = answered_in(queued, pending)
-        deferred = (
-            DeferredToolResults(calls=deferred_results(pending, answers)) if pending else None
-        )
+        deferred = DeferredToolResults(calls=deferred_results(pending, answers)) if pending else None
         state.taken = list(queued)
         if queued:
             # 开头取走的信件都交给了这次运行（mailbox.handed_to），哪怕它在第一次保存之前就最终失败：失败的结清据此
