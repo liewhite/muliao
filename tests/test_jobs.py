@@ -543,3 +543,37 @@ async def test_a_check_sent_before_the_job_ends_arrives_before_its_end(container
 
     events = [m.content for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
     assert len(events) == 2 and "still running" in events[0] and "was killed" in events[1]
+
+
+class _FakeProc:
+    def __init__(self) -> None:
+        self.stdout = asyncio.StreamReader()
+
+
+async def test_a_multiline_secret_across_a_read_boundary_never_reaches_the_log(tmp_path):
+    from muliao.jobs.process import _CHUNK, _record
+
+    pem = "-----BEGIN KEY-----\nAAAA\nBBBB\n-----END KEY-----"
+    proc = _FakeProc()
+    # secret 中间的换行恰好落在第一块里，其余部分在下一块
+    data = "x" * (_CHUNK - 25) + pem + "\ndone\n"
+    proc.stdout.feed_data(data.encode())
+    proc.stdout.feed_eof()
+    log_file = tmp_path / "out.log"
+    await _record(proc, log_file, {"PEM": pem})
+    assert log_file.read_text() == "x" * (_CHUNK - 25) + "[secret:PEM]\ndone\n"
+
+
+async def test_output_read_before_a_cancelled_drain_is_written_without_a_secret_prefix(tmp_path):
+    from muliao.jobs.process import _record
+
+    proc = _FakeProc()
+    # 没有换行的最后一段也要写出；末尾的 "se" 可能是 secret 的开头，留着不写
+    proc.stdout.feed_data(b"line1\nno newline yet se")
+    log_file = tmp_path / "out.log"
+    task = asyncio.create_task(_record(proc, log_file, {"K": "sec"}))
+    await asyncio.sleep(0.1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert log_file.read_text() == "line1\nno newline yet "

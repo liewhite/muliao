@@ -6,6 +6,7 @@
 
 import asyncio
 import os
+import re
 import signal
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -29,9 +30,13 @@ class ShellResult:
 
 
 def redact(text: str, secrets: Mapping[str, str]) -> str:
-    for key, value in secrets.items():
-        text = text.replace(value, f"[secret:{key}]")
-    return text
+    """一遍扫描替换所有 secret，同一位置优先匹配最长的：逐个 replace 时，A 是 B 的子串而 A 先替换，B 的其余部分
+    就会漏出来；先替换出的 [secret:KEY] 也可能被后面的 secret 再次匹配。"""
+    if not secrets:
+        return text
+    key_of = {value: key for key, value in secrets.items()}
+    pattern = "|".join(re.escape(v) for v in sorted(key_of, key=len, reverse=True))
+    return re.sub(pattern, lambda m: f"[secret:{key_of[m.group()]}]", text)
 
 
 def kill_group(pid: int) -> None:

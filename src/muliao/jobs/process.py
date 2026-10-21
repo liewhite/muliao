@@ -79,24 +79,20 @@ class Recorder:
 
 
 async def _record(proc: asyncio.subprocess.Process, log_file: Path, secrets: Mapping[str, str]) -> None:
-    """把输出逐块脱敏后追加到日志：按行写出（secret 不会被截在两块之间）；超长的一行攒到上限也写出去，
-    切口避开 secret（_safe_cut）。增量解码，多字节字符不会被块边界切坏。"""
+    """把输出逐块脱敏后追加到日志。每读一块写出到切口为止，切口之后留下最长 secret 长度减一个字符等下一块：
+    从切口之前开始的 secret 必然整个落在已读到的内容里，切口再避开跨在它上面的 secret（_safe_cut），两侧分开
+    脱敏也不会漏（secret 可以含换行，所以不能按行切）。读到结尾时写出全部剩余；读到一半被取消（进程退出后
+    后代还占着管道）时，留下的那一小段可能是某个 secret 的开头，不写出。增量解码，多字节字符不会被块边界切坏。"""
     assert proc.stdout is not None
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    hold = max((len(v) for v in secrets.values()), default=1) - 1
     pending = ""
     with log_file.open("a", encoding="utf-8") as out:
         while chunk := await proc.stdout.read(_CHUNK):
             pending += decoder.decode(chunk)
-            complete, sep, pending = pending.rpartition("\n")
-            if sep:
-                out.write(redact(complete + sep, secrets))
-            if len(pending) > _CHUNK:
-                cut = _safe_cut(
-                    pending, len(pending) - max((len(v) for v in secrets.values()), default=0), secrets
-                )
-                out.write(redact(pending[:cut], secrets))
-                pending = pending[cut:]
+            cut = _safe_cut(pending, max(0, len(pending) - hold), secrets)
+            out.write(redact(pending[:cut], secrets))
+            pending = pending[cut:]
             out.flush()
         pending += decoder.decode(b"", final=True)
-        if pending:
-            out.write(redact(pending, secrets))
+        out.write(redact(pending, secrets))

@@ -33,3 +33,13 @@ async def test_secrets_are_redacted_from_both_streams(tmp_path):
         'echo "$TOKEN"; echo "$TOKEN" >&2', cwd=tmp_path, secrets={"TOKEN": "s3cr3t"}, timeout=5
     )
     assert result.stdout.strip() == result.stderr.strip() == "[secret:TOKEN]"
+
+
+def test_a_secret_containing_another_secret_is_redacted_whole():
+    from muliao.platform.shell import redact
+
+    # 短的那个先登记：逐个替换时会先换掉它，长的那个的其余部分漏出来
+    secrets = {"SHORT": "abc", "LONG": "abc-tail-xyz"}
+    assert redact("x abc-tail-xyz y abc", secrets) == "x [secret:LONG] y [secret:SHORT]"
+    # 替换出的 [secret:KEY] 不会再被别的 secret 匹配
+    assert redact("p", {"A": "p", "B": "secret"}) == "[secret:A]"
