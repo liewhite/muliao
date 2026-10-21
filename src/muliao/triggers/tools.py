@@ -11,8 +11,9 @@ from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 
 from muliao.agents.api import AgentNames, AgentService
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.platform.values import KEEP
 from muliao.triggers.precheck import Precheck
-from muliao.triggers.service import KEEP, TriggerService
+from muliao.triggers.service import TriggerService
 from muliao.triggers.tables import Trigger
 
 

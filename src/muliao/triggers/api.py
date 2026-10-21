@@ -6,12 +6,11 @@
 from muliao.triggers.once import OnceConfig, OnceStatus
 from muliao.triggers.precheck import Precheck, PrecheckFailed
 from muliao.triggers.schedule import ScheduleConfig, ScheduleStatus
-from muliao.triggers.service import EVENT_MAX_BYTES, KEEP
+from muliao.triggers.service import EVENT_MAX_BYTES
 from muliao.triggers.webhook import WebhookConfig, WebhookStatus
 
 __all__ = [
     "EVENT_MAX_BYTES",
-    "KEEP",
     "OnceConfig",
     "OnceStatus",
     "Precheck",

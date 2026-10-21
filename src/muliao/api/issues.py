@@ -7,8 +7,9 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from muliao.api.deps import C
-from muliao.issues.api import KEEP, ActivityKind, IssuePriority, IssueStatus, IssueWork, Keep, WorkState
+from muliao.issues.api import ActivityKind, IssuePriority, IssueStatus, IssueWork, WorkState
 from muliao.issues.tables import Issue, IssueActivity
+from muliao.platform.values import KEEP, Keep
 
 router = APIRouter()
 

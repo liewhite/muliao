@@ -21,8 +21,6 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -42,6 +40,7 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Clock, Commit
 from muliao.platform.tooling import Origin
+from muliao.platform.values import KEEP, Keep, local_time
 from muliao.sessions.api import (
     Inbound,
     NewSession,
@@ -58,15 +57,6 @@ log = logging.getLogger(__name__)
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 # 事件内容原样进入 prompt（webhook 请求体、前置检查的输出），过大的应由来源裁剪或改为传引用
 EVENT_MAX_BYTES = 256 * 1024
-
-
-class Keep(Enum):
-    """局部修改里「不改这个字段」，用于本身可以设为 None 的字段（如去掉前置检查）。"""
-
-    KEEP = "keep"
-
-
-KEEP = Keep.KEEP
 
 
 class TriggerKind(Protocol):
@@ -240,6 +230,18 @@ class TriggerService:
         log.info("trigger updated", extra={"trigger": trigger.name, "enabled": trigger.enabled})
         return trigger
 
+    async def disable(self, trigger_id: int, reason: str) -> bool:
+        """系统停用触发器（如按到期触发失败），原因记在 disabled_reason 给用户看；用户重新启用时清除。
+        触发器已被删除时返回 False。"""
+        async with self._db.transaction() as s:
+            trigger = await s.get(Trigger, trigger_id)
+            if trigger is None:
+                return False
+            trigger.enabled = False
+            trigger.disabled_reason = reason
+        self._changed()
+        return True
+
     @staticmethod
     def set_state(trigger: Trigger, **values: Any) -> None:
         """激活机制维护自己的运行状态（在调用方事务里改这一行）。JSON 列只在整体赋值时被追踪。"""
@@ -333,7 +335,7 @@ class TriggerService:
             origin_ref=str(trigger.id),
             content=event_prompt(trigger.prompt, payload),
             session=NewSession(
-                agent_id=trigger.agent_id, title=f"{trigger.name} · {_local(now, self._tz)}", id=target
+                agent_id=trigger.agent_id, title=f"{trigger.name} · {local_time(now, self._tz)}", id=target
             )
             if session_id is None
             else session_id,
@@ -459,7 +461,3 @@ class _Fired:
     session_id: str
     # 投信的定向命令（Receive）的投递任务
     delivery: Task
-
-
-def _local(now: datetime, tz: ZoneInfo) -> str:
-    return now.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")

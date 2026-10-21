@@ -118,15 +118,9 @@ class DueRunner:
         return None
 
     async def _disable(self, trigger_id: int, error: str) -> None:
-        async with self._db.transaction() as s:
-            trigger = await s.get(Trigger, trigger_id)
-            if trigger is None:
-                log.info(
-                    "failed trigger was deleted meanwhile", extra={"trigger_id": trigger_id, "error": error}
-                )
-                return
-            trigger.enabled = False
-            trigger.disabled_reason = error
+        if not await self._triggers.disable(trigger_id, error):
+            log.info("failed trigger was deleted meanwhile", extra={"trigger_id": trigger_id, "error": error})
+            return
         log.error("trigger disabled after failed fire: %s", error, extra={"trigger_id": trigger_id})
 
     async def _next_wake(self) -> float:

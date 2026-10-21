@@ -7,8 +7,8 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field, TypeAdapter
 
 from muliao.api.deps import C
+from muliao.platform.values import KEEP
 from muliao.triggers.api import (
-    KEEP,
     OnceConfig,
     OnceStatus,
     Precheck,

@@ -13,8 +13,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -41,6 +39,7 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit
 from muliao.platform.tooling import Origin
+from muliao.platform.values import KEEP, Keep, local_time
 from muliao.sessions.api import (
     Inbound,
     SessionActivity,
@@ -54,15 +53,6 @@ from muliao.sessions.api import (
 log = logging.getLogger(__name__)
 
 TITLE_MAX = 300
-
-
-class Keep(Enum):
-    """局部修改里「不改这个字段」，用于本身可以设为 None 的字段（指派人）。"""
-
-    KEEP = "keep"
-
-
-KEEP = Keep.KEEP
 
 
 @dataclass(frozen=True)
@@ -390,9 +380,6 @@ class IssueService:
         if wake is not None:
             await self._run_now(wake.id)
 
-    def _local(self, at: datetime) -> str:
-        return at.astimezone(self._tz).strftime("%Y-%m-%d %H:%M")
-
     async def _view_in(self, s: AsyncSession, issue: Issue) -> IssueView:
         await s.flush()
         return self._view_with(issue, await self._activities_in(s, issue.id), await agent_names_in(s))
@@ -419,7 +406,7 @@ class IssueService:
                     before, after = str(a.change["from"]), str(a.change["to"])
             views.append(
                 ActivityView(
-                    at=self._local(a.created_at),
+                    at=local_time(a.created_at, self._tz),
                     actor=who(a.actor_agent_id),
                     kind=a.kind,
                     body=a.body,
