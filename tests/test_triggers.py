@@ -6,11 +6,12 @@ from typing import get_args
 import pytest
 
 from muliao.agent_runtime.mcp import McpTransport, mcp_config
-from muliao.api.triggers import TriggerKindName
+from muliao.api.triggers import TriggerKindName, TriggerOut
 from muliao.errors import InvalidInput
 from muliao.platform.tooling import Origin
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
+from tests.conftest import login
 from tests.test_flow import drain, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
@@ -386,3 +387,23 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
 
 async def test_http_trigger_types_cover_exactly_the_registered_kinds(container):
     assert set(get_args(TriggerKindName)) == set(container.triggers.kinds)
+    # 联合类型里每种方式恰有一个成员，列表接口才不会因为漏了某种方式而 500
+    members = get_args(get_args(TriggerOut)[0])
+    assert sorted(get_args(m.model_fields["kind"].annotation)[0] for m in members) == sorted(
+        get_args(TriggerKindName)
+    )
+
+
+async def test_trigger_list_returns_each_kinds_typed_status(client, container, make_agent):
+    alpha = (await make_agent()).id
+    for name, kind, config in [
+        ("s", "schedule", {"cron": "0 9 * * *"}),
+        ("o", "once", {"at": "2099-01-01T10:00"}),
+        ("w", "webhook", {}),
+    ]:
+        await container.triggers.create(name=name, agent_id=alpha, kind=kind, prompt="p", config=config)
+    await login(client)
+    listed = {t["kind"]: t for t in (await client.get("/api/triggers")).json()}
+    assert set(listed["schedule"]["status"]) == {"next_run_at"}
+    assert listed["once"]["status"]["run_at"].startswith("2099-01-01T10:00")
+    assert listed["webhook"]["status"] == {"url": "http://test/api/hooks/w", "has_token": False}

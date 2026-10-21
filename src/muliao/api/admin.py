@@ -38,7 +38,8 @@ class McpOut(BaseModel):
     headers: dict[str, str]
     enabled: bool
     tools: list[str] = []
-    # 在列表所取的 owner 视角下，这个公共 server 被同名私有 server 遮蔽（实际生效的是私有的）
+    # 在列表所取的 owner 视角下，这个公共 server 被同名私有 server 遮蔽（实际生效的是私有的）；
+    # 单个 server 的响应（新建、启停）取它自己归属者的视角，总是 false
     shadowed: bool
 
     @classmethod

@@ -65,6 +65,26 @@ async def test_vault_never_returns_values(client):
     assert (await client.put("/api/vault/X?owner=nope", json={"value": "v"})).status_code == 404
 
 
+async def test_vault_and_mcp_lists_take_the_owners_view_with_shadowing(client, make_agent):
+    alpha = (await make_agent()).id
+    await login(client)
+    for owner in ("", f"?owner={alpha}"):
+        await client.put(f"/api/vault/TOKEN{owner}", json={"value": "v"})
+    await client.put("/api/vault/OTHER", json={"value": "v"})
+
+    def keys(listed):
+        return [(s["key"], s["owner"], s["shadowed"]) for s in listed]
+
+    assert keys((await client.get("/api/vault", params={"owner": alpha})).json()) == [
+        ("TOKEN", alpha, False),
+        ("OTHER", None, False),
+        ("TOKEN", None, True),
+    ]
+    assert keys((await client.get("/api/vault")).json()) == [("OTHER", None, False), ("TOKEN", None, False)]
+    assert (await client.get("/api/vault", params={"owner": "nope"})).status_code == 404
+    assert (await client.get("/api/mcp", params={"owner": "nope"})).status_code == 404
+
+
 def test_auth_token_expires_and_rejects_tampering():
     auth = Auth("secret", "pw")
     token = auth.issue(now=1000)

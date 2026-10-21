@@ -46,5 +46,5 @@ def owned_by(column: InstrumentedAttribute[str | None], owner: str | None) -> Co
 
 
 def visible_owners(column: InstrumentedAttribute[str | None], agent_id: str | None) -> ColumnElement[bool]:
-    """查询条件：可能对 agent_id 可见的归属（公共，或它自己）。最终可见性仍由 visible() 决定。"""
+    """查询条件：可能对 agent_id 可见的归属（公共，或它自己）。最终的遮蔽与可见性仍由 shadowing() / visible() 决定。"""
     return column.is_(None) if agent_id is None else or_(column.is_(None), column == agent_id)
