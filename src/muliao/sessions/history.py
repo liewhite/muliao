@@ -2,12 +2,26 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from typing import Literal
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolReturnPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.api import RUN_STOPPED, STOPPED_TOOL_RESULT, answer_text, unanswered_calls
+from muliao.agent_runtime.api import (
+    INTERRUPTED_TOOL_RESULT,
+    RUN_STOPPED,
+    STOPPED_TOOL_RESULT,
+    answer_text,
+    unanswered_calls,
+)
 from muliao.sessions.codec import load_messages
 from muliao.sessions.questions import ASK_USER
 from muliao.sessions.tables import Compaction, Message
@@ -76,19 +90,35 @@ async def latest_answer(s: AsyncSession, session_id: str) -> str:
     return ""
 
 
-def stopped_results(history: Sequence[ModelMessage]) -> list[ModelMessage]:
-    """没出结果的工具调用（等用户回答的提问除外）补上「被用户停止、可能已部分执行」的结果；没有则为空。"""
-    dangling = [c for c in unanswered_calls(history) if c.tool_name != ASK_USER]
-    if not dangling:
+def _results_for(
+    calls: Sequence[ToolCallPart], content: str, outcome: Literal["success", "interrupted"]
+) -> list[ModelMessage]:
+    """给这些没出结果的调用补上同一个结果，合成一条请求；没有调用则为空。"""
+    if not calls:
         return []
     return [
         ModelRequest(
             parts=[
-                ToolReturnPart(c.tool_name, STOPPED_TOOL_RESULT, tool_call_id=c.tool_call_id)
-                for c in dangling
+                ToolReturnPart(c.tool_name, content, tool_call_id=c.tool_call_id, outcome=outcome)
+                for c in calls
             ]
         )
     ]
+
+
+def stopped_results(history: Sequence[ModelMessage]) -> list[ModelMessage]:
+    """没出结果的工具调用补上「被用户停止、可能已部分执行」的结果；等用户回答的提问除外（它在等人回答，不是没做完
+    的调用，用户仍可回答）。"""
+    return _results_for(
+        [c for c in unanswered_calls(history) if c.tool_name != ASK_USER], STOPPED_TOOL_RESULT, "success"
+    )
+
+
+def interrupted_results(calls: Sequence[ToolCallPart]) -> list[ModelMessage]:
+    """一步在执行工具时被打断，这些调用没有结果：补上「被中断、没有重新执行」的结果。它们不重新执行——副作用
+    （shell、通知、委派、改记忆）可能已经发生，而我们无从知道——由模型看着结果决定要不要再做一次。哪些调用走这条
+    路由 Consumer 决定（sessions.consumer.interrupted_calls），设计见 docs/architecture.md「从哪里开始」。"""
+    return _results_for(calls, INTERRUPTED_TOOL_RESULT, "interrupted")
 
 
 def marked_stopped(message: ModelMessage) -> ModelMessage:

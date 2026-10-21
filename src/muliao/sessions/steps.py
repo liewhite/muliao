@@ -1,6 +1,7 @@
 """逐步保存：一次运行的每一步（一次模型请求及其返回的工具调用）各自提交。请求模型之前把新到的信件并进这条请求，请求与
 它带上的信件（记为已处理）同一个事务提交；模型回复之后提交这条回复。失败或重启后从上一步续跑，已经保存的步骤不会
-重放（只有中断那一步里正在执行的工具会再执行一遍）。实时展示按步换段（sessions.live.LiveRuns.step）。"""
+重放；中断那一步里正在执行的工具也不重新执行，而是补上「被中断」的结果（save_interrupted）。实时展示按步换段
+（sessions.live.LiveRuns.step）。"""
 
 from __future__ import annotations
 
@@ -140,6 +141,14 @@ class Steps:
         if state.live is not None and len(state.live) > state.saved:
             await self._save(state, state.live[state.saved :], consumed=[])
             state.saved = len(state.live)
+
+    async def save_interrupted(self, state: RunState, messages: Sequence[ModelMessage]) -> int:
+        """从被中断的一步续跑：给没出结果的调用补上的结果（sessions.history.interrupted_results）作为这次运行的
+        第一步存下来，走的是和别的步骤同一条保存路径，历史里不留悬空的调用。返回保存的最后一行的 id。"""
+        await self._save(state, messages, consumed=[])
+        if state.last_row is None:
+            raise RuntimeError(f"run {state.run_id} saved interrupted tool results without a row")
+        return state.last_row.id
 
     async def save_stopped(self, state: RunState) -> int:
         """运行被停止：保存运行中的历史里还没保存的部分，没出结果的调用补上「被停止」的结果，最后一条标上停止。

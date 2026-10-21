@@ -9,6 +9,7 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 | `TOOL_THREADS`：工具开出或续写的子会话 | ToolReturnPart.metadata | delegate_task、ask_agent | 会话条目、实时事件 |
 | `RUN_STOPPED`：运行被用户停止 | 停止时最后保存的那条消息的 metadata | sessions.consumer | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
 | `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | sessions.consumer | 模型（之后的运行） |
+| `INTERRUPTED_TOOL_RESULT`：进程退出时没出结果的调用 | 合成的 ToolReturnPart 内容（`outcome='interrupted'`） | sessions.consumer | 模型（续跑的那次请求） |
 | `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | sessions.consumer | 模型、会话条目 |
 | 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart | — | unanswered_calls：挂起的提问、压缩切点、停止时补结果 |
 | `RUN_EVENTS`：这一步交给模型的事件信件 | 事件各占用户消息内容的一段（format_event），metadata 记下是第几段 | sessions.consumer | 模型、会话条目 |
@@ -38,6 +39,13 @@ from muliao.files.api import FileMeta, parse_file_url
 RUN_STOPPED = "muliao_stopped"
 # 停止时还没出结果的工具调用的结果：工具的副作用可能已经发生，告诉模型它没有完成
 STOPPED_TOOL_RESULT = "Stopped by the user before this tool call finished; it may have partly run."
+# 一步在执行工具时被打断（进程退出，或这一步失败）：续跑不重新执行这些调用——副作用可能已经发生，而我们无从
+# 知道——补上这个结果交给模型判断。pydantic-ai 的 outcome='interrupted' 说的就是这件事：没有产生结果，不是工具报错
+INTERRUPTED_TOOL_RESULT = (
+    "Interrupted: this run was interrupted while the call was running (the service restarted, or the "
+    "step failed), and the call was NOT re-run automatically. It may or may not have taken effect; "
+    "check its effects before deciding whether to run it again."
+)
 
 
 # 交给模型的事件信件（sessions.mailbox）：每条事件是用户消息内容里独立的一段，格式见 format_event；

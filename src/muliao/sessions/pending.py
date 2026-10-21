@@ -99,7 +99,8 @@ Delegated = AbstractSet[str]
 def pending_calls(history: Sequence[ModelMessage], delegated: Delegated) -> dict[str, ToolCallPart]:
     """还在等回信的调用，按出现顺序：没有结果的 ask_user 调用（参数被拒绝、交还模型重试的有结果，不算），以及已经
     交出去、还没有结果的 ask_agent 调用。没有占用的 ask_agent 不是在等回信：工具还没执行完（回复保存后、投递
-    提交前失败），它是待执行的调用，续跑时再执行（Threads.dispatch 按调用 id 幂等）。"""
+    提交前失败），它是待执行的调用，续跑时再执行（Threads.dispatch 按调用 id 幂等；这一步里还有别的没出结果的
+    调用时整步都不重放，见 sessions.consumer.interrupted_calls）。"""
     return {
         c.tool_call_id: c
         for c in unanswered_calls(history)

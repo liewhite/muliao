@@ -4,6 +4,7 @@
 from muliao.agent_runtime.answers import Answer
 from muliao.agent_runtime.attachments import copy_to_workspace, references
 from muliao.agent_runtime.conventions import (
+    INTERRUPTED_TOOL_RESULT,
     RUN_EVENTS,
     RUN_STOPPED,
     STOPPED_TOOL_RESULT,
@@ -28,6 +29,7 @@ from muliao.agent_runtime.runner import AgentRuntime, RunProfile, StepHooks, Tex
 from muliao.agent_runtime.workspace_tools import SHELL_DESCRIPTION, ShellLimits, file_toolset, run_foreground
 
 __all__ = [
+    "INTERRUPTED_TOOL_RESULT",
     "McpServer",
     "McpTransport",
     "mcp_config",

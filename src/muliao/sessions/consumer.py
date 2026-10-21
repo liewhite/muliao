@@ -1,9 +1,11 @@
 """会话的消费者：把信箱里的信件交给模型。设计见 docs/architecture.md「会话信箱」。
 
 一次运行（一条 run task）的编排，各部分在各自的模块里：
-- 起点由历史决定（_opening）：历史停在一条没得到回复、没标停止的请求上就重发它；最后一条回复里有没执行完的工具
-  调用（进程在执行工具时退出）就执行它们；停在挂起的调用上时按 sessions.pending 交回结果；否则把信箱里排队的信件
-  作为开头交给模型（sessions.content）。
+- 起点由历史决定（_opening）：历史停在一条没得到回复、没标停止的请求上就重发它；最后一条回复里有没出结果的工具
+  调用（这一步在执行工具时被打断）就先补上「被中断、没有重新执行」的结果（sessions.history.interrupted_results），
+  再重发那条补出来的请求，不重新执行它们——可以安全重放的那一步除外（interrupted_calls）；停在挂起的调用上时按
+  sessions.pending 交回结果（同一个回复里被打断的别的调用同样先补上结果）；否则把信箱里排队的信件作为开头交给
+  模型（sessions.content）。
 - 逐步运行、每一步保存（sessions.steps）；上下文超过阈值时在步与步之间压缩后续跑（sessions.compaction）。
 - 收尾（sessions.finish），与运行记为完成在同一个事务里。
 - 用户停止（sessions.halt）。
@@ -28,12 +30,13 @@ from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
 from muliao.sessions.finish import RunEnd, RunFinisher, load_session
 from muliao.sessions.halt import Halted, SessionHalt
-from muliao.sessions.history import load_context
+from muliao.sessions.history import interrupted_results, load_context
 from muliao.sessions.holds import called_in
 from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import RunPayload, queued_in
 from muliao.sessions.pending import (
+    ASK_AGENT,
     DEFERRED_TOOLS,
     Delegated,
     answered_in,
@@ -52,8 +55,8 @@ log = logging.getLogger(__name__)
 
 
 def resumable(history: list[ModelMessage], delegated: Delegated) -> bool:
-    """历史从中途续跑：停在一条没得到回复、也没被停止的请求上，或最后的回复里有没执行完的工具调用（挂起的调用除外，
-    包括没委派出去、还要再执行的 ask_agent，见 pending.pending_calls）。
+    """历史从中途续跑：停在一条没得到回复、也没被停止的请求上，或最后的回复里有没出结果的工具调用（挂起的调用除外，
+    见 pending.pending_calls；这些调用一般不重新执行，由 Consumer._run 补上「被中断」的结果后重发）。
 
     停在挂起的调用上时不是续跑，哪怕末尾是一条请求：挂起的调用与别的工具在同一个回复里时，pydantic-ai 以挂起结束时
     把别的工具的结果追加成一条请求，这时要等回答（或跳过）作为 DeferredToolResults 交回，不能把那条请求重发出去。"""
@@ -64,6 +67,21 @@ def resumable(history: list[ModelMessage], delegated: Delegated) -> bool:
     if isinstance(last, ModelRequest):
         return not is_stopped(last)
     return bool(unanswered_calls(history))
+
+
+def interrupted_calls(history: list[ModelMessage], delegated: Delegated) -> list[ToolCallPart]:
+    """这次运行要补上「被中断」结果的调用：历史停在一条回复上（这一步在执行工具时被打断——进程退出，或这一步
+    失败），它里面没出结果、又不在等回信的调用。挂起的调用不在其中：它们的结果由 sessions.pending 交回。
+
+    可以原样重放的不补：没出结果的调用全是还没交出去的 ask_agent 时重新执行按调用 id 幂等（sessions.holds，
+    没有占用就是没投出去），没有别的副作用。只要有一个不能重放，整步都补结果、都不重放——pydantic-ai 续跑时要么
+    执行这条回复里所有没结果的调用、要么一个都不执行，挑不出单独一个来（停在挂起的调用上时把已有结果的调用标为
+    跳过，所以补过结果的不会再执行）。"""
+    if not history or not isinstance(history[-1], ModelResponse):
+        return []
+    pending = pending_calls(history, delegated)
+    calls = [c for c in unanswered_calls(history) if c.tool_call_id not in pending]
+    return [] if all(c.tool_name == ASK_AGENT for c in calls) else calls
 
 
 def paused_end(calls: Sequence[ToolCallPart]) -> RunEnd:
@@ -162,7 +180,8 @@ class Consumer:
             run_id=run_id,
             session=session,
             agent=agent,
-            resending=resumable(history, delegated) and isinstance(history[-1], ModelRequest),
+            # 补完被中断的调用之后才定下（补出来的那条请求就是要重发的）
+            resending=False,
             handled=[*earlier, *adopted],
             messages=load_messages(r.payload for r in saved_rows),
             last_row=saved_rows[-1] if saved_rows else None,
@@ -170,6 +189,22 @@ class Consumer:
         state.stale_responses = context.stale_responses
         state.compaction_exhausted = verdict == Verdict.HOPELESS or compacted == 0
         self._active[session_id] = state
+        # 被打断的那一步里没出结果的调用不重新执行——副作用可能已经发生，而我们无从知道，重放一条重启服务的命令
+        # 会让恢复无限循环。补上「被中断、没有重新执行」的结果交给模型判断：没有挂起的调用时这次运行就从这条补
+        # 出来的请求重发（下面的 resending），停在挂起的调用上时它让那些调用在交回回答时被标为跳过
+        if interrupted := interrupted_calls(history, delegated):
+            log.warning(
+                "resuming an interrupted step; its unfinished tool calls are not re-executed",
+                extra={
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "tools": [c.tool_name for c in interrupted],
+                },
+            )
+            filled = interrupted_results(interrupted)
+            last_message = await self._steps.save_interrupted(state, filled)
+            history = [*history, *filled]
+        state.resending = resumable(history, delegated) and isinstance(history[-1], ModelRequest)
         prompt, deferred = await self._opening(state, history, queued, delegated)
         if prompt is None and deferred is None and not resumable(history, delegated):
             # 没有要交给模型的：信箱空了，或停在挂起的调用上、还不能继续。之前的尝试已经跑完、只差收尾时（它保存的就是
