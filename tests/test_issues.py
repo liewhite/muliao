@@ -83,7 +83,12 @@ async def test_every_change_lands_in_the_one_session_of_the_issue_and_agent(cont
     [session] = await _issue_sessions(container)
     assert (session.agent_id, session.origin_ref) == (alpha, str(issue.id))
     [mail] = await _mail(container, session.id)
-    assert "user changed status: backlog -> todo" in mail and "CI is red" in mail
+    # 信里只有一行摘要和这次的动态：描述、完整时间线由 agent 自己 issue_show
+    assert mail.startswith(
+        f"New activity on issue #{issue.id} Fix the build | status: todo | assignee: alpha\n"
+    )
+    assert "user changed status: backlog -> todo" in mail and "CI is red" not in mail
+    assert f"`issue_show({issue.id})`" in mail
 
     # 评论、改派走又改派回来、改状态、改标题：同一个 agent 始终在同一个会话里接着做
     await container.issues.comment(None, issue.id, "any update?")
@@ -96,12 +101,14 @@ async def test_every_change_lands_in_the_one_session_of_the_issue_and_agent(cont
     assert [(s.agent_id, s.origin_ref) for s in sessions] == [(alpha, str(issue.id)), (beta, str(issue.id))]
     mails = await _mail(container, session.id)
     assert len(mails) == 5
-    assert "any update?" in mails[1]
+    # 信件不随时间线变长：只带这次的动态，不重复之前的
+    assert "any update?" in mails[1] and "backlog -> todo" not in mails[1]
     assert (
         "user changed assignee: beta -> alpha" in mails[2]
         and "user changed status: todo -> in_progress" in mails[2]
     )
     assert "beta commented:\n  handing it back" in mails[3].split("\n\n")[0]
+    assert "any update?" not in mails[3]
     assert "Fix the build now" in mails[4]
     assert (await container.issues.work([issue]))[issue.id].sessions == {
         alpha: session.id,
@@ -357,14 +364,14 @@ async def test_a_downstream_issue_is_delivered_when_its_last_upstream_finishes(c
     assert detail.activities[-1].kind == ActivityKind.DEPENDENCY
     assert detail.activities[-1].change == {"issue": up1.id, "from": "todo", "to": "done"}
 
-    # 最后一个上游取消也算完成：投给下游，信里是这次的动态与完整视图（含之前没投的评论）
+    # 最后一个上游取消也算完成：投给下游，信里是摘要（含上游及其状态）与这次的动态；等待期间的评论靠 issue_show 看
     await container.issues.update(None, up2.id, status=IssueStatus.CANCELLED)
     await deliver(container)
     [session] = [s for s in await _issue_sessions(container) if s.origin_ref == str(down.id)]
     [mail] = await _mail(container, session.id)
     news = mail.split("\n\n")[0]
     assert f"user changed status of dependency #{up2.id}: todo -> cancelled" in news
-    assert "wait for them" in mail and f"depends on: #{up1.id} (done), #{up2.id} (cancelled)" in mail
+    assert f"depends on: #{up1.id} (done), #{up2.id} (cancelled)" in news and "wait for them" not in mail
     assert (await container.issues.work([down]))[down.id].waiting_on == ()
 
     # 已完成的上游再改到另一个完成状态不再通知
@@ -470,3 +477,28 @@ async def test_waiting_is_derived_from_the_current_upstream_state(container, mak
     await container.issues.comment(None, down.id, "not yet")
     await deliver(container)
     assert len(await _mail(container, session.id)) == 1
+
+
+def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
+    """处理指引在 issue 会话的固定说明里（缓存前缀），信件不重复它：说明里要让 agent 先 issue_show、做完交审。"""
+    from pathlib import Path
+
+    from muliao.agent_runtime.instructions import build_instructions
+
+    def built(origin: Origin) -> str:
+        return build_instructions(
+            agent_name="a",
+            agent_description="",
+            public_instructions="",
+            agent_instructions="",
+            workspace=Path("/w"),
+            origin=origin,
+            memory="",
+            skills=(),
+            memory_limit=100,
+            summary=None,
+        )
+
+    issue = built(Origin.ISSUE)
+    assert "`issue_show`" in issue and "`in_review` and assignee `user`" in issue
+    assert "issue_show" not in built(Origin.USER)

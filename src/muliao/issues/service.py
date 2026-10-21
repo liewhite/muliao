@@ -500,7 +500,7 @@ class IssueService:
         inbound = Inbound(
             origin=Origin.ISSUE,
             origin_ref=str(issue.id),
-            content=delivery_message(issue.id, news, render_issue(view)),
+            content=delivery_message(view, news),
             session=SessionKey(agent_id=agent, title=f"#{issue.id} {issue.title}"[:200]),
             awaited=False,
         )

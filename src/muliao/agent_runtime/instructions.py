@@ -24,9 +24,18 @@ _ORIGIN_NOTES: dict[Origin, str] = {
     ),
     Origin.DELEGATION: "Another agent opened this conversation with you.",
     Origin.ISSUE: (
-        "This conversation belongs to an issue on the muliao issue board that is assigned to you; it is "
-        "continued each time the issue needs you again. Nobody is watching it: record progress and results on "
-        "the issue itself."
+        "This conversation is dedicated to one issue on the muliao issue board that is assigned to you, and is "
+        "continued each time the issue needs you again: while it is `todo` or `in_progress`, every change others "
+        "make to it (comments, status, assignee, edits, a dependency finishing) arrives here as a short message "
+        "carrying only that new activity. Read the full issue (description, dependencies, whole timeline) with "
+        "`issue_show` before you start, and again whenever the message is not enough. An issue that depends on "
+        "others is delivered only once all of them are `done` or `cancelled`; a cancelled dependency may mean "
+        "this issue is no longer needed. Work on it here, then record the outcome on the issue with the `issue_*` "
+        "tools: comment with what you did or found (`issue_comment`), and move it on with `issue_update`, e.g. "
+        "status `in_progress` while working, `blocked` with a comment explaining why. When you have finished, do "
+        "not set `done` yourself: set status `in_review` and assignee `user`, and the user moves it to `done` "
+        "after reviewing. Hand it to another agent by changing the assignee. Nobody is watching this "
+        "conversation: the user reads the issue, not this conversation."
     ),
 }
 

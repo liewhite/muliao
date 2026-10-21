@@ -33,7 +33,7 @@ def _agent_assignee(issue: Snapshot) -> str | None:
 def recipient(issue: Snapshot, from_its_session: str | None) -> str | None:
     """issue 上的一条动态（创建、评论、任何字段的修改）投给谁：动作之后处于 todo / in_progress（包括这次动作让它进入）
     时，投给被指派的 agent；backlog 是以后再做，in_review / done 等是已经交出去，不投。还在等上游（waiting_on 非空）
-    时也不投：动态照常记进时间线，最后一个上游完成时那封信带着完整的 issue 视图投过去。
+    时也不投：动态照常记进时间线，最后一个上游完成时投一封信，agent 自己 issue_show 看等待期间的动态。
 
     from_its_session 是在自己这个 issue 会话里动手的 agent（否则为 None）：它自己的动作不投回它正在做事的会话，
     避免自激循环。它在别的会话（如普通对话）里给自己建、派、转 todo，照常投进 issue 会话——issue 只在那里做。
@@ -139,7 +139,7 @@ def _dependencies(found: Sequence[Dependency]) -> str:
 
 
 def render_issue(issue: IssueView) -> str:
-    """issue 的完整文本（交给模型：唤醒信件与 issue_show 共用）。"""
+    """issue 的完整文本（交给模型，issue_show 用）。"""
     lines = [
         f"# Issue #{issue.id}: {issue.title}",
         f"owner (project): {issue.owner} | status: {issue.status} | priority: {issue.priority} | "
@@ -161,19 +161,14 @@ def render_issue(issue: IssueView) -> str:
     return "\n".join(lines)
 
 
-GUIDE = """\
-You are the assignee of this issue on the muliao issue board, and this conversation is dedicated to it: every \
-change others make to the issue (comments, status, assignee, edits) arrives here while it is `todo` or \
-`in_progress`. Work on it here, then record the outcome on the issue with the `issue_*` tools: comment with what you \
-did or found (`issue_comment`), and move it on with `issue_update` — e.g. status `in_progress` while working, \
-`blocked` with a comment explaining why. When you have finished, do not set `done` yourself: set status \
-`in_review` and assignee `user`, and the user moves it to `done` after reviewing. Hand it to another agent by \
-changing the assignee. An issue that depends on others is delivered only once all of them are `done` or \
-`cancelled`; a cancelled dependency may mean this issue is no longer needed. The user reads the issue, not this \
-conversation."""
-
-
-def delivery_message(issue_id: int, happened: Sequence[ActivityView], rendered: str) -> str:
-    """投进 issue 会话的一封信：这次的动态，加上 issue 的当前视图。"""
+def delivery_message(issue: IssueView, happened: Sequence[ActivityView]) -> str:
+    """投进 issue 会话的一封信：一行摘要加这次的动态，不随时间线变长。完整内容由 agent 自己 issue_show；
+    怎么处理 issue 的说明在会话来源的固定说明里（agent_runtime 的 _ORIGIN_NOTES），不在信里重复。"""
+    summary = [f"#{issue.id} {issue.title}", f"status: {issue.status}", f"assignee: {issue.assignee}"]
+    if issue.depends_on:
+        summary.append(f"depends on: {_dependencies(issue.depends_on)}")
     news = "\n".join(render_activity(a) for a in happened)
-    return f"New activity on issue #{issue_id}:\n{news}\n\n{GUIDE}\n\n<issue>\n{rendered}\n</issue>"
+    return (
+        f"New activity on issue {' | '.join(summary)}\n{news}\n\n"
+        f"Full issue (description, dependencies, whole timeline): `issue_show({issue.id})`."
+    )
