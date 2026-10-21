@@ -68,10 +68,9 @@ export function assigneeLabel(agents: Agent[] | undefined, assignee: string | nu
   return agents?.find((a) => a.id === assignee)?.name ?? assignee
 }
 
-/** 同一列里：优先级高的在前，同优先级按最近更新 */
+/** 同一列里：最近更新的在前，刚拖进来的 issue 就排在最上面 */
 export function compareIssues(a: Issue, b: Issue): number {
-  const p = PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority)
-  return p !== 0 ? p : b.updated_at.localeCompare(a.updated_at)
+  return b.updated_at.localeCompare(a.updated_at)
 }
 
 export function groupByStatus(issues: Issue[]): Record<IssueStatus, Issue[]> {
@@ -81,9 +80,9 @@ export function groupByStatus(issues: Issue[]): Record<IssueStatus, Issue[]> {
   return groups
 }
 
-/** 拖拽、本地乐观更新：把 issue 移到新状态 */
-export function moveIssue(issues: Issue[], id: number, status: IssueStatus): Issue[] {
-  return issues.map((i) => (i.id === id ? { ...i, status } : i))
+/** 拖拽、本地乐观更新：把 issue 移到新状态，并按服务端的做法刷新更新时间 */
+export function moveIssue(issues: Issue[], id: number, status: IssueStatus, now: string): Issue[] {
+  return issues.map((i) => (i.id === id ? { ...i, status, updated_at: now } : i))
 }
 
 function valueLabel(agents: Agent[] | undefined, a: IssueActivity, v: unknown): string {

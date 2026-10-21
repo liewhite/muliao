@@ -20,20 +20,23 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
 const agents = [{ id: 'a1', name: 'alpha' }] as unknown as Agent[]
 
 describe('issues', () => {
-  it('groups by status, urgent first then most recently updated', () => {
+  it('groups by status, most recently updated first', () => {
     const groups = groupByStatus([
       issue(1, { updated_at: '2026-10-21T01:00:00Z' }),
       issue(2, { updated_at: '2026-10-21T02:00:00Z' }),
       issue(3, { priority: 'urgent' }),
       issue(4, { status: 'done' }),
     ])
-    expect(groups.todo.map((i) => i.id)).toEqual([3, 2, 1])
+    // 只按最近更新排，不看优先级
+    expect(groups.todo.map((i) => i.id)).toEqual([2, 1, 3])
     expect(groups.done.map((i) => i.id)).toEqual([4])
     expect(groups.backlog).toEqual([])
   })
 
   it('moves an issue to another status', () => {
-    expect(moveIssue([issue(1), issue(2)], 2, 'done').map((i) => i.status)).toEqual(['todo', 'done'])
+    const moved = moveIssue([issue(1), issue(2)], 2, 'done', '2026-10-21T09:00:00Z')
+    expect(moved.map((i) => i.status)).toEqual(['todo', 'done'])
+    expect(moved[1].updated_at).toBe('2026-10-21T09:00:00Z')
   })
 
   it('labels assignees', () => {

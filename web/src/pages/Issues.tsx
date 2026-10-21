@@ -273,8 +273,8 @@ export default function Issues() {
   const [owner, setOwner] = useState(ALL_OWNERS)
   const loaded = useLoad(() => api.issues(owner === ALL_OWNERS ? undefined : owner), [owner])
   // 拖拽后先在本地挪动，接口返回、重新拉取之后以服务端为准
-  const [moving, setMoving] = useState<{ id: number; status: IssueStatus } | null>(null)
-  const issues = loaded.data && moving ? moveIssue(loaded.data, moving.id, moving.status) : loaded.data
+  const [moving, setMoving] = useState<{ id: number; status: IssueStatus; at: string } | null>(null)
+  const issues = loaded.data && moving ? moveIssue(loaded.data, moving.id, moving.status, moving.at) : loaded.data
   const move = useAction()
   useServerEvents((e) => {
     // agent 的运行里可能改了 issue：运行结束、或重连后重新拉取
@@ -285,7 +285,7 @@ export default function Issues() {
     setView(v)
   }
   const onMove = (id: number, status: IssueStatus) => {
-    setMoving({ id, status })
+    setMoving({ id, status, at: new Date().toISOString() })
     void move.run(async () => {
       try {
         await api.updateIssue(id, { status })
