@@ -5,7 +5,8 @@
 issue 上续写同一个会话（Issue.sessions）。
 
 actor 是做这件事的 agent id，用户为 None；session_id 是 agent 动手时所在的会话。只有在这个 issue 自己的会话里
-（Issue.sessions[actor]）做的修改才不唤醒它自己——它正在处理；在别的会话里给自己建、转 todo 的 issue 照样唤醒。
+（Issue.sessions[actor]）做的修改不唤醒它自己——它正在处理。在别的会话里给自己建、派、转 todo 的 issue 也不另开
+会话：那个会话登记为这个 issue 的处理会话（巡检据此判断有没有人在做）；它停下后的下一次唤醒才开 issue 自己的会话。
 """
 
 from __future__ import annotations
@@ -208,7 +209,7 @@ class IssueService:
             s.add(issue)
             await s.flush()
             self._record(s, issue, actor, ActivityKind.CREATED)
-            wake = await self._after_change_in(s, None, issue, actor, _working(issue, actor, session_id))
+            wake = await self._after_change_in(s, None, issue, actor, session_id)
         log.info("issue created", extra={"issue_id": issue.id, "actor": actor, "assignee": assignee})
         await self._deliver(wake)
         return issue
@@ -325,7 +326,12 @@ class IssueService:
             return f"(deleted agent {agent_id})"
 
     async def _after_change_in(
-        self, s: AsyncSession, before: Snapshot | None, issue: Issue, actor: str | None, working: str | None
+        self,
+        s: AsyncSession,
+        before: Snapshot | None,
+        issue: Issue,
+        actor: str | None,
+        session_id: str | None,
     ) -> Task | None:
         after = _snapshot(issue)
         if actor is not None and after.assignee == USER and (before is None or before.assignee != USER):
@@ -339,8 +345,16 @@ class IssueService:
                     session_id=issue.sessions.get(actor),
                 ),
             )
-        agent = wake_target(before, after, working)
+        agent = wake_target(before, after, _working(issue, actor, session_id))
         if agent is None:
+            return None
+        if agent == actor and session_id is not None:
+            # agent 在别的会话里给自己建、派、转 todo 的 issue：就在这个会话里做，登记它为处理会话，不另开会话。
+            # 这个会话停下而 issue 还没做完时，下一次唤醒（评论、巡检）再开 issue 自己的会话（见 _wake_in）
+            issue.sessions = {**issue.sessions, agent: session_id}
+            log.info(
+                "issue adopted by the session that assigned it", extra={"issue_id": issue.id, "agent": agent}
+            )
             return None
         if before is None:
             reason = f"Issue #{issue.id} was created and assigned to you."
@@ -355,8 +369,11 @@ class IssueService:
         """在调用方的事务里给 agent 投一封信：续写它在这个 issue 上的会话，没有（或已删除）就新开。"""
         view = await self._view_in(s, issue)
         existing = issue.sessions.get(agent_id)
-        if existing is not None and await session_in(s, existing) is None:
-            existing = None
+        if existing is not None:
+            info = await session_in(s, existing)
+            # 只续写这个 issue 自己开的会话；登记的处理会话可能是 agent 的别的会话（如用户的对话），不往里投信
+            if info is None or (info.origin, info.origin_ref) != (Origin.ISSUE, str(issue.id)):
+                existing = None
         session: str | NewSession = (
             existing
             if existing is not None

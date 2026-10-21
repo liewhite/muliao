@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.platform.tooling import Origin
 from muliao.sessions.tables import Session
 
 
@@ -16,6 +17,9 @@ class SessionInfo:
     title: str
     # 委派开出的 thread：它在父会话里的名字
     thread: str | None
+    # 会话的发起方：来源与它在来源里的身份（触发器 id、issue id……；委派与用户为 None）
+    origin: Origin
+    origin_ref: str | None
 
 
 async def session_in(s: AsyncSession, session_id: str) -> SessionInfo | None:
@@ -23,4 +27,11 @@ async def session_in(s: AsyncSession, session_id: str) -> SessionInfo | None:
     session = await s.get(Session, session_id)
     if session is None:
         return None
-    return SessionInfo(id=session.id, agent_id=session.agent_id, title=session.title, thread=session.thread)
+    return SessionInfo(
+        id=session.id,
+        agent_id=session.agent_id,
+        title=session.title,
+        thread=session.thread,
+        origin=session.origin,
+        origin_ref=session.origin_ref,
+    )

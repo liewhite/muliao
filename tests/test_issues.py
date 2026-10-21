@@ -104,14 +104,28 @@ async def test_an_agent_working_in_the_issue_session_does_not_wake_itself(contai
     assert len(await _mail(container, session.id)) == 1
 
 
-async def test_an_agent_assigning_itself_from_another_session_is_woken(container, make_agent):
+async def test_an_agent_assigning_itself_works_on_it_in_its_current_session(container, make_agent):
+    from muliao.issues.api import WorkState
+    from tests.test_flow import start
+
     alpha = (await make_agent()).id
+    chat = await start(container, alpha, "track this")
     issue = await container.issues.create(
-        alpha, session_id="elsewhere", title="later", status=IssueStatus.TODO, assignee=alpha
+        alpha, session_id=chat.id, title="mine", status=IssueStatus.IN_PROGRESS, assignee=alpha
     )
+    await deliver(container)
+    # 不另开会话：当前会话登记为处理会话，它在跑就算有人在做
+    assert await _issue_sessions(container) == []
+    assert issue.sessions == {alpha: chat.id}
+    assert (await container.issues.work_states([issue]))[issue.id] == WorkState.RUNNING
+
+    # 会话停下后有人评论：开 issue 自己的会话接手，不往用户的对话里投信
+    await drain(container)
+    await container.issues.comment(None, issue.id, "still on it?")
     await deliver(container)
     [session] = await _issue_sessions(container)
     assert (session.agent_id, session.origin_ref) == (alpha, str(issue.id))
+    assert (await container.issues.get(issue.id)).issue.sessions == {alpha: session.id}
 
 
 async def test_handing_over_wakes_the_new_assignee_and_records_the_timeline(container, make_agent):

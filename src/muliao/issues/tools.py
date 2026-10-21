@@ -84,7 +84,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         priority: IssuePriority = IssuePriority.NONE,
         assignee: str | None = None,
     ) -> str:
-        """Create an issue. An agent assigned an issue in `todo` or `in_progress` is woken up to work on it.
+        """Create an issue. An agent assigned an issue in `todo` or `in_progress` is woken up to work on it;
+        if that is you, this conversation becomes the one working on it (use `backlog` for later work).
 
         Args:
             title: One-line summary.
@@ -116,8 +117,9 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         unassign: bool = False,
     ) -> str:
         """Change an issue; only the given fields change. Moving an agent's issue into `todo`/`in_progress`, or
-        assigning an issue in those statuses to an agent, wakes that agent up (you too, unless
-        you are working on it in its own conversation).
+        assigning an issue in those statuses to an agent, wakes that agent up. If that agent is you, nothing is
+        started: this conversation becomes the one working on it, so carry on with it here (or leave it in
+        `backlog` if it is for later).
 
         Args:
             issue_id: Issue number.
