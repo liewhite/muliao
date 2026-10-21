@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ from muliao.agents.tool_catalog import ToolGroupInfo
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.ids import new_agent_id
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -164,6 +167,11 @@ class AgentService:
     def workspace(self, agent_id: str) -> Path:
         return self._workspaces_dir / agent_id
 
+    def workspace_owners(self) -> list[str]:
+        """有工作目录的 agent id。"""
+        root = self._workspaces_dir
+        return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
+
     def _check(self, *, description: str, model: str, reflect_every: int, tool_groups: list[str]) -> None:
         if not description.strip():
             raise InvalidInput("agent description must not be empty")
@@ -300,5 +308,13 @@ class AgentService:
         workspace = self.workspace(agent_id)
         if workspace.exists():
             # 工作目录里可能有 venv、clone 的仓库、后台任务日志：放到线程里删，不阻塞事件循环
-            await asyncio.to_thread(shutil.rmtree, workspace)
+            try:
+                await asyncio.to_thread(shutil.rmtree, workspace)
+            except OSError as e:
+                # 例如它留在后台的进程还在往里写（目录删空后又出现新文件）。工作目录只是文件：删不干净不能让删除卡在
+                # deleting 一直重试；残留留给启动检查列出（workspace_owners），由人清理
+                log.warning(
+                    "workspace of a deleted agent could not be fully removed",
+                    extra={"agent": agent_id, "path": str(workspace), "error": repr(e)},
+                )
         await self._repo.apply({self._repo.owner_dir(agent_id): None}, f"delete agent {agent_id}", author)

@@ -60,6 +60,28 @@ async def test_deleting_an_agent_without_sessions_completes(container, make_agen
     assert await _failed_tasks(container) == []
 
 
+async def test_a_workspace_that_cannot_be_fully_removed_does_not_block_deleting_the_agent(
+    container, make_agent, caplog
+):
+    agent = await make_agent("alpha")
+    stuck = container.agents.workspace(agent.id) / "stuck"
+    stuck.mkdir(parents=True)
+    (stuck / "f").write_text("x")
+    stuck.chmod(0o500)  # 里面的文件删不掉：rmtree 抛 PermissionError
+    try:
+        await container.agent_lifecycle.delete(agent.id, author="user")
+        await drain(container)
+
+        async with container.db.transaction() as s:
+            assert await s.get(Agent, agent.id) is None
+        assert await _failed_tasks(container) == []
+        assert "workspace of a deleted agent could not be fully removed" in caplog.text
+        # 残留由启动检查列出
+        assert agent.id in container.agents.workspace_owners()
+    finally:
+        stuck.chmod(0o700)
+
+
 async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(container, make_agent):
     agent = await make_agent("alpha")
     await container.vault.set(agent.id, "TOKEN", "x")

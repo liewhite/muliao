@@ -3,10 +3,11 @@
 结清」。
 """
 
-import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Protocol
+
+import anyio
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ class WorkWatcher:
 
     async def run_forever(self) -> None:
         while True:
-            await asyncio.sleep(self._interval)
+            await anyio.sleep(self._interval)
             posted = await self.check()
             if posted:
                 log.info("check-in events posted", extra={"posted": posted})

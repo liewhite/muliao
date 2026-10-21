@@ -168,11 +168,15 @@ class Container:
         await self.jobs.recover()
 
     async def _check_orphan_resources(self) -> None:
-        """数据库里已删除、资源仓库里还留着目录的 agent（删除时提交失败所致）：记录出来，由人决定是否清理。"""
+        """数据库里已删除、还留着资源目录（删除时提交失败所致）或工作目录（删除时没删干净）的 agent：记录出来，由人决定
+        是否清理。"""
         known = {a.id for a in await self.agents.list()}
         orphans = [o for o in self.resources.agent_owners() if o not in known]
         if orphans:
             log.warning("resource directories of deleted agents remain", extra={"agent_ids": orphans})
+        leftovers = [o for o in self.agents.workspace_owners() if o not in known]
+        if leftovers:
+            log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
     async def _check_agent_models(self) -> None:
         """已存 agent 的模型必须能被当前配置解析：配置改动（删 provider、改名）在启动时暴露，而不是散落到每个任务里失败。"""

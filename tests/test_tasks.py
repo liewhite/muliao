@@ -95,7 +95,7 @@ async def test_recover_resets_running_tasks(container, make_agent):
 
 
 async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recovered_forever(
-    container, make_agent
+    container, make_agent, caplog
 ):
     """任务自己让进程退出时（事故：agent 的 shell 命令重启了服务），恢复—重启—再恢复会无限循环下去，还一直占住它的
     lane：尝试次数用完就记为最终失败，钩子照常收尾，用户可手动重试。"""
@@ -137,3 +137,6 @@ async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recover
 
     assert status == TaskStatus.FAILED and "attempts are used up" in error
     assert settled == [task.id]
+    # 失败日志带的是这次失败本身，而不是此刻并不存在的「当前异常」（曾打出 NoneType: None）
+    [failed] = [r for r in caplog.records if r.getMessage().startswith("task failed")]
+    assert failed.exc_info is not None and "Interrupted" in caplog.text

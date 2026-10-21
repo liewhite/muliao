@@ -71,6 +71,10 @@ class TaskQueue:
         """尝试次数的上限：重试与启动恢复共用（Worker._recover）。"""
         return self._max_attempts
 
+    def _wake_after_commit(self, s: AsyncSession) -> None:
+        """这个事务提交后唤醒 worker（新的可领取 task 在提交前对它不可见）。"""
+        event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
+
     def enqueue(
         self,
         s: AsyncSession,
@@ -92,7 +96,7 @@ class TaskQueue:
             not_before=self._clock(),
         )
         s.add(task)
-        event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
+        self._wake_after_commit(s)
         return task
 
     async def claim(self, kinds: Collection[TaskKind]) -> Task | None:
@@ -205,7 +209,7 @@ class TaskQueue:
             task.attempts = 0
             task.not_before = self._clock()
             task.finished_at = None
-            event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
+            self._wake_after_commit(s)
             return task
 
     async def next_due(self, kinds: Collection[TaskKind]) -> datetime | None:

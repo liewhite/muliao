@@ -1,5 +1,4 @@
 import logging
-import traceback
 from typing import Protocol
 
 import anthropic
@@ -218,7 +217,7 @@ class Worker:
             self._publish(task, TaskStatus.FAILED, error)
             return
         if failed.status == TaskStatus.FAILED:
-            log.error("task failed: %s\n%s", error, traceback.format_exc(), extra=ctx)
+            log.error("task failed: %s", error, exc_info=exc, extra=ctx)
         else:
             log.warning(
                 "task failed transiently, retry scheduled at %s: %s", failed.not_before, error, extra=ctx
