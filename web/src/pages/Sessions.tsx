@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Card, Chip } from '@heroui/react'
-import { Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, asAgentId, type Origin, sessionRoute } from '../api'
+import { api, asAgentId, type AgentId, type Origin, type Session, sessionRoute } from '../api'
 import { useServerEvents } from '../events'
+import { groupByAgent } from '../sessionGroups'
 import {
   EmptyHint,
   LinkButton,
@@ -34,12 +35,61 @@ type Filter = keyof typeof FILTERS
 // 「所有 agent」选项的 id；查询时映射为不过滤
 const ALL_AGENTS = '@all'
 
+// 折叠起来的 agent 分组，跨刷新记住
+const COLLAPSED_KEY = 'muliao.sessions.collapsed'
+
+function loadCollapsed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_KEY)
+    return new Set(raw ? (JSON.parse(raw) as string[]) : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function SessionCard({ s }: { s: Session }) {
+  return (
+    <Link to={sessionRoute(s.id)}>
+      <Card className="transition-colors hover:bg-surface-hover">
+        <Card.Content className="flex flex-row items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 font-medium">
+              {s.unread && (
+                <>
+                  <span className="size-2 shrink-0 rounded-full bg-accent" aria-hidden />
+                  <span className="sr-only">未读</span>
+                </>
+              )}
+              <span className="truncate">{s.title}</span>
+            </div>
+            <div className="mt-1 flex gap-1.5">
+              <Chip size="sm" variant="secondary">
+                {ORIGIN_LABEL[s.origin]}
+              </Chip>
+            </div>
+          </div>
+          <span className="shrink-0 text-xs text-muted">{relativeTime(s.updated_at)}</span>
+        </Card.Content>
+      </Card>
+    </Link>
+  )
+}
+
 export default function Sessions() {
   const [filter, setFilter] = useState<Filter>('inbox')
   const [agent, setAgent] = useState(ALL_AGENTS)
   const agents = useAgents()
+  const [collapsed, setCollapsed] = useState(loadCollapsed)
+  const toggle = (id: AgentId) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+      return next
+    })
   const sessions = useLoad(
-    () => api.sessions({ origin: FILTERS[filter].origins, agent_id: agent === ALL_AGENTS ? undefined : asAgentId(agent), limit: 100 }),
+    () => api.sessions({ origin: FILTERS[filter].origins, agent_id: agent === ALL_AGENTS ? undefined : asAgentId(agent), limit: 200 }),
     [filter, agent],
   )
   useServerEvents((e) => {
@@ -76,36 +126,37 @@ export default function Sessions() {
         {(list) =>
           list.length === 0 ? (
             <EmptyHint>没有会话</EmptyHint>
-          ) : (
+          ) : agent !== ALL_AGENTS ? (
             <div className="flex flex-col gap-2">
               {list.map((s) => (
-                <Link key={s.id} to={sessionRoute(s.id)}>
-                  <Card className="transition-colors hover:bg-surface-hover">
-                    <Card.Content className="flex flex-row items-center gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 font-medium">
-                          {s.unread && (
-                            <>
-                              <span className="size-2 shrink-0 rounded-full bg-accent" aria-hidden />
-                              <span className="sr-only">未读</span>
-                            </>
-                          )}
-                          <span className="truncate">{s.title}</span>
-                        </div>
-                        <div className="mt-1 flex gap-1.5">
-                          <Chip size="sm" color="accent" variant="soft">
-                            {agentLabel(agents.data, s.agent_id)}
-                          </Chip>
-                          <Chip size="sm" variant="secondary">
-                            {ORIGIN_LABEL[s.origin]}
-                          </Chip>
-                        </div>
-                      </div>
-                      <span className="shrink-0 text-xs text-muted">{relativeTime(s.updated_at)}</span>
-                    </Card.Content>
-                  </Card>
-                </Link>
+                <SessionCard key={s.id} s={s} />
               ))}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              {groupByAgent(list).map((g) => {
+                const open = !collapsed.has(g.agentId)
+                return (
+                  <section key={g.agentId} className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      className="flex items-center gap-2 text-left text-sm font-semibold text-muted hover:text-foreground"
+                      aria-expanded={open}
+                      onClick={() => toggle(g.agentId)}
+                    >
+                      {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                      <span>{agentLabel(agents.data, g.agentId)}</span>
+                      <span className="font-normal">{g.sessions.length}</span>
+                      {g.unread > 0 && (
+                        <Chip size="sm" color="accent" variant="soft">
+                          {g.unread} 未读
+                        </Chip>
+                      )}
+                    </button>
+                    {open && g.sessions.map((s) => <SessionCard key={s.id} s={s} />)}
+                  </section>
+                )
+              })}
             </div>
           )
         }
