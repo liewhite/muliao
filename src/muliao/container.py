@@ -34,7 +34,7 @@ from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
 from muliao.agents.prompts import PromptStore
-from muliao.agents.resources import ResourceRepo
+from muliao.agents.resources import ResourceRepo, RevisionHistory
 from muliao.agents.service import AgentDefaults, AgentService
 from muliao.agents.skills import SkillStore
 from muliao.agents.tools import agents_toolset
@@ -54,7 +54,7 @@ from muliao.platform.db import Database, WriteCheck, create_engine, migrate
 from muliao.platform.messaging import Messaging
 from muliao.platform.retention import TaskRetention
 from muliao.platform.tables import EVENT_TASK
-from muliao.platform.tasks import Commit, TaskQueue
+from muliao.platform.tasks import Commit, TaskAdmin, TaskQueue
 from muliao.platform.tooling import RunScope
 from muliao.platform.worker import RunNow, TaskHandler, Worker
 from muliao.reflection.service import REFLECTION_TASK, ReflectionHandler, ReflectionScheduler
@@ -95,16 +95,18 @@ log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Container:
-    """HTTP 层看到的组合根：各领域的门面（类型都由领域的 api 模块导出，tests/test_boundaries 检查）、平台的事件流与
-    任务列表，以及服务的生命周期。HTTP 层只经这些调用领域，拿不到领域内部的对象（消费者、队列的写入口……）。"""
+    """HTTP 层看到的组合根：各领域的门面（类型都由领域的 api 模块导出）、平台的展示事件流与「任务」页的操作，以及
+    服务的生命周期（tests/test_boundaries 检查字段类型）。HTTP 层只经这些调用领域，拿不到领域内部的对象（消费者、
+    队列的排任务与领取、资源仓库的直接写入……）。"""
 
     settings: Settings
     # SSE：进程内的展示事件
     bus: EventBus
-    # 「任务」页：列出与手动重试
-    tasks: TaskQueue
+    # 「任务」页：列出与人工重试
+    tasks: TaskAdmin
     vault: Vault
-    resources: ResourceRepo
+    # 资源的版本历史（只读；写入经各 store）
+    resources: RevisionHistory
     skills: SkillStore
     memory: MemoryStore
     prompts: PromptStore

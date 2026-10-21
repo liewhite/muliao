@@ -1,7 +1,9 @@
 import asyncio
 import subprocess
+from functools import partial
 from pathlib import Path
 
+import anyio
 import pytest
 
 from muliao.agents.memory import MemoryFull, MemoryStore
@@ -570,3 +572,46 @@ async def test_contents_at_reads_every_revision_in_one_batch(repo: ResourceRepo)
     other = repo.root / "public" / "other.md"
     with pytest.raises(NotFound):
         await repo.contents_at([revisions[0].rev], other)
+
+
+async def test_a_failing_precondition_writes_and_commits_nothing(repo: ResourceRepo):
+    path = repo.owner_dir(ALPHA) / "MEMORY.md"
+    head = _git("-C", str(repo.root), "rev-parse", "HEAD")
+
+    async def refuse() -> None:
+        raise NotFound("agent gone")
+
+    with pytest.raises(NotFound):
+        await repo.apply({path: "x"}, "memory", ALPHA, precondition=refuse)
+    with pytest.raises(NotFound):
+        await repo.update(path, lambda _c: "x", "memory", ALPHA, precondition=refuse)
+
+    assert not repo.owner_dir(ALPHA).exists()
+    assert _git("-C", str(repo.root), "rev-parse", "HEAD") == head
+
+
+async def test_the_precondition_runs_inside_the_repository_lock(repo: ResourceRepo):
+    """检查与写入之间插不进别的写入（例如删除 agent 删掉它的目录）：检查在锁里执行。"""
+    path = repo.owner_dir(ALPHA) / "MEMORY.md"
+    checking, release = anyio.Event(), anyio.Event()
+    order: list[str] = []
+
+    async def slow_check() -> None:
+        checking.set()
+        await release.wait()
+        order.append("checked")
+
+    async def other_write() -> None:
+        await checking.wait()
+        await repo.apply({repo.owner_dir(ALPHA): None}, "delete agent", "user")
+        order.append("deleted")
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(other_write)
+        group.start_soon(partial(repo.apply, {path: "fact\n"}, "memory", ALPHA, precondition=slow_check))
+        await checking.wait()
+        await anyio.sleep(0.1)
+        assert order == []
+        release.set()
+
+    assert order == ["checked", "deleted"] and not path.exists()

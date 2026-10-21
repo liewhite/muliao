@@ -12,7 +12,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Collection
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy import Select, delete, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +53,14 @@ def _claimable():  # noqa: ANN202
             .exists()
         )
     )
+
+
+class TaskAdmin(Protocol):
+    """「任务」页的操作（TaskQueue 实现）：列出与人工重试。HTTP 层只拿到这些，不能排、领取或结束任务。"""
+
+    async def list(self, *, status: TaskStatus | None, session_id: str | None, limit: int) -> list[Task]: ...
+
+    async def retry(self, task_id: int) -> Task: ...
 
 
 class TaskQueue:

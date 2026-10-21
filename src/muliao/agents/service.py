@@ -290,7 +290,8 @@ class AgentService:
         return fields
 
     async def get_active(self, agent_id: str) -> AgentInfo:
-        """还可用的 agent：正在删除的按不存在处理。为它写数据（资源、配置）之前用这个检查。"""
+        """还可用的 agent：正在删除的按不存在处理（例如读它的私有资源时）。为它写数据的检查在写入的地方：数据库数据在
+        同一事务里用 active_agent_in，私有资源由各 store 在资源仓库的锁里检查（agents.active）。"""
         async with self._db.transaction() as s:
             return await active_agent_in(s, agent_id)
 

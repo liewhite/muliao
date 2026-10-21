@@ -182,8 +182,9 @@ async def test_injected_agent_deletion_blockers_are_reviewed_read_only_queries(c
 
 
 def test_the_http_layer_sees_only_domain_facades():
-    """HTTP 层只经 Container 调用领域（docs/architecture.md 2.3）：它的字段类型都由领域的 api 模块导出，或是平台的
-    类型与配置；领域内部的对象（消费者、压缩、信箱……）不在其中。import 检查拦不住经 Container 取到的对象，由这里拦。"""
+    """HTTP 层只经 Container 调用领域（docs/architecture.md 2.3）：它的字段类型都由领域的 api 模块导出，或是逐个
+    审过的平台类型与配置；领域内部的对象（消费者、压缩、信箱……）、平台的数据库与队列不在其中。import 检查拦不住
+    经 Container 取到的对象，由这里拦。"""
     import dataclasses
     import importlib
     import types
@@ -191,6 +192,11 @@ def test_the_http_layer_sees_only_domain_facades():
 
     from muliao.config import Settings
     from muliao.container import Container
+    from muliao.platform.bus import EventBus
+    from muliao.platform.tasks import TaskAdmin
+
+    # 平台类型：展示事件流（只订阅）与「任务」页的窄口
+    reviewed = (Settings, EventBus, TaskAdmin)
 
     exported = [
         getattr(module, name)
@@ -205,7 +211,7 @@ def test_the_http_layer_sees_only_domain_facades():
         hint = hints[field.name]
         members = typing.get_args(hint) if isinstance(hint, types.UnionType) else (hint,)
         for t in members:
-            if t is type(None) or t is Settings or t.__module__.startswith("muliao.platform."):
+            if t is type(None) or any(t is r for r in reviewed):
                 continue
             if not any(t is e for e in exported):
                 problems.append(f"Container.{field.name}: {t.__module__}.{t.__qualname__}")
