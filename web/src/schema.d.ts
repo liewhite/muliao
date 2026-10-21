@@ -1159,7 +1159,7 @@ export interface components {
         };
         /**
          * CorruptOut
-         * @description 一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除或重写。
+         * @description 一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除（skill 也可重写）。
          */
         CorruptOut: {
             /** Owner */

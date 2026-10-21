@@ -209,6 +209,7 @@ def check_text(child: Session, agent: AgentInfo, work: WorkState, run: Task | No
         case WorkState.RUNNING if run is not None and run.status == TaskStatus.PENDING and run.attempts:
             doing = f"is waiting to run again (attempt {run.attempts} so far)"
         case WorkState.RUNNING | WorkState.IDLE:
-            # idle 也会出现：最终失败的运行期间才到的委派信件，要等定期对账（MailReconciler）唤醒下一次运行
+            # idle 也会出现：委派信件到了，投信或运行结束（含最终失败）时的唤醒没做成（事务失败、重启），要等定期对账
+            # （MailReconciler）补唤醒下一次运行
             doing = "has your task queued and has not started on it yet"
     return f"{who} {doing}. {keep}"

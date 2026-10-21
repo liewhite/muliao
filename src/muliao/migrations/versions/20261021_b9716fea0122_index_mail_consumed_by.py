@@ -1,6 +1,6 @@
 """index mail consumed_by
 
-给 mail.consumed_by（指向 tasks.id 的外键）加部分索引：删 tasks 时（#47 保留策略、删会话）SQLite 按它查引用，
+给 mail.consumed_by（指向 tasks.id 的外键）加部分索引：删 tasks 时（#47 保留策略）SQLite 按它查引用，
 没有它每删一行都要扫整张 mail。只加索引，不动已有数据。
 
 Revision ID: b9716fea0122
