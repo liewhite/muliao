@@ -383,6 +383,7 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
             "memory_append",
             "memory_replace",
             "instructions_replace",
+            "ask_user",
         ]
     )
     with pytest.raises(InvalidInput, match="tool groups"):

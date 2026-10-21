@@ -7,6 +7,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -15,6 +16,7 @@ from pydantic_ai.models.function import AgentInfo
 
 from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
+from muliao.sessions.ask_user import NO_USER_WAITING
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import steps_of
 from muliao.sessions.tables import Message
@@ -240,7 +242,8 @@ async def test_rejected_question_arguments_do_not_leave_a_pending_question(
     assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.DONE, TaskStatus.DONE]
 
 
-async def test_ask_user_is_offered_only_when_the_user_reads_the_answer(container, make_agent, models):
+async def test_ask_user_is_always_listed_so_the_tool_list_stays_cacheable(container, make_agent, models):
+    """工具列表在缓存前缀最前面：有没有用户在等，列出的工具都一样。"""
     agent = await make_agent("alpha", model="m")
     seen: list[list[str]] = []
 
@@ -253,7 +256,7 @@ async def test_ask_user_is_offered_only_when_the_user_reads_the_answer(container
     await start(container, agent.id, "event", origin=Origin.TRIGGER)
     await drain(container)
 
-    assert "ask_user" in seen[0] and "ask_user" not in seen[1]
+    assert "ask_user" in seen[0] and seen[0] == seen[1]
 
 
 def test_compaction_never_separates_a_question_from_its_answer():
@@ -336,18 +339,21 @@ async def test_a_voided_failed_answer_does_not_block_later_questions(client, con
     assert resp.status_code == 202
 
 
-async def test_a_question_where_ask_user_is_not_offered_shows_as_a_rejected_tool_call(
+async def test_a_question_when_no_user_waits_is_rejected_with_the_reason(
     client, container, make_agent, models
 ):
-    """参数合法、但这次运行不提供 ask_user（没有用户在等）：pydantic-ai 退回调用，它不是提问。"""
+    """参数合法、但没有用户在等这次运行的回答：调用被拒绝并交还模型（说明原因），它不是提问。"""
     await login(client)
     agent = await make_agent("analyst", model="blind")
+
+    retries: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         if len(messages) == 1:
             return ModelResponse(
                 parts=[ToolCallPart("ask_user", {"questions": QUESTIONS[:1]}, tool_call_id="q")]
             )
+        retries.extend(str(p.content) for p in messages[-1].parts if isinstance(p, RetryPromptPart))
         return ModelResponse(parts=[TextPart("那我自己决定")])
 
     models.models["blind"] = scripted(fn)
@@ -357,6 +363,7 @@ async def test_a_question_where_ask_user_is_not_offered_shows_as_a_rejected_tool
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
     assert ask_states(detail) == {}
     assert [i["type"] for i in detail["items"] if i["tool_call_id"] == "q"] == ["tool_call", "tool_error"]
+    assert retries == [NO_USER_WAITING]
 
 
 async def test_a_live_question_is_shown_as_asking(container, make_agent, models):

@@ -306,7 +306,7 @@ def build_container(
         settings.runtime.shell_max_timeout,
         settings.runtime.tool_output_max_chars,
     )
-    # 总是开放：自我改进，以及向用户提问（没有用户会回答的运行里由工具自己隐藏，见 sessions.ask_user）
+    # 总是开放：自我改进，以及向用户提问（工具列表保持稳定以命中缓存；没有用户会回答的运行里调用被拒绝，见 sessions.ask_user）
     always_tools = [
         skills_toolset(skills),
         memory_toolset(memory),
