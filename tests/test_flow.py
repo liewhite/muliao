@@ -348,6 +348,27 @@ async def test_tool_that_keeps_failing_does_not_abort_the_run(container, make_ag
     assert container.memory.read(alpha) == "x" * container.memory.max_chars
 
 
+async def test_long_run_is_not_capped_by_pydantic_ai_default_request_limit(container, make_agent, models):
+    """长期 agent 的一次运行不设请求数上限（10-21 开发任务在 pydantic-ai 默认的 50 次请求处被打断）。"""
+    alpha = (await make_agent("alpha", model="m")).id
+    steps = 60
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        done = sum(isinstance(m, ModelResponse) for m in messages)
+        if done >= steps:
+            return ModelResponse(parts=[TextPart("finished")])
+        return ModelResponse(parts=[ToolCallPart("list_files", {})])
+
+    models.models["m"] = scripted(fn)
+    session = await start(container, alpha, "long task", origin=Origin.TRIGGER)
+    await drain(container)
+
+    [turn] = await tasks_of(container, TaskKind.RUN)
+    assert turn.status == TaskStatus.DONE, turn.error
+    history = await container.sessions.history(session.id)
+    assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "finished"
+
+
 async def test_run_events_are_published_to_bus(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = call_then_answer("list_agents", {}, "there is one agent")

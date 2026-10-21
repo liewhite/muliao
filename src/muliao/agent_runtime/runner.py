@@ -48,6 +48,10 @@ from muliao.platform.tasks import Clock
 from muliao.platform.tooling import Audience, DomainErrorsAsRetry, Origin, RunScope
 from muliao.usage.api import RunKind, UsageEntry, UsageLog
 
+# pydantic-ai 不传 usage_limits 时默认 request_limit=50。长期 agent 的一次运行（开发任务）上百步是常态，不设请求数上限：
+# 运行靠用户停止与 task 时限收束。只有临时 agent 按 runtime.temp_agent_request_limit 显式设限。
+_UNLIMITED = UsageLimits(request_limit=None)
+
 log = logging.getLogger(__name__)
 
 TextKind = Literal["assistant", "thinking"]
@@ -219,6 +223,7 @@ class AgentRuntime:
                 output_type=[str, DeferredToolRequests],
                 deferred_tool_results=deferred,
                 usage=usage,
+                usage_limits=_UNLIMITED,
             ) as run:
                 node = run.next_node
                 if not PaiAgent.is_user_prompt_node(node):
@@ -319,7 +324,7 @@ class AgentRuntime:
         history: Sequence[ModelMessage],
         kind: RunKind,
         billed_to: str | None,
-        usage_limits: UsageLimits | None = None,
+        usage_limits: UsageLimits = _UNLIMITED,
     ) -> AgentRunResult[str]:
         ctx = {
             "agent": scope.agent_id,
