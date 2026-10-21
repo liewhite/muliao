@@ -1,6 +1,6 @@
 """加密保存的 secret，分公共与 agent 私有。agent 只能通过 key 引用，没有读取明文的工具。
 
-引用 ${vault:KEY} 按使用者的视角解析（合并规则见 ownership.visible）：agent 运行的命令用该 agent 的视角，
+引用 ${vault:KEY} 按使用者的视角解析（合并规则见 ownership.shadowing）：agent 运行的命令用该 agent 的视角，
 MCP server 的配置用 server 归属者的视角——公共 server 只能引用公共 secret。
 """
 
@@ -15,7 +15,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import active_agent_in, owned_by, scope_of, visible, visible_owners
+from muliao.agents.api import active_agent_in, owned_by, scope_of, shadowing, visible, visible_owners
 from muliao.agents.events import AgentDeleting
 from muliao.errors import InvalidInput, NotFound
 from muliao.platform.db import Database
@@ -90,11 +90,16 @@ class Vault:
             await s.delete(row)
         log.info("secret deleted", extra={"owner": owner, "key": key})
 
-    async def list_all(self) -> list[SecretInfo]:
-        """管理界面：所有公共与私有 secret（不含值）。"""
+    async def view(self, owner: str | None) -> list[tuple[SecretInfo, bool]]:
+        """管理界面：owner 视角下的 secret（不含值），即它私有的与公共的，各自标明是否被同名私有项遮蔽。
+
+        owner 为 None 时只有公共 secret。顺序：私有在前，各按 key 排序。
+        """
         async with self._db.transaction() as s:
-            rows = (await s.scalars(select(Secret).order_by(Secret.owner, Secret.key))).all()
-            return [_info(r) for r in rows]
+            query = select(Secret).where(visible_owners(Secret.owner, owner))
+            rows = (await s.scalars(query.order_by(Secret.owner.is_(None), Secret.key))).all()
+            view = shadowing(rows, agent_id=owner, owner=lambda r: r.owner, name=lambda r: r.key)
+            return [(_info(r), shadowed) for r, shadowed in view]
 
     async def visible_to(self, agent_id: str | None) -> list[SecretInfo]:
         async with self._db.transaction() as s:

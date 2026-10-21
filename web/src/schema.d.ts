@@ -384,7 +384,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Mcp */
+        /**
+         * List Mcp
+         * @description owner 视角下的 server：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 server。
+         */
         get: operations["list_mcp_api_mcp_get"];
         put?: never;
         /** Add Mcp */
@@ -437,7 +440,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Secrets */
+        /**
+         * List Secrets
+         * @description owner 视角下的 secret（不含值）：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 secret。
+         */
         get: operations["list_secrets_api_vault_get"];
         put?: never;
         post?: never;
@@ -1394,6 +1400,8 @@ export interface components {
              * @default []
              */
             tools: string[];
+            /** Shadowed */
+            shadowed: boolean;
         };
         /**
          * McpTransport
@@ -1429,6 +1437,55 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** OnceConfig */
+        OnceConfig: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+        };
+        /** OnceStatus */
+        OnceStatus: {
+            /**
+             * Run At
+             * Format: date-time
+             */
+            run_at: string;
+        };
+        /** OnceTriggerOut */
+        OnceTriggerOut: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Prompt */
+            prompt: string;
+            /** Enabled */
+            enabled: boolean;
+            precheck: components["schemas"]["Precheck"] | null;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /** Last Fired At */
+            last_fired_at: string | null;
+            /** Last Session Id */
+            last_session_id: string | null;
+            /** Disabled Reason */
+            disabled_reason: string | null;
+            /** Precheck Error */
+            precheck_error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "once";
+            config: components["schemas"]["OnceConfig"];
+            status: components["schemas"]["OnceStatus"];
         };
         /** Option */
         Option: {
@@ -1649,6 +1706,52 @@ export interface components {
             /** Session Id */
             session_id: string;
         };
+        /** ScheduleConfig */
+        ScheduleConfig: {
+            /** Cron */
+            cron: string;
+        };
+        /** ScheduleStatus */
+        ScheduleStatus: {
+            /**
+             * Next Run At
+             * Format: date-time
+             */
+            next_run_at: string;
+        };
+        /** ScheduleTriggerOut */
+        ScheduleTriggerOut: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Prompt */
+            prompt: string;
+            /** Enabled */
+            enabled: boolean;
+            precheck: components["schemas"]["Precheck"] | null;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /** Last Fired At */
+            last_fired_at: string | null;
+            /** Last Session Id */
+            last_session_id: string | null;
+            /** Disabled Reason */
+            disabled_reason: string | null;
+            /** Precheck Error */
+            precheck_error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "schedule";
+            config: components["schemas"]["ScheduleConfig"];
+            status: components["schemas"]["ScheduleStatus"];
+        };
         /** SecretIn */
         SecretIn: {
             /** Value */
@@ -1672,6 +1775,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Shadowed */
+            shadowed: boolean;
         };
         /**
          * ServerEvent
@@ -1899,8 +2004,11 @@ export interface components {
             name: string;
             /** Agent Id */
             agent_id: string;
-            /** Kind */
-            kind: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "schedule" | "once" | "webhook";
             /** Prompt */
             prompt: string;
             /** Config */
@@ -1911,46 +2019,13 @@ export interface components {
         };
         /** TriggerKindOut */
         TriggerKindOut: {
-            /** Name */
-            name: string;
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "schedule" | "once" | "webhook";
             /** Description */
             description: string;
-        };
-        /** TriggerOut */
-        TriggerOut: {
-            /** Id */
-            id: number;
-            /** Name */
-            name: string;
-            /** Agent Id */
-            agent_id: string;
-            /** Kind */
-            kind: string;
-            /** Prompt */
-            prompt: string;
-            /** Config */
-            config: {
-                [key: string]: unknown;
-            };
-            /** Status */
-            status: {
-                [key: string]: unknown;
-            };
-            /** Enabled */
-            enabled: boolean;
-            precheck: components["schemas"]["Precheck"] | null;
-            /** Last Checked At */
-            last_checked_at: string | null;
-            /** Last Fired At */
-            last_fired_at: string | null;
-            /** Last Session Id */
-            last_session_id: string | null;
-            /** Disabled Reason */
-            disabled_reason: string | null;
-            /** Precheck Error */
-            precheck_error: string | null;
-            /** Finished At */
-            finished_at: string | null;
         };
         /**
          * TriggerPatch
@@ -2032,6 +2107,51 @@ export interface components {
         VapidOut: {
             /** Public Key */
             public_key: string;
+        };
+        /**
+         * WebhookConfig
+         * @description webhook 没有配置项。
+         */
+        WebhookConfig: Record<string, never>;
+        /** WebhookStatus */
+        WebhookStatus: {
+            /** Url */
+            url: string;
+            /** Has Token */
+            has_token: boolean;
+        };
+        /** WebhookTriggerOut */
+        WebhookTriggerOut: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Prompt */
+            prompt: string;
+            /** Enabled */
+            enabled: boolean;
+            precheck: components["schemas"]["Precheck"] | null;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /** Last Fired At */
+            last_fired_at: string | null;
+            /** Last Session Id */
+            last_session_id: string | null;
+            /** Disabled Reason */
+            disabled_reason: string | null;
+            /** Precheck Error */
+            precheck_error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "webhook";
+            config: components["schemas"]["WebhookConfig"];
+            status: components["schemas"]["WebhookStatus"];
         };
         /**
          * WorkState
@@ -2893,7 +3013,9 @@ export interface operations {
     };
     list_mcp_api_mcp_get: {
         parameters: {
-            query?: never;
+            query?: {
+                owner?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2907,6 +3029,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3044,7 +3175,9 @@ export interface operations {
     };
     list_secrets_api_vault_get: {
         parameters: {
-            query?: never;
+            query?: {
+                owner?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3058,6 +3191,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SecretOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3332,7 +3474,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TriggerOut"][];
+                    "application/json": (components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"])[];
                 };
             };
             /** @description Validation Error */
@@ -3365,7 +3507,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TriggerOut"];
+                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"];
                 };
             };
             /** @description Validation Error */
@@ -3429,7 +3571,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TriggerOut"];
+                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"];
                 };
             };
             /** @description Validation Error */

@@ -284,7 +284,7 @@ export function EmptyHint({ children }: { children: ReactNode }) {
   return <p className="py-10 text-center text-sm text-muted">{children}</p>
 }
 
-/** 只读列出继承来的公共资源（见 ownership.ts）：私有视角里能看到它们，但只能在设置页管理。 */
+/** 只读列出继承来的公共资源（见 ownership.ts；是否被遮蔽由后端给出）：私有视角里能看到它们，但只能在设置页管理。 */
 export function InheritedSection({ title, to, children }: { title: string; to: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-2">

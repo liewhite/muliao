@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plug, Trash2 } from 'lucide-react'
 import { api, type AgentId, type McpInput, type McpServer } from '../api'
-import { inheritedPublic, ownedBy, type Inherited } from '../ownership'
+import { splitView } from '../ownership'
 import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
@@ -195,7 +195,7 @@ function McpItem({ server, onChange }: { server: McpServer; onChange: () => void
 }
 
 /** 继承来的公共 server：只能看，管理入口在设置页。 */
-function InheritedMcpItem({ entry: { item, shadowed } }: { entry: Inherited<McpServer> }) {
+function InheritedMcpItem({ item }: { item: McpServer }) {
   return (
     <Card>
       <Card.Header>
@@ -209,7 +209,7 @@ function InheritedMcpItem({ entry: { item, shadowed } }: { entry: Inherited<McpS
               已停用
             </Chip>
           )}
-          {shadowed && (
+          {item.shadowed && (
             <Chip size="sm" color="warning" variant="soft">
               已被私有项覆盖
             </Chip>
@@ -225,14 +225,13 @@ function InheritedMcpItem({ entry: { item, shadowed } }: { entry: Inherited<McpS
 
 /** owner 为 null 时管理公共 MCP server；否则管理该 agent 的私有 server，并只读列出它继承的公共 server。 */
 export function McpManager({ owner }: { owner: AgentId | null }) {
-  const servers = useLoad(() => api.mcp(), [])
+  const servers = useLoad(() => api.mcp(owner), [owner])
   return (
     <div className="flex flex-col gap-3">
       <McpForm owner={owner} onCreated={() => void servers.reload()} />
       <Loading state={servers}>
         {(all) => {
-          const own = ownedBy(all, owner)
-          const inherited = inheritedPublic(all, owner, (s) => s.name)
+          const { own, inherited } = splitView(all, owner)
           return (
             <div className="flex flex-col gap-4">
               {own.length === 0 ? (
@@ -246,8 +245,8 @@ export function McpManager({ owner }: { owner: AgentId | null }) {
               )}
               {inherited.length > 0 && (
                 <InheritedSection title="继承的公共 MCP" to="/mcp">
-                  {inherited.map((e) => (
-                    <InheritedMcpItem key={e.item.name} entry={e} />
+                  {inherited.map((s) => (
+                    <InheritedMcpItem key={s.name} item={s} />
                   ))}
                 </InheritedSection>
               )}

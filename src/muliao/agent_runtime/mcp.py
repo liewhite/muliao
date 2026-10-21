@@ -1,7 +1,7 @@
 """MCP server 的配置与注册表，以及把配置构建为 pydantic-ai toolset。
 
 配置是资源仓库里的 JSON 文件（public/mcp/<name>.json、agents/<id>/mcp/<name>.json，见 muliao.agents.resources）：
-归属与名称由文件位置决定，每次修改提交一版。agent 看到的 server 按 ownership.visible 合并公共与私有。
+归属与名称由文件位置决定，每次修改提交一版。agent 看到的 server 按 ownership.shadowing 合并公共与私有。
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset
 
-from muliao.agents.api import ResourceRepo, scope_of, validate_slug, visible
+from muliao.agents.api import ResourceRepo, scope_of, shadowing, validate_slug
 from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
 from muliao.platform.shell import redact
 from muliao.platform.tooling import RunScope
@@ -193,14 +193,23 @@ class McpRegistry:
             return []
         return [self._load(owner, p) for p in sorted(directory.glob("*.json"))]
 
-    def list_all(self) -> list[McpServer]:
-        """管理界面：公共与所有 agent 私有的 server。"""
-        return [*self.list(None), *(s for owner in self._repo.agent_owners() for s in self.list(owner))]
+    def view(self, owner: str | None) -> list[tuple[McpServer, bool]]:
+        """管理界面：owner 视角下的 server，即它私有的（在前）与公共的，各自标明是否被同名私有 server 遮蔽。
+
+        停用的 server 不参与合并（不遮蔽别人）；owner 为 None 时只有公共 server。
+        """
+        servers = (self.list(owner) if owner is not None else []) + self.list(None)
+        enabled = [s for s in servers if s.enabled]
+        shadowed = {
+            id(s)
+            for s, hit in shadowing(enabled, agent_id=owner, owner=lambda s: s.owner, name=lambda s: s.name)
+            if hit
+        }
+        return [(s, id(s) in shadowed) for s in servers]
 
     def visible_to(self, agent_id: str) -> list[McpServer]:
-        """agent 可用的 server：已启用的，按 ownership.visible 合并公共与私有。"""
-        enabled = [s for s in self.list(agent_id) + self.list(None) if s.enabled]
-        return visible(enabled, agent_id=agent_id, owner=lambda s: s.owner, name=lambda s: s.name)
+        """agent 可用的 server：view 里已启用且未被遮蔽的。"""
+        return [s for s, shadowed in self.view(agent_id) if s.enabled and not shadowed]
 
     def get(self, owner: str | None, name: str) -> McpServer:
         path = self._path(owner, name)

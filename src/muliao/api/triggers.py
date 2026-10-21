@@ -1,28 +1,42 @@
 """触发器的通用管理接口；某种触发方式专有的操作在它自己的模块里（如 api/webhook.py）。"""
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, TypeAdapter
 
 from muliao.api.deps import C
-from muliao.triggers.api import KEEP, Precheck
+from muliao.triggers.api import (
+    KEEP,
+    OnceConfig,
+    OnceStatus,
+    Precheck,
+    ScheduleConfig,
+    ScheduleStatus,
+    WebhookConfig,
+    WebhookStatus,
+)
 from muliao.triggers.tables import Trigger
 
 router = APIRouter()
 
 
+# 所有触发方式；与 container 里注册的方式一一对应（tests/test_triggers.py 校验）
+TriggerKindName = Literal["schedule", "once", "webhook"]
+
+
 class TriggerKindOut(BaseModel):
-    name: str
+    name: TriggerKindName
     description: str
 
 
 class TriggerCreate(BaseModel):
     name: str
     agent_id: str
-    kind: str
+    kind: TriggerKindName
     prompt: str
+    # 由 kind 校验，格式见 TriggerKindOut.description
     config: dict[str, Any]
     # 触发前的前置检查（见 triggers.precheck）；不给则每次都交给 agent
     precheck: Precheck | None = None
@@ -37,15 +51,14 @@ class TriggerPatch(BaseModel):
     precheck: Precheck | None = None
 
 
-class TriggerOut(BaseModel):
+class _TriggerOutBase(BaseModel):
+    """各触发方式共有的字段；kind、config 与 status（这种方式自己给出的运行状态，见 TriggerKind.status，不含凭证）
+    由各方式的子类给出类型。"""
+
     id: int
     name: str
     agent_id: str
-    kind: str
     prompt: str
-    config: dict[str, Any]
-    # 这种触发方式自己给出的运行状态（见 TriggerKind.status），不含凭证
-    status: dict[str, Any]
     enabled: bool
     precheck: Precheck | None
     last_checked_at: datetime | None
@@ -58,28 +71,52 @@ class TriggerOut(BaseModel):
     finished_at: datetime | None
 
 
+class ScheduleTriggerOut(_TriggerOutBase):
+    kind: Literal["schedule"]
+    config: ScheduleConfig
+    status: ScheduleStatus
+
+
+class OnceTriggerOut(_TriggerOutBase):
+    kind: Literal["once"]
+    config: OnceConfig
+    status: OnceStatus
+
+
+class WebhookTriggerOut(_TriggerOutBase):
+    kind: Literal["webhook"]
+    config: WebhookConfig
+    status: WebhookStatus
+
+
+TriggerOut = Annotated[ScheduleTriggerOut | OnceTriggerOut | WebhookTriggerOut, Field(discriminator="kind")]
+_TRIGGER_OUT: TypeAdapter[TriggerOut] = TypeAdapter(TriggerOut)
+
+
 class FiredOut(BaseModel):
     # 前置检查判定这次不触发时为 null
     session_id: str | None
 
 
 def _out(c: C, t: Trigger) -> TriggerOut:
-    return TriggerOut(
-        id=t.id,
-        name=t.name,
-        agent_id=t.agent_id,
-        kind=t.kind,
-        prompt=t.prompt,
-        config=t.config,
-        status=c.triggers.kind(t.kind).status(t),
-        enabled=t.enabled,
-        precheck=None if t.precheck is None else Precheck.model_validate(t.precheck),
-        last_checked_at=t.last_checked_at,
-        last_fired_at=t.last_fired_at,
-        last_session_id=t.last_session_id,
-        disabled_reason=t.disabled_reason,
-        precheck_error=t.precheck_error,
-        finished_at=t.finished_at,
+    return _TRIGGER_OUT.validate_python(
+        dict(
+            id=t.id,
+            name=t.name,
+            agent_id=t.agent_id,
+            kind=t.kind,
+            prompt=t.prompt,
+            config=t.config,
+            status=c.triggers.kind(t.kind).status(t).model_dump(),
+            enabled=t.enabled,
+            precheck=None if t.precheck is None else Precheck.model_validate(t.precheck),
+            last_checked_at=t.last_checked_at,
+            last_fired_at=t.last_fired_at,
+            last_session_id=t.last_session_id,
+            disabled_reason=t.disabled_reason,
+            precheck_error=t.precheck_error,
+            finished_at=t.finished_at,
+        )
     )
 
 

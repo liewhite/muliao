@@ -26,6 +26,7 @@ from enum import Enum
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
+from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,8 +84,11 @@ class TriggerKind(Protocol):
         """
         ...
 
-    def status(self, trigger: Trigger) -> dict[str, Any]:
-        """给界面与模型看的运行状态（如下次触发时间、地址），不含任何凭证。"""
+    def status(self, trigger: Trigger) -> BaseModel:
+        """给界面与模型看的运行状态（如下次触发时间、地址），不含任何凭证。
+
+        每种方式有自己的状态类型；HTTP 接口按 kind 区分的联合类型（api/triggers.py）列出全部方式。
+        """
         ...
 
 

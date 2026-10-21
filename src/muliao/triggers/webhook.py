@@ -15,6 +15,7 @@ import logging
 import secrets
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from muliao.errors import InvalidInput, Unauthorized
@@ -25,6 +26,17 @@ from muliao.triggers.tables import Trigger
 log = logging.getLogger(__name__)
 
 KIND = "webhook"
+
+
+class WebhookConfig(BaseModel):
+    """webhook 没有配置项。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class WebhookStatus(BaseModel):
+    url: str
+    has_token: bool
 
 
 def _hash(token: str) -> str:
@@ -50,8 +62,10 @@ class WebhookKind:
             raise InvalidInput(f"webhook trigger config must be {{}}, got {config!r}")
         return {}, {}
 
-    def status(self, trigger: Trigger) -> dict[str, Any]:
-        return {"url": hook_url(self._public_url, trigger.name), "has_token": "token_hash" in trigger.state}
+    def status(self, trigger: Trigger) -> WebhookStatus:
+        return WebhookStatus(
+            url=hook_url(self._public_url, trigger.name), has_token="token_hash" in trigger.state
+        )
 
 
 class Webhooks:

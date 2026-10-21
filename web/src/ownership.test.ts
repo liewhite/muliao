@@ -1,46 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import { asAgentId } from './api'
-import { inheritedPublic, ownedBy } from './ownership'
+import { splitView } from './ownership'
 
 const a = asAgentId('agent-a')
-const b = asAgentId('agent-b')
 
-const ALL = [
+// 接口给出的 a 视角：私有在前，公共在后
+const VIEW_A = [
+  { owner: a, name: 'slack' },
   { owner: null, name: 'search' },
   { owner: null, name: 'slack' },
-  { owner: a, name: 'slack' },
-  { owner: a, name: 'notes' },
-  { owner: b, name: 'search' },
 ]
 const nameOf = (x: { name: string }) => x.name
 
-describe('ownedBy', () => {
-  it('只给出公共资源', () => {
-    expect(ownedBy(ALL, null).map(nameOf)).toEqual(['search', 'slack'])
+describe('splitView', () => {
+  it('私有视角：自己管理的是私有项，公共项是继承来的', () => {
+    const { own, inherited } = splitView(VIEW_A, a)
+    expect(own.map(nameOf)).toEqual(['slack'])
+    expect(inherited.map(nameOf)).toEqual(['search', 'slack'])
   })
 
-  it('只给出该 agent 的私有资源，看不到别人的', () => {
-    expect(ownedBy(ALL, a).map(nameOf)).toEqual(['slack', 'notes'])
-  })
-
-  it('没有私有资源时为空', () => {
-    expect(ownedBy(ALL, asAgentId('agent-c'))).toEqual([])
-  })
-})
-
-describe('inheritedPublic', () => {
-  it('列出全部公共资源，同名的标为被私有项遮蔽', () => {
-    expect(inheritedPublic(ALL, a, nameOf)).toEqual([
-      { item: { owner: null, name: 'search' }, shadowed: false },
-      { item: { owner: null, name: 'slack' }, shadowed: true },
-    ])
-  })
-
-  it('别的 agent 的同名私有资源不参与遮蔽判断', () => {
-    expect(inheritedPublic(ALL, b, nameOf).map((i) => i.shadowed)).toEqual([true, false])
-  })
-
-  it('公共视角本身不继承任何东西', () => {
-    expect(inheritedPublic(ALL, null, nameOf)).toEqual([])
+  it('公共视角：自己管理的就是公共项，不继承任何东西', () => {
+    const publicView = VIEW_A.filter((x) => x.owner === null)
+    expect(splitView(publicView, null)).toEqual({ own: publicView, inherited: [] })
   })
 })

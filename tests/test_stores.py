@@ -122,7 +122,7 @@ async def test_vault_renders_references_and_fails_on_missing_key(container):
     await vault.set(None, "TOKEN", "s3cret", "api token")
 
     assert await vault.render("Bearer ${vault:TOKEN}", None) == "Bearer s3cret"
-    assert [s.key for s in await vault.list_all()] == ["TOKEN"]
+    assert [(s.key, shadowed) for s, shadowed in await vault.view(None)] == [("TOKEN", False)]
     with pytest.raises(NotFound):
         await vault.render("${vault:MISSING}", None)
     with pytest.raises(InvalidInput):
@@ -147,6 +147,14 @@ async def test_private_secret_shadows_public_and_is_invisible_to_others(containe
         ("TOKEN", alpha),
     ]
 
+    # 管理界面的视角：私有在前，公共的标明被遮蔽；别的 agent 视角里不遮蔽
+    assert [(s.key, s.owner, shadowed) for s, shadowed in await vault.view(alpha)] == [
+        ("ALPHA_KEY", alpha, False),
+        ("TOKEN", alpha, False),
+        ("TOKEN", None, True),
+    ]
+    assert [(s.key, shadowed) for s, shadowed in await vault.view(beta)] == [("TOKEN", False)]
+
     await vault.delete(alpha, "TOKEN")
     assert await vault.resolve_many(alpha, ["TOKEN"]) == {"TOKEN": "public"}
     with pytest.raises(NotFound):
@@ -159,7 +167,7 @@ async def test_secrets_of_deleted_agent_go_with_it(container, make_agent):
     await container.agent_lifecycle.delete(alpha, author="user")
     # 删除的清理经事件完成
     await drain(container)
-    assert await container.vault.list_all() == []
+    assert await container.vault.view(alpha) == []
 
 
 async def test_recover_commits_leftovers_and_clears_a_stale_lock(repo: ResourceRepo):

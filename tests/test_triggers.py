@@ -1,10 +1,12 @@
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from muliao.agent_runtime.mcp import McpTransport, mcp_config
+from muliao.api.triggers import TriggerKindName
 from muliao.errors import InvalidInput
 from muliao.platform.tooling import Origin
 from muliao.sessions.mailbox import queued_in
@@ -178,6 +180,24 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
     assert container.mcp.visible_to("b2b2b2b2b2b2") == []
 
 
+async def test_mcp_view_marks_public_servers_shadowed_by_enabled_private_ones(container, make_agent):
+    alpha = (await make_agent()).id
+    spec = mcp_config(transport=McpTransport.HTTP, url="http://example.invalid/mcp")
+    for owner in (None, alpha):
+        await container.mcp.add(owner, "echo", spec, probe=False, author="user")
+    await container.mcp.add(None, "other", spec, probe=False, author="user")
+
+    def view(owner):
+        return [(s.owner, s.name, shadowed) for s, shadowed in container.mcp.view(owner)]
+
+    assert view(alpha) == [(alpha, "echo", False), (None, "echo", True), (None, "other", False)]
+    assert view(None) == [(None, "echo", False), (None, "other", False)]
+    # 停用的私有 server 不生效，也就不遮蔽公共的：与 visible_to 一致
+    await container.mcp.set_enabled(alpha, "echo", False, "user")
+    assert view(alpha) == [(alpha, "echo", False), (None, "echo", False), (None, "other", False)]
+    assert [(s.owner, s.name) for s in container.mcp.visible_to(alpha)] == [(None, "echo"), (None, "other")]
+
+
 async def test_mcp_add_failing_probe_saves_nothing(container):
     spec = mcp_config(
         transport=McpTransport.STDIO, command=sys.executable, args=["-c", "raise SystemExit(1)"]
@@ -185,7 +205,7 @@ async def test_mcp_add_failing_probe_saves_nothing(container):
 
     with pytest.raises(InvalidInput, match="could not connect"):
         await container.mcp.add(None, "broken", spec, probe=True, author="user")
-    assert container.mcp.list_all() == []
+    assert container.mcp.view(None) == []
 
 
 async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, models):
@@ -362,3 +382,7 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
     async with container.db.transaction() as s:
         await release_in(s, session_id, "job:1")
     assert not await busy()
+
+
+async def test_http_trigger_types_cover_exactly_the_registered_kinds(container):
+    assert set(get_args(TriggerKindName)) == set(container.triggers.kinds)

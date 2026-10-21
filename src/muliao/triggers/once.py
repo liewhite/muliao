@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import InvalidInput
@@ -25,6 +26,14 @@ from muliao.triggers.service import TriggerService
 from muliao.triggers.tables import Trigger
 
 KIND = "once"
+
+
+class OnceConfig(BaseModel):
+    at: datetime
+
+
+class OnceStatus(BaseModel):
+    run_at: datetime
 
 
 class OnceKind:
@@ -60,8 +69,8 @@ class OnceKind:
         # 不带时区的按服务端时区解释（用户与 agent 说的都是本地时间）
         return at if at.tzinfo is not None else at.replace(tzinfo=self._tz)
 
-    def status(self, trigger: Trigger) -> dict[str, Any]:
-        return {"run_at": trigger.config["at"]}
+    def status(self, trigger: Trigger) -> OnceStatus:
+        return OnceStatus(run_at=run_at(trigger.config))
 
 
 def run_at(config: dict[str, Any]) -> datetime:

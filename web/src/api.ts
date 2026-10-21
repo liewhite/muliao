@@ -14,8 +14,10 @@ export type AgentId = string & { readonly __brand: 'AgentId' }
 /** 仅用于边界：路由参数、取值为 id 的下拉框 */
 export const asAgentId = (value: string) => value as AgentId
 
-/** 把接口类型里是 agent id 的字段换成 AgentId（可为空的保持可为空） */
-type WithAgentId<T, K extends keyof T> = Omit<T, K> & { [P in K]: null extends T[P] ? AgentId | null : AgentId }
+/** 把接口类型里是 agent id 的字段换成 AgentId（可为空的保持可为空）；对联合类型逐个成员替换，保留区分字段 */
+type WithAgentId<T, K extends keyof T> = T extends unknown
+  ? Omit<T, K> & { [P in K]: null extends T[P] ? AgentId | null : AgentId }
+  : never
 
 export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
 /** 修改 agent 的请求体：整体替换，字段全部必填（新建用 Schemas['AgentCreate']） */
@@ -61,7 +63,12 @@ export type Memory = Schemas['MemoryOut']
 export type Reflection = Schemas['ReflectionOut']
 export type TriggerKind = Schemas['TriggerKindOut']
 export type Precheck = Schemas['Precheck']
-export type Trigger = WithAgentId<Schemas['TriggerOut'], 'agent_id'>
+/** 按 kind 区分的联合：收窄 kind 后 config 与 status 就是这种方式的类型 */
+export type Trigger = WithAgentId<
+  Schemas['ScheduleTriggerOut'] | Schemas['OnceTriggerOut'] | Schemas['WebhookTriggerOut'],
+  'agent_id'
+>
+export type TriggerKindName = Trigger['kind']
 export type ResourceKind = Schemas['ResourceKind']
 export type Revision = Schemas['RevisionOut']
 export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
@@ -279,14 +286,16 @@ export const api = {
   restore: (kind: ResourceKind, owner: AgentId | null, rev: string) =>
     call('post', '/api/resources/{kind}/restore', { path: { kind }, body: { owner, rev } }),
   setPublicPrompt: (content: string) => call('put', '/api/prompts/public', { body: { content } }),
-  mcp: () => branded<McpServer[]>(call('get', '/api/mcp')),
+  /** owner 视角：它的私有 server 在前，然后是公共的（shadowed 标明被同名私有项遮蔽）；owner 为 null 只有公共的 */
+  mcp: (owner: AgentId | null) => branded<McpServer[]>(call('get', '/api/mcp', { query: { owner } })),
   addMcp: (body: McpInput) => branded<McpServer>(call('post', '/api/mcp', { body })),
   probeMcp: (owner: AgentId | null, name: string) => call('post', '/api/mcp/tools', { query: { owner, name } }),
   setMcpEnabled: (owner: AgentId | null, name: string, enabled: boolean) =>
     branded<McpServer>(call('put', '/api/mcp/enabled', { query: { owner, name }, body: { enabled } })),
   deleteMcp: (owner: AgentId | null, name: string) => call('delete', '/api/mcp', { query: { owner, name } }),
 
-  secrets: () => branded<SecretInfo[]>(call('get', '/api/vault')),
+  /** owner 视角，同 mcp */
+  secrets: (owner: AgentId | null) => branded<SecretInfo[]>(call('get', '/api/vault', { query: { owner } })),
   setSecret: (owner: AgentId | null, key: string, value: string, description: string) =>
     call('put', '/api/vault/{key}', { path: { key }, query: { owner }, body: { value, description } }),
   deleteSecret: (owner: AgentId | null, key: string) => call('delete', '/api/vault/{key}', { path: { key }, query: { owner } }),

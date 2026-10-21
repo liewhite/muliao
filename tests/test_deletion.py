@@ -77,7 +77,7 @@ async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(conta
     await drain(container)
 
     assert await container.triggers.list() == []
-    assert await container.vault.list_all() == []
+    assert await container.vault.view(agent.id) == []
     with pytest.raises(NotFound):
         await container.sessions.get(session.id)
     async with container.db.transaction() as s:

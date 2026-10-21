@@ -8,7 +8,7 @@
 
 from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import validate_slug
-from muliao.agents.ownership import Scope, owned_by, owner_of, scope_of, visible, visible_owners
+from muliao.agents.ownership import Scope, owned_by, owner_of, scope_of, shadowing, visible, visible_owners
 from muliao.agents.prompts import PromptStore
 from muliao.agents.resources import USER, ResourceRepo
 from muliao.agents.service import AgentInfo, AgentPatch, AgentService, AgentSpec, active_agent_in, agent_in
@@ -33,6 +33,7 @@ __all__ = [
     "owned_by",
     "owner_of",
     "scope_of",
+    "shadowing",
     "validate_slug",
     "visible",
     "visible_owners",

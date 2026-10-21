@@ -1,8 +1,18 @@
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { Alert, Button, Card, Chip, Disclosure, toast } from '@heroui/react'
 import { Archive, Copy, History, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, asAgentId, type Agent, type Precheck, type Trigger, type TriggerKind, sessionRoute } from '../api'
+import {
+  api,
+  asAgentId,
+  type Agent,
+  type Precheck,
+  type Schemas,
+  type Trigger,
+  type TriggerKind,
+  type TriggerKindName,
+  sessionRoute,
+} from '../api'
 import { inAnHour, wallClock } from '../wallClock'
 import {
   ActionButton,
@@ -25,49 +35,39 @@ import {
   useLoad,
 } from '../ui'
 
+/** 提交给接口的配置（由后端按 kind 校验）；读到的配置按 kind 有各自的类型，见 KindConfig */
 type Config = Record<string, unknown>
 
-/** 各触发方式在界面上的差异：配置编辑、状态展示、额外操作。未登记的方式用通用的 JSON 编辑与原样展示。 */
+/** 某种方式的触发器：收窄后 config 与 status 都是这种方式的类型 */
+type TriggerOf<K extends TriggerKindName> = Extract<Trigger, { kind: K }>
+
+/** kind 与它的配置成对出现，编辑器按 kind 收窄 */
+type KindConfig = { [K in TriggerKindName]: { kind: K; config: TriggerOf<K>['config'] } }[TriggerKindName]
+
 /** 配置编辑器以 config 为初始值、自己保存编辑中的内容；内容不合法时回调 null：保存按钮随之禁用，不会提交上一次的合法值 */
 type ConfigChange = (c: Config | null) => void
 
-interface KindView {
-  label: string
-  /** 选择方式时的一句话说明（后端的 description 是写给 agent 的，太长） */
-  summary?: string
-  /** 新建时的初始配置。是函数而不是常量：一次性触发器的默认时间要在打开表单时才算 */
-  emptyConfig: () => Config
-  ConfigEditor: (props: { config: Config; onChange: ConfigChange }) => ReactNode
-  Status: (props: { trigger: Trigger }) => ReactNode
-  Actions?: (props: { trigger: Trigger; onChange: () => void }) => ReactNode
+/** 各触发方式在界面上的名字；summary 是选择方式时的一句话说明（后端的 description 是写给 agent 的，太长） */
+const KIND_LABELS: Record<TriggerKindName, { label: string; summary: string }> = {
+  schedule: { label: '定时', summary: '按 cron 表达式周期运行' },
+  once: { label: '一次性', summary: '到指定时间运行一次，之后移入「已完成」' },
+  webhook: { label: 'Webhook', summary: '收到 HTTP POST 时运行' },
 }
 
-function JsonConfigEditor({ config, onChange }: { config: Config; onChange: ConfigChange }) {
-  const [text, setText] = useState(JSON.stringify(config, null, 2))
-  const [error, setError] = useState<string | null>(null)
-  return (
-    <TextAreaInput
-      label="config（JSON）"
-      hint={error ?? '这种触发方式的配置'}
-      value={text}
-      onChange={(value) => {
-        setText(value)
-        try {
-          onChange(JSON.parse(value) as Config)
-          setError(null)
-        } catch {
-          setError('不是合法的 JSON')
-          onChange(null)
-        }
-      }}
-      rows={4}
-      mono
-    />
-  )
+/** 新建时的初始配置。在打开表单、切换方式时才算：一次性触发器的默认时间是那时起一小时后 */
+function emptyConfig(kind: TriggerKindName): KindConfig {
+  switch (kind) {
+    case 'schedule':
+      return { kind, config: { cron: '*/5 * * * *' } }
+    case 'once':
+      return { kind, config: { at: inAnHour(new Date()) } }
+    case 'webhook':
+      return { kind, config: {} }
+  }
 }
 
-function CronEditor({ config, onChange }: { config: Config; onChange: ConfigChange }) {
-  const [cron, setCron] = useState(String(config.cron ?? ''))
+function CronEditor({ config, onChange }: { config: Schemas['ScheduleConfig']; onChange: ConfigChange }) {
+  const [cron, setCron] = useState(config.cron)
   return (
     <TextInput
       label="cron 表达式"
@@ -82,8 +82,8 @@ function CronEditor({ config, onChange }: { config: Config; onChange: ConfigChan
   )
 }
 
-function RunAtEditor({ config, onChange }: { config: Config; onChange: ConfigChange }) {
-  const [at, setAt] = useState(wallClock(String(config.at ?? '')))
+function RunAtEditor({ config, onChange }: { config: Schemas['OnceConfig']; onChange: ConfigChange }) {
+  const [at, setAt] = useState(wallClock(config.at))
   return (
     <TextInput
       label="触发时间"
@@ -96,6 +96,18 @@ function RunAtEditor({ config, onChange }: { config: Config; onChange: ConfigCha
       }}
     />
   )
+}
+
+/** 按方式选配置编辑器；webhook 没有配置项 */
+function ConfigEditor({ value, onChange }: { value: KindConfig; onChange: ConfigChange }) {
+  switch (value.kind) {
+    case 'schedule':
+      return <CronEditor config={value.config} onChange={onChange} />
+    case 'once':
+      return <RunAtEditor config={value.config} onChange={onChange} />
+    case 'webhook':
+      return null
+  }
 }
 
 const FIRE_WHEN_LABELS: Record<Precheck['fire_when'], string> = {
@@ -191,16 +203,12 @@ function PrecheckSummary({ trigger }: { trigger: Trigger }) {
   )
 }
 
-function RawStatus({ trigger }: { trigger: Trigger }) {
-  return Object.keys(trigger.status).length ? <pre className={CODE_BLOCK}>{JSON.stringify(trigger.status, null, 2)}</pre> : null
-}
-
 /** webhook 的 token 只在生成后显示这一次 */
-function WebhookToken({ trigger, onChange }: { trigger: Trigger; onChange: () => void }) {
+function WebhookToken({ trigger, onChange }: { trigger: TriggerOf<'webhook'>; onChange: () => void }) {
   const confirm = useConfirm()
   const action = useAction()
   const [token, setToken] = useState<string | null>(null)
-  const hasToken = trigger.status.has_token === true
+  const hasToken = trigger.status.has_token
 
   async function generate() {
     if (hasToken) {
@@ -230,7 +238,7 @@ function WebhookToken({ trigger, onChange }: { trigger: Trigger; onChange: () =>
           <Alert.Content className="flex min-w-0 flex-col gap-2">
             <Alert.Title>请保存 token，离开后无法再次查看</Alert.Title>
             <pre className={CODE_BLOCK}>
-              {`curl -X POST ${String(trigger.status.url)} \\\n  -H 'Authorization: Bearer ${token}' \\\n  -d '{"hello": "world"}'`}
+              {`curl -X POST ${trigger.status.url} \\\n  -H 'Authorization: Bearer ${token}' \\\n  -d '{"hello": "world"}'`}
             </pre>
             <div className="text-xs">响应里的 session_id 可以在后续请求中以 ?session_id=… 传回，在同一个会话里继续。</div>
             <div className="flex gap-2">
@@ -249,43 +257,26 @@ function WebhookToken({ trigger, onChange }: { trigger: Trigger; onChange: () =>
   )
 }
 
-const KIND_VIEWS: Record<string, KindView> = {
-  schedule: {
-    label: '定时',
-    summary: '按 cron 表达式周期运行',
-    emptyConfig: () => ({ cron: '*/5 * * * *' }),
-    ConfigEditor: CronEditor,
-    Status: ({ trigger }) => (
-      <span>
-        <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{String(trigger.config.cron)}</code>
-        {trigger.enabled && <> · 下次 {formatTime(String(trigger.status.next_run_at))}</>}
-      </span>
-    ),
-  },
-  once: {
-    label: '一次性',
-    summary: '到指定时间运行一次，之后移入「已完成」',
-    emptyConfig: () => ({ at: inAnHour(new Date()) }),
-    ConfigEditor: RunAtEditor,
-    Status: ({ trigger }) => <span>计划 {formatTime(String(trigger.status.run_at))}</span>,
-  },
-  webhook: {
-    label: 'Webhook',
-    summary: '收到 HTTP POST 时运行',
-    emptyConfig: () => ({}),
-    ConfigEditor: () => null,
-    Status: ({ trigger }) => (
-      <span className="break-all">
-        <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">POST {String(trigger.status.url)}</code>
-        {trigger.status.has_token !== true && <> · 还没有 token，生成后才能接收事件</>}
-      </span>
-    ),
-    Actions: WebhookToken,
-  },
-}
-
-function viewOf(kind: string): KindView {
-  return KIND_VIEWS[kind] ?? { label: kind, emptyConfig: () => ({}), ConfigEditor: JsonConfigEditor, Status: RawStatus }
+/** 这种方式自己的运行状态：下次时间、地址等 */
+function KindStatus({ trigger }: { trigger: Trigger }) {
+  switch (trigger.kind) {
+    case 'schedule':
+      return (
+        <span>
+          <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{trigger.config.cron}</code>
+          {trigger.enabled && <> · 下次 {formatTime(trigger.status.next_run_at)}</>}
+        </span>
+      )
+    case 'once':
+      return <span>计划 {formatTime(trigger.status.run_at)}</span>
+    case 'webhook':
+      return (
+        <span className="break-all">
+          <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">POST {trigger.status.url}</code>
+          {!trigger.status.has_token && <> · 还没有 token，生成后才能接收事件</>}
+        </span>
+      )
+  }
 }
 
 /** 这个触发器发起过的会话（后端按 origin=trigger 与它的 id 查），展开时才取 */
@@ -336,7 +327,6 @@ function SessionList({ triggerId }: { triggerId: number }) {
 
 function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
   const confirm = useConfirm()
-  const view = viewOf(trigger.kind)
   const [editing, setEditing] = useState(false)
   const [prompt, setPrompt] = useState(trigger.prompt)
   const [config, setConfig] = useState<Config | null>(trigger.config)
@@ -373,12 +363,12 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           <Card.Title>{trigger.name}</Card.Title>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
             <Chip size="sm" variant="soft">
-              {view.label}
+              {KIND_LABELS[trigger.kind].label}
             </Chip>
             <Chip size="sm" color="accent" variant="soft">
               {agentLabel(agents, trigger.agent_id)}
             </Chip>
-            <view.Status trigger={trigger} />
+            <KindStatus trigger={trigger} />
           </div>
         </div>
         <ToggleSwitch
@@ -406,7 +396,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
         )}
         {editing ? (
           <>
-            <view.ConfigEditor config={trigger.config} onChange={setConfig} />
+            <ConfigEditor value={trigger} onChange={setConfig} />
             <PrecheckEditor precheck={trigger.precheck} onChange={setPrecheck} />
             <TextAreaInput label="处理说明" value={prompt} onChange={setPrompt} rows={5} />
           </>
@@ -455,7 +445,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
               <Play className="size-4" />
               立即运行
             </Button>
-            {view.Actions && <view.Actions trigger={trigger} onChange={onChange} />}
+            {trigger.kind === 'webhook' && <WebhookToken trigger={trigger} onChange={onChange} />}
             <Button size="sm" variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
               <Trash2 className="size-4" />
               删除
@@ -468,14 +458,15 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
 }
 
 function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agents: Agent[] | undefined; onCreated: () => void }) {
-  const [kind, setKind] = useState<string | null>(kinds[0]?.name ?? null)
+  // 选中方式时的初始配置，也就决定了当前的方式；编辑中的配置在 config 里
+  const [initial, setInitial] = useState<KindConfig | null>(kinds[0] ? emptyConfig(kinds[0].name) : null)
+  const kind = initial?.kind ?? null
   const [name, setName] = useState('')
   const [agentId, setAgentId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
-  const [config, setConfig] = useState<Config | null>(kind ? viewOf(kind).emptyConfig() : {})
+  const [config, setConfig] = useState<Config | null>(initial?.config ?? null)
   const [precheck, setPrecheck] = useState<Precheck | null>(null)
   const action = useAction()
-  const view = kind ? viewOf(kind) : null
 
   async function create() {
     const ok = await action.run(async () => {
@@ -496,11 +487,13 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
       <SelectInput
         label="触发方式"
         value={kind}
-        onChange={(k) => {
-          setKind(k)
-          if (k) setConfig(viewOf(k).emptyConfig())
+        onChange={(id) => {
+          const k = kinds.find((x) => x.name === id)?.name
+          const next = k ? emptyConfig(k) : null
+          setInitial(next)
+          setConfig(next?.config ?? null)
         }}
-        options={kinds.map((k) => ({ id: k.name, label: viewOf(k.name).label, description: viewOf(k.name).summary }))}
+        options={kinds.map((k) => ({ id: k.name, label: KIND_LABELS[k.name].label, description: KIND_LABELS[k.name].summary }))}
       />
       <TextInput
         label="名称"
@@ -517,7 +510,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
         placeholder="选择 agent"
         options={(agents ?? []).map((a) => ({ id: a.id, label: a.name }))}
       />
-      {view && kind && <view.ConfigEditor key={kind} config={config ?? {}} onChange={setConfig} />}
+      {initial && <ConfigEditor key={initial.kind} value={initial} onChange={setConfig} />}
       <PrecheckEditor precheck={null} onChange={setPrecheck} />
       <TextAreaInput
         label="处理说明"
@@ -542,7 +535,6 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
 function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
   const confirm = useConfirm()
   const action = useAction()
-  const view = viewOf(trigger.kind)
 
   async function remove() {
     const ok = await confirm({ title: `删除「${trigger.name}」的记录？`, body: '它发起的会话不会被删除。', confirmLabel: '删除', danger: true })
@@ -556,12 +548,12 @@ function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agen
           <Card.Title>{trigger.name}</Card.Title>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
             <Chip size="sm" variant="soft">
-              {view.label}
+              {KIND_LABELS[trigger.kind].label}
             </Chip>
             <Chip size="sm" color="accent" variant="soft">
               {agentLabel(agents, trigger.agent_id)}
             </Chip>
-            <view.Status trigger={trigger} />
+            <KindStatus trigger={trigger} />
             {trigger.finished_at && <span>· 完成 {formatTime(trigger.finished_at)}</span>}
           </div>
         </div>

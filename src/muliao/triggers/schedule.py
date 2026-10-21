@@ -15,6 +15,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import InvalidInput
@@ -24,6 +25,14 @@ from muliao.triggers.service import TriggerService
 from muliao.triggers.tables import Trigger
 
 KIND = "schedule"
+
+
+class ScheduleConfig(BaseModel):
+    cron: str
+
+
+class ScheduleStatus(BaseModel):
+    next_run_at: datetime
 
 
 class ScheduleKind:
@@ -52,8 +61,8 @@ class ScheduleKind:
         expr = config["cron"].strip()
         return {"cron": expr}, {"next_run_at": self.next_run(expr, self._clock()).isoformat()}
 
-    def status(self, trigger: Trigger) -> dict[str, Any]:
-        return {"next_run_at": trigger.state["next_run_at"]}
+    def status(self, trigger: Trigger) -> ScheduleStatus:
+        return ScheduleStatus(next_run_at=next_run_at(trigger.state))
 
 
 def next_run_at(state: dict[str, Any]) -> datetime:

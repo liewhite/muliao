@@ -1170,7 +1170,26 @@
     "/api/mcp": {
       "get": {
         "summary": "List Mcp",
+        "description": "owner 视角下的 server：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 server。",
         "operationId": "list_mcp_api_mcp_get",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1182,6 +1201,16 @@
                     "$ref": "#/components/schemas/McpOut"
                   },
                   "title": "Response List Mcp Api Mcp Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1398,18 +1427,47 @@
     "/api/vault": {
       "get": {
         "summary": "List Secrets",
+        "description": "owner 视角下的 secret（不含值）：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 secret。",
         "operationId": "list_secrets_api_vault_get",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/SecretOut"
                   },
-                  "type": "array",
                   "title": "Response List Secrets Api Vault Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1762,7 +1820,25 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/TriggerOut"
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/ScheduleTriggerOut"
+                      },
+                      {
+                        "$ref": "#/components/schemas/OnceTriggerOut"
+                      },
+                      {
+                        "$ref": "#/components/schemas/WebhookTriggerOut"
+                      }
+                    ],
+                    "discriminator": {
+                      "propertyName": "kind",
+                      "mapping": {
+                        "schedule": "#/components/schemas/ScheduleTriggerOut",
+                        "once": "#/components/schemas/OnceTriggerOut",
+                        "webhook": "#/components/schemas/WebhookTriggerOut"
+                      }
+                    }
                   },
                   "title": "Response List Triggers Api Triggers Get"
                 }
@@ -1800,7 +1876,26 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TriggerOut"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ScheduleTriggerOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OnceTriggerOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WebhookTriggerOut"
+                    }
+                  ],
+                  "discriminator": {
+                    "propertyName": "kind",
+                    "mapping": {
+                      "schedule": "#/components/schemas/ScheduleTriggerOut",
+                      "once": "#/components/schemas/OnceTriggerOut",
+                      "webhook": "#/components/schemas/WebhookTriggerOut"
+                    }
+                  },
+                  "title": "Response Create Trigger Api Triggers Post"
                 }
               }
             }
@@ -1849,7 +1944,26 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TriggerOut"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ScheduleTriggerOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OnceTriggerOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/WebhookTriggerOut"
+                    }
+                  ],
+                  "discriminator": {
+                    "propertyName": "kind",
+                    "mapping": {
+                      "schedule": "#/components/schemas/ScheduleTriggerOut",
+                      "once": "#/components/schemas/OnceTriggerOut",
+                      "webhook": "#/components/schemas/WebhookTriggerOut"
+                    }
+                  },
+                  "title": "Response Update Trigger Api Triggers  Trigger Id  Patch"
                 }
               }
             }
@@ -3945,6 +4059,10 @@
             "type": "array",
             "title": "Tools",
             "default": []
+          },
+          "shadowed": {
+            "type": "boolean",
+            "title": "Shadowed"
           }
         },
         "type": "object",
@@ -3957,7 +4075,8 @@
           "url",
           "env",
           "headers",
-          "enabled"
+          "enabled",
+          "shadowed"
         ],
         "title": "McpOut"
       },
@@ -4045,6 +4164,167 @@
           "created_at"
         ],
         "title": "NotificationOut"
+      },
+      "OnceConfig": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "at"
+        ],
+        "title": "OnceConfig"
+      },
+      "OnceStatus": {
+        "properties": {
+          "run_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Run At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_at"
+        ],
+        "title": "OnceStatus"
+      },
+      "OnceTriggerOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_fired_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fired At"
+          },
+          "last_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Session Id"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "precheck_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precheck Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "kind": {
+            "type": "string",
+            "const": "once",
+            "title": "Kind"
+          },
+          "config": {
+            "$ref": "#/components/schemas/OnceConfig"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OnceStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "agent_id",
+          "prompt",
+          "enabled",
+          "precheck",
+          "last_checked_at",
+          "last_fired_at",
+          "last_session_id",
+          "disabled_reason",
+          "precheck_error",
+          "finished_at",
+          "kind",
+          "config",
+          "status"
+        ],
+        "title": "OnceTriggerOut"
       },
       "Option": {
         "properties": {
@@ -4467,6 +4747,166 @@
         "title": "SavedEvent",
         "description": "运行中又保存了一步（LiveRuns.step）：历史有了新内容，实时事件换成新的一段。"
       },
+      "ScheduleConfig": {
+        "properties": {
+          "cron": {
+            "type": "string",
+            "title": "Cron"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cron"
+        ],
+        "title": "ScheduleConfig"
+      },
+      "ScheduleStatus": {
+        "properties": {
+          "next_run_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Next Run At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "next_run_at"
+        ],
+        "title": "ScheduleStatus"
+      },
+      "ScheduleTriggerOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_fired_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fired At"
+          },
+          "last_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Session Id"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "precheck_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precheck Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "kind": {
+            "type": "string",
+            "const": "schedule",
+            "title": "Kind"
+          },
+          "config": {
+            "$ref": "#/components/schemas/ScheduleConfig"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScheduleStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "agent_id",
+          "prompt",
+          "enabled",
+          "precheck",
+          "last_checked_at",
+          "last_fired_at",
+          "last_session_id",
+          "disabled_reason",
+          "precheck_error",
+          "finished_at",
+          "kind",
+          "config",
+          "status"
+        ],
+        "title": "ScheduleTriggerOut"
+      },
       "SecretIn": {
         "properties": {
           "value": {
@@ -4510,6 +4950,10 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "shadowed": {
+            "type": "boolean",
+            "title": "Shadowed"
           }
         },
         "type": "object",
@@ -4517,7 +4961,8 @@
           "owner",
           "key",
           "description",
-          "updated_at"
+          "updated_at",
+          "shadowed"
         ],
         "title": "SecretOut"
       },
@@ -5170,6 +5615,11 @@
           },
           "kind": {
             "type": "string",
+            "enum": [
+              "schedule",
+              "once",
+              "webhook"
+            ],
             "title": "Kind"
           },
           "prompt": {
@@ -5206,6 +5656,11 @@
         "properties": {
           "name": {
             "type": "string",
+            "enum": [
+              "schedule",
+              "once",
+              "webhook"
+            ],
             "title": "Name"
           },
           "description": {
@@ -5219,142 +5674,6 @@
           "description"
         ],
         "title": "TriggerKindOut"
-      },
-      "TriggerOut": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "agent_id": {
-            "type": "string",
-            "title": "Agent Id"
-          },
-          "kind": {
-            "type": "string",
-            "title": "Kind"
-          },
-          "prompt": {
-            "type": "string",
-            "title": "Prompt"
-          },
-          "config": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Config"
-          },
-          "status": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Status"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "precheck": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Precheck"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "last_checked_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Checked At"
-          },
-          "last_fired_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Fired At"
-          },
-          "last_session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Session Id"
-          },
-          "disabled_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Disabled Reason"
-          },
-          "precheck_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Precheck Error"
-          },
-          "finished_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Finished At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "agent_id",
-          "kind",
-          "prompt",
-          "config",
-          "status",
-          "enabled",
-          "precheck",
-          "last_checked_at",
-          "last_fired_at",
-          "last_session_id",
-          "disabled_reason",
-          "precheck_error",
-          "finished_at"
-        ],
-        "title": "TriggerOut"
       },
       "TriggerPatch": {
         "properties": {
@@ -5572,6 +5891,164 @@
           "public_key"
         ],
         "title": "VapidOut"
+      },
+      "WebhookConfig": {
+        "properties": {},
+        "additionalProperties": false,
+        "type": "object",
+        "title": "WebhookConfig",
+        "description": "webhook 没有配置项。"
+      },
+      "WebhookStatus": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "has_token": {
+            "type": "boolean",
+            "title": "Has Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "has_token"
+        ],
+        "title": "WebhookStatus"
+      },
+      "WebhookTriggerOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_fired_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fired At"
+          },
+          "last_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Session Id"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "precheck_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precheck Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "kind": {
+            "type": "string",
+            "const": "webhook",
+            "title": "Kind"
+          },
+          "config": {
+            "$ref": "#/components/schemas/WebhookConfig"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WebhookStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "agent_id",
+          "prompt",
+          "enabled",
+          "precheck",
+          "last_checked_at",
+          "last_fired_at",
+          "last_session_id",
+          "disabled_reason",
+          "precheck_error",
+          "finished_at",
+          "kind",
+          "config",
+          "status"
+        ],
+        "title": "WebhookTriggerOut"
       },
       "WorkState": {
         "type": "string",

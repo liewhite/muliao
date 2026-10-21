@@ -80,7 +80,7 @@ class SkillStore:
         return self._load(owner, skill_dir)
 
     def resolve(self, agent: str, name: str) -> Skill:
-        """agent 视角读取（合并规则见 ownership.visible）。"""
+        """agent 视角读取（合并规则见 ownership.shadowing）。"""
         for meta in self.visible_to(agent):
             if meta.name == name:
                 return self.read(meta.owner, name)

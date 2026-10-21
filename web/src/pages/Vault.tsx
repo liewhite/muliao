@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button, Card, Chip, toast } from '@heroui/react'
 import { Trash2 } from 'lucide-react'
 import { api, type AgentId, type SecretInfo } from '../api'
-import { inheritedPublic, ownedBy, type Inherited } from '../ownership'
+import { splitView } from '../ownership'
 import { ActionButton,
   EmptyHint,
   ErrorAlert,
@@ -17,7 +17,7 @@ import { ActionButton,
 } from '../ui'
 
 /** 继承来的公共 secret：只能看，管理入口在设置页。 */
-function InheritedSecretItem({ entry: { item, shadowed } }: { entry: Inherited<SecretInfo> }) {
+function InheritedSecretItem({ item }: { item: SecretInfo }) {
   return (
     <Card>
       <Card.Content className="flex flex-row items-center gap-3">
@@ -27,7 +27,7 @@ function InheritedSecretItem({ entry: { item, shadowed } }: { entry: Inherited<S
             {item.description || '无说明'} · {formatTime(item.updated_at)}
           </div>
         </div>
-        {shadowed && (
+        {item.shadowed && (
           <Chip size="sm" color="warning" variant="soft">
             已被私有项覆盖
           </Chip>
@@ -40,7 +40,7 @@ function InheritedSecretItem({ entry: { item, shadowed } }: { entry: Inherited<S
 /** owner 为 null 时管理公共 secret；否则管理该 agent 的私有 secret，并只读列出它继承的公共 secret。 */
 export function SecretManager({ owner }: { owner: AgentId | null }) {
   const confirm = useConfirm()
-  const secrets = useLoad(() => api.secrets(), [])
+  const secrets = useLoad(() => api.secrets(owner), [owner])
   const [key, setKey] = useState('')
   const [value, setValue] = useState('')
   const [description, setDescription] = useState('')
@@ -87,8 +87,7 @@ export function SecretManager({ owner }: { owner: AgentId | null }) {
       </Card>
       <Loading state={secrets}>
         {(all) => {
-          const own = ownedBy(all, owner)
-          const inherited = inheritedPublic(all, owner, (s) => s.key)
+          const { own, inherited } = splitView(all, owner)
           return (
             <div className="flex flex-col gap-4">
               {own.length === 0 ? (
@@ -114,8 +113,8 @@ export function SecretManager({ owner }: { owner: AgentId | null }) {
               )}
               {inherited.length > 0 && (
                 <InheritedSection title="继承的公共 Secrets" to="/vault">
-                  {inherited.map((e) => (
-                    <InheritedSecretItem key={e.item.key} entry={e} />
+                  {inherited.map((s) => (
+                    <InheritedSecretItem key={s.key} item={s} />
                   ))}
                 </InheritedSection>
               )}

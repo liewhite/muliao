@@ -10,7 +10,7 @@ from muliao.platform.tables import agent_ref
 
 
 class Secret(Base):
-    """owner 为 None 时是公共 secret，否则为该 agent 私有；同名时私有遮蔽公共（见 ownership.visible）。"""
+    """owner 为 None 时是公共 secret，否则为该 agent 私有；同名时私有遮蔽公共（见 ownership.shadowing）。"""
 
     __tablename__ = "secrets"
 

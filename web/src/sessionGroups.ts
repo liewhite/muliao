@@ -1,4 +1,4 @@
-import type { AgentId } from './api'
+import type { AgentId, Schemas } from './api'
 
 export interface SessionGroup<T> {
   agentId: AgentId
@@ -24,7 +24,7 @@ export function groupByAgent<T extends { agent_id: AgentId; unread: boolean }>(l
 
 // 进行中（在运行、或在等后台任务 / 委派 / 用户回答）的会话单独置顶在所有分组之上，其余的再按 agent 分组；
 // 两部分都保持接口顺序
-export function splitActive<T extends { state: 'running' | 'waiting' | 'idle' }>(
+export function splitActive<T extends { state: Schemas['WorkState'] }>(
   list: T[],
 ): { active: T[]; rest: T[] } {
   return { active: list.filter((s) => s.state !== 'idle'), rest: list.filter((s) => s.state === 'idle') }

@@ -157,7 +157,7 @@ async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
         "/api/hooks/github", content="opened", headers={"Authorization": f"Bearer {token}"}
     )
     assert resp.status_code == 202
-    assert await container.vault.list_all() == []
+    assert await container.vault.view(me.id) == []
 
 
 async def test_agent_manages_private_and_public_secrets(container, make_agent, models):

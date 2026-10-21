@@ -1,6 +1,23 @@
-"""触发器领域的公开接口（HTTP 适配层用）。"""
+"""触发器领域的公开接口（HTTP 适配层用）。
 
+各触发方式的配置与状态类型也在这里导出：HTTP 接口按 kind 把它们组成有区分字段的联合类型。
+"""
+
+from muliao.triggers.once import OnceConfig, OnceStatus
 from muliao.triggers.precheck import Precheck, PrecheckFailed
+from muliao.triggers.schedule import ScheduleConfig, ScheduleStatus
 from muliao.triggers.service import EVENT_MAX_BYTES, KEEP
+from muliao.triggers.webhook import WebhookConfig, WebhookStatus
 
-__all__ = ["EVENT_MAX_BYTES", "KEEP", "Precheck", "PrecheckFailed"]
+__all__ = [
+    "EVENT_MAX_BYTES",
+    "KEEP",
+    "OnceConfig",
+    "OnceStatus",
+    "Precheck",
+    "PrecheckFailed",
+    "ScheduleConfig",
+    "ScheduleStatus",
+    "WebhookConfig",
+    "WebhookStatus",
+]

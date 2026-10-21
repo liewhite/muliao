@@ -426,7 +426,7 @@ Alembic 管理表结构（`src/muliao/migrations/`，随包分发），启动时
 ### Skill
 agent 在任何一次运行里都可以主动 `write_skill`。公共 skill 对所有 agent 可见；私有 skill 只对自己可见，同名时私有遮蔽公共。
 
-**归属与合并规则（skill、MCP server、secret 共用，只在 `ownership.visible` 实现一次）**：资源归属某个 agent（私有）或公共；agent 看到自己的私有资源加上公共资源，同名时私有遮蔽公共，其他 agent 的私有资源不可见。prompt 不是按名称合并，而是公共 prompt 与 agent 指令拼接（见下）。「私有」是可见范围和命名空间的划分，不是安全隔离：agent 能执行任意命令、读到数据库与 vault 主密钥（见第 15 节）。界面按同一条规则安排归属位置：管理菜单（左上角按钮打开）的「公共资源」组只管理公共资源（公共指令、公共 Skills、公共 MCP servers、公共 Vault），私有资源在 agent 详情页的 Skills / MCP / Secrets 标签里管理，下方只读列出该 agent 继承的公共项并标出被同名私有项覆盖的；前端这份只用于展示的归属划分在 `web/src/ownership.ts`，权威判断仍只在后端。
+**归属与合并规则（skill、MCP server、secret 共用，只在 `ownership.shadowing` 实现一次，`visible` 由它得出）**：资源归属某个 agent（私有）或公共；agent 看到自己的私有资源加上公共资源，同名时私有遮蔽公共，其他 agent 的私有资源不可见。prompt 不是按名称合并，而是公共 prompt 与 agent 指令拼接（见下）。「私有」是可见范围和命名空间的划分，不是安全隔离：agent 能执行任意命令、读到数据库与 vault 主密钥（见第 15 节）。界面按同一条规则安排归属位置：管理菜单（左上角按钮打开）的「公共资源」组只管理公共资源（公共指令、公共 Skills、公共 MCP servers、公共 Vault），私有资源在 agent 详情页的 Skills / MCP / Secrets 标签里管理，下方只读列出该 agent 继承的公共项并标出被同名私有项覆盖的。MCP 与 vault 的列表接口按 owner 视角返回（`GET /api/mcp?owner=`、`/api/vault?owner=`：私有在前、公共在后），公共项是否被遮蔽由后端给出 `shadowed`（MCP 只有已启用的私有 server 才遮蔽，与运行时一致）；前端 `web/src/ownership.ts` 只按归属把列表分成两段，不实现遮蔽规则。
 
 ### Prompt（公共 prompt 与 agent 指令）
 agent 的指令是资源仓库里的 `agents/<id>/PROMPT.md`，公共 prompt 是 `public/PROMPT.md`（合并进所有 agent，放在各自的指令之前）。当前生效的就是文件内容（`agents` 表里没有指令列），读写都经过 `PromptStore`；修改即提交一版并记录作者（`user` 或做出修改的 agent），回滚即把旧版内容作为新的一版写入，历史只增不改。内容未变时不提交；空的公共 prompt 等同于没有（清空也提交一版空文件，历史里不会出现「文件不存在」的版本）。指令与记忆的历史和恢复通过 `/api/resources/{prompt|memory}/history|restore`，界面在公共指令页和 agent 的配置、记忆标签里；接口只列最近 50 版，更早的仍在仓库里。
@@ -468,10 +468,10 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 **触发器**：具名、持久的事件来源（`triggers` 表）。公共字段只有名称、agent、处理说明、启用、归档（见下）与最近一次触发的记录；怎么被触发由 `kind` 决定，**只在代码里多态实现**，表里不为某种方式开专门的列：`config`（JSON）是这种方式的配置，`state`（JSON）是这种方式自己维护的运行状态。每种方式分两部分：
 
-- `TriggerKind`（纯逻辑，注册给 `TriggerService`）：校验并规范化 `config`、由配置推导 `state`、给出展示用的运行状态（不含凭证）。推导在创建、修改配置与停用后重新启用时进行，由 `TriggerService` 合并进已有 `state`（实现不负责保留与配置无关的部分，如 token 摘要）；
+- `TriggerKind`（纯逻辑，注册给 `TriggerService`）：校验并规范化 `config`、由配置推导 `state`、给出展示用的运行状态（每种方式一个 pydantic 类型，不含凭证）。推导在创建、修改配置与停用后重新启用时进行，由 `TriggerService` 合并进已有 `state`（实现不负责保留与配置无关的部分，如 token 摘要）；
 - 激活机制：怎么被触发，都只调用 `TriggerService.fire`（唯一出口，先跑前置检查，见下）组装成事件交给统一入口；需要感知触发器变化的激活机制各自 `watch()` 一个通知，互不干扰；某种方式专有的接口放在它自己的 API 模块（如 `api/webhook.py`）。
 
-新增一种方式（例如消息队列）= 一个 `TriggerKind` + 它的激活机制（消费循环），在组合根注册并启动；表、工具、统一入口与界面的通用部分都不用改（界面对未知方式用 JSON 编辑配置）。现有三种：
+新增一种方式（例如消息队列）= 一个 `TriggerKind` + 它的激活机制（消费循环），在组合根注册并启动；表、工具、统一入口都不用改；HTTP 接口的 `TriggerOut` 是按 `kind` 区分的联合类型（每种方式的 config 与 status 各有类型，`TriggerKindName` 列出全部方式，测试校验它与注册的方式一致），所以要在 `api/triggers.py` 加一个成员，界面（`pages/Triggers.tsx` 按 kind 的穷举 switch）也要补上这种方式的编辑器与状态展示，漏了编译器会报。现有三种：
 
 | kind | config | state | 激活机制 |
 |---|---|---|---|
