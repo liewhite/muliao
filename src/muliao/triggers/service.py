@@ -45,6 +45,7 @@ from muliao.sessions.api import (
     Inbound,
     NewSession,
     SessionActivity,
+    WorkState,
     check_receivable_in,
     receive_command,
 )
@@ -305,9 +306,11 @@ class TriggerService:
             raise NotFound(f"trigger {name!r} not found")
 
     async def busy_in(self, s: AsyncSession, trigger: Trigger) -> bool:
-        """上一次触发的会话是否还有没做完的事，包括还没投递的这次来信（定时触发据此避免重叠，会话领域的查询）。"""
-        return trigger.last_session_id is not None and await self._activity.has_pending_work_in(
-            s, trigger.last_session_id
+        """上一次触发的会话是否还有没做完的事（定时触发据此避免重叠，会话领域的工作状态）：在运行、有还没投递的来信
+        （包括这次的），或在等后台任务、委派、用户回答——等待中的会话结果回来会自动接着做，再开一个会重叠。"""
+        return (
+            trigger.last_session_id is not None
+            and await self._activity.work_state_in(s, trigger.last_session_id) != WorkState.IDLE
         )
 
     async def _deliver_in(

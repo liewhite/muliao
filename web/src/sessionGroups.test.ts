@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { asAgentId } from './api'
-import { groupByAgent, splitRunning } from './sessionGroups'
+import { groupByAgent, splitActive } from './sessionGroups'
 
 const a = asAgentId('agent-a')
 const b = asAgentId('agent-b')
@@ -27,16 +27,16 @@ describe('groupByAgent', () => {
   })
 })
 
-describe('splitRunning', () => {
-  it('运行中的分出来置顶，两部分各自保持顺序', () => {
+describe('splitActive', () => {
+  it('在运行与在等待的都分出来置顶，两部分各自保持顺序', () => {
     const list = [
-      { id: 1, running: true },
-      { id: 2, running: false },
-      { id: 3, running: true },
-      { id: 4, running: false },
+      { id: 1, state: 'running' as const },
+      { id: 2, state: 'idle' as const },
+      { id: 3, state: 'waiting' as const },
+      { id: 4, state: 'idle' as const },
     ]
-    const { running, rest } = splitRunning(list)
-    expect(running.map((s) => s.id)).toEqual([1, 3])
+    const { active, rest } = splitActive(list)
+    expect(active.map((s) => s.id)).toEqual([1, 3])
     expect(rest.map((s) => s.id)).toEqual([2, 4])
   })
 })

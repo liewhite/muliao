@@ -106,7 +106,6 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
         "session_in",
         "check_receivable_in",
         "hold_registered_in",
-        "SessionActivity.has_pending_work_in",
         "SessionActivity.work_state_in",
         "SessionActivity.blocks_agent_deletion_in",
     },

@@ -4688,9 +4688,8 @@
             "format": "date-time",
             "title": "Updated At"
           },
-          "running": {
-            "type": "boolean",
-            "title": "Running"
+          "state": {
+            "$ref": "#/components/schemas/WorkState"
           }
         },
         "type": "object",
@@ -4708,10 +4707,10 @@
           "unread",
           "created_at",
           "updated_at",
-          "running"
+          "state"
         ],
         "title": "SessionListItem",
-        "description": "会话列表里的一行：多一个只在列表里算的「此刻有运行在进行」（会话页看 SessionDetail.run）。"
+        "description": "会话列表里的一行：多一个只在列表里算的工作状态（在运行 / 在等后台任务、委派或用户回答 / 空闲；会话页看\nSessionDetail.run）。"
       },
       "SessionOut": {
         "properties": {
@@ -5583,7 +5582,7 @@
           "idle"
         ],
         "title": "WorkState",
-        "description": "会话此刻在不在处理事情（给别的领域看，如 issue 看板判断被指派的 agent 是否在处理）。"
+        "description": "会话此刻在不在处理事情。running 与 waiting 都是「事情还没做完」：等待中的会话结果回来会自动接着做，\n所以除了展示，别的判断（issue 看板的「没人在处理」、触发器避免重叠）都只区分 idle 与否。"
       }
     }
   }

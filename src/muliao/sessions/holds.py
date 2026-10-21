@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,6 +83,16 @@ async def has_active_in(s: AsyncSession, session_id: str) -> bool:
             .limit(1)
         )
     ) is not None
+
+
+async def with_active_among(s: AsyncSession, session_ids: Collection[str]) -> set[str]:
+    """其中有 active 占用的会话（一次查询）。"""
+    rows = await s.scalars(
+        select(SessionHold.session_id)
+        .where(SessionHold.session_id.in_(list(session_ids)), SessionHold.status == HoldStatus.ACTIVE)
+        .distinct()
+    )
+    return set(rows.all())
 
 
 async def called_in(s: AsyncSession, session_id: str) -> set[str]:

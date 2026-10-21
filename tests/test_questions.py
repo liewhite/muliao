@@ -99,6 +99,8 @@ async def test_turn_stops_on_questions_and_answers_come_back_as_the_tool_result(
     assert "看哪个周期？" in note["body"] and note["session_id"] == session_id
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
     assert [(p["tool_call_id"], len(p["questions"])) for p in pending_asks(detail)] == [("q1", 2)]
+    # 停在提问上的会话在等用户回答：列表里是 waiting，不是空闲
+    assert [s["state"] for s in (await client.get("/api/sessions")).json()] == ["waiting"]
 
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量", "持仓量"], "other": "还有链上数据"}]}
     resp = await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
@@ -121,6 +123,7 @@ async def test_turn_stops_on_questions_and_answers_come_back_as_the_tool_result(
     [ask] = [i["ask"] for i in detail["items"] if i["ask"] is not None]
     assert [a["selected"] for a in ask["answers"]] == [["日线"], ["成交量", "持仓量"]]
     assert detail["items"][-1]["text"] == "好的，开始分析。"
+    assert [s["state"] for s in (await client.get("/api/sessions")).json()] == ["idle"]
 
 
 async def test_answers_are_checked_against_the_pending_questions(client, container, make_agent, models):

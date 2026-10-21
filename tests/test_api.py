@@ -195,9 +195,9 @@ async def test_session_list_pins_running_sessions_and_marks_them(client, contain
     await drain(container)
     await login(client)
     listed = (await client.get("/api/sessions")).json()
-    assert [(s["id"], s["running"]) for s in listed] == [(newer.id, False), (older.id, False)]
+    assert [(s["id"], s["state"]) for s in listed] == [(newer.id, "idle"), (older.id, "idle")]
 
-    # 较早的会话又在运行（运行任务进行中）：置顶并标记；排队的运行不算
+    # 较早的会话又在运行（运行任务进行中）：置顶；排队的运行不置顶，但同样标记为在运行（工作状态）
     async with container.db.transaction() as s:
         s.add(
             Task(
@@ -220,5 +220,5 @@ async def test_session_list_pins_running_sessions_and_marks_them(client, contain
             )
         )
     listed = (await client.get("/api/sessions")).json()
-    assert [(s["id"], s["running"]) for s in listed] == [(older.id, True), (newer.id, False)]
+    assert [(s["id"], s["state"]) for s in listed] == [(older.id, "running"), (newer.id, "running")]
     assert (await client.get("/api/sessions", params={"origin": "trigger"})).json() == []

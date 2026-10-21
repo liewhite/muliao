@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -91,6 +91,19 @@ async def queued_in(s: AsyncSession, session_id: str) -> list[Mail]:
         select(Mail).where(Mail.session_id == session_id, Mail.state == MailState.QUEUED).order_by(Mail.id)
     )
     return list(rows.all())
+
+
+async def queued_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, list[Mail]]:
+    """这些会话里还在排队的信件，各自按到达顺序（一次查询）。"""
+    rows = await s.scalars(
+        select(Mail)
+        .where(Mail.session_id.in_(list(session_ids)), Mail.state == MailState.QUEUED)
+        .order_by(Mail.id)
+    )
+    queued: dict[str, list[Mail]] = {x: [] for x in session_ids}
+    for mail in rows.all():
+        queued[mail.session_id].append(mail)
+    return queued
 
 
 async def wake_in(

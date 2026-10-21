@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Card, Chip, Spinner } from '@heroui/react'
-import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, Hourglass, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, asAgentId, type AgentId, type Origin, type SessionListItem, sessionRoute } from '../api'
 import { useServerEvents } from '../events'
-import { groupByAgent, splitRunning } from '../sessionGroups'
+import { groupByAgent, splitActive } from '../sessionGroups'
 import {
   EmptyHint,
   LinkButton,
@@ -48,17 +48,23 @@ function loadCollapsed(): Set<string> {
   }
 }
 
-// 运行中的会话：卡片左侧描强调色边、标题前转圈、带「运行中」标签；置顶区里不在 agent 分组下，带上 agent 名
+// 在运行的会话：卡片左侧描强调色边、标题前转圈、带「运行中」标签；在等待的（后台任务、委派、用户回答）：
+// 浅色边、沙漏、「等待中」。置顶区里不在 agent 分组下，带上 agent 名
+const STATE_CARD: Record<SessionListItem['state'], string> = {
+  running: 'border-l-4 border-accent bg-accent/5',
+  waiting: 'border-l-4 border-accent/40',
+  idle: '',
+}
+
 function SessionCard({ s, agentName }: { s: SessionListItem; agentName?: string }) {
   return (
     <Link to={sessionRoute(s.id)}>
-      <Card
-        className={`transition-colors hover:bg-surface-hover ${s.running ? 'border-l-4 border-accent bg-accent/5' : ''}`}
-      >
+      <Card className={`transition-colors hover:bg-surface-hover ${STATE_CARD[s.state]}`}>
         <Card.Content className="flex flex-row items-center gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 font-medium">
-              {s.running && <Spinner size="sm" aria-label="运行中" />}
+              {s.state === 'running' && <Spinner size="sm" aria-label="运行中" />}
+              {s.state === 'waiting' && <Hourglass className="size-4 shrink-0 text-muted" aria-label="等待中" />}
               {s.unread && (
                 <>
                   <span className="size-2 shrink-0 rounded-full bg-accent" aria-hidden />
@@ -76,9 +82,14 @@ function SessionCard({ s, agentName }: { s: SessionListItem; agentName?: string 
               <Chip size="sm" variant="secondary">
                 {ORIGIN_LABEL[s.origin]}
               </Chip>
-              {s.running && (
+              {s.state === 'running' && (
                 <Chip size="sm" color="accent" variant="soft">
                   运行中
+                </Chip>
+              )}
+              {s.state === 'waiting' && (
+                <Chip size="sm" variant="soft">
+                  等待中
                 </Chip>
               )}
             </div>
@@ -150,7 +161,7 @@ export default function Sessions() {
       </div>
       <Loading state={sessions}>
         {(list) => {
-          const { running, rest } = splitRunning(list)
+          const { active, rest } = splitActive(list)
           return list.length === 0 ? (
             <EmptyHint>没有会话</EmptyHint>
           ) : agent !== ALL_AGENTS ? (
@@ -161,14 +172,14 @@ export default function Sessions() {
             </div>
           ) : (
             <div className="flex flex-col gap-4">
-              {running.length > 0 && (
+              {active.length > 0 && (
                 <section className="flex flex-col gap-2">
                   <div className="flex items-center gap-2 text-sm font-semibold text-accent">
                     <Spinner size="sm" color="current" />
-                    <span>运行中</span>
-                    <span className="font-normal">{running.length}</span>
+                    <span>进行中</span>
+                    <span className="font-normal">{active.length}</span>
                   </div>
-                  {running.map((s) => (
+                  {active.map((s) => (
                     <SessionCard key={s.id} s={s} agentName={agentLabel(agents.data, s.agent_id)} />
                   ))}
                 </section>

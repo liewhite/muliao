@@ -1695,7 +1695,8 @@ export interface components {
         SessionKind: "conversation" | "thread" | "private_thread";
         /**
          * SessionListItem
-         * @description 会话列表里的一行：多一个只在列表里算的「此刻有运行在进行」（会话页看 SessionDetail.run）。
+         * @description 会话列表里的一行：多一个只在列表里算的工作状态（在运行 / 在等后台任务、委派或用户回答 / 空闲；会话页看
+         *     SessionDetail.run）。
          */
         SessionListItem: {
             /** Id */
@@ -1728,8 +1729,7 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
-            /** Running */
-            running: boolean;
+            state: components["schemas"]["WorkState"];
         };
         /** SessionOut */
         SessionOut: {
@@ -2032,7 +2032,8 @@ export interface components {
         };
         /**
          * WorkState
-         * @description 会话此刻在不在处理事情（给别的领域看，如 issue 看板判断被指派的 agent 是否在处理）。
+         * @description 会话此刻在不在处理事情。running 与 waiting 都是「事情还没做完」：等待中的会话结果回来会自动接着做，
+         *     所以除了展示，别的判断（issue 看板的「没人在处理」、触发器避免重叠）都只区分 idle 与否。
          * @enum {string}
          */
         WorkState: "running" | "waiting" | "idle";

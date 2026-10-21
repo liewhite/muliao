@@ -278,7 +278,9 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
 
 thread 种类只由委派创建（`origin` 为 delegation，带父会话），新建会话时检查种类与来源一致。会话接口随会话下发 `user_writable` 与 `deletable`，界面不另写一份规则。
 
-会话列表（`SessionService.list`）把此刻有运行在进行的会话（run task 处于 running，不含排队与压缩）置顶，其余按最近更新排序；列表接口的每一行（`SessionListItem`）带 `running`，界面据此标记「运行中」；按 agent 分组时，运行中的会话单独成一个「运行中」区，置于所有 agent 分组之上（带 agent 名），其余会话再按 agent 分组。运行开始与结束都有 task 事件，列表据此重新拉取。
+会话列表（`SessionService.list`）把此刻有运行在进行的会话（run task 处于 running，不含排队与压缩）置顶，其余按最近更新排序；列表接口的每一行（`SessionListItem`）带工作状态 `state`（`SessionActivity` 的同一条规则，见下文「工作状态」），界面据此标记「运行中」（转圈）或「等待中」（沙漏）；按 agent 分组时，不空闲的会话单独成一个「进行中」区，置于所有 agent 分组之上（带 agent 名），其余会话再按 agent 分组。运行开始与结束都有 task 事件，列表据此重新拉取。
+
+**工作状态**（`activity.work_states_in`，唯一规则；会话列表、issue 看板、定时触发避免重叠都用它）：`running` 会话的 lane 上有排队或进行中的任务，或有投给它、还没投递的 `Receive`；`waiting` 运行停了但在等外面的结果——有 active 占用（后台任务、委派出去的工作）或还能回答的 ask_user 提问；否则 `idle`。running 与 waiting 都是「事情还没做完」：等待中的会话结果回来会自动接着做，所以除了展示，各处只区分 idle 与否。批量计算，查询次数与会话数无关（列表一次几百个，事务持有全局写锁）；挂起的提问只可能在最后一条模型回复里（之前每条回复的调用在下一条回复前都已有结果），所以只读最后一条回复起的消息（`history.since_last_response`），不加载整段上下文。它与删除检查回答不同的问题：挂起的提问没有人在外面做事，不挡删除。
 
 ### thread 与结果路由
 
@@ -472,7 +474,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 | kind | config | state | 激活机制 |
 |---|---|---|---|
-| `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at` | `DueRunner` + `ScheduleDue`：消耗这次到期 = 推进到下次时间；上一次触发的会话仍有没做完的事时跳过本次（会话领域的 `SessionActivity.has_pending_work_in`：会话的 lane 上有任务，或有投给它、还没投递的 `Receive`）；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起） |
+| `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at` | `DueRunner` + `ScheduleDue`：消耗这次到期 = 推进到下次时间；上一次触发的会话不空闲时跳过本次（会话领域的工作状态 `SessionActivity.work_state_in` 不是 idle：在运行、有还没投递的 `Receive`，或在等后台任务、委派、用户回答）；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起） |
 | `once` | `{"at": "<ISO 8601 时间>"}`，不带时区的按配置的时区解释，创建时必须在将来 | `{}`（到期时间就是配置本身） | `DueRunner` + `OnceDue`：消耗这次到期 = 归档（`finished_at`）。到点只触发一次，之后从列表里消失 |
 | `webhook` | `{}` | `token_hash` | `Webhooks`：`POST /api/hooks/{name}[?session_id=]` 凭 token 鉴权 |
 

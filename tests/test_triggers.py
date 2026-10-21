@@ -339,3 +339,27 @@ async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_
     await container.triggers.fire(trigger.id)
     async with container.db.transaction() as s:
         assert await container.triggers.busy_in(s, await container.triggers.get_in(s, trigger.id))
+
+
+async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(container, make_agent):
+    """上一次触发的会话停了，但还在等后台任务（active 占用）：结果回来会接着做，这次不再触发；占用释放后空闲。"""
+    from muliao.sessions.holds import hold_in, release_in
+
+    alpha = (await make_agent("alpha")).id
+    trigger = await container.triggers.create(
+        name="slack", agent_id=alpha, kind="schedule", prompt="check slack", config={"cron": "* * * * *"}
+    )
+    session_id = await container.triggers.fire(trigger.id)
+    await drain(container)
+
+    async def busy() -> bool:
+        async with container.db.transaction() as s:
+            return await container.triggers.busy_in(s, await container.triggers.get_in(s, trigger.id))
+
+    assert not await busy()
+    async with container.db.transaction() as s:
+        await hold_in(s, session_id, "job:1", awaited=False)
+    assert await busy()
+    async with container.db.transaction() as s:
+        await release_in(s, session_id, "job:1")
+    assert not await busy()

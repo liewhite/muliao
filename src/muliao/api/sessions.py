@@ -16,6 +16,7 @@ from muliao.sessions.api import (
     QuestionAnswer,
     RunEvent,
     SessionKind,
+    WorkState,
     call_result,
     default_title,
     policy_of,
@@ -62,9 +63,10 @@ class SessionOut(BaseModel):
 
 
 class SessionListItem(SessionOut):
-    """会话列表里的一行：多一个只在列表里算的「此刻有运行在进行」（会话页看 SessionDetail.run）。"""
+    """会话列表里的一行：多一个只在列表里算的工作状态（在运行 / 在等后台任务、委派或用户回答 / 空闲；会话页看
+    SessionDetail.run）。"""
 
-    running: bool
+    state: WorkState
 
 
 class TaskOut(BaseModel):
@@ -183,8 +185,8 @@ async def list_sessions(
     sessions = await c.sessions.list(
         agent_id=agent_id, origins=origin, origin_ref=origin_ref, limit=limit, offset=offset
     )
-    running = await c.sessions.running_among([s.id for s in sessions])
-    return [SessionListItem(**SessionOut.of(s).model_dump(), running=s.id in running) for s in sessions]
+    states = await c.sessions.work_states([s.id for s in sessions])
+    return [SessionListItem(**SessionOut.of(s).model_dump(), state=states[s.id]) for s in sessions]
 
 
 @router.post("/sessions", status_code=201)

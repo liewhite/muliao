@@ -6,9 +6,10 @@
 - 新建会话只有 create_session 一处实现（来信与 thread 都经过它）。"""
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from pydantic_ai.messages import ModelMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import active_agent_in
@@ -19,9 +20,9 @@ from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import Origin
 from muliao.sessions.events import Receive, ReceiveNewSession
-from muliao.sessions.history import load_context
+from muliao.sessions.history import since_last_response, since_last_response_among
 from muliao.sessions.kinds import SessionKind, policy_of
-from muliao.sessions.mailbox import post_in, queued_in
+from muliao.sessions.mailbox import post_in, queued_among, queued_in
 from muliao.sessions.pending import UserAnswered, pending_questions
 from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
 from muliao.sessions.tables import Mail, MailKind, Session
@@ -147,10 +148,20 @@ class OpenAsks:
 
 
 async def open_asks(s: AsyncSession, session_id: str) -> OpenAsks:
-    pending = pending_questions((await load_context(s, session_id)).messages)
-    submitted = frozenset(
-        k for m in await queued_in(s, session_id) if m.kind == MailKind.ANSWER for k in m.answers
-    )
+    return _open_asks(await since_last_response(s, session_id), await queued_in(s, session_id))
+
+
+async def open_asks_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, OpenAsks]:
+    """open_asks 的批量版本（会话列表的工作状态），同一条规则。"""
+    tails = await since_last_response_among(s, session_ids)
+    queued = await queued_among(s, session_ids)
+    return {x: _open_asks(tails[x], queued[x]) for x in session_ids}
+
+
+def _open_asks(since_last_response: Sequence[ModelMessage], queued: Sequence[Mail]) -> OpenAsks:
+    """挂起的提问只可能在最后一条模型回复里（history.since_last_response）；回答已在信箱里排着的算已提交。"""
+    pending = pending_questions(since_last_response)
+    submitted = frozenset(k for m in queued if m.kind == MailKind.ANSWER for k in m.answers)
     return OpenAsks(answerable={k: v for k, v in pending.items() if k not in submitted}, submitted=submitted)
 
 

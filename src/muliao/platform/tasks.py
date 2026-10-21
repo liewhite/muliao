@@ -224,9 +224,13 @@ class TaskQueue:
             return list((await s.scalars(query)).all())
 
     async def lane_busy(self, s: AsyncSession, lane: str) -> bool:
-        busy = await s.scalar(
-            select(Task.id)
-            .where(Task.lane == lane, Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
-            .limit(1)
+        return bool(await self.busy_lanes(s, [lane]))
+
+    async def busy_lanes(self, s: AsyncSession, lanes: Collection[str]) -> set[str]:
+        """其中有排队或进行中任务的 lane（一次查询）。"""
+        busy = await s.scalars(
+            select(Task.lane)
+            .where(Task.lane.in_(list(lanes)), Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
+            .distinct()
         )
-        return busy is not None
+        return set(busy.all())

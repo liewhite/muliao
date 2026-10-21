@@ -1,6 +1,6 @@
 """会话历史：发给模型的上下文（最新摘要 + 压缩切点之后的原始消息）。原始消息不删除，压缩只决定从哪里开始发。"""
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -12,7 +12,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import (
@@ -49,6 +49,52 @@ async def rows_after(s: AsyncSession, session_id: str, after_id: int) -> list[Me
         select(Message).where(Message.session_id == session_id, Message.id > after_id).order_by(Message.id)
     )
     return list((await s.scalars(query)).all())
+
+
+async def since_last_response_among(
+    s: AsyncSession, session_ids: Collection[str]
+) -> dict[str, list[ModelMessage]]:
+    """since_last_response 的批量版本：先一次查询取各会话的最后一条消息，多数会话停在一条模型回复上，就是它；
+    停在请求上的（运行中途、出错）再逐个往回读。"""
+    last_ids = (
+        select(func.max(Message.id))
+        .where(Message.session_id.in_(list(session_ids)))
+        .group_by(Message.session_id)
+    )
+    rows = (
+        await s.execute(select(Message.session_id, Message.payload).where(Message.id.in_(last_ids)))
+    ).all()
+    tails: dict[str, list[ModelMessage]] = {x: [] for x in session_ids}
+    for session_id, payload in rows:
+        (message,) = load_messages([payload])
+        tails[session_id] = (
+            [message] if isinstance(message, ModelResponse) else await since_last_response(s, session_id)
+        )
+    return tails
+
+
+async def since_last_response(s: AsyncSession, session_id: str) -> list[ModelMessage]:
+    """从最后一条模型回复起的消息（按顺序；还没有回复时是全部）。之前每条回复的工具调用在下一条回复之前都已有
+    结果（提供方的要求），所以还没有结果的调用（挂起的提问）只可能在这一段里：查它们不必加载整段上下文。"""
+    tail: list[ModelMessage] = []
+    before: int | None = None
+    while True:
+        # 分批往回读：通常一两条就到最后一条回复，不把整段历史读进内存
+        query = select(Message.id, Message.payload).where(Message.session_id == session_id)
+        if before is not None:
+            query = query.where(Message.id < before)
+        rows = (await s.execute(query.order_by(Message.id.desc()).limit(_TAIL_BATCH))).all()
+        for message_id, payload in rows:
+            (message,) = load_messages([payload])
+            tail.append(message)
+            if isinstance(message, ModelResponse):
+                return tail[::-1]
+            before = message_id
+        if len(rows) < _TAIL_BATCH:
+            return tail[::-1]
+
+
+_TAIL_BATCH = 4
 
 
 # 压缩的切点可能落在一条模型回复之前（sessions.compaction.steps_of），而提供方要求对话从用户消息开始：这时在留下的

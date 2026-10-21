@@ -16,6 +16,7 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.platform.tooling import Origin
+from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.events import Receive, StopThread
@@ -161,11 +162,10 @@ class SessionService:
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
 
-    async def running_among(self, session_ids: Sequence[str]) -> set[str]:
-        """其中此刻有运行在进行的会话（会话列表的「运行中」标记）。"""
+    async def work_states(self, session_ids: Sequence[str]) -> dict[str, WorkState]:
+        """这些会话的工作状态（会话列表每一行的标记，与 issue 看板、触发器同一条规则）。"""
         async with self._db.transaction() as s:
-            query = select(Task.session_id).where(_running_run(), Task.session_id.in_(session_ids))
-            return {x for x in (await s.scalars(query)).all() if x is not None}
+            return await work_states_in(s, self._queue, session_ids)
 
     async def threads(self, parent_id: str) -> list[Session]:
         """父会话开出的 thread（含私有的），按创建顺序。"""
