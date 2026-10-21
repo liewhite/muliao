@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Card, Chip } from '@heroui/react'
-import { DndContext, PointerSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
-import { Link } from 'react-router-dom'
+import { DndContext, MouseSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, type Agent, type Issue, type IssuePriority, type IssueStatus } from '../api'
 import { useServerEvents } from '../events'
 import {
@@ -46,8 +46,7 @@ export function StatusDot({ status }: { status: IssueStatus }) {
 
 function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefined }) {
   return (
-    <Link to={issueRoute(issue.id)}>
-      <Card className="transition-colors hover:bg-surface-hover">
+    <Card className="cursor-pointer transition-colors hover:bg-surface-hover">
         <Card.Content className="flex flex-col gap-1.5 p-3">
           <div className="flex items-center gap-2 text-xs text-muted">
             <span>#{issue.id}</span>
@@ -76,22 +75,42 @@ function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefine
             )}
           </div>
         </Card.Content>
-      </Card>
-    </Link>
+    </Card>
   )
 }
 
-function DraggableCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefined }) {
+function DraggableCard({ issue, agents, onOpen }: { issue: Issue; agents: Agent[] | undefined; onOpen: (id: number) => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: issue.id })
   const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined
   return (
-    <div ref={setNodeRef} style={style} className={isDragging ? 'relative z-10 opacity-80' : ''} {...listeners} {...attributes}>
+    // 单击打开详情；拖拽结束时浏览器随后发出的那次 click 由 onOpen 忽略。触屏上禁用长按菜单与文字选中，长按才能拖起
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`touch-manipulation select-none [-webkit-touch-callout:none] ${isDragging ? 'relative z-10 opacity-80' : ''}`}
+      {...listeners}
+      {...attributes}
+      onClick={() => onOpen(issue.id)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onOpen(issue.id)
+      }}
+    >
       <IssueCard issue={issue} agents={agents} />
     </div>
   )
 }
 
-function Column({ status, issues, agents }: { status: IssueStatus; issues: Issue[]; agents: Agent[] | undefined }) {
+function Column({
+  status,
+  issues,
+  agents,
+  onOpen,
+}: {
+  status: IssueStatus
+  issues: Issue[]
+  agents: Agent[] | undefined
+  onOpen: (id: number) => void
+}) {
   const { setNodeRef, isOver } = useDroppable({ id: status })
   return (
     <section
@@ -104,30 +123,51 @@ function Column({ status, issues, agents }: { status: IssueStatus; issues: Issue
         <span className="font-normal text-muted">{issues.length}</span>
       </h2>
       {issues.map((i) => (
-        <DraggableCard key={i.id} issue={i} agents={agents} />
+        <DraggableCard key={i.id} issue={i} agents={agents} onOpen={onOpen} />
       ))}
     </section>
   )
 }
 
 function Board({ issues, agents, onMove }: { issues: Issue[]; agents: Agent[] | undefined; onMove: (id: number, s: IssueStatus) => void }) {
-  // 拖动一小段才算拖拽，点一下仍是打开 issue；触屏长按才拖，不挡横向滚动
+  // 鼠标拖动一小段才算拖拽，点一下是打开；触屏长按才拖，滑动仍是滚动。不用 PointerSensor：触屏上它与浏览器的滚动
+  // 抢同一串指针事件，滑动一开始就被 pointercancel 打断，拖不起来
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
   )
+  const navigate = useNavigate()
+  // 拖拽中、以及刚结束的这一刻：松手后浏览器紧接着会派发一次 click，不能把它当成「单击打开」
+  const dragging = useRef(false)
   const groups = groupByStatus(issues)
+  const settle = () => {
+    // click 在松手的同一轮事件里派发，下一轮再清除标记
+    setTimeout(() => {
+      dragging.current = false
+    }, 0)
+  }
+  const onOpen = (id: number) => {
+    if (!dragging.current) navigate(issueRoute(id))
+  }
   const onDragEnd = (e: DragEndEvent) => {
+    settle()
     if (e.over === null) return
     const status = e.over.id as IssueStatus
     const id = Number(e.active.id)
     if (issues.find((i) => i.id === id)?.status !== status) onMove(id, status)
   }
   return (
-    <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+    <DndContext
+      sensors={sensors}
+      onDragStart={() => {
+        dragging.current = true
+      }}
+      onDragEnd={onDragEnd}
+      onDragCancel={settle}
+    >
       <div className="flex min-h-full gap-3 overflow-x-auto px-4 py-3">
         {STATUSES.map((s) => (
-          <Column key={s} status={s} issues={groups[s]} agents={agents} />
+          <Column key={s} status={s} issues={groups[s]} agents={agents} onOpen={onOpen} />
         ))}
       </div>
     </DndContext>
