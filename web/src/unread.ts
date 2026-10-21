@@ -3,7 +3,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 import { api } from './api'
-import { useServerEvents, type PageEvent } from './events'
+import { isTaskOf, useServerEvents, type PageEvent } from './events'
 
 let unread = 0
 // 请求序号：并发刷新时只让最新一次的结果落下，晚到的旧响应不能覆盖新值
@@ -47,7 +47,7 @@ export const refreshUnreadLogged = () => void refreshUnread().catch((e) => conso
 export const notificationsMayHaveChanged = (e: PageEvent) =>
   e.type === 'connected' ||
   e.type === 'notification' ||
-  (e.type === 'task' && e.kind === 'event' && e.status === 'done')
+  (isTaskOf(e, 'event') && e.status === 'done')
 
 /** 登录后在应用根部调用一次：新通知投递、断线重连、回到前台、收到推送时刷新 */
 export function useUnreadSync() {

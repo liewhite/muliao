@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { shouldRefetch } from './events'
+import { shouldRefetch, type TaskKind } from './events'
 import { Loading, type Loaded } from './ui'
 
 const state = (data: string | undefined, error: string | null): Loaded<string> => ({
@@ -32,7 +32,7 @@ describe('Loading', () => {
 })
 
 describe('shouldRefetch', () => {
-  const task = (kind: 'run' | 'deliver') =>
+  const task = (kind: TaskKind) =>
     ({ type: 'task', task_id: 1, kind, status: 'done', session_id: 's', agent: 'a', error: null }) as const
 
   it('refetches after connecting or a run status change, not on deliveries', () => {

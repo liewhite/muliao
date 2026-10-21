@@ -5681,6 +5681,13 @@
           },
           "kind": {
             "type": "string",
+            "enum": [
+              "event",
+              "run",
+              "compaction",
+              "reflection",
+              "deliver"
+            ],
             "title": "Kind"
           },
           "agent_id": {

@@ -33,7 +33,7 @@ import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads 
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
 import { isSendShortcut, SEND_HINT } from '../sendKey'
-import { announceChange, liveItems, mergeLive, useServerEvents, withoutCovered, type RunEvent } from '../events'
+import { announceChange, isTaskOf, liveItems, mergeLive, useServerEvents, withoutCovered, type RunEvent } from '../events'
 import { refreshUnread, refreshUnreadLogged } from '../unread'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
 
@@ -510,7 +510,7 @@ export default function SessionView() {
       if (e.type === 'run') setLive((prev) => [...withoutCovered(detail.data?.live ?? null, prev, e), e])
       // 又保存了一步：重新拉取历史；新快照换成新的一段，合并时丢掉上一段的事件
       else if (e.type === 'saved') void detail.reload()
-      else if (e.type === 'task' && (e.kind === 'run' || e.kind === 'compaction')) {
+      else if (isTaskOf(e, 'run', 'compaction')) {
         // 运行状态变化后以数据库为准重新拉取，清空临时流
         if (e.status !== 'running') setLive([])
         void detail.reload()

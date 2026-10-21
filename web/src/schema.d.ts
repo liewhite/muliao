@@ -2029,8 +2029,11 @@ export interface components {
         TaskOut: {
             /** Id */
             id: number;
-            /** Kind */
-            kind: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "event" | "run" | "compaction" | "reflection" | "deliver";
             /** Agent Id */
             agent_id: string | null;
             /** Session Id */

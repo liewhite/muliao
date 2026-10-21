@@ -6,7 +6,8 @@
   WorkEnded / WorkCheckIn（sessions.events）；
 - HTTP 层用的会话门面（SessionService：会话的读写、停止、手动压缩）；
 - 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙）、AgentHistory（反思用的步数与记录）；
-- 会话来源（Origin：发送方新建会话时给出）、会话种类与 HTTP 层用的读模型、展示事件。
+- 会话来源（Origin：发送方新建会话时给出）、会话种类与 HTTP 层用的读模型、展示事件；
+- 会话 lane 上的任务种类（RUN_TASK、COMPACTION_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
 """
 
 from muliao.sessions.activity import SessionActivity, WorkState
@@ -15,6 +16,7 @@ from muliao.sessions.holds import registered_in as hold_registered_in
 from muliao.sessions.inbound import Inbound, NewSession, SessionKey, receive_command_in
 from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
 from muliao.sessions.kinds import SessionKind, policy_of
+from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveRun, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 from muliao.sessions.origins import Origin
 from muliao.sessions.pending import CallResult, call_result
@@ -24,6 +26,8 @@ from muliao.sessions.transcript import Item
 from muliao.sessions.work import SessionWork
 
 __all__ = [
+    "COMPACTION_TASK",
+    "RUN_TASK",
     "Origin",
     "SessionActivity",
     "WorkState",
