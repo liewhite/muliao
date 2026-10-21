@@ -174,6 +174,20 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         return f"commented on issue #{issue_id}"
 
     @ts.tool
+    async def issue_claim(ctx: RunContext[RunScope], issue_id: int) -> str:
+        """Make this conversation the one working on an issue assigned to you, when you work on it here rather than
+        in the issue's own conversation. The issue watch then sees this conversation's activity; when it stops with
+        the issue still `todo`/`in_progress`, the next wake-up goes to the issue's own conversation.
+
+        Args:
+            issue_id: Issue number.
+        """
+        if ctx.deps.session_id is None:
+            raise InvalidInput("issue_claim only works inside a conversation")
+        await issues.claim(ctx.deps.agent_id, issue_id, ctx.deps.session_id)
+        return f"this conversation is now the one working on issue #{issue_id}"
+
+    @ts.tool
     async def issue_release(ctx: RunContext[RunScope], issue_id: int) -> str:
         """Stop working on an issue in this conversation, e.g. it turned out to be separate from what you are doing
         here. If it is still `todo`/`in_progress` and assigned to you, a fresh conversation dedicated to the issue

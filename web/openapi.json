@@ -2621,7 +2621,8 @@
           "owner",
           "title",
           "description",
-          "released"
+          "released",
+          "claimed"
         ],
         "title": "ActivityKind"
       },

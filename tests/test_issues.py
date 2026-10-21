@@ -130,6 +130,56 @@ async def test_an_agent_assigning_itself_works_on_it_in_its_current_session(cont
     assert (await container.issues.get(issue.id)).issue.sessions == {alpha: session.id}
 
 
+async def test_the_assignee_acting_from_another_session_does_not_wake_itself(container, make_agent):
+    from tests.test_flow import start
+
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    issue = await container.issues.create(
+        None, owner=alpha, title="t", status=IssueStatus.TODO, assignee=alpha
+    )
+    await drain(container)
+    [own] = await _issue_sessions(container)
+
+    # 自检之类的别的会话里评论、改状态：不唤醒它的 issue 会话（否则两个会话并发处理），也不改登记
+    check = await start(container, alpha, "self-check")
+    await container.issues.comment(alpha, issue.id, "self-check passed", session_id=check.id)
+    await container.issues.update(alpha, issue.id, session_id=check.id, status=IssueStatus.IN_PROGRESS)
+    await deliver(container)
+    assert len(await _mail(container, own.id)) == 1
+    assert (await container.issues.get(issue.id)).issue.sessions == {alpha: own.id}
+
+    # 别的 agent 评论照样唤醒被指派人
+    await drain(container)
+    talk = await start(container, beta, "chat")
+    await container.issues.comment(beta, issue.id, "ping", session_id=talk.id)
+    await deliver(container)
+    assert len(await _mail(container, own.id)) == 2
+
+
+async def test_an_agent_claims_an_issue_for_the_session_working_on_it(container, make_agent):
+    from muliao.errors import Conflict
+    from muliao.issues.api import WorkState
+    from tests.test_flow import start
+
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    issue = await container.issues.create(
+        None, owner=alpha, title="t", status=IssueStatus.TODO, assignee=alpha
+    )
+    await drain(container)
+    assert (await container.issues.work_states([issue]))[issue.id] == WorkState.IDLE
+
+    chat = await start(container, alpha, "working on it here")
+    with pytest.raises(Conflict):
+        await container.issues.claim(beta, issue.id, chat.id)
+    await container.issues.claim(alpha, issue.id, chat.id)
+    await container.issues.claim(alpha, issue.id, chat.id)  # 已是处理会话：不再记时间线
+    detail = await container.issues.get(issue.id)
+    assert detail.issue.sessions == {alpha: chat.id}
+    assert [a.kind for a in detail.activities].count(ActivityKind.CLAIMED) == 1
+    # 巡检看的是认领的会话
+    assert (await container.issues.work_states([detail.issue]))[issue.id] == WorkState.RUNNING
+
+
 async def test_handing_over_wakes_the_new_assignee_and_records_the_timeline(container, make_agent):
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
     issue = await container.issues.create(alpha, owner=alpha, title="t", assignee=alpha)

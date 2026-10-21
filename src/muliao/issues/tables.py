@@ -40,6 +40,8 @@ class ActivityKind(StrEnum):
     DESCRIPTION = "description"
     # agent 让出 issue：断开它的处理会话
     RELEASED = "released"
+    # agent 认领 issue：把调用所在的会话登记为它的处理会话
+    CLAIMED = "claimed"
 
 
 class Issue(Base):

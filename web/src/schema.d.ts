@@ -915,7 +915,7 @@ export interface components {
          * ActivityKind
          * @enum {string}
          */
-        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "released";
+        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "released" | "claimed";
         /** ActivityOut */
         ActivityOut: {
             /** Id */

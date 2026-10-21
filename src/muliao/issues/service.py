@@ -4,9 +4,10 @@
 定向命令 Receive（来源 Origin.ISSUE，origin_ref 是 issue id），提交后马上投递（run_now）。同一个 agent 在同一个
 issue 上续写同一个会话（Issue.sessions）。
 
-actor 是做这件事的 agent id，用户为 None；session_id 是 agent 动手时所在的会话。只有在这个 issue 自己的会话里
-（Issue.sessions[actor]）做的修改不唤醒它自己——它正在处理。在别的会话里给自己建、派、转 todo 的 issue 也不另开
-会话：那个会话登记为这个 issue 的处理会话（巡检据此判断有没有人在做）；它停下后的下一次唤醒才开 issue 自己的会话。
+actor 是做这件事的 agent id，用户为 None；session_id 是 agent 动手时所在的会话。agent 自己的修改、评论从不唤醒
+它自己（不论在哪个会话里做的），否则它的 issue 会话会和动手的会话并发处理同一件事。处理会话（Issue.sessions，巡检
+据此判断有没有人在做）只显式登记：agent 在当前会话里给自己建、派、转 todo 的 issue 登记当前会话；在别的会话里接手
+用 claim，让出用 release。登记的会话停下后的下一次唤醒（评论、巡检）才开 issue 自己的会话。
 """
 
 from __future__ import annotations
@@ -89,8 +90,9 @@ def _assignee_of(issue: Issue) -> str | None:
 
 
 def _working(issue: Issue, actor: str | None, session_id: str | None) -> str | None:
-    """正在这个 issue 自己的会话里处理它的 agent：actor 就在它在这个 issue 上的会话里动手。"""
-    if actor is not None and session_id is not None and issue.sessions.get(actor) == session_id:
+    """这次修改不该唤醒的 agent：被指派人在某个会话里自己动手时就是它（它知道自己做了什么，唤醒只会多开一个并发的
+    会话）。不在会话里（没有地方接着做）的修改照常唤醒。"""
+    if actor is not None and session_id is not None and actor == issue.assignee_agent_id:
         return actor
     return None
 
@@ -270,7 +272,7 @@ class IssueService:
             if not changed:
                 return issue
             issue.updated_at = utcnow()
-            wake = await self._after_change_in(s, before, issue, actor, _working(issue, actor, session_id))
+            wake = await self._after_change_in(s, before, issue, actor, session_id)
         log.info("issue updated", extra={"issue_id": issue_id, "actor": actor, "status": issue.status})
         await self._deliver(wake)
         return issue
@@ -292,6 +294,19 @@ class IssueService:
         log.info("issue commented", extra={"issue_id": issue_id, "actor": actor})
         await self._deliver(wake)
         return activity
+
+    async def claim(self, actor: str, issue_id: int, session_id: str) -> None:
+        """agent 在当前会话里接手指派给它的 issue：把这个会话登记为处理会话（巡检看它在不在做事）。"""
+        async with self._db.transaction() as s:
+            issue = await self._get_in(s, issue_id)
+            if issue.assignee_agent_id != actor:
+                raise Conflict(f"issue #{issue_id} is not assigned to you; only the assignee can claim it")
+            if issue.sessions.get(actor) == session_id:
+                return
+            issue.sessions = {**issue.sessions, actor: session_id}
+            self._record(s, issue, actor, ActivityKind.CLAIMED)
+            issue.updated_at = utcnow()
+        log.info("issue claimed", extra={"issue_id": issue_id, "agent": actor, "session_id": session_id})
 
     async def release(self, actor: str, issue_id: int, session_id: str) -> bool:
         """agent 让出 issue：断开登记的处理会话（必须就是它现在所在的会话）。issue 仍是 todo / 进行中、指派给它时，
@@ -389,16 +404,15 @@ class IssueService:
                     session_id=issue.sessions.get(actor),
                 ),
             )
+        if session_id is not None and actor is not None and wake_target(before, after, None) == actor:
+            # agent 在当前会话里给自己建、派、转 todo 的 issue：就在这个会话里做，登记它为处理会话，不另开会话。
+            # 这个会话停下而 issue 还没做完时，下一次唤醒（评论、巡检）再开 issue 自己的会话（见 _wake_in）
+            issue.sessions = {**issue.sessions, actor: session_id}
+            log.info(
+                "issue adopted by the session that assigned it", extra={"issue_id": issue.id, "agent": actor}
+            )
         agent = wake_target(before, after, _working(issue, actor, session_id))
         if agent is None:
-            return None
-        if agent == actor and session_id is not None:
-            # agent 在别的会话里给自己建、派、转 todo 的 issue：就在这个会话里做，登记它为处理会话，不另开会话。
-            # 这个会话停下而 issue 还没做完时，下一次唤醒（评论、巡检）再开 issue 自己的会话（见 _wake_in）
-            issue.sessions = {**issue.sessions, agent: session_id}
-            log.info(
-                "issue adopted by the session that assigned it", extra={"issue_id": issue.id, "agent": agent}
-            )
             return None
         if before is None:
             reason = f"Issue #{issue.id} was created and assigned to you."
