@@ -3,6 +3,7 @@
 agent 按名称指定，不出现 id。webhook 的 token 只能由用户在界面上生成，agent 拿不到也不需要。
 """
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -33,6 +34,10 @@ class TriggerInfo(BaseModel):
     # 被自动停用的原因；最近一次前置检查失败的原因
     disabled_reason: str | None
     precheck_error: str | None
+    # 最近一次触发开出的会话；已归档的（跑完的一次性触发器）在这里能看到它的结果去了哪
+    last_session_id: str | None
+    # 不为空表示它已经跑完、不会再触发了
+    finished_at: datetime | None
 
 
 _CREATE_DESCRIPTION = """\
@@ -69,6 +74,8 @@ def triggers_toolset(
             precheck=None if t.precheck is None else Precheck.model_validate(t.precheck),
             disabled_reason=t.disabled_reason,
             precheck_error=t.precheck_error,
+            last_session_id=t.last_session_id,
+            finished_at=t.finished_at,
         )
 
     @ts.tool_plain
@@ -77,10 +84,16 @@ def triggers_toolset(
         return [TriggerKindInfo(kind=k.name, description=k.description) for k in triggers.kinds.values()]
 
     @ts.tool_plain
-    async def trigger_list() -> list[TriggerInfo]:
-        """List all triggers: things that start a new conversation of an agent (schedules, webhooks, ...)."""
+    async def trigger_list(finished: bool = False) -> list[TriggerInfo]:
+        """List triggers: things that start a new conversation of an agent (schedules, webhooks, ...).
+
+        Args:
+            finished: List the archived ones instead — `once` triggers that already ran and are gone from
+                the list above. Their `last_session_id` is the conversation they started, so this is how you
+                look up what came of a one-off task.
+        """
         names = {a.id: a.name for a in await agents.list()}
-        return [await info(t, names) for t in await triggers.list()]
+        return [await info(t, names) for t in await triggers.list(finished=finished)]
 
     @ts.tool(description=_CREATE_DESCRIPTION.format(timeout=precheck_timeout))
     async def trigger_create(
@@ -98,7 +111,9 @@ def triggers_toolset(
             name: Lowercase letters, digits and `-`, e.g. `daily-report` (used in webhook URLs).
             kind: Trigger kind from `trigger_kinds`.
             prompt: What to do on each firing.
-            config: Kind-specific settings, e.g. {"cron": "0 9 * * *"} for a schedule.
+            config: Kind-specific settings, e.g. {"cron": "0 9 * * *"} for a schedule, {"at":
+                "2026-10-22T10:30"} for a one-off `once` trigger (never a cron expression with a date:
+                that fires again every year and stays in the list).
             agent: Name of the agent to run (see `list_agents`); defaults to you.
             precheck: Optional command deciding whether to fire; see above.
         """
@@ -143,13 +158,14 @@ def triggers_toolset(
     @ts.tool_plain
     async def trigger_run(name: str) -> str:
         """Fire a trigger now (without an event body), starting a new conversation of its agent. Its precheck,
-        if any, runs first, so this also tests the precheck.
+        if any, runs first, so this also tests the precheck. This does not use up a `once` trigger: it still
+        fires at its own time.
 
         Args:
             name: Trigger name.
         """
         trigger = await triggers.get_by_name(name)
-        if await triggers.fire(trigger.id) is None:
+        if await triggers.run(trigger.id) is None:
             return f"precheck of {name} found nothing to do (or recorded its baseline): not fired"
         return f"fired trigger {name}"
 

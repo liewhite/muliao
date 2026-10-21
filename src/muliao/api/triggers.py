@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from muliao.api.deps import C
@@ -54,6 +54,8 @@ class TriggerOut(BaseModel):
     # 被自动停用的原因；最近一次前置检查失败的原因
     disabled_reason: str | None
     precheck_error: str | None
+    # 归档的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
+    finished_at: datetime | None
 
 
 class FiredOut(BaseModel):
@@ -77,6 +79,7 @@ def _out(c: C, t: Trigger) -> TriggerOut:
         last_session_id=t.last_session_id,
         disabled_reason=t.disabled_reason,
         precheck_error=t.precheck_error,
+        finished_at=t.finished_at,
     )
 
 
@@ -86,8 +89,10 @@ async def trigger_kinds(c: C) -> list[TriggerKindOut]:
 
 
 @router.get("/triggers")
-async def list_triggers(c: C) -> list[TriggerOut]:
-    return [_out(c, t) for t in await c.triggers.list()]
+async def list_triggers(
+    c: C, finished: bool = Query(False, description="列已归档的（跑完的一次性触发器）而不是还会触发的")
+) -> list[TriggerOut]:
+    return [_out(c, t) for t in await c.triggers.list(finished=finished)]
 
 
 @router.post("/triggers", status_code=201)

@@ -131,9 +131,18 @@ class SessionService:
             return await self._get(s, session_id)
 
     async def list(
-        self, *, agent_id: str | None, origins: Sequence[Origin] | None, limit: int, offset: int
+        self,
+        *,
+        agent_id: str | None,
+        origins: Sequence[Origin] | None,
+        limit: int,
+        offset: int,
+        origin_ref: str | None = None,
     ) -> list[Session]:
-        """会话列表只含列出的种类（KindPolicy.listed）；私有 thread 从父会话进入。"""
+        """会话列表只含列出的种类（KindPolicy.listed）；私有 thread 从父会话进入。
+
+        origin_ref 是发起方在它那个 origin 里的身份（触发器的 id），用来列出某个发起方开过的会话。
+        """
         query = (
             select(Session)
             .where(Session.kind.in_(LISTED))
@@ -145,6 +154,8 @@ class SessionService:
             query = query.where(Session.agent_id == agent_id)
         if origins is not None:
             query = query.where(Session.origin.in_(list(origins)))
+        if origin_ref is not None:
+            query = query.where(Session.origin_ref == origin_ref)
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
 

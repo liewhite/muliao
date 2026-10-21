@@ -169,10 +169,13 @@ async def list_sessions(
     c: C,
     agent_id: str | None = None,
     origin: list[Origin] | None = Query(None),
+    origin_ref: str | None = Query(None, description="发起方在它那个 origin 里的身份，如触发器的 id"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[SessionOut]:
-    sessions = await c.sessions.list(agent_id=agent_id, origins=origin, limit=limit, offset=offset)
+    sessions = await c.sessions.list(
+        agent_id=agent_id, origins=origin, origin_ref=origin_ref, limit=limit, offset=offset
+    )
     return [SessionOut.of(s) for s in sessions]
 
 

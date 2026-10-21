@@ -13,6 +13,7 @@ from muliao.errors import Conflict, InvalidInput
 from muliao.platform.tooling import Origin
 from muliao.triggers.once import OnceKind
 from muliao.triggers.precheck import Precheck
+from tests.conftest import login
 from tests.test_flow import deliver
 
 
@@ -55,8 +56,10 @@ async def test_once_fires_at_its_time_and_is_then_archived_with_its_session(cont
     assert await container.triggers.list() == []
     [archived] = await container.triggers.list(finished=True)
     assert archived.id == trigger.id and archived.finished_at is not None
-    session = await container.sessions.get(archived.last_session_id)
-    assert session.origin == Origin.TRIGGER and session.origin_ref == str(trigger.id)
+    sessions = await container.sessions.list(
+        agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
+    )
+    assert [s.id for s in sessions] == [archived.last_session_id]
 
 
 async def test_a_once_trigger_in_the_past_is_refused_at_creation(container, make_agent):
@@ -161,4 +164,65 @@ async def test_running_a_once_trigger_by_hand_does_not_use_up_its_firing(contain
     assert await _fire_due(container, trigger.id) == 1
     archived = (await container.triggers.list(finished=True))[0]
     assert archived.finished_at is not None and archived.last_session_id != manual
+    history = await container.sessions.list(
+        agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
+    )
+    assert {s.id for s in history} == {manual, archived.last_session_id}
 
+
+async def test_the_api_lists_the_archived_ones_separately_with_the_sessions_they_started(
+    client, container, make_agent
+):
+    alpha = (await make_agent()).id
+    await login(client)
+    trigger = await _once(container, alpha)
+    await _fire_due(container, trigger.id)
+    still_running = await _once(container, alpha, name="later")
+
+    listed = (await client.get("/api/triggers")).json()
+    archived = (await client.get("/api/triggers", params={"finished": True})).json()
+
+    assert [t["id"] for t in listed] == [still_running.id]
+    assert [(t["id"], t["finished_at"] is not None) for t in archived] == [(trigger.id, True)]
+    history = await client.get("/api/sessions", params={"origin": ["trigger"], "origin_ref": str(trigger.id)})
+    assert [s["id"] for s in history.json()] == [archived[0]["last_session_id"]]
+    assert (await client.post(f"/api/triggers/{trigger.id}/run")).status_code == 409
+    assert (await client.patch(f"/api/triggers/{trigger.id}", json={"enabled": True})).status_code == 409
+    assert (await client.delete(f"/api/triggers/{trigger.id}")).status_code == 204
+
+
+async def test_the_agent_creates_a_once_trigger_and_later_looks_up_what_came_of_it(
+    container, make_agent, models
+):
+    from tests.test_tools import run_tools
+
+    me = await make_agent("manager", model="tools", reflect_every=100)
+
+    created = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            (
+                "trigger_create",
+                {"name": "remind", "kind": "once", "prompt": "Remind me.", "config": {"at": _later()}},
+            )
+        ],
+    )
+    trigger = await container.triggers.get_by_name("remind")
+    await _fire_due(container, trigger.id)
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [("trigger_list", {}), ("trigger_list", {"finished": True}), ("trigger_run", {"name": "remind"})],
+    )
+
+    # 同一个步骤遇到 ModelRetry 会再问一次模型，结果重复一遍：按出现顺序去重
+    listed, archived, rerun = list(dict.fromkeys(outputs))
+    assert "run_at" in created[0]
+    assert listed == "[]"  # 跑完就不在列表里了
+    assert "remind" in archived and "finished_at" in archived
+    assert str((await container.triggers.list(finished=True))[0].last_session_id) in archived
+    # 归档的按名称指不了，但错误说清楚是跑完归档了，不是找不到
+    assert "has finished" in rerun

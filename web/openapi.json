@@ -733,6 +733,24 @@
             }
           },
           {
+            "name": "origin_ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "发起方在它那个 origin 里的身份，如触发器的 id",
+              "title": "Origin Ref"
+            },
+            "description": "发起方在它那个 origin 里的身份，如触发器的 id"
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -1720,17 +1738,41 @@
       "get": {
         "summary": "List Triggers",
         "operationId": "list_triggers_api_triggers_get",
+        "parameters": [
+          {
+            "name": "finished",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "列已归档的（跑完的一次性触发器）而不是还会触发的",
+              "default": false,
+              "title": "Finished"
+            },
+            "description": "列已归档的（跑完的一次性触发器）而不是还会触发的"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/TriggerOut"
                   },
-                  "type": "array",
                   "title": "Response List Triggers Api Triggers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1741,14 +1783,14 @@
         "summary": "Create Trigger",
         "operationId": "create_trigger_api_triggers_post",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/TriggerCreate"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "201": {
@@ -4486,6 +4528,18 @@
               }
             ],
             "title": "Precheck Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
           }
         },
         "type": "object",
@@ -4503,7 +4557,8 @@
           "last_fired_at",
           "last_session_id",
           "disabled_reason",
-          "precheck_error"
+          "precheck_error",
+          "finished_at"
         ],
         "title": "TriggerOut"
       },
