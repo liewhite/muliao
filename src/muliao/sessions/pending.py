@@ -20,7 +20,7 @@ from pydantic_ai.messages import ModelMessage, ToolCallPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import Answer, Attachment, unanswered_calls
-from muliao.sessions.history import load_context
+from muliao.sessions.history import since_last_response
 from muliao.sessions.holds import called_in
 from muliao.sessions.questions import (
     ASK_USER,
@@ -114,8 +114,9 @@ def pending_questions(history: Sequence[ModelMessage]) -> dict[str, list[Questio
 
 
 async def pending_in(s: AsyncSession, session_id: str) -> dict[str, ToolCallPart]:
-    """会话现在挂着的调用，从库里的历史推导（压缩的切点不会落在挂起的调用之前）。"""
-    return pending_calls((await load_context(s, session_id)).messages, await called_in(s, session_id))
+    """会话现在挂着的调用，从库里的历史推导：只可能在最后一条模型回复里（history.since_last_response），不加载整段
+    上下文。"""
+    return pending_calls(await since_last_response(s, session_id), await called_in(s, session_id))
 
 
 def answered_in(queued: Sequence[Mail], pending: Mapping[str, ToolCallPart]) -> dict[str, CallResult]:

@@ -26,7 +26,7 @@ from muliao.errors import CorruptState, NotFound
 from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import TaskQueue
-from muliao.sessions.history import load_context
+from muliao.sessions.history import since_last_response
 from muliao.sessions.holds import called_in, get_in
 from muliao.sessions.lanes import session_lane
 from muliao.sessions.pending import waiting
@@ -129,8 +129,9 @@ async def wake_in(
     if finished is None and latest is not None and all(handed_to(m, latest) for m in queued):
         # 都已经交给过一次运行（它失败了、等重试）：由它或之后新信件唤醒的运行处理，不重复投递
         return None
-    if waiting((await load_context(s, session.id)).messages, queued, await called_in(s, session.id)):
-        # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型
+    if waiting(await since_last_response(s, session.id), queued, await called_in(s, session.id)):
+        # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型。挂起的调用只可能在最后一条模型回复里，
+        # 不加载整段上下文
         return None
     run = queue.enqueue(
         s,

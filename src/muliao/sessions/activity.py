@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import Origin
-from muliao.sessions.holds import has_active_in, with_active_among
+from muliao.sessions.holds import with_active_among
 from muliao.sessions.inbound import open_asks_among
 from muliao.sessions.info import keyed_sessions_among
 from muliao.sessions.kinds import SessionKind
@@ -94,7 +94,9 @@ async def blocking_deletion_in(
 ) -> list[str]:
     """其中忙、因而不能删除的会话：lane 上有排队或运行中的任务（运行、压缩），或有人替它在外面做事（后台任务、委派
     出去的工作）。与工作状态（work_state_in）回答的是不同的问题：挂起的提问没有人在外面做事，不挡删除。"""
-    return [x for x in sessions if await queue.lane_busy(s, session_lane(x)) or await has_active_in(s, x)]
+    busy = await queue.busy_lanes(s, [session_lane(x) for x in sessions])
+    held = await with_active_among(s, list(sessions))
+    return [x for x in sessions if session_lane(x) in busy or x in held]
 
 
 async def sessions_blocking_agent_deletion_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> list[str]:
