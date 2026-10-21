@@ -85,6 +85,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         """
         issue = await issues.create(
             ctx.deps.agent_id,
+            session_id=ctx.deps.session_id,
             title=title,
             description=description,
             status=status,
@@ -105,7 +106,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         unassign: bool = False,
     ) -> str:
         """Change an issue; only the given fields change. Moving an agent's issue into `todo`/`in_progress`, or
-        assigning an issue in those statuses to an agent, wakes that agent up (never yourself).
+        assigning an issue in those statuses to an agent, wakes that agent up (you too, unless
+        you are working on it in its own conversation).
 
         Args:
             issue_id: Issue number.
@@ -124,6 +126,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         issue = await issues.update(
             ctx.deps.agent_id,
             issue_id,
+            session_id=ctx.deps.session_id,
             title=title,
             description=description,
             status=status,
@@ -140,7 +143,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             issue_id: Issue number.
             body: Comment text.
         """
-        await issues.comment(ctx.deps.agent_id, issue_id, body)
+        await issues.comment(ctx.deps.agent_id, issue_id, body, session_id=ctx.deps.session_id)
         return f"commented on issue #{issue_id}"
 
     return ts

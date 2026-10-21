@@ -20,26 +20,28 @@ class Snapshot:
     assignee: str | None
 
 
-def wake_target(before: Snapshot | None, after: Snapshot, actor: str | None) -> str | None:
+def wake_target(before: Snapshot | None, after: Snapshot, working: str | None) -> str | None:
     """这次变化要唤醒的 agent（没有为 None）。before 为 None 表示新建。
 
-    被指派人是 agent、且不是这次动手的 agent 自己时：
+    working 是正在这个 issue 自己的会话里处理它的 agent（这次修改就发生在那个会话里），否则为 None。
+
+    被指派人是 agent、且不是正在处理它的那个时：
     - 状态从别的状态转入 todo / in_progress；
     - 或处于 todo / in_progress 时被指派给它（含新建时就指派好）。
-    agent 自己改自己的 issue 不唤醒自己（它正在处理）。
+    agent 在别的会话里给自己建、转 todo 的 issue 照样唤醒：那是一件新开的工作。
     """
     agent = after.assignee
-    if agent is None or agent == USER or agent == actor or after.status not in ACTIVE:
+    if agent is None or agent == USER or agent == working or after.status not in ACTIVE:
         return None
     if before is None or before.status not in ACTIVE or before.assignee != agent:
         return agent
     return None
 
 
-def comment_wakes(issue: Snapshot, actor: str | None) -> str | None:
-    """评论唤醒被指派的 agent：issue 处于 todo / in_progress、指派给 agent、评论的不是它自己。"""
+def comment_wakes(issue: Snapshot, working: str | None) -> str | None:
+    """评论唤醒被指派的 agent：issue 处于 todo / in_progress、指派给 agent、不是它在这个 issue 的会话里自己评论的。"""
     agent = issue.assignee
-    if agent is None or agent == USER or agent == actor or issue.status not in ACTIVE:
+    if agent is None or agent == USER or agent == working or issue.status not in ACTIVE:
         return None
     return agent
 

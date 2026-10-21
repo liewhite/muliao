@@ -591,7 +591,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 - **状态**：backlog / todo / in_progress / in_review / blocked / done / cancelled。**指派人**：一个 agent、用户（`"user"`），或未指派。界面上的操作以用户身份进行（actor 为 None），工具以调用它的 agent 身份进行。
 - **时间线**：每次创建、评论、每个真正变了的字段各记一条 `IssueActivity`，只增不改；删除 issue 一起删。
-- **唤醒**（`issues.rules.wake_target`，纯函数）：被指派人是 agent、且不是这次动手的 agent 自己时，状态从别处转入 todo / in_progress，或处于这两个状态时被指派给它（含新建时就指派好）——唤醒它。评论也唤醒处于这两个状态的被指派 agent（`comment_wakes`）。agent 改自己的 issue 不唤醒自己。
+- **唤醒**（`issues.rules.wake_target`，纯函数）：被指派人是 agent、且这次修改不是它在这个 issue 自己的会话里做的时，状态从别处转入 todo / in_progress，或处于这两个状态时被指派给它（含新建时就指派好）——唤醒它。评论也唤醒处于这两个状态的被指派 agent（`comment_wakes`）。只有 agent 在这个 issue 的会话里（`Issue.sessions[agent]`，即正在处理它）改状态、评论不唤醒自己；在别的会话里给自己建、转 todo 的 issue 照样唤醒（新开 issue 会话）。工具把调用所在的会话（RunScope.session_id）交给服务判定。
 - **投信**：与触发器同一套路——在 issue 的事务里 `check_receivable_in`、发出定向命令 `Receive`（来源 `Origin.ISSUE`，`origin_ref` 为 issue id），提交后 `run_now`。同一个 agent 在同一个 issue 上续写同一个会话（`Issue.sessions`，agent id → 会话 id），会话被删了就新开。信件内容是 issue 的全文（描述与时间线）加上处理指引；没有用户在等（awaited = False），结果记在 issue 上。
 - **交给用户**：agent 把 issue 指派给用户时发 `Notify` 推送，点开是它在这个 issue 上的会话。
 - **删除 agent**：订阅 `AgentDeleting`，指派给它的 issue 改为未指派（记一条时间线），忘掉它的会话。

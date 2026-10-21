@@ -4,7 +4,8 @@
 定向命令 Receive（来源 Origin.ISSUE，origin_ref 是 issue id），提交后马上投递（run_now）。同一个 agent 在同一个
 issue 上续写同一个会话（Issue.sessions）。
 
-actor 是做这件事的 agent id，用户为 None。
+actor 是做这件事的 agent id，用户为 None；session_id 是 agent 动手时所在的会话。只有在这个 issue 自己的会话里
+（Issue.sessions[actor]）做的修改才不唤醒它自己——它正在处理；在别的会话里给自己建、转 todo 的 issue 照样唤醒。
 """
 
 from __future__ import annotations
@@ -76,6 +77,13 @@ def _assignee_of(issue: Issue) -> str | None:
     if issue.assigned_to_user:
         return USER
     return issue.assignee_agent_id
+
+
+def _working(issue: Issue, actor: str | None, session_id: str | None) -> str | None:
+    """正在这个 issue 自己的会话里处理它的 agent：actor 就在它在这个 issue 上的会话里动手。"""
+    if actor is not None and session_id is not None and issue.sessions.get(actor) == session_id:
+        return actor
+    return None
 
 
 def _snapshot(issue: Issue) -> Snapshot:
@@ -151,6 +159,7 @@ class IssueService:
         self,
         actor: str | None,
         *,
+        session_id: str | None = None,
         title: str,
         description: str = "",
         status: IssueStatus = IssueStatus.BACKLOG,
@@ -175,7 +184,7 @@ class IssueService:
             s.add(issue)
             await s.flush()
             self._record(s, issue, actor, ActivityKind.CREATED)
-            wake = await self._after_change_in(s, None, issue, actor)
+            wake = await self._after_change_in(s, None, issue, actor, _working(issue, actor, session_id))
         log.info("issue created", extra={"issue_id": issue.id, "actor": actor, "assignee": assignee})
         await self._deliver(wake)
         return issue
@@ -185,6 +194,7 @@ class IssueService:
         actor: str | None,
         issue_id: int,
         *,
+        session_id: str | None = None,
         title: str | None = None,
         description: str | None = None,
         status: IssueStatus | None = None,
@@ -217,12 +227,14 @@ class IssueService:
             if not changed:
                 return issue
             issue.updated_at = utcnow()
-            wake = await self._after_change_in(s, before, issue, actor)
+            wake = await self._after_change_in(s, before, issue, actor, _working(issue, actor, session_id))
         log.info("issue updated", extra={"issue_id": issue_id, "actor": actor, "status": issue.status})
         await self._deliver(wake)
         return issue
 
-    async def comment(self, actor: str | None, issue_id: int, body: str) -> IssueActivity:
+    async def comment(
+        self, actor: str | None, issue_id: int, body: str, *, session_id: str | None = None
+    ) -> IssueActivity:
         if not body.strip():
             raise InvalidInput("comment must not be empty")
         async with self._db.transaction() as s:
@@ -231,7 +243,7 @@ class IssueService:
             issue.updated_at = utcnow()
             await s.flush()
             wake = None
-            if (agent := comment_wakes(_snapshot(issue), actor)) is not None:
+            if (agent := comment_wakes(_snapshot(issue), _working(issue, actor, session_id))) is not None:
                 who = "The user" if actor is None else f"Agent {await self._name_in(s, actor)}"
                 wake = await self._wake_in(s, issue, agent, f"{who} commented on issue #{issue.id}.")
         log.info("issue commented", extra={"issue_id": issue_id, "actor": actor})
@@ -289,7 +301,7 @@ class IssueService:
             return f"(deleted agent {agent_id})"
 
     async def _after_change_in(
-        self, s: AsyncSession, before: Snapshot | None, issue: Issue, actor: str | None
+        self, s: AsyncSession, before: Snapshot | None, issue: Issue, actor: str | None, working: str | None
     ) -> Task | None:
         after = _snapshot(issue)
         if actor is not None and after.assignee == USER and (before is None or before.assignee != USER):
@@ -303,7 +315,7 @@ class IssueService:
                     session_id=issue.sessions.get(actor),
                 ),
             )
-        agent = wake_target(before, after, actor)
+        agent = wake_target(before, after, working)
         if agent is None:
             return None
         if before is None:

@@ -30,7 +30,7 @@ TODO, BACKLOG, PROGRESS, REVIEW = (
         (Snapshot(TODO, "a"), Snapshot(PROGRESS, "a"), None, None),
         (Snapshot(TODO, None), Snapshot(TODO, "a"), None, "a"),
         (Snapshot(PROGRESS, "b"), Snapshot(PROGRESS, "a"), "b", "a"),
-        (Snapshot(BACKLOG, "a"), Snapshot(TODO, "a"), "a", None),
+        (Snapshot(BACKLOG, "a"), Snapshot(TODO, "a"), "a", None),  # 在它自己的 issue 会话里
         (Snapshot(BACKLOG, None), Snapshot(TODO, USER), None, None),
         (Snapshot(TODO, "a"), Snapshot(REVIEW, "a"), None, None),
     ],
@@ -42,7 +42,7 @@ TODO, BACKLOG, PROGRESS, REVIEW = (
         "already-active",
         "assigned-while-active",
         "handed-over",
-        "own-change",
+        "working-in-its-session",
         "user-assignee",
         "moved-out",
     ],
@@ -91,27 +91,42 @@ async def test_moving_an_assigned_issue_to_todo_wakes_the_agent_in_one_session(c
     assert "any update?" in (await _mail(container, session.id))[-1]
 
 
-async def test_the_agent_changing_its_own_issue_does_not_wake_itself(container, make_agent):
+async def test_an_agent_working_in_the_issue_session_does_not_wake_itself(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(alpha, title="t", status=IssueStatus.TODO, assignee=alpha)
-    await container.issues.update(alpha, issue.id, status=IssueStatus.IN_PROGRESS)
-    await container.issues.comment(alpha, issue.id, "working on it")
+    issue = await container.issues.create(None, title="t", status=IssueStatus.TODO, assignee=alpha)
+    await drain(container)
+    [session] = await _issue_sessions(container)
+    # 在这个 issue 自己的会话里改状态、评论：它正在处理，不再唤醒
+    await container.issues.update(alpha, issue.id, session_id=session.id, status=IssueStatus.IN_REVIEW)
+    await container.issues.update(alpha, issue.id, session_id=session.id, status=IssueStatus.IN_PROGRESS)
+    await container.issues.comment(alpha, issue.id, "working on it", session_id=session.id)
     await deliver(container)
-    assert await _issue_sessions(container) == []
+    assert len(await _mail(container, session.id)) == 1
+
+
+async def test_an_agent_assigning_itself_from_another_session_is_woken(container, make_agent):
+    alpha = (await make_agent()).id
+    issue = await container.issues.create(
+        alpha, session_id="elsewhere", title="later", status=IssueStatus.TODO, assignee=alpha
+    )
+    await deliver(container)
+    [session] = await _issue_sessions(container)
+    assert (session.agent_id, session.origin_ref) == (alpha, str(issue.id))
 
 
 async def test_handing_over_wakes_the_new_assignee_and_records_the_timeline(container, make_agent):
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
-    issue = await container.issues.create(alpha, title="t", status=IssueStatus.IN_PROGRESS, assignee=alpha)
-    await container.issues.update(alpha, issue.id, assignee=beta, priority=None)
+    issue = await container.issues.create(alpha, title="t", assignee=alpha)
+    await container.issues.update(alpha, issue.id, assignee=beta, status=IssueStatus.IN_PROGRESS)
     await deliver(container)
     [session] = await _issue_sessions(container)
     assert session.agent_id == beta
     assert "assigned to you" in (await _mail(container, session.id))[0]
 
     detail = await container.issues.get(issue.id)
-    assert [a.kind for a in detail.activities] == [ActivityKind.CREATED, ActivityKind.ASSIGNEE]
-    assert detail.activities[1].change == {"from": alpha, "to": beta}
+    kinds = [a.kind for a in detail.activities]
+    assert kinds == [ActivityKind.CREATED, ActivityKind.STATUS, ActivityKind.ASSIGNEE]
+    assert detail.activities[2].change == {"from": alpha, "to": beta}
     assert "alpha changed assignee: alpha -> beta" in await container.issues.render(issue.id)
 
 
