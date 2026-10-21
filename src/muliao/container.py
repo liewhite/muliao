@@ -169,8 +169,8 @@ class Container:
 
     async def _check_orphan_resources(self) -> None:
         """数据库里已删除、还留着资源目录（删除时提交失败所致）或工作目录（删除时没删干净）的 agent：记录出来，由人决定
-        是否清理。"""
-        known = {a.id for a in await self.agents.list()}
+        是否清理。正在删除的不算：它的目录由删除流程删。"""
+        known = await self.agents.ids()
         orphans = [o for o in self.resources.agent_owners() if o not in known]
         if orphans:
             log.warning("resource directories of deleted agents remain", extra={"agent_ids": orphans})

@@ -303,6 +303,11 @@ class AgentService:
             ).all()
             return [info_of(a) for a in rows]
 
+    async def ids(self) -> set[str]:
+        """数据库里所有 agent 的 id，正在删除的也算（它的目录还在是正常的，删除流程会删）。"""
+        async with self._db.transaction() as s:
+            return set((await s.scalars(select(Agent.id))).all())
+
     async def remove_files(self, agent_id: str, author: str) -> None:
         """删除 agent 的工作目录与私有资源（记忆、指令、skill、MCP 配置，删除记入资源仓库）。数据库行由调用方删除。"""
         workspace = self.workspace(agent_id)

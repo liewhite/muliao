@@ -13,11 +13,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from typing import Any
 
+import anyio
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -293,7 +293,7 @@ class MailReconciler:
     async def run_forever(self) -> None:
         while True:
             await self.reconcile()
-            await asyncio.sleep(self._interval)
+            await anyio.sleep(self._interval)
 
 
 async def post_check_in(

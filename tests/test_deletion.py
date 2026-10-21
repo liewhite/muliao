@@ -1,9 +1,12 @@
 """删除经事件完成（docs/architecture.md 第 10 节与第 7 节「thread 与结果路由」）：没有跨领域外键，各领域按 SessionDeleted / AgentDeleting 清理
 自己的数据；先停止再删除时迟到的结局不产生失败投递。"""
 
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy import select
 
+import muliao.agents.service
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.tables import Job, JobStatus
@@ -61,25 +64,40 @@ async def test_deleting_an_agent_without_sessions_completes(container, make_agen
 
 
 async def test_a_workspace_that_cannot_be_fully_removed_does_not_block_deleting_the_agent(
-    container, make_agent, caplog
+    container, make_agent, caplog, monkeypatch
 ):
-    agent = await make_agent("alpha")
-    stuck = container.agents.workspace(agent.id) / "stuck"
-    stuck.mkdir(parents=True)
-    (stuck / "f").write_text("x")
-    stuck.chmod(0o500)  # 里面的文件删不掉：rmtree 抛 PermissionError
-    try:
-        await container.agent_lifecycle.delete(agent.id, author="user")
-        await drain(container)
+    def rmtree_fails(path):  # noqa: ANN001, ANN202
+        # 例如它留在后台的进程还在往里写
+        raise OSError(39, "Directory not empty", str(path))
 
-        async with container.db.transaction() as s:
-            assert await s.get(Agent, agent.id) is None
-        assert await _failed_tasks(container) == []
-        assert "workspace of a deleted agent could not be fully removed" in caplog.text
-        # 残留由启动检查列出
-        assert agent.id in container.agents.workspace_owners()
-    finally:
-        stuck.chmod(0o700)
+    # 只换掉 agent 领域删工作目录用的 rmtree（资源仓库照常删）
+    monkeypatch.setattr(muliao.agents.service, "shutil", SimpleNamespace(rmtree=rmtree_fails))
+    agent = await make_agent("alpha")
+    container.agents.workspace(agent.id).mkdir(parents=True, exist_ok=True)
+
+    await container.agent_lifecycle.delete(agent.id, author="user")
+    await drain(container)
+
+    async with container.db.transaction() as s:
+        assert await s.get(Agent, agent.id) is None
+    assert await _failed_tasks(container) == []
+    assert "workspace of a deleted agent could not be fully removed" in caplog.text
+    # 残留由启动检查列进日志
+    caplog.clear()
+    await container._check_orphan_resources()
+    [leftover] = [r for r in caplog.records if r.getMessage() == "workspaces of deleted agents remain"]
+    assert leftover.agent_ids == [agent.id]
+
+
+async def test_the_startup_check_does_not_report_an_agent_still_being_deleted(container, make_agent, caplog):
+    agent = await make_agent("alpha")
+    container.agents.workspace(agent.id).mkdir(parents=True, exist_ok=True)
+    # 只标记、不投递：它的目录还在是正常的，删除流程会删
+    await container.agent_lifecycle.delete(agent.id, author="user")
+
+    await container._check_orphan_resources()
+
+    assert "deleted agents remain" not in caplog.text
 
 
 async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(container, make_agent):
