@@ -163,7 +163,7 @@ async def test_a_worker_cancelled_while_claiming_keeps_its_slot_for_the_next_sta
         async def failed_in(self, _s, _task: Task) -> None:  # noqa: ANN001
             pass
 
-    worker = Worker(container.queue, {TaskKind.DELIVER: Handler()}, container.bus, concurrency=1)
+    worker = Worker(container.queue, {DELIVER_TASK: Handler()}, container.bus, concurrency=1)
     claim = container.queue.claim
     claiming = asyncio.Event()
 
