@@ -577,3 +577,18 @@ async def test_output_read_before_a_cancelled_drain_is_written_without_a_secret_
     with pytest.raises(asyncio.CancelledError):
         await task
     assert log_file.read_text() == "line1\nno newline yet "
+
+
+async def test_output_of_a_quiet_job_reaches_the_log_even_with_long_secrets(tmp_path):
+    """只留着可能是 secret 开头的那一段，不按最长 secret 的长度一律扣住末尾：否则安静下来的进程最后几行看不到。"""
+    from muliao.jobs.process import _record
+
+    proc = _FakeProc()
+    proc.stdout.feed_data(b"starting\nlistening on http://localhost:8080\n")
+    log_file = tmp_path / "out.log"
+    task = asyncio.create_task(_record(proc, log_file, {"K": "k" * 40}))
+    await asyncio.sleep(0.1)
+    assert log_file.read_text() == "starting\nlistening on http://localhost:8080\n"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

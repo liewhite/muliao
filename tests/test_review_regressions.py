@@ -245,3 +245,28 @@ async def test_a_vault_set_call_failing_validation_keeps_the_value_out_of_histor
     assert any("RetryPromptPart" in p or "retry-prompt" in p for p in payloads)
     assert all("super-secret" not in p for p in payloads)
     assert published and all("super-secret" not in item.model_dump_json() for item in published)
+
+
+async def test_running_out_of_vault_set_retries_keeps_the_value_out_of_the_logged_failure(
+    container, make_agent, models, caplog
+):
+    import logging
+
+    from pydantic_ai.messages import ToolCallPart
+
+    from tests.test_flow import scripted
+
+    caplog.set_level(logging.INFO)
+    alpha = (await make_agent("alpha", model="m")).id
+    # 每次都缺必填的 key：重试次数用完后运行失败，失败连同 traceback 进日志
+    models.models["m"] = scripted(
+        lambda messages, info: ModelResponse(parts=[ToolCallPart("vault_set", {"value": "super-secret"})])
+    )
+    session = await start(container, alpha, "save my token", origin=Origin.TRIGGER)
+    await drain(container)
+
+    assert "exceeded max retries" in caplog.text
+    assert "super-secret" not in caplog.text
+    async with container.db.transaction() as s:
+        payloads = (await s.scalars(select(Message.payload).where(Message.session_id == session.id))).all()
+    assert all("super-secret" not in p for p in payloads)

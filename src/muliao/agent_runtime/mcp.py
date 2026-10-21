@@ -26,7 +26,7 @@ from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound, Transi
 from muliao.platform.shell import redact
 from muliao.platform.tooling import RunScope
 from muliao.platform.worker import is_transient
-from muliao.vault.api import VAULT_REF, Vault
+from muliao.vault.api import VAULT_REF, Vault, fill
 
 log = logging.getLogger(__name__)
 
@@ -116,16 +116,24 @@ class McpFailed(Exception):
     """MCP server 连接或通信失败。信息已脱敏，原始异常不挂在后面（见 _SecretSafe）。"""
 
 
-# 工具调用的正常结局（交还模型、延后执行等），不是 server 故障，原样放行
-_TOOL_OUTCOMES = (ModelRetry, ToolFailed, CallDeferred, ApprovalRequired)
+# 工具调用的正常结局（延后执行、等待批准），不是 server 故障，原样放行；交还模型的错误（ModelRetry、ToolFailed）
+# 保留类型、只脱敏信息（文本来自 server 或网关）
+_TOOL_OUTCOMES = (CallDeferred, ApprovalRequired)
+
+
+def _describe(e: BaseException) -> str:
+    """异常的类型与信息；异常组展开每个子异常（组本身的 str 只有「n sub-exceptions」）。"""
+    if isinstance(e, BaseExceptionGroup):
+        return f"{type(e).__name__}: {e.message} [{'; '.join(_describe(x) for x in e.exceptions)}]"
+    return f"{type(e).__name__}: {e}"
 
 
 @dataclass
 class _SecretSafe(WrapperToolset[RunScope]):
-    """MCP 的连接、列工具、调用工具失败时，异常文本可能带着已代入 secret 的 URL、参数或请求头（如 HTTP 错误里的
-    完整 URL），它会进 tasks.error、服务日志（带 traceback）并交还给调用方。运行期与 probe 都经 guard：换成信息里
-    secret 明文已替换为 [secret:KEY] 的异常（与 run_shell 同一份 redact），不带原始异常链；暂时性失败仍是
-    TransientError，照常由任务队列重试。"""
+    """MCP 的连接、列工具、调用工具、断开失败时，异常文本可能带着已代入 secret 的 URL、参数或请求头（如 HTTP 错误
+    里的完整 URL），它会进 tasks.error、服务日志（带 traceback）并交还给调用方。运行期与 probe 都经 guard：换成信息
+    里 secret 明文已替换为 [secret:KEY] 的异常（与 run_shell 同一份 redact），不带原始异常链；暂时性失败仍是
+    TransientError，照常由任务队列重试。secrets 与代入配置的是同一份明文（build_toolset 只解析一次）。"""
 
     server: str
     secrets: Mapping[str, str]
@@ -136,14 +144,20 @@ class _SecretSafe(WrapperToolset[RunScope]):
             yield
         except _TOOL_OUTCOMES:
             raise
+        except (ModelRetry, ToolFailed) as e:
+            raise type(e)(redact(e.message, self.secrets)) from None
         except Exception as e:
-            message = redact(f"MCP server {self.server!r} failed: {type(e).__name__}: {e}", self.secrets)
+            message = redact(f"MCP server {self.server!r} failed: {_describe(e)}", self.secrets)
             raise (TransientError if is_transient(e) else McpFailed)(message) from None
 
     async def __aenter__(self) -> Self:
         with self.guard():
             await self.wrapped.__aenter__()
         return self
+
+    async def __aexit__(self, *args: Any) -> bool | None:
+        with self.guard():
+            return await self.wrapped.__aexit__(*args)
 
     async def get_tools(self, ctx: RunContext[RunScope]) -> dict[str, ToolsetTool[RunScope]]:
         with self.guard():
@@ -184,23 +198,24 @@ class McpRegistry:
     async def build_toolset(self, server: McpServer) -> AbstractToolset:
         """解析 vault 引用并构建 toolset；工具名以 `<server名>_` 为前缀避免冲突。"""
         c = server.config
+        # 只解析一次：代入配置的与脱敏用的是同一份明文
+        secrets = await self._vault.resolve_many(server.owner, _vault_keys(c))
         if c.transport == McpTransport.STDIO:
             assert c.command is not None
             client = StdioTransport(
                 command=c.command,
-                args=[await self._vault.render(a, server.owner) for a in c.args],
-                env=await self._vault.render_map(c.env, server.owner) or None,
+                args=[fill(a, secrets) for a in c.args],
+                env={k: fill(v, secrets) for k, v in c.env.items()} or None,
             )
             toolset = MCPToolset(client, id=f"mcp-{server.key}", init_timeout=_CONNECT_TIMEOUT)
         else:
             assert c.url is not None
             toolset = MCPToolset(
-                await self._vault.render(c.url, server.owner),
+                fill(c.url, secrets),
                 id=f"mcp-{server.key}",
-                headers=await self._vault.render_map(c.headers, server.owner) or None,
+                headers={k: fill(v, secrets) for k, v in c.headers.items()} or None,
                 init_timeout=_CONNECT_TIMEOUT,
             )
-        secrets = await self._vault.resolve_many(server.owner, _vault_keys(c))
         return _SecretSafe(toolset, server=server.name, secrets=secrets).prefixed(server.name)
 
     def toolset(self) -> DynamicToolset[RunScope]:

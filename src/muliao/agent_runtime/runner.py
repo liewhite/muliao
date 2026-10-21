@@ -41,7 +41,7 @@ from muliao.agent_runtime.instructions import (
     build_temp_instructions,
 )
 from muliao.agent_runtime.llm import ModelResolver
-from muliao.agent_runtime.redaction import redact_call, redact_retry
+from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agents.api import AgentInfo, AgentService, MemoryStore, PromptStore, SkillStore
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
@@ -211,43 +211,44 @@ class AgentRuntime:
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred.calls) if deferred is not None else frozenset()
         async with self._billed(RunKind.RUN, scope.agent_id, model, session_id, ctx, len(history)) as usage:
-            async with self._pai.iter(
-                None if prompt is None else list(prompt),
-                model=self._resolve_model(model),
-                instructions=await self.instructions(agent, scope, summary),
-                message_history=list(history),
-                deps=scope,
-                toolsets=self._toolsets(profile),
-                output_type=[str, DeferredToolRequests],
-                deferred_tool_results=deferred,
-                usage=usage,
-                usage_limits=_UNLIMITED,
-            ) as run:
-                node = run.next_node
-                if not PaiAgent.is_user_prompt_node(node):
-                    raise RuntimeError(f"agent run did not start with the user prompt node: {node!r}")
-                node = await run.next(node)
-                await hooks.started(run.ctx.state.message_history)
-                while not isinstance(node, End):
-                    if PaiAgent.is_model_request_node(node):
-                        await hooks.before_request(node.request, run.ctx.state.message_history)
-                        async with node.stream(run.ctx) as stream:
-                            await _forward_events(stream, hooks, resumed)
-                        node = await run.next(node)
-                        messages = run.ctx.state.message_history
-                        response = messages[-1]
-                        if not isinstance(response, ModelResponse):
-                            raise RuntimeError(
-                                f"model request ended without a response, history ends with {response!r}"
-                            )
-                        await hooks.after_response(response, messages)
-                    elif PaiAgent.is_call_tools_node(node):
-                        async with node.stream(run.ctx) as stream:
-                            await _forward_events(stream, hooks, resumed)
-                        node = await run.next(node)
-                    else:
-                        node = await run.next(node)
-                result = run.result
+            with tool_input_kept_out_of_failures():
+                async with self._pai.iter(
+                    None if prompt is None else list(prompt),
+                    model=self._resolve_model(model),
+                    instructions=await self.instructions(agent, scope, summary),
+                    message_history=list(history),
+                    deps=scope,
+                    toolsets=self._toolsets(profile),
+                    output_type=[str, DeferredToolRequests],
+                    deferred_tool_results=deferred,
+                    usage=usage,
+                    usage_limits=_UNLIMITED,
+                ) as run:
+                    node = run.next_node
+                    if not PaiAgent.is_user_prompt_node(node):
+                        raise RuntimeError(f"agent run did not start with the user prompt node: {node!r}")
+                    node = await run.next(node)
+                    await hooks.started(run.ctx.state.message_history)
+                    while not isinstance(node, End):
+                        if PaiAgent.is_model_request_node(node):
+                            await hooks.before_request(node.request, run.ctx.state.message_history)
+                            async with node.stream(run.ctx) as stream:
+                                await _forward_events(stream, hooks, resumed)
+                            node = await run.next(node)
+                            messages = run.ctx.state.message_history
+                            response = messages[-1]
+                            if not isinstance(response, ModelResponse):
+                                raise RuntimeError(
+                                    f"model request ended without a response, history ends with {response!r}"
+                                )
+                            await hooks.after_response(response, messages)
+                        elif PaiAgent.is_call_tools_node(node):
+                            async with node.stream(run.ctx) as stream:
+                                await _forward_events(stream, hooks, resumed)
+                            node = await run.next(node)
+                        else:
+                            node = await run.next(node)
+                    result = run.result
         if result is None:
             raise RuntimeError("agent run ended without a result")
         return result
@@ -326,16 +327,17 @@ class AgentRuntime:
             "workspace": str(scope.workspace),
         }
         async with self._billed(kind, scope.agent_id, model, billed_to, ctx, len(history)) as usage:
-            result = await self._pai.run(
-                prompt,
-                model=self._resolve_model(model),
-                instructions=instructions,
-                message_history=list(history),
-                deps=scope,
-                toolsets=toolsets,
-                usage_limits=_UNLIMITED,
-                usage=usage,
-            )
+            with tool_input_kept_out_of_failures():
+                result = await self._pai.run(
+                    prompt,
+                    model=self._resolve_model(model),
+                    instructions=instructions,
+                    message_history=list(history),
+                    deps=scope,
+                    toolsets=toolsets,
+                    usage_limits=_UNLIMITED,
+                    usage=usage,
+                )
         return result
 
     async def summarize(self, agent: AgentInfo, session_id: str, instructions: str, prompt: str) -> str:

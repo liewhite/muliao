@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -28,6 +29,11 @@ log = logging.getLogger(__name__)
 _KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,99}$")
 # 配置模板中的引用语法：${vault:KEY}
 VAULT_REF = re.compile(r"\$\{vault:([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def fill(template: str, values: Mapping[str, str]) -> str:
+    """把字符串中的 ${vault:KEY} 替换为 values 里的明文（values 须含全部引用，通常来自 resolve_many）。"""
+    return VAULT_REF.sub(lambda m: values[m.group(1)], template)
 
 
 @dataclass(frozen=True)
@@ -128,8 +134,4 @@ class Vault:
         keys = list(dict.fromkeys(VAULT_REF.findall(template)))
         if not keys:
             return template
-        values = await self.resolve_many(agent_id, keys)
-        return VAULT_REF.sub(lambda m: values[m.group(1)], template)
-
-    async def render_map(self, mapping: dict[str, str], agent_id: str | None) -> dict[str, str]:
-        return {k: await self.render(v, agent_id) for k, v in mapping.items()}
+        return fill(template, await self.resolve_many(agent_id, keys))

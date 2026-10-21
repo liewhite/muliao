@@ -547,11 +547,17 @@ def rejecting_http_server():
 async def test_a_failing_mcp_server_keeps_its_secrets_out_of_task_errors_and_logs(
     container, make_agent, models, rejecting_http_server, caplog
 ):
+    import logging
+
     from sqlalchemy import select
 
+    from muliao.logging_setup import quiet_http_clients
     from muliao.platform.tables import Task, TaskKind, TaskStatus
     from tests.test_flow import call_then_answer
 
+    # 与服务一样：INFO 级别，HTTP 客户端的逐请求日志关掉（它们带完整 URL）
+    caplog.set_level(logging.INFO)
+    quiet_http_clients()
     alpha = (await make_agent("alpha", model="m")).id
     await container.vault.set(None, "MCP_TOKEN", "tok-in-url-123")
     spec = mcp_config(
@@ -574,3 +580,4 @@ async def test_a_failing_mcp_server_keeps_its_secrets_out_of_task_errors_and_log
     with pytest.raises(InvalidInput, match="could not connect") as probe:
         await container.mcp.add(alpha, "remote2", spec, probe=True, author="user")
     assert "tok-in-url-123" not in str(probe.value) and "[secret:MCP_TOKEN]" in str(probe.value)
+    assert "mcp probe failed" in caplog.text and "tok-in-url-123" not in caplog.text

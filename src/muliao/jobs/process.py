@@ -58,6 +58,17 @@ def _safe_cut(text: str, cut: int, secrets: Mapping[str, str]) -> int:
         cut = moved
 
 
+def _partial_secret(text: str, secrets: Mapping[str, str]) -> int:
+    """text 末尾最长的、恰好是某个 secret 开头（真前缀）的一段的长度：这一段可能和下一块拼成 secret，要留着。"""
+    longest = 0
+    for value in secrets.values():
+        for n in range(min(len(value) - 1, len(text)), longest, -1):
+            if text.endswith(value[:n]):
+                longest = n
+                break
+    return longest
+
+
 class Recorder:
     """把输出写进日志。意外失败时杀掉进程组（进程不能没人管地留着），失败交给监督者记为被中断。"""
 
@@ -79,18 +90,18 @@ class Recorder:
 
 
 async def _record(proc: asyncio.subprocess.Process, log_file: Path, secrets: Mapping[str, str]) -> None:
-    """把输出逐块脱敏后追加到日志。每读一块写出到切口为止，切口之后留下最长 secret 长度减一个字符等下一块：
-    从切口之前开始的 secret 必然整个落在已读到的内容里，切口再避开跨在它上面的 secret（_safe_cut），两侧分开
-    脱敏也不会漏（secret 可以含换行，所以不能按行切）。读到结尾时写出全部剩余；读到一半被取消（进程退出后
-    后代还占着管道）时，留下的那一小段可能是某个 secret 的开头，不写出。增量解码，多字节字符不会被块边界切坏。"""
+    """把输出逐块脱敏后追加到日志。每读一块写出到切口为止：末尾可能是某个 secret 开头的一段留着等下一块
+    （_partial_secret），切口再避开跨在它上面的完整 secret（_safe_cut），两侧分开脱敏也不会漏。从切口之前开始的
+    secret 要么已经完整、由 _safe_cut 处理，要么不完整、那它从开头到末尾就是一个 secret 前缀，切口不会在它之后。
+    secret 可以含换行，所以不能按行切。读到结尾时写出全部剩余；读到一半被取消（进程退出后后代还占着管道）时，
+    只丢下留着的那一小段。增量解码，多字节字符不会被块边界切坏。"""
     assert proc.stdout is not None
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    hold = max((len(v) for v in secrets.values()), default=1) - 1
     pending = ""
     with log_file.open("a", encoding="utf-8") as out:
         while chunk := await proc.stdout.read(_CHUNK):
             pending += decoder.decode(chunk)
-            cut = _safe_cut(pending, max(0, len(pending) - hold), secrets)
+            cut = _safe_cut(pending, len(pending) - _partial_secret(pending, secrets), secrets)
             out.write(redact(pending[:cut], secrets))
             pending = pending[cut:]
             out.flush()
