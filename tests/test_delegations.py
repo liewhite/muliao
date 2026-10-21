@@ -44,9 +44,9 @@ async def test_a_reported_thread_answer_comes_back_as_an_event_not_a_push(contai
     [event_prompt] = [p for p in recorder.prompts if any(f'source="thread:{child.id}"' in c for c in p)]
     assert len(event_prompt) == 1 and "reviewed check v1" in event_prompt[0]
     # 子 thread 的回答不直接推送；父会话（用户发起）处理交回事件的运行推送
-    deliveries = await tasks_of(container, TaskKind.DELIVER)
-    assert child.id not in [d.session_id for d in deliveries]
-    assert parent.id in [d.session_id for d in deliveries]
+    notes = await container.notifications.list(100)
+    assert child.id not in [n.session_id for n in notes]
+    assert parent.id in [n.session_id for n in notes]
 
 
 async def test_a_thread_that_fails_for_good_reports_its_failure(container, make_agent, models):

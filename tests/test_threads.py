@@ -93,8 +93,8 @@ async def test_ask_agent_returns_answer_and_follow_up_keeps_thread_context(conta
         task_ids = (await s.scalars(select(Message.task_id).where(Message.session_id == child.id))).all()
     assert sorted(set(task_ids)) == [t.id for t in child_turns]
     # 发问方停在 ask_agent 上时不推送；子会话的回答交给父 agent，不推送；父会话做完时推送最终回答
-    deliveries = await tasks_of(container, TaskKind.DELIVER)
-    assert [d.session_id for d in deliveries] == [parent.id, parent.id]
+    notes = await container.notifications.list(100)
+    assert [n.session_id for n in notes] == [parent.id, parent.id]
     # 发问方等待时不占运行：每次 ask 前后各是一次运行
     assert [t.status for t in await turns_in(container, parent.id)] == [TaskStatus.DONE] * 4
 
@@ -172,8 +172,8 @@ async def test_delegate_task_runs_in_public_thread_without_returning_the_answer(
     [child] = await threads_of(container, parent.id)
     assert child.kind == SessionKind.THREAD and await last_answer(container, child.id) == "report: write it"
     # 公开 thread 的回答推送给用户
-    deliveries = await tasks_of(container, TaskKind.DELIVER)
-    assert sorted(d.session_id for d in deliveries) == sorted([parent.id, child.id])
+    notes = await container.notifications.list(100)
+    assert sorted(n.session_id for n in notes) == sorted([parent.id, child.id])
 
 
 async def test_a_failed_ask_comes_back_as_its_result_and_the_asker_goes_on(container, make_agent, models):

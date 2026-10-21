@@ -1,53 +1,180 @@
 import json
 
 import pytest
+import requests
 
+import muliao.notifications.webpush as webpush_module
+from muliao.errors import TransientError
 from muliao.notifications.delivery import DeliverHandler
-from muliao.notifications.tables import Notification
+from muliao.notifications.tables import Notification, PushSubscription
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import Task, TaskKind
-from tests.test_flow import drain, start
+from tests.test_flow import drain, start, tasks_of
 
 
 class RecordingPusher:
     def __init__(self) -> None:
-        self.sent: list[tuple[Notification, int]] = []
+        self.sent: list[tuple[str, int, int]] = []
 
-    async def send(self, notification: Notification, unread: int) -> None:
-        self.sent.append((notification, unread))
+    async def send(self, subscription: PushSubscription, notification: Notification, unread: int) -> None:
+        self.sent.append((subscription.endpoint, notification.id, unread))
+
+
+def _sub(name: str) -> PushSubscription:
+    return PushSubscription(endpoint=f"https://push.example/{name}", p256dh="k", auth="a")
+
+
+def _webpush(container) -> WebPushDelivery:
+    return WebPushDelivery(container.push_subscriptions, container.vapid, "mailto:a@b.c")
+
+
+async def _subscribe(container, *names: str) -> None:
+    for name in names:
+        await container.push_subscriptions.add(f"https://push.example/{name}", "k", "a")
 
 
 async def test_push_carries_the_unread_count_and_system_notifications_open_the_notification_page(
     container, monkeypatch
 ):
-    await container.push_subscriptions.add("https://push.example/a", "k", "a")
     payloads: list[dict] = []
     monkeypatch.setattr(WebPushDelivery, "_push", lambda _self, _sub, data: payloads.append(json.loads(data)))
-    delivery = WebPushDelivery(container.push_subscriptions, container.vapid, "mailto:a@b.c")
 
-    await delivery.send(Notification(id=1, title="t", body="b", session_id=None), unread=3)
+    await _webpush(container).send(
+        _sub("a"), Notification(id=1, title="t", body="b", session_id=None), unread=3
+    )
 
     assert payloads == [{"title": "t", "body": "b", "url": "/notifications", "session_id": None, "badge": 3}]
 
 
+async def test_a_notification_is_one_deliver_task_per_device(container):
+    await _subscribe(container, "phone", "laptop")
+
+    await container.notifications.notify(None, "t", "b", None)
+
+    tasks = await tasks_of(container, TaskKind.DELIVER)
+    assert sorted(t.payload["endpoint"] for t in tasks) == [
+        "https://push.example/laptop",
+        "https://push.example/phone",
+    ]
+
+
+async def test_without_devices_the_notification_is_kept_but_nothing_is_delivered(container):
+    await container.notifications.notify(None, "t", "b", None)
+
+    assert await tasks_of(container, TaskKind.DELIVER) == []
+    assert [n.title for n in await container.notifications.list(10)] == ["t"]
+
+
+async def test_retrying_a_temporarily_failed_device_does_not_push_the_others_again(container, monkeypatch):
+    await _subscribe(container, "busy", "ok")
+    reached: list[str] = []
+    busy_status = {"value": 503}
+
+    def fake_push(_self, sub, _data):  # noqa: ANN001, ANN202
+        name = sub.endpoint.rsplit("/", 1)[1]
+        reached.append(name)
+        return busy_status["value"] if name == "busy" else None
+
+    monkeypatch.setattr(WebPushDelivery, "_push", fake_push)
+    handler = DeliverHandler(container.db, _webpush(container))
+    await container.notifications.notify(None, "t", "b", None)
+    tasks = {t.payload["endpoint"].rsplit("/", 1)[1]: t for t in await tasks_of(container, TaskKind.DELIVER)}
+
+    await handler.execute(tasks["ok"])
+    with pytest.raises(TransientError, match="503"):
+        await handler.execute(tasks["busy"])
+    # 任务队列重试的只是失败的那一台
+    busy_status["value"] = None
+    await handler.execute(tasks["busy"])
+
+    assert sorted(reached) == ["busy", "busy", "ok"]
+
+
 async def test_deliver_counts_the_notification_itself_as_unread(container):
     pusher = RecordingPusher()
+    await _subscribe(container, "a")
     await container.notifications.notify(None, "t", "b", None)
     [note] = await container.notifications.list(10)
-    task = Task(kind=TaskKind.DELIVER, payload={"notification_id": note.id}, session_id=None)
+    [task] = await tasks_of(container, TaskKind.DELIVER)
 
     await DeliverHandler(container.db, pusher).execute(task)
 
-    assert [(n.id, unread) for n, unread in pusher.sent] == [(note.id, 1)]
+    assert pusher.sent == [("https://push.example/a", note.id, 1)]
 
 
 async def test_deliver_does_not_push_a_notification_deleted_with_its_session(container):
     pusher = RecordingPusher()
-    task = Task(kind=TaskKind.DELIVER, payload={"notification_id": 404}, session_id="gone")
+    await _subscribe(container, "a")
+    task = Task(
+        kind=TaskKind.DELIVER,
+        payload={"notification_id": 404, "endpoint": "https://push.example/a"},
+        session_id="gone",
+    )
 
     await DeliverHandler(container.db, pusher).execute(task)
 
     assert pusher.sent == []
+
+
+async def test_deliver_skips_a_device_unsubscribed_after_it_was_queued(container):
+    pusher = RecordingPusher()
+    await _subscribe(container, "a")
+    await container.notifications.notify(None, "t", "b", None)
+    [task] = await tasks_of(container, TaskKind.DELIVER)
+    await container.push_subscriptions.remove("https://push.example/a")
+
+    await DeliverHandler(container.db, pusher).execute(task)
+
+    assert pusher.sent == []
+
+
+async def test_push_statuses_decide_retry_failure_or_removal(container, monkeypatch):
+    await _subscribe(container, "gone", "bad", "busy")
+    statuses = {"gone": 410, "bad": 403, "busy": 503}
+    monkeypatch.setattr(
+        WebPushDelivery, "_push", lambda _self, sub, _data: statuses[sub.endpoint.rsplit("/", 1)[1]]
+    )
+    delivery = _webpush(container)
+    note = Notification(id=1, title="t", body="b", session_id=None)
+
+    # 404/410：订阅失效，删除，投递算完成
+    await delivery.send(_sub("gone"), note, unread=1)
+    # 其他 4xx 多半是本端问题：task 失败可见、不重试，也不删用户的订阅
+    with pytest.raises(RuntimeError, match="403") as rejected:
+        await delivery.send(_sub("bad"), note, unread=1)
+    assert not isinstance(rejected.value, TransientError)
+    with pytest.raises(TransientError, match="503"):
+        await delivery.send(_sub("busy"), note, unread=1)
+
+    assert sorted(s.endpoint.rsplit("/", 1)[1] for s in await container.push_subscriptions.list()) == [
+        "bad",
+        "busy",
+    ]
+
+
+async def test_any_transport_failure_is_retried(container, monkeypatch):
+    def fake_webpush(subscription_info, **_kwargs):  # noqa: ANN001, ANN202
+        raise requests.exceptions.ChunkedEncodingError("connection broken mid-response")
+
+    monkeypatch.setattr(webpush_module, "webpush", fake_webpush)
+
+    with pytest.raises(TransientError):
+        await _webpush(container).send(
+            _sub("a"), Notification(id=1, title="t", body="b", session_id=None), unread=1
+        )
+
+
+async def test_a_local_request_error_is_not_retried_as_transient(container, monkeypatch):
+    """URL、请求头不合法这类本端问题重试也不会好，照常抛出，task 失败可见。"""
+
+    def fake_webpush(subscription_info, **_kwargs):  # noqa: ANN001, ANN202
+        raise requests.exceptions.InvalidHeader("bad header value")
+
+    monkeypatch.setattr(webpush_module, "webpush", fake_webpush)
+    with pytest.raises(requests.exceptions.InvalidHeader):
+        await _webpush(container).send(
+            _sub("a"), Notification(id=1, title="t", body="b", session_id=None), unread=1
+        )
 
 
 async def test_deleting_a_session_deletes_the_notifications_pointing_to_it(container, make_agent):
@@ -62,43 +189,3 @@ async def test_deleting_a_session_deletes_the_notifications_pointing_to_it(conta
     await drain(container)
 
     assert [n.title for n in await container.notifications.list(10)] == ["system"]
-
-
-async def test_any_transport_failure_is_retried_and_does_not_stop_other_devices(container, monkeypatch):
-    import requests
-
-    import muliao.notifications.webpush as webpush_module
-    from muliao.errors import TransientError
-
-    for name in ("broken", "ok"):
-        await container.push_subscriptions.add(f"https://push.example/{name}", "k", "a")
-    reached: list[str] = []
-
-    def fake_webpush(subscription_info, **_kwargs):  # noqa: ANN001, ANN202
-        reached.append(subscription_info["endpoint"])
-        if subscription_info["endpoint"].endswith("broken"):
-            raise requests.exceptions.ChunkedEncodingError("connection broken mid-response")
-
-    monkeypatch.setattr(webpush_module, "webpush", fake_webpush)
-    delivery = WebPushDelivery(container.push_subscriptions, container.vapid, "mailto:a@b.c")
-
-    with pytest.raises(TransientError):
-        await delivery.send(Notification(id=1, title="t", body="b", session_id=None), unread=1)
-    assert len(reached) == 2
-
-
-async def test_a_local_request_error_is_not_retried_as_transient(container, monkeypatch):
-    """URL、请求头不合法这类本端问题重试也不会好；当成暂时性失败会让其他设备把同一条通知收到好几次。"""
-    import requests
-
-    import muliao.notifications.webpush as webpush_module
-
-    await container.push_subscriptions.add("https://push.example/a", "k", "a")
-
-    def fake_webpush(subscription_info, **_kwargs):  # noqa: ANN001, ANN202
-        raise requests.exceptions.InvalidHeader("bad header value")
-
-    monkeypatch.setattr(webpush_module, "webpush", fake_webpush)
-    delivery = WebPushDelivery(container.push_subscriptions, container.vapid, "mailto:a@b.c")
-    with pytest.raises(requests.exceptions.InvalidHeader):
-        await delivery.send(Notification(id=1, title="t", body="b", session_id=None), unread=1)

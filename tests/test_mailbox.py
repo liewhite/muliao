@@ -243,11 +243,11 @@ async def test_only_mail_someone_waits_for_pushes_the_answer(container, make_age
 
     await post(container, session.id, "check")
     await drain(container)
-    assert await tasks_of(container, TaskKind.DELIVER) == []
+    assert await container.notifications.list(100) == []
 
     await post(container, session.id, "job finished", awaited=True)
     await drain(container)
-    assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
+    assert len(await container.notifications.list(100)) == 1
 
 
 async def test_mail_reaches_the_model_in_arrival_order(container, make_agent, models):

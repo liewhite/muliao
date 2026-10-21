@@ -8,8 +8,6 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from sqlalchemy import select
 
 from muliao.errors import Conflict, TransientError
-from muliao.notifications.tables import Notification
-from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.platform.worker import is_transient
@@ -104,34 +102,6 @@ def test_only_transport_level_model_api_errors_are_transient():
     assert is_transient(ModelHTTPError(status_code=529, model_name="m"))
     assert not is_transient(ModelHTTPError(status_code=400, model_name="m"))
     assert is_transient(TransientError("x"))
-
-
-async def test_webpush_isolates_subscriptions(container, monkeypatch):
-    subs = container.push_subscriptions
-    for name in ("gone", "bad", "ok", "busy"):
-        await subs.add(f"https://push.example/{name}", "k", "a")
-    statuses = {"gone": 410, "bad": 403, "ok": None, "busy": 503}
-    sent: list[str] = []
-
-    def fake_push(self, sub, data):
-        name = sub.endpoint.rsplit("/", 1)[1]
-        sent.append(name)
-        return statuses[name]
-
-    monkeypatch.setattr(WebPushDelivery, "_push", fake_push)
-    delivery = WebPushDelivery(subs, container.vapid, "mailto:a@b.c")
-    note = Notification(title="t", body="b", session_id=None)
-
-    # 403 等其他 4xx 多半是本端问题：任务失败可见，但不删用户的订阅
-    with pytest.raises(RuntimeError, match="403"):
-        await delivery.send(note, unread=1)
-
-    assert sorted(sent) == ["bad", "busy", "gone", "ok"]
-    assert sorted(s.endpoint.rsplit("/", 1)[1] for s in await subs.list()) == ["bad", "busy", "ok"]
-
-    statuses["bad"] = None
-    with pytest.raises(TransientError):
-        await delivery.send(note, unread=1)
 
 
 async def test_retried_task_keeps_last_error_while_running(container, make_agent, models):

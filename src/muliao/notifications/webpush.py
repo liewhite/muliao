@@ -87,14 +87,8 @@ class WebPushDelivery:
         self._keys = keys
         self._subject = subject
 
-    async def send(self, notification: Notification, unread: int) -> None:
-        """逐个订阅独立投递：失效订阅删除，暂时性失败汇总后抛出交给任务重试，载荷错误属于本端 bug。"""
-        subs = await self._subs.list()
-        if not subs:
-            log.warning(
-                "no push subscriptions, notification dropped", extra={"session_id": notification.session_id}
-            )
-            return
+    async def send(self, subscription: PushSubscription, notification: Notification, unread: int) -> None:
+        """投递到一个订阅：失效订阅删除，暂时性失败抛 TransientError 交给任务重试（只重推这一台），其余 4xx 属于本端问题。"""
         data = json.dumps(
             {
                 "title": notification.title,
@@ -108,43 +102,25 @@ class WebPushDelivery:
             },
             ensure_ascii=False,
         )
-        transient: list[str] = []
-        rejected: list[int] = []
-        sent = gone = 0
-        for sub in subs:
-            status = await asyncio.to_thread(self._push, sub, data)
-            if status is None:
-                sent += 1
-                continue
-            if status in _GONE:
-                log.info("push subscription gone, removing it", extra={"status": status})
-                await self._subs.remove(sub.endpoint)
-                gone += 1
-            elif status in _TRANSIENT:
-                transient.append(str(status))
-            else:
-                # 其余 4xx（400/401/403/413…）多半是本端问题（VAPID 声明、时钟、载荷），不能删用户的订阅
-                rejected.append(status)
-        log.info(
-            "web push sent",
-            extra={
-                "notification_id": notification.id,
-                "session_id": notification.session_id,
-                "sent": sent,
-                "gone": gone,
-                "failed": len(transient) + len(rejected),
-            },
-        )
-        if rejected:
-            # 本端问题优先：整个 task 失败、不重试（重试也会再次被拒，还会重复推送给已经成功的设备）；暂时失败的也如实列出
-            also = f"; {len(transient)} more failed temporarily: {transient}" if transient else ""
-            raise RuntimeError(
-                f"push service rejected {len(rejected)} subscriptions with HTTP {rejected}{also}"
-            )
-        if transient:
-            raise TransientError(
-                f"push service temporarily failed for {len(transient)} subscriptions: {transient}"
-            )
+        status = await asyncio.to_thread(self._push, subscription, data)
+        # 不记 endpoint：它的完整路径即订阅凭据，只记推送服务的主机
+        host = urlsplit(subscription.endpoint).hostname
+        extra = {
+            "notification_id": notification.id,
+            "session_id": notification.session_id,
+            "push_host": host,
+            "status": status,
+        }
+        if status is None:
+            log.info("web push sent", extra=extra)
+        elif status in _GONE:
+            log.info("push subscription gone, removing it", extra=extra)
+            await self._subs.remove(subscription.endpoint)
+        elif status in _TRANSIENT:
+            raise TransientError(f"push service temporarily failed with HTTP {status} ({host})")
+        else:
+            # 其余 4xx（400/401/403/413…）多半是本端问题（VAPID 声明、时钟、载荷），不能删用户的订阅；task 失败可见、不重试
+            raise RuntimeError(f"push service rejected the subscription with HTTP {status} ({host})")
 
     def _push(self, sub: PushSubscription, data: str) -> int | None:
         """返回失败的 HTTP 状态码；成功返回 None。"""

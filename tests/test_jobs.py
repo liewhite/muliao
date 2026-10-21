@@ -10,13 +10,12 @@ from sqlalchemy import select
 
 from muliao.errors import Conflict
 from muliao.jobs.tables import Job, JobStatus
-from muliao.platform.tables import TaskKind
 from muliao.platform.tooling import Origin
 from muliao.sessions.holds import has_active_in, hold_in
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Mail, MailState
 from tests.scripted import scripted
-from tests.test_flow import deliver, drain, start, tasks_of
+from tests.test_flow import deliver, drain, start
 from tests.test_mailbox import Recorder
 
 
@@ -141,7 +140,7 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
     # 进程自成进程组、可能还活着：如实告诉 agent 怎么核实，不盲杀
     assert "pgrep -g 424242" in event_text
     # 发起它的运行有用户在等：处理中断通知的运行推送
-    assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
+    assert len(await container.notifications.list(100)) == 1
 
 
 async def test_runs_without_a_session_get_no_background_jobs(container):

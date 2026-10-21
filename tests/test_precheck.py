@@ -110,7 +110,7 @@ async def test_failing_precheck_is_recorded_alerts_once_and_keeps_the_trigger_en
         and "exited with 3: no token" in failed.precheck_error
     )
     assert await tasks_of(container, TaskKind.RUN) == []
-    assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
+    assert len(await container.notifications.list(100)) == 1
     # 告警留在通知页里：检查恢复、precheck_error 清除之后仍然看得到
     [alert] = await container.notifications.list(10)
     assert "watch" in alert.title and "no token" in alert.body and alert.session_id is None
@@ -208,7 +208,7 @@ async def test_a_change_too_large_to_hand_over_is_recorded_and_alerted(container
 
     failed = await container.triggers.get_by_name("watch")
     assert failed.precheck_error is not None and "event limit" in failed.precheck_error
-    assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
+    assert len(await container.notifications.list(100)) == 1
     assert await tasks_of(container, TaskKind.RUN) == []
 
 
@@ -227,7 +227,7 @@ async def test_enabling_an_enabled_trigger_keeps_its_error_and_does_not_alert_ag
     await container.triggers.update(trigger.id, enabled=True)
     assert (await container.triggers.get_by_name("watch")).precheck_error is not None
     await _tick(container, trigger.id)
-    assert len(await tasks_of(container, TaskKind.DELIVER)) == 1
+    assert len(await container.notifications.list(100)) == 1
 
 
 async def test_changing_the_precheck_clears_the_old_commands_error(container, make_agent):
@@ -238,4 +238,4 @@ async def test_changing_the_precheck_clears_the_old_commands_error(container, ma
     await container.triggers.update(trigger.id, precheck=Precheck(command="exit 5"))
     assert (await container.triggers.get_by_name("watch")).precheck_error is None
     await _tick(container, trigger.id)
-    assert len(await tasks_of(container, TaskKind.DELIVER)) == 2
+    assert len(await container.notifications.list(100)) == 2

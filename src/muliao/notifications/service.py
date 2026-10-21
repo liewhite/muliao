@@ -1,8 +1,8 @@
 """通知：发给用户的一条消息（标题、正文、指向的会话、是否未读）。通知页与应用角标的未读数是它的展示；投递
 （Web Push）是 delivery 的事，deliver task 只引用通知，内容只存在 notifications 表。
 
-Notifications 是这个领域的唯一服务：写下通知并排一个 deliver task（notify、定向命令 Notify、订阅 RunEnded），通知页
-与未读数，随会话已读（订阅 SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在同一条 lane 上
+Notifications 是这个领域的唯一服务：写下通知并给每个推送订阅（设备）各排一个 deliver task（notify、定向命令 Notify、
+订阅 RunEnded），通知页与未读数，随会话已读（订阅 SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在同一条 lane 上
 （session_events_lane）。
 """
 
@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.notifications.events import Notify
-from muliao.notifications.tables import Notification
+from muliao.notifications.tables import Notification, PushSubscription
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import TaskKind
@@ -41,16 +41,24 @@ class Notifications:
         self._queue = queue
 
     async def enqueue_in(self, s: AsyncSession, agent_id: str | None, notification: Notification) -> None:
+        """写下通知，每个设备一个 deliver task：一台设备暂时失败只重试它自己，已经送达的设备不会再收到一次。"""
         s.add(notification)
         await s.flush()
-        self._queue.enqueue(
-            s,
-            kind=TaskKind.DELIVER,
-            lane=deliver_lane(notification.session_id, agent_id),
-            agent_id=agent_id,
-            session_id=notification.session_id,
-            payload={"notification_id": notification.id},
-        )
+        endpoints = (await s.scalars(select(PushSubscription.endpoint))).all()
+        if not endpoints:
+            log.warning(
+                "no push subscriptions, notification not pushed",
+                extra={"notification_id": notification.id, "session_id": notification.session_id},
+            )
+        for endpoint in endpoints:
+            self._queue.enqueue(
+                s,
+                kind=TaskKind.DELIVER,
+                lane=deliver_lane(notification.session_id, agent_id),
+                agent_id=agent_id,
+                session_id=notification.session_id,
+                payload={"notification_id": notification.id, "endpoint": endpoint},
+            )
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended, lane=session_events_lane)

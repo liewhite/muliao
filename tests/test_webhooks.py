@@ -2,10 +2,9 @@
 
 import httpx
 
-from muliao.platform.tables import TaskKind
 from muliao.platform.tooling import Origin
 from tests.conftest import login
-from tests.test_flow import drain, last_user_prompt, tasks_of
+from tests.test_flow import drain, last_user_prompt
 
 
 async def _create(client: httpx.AsyncClient, agent_id: str, name: str = "github") -> tuple[dict, str]:
@@ -47,7 +46,7 @@ async def test_each_event_starts_a_new_session_with_payload_in_prompt(client, co
     prompt = last_user_prompt(await container.sessions.history(first.json()["session_id"]))
     assert prompt == 'Triage this GitHub event.\n\n<event>\n{"action": "opened"}\n</event>'
     # 事件触发的一轮不自动推送
-    assert await tasks_of(container, TaskKind.DELIVER) == []
+    assert await container.notifications.list(100) == []
     listed = (await client.get("/api/triggers")).json()
     assert listed[0]["last_session_id"] == second.json()["session_id"]
 
