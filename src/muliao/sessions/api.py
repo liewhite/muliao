@@ -15,7 +15,7 @@ from muliao.sessions.holds import registered_in as hold_registered_in
 from muliao.sessions.inbound import Inbound, NewSession, SessionKey, receive_command_in
 from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
 from muliao.sessions.kinds import KindPolicy, SessionKind, policy_of
-from muliao.sessions.live import RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
+from muliao.sessions.live import LiveRun, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.service import default_title
@@ -28,6 +28,7 @@ __all__ = [
     "KindPolicy",
     "SessionKind",
     "policy_of",
+    "LiveRun",
     "RunDeltaEvent",
     "RunEvent",
     "RunItemEvent",

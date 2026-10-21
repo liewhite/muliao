@@ -12,6 +12,7 @@ from muliao.sessions.api import (
     CallResult,
     Inbound,
     Item,
+    LiveRun,
     NewSession,
     QuestionAnswer,
     RunEvent,
@@ -21,7 +22,7 @@ from muliao.sessions.api import (
     default_title,
     policy_of,
 )
-from muliao.sessions.tables import Mail, MailKind, MailState, Session
+from muliao.sessions.tables import Compaction, Mail, MailKind, MailState, Session
 
 router = APIRouter()
 
@@ -136,10 +137,18 @@ class CompactionOut(BaseModel):
     summary: str
     created_at: datetime
 
+    @classmethod
+    def of(cls, x: Compaction) -> "CompactionOut":
+        return cls(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
+
 
 class LiveRunOut(BaseModel):
     run_id: str
     events: list[RunEvent]
+
+    @classmethod
+    def of(cls, run: LiveRun) -> "LiveRunOut":
+        return cls(run_id=run.run_id, events=run.events)
 
 
 class SessionDetail(BaseModel):
@@ -212,14 +221,11 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
     return SessionDetail(
         session=SessionOut.of(view.session),
         items=view.items,
-        compactions=[
-            CompactionOut(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
-            for x in view.compactions
-        ],
+        compactions=[CompactionOut.of(x) for x in view.compactions],
         mail=await mail_outs(c, view.mail),
         run=None if view.run is None else TaskOut.of(view.run),
         threads=[SessionOut.of(t) for t in view.threads],
-        live=None if view.live is None else LiveRunOut(run_id=view.live.run_id, events=view.live.events),
+        live=None if view.live is None else LiveRunOut.of(view.live),
     )
 
 

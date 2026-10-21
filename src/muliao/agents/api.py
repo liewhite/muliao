@@ -23,7 +23,7 @@ from muliao.agents.service import (
     agent_names_in,
 )
 from muliao.agents.skills import SkillMeta, SkillStore
-from muliao.agents.tool_catalog import REFLECTION_GROUPS
+from muliao.agents.tool_catalog import REFLECTION_GROUPS, ToolGroupInfo
 
 __all__ = [
     "USER",
@@ -40,6 +40,7 @@ __all__ = [
     "Scope",
     "SkillMeta",
     "SkillStore",
+    "ToolGroupInfo",
     "active_agent_in",
     "agent_in",
     "agent_names_in",

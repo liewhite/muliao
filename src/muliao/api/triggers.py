@@ -14,6 +14,7 @@ from muliao.triggers.api import (
     Precheck,
     ScheduleConfig,
     ScheduleStatus,
+    TriggerKind,
     WebhookConfig,
     WebhookStatus,
 )
@@ -29,6 +30,10 @@ TriggerKindName = Literal["schedule", "once", "webhook"]
 class TriggerKindOut(BaseModel):
     name: TriggerKindName
     description: str
+
+    @classmethod
+    def of(cls, k: TriggerKind) -> "TriggerKindOut":
+        return cls(name=k.name, description=k.description)
 
 
 class TriggerCreate(BaseModel):
@@ -122,7 +127,7 @@ def _out(c: C, t: Trigger) -> TriggerOut:
 
 @router.get("/trigger-kinds")
 async def trigger_kinds(c: C) -> list[TriggerKindOut]:
-    return [TriggerKindOut(name=k.name, description=k.description) for k in c.triggers.kinds.values()]
+    return [TriggerKindOut.of(k) for k in c.triggers.kinds.values()]
 
 
 @router.get("/triggers")

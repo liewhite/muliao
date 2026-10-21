@@ -3,9 +3,10 @@ from datetime import datetime
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from muliao.agents.api import USER, AgentInfo, AgentPatch, AgentSpec
+from muliao.agents.api import USER, AgentInfo, AgentPatch, AgentSpec, SkillMeta, ToolGroupInfo
 from muliao.api.deps import C
 from muliao.reflection.api import list_reflections_of
+from muliao.reflection.tables import Reflection
 
 router = APIRouter()
 
@@ -77,6 +78,10 @@ class ToolGroupOut(BaseModel):
     # 新建 agent 时默认开启
     default: bool
 
+    @classmethod
+    def of(cls, g: ToolGroupInfo) -> "ToolGroupOut":
+        return cls(name=g.name, label=g.label, default=g.default)
+
 
 class AgentDefaultsOut(BaseModel):
     model: str
@@ -94,7 +99,7 @@ async def agent_defaults(c: C) -> AgentDefaultsOut:
     return AgentDefaultsOut(
         model=d.model,
         reflect_every=d.reflect_every,
-        groups=[ToolGroupOut(name=g.name, label=g.label, default=g.default) for g in d.groups],
+        groups=[ToolGroupOut.of(g) for g in d.groups],
         default_tool_groups=d.tool_groups,
     )
 
@@ -181,26 +186,31 @@ class ReflectionOut(BaseModel):
     output: str
     created_at: datetime
 
-
-@router.get("/agents/{agent_id}/reflections")
-async def list_reflections(c: C, agent_id: str, limit: int = Query(50, ge=1, le=200)) -> list[ReflectionOut]:
-    await c.agents.get(agent_id)
-    return [
-        ReflectionOut(
+    @classmethod
+    def of(cls, r: Reflection) -> "ReflectionOut":
+        return cls(
             id=r.id,
             from_message_id=r.from_message_id,
             to_message_id=r.to_message_id,
             output=r.output,
             created_at=r.created_at,
         )
-        for r in await list_reflections_of(c.db, agent_id, limit)
-    ]
+
+
+@router.get("/agents/{agent_id}/reflections")
+async def list_reflections(c: C, agent_id: str, limit: int = Query(50, ge=1, le=200)) -> list[ReflectionOut]:
+    await c.agents.get(agent_id)
+    return [ReflectionOut.of(r) for r in await list_reflections_of(c.db, agent_id, limit)]
 
 
 class SkillOut(BaseModel):
     name: str
     description: str
     owner: str | None
+
+    @classmethod
+    def of(cls, m: SkillMeta) -> "SkillOut":
+        return cls(name=m.name, description=m.description, owner=m.owner)
 
 
 class SkillDetail(SkillOut):
@@ -224,7 +234,7 @@ async def _check_owner(c: C, owner: str | None) -> None:
 async def list_skills(c: C, owner: str | None = None) -> list[SkillOut]:
     """owner 为空列出公共 skill，否则列出该 agent 的私有 skill。"""
     await _check_owner(c, owner)
-    return [SkillOut(name=s.name, description=s.description, owner=s.owner) for s in c.skills.list(owner)]
+    return [SkillOut.of(s) for s in c.skills.list(owner)]
 
 
 @router.get("/skill")
@@ -238,7 +248,7 @@ async def get_skill(c: C, name: str, owner: str | None = None) -> SkillDetail:
 async def put_skill(c: C, body: SkillIn) -> SkillOut:
     await _check_owner(c, body.owner)
     meta = await c.skills.write(body.owner, body.name, body.description, body.body, USER)
-    return SkillOut(name=meta.name, description=meta.description, owner=meta.owner)
+    return SkillOut.of(meta)
 
 
 @router.delete("/skill", status_code=204)

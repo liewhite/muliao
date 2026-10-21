@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from muliao.agent_runtime.api import McpServer, McpTransport, mcp_config
 from muliao.agents.api import USER
 from muliao.api.deps import C
+from muliao.vault.api import SecretInfo
 
 router = APIRouter()
 
@@ -121,18 +122,19 @@ class SecretOut(BaseModel):
     # 在列表所取的 owner 视角下，这个公共 secret 被同名私有 secret 遮蔽
     shadowed: bool
 
+    @classmethod
+    def of(cls, s: SecretInfo, shadowed: bool) -> "SecretOut":
+        return cls(
+            owner=s.owner, key=s.key, description=s.description, updated_at=s.updated_at, shadowed=shadowed
+        )
+
 
 @router.get("/vault")
 async def list_secrets(c: C, owner: str | None = None) -> list[SecretOut]:
     """owner 视角下的 secret（不含值）：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 secret。"""
     if owner is not None:
         await c.agents.get_active(owner)
-    return [
-        SecretOut(
-            owner=s.owner, key=s.key, description=s.description, updated_at=s.updated_at, shadowed=shadowed
-        )
-        for s, shadowed in await c.vault.view(owner)
-    ]
+    return [SecretOut.of(s, shadowed) for s, shadowed in await c.vault.view(owner)]
 
 
 @router.put("/vault/{key}", status_code=204)
