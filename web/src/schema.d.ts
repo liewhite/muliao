@@ -776,6 +776,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/features": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Features
+         * @description 服务端配置决定的可选能力，界面据此显示或隐藏对应入口。
+         */
+        get: operations["features_api_features_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/transcriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe
+         * @description 请求体是一段语音（webm、ogg、mp4、wav、mp3……），返回转写出的文字；转写服务出错时 502 并带上原因。
+         */
+        post: operations["transcribe_api_transcriptions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/me": {
         parameters: {
             query?: never;
@@ -986,6 +1026,11 @@ export interface components {
         EnabledIn: {
             /** Enabled */
             enabled: boolean;
+        };
+        /** FeaturesOut */
+        FeaturesOut: {
+            /** Transcription */
+            transcription: boolean;
         };
         /** FileOut */
         FileOut: {
@@ -1633,6 +1678,11 @@ export interface components {
             full_access: boolean;
             /** Default */
             default: boolean;
+        };
+        /** TranscriptOut */
+        TranscriptOut: {
+            /** Text */
+            text: string;
         };
         /** TriggerCreate */
         TriggerCreate: {
@@ -3413,6 +3463,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    features_api_features_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeaturesOut"];
+                };
+            };
+        };
+    };
+    transcribe_api_transcriptions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscriptOut"];
                 };
             };
         };

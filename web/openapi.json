@@ -2231,6 +2231,44 @@
         }
       }
     },
+    "/api/features": {
+      "get": {
+        "summary": "Features",
+        "description": "服务端配置决定的可选能力，界面据此显示或隐藏对应入口。",
+        "operationId": "features_api_features_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturesOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/transcriptions": {
+      "post": {
+        "summary": "Transcribe",
+        "description": "请求体是一段语音（webm、ogg、mp4、wav、mp3……），返回转写出的文字；转写服务出错时 502 并带上原因。",
+        "operationId": "transcribe_api_transcriptions_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/me": {
       "get": {
         "summary": "Me",
@@ -2729,6 +2767,19 @@
           "enabled"
         ],
         "title": "EnabledIn"
+      },
+      "FeaturesOut": {
+        "properties": {
+          "transcription": {
+            "type": "boolean",
+            "title": "Transcription"
+          }
+        },
+        "type": "object",
+        "required": [
+          "transcription"
+        ],
+        "title": "FeaturesOut"
       },
       "FileOut": {
         "properties": {
@@ -4363,6 +4414,19 @@
         ],
         "title": "ToolGroupOut",
         "description": "一个可选的工具组（tool_catalog）。"
+      },
+      "TranscriptOut": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "TranscriptOut"
       },
       "TriggerCreate": {
         "properties": {

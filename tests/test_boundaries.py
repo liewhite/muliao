@@ -20,6 +20,7 @@ DOMAINS = {
     "reflection",
     "sessions",
     "triggers",
+    "speech",
     "usage",
     "vault",
 }

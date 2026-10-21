@@ -68,6 +68,7 @@ from muliao.sessions.settlement import reconcile_failures
 from muliao.sessions.steps import Steps
 from muliao.sessions.threads import Threads
 from muliao.sessions.work import SessionWork, handle_work_commands
+from muliao.speech.api import Transcriber, build_transcriber
 from muliao.triggers.due import DueRunner
 from muliao.triggers.once import OnceDue, OnceKind
 from muliao.triggers.precheck import PrecheckRunner
@@ -117,6 +118,8 @@ class Container:
     models: ModelRegistry
     files: FileStore
     usage: UsageLog
+    # 语音转文字；没配置 [transcription] 时为 None，界面不显示语音输入
+    transcriber: Transcriber | None
     # 默认就是 models.check，单独持有只为测试替换
     _model_checker: Callable[[str], None]
 
@@ -206,14 +209,17 @@ def build_container(
     resolve_model: ModelResolver | None = None,
     model_checker: Callable[[str], None] | None = None,
     web: WebProvider | None = None,
+    transcriber: Transcriber | None = None,
     check_writes: WriteCheck | None = None,
 ) -> Container:
-    """resolve_model / model_checker / web 仅供测试替换；默认由配置中的 LLM providers 与 [web] 构造。check_writes 是
+    """resolve_model / model_checker / web / transcriber 仅供测试替换；默认由配置中的 LLM providers、[web] 与 [transcription] 构造。check_writes 是
     测试打开的开发期断言（schema.single_domain_writes）。"""
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     models = ModelRegistry(settings.llm)
     if web is None and settings.web is not None:
         web = build_web_provider(settings.web)
+    if transcriber is None and settings.transcription is not None:
+        transcriber = build_transcriber(settings.transcription)
     # 「配置了哪些可选能力」只在这里判断一次，工具组名称、注册表与临时 agent 的工具都由它导出
     web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
     groups = tool_catalog.available(web_configured=bool(web_tools))
@@ -435,5 +441,6 @@ def build_container(
         models=models,
         files=files,
         usage=usage,
+        transcriber=transcriber,
         _model_checker=model_checker or models.check,
     )

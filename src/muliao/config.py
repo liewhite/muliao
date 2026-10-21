@@ -101,6 +101,24 @@ class WebConfig(_Section):
     base_url: str | None = None
 
 
+TranscriptionType = Literal["openai"]
+
+
+class TranscriptionConfig(_Section):
+    """语音转文字（muliao.speech）：界面录下的语音先转成文字，再作为消息发给 agent。不配置时界面没有语音输入。
+
+    type 是调用协议：openai = OpenAI Chat Completions 的音频输入（input_audio，流式返回），
+    也适用于兼容它的服务，如阿里云百炼的 Qwen-Omni（compatible-mode）。"""
+
+    type: TranscriptionType
+    base_url: str
+    api_key: SecretStr = Field(min_length=1)
+    # 能听懂音频的对话模型，如 qwen3.8-omni-flash
+    model: str = Field(min_length=1)
+    # 一段语音的字节上限：音频以 base64 内联在请求里，服务端对请求体有上限（百炼为 10 MB 左右）
+    max_bytes: int = Field(default=7 * 1024 * 1024, ge=1)
+
+
 class RuntimeConfig(_Section):
     worker_concurrency: int = Field(default=4, ge=1)
     task_max_attempts: int = Field(default=5, ge=1)
@@ -149,6 +167,7 @@ class Settings(_Section):
     push: PushConfig
     llm: LlmConfig
     web: WebConfig | None = None
+    transcription: TranscriptionConfig | None = None
     runtime: RuntimeConfig = RuntimeConfig()
 
     @property

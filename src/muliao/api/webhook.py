@@ -3,8 +3,8 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from muliao.api.deps import C
-from muliao.errors import InvalidInput, TooLarge, Unauthorized
+from muliao.api.deps import C, read_limited
+from muliao.errors import InvalidInput, Unauthorized
 from muliao.triggers.api import EVENT_MAX_BYTES, PrecheckFailed
 
 # 不需要登录：外部系统调用
@@ -23,19 +23,6 @@ class TokenOut(BaseModel):
     token: str
 
 
-async def _read_limited(request: Request, limit: int) -> bytes:
-    """按字节上限读取请求体：声明的长度超限直接拒绝，未声明长度的分块读取，超限即停。"""
-    declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit() and int(declared) > limit:
-        raise TooLarge(f"request body exceeds {limit} bytes")
-    body = bytearray()
-    async for chunk in request.stream():
-        body += chunk
-        if len(body) > limit:
-            raise TooLarge(f"request body exceeds {limit} bytes")
-    return bytes(body)
-
-
 @public_router.post("/api/hooks/{name}", status_code=202)
 async def hook(c: C, name: str, request: Request, session_id: str | None = None) -> HookOut:
     """外部事件入口：Authorization: Bearer <token>。不带 session_id 时新建会话；带上之前返回的则在该会话里继续。"""
@@ -44,7 +31,7 @@ async def hook(c: C, name: str, request: Request, session_id: str | None = None)
         raise Unauthorized("missing bearer token")
     # 先鉴权再读请求体：未鉴权的调用方不能让进程读入任何内容
     trigger_id = await c.webhooks.authenticate(name, token)
-    payload = await _read_limited(request, EVENT_MAX_BYTES)
+    payload = await read_limited(request, EVENT_MAX_BYTES)
     try:
         text = payload.decode()
     except UnicodeDecodeError as e:
