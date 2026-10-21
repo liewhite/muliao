@@ -1,4 +1,7 @@
-"""单用户认证：密码登录后下发 HMAC 签名 cookie。"""
+"""单用户认证：密码登录后下发 HMAC 签名 cookie。
+
+签名 key 由配置的 secret_key 与密码的摘要一起派生：改了密码（改配置、重启），之前签发的 cookie 全部失效，不需要
+服务端的会话表。登出只删浏览器里的 cookie。"""
 
 import hashlib
 import hmac
@@ -13,8 +16,8 @@ _VERSION = "v1"
 
 class Auth:
     def __init__(self, secret_key: str, password: str):
-        self._key = secret_key.encode()
         self._password = password.encode()
+        self._key = hmac.new(secret_key.encode(), hashlib.sha256(self._password).digest(), hashlib.sha256).digest()
 
     def _sign(self, payload: str) -> str:
         return hmac.new(self._key, payload.encode(), hashlib.sha256).hexdigest()

@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.memory import MemoryStore
-from muliao.agents.naming import normalize_agent_name
+from muliao.agents.naming import new_agent_name, normalize_agent_name
 from muliao.agents.prompts import PromptStore
 from muliao.agents.resources import ResourceRepo
 from muliao.agents.tables import Agent
@@ -192,7 +192,7 @@ class AgentService:
 
     async def create(self, spec: AgentSpec, *, author: str) -> AgentInfo:
         """author：创建者，"user" 或创建它的 agent 的 id（记在指令的第一版上）。"""
-        name = normalize_agent_name(spec.name)
+        name = new_agent_name(spec.name)
         model = self.defaults.model if spec.model is None else spec.model
         reflect_every = self.defaults.reflect_every if spec.reflect_every is None else spec.reflect_every
         tool_groups = list(self.defaults.tool_groups) if spec.tool_groups is None else spec.tool_groups
@@ -253,7 +253,7 @@ class AgentService:
     def _validated(self, agent: Agent, patch: AgentPatch) -> _AgentFields:
         """patch 合并到 agent 当前值之后的字段，校验过（不合法时报 InvalidInput）。"""
         fields = _AgentFields(
-            name=agent.name if patch.name is None else normalize_agent_name(patch.name),
+            name=agent.name if patch.name is None else new_agent_name(patch.name),
             description=agent.description if patch.description is None else patch.description,
             model=agent.model if patch.model is None else patch.model,
             reflect_every=agent.reflect_every if patch.reflect_every is None else patch.reflect_every,

@@ -93,6 +93,23 @@ def test_auth_token_expires_and_rejects_tampering():
     assert not auth.verify(token.replace("v1.1000", "v1.2000"), now=1001)
 
 
+def test_changing_the_password_revokes_issued_cookies():
+    token = Auth("secret", "old").issue(now=1000)
+    assert Auth("secret", "old").verify(token, now=1001)
+    assert not Auth("secret", "new").verify(token, now=1001)
+    assert not Auth("other", "old").verify(token, now=1001)
+
+
+async def test_agent_cannot_be_named_user(client):
+    # 模型按名称指派 issue 时 `user` 指用户：同名的 agent 会分不出来
+    await login(client)
+    assert (await client.post("/api/agents", json={"name": "user", "description": "x"})).status_code == 422
+    agent = (await client.post("/api/agents", json={"name": "a1", "description": "x"})).json()
+    resp = await client.put(f"/api/agents/{agent['id']}", json={**agent, "name": " user "})
+    assert resp.status_code == 422
+    assert "reserved" in resp.json()["detail"]
+
+
 async def test_agent_identified_by_id_and_renamable(client, container):
     await login(client)
     agent = (await client.post("/api/agents", json={"name": "研究助理", "description": "查资料"})).json()

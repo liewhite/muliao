@@ -3,11 +3,12 @@
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from muliao.agents.api import USER
 from muliao.issues.tables import ActivityKind, IssueStatus
 from muliao.sessions.api import WorkState
 
-# 指派人的取值：agent id，或这个常量表示用户；None 为未指派。agent id 是 12 位十六进制，不会与它相同
-USER = "user"
+# 指派人的取值：agent id，或 USER（agents.api，全系统指代用户的那个值）；None 为未指派。agent id 是 12 位十六进制，
+# 不会与它相同；agent 名称也不能取它（agents.naming.new_agent_name），工具里按名称指派时不会混淆
 
 # 「该有人动手」的状态：处于这两个状态、指派给 agent 的 issue，动态投给它
 ACTIVE = frozenset({IssueStatus.TODO, IssueStatus.IN_PROGRESS})
