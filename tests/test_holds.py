@@ -8,9 +8,10 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.errors import InvalidInput
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.sessions.holds import hold_in
 from muliao.sessions.kinds import SessionKind
+from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 from muliao.sessions.work import Delivered, deliver_in
 from tests.scripted import scripted
@@ -86,7 +87,7 @@ async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_
 
 async def _event_count(container) -> int:
     async with container.db.transaction() as s:
-        return len((await s.scalars(select(Task).where(Task.kind == TaskKind.EVENT))).all())
+        return len((await s.scalars(select(Task).where(Task.kind == EVENT_TASK))).all())
 
 
 async def _mail_count(container) -> int:
@@ -151,7 +152,7 @@ async def test_a_final_failure_settles_delegations_handled_by_an_earlier_run(con
     [middle] = await threads_of(container, parent.id)
     async with container.db.transaction() as s:
         runs = (
-            await s.scalars(select(Task).where(Task.kind == TaskKind.RUN, Task.session_id == middle.id))
+            await s.scalars(select(Task).where(Task.kind == RUN_TASK, Task.session_id == middle.id))
         ).all()
     assert [t.status for t in runs][-1] == "failed"
     # 发起方拿到失败作为 ask_agent 的结果，继续往下走
@@ -242,7 +243,7 @@ async def test_a_run_stopped_right_after_it_was_claimed_does_not_execute(contain
     agent = (await make_agent("alpha", model="m")).id
     models.models["m"] = scripted(lambda m, i: called.append(True) or ModelResponse(parts=[TextPart("x")]))
     session = await start(container, agent, "go")
-    run = await container.queue.claim([TaskKind.RUN])
+    run = await container.queue.claim([RUN_TASK])
     assert run is not None
 
     # 领取之后、登记可停止的运行之前停止：停止直接执行停止事务
@@ -378,7 +379,7 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
     from tests.test_flow import deliver
 
     await deliver(container)
-    run = await container.queue.claim([TaskKind.RUN])
+    run = await container.queue.claim([RUN_TASK])
     assert run is not None and run.session_id == child.id
 
     async def no_hook(_s, _task):  # noqa: ANN202  模拟 failed_in 没做成：worker 不带钩子记下失败
@@ -428,7 +429,7 @@ async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_fail
             )
 
     child = await dispatch("first")
-    run = await container.queue.claim([TaskKind.RUN])
+    run = await container.queue.claim([RUN_TASK])
     assert run is not None and run.session_id == child.id
 
     async def no_hook(_s, _task):  # noqa: ANN202

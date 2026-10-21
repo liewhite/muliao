@@ -2015,7 +2015,8 @@ export interface components {
             type: "task";
             /** Task Id */
             task_id: number;
-            kind: components["schemas"]["TaskKind"];
+            /** Kind */
+            kind: string;
             status: components["schemas"]["TaskStatus"];
             /** Session Id */
             session_id: string | null;
@@ -2024,16 +2025,12 @@ export interface components {
             /** Error */
             error: string | null;
         };
-        /**
-         * TaskKind
-         * @enum {string}
-         */
-        TaskKind: "run" | "reflection" | "deliver" | "compaction" | "event";
         /** TaskOut */
         TaskOut: {
             /** Id */
             id: number;
-            kind: components["schemas"]["TaskKind"];
+            /** Kind */
+            kind: string;
             /** Agent Id */
             agent_id: string | null;
             /** Session Id */

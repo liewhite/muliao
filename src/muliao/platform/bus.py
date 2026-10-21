@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from muliao.platform.tables import TaskKind, TaskStatus
+from muliao.platform.tables import TaskStatus
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class TaskEvent(BaseModel):
 
     type: Literal["task"] = "task"
     task_id: int
-    kind: TaskKind
+    kind: str
     status: TaskStatus
     session_id: str | None
     # 系统通知的投递没有所属 agent

@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from muliao.errors import TransientError
 from muliao.platform.messaging import Command, Delivery, DomainEvent, Messaging
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tasks import no_commit
 from muliao.platform.worker import Worker
 from tests.test_flow import idle
@@ -24,7 +24,7 @@ class DoIt(Command):
 
 
 async def run_worker(container, messaging: Messaging) -> None:
-    worker = Worker(container.queue, {TaskKind.EVENT: messaging}, container.bus, concurrency=4)
+    worker = Worker(container.queue, {EVENT_TASK: messaging}, container.bus, concurrency=4)
     async with anyio.create_task_group() as group:
         group.start_soon(worker.run_forever)
         await idle(container)
@@ -33,9 +33,7 @@ async def run_worker(container, messaging: Messaging) -> None:
 
 async def deliveries(container) -> list[Task]:
     async with container.db.transaction() as s:
-        return list(
-            (await s.scalars(select(Task).where(Task.kind == TaskKind.EVENT).order_by(Task.id))).all()
-        )
+        return list((await s.scalars(select(Task).where(Task.kind == EVENT_TASK).order_by(Task.id))).all())
 
 
 async def test_each_subscriber_handles_a_committed_event_once_with_the_same_id(container):
@@ -147,7 +145,7 @@ async def test_a_delivery_this_version_cannot_read_fails_at_once_and_can_be_retr
         messaging.publish_in(s, Happened(n=1))
         messaging.publish_in(s, Happened(n=2))
     async with container.db.transaction() as s:
-        first = await s.scalar(select(Task).where(Task.kind == TaskKind.EVENT).order_by(Task.id).limit(1))
+        first = await s.scalar(select(Task).where(Task.kind == EVENT_TASK).order_by(Task.id).limit(1))
         first.payload = {**first.payload, "data": {"n": "not a number"}}
     await run_worker(container, messaging)
 
@@ -168,7 +166,7 @@ async def test_a_delivery_this_version_cannot_read_fails_at_once_and_can_be_retr
 
 
 def _now_worker(container, messaging: Messaging) -> Worker:
-    return Worker(container.queue, {TaskKind.EVENT: messaging}, container.bus, concurrency=1)
+    return Worker(container.queue, {EVENT_TASK: messaging}, container.bus, concurrency=1)
 
 
 async def test_run_now_executes_a_committed_command_at_once(container):
@@ -212,7 +210,7 @@ async def test_run_now_does_nothing_for_a_task_the_worker_already_claimed(contai
     messaging.handle(DoIt, "do", lambda _c, _d: pytest.fail("executed twice"))
     async with container.db.transaction() as s:
         task = messaging.send_in(s, DoIt(what="x"))
-    assert await container.queue.claim([TaskKind.EVENT]) is not None
+    assert await container.queue.claim([EVENT_TASK]) is not None
 
     await _now_worker(container, messaging).run_now(task.id)
 

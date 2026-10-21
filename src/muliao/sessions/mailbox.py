@@ -24,11 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import CorruptState, NotFound
 from muliao.platform.db import Database
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.history import since_last_response
 from muliao.sessions.holds import called_in, get_in
-from muliao.sessions.lanes import session_lane
+from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.sessions.pending import waiting
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
 
@@ -118,7 +118,7 @@ async def wake_in(
     if not queued:
         return None
     lane = session_lane(session.id)
-    runs = select(Task).where(Task.lane == lane, Task.kind == TaskKind.RUN)
+    runs = select(Task).where(Task.lane == lane, Task.kind == RUN_TASK)
     busy = runs.where(Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
     if finished is not None:
         busy = busy.where(Task.id != finished)
@@ -135,7 +135,7 @@ async def wake_in(
         return None
     run = queue.enqueue(
         s,
-        kind=TaskKind.RUN,
+        kind=RUN_TASK,
         lane=lane,
         agent_id=session.agent_id,
         session_id=session.id,
@@ -174,9 +174,7 @@ async def latest_runs_among(s: AsyncSession, session_ids: Collection[str]) -> di
     """这些会话各自最近一次运行（一次查询）；还没有运行的会话不在结果里。"""
     lanes = {session_lane(x): x for x in session_ids}
     latest = (
-        select(func.max(Task.id))
-        .where(Task.lane.in_(list(lanes)), Task.kind == TaskKind.RUN)
-        .group_by(Task.lane)
+        select(func.max(Task.id)).where(Task.lane.in_(list(lanes)), Task.kind == RUN_TASK).group_by(Task.lane)
     )
     return {lanes[t.lane]: t for t in (await s.scalars(select(Task).where(Task.id.in_(latest)))).all()}
 
@@ -191,7 +189,7 @@ class RunPayload(BaseModel):
 
     @classmethod
     def of(cls, run: Task) -> RunPayload:
-        if run.kind != TaskKind.RUN:
+        if run.kind != RUN_TASK:
             raise RuntimeError(f"task {run.id} is a {run.kind}, not a run")
         try:
             return cls.model_validate(run.payload)

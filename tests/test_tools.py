@@ -293,7 +293,8 @@ async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
 ):
     from pydantic_ai.exceptions import ModelHTTPError
 
-    from muliao.platform.tables import TaskKind, TaskStatus
+    from muliao.platform.tables import TaskStatus
+    from muliao.sessions.lanes import RUN_TASK
     from tests.test_flow import tasks_of
 
     me = await make_agent("manager", model="tools")
@@ -305,7 +306,7 @@ async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
     await run_tools(container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})])
 
     assert list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240
-    [turn] = await tasks_of(container, TaskKind.RUN)
+    [turn] = await tasks_of(container, RUN_TASK)
     assert turn.status == TaskStatus.FAILED and "400" in turn.error
 
 

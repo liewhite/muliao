@@ -416,7 +416,8 @@ async def test_an_mcp_server_with_a_missing_secret_is_skipped_and_the_model_is_t
     container, make_agent, models, caplog
 ):
     """一个 server 引用的 secret 不在了：这次运行没有它的工具，别的 server 照常可用，模型从运行上下文得知原因。"""
-    from muliao.platform.tables import TaskKind, TaskStatus
+    from muliao.platform.tables import TaskStatus
+    from muliao.sessions.lanes import RUN_TASK
     from tests.test_flow import tasks_of
 
     alpha = (await make_agent("alpha", model="m")).id
@@ -434,7 +435,7 @@ async def test_an_mcp_server_with_a_missing_secret_is_skipped_and_the_model_is_t
     await start(container, alpha, "token?")
     await drain(container)
 
-    [run] = await tasks_of(container, TaskKind.RUN)
+    [run] = await tasks_of(container, RUN_TASK)
     assert run.status == TaskStatus.DONE
     assert "good_echo" in tools and not any(t.startswith("echo_") for t in tools)
     assert "MCP server 'echo'" in requests[0] and "MISSING" in requests[0]
@@ -600,7 +601,8 @@ async def test_an_unreachable_mcp_server_is_skipped_and_keeps_its_secrets_out_of
     import logging
 
     from muliao.logging_setup import quiet_http_clients
-    from muliao.platform.tables import TaskKind, TaskStatus
+    from muliao.platform.tables import TaskStatus
+    from muliao.sessions.lanes import RUN_TASK
     from tests.test_flow import tasks_of
 
     # 与服务一样：INFO 级别，HTTP 客户端的逐请求日志关掉（它们带完整 URL）
@@ -621,7 +623,7 @@ async def test_an_unreachable_mcp_server_is_skipped_and_keeps_its_secrets_out_of
     await drain(container, limit_seconds=30)
 
     # 连不上的 server 只是这次没有它的工具，运行照常完成；告诉模型的原因与日志都已脱敏
-    [run] = await tasks_of(container, TaskKind.RUN)
+    [run] = await tasks_of(container, RUN_TASK)
     assert run.status == TaskStatus.DONE and not any(t.startswith("remote_") for t in tools)
     assert "MCP server 'remote' failed" in requests[0] and "[secret:MCP_TOKEN]" in requests[0]
     assert "tok-in-url-123" not in requests[0]

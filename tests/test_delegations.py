@@ -8,12 +8,13 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.errors import Conflict
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.kinds import SessionKind
+from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, SessionHold
 from tests.scripted import scripted
-from tests.test_flow import deliver, drain, history_of, start, tasks_of
+from tests.test_flow import ALL_TASK_KINDS, deliver, drain, history_of, start, tasks_of
 from tests.test_mailbox import Recorder
 from tests.test_threads import call, echo, threads_of
 
@@ -75,7 +76,7 @@ async def test_a_thread_that_fails_for_good_reports_its_failure(container, make_
     await drain(container)
 
     [child] = await threads_of(container, parent.id)
-    child_turn = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == child.id][-1]
+    child_turn = [t for t in await tasks_of(container, RUN_TASK) if t.session_id == child.id][-1]
     assert child_turn.status == TaskStatus.FAILED
     reports = [c for p in recorder.prompts for c in p if f'source="thread:{child.id}"' in c]
     assert len(reports) == 1 and "failed" in reports[0] and "review" in reports[0]
@@ -202,7 +203,7 @@ async def test_a_failing_settle_hook_still_records_the_failure_instead_of_leavin
     session = await start(container, agent, "go")
     await drain(container)
 
-    [turn] = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == session.id]
+    [turn] = [t for t in await tasks_of(container, RUN_TASK) if t.session_id == session.id]
     assert turn.status == TaskStatus.FAILED and "bad request" in (turn.error or "")
 
 
@@ -219,12 +220,10 @@ def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
 
     child = Session(id="c", agent_id="a", title="t", thread="review")
     agent = Agent(id="a", name="reviewer")
-    queued = Task(id=1, kind=TaskKind.RUN, status=TaskStatus.PENDING, attempts=0)
-    retrying = Task(id=2, kind=TaskKind.RUN, status=TaskStatus.PENDING, attempts=2)
-    done = Task(id=3, kind=TaskKind.RUN, status=TaskStatus.DONE, attempts=1)
-    running = Task(
-        id=4, kind=TaskKind.RUN, status=TaskStatus.RUNNING, attempts=1, started_at=datetime.now(UTC)
-    )
+    queued = Task(id=1, kind=RUN_TASK, status=TaskStatus.PENDING, attempts=0)
+    retrying = Task(id=2, kind=RUN_TASK, status=TaskStatus.PENDING, attempts=2)
+    done = Task(id=3, kind=RUN_TASK, status=TaskStatus.DONE, attempts=1)
+    running = Task(id=4, kind=RUN_TASK, status=TaskStatus.RUNNING, attempts=1, started_at=datetime.now(UTC))
     now = datetime.now(UTC)
     # 排队中的 thread 也能停：停止清空它的信箱，并交回「被停止」
     assert "stop_thread('review')" in check_text(child, agent, WorkState.RUNNING, queued, now)
@@ -254,10 +253,10 @@ async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_h
         async def failed_in(self, s, task):  # noqa: ANN001, ANN202
             """不会被调到。"""
 
-    worker = Worker(container.queue, {TaskKind.RUN: Handler()}, container.bus, concurrency=1)
+    worker = Worker(container.queue, {RUN_TASK: Handler()}, container.bus, concurrency=1)
     monkeypatch.setattr(container.queue, "fail", fake_fail)
 
-    await worker._record_failure(Task(id=1, kind=TaskKind.RUN), RuntimeError("boom"), {})  # noqa: SLF001
+    await worker._record_failure(Task(id=1, kind=RUN_TASK), RuntimeError("boom"), {})  # noqa: SLF001
     # 只尝试一次：没有因为记账失败就去掉钩子重来
     assert calls["n"] == 1
 
@@ -308,7 +307,7 @@ async def test_stopping_the_parent_stops_its_reported_threads_and_they_do_not_re
         await asyncio.gather(worker, return_exceptions=True)
 
     [child] = await threads_of(container, parent.id)
-    [child_run] = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == child.id]
+    [child_run] = [t for t in await tasks_of(container, RUN_TASK) if t.session_id == child.id]
     assert child_run.status == TaskStatus.DONE
     history = await history_of(container, child.id)
     assert history[-1].metadata and history[-1].metadata.get("muliao_stopped")
@@ -494,7 +493,7 @@ async def test_a_user_message_while_waiting_on_an_agent_continues_and_the_answer
     parent, seen = await _asking(container, make_agent, models, FunctionModel(stream_function=slow))
 
     async def parent_runs_done(n: int) -> bool:
-        runs = [r for r in await tasks_of(container, TaskKind.RUN) if r.session_id == parent.id]
+        runs = [r for r in await tasks_of(container, RUN_TASK) if r.session_id == parent.id]
         return len(runs) >= n and all(r.status == TaskStatus.DONE for r in runs)
 
     worker = asyncio.create_task(container.worker.run_forever())
@@ -591,7 +590,7 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
 async def test_no_check_ins_while_the_delegator_waits_on_the_ask(container, make_agent, models):
     parent, _seen = await _asking(container, make_agent, models, scripted(Recorder()))
     # 只跑发问方那次运行：它停在 ask_agent 上，子 thread 的运行还排着
-    run = await container.queue.claim(list(TaskKind))
+    run = await container.queue.claim(ALL_TASK_KINDS)
     assert run is not None and run.session_id == parent.id
     await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
     # 检查信件要等回答一起才交给模型，这时不发
@@ -626,7 +625,7 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
 
     monkeypatch.setattr(ThreadsClass, "dispatch", flaky)
     await drain(container)
-    [failed] = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == parent.id]
+    [failed] = [t for t in await tasks_of(container, RUN_TASK) if t.session_id == parent.id]
     assert failed.status == TaskStatus.FAILED
 
     await container.queue.retry(failed.id)
@@ -644,7 +643,7 @@ async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, mak
     from muliao.agent_runtime.conventions import STOPPED_TOOL_RESULT
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
-    run = await container.queue.claim(list(TaskKind))
+    run = await container.queue.claim(ALL_TASK_KINDS)
     assert run is not None and run.session_id == parent.id
     await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
 
@@ -935,6 +934,6 @@ async def test_stopping_the_asker_stops_its_threads_level_by_level(container, ma
         thread_events = (await s.scalars(select(Mail).where(Mail.source.like("thread:%")))).all()
     assert {h.status for h in holds} == {HoldStatus.CLEARED}
     assert queued == [] and thread_events == []
-    runs = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id in (first.id, second.id)]
+    runs = [t for t in await tasks_of(container, RUN_TASK) if t.session_id in (first.id, second.id)]
     assert runs and all(t.status == TaskStatus.DONE for t in runs)
     assert await _failed_tasks(container) == []

@@ -14,12 +14,12 @@ from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
 from muliao.agent_runtime.conventions import run_context_index
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS, select_steps, steps_of
 from muliao.sessions.history import CONTINUATION
-from muliao.sessions.lanes import session_lane
+from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, session_lane
 from muliao.sessions.tables import Compaction, Message
 from tests.scripted import scripted
 from tests.test_flow import drain, history_of, last_user_prompt, reply, start
@@ -45,7 +45,7 @@ async def _enqueue_compaction(container, session) -> None:
     async with container.db.transaction() as s:
         container.queue.enqueue(
             s,
-            kind=TaskKind.COMPACTION,
+            kind=COMPACTION_TASK,
             lane=session_lane(session.id),
             agent_id=session.agent_id,
             session_id=session.id,
@@ -143,7 +143,7 @@ async def test_compaction_with_nothing_beyond_kept_steps_is_a_noop(container, ma
     assert recorder.compactions == []
     async with container.db.transaction() as s:
         assert await s.scalar(select(Compaction)) is None
-        task = await s.scalar(select(Task).where(Task.kind == TaskKind.COMPACTION))
+        task = await s.scalar(select(Task).where(Task.kind == COMPACTION_TASK))
     assert task.status == TaskStatus.DONE
 
 
@@ -223,13 +223,13 @@ async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make
     assert "SUMMARY" in (instructions or "")
     # 工具只执行一次，运行只有一次
     assert container.memory.read(alpha) == "- once\n"
-    runs = [t for t in await _tasks(container, TaskKind.RUN)]
+    runs = [t for t in await _tasks(container, RUN_TASK)]
     assert [r.status for r in runs] == [TaskStatus.DONE]
     history = await history_of(container, session.id)
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "done"
 
 
-async def _tasks(container, kind: TaskKind) -> list[Task]:
+async def _tasks(container, kind: str) -> list[Task]:
     async with container.db.transaction() as s:
         return list((await s.scalars(select(Task).where(Task.kind == kind))).all())
 

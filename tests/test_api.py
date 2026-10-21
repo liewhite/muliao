@@ -244,7 +244,8 @@ async def test_opening_a_session_marks_it_and_its_notifications_read(client, con
 
 
 async def test_session_list_pins_running_sessions_and_marks_them(client, container, make_agent):
-    from muliao.platform.tables import Task, TaskKind, TaskStatus
+    from muliao.platform.tables import Task, TaskStatus
+    from muliao.sessions.lanes import RUN_TASK
     from tests.test_flow import drain, start
 
     agent = await make_agent("alpha")
@@ -260,7 +261,7 @@ async def test_session_list_pins_running_sessions_and_marks_them(client, contain
     async with container.db.transaction() as s:
         s.add(
             Task(
-                kind=TaskKind.RUN,
+                kind=RUN_TASK,
                 lane=f"session:{older.id}",
                 agent_id=agent.id,
                 session_id=older.id,
@@ -270,7 +271,7 @@ async def test_session_list_pins_running_sessions_and_marks_them(client, contain
         )
         s.add(
             Task(
-                kind=TaskKind.RUN,
+                kind=RUN_TASK,
                 lane=f"session:{newer.id}",
                 agent_id=agent.id,
                 session_id=newer.id,

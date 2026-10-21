@@ -122,14 +122,15 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 
 `tasks` 表是持久化的任务队列，也是 actor 调度器：每个 task 带 `lane`，同一 lane 内严格 FIFO（更早的排队任务、或进行中的任务挡住后面的）、同一时刻最多一个 running；不同 lane 并发。平台只提供 lane 的机制，lane 名由用它的领域定义：会话领域的都在 `sessions/lanes.py`（会话 actor 的邮箱 `session:<id>`，运行、压缩都在这条 lane 上串行执行；`Receive` 与会话之外的工作各自的 lane），反思的 `reflection:<agent id>` 在反思领域，deliver 的 `deliver:<会话>:<设备>`（系统通知按 agent，没有 agent 的是 `deliver:system:<设备>`；设备是 endpoint 的摘要，lane 会进日志而 endpoint 是订阅凭据）在通知领域。别的领域不拼这些名字，要问会话忙不忙用会话领域的 `SessionActivity`。
 
+- **任务种类**：`tasks.kind` 是不透明的字符串，由各领域定义（会话的 `run`、`compaction` 在 `sessions/lanes.py`，反思的 `reflection`、通知的 `deliver` 在各自的 service），在组合根为它登记处理器；平台只有自己的 `event`（`platform.tables.EVENT_TASK`），不枚举领域的种类。
 - **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。处理器分两段：`execute` 做事（可以开自己的事务、调用别的领域的命令），返回的 `Commit` 与「task 记为完成」在同一个事务里提交（`TaskQueue.complete`）。task 不设总时限：一次运行跑多久由 agent 自己判断，卡住的单个调用由各自的时限兜底（`run_shell` 的 timeout、MCP 工具调用的读超时、web 工具与推送的请求时限、模型 HTTP 请求每次读的空闲时限等；持续慢速输出的流不受后者约束），会话轮次与临时 agent 整体靠用户停止。反思运行没有停止入口：失控时只能重启，并等它耗尽 `task_max_attempts`（反思只开放改资源的短工具，这种情况罕见）。
 - **失败**：契约内的失败（第 5 节）按指数退避重试，上限 `task_max_attempts`；最终失败时处理器的 `failed_in` 在记下失败的同一事务里收尾（如把失败交回等着的会话）。「任务」页可查并可手动重试（沿用原 id，所以仍按原顺序；重试把尝试次数清零）。进程崩溃后启动时把 `running` 复位为 `pending`（`Worker._recover`），尝试次数已经用完的除外：任务自己会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去、还一直占住它的 lane，这时按最终失败记账（同一个上限，收尾钩子照常执行，失败照常可见）。
-- **保留**（`platform/retention.py`）：启动时与之后每天一次，删掉 7 天前已完成（done）的 `event`、`deliver` 任务，它们完成后没有别的数据引用；failed 一律保留供排查与重试。`run` 不删：`mail.consumed_by` 指向它且 ON DELETE CASCADE，删了会连带删掉它处理过的信件与幂等键；`reflection`、`compaction` 量小，留着。
+- **保留**（`platform/retention.py`）：启动时与之后每天一次，删掉 7 天前已完成（done）的 `event`、`deliver` 任务（这两种由组合根交给它），它们完成后没有别的数据引用；failed 一律保留供排查与重试。`run` 不删：`mail.consumed_by` 指向它且 ON DELETE CASCADE，删了会连带删掉它处理过的信件与幂等键；`reflection`、`compaction` 量小，留着。
 - **马上执行**（`Worker.run_now`）：发送方提交了一条定向命令或一个事件之后希望它马上生效时，在调用方的任务里经同一个执行边界执行这一条投递（只用于短小的 `event` 投递，不占 worker 的槽位）；此刻不可领取（lane 被挡住、已被领取）就交给 worker。调用方随时可能被取消（请求断开、调用它的运行被停止），被取消时在屏蔽作用域里把还在 running 的它放回 pending 再照常抛出——投递的写入与完成同一事务，重做是安全的。
 
 ### 3.3 事件：以投递任务作为 outbox
 
-**发布一个事件 = 在发布方的本地事务里，为每个订阅者插入一条投递任务**（`TaskKind.EVENT`，payload 是事件类型、事件 id、接收方与数据；`Messaging.publish_in`）。状态变化与「一定会通知到订阅者」在同一个事务里。订阅者在组合根注册（事件类型 → 接收方名、处理器、lane）。处理器返回的 `Commit` 只写**自己领域**的表，与投递完成在同一个事务里提交，所以对自己领域是恰好一次。语义成立的前提：
+**发布一个事件 = 在发布方的本地事务里，为每个订阅者插入一条投递任务**（种类 `event`，payload 是事件类型、事件 id、接收方与数据；`Messaging.publish_in`）。状态变化与「一定会通知到订阅者」在同一个事务里。订阅者在组合根注册（事件类型 → 接收方名、处理器、lane）。处理器返回的 `Commit` 只写**自己领域**的表，与投递完成在同一个事务里提交，所以对自己领域是恰好一次。语义成立的前提：
 
 1. 一个订阅者领域的状态只由它的投递 lane 写（单写者），否则「`execute` 里读、`Commit` 里写」是先查后写的竞态。
 2. `Commit` 里不调用别的领域的命令。

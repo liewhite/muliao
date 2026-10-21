@@ -20,7 +20,7 @@ from sqlalchemy.orm import aliased
 
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class TaskQueue:
         self,
         s: AsyncSession,
         *,
-        kind: TaskKind,
+        kind: str,
         lane: str,
         agent_id: str | None,
         session_id: str | None,
@@ -99,11 +99,11 @@ class TaskQueue:
         self._wake_after_commit(s)
         return task
 
-    async def claim(self, kinds: Collection[TaskKind]) -> Task | None:
+    async def claim(self, kinds: Collection[str]) -> Task | None:
         """领取一个可以执行的 task，只在调用方能处理的这些种类里找。"""
         return await self._claim(_claimable().where(Task.kind.in_(list(kinds))).order_by(Task.id).limit(1))
 
-    async def claim_task(self, task_id: int, kinds: Collection[TaskKind]) -> Task | None:
+    async def claim_task(self, task_id: int, kinds: Collection[str]) -> Task | None:
         """现在就领取这一个 task（Worker.run_now）；它此刻不可领取（已被领取、同 lane 有更早或进行中的、还没到时间、
         不是这些种类）时为 None，留给 worker。"""
         return await self._claim(_claimable().where(Task.id == task_id, Task.kind.in_(list(kinds))))
@@ -163,7 +163,7 @@ class TaskQueue:
         self.wake.set()
         return task
 
-    async def finish_pending_in(self, s: AsyncSession, lane: str, kind: TaskKind) -> list[Task]:
+    async def finish_pending_in(self, s: AsyncSession, lane: str, kind: str) -> list[Task]:
         """在调用方事务里把这个 lane 上排队（含等重试）的这种 task 记为完成，不再执行（用户停止会话）。"""
         tasks = list(
             (
@@ -201,7 +201,7 @@ class TaskQueue:
                 raise NotFound(f"task {task_id} not found")
             if task.status != TaskStatus.FAILED:
                 raise InvalidInput(f"only failed tasks can be retried, task {task_id} is {task.status}")
-            if task.kind != TaskKind.EVENT and await self.lane_busy(s, task.lane):
+            if task.kind != EVENT_TASK and await self.lane_busy(s, task.lane):
                 raise Conflict(
                     f"lane {task.lane} still has unfinished tasks; retry task {task_id} after they finish"
                 )
@@ -212,7 +212,7 @@ class TaskQueue:
             self._wake_after_commit(s)
             return task
 
-    async def prune_done(self, kinds: Collection[TaskKind], *, finished_before: datetime) -> int:
+    async def prune_done(self, kinds: Collection[str], *, finished_before: datetime) -> int:
         """删掉这些种类里在 finished_before 之前就已完成（done）的 task，返回删除的条数（保留策略，platform.retention）。"""
         async with self._db.transaction() as s:
             result = await s.execute(
@@ -224,7 +224,7 @@ class TaskQueue:
             )
             return result.rowcount
 
-    async def next_due(self, kinds: Collection[TaskKind]) -> datetime | None:
+    async def next_due(self, kinds: Collection[str]) -> datetime | None:
         """最早一个「可领取、只是还没到时间」的 task 的时间；被同 lane 挡住的 task 由 complete/fail 唤醒。"""
         claimable = _claimable().where(Task.kind.in_(list(kinds))).subquery()
         async with self._db.transaction() as s:

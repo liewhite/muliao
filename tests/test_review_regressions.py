@@ -8,12 +8,14 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from sqlalchemy import select
 
 from muliao.errors import Conflict, TransientError
-from muliao.platform.tables import TaskKind, TaskStatus
+from muliao.notifications.service import DELIVER_TASK
+from muliao.platform.tables import TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.platform.worker import is_transient
+from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Message
 from muliao.sessions.transcript import to_items
-from tests.test_flow import call_then_answer, drain, history_of, start
+from tests.test_flow import ALL_TASK_KINDS, call_then_answer, drain, history_of, start
 
 
 async def test_message_ids_never_reused_after_deleting_latest_session(container, make_agent):
@@ -37,18 +39,18 @@ async def test_next_due_ignores_tasks_blocked_by_running_lane(container, make_ag
     async with container.db.transaction() as s:
         for _ in range(2):
             container.queue.enqueue(
-                s, kind=TaskKind.DELIVER, lane="x", agent_id=alpha, session_id=None, payload={}
+                s, kind=DELIVER_TASK, lane="x", agent_id=alpha, session_id=None, payload={}
             )
-    await container.queue.claim(list(TaskKind))
+    await container.queue.claim(ALL_TASK_KINDS)
 
     # 第二个 task 被同 lane 的 running 挡住，不应让 worker 以为马上有活可干
-    assert await container.queue.next_due(list(TaskKind)) is None
+    assert await container.queue.next_due(ALL_TASK_KINDS) is None
 
 
 async def test_deleting_session_or_agent_with_running_task_is_rejected(container, make_agent):
     alpha = (await make_agent()).id
     session = await start(container, alpha, "hi")
-    await container.queue.claim(list(TaskKind))
+    await container.queue.claim(ALL_TASK_KINDS)
 
     with pytest.raises(Conflict):
         await container.sessions.delete(session.id)
@@ -120,7 +122,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
 
     models.models["m"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("ok")]))
     await container.queue.retry(turn.id)
-    claimed = await container.queue.claim(list(TaskKind))
+    claimed = await container.queue.claim(ALL_TASK_KINDS)
     assert claimed.error is not None  # 运行期间仍能看到上次为什么失败
 
 
@@ -182,14 +184,14 @@ async def test_retrying_a_failed_run_after_the_session_was_stopped_ends_quietly(
     models.models["m"] = scripted(fail)
     session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
-    [failed] = await tasks_of(container, TaskKind.RUN)
+    [failed] = await tasks_of(container, RUN_TASK)
     assert failed.status == TaskStatus.FAILED
 
     await container.consumer.stop_session(session.id)
     await container.queue.retry(failed.id)
     await drain(container)
 
-    [run] = await tasks_of(container, TaskKind.RUN)
+    [run] = await tasks_of(container, RUN_TASK)
     assert run.status == TaskStatus.DONE
     assert calls["n"] == 1
     history = await history_of(container, session.id)
@@ -207,12 +209,12 @@ async def test_mail_taken_at_a_runs_start_counts_as_handed_to_it(container, make
     session = await start(container, alpha, "one", origin=Origin.TRIGGER)
     # 运行还在排队：这封信不另外唤醒，由它开头一起取走
     later = await reply(container, session.id, "two")
-    [run] = await tasks_of(container, TaskKind.RUN)
+    [run] = await tasks_of(container, RUN_TASK)
     assert RunPayload.of(run).through_mail_id < later.id
 
     await drain(container)
 
-    [run] = await tasks_of(container, TaskKind.RUN)
+    [run] = await tasks_of(container, RUN_TASK)
     assert RunPayload.of(run).through_mail_id == later.id
     assert {m.consumed_by for m in await mail_of(container)} == {run.id}
 

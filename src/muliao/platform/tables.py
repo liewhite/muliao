@@ -1,4 +1,4 @@
-"""平台的表：任务队列（tasks），以及别的领域引用 agent 与会话时用的不透明 id 列类型。"""
+"""平台的表：任务队列（tasks，种类由各领域定义），以及别的领域引用 agent 与会话时用的不透明 id 列类型。"""
 
 from datetime import datetime
 from enum import StrEnum
@@ -9,14 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from muliao.platform.db import Base, StrEnumType, UTCDateTime, utcnow
 
-
-class TaskKind(StrEnum):
-    RUN = "run"
-    REFLECTION = "reflection"
-    DELIVER = "deliver"
-    COMPACTION = "compaction"
-    # 领域事件或定向命令的一次投递（platform.messaging）
-    EVENT = "event"
+# 任务种类是不透明的字符串：各领域定义自己的种类（如会话的运行、通知的推送），在组合根为它登记处理器（Worker 的
+# handlers），平台不枚举它们。平台自己只有一种：领域事件或定向命令的一次投递（platform.messaging）
+EVENT_TASK = "event"
 
 
 class TaskStatus(StrEnum):
@@ -40,7 +35,7 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    kind: Mapped[TaskKind] = mapped_column(StrEnumType(TaskKind))
+    kind: Mapped[str] = mapped_column(String(16))
     # 同一 lane 内 FIFO 串行；见 docs/architecture.md「任务队列即 actor 调度」
     lane: Mapped[str] = mapped_column(String(100))
     # 系统通知（如推送测试）不属于任何 agent

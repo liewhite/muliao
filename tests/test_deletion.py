@@ -10,10 +10,11 @@ import muliao.agents.service
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.tables import Job, JobStatus
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tooling import Origin
+from muliao.reflection.service import REFLECTION_TASK
 from muliao.sessions.inbound import Inbound, NewSession
-from muliao.sessions.lanes import session_lane
+from muliao.sessions.lanes import RUN_TASK, session_lane
 from tests.test_flow import deliver, drain, start
 from tests.test_jobs import start_job, wait_until_done
 
@@ -27,9 +28,7 @@ async def _lanes_of(container, *receivers: str) -> set[str]:
     """这些接收方排队中的投递所在的 lane（每个接收方都必须有一条）。"""
     async with container.db.transaction() as s:
         pending = (
-            await s.scalars(
-                select(Task).where(Task.kind == TaskKind.EVENT, Task.status == TaskStatus.PENDING)
-            )
+            await s.scalars(select(Task).where(Task.kind == EVENT_TASK, Task.status == TaskStatus.PENDING))
         ).all()
     mine = [t for t in pending if t.payload["receiver"] in receivers]
     assert {t.payload["receiver"] for t in mine} == set(receivers)
@@ -160,7 +159,7 @@ async def test_an_agent_with_a_queued_reflection_is_not_deleted(container, make_
     async with container.db.transaction() as s:
         container.queue.enqueue(
             s,
-            kind=TaskKind.REFLECTION,
+            kind=REFLECTION_TASK,
             lane=reflection_lane(agent.id),
             agent_id=agent.id,
             session_id=None,
@@ -194,7 +193,7 @@ async def test_a_run_rerun_after_the_mark_is_stopped_and_the_agent_deleted(conta
     async with container.db.transaction() as s:
         rerun = container.queue.enqueue(
             s,
-            kind=TaskKind.RUN,
+            kind=RUN_TASK,
             lane=session_lane(session.id),
             agent_id=agent.id,
             session_id=session.id,
@@ -257,7 +256,9 @@ async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, mo
     await deliver(container)
     async with container.db.transaction() as s:
         [hold] = (await s.scalars(select(SessionHold).where(SessionHold.session_id == session.id))).all()
-        mail = (await s.scalars(select(Mail).where(Mail.session_id == session.id, Mail.source.is_not(None)))).all()
+        mail = (
+            await s.scalars(select(Mail).where(Mail.session_id == session.id, Mail.source.is_not(None)))
+        ).all()
     assert hold.status == HoldStatus.CLEARED and mail == []
     await drain(container)
     await wait_until_done(container, job.id)
@@ -301,7 +302,7 @@ async def test_deleting_an_agent_before_its_run_ended_is_delivered_schedules_no_
 
     async with container.db.transaction() as s:
         assert await s.get(ReflectionCheckpoint, agent.id) is None
-        assert (await s.scalars(select(Task).where(Task.kind == TaskKind.REFLECTION))).all() == []
+        assert (await s.scalars(select(Task).where(Task.kind == REFLECTION_TASK))).all() == []
     assert await _failed_tasks(container) == []
 
 
@@ -405,7 +406,7 @@ async def test_deleting_an_agent_whose_run_is_executing_stops_it_and_completes(
 
     async with container.db.transaction() as s:
         assert await s.get(Agent, agent.id) is None
-        retried = (await s.scalars(select(Task).where(Task.kind == TaskKind.EVENT, Task.attempts > 1))).all()
+        retried = (await s.scalars(select(Task).where(Task.kind == EVENT_TASK, Task.attempts > 1))).all()
     assert retried == []
     with pytest.raises(NotFound):
         await container.sessions.get(session.id)

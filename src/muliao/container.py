@@ -44,7 +44,7 @@ from muliao.issues.tools import issues_toolset
 from muliao.jobs.runner import JobRunner
 from muliao.jobs.tools import session_workspace_toolset
 from muliao.notifications.delivery import DeliverHandler
-from muliao.notifications.service import Notifications
+from muliao.notifications.service import DELIVER_TASK, Notifications
 from muliao.notifications.tools import notify_toolset
 from muliao.notifications.webpush import PushSubscriptions, VapidKeys, WebPushDelivery
 from muliao.platform.bus import EventBus
@@ -52,11 +52,11 @@ from muliao.platform.checks import WorkWatcher
 from muliao.platform.db import Database, WriteCheck, create_engine, migrate
 from muliao.platform.messaging import Messaging
 from muliao.platform.retention import TaskRetention
-from muliao.platform.tables import TaskKind
+from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import RunScope
 from muliao.platform.worker import TaskHandler, Worker
-from muliao.reflection.service import ReflectionHandler, ReflectionScheduler
+from muliao.reflection.service import REFLECTION_TASK, ReflectionHandler, ReflectionScheduler
 from muliao.sessions.agent_history import AgentHistory
 from muliao.sessions.api import SessionActivity
 from muliao.sessions.ask_user import ask_user_toolset
@@ -68,6 +68,7 @@ from muliao.sessions.delegation_tools import delegation_toolset
 from muliao.sessions.deletion import AgentSessionsCleanup
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt
+from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import MailReconciler
 from muliao.sessions.service import SessionService
@@ -419,12 +420,13 @@ def build_container(
         SessionHalt(db, queue, messaging),
         compactor,
     )
-    handlers: dict[TaskKind, TaskHandler] = {
-        TaskKind.EVENT: messaging,
-        TaskKind.RUN: RunHandler(consumer, queue),
-        TaskKind.COMPACTION: CompactionHandler(db, compactor),
-        TaskKind.REFLECTION: ReflectionHandler(db, runtime, tool_groups, agents, agent_history),
-        TaskKind.DELIVER: DeliverHandler(db, pusher),
+    # 各领域的任务种类在这里登记处理器
+    handlers: dict[str, TaskHandler] = {
+        EVENT_TASK: messaging,
+        RUN_TASK: RunHandler(consumer, queue),
+        COMPACTION_TASK: CompactionHandler(db, compactor),
+        REFLECTION_TASK: ReflectionHandler(db, runtime, tool_groups, agents, agent_history),
+        DELIVER_TASK: DeliverHandler(db, pusher),
     }
     worker = Worker(
         queue,
@@ -461,7 +463,8 @@ def build_container(
         jobs=jobs,
         thread_checks=thread_checks,
         work=WorkWatcher([jobs, thread_checks], settings.runtime.job_check_seconds),
-        retention=TaskRetention(queue),
+        # 只清理投递类的任务（docs/architecture.md 3.2「保留」）
+        retention=TaskRetention(queue, prunable=(EVENT_TASK, DELIVER_TASK)),
         compactor=compactor,
         reflection=reflection,
         consumer=consumer,

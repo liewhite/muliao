@@ -1,5 +1,5 @@
 """领域事件与定向命令（docs/architecture.md 3.3、3.4）。两者都是 outbox：在发送方的本地事务里为接收方插入一条投递
-任务（TaskKind.EVENT），状态变化与「一定会送达」原子地提交；worker 执行投递，失败按队列规则重试，最终失败在「任务」页
+任务（EVENT_TASK），状态变化与「一定会送达」原子地提交；worker 执行投递，失败按队列规则重试，最终失败在「任务」页
 可见。
 
 - 事件（publish_in）：发送方不知道谁在订阅。每个订阅者一条投递任务，默认每个订阅者一条 lane（按发布顺序逐条处理）。
@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import CorruptState
 from muliao.platform.ids import new_id
-from muliao.platform.tables import Task, TaskKind
+from muliao.platform.tables import EVENT_TASK, Task
 from muliao.platform.tasks import Commit, TaskQueue
 
 log = logging.getLogger(__name__)
@@ -146,7 +146,7 @@ class Messaging:
     def _enqueue(self, s: AsyncSession, receiver: _Receiver, message: Message, message_id: str) -> Task:
         return self._queue.enqueue(
             s,
-            kind=TaskKind.EVENT,
+            kind=EVENT_TASK,
             lane=receiver.lane(message),
             agent_id=None,
             session_id=None,

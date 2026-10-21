@@ -10,10 +10,9 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
-from muliao.platform.tables import TaskKind
 from muliao.platform.tooling import Origin
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS
-from muliao.sessions.lanes import session_lane
+from muliao.sessions.lanes import COMPACTION_TASK, session_lane
 from muliao.usage.api import RunKind, UsageEntry, UsageGroup
 from muliao.usage.tables import ModelUsage
 from tests.conftest import login
@@ -72,7 +71,7 @@ async def test_compaction_is_billed_to_the_session_it_compacts(container, make_a
     async with container.db.transaction() as s:
         container.queue.enqueue(
             s,
-            kind=TaskKind.COMPACTION,
+            kind=COMPACTION_TASK,
             lane=session_lane(session.id),
             agent_id=alpha.id,
             session_id=session.id,

@@ -18,13 +18,16 @@ from muliao.agents.events import AgentDeleting
 from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tables import Task, TaskKind
+from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
 from muliao.sessions.api import AgentHistory
 from muliao.sessions.events import RunEnded
 
 log = logging.getLogger(__name__)
+
+# 反思的任务种类（组合根为它登记 ReflectionHandler）
+REFLECTION_TASK = "reflection"
 
 _ITEM_CHARS = 2000
 _TRANSCRIPT_CHARS = 120_000
@@ -90,7 +93,7 @@ class ReflectionScheduler:
         """删除 agent 的流程：排队的反思不再执行，反思记录与检查点删除（正在执行的那次由 agent 领域等它结束）。"""
 
         async def commit(s: AsyncSession) -> None:
-            await self._queue.finish_pending_in(s, reflection_lane(event.agent_id), TaskKind.REFLECTION)
+            await self._queue.finish_pending_in(s, reflection_lane(event.agent_id), REFLECTION_TASK)
             await s.execute(delete(Reflection).where(Reflection.agent_id == event.agent_id))
             await s.execute(
                 delete(ReflectionCheckpoint).where(ReflectionCheckpoint.agent_id == event.agent_id)
@@ -129,7 +132,7 @@ class ReflectionScheduler:
                 )
             self._queue.enqueue(
                 s,
-                kind=TaskKind.REFLECTION,
+                kind=REFLECTION_TASK,
                 lane=reflection_lane(event.agent_id),
                 agent_id=event.agent_id,
                 session_id=None,

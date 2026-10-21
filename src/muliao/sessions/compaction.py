@@ -24,11 +24,11 @@ from muliao.agent_runtime.api import AgentRuntime, calls_in, results_in
 from muliao.agents.api import AgentInfo, active_agent_in, agent_in
 from muliao.errors import NotFound
 from muliao.platform.db import Database
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.history import latest_compaction, rows_after
-from muliao.sessions.lanes import session_lane
+from muliao.sessions.lanes import COMPACTION_TASK, session_lane
 from muliao.sessions.tables import Compaction, Message, Session
 from muliao.sessions.transcript import to_items, to_text
 
@@ -207,14 +207,14 @@ class Compactor:
         lane = session_lane(session.id)
         pending = await s.scalar(
             select(Task.id)
-            .where(Task.lane == lane, Task.kind == TaskKind.COMPACTION, Task.status == TaskStatus.PENDING)
+            .where(Task.lane == lane, Task.kind == COMPACTION_TASK, Task.status == TaskStatus.PENDING)
             .limit(1)
         )
         if pending is not None:
             return False
         self._queue.enqueue(
             s,
-            kind=TaskKind.COMPACTION,
+            kind=COMPACTION_TASK,
             lane=lane,
             agent_id=session.agent_id,
             session_id=session.id,

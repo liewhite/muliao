@@ -5621,7 +5621,8 @@
             "title": "Task Id"
           },
           "kind": {
-            "$ref": "#/components/schemas/TaskKind"
+            "type": "string",
+            "title": "Kind"
           },
           "status": {
             "$ref": "#/components/schemas/TaskStatus"
@@ -5672,17 +5673,6 @@
         "title": "TaskEvent",
         "description": "一个 task 的状态变化（前端据此从数据库重新拉取），由 worker 发出。"
       },
-      "TaskKind": {
-        "type": "string",
-        "enum": [
-          "run",
-          "reflection",
-          "deliver",
-          "compaction",
-          "event"
-        ],
-        "title": "TaskKind"
-      },
       "TaskOut": {
         "properties": {
           "id": {
@@ -5690,7 +5680,8 @@
             "title": "Id"
           },
           "kind": {
-            "$ref": "#/components/schemas/TaskKind"
+            "type": "string",
+            "title": "Kind"
           },
           "agent_id": {
             "anyOf": [

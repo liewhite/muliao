@@ -1,6 +1,10 @@
 """会话领域自己命名的 lane（docs/architecture.md「任务队列即 actor 调度」）：lane 名在任务表里是全局的，会话领域命名的
 都在这里定义，别的领域不拼它们（要问会话忙不忙，用 SessionActivity）。没有给 lane 的订阅与命令（如 StopThread）用平台
-默认的按接收方一条 lane。"""
+默认的按接收方一条 lane。会话领域的任务种类也在这里定义（组合根为它们登记处理器）。"""
+
+# 会话 lane 上的两种任务：一次运行（consumer.RunHandler）、一次手动压缩（compaction.CompactionHandler）
+RUN_TASK = "run"
+COMPACTION_TASK = "compaction"
 
 
 def session_lane(session_id: str) -> str:

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.container import Container
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.sessions.api import (
     CallResult,
@@ -75,7 +75,7 @@ class SessionListItem(SessionOut):
 
 class TaskOut(BaseModel):
     id: int
-    kind: TaskKind
+    kind: str
     agent_id: str | None
     session_id: str | None
     status: TaskStatus

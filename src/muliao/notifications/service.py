@@ -17,12 +17,14 @@ from muliao.notifications.tables import Notification, PushSubscription
 from muliao.platform.bus import EventBus
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.api import session_in
 from muliao.sessions.events import RunEnded, SessionDeleted, SessionRead
 
 log = logging.getLogger(__name__)
+
+# 推送一条通知到一台设备的任务种类（组合根为它登记 DeliverHandler）
+DELIVER_TASK = "deliver"
 
 
 def deliver_lane(session_id: str | None, agent_id: str | None, endpoint: str) -> str:
@@ -60,7 +62,7 @@ class Notifications:
         for endpoint in endpoints:
             self._queue.enqueue(
                 s,
-                kind=TaskKind.DELIVER,
+                kind=DELIVER_TASK,
                 lane=deliver_lane(notification.session_id, agent_id, endpoint),
                 agent_id=agent_id,
                 session_id=notification.session_id,

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.platform.tooling import Origin
 from muliao.sessions.activity import WorkState, work_states_in
@@ -30,6 +30,7 @@ from muliao.sessions.inbound import (
     receive_lane_of,
 )
 from muliao.sessions.kinds import LISTED, policy_of
+from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.tables import Compaction, Mail, Message, Session
@@ -235,4 +236,4 @@ class SessionService:
 
 def _running_run() -> ColumnElement[bool]:
     """进行中的运行任务（不含排队的运行与压缩）。"""
-    return and_(Task.kind == TaskKind.RUN, Task.status == TaskStatus.RUNNING)
+    return and_(Task.kind == RUN_TASK, Task.status == TaskStatus.RUNNING)

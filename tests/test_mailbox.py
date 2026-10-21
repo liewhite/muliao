@@ -17,10 +17,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from muliao.agent_runtime.conventions import INTERRUPTED_TOOL_RESULT, RUN_EVENTS, format_event
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.sessions.codec import dump_message
 from muliao.sessions.consumer import interrupted_calls
+from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import post_in, queued_in
 from muliao.sessions.tables import Mail, MailKind, MailState, Message
 from muliao.sessions.transcript import to_items, to_text
@@ -117,7 +118,7 @@ async def test_mail_arriving_during_a_run_reaches_the_model_between_tool_calls(c
     assert [r.tool_call_id for r in returns] == ["m1"]
     assert [p.content for p in prompts] == [[event("job 7 finished: exit 0", "job:7")]]
     # 同一次运行处理完，没有为它另开一次
-    assert len([t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == session.id]) == 1
+    assert len([t for t in await tasks_of(container, RUN_TASK) if t.session_id == session.id]) == 1
     [_, mail] = await mail_of(container)
     assert mail.state == MailState.CONSUMED
     history = await history_of(container, session.id)
@@ -143,7 +144,7 @@ async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_t
     models.models["flaky"] = scripted(fn)
     session = await start(container, agent.id, "remember", origin=Origin.TRIGGER)
     await drain(container)
-    [failed] = await tasks_of(container, TaskKind.RUN)
+    [failed] = await tasks_of(container, RUN_TASK)
     assert failed.status == TaskStatus.FAILED
 
     await container.queue.retry(failed.id)
@@ -175,7 +176,7 @@ async def test_events_wait_for_an_answer_and_ride_along_with_it(client, containe
     # 等用户回答时事件留在信箱里，不开新的一次运行（否则会把提问记成没回答）
     await post(container, session_id, "check: still running")
     await drain(container)
-    assert len(await tasks_of(container, TaskKind.RUN)) == 1
+    assert len(await tasks_of(container, RUN_TASK)) == 1
     assert await queued(container, session_id) == ["check: still running"]
 
     answers = {"q1": [{"selected": ["日线"]}, {"selected": ["成交量"]}]}
@@ -199,7 +200,7 @@ async def test_a_failed_run_is_not_redispatched_forever(container, make_agent, m
     models.models["rec"] = scripted(broken)
     await post(container, session.id, "first")
     await drain(container)
-    assert (await tasks_of(container, TaskKind.RUN))[-1].status == TaskStatus.FAILED
+    assert (await tasks_of(container, RUN_TASK))[-1].status == TaskStatus.FAILED
 
     # 信件随那次请求保存、已经交给过模型：对账不重复投递
     assert await container.mail.reconcile() == 0
@@ -299,7 +300,7 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
     models.models["rec"] = scripted(fn)
     session = await start(container, agent.id, "restart the service", origin=Origin.TRIGGER)
     await drain(container)
-    [run] = await tasks_of(container, TaskKind.RUN)
+    [run] = await tasks_of(container, RUN_TASK)
 
     # 回复在执行工具之前就已保存，结果没有；那条 run task 留在 running，由下次启动恢复（platform.worker）
     async with container.db.transaction() as s:
@@ -322,7 +323,7 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
         ("m1", INTERRUPTED_TOOL_RESULT, "interrupted")
     ]
     # 补上的结果随这次运行保存（历史里不留悬空的调用），运行照常做完
-    assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.DONE]
+    assert [t.status for t in await tasks_of(container, RUN_TASK)] == [TaskStatus.DONE]
     history = await history_of(container, session.id)
     assert [type(m).__name__ for m in history] == [
         "ModelRequest",
@@ -397,7 +398,7 @@ async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_agai
         "id"
     ]
     await drain(container)
-    [run] = await tasks_of(container, TaskKind.RUN)
+    [run] = await tasks_of(container, RUN_TASK)
 
     async with container.db.transaction() as s:
         s.add(

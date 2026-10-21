@@ -7,9 +7,10 @@ import requests
 import muliao.notifications.webpush as webpush_module
 from muliao.errors import TransientError
 from muliao.notifications.delivery import DeliverHandler
+from muliao.notifications.service import DELIVER_TASK
 from muliao.notifications.tables import Notification, PushSubscription
 from muliao.notifications.webpush import WebPushDelivery
-from muliao.platform.tables import Task, TaskKind
+from muliao.platform.tables import Task
 from tests.test_flow import drain, start, tasks_of
 
 
@@ -52,7 +53,7 @@ async def test_a_notification_is_one_deliver_task_per_device(container):
 
     await container.notifications.notify(None, "t", "b", None)
 
-    tasks = await tasks_of(container, TaskKind.DELIVER)
+    tasks = await tasks_of(container, DELIVER_TASK)
     assert sorted(t.payload["endpoint"] for t in tasks) == [
         "https://push.example/laptop",
         "https://push.example/phone",
@@ -70,7 +71,7 @@ async def test_without_devices_the_notification_is_kept_but_nothing_is_delivered
     [note] = await container.notifications.list(10)
     assert (created.type, created.notification_id, created.session_id) == ("notification", note.id, None)
     assert note.title == "t"
-    assert await tasks_of(container, TaskKind.DELIVER) == []
+    assert await tasks_of(container, DELIVER_TASK) == []
 
 
 async def test_retrying_a_temporarily_failed_device_does_not_push_the_others_again(container, monkeypatch):
@@ -86,7 +87,7 @@ async def test_retrying_a_temporarily_failed_device_does_not_push_the_others_aga
     monkeypatch.setattr(WebPushDelivery, "_push", fake_push)
     handler = DeliverHandler(container.db, _webpush(container))
     await container.notifications.notify(None, "t", "b", None)
-    tasks = {t.payload["endpoint"].rsplit("/", 1)[1]: t for t in await tasks_of(container, TaskKind.DELIVER)}
+    tasks = {t.payload["endpoint"].rsplit("/", 1)[1]: t for t in await tasks_of(container, DELIVER_TASK)}
 
     await handler.execute(tasks["ok"])
     with pytest.raises(TransientError, match="503"):
@@ -103,7 +104,7 @@ async def test_deliver_counts_the_notification_itself_as_unread(container):
     await _subscribe(container, "a")
     await container.notifications.notify(None, "t", "b", None)
     [note] = await container.notifications.list(10)
-    [task] = await tasks_of(container, TaskKind.DELIVER)
+    [task] = await tasks_of(container, DELIVER_TASK)
 
     await DeliverHandler(container.db, pusher).execute(task)
 
@@ -114,7 +115,7 @@ async def test_deliver_does_not_push_a_notification_deleted_with_its_session(con
     pusher = RecordingPusher()
     await _subscribe(container, "a")
     task = Task(
-        kind=TaskKind.DELIVER,
+        kind=DELIVER_TASK,
         payload={"notification_id": 404, "endpoint": "https://push.example/a"},
         session_id="gone",
     )
@@ -128,7 +129,7 @@ async def test_deliver_skips_a_device_unsubscribed_after_it_was_queued(container
     pusher = RecordingPusher()
     await _subscribe(container, "a")
     await container.notifications.notify(None, "t", "b", None)
-    [task] = await tasks_of(container, TaskKind.DELIVER)
+    [task] = await tasks_of(container, DELIVER_TASK)
     await container.push_subscriptions.remove("https://push.example/a")
 
     await DeliverHandler(container.db, pusher).execute(task)

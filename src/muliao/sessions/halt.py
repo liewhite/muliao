@@ -22,14 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agent_runtime.api import is_stopped
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
-from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.delegation import threads_of_holds_in
 from muliao.sessions.events import Ending, SessionStopped, StopThread
 from muliao.sessions.history import latest_answer, marked_stopped, since_last_response, stopped_results
 from muliao.sessions.holds import clear_in
-from muliao.sessions.lanes import session_lane
+from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.sessions.mailbox import discard_in, latest_run
 from muliao.sessions.settlement import settle_in, unsettled_in
 from muliao.sessions.tables import MailState, Message, Session
@@ -81,7 +80,7 @@ class SessionHalt:
                 return Halted.GONE
             await close_history_in(s, session_id)
             dropped = [
-                t.id for t in await self._queue.finish_pending_in(s, session_lane(session_id), TaskKind.RUN)
+                t.id for t in await self._queue.finish_pending_in(s, session_lane(session_id), RUN_TASK)
             ]
             cleared = await clear_in(s, session_id)
             settled = await settle_in(

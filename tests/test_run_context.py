@@ -9,8 +9,9 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.agent_runtime.conventions import run_context_index
-from muliao.platform.tables import TaskKind, TaskStatus
+from muliao.platform.tables import TaskStatus
 from muliao.platform.tooling import Audience, Origin
+from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Message
 from tests.scripted import scripted
 from tests.test_flow import drain, history_of, start, tasks_of
@@ -88,7 +89,7 @@ async def test_resuming_resends_the_saved_request_unchanged_and_marks_the_next_n
     models.models["flaky"] = scripted(fn)
     session = await start(container, agent.id, "remember", origin=Origin.TRIGGER)
     await drain(container)
-    [failed] = await tasks_of(container, TaskKind.RUN)
+    [failed] = await tasks_of(container, RUN_TASK)
     assert failed.status == TaskStatus.FAILED
     before = await payloads_of(container, session.id)
 

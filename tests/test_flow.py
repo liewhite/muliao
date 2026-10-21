@@ -17,17 +17,23 @@ from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionMo
 from sqlalchemy import select
 
 from muliao.agent_runtime.conventions import run_context_index
+from muliao.notifications.service import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.platform.worker import Worker
+from muliao.reflection.service import REFLECTION_TASK
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
 from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
+from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.tables import Mail, Message
 from tests.scripted import scripted
+
+# 组合根登记的全部任务种类（领取时不限种类用）
+ALL_TASK_KINDS = (EVENT_TASK, RUN_TASK, COMPACTION_TASK, REFLECTION_TASK, DELIVER_TASK)
 
 
 async def drain(container, limit_seconds: float = 10.0) -> None:
@@ -41,12 +47,12 @@ async def drain(container, limit_seconds: float = 10.0) -> None:
 
 async def deliver(container, limit_seconds: float = 10.0) -> None:
     """只执行事件与定向命令的投递（不执行运行）：投进信箱的信件留着排队，测试可以直接看它们。"""
-    await work_only(container, {TaskKind.EVENT: container.messaging}, limit_seconds)
+    await work_only(container, {EVENT_TASK: container.messaging}, limit_seconds)
 
 
 async def run_only(container, limit_seconds: float = 10.0) -> None:
     """只执行运行（不投递事件）：运行发布的事件留着排队，测试可以安排它们与别的操作的先后。"""
-    await work_only(container, {TaskKind.RUN: RunHandler(container.consumer, container.queue)}, limit_seconds)
+    await work_only(container, {RUN_TASK: RunHandler(container.consumer, container.queue)}, limit_seconds)
 
 
 async def work_only(container, handlers: dict, limit_seconds: float) -> None:
@@ -154,7 +160,7 @@ async def mail_of(container) -> list[Mail]:
         return list((await s.scalars(select(Mail).order_by(Mail.id))).all())
 
 
-async def tasks_of(container, kind: TaskKind) -> list[Task]:
+async def tasks_of(container, kind: str) -> list[Task]:
     async with container.db.transaction() as s:
         return list((await s.scalars(select(Task).where(Task.kind == kind).order_by(Task.id))).all())
 
@@ -177,7 +183,7 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     assert container.memory.read(alpha) == "- user likes tea\n"
     assert last_user_prompt(history) == "I like tea"
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "Noted!"
-    deliver = await tasks_of(container, TaskKind.DELIVER)
+    deliver = await tasks_of(container, DELIVER_TASK)
     assert len(deliver) == 1 and deliver[0].status == TaskStatus.DONE
     [note] = await container.notifications.list(10)
     assert deliver[0].payload == {"notification_id": note.id, "endpoint": "https://push.example/phone"}
@@ -278,7 +284,7 @@ async def test_reflection_runs_every_n_steps_over_the_window_and_can_write_skill
     await start(container, alpha, "second task", origin=Origin.TRIGGER)
     await drain(container)
 
-    reflections = await tasks_of(container, TaskKind.REFLECTION)
+    reflections = await tasks_of(container, REFLECTION_TASK)
     assert len(reflections) == 1 and reflections[0].status == TaskStatus.DONE
     assert "first task" in transcripts[0] and "second task" in transcripts[0]
     assert container.skills.read(alpha, "tea-making").meta.description == "Make tea"
@@ -307,7 +313,7 @@ async def test_transient_model_error_is_retried_and_converges(container, make_ag
     session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
 
-    turn = (await tasks_of(container, TaskKind.RUN))[0]
+    turn = (await tasks_of(container, RUN_TASK))[0]
     assert turn.status == TaskStatus.DONE and turn.attempts == 2
     assert len(await history_of(container, session.id)) == 2
 
@@ -322,7 +328,7 @@ async def test_contract_violation_error_fails_without_retry(container, make_agen
     await start(container, alpha, "hi")
     await drain(container)
 
-    turn = (await tasks_of(container, TaskKind.RUN))[0]
+    turn = (await tasks_of(container, RUN_TASK))[0]
     assert turn.status == TaskStatus.FAILED and turn.attempts == 1
     assert "400" in turn.error
 
@@ -370,7 +376,7 @@ async def test_domain_error_in_tool_is_returned_to_model_for_correction(containe
     await drain(container)
 
     assert "not found" in retry_texts[0]
-    assert (await tasks_of(container, TaskKind.RUN))[0].status == TaskStatus.DONE
+    assert (await tasks_of(container, RUN_TASK))[0].status == TaskStatus.DONE
 
 
 async def test_tool_that_keeps_failing_does_not_abort_the_run(container, make_agent, models):
@@ -393,7 +399,7 @@ async def test_tool_that_keeps_failing_does_not_abort_the_run(container, make_ag
     await start(container, alpha, "remember", origin=Origin.TRIGGER)
     await drain(container)
 
-    assert (await tasks_of(container, TaskKind.RUN))[0].status == TaskStatus.DONE
+    assert (await tasks_of(container, RUN_TASK))[0].status == TaskStatus.DONE
     assert all("free at least" in text for text in seen)
     assert "stop retrying" in seen[3] and "stop retrying" not in seen[2]
     assert container.memory.read(alpha) == "x" * container.memory.max_chars
@@ -414,7 +420,7 @@ async def test_long_run_is_not_capped_by_pydantic_ai_default_request_limit(conta
     session = await start(container, alpha, "long task", origin=Origin.TRIGGER)
     await drain(container)
 
-    [turn] = await tasks_of(container, TaskKind.RUN)
+    [turn] = await tasks_of(container, RUN_TASK)
     assert turn.status == TaskStatus.DONE, turn.error
     history = await history_of(container, session.id)
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "finished"

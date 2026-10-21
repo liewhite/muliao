@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import TransientError
 from muliao.platform.bus import EventBus, TaskEvent
-from muliao.platform.tables import Task, TaskKind, TaskStatus
+from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue
 
 log = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class Worker:
     def __init__(
         self,
         queue: TaskQueue,
-        handlers: dict[TaskKind, TaskHandler],
+        handlers: dict[str, TaskHandler],
         bus: EventBus,
         *,
         concurrency: int,
@@ -124,14 +124,14 @@ class Worker:
     async def run_now(self, task_id: int) -> None:
         """在调用方的任务里立刻执行这一个投递任务（经同一个执行边界：时限、重试或失败记账），不占 worker 的槽位。
         用于发送方提交了定向命令之后希望它马上生效（例如触发器新建的会话在返回会话 id 之前就已存在）；只用于短小的
-        投递（EVENT），运行这类长任务仍由 worker 按并发上限执行。此刻不可领取就什么都不做，照常由 worker 执行。
+        投递（EVENT_TASK），运行这类长任务仍由 worker 按并发上限执行。此刻不可领取就什么都不做，照常由 worker 执行。
 
         取消语义与 worker 不同：worker 的任务只被关停取消，下次启动由 recover 复位；这里的调用方随时可能被取消（请求
         断开、调用它的运行被停止）。被取消时在屏蔽作用域里把还在 running 的它放回 pending 交给 worker，再照常抛出
         取消——投递的写入与「完成」同一事务，重做是安全的。"""
-        if TaskKind.EVENT not in self._handlers:
+        if EVENT_TASK not in self._handlers:
             raise RuntimeError("run_now executes deliveries, but this worker has no EVENT handler")
-        task = await self._queue.claim_task(task_id, [TaskKind.EVENT])
+        task = await self._queue.claim_task(task_id, [EVENT_TASK])
         if task is None:
             log.info("task not claimable now, left to the worker", extra={"task_id": task_id})
             return

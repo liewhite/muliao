@@ -8,10 +8,11 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.errors import Conflict, Forbidden
-from muliao.platform.tables import TaskKind, TaskStatus
+from muliao.platform.tables import TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
+from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Message, Session
 from muliao.sessions.threads import threads_of as sessions_threads_of
@@ -61,7 +62,7 @@ async def last_answer(container, session_id: str) -> str:
 
 
 async def turns_in(container, session_id: str):
-    return [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == session_id]
+    return [t for t in await tasks_of(container, RUN_TASK) if t.session_id == session_id]
 
 
 async def test_ask_agent_returns_answer_and_follow_up_keeps_thread_context(container, make_agent, models):
