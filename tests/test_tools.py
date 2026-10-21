@@ -1,5 +1,6 @@
 """agent 能用工具完成的系统操作：管理 agent 与公共 prompt、MCP 启停、cron 修改、事件触发器、vault、thread 列表。"""
 
+import pytest
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -370,8 +371,6 @@ def test_unremovable_leftover_is_logged_and_does_not_block_startup(tmp_path, mon
 
 
 async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, models):
-    import pytest
-
     from muliao.agents.service import AgentSpec
     from muliao.errors import InvalidInput
 
@@ -461,6 +460,33 @@ async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, 
 async def test_public_skills_group_can_edit_part_of_a_public_skill(container):
     [toolset] = container.consumer._tool_groups.groups["public_skills"]  # noqa: SLF001
     assert set(toolset.tools) == {"write_public_skill", "edit_public_skill", "delete_public_skill"}
+
+
+@pytest.mark.parametrize(("tool", "public"), [("edit_skill", False), ("edit_public_skill", True)])
+async def test_edit_skill_tools_change_description_body_or_both_and_reject_empty_edits(
+    container, make_agent, models, tool, public
+):
+    me = await make_agent("alpha", model="tools")
+    owner = None if public else me.id
+    await container.skills.write(owner, "digest", "When digesting", "step one", me.id)
+
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            (tool, {"name": "digest", "description": "When summarizing"}),
+            (tool, {"name": "digest", "old_text": "step one", "new_text": "step 1"}),
+            (tool, {"name": "digest", "new_text": "step 2", "description": "When digesting"}),
+            (tool, {"name": "digest"}),
+        ],
+    )
+
+    scope = "public" if public else "private"
+    assert outputs[:3] == [f"edited {scope} skill digest"] * 3
+    assert "nothing to change" in outputs[3]
+    skill = container.skills.read(owner, "digest")
+    assert (skill.meta.description, skill.body) == ("When digesting", "step 1\n\nstep 2")
 
 
 async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):

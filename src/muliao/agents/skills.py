@@ -90,9 +90,7 @@ class SkillStore:
         self, owner: str | None, name: str, description: str, body: str, author: str
     ) -> SkillMeta:
         validate_slug("skill", name)
-        description = description.strip()
-        if not description:
-            raise InvalidInput("skill description must not be empty")
+        description = _valid_description(description)
         skill_dir = self._root(owner) / name
         skill_dir.mkdir(parents=True, exist_ok=True)
         post = frontmatter.Post(body.strip() + "\n", name=name, description=description)
@@ -102,25 +100,50 @@ class SkillStore:
         )
         return SkillMeta(name, description, owner, path)
 
-    async def edit(self, owner: str | None, name: str, old: str, new: str, author: str) -> SkillMeta:
-        """改正文的一部分（规则同记忆与指令，见 text_edit）：old 恰好出现一次时替换为 new，old 为空时把 new 追加到末尾。
-        名称与描述不变，改它们用 write。"""
+    async def edit(
+        self,
+        owner: str | None,
+        name: str,
+        author: str,
+        *,
+        old: str = "",
+        new: str = "",
+        description: str | None = None,
+    ) -> SkillMeta:
+        """改一个 skill，不整篇重写：正文的一部分、描述，或两者一起（同一次提交）。
+        正文规则同记忆与指令（见 text_edit.edit）：old 恰好出现一次时替换为 new，old 为空时把 new 追加到末尾；
+        old、new 都为空表示不改正文。description 为 None 表示不改描述。什么都不改是错误。名称不变。"""
+        edits_body = bool(old or new)
+        if description is not None:
+            description = _valid_description(description)
+        elif not edits_body:
+            raise InvalidInput(
+                "nothing to change: give old_text/new_text to edit the instructions, description, or both"
+            )
         meta = self.read(owner, name).meta
 
         def transform(current: str | None) -> str:
             if current is None:
                 raise NotFound(f"skill {name!r} was deleted")
             post = frontmatter.loads(current)
-            what = f"skill {name}"
-            body = text_edit.edit(post.content, old, new, what)
-            post.content = body.strip() + "\n"
+            if edits_body:
+                post.content = text_edit.edit(post.content, old, new, f"skill {name}").strip() + "\n"
+            if description is not None:
+                post["description"] = description
             return frontmatter.dumps(post) + "\n"
 
         await self._repo.update(meta.path, transform, f"edit {scope_of(owner)} skill {name}", author)
-        return meta
+        return SkillMeta(name, meta.description if description is None else description, owner, meta.path)
 
     async def delete(self, owner: str | None, name: str, author: str) -> None:
         skill = self.read(owner, name)
         await self._repo.apply(
             {skill.meta.path.parent: None}, f"delete {scope_of(owner)} skill {name}", author
         )
+
+
+def _valid_description(description: str) -> str:
+    description = description.strip()
+    if not description:
+        raise InvalidInput("skill description must not be empty")
+    return description

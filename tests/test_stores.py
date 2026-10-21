@@ -292,16 +292,53 @@ async def test_editing_a_skill_replaces_or_appends_to_its_body_and_keeps_name_an
     skills = SkillStore(repo)
     await skills.write(ALPHA, "digest", "When digesting", "step one\nstep two", ALPHA)
 
-    await skills.edit(ALPHA, "digest", "step two", "step 2", ALPHA)
-    await skills.edit(ALPHA, "digest", "", "## pitfalls\n- none", ALPHA)
+    await skills.edit(ALPHA, "digest", ALPHA, old="step two", new="step 2")
+    await skills.edit(ALPHA, "digest", ALPHA, new="## pitfalls\n- none")
 
     skill = skills.read(ALPHA, "digest")
     assert (skill.meta.name, skill.meta.description) == ("digest", "When digesting")
     assert skill.body == "step one\nstep 2\n\n## pitfalls\n- none"
     with pytest.raises(InvalidInput, match="exactly once"):
-        await skills.edit(ALPHA, "digest", "missing", "x", ALPHA)
+        await skills.edit(ALPHA, "digest", ALPHA, old="missing", new="x")
     with pytest.raises(NotFound):
-        await skills.edit(ALPHA, "nope", "", "x", ALPHA)
+        await skills.edit(ALPHA, "nope", ALPHA, new="x")
+
+
+@pytest.mark.parametrize("owner", [ALPHA, None], ids=["private", "public"])
+async def test_editing_a_skill_can_change_only_its_description_or_body_and_description_in_one_revision(
+    repo: ResourceRepo, owner: str | None
+):
+    skills = SkillStore(repo)
+    await skills.write(owner, "digest", "When digesting", "step one\nstep two", ALPHA)
+
+    meta = await skills.edit(owner, "digest", ALPHA, description="  When summarizing a channel  ")
+    assert meta.description == "When summarizing a channel"
+    skill = skills.read(owner, "digest")
+    assert (skill.meta.description, skill.body) == ("When summarizing a channel", "step one\nstep two")
+
+    before = len(await repo.history(skill.meta.path, 10))
+    await skills.edit(owner, "digest", ALPHA, old="step two", new="step 2", description="When digesting")
+    skill = skills.read(owner, "digest")
+    assert (skill.meta.description, skill.body) == ("When digesting", "step one\nstep 2")
+    assert len(await repo.history(skill.meta.path, 10)) == before + 1
+
+
+@pytest.mark.parametrize("owner", [ALPHA, None], ids=["private", "public"])
+async def test_editing_a_skill_rejects_invalid_combinations_without_changing_it(
+    repo: ResourceRepo, owner: str | None
+):
+    skills = SkillStore(repo)
+    await skills.write(owner, "digest", "When digesting", "step\nstep", ALPHA)
+
+    with pytest.raises(InvalidInput, match="nothing to change"):
+        await skills.edit(owner, "digest", ALPHA)
+    with pytest.raises(InvalidInput, match="description must not be empty"):
+        await skills.edit(owner, "digest", ALPHA, new="more", description="  ")
+    with pytest.raises(InvalidInput, match="exactly once"):
+        await skills.edit(owner, "digest", ALPHA, old="step", new="x", description="New")
+
+    skill = skills.read(owner, "digest")
+    assert (skill.meta.description, skill.body) == ("When digesting", "step\nstep")
 
 
 async def test_files_outside_the_resource_layout_never_enter_history(repo: ResourceRepo, tmp_path: Path):

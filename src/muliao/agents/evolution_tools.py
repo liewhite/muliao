@@ -37,18 +37,26 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         return f"saved private skill {meta.name} at {meta.path}"
 
     @ts.tool
-    async def edit_skill(ctx: RunContext[RunScope], name: str, old_text: str, new_text: str) -> str:
-        """Change part of one of your private skills' instructions without rewriting the whole skill.
-        `old_text` must occur exactly once in them; an empty `old_text` appends `new_text` at the end.
+    async def edit_skill(
+        ctx: RunContext[RunScope],
+        name: str,
+        old_text: str = "",
+        new_text: str = "",
+        description: str | None = None,
+    ) -> str:
+        """Change one of your private skills without rewriting the whole skill: part of its instructions,
+        its description, or both. Instructions: `old_text` must occur exactly once in them and is replaced by
+        `new_text`; an empty `old_text` appends `new_text` at the end; leave both empty to keep the instructions.
+        At least one of the two changes must be given.
         Use this (or `write_skill`) rather than editing SKILL.md with shell or file tools, so the change is versioned.
 
         Args:
             name: Skill name.
             old_text: Exact text currently in the skill's instructions, or empty to append.
             new_text: Replacement (or appended) text; empty deletes `old_text`.
+            description: New one-sentence description shown in your skill index; omit to keep the current one.
         """
-        meta = await store.edit(ctx.deps.agent_id, name, old_text, new_text, ctx.deps.agent_id)
-        return f"edited private skill {meta.name}"
+        return await _edit(store, ctx.deps.agent_id, name, old_text, new_text, description, ctx.deps.agent_id)
 
     @ts.tool
     async def delete_skill(ctx: RunContext[RunScope], name: str) -> str:
@@ -81,17 +89,25 @@ def public_skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         return f"saved public skill {meta.name} at {meta.path}"
 
     @ts.tool
-    async def edit_public_skill(ctx: RunContext[RunScope], name: str, old_text: str, new_text: str) -> str:
-        """Change part of a public skill's instructions without rewriting the whole skill.
-        `old_text` must occur exactly once in them; an empty `old_text` appends `new_text` at the end.
+    async def edit_public_skill(
+        ctx: RunContext[RunScope],
+        name: str,
+        old_text: str = "",
+        new_text: str = "",
+        description: str | None = None,
+    ) -> str:
+        """Change a public skill without rewriting the whole skill: part of its instructions, its description,
+        or both. Instructions: `old_text` must occur exactly once in them and is replaced by `new_text`; an empty
+        `old_text` appends `new_text` at the end; leave both empty to keep the instructions.
+        At least one of the two changes must be given.
 
         Args:
             name: Skill name.
             old_text: Exact text currently in the skill's instructions, or empty to append.
             new_text: Replacement (or appended) text; empty deletes `old_text`.
+            description: New one-sentence description shown in every agent's skill index; omit to keep the current one.
         """
-        meta = await store.edit(None, name, old_text, new_text, ctx.deps.agent_id)
-        return f"edited public skill {meta.name}"
+        return await _edit(store, None, name, old_text, new_text, description, ctx.deps.agent_id)
 
     @ts.tool
     async def delete_public_skill(ctx: RunContext[RunScope], name: str) -> str:
@@ -104,6 +120,14 @@ def public_skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         return f"deleted public skill {name}"
 
     return ts
+
+
+async def _edit(
+    store: SkillStore, owner: str | None, name: str, old: str, new: str, description: str | None, author: str
+) -> str:
+    """edit_skill 与 edit_public_skill 共用：规则在 SkillStore.edit。"""
+    meta = await store.edit(owner, name, author, old=old, new=new, description=description)
+    return f"edited {meta.scope} skill {meta.name}"
 
 
 def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
