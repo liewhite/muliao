@@ -30,7 +30,7 @@ class PromptStore:
             return path.read_text(encoding="utf-8")
         if owner is None:
             return ""
-        raise CorruptState(f"agent {owner} has no instructions file {path}; it must get one when created")
+        raise _missing(owner, path)
 
     async def set(self, owner: str | None, content: str, author: str) -> bool:
         """写入并提交一版；与当前内容相同时不提交，返回 False。"""
@@ -48,9 +48,7 @@ class PromptStore:
 
         def transform(current: str | None) -> str | None:
             if current is None and owner is not None:
-                raise RuntimeError(
-                    f"agent {owner} has no instructions file {path}; it must get one when created"
-                )
+                raise _missing(owner, path)
             updated = edit(current or "")
             # 从未设置过、仍为空：什么都没变，不提交（None 删除一个不存在的路径即无变化）
             if current is None and not updated:
@@ -71,3 +69,8 @@ class PromptStore:
     async def restore(self, owner: str | None, rev: str, author: str) -> bool:
         """把某一版的内容作为新的一版写入（与当前相同则不写）。"""
         return await self.set(owner, await self.read_at(owner, rev), author)
+
+
+def _missing(owner: str, path: Path) -> CorruptState:
+    """agent 的指令文件缺失：创建时就写了，缺失说明数据不一致。"""
+    return CorruptState(f"agent {owner} has no instructions file {path}; it must get one when created")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -269,12 +270,15 @@ class AgentService:
     async def list(self) -> list[AgentInfo]:
         async with self._db.transaction() as s:
             # 正在删除的不列出
-            rows = (await s.scalars(select(Agent).where(Agent.deleting_by.is_(None)).order_by(Agent.name))).all()
+            rows = (
+                await s.scalars(select(Agent).where(Agent.deleting_by.is_(None)).order_by(Agent.name))
+            ).all()
             return [info_of(a) for a in rows]
 
     async def remove_files(self, agent_id: str, author: str) -> None:
         """删除 agent 的工作目录与私有资源（记忆、指令、skill、MCP 配置，删除记入资源仓库）。数据库行由调用方删除。"""
         workspace = self.workspace(agent_id)
         if workspace.exists():
-            shutil.rmtree(workspace)
+            # 工作目录里可能有 venv、clone 的仓库、后台任务日志：放到线程里删，不阻塞事件循环
+            await asyncio.to_thread(shutil.rmtree, workspace)
         await self._repo.apply({self._repo.owner_dir(agent_id): None}, f"delete agent {agent_id}", author)

@@ -114,7 +114,7 @@ def test_deepseek_without_base_url_uses_the_official_address():
     from muliao.agent_runtime.web import build_web_provider
     from muliao.config import WebConfig
 
-    web = build_web_provider(WebConfig(type="deepseek", api_key=SecretStr("k")))
+    web = build_web_provider(WebConfig(type="deepseek", api_key=SecretStr("k")), httpx.AsyncClient())
     assert isinstance(web, DeepSeekWeb) and web._base_url == "https://api.deepseek.com"
 
 

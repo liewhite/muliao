@@ -94,13 +94,19 @@ def _error_message(resp: httpx.Response) -> str | None:
 
 
 class DeepSeekWeb:
-    def __init__(self, api_key: str, base_url: str, client: httpx.AsyncClient | None = None):
-        self._client = client or httpx.AsyncClient(timeout=_DEEPSEEK_TIMEOUT_SECONDS)
+    def __init__(self, api_key: str, base_url: str, client: httpx.AsyncClient):
+        # 共用的出站 HTTP 客户端，由容器创建、在关停时关闭
+        self._client = client
         self._base_url = base_url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {api_key}"}
 
     async def _post(self, op: _Op, body: dict[str, object]) -> object:
-        resp = await self._client.post(f"{self._base_url}/v1/tools/{op}", json=body, headers=self._headers)
+        resp = await self._client.post(
+            f"{self._base_url}/v1/tools/{op}",
+            json=body,
+            headers=self._headers,
+            timeout=_DEEPSEEK_TIMEOUT_SECONDS,
+        )
         if resp.status_code == 200:
             return resp.json()
         message = _error_message(resp)
@@ -133,10 +139,10 @@ class DeepSeekWeb:
         return Page(title=page.title, content=page.content)
 
 
-def build_web_provider(cfg: WebConfig) -> WebProvider:
+def build_web_provider(cfg: WebConfig, client: httpx.AsyncClient) -> WebProvider:
     match cfg.type:
         case "deepseek":
             # 与 LLM provider 一样，地址只来自配置，未填时显式使用官方地址
-            return DeepSeekWeb(cfg.api_key.get_secret_value(), cfg.base_url or DEEPSEEK_BASE_URL)
+            return DeepSeekWeb(cfg.api_key.get_secret_value(), cfg.base_url or DEEPSEEK_BASE_URL, client)
         case _:
             assert_never(cfg.type)

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 import anyio
+import httpx
 from pydantic_ai import FunctionToolset
 from pydantic_ai.toolsets import AbstractToolset
 
@@ -124,6 +125,8 @@ class Container:
     files: FileStore
     usage: UsageLog
     issues: IssueService
+    # 联网搜索、语音转写共用的出站 HTTP 客户端
+    http: httpx.AsyncClient
     # 语音转文字；没配置 [transcription] 时为 None，界面不显示语音输入
     transcriber: Transcriber | None
     # 默认就是 models.check，单独持有只为测试替换
@@ -146,6 +149,7 @@ class Container:
                 finally:
                     root.cancel_scope.cancel()
         finally:
+            await self.http.aclose()
             await self.db.engine.dispose()
 
     async def _prepare(self) -> None:
@@ -222,10 +226,12 @@ def build_container(
     测试打开的开发期断言（schema.single_domain_writes）。"""
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     models = ModelRegistry(settings.llm)
+    # 联网搜索与语音转写共用的出站 HTTP 客户端（超时按请求给）；容器关停时关闭
+    http = httpx.AsyncClient()
     if web is None and settings.web is not None:
-        web = build_web_provider(settings.web)
+        web = build_web_provider(settings.web, http)
     if transcriber is None and settings.transcription is not None:
-        transcriber = build_transcriber(settings.transcription)
+        transcriber = build_transcriber(settings.transcription, http)
     # 「配置了哪些可选能力」只在这里判断一次，工具组名称、注册表与临时 agent 的工具都由它导出
     web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
     groups = tool_catalog.available(web_configured=bool(web_tools))
@@ -454,6 +460,7 @@ def build_container(
         files=files,
         usage=usage,
         issues=issues,
+        http=http,
         transcriber=transcriber,
         _model_checker=model_checker or models.check,
     )

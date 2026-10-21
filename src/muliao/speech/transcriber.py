@@ -73,9 +73,10 @@ class DashScopeTranscriber:
         base_url: str = DASHSCOPE_BASE_URL,
         vocabulary: dict[str, int] | None = None,
         language_hints: list[str] | None = None,
-        client: httpx.AsyncClient | None = None,
+        client: httpx.AsyncClient,
     ):
-        self._client = client or httpx.AsyncClient(timeout=_TIMEOUT_SECONDS)
+        # 共用的出站 HTTP 客户端，由容器创建、在关停时关闭
+        self._client = client
         self._url = base_url.rstrip("/") + "/services/aigc/multimodal-generation/generation"
         self._headers = {"Authorization": f"Bearer {api_key}", "X-DashScope-SSE": "disable"}
         self._model = model
@@ -104,7 +105,10 @@ class DashScopeTranscriber:
         started = time.monotonic()
         try:
             resp = await self._client.post(
-                self._url, json=self._body(audio, mime, fmt), headers=self._headers
+                self._url,
+                json=self._body(audio, mime, fmt),
+                headers=self._headers,
+                timeout=_TIMEOUT_SECONDS,
             )
         except httpx.HTTPError as e:
             raise self._failed(f"{type(e).__name__}: {e}", fmt, len(audio)) from e
@@ -136,7 +140,7 @@ class DashScopeTranscriber:
         return UpstreamFailed(f"transcription failed ({self._model}): {reason}")
 
 
-def build_transcriber(cfg: TranscriptionConfig) -> Transcriber:
+def build_transcriber(cfg: TranscriptionConfig, client: httpx.AsyncClient) -> Transcriber:
     match cfg.type:
         case "dashscope":
             return DashScopeTranscriber(
@@ -146,6 +150,7 @@ def build_transcriber(cfg: TranscriptionConfig) -> Transcriber:
                 base_url=cfg.base_url or DASHSCOPE_BASE_URL,
                 vocabulary=cfg.vocabulary,
                 language_hints=cfg.language_hints,
+                client=client,
             )
         case _:
             assert_never(cfg.type)
