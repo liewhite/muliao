@@ -71,7 +71,9 @@ async def _mail(container, session_id: str) -> list[str]:
 
 async def test_moving_an_assigned_issue_to_todo_wakes_the_agent_in_one_session(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, title="Fix the build", description="CI is red", assignee=alpha)
+    issue = await container.issues.create(
+        None, title="Fix the build", description="CI is red", assignee=alpha
+    )
     await deliver(container)
     assert await _issue_sessions(container) == []  # backlog：不唤醒
 
@@ -156,3 +158,30 @@ async def test_deleting_an_agent_unassigns_its_issues(container, make_agent):
 async def test_assigning_to_an_unknown_agent_is_refused(container):
     with pytest.raises(NotFound):
         await container.issues.create(None, title="t", assignee="nobody")
+
+
+async def test_http_issue_lifecycle(client, container, make_agent):
+    from tests.conftest import login
+
+    await login(client)
+    alpha = (await make_agent()).id
+    resp = await client.post("/api/issues", json={"title": "Write docs", "assignee": alpha})
+    assert resp.status_code == 201
+    issue_id = resp.json()["id"]
+
+    resp = await client.patch(f"/api/issues/{issue_id}", json={"status": "todo"})
+    assert resp.json()["status"] == "todo" and resp.json()["assignee"] == alpha
+    await deliver(container)
+    detail = (await client.get(f"/api/issues/{issue_id}")).json()
+    assert alpha in detail["issue"]["sessions"]
+    assert [a["kind"] for a in detail["activities"]] == ["created", "status"]
+
+    # 只给出的字段改变；assignee 为 null 取消指派
+    resp = await client.patch(f"/api/issues/{issue_id}", json={"assignee": None})
+    assert resp.json()["assignee"] is None and resp.json()["status"] == "todo"
+    assert (await client.post(f"/api/issues/{issue_id}/comments", json={"body": "hi"})).status_code == 201
+
+    listed = (await client.get("/api/issues", params={"status": ["todo"]})).json()
+    assert [i["id"] for i in listed] == [issue_id]
+    assert (await client.delete(f"/api/issues/{issue_id}")).status_code == 204
+    assert (await client.get(f"/api/issues/{issue_id}")).status_code == 404

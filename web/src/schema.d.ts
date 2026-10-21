@@ -776,6 +776,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Issues */
+        get: operations["list_issues_api_issues_get"];
+        put?: never;
+        /** Create Issue */
+        post: operations["create_issue_api_issues_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/issues/{issue_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Issue */
+        get: operations["get_issue_api_issues__issue_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Issue */
+        delete: operations["delete_issue_api_issues__issue_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Issue */
+        patch: operations["update_issue_api_issues__issue_id__patch"];
+        trace?: never;
+    };
+    "/api/issues/{issue_id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Comment Issue */
+        post: operations["comment_issue_api_issues__issue_id__comments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/features": {
         parameters: {
             query?: never;
@@ -854,6 +908,30 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * ActivityKind
+         * @enum {string}
+         */
+        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "title" | "description";
+        /** ActivityOut */
+        ActivityOut: {
+            /** Id */
+            id: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Actor Agent Id */
+            actor_agent_id: string | null;
+            kind: components["schemas"]["ActivityKind"];
+            /** Body */
+            body: string | null;
+            /** Change */
+            change: {
+                [key: string]: unknown;
+            } | null;
+        };
         /**
          * AgentAnswer
          * @description 被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件，所在的 thread。
@@ -1000,6 +1078,11 @@ export interface components {
             /** Inline */
             inline: boolean;
         };
+        /** CommentIn */
+        CommentIn: {
+            /** Body */
+            body: string;
+        };
         /** CompactOut */
         CompactOut: {
             /** Queued */
@@ -1083,6 +1166,81 @@ export interface components {
             /** Session Id */
             session_id: string | null;
         };
+        /** IssueCreate */
+        IssueCreate: {
+            /** Title */
+            title: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** @default backlog */
+            status: components["schemas"]["IssueStatus"];
+            /** @default none */
+            priority: components["schemas"]["IssuePriority"];
+            /** Assignee */
+            assignee?: string | null;
+        };
+        /** IssueDetailOut */
+        IssueDetailOut: {
+            issue: components["schemas"]["IssueOut"];
+            /** Activities */
+            activities: components["schemas"]["ActivityOut"][];
+        };
+        /** IssueOut */
+        IssueOut: {
+            /** Id */
+            id: number;
+            /** Title */
+            title: string;
+            /** Description */
+            description: string;
+            status: components["schemas"]["IssueStatus"];
+            priority: components["schemas"]["IssuePriority"];
+            /** Assignee */
+            assignee: string | null;
+            /** Creator Agent Id */
+            creator_agent_id: string | null;
+            /** Sessions */
+            sessions: {
+                [key: string]: string;
+            };
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * IssuePatch
+         * @description 只修改给出的字段。assignee 给出 null 表示取消指派，不出现表示不变。
+         */
+        IssuePatch: {
+            /** Title */
+            title?: string | null;
+            /** Description */
+            description?: string | null;
+            status?: components["schemas"]["IssueStatus"] | null;
+            priority?: components["schemas"]["IssuePriority"] | null;
+            /** Assignee */
+            assignee?: string | null;
+        };
+        /**
+         * IssuePriority
+         * @enum {string}
+         */
+        IssuePriority: "none" | "urgent" | "high" | "medium" | "low";
+        /**
+         * IssueStatus
+         * @enum {string}
+         */
+        IssueStatus: "backlog" | "todo" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
         /** Item */
         Item: {
             /**
@@ -1273,10 +1431,10 @@ export interface components {
         };
         /**
          * Origin
-         * @description 会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派。
+         * @description 会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派、issue 看板唤醒被指派的 agent。
          * @enum {string}
          */
-        Origin: "user" | "trigger" | "delegation";
+        Origin: "user" | "trigger" | "delegation" | "issue";
         /** Precheck */
         Precheck: {
             /**
@@ -3454,6 +3612,201 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_issues_api_issues_get: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["IssueStatus"][] | null;
+                assignee?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_issue_api_issues_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_issue_api_issues__issue_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_issue_api_issues__issue_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_issue_api_issues__issue_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssuePatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    comment_issue_api_issues__issue_id__comments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommentIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityOut"];
                 };
             };
             /** @description Validation Error */

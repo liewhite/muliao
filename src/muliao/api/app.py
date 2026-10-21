@@ -17,6 +17,7 @@ from muliao.api import (
     admin,
     agents,
     files,
+    issues,
     notifications,
     resources,
     sessions,
@@ -121,6 +122,7 @@ def _private_routes() -> APIRouter:
     router.include_router(files.router)
     router.include_router(notifications.router)
     router.include_router(usage.router)
+    router.include_router(issues.router)
     router.include_router(speech.router)
 
     @router.get("/auth/me", status_code=204)
