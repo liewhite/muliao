@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 class CorruptOut(BaseModel):
-    """一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除或重写。"""
+    """一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除（skill 也可重写）。"""
 
     owner: str | None
     name: str

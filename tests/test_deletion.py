@@ -1,12 +1,14 @@
 """删除经事件完成（docs/architecture.md 第 10 节与第 7 节「thread 与结果路由」）：没有跨领域外键，各领域按 SessionDeleted / AgentDeleting 清理
 自己的数据；先停止再删除时迟到的结局不产生失败投递。"""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
 import muliao.agents.service
+from muliao.agents.api import McpTransport, mcp_config
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.tables import Job, JobStatus
@@ -179,6 +181,12 @@ async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
         await container.agents.get_active(agent.id)
     with pytest.raises(NotFound):
         await container.vault.set(agent.id, "K", "v")
+    # 添加 MCP server 在连接验证之前就拒绝（这个配置一连就失败，报 InvalidInput 说明白跑了一次连接）
+    failing = mcp_config(
+        transport=McpTransport.STDIO, command=sys.executable, args=["-c", "raise SystemExit(1)"]
+    )
+    with pytest.raises(NotFound):
+        await container.mcp.add(agent.id, "probe", failing, probe=True, author="user")
     await drain(container)
 
 

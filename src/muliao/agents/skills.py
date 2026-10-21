@@ -83,7 +83,11 @@ class SkillStore:
                 skills.append(self._load(owner, d).meta)
             except CorruptState as e:
                 log.error("corrupt skill", extra={"owner": owner, "skill": d.name, "error": str(e)})
-                corrupt.append(CorruptResource("skill", owner, d.name, d / SKILL_FILE, str(e)))
+                corrupt.append(
+                    CorruptResource(
+                        "skill", owner, d.name, d / SKILL_FILE, str(e), repair="rewritten or deleted"
+                    )
+                )
         return skills, corrupt
 
     def list(self, owner: str | None) -> list[SkillMeta]:

@@ -150,7 +150,11 @@ class McpRegistry:
                 servers.append(self._load(owner, path))
             except CorruptState as e:
                 log.error("corrupt mcp config", extra={"owner": owner, "mcp": path.stem, "error": str(e)})
-                corrupt.append(CorruptResource("MCP server", owner, path.stem, path, str(e)))
+                corrupt.append(
+                    CorruptResource(
+                        "MCP server", owner, path.stem, path, str(e), repair="removed and added again"
+                    )
+                )
         return servers, corrupt
 
     def list(self, owner: str | None) -> list[McpServer]:
@@ -158,7 +162,7 @@ class McpRegistry:
         return self._scan(owner)[0]
 
     def corrupt_in(self, owner: str | None) -> list[CorruptResource]:
-        """owner 名下配置坏了的 server（管理界面与 mcp_list 列出，供删除或重写）。"""
+        """owner 名下配置坏了的 server（管理界面与 mcp_list 列出，供删掉重加）。"""
         return self._scan(owner)[1]
 
     def view(self, owner: str | None) -> list[tuple[McpServer, bool]]:
@@ -193,6 +197,8 @@ class McpRegistry:
         """新增 server。probe=True 时先连接验证，验证失败不写入。"""
         validate_slug("mcp server", name)
         server = McpServer(owner=owner, name=name, config=config)
+        # 连接验证之前先查一次 owner（正在删除的 agent 不必白跑一次连接）；写入时锁里的那次才是准的
+        await self._check_owner(owner)
         tools = await self.probe(server) if probe else []
 
         def create(current: str | None) -> str:

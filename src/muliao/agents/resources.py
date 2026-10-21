@@ -77,7 +77,7 @@ _GIT_EXIT_SECONDS = 5.0
 class CorruptResource:
     """一个读不出来的资源文件（多半是绕过工具改坏的，见模块说明）。列出资源的地方跳过它、单独交出来：坏的只是这一项，
     不连累同一目录里的其他资源，也不让读到它的每次运行都失败；它照样以错误报出（日志、交给模型的说明），等人或 agent
-    修复——重写或删除它。"""
+    修复（repair：怎么修因种类而异）或删除它。"""
 
     # 资源的种类，如 "skill"、"MCP server"
     kind: str
@@ -86,11 +86,14 @@ class CorruptResource:
     name: str
     path: Path
     problem: str
+    # 怎么修好它，接在「cannot be used until it is」后面，如 skill 的 "rewritten or deleted"（write_skill 整篇覆盖）、
+    # MCP server 的 "removed and added again"（没有覆盖写入的入口）
+    repair: str
 
     def describe(self) -> str:
         return (
-            f"{scope_of(self.owner)} {self.kind} {self.name!r} is corrupt and cannot be used until it is rewritten "
-            f"or deleted: {self.problem}"
+            f"{scope_of(self.owner)} {self.kind} {self.name!r} is corrupt and cannot be used until it is "
+            f"{self.repair}: {self.problem}"
         )
 
 

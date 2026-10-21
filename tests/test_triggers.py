@@ -498,7 +498,11 @@ async def test_a_corrupt_public_mcp_config_is_reported_to_a_temp_agent_without_f
     )
 
     assert answer.text == "ok" and "good_echo" in tools
-    assert "public MCP server 'bad' is corrupt" in requests[0] and "the task" in requests[0]
+    assert (
+        "public MCP server 'bad' is corrupt and cannot be used until it is removed and added again"
+        in requests[0]
+    )
+    assert "the task" in requests[0]
 
 
 async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_meanwhile(container, make_agent):
