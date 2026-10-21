@@ -23,6 +23,11 @@ _ORIGIN_NOTES: dict[Origin, str] = {
         "later firings need in memory or workspace files."
     ),
     Origin.DELEGATION: "Another agent opened this conversation with you.",
+    Origin.ISSUE: (
+        "This conversation belongs to an issue on the muliao issue board that is assigned to you; it is "
+        "continued each time the issue needs you again. Nobody is watching it: record progress and results on "
+        "the issue itself."
+    ),
 }
 
 _AUDIENCE_NOTES: dict[Audience, str] = {

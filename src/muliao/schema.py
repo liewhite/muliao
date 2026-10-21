@@ -3,6 +3,7 @@
 
 from muliao.agents import tables as agents  # noqa: F401
 from muliao.files import tables as files  # noqa: F401
+from muliao.issues import tables as issues  # noqa: F401
 from muliao.jobs import tables as jobs  # noqa: F401
 from muliao.notifications import tables as notifications  # noqa: F401
 from muliao.platform import tables as platform  # noqa: F401

@@ -36,6 +36,8 @@ from muliao.agents.tools import agents_toolset
 from muliao.config import Settings
 from muliao.errors import InvalidInput
 from muliao.files.store import FileStore
+from muliao.issues.api import IssueService
+from muliao.issues.tools import issues_toolset
 from muliao.jobs.runner import JobRunner
 from muliao.jobs.tools import session_workspace_toolset
 from muliao.notifications.delivery import DeliverHandler
@@ -118,6 +120,7 @@ class Container:
     models: ModelRegistry
     files: FileStore
     usage: UsageLog
+    issues: IssueService
     # 语音转文字；没配置 [transcription] 时为 None，界面不显示语音输入
     transcriber: Transcriber | None
     # 默认就是 models.check，单独持有只为测试替换
@@ -282,6 +285,7 @@ def build_container(
     # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
     due_triggers = DueRunner(db, triggers, [ScheduleDue(triggers, schedule_kind), OnceDue(triggers)])
     webhooks = Webhooks(db, triggers)
+    issues = IssueService(db, agents, messaging, tz, lambda task_id: worker.run_now(task_id))
     push_subscriptions = PushSubscriptions(db)
     vapid = VapidKeys(settings.vapid_key_path)
 
@@ -358,6 +362,7 @@ def build_container(
         "mcp_admin": [mcp_admin_toolset(mcp)],
         "vault": [vault_toolset(vault)],
         "triggers": ([triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)]),
+        "issues": [issues_toolset(issues, agents)],
         "web": web_tools,
     }
     if missing := [g.name for g in tool_catalog.CATALOG if g.name not in implementations]:
@@ -380,6 +385,7 @@ def build_container(
     ).subscribe(messaging)
     vault.subscribe(messaging)
     triggers.subscribe(messaging)
+    issues.subscribe(messaging)
     reflection.subscribe(messaging)
     consumer = Consumer(
         db,
@@ -441,6 +447,7 @@ def build_container(
         models=models,
         files=files,
         usage=usage,
+        issues=issues,
         transcriber=transcriber,
         _model_checker=model_checker or models.check,
     )

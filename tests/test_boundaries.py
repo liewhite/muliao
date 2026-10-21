@@ -15,6 +15,7 @@ DOMAINS = {
     "agents",
     "agent_runtime",
     "files",
+    "issues",
     "jobs",
     "notifications",
     "reflection",

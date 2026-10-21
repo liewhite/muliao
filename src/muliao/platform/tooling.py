@@ -13,11 +13,12 @@ from muliao.errors import DomainError
 
 
 class Origin(StrEnum):
-    """会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派。"""
+    """会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派、issue 看板唤醒被指派的 agent。"""
 
     USER = "user"
     TRIGGER = "trigger"
     DELEGATION = "delegation"
+    ISSUE = "issue"
 
 
 class Audience(StrEnum):

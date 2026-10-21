@@ -35,6 +35,8 @@ CATALOG: tuple[ToolGroupInfo, ...] = (
     ToolGroupInfo("mcp_admin", "管理 MCP", full_access=True),
     ToolGroupInfo("vault", "管理 vault", full_access=False),
     ToolGroupInfo("triggers", "管理触发器", full_access=True),
+    # 能把 issue 指派给任何 agent（即唤醒它、给它下任务），等同委派
+    ToolGroupInfo("issues", "issue 看板", full_access=True),
     ToolGroupInfo("web", "网页搜索与抓取", full_access=False, needs_web=True),
 )
 
