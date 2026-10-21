@@ -500,12 +500,15 @@ async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit
     assert "Optional command deciding whether to fire" in str(create.function_schema.json_schema)
 
 
-async def test_run_shell_tells_the_model_its_configured_time_limits(container):
+async def test_run_shell_tells_the_model_its_configured_limits(container):
     run_shell = container.consumer._tool_groups.groups["workspace"][0].tools["run_shell"]  # noqa: SLF001
     runtime = container.settings.runtime
     assert f"after {runtime.shell_default_timeout:g} seconds" in run_shell.description
     assert f"at most {runtime.shell_max_timeout:g}" in run_shell.description
-    assert f"beyond {runtime.tool_output_max_chars} characters is cut off" in run_shell.description
+    assert (
+        f"Only the first {runtime.tool_output_max_chars} characters of output are kept"
+        in run_shell.description
+    )
 
 
 async def test_run_shell_rejects_a_zero_timeout_instead_of_using_the_default(container, make_agent, models):

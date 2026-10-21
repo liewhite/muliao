@@ -37,10 +37,10 @@ def resolve(scope: RunScope, path: str) -> Path:
     return p if p.is_absolute() else scope.workspace / p
 
 
-SHELL_DESCRIPTION = (
+_SHELL_DESCRIPTION = (
     "Run a shell command (bash) in your workspace and return its exit code and combined output. "
     "Commands are killed after {default:g} seconds unless you pass a longer `timeout` (at most {max:g}). "
-    "Output beyond {max_output} characters is cut off, so limit it yourself: pipe through `| head` or `| tail`, "
+    "Only the first {max_output} characters of output are kept, so limit it yourself: pipe through `| head` or `| tail`, "
     "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
     "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
     "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules. "
@@ -50,7 +50,7 @@ SHELL_DESCRIPTION = (
 
 def shell_description(limits: ShellLimits) -> str:
     """时限与输出上限是配置的值，写进说明：模型不知道它们，长命令被杀、长输出被截了才学会。"""
-    return SHELL_DESCRIPTION.format(
+    return _SHELL_DESCRIPTION.format(
         default=limits.default_timeout, max=limits.max_timeout, max_output=limits.max_output_chars
     )
 
@@ -67,7 +67,7 @@ def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> Fu
         # 不写成 `list[str] | None`：可为空的数组在 schema 里是 anyOf[array, null]，模型更容易把数组写成 JSON 字符串
         secrets: tuple[str, ...] = (),
     ) -> str:
-        """The description is set in the decorator (it carries the configured time limits).
+        """The description is set in the decorator (it carries the configured limits).
 
         Args:
             command: The command line to run.

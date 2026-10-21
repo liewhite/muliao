@@ -33,7 +33,7 @@ def session_workspace_toolset(
         secrets: tuple[str, ...] = (),
         background: bool = False,
     ) -> str:
-        """The description is set in the decorator (it carries the configured time limits).
+        """The description is set in the decorator (it carries the configured limits).
 
         Args:
             command: The command line to run.
