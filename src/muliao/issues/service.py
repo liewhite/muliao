@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentService, active_agent_in, agent_in
+from muliao.agents.api import AgentNames, AgentService, active_agent_in, agent_names_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import InvalidInput, NotFound
 from muliao.issues.rules import (
@@ -324,12 +324,6 @@ class IssueService:
         s.add(activity)
         return activity
 
-    async def _name_in(self, s: AsyncSession, agent_id: str) -> str:
-        try:
-            return (await agent_in(s, agent_id)).name
-        except NotFound:
-            return f"(deleted agent {agent_id})"
-
     async def _after_change_in(
         self,
         s: AsyncSession,
@@ -401,41 +395,32 @@ class IssueService:
 
     async def _view_in(self, s: AsyncSession, issue: Issue) -> IssueView:
         await s.flush()
-        return await self._view_with(
-            issue, await self._activities_in(s, issue.id), lambda a: self._name_in(s, a)
-        )
+        return self._view_with(issue, await self._activities_in(s, issue.id), await agent_names_in(s))
 
     async def _view(self, detail: IssueDetail) -> IssueView:
-        names = {a.id: a.name for a in await self._agents.list()}
+        return self._view_with(detail.issue, detail.activities, await self._agents.names())
 
-        async def name(agent_id: str) -> str:
-            return names.get(agent_id, f"(deleted agent {agent_id})")
+    def _view_with(self, issue: Issue, activities: list[IssueActivity], names: AgentNames) -> IssueView:
+        def who(agent_id: str | None) -> str:
+            return "user" if agent_id is None else names[agent_id]
 
-        return await self._view_with(detail.issue, detail.activities, name)
-
-    async def _view_with(
-        self, issue: Issue, activities: list[IssueActivity], name: Callable[[str], Awaitable[str]]
-    ) -> IssueView:
-        async def who(agent_id: str | None) -> str:
-            return "user" if agent_id is None else await name(agent_id)
-
-        async def assignee(value: Any) -> str:
+        def assignee(value: Any) -> str:
             if value is None:
                 return "unassigned"
-            return "user" if value == USER else await name(value)
+            return "user" if value == USER else names[value]
 
         views = []
         for a in activities:
             before = after = None
             if a.change is not None:
                 if a.kind in (ActivityKind.ASSIGNEE, ActivityKind.OWNER):
-                    before, after = await assignee(a.change["from"]), await assignee(a.change["to"])
+                    before, after = assignee(a.change["from"]), assignee(a.change["to"])
                 else:
                     before, after = str(a.change["from"]), str(a.change["to"])
             views.append(
                 ActivityView(
                     at=self._local(a.created_at),
-                    actor=await who(a.actor_agent_id),
+                    actor=who(a.actor_agent_id),
                     kind=a.kind,
                     body=a.body,
                     before=before,
@@ -448,8 +433,8 @@ class IssueService:
             description=issue.description,
             status=issue.status,
             priority=issue.priority,
-            assignee=await assignee(issue.assignee),
-            owner="none" if issue.owner_agent_id is None else await name(issue.owner_agent_id),
-            creator=await who(issue.creator_agent_id),
+            assignee=assignee(issue.assignee),
+            owner="none" if issue.owner_agent_id is None else names[issue.owner_agent_id],
+            creator=who(issue.creator_agent_id),
             activities=views,
         )

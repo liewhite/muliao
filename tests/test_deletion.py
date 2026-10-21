@@ -370,3 +370,18 @@ async def test_deleting_an_agent_whose_run_is_executing_stops_it_and_completes(
     with pytest.raises(NotFound):
         await container.sessions.get(session.id)
     assert await _failed_tasks(container) == []
+
+
+async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(container, make_agent, models):
+    """名称映射（AgentNames）包括正在删除的 agent：删除流程还没清掉它的 trigger、issue 时列出它们不报错；
+    删完之后留下的 id 显示为 deleted agent。"""
+    agent = await make_agent("alpha")
+    await start(container, agent.id, "hi")
+    await drain(container)
+
+    await container.agent_lifecycle.delete(agent.id, author="user")
+    assert [a.id for a in await container.agents.list()].count(agent.id) == 0
+    assert (await container.agents.names())[agent.id] == "alpha"
+
+    await drain(container)
+    assert (await container.agents.names())[agent.id] == f"(deleted agent {agent.id})"

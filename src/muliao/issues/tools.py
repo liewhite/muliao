@@ -5,7 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agents.api import AgentService
+from muliao.agents.api import AgentNames, AgentService
 from muliao.errors import InvalidInput
 from muliao.issues.rules import USER
 from muliao.issues.service import KEEP, IssueService, IssueWork, Keep
@@ -37,17 +37,15 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
     async def assignee_id(name: str) -> str:
         return USER if name == USER else (await agents.find_by_name(name)).id
 
-    def summary(issue: Issue, names: dict[str, str], work: IssueWork) -> IssueSummary:
+    def summary(issue: Issue, names: AgentNames, work: IssueWork) -> IssueSummary:
         assignee = issue.assignee
         return IssueSummary(
             id=issue.id,
             title=issue.title,
-            owner=None
-            if issue.owner_agent_id is None
-            else names.get(issue.owner_agent_id, issue.owner_agent_id),
+            owner=None if issue.owner_agent_id is None else names[issue.owner_agent_id],
             status=issue.status,
             priority=issue.priority,
-            assignee=None if assignee is None else names.get(assignee, assignee),
+            assignee=None if assignee is None else USER if assignee == USER else names[assignee],
             assignee_session=work.assignee_session,
             stalled=work.stalled,
             updated_at=issue.updated_at,
@@ -67,7 +65,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             assignee: Only issues assigned to this agent (by name) or `user`.
             owner: Only issues owned by this agent (by name): the whole history of its project.
         """
-        names = {a.id: a.name for a in await agents.list()} | {USER: USER}
+        names = await agents.names()
         found = await issues.list(
             statuses=list(statuses),
             assignee=None if assignee is None else await assignee_id(assignee),

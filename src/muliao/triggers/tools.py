@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 
-from muliao.agents.api import AgentService
+from muliao.agents.api import AgentNames, AgentService
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.triggers.precheck import Precheck
 from muliao.triggers.service import KEEP, TriggerService
@@ -62,7 +62,7 @@ def triggers_toolset(
     """precheck_timeout：前置检查的时限（runtime.precheck_timeout_seconds），写进工具说明，agent 写检查脚本时要知道。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    async def info(t: Trigger, names: dict[str, str]) -> TriggerInfo:
+    async def info(t: Trigger, names: AgentNames) -> TriggerInfo:
         return TriggerInfo(
             name=t.name,
             kind=t.kind,
@@ -92,7 +92,7 @@ def triggers_toolset(
                 the list above. Their `last_session_id` is the conversation they started, so this is how you
                 look up what came of a one-off task.
         """
-        names = {a.id: a.name for a in await agents.list()}
+        names = await agents.names()
         return [await info(t, names) for t in await triggers.list(finished=finished)]
 
     @ts.tool(description=_CREATE_DESCRIPTION.format(timeout=precheck_timeout))

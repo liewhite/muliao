@@ -115,6 +115,22 @@ async def active_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     return info_of(await _active_in(s, agent_id))
 
 
+@dataclass(frozen=True)
+class AgentNames:
+    """agent id → 展示名称（包括正在删除的）。别的领域里留着的 id 可能属于已删除的 agent，显示为
+    「(deleted agent <id>)」，而不是报错或露出裸 id。"""
+
+    by_id: dict[str, str]
+
+    def __getitem__(self, agent_id: str) -> str:
+        return self.by_id.get(agent_id, f"(deleted agent {agent_id})")
+
+
+async def agent_names_in(s: AsyncSession) -> AgentNames:
+    """在调用方的事务里取全部 agent 的名称（AgentNames）。"""
+    return AgentNames({agent_id: name for agent_id, name in await s.execute(select(Agent.id, Agent.name))})
+
+
 async def agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     """agent（包括正在删除的）。在调用方的事务里读它的展示信息（名称、模型）：这些字段的修改与调用方的写入之间没有
     先后要求。"""
@@ -266,6 +282,10 @@ class AgentService:
                 ).all()
                 raise NotFound(f"no agent named {name!r}; available agents: {list(names)}")
             return info_of(agent)
+
+    async def names(self) -> AgentNames:
+        async with self._db.transaction() as s:
+            return await agent_names_in(s)
 
     async def list(self) -> list[AgentInfo]:
         async with self._db.transaction() as s:
