@@ -6,7 +6,7 @@
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Literal
 
 from pydantic import BaseModel
@@ -81,3 +81,14 @@ class EventBus:
             yield sub
         finally:
             self._subscribers.discard(sub)
+
+
+class EventFeed:
+    """总线的订阅一面（HTTP 层的 SSE 用），转发给 EventBus。HTTP 层拿到的是这个对象而不是总线本身，所以在运行时
+    也发布不了事件。"""
+
+    def __init__(self, bus: EventBus):
+        self._bus = bus
+
+    def subscribe(self) -> AbstractAsyncContextManager[_Subscriber]:
+        return self._bus.subscribe()

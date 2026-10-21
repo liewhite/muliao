@@ -290,7 +290,7 @@ async def test_reflection_runs_every_n_steps_over_the_window_and_can_write_skill
     assert [r.output for r in rows] == ["Created skill tea-making."]
     agent = await container.agents.get(alpha)
     # 步数由消息推导：检查点推进之后归零
-    assert (await container.reflection.steps_since([agent]))[alpha] == 0
+    assert (await container.reflection_log.steps_since([agent]))[alpha] == 0
     async with container.db.transaction() as s:
         checkpoint = await s.get(ReflectionCheckpoint, alpha)
     assert checkpoint.message_id == reflections[0].payload["to_message_id"]

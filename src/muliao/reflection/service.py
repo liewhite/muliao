@@ -60,13 +60,12 @@ def bounded(transcript: str) -> str:
     )
 
 
-class ReflectionScheduler:
-    """反思的调度（反思领域）：订阅 RunEnded，按该 agent 自检查点以来的步数决定是否投递反思；检查点在自己的表里。"""
+class ReflectionLog:
+    """反思的只读一面（HTTP 层用）：反思记录与距下次反思的步数。调度（ReflectionScheduler）的订阅、投递与删除检查
+    不在这里，HTTP 层拿不到。"""
 
-    def __init__(self, db: Database, queue: TaskQueue, agents: AgentService, history: AgentHistory):
+    def __init__(self, db: Database, history: AgentHistory):
         self._db = db
-        self._queue = queue
-        self._agents = agents
         self._history = history
 
     async def list(self, agent_id: str, limit: int) -> list[Reflection]:
@@ -79,6 +78,31 @@ class ReflectionScheduler:
                 .limit(limit)
             )
             return list((await s.scalars(query)).all())
+
+    async def steps_since(self, agents: Sequence[AgentInfo]) -> dict[str, int]:
+        """这些 agent 自上次反思以来的步数（界面显示「距下次反思」）。"""
+        async with self._db.transaction() as s:
+            checkpoints = {
+                c.agent_id: c.message_id
+                for c in (
+                    await s.scalars(
+                        select(ReflectionCheckpoint).where(
+                            ReflectionCheckpoint.agent_id.in_([a.id for a in agents])
+                        )
+                    )
+                ).all()
+            }
+        return {a.id: await self._history.steps_after(a.id, checkpoints.get(a.id, 0)) for a in agents}
+
+
+class ReflectionScheduler:
+    """反思的调度（反思领域）：订阅 RunEnded，按该 agent 自检查点以来的步数决定是否投递反思；检查点在自己的表里。"""
+
+    def __init__(self, db: Database, queue: TaskQueue, agents: AgentService, history: AgentHistory):
+        self._db = db
+        self._queue = queue
+        self._agents = agents
+        self._history = history
 
     def subscribe(self, messaging: Messaging) -> None:
         # 同一个 agent 的两种事件在同一条 lane 上按发布顺序处理。通常 RunEnded 先于 AgentDeleting 发布（agent 有会话忙时
@@ -146,21 +170,6 @@ class ReflectionScheduler:
     async def blocks_agent_deletion_in(self, s: AsyncSession, agent_id: str) -> bool:
         """这个 agent 的反思在排队或执行（删除 agent 的检查，组合根注入 AgentLifecycle）：执行中的反思会写它的资源。"""
         return await self._queue.lane_busy(s, reflection_lane(agent_id))
-
-    async def steps_since(self, agents: Sequence[AgentInfo]) -> dict[str, int]:
-        """这些 agent 自上次反思以来的步数（界面显示「距下次反思」）。"""
-        async with self._db.transaction() as s:
-            checkpoints = {
-                c.agent_id: c.message_id
-                for c in (
-                    await s.scalars(
-                        select(ReflectionCheckpoint).where(
-                            ReflectionCheckpoint.agent_id.in_([a.id for a in agents])
-                        )
-                    )
-                ).all()
-            }
-        return {a.id: await self._history.steps_after(a.id, checkpoints.get(a.id, 0)) for a in agents}
 
 
 def reflection_lane(agent_id: str) -> str:

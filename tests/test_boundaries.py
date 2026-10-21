@@ -11,35 +11,47 @@ import ast
 from pathlib import Path
 
 SRC = Path(__file__).parent.parent / "src" / "muliao"
-DOMAINS = {
-    "agents",
-    "agent_runtime",
-    "files",
-    "issues",
-    "jobs",
-    "notifications",
-    "reflection",
-    "sessions",
-    "triggers",
-    "speech",
-    "usage",
-    "vault",
-}
+# 经 api 的依赖方向（docs/architecture.md 2.3）：领域只能 import 更早一层的领域的 api，同层与反向都不行，所以依赖无环。
+# 事件与定向命令不受方向限制（events 模块只放消息的数据形状）。新增领域要在这里定它在哪一层
+LAYERS: list[set[str]] = [
+    {"files", "agents", "usage", "speech"},
+    {"vault"},
+    {"agent_runtime"},
+    {"sessions"},
+    {"jobs", "reflection", "notifications", "triggers", "issues"},
+]
+DOMAINS = set().union(*LAYERS)
+RANK = {d: rank for rank, layer in enumerate(LAYERS) for d in layer}
 # 一个领域对外公开的模块
 PUBLIC = {"api", "events"}
 # HTTP 适配层另外可以 import 的：序列化领域交给它的行
 HTTP_VISIBLE = PUBLIC | {"tables"}
+# src/muliao 下不是领域的目录
+NOT_DOMAINS = {"api", "platform", "migrations", "webui"}
 
 
-def _imports(path: Path) -> list[tuple[int, str]]:
+def _module_of(path: Path, root: Path) -> list[str]:
+    """path 这个模块所在的包（相对 import 从这里算起）：muliao/agents/x.py 与 muliao/agents/__init__.py 都在 muliao.agents。"""
+    return ["muliao", *path.relative_to(root).parts[:-1]]
+
+
+def _imports(path: Path, root: Path = SRC) -> list[tuple[int, str]]:
+    """这个文件 import 的 muliao 模块（含相对 import，换算成绝对名）。`from x import y` 记成 x.y：y 可能是子模块。"""
     tree = ast.parse(path.read_text())
     found = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            if node.module == "muliao":
-                found += [(node.lineno, f"muliao.{alias.name}") for alias in node.names]
+        if isinstance(node, ast.ImportFrom):
+            if node.level:
+                package = _module_of(path, root)
+                base = package[: len(package) - node.level + 1]
+                if not base:
+                    raise AssertionError(
+                        f"{path}:{node.lineno} relative import goes above the muliao package"
+                    )
+                module = ".".join(base + ([node.module] if node.module else []))
             else:
-                found += [(node.lineno, f"{node.module}.{alias.name}") for alias in node.names]
+                module = node.module or ""
+            found += [(node.lineno, f"{module}.{alias.name}") for alias in node.names]
         elif isinstance(node, ast.Import):
             found += [(node.lineno, alias.name) for alias in node.names]
     return [(line, name) for line, name in found if name.startswith("muliao.")]
@@ -60,31 +72,43 @@ def _violations() -> list[str]:
                     problems.append(
                         f"{where} (a domain must not depend on the HTTP layer or the composition root)"
                     )
-                elif (
-                    target[1] in DOMAINS
-                    and target[1] != owner
-                    and (len(target) < 3 or target[2] not in PUBLIC)
-                ):
-                    problems.append(f"{where} (only {target[1]}.api and {target[1]}.events are public)")
+                elif target[1] in DOMAINS and target[1] != owner:
+                    if len(target) < 3 or target[2] not in PUBLIC:
+                        problems.append(f"{where} (only {target[1]}.api and {target[1]}.events are public)")
+                    elif target[2] == "api" and RANK[target[1]] >= RANK[owner]:
+                        problems.append(
+                            f"{where} (dependencies through api go one way: {owner} is in layer {RANK[owner]}, "
+                            f"{target[1]} in layer {RANK[target[1]]})"
+                        )
             if owner == "api" and target[1] in DOMAINS and (len(target) < 3 or target[2] not in HTTP_VISIBLE):
                 problems.append(f"{where} (the HTTP layer uses {target[1]}.api, .events and .tables only)")
     return sorted(problems)
 
 
 def test_every_domain_has_a_public_api_module():
-    """边界检查只看得到 api 模块：缺了它，领域的公开接口（如在调用方事务里写入的函数）就不受下面的检查。"""
-    packages = {p.name for p in SRC.iterdir() if (p / "__init__.py").exists()} - {
-        "api",
-        "platform",
-        "migrations",
-        "webui",
-    }
+    """边界检查只看得到 api 模块：缺了它，领域的公开接口（如在调用方事务里写入的函数）就不受下面的检查。目录有没有
+    __init__.py 都算（没有它的命名空间包照样能 import）。"""
+    packages = {p.name for p in SRC.iterdir() if p.is_dir() and p.name != "__pycache__"} - NOT_DOMAINS
     assert packages == DOMAINS
     assert sorted(d for d in DOMAINS if not (SRC / d / "api.py").exists()) == []
 
 
 def test_domains_only_use_each_others_api():
     assert _violations() == []
+
+
+def test_relative_imports_are_resolved_to_the_module_they_name(tmp_path):
+    root = tmp_path / "muliao"
+    module = root / "jobs" / "x.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        "from . import api\nfrom .runner import y\nfrom ..sessions.mailbox import z\nimport os\n"
+    )
+    assert _imports(module, root) == [
+        (1, "muliao.jobs.api"),
+        (2, "muliao.jobs.runner.y"),
+        (3, "muliao.sessions.mailbox.z"),
+    ]
 
 
 async def test_a_transaction_writing_two_domains_tables_fails(container, make_agent):
@@ -116,7 +140,6 @@ async def test_a_domain_and_the_task_table_may_be_written_together(container):
 READ_ONLY_IN_CALLER_TRANSACTION = {
     "agents": {"active_agent_in", "agent_in", "agent_names_in"},
     "files": {"load_metas"},
-    "reflection": {"ReflectionScheduler.blocks_agent_deletion_in"},
     "sessions": {
         "session_in",
         "receive_command_in",
@@ -127,7 +150,7 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
         "SessionActivity.blocks_agent_deletion_in",
     },
     # 触发器领域内部（各触发方式）用的查询；TriggerService 由 api 导出给 HTTP 层
-    "triggers": {"TriggerService.get_in", "TriggerService.busy_in"},
+    "triggers": {"TriggerService.busy_in"},
 }
 
 
@@ -192,11 +215,11 @@ def test_the_http_layer_sees_only_domain_facades():
 
     from muliao.config import Settings
     from muliao.container import Container
-    from muliao.platform.bus import EventBus
+    from muliao.platform.bus import EventFeed
     from muliao.platform.tasks import TaskAdmin
 
     # 平台类型：展示事件流（只订阅）与「任务」页的窄口
-    reviewed = (Settings, EventBus, TaskAdmin)
+    reviewed = (Settings, EventFeed, TaskAdmin)
 
     exported = [
         getattr(module, name)
@@ -215,4 +238,27 @@ def test_the_http_layer_sees_only_domain_facades():
                 continue
             if not any(t is e for e in exported):
                 problems.append(f"Container.{field.name}: {t.__module__}.{t.__qualname__}")
+    assert problems == []
+
+
+async def test_the_container_holds_exactly_the_declared_types_at_run_time(container):
+    """声明类型挡不住运行时（项目不跑类型检查）：窄接口要是把完整对象传进来（如把 TaskQueue 当 TaskAdmin），HTTP 层
+    照样能调 enqueue。所以每个字段的值必须恰好是声明的类型，不能是它的子类或别的对象。"""
+    import dataclasses
+    import types
+    import typing
+
+    from muliao.container import Container
+
+    c = container.container
+    hints = typing.get_type_hints(Container)
+    problems = []
+    for field in dataclasses.fields(Container):
+        if field.name == "running":
+            continue
+        hint = hints[field.name]
+        allowed = typing.get_args(hint) if isinstance(hint, types.UnionType) else (hint,)
+        value = getattr(c, field.name)
+        if not any(type(value) is t for t in allowed):
+            problems.append(f"Container.{field.name}: {type(value).__qualname__} is not {hint}")
     assert problems == []

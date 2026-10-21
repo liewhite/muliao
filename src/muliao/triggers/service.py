@@ -100,6 +100,14 @@ def event_prompt(instructions: str, payload: str | None) -> str:
     return f"{instructions.strip()}\n\n<event>\n{payload}\n</event>"
 
 
+async def trigger_in(s: AsyncSession, trigger_id: int) -> Trigger:
+    """在调用方事务里取这一行（触发器领域内部用，不公开：HTTP 层与别的领域经 TriggerService 的命令与查询）。"""
+    trigger = await s.get(Trigger, trigger_id)
+    if trigger is None:
+        raise NotFound(f"trigger {trigger_id} not found")
+    return trigger
+
+
 class TriggerService:
     def __init__(
         self,
@@ -258,7 +266,7 @@ class TriggerService:
 
     async def delete(self, trigger_id: int) -> None:
         async with self._db.transaction() as s:
-            trigger = await self.get_in(s, trigger_id)
+            trigger = await trigger_in(s, trigger_id)
             await s.delete(trigger)
         self._changed()
         log.info("trigger deleted", extra={"trigger": trigger.name, "trigger_id": trigger_id})
@@ -279,15 +287,9 @@ class TriggerService:
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
 
-    async def get_in(self, s: AsyncSession, trigger_id: int) -> Trigger:
-        trigger = await s.get(Trigger, trigger_id)
-        if trigger is None:
-            raise NotFound(f"trigger {trigger_id} not found")
-        return trigger
-
     async def _manageable_in(self, s: AsyncSession, trigger_id: int) -> Trigger:
         """管理操作（修改、启用、立即运行）的前提：这个触发器还会触发。已归档的只能查看和删除。"""
-        trigger = await self.get_in(s, trigger_id)
+        trigger = await trigger_in(s, trigger_id)
         if trigger.finished_at is not None:
             raise _finished(trigger.name)
         return trigger
@@ -374,7 +376,7 @@ class TriggerService:
 
     async def _fire(self, trigger_id: int, payload: str | None, session_id: str | None) -> _Fired | None:
         async with self._db.transaction() as s:
-            trigger = await self.get_in(s, trigger_id)
+            trigger = await trigger_in(s, trigger_id)
             if not trigger.enabled:
                 raise Conflict(f"trigger {trigger.name!r} is disabled")
             if trigger.precheck is None:

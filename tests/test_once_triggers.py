@@ -13,6 +13,7 @@ from muliao.errors import Conflict, InvalidInput
 from muliao.sessions.api import Origin
 from muliao.triggers.once import OnceKind
 from muliao.triggers.precheck import Precheck
+from muliao.triggers.service import trigger_in
 from tests.conftest import login
 from tests.test_flow import deliver
 
@@ -31,7 +32,7 @@ async def _make_due(container, trigger_id: int) -> None:
     """把预定时间改到过去，模拟到点（创建时不接受过去的时间）。"""
     past = (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()
     async with container.db.transaction() as s:
-        trigger = await container.triggers.get_in(s, trigger_id)
+        trigger = await trigger_in(s, trigger_id)
         trigger.config = {**trigger.config, "at": past}
 
 
@@ -144,7 +145,7 @@ async def test_a_once_trigger_that_cannot_fire_is_archived_with_the_reason(conta
     alpha = (await make_agent()).id
     trigger = await _once(container, alpha)
     async with container.db.transaction() as s:
-        (await container.triggers.get_in(s, trigger.id)).prompt = "   "  # 模拟绕过校验写入的坏数据
+        (await trigger_in(s, trigger.id)).prompt = "   "  # 模拟绕过校验写入的坏数据
 
     await _fire_due(container, trigger.id)
 

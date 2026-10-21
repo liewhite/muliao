@@ -31,7 +31,6 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
 
 import anyio
 
@@ -146,15 +145,21 @@ def _write(path: Path, content: str) -> None:
     tmp.replace(path)
 
 
-class RevisionHistory(Protocol):
-    """资源文件的版本历史（ResourceRepo 实现）。HTTP 层只读历史；写入（包括恢复到某一版）一律经各 store，带上
-    owner 的检查（agents.active）。"""
+class RevisionHistory:
+    """资源文件的版本历史，只读，转发给 ResourceRepo。HTTP 层拿到的是这个对象而不是仓库本身，所以在运行时也写不了；
+    写入（包括恢复到某一版）一律经各 store，带上 owner 的检查（agents.active）。"""
 
-    async def history(self, path: Path, limit: int) -> list[Revision]: ...
+    def __init__(self, repo: ResourceRepo):
+        self._repo = repo
 
-    async def contents_at(self, revs: Sequence[str], path: Path) -> list[str]: ...
+    async def history(self, path: Path, limit: int) -> list[Revision]:
+        return await self._repo.history(path, limit)
 
-    async def read_at(self, rev: str, path: Path) -> str: ...
+    async def contents_at(self, revs: Sequence[str], path: Path) -> list[str]:
+        return await self._repo.contents_at(revs, path)
+
+    async def read_at(self, rev: str, path: Path) -> str:
+        return await self._repo.read_at(rev, path)
 
 
 class ResourceRepo:

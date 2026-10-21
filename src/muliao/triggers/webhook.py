@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from muliao.errors import InvalidInput, Unauthorized
 from muliao.platform.db import Database
-from muliao.triggers.service import TriggerService
+from muliao.triggers.service import TriggerService, trigger_in
 from muliao.triggers.tables import Trigger
 
 log = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ class Webhooks:
         """生成（或重新生成）token：旧 token 立即失效。只由用户在界面上调用。"""
         token = secrets.token_urlsafe(32)
         async with self._db.transaction() as s:
-            trigger = await self._triggers.get_in(s, trigger_id)
+            trigger = await trigger_in(s, trigger_id)
             if trigger.kind != KIND:
                 raise InvalidInput(f"trigger {trigger.name!r} is a {trigger.kind} trigger, not a webhook")
             self._triggers.set_state(trigger, token_hash=_hash(token))

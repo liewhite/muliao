@@ -11,6 +11,7 @@ from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
+from muliao.triggers.service import trigger_in
 from tests.conftest import login
 from tests.test_flow import drain, history_of, start
 
@@ -24,7 +25,7 @@ def _schedule(container):
 async def _make_due(container, trigger_id: int) -> None:
     past = (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()
     async with container.db.transaction() as s:
-        trigger = await container.triggers.get_in(s, trigger_id)
+        trigger = await trigger_in(s, trigger_id)
         container.triggers.set_state(trigger, next_run_at=past)
 
 
@@ -81,7 +82,7 @@ async def test_broken_schedule_trigger_is_disabled_without_blocking_others(conta
     for trigger_id in (bad.id, good.id):
         await _make_due(container, trigger_id)
     async with container.db.transaction() as s:
-        (await triggers.get_in(s, bad.id)).prompt = "   "  # 模拟绕过校验写入的坏数据
+        (await trigger_in(s, bad.id)).prompt = "   "  # 模拟绕过校验写入的坏数据
     changed = triggers.watch()
 
     await schedules.fire_due()
@@ -180,7 +181,7 @@ async def test_a_trigger_with_corrupt_stored_data_is_disabled_and_the_scan_goes_
     )
     await _make_due(container, good.id)
     async with container.db.transaction() as s:
-        row = await triggers.get_in(s, bad.id)
+        row = await trigger_in(s, bad.id)
         if kind == "schedule" and "config" in corrupt:
             # 到期了才会去读 cron：先让它到期，再弄坏配置
             row.state = {"next_run_at": (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()}
@@ -203,7 +204,7 @@ async def test_a_trigger_corrupted_after_being_listed_is_disabled_when_it_fires(
         name="bad", agent_id=alpha, kind="schedule", prompt="x", config={"cron": "* * * * *"}
     )
     async with container.db.transaction() as s:
-        (await triggers.get_in(s, trigger.id)).state = {}
+        (await trigger_in(s, trigger.id)).state = {}
 
     await schedules._fire_one(trigger.id, datetime.now().astimezone())
 
@@ -545,7 +546,7 @@ async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_
     container.triggers._run_now = later  # noqa: SLF001  模拟投递没能马上执行
     await container.triggers.fire(trigger.id)
     async with container.db.transaction() as s:
-        assert await container.triggers.busy_in(s, await container.triggers.get_in(s, trigger.id))
+        assert await container.triggers.busy_in(s, await trigger_in(s, trigger.id))
 
 
 async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(container, make_agent):
@@ -561,7 +562,7 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
 
     async def busy() -> bool:
         async with container.db.transaction() as s:
-            return await container.triggers.busy_in(s, await container.triggers.get_in(s, trigger.id))
+            return await container.triggers.busy_in(s, await trigger_in(s, trigger.id))
 
     assert not await busy()
     async with container.db.transaction() as s:
