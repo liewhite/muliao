@@ -14,8 +14,7 @@ import tempfile
 from pathlib import Path
 
 import anyio
-from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolReturn
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.runner import AgentRuntime, RunProfile
 from muliao.agents.api import AgentService
@@ -72,7 +71,7 @@ async def _discard(workspace: Path, agent_id: str, outcome: str) -> None:
 
 
 def temp_agent_toolset(
-    runtime: AgentRuntime, agents: AgentService, profile: RunProfile, temp_root: Path, request_limit: int
+    runtime: AgentRuntime, agents: AgentService, profile: RunProfile, temp_root: Path
 ) -> FunctionToolset[RunScope]:
     """profile 是临时 agent 能用的工具：不得包含本工具集（临时 agent 不能再开临时 agent）。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
@@ -109,23 +108,10 @@ def temp_agent_toolset(
                 model=parent.model if model is None else model,
                 profile=profile,
                 workspace=workspace,
-                request_limit=request_limit,
                 session_id=ctx.deps.session_id,
             )
             outcome = "ok"
             return result.to_tool_return()
-        except UsageLimitExceeded as e:
-            # 有界运行在契约内的结局：交回调用方的模型去拆分任务，而不是让整轮失败后反复重试。
-            # 这次已经共享的文件不交付（存在文件存储里但没有引用）：拆分后重做时会重新共享
-            outcome = "request limit"
-            log.warning(
-                "temp agent hit its request limit",
-                extra={"agent": parent.id, "session_id": ctx.deps.session_id, "limit": request_limit},
-            )
-            raise ModelRetry(
-                f"the temporary agent did not finish within {request_limit} model requests ({e}); "
-                "split the job into smaller tasks"
-            ) from e
         except anyio.get_cancelled_exc_class():
             outcome = "cancelled"
             raise

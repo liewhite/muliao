@@ -335,17 +335,7 @@ def build_container(
     implementations = {
         # 对话里用的这份带后台任务（只有会话运行会选用工具组；反思不开放它）
         "workspace": [session_workspace_toolset(vault, limits, files, jobs)],
-        "temp_agent": (
-            [
-                temp_agent_toolset(
-                    runtime,
-                    agents,
-                    temp_profile,
-                    settings.temp_dir,
-                    settings.runtime.temp_agent_request_limit,
-                )
-            ]
-        ),
+        "temp_agent": [temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir)],
         # stop_thread 用消费者停止会话，而消费者又用这组工具：通过延迟绑定的调用打破构造顺序上的环
         "delegation": (
             [

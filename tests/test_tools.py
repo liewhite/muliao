@@ -307,16 +307,22 @@ async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
     assert turn.status == TaskStatus.FAILED and "400" in turn.error
 
 
-async def test_temp_agent_over_request_limit_is_returned_to_caller(container, make_agent, models):
+async def test_temp_agent_is_not_capped_by_pydantic_ai_default_request_limit(container, make_agent, models):
+    """临时 agent 和长期 agent 一样不设请求数上限（#45）：越过 pydantic-ai 默认的 50 次请求照样做完。"""
     me = await make_agent("manager", model="tools")
-    endless = scripted(lambda m, i: ModelResponse(parts=[ToolCallPart("write_file", {"path": "x.txt", "content": "x"}, tool_call_id="l")]))
-    models.models["helper"] = endless
+    steps = 60
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if sum(isinstance(m, ModelResponse) for m in messages) >= steps:
+            return ModelResponse(parts=[TextPart("finished")])
+        return ModelResponse(parts=[ToolCallPart("write_file", {"path": "x.txt", "content": "x"})])
+
+    models.models["helper"] = scripted(fn)
     outputs = await run_tools(
         container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})]
     )
 
-    limit = container.settings.runtime.temp_agent_request_limit
-    assert f"did not finish within {limit} model requests" in outputs[0]
+    assert outputs == ["finished"]
     assert list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240
 
 

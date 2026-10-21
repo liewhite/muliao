@@ -269,7 +269,6 @@ async def test_a_temp_agent_sees_the_mcp_servers_of_its_caller(container, make_a
         model="temp",
         profile=RunProfile(toolsets=[container.mcp.toolset()]),
         workspace=tmp_path,
-        request_limit=3,
         session_id=None,
     )
     assert answer.text == "ok" and {"echo_echo", "echo_token"} <= set(seen)

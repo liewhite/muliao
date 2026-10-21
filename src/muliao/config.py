@@ -143,8 +143,6 @@ class RuntimeConfig(_Section):
     # 后台任务（jobs.runner）运行期间，每隔这么久给发起它的会话发一个检查事件，由 agent 决定继续等还是结束它
     job_check_seconds: float = Field(default=60.0, gt=0)
     tool_output_max_chars: int = Field(default=20000, ge=1000)
-    # 临时 agent 单次运行最多的模型请求数：做不完就尽早失败，交回调用方拆分任务，而不是靠整轮超时反复重试
-    temp_agent_request_limit: int = Field(default=30, ge=1)
     # 单个文件（用户上传的附件、agent 发出的文件）的字节上限，默认与 Matrix Synapse 一致
     upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
 

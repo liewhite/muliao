@@ -48,8 +48,8 @@ from muliao.platform.tasks import Clock
 from muliao.platform.tooling import Audience, DomainErrorsAsRetry, Origin, RunScope
 from muliao.usage.api import RunKind, UsageEntry, UsageLog
 
-# pydantic-ai 不传 usage_limits 时默认 request_limit=50。长期 agent 的一次运行（开发任务）上百步是常态，不设请求数上限：
-# 运行靠用户停止与 task 时限收束。只有临时 agent 按 runtime.temp_agent_request_limit 显式设限。
+# pydantic-ai 不传 usage_limits 时默认 request_limit=50。任何运行（长期 agent 的轮次与反思、临时 agent）都不设请求数
+# 上限：开发任务上百步是常态，运行靠用户停止与 task 时限收束。
 _UNLIMITED = UsageLimits(request_limit=None)
 
 log = logging.getLogger(__name__)
@@ -280,14 +280,13 @@ class AgentRuntime:
         model: str,
         profile: RunProfile,
         workspace: Path,
-        request_limit: int,
         session_id: str | None,
     ) -> Answer:
         """一次性的临时 agent：替 parent 做一件事，返回最终回答，以及它用工具挂给用户的文件（如 share_file）。
 
         没有记忆、skill、历史与反思；工具来自 profile（不含委派与再开临时 agent），MCP 与 secret 按 parent 的视角。
         也不带公共 prompt：公共 prompt 约定的是长期 agent 之间的共同规则，临时 agent 只执行调用方交给它的任务。
-        不属于任何会话，运行事件不推到会话页。模型请求数超过 request_limit 时抛出 UsageLimitExceeded。
+        不属于任何会话，运行事件不推到会话页。和长期 agent 一样不设请求数上限。
 
         session_id 是发起它的那个会话：临时 agent 自己不属于任何会话（RunScope 里仍是 None），但它花的 token
         是那次运行的开销，记到那个会话名下。
@@ -303,7 +302,6 @@ class AgentRuntime:
             prompt=f"{self.run_context(None)}\n\n{task}",
             scope=scope,
             history=(),
-            usage_limits=UsageLimits(request_limit=request_limit),
             kind=RunKind.TEMP_AGENT,
             billed_to=session_id,
         )
@@ -324,7 +322,6 @@ class AgentRuntime:
         history: Sequence[ModelMessage],
         kind: RunKind,
         billed_to: str | None,
-        usage_limits: UsageLimits = _UNLIMITED,
     ) -> AgentRunResult[str]:
         ctx = {
             "agent": scope.agent_id,
@@ -342,7 +339,7 @@ class AgentRuntime:
                 message_history=list(history),
                 deps=scope,
                 toolsets=toolsets,
-                usage_limits=usage_limits,
+                usage_limits=_UNLIMITED,
                 usage=usage,
             )
         finally:
