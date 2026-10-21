@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTheme } from '@heroui/react'
-import { Bell, Bot, MessageSquare, Settings as SettingsIcon, Zap } from 'lucide-react'
+import { Bell, Bot, KanbanSquare, MessageSquare, Settings as SettingsIcon, Zap } from 'lucide-react'
 import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
 import { closeServerEvents, useUiOutdated } from './events'
@@ -8,6 +8,8 @@ import { useUnreadCount, useUnreadSync } from './unread'
 import { AgentCreate, AgentDetail, AgentList } from './pages/Agents'
 import { Login, Settings, Tasks } from './pages/Admin'
 import Triggers from './pages/Triggers'
+import Issues from './pages/Issues'
+import IssueView from './pages/IssueView'
 import Mcp from './pages/Mcp'
 import Vault from './pages/Vault'
 import PublicPrompt from './pages/Prompts'
@@ -24,6 +26,7 @@ type AuthState = 'checking' | 'in' | 'out'
 
 const TABS = [
   { to: '/', label: '会话', Icon: MessageSquare },
+  { to: '/issues', label: 'Issues', Icon: KanbanSquare },
   { to: '/notifications', label: '通知', Icon: Bell },
   { to: '/agents', label: 'Agents', Icon: Bot },
   { to: '/triggers', label: '触发', Icon: Zap },
@@ -88,6 +91,12 @@ function SessionRoute() {
   return <SessionView key={id} />
 }
 
+/** 每个 issue 一个独立的页面实例：编辑中的草稿不带到另一个 issue */
+function IssueRoute() {
+  const { id = '' } = useParams()
+  return <IssueView key={id} />
+}
+
 /** 登录后的界面：页面与底部导航 */
 function Shell() {
   useUnreadSync()
@@ -105,6 +114,8 @@ function Shell() {
           <Route path="/agents/new" element={<AgentCreate />} />
           <Route path="/agents/:id" element={<AgentDetail />} />
           <Route path="/triggers" element={<Triggers />} />
+          <Route path="/issues" element={<Issues />} />
+          <Route path="/issues/:id" element={<IssueRoute />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/prompt" element={<PublicPrompt />} />
           <Route path="/skills" element={<PublicSkills />} />

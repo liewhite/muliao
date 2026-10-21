@@ -23,6 +23,7 @@
 | File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
 | Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，deliver task 只引用它，内容不另存一份 | `notifications` 表 |
 | ModelUsage（用量） | 一次模型运行报告的 token 用量：时间、agent、会话（没有就为空）、运行类型（对话 / 压缩 / 反思 / 临时 agent）、模型、请求数与各项 token。只增不改，也不随 agent 与会话的删除而消失——它是账目 | `model_usage` 表 |
+| Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、指派人（agent / 用户 / 无）、时间线（评论与属性变化）。转入 todo / in_progress 或在这两个状态被指派时唤醒被指派的 agent | `issues`、`issue_activities` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件；触发方式（定时、一次性、webhook……）多态实现。跑完不会再触发的归档（`finished_at`），离开列表但留下历史 | `triggers` 表 |
 
 目录：
@@ -67,6 +68,7 @@ muliao/
   jobs/            后台任务
   agents/          agent 目录、资源仓库、自我改进工具、工具组目录
   usage/           模型用量：每次运行记一条，按时间范围汇总
+  issues/          issue 看板：人与 agent 协作的事项，按状态与指派唤醒 agent
   speech/          语音输入：把界面录下的语音转成文字（可选，配置 [transcription] 才有）
   vault/  files/  reflection/  notifications/  triggers/
   api/             HTTP 适配
@@ -581,7 +583,18 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - **错误**：不认识的音频类型、空录音 422；超过 `max_bytes` 413；服务端出错、网络不通是 502（`UpstreamFailed`，带上服务给的原因），界面显示后用户重录即可，不重试。听不到说话时返回空文字，界面提示「没有听到说话内容」。
 - **开关**：没配置 `[transcription]` 时 `/api/transcriptions` 是 404，`GET /api/features` 的 `transcription` 为假，界面不显示麦克风按钮；浏览器不能录音（非 HTTPS、没有 `MediaRecorder`）时也不显示。
 
-## 21. 暂缓的项
+## 21. issue 看板
+
+**职责**：人与 agent 协作的事项（`issues/`，表 `issues` 与 `issue_activities`）。界面上有看板（拖拽改状态）、列表与详情页；agent 用工具组 `issues`（`issue_list/show/create/update/comment`）读写。
+
+- **状态**：backlog / todo / in_progress / in_review / blocked / done / cancelled。**指派人**：一个 agent、用户（`"user"`），或未指派。界面上的操作以用户身份进行（actor 为 None），工具以调用它的 agent 身份进行。
+- **时间线**：每次创建、评论、每个真正变了的字段各记一条 `IssueActivity`，只增不改；删除 issue 一起删。
+- **唤醒**（`issues.rules.wake_target`，纯函数）：被指派人是 agent、且不是这次动手的 agent 自己时，状态从别处转入 todo / in_progress，或处于这两个状态时被指派给它（含新建时就指派好）——唤醒它。评论也唤醒处于这两个状态的被指派 agent（`comment_wakes`）。agent 改自己的 issue 不唤醒自己。
+- **投信**：与触发器同一套路——在 issue 的事务里 `check_receivable_in`、发出定向命令 `Receive`（来源 `Origin.ISSUE`，`origin_ref` 为 issue id），提交后 `run_now`。同一个 agent 在同一个 issue 上续写同一个会话（`Issue.sessions`，agent id → 会话 id），会话被删了就新开。信件内容是 issue 的全文（描述与时间线）加上处理指引；没有用户在等（awaited = False），结果记在 issue 上。
+- **交给用户**：agent 把 issue 指派给用户时发 `Notify` 推送，点开是它在这个 issue 上的会话。
+- **删除 agent**：订阅 `AgentDeleting`，指派给它的 issue 改为未指派（记一条时间线），忘掉它的会话。
+
+## 22. 暂缓的项
 
 - **临时 agent 改为用完即删的 thread**：运行只剩一种模型，失败只重做自己。等占用与结清稳定之后再定。
 - **自己写 agent loop**（框架只做模型客户端）：改动限于 `agent_runtime` 的运行端口（第 2.1 节）。

@@ -67,6 +67,12 @@ export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
 export type SecretInfo = WithAgentId<Schemas['SecretOut'], 'owner'>
 /** 一个可选的工具组（后端 tool_catalog） */
 export type ToolGroup = Schemas['ToolGroupOut']
+export type IssueStatus = Schemas['IssueStatus']
+export type IssuePriority = Schemas['IssuePriority']
+/** assignee：agent id、'user'（用户），或 null（未指派） */
+export type Issue = Schemas['IssueOut']
+export type IssueActivity = Schemas['ActivityOut']
+export type IssueDetail = Schemas['IssueDetailOut']
 export type AgentDefaults = Schemas['AgentDefaultsOut']
 
 export class ApiError extends Error {
@@ -282,6 +288,16 @@ export const api = {
   setSecret: (owner: AgentId | null, key: string, value: string, description: string) =>
     call('put', '/api/vault/{key}', { path: { key }, query: { owner }, body: { value, description } }),
   deleteSecret: (owner: AgentId | null, key: string) => call('delete', '/api/vault/{key}', { path: { key }, query: { owner } }),
+
+  issues: () => call('get', '/api/issues'),
+  issue: (issue_id: number) => call('get', '/api/issues/{issue_id}', { path: { issue_id } }),
+  createIssue: (body: Schemas['IssueCreate']) => call('post', '/api/issues', { body }),
+  /** 只修改给出的字段；assignee 给 null 表示取消指派 */
+  updateIssue: (issue_id: number, body: Schemas['IssuePatch']) =>
+    call('patch', '/api/issues/{issue_id}', { path: { issue_id }, body }),
+  commentIssue: (issue_id: number, body: string) =>
+    call('post', '/api/issues/{issue_id}/comments', { path: { issue_id }, body: { body } }),
+  deleteIssue: (issue_id: number) => call('delete', '/api/issues/{issue_id}', { path: { issue_id } }),
 
   vapidKey: () => call('get', '/api/push/vapid'),
   subscribePush: (body: Schemas['PushSubscriptionIn']) => call('post', '/api/push/subscriptions', { body }),

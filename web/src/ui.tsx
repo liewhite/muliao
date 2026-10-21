@@ -122,9 +122,12 @@ export function Page({
   actions,
   footer,
   scrollRef,
+  wide = false,
   children,
 }: {
   title: ReactNode
+  /** 内容不限宽、不加内边距（如横向滚动的看板），由页面自己排版 */
+  wide?: boolean
   back?: string
   actions?: ReactNode
   /** 固定在页面底部、不随内容滚动（如输入框） */
@@ -146,7 +149,7 @@ export function Page({
         <div className="flex items-center gap-2">{actions}</div>
       </header>
       <main ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 py-3">{children}</div>
+        {wide ? children : <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 py-3">{children}</div>}
       </main>
       {footer}
     </div>
