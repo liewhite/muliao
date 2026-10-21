@@ -27,6 +27,8 @@ def replace_all(current: str, old: str, new: str, what: str) -> tuple[str, int]:
 def replace_each(current: str, edits: list[tuple[str, str, bool]], what: str) -> tuple[str, int]:
     """依次做多处替换（每项 (old, new, 是否替换全部)，后一项作用在前面替换后的文本上），返回新文本与总替换数。
     任何一项失败都整体失败，报错指出是第几项；调用方只在成功后写盘，所以不会留下改了一半的文件。"""
+    if not edits:
+        raise InvalidInput("no edits given")
     total = 0
     for i, (old, new, every) in enumerate(edits, 1):
         try:

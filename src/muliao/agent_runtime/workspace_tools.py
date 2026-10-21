@@ -27,8 +27,7 @@ _MAX_LINE_CHARS = 2000
 
 
 class TextEdit(BaseModel):
-    """edit_file 一次调用里的一处替换。"""
-
+    # edit_file 一次调用里的一处替换（类 docstring 会进 schema 给模型看，所以用注释）
     model_config = ConfigDict(extra="forbid")
 
     old_text: str = Field(description="Exact text to replace.")
@@ -159,8 +158,8 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
     async def edit_file(
         ctx: RunContext[RunScope],
         path: str,
-        old_text: str = "",
-        new_text: str = "",
+        old_text: str | None = None,
+        new_text: str | None = None,
         replace_all: bool = False,
         edits: tuple[TextEdit, ...] = (),
     ) -> str:
@@ -172,15 +171,17 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         Args:
             path: File path.
             old_text: Exact text to replace (omit when using `edits`).
-            new_text: Replacement text.
-            replace_all: Replace every occurrence (e.g. renaming a variable) instead of exactly one.
-            edits: Several replacements in this file, applied in order; each later one sees the earlier ones'
-                result.
+            new_text: Replacement text; empty deletes `old_text` (omit when using `edits`).
+            replace_all: Replace every occurrence (e.g. renaming a variable) instead of exactly one (omit when
+                using `edits`).
+            edits: List of {old_text, new_text, replace_all} replacements in this file, applied in order (each
+                sees the result of the earlier ones); each old_text must occur exactly once unless its
+                replace_all is set.
         """
-        if edits and (old_text or new_text or replace_all):
+        if edits and (old_text is not None or new_text is not None or replace_all):
             raise InvalidInput("pass either old_text/new_text/replace_all or edits, not both")
-        if not edits and not old_text:
-            raise InvalidInput("old_text must not be empty (or pass edits)")
+        if not edits and (old_text is None or new_text is None):
+            raise InvalidInput("old_text and new_text are required (or pass edits)")
         target = resolve(ctx.deps, path)
         if not target.is_file():
             raise NotFound(f"file not found: {target}")

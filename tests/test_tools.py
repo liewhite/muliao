@@ -592,6 +592,9 @@ async def test_edit_file_applies_several_edits_all_or_nothing(container, make_ag
                 },
             ),
             ("edit_file", {"path": "m.py", "new_text": "z"}),
+            ("edit_file", {"path": "m.py", "old_text": "a=10"}),
+            ("edit_file", {"path": "m.py", "new_text": "", "edits": [{"old_text": "b", "new_text": "y"}]}),
+            ("read_file", {"path": "m.py"}),
         ],
     )
     assert "edit 2 of 2" in outputs[1] and "1 earlier edit(s) applied" in outputs[1]
@@ -600,7 +603,10 @@ async def test_edit_file_applies_several_edits_all_or_nothing(container, make_ag
     assert "5 replacements" in outputs[3]
     assert "1\ta=10\n2\tbb=2\n3\tc=3" in outputs[4]
     assert "not both" in outputs[5]
-    assert "old_text must not be empty" in outputs[6]
+    assert "old_text and new_text are required" in outputs[6]
+    assert "old_text and new_text are required" in outputs[7]
+    assert "not both" in outputs[8]
+    assert "1\ta=10\n2\tbb=2\n3\tc=3" in outputs[9]
 
 
 async def test_read_file_truncates_very_long_lines(container, make_agent, models):
