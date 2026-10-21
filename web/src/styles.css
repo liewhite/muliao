@@ -10,6 +10,14 @@ body,
   height: 100%;
 }
 
+/* iOS 主屏 PWA（status-bar-style 为 black-translucent）里，html 的 100% 高度少算了顶部安全区，
+   底部会空出一条状态栏高度的空白；补上这段。只对 iOS 生效，浏览器里 Safari 竖屏时 inset-top 为 0 */
+@supports (-webkit-touch-callout: none) {
+  html {
+    height: calc(100% + env(safe-area-inset-top));
+  }
+}
+
 body {
   @apply bg-background text-foreground antialiased;
   -webkit-text-size-adjust: 100%;
