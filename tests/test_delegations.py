@@ -13,7 +13,7 @@ from muliao.sessions.kinds import SessionKind
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, SessionHold
 from tests.scripted import scripted
-from tests.test_flow import deliver, drain, start, tasks_of
+from tests.test_flow import deliver, drain, history_of, start, tasks_of
 from tests.test_mailbox import Recorder
 from tests.test_threads import call, echo, threads_of
 
@@ -277,7 +277,7 @@ async def test_stopping_the_parent_stops_its_reported_threads_and_they_do_not_re
     [child] = await threads_of(container, parent.id)
     [child_run] = [t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == child.id]
     assert child_run.status == TaskStatus.DONE
-    history = await container.sessions.history(child.id)
+    history = await history_of(container, child.id)
     assert history[-1].metadata and history[-1].metadata.get("muliao_stopped")
     # 被一起停下的 thread 不再给父会话投信：父会话没有因为它再运行
     assert not any(f'source="thread:{child.id}"' in c for p in recorder.prompts for c in p)
@@ -602,7 +602,10 @@ async def test_an_ask_whose_delegation_never_committed_is_executed_again_on_retr
 
     assert seen == ["checked check"]
     async with container.db.transaction() as s:
-        assert len((await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))).all()) == 1
+        assert (
+            len((await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))).all())
+            == 1
+        )
 
 
 async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, make_agent, models):
@@ -617,11 +620,13 @@ async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, mak
     await drain(container)
 
     async with container.db.transaction() as s:
-        [delegation] = (await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))).all()
+        [delegation] = (
+            await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))
+        ).all()
         mail = (await s.scalars(select(Mail).where(Mail.session_id == parent.id))).all()
     assert delegation.status == HoldStatus.CLEARED
     # 发问方的这次调用补上了「被停止」，之后没有回答投回来，也没有再运行
-    history = await container.sessions.history(parent.id)
+    history = await history_of(container, parent.id)
     from pydantic_ai.messages import ToolReturnPart
 
     returns = [p for m in history for p in m.parts if isinstance(p, ToolReturnPart)]

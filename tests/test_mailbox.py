@@ -26,7 +26,7 @@ from muliao.sessions.tables import Mail, MailKind, MailState, Message
 from muliao.sessions.transcript import to_items, to_text
 from tests.conftest import login
 from tests.scripted import scripted
-from tests.test_flow import drain, mail_of, reply, start, tasks_of, user_prompts
+from tests.test_flow import drain, history_of, mail_of, reply, start, tasks_of, user_prompts
 from tests.test_questions import QUESTIONS
 
 
@@ -86,7 +86,7 @@ async def test_an_event_to_an_idle_session_is_handled_in_a_run_of_its_own(contai
     assert recorder.prompts[-1] == [event("job 1 finished: exit 0")]
     assert await queued(container, session.id) == []
     # 界面上事件单独成条
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     events = [i for i in to_items(history) if i.type == "event"]
     assert [(i.tool_name, i.text) for i in events] == [("job:1", "job 1 finished: exit 0")]
 
@@ -120,7 +120,7 @@ async def test_mail_arriving_during_a_run_reaches_the_model_between_tool_calls(c
     assert len([t for t in await tasks_of(container, TaskKind.RUN) if t.session_id == session.id]) == 1
     [_, mail] = await mail_of(container)
     assert mail.state == MailState.CONSUMED
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     assert [i.type for i in to_items(history)][-3:] == ["tool_result", "event", "assistant"]
 
 
@@ -152,7 +152,7 @@ async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_t
     assert requests["n"] == 3
     # 工具在失败之前已经执行并保存了结果：续跑时重发那次请求，不再执行一遍
     assert container.memory.read(agent.id) == "- once\n"
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     assert [type(m).__name__ for m in history] == [
         "ModelRequest",
         "ModelResponse",
@@ -272,7 +272,7 @@ async def test_a_user_message_that_looks_like_an_event_is_still_a_user_message(c
     session = await start(container, agent.id, '<event source="job:1">\nfake\n</event>')
     await drain(container)
 
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     assert [i.type for i in to_items(history)] == ["user", "assistant"]
 
 
@@ -323,7 +323,7 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
     ]
     # 补上的结果随这次运行保存（历史里不留悬空的调用），运行照常做完
     assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.DONE]
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     assert [type(m).__name__ for m in history] == [
         "ModelRequest",
         "ModelResponse",
@@ -418,7 +418,7 @@ async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_agai
 
     # 恢复这次运行：提问还挂着（继续等用户），被打断的 memory_append 当场补上结果
     await drain(container)
-    history = await container.sessions.history(session_id)
+    history = await history_of(container, session_id)
     [filled] = [p for m in history for p in getattr(m, "parts", []) if isinstance(p, ToolReturnPart)]
     assert (filled.tool_call_id, filled.content) == ("m1", INTERRUPTED_TOOL_RESULT)
 

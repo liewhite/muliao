@@ -28,7 +28,7 @@ from muliao.agent_runtime.conventions import (
 )
 from muliao.agent_runtime.mcp import McpServer, McpTransport, mcp_config
 from muliao.agent_runtime.redaction import redact_messages
-from muliao.agent_runtime.runner import AgentRuntime, RunProfile, StepHooks, TextKind, ToolGroups
+from muliao.agent_runtime.runner import AgentRuntime, RunProfile, StepHooks, ToolGroups
 from muliao.agent_runtime.workspace_tools import SHELL_DESCRIPTION, ShellLimits, file_toolset, run_foreground
 
 __all__ = [
@@ -49,7 +49,6 @@ __all__ = [
     "RunProfile",
     "ShellLimits",
     "StepHooks",
-    "TextKind",
     "ToolGroups",
     "answer_text",
     "attach_run_context",

@@ -4,7 +4,7 @@ import httpx
 
 from muliao.platform.tooling import Origin
 from tests.conftest import login
-from tests.test_flow import drain, last_user_prompt
+from tests.test_flow import drain, history_of, last_user_prompt
 
 
 async def _create(client: httpx.AsyncClient, agent_id: str, name: str = "github") -> tuple[dict, str]:
@@ -43,7 +43,7 @@ async def test_each_event_starts_a_new_session_with_payload_in_prompt(client, co
 
     sessions = await container.sessions.list(agent_id=alpha, origins=[Origin.TRIGGER], limit=10, offset=0)
     assert {s.id for s in sessions} == {first.json()["session_id"], second.json()["session_id"]}
-    prompt = last_user_prompt(await container.sessions.history(first.json()["session_id"]))
+    prompt = last_user_prompt(await history_of(container, first.json()["session_id"]))
     assert prompt == 'Triage this GitHub event.\n\n<event>\n{"action": "opened"}\n</event>'
     # 事件触发的一轮不自动推送
     assert await container.notifications.list(100) == []
@@ -123,7 +123,7 @@ async def test_event_can_continue_the_session_it_started(client, container, make
     assert resp.status_code == 202 and resp.json() == first
     await drain(container)
 
-    history = await container.sessions.history(first["session_id"])
+    history = await history_of(container, first["session_id"])
     assert last_user_prompt(history).endswith("<event>\ncommented on #1\n</event>")
     assert len(await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0)) == 1
 

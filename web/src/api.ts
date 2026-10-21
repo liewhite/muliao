@@ -41,7 +41,6 @@ export type Task = WithAgentId<Schemas['TaskOut'], 'agent_id'>
 export type Usage = WithAgentId<Schemas['UsageOut'], 'agent_id'>
 export type UsageGroup = Schemas['UsageGroup']
 
-export type QuestionOption = Schemas['Option']
 export type Question = Schemas['Question']
 export type QuestionAnswer = Schemas['QuestionAnswer']
 export type AnsweredQuestion = Schemas['AnsweredQuestion']
@@ -57,7 +56,6 @@ export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'run' | '
 }
 export type LiveRun = Schemas['LiveRunOut']
 
-export type SkillMeta = Schemas['SkillOut']
 export type Skill = Schemas['SkillDetail']
 export type Memory = Schemas['MemoryOut']
 export type Reflection = Schemas['ReflectionOut']
@@ -70,7 +68,6 @@ export type Trigger = WithAgentId<
 >
 export type TriggerKindName = Trigger['kind']
 export type ResourceKind = Schemas['ResourceKind']
-export type Revision = Schemas['RevisionOut']
 export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
 export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
 export type SecretInfo = WithAgentId<Schemas['SecretOut'], 'owner'>

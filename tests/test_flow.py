@@ -138,6 +138,11 @@ async def reply(container, session_id: str, prompt: str) -> Mail:
     return mail
 
 
+async def history_of(container, session_id: str) -> list[ModelMessage]:
+    """会话的完整原始历史（不带消息 id）。"""
+    return [m for _, m in await container.sessions.history_with_ids(session_id)]
+
+
 async def mail_of(container) -> list[Mail]:
     """所有会话信箱里的信件，按到达顺序。"""
     async with container.db.transaction() as s:
@@ -162,7 +167,7 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     await drain(container)
 
     detail = await container.sessions.get(session.id)
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     assert detail.unread
     assert container.memory.read(alpha) == "- user likes tea\n"
     assert last_user_prompt(history) == "I like tea"
@@ -238,7 +243,7 @@ async def test_reply_continues_with_full_history(container, make_agent, models):
     await drain(container)
 
     assert seen == [1, 3]
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     assert [type(m).__name__ for m in history] == ["ModelRequest", "ModelResponse"] * 2
 
 
@@ -299,7 +304,7 @@ async def test_transient_model_error_is_retried_and_converges(container, make_ag
 
     turn = (await tasks_of(container, TaskKind.RUN))[0]
     assert turn.status == TaskStatus.DONE and turn.attempts == 2
-    assert len(await container.sessions.history(session.id)) == 2
+    assert len(await history_of(container, session.id)) == 2
 
 
 async def test_contract_violation_error_fails_without_retry(container, make_agent, models):
@@ -333,7 +338,7 @@ async def test_delegate_task_opens_public_thread_and_notifies_user(container, ma
     child = children[0]
     assert child.origin == Origin.DELEGATION and child.parent_session_id == parent.id
     assert child.thread == "x" and child.kind == SessionKind.THREAD
-    assert (await container.sessions.history(child.id))[-1].parts[0].content == "summary of X"
+    assert (await history_of(container, child.id))[-1].parts[0].content == "summary of X"
     assert [n.session_id for n in await container.notifications.list(10)] == [child.id]
 
 
@@ -406,7 +411,7 @@ async def test_long_run_is_not_capped_by_pydantic_ai_default_request_limit(conta
 
     [turn] = await tasks_of(container, TaskKind.RUN)
     assert turn.status == TaskStatus.DONE, turn.error
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "finished"
 
 

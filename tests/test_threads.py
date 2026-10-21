@@ -15,7 +15,7 @@ from muliao.sessions.kinds import SessionKind
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Message, Session
 from tests.scripted import scripted
-from tests.test_flow import drain, idle, last_user_prompt, reply, start, tasks_of, tool_returns
+from tests.test_flow import drain, history_of, idle, last_user_prompt, reply, start, tasks_of, tool_returns
 
 
 def steps(*responses):
@@ -53,7 +53,7 @@ async def threads_of(container, parent_id: str) -> list[Session]:
 
 
 async def last_answer(container, session_id: str) -> str:
-    history = await container.sessions.history(session_id)
+    history = await history_of(container, session_id)
     assert isinstance(history[-1], ModelResponse)
     return history[-1].parts[0].content
 
@@ -253,7 +253,9 @@ async def test_deleting_parent_deletes_private_threads_and_keeps_public_ones(con
     )
     parent = await start(container, lead, "go")
     await drain(container)
-    pub, priv = sorted(await threads_of(container, parent.id), key=lambda t: t.kind == SessionKind.PRIVATE_THREAD)
+    pub, priv = sorted(
+        await threads_of(container, parent.id), key=lambda t: t.kind == SessionKind.PRIVATE_THREAD
+    )
 
     await container.sessions.delete(parent.id)
 

@@ -21,7 +21,7 @@ from muliao.sessions.history import CONTINUATION
 from muliao.sessions.lanes import session_lane
 from muliao.sessions.tables import Compaction, Message
 from tests.scripted import scripted
-from tests.test_flow import drain, last_user_prompt, reply, start
+from tests.test_flow import drain, history_of, last_user_prompt, reply, start
 
 
 class Recorder:
@@ -111,7 +111,7 @@ async def test_compaction_summarizes_older_steps_and_the_next_run_uses_the_summa
     assert message_count == keep + 1  # 只有保留的步 + 这次的提问
     assert "<summary>\nSUMMARY#1\n</summary>" in instructions
     # UI 仍能看到完整原文
-    assert len(await container.sessions.history(session.id)) == (n + 1) * 2
+    assert len(await history_of(container, session.id)) == (n + 1) * 2
 
 
 async def test_second_compaction_folds_in_previous_summary(container, make_agent, models):
@@ -224,7 +224,7 @@ async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make
     assert container.memory.read(alpha) == "- once\n"
     runs = [t for t in await _tasks(container, TaskKind.RUN)]
     assert [r.status for r in runs] == [TaskStatus.DONE]
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "done"
 
 
@@ -289,7 +289,7 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
 
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     results = [r for m in history for r in results_in(m)]
     assert sorted(results) == sorted(c.tool_call_id for m in history for c in calls_in(m))
     assert len(results) == len(set(results))

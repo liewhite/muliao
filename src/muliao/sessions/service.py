@@ -175,9 +175,6 @@ class SessionService:
             await self._get(s, parent_id)
             return await threads_of(s, parent_id)
 
-    async def history(self, session_id: str) -> list[ModelMessage]:
-        return [m for _, m in await self.history_with_ids(session_id)]
-
     async def history_with_ids(self, session_id: str) -> list[tuple[int, ModelMessage]]:
         """完整原始历史（不受压缩影响），附消息 id。"""
         async with self._db.transaction() as s:

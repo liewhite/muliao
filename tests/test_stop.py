@@ -20,7 +20,7 @@ from muliao.sessions.mailbox import post_in
 from muliao.sessions.tables import MailKind, MailState
 from tests.conftest import login
 from tests.scripted import scripted
-from tests.test_flow import drain, mail_of, tasks_of
+from tests.test_flow import drain, history_of, mail_of, tasks_of
 
 
 class TwoSteps:
@@ -303,7 +303,7 @@ async def test_stopping_during_a_pending_retry_stops_the_retry(container, make_a
     await drain(container)
 
     assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.DONE]
-    history = await container.sessions.history(session_id)
+    history = await history_of(container, session_id)
     assert history[-1].metadata[RUN_STOPPED] is True
     # 之后的消息不会把停下的请求再发一遍
     from tests.test_flow import reply
@@ -311,7 +311,7 @@ async def test_stopping_during_a_pending_retry_stops_the_retry(container, make_a
     await reply(container, session_id, "next")
     await drain(container)
     assert len(calls) == 2
-    history = await container.sessions.history(session_id)
+    history = await history_of(container, session_id)
     assert [type(m).__name__ for m in history] == ["ModelRequest", "ModelRequest", "ModelResponse"]
 
 
@@ -340,7 +340,7 @@ async def test_stopping_a_resumed_run_before_its_first_step_closes_the_history(
     await worker
 
     assert len(calls) == 1
-    history = await container.sessions.history(session_id)
+    history = await history_of(container, session_id)
     assert [type(m).__name__ for m in history] == ["ModelRequest"]
     assert history[-1].metadata[RUN_STOPPED] is True
     assert [m.state for m in await mail_of(container)][-1] == MailState.DISCARDED

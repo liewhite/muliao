@@ -13,7 +13,7 @@ from muliao.platform.tables import TaskKind, TaskStatus
 from muliao.platform.tooling import Audience, Origin
 from muliao.sessions.tables import Message
 from tests.scripted import scripted
-from tests.test_flow import drain, start, tasks_of
+from tests.test_flow import drain, history_of, start, tasks_of
 
 _TIME = "[Current local time: "
 
@@ -61,7 +61,7 @@ async def test_a_run_hands_the_model_the_time_in_its_first_request(container, ma
     assert request.parts[1].content == ["hi"]
 
     # 入库的是同一条，之后原样重放；但会话条目里不展示这一段（它不是用户说的话）
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     assert run_context_index(history[0]) == 0
     items = (await container.sessions.detail(session.id)).items
     assert [(i.type, i.text) for i in items] == [("user", "hi"), ("assistant", "ok")]
@@ -97,7 +97,7 @@ async def test_resuming_resends_the_saved_request_unchanged_and_marks_the_next_n
 
     after = await payloads_of(container, session.id)
     assert after[: len(before)] == before
-    history = await container.sessions.history(session.id)
+    history = await history_of(container, session.id)
     requests = [m for m in history if isinstance(m, ModelRequest)]
     # 第一次运行只在它新增的第一条请求（用户内容）上挂；第二条是它新增的第二条，不挂。续跑那次重发第二条、
     # 不改它，把自己的运行上下文挂到第三条上——那条只有工具结果，这一段排在工具结果之后

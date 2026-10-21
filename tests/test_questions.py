@@ -22,7 +22,7 @@ from muliao.sessions.compaction import steps_of
 from muliao.sessions.tables import Message
 from tests.conftest import login
 from tests.scripted import scripted
-from tests.test_flow import drain, start, tasks_of
+from tests.test_flow import drain, history_of, start, tasks_of
 
 QUESTIONS = [
     {
@@ -165,7 +165,7 @@ async def test_an_answer_behind_a_queued_message_still_answers_the_questions(
     await drain(container)
 
     assert [json.loads(r)["answered"] for r in asker.results] == [True]
-    history = await container.sessions.history(session_id)
+    history = await history_of(container, session_id)
     assert "先看看别的" in str(history[-2].parts[-1].content)
 
 
@@ -298,12 +298,12 @@ async def test_a_later_run_finishes_a_failed_answer_and_retrying_it_does_nothing
     notes = (await client.get("/api/notifications")).json()
     assert len(notes) == 3  # 提问、接手的运行回答了回答、之后的消息
 
-    before = await container.sessions.history(session_id)
+    before = await history_of(container, session_id)
     assert (await client.post(f"/api/tasks/{failed.id}/retry")).status_code == 200
     await drain(container)
     retried = next(t for t in await tasks_of(container, TaskKind.RUN) if t.id == failed.id)
     assert retried.status == TaskStatus.DONE
-    assert await container.sessions.history(session_id) == before
+    assert await history_of(container, session_id) == before
     assert len((await client.get("/api/notifications")).json()) == 3
 
 

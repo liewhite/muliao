@@ -12,6 +12,7 @@ from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.activity import WorkState
+from muliao.sessions.halt import Halted
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.threads import Threads, validate_thread
 
@@ -37,7 +38,7 @@ class ThreadInfo(BaseModel):
 
 
 # 停止一个会话：停下它的消费、清空信箱（sessions.consumer.Consumer.stop_session）
-StopSession = Callable[[str], Awaitable[None]]
+StopSession = Callable[[str], Awaitable[Halted]]
 
 
 _DELEGATE_DESCRIPTION = """\
@@ -154,7 +155,9 @@ def delegation_toolset(
             child_id = await threads.thread_id_in(s, parent_id, validate_thread(thread))
         if child_id is None:
             raise ModelRetry(f"this conversation has no thread named {thread!r}; see list_threads")
-        await stop_session(child_id)
+        if await stop_session(child_id) == Halted.GONE:
+            # 查到之后、停止之前被删除了（随所属 agent 删除）
+            return f"thread {thread!r} was deleted meanwhile; nothing to stop"
         return f"stopped thread {thread!r}"
 
     @ts.tool

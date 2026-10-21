@@ -13,7 +13,7 @@ from muliao.platform.tooling import Origin
 from muliao.platform.worker import is_transient
 from muliao.sessions.tables import Message
 from muliao.sessions.transcript import to_items
-from tests.test_flow import call_then_answer, drain, start
+from tests.test_flow import call_then_answer, drain, history_of, start
 
 
 async def test_message_ids_never_reused_after_deleting_latest_session(container, make_agent):
@@ -86,7 +86,7 @@ async def test_vault_set_value_is_redacted_from_saved_history(container, make_ag
     async with container.db.transaction() as s:
         payloads = (await s.scalars(select(Message.payload).where(Message.session_id == session.id))).all()
     assert all("super-secret" not in p for p in payloads)
-    calls = [i for i in to_items(await container.sessions.history(session.id)) if i.type == "tool_call"]
+    calls = [i for i in to_items(await history_of(container, session.id)) if i.type == "tool_call"]
     assert "[redacted]" in calls[0].text
 
 

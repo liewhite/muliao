@@ -12,7 +12,7 @@ from muliao.platform.tooling import Origin
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
 from tests.conftest import login
-from tests.test_flow import drain, start
+from tests.test_flow import drain, history_of, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
 
@@ -228,7 +228,7 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
 
     from muliao.sessions.transcript import to_items
 
-    items = to_items(await container.sessions.history(session.id))
+    items = to_items(await history_of(container, session.id))
     results = [i.text for i in items if i.type == "tool_result"]
     assert results == ["tok-123"]
 

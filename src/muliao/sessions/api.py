@@ -5,16 +5,15 @@
 - 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；结局与运行中检查经定向命令
   WorkEnded / WorkCheckIn（sessions.events）；
 - 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙）、AgentHistory（反思用的步数与记录）；
-- 会话种类与 HTTP 层用的读模型、展示事件；停止的结果：Halted。
+- 会话种类与 HTTP 层用的读模型、展示事件。
 """
 
 from muliao.sessions.activity import SessionActivity, WorkState
 from muliao.sessions.agent_history import AgentHistory
-from muliao.sessions.halt import Halted
 from muliao.sessions.holds import registered_in as hold_registered_in
 from muliao.sessions.inbound import Inbound, NewSession, SessionKey, receive_command_in
 from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
-from muliao.sessions.kinds import KindPolicy, SessionKind, policy_of
+from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.live import LiveRun, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
@@ -25,7 +24,6 @@ from muliao.sessions.work import SessionWork
 __all__ = [
     "SessionActivity",
     "WorkState",
-    "KindPolicy",
     "SessionKind",
     "policy_of",
     "LiveRun",
@@ -39,7 +37,6 @@ __all__ = [
     "default_title",
     "Item",
     "AgentHistory",
-    "Halted",
     "Inbound",
     "NewSession",
     "SessionInfo",
