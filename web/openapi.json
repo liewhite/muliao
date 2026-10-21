@@ -555,6 +555,57 @@
         }
       }
     },
+    "/api/skills/corrupt": {
+      "get": {
+        "summary": "List Corrupt Skills",
+        "description": "owner 名下（缺省为公共）读不出来的 skill，GET /skills 不列它们。",
+        "operationId": "list_corrupt_skills_api_skills_corrupt_get",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CorruptOut"
+                  },
+                  "title": "Response List Corrupt Skills Api Skills Corrupt Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/skill": {
       "get": {
         "summary": "Get Skill",
@@ -1287,6 +1338,57 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/mcp/corrupt": {
+      "get": {
+        "summary": "List Corrupt Mcp",
+        "description": "owner 名下（缺省为公共）配置坏了的 server，GET /mcp 不列它们。",
+        "operationId": "list_corrupt_mcp_api_mcp_corrupt_get",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CorruptOut"
+                  },
+                  "title": "Response List Corrupt Mcp Api Mcp Corrupt Get"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -3246,6 +3348,37 @@
           "content"
         ],
         "title": "ContentIn"
+      },
+      "CorruptOut": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "problem": {
+            "type": "string",
+            "title": "Problem"
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner",
+          "name",
+          "problem"
+        ],
+        "title": "CorruptOut",
+        "description": "一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除或重写。"
       },
       "EnabledIn": {
         "properties": {

@@ -521,12 +521,12 @@ class IssueService:
         self, issue: Issue, activities: list[IssueActivity], links: Links, names: AgentNames
     ) -> IssueView:
         def who(agent_id: str | None) -> str:
-            return "user" if agent_id is None else names[agent_id]
+            return USER if agent_id is None else names[agent_id]
 
         def assignee(value: Any) -> str:
             if value is None:
                 return "unassigned"
-            return "user" if value == USER else names[value]
+            return USER if value == USER else names[value]
 
         def issues(ids: list[int]) -> str:
             return ", ".join(f"#{i}" for i in ids) or "none"

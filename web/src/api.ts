@@ -32,6 +32,8 @@ export type AppNotification = Schemas['NotificationOut']
 export const FILES_PATH = '/api/files'
 
 export type FileInfo = Schemas['FileOut']
+/** 读不出来的资源文件（skill、MCP 配置）：列表接口不含它们，单独列出供删除 */
+export type CorruptResource = Schemas['CorruptOut']
 export type Attachment = Schemas['Attachment']
 export type Item = Schemas['Item']
 export type CompactionInfo = Schemas['CompactionOut']
@@ -220,6 +222,7 @@ export const api = {
   reflections: (agent_id: AgentId) => call('get', '/api/agents/{agent_id}/reflections', { path: { agent_id } }),
 
   skills: (owner: string | null) => call('get', '/api/skills', { query: { owner } }),
+  corruptSkills: (owner: AgentId | null) => call('get', '/api/skills/corrupt', { query: { owner } }),
   skill: (owner: string | null, name: string) => call('get', '/api/skill', { query: { owner, name } }),
   saveSkill: (body: Schemas['SkillIn']) => call('put', '/api/skill', { body }),
   deleteSkill: (owner: string | null, name: string) => call('delete', '/api/skill', { query: { owner, name } }),
@@ -290,6 +293,7 @@ export const api = {
   setMcpEnabled: (owner: AgentId | null, name: string, enabled: boolean) =>
     branded<McpServer>(call('put', '/api/mcp/enabled', { query: { owner, name }, body: { enabled } })),
   deleteMcp: (owner: AgentId | null, name: string) => call('delete', '/api/mcp', { query: { owner, name } }),
+  corruptMcp: (owner: AgentId | null) => call('get', '/api/mcp/corrupt', { query: { owner } }),
 
   /** owner 视角，同 mcp */
   secrets: (owner: AgentId | null) => branded<SecretInfo[]>(call('get', '/api/vault', { query: { owner } })),

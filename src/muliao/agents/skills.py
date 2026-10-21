@@ -83,17 +83,24 @@ class SkillStore:
         return skills, corrupt
 
     def list(self, owner: str | None) -> list[SkillMeta]:
-        """owner 名下读得出来的 skill；坏的见 corrupt。"""
+        """owner 名下读得出来的 skill；坏的见 corrupt_in。"""
         return self._scan(owner)[0]
 
-    def corrupt(self, agent: str) -> list[CorruptResource]:
-        """agent 看得到的（它私有的与公共的）读不出来的 skill：skill 索引里逐项说明，不让整次运行失败。"""
-        return self._scan(agent)[1] + self._scan(None)[1]
+    def corrupt_in(self, owner: str | None) -> list[CorruptResource]:
+        """owner 名下读不出来的 skill（管理界面列出，供删除或重写）。"""
+        return self._scan(owner)[1]
+
+    def index(self, agent: str) -> tuple[list[SkillMeta], list[CorruptResource]]:
+        """agent 的 skill 索引：看得到的 skill（合并规则见 ownership.shadowing），以及它私有的与公共的里读不出来的
+        （索引里逐项说明，不让整次运行失败）。坏的不参与同名遮蔽——读不出来就不知道它是什么——所以坏掉的私有 skill
+        的同名公共 skill 照常可见。每个目录只扫一次。"""
+        private, private_corrupt = self._scan(agent)
+        public, public_corrupt = self._scan(None)
+        skills = visible(private + public, agent_id=agent, owner=lambda s: s.owner, name=lambda s: s.name)
+        return skills, private_corrupt + public_corrupt
 
     def visible_to(self, agent: str) -> list[SkillMeta]:
-        return visible(
-            self.list(agent) + self.list(None), agent_id=agent, owner=lambda s: s.owner, name=lambda s: s.name
-        )
+        return self.index(agent)[0]
 
     def _existing(self, owner: str | None, name: str) -> Path:
         skill_dir = self._root(owner) / validate_slug("skill", name)
@@ -106,10 +113,11 @@ class SkillStore:
 
     def resolve(self, agent: str, name: str) -> Skill:
         """agent 视角读取（合并规则见 ownership.shadowing）。"""
-        for meta in self.visible_to(agent):
+        skills, corrupt_skills = self.index(agent)
+        for meta in skills:
             if meta.name == name:
                 return self.read(meta.owner, name)
-        for corrupt in self.corrupt(agent):
+        for corrupt in corrupt_skills:
             if corrupt.name == name:
                 # 交还模型（不让整次运行失败）：它可以照说明重写或删掉
                 raise NotFound(corrupt.describe())
@@ -149,7 +157,11 @@ class SkillStore:
             raise InvalidInput(
                 "nothing to change: give old_text/new_text to edit the instructions, description, or both"
             )
-        meta = self.read(owner, name).meta
+        try:
+            meta = self.read(owner, name).meta
+        except CorruptState as e:
+            # 交还调用方（模型照 skill 索引里的说明来修它时，不让整次运行失败）：坏的只能整篇重写或删除
+            raise InvalidInput(f"{e}; it cannot be edited in part, rewrite it as a whole or delete it") from e
 
         def transform(current: str | None) -> str:
             if current is None:

@@ -164,6 +164,7 @@ class AgentRuntime:
     async def instructions(self, agent: AgentInfo, scope: RunScope, summary: str | None) -> str:
         """这次运行的指令。只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字：它是缓存前缀
         （agent_runtime.instructions 的模块说明）。随运行变化的那几行走 run_context。"""
+        skills, corrupt_skills = self._skills.index(agent.id)
         return build_instructions(
             agent_name=agent.name,
             agent_description=agent.description,
@@ -172,8 +173,8 @@ class AgentRuntime:
             workspace=scope.workspace,
             origin=scope.origin,
             memory=self._memory.read(agent.id),
-            skills=self._skills.visible_to(agent.id),
-            corrupt_skills=self._skills.corrupt(agent.id),
+            skills=skills,
+            corrupt_skills=corrupt_skills,
             memory_limit=self._memory.max_chars,
             summary=summary,
         )
@@ -340,7 +341,7 @@ class AgentRuntime:
         async with self._billed(kind, scope.agent_id, model, billed_to, ctx, len(history)) as usage:
             with tool_input_kept_out_of_failures():
                 async with self._pai.iter(
-                    f"{context}\n\n{prompt}",
+                    None,
                     model=self._resolve_model(model),
                     instructions=instructions,
                     message_history=list(history),
@@ -352,9 +353,9 @@ class AgentRuntime:
                     node = run.next_node
                     if not PaiAgent.is_user_prompt_node(node):
                         raise RuntimeError(f"agent run did not start with the user prompt node: {node!r}")
-                    if scope.notices:
-                        # 工具组在进入 iter 时已经连接，notices 这时才齐；prompt 还没交给模型
-                        node.user_prompt = f"{with_notices(context, scope.notices)}\n\n{prompt}"
+                    # 工具组在进入 iter 时已经连接，notices 这时才齐；prompt 在这个节点运行时才交给模型。
+                    # pydantic-ai 的 RunContext.prompt 取的是传给 iter 的那个（None），本项目不读它
+                    node.user_prompt = f"{with_notices(context, scope.notices)}\n\n{prompt}"
                     async for _ in run:
                         pass
                     result = run.result

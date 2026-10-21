@@ -53,6 +53,9 @@ class RunState:
     # 这次运行的运行上下文（agent_runtime.instructions.build_run_context），由消费者在运行开始时定下：挂到本次
     # 新增的第一条请求上之后清空，一次运行只带一段
     run_context: str = ""
+    # 这次驱动的工具组在连接时发现的问题（RunScope.notices）：和运行上下文挂在同一条请求上（instructions.with_notices）。
+    # 每次驱动（压缩后续跑会重新连接）由 started 覆盖，挂出去之后清空
+    notices: Sequence[str] = ()
     # 挂着这次运行的运行上下文的那条请求（消息 id）：运行中途压缩把它切进摘要时，消费者重新定下 run_context
     run_context_row: int | None = None
     # 这次运行处理过的信件：包括之前几次尝试里已经保存的（重试沿用同一个运行），以及接着别的运行保存的部分续跑时
@@ -93,9 +96,7 @@ class Steps:
     async def _started(self, state: RunState, messages: list[ModelMessage], notices: Sequence[str]) -> None:
         state.live = messages
         state.saved = len(messages)
-        if notices:
-            # 和运行上下文挂在同一条请求上；运行上下文已经挂出去了（压缩后续跑）就单独挂在下一条新请求上
-            state.run_context = with_notices(state.run_context, notices)
+        state.notices = notices
 
     async def _before_request(
         self, state: RunState, request: ModelRequest, messages: list[ModelMessage]
@@ -116,16 +117,19 @@ class Steps:
             # 运行中途没有挂起的调用（调用只在运行结束时挂起），这时到达的回答都是迟到的
             state.taken += arrived
             append_content(request, await self._content.of(state.agent.id, arrived))
-        if state.run_context:
+        context = with_notices(state.run_context, state.notices)
+        if context:
             # 只挂在本次运行新增的第一条请求上。上面重发的那条已经在库里，不改它——改了它，它之前的历史就不再
-            # 是同一个前缀，缓存全废；那种情况下这段留给这次运行的下一条新请求
-            attach_run_context(request, state.run_context)
+            # 是同一个前缀，缓存全废；那种情况下这段留给这次运行的下一条新请求。运行上下文已经挂出去了（压缩后
+            # 续跑）时，notices 单独挂在下一条新请求上
+            attach_run_context(request, context)
         await self._save(state, [*messages[state.saved :], request], consumed=state.taken)
         if state.last_row is None:
             raise RuntimeError(f"run {state.run_id} saved a request without a row")
         if state.run_context:
             state.run_context = ""
             state.run_context_row = state.last_row.id
+        state.notices = ()
         self._live.step(state.session.id, state.last_row.id)
         state.handled += state.taken
         state.taken = []

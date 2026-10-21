@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from muliao.agents.api import USER, AgentInfo, AgentPatch, AgentSpec, SkillMeta, ToolGroupInfo
+from muliao.api.admin import CorruptOut
 from muliao.api.deps import C
 from muliao.reflection.api import list_reflections_of
 from muliao.reflection.tables import Reflection
@@ -235,6 +236,13 @@ async def list_skills(c: C, owner: str | None = None) -> list[SkillOut]:
     """owner 为空列出公共 skill，否则列出该 agent 的私有 skill。"""
     await _check_owner(c, owner)
     return [SkillOut.of(s) for s in c.skills.list(owner)]
+
+
+@router.get("/skills/corrupt")
+async def list_corrupt_skills(c: C, owner: str | None = None) -> list[CorruptOut]:
+    """owner 名下（缺省为公共）读不出来的 skill，GET /skills 不列它们。"""
+    await _check_owner(c, owner)
+    return [CorruptOut.of(x) for x in c.skills.corrupt_in(owner)]
 
 
 @router.get("/skill")

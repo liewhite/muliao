@@ -207,6 +207,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/skills/corrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Corrupt Skills
+         * @description owner 名下（缺省为公共）读不出来的 skill，GET /skills 不列它们。
+         */
+        get: operations["list_corrupt_skills_api_skills_corrupt_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/skill": {
         parameters: {
             query?: never;
@@ -394,6 +414,26 @@ export interface paths {
         post: operations["add_mcp_api_mcp_post"];
         /** Delete Mcp */
         delete: operations["delete_mcp_api_mcp_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mcp/corrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Corrupt Mcp
+         * @description owner 名下（缺省为公共）配置坏了的 server，GET /mcp 不列它们。
+         */
+        get: operations["list_corrupt_mcp_api_mcp_corrupt_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1116,6 +1156,18 @@ export interface components {
         ContentIn: {
             /** Content */
             content: string;
+        };
+        /**
+         * CorruptOut
+         * @description 一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除或重写。
+         */
+        CorruptOut: {
+            /** Owner */
+            owner: string | null;
+            /** Name */
+            name: string;
+            /** Problem */
+            problem: string;
         };
         /** EnabledIn */
         EnabledIn: {
@@ -2629,6 +2681,37 @@ export interface operations {
             };
         };
     };
+    list_corrupt_skills_api_skills_corrupt_get: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorruptOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_skill_api_skill_get: {
         parameters: {
             query: {
@@ -3122,6 +3205,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_corrupt_mcp_api_mcp_corrupt_get: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorruptOut"][];
+                };
             };
             /** @description Validation Error */
             422: {

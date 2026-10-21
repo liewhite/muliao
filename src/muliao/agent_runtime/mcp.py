@@ -176,18 +176,24 @@ class _SecretSafe(WrapperToolset[RunScope]):
 @dataclass
 class _Reachable(CombinedToolset[RunScope]):
     """一次运行用到的 server：逐个连接，连不上的（McpFailed、TransientError，信息已脱敏）跳过并记进 notices，
-    其余照常组合。"""
+    其余照常组合。暂时性失败也是跳过（这次运行没有它的工具），不让整次运行失败重试。只进入一次（每次运行由
+    toolset() 新建一个）。"""
 
+    # 与 toolsets 一一对应的 server 名，以及这次运行的 agent：记日志用
+    servers: list[str] = field(default_factory=list)
+    agent: str = ""
     notices: list[str] = field(default_factory=list)
 
     async def __aenter__(self) -> Self:
         reachable: list[AbstractToolset[RunScope]] = []
         async with AsyncExitStack() as stack:
-            for toolset in self.toolsets:
+            for name, toolset in zip(self.servers, self.toolsets, strict=True):
                 try:
                     await stack.enter_async_context(toolset)
                 except (McpFailed, TransientError) as e:
-                    log.warning("mcp server unavailable", extra={"error": str(e)})
+                    log.warning(
+                        "mcp server unavailable", extra={"agent": self.agent, "mcp": name, "error": str(e)}
+                    )
                     self.notices.append(_unavailable(str(e)))
                     continue
                 reachable.append(toolset)
@@ -255,16 +261,22 @@ class McpRegistry:
 
         async def build(ctx: RunContext[RunScope]) -> AbstractToolset[RunScope] | None:
             agent, notices = ctx.deps.agent_id, ctx.deps.notices
-            notices += [c.describe() for c in self.corrupt(agent)]
+            servers, corrupt = self.index(agent)
+            notices += [c.describe() for c in corrupt]
+            names: list[str] = []
             toolsets: list[AbstractToolset[RunScope]] = []
-            for server in self.visible_to(agent):
+            for server in servers:
                 try:
                     toolsets.append(await self.build_toolset(server))
                 except NotFound as e:
                     # 配置引用的 secret 不在了（vault.resolve_many）
-                    log.warning("mcp server unavailable", extra={"mcp": server.name, "error": str(e)})
+                    log.warning(
+                        "mcp server unavailable", extra={"agent": agent, "mcp": server.name, "error": str(e)}
+                    )
                     notices.append(_unavailable(f"MCP server {server.name!r}: {e}"))
-            return _Reachable(toolsets, notices=notices) if toolsets else None
+                    continue
+                names.append(server.name)
+            return _Reachable(toolsets, servers=names, agent=agent, notices=notices) if toolsets else None
 
         return DynamicToolset(build, per_run_step=False)
 
@@ -304,30 +316,32 @@ class McpRegistry:
         return servers, corrupt
 
     def list(self, owner: str | None) -> list[McpServer]:
-        """owner 名下配置读得出来的 server；坏的见 corrupt。"""
+        """owner 名下配置读得出来的 server；坏的见 corrupt_in。"""
         return self._scan(owner)[0]
 
-    def corrupt(self, agent_id: str) -> list[CorruptResource]:
-        """agent 看得到的（它私有的与公共的）配置坏了的 server。它们不参与同名遮蔽（是否启用都读不出来）。"""
-        return self._scan(agent_id)[1] + self._scan(None)[1]
+    def corrupt_in(self, owner: str | None) -> list[CorruptResource]:
+        """owner 名下配置坏了的 server（管理界面与 mcp_list 列出，供删除或重写）。"""
+        return self._scan(owner)[1]
 
     def view(self, owner: str | None) -> list[tuple[McpServer, bool]]:
         """管理界面：owner 视角下的 server，即它私有的（在前）与公共的，各自标明是否被同名私有 server 遮蔽。
 
         停用的 server 不参与合并（不遮蔽别人）；owner 为 None 时只有公共 server。
         """
-        servers = (self.list(owner) if owner is not None else []) + self.list(None)
-        enabled = [s for s in servers if s.enabled]
-        shadowed = {
-            id(s)
-            for s, hit in shadowing(enabled, agent_id=owner, owner=lambda s: s.owner, name=lambda s: s.name)
-            if hit
-        }
-        return [(s, id(s) in shadowed) for s in servers]
+        return _with_shadowing((self.list(owner) if owner is not None else []) + self.list(None), owner)
+
+    def index(self, agent_id: str) -> tuple[list[McpServer], list[CorruptResource]]:
+        """agent 可用的 server（view 里已启用且未被遮蔽的），以及它私有的与公共的里配置坏了的。坏的不参与同名遮蔽
+        （是否启用都读不出来）。每个目录只扫一次。"""
+        private, private_corrupt = self._scan(agent_id)
+        public, public_corrupt = self._scan(None)
+        usable = [
+            s for s, shadowed in _with_shadowing(private + public, agent_id) if s.enabled and not shadowed
+        ]
+        return usable, private_corrupt + public_corrupt
 
     def visible_to(self, agent_id: str) -> list[McpServer]:
-        """agent 可用的 server：view 里已启用且未被遮蔽的。"""
-        return [s for s, shadowed in self.view(agent_id) if s.enabled and not shadowed]
+        return self.index(agent_id)[0]
 
     def get(self, owner: str | None, name: str) -> McpServer:
         path = self._path(owner, name)
@@ -372,7 +386,11 @@ class McpRegistry:
         def toggle(current: str | None) -> str:
             if current is None:
                 raise NotFound(f"MCP server {name!r} not found in {scope_of(owner)} scope")
-            server = self._load(owner, path)
+            try:
+                server = self._load(owner, path)
+            except CorruptState as e:
+                # 交还调用方（不让模型这次运行失败）：坏的配置只能删掉重加
+                raise InvalidInput(f"{e}; remove it and add it again") from e
             updated = server.config.model_copy(update={"enabled": enabled})
             result.append(McpServer(owner=owner, name=name, config=updated))
             return _dump(updated)
@@ -380,6 +398,17 @@ class McpRegistry:
         message = f"{'enable' if enabled else 'disable'} {scope_of(owner)} MCP server {name}"
         await self._repo.update(path, toggle, message, author)
         return result[0]
+
+
+def _with_shadowing(servers: list[McpServer], owner: str | None) -> list[tuple[McpServer, bool]]:
+    """servers 各自标明是否被同名私有 server 遮蔽：停用的不参与合并（不遮蔽别人）。"""
+    enabled = [s for s in servers if s.enabled]
+    shadowed = {
+        id(s)
+        for s, hit in shadowing(enabled, agent_id=owner, owner=lambda s: s.owner, name=lambda s: s.name)
+        if hit
+    }
+    return [(s, id(s) in shadowed) for s in servers]
 
 
 def _dump(config: McpConfig) -> str:

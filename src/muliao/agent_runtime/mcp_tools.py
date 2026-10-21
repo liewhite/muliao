@@ -25,16 +25,25 @@ class McpInfo(BaseModel):
     active: bool
 
 
+class McpListing(BaseModel):
+    servers: list[McpInfo]
+    # 配置文件坏了、读不出来的 server（谁的、叫什么、原因）：删掉重加
+    corrupt: list[str]
+
+
 def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
-    async def mcp_list(ctx: RunContext[RunScope]) -> list[McpInfo]:
+    async def mcp_list(ctx: RunContext[RunScope]) -> McpListing:
         """List your private MCP servers and the public ones, including disabled ones. `active` tells whether its
-        tools are offered to you. Values of env/headers are hidden."""
-        # 哪些真正生效由合并规则决定（registry.visible_to），这里不复述规则
-        active = {s.key for s in registry.visible_to(ctx.deps.agent_id)}
-        return [
+        tools are offered to you. Values of env/headers are hidden. `corrupt` lists servers whose stored config
+        cannot be read; remove and re-add them."""
+        agent = ctx.deps.agent_id
+        # 哪些真正生效由合并规则决定（registry.index），这里不复述规则
+        usable, corrupt = registry.index(agent)
+        active = {s.key for s in usable}
+        servers = [
             McpInfo(
                 name=s.name,
                 scope=scope_of(s.owner),
@@ -47,8 +56,9 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
                 enabled=s.enabled,
                 active=s.key in active,
             )
-            for s in registry.list(ctx.deps.agent_id) + registry.list(None)
+            for s in registry.list(agent) + registry.list(None)
         ]
+        return McpListing(servers=servers, corrupt=[c.describe() for c in corrupt])
 
     @ts.tool
     async def mcp_add(

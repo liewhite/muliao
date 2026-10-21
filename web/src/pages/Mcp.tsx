@@ -3,6 +3,7 @@ import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plug, Trash2 } from 'lucide-react'
 import { api, type AgentId, type McpInput, type McpServer } from '../api'
 import { splitView } from '../ownership'
+import { CorruptList } from './CorruptList'
 import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
@@ -254,6 +255,7 @@ export function McpManager({ owner }: { owner: AgentId | null }) {
           )
         }}
       </Loading>
+      <CorruptList kind="mcp" owner={owner} />
     </div>
   )
 }

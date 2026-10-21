@@ -3,6 +3,7 @@ import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plus, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { agentRoute, api, asAgentId, type AgentId, type Skill } from '../api'
+import { CorruptList } from './CorruptList'
 import { ActionButton,
   EmptyHint,
   ErrorAlert,
@@ -54,6 +55,7 @@ export function SkillList({ owner }: { owner: AgentId | null }) {
           )
         }
       </Loading>
+      <CorruptList kind="skill" owner={owner} />
     </div>
   )
 }

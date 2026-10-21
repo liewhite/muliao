@@ -74,7 +74,7 @@ async def test_a_corrupt_skill_is_reported_on_its_own_without_hiding_the_others(
     (d / "SKILL.md").write_text(content)
 
     assert [s.name for s in skills.visible_to(ALPHA)] == ["mine", "good"]
-    [corrupt] = skills.corrupt(ALPHA)
+    [corrupt] = skills.index(ALPHA)[1]
     assert (corrupt.name, corrupt.owner, corrupt.kind) == ("real", None, "skill")
     assert problem in corrupt.problem and str(d) in corrupt.problem
     assert "public skill 'real' is corrupt" in corrupt.describe()
@@ -83,8 +83,13 @@ async def test_a_corrupt_skill_is_reported_on_its_own_without_hiding_the_others(
         skills.read(None, "real")
     with pytest.raises(NotFound, match=problem):
         skills.resolve(ALPHA, "real")
+    # 局部修改交还调用方（模型照索引说明来修时不让运行失败），整篇重写即修复
+    with pytest.raises(InvalidInput, match="rewrite it as a whole"):
+        await skills.edit(None, "real", "user", description="new")
+    assert skills.corrupt_in(None) == [corrupt]
+    await skills.write(None, "real", "fixed", "x", "user")
+    assert skills.index(ALPHA)[1] == []
     await skills.delete(None, "real", "user")
-    assert skills.corrupt(ALPHA) == []
 
 
 async def test_corrupt_skills_of_other_agents_are_not_reported(skills: SkillStore, repo: ResourceRepo):
@@ -92,8 +97,8 @@ async def test_corrupt_skills_of_other_agents_are_not_reported(skills: SkillStor
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text("broken")
 
-    assert skills.corrupt(ALPHA) == []
-    assert [c.name for c in skills.corrupt(BETA)] == ["broken"]
+    assert skills.index(ALPHA)[1] == []
+    assert [c.name for c in skills.index(BETA)[1]] == ["broken"]
 
 
 async def test_delete_missing_skill_raises_not_found(skills: SkillStore):
@@ -291,7 +296,10 @@ async def test_corrupt_mcp_config_is_reported_with_its_path_on_its_own_and_can_b
             container.mcp.get(None, "echo")
         # 列出时单独报出，不连累别的 server
         assert container.mcp.list(None) == []
-        [corrupt] = container.mcp.corrupt("a1a1a1a1a1a1")
+        [corrupt] = container.mcp.index("a1a1a1a1a1a1")[1]
+        assert container.mcp.corrupt_in(None) == [corrupt]
+        with pytest.raises(InvalidInput, match="remove it and add it again"):
+            await container.mcp.set_enabled(None, "echo", False, "user")
         assert (corrupt.kind, corrupt.name, corrupt.path) == ("MCP server", "echo", path)
         assert f"corrupt MCP config {path}" in corrupt.problem
 

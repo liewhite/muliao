@@ -17,7 +17,9 @@ _VERSION = "v1"
 class Auth:
     def __init__(self, secret_key: str, password: str):
         self._password = password.encode()
-        self._key = hmac.new(secret_key.encode(), hashlib.sha256(self._password).digest(), hashlib.sha256).digest()
+        self._key = hmac.new(
+            secret_key.encode(), hashlib.sha256(self._password).digest(), hashlib.sha256
+        ).digest()
 
     def _sign(self, payload: str) -> str:
         return hmac.new(self._key, payload.encode(), hashlib.sha256).hexdigest()

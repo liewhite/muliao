@@ -100,6 +100,27 @@ def test_changing_the_password_revokes_issued_cookies():
     assert not Auth("other", "old").verify(token, now=1001)
 
 
+async def test_corrupt_skills_and_mcp_configs_are_listed_separately_and_can_be_deleted(client, container):
+    await login(client)
+    root = container.resources.owner_dir(None)
+    (root / "skills" / "bad").mkdir(parents=True)
+    (root / "skills" / "bad" / "SKILL.md").write_text("broken")
+    (root / "mcp").mkdir(parents=True, exist_ok=True)
+    (root / "mcp" / "worse.json").write_text("{")
+
+    assert (await client.get("/api/skills")).json() == []
+    [skill] = (await client.get("/api/skills/corrupt")).json()
+    assert (skill["name"], skill["owner"]) == ("bad", None) and "SKILL.md" in skill["problem"]
+    assert (await client.get("/api/mcp")).json() == []
+    [mcp] = (await client.get("/api/mcp/corrupt")).json()
+    assert mcp["name"] == "worse" and "corrupt MCP config" in mcp["problem"]
+
+    assert (await client.delete("/api/skill", params={"name": "bad"})).status_code == 204
+    assert (await client.delete("/api/mcp", params={"name": "worse"})).status_code == 204
+    assert (await client.get("/api/skills/corrupt")).json() == []
+    assert (await client.get("/api/mcp/corrupt")).json() == []
+
+
 async def test_agent_cannot_be_named_user(client):
     # 模型按名称指派 issue 时 `user` 指用户：同名的 agent 会分不出来
     await login(client)
