@@ -47,7 +47,7 @@ class Notifications:
         self._queue = queue
         self._bus = bus
 
-    async def enqueue_in(self, s: AsyncSession, agent_id: str | None, notification: Notification) -> None:
+    async def _enqueue_in(self, s: AsyncSession, agent_id: str | None, notification: Notification) -> None:
         """写下通知，每个设备一个 deliver task：一台设备暂时失败只重试它自己，不会再推给已经送达的设备。"""
         s.add(notification)
         await s.flush()
@@ -81,7 +81,7 @@ class Notifications:
 
     async def on_notify(self, command: Notify, _delivery: Delivery) -> Commit:
         async def commit(s: AsyncSession) -> None:
-            await self.enqueue_in(
+            await self._enqueue_in(
                 s,
                 command.agent_id,
                 Notification(title=command.title, body=command.body, session_id=command.session_id),
@@ -104,7 +104,7 @@ class Notifications:
                     extra={"session_id": event.session_id, "run_id": event.run_id},
                 )
                 return
-            await self.enqueue_in(
+            await self._enqueue_in(
                 s,
                 event.agent_id,
                 Notification(
@@ -119,7 +119,7 @@ class Notifications:
     async def notify(self, agent_id: str | None, title: str, body: str, session_id: str | None) -> None:
         """agent_id 为 None 表示系统通知，不属于任何 agent；session_id 是点开通知打开的会话。"""
         async with self._db.transaction() as s:
-            await self.enqueue_in(s, agent_id, Notification(title=title, body=body, session_id=session_id))
+            await self._enqueue_in(s, agent_id, Notification(title=title, body=body, session_id=session_id))
 
     async def on_session_deleted(self, event: SessionDeleted, _delivery: Delivery) -> Commit:
         """指向被删会话的通知随它删除。"""

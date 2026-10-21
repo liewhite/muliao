@@ -60,17 +60,6 @@ def bounded(transcript: str) -> str:
     )
 
 
-async def list_reflections_of(db: Database, agent_id: str, limit: int) -> list[Reflection]:
-    async with db.transaction() as s:
-        query = (
-            select(Reflection)
-            .where(Reflection.agent_id == agent_id)
-            .order_by(Reflection.id.desc())
-            .limit(limit)
-        )
-        return list((await s.scalars(query)).all())
-
-
 class ReflectionScheduler:
     """反思的调度（反思领域）：订阅 RunEnded，按该 agent 自检查点以来的步数决定是否投递反思；检查点在自己的表里。"""
 
@@ -79,6 +68,17 @@ class ReflectionScheduler:
         self._queue = queue
         self._agents = agents
         self._history = history
+
+    async def list(self, agent_id: str, limit: int) -> list[Reflection]:
+        """这个 agent 最近的反思记录，新的在前。"""
+        async with self._db.transaction() as s:
+            query = (
+                select(Reflection)
+                .where(Reflection.agent_id == agent_id)
+                .order_by(Reflection.id.desc())
+                .limit(limit)
+            )
+            return list((await s.scalars(query)).all())
 
     def subscribe(self, messaging: Messaging) -> None:
         # 同一个 agent 的两种事件在同一条 lane 上按发布顺序处理。通常 RunEnded 先于 AgentDeleting 发布（agent 有会话忙时

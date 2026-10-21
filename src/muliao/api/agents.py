@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from muliao.agents.api import USER, AgentInfo, AgentPatch, AgentSpec, SkillMeta, ToolGroupInfo
 from muliao.api.deps import C
 from muliao.api.resources import CorruptOut
-from muliao.reflection.api import list_reflections_of
 from muliao.reflection.tables import Reflection
 
 router = APIRouter()
@@ -201,7 +200,7 @@ class ReflectionOut(BaseModel):
 @router.get("/agents/{agent_id}/reflections")
 async def list_reflections(c: C, agent_id: str, limit: int = Query(50, ge=1, le=200)) -> list[ReflectionOut]:
     await c.agents.get(agent_id)
-    return [ReflectionOut.of(r) for r in await list_reflections_of(c.db, agent_id, limit)]
+    return [ReflectionOut.of(r) for r in await c.reflection.list(agent_id, limit)]
 
 
 class SkillOut(BaseModel):

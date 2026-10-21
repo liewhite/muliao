@@ -106,6 +106,7 @@ muliao/
 
 - 领域之间只能 import 对方的 `api` 模块（命令、查询、读模型）与 `events` 模块（它发布的事件、接收的定向命令）；不 import 别的领域的表，也不拿别的领域的 ORM 对象。
 - `platform` 不 import 任何领域；领域不 import HTTP 适配层（`api/`）与组合根。
+- 每个领域都有 `api.py`（`__all__` 只列公开接口），缺了测试就失败：在调用方事务里执行的公开函数（参数里有调用方的事务）只能是登记过的只读查询，这条检查只看得到 `api` 模块。领域内部在自己事务里的写入（如通知的 `_enqueue_in`）是私有的。平台不认识领域的词汇：任务种类、会话来源、LLM SDK 的异常都在各自的领域里（3.2、第 5 节）。
 - HTTP 适配层经领域的 `api`（与 `events`）调用领域，另外可以 import 领域的 `tables`，把领域交给它的行序列化成响应（它是适配器，不是领域，不另造一套读模型）。
 
 经 `api` 的依赖无环：`files`、`agents`、`usage` → `vault` → `agent_runtime` → `sessions` → `jobs`、`reflection`、`notifications`、`triggers`。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
@@ -520,7 +521,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - token 是我们签发给外部系统的凭证，事实来源是触发器自己：`state` 里只存 SHA-256，明文只在生成时返回一次，**只能由用户在界面上生成**（agent 创建的 webhook 在用户生成 token 之前收不到事件）。不放进 vault——vault 存的是外部系统发给我们的凭证。
 - 不校验各平台自己的签名格式（GitHub、Slack 等各不相同）。需要时由发送方把 token 放进 Authorization 头，或在中间加一层转发。
 
-**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警（定向命令 `Notify`）、推送测试，都经 `Notifications.enqueue_in` 在通知领域的事务里写一条 `notifications` 行，并给当时的每个推送订阅各排一个 deliver task（只带 `notification_id` 与订阅的 endpoint；没有订阅就只留在通知页）。DeliverHandler 投递时读出通知、订阅（排队后已退订就跳过）和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到新通知事件（SSE `notification`，写下通知的事务提交后发出，与有没有推送订阅无关）和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时只由会话领域标记（`SessionService.mark_read`），同一事务发布 `SessionRead`，通知领域订阅它把指向这个会话的通知标为已读（提交后 `run_now` 马上投递，通常请求返回时未读数已更新；同一 lane 上有更早的投递时由 worker 稍后处理，界面在 `event` 投递完成时重新取未读数）。通知随它指向的会话删除（订阅 `SessionDeleted`）；`RunEnded`、`SessionRead`、`SessionDeleted` 在同一条按会话的 lane 上；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
+**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警（定向命令 `Notify`）、推送测试，都经 `Notifications` 内部的 `_enqueue_in` 在通知领域自己的事务里写一条 `notifications` 行，并给当时的每个推送订阅各排一个 deliver task（只带 `notification_id` 与订阅的 endpoint；没有订阅就只留在通知页）。DeliverHandler 投递时读出通知、订阅（排队后已退订就跳过）和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到新通知事件（SSE `notification`，写下通知的事务提交后发出，与有没有推送订阅无关）和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时只由会话领域标记（`SessionService.mark_read`），同一事务发布 `SessionRead`，通知领域订阅它把指向这个会话的通知标为已读（提交后 `run_now` 马上投递，通常请求返回时未读数已更新；同一 lane 上有更早的投递时由 worker 稍后处理，界面在 `event` 投递完成时重新取未读数）。通知随它指向的会话删除（订阅 `SessionDeleted`）；`RunEnded`、`SessionRead`、`SessionDeleted` 在同一条按会话的 lane 上；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
 
 通知只有 Web Push 一种渠道。不支持主动推送的外部消息源（例如只能拉取的 Slack 未读）用定时触发器拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
 

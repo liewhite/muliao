@@ -71,6 +71,18 @@ def _violations() -> list[str]:
     return sorted(problems)
 
 
+def test_every_domain_has_a_public_api_module():
+    """边界检查只看得到 api 模块：缺了它，领域的公开接口（如在调用方事务里写入的函数）就不受下面的检查。"""
+    packages = {p.name for p in SRC.iterdir() if (p / "__init__.py").exists()} - {
+        "api",
+        "platform",
+        "migrations",
+        "webui",
+    }
+    assert packages == DOMAINS
+    assert sorted(d for d in DOMAINS if not (SRC / d / "api.py").exists()) == []
+
+
 def test_domains_only_use_each_others_api():
     assert _violations() == []
 
@@ -93,7 +105,9 @@ async def test_a_domain_and_the_task_table_may_be_written_together(container):
     from muliao.notifications.tables import Notification
 
     async with container.db.transaction() as s:
-        await container.notifications.enqueue_in(s, None, Notification(title="t", body="b", session_id=None))
+        await container.notifications._enqueue_in(  # noqa: SLF001
+            s, None, Notification(title="t", body="b", session_id=None)
+        )
 
 
 # 领域公开接口里在调用方事务里执行的函数（参数里有调用方的事务）：只能是只读的查询（docs/architecture.md 2.2）。
@@ -102,6 +116,7 @@ async def test_a_domain_and_the_task_table_may_be_written_together(container):
 READ_ONLY_IN_CALLER_TRANSACTION = {
     "agents": {"active_agent_in", "agent_in", "agent_names_in"},
     "files": {"load_metas"},
+    "reflection": {"ReflectionScheduler.blocks_agent_deletion_in"},
     "sessions": {
         "session_in",
         "receive_command_in",
@@ -134,8 +149,6 @@ def test_public_functions_in_the_callers_transaction_are_reviewed_read_only_quer
 
     found: dict[str, set[str]] = {}
     for domain in sorted(DOMAINS):
-        if not (SRC / domain / "api.py").exists():
-            continue
         module = importlib.import_module(f"muliao.{domain}.api")
         for name in module.__all__:
             obj = getattr(module, name)
