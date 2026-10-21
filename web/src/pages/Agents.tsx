@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Tabs, toast, type Key } from '@heroui/react'
 import { Copy, MessageSquarePlus, Plus, Trash2 } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
   api,
@@ -56,19 +56,21 @@ export function AgentList() {
           ) : (
             <div className="flex flex-col gap-2">
               {list.map((a) => (
-                <Link key={a.id} to={agentRoute(a.id)}>
-                  <Card className="transition-colors hover:bg-surface-hover">
-                    <Card.Header>
-                      <Card.Title>{a.name}</Card.Title>
-                      <Card.Description>{a.description}</Card.Description>
-                    </Card.Header>
-                    <Card.Footer>
-                      <Chip size="sm" variant="secondary">
-                        {a.model}
-                      </Chip>
-                    </Card.Footer>
-                  </Card>
-                </Link>
+                <NavLink key={a.id} to={agentRoute(a.id)}>
+                  {({ isActive }) => (
+                    <Card className={`transition-colors hover:bg-surface-hover ${isActive ? 'ring-2 ring-accent' : ''}`}>
+                      <Card.Header>
+                        <Card.Title>{a.name}</Card.Title>
+                        <Card.Description>{a.description}</Card.Description>
+                      </Card.Header>
+                      <Card.Footer>
+                        <Chip size="sm" variant="secondary">
+                          {a.model}
+                        </Chip>
+                      </Card.Footer>
+                    </Card>
+                  )}
+                </NavLink>
               ))}
             </div>
           )

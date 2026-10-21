@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
-import { Activity, BarChart3, BellRing, ChevronRight, KeyRound, LogOut, Plug, RotateCcw, ScrollText, Sparkles } from 'lucide-react'
+import { BellRing, LogOut, RotateCcw } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent, type TaskStatus, sessionRoute } from '../api'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
@@ -41,7 +41,7 @@ export function Tasks() {
   const agents = useAgents()
   const action = useAction()
   return (
-    <Page title="任务" back="/settings">
+    <Page title="任务">
       <Segmented
         label="任务状态"
         value={filter}
@@ -118,15 +118,6 @@ const PUSH_TEXT: Record<PushState, string> = {
   subscribed: '推送已开启。',
 }
 
-const LINKS = [
-  { to: '/prompt', label: '公共指令', Icon: ScrollText },
-  { to: '/skills', label: '公共 Skills', Icon: Sparkles },
-  { to: '/mcp', label: '公共 MCP servers', Icon: Plug },
-  { to: '/vault', label: '公共 Vault', Icon: KeyRound },
-  { to: '/tasks', label: '任务与失败记录', Icon: Activity },
-  { to: '/usage', label: 'Token 用量', Icon: BarChart3 },
-] as const
-
 export function Settings() {
   const confirm = useConfirm()
   // null：还在查询本设备的订阅
@@ -153,7 +144,7 @@ export function Settings() {
   }
 
   return (
-    <Page title="设置">
+    <Page title="推送与登录">
       <Card>
         <Card.Header>
           <Card.Title className="flex items-center gap-2">
@@ -190,17 +181,6 @@ export function Settings() {
         )}
       </Card>
       <ErrorAlert error={action.error} />
-      <Card className="p-0">
-        <div className="flex flex-col divide-y divide-separator">
-          {LINKS.map(({ to, label, Icon }) => (
-            <Link key={to} to={to} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-hover">
-              <Icon className="size-4 text-muted" />
-              <span className="flex-1">{label}</span>
-              <ChevronRight className="size-4 text-muted" />
-            </Link>
-          ))}
-        </div>
-      </Card>
       <Button variant="danger-soft" onPress={() => void logout()}>
         <LogOut className="size-4" />
         退出登录

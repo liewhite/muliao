@@ -129,7 +129,7 @@ export function SecretManager({ owner }: { owner: AgentId | null }) {
 
 export default function Vault() {
   return (
-    <Page title="公共 Vault" back="/settings">
+    <Page title="公共 Vault">
       <p className="text-sm text-muted">
         Secret 加密保存，值不会再显示。agent 通过 key 引用：MCP 配置里写{' '}
         <code className="font-mono">{'${vault:KEY}'}</code>，shell 里用{' '}

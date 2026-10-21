@@ -261,7 +261,7 @@ export function McpManager({ owner }: { owner: AgentId | null }) {
 
 export default function Mcp() {
   return (
-    <Page title="公共 MCP servers" back="/settings">
+    <Page title="公共 MCP servers">
       <p className="text-sm text-muted">
         公共 MCP server 对所有 agent 可见，只能引用公共 secret；agent 私有的 MCP 在该 agent 详情页的 MCP 标签里管理，同名时遮蔽公共的。
       </p>

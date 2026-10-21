@@ -60,7 +60,7 @@ export function SkillList({ owner }: { owner: AgentId | null }) {
 
 export function PublicSkills() {
   return (
-    <Page title="公共 Skills" back="/settings">
+    <Page title="公共 Skills">
       <p className="text-sm text-muted">所有 agent 都能看到公共 skill；同名私有 skill 会遮蔽它。</p>
       <SkillList owner={null} />
     </Page>

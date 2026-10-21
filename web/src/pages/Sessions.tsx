@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Card, Chip, Spinner } from '@heroui/react'
 import { ChevronDown, ChevronRight, Hourglass, Plus } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useMatch } from 'react-router-dom'
 import { api, asAgentId, type AgentId, type Origin, type SessionListItem, sessionRoute } from '../api'
 import { useServerEvents } from '../events'
 import { groupByAgent, splitActive } from '../sessionGroups'
@@ -57,9 +57,11 @@ const STATE_CARD: Record<SessionListItem['state'], string> = {
 }
 
 function SessionCard({ s, agentName }: { s: SessionListItem; agentName?: string }) {
+  // 宽屏分屏时右侧正打开的会话
+  const open = useMatch(sessionRoute(s.id)) !== null
   return (
     <Link to={sessionRoute(s.id)}>
-      <Card className={`transition-colors hover:bg-surface-hover ${STATE_CARD[s.state]}`}>
+      <Card className={`transition-colors hover:bg-surface-hover ${STATE_CARD[s.state]} ${open ? 'ring-2 ring-accent' : ''}`}>
         <Card.Content className="flex flex-row items-center gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 font-medium">

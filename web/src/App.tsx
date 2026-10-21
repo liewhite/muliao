@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
-import { useTheme } from '@heroui/react'
-import { Bell, Bot, KanbanSquare, MessageSquare, Settings as SettingsIcon, Zap } from 'lucide-react'
-import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useState } from 'react'
+import { Button, useTheme } from '@heroui/react'
+import { Menu } from 'lucide-react'
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api, unauthorizedEvent } from './api'
 import { closeServerEvents, useUiOutdated } from './events'
 import { useUnreadCount, useUnreadSync } from './unread'
@@ -21,17 +21,11 @@ import { PublicSkills, SkillEditor } from './pages/Skills'
 import UsagePage from './pages/Usage'
 import { syncPushSubscription } from './push'
 import { ErrorAlert, errorMessage } from './ui'
+import { AdminDrawer, AdminNav } from './AdminMenu'
+import { ListDetail } from './ListDetail'
+import { ACTIVITY_TABS, AdminMenuContext, isAdminPath } from './nav'
 
 type AuthState = 'checking' | 'in' | 'out'
-
-const TABS = [
-  { to: '/', label: '会话', Icon: MessageSquare },
-  { to: '/issues', label: 'Issues', Icon: KanbanSquare },
-  { to: '/notifications', label: '通知', Icon: Bell },
-  { to: '/agents', label: 'Agents', Icon: Bot },
-  { to: '/triggers', label: '触发', Icon: Zap },
-  { to: '/settings', label: '设置', Icon: SettingsIcon },
-] as const
 
 export default function App() {
   const [auth, setAuth] = useState<AuthState>('checking')
@@ -91,76 +85,128 @@ function SessionRoute() {
   return <SessionView key={id} />
 }
 
+/** 每个 agent 一个独立的页面实例：分屏切换 agent 时，标签页与表单草稿不带到另一个 agent */
+function AgentRoute() {
+  const { id = '' } = useParams()
+  return <AgentDetail key={id} />
+}
+
 /** 每个 issue 一个独立的页面实例：编辑中的草稿不带到另一个 issue */
 function IssueRoute() {
   const { id = '' } = useParams()
   return <IssueView key={id} />
 }
 
-/** 登录后的界面：页面与底部导航 */
+/** 动态导航的一项，通知带未读角标；底栏与桌面左侧栏共用 */
+function TabLink({ to, label, Icon, unread, className }: (typeof ACTIVITY_TABS)[number] & { unread: number; className: string }) {
+  return (
+    <NavLink
+      to={to}
+      end={to === '/'}
+      className={({ isActive }) =>
+        `flex flex-col items-center justify-center gap-0.5 text-[11px] ${className} ${isActive ? 'text-accent' : 'text-muted'}`
+      }
+    >
+      <span className="relative">
+        <Icon className="size-5" />
+        {to === '/notifications' && unread > 0 && (
+          <span className="absolute -top-1.5 left-3 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] leading-4 text-danger-foreground">
+            {unread > 99 ? '99+' : unread}
+            <span className="sr-only">条未读</span>
+          </span>
+        )}
+      </span>
+      <span>{label}</span>
+    </NavLink>
+  )
+}
+
+/**
+ * 登录后的界面。首页导航只放动态（会话、Issues、通知），配置类页面都收进管理菜单。
+ * 手机：页面 + 底部动态导航；页面头部左上角的按钮打开管理抽屉。
+ * 桌面（md 起）：左侧窄栏（左上角管理菜单按钮 + 动态导航）+ 页面；管理类页面在 lg 起多一列常驻的管理菜单。
+ * 会话、Agents 在 xl 起列表与详情分屏（见 ListDetail）。
+ */
 function Shell() {
   useUnreadSync()
   const unread = useUnreadCount()
   const outdated = useUiOutdated()
+  const { pathname } = useLocation()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const openMenu = useCallback(() => setMenuOpen(true), [])
   return (
-    <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1">
-        <Routes>
-          <Route path="/" element={<Sessions />} />
-          <Route path="/new" element={<NewSession />} />
-          <Route path="/notifications" element={<Notifications />} />
-          <Route path="/sessions/:id" element={<SessionRoute />} />
-          <Route path="/agents" element={<AgentList />} />
-          <Route path="/agents/new" element={<AgentCreate />} />
-          <Route path="/agents/:id" element={<AgentDetail />} />
-          <Route path="/triggers" element={<Triggers />} />
-          <Route path="/issues" element={<Issues />} />
-          <Route path="/issues/:id" element={<IssueRoute />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/prompt" element={<PublicPrompt />} />
-          <Route path="/skills" element={<PublicSkills />} />
-          <Route path="/skills/edit" element={<SkillEditor />} />
-          <Route path="/mcp" element={<Mcp />} />
-          <Route path="/vault" element={<Vault />} />
-          <Route path="/tasks" element={<Tasks />} />
-          <Route path="/usage" element={<UsagePage />} />
-          <Route path="/login" element={<Navigate to="/" replace />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </div>
-      {/* 放在底部导航上方：不占顶部安全区（页面头部已经留了），也不挡头部的按钮 */}
-      {outdated && (
-        <button
-          type="button"
-          className="bg-accent px-3 py-1.5 text-center text-sm text-accent-foreground"
-          onClick={() => location.reload()}
+    <AdminMenuContext value={openMenu}>
+      <div className="flex h-full flex-col md:flex-row">
+        <nav
+          aria-label="动态"
+          className="hidden w-16 shrink-0 flex-col items-center gap-1 border-r border-separator bg-surface pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2 md:flex"
         >
-          新版本已上线，点这里刷新
-        </button>
-      )}
-      <nav className="flex border-t border-separator bg-surface pb-[env(safe-area-inset-bottom)]">
-        {TABS.map(({ to, label, Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) =>
-              `flex h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] ${isActive ? 'text-accent' : 'text-muted'}`
-            }
+          <Button isIconOnly variant="ghost" aria-label="管理菜单" onPress={openMenu}>
+            <Menu className="size-5" />
+          </Button>
+          <div className="my-1 h-px w-8 bg-separator" />
+          {ACTIVITY_TABS.map((t) => (
+            <TabLink key={t.to} {...t} unread={unread} className="h-14 w-14 rounded-lg hover:bg-surface-hover" />
+          ))}
+        </nav>
+        {isAdminPath(pathname) && (
+          <aside className="hidden w-56 shrink-0 flex-col border-r border-separator bg-surface lg:flex">
+            <div className="border-b border-separator px-6 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2 text-lg leading-8 font-semibold">
+              管理
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <AdminNav />
+            </div>
+          </aside>
+        )}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1">
+            <Routes>
+              <Route path="/" element={<ListDetail list={<Sessions />} empty="选择一个会话" />}>
+                <Route path="new" element={<NewSession />} />
+                <Route path="sessions/:id" element={<SessionRoute />} />
+              </Route>
+              <Route path="/notifications" element={<Notifications />} />
+              <Route path="/agents" element={<ListDetail list={<AgentList />} empty="选择一个 agent" />}>
+                <Route path="new" element={<AgentCreate />} />
+                <Route path=":id" element={<AgentRoute />} />
+              </Route>
+              <Route path="/triggers" element={<Triggers />} />
+              <Route path="/issues" element={<Issues />} />
+              <Route path="/issues/:id" element={<IssueRoute />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/prompt" element={<PublicPrompt />} />
+              <Route path="/skills" element={<PublicSkills />} />
+              <Route path="/skills/edit" element={<SkillEditor />} />
+              <Route path="/mcp" element={<Mcp />} />
+              <Route path="/vault" element={<Vault />} />
+              <Route path="/tasks" element={<Tasks />} />
+              <Route path="/usage" element={<UsagePage />} />
+              <Route path="/login" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </div>
+          {/* 放在底部导航上方：不占顶部安全区（页面头部已经留了），也不挡头部的按钮 */}
+          {outdated && (
+            <button
+              type="button"
+              className="bg-accent px-3 py-1.5 text-center text-sm text-accent-foreground"
+              onClick={() => location.reload()}
+            >
+              新版本已上线，点这里刷新
+            </button>
+          )}
+          <nav
+            aria-label="动态"
+            className="flex border-t border-separator bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
           >
-            <span className="relative">
-              <Icon className="size-5" />
-              {to === '/notifications' && unread > 0 && (
-                <span className="absolute -top-1.5 left-3 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] leading-4 text-danger-foreground">
-                  {unread > 99 ? '99+' : unread}
-                  <span className="sr-only">条未读</span>
-                </span>
-              )}
-            </span>
-            <span>{label}</span>
-          </NavLink>
-        ))}
-      </nav>
-    </div>
+            {ACTIVITY_TABS.map((t) => (
+              <TabLink key={t.to} {...t} unread={unread} className="h-14 flex-1" />
+            ))}
+          </nav>
+        </div>
+      </div>
+      <AdminDrawer isOpen={menuOpen} onOpenChange={setMenuOpen} />
+    </AdminMenuContext>
   )
 }

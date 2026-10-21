@@ -102,7 +102,7 @@ export default function PublicPrompt() {
   const reload = () => void history.reload()
 
   return (
-    <Page title="公共指令" back="/settings">
+    <Page title="公共指令">
       <Loading state={history}>
         {() => (
           <div className="flex flex-col gap-3">

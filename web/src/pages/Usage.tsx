@@ -116,7 +116,7 @@ export default function UsagePage() {
   }, [window_])
 
   return (
-    <Page title="用量" back="/settings">
+    <Page title="用量">
       <Segmented
         label="统计区间"
         value={window_}
