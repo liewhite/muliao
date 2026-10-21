@@ -70,9 +70,7 @@ class Worker:
         bus: EventBus,
         *,
         concurrency: int,
-        task_timeout_seconds: float,
     ):
-        self._task_timeout = task_timeout_seconds
         self._queue = queue
         self._handlers = handlers
         self._bus = bus
@@ -171,9 +169,8 @@ class Worker:
         log.info("task started", extra=ctx)
         self._publish(task, TaskStatus.RUNNING)
         try:
-            # 总时限：卡死的工具或模型连接不能永久占住 lane 和 worker 槽位；超时按暂时性失败重试
-            with anyio.fail_after(self._task_timeout):
-                commit = await self._handlers[task.kind].execute(task)
+            # 不设总时限：一次运行该跑多久由 agent 自己判断；兜底与收束见 architecture.md「TaskHandler 接口」
+            commit = await self._handlers[task.kind].execute(task)
             await self._queue.complete(task.id, commit)
         except anyio.get_cancelled_exc_class():
             # worker 的任务只被关停取消，下次启动由 recover 复位；run_now 的调用方被取消时由 run_now 当场放回

@@ -51,7 +51,7 @@ async def run_only(container, limit_seconds: float = 10.0) -> None:
 
 async def work_only(container, handlers: dict, limit_seconds: float) -> None:
     """只执行这些种类的 task，直到它们都做完。"""
-    worker = Worker(container.queue, handlers, container.bus, concurrency=1, task_timeout_seconds=5)
+    worker = Worker(container.queue, handlers, container.bus, concurrency=1)
     task = asyncio.create_task(worker.run_forever())
     try:
         async with asyncio.timeout(limit_seconds):

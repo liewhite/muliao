@@ -428,7 +428,6 @@ def build_container(
         handlers,
         bus,
         concurrency=settings.runtime.worker_concurrency,
-        task_timeout_seconds=settings.runtime.task_timeout_seconds,
     )
 
     return Container(

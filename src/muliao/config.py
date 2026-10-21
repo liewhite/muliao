@@ -127,8 +127,6 @@ class RuntimeConfig(_Section):
     worker_concurrency: int = Field(default=4, ge=1)
     task_max_attempts: int = Field(default=5, ge=1)
     task_retry_base_seconds: float = Field(default=5.0, gt=0)
-    # 单个 task 的总时限（一次运行含所有工具调用）
-    task_timeout_seconds: float = Field(default=1800.0, gt=0)
     # 新建 agent 的默认反思间隔（步，即模型回复数）
     default_reflect_every: int = Field(default=30, ge=1)
     # 发给模型的上下文（上一次请求的输入 token）超过此值，就在步与步之间压缩该 session 的早期上下文

@@ -44,7 +44,7 @@ class WebProvider(Protocol):
 # --- DeepSeek：https://api-docs.deepseek.com/zh-cn/guides/search ---
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-# 抓取要等对方站点，给足时间；挂起时报错交给任务重试，而不是占满整轮时限
+# 抓取要等对方站点，给足时间；挂起时及时报错，而不是一直占着这次运行
 _DEEPSEEK_TIMEOUT_SECONDS = 60.0
 # 文档：408、429、5xx 等待后重试
 _DEEPSEEK_TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})

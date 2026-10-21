@@ -119,7 +119,6 @@ async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recover
         {TaskKind.DELIVER: Handler()},
         container.bus,
         concurrency=1,
-        task_timeout_seconds=5,
     )
     running = asyncio.create_task(worker.run_forever())
     try:

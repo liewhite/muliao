@@ -50,7 +50,7 @@ from muliao.platform.tooling import Audience, DomainErrorsAsRetry, Origin, RunSc
 from muliao.usage.api import RunKind, UsageEntry, UsageLog
 
 # pydantic-ai 不传 usage_limits 时默认 request_limit=50。任何运行（长期 agent 的轮次与反思、临时 agent）都不设请求数
-# 上限：开发任务上百步是常态，运行靠用户停止与 task 时限收束。
+# 上限：开发任务上百步是常态，运行不设总时长，靠用户停止收束（反思见 architecture.md「TaskHandler 接口」）。
 _UNLIMITED = UsageLimits(request_limit=None)
 
 log = logging.getLogger(__name__)

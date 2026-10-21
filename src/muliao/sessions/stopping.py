@@ -1,7 +1,7 @@
-"""用户停止与关停、总时限的区分。停止之后要做的事在 sessions.steps（save_stopped）与 sessions.halt（SessionHalt），设计见
+"""用户停止与外层取消（目前是关停）的区分。停止之后要做的事在 sessions.steps（save_stopped）与 sessions.halt（SessionHalt），设计见
 docs/architecture.md「停止会话」。
 
-运行放在自己的原生任务里，用户停止只取消这个任务；外层（worker 的任务组、fail_after）被取消时，宿主在等待处收到取消，
+运行放在自己的原生任务里，用户停止只取消这个任务；外层（worker 的任务组）被取消时，宿主在等待处收到取消，
 再取消运行的任务后照原语义抛出。用 asyncio.wait 等运行结束：它在运行被取消时不抛出，只在宿主自己被取消时抛出，
 所以「运行被取消而宿主没有」就是用户停止，不需要数取消次数。
 
@@ -63,7 +63,7 @@ class StoppableRuns[T]:
             try:
                 await asyncio.wait({inner})  # noqa: TID251  运行被取消时不抛出，宿主被取消时才抛出
             except asyncio.CancelledError:
-                # 外层被取消（关停、总时限）：这次运行一起取消（不带消息，见模块说明），按原来的语义抛出。
+                # 外层被取消（目前是关停）：这次运行一起取消（不带消息，见模块说明），按原来的语义抛出。
                 # 外层的取消是电平触发的：取消与等运行收尾都要屏蔽它，并设时限，收尾卡住也不拖住关停
                 with anyio.CancelScope(shield=True), anyio.move_on_after(_WIND_DOWN_SECONDS):
                     await self._cancel(inner)

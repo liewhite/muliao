@@ -254,9 +254,7 @@ async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_h
         async def failed_in(self, s, task):  # noqa: ANN001, ANN202
             """不会被调到。"""
 
-    worker = Worker(
-        container.queue, {TaskKind.RUN: Handler()}, container.bus, concurrency=1, task_timeout_seconds=5
-    )
+    worker = Worker(container.queue, {TaskKind.RUN: Handler()}, container.bus, concurrency=1)
     monkeypatch.setattr(container.queue, "fail", fake_fail)
 
     await worker._record_failure(Task(id=1, kind=TaskKind.RUN), RuntimeError("boom"), {})  # noqa: SLF001
