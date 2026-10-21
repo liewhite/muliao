@@ -24,9 +24,7 @@ class SessionKind(StrEnum):
 class KindPolicy:
     # 由委派开出（有父会话与 thread 名）；否则是顶层会话（用户或触发器发起）
     opened_by_delegation: bool
-    # 私有：只有开它的会话能继续，用户只能看（list_threads 与界面据此标出）
-    private: bool
-    # 用户能在里面发消息
+    # 用户能在里面发消息；不能的就是私有的（见 private）
     user_writable: bool
     # 出现在会话列表（收件箱）里、运行结束时标未读
     listed: bool
@@ -36,6 +34,12 @@ class KindPolicy:
     answers_to_agent: bool
     # 续聊这个 thread 用的工具；顶层会话为 None
     continued_by: str | None
+
+    @property
+    def private(self) -> bool:
+        """私有：只有开它的会话能继续，用户只能看（list_threads 与界面据此标出）。和「用户能发消息」是同一个事实的两面，
+        只存 user_writable 一份。"""
+        return not self.user_writable
 
     def audience(self, user_waits: bool) -> Audience:
         """这次运行的回答给谁看。"""
@@ -47,7 +51,6 @@ class KindPolicy:
 _POLICIES = {
     SessionKind.CONVERSATION: KindPolicy(
         opened_by_delegation=False,
-        private=False,
         user_writable=True,
         listed=True,
         owned_by_parent=False,
@@ -56,7 +59,6 @@ _POLICIES = {
     ),
     SessionKind.THREAD: KindPolicy(
         opened_by_delegation=True,
-        private=False,
         user_writable=True,
         listed=True,
         owned_by_parent=False,
@@ -65,7 +67,6 @@ _POLICIES = {
     ),
     SessionKind.PRIVATE_THREAD: KindPolicy(
         opened_by_delegation=True,
-        private=True,
         user_writable=False,
         listed=False,
         owned_by_parent=True,
