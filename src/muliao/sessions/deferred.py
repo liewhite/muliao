@@ -83,7 +83,8 @@ def asks_user(name: str) -> bool:
 
 
 def questions_in(call: ToolCallPart) -> list[Question]:
-    """调用里给用户的问题；不是提问的调用没有。"""
+    """调用里给用户的问题；不是提问的调用没有。提问至少有一个问题（questions.Questions），所以非空就是提问：要的是
+    问题时只用它判断，不再先问 asks_user。"""
     tool = deferred_tool(call.tool_name)
     return [] if tool is None or tool.questions is None else tool.questions(call)
 

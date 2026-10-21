@@ -289,7 +289,7 @@ class Consumer:
         pending = pending_calls(history, delegated)
         answers = answered_in(queued, pending)
         deferred = (
-            DeferredToolResults(calls=deferred_results(pending, answers, delegated)) if pending else None
+            DeferredToolResults(calls=deferred_results(pending, answers)) if pending else None
         )
         state.taken = list(queued)
         if queued:

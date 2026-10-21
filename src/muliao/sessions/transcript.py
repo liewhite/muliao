@@ -92,12 +92,12 @@ def _item(
 
 def call_item(part: ToolCallPart) -> Item:
     item = _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id)
-    if asks_user(part.tool_name):
-        try:
-            questions = questions_in(part)
-        except (ValidationError, KeyError):
-            # 参数被工具 schema 拒绝、交还模型重试的提问（它有 tool_error 结果）：按普通工具调用展示
-            return item
+    try:
+        questions = questions_in(part)
+    except (ValidationError, KeyError):
+        # 参数被工具 schema 拒绝、交还模型重试的提问（它有 tool_error 结果）：按普通工具调用展示
+        return item
+    if questions:
         item.ask = AskView(status="asking", questions=questions, answers=[], note=None)
     return item
 
