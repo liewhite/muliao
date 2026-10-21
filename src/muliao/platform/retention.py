@@ -1,8 +1,5 @@
-"""任务队列的保留策略：每天删一次 7 天前已完成的投递任务（event、deliver），tasks 表不随时间无限增长。设计见
-docs/architecture.md「任务队列即 actor 调度」。
-
-只删这两种：它们完成后没有别的数据引用。run 不能删：信件的 mail.consumed_by 指向它且 ON DELETE CASCADE，删了会
-连带删掉它处理过的信件与幂等键；reflection、compaction 量小，留着。failed 一律保留，供排查与人工重试。
+"""任务队列的保留策略：启动时与之后每天一次，删掉 7 天前已完成的投递任务（event、deliver），tasks 表不随时间无限
+增长。为什么只删这两种见 docs/architecture.md 3.2「保留」。
 """
 
 import logging

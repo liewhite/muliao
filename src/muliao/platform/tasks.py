@@ -213,8 +213,7 @@ class TaskQueue:
             return task
 
     async def prune_done(self, kinds: Collection[TaskKind], *, finished_before: datetime) -> int:
-        """删掉这些种类里在 finished_before 之前就已完成的 task，返回删除的条数。只删 done：failed 留着排查与重试，
-        排队、进行中的还要执行。"""
+        """删掉这些种类里在 finished_before 之前就已完成（done）的 task，返回删除的条数（保留策略，platform.retention）。"""
         async with self._db.transaction() as s:
             result = await s.execute(
                 delete(Task).where(

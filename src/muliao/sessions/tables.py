@@ -128,6 +128,8 @@ class Mail(Base):
             "uq_mail_dedupe_key", "session_id", "dedupe_key", unique=True, sqlite_where=dedupe_key.isnot(None)
         ),
         Index("ix_mail_correlation", "correlation", sqlite_where=correlation.isnot(None)),
+        # 外键的子表索引：删 tasks 时（保留策略、删会话）SQLite 按它查引用，没有它每删一行都扫整张 mail
+        Index("ix_mail_consumed_by", "consumed_by", sqlite_where=consumed_by.isnot(None)),
         {"sqlite_autoincrement": True},
     )
 

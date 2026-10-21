@@ -167,7 +167,7 @@ class Consumer:
             if compacted is not None:
                 context = await load_context(s, session.id)
             queued = await queued_in(s, session.id)
-            # 都带上会话条件：task_id、consumed_by 没有索引，按会话的索引只扫这个会话的行
+            # 都带上会话条件：messages.task_id 没有索引，按会话的索引只扫这个会话的行
             earlier = list(
                 (
                     await s.scalars(
