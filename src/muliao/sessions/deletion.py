@@ -1,7 +1,6 @@
 """删除会话的唯一规则与删除 agent 流程里会话领域的一步（docs/architecture.md 第 7 节「thread 与结果路由」）。"""
 
 import logging
-from collections.abc import Awaitable, Callable
 
 import anyio
 from sqlalchemy import select
@@ -14,7 +13,7 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.activity import blocking_deletion_in, sessions_blocking_agent_deletion_in
 from muliao.sessions.events import AgentSessionsCleared, Ending, SessionDeleted
-from muliao.sessions.halt import Halted
+from muliao.sessions.halt import StopSession
 from muliao.sessions.lanes import agent_deleting_lane
 from muliao.sessions.ownership import owned_threads_in
 from muliao.sessions.settlement import settle_in, unsettled_in
@@ -67,14 +66,14 @@ _IDLE_POLL_SECONDS = 0.1
 
 class AgentSessionsCleanup:
     """删除 agent 流程里会话领域的一步（docs/architecture.md 第 10 节）：订阅 AgentDeleting，删除它的全部会话，发布
-    AgentSessionsCleared。stop_session 是停止会话的命令（sessions.halt.SessionStopper）。"""
+    AgentSessionsCleared。stop_session 是停止会话的命令（sessions.halt.StopSession）。"""
 
     def __init__(
         self,
         db: Database,
         queue: TaskQueue,
         messaging: Messaging,
-        stop_session: Callable[[str], Awaitable[Halted]],
+        stop_session: StopSession,
     ):
         self._db = db
         self._queue = queue

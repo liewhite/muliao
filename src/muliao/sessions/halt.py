@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 
 from pydantic_ai.messages import ModelRequest
@@ -65,6 +66,11 @@ class Halted(StrEnum):
     STOPPED = "stopped"
     # 会话已删除（例如 StopThread 停止一个刚被用户删掉的 thread）：契约内的情况，不是错误
     GONE = "gone"
+
+
+# 停止会话的端口（用户停止、逐层停止 thread、删除 agent 的会话都经它）：SessionStopper 实现，用到停止的领域都依赖
+# 这个类型，不各写一份签名
+StopSession = Callable[[str], Awaitable[Halted]]
 
 
 class SessionHalt:

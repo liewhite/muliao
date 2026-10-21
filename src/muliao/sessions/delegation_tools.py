@@ -1,8 +1,6 @@
 """agent 之间的委派：delegate_task（不等结果）、ask_agent（挂起这次调用，等对方的结局作为结果）、stop_thread、
 list_threads。委派的生命周期见 sessions.delegation。"""
 
-from collections.abc import Awaitable, Callable
-
 from pydantic import BaseModel
 from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext, ToolReturn
 
@@ -13,7 +11,7 @@ from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.activity import WorkState
 from muliao.sessions.deferred import ASK_AGENT
-from muliao.sessions.halt import Halted
+from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.kinds import DELEGATE_TASK, SessionKind, policy_of
 from muliao.sessions.threads import Threads, validate_thread
 
@@ -36,10 +34,6 @@ class ThreadInfo(BaseModel):
     failure: str | None
     # 它最近的回答摘录（还没有回答时为 None）；status 不是 idle 时是中间的回答，不是结局
     answer: str | None
-
-
-# 停止一个会话：停下它的消费、清空信箱（sessions.halt.SessionStopper）
-StopSession = Callable[[str], Awaitable[Halted]]
 
 
 _DELEGATE_DESCRIPTION = """\

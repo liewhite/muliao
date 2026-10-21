@@ -19,7 +19,7 @@ from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor
 from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.events import Receive, SessionRead, StopThread
-from muliao.sessions.halt import Halted, SessionStopper
+from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.inbound import (
     Inbound,
     Received,
@@ -65,7 +65,7 @@ class SessionService:
         queue: TaskQueue,
         live: LiveRuns,
         messaging: Messaging,
-        stopper: SessionStopper,
+        stop_session: StopSession,
         compactor: Compactor,
         run_now: Callable[[int], Awaitable[None]],
     ):
@@ -73,7 +73,7 @@ class SessionService:
         self._queue = queue
         self._live = live
         self._messaging = messaging
-        self._stop_session = stopper
+        self._stop_session = stop_session
         self._compactor = compactor
         # 马上执行一个已提交的投递任务（Worker.run_now）
         self._run_now = run_now
