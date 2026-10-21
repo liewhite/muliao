@@ -1,8 +1,11 @@
 """issue 看板：修改记时间线；todo / in_progress 时每条动态投给被指派的 agent，进它在这个 issue 上唯一的会话。"""
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy import select
 
+from muliao.agent_runtime.instructions import build_instructions
 from muliao.agents.events import AgentDeleting
 from muliao.errors import InvalidInput, NotFound
 from muliao.issues.api import USER, ActivityKind, IssueStatus, WorkState
@@ -85,7 +88,7 @@ async def test_every_change_lands_in_the_one_session_of_the_issue_and_agent(cont
     [mail] = await _mail(container, session.id)
     # 信里只有一行摘要和这次的动态：描述、完整时间线由 agent 自己 issue_show
     assert mail.startswith(
-        f"New activity on issue #{issue.id} Fix the build | status: todo | assignee: alpha\n"
+        f"New activity on issue #{issue.id}: Fix the build | status: todo | assignee: alpha\n"
     )
     assert "user changed status: backlog -> todo" in mail and "CI is red" not in mail
     assert f"`issue_show({issue.id})`" in mail
@@ -481,9 +484,6 @@ async def test_waiting_is_derived_from_the_current_upstream_state(container, mak
 
 def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
     """处理指引在 issue 会话的固定说明里（缓存前缀），信件不重复它：说明里要让 agent 先 issue_show、做完交审。"""
-    from pathlib import Path
-
-    from muliao.agent_runtime.instructions import build_instructions
 
     def built(origin: Origin) -> str:
         return build_instructions(
