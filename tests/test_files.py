@@ -17,7 +17,7 @@ from sqlalchemy import select
 from muliao.sessions.tables import Message
 from tests.conftest import login
 from tests.scripted import scripted
-from tests.test_flow import drain
+from tests.test_flow import drain, user_prompts
 from tests.test_tools import run_tools
 
 PNG = b"\x89PNG\r\n\x1a\nfake"
@@ -89,9 +89,9 @@ async def test_image_reaches_the_model_as_content_but_is_stored_as_a_reference(
     seen: list[list] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        first = messages[0]
-        assert isinstance(first, ModelRequest) and isinstance(first.parts[0], UserPromptPart)
-        seen.append(list(first.parts[0].content))
+        # 第一条请求里用户自己的那一段（它前面还有这次运行的运行上下文，见 test_flow.user_prompts）
+        [prompt] = user_prompts(messages[0])
+        seen.append(list(prompt.content))
         return ModelResponse(parts=[TextPart("a cat")])
 
     models.models["vision"] = scripted(fn)
@@ -117,7 +117,8 @@ async def test_image_reaches_the_model_as_content_but_is_stored_as_a_reference(
 
     async with container.db.transaction() as s:
         payloads = (await s.scalars(select(Message.payload).where(Message.session_id == session_id))).all()
-    stored = json.loads(payloads[0])["parts"][0]["content"]
+    # parts[0] 是运行上下文，用户自己的消息在它后面
+    stored = json.loads(payloads[0])["parts"][1]["content"]
     assert stored[1]["kind"] == "image-url" and stored[1]["url"] == image["url"]
     assert all("data" not in c for c in stored if isinstance(c, dict))
 

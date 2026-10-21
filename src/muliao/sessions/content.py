@@ -13,6 +13,7 @@ from muliao.agent_runtime.api import (
     event_indices,
     format_event,
     references,
+    run_context_index,
 )
 from muliao.files.api import FileStore
 from muliao.sessions.pending import call_result, late_text
@@ -54,9 +55,12 @@ class ContentBuilder:
 
 
 def append_content(request: ModelRequest, content: Content) -> None:
-    """把内容并进这条请求唯一的用户消息（没有就加一条）：一条请求里的信件都在同一段用户消息里，事件下标才有意义。"""
+    """把内容并进这条请求唯一的用户消息（没有就加一条）：一条请求里的信件都在同一段用户消息里，事件下标才有意义。
+
+    运行上下文（RUN_CONTEXT）虽然也是一段用户消息，但不是对话内容，跳过它：这样两者谁先挂上都不影响结果。"""
+    context_at = run_context_index(request)
     for i, part in enumerate(request.parts):
-        if isinstance(part, UserPromptPart):
+        if isinstance(part, UserPromptPart) and i != context_at:
             existing = [part.content] if isinstance(part.content, str) else list(part.content)
             request.parts[i] = replace(part, content=[*existing, *content.items])
             mark_events(request, len(existing), content.events)

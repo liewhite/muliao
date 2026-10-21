@@ -34,7 +34,11 @@ from pydantic_graph import End
 
 from muliao.agent_runtime.answers import Answer
 from muliao.agent_runtime.attachments import AttachmentsForModel
-from muliao.agent_runtime.instructions import build_instructions, build_temp_instructions
+from muliao.agent_runtime.instructions import (
+    build_instructions,
+    build_run_context,
+    build_temp_instructions,
+)
 from muliao.agent_runtime.llm import ModelResolver
 from muliao.agent_runtime.redaction import redact_call
 from muliao.agents.api import AgentInfo, AgentService, MemoryStore, PromptStore, SkillStore
@@ -151,20 +155,25 @@ class AgentRuntime:
         )
 
     async def instructions(self, agent: AgentInfo, scope: RunScope, summary: str | None) -> str:
+        """这次运行的指令。只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字：它是缓存前缀
+        （agent_runtime.instructions 的模块说明）。随运行变化的那几行走 run_context。"""
         return build_instructions(
             agent_name=agent.name,
             agent_description=agent.description,
             public_instructions=self._prompts.current(None),
             agent_instructions=self._prompts.current(agent.id),
             workspace=scope.workspace,
-            now_local=self._clock().astimezone(self._tz),
             origin=scope.origin,
-            audience=scope.audience,
             memory=self._memory.read(agent.id),
             skills=self._skills.visible_to(agent.id),
             memory_limit=self._memory.max_chars,
             summary=summary,
         )
+
+    def run_context(self, audience: Audience | None) -> str:
+        """这次运行开头交给模型的运行上下文（当前时间等，见 instructions.build_run_context）。会话的运行由
+        sessions.steps 挂到本次新增的第一条请求上；没有历史的运行（反思）直接放在 prompt 前面。"""
+        return build_run_context(now_local=self._clock().astimezone(self._tz), audience=audience)
 
     async def run_steps(
         self,
@@ -251,7 +260,7 @@ class AgentRuntime:
             instructions=await self.instructions(agent, scope, None),
             toolsets=self._toolsets(profile),
             scope=scope,
-            prompt=prompt,
+            prompt=f"{self.run_context(scope.audience)}\n\n{prompt}",
             history=(),
             kind=RunKind.REFLECTION,
             billed_to=scope.session_id,

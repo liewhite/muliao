@@ -16,6 +16,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
 from sqlalchemy import select
 
+from muliao.agent_runtime.conventions import run_context_index
 from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tooling import Origin
 from muliao.platform.worker import Worker
@@ -43,9 +44,7 @@ async def deliver(container, limit_seconds: float = 10.0) -> None:
 
 async def run_only(container, limit_seconds: float = 10.0) -> None:
     """只执行运行（不投递事件）：运行发布的事件留着排队，测试可以安排它们与别的操作的先后。"""
-    await work_only(
-        container, {TaskKind.RUN: RunHandler(container.consumer, container.queue)}, limit_seconds
-    )
+    await work_only(container, {TaskKind.RUN: RunHandler(container.consumer, container.queue)}, limit_seconds)
 
 
 async def work_only(container, handlers: dict, limit_seconds: float) -> None:
@@ -85,14 +84,20 @@ async def idle(container, limit_seconds: float = 10.0) -> None:
                 return
 
 
+def user_prompts(message: ModelMessage) -> list[UserPromptPart]:
+    """这条请求里用户内容的那几段，不含运行上下文（RUN_CONTEXT，当前时间等，不是用户说的话）。"""
+    if not isinstance(message, ModelRequest):
+        return []
+    context_at = run_context_index(message)
+    return [p for i, p in enumerate(message.parts) if isinstance(p, UserPromptPart) and i != context_at]
+
+
 def last_user_prompt(messages: list[ModelMessage]) -> str:
     for msg in reversed(messages):
-        if isinstance(msg, ModelRequest):
-            for part in msg.parts:
-                if isinstance(part, UserPromptPart):
-                    # 信件内容以列表交给模型（sessions.consumer），一段文字时取出它
-                    content = part.content
-                    return content if isinstance(content, str) else "\n".join(str(c) for c in content)
+        for part in user_prompts(msg):
+            # 信件内容以列表交给模型（sessions.consumer），一段文字时取出它
+            content = part.content
+            return content if isinstance(content, str) else "\n".join(str(c) for c in content)
     raise AssertionError("no user prompt")
 
 

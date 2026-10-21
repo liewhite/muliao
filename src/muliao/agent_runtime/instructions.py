@@ -1,4 +1,12 @@
-"""组装每次运行的 instructions。纯函数，便于测试。"""
+"""组装一次运行的 instructions，以及每次运行开头那段运行上下文。纯函数，便于测试。
+
+两者的分工只有一条规则：**instructions 只放同一个会话的不同运行之间不会变的内容，随运行变化的放进运行上下文**。
+原因是缓存前缀——instructions 渲染成提供方的 system，缓存断点就放在它末尾（llm.ANTHROPIC_CACHE_SETTINGS），
+DeepSeek 等自动前缀缓存同样从这里开始匹配。instructions 里只要有一个每次运行都不同的值（最早是「当前时间」），
+整段历史每次运行都要重新写入缓存（写缓存比普通输入还贵），同一个 agent 的不同会话、反思、压缩也只能复用工具定义
+那一段。运行上下文放进这次运行新增的第一条请求（conventions.attach_run_context），它随消息入库、之后原样重放，
+旧消息保持字节不变。
+"""
 
 from collections.abc import Sequence
 from datetime import datetime
@@ -45,6 +53,20 @@ user keeps repeating one; keep such edits small. Every version is kept and the u
 - Keep state you need across runs (cursors, caches) in files in your workspace."""
 
 
+def build_run_context(*, now_local: datetime, audience: Audience | None) -> str:
+    """一次运行开头交给模型的运行上下文：必须随运行变化、因而不能放进 instructions 的那几行（见模块说明）。
+
+    - 当前时间：每次运行都不同。
+    - 回答交给谁（Audience）：由这次运行处理的信件推导（sessions.kinds.KindPolicy.audience），同一个会话的不同
+      运行会不同——用户在等回答的那次是 `user`，后台触发的那次是 `none`。
+    会话来源（Origin）不在这里：它是会话创建时定下、整个会话不变的，留在 instructions 里。
+    """
+    lines = [f"[Current local time: {now_local.isoformat(timespec='minutes')} ({now_local.tzname()})]"]
+    if audience is not None:
+        lines.append(f"[{_AUDIENCE_NOTES[audience]}]")
+    return "\n".join(lines)
+
+
 def build_instructions(
     *,
     agent_name: str,
@@ -52,23 +74,19 @@ def build_instructions(
     public_instructions: str,
     agent_instructions: str,
     workspace: Path,
-    now_local: datetime,
     origin: Origin | None,
-    audience: Audience | None,
     memory: str,
     skills: Sequence[SkillMeta],
     memory_limit: int,
     summary: str | None,
 ) -> str:
+    """这个 agent 在这个会话里的指令。参数只能是会话级、agent 级的稳定内容（见模块说明）。"""
     context = [
         f"- You are agent {agent_name!r}: {agent_description}",
-        f"- Current local time: {now_local.isoformat(timespec='minutes')} ({now_local.tzname()})",
         f"- Workspace (base for relative paths and shell cwd): {workspace}",
     ]
     if origin is not None:
         context.append(f"- {_ORIGIN_NOTES[origin]}")
-    if audience is not None:
-        context.append(f"- {_AUDIENCE_NOTES[audience]}")
     skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] or ["(no skills yet)"]
     # 公共 prompt 在前、agent 自己的指令在后：具体的指令可以细化或覆盖通用规则
     sections = [

@@ -223,6 +223,9 @@ class Consumer:
         awaited = any(m.awaited for m in [*state.handled, *queued])
         audience = policy_of(session.kind).audience(awaited)
         scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, audience=audience)
+        # 随运行变化的上下文（当前时间、回答交给谁）不进 instructions——那是缓存前缀——而是挂在这次运行新增的
+        # 第一条请求上（sessions.steps._before_request）
+        state.run_context = self._runtime.run_context(audience)
         profile = self._tool_groups.profile(agent.id, agent.tool_groups)
         self._live.begin(session_id, last_message)
         while True:

@@ -26,24 +26,22 @@ from muliao.sessions.tables import Mail, MailKind, MailState, Message
 from muliao.sessions.transcript import to_items, to_text
 from tests.conftest import login
 from tests.scripted import scripted
-from tests.test_flow import drain, mail_of, reply, start, tasks_of
+from tests.test_flow import drain, mail_of, reply, start, tasks_of, user_prompts
 from tests.test_questions import QUESTIONS
 
 
 class Recorder:
-    """记下每次请求里最后一条请求的用户消息内容段；可选地在第一次请求时停在提问上。"""
+    """记下每次请求里最后一条请求的用户消息内容段（运行上下文不算，见 test_flow.user_prompts）；可选地在第一次
+    请求时停在提问上。"""
 
     def __init__(self, ask_first: bool = False) -> None:
         self.prompts: list[list[str]] = []
         self.ask_first = ask_first
 
     def __call__(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        last = messages[-1]
-        if isinstance(last, ModelRequest):
-            for part in last.parts:
-                if isinstance(part, UserPromptPart):
-                    content = part.content
-                    self.prompts.append([content] if isinstance(content, str) else list(content))
+        for part in user_prompts(messages[-1]):
+            content = part.content
+            self.prompts.append([content] if isinstance(content, str) else list(content))
         if self.ask_first and len(self.prompts) == 1:
             return ModelResponse(
                 parts=[ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="q1")]

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
 
-from muliao.agent_runtime.api import StepHooks, redact_messages
+from muliao.agent_runtime.api import StepHooks, attach_run_context, redact_messages
 from muliao.agents.api import AgentInfo
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
@@ -50,6 +50,9 @@ class RunState:
     taken: list[Mail] = field(default_factory=list)
     # 开头交给模型的内容里哪些段是事件，第一次请求保存前标上
     opening_events: list[int] = field(default_factory=list)
+    # 这次运行的运行上下文（agent_runtime.instructions.build_run_context），由消费者在运行开始时定下：挂到本次
+    # 新增的第一条请求上之后清空，一次运行只带一段
+    run_context: str = ""
     # 这次运行处理过的信件：包括之前几次尝试里已经保存的（重试沿用同一个运行），以及接着别的运行保存的部分续跑时
     # 那次运行处理过的（consumer._adopted）
     handled: list[Mail] = field(default_factory=list)
@@ -108,6 +111,11 @@ class Steps:
             # 运行中途没有挂起的调用（调用只在运行结束时挂起），这时到达的回答都是迟到的
             state.taken += arrived
             append_content(request, await self._content.of(state.agent.id, arrived))
+        if state.run_context:
+            # 只挂在本次运行新增的第一条请求上。上面重发的那条已经在库里，不改它——改了它，它之前的历史就不再
+            # 是同一个前缀，缓存全废；那种情况下这段留给这次运行的下一条新请求
+            attach_run_context(request, state.run_context)
+            state.run_context = ""
         await self._save(state, [*messages[state.saved :], request], consumed=state.taken)
         if state.last_row is None:
             raise RuntimeError(f"run {state.run_id} saved a request without a row")

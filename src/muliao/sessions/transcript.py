@@ -27,6 +27,7 @@ from muliao.agent_runtime.api import (
     Attachment,
     event_indices,
     parse_event,
+    run_context_index,
     tool_attachments,
     tool_threads,
 )
@@ -198,7 +199,12 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
     items: list[Item] = []
     for msg in messages:
         if isinstance(msg, ModelRequest):
-            for part in msg.parts:
+            # 运行上下文那一段（RUN_CONTEXT）不展示：它是我们加给模型的，不是用户说的话。它仍在消息里原样重放，
+            # 所以这里只是不投影，派生出这份条目的地方（会话页、压缩的文字记录、反思）都看不到它
+            context_at = run_context_index(msg)
+            for index, part in enumerate(msg.parts):
+                if index == context_at:
+                    continue
                 if isinstance(part, UserPromptPart):
                     items.extend(_prompt_items(part.content, event_indices(msg)))
                 elif isinstance(part, ToolReturnPart | RetryPromptPart):

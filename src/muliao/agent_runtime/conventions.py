@@ -13,6 +13,7 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 | `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | sessions.consumer | 模型、会话条目 |
 | 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart | — | unanswered_calls：挂起的提问、压缩切点、停止时补结果 |
 | `RUN_EVENTS`：这一步交给模型的事件信件 | 事件各占用户消息内容的一段（format_event），metadata 记下是第几段 | sessions.consumer | 模型、会话条目 |
+| `RUN_CONTEXT`：这次运行的运行上下文（当前时间等） | 单独一段用户消息，metadata 记下它是第几个 part | sessions.steps | 模型；会话条目不展示它 |
 
 metadata 的键都带 `muliao_` 前缀：metadata 是 pydantic-ai 开放给所有工具（含 MCP 包装）的字段，通用的键名可能撞上形状
 不同的数据。
@@ -31,6 +32,7 @@ from pydantic_ai.messages import (
     TextPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 
 from muliao.files.api import FileMeta, parse_file_url
@@ -65,6 +67,31 @@ def parse_event(text: str) -> tuple[str, str]:
     if match is None:
         raise RuntimeError(f"stored event does not follow the event format: {text[:200]!r}")
     return match["source"], match["content"]
+
+
+# 一次运行开头交给模型的运行上下文（当前时间等，见 agent_runtime.instructions 的模块说明）：它单独占一段用户
+# 消息，那条 ModelRequest 的 metadata[RUN_CONTEXT] 是它在 parts 里的下标。只挂在这次运行新增的第一条请求上，
+# 之后随消息入库、原样重放——旧消息字节不变，缓存才命中
+RUN_CONTEXT = "muliao_run_context"
+
+
+def attach_run_context(request: ModelRequest, text: str) -> None:
+    """把运行上下文作为独立的一段用户消息放进这条请求，并记下它是第几个 part。
+
+    放在用户内容之前、工具结果之后：模型先看到「现在几点」再看这次要处理的内容；而一条请求里工具结果在前、用户内容
+    在后是这里已有的形状（sessions.content.append_content），不为这一段改变它。"""
+    if RUN_CONTEXT in (request.metadata or {}):
+        raise RuntimeError(f"request already carries a run context: {request.metadata!r}")
+    parts = list(request.parts)
+    index = next((i for i, p in enumerate(parts) if isinstance(p, UserPromptPart)), len(parts))
+    parts.insert(index, UserPromptPart(text))
+    request.parts = parts
+    request.metadata = {**(request.metadata or {}), RUN_CONTEXT: index}
+
+
+def run_context_index(message: ModelMessage) -> int | None:
+    """这条消息里哪个 part 是运行上下文（RUN_CONTEXT）；没有带就是 None。"""
+    return (message.metadata or {}).get(RUN_CONTEXT)
 
 
 def is_stopped(message: ModelMessage) -> bool:

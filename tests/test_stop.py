@@ -304,7 +304,7 @@ async def test_stopping_during_a_pending_retry_stops_the_retry(container, make_a
 
     assert [t.status for t in await tasks_of(container, TaskKind.RUN)] == [TaskStatus.DONE]
     history = await container.sessions.history(session_id)
-    assert history[-1].metadata == {RUN_STOPPED: True}
+    assert history[-1].metadata[RUN_STOPPED] is True
     # 之后的消息不会把停下的请求再发一遍
     from tests.test_flow import reply
 
@@ -342,7 +342,7 @@ async def test_stopping_a_resumed_run_before_its_first_step_closes_the_history(
     assert len(calls) == 1
     history = await container.sessions.history(session_id)
     assert [type(m).__name__ for m in history] == ["ModelRequest"]
-    assert history[-1].metadata == {RUN_STOPPED: True}
+    assert history[-1].metadata[RUN_STOPPED] is True
     assert [m.state for m in await mail_of(container)][-1] == MailState.DISCARDED
 
 
