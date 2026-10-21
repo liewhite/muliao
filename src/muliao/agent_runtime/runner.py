@@ -43,6 +43,7 @@ from muliao.agent_runtime.instructions import (
 )
 from muliao.agent_runtime.llm import ModelResolver
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
+from muliao.agent_runtime.transient import transient_as_retryable
 from muliao.agents.api import AgentInfo, AgentService, MemoryStore, PromptStore, SkillStore
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
@@ -382,12 +383,14 @@ class AgentRuntime:
         ctx: Mapping[str, object],
         history: int | None = None,
     ) -> AsyncIterator[RunUsage]:
-        """一次模型运行的记账：记「agent run started」日志（ctx 与带上的历史条数；压缩没有历史这一说，不记），交出给 pydantic-ai 累加用量的
-        RunUsage；运行无论成功、失败还是被取消，退出时都把已花掉的部分记到 session_id 名下（_bill）。"""
+        """一次模型运行的边界（每个入口都经过它）：记「agent run started」日志（ctx 与带上的历史条数；压缩没有历史这一说，不记），
+        交出给 pydantic-ai 累加用量的 RunUsage；运行无论成功、失败还是被取消，退出时都把已花掉的部分记到 session_id 名下
+        （_bill）。运行里抛出的暂时性失败（模型提供方、网络层）在这里换成 TransientError，交给任务队列重试（transient）。"""
         log.info("agent run started", extra=dict(ctx) if history is None else {**ctx, "history": history})
         usage = RunUsage()
         try:
-            yield usage
+            with transient_as_retryable():
+                yield usage
         finally:
             await self._bill(kind, agent_id, session_id, model, usage, ctx)
 

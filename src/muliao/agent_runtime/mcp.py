@@ -24,11 +24,11 @@ from pydantic_ai.exceptions import ApprovalRequired, CallDeferred, ModelRetry, T
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset, ToolsetTool, WrapperToolset
 
+from muliao.agent_runtime.transient import is_transient
 from muliao.agents.api import CorruptResource, ResourceRepo, scope_of, shadowing, validate_slug
 from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound, TransientError
 from muliao.platform.shell import redact
 from muliao.platform.tooling import RunScope
-from muliao.platform.worker import is_transient
 from muliao.vault.api import VAULT_REF, Vault, fill
 
 log = logging.getLogger(__name__)

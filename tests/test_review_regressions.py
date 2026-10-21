@@ -7,11 +7,12 @@ from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, TextPart
 from sqlalchemy import select
 
+from muliao.agent_runtime.transient import is_transient, transient_as_retryable
 from muliao.errors import Conflict, TransientError
 from muliao.notifications.service import DELIVER_TASK
 from muliao.platform.tables import TaskStatus
 from muliao.platform.tooling import Origin
-from muliao.platform.worker import is_transient
+from muliao.platform.worker import is_retryable
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Message
 from muliao.sessions.transcript import to_items
@@ -104,6 +105,27 @@ def test_only_transport_level_model_api_errors_are_transient():
     assert is_transient(ModelHTTPError(status_code=529, model_name="m"))
     assert not is_transient(ModelHTTPError(status_code=400, model_name="m"))
     assert is_transient(TransientError("x"))
+
+
+def test_the_worker_retries_only_transient_errors_and_timeouts_not_sdk_exceptions():
+    # 平台不认识 SDK 的异常：暂时性的由 agent_runtime 换成 TransientError 之后才会重试
+    assert is_retryable(TransientError("x")) and is_retryable(TimeoutError())
+    assert not is_retryable(ModelHTTPError(status_code=503, model_name="m"))
+    assert not is_retryable(httpx.ConnectError("refused"))
+
+
+def test_a_model_run_turns_transient_failures_into_transient_error_and_keeps_the_rest():
+    request = httpx.Request("POST", "https://api.example")
+    connection = ModelAPIError(model_name="m", message="conn")
+    connection.__cause__ = APIConnectionError(request=request)
+    with pytest.raises(TransientError, match="ModelAPIError") as caught:
+        with transient_as_retryable():
+            raise connection
+    assert caught.value.__cause__ is connection
+
+    with pytest.raises(ModelHTTPError):
+        with transient_as_retryable():
+            raise ModelHTTPError(status_code=400, model_name="m")
 
 
 async def test_retried_task_keeps_last_error_while_running(container, make_agent, models):

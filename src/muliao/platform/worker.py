@@ -1,12 +1,7 @@
 import logging
 from typing import Protocol
 
-import anthropic
 import anyio
-import httpx
-import httpx2
-import openai
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import TransientError
@@ -18,28 +13,13 @@ log = logging.getLogger(__name__)
 # run_now 被取消后把任务放回 pending 的时限（一个短事务）
 _UNCLAIM_SECONDS = 10.0
 
-# 模型提供方契约中声明的暂时性状态码
-_TRANSIENT_HTTP = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 _IDLE_POLL_SECONDS = 30.0
 
 
-# 网络层的暂时性失败。pydantic-ai 把它们包装为 ModelAPIError，原始异常在 __cause__ 中
-_TRANSPORT_ERRORS = (
-    httpx.TransportError,
-    httpx2.TransportError,
-    anthropic.APIConnectionError,
-    openai.APIConnectionError,
-    TimeoutError,
-)
-
-
-def is_transient(exc: BaseException) -> bool:
-    """契约内的暂时性失败才重试。ModelAPIError 还包括请求超限、响应解码失败等确定性错误，不能整类重试。"""
-    if isinstance(exc, ModelHTTPError):
-        return exc.status_code in _TRANSIENT_HTTP
-    if isinstance(exc, ModelAPIError):
-        return isinstance(exc.__cause__, _TRANSPORT_ERRORS)
-    return isinstance(exc, (TransientError, *_TRANSPORT_ERRORS))
+def is_retryable(exc: BaseException) -> bool:
+    """按契约重试的失败：领域与适配层把暂时性失败表达为 TransientError（模型与网络层的由 agent_runtime 换成它），
+    加上超时。别的异常一律按确定性失败记账：平台不认识任何 SDK 的异常类型。"""
+    return isinstance(exc, (TransientError, TimeoutError))
 
 
 class TaskHandler(Protocol):
@@ -196,7 +176,7 @@ class Worker:
         try:
             try:
                 failed = await self._queue.fail(
-                    task.id, error, retryable=is_transient(exc), on_final=settle_or_mark
+                    task.id, error, retryable=is_retryable(exc), on_final=settle_or_mark
                 )
             except _SettleFailed:
                 # 只有收尾钩子（如把失败交回等着的会话）自己失败时走这里；记账本身的失败（如数据库暂时不可用）
@@ -206,7 +186,7 @@ class Worker:
                     "settling the failed task failed; recording the failure without settling it", extra=ctx
                 )
                 failed = await self._queue.fail(
-                    task.id, error, retryable=is_transient(exc), on_final=_unsettled
+                    task.id, error, retryable=is_retryable(exc), on_final=_unsettled
                 )
         except Exception:
             # 记账本身失败（如 task 已被删除）：留下完整上下文，不能让异常无人接收
