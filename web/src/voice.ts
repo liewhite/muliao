@@ -48,7 +48,8 @@ function useVoiceAvailable(): boolean {
 export type VoiceState = 'idle' | 'recording' | 'transcribing'
 
 /**
- * 点一下开始录音，再点一下停止并交给服务端转写，拿到文字后调用 onText（空录音、误触不调用）。
+ * 按住说话：press 开始录音，release() 结束并交给服务端转写，拿到文字后调用 onText（空录音、误触不调用）；
+ * release(true) 是取消，录音丢弃。麦克风授权是异步的，授权完成前就松手同样作废。
  * 离开页面时停止录音并释放麦克风。
  */
 export function useVoiceInput(onText: (text: string) => void) {
@@ -57,22 +58,29 @@ export function useVoiceInput(onText: (text: string) => void) {
   const [error, setError] = useState<string | null>(null)
   const [startedAt, setStartedAt] = useState<number | null>(null)
   const recorder = useRef<MediaRecorder | null>(null)
+  // 用户是否还按着；拿到麦克风时已经松手就不开始录音
+  const held = useRef(false)
+  const cancelled = useRef(false)
   const onTextRef = useRef(onText)
   useEffect(() => {
     onTextRef.current = onText
   })
 
-  const stop = useCallback(() => {
-    if (recorder.current?.state === 'recording') recorder.current.stop()
-  }, [])
-
   const start = useCallback(async () => {
     setError(null)
+    cancelled.current = false
+    setState('recording')
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch (e) {
+      setState('idle')
       setError(`无法使用麦克风：${apiErrorMessage(e)}`)
+      return
+    }
+    if (!held.current) {
+      stream.getTracks().forEach((t) => t.stop())
+      setState('idle')
       return
     }
     const mimeType = pickRecordingType((t) => MediaRecorder.isTypeSupported(t))
@@ -89,7 +97,7 @@ export function useVoiceInput(onText: (text: string) => void) {
       recorder.current = null
       setStartedAt(null)
       const audio = new Blob(chunks, { type: rec.mimeType || mimeType || 'audio/webm' })
-      if (Date.now() - began < MIN_RECORDING_MS || audio.size === 0) {
+      if (cancelled.current || Date.now() - began < MIN_RECORDING_MS || audio.size === 0) {
         setState('idle')
         return
       }
@@ -106,7 +114,6 @@ export function useVoiceInput(onText: (text: string) => void) {
     recorder.current = rec
     rec.start()
     setStartedAt(began)
-    setState('recording')
   }, [])
 
   // 离开页面：停止录音（onstop 里释放麦克风），不再转写
@@ -122,12 +129,20 @@ export function useVoiceInput(onText: (text: string) => void) {
     [],
   )
 
-  const toggle = useCallback(() => {
-    if (state === 'recording') stop()
-    else if (state === 'idle') void start()
-  }, [state, start, stop])
+  const press = useCallback(() => {
+    if (state !== 'idle' || held.current) return
+    held.current = true
+    void start()
+  }, [state, start])
 
-  return { available, state, error, startedAt, toggle }
+  const release = useCallback((cancel = false) => {
+    if (!held.current) return
+    held.current = false
+    cancelled.current = cancel
+    if (recorder.current?.state === 'recording') recorder.current.stop()
+  }, [])
+
+  return { available, state, error, startedAt, press, release }
 }
 
 export type VoiceInput = ReturnType<typeof useVoiceInput>
