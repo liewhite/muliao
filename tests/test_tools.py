@@ -194,7 +194,8 @@ async def test_list_threads_shows_each_thread_with_its_state(container, make_age
     )
 
     assert outputs[0] == "ok"
-    assert "review" in outputs[1] and "worker" in outputs[1] and "done" in outputs[1]
+    # 被问的 agent 已经交回结局：没有进行中的事，附上它的回答
+    assert "review" in outputs[1] and "worker" in outputs[1] and "'idle'" in outputs[1]
 
 
 async def test_temp_agent_runs_once_in_a_discarded_workspace_and_returns_its_answer(

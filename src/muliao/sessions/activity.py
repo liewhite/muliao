@@ -6,7 +6,7 @@
 看哪些 lane、哪些占用是会话领域的实现细节：别的领域经 SessionActivity 问，不拿任务队列。
 """
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from enum import StrEnum
 
 from sqlalchemy import select
@@ -17,10 +17,9 @@ from muliao.platform.tooling import Origin
 from muliao.sessions.holds import with_active_among
 from muliao.sessions.inbound import open_asks_among
 from muliao.sessions.info import keyed_sessions_among
-from muliao.sessions.kinds import SessionKind
+from muliao.sessions.kinds import OWNED_BY_PARENT, SessionKind
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
 from muliao.sessions.tables import Session
-from muliao.sessions.threads import owned_threads_in
 
 
 class WorkState(StrEnum):
@@ -97,6 +96,23 @@ async def blocking_deletion_in(
     busy = await queue.busy_lanes(s, [session_lane(x) for x in sessions])
     held = await with_active_among(s, list(sessions))
     return [x for x in sessions if session_lane(x) in busy or x in held]
+
+
+async def owned_threads_in(s: AsyncSession, roots: Sequence[Session]) -> dict[str, Session]:
+    """这些会话连同（逐层）归它们所有的 thread（KindPolicy.owned_by_parent）：删除时一起删除。"""
+    doomed = {x.id: x for x in roots}
+    frontier = list(doomed)
+    while frontier:
+        children = (
+            await s.scalars(
+                select(Session).where(
+                    Session.parent_session_id.in_(frontier), Session.kind.in_(OWNED_BY_PARENT)
+                )
+            )
+        ).all()
+        frontier = [c.id for c in children if c.id not in doomed]
+        doomed |= {c.id: c for c in children}
+    return doomed
 
 
 async def sessions_blocking_agent_deletion_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> list[str]:

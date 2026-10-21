@@ -2,7 +2,6 @@
 list_threads。委派的生命周期见 sessions.delegation。"""
 
 from collections.abc import Awaitable, Callable
-from typing import Literal
 
 from pydantic import BaseModel
 from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext, ToolReturn
@@ -12,6 +11,7 @@ from muliao.agents.api import AgentService
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.sessions.activity import WorkState
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.threads import Threads, validate_thread
 
@@ -28,9 +28,11 @@ class ThreadInfo(BaseModel):
     agent: str
     # true：ask_agent 开出的、只有你能继续的 thread；false：用户也能看到并回复
     private: bool
-    # 最近一次运行的状态（idle：还没有运行）
-    status: Literal["done", "failed", "running", "idle"]
-    # 最近一次运行完成时，会话最近的回答摘录
+    # running：在处理；waiting：在等它自己开出的后台任务、委派或提问的回答，还没做完；idle：没有进行中的事
+    status: WorkState
+    # 最近一次运行最终失败时的错误说明
+    failure: str | None
+    # 它最近的回答摘录（还没有回答时为 None）；status 不是 idle 时是中间的回答，不是结局
     answer: str | None
 
 
@@ -168,8 +170,9 @@ def delegation_toolset(
                 thread=v.thread,
                 agent=names[v.agent_id],
                 private=not policy_of(v.kind).user_writable,
-                status=v.state.status,
-                answer=truncate(v.state.text, _ANSWER_PREVIEW) if v.state.status == "done" else None,
+                status=v.state.work,
+                failure=v.state.failure,
+                answer=truncate(v.state.answer, _ANSWER_PREVIEW) if v.state.answer else None,
             )
             for v in views
         ]

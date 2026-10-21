@@ -26,6 +26,7 @@ from muliao.agents.api import AgentInfo, agent_in
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Clock, TaskQueue
+from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.events import Ending
 from muliao.sessions.mailbox import latest_run, post_check_in
 from muliao.sessions.pending import AgentAnswer, pending_in
@@ -148,46 +149,49 @@ class ThreadChecks:
                     .order_by(SessionHold.id)
                 )
             ).all()
-            seen: set[tuple[str, str]] = set()
+            due: dict[tuple[str, str], SessionHold] = {}
             for hold, child_id in rows:
-                if (hold.session_id, child_id) in seen:
+                if (hold.session_id, child_id) in due:
                     continue
-                seen.add((hold.session_id, child_id))
                 if hold.call_id is not None and hold.call_id in await pending_in(s, hold.session_id):
                     # 发起方停在这次调用上：检查信件要等回答一起才交给模型，没有意义
                     continue
+                due[(hold.session_id, child_id)] = hold
+            works = await work_states_in(s, self._queue, {child_id for _, child_id in due})
+            for (_, child_id), hold in due.items():
                 child = await s.get(Session, child_id)
                 if child is None:
                     # 不变量断言：信件随会话删除，join 不会给出已删除的 thread
                     raise RuntimeError(f"delegation {hold.holder} has mail in a missing thread {child_id}")
                 agent = await agent_in(s, child.agent_id)
-                text = check_text(child, agent, await latest_run(s, child.id), self._clock())
+                text = check_text(child, agent, works[child_id], await latest_run(s, child.id), self._clock())
                 posted += await post_check_in(
                     s, self._queue, hold.session_id, hold.holder, thread_source(child.id), text
                 )
         return posted
 
 
-def check_text(child: Session, agent: AgentInfo, run: Task | None, now: datetime) -> str:
-    """run 为 None：委派信件还排着，thread 还没有运行。最近一次运行已经结束（委派却还没结清）：thread 停在它自己的
-    挂起调用上，或在等它发起的后台任务、委派。"""
+def check_text(child: Session, agent: AgentInfo, work: WorkState, run: Task | None, now: datetime) -> str:
+    """还没结清的委派的检查信件，按 thread 的工作状态（activity.work_states_in）说；run 是它最近一次运行（还没有
+    运行时为 None），只用来补充 running 的细节：在跑多久了、在等重试，还是还排着。"""
     name = thread_name(child)
-    stop = f"if it is no longer needed, call stop_thread({name!r})."
-    if run is None or run.status in (TaskStatus.PENDING, TaskStatus.DONE, TaskStatus.FAILED):
-        if run is not None and run.status == TaskStatus.PENDING and run.attempts:
-            state = f"is waiting to run again (attempt {run.attempts} so far)"
-        elif run is not None and run.status == TaskStatus.DONE:
-            state = (
+    who = f"Thread {name!r} ({agent.name})"
+    keep = f"Keep waiting, you will get an event with its answer; if it is no longer needed, call stop_thread({name!r})."
+    match work:
+        case WorkState.IDLE:
+            # 不变量断言：委派在 thread 空闲之前就结清了（运行做完、最终失败、被停止都在同一个事务里结清）
+            raise RuntimeError(f"thread {child.id} is idle but a delegation to it is still unsettled")
+        case WorkState.WAITING:
+            doing = (
                 "is waiting for work it started (background jobs, other agents) or for answers it asked for"
             )
-        else:
-            state = "is queued and has not started yet"
-        return f"Thread {name!r} ({agent.name}) {state}. Keep waiting, you will get an event with its answer; {stop}"
-    if run.started_at is None:
-        raise RuntimeError(f"running run {run.id} has no start time")
-    minutes = int((now - run.started_at).total_seconds() // 60)
-    return (
-        f"Thread {name!r} ({agent.name}) is still working on your task ({minutes} min so far).\n"
-        f"Keep waiting, you will get an event with its answer; {stop}"
-    )
-
+        case WorkState.RUNNING if run is not None and run.status == TaskStatus.RUNNING:
+            if run.started_at is None:
+                raise RuntimeError(f"running run {run.id} has no start time")
+            minutes = int((now - run.started_at).total_seconds() // 60)
+            return f"{who} is still working on your task ({minutes} min so far).\n{keep}"
+        case WorkState.RUNNING if run is not None and run.status == TaskStatus.PENDING and run.attempts:
+            doing = f"is waiting to run again (attempt {run.attempts} so far)"
+        case WorkState.RUNNING:
+            doing = "is queued and has not started yet"
+    return f"{who} {doing}. {keep}"

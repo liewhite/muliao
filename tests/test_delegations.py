@@ -171,11 +171,12 @@ async def test_a_failing_settle_hook_still_records_the_failure_instead_of_leavin
     assert turn.status == TaskStatus.FAILED and "bad request" in (turn.error or "")
 
 
-def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running():
+def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
     from datetime import UTC, datetime
 
     from muliao.agents.tables import Agent
     from muliao.platform.tables import Task
+    from muliao.sessions.activity import WorkState
     from muliao.sessions.delegation import check_text
     from muliao.sessions.delegation import event_text as _event_text
     from muliao.sessions.events import Ending
@@ -185,10 +186,20 @@ def test_check_text_offers_stop_thread_whether_the_thread_is_queued_or_running()
     agent = Agent(id="a", name="reviewer")
     queued = Task(id=1, kind=TaskKind.RUN, status=TaskStatus.PENDING, attempts=0)
     retrying = Task(id=2, kind=TaskKind.RUN, status=TaskStatus.PENDING, attempts=2)
+    done = Task(id=3, kind=TaskKind.RUN, status=TaskStatus.DONE, attempts=1)
+    running = Task(
+        id=4, kind=TaskKind.RUN, status=TaskStatus.RUNNING, attempts=1, started_at=datetime.now(UTC)
+    )
     now = datetime.now(UTC)
     # 排队中的 thread 也能停：停止清空它的信箱，并交回「被停止」
-    assert "stop_thread('review')" in check_text(child, agent, queued, now)
-    assert "waiting to run again" in check_text(child, agent, retrying, now)
+    assert "stop_thread('review')" in check_text(child, agent, WorkState.RUNNING, queued, now)
+    assert "not started yet" in check_text(child, agent, WorkState.RUNNING, None, now)
+    assert "waiting to run again" in check_text(child, agent, WorkState.RUNNING, retrying, now)
+    assert "still working" in check_text(child, agent, WorkState.RUNNING, running, now)
+    # 最近一次运行做完了但在等自己开出的工作：照工作状态说在等，不是还排着
+    assert "waiting for work it started" in check_text(child, agent, WorkState.WAITING, done, now)
+    with pytest.raises(RuntimeError, match="idle"):
+        check_text(child, agent, WorkState.IDLE, done, now)
     # 被停止时如实说明，附上停止前说的话
     assert "was stopped" in _event_text("review", agent.name, Ending.STOPPED, "")
 
@@ -344,10 +355,10 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
         [event] = (
             await s.scalars(select(Mail).where(Mail.session_id == parent.id, Mail.state == MailState.QUEUED))
         ).all()
-        state = await container.threads.state(s, child)
+        [view] = await container.threads.list_in(s, parent.id)
     assert event.source == f"thread:{child.id}" and "was stopped" in event.content
     # 排着的运行记为完成、没有任何消息：thread 的状态照样能读
-    assert (state.status, state.text) == ("done", "")
+    assert (view.state.work, view.state.failure, view.state.answer) == ("idle", None, "")
     assert await container.thread_checks.check() == 0
 
 
@@ -749,6 +760,54 @@ async def test_a_private_thread_answers_only_after_its_background_job_finishes(c
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
     assert seen == ["job finished: all good"]
+
+
+async def test_a_thread_waiting_on_its_own_background_job_is_listed_as_waiting_not_done(
+    container, make_agent, models
+):
+    """thread 开了后台任务、先回了一句就结束了这次运行：它的工作还没做完，list_threads 报 waiting（附上那句中间的
+    回答），不报做完；任务结束、给出结局后才是 idle。"""
+    import asyncio
+
+    from pydantic_ai.messages import ToolCallPart
+
+    from muliao.sessions.activity import WorkState
+    from muliao.sessions.mailbox import latest_run
+    from tests.test_flow import last_user_prompt, tool_returns
+
+    def helper_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if "job:" in last_user_prompt(messages):
+            return ModelResponse(parts=[TextPart("job finished: all good")])
+        if tool_returns(messages):
+            return ModelResponse(parts=[TextPart("started, will report")])
+        return ModelResponse(
+            parts=[ToolCallPart("run_shell", {"command": "sleep 1", "background": True}, tool_call_id="bg")]
+        )
+
+    parent, seen = await _asking(container, make_agent, models, scripted(helper_fn))
+
+    async def states():  # noqa: ANN202
+        async with container.db.transaction() as s:
+            return [v.state for v in await container.threads.list_in(s, parent.id)]
+
+    async def answered_for_now() -> bool:
+        return [x.answer for x in await states()] == ["started, will report"]
+
+    worker = asyncio.create_task(container.worker.run_forever())
+    try:
+        await _until(answered_for_now)
+        [state] = await states()
+        assert (state.work, state.failure) == (WorkState.WAITING, None)
+        # 它最近一次运行已经做完（按最近一次运行判断会把它当成做完、把中间的回答当结局）
+        [child] = await threads_of(container, parent.id)
+        async with container.db.transaction() as s:
+            assert (await latest_run(s, child.id)).status == TaskStatus.DONE
+        await _until(lambda: _has(seen))
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+    [state] = await states()
+    assert (state.work, state.answer) == (WorkState.IDLE, "job finished: all good")
 
 
 async def _has(items: list) -> bool:  # noqa: ANN001

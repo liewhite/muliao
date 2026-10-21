@@ -4,9 +4,7 @@
 ask_agent 投给私有 thread（用户只读），发问方停在这次调用上，结局作为它的结果交回（sessions.delegation）。"""
 
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,12 +14,13 @@ from muliao.errors import InvalidInput
 from muliao.platform.tables import TaskStatus
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import Origin
+from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.delegation import delegation_holder, thread_name
 from muliao.sessions.history import latest_answer
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.inbound import Inbound, NewSession, Received, create_session, receive
-from muliao.sessions.kinds import OWNED_BY_PARENT, SessionKind, policy_of
+from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.mailbox import latest_run
 from muliao.sessions.settlement import failure_of
 from muliao.sessions.tables import Mail, Session
@@ -47,10 +46,13 @@ async def threads_of(s: AsyncSession, parent_id: str) -> list[Session]:
 
 @dataclass(frozen=True)
 class ThreadState:
-    # 最近一次运行的状态；idle：还没有运行
-    status: Literal["done", "failed", "running", "idle"]
-    # done 时为会话最近的回答（可能为空：运行停在第一次回复之前），failed 时为错误说明，其余为空
-    text: str
+    # 工作状态（activity.work_states_in，唯一规则）：waiting 是 thread 在等它自己开出的后台任务、委派或提问的回答，
+    # 工作还没做完
+    work: WorkState
+    # 最近一次运行最终失败时的错误说明，否则为 None
+    failure: str | None
+    # 会话最近的回答（还没有回复时为空）；work 不是 idle 时它是中间的回答
+    answer: str
 
 
 @dataclass(frozen=True)
@@ -172,43 +174,25 @@ class Threads:
 
     async def list_in(self, s: AsyncSession, parent_id: str) -> list[ThreadView]:
         """父会话开出的 thread（含私有的），按创建顺序，带各自的状态。"""
+        children = await threads_of(s, parent_id)
+        works = await work_states_in(s, self._queue, [c.id for c in children])
         return [
             ThreadView(
                 session_id=child.id,
                 thread=thread_name(child),
                 agent_id=child.agent_id,
                 kind=child.kind,
-                state=await self.state(s, child),
+                state=ThreadState(
+                    work=works[child.id],
+                    failure=await _failure_in(s, child.id),
+                    answer=await latest_answer(s, child.id),
+                ),
             )
-            for child in await threads_of(s, parent_id)
+            for child in children
         ]
 
-    async def state(self, s: AsyncSession, child: Session) -> ThreadState:
-        """thread 的状态：看最近一次运行；完成时给出会话最近的回答。"""
-        run = await latest_run(s, child.id)
-        if run is None:
-            return ThreadState("idle", "")
-        match run.status:
-            case TaskStatus.DONE:
-                return ThreadState("done", await latest_answer(s, child.id))
-            case TaskStatus.FAILED:
-                return ThreadState("failed", failure_of(run))
-            case _:
-                return ThreadState("running", "")
 
-
-async def owned_threads_in(s: AsyncSession, roots: Sequence[Session]) -> dict[str, Session]:
-    """这些会话连同（逐层）归它们所有的 thread（KindPolicy.owned_by_parent）：删除时一起删除。"""
-    doomed = {x.id: x for x in roots}
-    frontier = list(doomed)
-    while frontier:
-        children = (
-            await s.scalars(
-                select(Session).where(
-                    Session.parent_session_id.in_(frontier), Session.kind.in_(OWNED_BY_PARENT)
-                )
-            )
-        ).all()
-        frontier = [c.id for c in children if c.id not in doomed]
-        doomed |= {c.id: c for c in children}
-    return doomed
+async def _failure_in(s: AsyncSession, session_id: str) -> str | None:
+    """最近一次运行最终失败时的错误说明（之后又有运行排上就不再算）。"""
+    run = await latest_run(s, session_id)
+    return failure_of(run) if run is not None and run.status == TaskStatus.FAILED else None
