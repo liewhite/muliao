@@ -98,29 +98,23 @@ function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentF
   }
 }
 
-// 「≈全部权限」：拿到它就能间接做任何事（shell、借别的 agent 之手、改自己的配置、起任意命令的 MCP……）
-/** 工具组的说明与风险由后端给出（tool_catalog），这里只负责展示 */
-function groupLabel(group: ToolGroup): string {
-  return group.full_access ? `${group.label}（≈全部权限）` : group.label
-}
-
 function ToolGroupsInput({ all, value, onChange }: { all: ToolGroup[]; value: string[]; onChange: (v: string[]) => void }) {
   const names = all.map((g) => g.name)
   return (
     <div className="flex flex-col gap-2">
       <div className="text-sm font-medium">可用工具</div>
-      <div className="text-xs text-muted">记忆、私有 skill 和自己的指令总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的；标着「≈全部权限」的任何一项都能间接做到其余所有事</div>
+      <div className="text-xs text-muted">记忆、私有 skill 和自己的指令总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的</div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {all.map((group) => (
           <label key={group.name} className="flex items-center gap-2 text-sm">
             <ToggleSwitch
-              label={groupLabel(group)}
+              label={group.label}
               isSelected={value.includes(group.name)}
               onChange={(on) =>
                 onChange(on ? names.filter((g) => g === group.name || value.includes(g)) : value.filter((g) => g !== group.name))
               }
             />
-            {groupLabel(group)}
+            {group.label}
           </label>
         ))}
       </div>

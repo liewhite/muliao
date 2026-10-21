@@ -107,6 +107,10 @@ class McpServer:
         return f"{scope_of(self.owner)}:{self.owner or ''}:{self.name}"
 
 
+# 「使用 MCP」组的工具：每次运行按 agent 可见的 server 构建，工具名带 server 前缀（给模型看的工具组说明用它）
+MCP_TOOL_NAMES = "<server>_<tool> for every tool of the MCP servers the agent can see"
+
+
 class McpRegistry:
     def __init__(self, repo: ResourceRepo, vault: Vault):
         self._repo = repo

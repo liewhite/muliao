@@ -10,9 +10,11 @@ from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 import anyio
+from pydantic_ai import FunctionToolset
+from pydantic_ai.toolsets import AbstractToolset
 
 from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
-from muliao.agent_runtime.mcp import McpRegistry
+from muliao.agent_runtime.mcp import MCP_TOOL_NAMES, McpRegistry
 from muliao.agent_runtime.mcp_tools import mcp_admin_toolset
 from muliao.agent_runtime.runner import AgentRuntime, RunProfile, ToolGroups
 from muliao.agent_runtime.temp_agent import clear_temp_dirs, temp_agent_toolset
@@ -50,6 +52,7 @@ from muliao.platform.db import Database, WriteCheck, create_engine, migrate
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import TaskQueue
+from muliao.platform.tooling import RunScope
 from muliao.platform.worker import TaskHandler, Worker
 from muliao.reflection.service import ReflectionHandler, ReflectionScheduler
 from muliao.sessions.agent_history import AgentHistory
@@ -356,7 +359,6 @@ def build_container(
             ]
         ),
         "notify": [notify_toolset(notifications)],
-        "agents": [agents_toolset(agents, agent_lifecycle, prompts)],
         "public_skills": [public_skills_toolset(skills)],
         "mcp": [mcp.toolset()],
         "mcp_admin": [mcp_admin_toolset(mcp)],
@@ -365,6 +367,14 @@ def build_container(
         "issues": [issues_toolset(issues, agents)],
         "web": web_tools,
     }
+    # get_agent 给模型列出每组实际包含的工具（从注册的工具集取，不另写一份）；MCP 的工具每次运行按可见的 server 构建
+    group_tools = {
+        name: [tool for ts in toolsets for tool in _function_tools(name, ts)]
+        for name, toolsets in implementations.items()
+        if name != tool_catalog.MCP
+    }
+    group_tools[tool_catalog.MCP] = [MCP_TOOL_NAMES]
+    implementations[tool_catalog.AGENTS] = [agents_toolset(agents, agent_lifecycle, prompts, group_tools)]
     if missing := [g.name for g in tool_catalog.CATALOG if g.name not in implementations]:
         raise RuntimeError(f"tool groups in the catalog without an implementation: {missing}")
     tool_groups = ToolGroups(groups={g.name: implementations[g.name] for g in groups}, always=always_tools)
@@ -451,3 +461,12 @@ def build_container(
         transcriber=transcriber,
         _model_checker=model_checker or models.check,
     )
+
+
+def _function_tools(group: str, toolset: AbstractToolset[RunScope]) -> list[str]:
+    """一个静态工具集里注册的工具名；静态的组只由 FunctionToolset 组成，别的是代码不一致。"""
+    if not isinstance(toolset, FunctionToolset):
+        raise RuntimeError(
+            f"tool group {group} has a toolset whose tools are not known up front: {toolset!r}"
+        )
+    return list(toolset.tools)

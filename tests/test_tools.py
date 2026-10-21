@@ -10,7 +10,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agent_runtime.mcp import McpTransport, mcp_config
+from muliao.agent_runtime.mcp import MCP_TOOL_NAMES, McpTransport, mcp_config
 from muliao.platform.tooling import Origin
 from tests.conftest import login
 from tests.scripted import scripted
@@ -66,6 +66,18 @@ async def test_agent_creates_and_reconfigures_agents_with_versioned_instructions
     assert (container.prompts.current(me.id), latest.author) == ("Delegate research to researcher.", me.id)
     # 结果里只出现名称，不出现 id
     assert me.id not in "\n".join(outputs)
+
+
+async def test_get_agent_lists_each_tool_group_with_the_tools_it_registers(container, make_agent, models):
+    me = await make_agent("manager", model="tools")
+    [detail] = await run_tools(container, models, me.id, [("get_agent", {"agent": "manager"})])
+
+    # 每组的工具取自实际注册的工具集，包括 get_agent 自己所在的组；MCP 的工具按运行构建，只说明命名方式
+    assert "name='workspace', tools=[" in detail and "'run_shell'" in detail
+    assert "name='agents', tools=['get_agent', 'create_agent'" in detail
+    assert "'issue_create'" in detail
+    assert f"name='mcp', tools=['{MCP_TOOL_NAMES}']" in detail
+    assert "full access" not in detail
 
 
 async def test_agent_edits_public_prompt(container, make_agent, models):

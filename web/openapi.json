@@ -5127,10 +5127,6 @@
             "type": "string",
             "title": "Label"
           },
-          "full_access": {
-            "type": "boolean",
-            "title": "Full Access"
-          },
           "default": {
             "type": "boolean",
             "title": "Default"
@@ -5140,7 +5136,6 @@
         "required": [
           "name",
           "label",
-          "full_access",
           "default"
         ],
         "title": "ToolGroupOut",

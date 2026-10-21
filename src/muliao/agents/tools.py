@@ -4,14 +4,22 @@
 用户可以在界面上回滚。
 """
 
+from collections.abc import Mapping, Sequence
+
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.prompts import PromptStore
 from muliao.agents.service import AgentPatch, AgentService, AgentSpec
+from muliao.agents.tool_catalog import AGENTS
 from muliao.errors import InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+
+
+class ToolGroup(BaseModel):
+    name: str
+    tools: list[str]
 
 
 class AgentDetail(BaseModel):
@@ -21,13 +29,17 @@ class AgentDetail(BaseModel):
     instructions: str
     reflect_every: int
     tool_groups: list[str]
-    # 所有可选的工具组名称
-    available_tool_groups: list[str]
+    # 所有可选的工具组，各带它包含的工具
+    available_tool_groups: list[ToolGroup]
 
 
 def agents_toolset(
-    agents: AgentService, lifecycle: AgentLifecycle, prompts: PromptStore
+    agents: AgentService,
+    lifecycle: AgentLifecycle,
+    prompts: PromptStore,
+    group_tools: Mapping[str, Sequence[str]],
 ) -> FunctionToolset[RunScope]:
+    """group_tools：除本组以外每个工具组包含的工具（组合根从各组实际注册的工具集取）；本组的工具在这里定义，自己补上。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool_plain
@@ -45,7 +57,10 @@ def agents_toolset(
             instructions=prompts.current(target.id),
             reflect_every=target.reflect_every,
             tool_groups=target.tool_groups,
-            available_tool_groups=agents.defaults.group_names,
+            available_tool_groups=[
+                ToolGroup(name=g, tools=list(ts.tools) if g == AGENTS else list(group_tools[g]))
+                for g in agents.defaults.group_names
+            ],
         )
 
     @ts.tool
@@ -67,9 +82,9 @@ def agents_toolset(
             instructions: Its system prompt.
             model: `<provider>:<model>`; defaults to the server's default model.
             reflect_every: Steps (model responses) between forced reflections; defaults to the server's setting.
-            tool_groups: Tool groups it may use (`get_agent` lists the available ones); defaults to all.
-                Give an agent that handles untrusted input (web pages, external events) only what it needs:
-                workspace, temp_agent, delegation, agents, triggers and mcp_admin each amount to full access.
+            tool_groups: Tool groups it may use (`get_agent` lists every available group with its tools);
+                defaults to all. Give an agent that handles untrusted input (web pages, external events) only
+                the groups whose tools it needs.
         """
         spec = AgentSpec(
             name=name,

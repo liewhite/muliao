@@ -1880,8 +1880,6 @@ export interface components {
             name: string;
             /** Label */
             label: string;
-            /** Full Access */
-            full_access: boolean;
             /** Default */
             default: boolean;
         };

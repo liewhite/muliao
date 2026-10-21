@@ -74,8 +74,6 @@ class ToolGroupOut(BaseModel):
 
     name: str
     label: str
-    # 开了它就能间接做任何事：给处理不可信输入的 agent 开要谨慎
-    full_access: bool
     # 新建 agent 时默认开启
     default: bool
 
@@ -96,10 +94,7 @@ async def agent_defaults(c: C) -> AgentDefaultsOut:
     return AgentDefaultsOut(
         model=d.model,
         reflect_every=d.reflect_every,
-        groups=[
-            ToolGroupOut(name=g.name, label=g.label, full_access=g.full_access, default=g.default)
-            for g in d.groups
-        ],
+        groups=[ToolGroupOut(name=g.name, label=g.label, default=g.default) for g in d.groups],
         default_tool_groups=d.tool_groups,
     )
 

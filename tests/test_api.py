@@ -114,8 +114,7 @@ async def test_agent_defaults_endpoint_reflects_config(client, container):
         "model": container.settings.llm.default_model,
         "reflect_every": container.settings.runtime.default_reflect_every,
         "groups": [
-            {"name": g.name, "label": g.label, "full_access": g.full_access, "default": g.default}
-            for g in container.agents.defaults.groups
+            {"name": g.name, "label": g.label, "default": g.default} for g in container.agents.defaults.groups
         ],
         "default_tool_groups": container.agents.defaults.tool_groups,
     }
