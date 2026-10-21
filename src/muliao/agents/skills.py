@@ -6,16 +6,20 @@ owner 为 None 表示公共 skill，否则为 agent 私有。agent 视角下同�
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 import frontmatter
+import yaml
 
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import Scope, scope_of, visible
-from muliao.agents.resources import ResourceRepo
+from muliao.agents.resources import CorruptResource, ResourceRepo
 from muliao.errors import CorruptState, InvalidInput, NotFound
 from muliao.platform import text_edit
+
+log = logging.getLogger(__name__)
 
 SKILL_FILE = "SKILL.md"
 
@@ -47,7 +51,10 @@ class SkillStore:
 
     def _load(self, owner: str | None, skill_dir: Path) -> Skill:
         path = skill_dir / SKILL_FILE
-        post = frontmatter.load(path)
+        try:
+            post = frontmatter.load(path)
+        except (yaml.YAMLError, ValueError) as e:
+            raise CorruptState(f"{path}: cannot parse: {e}") from e
         name, description = post.get("name"), post.get("description")
         # 读的是存下的文件（写入时校验过）：不合法是被绕过工具改坏了，不是调用方的输入错误
         if not isinstance(name, str) or not isinstance(description, str):
@@ -58,32 +65,54 @@ class SkillStore:
             )
         return Skill(SkillMeta(name, description, owner, path), post.content)
 
-    def list(self, owner: str | None) -> list[SkillMeta]:
+    def _scan(self, owner: str | None) -> tuple[list[SkillMeta], list[CorruptResource]]:
+        """owner 名下的 skill：读得出来的，和读不出来的（CorruptResource，每次读到都记 error）。"""
         root = self._root(owner)
         if not root.exists():
-            return []
-        return [
-            self._load(owner, d).meta
-            for d in sorted(root.iterdir())
-            if d.is_dir() and (d / SKILL_FILE).exists()
-        ]
+            return [], []
+        skills: list[SkillMeta] = []
+        corrupt: list[CorruptResource] = []
+        for d in sorted(root.iterdir()):
+            if not (d.is_dir() and (d / SKILL_FILE).exists()):
+                continue
+            try:
+                skills.append(self._load(owner, d).meta)
+            except CorruptState as e:
+                log.error("corrupt skill", extra={"owner": owner, "skill": d.name, "error": str(e)})
+                corrupt.append(CorruptResource("skill", owner, d.name, d / SKILL_FILE, str(e)))
+        return skills, corrupt
+
+    def list(self, owner: str | None) -> list[SkillMeta]:
+        """owner 名下读得出来的 skill；坏的见 corrupt。"""
+        return self._scan(owner)[0]
+
+    def corrupt(self, agent: str) -> list[CorruptResource]:
+        """agent 看得到的（它私有的与公共的）读不出来的 skill：skill 索引里逐项说明，不让整次运行失败。"""
+        return self._scan(agent)[1] + self._scan(None)[1]
 
     def visible_to(self, agent: str) -> list[SkillMeta]:
         return visible(
             self.list(agent) + self.list(None), agent_id=agent, owner=lambda s: s.owner, name=lambda s: s.name
         )
 
-    def read(self, owner: str | None, name: str) -> Skill:
+    def _existing(self, owner: str | None, name: str) -> Path:
         skill_dir = self._root(owner) / validate_slug("skill", name)
         if not (skill_dir / SKILL_FILE).exists():
             raise NotFound(f"{scope_of(owner)} skill {name!r} not found")
-        return self._load(owner, skill_dir)
+        return skill_dir
+
+    def read(self, owner: str | None, name: str) -> Skill:
+        return self._load(owner, self._existing(owner, name))
 
     def resolve(self, agent: str, name: str) -> Skill:
         """agent 视角读取（合并规则见 ownership.shadowing）。"""
         for meta in self.visible_to(agent):
             if meta.name == name:
                 return self.read(meta.owner, name)
+        for corrupt in self.corrupt(agent):
+            if corrupt.name == name:
+                # 交还模型（不让整次运行失败）：它可以照说明重写或删掉
+                raise NotFound(corrupt.describe())
         raise NotFound(f"skill {name!r} not found in private or public skills")
 
     async def write(
@@ -136,10 +165,9 @@ class SkillStore:
         return SkillMeta(name, meta.description if description is None else description, owner, meta.path)
 
     async def delete(self, owner: str | None, name: str, author: str) -> None:
-        skill = self.read(owner, name)
-        await self._repo.apply(
-            {skill.meta.path.parent: None}, f"delete {scope_of(owner)} skill {name}", author
-        )
+        """只看 skill 在不在，不解析内容：改坏的 skill 也能删掉。"""
+        skill_dir = self._existing(owner, name)
+        await self._repo.apply({skill_dir: None}, f"delete {scope_of(owner)} skill {name}", author)
 
 
 def _valid_description(description: str) -> str:

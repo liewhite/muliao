@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from muliao.agents.api import SkillMeta
+from muliao.agents.api import CorruptResource, SkillMeta
 from muliao.platform.tooling import Audience, Origin
 
 _ORIGIN_NOTES: dict[Origin, str] = {
@@ -91,6 +91,7 @@ def build_instructions(
     origin: Origin | None,
     memory: str,
     skills: Sequence[SkillMeta],
+    corrupt_skills: Sequence[CorruptResource],
     memory_limit: int,
     summary: str | None,
 ) -> str:
@@ -101,7 +102,10 @@ def build_instructions(
     ]
     if origin is not None:
         context.append(f"- {_ORIGIN_NOTES[origin]}")
-    skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] or ["(no skills yet)"]
+    # 坏的 skill 逐项说明（不让整次运行失败，见 agents.resources.CorruptResource）：agent 可以重写或删掉它
+    skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] + [
+        f"- {c.describe()}" for c in corrupt_skills
+    ] or ["(no skills yet)"]
     # 公共 prompt 在前、agent 自己的指令在后：具体的指令可以细化或覆盖通用规则
     sections = [
         public_instructions.strip(),

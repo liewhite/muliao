@@ -495,6 +495,7 @@ def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
             origin=origin,
             memory="",
             skills=(),
+            corrupt_skills=(),
             memory_limit=100,
             summary=None,
         )

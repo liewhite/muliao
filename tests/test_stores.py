@@ -56,13 +56,44 @@ async def test_skill_rejects_invalid_name_and_empty_description(skills: SkillSto
         await skills.write(None, "ok", "  ", "b", "user")
 
 
-def test_skill_with_mismatched_frontmatter_name_fails_loudly(skills: SkillStore, repo: ResourceRepo):
+@pytest.mark.parametrize(
+    ("content", "problem"),
+    [
+        ("---\nname: fake\ndescription: x\n---\nbody", "does not match directory"),
+        ("---\nname: [real\n---\nbody", "cannot parse"),
+        ("no frontmatter", "must contain string 'name'"),
+    ],
+)
+async def test_a_corrupt_skill_is_reported_on_its_own_without_hiding_the_others(
+    skills: SkillStore, repo: ResourceRepo, content: str, problem: str
+):
+    await skills.write(None, "good", "fine", "x", "user")
+    await skills.write(ALPHA, "mine", "fine too", "x", "user")
     d = repo.owner_dir(None) / "skills" / "real"
     d.mkdir(parents=True)
-    (d / "SKILL.md").write_text("---\nname: fake\ndescription: x\n---\nbody")
+    (d / "SKILL.md").write_text(content)
 
-    with pytest.raises(CorruptState, match="does not match directory"):
-        skills.list(None)
+    assert [s.name for s in skills.visible_to(ALPHA)] == ["mine", "good"]
+    [corrupt] = skills.corrupt(ALPHA)
+    assert (corrupt.name, corrupt.owner, corrupt.kind) == ("real", None, "skill")
+    assert problem in corrupt.problem and str(d) in corrupt.problem
+    assert "public skill 'real' is corrupt" in corrupt.describe()
+    # 读它本身照样报错（交还模型的那种），读出原因；删得掉
+    with pytest.raises(CorruptState, match=problem):
+        skills.read(None, "real")
+    with pytest.raises(NotFound, match=problem):
+        skills.resolve(ALPHA, "real")
+    await skills.delete(None, "real", "user")
+    assert skills.corrupt(ALPHA) == []
+
+
+async def test_corrupt_skills_of_other_agents_are_not_reported(skills: SkillStore, repo: ResourceRepo):
+    d = repo.owner_dir(BETA) / "skills" / "broken"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("broken")
+
+    assert skills.corrupt(ALPHA) == []
+    assert [c.name for c in skills.corrupt(BETA)] == ["broken"]
 
 
 async def test_delete_missing_skill_raises_not_found(skills: SkillStore):

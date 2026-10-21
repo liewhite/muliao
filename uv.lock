@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -1572,6 +1572,7 @@ dependencies = [
     { name = "pydantic-ai-slim", extra = ["anthropic", "google", "mcp", "openai"] },
     { name = "python-frontmatter" },
     { name = "pywebpush" },
+    { name = "pyyaml" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1597,6 +1598,7 @@ requires-dist = [
     { name = "pydantic-ai-slim", extras = ["anthropic", "google", "mcp", "openai"], specifier = ">=2.57.0" },
     { name = "python-frontmatter", specifier = ">=1.3.0" },
     { name = "pywebpush", specifier = ">=2.5.0" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.1.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]

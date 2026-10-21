@@ -171,6 +171,7 @@ class AgentRuntime:
             origin=scope.origin,
             memory=self._memory.read(agent.id),
             skills=self._skills.visible_to(agent.id),
+            corrupt_skills=self._skills.corrupt(agent.id),
             memory_limit=self._memory.max_chars,
             summary=summary,
         )
