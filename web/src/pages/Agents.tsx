@@ -31,8 +31,10 @@ import { ActionButton,
   useConfirm,
   useLoad,
 } from '../ui'
+import { McpManager } from './Mcp'
 import { ResourceHistory } from './Prompts'
 import { SkillList } from './Skills'
+import { SecretManager } from './Vault'
 import { refreshUnreadLogged } from '../unread'
 
 export function AgentList() {
@@ -311,6 +313,8 @@ const DETAIL_TABS = [
   ['config', '配置'],
   ['memory', '记忆'],
   ['skills', 'Skills'],
+  ['mcp', 'MCP'],
+  ['secrets', 'Secrets'],
   ['reflections', '反思'],
 ] as const
 
@@ -405,6 +409,14 @@ export function AgentDetail() {
             </Tabs.Panel>
             <Tabs.Panel id="skills" className="pt-3">
               <SkillList owner={a.id} />
+            </Tabs.Panel>
+            <Tabs.Panel id="mcp" className="flex flex-col gap-3 pt-3">
+              <p className="text-sm text-muted">私有 MCP server 只有这个 agent 能用，可以引用它的私有 secret；同名时遮蔽公共的。</p>
+              <McpManager owner={a.id} />
+            </Tabs.Panel>
+            <Tabs.Panel id="secrets" className="flex flex-col gap-3 pt-3">
+              <p className="text-sm text-muted">私有 secret 只有这个 agent 能用；同名时遮蔽公共的。</p>
+              <SecretManager owner={a.id} />
             </Tabs.Panel>
             <Tabs.Panel id="reflections" className="pt-3">
               <Reflections agentId={a.id} />
