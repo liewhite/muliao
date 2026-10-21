@@ -69,7 +69,16 @@ class TaskQueue:
         self._max_attempts = max_attempts
         self._retry_base = retry_base_seconds
         self._clock = clock
+        # 有处理器的任务种类（accept），登记之前不接受任何 task
+        self._kinds: frozenset[str] = frozenset()
         self.wake = asyncio.Event()
+
+    def accept(self, kinds: frozenset[str]) -> None:
+        """登记有处理器的任务种类（组合根建好 worker 后调用一次）。没有处理器的 task 永远不会被领取，还挡住同一
+        lane 后面的 task（_claimable 不看种类），所以 enqueue 当场拒绝别的种类。"""
+        if self._kinds:
+            raise RuntimeError("task kinds are already registered")
+        self._kinds = kinds
 
     def now(self) -> datetime:
         return self._clock()
@@ -93,7 +102,9 @@ class TaskQueue:
         session_id: str | None,
         payload: dict[str, Any],
     ) -> Task:
-        """在调用方事务内写入 task；事务提交后唤醒 worker。"""
+        """在调用方事务内写入 task；事务提交后唤醒 worker。种类必须有处理器（accept）。"""
+        if kind not in self._kinds:
+            raise RuntimeError(f"no handler is registered for task kind {kind!r}")
         task = Task(
             kind=kind,
             lane=lane,

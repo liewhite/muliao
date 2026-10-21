@@ -59,7 +59,7 @@ ignore = ["E501", "B008"]
 # 测试自己编排 worker 与订阅者，可以直接用 asyncio
 "tests/**" = ["TID251"]
 
-# 并发一律用 anyio 的任务组与取消作用域（docs/domain-design.md「并发模型」）：裸任务不受作用域的取消约束
+# 并发一律用 anyio 的任务组与取消作用域（docs/architecture.md「并发模型」）：裸任务不受作用域的取消约束
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "asyncio.create_task".msg = "start tasks in an anyio task group"
 "asyncio.ensure_future".msg = "start tasks in an anyio task group"

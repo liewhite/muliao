@@ -30,6 +30,16 @@ class TaskHandler(Protocol):
         ...
 
 
+def register_handlers(*entries: tuple[str, TaskHandler]) -> dict[str, TaskHandler]:
+    """组合根登记各任务种类的处理器。同一种类登记两次是写错了，当场报错（dict 字面量会悄悄留下后一个）。"""
+    handlers: dict[str, TaskHandler] = {}
+    for kind, handler in entries:
+        if kind in handlers:
+            raise ValueError(f"task kind {kind!r} is registered twice")
+        handlers[kind] = handler
+    return handlers
+
+
 class Interrupted(Exception):
     """任务被中断（进程退出）后恢复的次数已经用完：不再恢复，记为最终失败。见 Worker._recover。"""
 
@@ -82,7 +92,7 @@ class Worker:
         async with anyio.create_task_group() as group:
             while True:
                 await slots.acquire()
-                task = await self._queue.claim(self._handlers.keys())
+                task = await self._queue.claim(self.kinds)
                 if task is None:
                     slots.release()
                     await self._wait_for_work()
@@ -147,7 +157,7 @@ class Worker:
 
     async def _wait_for_work(self) -> None:
         self._queue.wake.clear()
-        due = await self._queue.next_due(self._handlers.keys())
+        due = await self._queue.next_due(self.kinds)
         timeout = _IDLE_POLL_SECONDS if due is None else max(0.05, (due - self._queue.now()).total_seconds())
         with anyio.move_on_after(min(timeout, _IDLE_POLL_SECONDS)):
             await self._queue.wake.wait()

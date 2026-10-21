@@ -56,7 +56,7 @@ from muliao.platform.retention import TaskRetention
 from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import Commit, TaskAdmin, TaskQueue
 from muliao.platform.tooling import RunScope
-from muliao.platform.worker import RunNow, TaskHandler, Worker
+from muliao.platform.worker import RunNow, Worker, register_handlers
 from muliao.reflection.service import REFLECTION_TASK, ReflectionHandler, ReflectionScheduler
 from muliao.sessions.agent_history import AgentHistory
 from muliao.sessions.api import SessionActivity
@@ -245,7 +245,8 @@ class Assembly:
 
     async def _check_task_kinds(self) -> None:
         """任务种类是不透明的字符串（platform.tables）：库里还没完成的 task 若是没有处理器登记的种类（例如改名后留下的
-        旧值），它永远不会被领取，还挡住它的 lane。启动时报出来，由人处理（「任务」页可见）。"""
+        旧值），它永远不会被领取，还挡住它的 lane（停止会话也解不开）。新写入的已由 TaskQueue.accept 拒绝，这里报的是
+        库里留下的旧行。启动时报出来，由人处理：恢复它的处理器，或在库里删掉它；「任务」页上它没有可做的操作。"""
         unknown = sorted(await self.queue.unfinished_kinds() - self.worker.kinds)
         if unknown:
             log.error("unfinished tasks of kinds no handler is registered for", extra={"kinds": unknown})
@@ -463,14 +464,14 @@ def assemble(
         halt,
         compactor,
     )
-    # 各领域的任务种类在这里登记处理器
-    handlers: dict[str, TaskHandler] = {
-        EVENT_TASK: messaging,
-        RUN_TASK: RunHandler(consumer, queue),
-        COMPACTION_TASK: CompactionHandler(db, compactor),
-        REFLECTION_TASK: ReflectionHandler(db, runtime, tool_groups, agents, agent_history),
-        DELIVER_TASK: DeliverHandler(db, pusher),
-    }
+    # 各领域的任务种类在这里登记处理器；队列只接受登记过的种类（TaskQueue.accept）
+    handlers = register_handlers(
+        (EVENT_TASK, messaging),
+        (RUN_TASK, RunHandler(consumer, queue)),
+        (COMPACTION_TASK, CompactionHandler(db, compactor)),
+        (REFLECTION_TASK, ReflectionHandler(db, runtime, tool_groups, agents, agent_history)),
+        (DELIVER_TASK, DeliverHandler(db, pusher)),
+    )
     worker = Worker(
         queue,
         handlers,
@@ -478,6 +479,7 @@ def assemble(
         concurrency=settings.runtime.worker_concurrency,
     )
     run_now.bind(worker)
+    queue.accept(worker.kinds)
 
     return Assembly(
         settings=settings,

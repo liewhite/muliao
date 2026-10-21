@@ -227,10 +227,49 @@ async def test_mail_consumed_by_is_indexed_for_task_deletes(container):
 
 
 async def test_startup_reports_unfinished_tasks_of_kinds_without_a_handler(container, make_agent, caplog):
-    """任务种类是不透明字符串：没有处理器的种类永远不会被领取、挡住 lane，启动时要报出来。"""
+    """任务种类是不透明字符串：库里留下的（例如改名前写入的）没有处理器的种类永远不会被领取、挡住 lane，启动时要
+    报出来；有处理器的种类与已完成的不报。"""
     alpha = (await make_agent()).id
     async with container.db.transaction() as s:
-        container.queue.enqueue(s, kind="renamed", lane="x", agent_id=alpha, session_id=None, payload={})
+        container.queue.enqueue(s, kind=RUN_TASK, lane="y", agent_id=alpha, session_id=None, payload={})
+        # enqueue 已拒绝没有处理器的种类：旧行直接写进表
+        s.add_all(
+            [
+                Task(
+                    kind="renamed",
+                    lane="x",
+                    agent_id=alpha,
+                    payload={},
+                    status=TaskStatus.PENDING,
+                    not_before=utcnow(),
+                ),
+                Task(
+                    kind="gone",
+                    lane="z",
+                    agent_id=alpha,
+                    payload={},
+                    status=TaskStatus.DONE,
+                    not_before=utcnow(),
+                ),
+            ]
+        )
     await container._check_task_kinds()  # noqa: SLF001
     [record] = [r for r in caplog.records if "no handler" in r.message]
     assert record.levelname == "ERROR" and record.kinds == ["renamed"]
+
+
+async def test_enqueueing_a_kind_without_a_handler_is_refused(container, make_agent):
+    """没有处理器的 task 永远领不到，还挡住同一 lane 后面的 task：写入时当场拒绝，什么都不写。"""
+    alpha = (await make_agent()).id
+    with pytest.raises(RuntimeError, match="no handler is registered for task kind 'typo'"):
+        async with container.db.transaction() as s:
+            container.queue.enqueue(s, kind="typo", lane="x", agent_id=alpha, session_id=None, payload={})
+    async with container.db.transaction() as s:
+        assert (await s.execute(text("SELECT count(*) FROM tasks WHERE kind = 'typo'"))).scalar() == 0
+
+
+def test_registering_a_task_kind_twice_is_refused():
+    from muliao.platform.worker import register_handlers
+
+    with pytest.raises(ValueError, match="'run' is registered twice"):
+        register_handlers((RUN_TASK, object()), (EVENT_TASK, object()), (RUN_TASK, object()))
