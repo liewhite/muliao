@@ -102,7 +102,8 @@ class _SecretSafe(WrapperToolset[RunScope]):
 class _Reachable(CombinedToolset[RunScope]):
     """一次运行用到的 server：逐个连接并列一次工具，连不上或列不出工具的（McpFailed、TransientError，信息已
     脱敏）跳过并记进 notices，其余照常组合。工具在进入时就列好（MCPToolset 缓存它），之后每步的 get_tools 用缓存，
-    不会在请求模型时才失败、拖垮整次运行，notices 也赶得上这次运行开头的运行上下文。暂时性失败也是跳过（这次运行
+    notices 也赶得上这次运行开头的运行上下文。运行中 server 通知工具变了（tools/list_changed 清掉缓存）、重新列又
+    失败时，那一步照常失败（少见，不另设一条半路跳过的路径）。暂时性失败也是跳过（这次运行
     没有它的工具），不让整次运行失败重试。只进入一次（每次运行由 toolset() 新建一个）。"""
 
     # 与 toolsets 一一对应的 server 名，以及这次运行的 agent：记日志用
