@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, asAgentId, type AgentId, type Origin, type SessionListItem, sessionRoute } from '../api'
 import { useServerEvents } from '../events'
-import { groupByAgent } from '../sessionGroups'
+import { groupByAgent, splitRunning } from '../sessionGroups'
 import {
   EmptyHint,
   LinkButton,
@@ -48,11 +48,13 @@ function loadCollapsed(): Set<string> {
   }
 }
 
-// 运行中的会话：接口已把它们置顶；卡片左侧描强调色边、标题前转圈、带「运行中」标签
-function SessionCard({ s }: { s: SessionListItem }) {
+// 运行中的会话：卡片左侧描强调色边、标题前转圈、带「运行中」标签；置顶区里不在 agent 分组下，带上 agent 名
+function SessionCard({ s, agentName }: { s: SessionListItem; agentName?: string }) {
   return (
     <Link to={sessionRoute(s.id)}>
-      <Card className={`transition-colors hover:bg-surface-hover ${s.running ? 'border-l-4 border-accent bg-accent/5' : ''}`}>
+      <Card
+        className={`transition-colors hover:bg-surface-hover ${s.running ? 'border-l-4 border-accent bg-accent/5' : ''}`}
+      >
         <Card.Content className="flex flex-row items-center gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 font-medium">
@@ -66,6 +68,11 @@ function SessionCard({ s }: { s: SessionListItem }) {
               <span className="truncate">{s.title}</span>
             </div>
             <div className="mt-1 flex gap-1.5">
+              {agentName !== undefined && (
+                <Chip size="sm" variant="secondary">
+                  {agentName}
+                </Chip>
+              )}
               <Chip size="sm" variant="secondary">
                 {ORIGIN_LABEL[s.origin]}
               </Chip>
@@ -97,7 +104,12 @@ export default function Sessions() {
       return next
     })
   const sessions = useLoad(
-    () => api.sessions({ origin: FILTERS[filter].origins, agent_id: agent === ALL_AGENTS ? undefined : asAgentId(agent), limit: 200 }),
+    () =>
+      api.sessions({
+        origin: FILTERS[filter].origins,
+        agent_id: agent === ALL_AGENTS ? undefined : asAgentId(agent),
+        limit: 200,
+      }),
     [filter, agent],
   )
   useServerEvents((e) => {
@@ -119,20 +131,27 @@ export default function Sessions() {
           label="会话筛选"
           value={filter}
           onChange={setFilter}
-          options={Object.entries(FILTERS).map(([id, f]) => ({ id: id as Filter, label: f.label }))}
+          options={Object.entries(FILTERS).map(([id, f]) => ({
+            id: id as Filter,
+            label: f.label,
+          }))}
         />
         <div className="min-w-40 flex-1">
           <SelectInput
             label="Agent"
             value={agent}
             onChange={setAgent}
-            options={[{ id: ALL_AGENTS, label: '所有 agent' }, ...(agents.data ?? []).map((a) => ({ id: a.id, label: a.name }))]}
+            options={[
+              { id: ALL_AGENTS, label: '所有 agent' },
+              ...(agents.data ?? []).map((a) => ({ id: a.id, label: a.name })),
+            ]}
           />
         </div>
       </div>
       <Loading state={sessions}>
-        {(list) =>
-          list.length === 0 ? (
+        {(list) => {
+          const { running, rest } = splitRunning(list)
+          return list.length === 0 ? (
             <EmptyHint>没有会话</EmptyHint>
           ) : agent !== ALL_AGENTS ? (
             <div className="flex flex-col gap-2">
@@ -142,7 +161,19 @@ export default function Sessions() {
             </div>
           ) : (
             <div className="flex flex-col gap-4">
-              {groupByAgent(list).map((g) => {
+              {running.length > 0 && (
+                <section className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-accent">
+                    <Spinner size="sm" color="current" />
+                    <span>运行中</span>
+                    <span className="font-normal">{running.length}</span>
+                  </div>
+                  {running.map((s) => (
+                    <SessionCard key={s.id} s={s} agentName={agentLabel(agents.data, s.agent_id)} />
+                  ))}
+                </section>
+              )}
+              {groupByAgent(rest).map((g) => {
                 const open = !collapsed.has(g.agentId)
                 return (
                   <section key={g.agentId} className="flex flex-col gap-2">
@@ -155,12 +186,6 @@ export default function Sessions() {
                       {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                       <span>{agentLabel(agents.data, g.agentId)}</span>
                       <span className="font-normal">{g.sessions.length}</span>
-                      {g.running > 0 && (
-                        <Chip size="sm" color="accent" variant="soft">
-                          <Spinner size="sm" color="current" />
-                          {g.running} 运行中
-                        </Chip>
-                      )}
                       {g.unread > 0 && (
                         <Chip size="sm" color="accent" variant="soft">
                           {g.unread} 未读
@@ -173,7 +198,7 @@ export default function Sessions() {
               })}
             </div>
           )
-        }
+        }}
       </Loading>
     </Page>
   )
