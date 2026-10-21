@@ -65,6 +65,8 @@ class Worker:
         self._handlers = handlers
         self._bus = bus
         self._concurrency = concurrency
+        # run_forever 正在进行：并发上限是每次运行各自的槽位，同时跑两次上限就翻倍，所以只允许一次
+        self._running = False
 
     @property
     def kinds(self) -> frozenset[str]:
@@ -84,6 +86,15 @@ class Worker:
         )
 
     async def run_forever(self) -> None:
+        if self._running:
+            raise RuntimeError("worker is already running; a second run_forever would double its concurrency")
+        self._running = True
+        try:
+            await self._run()
+        finally:
+            self._running = False
+
+    async def _run(self) -> None:
         await self._recover()
         # 槽位属于这一次运行（与任务组同生命周期）：停在领取中途时没还的槽位随这次运行一起丢弃，同一个 worker
         # 再次启动时槽位是满的（槽位曾放在实例上，漏够 concurrency 次后再启动的 worker 永远领不到任务）

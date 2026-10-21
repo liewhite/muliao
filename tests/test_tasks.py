@@ -189,6 +189,24 @@ async def test_a_worker_cancelled_while_claiming_keeps_its_slot_for_the_next_sta
     assert executed == [task.id]
 
 
+async def test_a_worker_runs_at_most_once_at_a_time(container):
+    """并发上限是每次 run_forever 各自的槽位：同时跑第二次会让上限翻倍，所以当场拒绝；第一次结束后可以再启动。"""
+    import pytest
+
+    worker = Worker(container.queue, {}, container.bus, concurrency=1)
+    running = asyncio.create_task(worker.run_forever())
+    await asyncio.sleep(0.05)
+    with pytest.raises(RuntimeError, match="already running"):
+        await worker.run_forever()
+    running.cancel()
+    await asyncio.gather(running, return_exceptions=True)
+    again = asyncio.create_task(worker.run_forever())
+    await asyncio.sleep(0.05)
+    assert not again.done()
+    again.cancel()
+    await asyncio.gather(again, return_exceptions=True)
+
+
 async def test_retention_prunes_only_old_done_event_and_deliver_tasks(container, make_agent):
     """保留策略：7 天前完成的 event/deliver 删掉；failed、run、排队中的与较新的保留（为什么见 docs/architecture.md 3.2「保留」）。"""
     alpha = (await make_agent()).id
