@@ -174,6 +174,23 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(contain
     assert not (await container.sessions.get(session.id)).unread
 
 
+async def test_a_session_read_before_its_run_ended_event_is_handled_still_reads_that_runs_notification(
+    container, make_agent
+):
+    # 运行结束、通知还没写下时就打开了会话：SessionRead 排在 RunEnded 后面，写下的通知随即已读
+    alpha = (await make_agent("alpha")).id
+    session = await start(container, alpha, "hi")
+    await run_only(container)
+    assert (await container.sessions.get(session.id)).unread
+
+    await container.sessions.mark_read(session.id)
+    assert await container.notifications.list(10) == []
+
+    await deliver(container)
+    [note] = await container.notifications.list(10)
+    assert not note.unread
+
+
 async def test_marking_a_session_read_marks_its_notifications_read_even_if_it_was_not_unread(
     container, make_agent
 ):

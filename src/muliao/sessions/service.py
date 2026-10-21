@@ -186,7 +186,8 @@ class SessionService:
 
     async def mark_read(self, session_id: str) -> None:
         """用户看过了会话：清掉会话的未读，同一事务发布 SessionRead（通知领域据此把指向它的通知标为已读）。提交后
-        马上投递，返回时界面重新取的未读数已经反映；同一 lane 上还有更早的投递时留给 worker。"""
+        马上投递，通常返回时界面重新取的未读数已经反映；同一 lane 上还有更早的投递时留给 worker 稍后处理（界面在
+        事件投递完成时再取未读数）。订阅者的处理必须短小（在请求里执行）。"""
         async with self._db.transaction() as s:
             (await self._get(s, session_id)).unread = False
             published = self._messaging.publish_in(s, SessionRead(session_id=session_id))

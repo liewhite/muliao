@@ -124,7 +124,7 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 
 - **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。处理器分两段：`execute` 做事（可以开自己的事务、调用别的领域的命令），返回的 `Commit` 与「task 记为完成」在同一个事务里提交（`TaskQueue.complete`）。每个 task 有总时限（`task_timeout_seconds`），超时按暂时性失败重试。
 - **失败**：契约内的失败（第 5 节）按指数退避重试，上限 `task_max_attempts`；最终失败时处理器的 `failed_in` 在记下失败的同一事务里收尾（如把失败交回等着的会话）。「任务」页可查并可手动重试（沿用原 id，所以仍按原顺序；重试把尝试次数清零）。进程崩溃后启动时把 `running` 复位为 `pending`（`Worker._recover`），尝试次数已经用完的除外：任务自己会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去、还一直占住它的 lane，这时按最终失败记账（同一个上限，收尾钩子照常执行，失败照常可见）。
-- **马上执行**（`Worker.run_now`）：发送方提交了一条定向命令之后希望它马上生效时，在调用方的任务里经同一个执行边界执行这一条投递（只用于短小的 `event` 投递，不占 worker 的槽位）；此刻不可领取（lane 被挡住、已被领取）就交给 worker。调用方随时可能被取消（请求断开、调用它的运行被停止），被取消时在屏蔽作用域里把还在 running 的它放回 pending 再照常抛出——投递的写入与完成同一事务，重做是安全的。
+- **马上执行**（`Worker.run_now`）：发送方提交了一条定向命令或一个事件之后希望它马上生效时，在调用方的任务里经同一个执行边界执行这一条投递（只用于短小的 `event` 投递，不占 worker 的槽位）；此刻不可领取（lane 被挡住、已被领取）就交给 worker。调用方随时可能被取消（请求断开、调用它的运行被停止），被取消时在屏蔽作用域里把还在 running 的它放回 pending 再照常抛出——投递的写入与完成同一事务，重做是安全的。
 
 ### 3.3 事件：以投递任务作为 outbox
 
@@ -510,7 +510,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - token 是我们签发给外部系统的凭证，事实来源是触发器自己：`state` 里只存 SHA-256，明文只在生成时返回一次，**只能由用户在界面上生成**（agent 创建的 webhook 在用户生成 token 之前收不到事件）。不放进 vault——vault 存的是外部系统发给我们的凭证。
 - 不校验各平台自己的签名格式（GitHub、Slack 等各不相同）。需要时由发送方把 token 放进 Authorization 头，或在中间加一层转发。
 
-**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警（定向命令 `Notify`）、推送测试，都经 `Notifications.enqueue_in` 在通知领域的事务里写一条 `notifications` 行并排一个只带 `notification_id` 的 deliver task。DeliverHandler 投递时读出通知和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到 deliver 事件和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时只由会话领域标记（`SessionService.mark_read`），同一事务发布 `SessionRead`，通知领域订阅它把指向这个会话的通知标为已读（提交后 `run_now` 马上投递，请求返回时未读数已更新）。通知随它指向的会话删除（订阅 `SessionDeleted`）；`RunEnded`、`SessionRead`、`SessionDeleted` 在同一条按会话的 lane 上；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
+**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警（定向命令 `Notify`）、推送测试，都经 `Notifications.enqueue_in` 在通知领域的事务里写一条 `notifications` 行并排一个只带 `notification_id` 的 deliver task。DeliverHandler 投递时读出通知和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到 deliver 事件和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时只由会话领域标记（`SessionService.mark_read`），同一事务发布 `SessionRead`，通知领域订阅它把指向这个会话的通知标为已读（提交后 `run_now` 马上投递，通常请求返回时未读数已更新；同一 lane 上有更早的投递时由 worker 稍后处理，界面在 `event` 投递完成时重新取未读数）。通知随它指向的会话删除（订阅 `SessionDeleted`）；`RunEnded`、`SessionRead`、`SessionDeleted` 在同一条按会话的 lane 上；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
 
 通知只有 Web Push 一种渠道。不支持主动推送的外部消息源（例如只能拉取的 Slack 未读）用定时触发器拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
 
