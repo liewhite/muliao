@@ -23,7 +23,7 @@
 | File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
 | Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，每台设备（推送订阅）一个 deliver task，只引用通知与订阅，内容不另存一份 | `notifications` 表 |
 | ModelUsage（用量） | 一次模型运行报告的 token 用量：时间、agent、会话（没有就为空）、运行类型（对话 / 压缩 / 反思 / 临时 agent）、模型、请求数与各项 token。只增不改，也不随 agent 与会话的删除而消失——它是账目 | `model_usage` 表 |
-| Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、负责项目（owner agent，必填、不随指派变）、指派人（agent / 用户 / 无）、时间线（评论与属性变化）。处于 todo / in_progress 时，每条动态投进被指派 agent 在这个 issue 上唯一的会话 | `issues`、`issue_activities` 表 |
+| Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、负责项目（owner agent，必填、不随指派变）、指派人（agent / 用户 / 无）、依赖的上游 issue（有向无环）、时间线（评论与属性变化）。处于 todo / in_progress 且上游都已完成时，每条动态投进被指派 agent 在这个 issue 上唯一的会话 | `issues`、`issue_activities`、`issue_dependencies` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件；触发方式（定时、一次性、webhook……）多态实现。跑完不会再触发的归档（`finished_at`），离开列表但留下历史 | `triggers` 表 |
 
 目录：
@@ -591,14 +591,15 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 ## 21. issue 看板
 
-**职责**：人与 agent 协作的事项（`issues/`，表 `issues` 与 `issue_activities`）。界面上有看板（拖拽改状态）、列表与详情页；agent 用工具组 `issues`（`issue_list/show/create/update/comment`）读写。
+**职责**：人与 agent 协作的事项（`issues/`，表 `issues`、`issue_activities` 与 `issue_dependencies`）。界面上有看板（拖拽改状态）、列表与详情页；agent 用工具组 `issues`（`issue_list/show/create/update/comment`）读写。
 
 - **状态**：backlog / todo / in_progress / in_review / blocked / done / cancelled。**负责项目（owner）**：一个 agent（一个 agent 负责一个项目），创建时必填，不随指派变化，只能显式修改（时间线记一条）；按它筛选（`issue_list(owner=)`、`GET /api/issues?owner=`、界面的「负责项目」）看一个项目的全部来龙去脉。负责的 agent 被删除时置空。**指派人**（单列 `assignee`）：agent id、用户（`"user"`），或未指派（NULL）——现在谁在做。界面上的操作以用户身份进行（actor 为 None），工具以调用它的 agent 身份进行。
 - **时间线**：每次创建、评论、每个真正变了的字段各记一条 `IssueActivity`，只增不改；删除 issue 一起删。
 - **issue 会话**：每个（issue, agent）对应唯一一个会话，归会话领域：`origin=issue`、`origin_ref` 为 issue id、agent，按 `SessionKey` 定位，没有就建（会话被删了下次就新建）。issue 领域不存会话 id；界面与 `IssueOut.sessions` 上「各 agent 的会话」由 `sessions.api.keyed_sessions_among` 派生。issue 只在它自己的会话里做：普通对话只建 issue、派 issue（没有认领、让出之类的登记）。
-- **投递**（`issues.rules.recipient`，纯函数）：issue 上的每条动态——创建、评论、状态、指派、标题、描述、优先级、负责项目的修改——都作为一封信投进收件人的 issue 会话，内容是这次的动态加上 issue 的当前视图（描述与完整时间线）和处理指引（`rules.GUIDE`）。收件人是动作之后被指派的 agent；动作之后处于 todo / in_progress（包括这次动作让它进入）才投：backlog 是以后再做，in_review / done 等是已经交出去。被指派的 agent 在它自己这个 issue 会话里的动作不投回那里（避免自激循环）；它在别的会话（如普通对话、别的 issue 的会话、它从 issue 会话委派出去的 thread）里给自己建、派、转 todo 或评论，照常投进 issue 会话——thread 里的动作因此会回投一次，但不会循环（回投不产生新的动态）。一次修改改了几个字段就带上这几条动态，只投一封。两个 agent 互相改派不加限制。
+- **依赖**（表 `issue_dependencies`，有向无环图）：issue 可以依赖别的 issue（上游），让几件事按先后做而不是同时抢着做。创建时给出（`issue_create(depends_on=)`、`POST /api/issues`），修改时整体替换（`issue_update(depends_on=)`，`[]` 去掉全部）；上游必须存在、不能重复，成环（含依赖自己）当场拒绝并给出环上的路径（`rules.cycle_through`）。上游是 done 或 cancelled 就算完成（`rules.FINISHED`；取消也解除，由下游自己判断还做不做）；还有没完成的上游（`rules.waiting_on`，`IssueWork.waiting_on`、接口与 `issue_list` 的 `waiting_on`）时，下游还轮不到：动态照常记时间线，但不投、不算停滞，状态也不自动改。上游从未完成进入 done / cancelled 时，同一事务里给每个下游记一条 `dependency` 动态（`{"issue": 上游, "from", "to"}`）并按投递规则投递——下游因此不再等待时，这就是让它开工的那封信（带完整视图，包括等待期间没投的动态）；还在等别的上游就只记时间线。上游被重新打开，下游自然回到等待，不另做处理。修改依赖记一条 `depends_on` 动态（`{"from": [...], "to": [...]}`），同样按规则投递（去掉最后一个没完成的上游即开工）；删除 issue 时边级联删除，它的下游各记一条 `depends_on` 动态并投递。
+- **投递**（`issues.rules.recipient`，纯函数）：issue 上的每条动态——创建、评论、状态、指派、标题、描述、优先级、负责项目、依赖的修改，以及上游完成——都作为一封信投进收件人的 issue 会话，内容是这次的动态加上 issue 的当前视图（描述、依赖与完整时间线）和处理指引（`rules.GUIDE`）。收件人是动作之后被指派的 agent；动作之后处于 todo / in_progress（包括这次动作让它进入）、且不在等上游才投：backlog 是以后再做，in_review / done 等是已经交出去。被指派的 agent 在它自己这个 issue 会话里的动作不投回那里（避免自激循环）；它在别的会话（如普通对话、别的 issue 的会话、它从 issue 会话委派出去的 thread）里给自己建、派、转 todo 或评论，照常投进 issue 会话——thread 里的动作因此会回投一次，但不会循环（回投不产生新的动态）。一次修改改了几个字段就带上这几条动态，只投一封。两个 agent 互相改派不加限制。
 - **投信**：在 issue 的事务里经 `receive_command_in` 得到定向命令 `Receive`（来源 `Origin.ISSUE`，目标 `SessionKey`）并 `send_in`，提交后 `run_now`；没有用户在等（awaited = False），结果记在 issue 上。
-- **停滞**（`rules.stalled`，唯一规则）：todo / in_progress、指派给 agent，而它的 issue 会话空闲或不存在。`IssueService.work` 一次算出一批 issue 的各 agent 会话、被指派 agent 会话的工作状态（`SessionActivity.work_states_in`：running / waiting / idle）与是否停滞，`issue_list` 与接口的 `assignee_session`、`stalled` 都来自它。界面在 `stalled` 的卡片上标「没人在处理」；巡检 agent（issue-watch）的前置检查读接口的 `stalled`，评论来唤醒被指派的 agent——与界面同一条规则。
+- **停滞**（`rules.stalled`，唯一规则）：todo / in_progress、不在等上游、指派给 agent，而它的 issue 会话空闲或不存在。`IssueService.work` 一次算出一批 issue 的各 agent 会话、被指派 agent 会话的工作状态（`SessionActivity.work_states_in`：running / waiting / idle）与是否停滞，`issue_list` 与接口的 `assignee_session`、`stalled` 都来自它。界面在 `stalled` 的卡片上标「没人在处理」；巡检 agent（issue-watch）的前置检查读接口的 `stalled`，评论来唤醒被指派的 agent——与界面同一条规则。
 - **交给用户**：agent 把 issue 指派给用户时发 `Notify` 推送，点开是它交出 issue 的那个会话。
 - **先审核再完成**：agent 做完不自己设 done，而是设 in_review 并指派给用户，由用户审核后拖进 done。这是约定，写在唤醒说明（`rules.GUIDE`）和 `issue_update` 的工具说明里，代码不拦。
 - **删除 agent**：订阅 `AgentDeleting`，指派给它、归它负责的 issue 改为未指派、无负责人（各记一条时间线）。它的 issue 会话随它由会话领域删除，issue 领域没有要清理的会话引用。
