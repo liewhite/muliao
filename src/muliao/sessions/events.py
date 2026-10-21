@@ -54,6 +54,14 @@ class SessionDeleted(DomainEvent):
     agent_id: str
 
 
+class SessionRead(DomainEvent):
+    """用户看过了这个会话（打开它、看着它时又有了新回答）。每次标记都发，不论会话原本是否未读：指向它的通知是
+    订阅者自己的事实（例如一轮失败、会话没变未读时 notify_user 写下的通知）。"""
+
+    TYPE = "session.read"
+    session_id: str
+
+
 class AgentSessionsCleared(DomainEvent):
     """删除 agent 的流程里，会话领域已经删除了它的全部会话。"""
 

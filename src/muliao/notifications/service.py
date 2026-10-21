@@ -2,7 +2,8 @@
 （Web Push）是 delivery 的事，deliver task 只引用通知，内容只存在 notifications 表。
 
 Notifications 是这个领域的唯一服务：写下通知并排一个 deliver task（notify、定向命令 Notify、订阅 RunEnded），通知页
-与未读数，随会话删除（订阅 SessionDeleted）。同一会话的两种事件在同一条 lane 上（session_events_lane）。
+与未读数，随会话已读（订阅 SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在同一条 lane 上
+（session_events_lane）。
 """
 
 import logging
@@ -17,7 +18,7 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import TaskKind
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.api import session_in
-from muliao.sessions.events import RunEnded, SessionDeleted
+from muliao.sessions.events import RunEnded, SessionDeleted, SessionRead
 
 log = logging.getLogger(__name__)
 
@@ -27,9 +28,10 @@ def deliver_lane(session_id: str | None, agent_id: str | None) -> str:
     return f"deliver:{session_id or agent_id or 'system'}"
 
 
-def session_events_lane(event: RunEnded | SessionDeleted) -> str:
+def session_events_lane(event: RunEnded | SessionRead | SessionDeleted) -> str:
     """同一个会话的事件在同一条 lane 上按发布顺序处理：RunEnded 一定先于 SessionDeleted 发布（会话忙时不能删除），
-    删除的清理之后不会再为它写通知。顺序只对没有失败的投递成立：人工重试的 RunEnded 由处理器检查会话还在。"""
+    删除的清理之后不会再为它写通知；运行结束之后才打开会话时，SessionRead 排在 RunEnded 之后，标记已读能看到这次
+    运行的通知。顺序只对没有失败的投递成立：人工重试的 RunEnded 由处理器检查会话还在。"""
     return f"notifications:{event.session_id}"
 
 
@@ -54,6 +56,9 @@ class Notifications:
         messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended, lane=session_events_lane)
         messaging.subscribe(
             SessionDeleted, "notifications.session_deleted", self.on_session_deleted, lane=session_events_lane
+        )
+        messaging.subscribe(
+            SessionRead, "notifications.session_read", self.on_session_read, lane=session_events_lane
         )
         messaging.handle(Notify, "notifications.notify", self.on_notify)
 
@@ -107,14 +112,17 @@ class Notifications:
 
         return commit
 
-    async def mark_session_read(self, session_id: str) -> None:
-        """打开会话即看过了指向它的通知。"""
-        async with self._db.transaction() as s:
+    async def on_session_read(self, event: SessionRead, _delivery: Delivery) -> Commit:
+        """看过了会话即看过了指向它的通知（会话已被删除时没有这样的通知，什么都不改）。"""
+
+        async def commit(s: AsyncSession) -> None:
             await s.execute(
                 update(Notification)
-                .where(Notification.session_id == session_id, Notification.unread.is_(True))
+                .where(Notification.session_id == event.session_id, Notification.unread.is_(True))
                 .values(unread=False)
             )
+
+        return commit
 
     async def list(self, limit: int) -> list[Notification]:
         async with self._db.transaction() as s:

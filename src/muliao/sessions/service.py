@@ -19,7 +19,7 @@ from muliao.platform.tooling import Origin
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.deletion import delete_sessions
-from muliao.sessions.events import Receive, StopThread
+from muliao.sessions.events import Receive, SessionRead, StopThread
 from muliao.sessions.halt import Halted
 from muliao.sessions.inbound import (
     Inbound,
@@ -72,12 +72,15 @@ class SessionService:
         live: LiveRuns,
         messaging: Messaging,
         stop_session: Callable[[str], Awaitable[Halted]],
+        run_now: Callable[[int], Awaitable[None]],
     ):
         self._db = db
         self._queue = queue
         self._live = live
         self._messaging = messaging
         self._stop_session = stop_session
+        # 马上执行一个已提交的投递任务（Worker.run_now）
+        self._run_now = run_now
 
     async def detail(self, session_id: str) -> SessionView:
         # 先取快照再读库：快照这一段已在展示的消息不在历史里重复；之间换了段时，新保存的消息照旧由旧快照展示，
@@ -182,8 +185,13 @@ class SessionService:
             return await _history_in(s, session_id)
 
     async def mark_read(self, session_id: str) -> None:
+        """用户看过了会话：清掉会话的未读，同一事务发布 SessionRead（通知领域据此把指向它的通知标为已读）。提交后
+        马上投递，返回时界面重新取的未读数已经反映；同一 lane 上还有更早的投递时留给 worker。"""
         async with self._db.transaction() as s:
             (await self._get(s, session_id)).unread = False
+            published = self._messaging.publish_in(s, SessionRead(session_id=session_id))
+        for task in published.deliveries:
+            await self._run_now(task.id)
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.handle(StopThread, "sessions.stop_thread", self.on_stop_thread)

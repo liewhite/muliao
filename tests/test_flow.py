@@ -168,9 +168,27 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(contain
     assert (note.body, note.session_id, note.unread) == ("Noted!", session.id, True)
     assert await container.notifications.unread_count() == 1
 
-    # 打开会话即看过了指向它的通知（界面调用的接口同时标记两边）
-    await container.notifications.mark_session_read(session.id)
+    # 看过了会话即看过了指向它的通知（SessionRead，返回时已投递）
+    await container.sessions.mark_read(session.id)
     assert await container.notifications.unread_count() == 0
+    assert not (await container.sessions.get(session.id)).unread
+
+
+async def test_marking_a_session_read_marks_its_notifications_read_even_if_it_was_not_unread(
+    container, make_agent
+):
+    # notify_user 写的通知可能出现在会话没变未读时：标记已读照样发 SessionRead
+    alpha = (await make_agent("alpha")).id
+    session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
+    await drain(container)
+    await container.notifications.notify(alpha, "t", "b", session.id)
+    other = await start(container, alpha, "other", origin=Origin.TRIGGER)
+    await drain(container)
+    await container.notifications.notify(alpha, "t", "b", other.id)
+    await container.sessions.mark_read(session.id)
+    await container.sessions.mark_read(session.id)
+
+    assert [n.unread for n in await container.notifications.list(10)] == [True, False]
 
 
 async def test_triggered_session_does_not_notify_automatically(container, make_agent):

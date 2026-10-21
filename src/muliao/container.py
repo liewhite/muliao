@@ -265,7 +265,13 @@ def build_container(
         {"sessions": activity.blocks_agent_deletion_in, "reflection": reflection.blocks_agent_deletion_in},
     )
     sessions = SessionService(
-        db, queue, live, messaging, lambda session_id: consumer.stop_session(session_id)
+        db,
+        queue,
+        live,
+        messaging,
+        lambda session_id: consumer.stop_session(session_id),
+        # worker 在后面构造：延迟绑定
+        lambda task_id: worker.run_now(task_id),
     )
     threads = Threads(queue)
     notifications = Notifications(db, queue)
