@@ -1,7 +1,8 @@
 """执行一次 agent 运行：组装 instructions、toolsets、模型，转发流式事件到总线。"""
 
 import logging
-from collections.abc import AsyncIterable, Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Collection, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -207,12 +208,9 @@ class AgentRuntime:
             "model": model,
             "workspace": str(scope.workspace),
         }
-        log.info("agent run started", extra={**ctx, "history": len(history)})
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred.calls) if deferred is not None else frozenset()
-        # pydantic-ai 把用量累加进交给它的这个对象：运行无论成功、失败还是被取消，到这里都拿得到已花掉的部分
-        usage = RunUsage()
-        try:
+        async with self._billed(RunKind.RUN, scope.agent_id, model, session_id, ctx, len(history)) as usage:
             async with self._pai.iter(
                 None if prompt is None else list(prompt),
                 model=self._resolve_model(model),
@@ -250,8 +248,6 @@ class AgentRuntime:
                     else:
                         node = await run.next(node)
                 result = run.result
-        finally:
-            await self._bill(RunKind.RUN, scope.agent_id, session_id, model, usage, ctx)
         if result is None:
             raise RuntimeError("agent run ended without a result")
         return result
@@ -329,9 +325,7 @@ class AgentRuntime:
             "model": model,
             "workspace": str(scope.workspace),
         }
-        log.info("agent run started", extra={**ctx, "history": len(history)})
-        usage = RunUsage()
-        try:
+        async with self._billed(kind, scope.agent_id, model, billed_to, ctx, len(history)) as usage:
             result = await self._pai.run(
                 prompt,
                 model=self._resolve_model(model),
@@ -342,21 +336,35 @@ class AgentRuntime:
                 usage_limits=_UNLIMITED,
                 usage=usage,
             )
-        finally:
-            await self._bill(kind, scope.agent_id, billed_to, model, usage, ctx)
         return result
 
     async def summarize(self, agent: AgentInfo, session_id: str, instructions: str, prompt: str) -> str:
         """用该 agent 的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文）。不转发事件到前端。"""
         ctx = {"agent": agent.id, "session_id": session_id, "model": agent.model}
-        usage = RunUsage()
-        try:
+        async with self._billed(RunKind.COMPACTION, agent.id, agent.model, session_id, ctx, 0) as usage:
             result = await self._pai.run(
                 prompt, model=self._resolve_model(agent.model), instructions=instructions, usage=usage
             )
-        finally:
-            await self._bill(RunKind.COMPACTION, agent.id, session_id, agent.model, usage, ctx)
         return result.output
+
+    @asynccontextmanager
+    async def _billed(
+        self,
+        kind: RunKind,
+        agent_id: str,
+        model: str,
+        session_id: str | None,
+        ctx: Mapping[str, object],
+        history: int,
+    ) -> AsyncIterator[RunUsage]:
+        """一次模型运行的记账：记「agent run started」日志（ctx 与历史条数），交出给 pydantic-ai 累加用量的
+        RunUsage；运行无论成功、失败还是被取消，退出时都把已花掉的部分记到 session_id 名下（_bill）。"""
+        log.info("agent run started", extra={**ctx, "history": history})
+        usage = RunUsage()
+        try:
+            yield usage
+        finally:
+            await self._bill(kind, agent_id, session_id, model, usage, ctx)
 
     async def _bill(
         self,
