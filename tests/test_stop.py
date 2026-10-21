@@ -161,7 +161,6 @@ async def test_shutdown_is_not_a_stop_the_turn_is_left_for_recovery(client, cont
     items = [(i["type"], i["tool_call_id"]) for i in detail["items"]]
     assert ("tool_result", "fast") in items and "stopped" not in [kind for kind, _ in items]
     assert detail["live"] is None
-    assert not await container.consumer.stop(session_id)
 
 
 async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_truncated_secret(
@@ -301,7 +300,7 @@ async def test_stopping_during_a_pending_retry_stops_the_retry(container, make_a
         task = await s.get(Task, run.id)
         task.status, task.not_before = TaskStatus.PENDING, container.queue.now() + timedelta(hours=1)
 
-    await container.consumer.stop_session(session_id)
+    await container.stopper(session_id)
     await drain(container)
 
     assert [t.status for t in await tasks_of(container, RUN_TASK)] == [TaskStatus.DONE]
@@ -338,7 +337,7 @@ async def test_stopping_a_resumed_run_before_its_first_step_closes_the_history(
     worker = asyncio.create_task(drain(container))
     async with asyncio.timeout(5):
         await entered.wait()
-    await container.consumer.stop_session(session_id)
+    await container.stopper(session_id)
     await worker
 
     assert len(calls) == 1
@@ -373,7 +372,7 @@ async def test_stopping_a_run_before_it_reads_its_state_still_stops_the_session(
     async with asyncio.timeout(5):
         await entered.wait()
     # 停止要等进行中的事务做完才发出取消（db.Database.exclusive）：放开事务，停止随即生效
-    stopping = asyncio.create_task(container.consumer.stop_session(session.id))
+    stopping = asyncio.create_task(container.stopper(session.id))
     await asyncio.sleep(0.05)
     assert not stopping.done()
     gate.set()

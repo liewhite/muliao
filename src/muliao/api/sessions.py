@@ -19,7 +19,6 @@ from muliao.sessions.api import (
     SessionKind,
     WorkState,
     call_result,
-    default_title,
     policy_of,
 )
 from muliao.sessions.tables import Compaction, Mail, MailKind, MailState, Session
@@ -203,14 +202,12 @@ async def list_sessions(
 
 @router.post("/sessions", status_code=201)
 async def start_session(c: C, body: StartIn) -> SessionOut:
-    # 只发了文件时，用文件名作标题
-    names = ", ".join(f.name for f in await c.files.get_many(body.attachments))
     received = await c.sessions.receive(
         Inbound(
             origin=Origin.USER,
             origin_ref=None,
             content=body.prompt,
-            session=NewSession(agent_id=body.agent_id, title=default_title(body.prompt.strip() or names)),
+            session=NewSession(agent_id=body.agent_id, title=None),
             awaited=True,
             attachments=tuple(body.attachments),
         )
@@ -252,8 +249,7 @@ async def reply(c: C, session_id: str, body: ReplyIn) -> list[MailOut]:
 async def stop(c: C, session_id: str) -> None:
     """停止这个会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的异步工作
     （docs/architecture.md「停止会话」）。"""
-    await c.sessions.get(session_id)
-    await c.consumer.stop_session(session_id)
+    await c.sessions.stop(session_id)
 
 
 class CompactOut(BaseModel):
@@ -264,7 +260,7 @@ class CompactOut(BaseModel):
 @router.post("/sessions/{session_id}/compact", status_code=202)
 async def compact(c: C, session_id: str) -> CompactOut:
     """手动压缩上下文（自动压缩见 sessions.compaction）：排在正在进行与排队的运行之后。"""
-    return CompactOut(queued=await c.compactor.request(session_id))
+    return CompactOut(queued=await c.sessions.compact(session_id))
 
 
 @router.post("/sessions/{session_id}/read", status_code=204)
@@ -282,9 +278,9 @@ async def delete_session(c: C, session_id: str) -> None:
 async def list_tasks(
     c: C, status: TaskStatus | None = None, limit: int = Query(100, ge=1, le=500)
 ) -> list[TaskOut]:
-    return [TaskOut.of(t) for t in await c.queue.list(status=status, session_id=None, limit=limit)]
+    return [TaskOut.of(t) for t in await c.tasks.list(status=status, session_id=None, limit=limit)]
 
 
 @router.post("/tasks/{task_id}/retry")
 async def retry_task(c: C, task_id: int) -> TaskOut:
-    return TaskOut.of(await c.queue.retry(task_id))
+    return TaskOut.of(await c.tasks.retry(task_id))

@@ -10,7 +10,7 @@ from pydantic_ai.models.function import AgentInfo
 
 from muliao.agent_runtime.web import DeepSeekWeb, Page, SearchHit
 from muliao.agents.service import AgentSpec
-from muliao.container import build_container
+from muliao.container import assemble
 from muliao.errors import InvalidInput, TransientError
 from muliao.platform.db import migrate
 from tests.scripted import scripted
@@ -143,7 +143,7 @@ async def web_container(settings, models):
         update={"runtime": settings.runtime.model_copy(update={"tool_output_max_chars": 30})}
     )
     web = FakeWeb()
-    c = build_container(settings, resolve_model=models, model_checker=lambda _m: None, web=web)
+    c = assemble(settings, resolve_model=models, model_checker=lambda _m: None, web=web)
     migrate(settings.db_path)
     yield c, web
     await c.db.engine.dispose()
@@ -207,9 +207,9 @@ async def test_without_web_config_there_is_no_web_group_and_agents_using_it_bloc
     await with_web.agents.create(
         AgentSpec(name="reader", description="d", instructions="", tool_groups=["web"]), author="user"
     )
-    without_web = build_container(with_web.settings, model_checker=lambda _m: None)
+    without_web = assemble(with_web.settings, model_checker=lambda _m: None)
     with pytest.raises(RuntimeError, match=r"reader .*\['web'\]"):
-        await without_web._check_agent_tool_groups()
+        await without_web.agents.verify_stored()
     await without_web.db.engine.dispose()
 
 

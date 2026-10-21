@@ -14,6 +14,10 @@ from tests.test_flow import drain
 ALPHA, BETA = "a1a1a1a1a1a1", "b2b2b2b2b2b2"
 
 
+async def any_owner(_owner: str | None) -> None:
+    """这些用例只测 store 本身：owner 是否还可用不在这里查（见 test_deletion 的资源写入用例）。"""
+
+
 def _git(*args: str) -> str:
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
 
@@ -34,7 +38,7 @@ async def test_ensure_initialises_a_fresh_repository(tmp_path: Path):
 
 @pytest.fixture
 def skills(repo: ResourceRepo) -> SkillStore:
-    return SkillStore(repo)
+    return SkillStore(repo, any_owner)
 
 
 async def test_private_skill_shadows_public_skill_with_same_name(skills: SkillStore):
@@ -131,7 +135,7 @@ async def test_every_change_is_a_revision_with_its_author(skills: SkillStore, re
 
 @pytest.fixture
 async def memory(repo: ResourceRepo) -> MemoryStore:
-    store = MemoryStore(repo, max_chars=50)
+    store = MemoryStore(repo, max_chars=50, check_owner=any_owner)
     await repo.apply({store.path(ALPHA): ""}, "init", "user")
     return store
 
@@ -352,7 +356,7 @@ async def test_a_change_made_outside_the_tools_is_recorded_before_the_next_write
 async def test_editing_a_skill_replaces_or_appends_to_its_body_and_keeps_name_and_description(
     repo: ResourceRepo,
 ):
-    skills = SkillStore(repo)
+    skills = SkillStore(repo, any_owner)
     await skills.write(ALPHA, "digest", "When digesting", "step one\nstep two", ALPHA)
 
     await skills.edit(ALPHA, "digest", ALPHA, old="step two", new="step 2")
@@ -371,7 +375,7 @@ async def test_editing_a_skill_replaces_or_appends_to_its_body_and_keeps_name_an
 async def test_editing_a_skill_can_change_only_its_description_or_body_and_description_in_one_revision(
     repo: ResourceRepo, owner: str | None
 ):
-    skills = SkillStore(repo)
+    skills = SkillStore(repo, any_owner)
     await skills.write(owner, "digest", "When digesting", "step one\nstep two", ALPHA)
 
     meta = await skills.edit(owner, "digest", ALPHA, description="  When summarizing a channel  ")
@@ -390,7 +394,7 @@ async def test_editing_a_skill_can_change_only_its_description_or_body_and_descr
 async def test_editing_a_skill_rejects_invalid_combinations_without_changing_it(
     repo: ResourceRepo, owner: str | None
 ):
-    skills = SkillStore(repo)
+    skills = SkillStore(repo, any_owner)
     await skills.write(owner, "digest", "When digesting", "step\nstep", ALPHA)
 
     with pytest.raises(InvalidInput, match="nothing to change"):
@@ -406,7 +410,7 @@ async def test_editing_a_skill_rejects_invalid_combinations_without_changing_it(
 
 async def test_files_outside_the_resource_layout_never_enter_history(repo: ResourceRepo, tmp_path: Path):
     """agent 在 skill 目录里放的杂物不进历史；一个没有提交的嵌套仓库（git add 会失败）也不影响任何写入。"""
-    skills = SkillStore(repo)
+    skills = SkillStore(repo, any_owner)
     await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
     skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
     (skill_dir / "notes.tmp").write_text("agent's own scratch")
@@ -448,7 +452,7 @@ async def test_every_file_the_stores_write_is_in_the_resource_layout(container, 
     ["edit", "delete", "new skill", "path with space"],
 )
 async def test_reconcile_records_each_kind_of_outside_change(repo: ResourceRepo, outside: str):
-    skills = SkillStore(repo)
+    skills = SkillStore(repo, any_owner)
     await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
     skill = repo.owner_dir(ALPHA) / "skills" / "digest" / "SKILL.md"
     target = {
@@ -472,7 +476,7 @@ async def test_reconcile_records_each_kind_of_outside_change(repo: ResourceRepo,
 
 async def test_recover_commits_a_rename_left_staged_by_a_killed_reconcile(repo: ResourceRepo):
     """进程死在 reconcile 的 add 与 commit 之间、暂存区里留下一次重命名：之后的收敛不能被它卡住。"""
-    skills = SkillStore(repo)
+    skills = SkillStore(repo, any_owner)
     await skills.write(ALPHA, "old", "When digesting", "steps", ALPHA)
     old_dir = repo.owner_dir(ALPHA) / "skills" / "old"
     old_dir.rename(old_dir.with_name("new"))
@@ -500,7 +504,7 @@ async def test_a_symlink_named_like_a_partial_write_does_not_stop_startup(repo: 
 async def test_writing_a_skill_whose_directory_is_a_nested_repository_fails_instead_of_going_unversioned(
     repo: ResourceRepo,
 ):
-    skills = SkillStore(repo)
+    skills = SkillStore(repo, any_owner)
     await repo.ensure()
     skill_dir = repo.owner_dir(ALPHA) / "skills" / "cloned"
     skill_dir.mkdir(parents=True)
@@ -523,7 +527,7 @@ async def test_writing_a_skill_whose_directory_is_a_nested_repository_fails_inst
 async def test_reconcile_converges_from_any_mix_of_staged_and_unstaged_changes(
     repo: ResourceRepo, staged: str, then: str
 ):
-    skills = SkillStore(repo)
+    skills = SkillStore(repo, any_owner)
     await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
     skill_dir = repo.owner_dir(ALPHA) / "skills" / ("fresh" if staged == "new" else "digest")
     skill_dir.mkdir(exist_ok=True)

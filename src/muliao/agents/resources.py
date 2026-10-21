@@ -27,7 +27,7 @@ import asyncio
 import logging
 import re
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +38,9 @@ from muliao.agents.ownership import scope_of
 from muliao.errors import InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
+
+# 写入之前、在仓库的锁里执行的检查（ResourceRepo.apply / update）
+Precondition = Callable[[], Awaitable[None]]
 
 USER = "user"
 # 系统自己做的提交（初始化、启动时的收敛）
@@ -271,21 +274,40 @@ class ResourceRepo:
         )
         return [self.root / rel for rel in out.split("\0") if rel]
 
-    async def apply(self, changes: Mapping[Path, str | None], message: str, author: str) -> str | None:
-        """写入（内容为 None 表示删除该文件或目录）并提交，原子地：要么提交成功，要么什么都没发生。"""
+    async def apply(
+        self,
+        changes: Mapping[Path, str | None],
+        message: str,
+        author: str,
+        *,
+        precondition: Precondition | None = None,
+    ) -> str | None:
+        """写入（内容为 None 表示删除该文件或目录）并提交，原子地：要么提交成功，要么什么都没发生。
+
+        precondition 在锁里、写入之前执行，抛出领域错误即拒绝这次写入（例如 owner 必须还可用，agents.active）。"""
         async with self._lock:
+            if precondition is not None:
+                await precondition()
             # 外部写入先单独记一版，不并进这次作者的提交
             await self._reconcile_locked()
             return await self._apply_locked(changes, message, author)
 
     async def update(
-        self, path: Path, transform: Callable[[str | None], str | None], message: str, author: str
+        self,
+        path: Path,
+        transform: Callable[[str | None], str | None],
+        message: str,
+        author: str,
+        *,
+        precondition: Precondition | None = None,
     ) -> str | None:
         """读取当前内容（不存在为 None）、变换、写入并提交，整个过程在同一把锁里：并发的修改互不覆盖。
 
-        transform 返回新内容（None 表示删除），或抛出领域错误拒绝这次修改。
+        transform 返回新内容（None 表示删除），或抛出领域错误拒绝这次修改。precondition 同 apply。
         """
         async with self._lock:
+            if precondition is not None:
+                await precondition()
             # 先收敛外部写入再读：读到的就是刚提交的版本，变换的结果不会悄悄盖掉一次外部写入
             await self._reconcile_locked()
             return await self._apply_locked({path: transform(_read_optional(path))}, message, author)

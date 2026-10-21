@@ -75,6 +75,8 @@ async def test_a_shutdown_propagates_out_of_the_run_and_cancels_the_tool():
         group.cancel_scope.cancel()
 
     assert results == [] and tool.outcome == "cancelled"
+    # 被外层取消的运行也撤销了登记：之后的停止不会落到它身上
+    assert not await runs.stop("s")
 
 
 async def test_an_outer_timeout_raises_timeout_and_cancels_the_tool():

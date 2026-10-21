@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agent_runtime.api import is_stopped
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
-from muliao.platform.tasks import TaskQueue
+from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.delegation import threads_of_holds_in
 from muliao.sessions.events import Ending, SessionStopped, StopThread
@@ -31,6 +31,7 @@ from muliao.sessions.holds import clear_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.sessions.mailbox import discard_in, latest_run
 from muliao.sessions.settlement import settle_in, unsettled_in
+from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.tables import MailState, Message, Session
 
 log = logging.getLogger(__name__)
@@ -109,3 +110,20 @@ class SessionHalt:
             },
         )
         return Halted.STOPPED
+
+
+class SessionStopper:
+    """停止会话的命令（用户停止、逐层停止 thread、删除 agent 的会话）：停下正在进行的运行（运行在退出时自己执行
+    SessionHalt，见 sessions.consumer），没有在运行时直接执行 SessionHalt。会话已删除时返回 GONE。
+
+    由正在进行的运行的登记（StoppableRuns）与 SessionHalt 组成，二者都不依赖消费者：在组合根里先于消费者与所有
+    用到停止的领域构造，消费者用同一份登记运行。"""
+
+    def __init__(self, runs: StoppableRuns[Commit], halt: SessionHalt):
+        self._runs = runs
+        self._halt = halt
+
+    async def __call__(self, session_id: str) -> Halted:
+        if await self._runs.stop(session_id):
+            return Halted.STOPPED
+        return await self._halt(session_id)

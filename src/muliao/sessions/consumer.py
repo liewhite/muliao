@@ -128,6 +128,7 @@ class Consumer:
         content: ContentBuilder,
         steps: Steps,
         finisher: RunFinisher,
+        runs: StoppableRuns[Commit],
         halt: SessionHalt,
         compactor: Compactor,
     ):
@@ -140,7 +141,8 @@ class Consumer:
         self._finisher = finisher
         self._halt = halt
         self._compactor = compactor
-        self._runs: StoppableRuns[Commit] = StoppableRuns(db.exclusive)
+        # 正在进行的运行的登记：停止会话的命令（sessions.halt.SessionStopper）经同一份登记停下运行
+        self._runs = runs
         # 正在进行的运行的状态，按会话：被停止时从这里取（运行的协程已被取消）
         self._active: dict[str, RunState] = {}
 
@@ -300,18 +302,7 @@ class Consumer:
         state.opening_events = content.events
         return (content.items or None), deferred
 
-    # ---- 停止 ----
-
-    async def stop(self, session_id: str) -> bool:
-        """停止这个会话正在进行的运行；没有在运行的返回 False（调用方仍会停止会话，见 stop_session）。"""
-        return await self._runs.stop(session_id)
-
-    async def stop_session(self, session_id: str) -> Halted:
-        """用户停止会话：停下正在进行的运行（它在 _stopped 里收尾），没有在运行时直接停止会话（sessions.halt）。
-        会话已删除时返回 GONE。"""
-        if await self.stop(session_id):
-            return Halted.STOPPED
-        return await self._halt(session_id)
+    # ---- 停止（命令见 sessions.halt.SessionStopper）----
 
     async def _stopped(self, run_id: int, session_id: str) -> Commit:
         state = self._active.get(session_id)

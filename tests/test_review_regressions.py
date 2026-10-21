@@ -63,7 +63,7 @@ async def test_agent_api_rejects_zero_reflect_every_and_partial_update(container
     from muliao.api.app import create_app
     from tests.conftest import login
 
-    app = create_app(container, tmp_path / "no-web")
+    app = create_app(container.container, tmp_path / "no-web")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         await login(client)
         resp = await client.post("/api/agents", json={"name": "a", "description": "d", "reflect_every": 0})
@@ -209,7 +209,7 @@ async def test_retrying_a_failed_run_after_the_session_was_stopped_ends_quietly(
     [failed] = await tasks_of(container, RUN_TASK)
     assert failed.status == TaskStatus.FAILED
 
-    await container.consumer.stop_session(session.id)
+    await container.stopper(session.id)
     await container.queue.retry(failed.id)
     await drain(container)
 

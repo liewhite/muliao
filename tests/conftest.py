@@ -13,7 +13,7 @@ from pydantic_ai.models import Model
 from muliao.agents.resources import ResourceRepo
 from muliao.api.app import create_app
 from muliao.config import Settings
-from muliao.container import Container, build_container
+from muliao.container import Assembly, assemble
 from muliao.platform.db import migrate
 from muliao.schema import single_domain_writes
 from tests.scripted import scripted
@@ -21,7 +21,7 @@ from tests.scripted import scripted
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
 
-# 测试用 anyio 的 pytest 插件运行：异步 fixture 与测试在同一个任务里，任务组可以跨 fixture 的 yield（Container
+# 测试用 anyio 的 pytest 插件运行：异步 fixture 与测试在同一个任务里，任务组可以跨 fixture 的 yield（Assembly
 # 与 JobRunner 的 running 就是这样）。协程测试由 anyio_mode = auto 收集（pyproject），在 asyncio 后端上运行；
 # 用到异步 fixture 的测试必须是协程
 @pytest.fixture
@@ -88,19 +88,19 @@ def models() -> ModelSlot:
 
 
 @pytest.fixture
-async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Container]:
-    c = build_container(
+async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Assembly]:
+    c = assemble(
         settings, resolve_model=models, model_checker=lambda _m: None, check_writes=single_domain_writes
     )
     migrate(settings.db_path)
-    # 后台任务的监督者需要它的任务组（服务里由 Container.running 打开）；worker 等循环由测试自己驱动
+    # 后台任务的监督者需要它的任务组（服务里由 Assembly.running 打开）；worker 等循环由测试自己驱动
     async with c.jobs.running():
         yield c
     await c.db.engine.dispose()
 
 
 @pytest.fixture
-def make_agent(container: Container) -> Callable:
+def make_agent(container: Assembly) -> Callable:
     """创建 agent 并返回它；测试通过返回值的 .id 引用它（id 由系统生成）。"""
     from muliao.agents.service import AgentSpec
 
@@ -122,8 +122,8 @@ def make_agent(container: Container) -> Callable:
 
 
 @pytest.fixture
-async def client(container: Container, tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app(container, tmp_path / "no-web")
+async def client(container: Assembly, tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
+    app = create_app(container.container, tmp_path / "no-web")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

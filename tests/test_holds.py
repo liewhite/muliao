@@ -100,7 +100,7 @@ async def test_an_outcome_after_the_session_was_stopped_is_dropped_without_wakin
     session = await start(container, agent, "go")
     async with container.db.transaction() as s:
         await hold_in(s, session.id, "job:1", awaited=False)
-    await container.consumer.stop_session(session.id)
+    await container.stopper(session.id)
     before = await _mail_count(container)
 
     async with container.db.transaction() as s:
@@ -224,7 +224,7 @@ async def test_a_hold_registered_while_the_run_winds_down_is_cleared_by_the_stop
     try:
         worker = asyncio.create_task(container.worker.run_forever())
         await asyncio.wait_for(started.wait(), 5)
-        await container.consumer.stop_session(session.id)
+        await container.stopper(session.id)
         from tests.test_flow import idle
 
         await idle(container)
@@ -247,7 +247,7 @@ async def test_a_run_stopped_right_after_it_was_claimed_does_not_execute(contain
     assert run is not None
 
     # 领取之后、登记可停止的运行之前停止：停止直接执行停止事务
-    await container.consumer.stop_session(session.id)
+    await container.stopper(session.id)
     commit = await container.consumer.run(run.id, session.id)
     await container.queue.complete(run.id, commit)
 
@@ -311,7 +311,7 @@ async def test_stopping_a_thread_the_user_already_deleted_is_not_an_error(contai
     session = await start(container, agent, "go")
     await drain(container)
     await container.sessions.delete(session.id)
-    assert await container.consumer.stop_session(session.id) == Halted.GONE
+    assert await container.stopper(session.id) == Halted.GONE
 
 
 async def test_stopping_a_thread_hands_back_at_once_and_deleting_its_agent_later_changes_nothing(
@@ -339,7 +339,7 @@ async def test_stopping_a_thread_hands_back_at_once_and_deleting_its_agent_later
         )
     [child] = await threads_of(container, parent.id)
     # thread 被停止：同一个事务里结清并交回
-    await container.consumer.stop_session(child.id)
+    await container.stopper(child.id)
     await container.agent_lifecycle.delete(reviewer_id, author="user")
 
     await drain(container)
@@ -513,7 +513,7 @@ async def test_deleting_an_asker_together_with_its_private_thread_drops_the_thre
             awaited=False,
             key="k",
         )
-    await container.consumer.stop_session(parent.id)
+    await container.stopper(parent.id)
     await drain(container)
     await container.sessions.delete(parent.id)
     await drain(container)

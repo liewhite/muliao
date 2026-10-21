@@ -18,7 +18,8 @@ from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.events import Receive, SessionRead, StopThread
-from muliao.sessions.halt import Halted
+from muliao.sessions.compaction import Compactor
+from muliao.sessions.halt import Halted, SessionStopper
 from muliao.sessions.inbound import (
     Inbound,
     Received,
@@ -38,13 +39,6 @@ from muliao.sessions.threads import threads_of
 from muliao.sessions.transcript import Item, annotate_asks, to_items
 
 log = logging.getLogger(__name__)
-
-_TITLE_MAX = 60
-
-
-def default_title(prompt: str) -> str:
-    first = prompt.strip().splitlines()[0] if prompt.strip() else ""
-    return first if len(first) <= _TITLE_MAX else first[: _TITLE_MAX - 1] + "…"
 
 
 @dataclass(frozen=True)
@@ -71,14 +65,16 @@ class SessionService:
         queue: TaskQueue,
         live: LiveRuns,
         messaging: Messaging,
-        stop_session: Callable[[str], Awaitable[Halted]],
+        stopper: SessionStopper,
+        compactor: Compactor,
         run_now: Callable[[int], Awaitable[None]],
     ):
         self._db = db
         self._queue = queue
         self._live = live
         self._messaging = messaging
-        self._stop_session = stop_session
+        self._stop_session = stopper
+        self._compactor = compactor
         # 马上执行一个已提交的投递任务（Worker.run_now）
         self._run_now = run_now
 
@@ -146,6 +142,16 @@ class SessionService:
     async def get(self, session_id: str) -> Session:
         async with self._db.transaction() as s:
             return await self._get(s, session_id)
+
+    async def stop(self, session_id: str) -> Halted:
+        """用户停止会话：结束正在进行的运行（已经产生的部分照常保存）、清空信箱，连带停下它发起的异步工作
+        （sessions.halt）。会话不存在时报 NotFound。"""
+        await self.get(session_id)
+        return await self._stop_session(session_id)
+
+    async def compact(self, session_id: str) -> bool:
+        """用户手动压缩上下文（sessions.compaction.Compactor.request）：返回是否新排了一次。"""
+        return await self._compactor.request(session_id)
 
     async def list(
         self,

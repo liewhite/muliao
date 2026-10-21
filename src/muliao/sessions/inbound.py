@@ -8,7 +8,7 @@
 
 import logging
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pydantic_ai.messages import ModelMessage
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,13 +32,22 @@ from muliao.sessions.tables import Mail, MailKind, Session
 
 log = logging.getLogger(__name__)
 
+_TITLE_MAX = 60
+
+
+def default_title(text: str) -> str:
+    """没给标题的新会话的标题：内容的第一行，过长时截断。"""
+    first = text.strip().splitlines()[0] if text.strip() else ""
+    return first if len(first) <= _TITLE_MAX else first[: _TITLE_MAX - 1] + "…"
+
 
 @dataclass(frozen=True)
 class NewSession:
     """事件要求新建会话时的会话描述。"""
 
     agent_id: str
-    title: str
+    # None：由 receive 按这封来信推导（default_title：文字的第一行，只有附件时用文件名）；别的入口必须给出
+    title: str | None
     # 委派产生的 thread：父会话、thread 名与种类
     parent_session_id: str | None = None
     thread: str | None = None
@@ -119,6 +128,8 @@ async def create_session(
     s: AsyncSession, *, origin: Origin, origin_ref: str | None, spec: NewSession
 ) -> Session:
     """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
+    if spec.title is None:
+        raise ValueError(f"a new session needs a title by now (receive derives a missing one), got {spec}")
     await ensure_agent_active_in(s, spec.agent_id)
     is_thread = origin == Origin.DELEGATION
     if (
@@ -262,6 +273,8 @@ def _receive_command(inbound: Inbound) -> Receive:
             raise ValueError(
                 f"a Receive command creates a top-level session with a preassigned id, got {target}"
             )
+        if target.title is None:
+            raise ValueError(f"a Receive command creates a session with a title given by its sender, got {target}")
         new_session = ReceiveNewSession(id=target.id, agent_id=target.agent_id, title=target.title)
     return Receive(
         origin=inbound.origin,
@@ -303,6 +316,13 @@ def inbound_of(command: Receive) -> Inbound:
     )
 
 
+async def _derived_title(s: AsyncSession, inbound: Inbound) -> str:
+    """没给标题的新会话：文字的第一行；只发了文件时用文件名。"""
+    if inbound.content.strip():
+        return default_title(inbound.content)
+    return default_title(", ".join(m.name for m in await load_metas(s, inbound.attachments)))
+
+
 async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Received:
     """所有来信的唯一入口：确定会话（继续或新建），把它投进会话的信箱。"""
     session = await _existing_target_in(s, inbound)
@@ -310,11 +330,12 @@ async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Receiv
         target = inbound.session
         if isinstance(target, str):
             raise RuntimeError(f"inbound for session {target!r} resolved to no session")
-        spec = (
-            NewSession(agent_id=target.agent_id, title=target.title)
-            if isinstance(target, SessionKey)
-            else target
-        )
+        if isinstance(target, SessionKey):
+            spec = NewSession(agent_id=target.agent_id, title=target.title)
+        elif target.title is None:
+            spec = replace(target, title=await _derived_title(s, inbound))
+        else:
+            spec = target
         session = await create_session(s, origin=inbound.origin, origin_ref=inbound.origin_ref, spec=spec)
     session.updated_at = utcnow()
     mail = []

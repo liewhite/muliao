@@ -175,7 +175,7 @@ async def test_nothing_is_reported_once_the_parent_session_is_gone(container, ma
         )
     # 父会话在等这个 thread（占用还在）：先停止它（委派放弃、thread 一起停下），才能删除。公开 thread 在父会话
     # 删除后作为独立会话保留，它之后的结局不再交回任何地方：委派的状态就是发起方的占用，随发起方删除
-    await container.consumer.stop_session(parent.id)
+    await container.stopper(parent.id)
     await container.sessions.delete(parent.id)
     await drain(container)
     async with container.db.transaction() as s:
@@ -300,7 +300,7 @@ async def test_stopping_the_parent_stops_its_reported_threads_and_they_do_not_re
     try:
         async with asyncio.timeout(5):
             await running.wait()
-        await container.consumer.stop_session(parent.id)
+        await container.stopper(parent.id)
         await idle(container)
     finally:
         worker.cancel()
@@ -380,7 +380,7 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
         )
     [child] = await threads_of(container, parent.id)
 
-    await container.consumer.stop_session(child.id)
+    await container.stopper(child.id)
     await deliver(container)
 
     async with container.db.transaction() as s:
@@ -541,7 +541,7 @@ async def test_stopping_a_private_thread_answers_the_waiting_ask_with_stopped(co
         async with asyncio.timeout(5):
             await running.wait()
         [child] = await threads_of(container, parent.id)
-        await container.consumer.stop_session(child.id)
+        await container.stopper(child.id)
         await idle(container)
     finally:
         worker.cancel()
@@ -575,7 +575,7 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
     # 排着运行的 thread 忙：先停止才能删除；停止时委派结清为「被停止」，删除不再重复交回
     with pytest.raises(Conflict, match="busy"):
         await container.sessions.delete(received.id)
-    await container.consumer.stop_session(received.id)
+    await container.stopper(received.id)
     await container.sessions.delete(received.id)
     await deliver(container)
 
@@ -647,7 +647,7 @@ async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, mak
     assert run is not None and run.session_id == parent.id
     await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
 
-    await container.consumer.stop_session(parent.id)
+    await container.stopper(parent.id)
     await drain(container)
 
     async with container.db.transaction() as s:
@@ -921,7 +921,7 @@ async def test_stopping_the_asker_stops_its_threads_level_by_level(container, ma
     first = await dispatch(parent.id, middle, "first")
     second = await dispatch(first.id, leaf, "second")
     # 两个 thread 的运行都还排着
-    await container.consumer.stop_session(parent.id)
+    await container.stopper(parent.id)
     await drain(container)
 
     async with container.db.transaction() as s:

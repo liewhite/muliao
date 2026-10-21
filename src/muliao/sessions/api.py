@@ -18,7 +18,6 @@ from muliao.sessions.live import LiveRun, RunDeltaEvent, RunEvent, RunItemEvent,
 from muliao.sessions.origins import Origin
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
-from muliao.sessions.service import default_title
 from muliao.sessions.transcript import Item
 from muliao.sessions.work import SessionWork
 
@@ -36,7 +35,6 @@ __all__ = [
     "CallResult",
     "call_result",
     "QuestionAnswer",
-    "default_title",
     "Item",
     "AgentHistory",
     "Inbound",

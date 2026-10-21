@@ -47,6 +47,7 @@ class _Resource:
 
 
 async def _resource(c: C, kind: ResourceKind, owner: str | None) -> _Resource:
+    # 读历史：正在删除的 agent 按不存在处理；写入（恢复一版）由 store 自己检查（agents.active）
     if owner is not None:
         await c.agents.get_active(owner)
     match kind:

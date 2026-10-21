@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
+from muliao.agents.active import OwnerCheck
 from muliao.agents.resources import ResourceRepo, Revision
 from muliao.errors import CorruptState
 from muliao.platform import text_edit
@@ -16,8 +18,10 @@ PROMPT_FILE = "PROMPT.md"
 
 
 class PromptStore:
-    def __init__(self, repo: ResourceRepo):
+    def __init__(self, repo: ResourceRepo, check_owner: OwnerCheck):
         self._repo = repo
+        # 写 agent 的指令之前在仓库的锁里检查它还可用（agents.active）
+        self._check_owner = check_owner
 
     def path(self, owner: str | None) -> Path:
         return self._repo.owner_dir(owner) / PROMPT_FILE
@@ -57,7 +61,10 @@ class PromptStore:
             return updated
 
         message = "public prompt" if owner is None else f"instructions of {owner}"
-        return await self._repo.update(path, transform, message, author) is not None
+        updated = await self._repo.update(
+            path, transform, message, author, precondition=partial(self._check_owner, owner)
+        )
+        return updated is not None
 
     async def history(self, owner: str | None, limit: int) -> list[Revision]:
         """新的在前；第一条即当前生效的一版。"""

@@ -225,7 +225,7 @@ class SkillIn(BaseModel):
 
 
 async def _check_owner(c: C, owner: str | None) -> None:
-    """为 owner 写私有资源之前：正在删除的 agent 按不存在处理。"""
+    """读 owner 的私有资源：正在删除的 agent 按不存在处理。写入时由 store 自己检查（agents.active）。"""
     if owner is not None:
         await c.agents.get_active(owner)
 
@@ -253,12 +253,10 @@ async def get_skill(c: C, name: str, owner: str | None = None) -> SkillDetail:
 
 @router.put("/skill")
 async def put_skill(c: C, body: SkillIn) -> SkillOut:
-    await _check_owner(c, body.owner)
     meta = await c.skills.write(body.owner, body.name, body.description, body.body, USER)
     return SkillOut.of(meta)
 
 
 @router.delete("/skill", status_code=204)
 async def delete_skill(c: C, name: str, owner: str | None = None) -> None:
-    await _check_owner(c, owner)
     await c.skills.delete(owner, name, USER)

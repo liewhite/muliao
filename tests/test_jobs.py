@@ -169,7 +169,7 @@ async def test_stopping_the_session_kills_its_jobs_without_waking_it_again(conta
     session, job, recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
     prompts = len(recorder.prompts)
 
-    await container.consumer.stop_session(session.id)
+    await container.stopper(session.id)
     # 后台任务领域收到 SessionStopped 后结束进程
     await drain(container)
 
@@ -417,11 +417,11 @@ async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
 
 
 async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_stopped(settings, models):
-    """Container.running 的退出顺序：先取消运行与循环，再结束后台任务的进程并记为被中断。"""
+    """Assembly.running 的退出顺序：先取消运行与循环，再结束后台任务的进程并记为被中断。"""
     from muliao.agents.service import AgentSpec
-    from muliao.container import build_container
+    from muliao.container import assemble
 
-    c = build_container(settings, resolve_model=models, model_checker=lambda _m: None)
+    c = assemble(settings, resolve_model=models, model_checker=lambda _m: None)
     async with c.running():
         agent = await c.agents.create(
             AgentSpec(name="alpha", description="d", model="m", instructions="", reflect_every=5),

@@ -91,8 +91,6 @@ async def add_mcp(c: C, body: McpIn) -> McpOut:
         env=dict(body.env),
         headers=dict(body.headers),
     )
-    if body.owner is not None:
-        await c.agents.get_active(body.owner)
     row, tools = await c.mcp.add(body.owner, body.name, config, probe=body.probe, author=USER)
     # 新建的私有 server 本身不会被遮蔽；公共 server 在公共视角下也不会
     return McpOut.of(row, tools, shadowed=False)

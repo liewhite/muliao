@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import frontmatter
 import yaml
 
+from muliao.agents.active import OwnerCheck
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import Scope, scope_of, visible
 from muliao.agents.resources import CorruptResource, ResourceRepo
@@ -43,8 +45,10 @@ class Skill:
 
 
 class SkillStore:
-    def __init__(self, repo: ResourceRepo):
+    def __init__(self, repo: ResourceRepo, check_owner: OwnerCheck):
         self._repo = repo
+        # 写私有 skill 之前在仓库的锁里检查 owner 还可用（agents.active）
+        self._check_owner = check_owner
 
     def _root(self, owner: str | None) -> Path:
         return self._repo.owner_dir(owner) / "skills"
@@ -128,12 +132,13 @@ class SkillStore:
     ) -> SkillMeta:
         validate_slug("skill", name)
         description = _valid_description(description)
-        skill_dir = self._root(owner) / name
-        skill_dir.mkdir(parents=True, exist_ok=True)
         post = frontmatter.Post(body.strip() + "\n", name=name, description=description)
-        path = skill_dir / SKILL_FILE
+        path = self._root(owner) / name / SKILL_FILE
         await self._repo.apply(
-            {path: frontmatter.dumps(post) + "\n"}, f"{scope_of(owner)} skill {name}", author
+            {path: frontmatter.dumps(post) + "\n"},
+            f"{scope_of(owner)} skill {name}",
+            author,
+            precondition=partial(self._check_owner, owner),
         )
         return SkillMeta(name, description, owner, path)
 
@@ -173,13 +178,24 @@ class SkillStore:
                 post["description"] = description
             return frontmatter.dumps(post) + "\n"
 
-        await self._repo.update(meta.path, transform, f"edit {scope_of(owner)} skill {name}", author)
+        await self._repo.update(
+            meta.path,
+            transform,
+            f"edit {scope_of(owner)} skill {name}",
+            author,
+            precondition=partial(self._check_owner, owner),
+        )
         return SkillMeta(name, meta.description if description is None else description, owner, meta.path)
 
     async def delete(self, owner: str | None, name: str, author: str) -> None:
         """只看 skill 在不在，不解析内容：改坏的 skill 也能删掉。"""
         skill_dir = self._existing(owner, name)
-        await self._repo.apply({skill_dir: None}, f"delete {scope_of(owner)} skill {name}", author)
+        await self._repo.apply(
+            {skill_dir: None},
+            f"delete {scope_of(owner)} skill {name}",
+            author,
+            precondition=partial(self._check_owner, owner),
+        )
 
 
 def _valid_description(description: str) -> str:

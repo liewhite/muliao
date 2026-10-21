@@ -13,10 +13,12 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
+from muliao.agents.active import OwnerCheck
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import scope_of, shadowing
 from muliao.agents.resources import CorruptResource, ResourceRepo
@@ -109,8 +111,10 @@ McpProbe = Callable[[McpServer], Awaitable[list[str]]]
 
 
 class McpRegistry:
-    def __init__(self, repo: ResourceRepo, probe: McpProbe):
+    def __init__(self, repo: ResourceRepo, probe: McpProbe, check_owner: OwnerCheck):
         self._repo = repo
+        # 写私有配置之前在仓库的锁里检查 owner 还可用（agents.active）
+        self._check_owner = check_owner
         self._probe = probe
 
     def _dir(self, owner: str | None) -> Path:
@@ -186,7 +190,7 @@ class McpRegistry:
     async def add(
         self, owner: str | None, name: str, config: McpConfig, *, probe: bool, author: str
     ) -> tuple[McpServer, list[str]]:
-        """新增 server。probe=True 时先连接验证，验证失败不写入。owner 对应的 agent 由调用方确认存在。"""
+        """新增 server。probe=True 时先连接验证，验证失败不写入。"""
         validate_slug("mcp server", name)
         server = McpServer(owner=owner, name=name, config=config)
         tools = await self.probe(server) if probe else []
@@ -197,7 +201,11 @@ class McpRegistry:
             return _dump(config)
 
         await self._repo.update(
-            self._path(owner, name), create, f"add {scope_of(owner)} MCP server {name}", author
+            self._path(owner, name),
+            create,
+            f"add {scope_of(owner)} MCP server {name}",
+            author,
+            precondition=partial(self._check_owner, owner),
         )
         log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
@@ -210,7 +218,11 @@ class McpRegistry:
                 raise NotFound(f"MCP server {name!r} not found in {scope_of(owner)} scope")
 
         await self._repo.update(
-            self._path(owner, name), delete, f"remove {scope_of(owner)} MCP server {name}", author
+            self._path(owner, name),
+            delete,
+            f"remove {scope_of(owner)} MCP server {name}",
+            author,
+            precondition=partial(self._check_owner, owner),
         )
 
     async def set_enabled(self, owner: str | None, name: str, enabled: bool, author: str) -> McpServer:
@@ -230,7 +242,7 @@ class McpRegistry:
             return _dump(updated)
 
         message = f"{'enable' if enabled else 'disable'} {scope_of(owner)} MCP server {name}"
-        await self._repo.update(path, toggle, message, author)
+        await self._repo.update(path, toggle, message, author, precondition=partial(self._check_owner, owner))
         return result[0]
 
 

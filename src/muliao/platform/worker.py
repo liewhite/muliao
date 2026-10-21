@@ -208,3 +208,23 @@ class Worker:
                 "task failed transiently, retry scheduled at %s: %s", failed.not_before, error, extra=ctx
             )
         self._publish(task, failed.status, error)
+
+
+class RunNow:
+    """「马上执行这个已提交的投递任务」的端口（Worker.run_now），交给提交投递的领域。
+
+    worker 的处理器由各领域的对象组成，这些领域又要马上执行自己提交的投递：端口先构造、交给它们，组合根构造出 worker
+    之后 bind。绑定只在装配时发生一次；装配完成前（没有 bind）调用是组合根的 bug，当场报错。"""
+
+    def __init__(self) -> None:
+        self._worker: Worker | None = None
+
+    def bind(self, worker: Worker) -> None:
+        if self._worker is not None:
+            raise RuntimeError("RunNow is already bound to a worker")
+        self._worker = worker
+
+    async def __call__(self, task_id: int) -> None:
+        if self._worker is None:
+            raise RuntimeError(f"RunNow called for task {task_id} before a worker was bound")
+        await self._worker.run_now(task_id)

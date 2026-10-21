@@ -127,9 +127,9 @@ def test_vapid_subject_scheme_is_checked(tmp_path):
 
 async def test_startup_rejects_agents_with_unresolvable_models(settings, models):
     from muliao.agents.service import AgentSpec
-    from muliao.container import build_container
+    from muliao.container import assemble
 
-    c = build_container(settings, resolve_model=models)  # 使用真实的配置校验
+    c = assemble(settings, resolve_model=models)  # 使用真实的配置校验
     async with c.running():
         agent = await c.agents.create(
             AgentSpec(name="ok", description="d", model="fake:m", instructions="", reflect_every=5),
@@ -142,7 +142,7 @@ async def test_startup_rejects_agents_with_unresolvable_models(settings, models)
             (await s.get(Agent, agent.id)).model = "gone:m"  # 模拟配置里删掉了 provider
     finally:
         await c.db.engine.dispose()
-    c2 = build_container(settings, resolve_model=models)
+    c2 = assemble(settings, resolve_model=models)
     with pytest.raises(RuntimeError, match=f"ok \\({agent.id}\\): model 'gone:m'"):
         async with c2.running():
             pass

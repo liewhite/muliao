@@ -6,7 +6,7 @@ import uvicorn
 
 from muliao.api.app import create_app
 from muliao.config import DEFAULT_CONFIG_PATH, WEB_DIR, load_settings
-from muliao.container import build_container
+from muliao.container import assemble
 from muliao.logging_setup import setup_logging
 
 
@@ -23,7 +23,7 @@ def main() -> None:
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
     settings = load_settings(args.config)
     setup_logging(settings.log_level)
-    app = create_app(build_container(settings), WEB_DIR)
+    app = create_app(assemble(settings).container, WEB_DIR)
     uvicorn.run(
         app, host=settings.server.host, port=settings.server.port, log_config=None, proxy_headers=True
     )

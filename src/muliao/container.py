@@ -5,7 +5,7 @@ import logging
 import os
 import signal
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
@@ -22,6 +22,7 @@ from muliao.agent_runtime.web import WebProvider, build_web_provider
 from muliao.agent_runtime.web_tools import web_toolset
 from muliao.agent_runtime.workspace_tools import ShellLimits, workspace_toolset
 from muliao.agents import tool_catalog
+from muliao.agents.active import ActiveOwners
 from muliao.agents.evolution_tools import (
     instructions_toolset,
     memory_toolset,
@@ -38,7 +39,6 @@ from muliao.agents.service import AgentDefaults, AgentService
 from muliao.agents.skills import SkillStore
 from muliao.agents.tools import agents_toolset
 from muliao.config import Settings
-from muliao.errors import InvalidInput
 from muliao.files.store import FileStore
 from muliao.issues.api import IssueService
 from muliao.issues.tools import issues_toolset
@@ -54,9 +54,9 @@ from muliao.platform.db import Database, WriteCheck, create_engine, migrate
 from muliao.platform.messaging import Messaging
 from muliao.platform.retention import TaskRetention
 from muliao.platform.tables import EVENT_TASK
-from muliao.platform.tasks import TaskQueue
+from muliao.platform.tasks import Commit, TaskQueue
 from muliao.platform.tooling import RunScope
-from muliao.platform.worker import TaskHandler, Worker
+from muliao.platform.worker import RunNow, TaskHandler, Worker
 from muliao.reflection.service import REFLECTION_TASK, ReflectionHandler, ReflectionScheduler
 from muliao.sessions.agent_history import AgentHistory
 from muliao.sessions.api import SessionActivity
@@ -68,13 +68,14 @@ from muliao.sessions.delegation import ThreadChecks
 from muliao.sessions.delegation_tools import delegation_toolset
 from muliao.sessions.deletion import AgentSessionsCleanup
 from muliao.sessions.finish import RunFinisher
-from muliao.sessions.halt import SessionHalt
+from muliao.sessions.halt import SessionHalt, SessionStopper
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import MailReconciler
 from muliao.sessions.service import SessionService
 from muliao.sessions.settlement import reconcile_failures
 from muliao.sessions.steps import Steps
+from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.threads import Threads
 from muliao.sessions.work import SessionWork, handle_work_commands
 from muliao.speech.api import Transcriber, build_transcriber
@@ -92,8 +93,46 @@ from muliao.vault.tools import vault_toolset
 log = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Container:
+    """HTTP 层看到的组合根：各领域的门面（类型都由领域的 api 模块导出，tests/test_boundaries 检查）、平台的事件流与
+    任务列表，以及服务的生命周期。HTTP 层只经这些调用领域，拿不到领域内部的对象（消费者、队列的写入口……）。"""
+
+    settings: Settings
+    # SSE：进程内的展示事件
+    bus: EventBus
+    # 「任务」页：列出与手动重试
+    tasks: TaskQueue
+    vault: Vault
+    resources: ResourceRepo
+    skills: SkillStore
+    memory: MemoryStore
+    prompts: PromptStore
+    agents: AgentService
+    agent_lifecycle: AgentLifecycle
+    sessions: SessionService
+    notifications: Notifications
+    mcp: McpRegistry
+    triggers: TriggerService
+    webhooks: Webhooks
+    push_subscriptions: PushSubscriptions
+    vapid: VapidKeys
+    reflection: ReflectionScheduler
+    models: ModelRegistry
+    files: FileStore
+    usage: UsageLog
+    issues: IssueService
+    # 语音转文字；没配置 [transcription] 时为 None，界面不显示语音输入
+    transcriber: Transcriber | None
+    # 服务的整个生命周期（Assembly.running）
+    running: Callable[[], AbstractAsyncContextManager[None]]
+
+
+@dataclass
+class Assembly:
+    """组合根装配出的全部对象。服务入口（__main__）只取它的 container 交给 HTTP 层；测试夹具直接持有它，以驱动
+    worker、消费者等循环与查库。"""
+
     settings: Settings
     db: Database
     bus: EventBus
@@ -127,16 +166,44 @@ class Container:
     compactor: Compactor
     reflection: ReflectionScheduler
     consumer: Consumer
+    # 停止会话的命令（sessions.halt.SessionStopper）
+    stopper: SessionStopper
     models: ModelRegistry
     files: FileStore
     usage: UsageLog
     issues: IssueService
     # 联网搜索、语音转写共用的出站 HTTP 客户端
     http: httpx.AsyncClient
-    # 语音转文字；没配置 [transcription] 时为 None，界面不显示语音输入
     transcriber: Transcriber | None
-    # 默认就是 models.check，单独持有只为测试替换
-    _model_checker: Callable[[str], None]
+
+    @property
+    def container(self) -> Container:
+        return Container(
+            settings=self.settings,
+            bus=self.bus,
+            tasks=self.queue,
+            vault=self.vault,
+            resources=self.resources,
+            skills=self.skills,
+            memory=self.memory,
+            prompts=self.prompts,
+            agents=self.agents,
+            agent_lifecycle=self.agent_lifecycle,
+            sessions=self.sessions,
+            notifications=self.notifications,
+            mcp=self.mcp,
+            triggers=self.triggers,
+            webhooks=self.webhooks,
+            push_subscriptions=self.push_subscriptions,
+            vapid=self.vapid,
+            reflection=self.reflection,
+            models=self.models,
+            files=self.files,
+            usage=self.usage,
+            issues=self.issues,
+            transcriber=self.transcriber,
+            running=self.running,
+        )
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
@@ -165,8 +232,7 @@ class Container:
         await asyncio.to_thread(migrate, self.settings.db_path)
         # git 不可用或仓库损坏时在启动时暴露；上次进程留下的未提交修改与 git 锁在这里收敛（worker 还没开始）
         await self.resources.recover()
-        await self._check_agent_models()
-        await self._check_agent_tool_groups()
+        await self.agents.verify_stored()
         await self._check_orphan_resources()
         await self._check_task_kinds()
         # 在 worker 恢复任务之前：此时没有临时 agent 在运行
@@ -193,32 +259,6 @@ class Container:
         if leftovers:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
-    async def _check_agent_models(self) -> None:
-        """已存 agent 的模型必须能被当前配置解析：配置改动（删 provider、改名）在启动时暴露，而不是散落到每个任务里失败。"""
-        broken = []
-        for agent in await self.agents.list():
-            try:
-                self._model_checker(agent.model)
-            except InvalidInput as e:
-                broken.append(f"{agent.name} ({agent.id}): {e}")
-        if broken:
-            raise RuntimeError(
-                "agents reference models not resolvable with current config:\n" + "\n".join(broken)
-            )
-
-    async def _check_agent_tool_groups(self) -> None:
-        """已存 agent 选用的工具组必须都可用：去掉 [web] 配置后，选了 web 的 agent 在启动时暴露，而不是每轮都失败。"""
-        available = set(self.agents.defaults.group_names)
-        broken = [
-            f"{a.name} ({a.id}): {sorted(set(a.tool_groups) - available)}"
-            for a in await self.agents.list()
-            if not set(a.tool_groups) <= available
-        ]
-        if broken:
-            raise RuntimeError(
-                "agents use tool groups unavailable with current config:\n" + "\n".join(broken)
-            )
-
 
 async def _loop(name: str, run_forever: Callable[[], Awaitable[None]]) -> None:
     """根任务组里的后台循环：意外退出属于 bug 或不可恢复的配置错误，停止进程，交给进程管理器重启并告警。
@@ -234,7 +274,7 @@ async def _loop(name: str, run_forever: Callable[[], Awaitable[None]]) -> None:
     os.kill(os.getpid(), signal.SIGTERM)
 
 
-def build_container(
+def assemble(
     settings: Settings,
     *,
     resolve_model: ModelResolver | None = None,
@@ -242,7 +282,7 @@ def build_container(
     web: WebProvider | None = None,
     transcriber: Transcriber | None = None,
     check_writes: WriteCheck | None = None,
-) -> Container:
+) -> Assembly:
     """resolve_model / model_checker / web / transcriber 仅供测试替换；默认由配置中的 LLM providers、[web] 与 [transcription] 构造。check_writes 是
     测试打开的开发期断言（schema.single_domain_writes）。"""
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -267,12 +307,16 @@ def build_container(
     )
     # 领域事件与定向命令：订阅与命令处理者在下面各领域构造之后登记
     messaging = Messaging(queue)
+    # 马上执行已提交的投递（Worker.run_now）：worker 由各领域的处理器组成，在最后构造、绑定
+    run_now = RunNow()
     vault = Vault(db, settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
     resources = ResourceRepo(settings.resources_dir)
-    skills = SkillStore(resources)
-    memory = MemoryStore(resources, settings.runtime.memory_max_chars)
-    prompts = PromptStore(resources)
+    # 写私有资源之前，各 store 在资源仓库的锁里检查 owner 还可用（agents.active）
+    owners = ActiveOwners(db)
+    skills = SkillStore(resources, owners)
+    memory = MemoryStore(resources, settings.runtime.memory_max_chars, owners)
+    prompts = PromptStore(resources, owners)
     agents = AgentService(
         db,
         settings.workspaces_dir,
@@ -291,20 +335,15 @@ def build_container(
         messaging,
         {"sessions": activity.blocks_agent_deletion_in, "reflection": reflection.blocks_agent_deletion_in},
     )
-    sessions = SessionService(
-        db,
-        queue,
-        live,
-        messaging,
-        lambda session_id: consumer.stop_session(session_id),
-        # worker 在后面构造：延迟绑定
-        lambda task_id: worker.run_now(task_id),
-    )
+    # 停止会话不依赖消费者：正在进行的运行的登记与 SessionHalt 先构造，消费者用同一份登记运行
+    runs: StoppableRuns[Commit] = StoppableRuns(db.exclusive)
+    halt = SessionHalt(db, queue, messaging)
+    stopper = SessionStopper(runs, halt)
     threads = Threads(queue)
     notifications = Notifications(db, queue, bus)
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，「使用 MCP」组按配置的可用 server 连接
     mcp_connector = McpConnector(vault)
-    mcp = McpRegistry(resources, mcp_connector.probe)
+    mcp = McpRegistry(resources, mcp_connector.probe, owners)
     mcp_tools = mcp_connector.toolset(mcp.index)
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
@@ -318,13 +357,12 @@ def build_container(
         tz,
         precheck,
         messaging,
-        # worker 在后面构造：延迟绑定
-        lambda task_id: worker.run_now(task_id),
+        run_now,
     )
     # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
     due_triggers = DueRunner(db, triggers, [ScheduleDue(triggers, schedule_kind), OnceDue(triggers)])
     webhooks = Webhooks(db, triggers)
-    issues = IssueService(db, messaging, tz, lambda task_id: worker.run_now(task_id), activity)
+    issues = IssueService(db, messaging, tz, run_now, activity)
     push_subscriptions = PushSubscriptions(db)
     vapid = VapidKeys(settings.vapid_key_path)
 
@@ -372,18 +410,7 @@ def build_container(
         # 对话里用的这份带后台任务（只有会话运行会选用工具组；反思不开放它）
         "workspace": [session_workspace_toolset(vault, limits, files, jobs)],
         "temp_agent": [temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir)],
-        # stop_thread 用消费者停止会话，而消费者又用这组工具：通过延迟绑定的调用打破构造顺序上的环
-        "delegation": (
-            [
-                delegation_toolset(
-                    db,
-                    agents,
-                    threads,
-                    lambda session_id: consumer.stop_session(session_id),
-                    settings.runtime.job_check_seconds,
-                )
-            ]
-        ),
+        "delegation": [delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds)],
         "notify": [notify_toolset(notifications)],
         "public_skills": [public_skills_toolset(skills)],
         "mcp": [mcp_tools],
@@ -412,13 +439,12 @@ def build_container(
         keep_steps=settings.runtime.compaction_keep_steps,
     )
     content = ContentBuilder(files, runtime)
+    sessions = SessionService(db, queue, live, messaging, stopper, compactor, run_now)
     # 删除 agent 与会话时各领域清理自己的数据
     notifications.subscribe(messaging)
     agent_lifecycle.subscribe(messaging)
     sessions.subscribe(messaging)
-    AgentSessionsCleanup(
-        db, queue, messaging, lambda session_id: consumer.stop_session(session_id)
-    ).subscribe(messaging)
+    AgentSessionsCleanup(db, queue, messaging, stopper).subscribe(messaging)
     vault.subscribe(messaging)
     triggers.subscribe(messaging)
     issues.subscribe(messaging)
@@ -431,7 +457,8 @@ def build_container(
         content,
         Steps(db, live, content, compactor),
         RunFinisher(queue, messaging),
-        SessionHalt(db, queue, messaging),
+        runs,
+        halt,
         compactor,
     )
     # 各领域的任务种类在这里登记处理器
@@ -448,8 +475,9 @@ def build_container(
         bus,
         concurrency=settings.runtime.worker_concurrency,
     )
+    run_now.bind(worker)
 
-    return Container(
+    return Assembly(
         settings=settings,
         db=db,
         bus=bus,
@@ -483,13 +511,13 @@ def build_container(
         compactor=compactor,
         reflection=reflection,
         consumer=consumer,
+        stopper=stopper,
         models=models,
         files=files,
         usage=usage,
         issues=issues,
         http=http,
         transcriber=transcriber,
-        _model_checker=model_checker or models.check,
     )
 
 

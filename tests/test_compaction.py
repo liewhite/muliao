@@ -242,7 +242,7 @@ async def test_manual_compaction_endpoint(container, make_agent, tmp_path):
 
     alpha = (await make_agent("alpha")).id
     session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
-    app = create_app(container, tmp_path / "no-web")
+    app = create_app(container.container, tmp_path / "no-web")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         await login(client)
         first = await client.post(f"/api/sessions/{session.id}/compact")
@@ -284,7 +284,7 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
     try:
         async with asyncio.timeout(5):
             await entered.wait()
-        await container.consumer.stop_session(session.id)
+        await container.stopper(session.id)
         await idle(container)
     finally:
         worker.cancel()

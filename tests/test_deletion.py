@@ -38,7 +38,7 @@ async def _lanes_of(container, *receivers: str) -> set[str]:
 async def test_stopping_then_deleting_right_away_leaves_no_failed_delivery(container, make_agent, models):
     session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
 
-    await container.consumer.stop_session(session.id)
+    await container.stopper(session.id)
     # 停止之后会话不忙（占用已清掉），立刻可以删除；后台任务的进程随后才被结束、结局才写进它自己的行
     await container.sessions.delete(session.id)
     await drain(container)
@@ -147,7 +147,7 @@ async def test_an_agent_with_a_busy_session_is_not_deleted(container, make_agent
     session, job, _recorder, agent = await start_job(container, make_agent, models, "sleep 30")
     with pytest.raises(Conflict, match="working"):
         await container.agent_lifecycle.delete(agent.id, author="user")
-    await container.consumer.stop_session(session.id)
+    await container.stopper(session.id)
     await drain(container)
     await wait_until_done(container, job.id)
 
@@ -249,7 +249,7 @@ async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, mo
 
     session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
     # 停止已清掉占用，但后台任务领域还没处理 SessionStopped（进程还在跑）
-    await container.consumer.stop_session(session.id)
+    await container.stopper(session.id)
 
     # 任务还在运行，检查命令照发；会话领域看到占用已清掉，不投检查信件
     assert await container.jobs.check() == 1

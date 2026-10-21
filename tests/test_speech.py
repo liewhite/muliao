@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from muliao.api.app import create_app
 from muliao.config import TranscriptionConfig
-from muliao.container import build_container
+from muliao.container import assemble
 from muliao.errors import InvalidInput, UpstreamFailed
 from muliao.platform.db import migrate
 from muliao.speech.transcriber import DashScopeTranscriber, audio_type
@@ -126,14 +126,14 @@ async def speech_client(settings, models, tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         return _result("deploy 到 production")
 
-    c = build_container(
+    c = assemble(
         settings,
         resolve_model=models,
         model_checker=lambda _m: None,
         transcriber=_transcriber(handler, max_bytes=10),
     )
     migrate(settings.db_path)
-    transport = httpx.ASGITransport(app=create_app(c, tmp_path / "no-web"))
+    transport = httpx.ASGITransport(app=create_app(c.container, tmp_path / "no-web"))
     async with c.jobs.running(), httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
     await c.db.engine.dispose()

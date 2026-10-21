@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +13,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.active import active_row_in
 from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import new_agent_name, normalize_agent_name
 from muliao.agents.prompts import PromptStore
@@ -105,17 +106,10 @@ def info_of(agent: Agent) -> AgentInfo:
     )
 
 
-async def _active_in(s: AsyncSession, agent_id: str) -> Agent:
-    agent = await s.get(Agent, agent_id)
-    if agent is None or agent.deleting_by is not None:
-        raise NotFound(f"agent {agent_id!r} not found")
-    return agent
-
-
 async def active_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     """还可用的 agent（正在删除的按不存在处理）。别的领域在自己的写事务里为某个 agent 写数据之前用它检查：事务串行，
     agent 只会从可用变为正在删除、再变为不存在，检查与写入之间不会插进删除，删除流程的清理一定看得到这次写入。"""
-    return info_of(await _active_in(s, agent_id))
+    return info_of(await active_row_in(s, agent_id))
 
 
 @dataclass(frozen=True)
@@ -172,12 +166,40 @@ class AgentService:
         root = self._workspaces_dir
         return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
+    def _unavailable_groups(self, tool_groups: Sequence[str]) -> list[str]:
+        """不在当前配置可用的组里的组名（例如去掉 [web] 配置后的 web）。"""
+        return [g for g in tool_groups if g not in self.defaults.group_names]
+
+    async def verify_stored(self) -> None:
+        """启动检查：已存 agent 的模型必须能被当前配置解析、选用的工具组必须都可用，与新建、修改时同一套规则。
+        配置改动（删 provider、改名、去掉 [web]）在启动时暴露，而不是散落到每个任务里失败。正在删除的不查。"""
+        agents = await self.list()
+        broken = []
+        for agent in agents:
+            try:
+                self._check_model(agent.model)
+            except InvalidInput as e:
+                broken.append(f"{agent.name} ({agent.id}): {e}")
+        if broken:
+            raise RuntimeError(
+                "agents reference models not resolvable with current config:\n" + "\n".join(broken)
+            )
+        broken = [
+            f"{a.name} ({a.id}): {sorted(unknown)}"
+            for a in agents
+            if (unknown := self._unavailable_groups(a.tool_groups))
+        ]
+        if broken:
+            raise RuntimeError(
+                "agents use tool groups unavailable with current config:\n" + "\n".join(broken)
+            )
+
     def _check(self, *, description: str, model: str, reflect_every: int, tool_groups: list[str]) -> None:
         if not description.strip():
             raise InvalidInput("agent description must not be empty")
         if reflect_every < 1:
             raise InvalidInput("reflect_every must be >= 1")
-        unknown = [g for g in tool_groups if g not in self.defaults.group_names]
+        unknown = self._unavailable_groups(tool_groups)
         if unknown or len(set(tool_groups)) != len(tool_groups):
             raise InvalidInput(
                 f"tool groups must be distinct names from {self.defaults.group_names}, got {tool_groups}"
@@ -232,13 +254,13 @@ class AgentService:
         先校验全部字段，再写指令（资源仓库），最后改数据库行：校验或指令写入失败时什么都没生效。只有写完指令后
         恰好被并发改名撞了名字，才会出现指令已更新、其余字段报错（窗口极小，报错可见，重试即可）。"""
         async with self._db.transaction() as s:
-            fields = self._validated(await _active_in(s, agent_id), patch)
+            fields = self._validated(await active_row_in(s, agent_id), patch)
             await self._ensure_name_free(s, fields.name, agent_id)
         instructions_changed = patch.instructions is not None and await self._prompts.set(
             agent_id, patch.instructions, author
         )
         async with self._db.transaction() as s:
-            agent = await _active_in(s, agent_id)
+            agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)
             await self._ensure_name_free(s, fields.name, agent_id)
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
