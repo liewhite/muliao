@@ -80,6 +80,14 @@ export function groupByStatus(issues: Issue[]): Record<IssueStatus, Issue[]> {
   return groups
 }
 
+/** 每个状态默认显示的 issue 数，其余折叠：「完成」一栏会越堆越多 */
+export const FOLD_LIMIT = 10
+
+/** 一栏里要渲染的 issue：折叠时只取前 FOLD_LIMIT 个（已按最近更新排好），展开时全部 */
+export function foldIssues(issues: Issue[], expanded: boolean): Issue[] {
+  return expanded ? issues : issues.slice(0, FOLD_LIMIT)
+}
+
 /** 拖拽、本地乐观更新：把 issue 移到新状态，并按服务端的做法刷新更新时间 */
 export function moveIssue(issues: Issue[], id: number, status: IssueStatus, now: string): Issue[] {
   return issues.map((i) => (i.id === id ? { ...i, status, updated_at: now } : i))

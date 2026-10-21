@@ -14,6 +14,8 @@ import {
   assigneeLabel,
   assigneeOf,
   assigneeOptions,
+  FOLD_LIMIT,
+  foldIssues,
   ownerLabel,
   groupByStatus,
   issueRoute,
@@ -108,6 +110,16 @@ function DraggableCard({ issue, agents, onOpen }: { issue: Issue; agents: Agent[
   )
 }
 
+/** 折叠起来的 issue 的展开 / 收起按钮；不超过 FOLD_LIMIT 个时不显示 */
+function FoldToggle({ total, expanded, onToggle }: { total: number; expanded: boolean; onToggle: () => void }) {
+  if (total <= FOLD_LIMIT) return null
+  return (
+    <button type="button" className="self-start px-1 py-1 text-xs text-muted hover:text-foreground" onClick={onToggle}>
+      {expanded ? '收起' : `展开其余 ${total - FOLD_LIMIT} 个`}
+    </button>
+  )
+}
+
 function Column({
   status,
   issues,
@@ -120,6 +132,7 @@ function Column({
   onOpen: (id: number) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status })
+  const [expanded, setExpanded] = useState(false)
   return (
     <section
       ref={setNodeRef}
@@ -130,9 +143,10 @@ function Column({
         {STATUS_LABEL[status]}
         <span className="font-normal text-muted">{issues.length}</span>
       </h2>
-      {issues.map((i) => (
+      {foldIssues(issues, expanded).map((i) => (
         <DraggableCard key={i.id} issue={i} agents={agents} onOpen={onOpen} />
       ))}
+      <FoldToggle total={issues.length} expanded={expanded} onToggle={() => setExpanded(!expanded)} />
     </section>
   )
 }
@@ -189,28 +203,36 @@ function List({ issues, agents }: { issues: Issue[]; agents: Agent[] | undefined
   return (
     <div className="flex flex-col gap-4">
       {nonEmpty.map((s) => (
-        <section key={s} className="flex flex-col">
-          <h2 className="flex items-center gap-2 py-1 text-sm font-semibold text-muted">
-            <StatusDot status={s} />
-            {STATUS_LABEL[s]}
-            <span className="font-normal">{groups[s].length}</span>
-          </h2>
-          {groups[s].map((i) => (
-            <Link
-              key={i.id}
-              to={issueRoute(i.id)}
-              className="flex items-center gap-3 border-b border-separator px-1 py-2 text-sm hover:bg-surface-hover"
-            >
-              <span className="w-10 shrink-0 text-xs text-muted">#{i.id}</span>
-              <StatusDot status={i.status} />
-              <span className="min-w-0 flex-1 truncate">{i.title}</span>
-              {i.priority !== 'none' && <span className="shrink-0 text-xs text-muted">{PRIORITY_LABEL[i.priority]}</span>}
-              <span className="w-20 shrink-0 truncate text-right text-xs text-muted">{assigneeLabel(agents, i.assignee)}</span>
-            </Link>
-          ))}
-        </section>
+        <ListSection key={s} status={s} issues={groups[s]} agents={agents} />
       ))}
     </div>
+  )
+}
+
+function ListSection({ status, issues, agents }: { status: IssueStatus; issues: Issue[]; agents: Agent[] | undefined }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <section className="flex flex-col">
+      <h2 className="flex items-center gap-2 py-1 text-sm font-semibold text-muted">
+        <StatusDot status={status} />
+        {STATUS_LABEL[status]}
+        <span className="font-normal">{issues.length}</span>
+      </h2>
+      {foldIssues(issues, expanded).map((i) => (
+        <Link
+          key={i.id}
+          to={issueRoute(i.id)}
+          className="flex items-center gap-3 border-b border-separator px-1 py-2 text-sm hover:bg-surface-hover"
+        >
+          <span className="w-10 shrink-0 text-xs text-muted">#{i.id}</span>
+          <StatusDot status={i.status} />
+          <span className="min-w-0 flex-1 truncate">{i.title}</span>
+          {i.priority !== 'none' && <span className="shrink-0 text-xs text-muted">{PRIORITY_LABEL[i.priority]}</span>}
+          <span className="w-20 shrink-0 truncate text-right text-xs text-muted">{assigneeLabel(agents, i.assignee)}</span>
+        </Link>
+      ))}
+      <FoldToggle total={issues.length} expanded={expanded} onToggle={() => setExpanded(!expanded)} />
+    </section>
   )
 }
 

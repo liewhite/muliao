@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Issue, IssueActivity } from './api'
-import { activityText, assigneeLabel, groupByStatus, moveIssue, stalled } from './issues'
+import { FOLD_LIMIT, activityText, assigneeLabel, foldIssues, groupByStatus, moveIssue, stalled } from './issues'
 
 const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   id,
@@ -20,6 +20,14 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
 const agents = [{ id: 'a1', name: 'alpha' }] as unknown as Agent[]
 
 describe('issues', () => {
+  it('folds a column to the first FOLD_LIMIT issues unless expanded', () => {
+    const many = Array.from({ length: FOLD_LIMIT + 3 }, (_, k) => issue(k + 1))
+    expect(foldIssues(many, false).map((i) => i.id)).toEqual(many.slice(0, FOLD_LIMIT).map((i) => i.id))
+    expect(foldIssues(many, true)).toHaveLength(FOLD_LIMIT + 3)
+    const few = many.slice(0, 2)
+    expect(foldIssues(few, false)).toEqual(few)
+  })
+
   it('groups by status, most recently updated first', () => {
     const groups = groupByStatus([
       issue(1, { updated_at: '2026-10-21T01:00:00Z' }),
