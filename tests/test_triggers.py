@@ -15,7 +15,7 @@ ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
 
 
 def _schedule(container):
-    return container.triggers, container.schedules
+    return container.triggers, container.due_triggers
 
 
 async def _make_due(container, trigger_id: int) -> None:

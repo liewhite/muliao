@@ -2,10 +2,14 @@
 
 触发方式是多态的，分两部分实现，新增一种方式（例如消息队列）只需各加一个实现并在组合根注册：
 - TriggerKind：纯逻辑——校验配置、推导运行状态，注册给 TriggerService；
-- 激活机制：怎么被触发——定时循环（schedule.ScheduleRunner）、HTTP 入口（webhook.Webhooks）、消费循环……
-  它们都只调用 TriggerService.fire，组装成事件交给会话领域的统一入口。
+- 激活机制：怎么被触发——到期扫描循环（due.DueRunner，定时与一次性共用）、HTTP 入口（webhook.Webhooks）、
+  消费循环……它们都只调用 TriggerService.fire，组装成事件交给会话领域的统一入口。
 
 fire 先跑触发器的前置检查（若有，见 triggers.precheck）：没有事件就不调用 agent。检查在数据库事务之外执行。
+用户与 agent 的「立即运行一次」走 run：那是管理操作（见它的说明），不消耗一次性触发器预定的那一次。
+
+归档（finished_at）是所有触发方式共用的概念：这个触发器不会再触发了（一次性触发器用掉了它那一次）。归档的
+不出现在默认列表、不能再修改启用或立即运行，但行与 id 保留，它发起过的会话因此仍查得到是谁发的。
 
 触发投的信件都没有用户在等（awaited = False），处理它的运行不推送，需要通知时由 agent 调用 notify_user。
 """
@@ -88,6 +92,12 @@ def validate_trigger_name(name: str) -> str:
     if not _NAME.fullmatch(name):
         raise InvalidInput(f"invalid trigger name {name!r}: must match {_NAME.pattern}")
     return name
+
+
+def _finished(name: str) -> Conflict:
+    return Conflict(
+        f"trigger {name!r} has finished and will not fire again; it can only be viewed or deleted"
+    )
 
 
 def event_prompt(instructions: str, payload: str | None) -> str:
@@ -198,10 +208,10 @@ class TriggerService:
         if isinstance(precheck, Precheck):
             # 校验要读 vault（它自己开事务），不能放在下面的事务里；agent 不可改，先读出来即可
             async with self._db.transaction() as s:
-                agent_id = (await self.get_in(s, trigger_id)).agent_id
+                agent_id = (await self._manageable_in(s, trigger_id)).agent_id
             await self._precheck.check(agent_id, precheck)
         async with self._db.transaction() as s:
-            trigger = await self.get_in(s, trigger_id)
+            trigger = await self._manageable_in(s, trigger_id)
             if precheck is not KEEP:
                 trigger.precheck = None if precheck is None else precheck.model_dump()
                 # 新的检查从新的基线开始比较；旧命令的失败也不记到新配置上（新命令失败时要能再告警一次）
@@ -231,6 +241,15 @@ class TriggerService:
         """激活机制维护自己的运行状态（在调用方事务里改这一行）。JSON 列只在整体赋值时被追踪。"""
         trigger.state = {**trigger.state, **values}
 
+    def finish_in(self, trigger: Trigger) -> None:
+        """归档：这个触发器不会再触发了（一次性触发器用掉了它那一次），在调用方的事务里改这一行。
+
+        归档之后它不出现在默认列表里，也不能再修改、启用或立即运行；行保留着，它发起过的会话因此仍查得到
+        是谁发的，同名的触发器也可以重新创建。
+        """
+        trigger.finished_at = self._clock()
+        log.info("trigger finished", extra={"trigger": trigger.name, "kind": trigger.kind})
+
     async def delete(self, trigger_id: int) -> None:
         async with self._db.transaction() as s:
             trigger = await self.get_in(s, trigger_id)
@@ -238,8 +257,15 @@ class TriggerService:
         self._changed()
         log.info("trigger deleted", extra={"trigger": trigger.name, "trigger_id": trigger_id})
 
-    async def list(self, *, kind: str | None = None, enabled_only: bool = False) -> list[Trigger]:
-        query = select(Trigger).order_by(Trigger.name)
+    async def list(
+        self, *, kind: str | None = None, enabled_only: bool = False, finished: bool = False
+    ) -> list[Trigger]:
+        """默认只列还会触发的（按名称）；finished 为真时只列已归档的历史（按归档时间倒序）。"""
+        query = (
+            select(Trigger).where(Trigger.finished_at.isnot(None)).order_by(Trigger.finished_at.desc())
+            if finished
+            else select(Trigger).where(Trigger.finished_at.is_(None)).order_by(Trigger.name)
+        )
         if kind is not None:
             query = query.where(Trigger.kind == kind)
         if enabled_only:
@@ -253,12 +279,26 @@ class TriggerService:
             raise NotFound(f"trigger {trigger_id} not found")
         return trigger
 
+    async def _manageable_in(self, s: AsyncSession, trigger_id: int) -> Trigger:
+        """管理操作（修改、启用、立即运行）的前提：这个触发器还会触发。已归档的只能查看和删除。"""
+        trigger = await self.get_in(s, trigger_id)
+        if trigger.finished_at is not None:
+            raise _finished(trigger.name)
+        return trigger
+
     async def get_by_name(self, name: str) -> Trigger:
+        """按名称找还会触发的那个：名称只在未归档的触发器之间唯一，归档的只能按 id 指。
+
+        这个名字只剩归档的触发器时说清楚是归档了，而不是「找不到」：它在归档列表里按名字看得见。
+        """
         async with self._db.transaction() as s:
-            trigger = await s.scalar(select(Trigger).where(Trigger.name == name))
-            if trigger is None:
-                raise NotFound(f"trigger {name!r} not found")
-            return trigger
+            same_name = (await s.scalars(select(Trigger).where(Trigger.name == name))).all()
+            live = [t for t in same_name if t.finished_at is None]
+            if live:
+                return live[0]
+            if same_name:
+                raise _finished(name)
+            raise NotFound(f"trigger {name!r} not found")
 
     async def busy_in(self, s: AsyncSession, trigger: Trigger) -> bool:
         """上一次触发的会话是否还有没做完的事，包括还没投递的这次来信（定时触发据此避免重叠，会话领域的查询）。"""
@@ -298,11 +338,23 @@ class TriggerService:
         log.info("trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "session_id": target})
         return _Fired(session_id=target, delivery=delivery)
 
+    async def run(self, trigger_id: int) -> str | None:
+        """用户或 agent 的「立即运行一次」（不带事件内容）：管理操作，不消耗一次性触发器预定的那一次。
+
+        有前置检查时同样先跑检查，可以用来测试整条链路；返回交给的会话 id，检查判定没事时为 None。
+        """
+        async with self._db.transaction() as s:
+            await self._manageable_in(s, trigger_id)
+        return await self.fire(trigger_id)
+
     async def fire(
         self, trigger_id: int, payload: str | None = None, session_id: str | None = None
     ) -> str | None:
         """所有触发方式的唯一出口，返回交给的会话 id。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
         检查失败记在触发器上并抛出 PrecheckFailed（触发器保持启用：脚本的故障往往是暂时的）。
+
+        这是激活机制的入口，不看是否已归档：按到期时间触发的方式（triggers.due）在调用前就把这次到期消耗掉了，
+        一次性触发器那时已经归档。管理操作的「立即运行」走 run。
 
         触发记下之后马上执行投信（run_now），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。"""
         fired = await self._fire(trigger_id, payload, session_id)

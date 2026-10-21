@@ -62,10 +62,17 @@ class Webhooks:
         self._triggers = triggers
 
     async def authenticate(self, name: str, token: str) -> int:
-        """校验 token，返回触发器 id。失败的各种原因返回同一个错误，且都要计算一次摘要。"""
+        """校验 token，返回触发器 id。失败的各种原因返回同一个错误，且都要计算一次摘要。
+
+        名称只在未归档的触发器之间唯一，所以按名称找的也只有未归档的那个。
+        """
         digest = _hash(token)
         async with self._db.transaction() as s:
-            trigger = await s.scalar(select(Trigger).where(Trigger.name == name, Trigger.kind == KIND))
+            trigger = await s.scalar(
+                select(Trigger).where(
+                    Trigger.name == name, Trigger.kind == KIND, Trigger.finished_at.is_(None)
+                )
+            )
             stored = None if trigger is None else trigger.state.get("token_hash")
             if stored is None or not hmac.compare_digest(stored, digest):
                 log.warning("webhook rejected: unknown trigger or wrong token", extra={"trigger": name})

@@ -80,3 +80,36 @@ def test_foreign_key_violation_rolls_back_migration(tmp_path, monkeypatch):
 
     with sqlite3.connect(path) as conn:
         assert conn.execute("select count(*) from messages").fetchone()[0] == 0
+
+
+def _insert_trigger(conn: sqlite3.Connection, name: str, agent_id: str = "a1a1a1a1a1a1") -> None:
+    conn.execute(
+        "insert into triggers (name, agent_id, prompt, kind, config, state, enabled, created_at) "
+        "values (?, ?, 'p', 'schedule', '{\"cron\": \"* * * * *\"}', '{}', 1, '2026-01-01')",
+        (name, agent_id),
+    )
+
+
+def test_existing_triggers_survive_the_finished_at_upgrade_and_only_then_share_names(tmp_path):
+    """已有库升级：触发器原样保留、finished_at 为 NULL，名称改为只在未归档的之间唯一。"""
+    path = tmp_path / "m.db"
+    migrate(path, "cd85203e73a8")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, tool_groups, reflect_every, created_at, "
+            "updated_at) values ('a1a1a1a1a1a1', 'alpha', '', 'm', '[]', 0, '2026-01-01', '2026-01-01')"
+        )
+        _insert_trigger(conn, "daily")
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_trigger(conn, "daily")
+
+    migrate(path)
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select name, finished_at from triggers").fetchall() == [("daily", None)]
+        # 未归档的之间仍然唯一
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_trigger(conn, "daily")
+        conn.execute("update triggers set finished_at = '2026-01-02' where name = 'daily'")
+        _insert_trigger(conn, "daily")
+        assert conn.execute("select count(*) from triggers where name = 'daily'").fetchone()[0] == 2

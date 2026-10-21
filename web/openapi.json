@@ -1856,7 +1856,7 @@
     "/api/triggers/{trigger_id}/run": {
       "post": {
         "summary": "Run Trigger",
-        "description": "立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。",
+        "description": "立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。\n\n不消耗一次性触发器预定的那一次；已归档的触发器不能再运行。",
         "operationId": "run_trigger_api_triggers__trigger_id__run_post",
         "parameters": [
           {

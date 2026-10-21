@@ -68,8 +68,10 @@ from muliao.sessions.settlement import reconcile_failures
 from muliao.sessions.steps import Steps
 from muliao.sessions.threads import Threads
 from muliao.sessions.work import SessionWork, handle_work_commands
+from muliao.triggers.due import DueRunner
+from muliao.triggers.once import OnceDue, OnceKind
 from muliao.triggers.precheck import PrecheckRunner
-from muliao.triggers.schedule import ScheduleKind, ScheduleRunner
+from muliao.triggers.schedule import ScheduleDue, ScheduleKind
 from muliao.triggers.service import EVENT_MAX_BYTES, TriggerService
 from muliao.triggers.tools import triggers_toolset
 from muliao.triggers.webhook import WebhookKind, Webhooks
@@ -98,7 +100,7 @@ class Container:
     notifications: Notifications
     mcp: McpRegistry
     triggers: TriggerService
-    schedules: ScheduleRunner
+    due_triggers: DueRunner
     webhooks: Webhooks
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
@@ -127,7 +129,7 @@ class Container:
             await self._prepare()
             async with self.jobs.running(), anyio.create_task_group() as root:
                 root.start_soon(_loop, "worker", self.worker.run_forever)
-                root.start_soon(_loop, "schedules", self.schedules.run_forever)
+                root.start_soon(_loop, "due", self.due_triggers.run_forever)
                 root.start_soon(_loop, "mail", self.mail.run_forever)
                 root.start_soon(_loop, "checks", self.work.run_forever)
                 try:
@@ -256,7 +258,7 @@ def build_container(
     threads = Threads(queue)
     notifications = Notifications(db, queue)
     mcp = McpRegistry(resources, vault)
-    schedule_kind = ScheduleKind(tz)
+    schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
     precheck = PrecheckRunner(
         vault, agents.workspace, settings.runtime.precheck_timeout_seconds, EVENT_MAX_BYTES
@@ -264,14 +266,15 @@ def build_container(
     triggers = TriggerService(
         db,
         activity,
-        {k.name: k for k in (schedule_kind, WebhookKind(settings.server.public_url))},
+        {k.name: k for k in (schedule_kind, once_kind, WebhookKind(settings.server.public_url))},
         tz,
         precheck,
         messaging,
         # worker 在后面构造：延迟绑定
         lambda task_id: worker.run_now(task_id),
     )
-    schedules = ScheduleRunner(db, triggers, schedule_kind)
+    # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
+    due_triggers = DueRunner(db, triggers, [ScheduleDue(triggers, schedule_kind), OnceDue(triggers)])
     webhooks = Webhooks(db, triggers)
     push_subscriptions = PushSubscriptions(db)
     vapid = VapidKeys(settings.vapid_key_path)
@@ -415,7 +418,7 @@ def build_container(
         notifications=notifications,
         mcp=mcp,
         triggers=triggers,
-        schedules=schedules,
+        due_triggers=due_triggers,
         webhooks=webhooks,
         push_subscriptions=push_subscriptions,
         vapid=vapid,

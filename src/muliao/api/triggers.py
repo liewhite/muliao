@@ -122,5 +122,8 @@ async def delete_trigger(c: C, trigger_id: int) -> None:
 
 @router.post("/triggers/{trigger_id}/run", status_code=202)
 async def run_trigger(c: C, trigger_id: int) -> FiredOut:
-    """立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。"""
-    return FiredOut(session_id=await c.triggers.fire(trigger_id))
+    """立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。
+
+    不消耗一次性触发器预定的那一次；已归档的触发器不能再运行。
+    """
+    return FiredOut(session_id=await c.triggers.run(trigger_id))

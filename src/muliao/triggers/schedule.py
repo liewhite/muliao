@@ -1,41 +1,37 @@
 """定时触发：config = {"cron": "<5 段 cron 表达式>"}，按服务端配置的时区解释。
 
-策略：
+到期扫描循环是所有按时间触发的方式共用的（triggers.due.DueRunner），这里只给出定时这一种的规则：
+
+- 下次时间记在 state["next_run_at"]；到点先推进到下次（消耗这次到期），再触发。
 - 错过的触发（进程停机期间）只补一次，然后从当前时间算下一次。
 - 不重叠：上一次触发的会话仍有未完成的运行时跳过本次，并记 info 日志。
-- 触发时被拒绝（例如处理说明为空、cron 表达式不合法）时停用它并记录原因，不阻塞其他触发器；修复后由用户重新启用。
-- 列出到期触发器之后、触发之前，触发器可能被删除、停用或改了配置：触发前按最新的行重新判断，不再到期就跳过。
 - 停用后重新启用，下次时间从启用时算起（TriggerService 在重新启用时重新推导 state），不补暂停期间的触发。
 """
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import anyio
 from croniter import croniter
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
-from muliao.platform.db import Database, utcnow
+from muliao.errors import InvalidInput
+from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
-from muliao.triggers.precheck import PrecheckFailed
 from muliao.triggers.service import TriggerService
 from muliao.triggers.tables import Trigger
 
-log = logging.getLogger(__name__)
-
 KIND = "schedule"
-_MAX_SLEEP_SECONDS = 60.0
 
 
 class ScheduleKind:
     name = KIND
     description = (
         'Fires on a schedule. config: {"cron": "<5-field cron expression>"} in the server timezone, '
-        'e.g. {"cron": "*/5 * * * *"}. Skips a firing while the previous run is unfinished.'
+        'e.g. {"cron": "*/5 * * * *"}. Skips a firing while the previous run is unfinished. For a task that '
+        "should happen once, use the `once` kind: a cron expression with a date would fire again every year."
     )
 
     def __init__(self, tz: ZoneInfo, clock: Clock = utcnow):
@@ -64,100 +60,22 @@ def next_run_at(state: dict[str, Any]) -> datetime:
     return datetime.fromisoformat(state["next_run_at"])
 
 
-def _skip_reason(trigger: Trigger | None, now: datetime) -> str | None:
-    """列出到期之后、触发之前触发器发生的变化；None 表示仍应触发。"""
-    if trigger is None:
-        return "deleted"
-    if not trigger.enabled:
-        return "disabled"
-    if next_run_at(trigger.state) > now:
-        return "rescheduled"
-    return None
+class ScheduleDue:
+    """定时触发的到期规则：到点推进到下次时间，上一次触发的会话还没做完时跳过这一次。"""
 
+    kind = KIND
 
-class ScheduleRunner:
-    """定时触发的激活机制：到点推进下次时间，再调用 TriggerService.fire。
-
-    用最终正确性换简化：推进下次时间与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）。进程恰好死在
-    两者之间时这一次被跳过（至多一次），换来的是检查失败或很慢都不会让同一个时刻反复触发。
-    """
-
-    def __init__(self, db: Database, triggers: TriggerService, kind: ScheduleKind, clock: Clock = utcnow):
-        self._db = db
+    def __init__(self, triggers: TriggerService, kind: ScheduleKind):
         self._triggers = triggers
         self._kind = kind
-        self._clock = clock
-        self._changed = triggers.watch()
 
-    async def fire_due(self) -> int:
-        now = self._clock()
-        due = [
-            t.id
-            for t in await self._triggers.list(kind=KIND, enabled_only=True)
-            if next_run_at(t.state) <= now
-        ]
-        # 到期的触发器并发执行：一个慢的前置检查不拖住同一轮里的其他触发器。意外的异常（契约之外）让整组取消并上抛，
-        # 由后台循环的崩溃处理暴露，不会留下没人接收的异常
-        async with anyio.create_task_group() as group:
-            for trigger_id in due:
-                group.start_soon(self._fire_one, trigger_id, now)
-        return len(due)
+    def due_at(self, trigger: Trigger) -> datetime:
+        return next_run_at(trigger.state)
 
-    async def _fire_one(self, trigger_id: int, now: datetime) -> None:
-        try:
-            await self._fire(trigger_id, now)
-        except PrecheckFailed:
-            # 已记在触发器上；脚本的故障往往是暂时的，保持启用，下次照常检查
-            pass
-        except (Conflict, NotFound) as e:
-            # 推进时间之后、触发之前被用户停用或删除：不是触发失败，不覆盖失败原因
-            log.info("scheduled fire skipped: %s", e, extra={"trigger_id": trigger_id})
-        except DomainError as e:
-            await self._disable(trigger_id, f"{type(e).__name__}: {e}")
-
-    async def _fire(self, trigger_id: int, now: datetime) -> None:
-        async with self._db.transaction() as s:
-            trigger = await s.get(Trigger, trigger_id)
-            # 列出之后可能已被删除、停用或改了配置：按最新的行重新判断
-            skip = _skip_reason(trigger, now)
-            if skip is not None:
-                log.info(
-                    "scheduled fire skipped: trigger %s since it was due",
-                    skip,
-                    extra={"trigger_id": trigger_id},
-                )
-                return
-            self._triggers.set_state(
-                trigger, next_run_at=self._kind.next_run(trigger.config["cron"], now).isoformat()
-            )
-            if await self._triggers.busy_in(s, trigger):
-                log.info(
-                    "scheduled fire skipped: previous run still in progress", extra={"trigger": trigger.name}
-                )
-                return
-        await self._triggers.fire(trigger_id)
-
-    async def _disable(self, trigger_id: int, error: str) -> None:
-        async with self._db.transaction() as s:
-            trigger = await s.get(Trigger, trigger_id)
-            if trigger is None:
-                log.info(
-                    "failed trigger was deleted meanwhile", extra={"trigger_id": trigger_id, "error": error}
-                )
-                return
-            trigger.enabled = False
-            trigger.disabled_reason = error
-        log.error("schedule trigger disabled after failed fire: %s", error, extra={"trigger_id": trigger_id})
-
-    async def _next_wake(self) -> float:
-        times = [next_run_at(t.state) for t in await self._triggers.list(kind=KIND, enabled_only=True)]
-        if not times:
-            return _MAX_SLEEP_SECONDS
-        return min(_MAX_SLEEP_SECONDS, max(0.0, (min(times) - self._clock()).total_seconds()))
-
-    async def run_forever(self) -> None:
-        while True:
-            await self.fire_due()
-            self._changed.clear()
-            with anyio.move_on_after(await self._next_wake()):
-                await self._changed.wait()
+    async def consume_in(self, s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
+        self._triggers.set_state(
+            trigger, next_run_at=self._kind.next_run(trigger.config["cron"], now).isoformat()
+        )
+        if await self._triggers.busy_in(s, trigger):
+            return "previous run still in progress"
+        return None

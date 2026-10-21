@@ -46,7 +46,7 @@ async def _schedule(container, agent_id: str, precheck: Precheck):
 async def _tick(container, trigger_id: int) -> None:
     """到点触发一次；告警是发给通知领域的命令，随后投递。"""
     await _make_due(container, trigger_id)
-    await container.schedules.fire_due()
+    await container.due_triggers.fire_due()
     await deliver(container)
 
 
