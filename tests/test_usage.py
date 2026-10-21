@@ -10,7 +10,7 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
-from muliao.platform.tooling import Origin
+from muliao.sessions.api import Origin
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS
 from muliao.sessions.lanes import COMPACTION_TASK, session_lane
 from muliao.usage.api import RunKind, UsageEntry, UsageGroup

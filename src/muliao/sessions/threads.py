@@ -13,7 +13,6 @@ from muliao.agents.api import AgentInfo
 from muliao.errors import InvalidInput
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import TaskQueue
-from muliao.platform.tooling import Origin
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.delegation import delegation_holder, thread_name
 from muliao.sessions.history import latest_answers_among
@@ -22,6 +21,7 @@ from muliao.sessions.holds import hold_in
 from muliao.sessions.inbound import Inbound, NewSession, Received, create_session, receive
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.mailbox import latest_runs_among
+from muliao.sessions.origins import Origin
 from muliao.sessions.settlement import failure_of
 from muliao.sessions.tables import Mail, Session
 

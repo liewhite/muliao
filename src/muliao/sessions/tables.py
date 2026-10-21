@@ -9,8 +9,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from muliao.platform.db import Base, StrEnumType, UTCDateTime, utcnow
 from muliao.platform.tables import agent_ref
-from muliao.platform.tooling import Origin
 from muliao.sessions.kinds import SessionKind
+from muliao.sessions.origins import Origin
 
 
 class Session(Base):

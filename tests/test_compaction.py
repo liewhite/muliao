@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from muliao.agent_runtime.conventions import run_context_index
 from muliao.platform.tables import Task, TaskStatus
-from muliao.platform.tooling import Origin
+from muliao.sessions.api import Origin
 from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS, select_steps, steps_of
 from muliao.sessions.history import CONTINUATION

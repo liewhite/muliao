@@ -15,7 +15,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 
 from muliao.platform.tables import TaskStatus
-from muliao.platform.tooling import Origin
+from muliao.sessions.api import Origin
 from muliao.sessions.ask_user import NO_USER_WAITING
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import steps_of

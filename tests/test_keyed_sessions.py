@@ -2,9 +2,9 @@
 
 import pytest
 
-from muliao.platform.tooling import Origin
 from muliao.sessions.api import (
     Inbound,
+    Origin,
     SessionActivity,
     SessionKey,
     WorkState,

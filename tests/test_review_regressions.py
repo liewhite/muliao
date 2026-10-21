@@ -11,8 +11,8 @@ from muliao.agent_runtime.transient import is_transient, transient_as_retryable
 from muliao.errors import Conflict, TransientError
 from muliao.notifications.service import DELIVER_TASK
 from muliao.platform.tables import TaskStatus
-from muliao.platform.tooling import Origin
 from muliao.platform.worker import is_retryable
+from muliao.sessions.api import Origin
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Message
 from muliao.sessions.transcript import to_items

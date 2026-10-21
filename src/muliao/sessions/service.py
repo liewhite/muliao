@@ -14,7 +14,6 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
-from muliao.platform.tooling import Origin
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.deletion import delete_sessions
@@ -33,6 +32,7 @@ from muliao.sessions.kinds import LISTED, policy_of
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
+from muliao.sessions.origins import Origin
 from muliao.sessions.tables import Compaction, Mail, Message, Session
 from muliao.sessions.threads import threads_of
 from muliao.sessions.transcript import Item, annotate_asks, to_items

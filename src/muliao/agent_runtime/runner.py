@@ -43,12 +43,13 @@ from muliao.agent_runtime.instructions import (
 )
 from muliao.agent_runtime.llm import ModelResolver
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
+from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.transient import transient_as_retryable
 from muliao.agents.api import AgentInfo, AgentService, MemoryStore, PromptStore, SkillStore
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
-from muliao.platform.tooling import Audience, DomainErrorsAsRetry, Origin, RunScope
+from muliao.platform.tooling import Audience, RunScope
 from muliao.usage.api import RunKind, UsageEntry, UsageLog
 
 # pydantic-ai 不传 usage_limits 时默认 request_limit=50。任何运行（长期 agent 的轮次与反思、临时 agent）都不设请求数
@@ -151,20 +152,17 @@ class AgentRuntime:
     def workspace(self, agent_id: str) -> Path:
         return self._agents.workspace(agent_id)
 
-    def scope(
-        self, agent: AgentInfo, *, session_id: str | None, origin: Origin | None, audience: Audience | None
-    ) -> RunScope:
+    def scope(self, agent: AgentInfo, *, session_id: str | None, audience: Audience | None) -> RunScope:
         return RunScope(
-            agent_id=agent.id,
-            workspace=self.workspace(agent.id),
-            session_id=session_id,
-            origin=origin,
-            audience=audience,
+            agent_id=agent.id, workspace=self.workspace(agent.id), session_id=session_id, audience=audience
         )
 
-    async def instructions(self, agent: AgentInfo, scope: RunScope, summary: str | None) -> str:
+    async def instructions(
+        self, agent: AgentInfo, scope: RunScope, summary: str | None, origin_note: str | None
+    ) -> str:
         """这次运行的指令。只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字：它是缓存前缀
-        （agent_runtime.instructions 的模块说明）。随运行变化的那几行走 run_context。"""
+        （agent_runtime.instructions 的模块说明）。随运行变化的那几行走 run_context。origin_note 是会话来源的说明
+        （会话领域给出）。"""
         skills, corrupt_skills = self._skills.index(agent.id)
         return build_instructions(
             agent_name=agent.name,
@@ -172,7 +170,7 @@ class AgentRuntime:
             public_instructions=self._prompts.current(None),
             agent_instructions=self._prompts.current(agent.id),
             workspace=scope.workspace,
-            origin=scope.origin,
+            origin_note=origin_note,
             memory=self._memory.read(agent.id),
             skills=skills,
             corrupt_skills=corrupt_skills,
@@ -194,6 +192,7 @@ class AgentRuntime:
         profile: RunProfile,
         hooks: StepHooks,
         *,
+        origin_note: str,
         summary: str | None = None,
         deferred: DeferredToolResults | None = None,
     ) -> AgentRunResult[str | DeferredToolRequests]:
@@ -222,7 +221,7 @@ class AgentRuntime:
                 async with self._pai.iter(
                     None if prompt is None else list(prompt),
                     model=self._resolve_model(model),
-                    instructions=await self.instructions(agent, scope, summary),
+                    instructions=await self.instructions(agent, scope, summary, origin_note),
                     message_history=list(history),
                     deps=scope,
                     toolsets=self._toolsets(profile),
@@ -267,7 +266,7 @@ class AgentRuntime:
         """agent 一次不属于会话的运行（反思）：带它完整的指令，没有历史，不逐步保存。"""
         return await self._execute(
             model=agent.model,
-            instructions=await self.instructions(agent, scope, None),
+            instructions=await self.instructions(agent, scope, None, None),
             toolsets=self._toolsets(profile),
             scope=scope,
             context=self.run_context(scope.audience),
@@ -297,7 +296,7 @@ class AgentRuntime:
         session_id 是发起它的那个会话：临时 agent 自己不属于任何会话（RunScope 里仍是 None），但它花的 token
         是那次运行的开销，记到那个会话名下。
         """
-        scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, origin=None, audience=None)
+        scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, audience=None)
         result = await self._execute(
             model=model,
             instructions=build_temp_instructions(

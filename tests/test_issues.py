@@ -11,7 +11,8 @@ from muliao.errors import InvalidInput, NotFound
 from muliao.issues.api import USER, ActivityKind, IssueStatus, WorkState
 from muliao.issues.rules import Snapshot, cycle_through, recipient, stalled
 from muliao.platform.messaging import Delivery
-from muliao.platform.tooling import Origin
+from muliao.sessions.api import Origin
+from muliao.sessions.origins import origin_note
 from muliao.sessions.tables import Mail, Session
 from tests.test_flow import deliver, drain, start
 
@@ -492,7 +493,7 @@ def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
             public_instructions="",
             agent_instructions="",
             workspace=Path("/w"),
-            origin=origin,
+            origin_note=origin_note(origin),
             memory="",
             skills=(),
             corrupt_skills=(),

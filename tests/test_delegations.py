@@ -329,10 +329,10 @@ async def test_a_thread_failing_before_its_first_step_reports_the_failure_once(
     reviewer = (await make_agent("reviewer", model="v")).id
     original = AgentRuntime.instructions
 
-    async def broken(self, agent, scope, summary):  # noqa: ANN001, ANN202
+    async def broken(self, agent, scope, summary, origin_note):  # noqa: ANN001, ANN202
         if agent.id == reviewer:
             raise RuntimeError("cannot build instructions")
-        return await original(self, agent, scope, summary)
+        return await original(self, agent, scope, summary, origin_note)
 
     monkeypatch.setattr(AgentRuntime, "instructions", broken)
     recorder = Recorder()

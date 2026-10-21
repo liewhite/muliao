@@ -10,7 +10,8 @@ from sqlalchemy import select
 
 from muliao.agent_runtime.conventions import run_context_index
 from muliao.platform.tables import TaskStatus
-from muliao.platform.tooling import Audience, Origin
+from muliao.platform.tooling import Audience
+from muliao.sessions.api import Origin
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Message
 from tests.scripted import scripted
@@ -29,14 +30,14 @@ async def test_instructions_are_the_same_at_any_time_and_for_any_audience(contai
     """instructions 是缓存前缀：同一个 agent 在不同时间、不同听众下组装出的指令必须一字不差。"""
     agent = await make_agent("alpha")
     runtime = container.consumer._runtime  # noqa: SLF001
-    scope = runtime.scope(agent, session_id="s1", origin=Origin.USER, audience=Audience.USER)
+    scope = runtime.scope(agent, session_id="s1", audience=Audience.USER)
 
     runtime._clock = lambda: datetime(2026, 1, 1, 9, 0, tzinfo=UTC)  # noqa: SLF001
-    morning = await runtime.instructions(agent, scope, None)
+    morning = await runtime.instructions(agent, scope, None, "note")
     # 一天之后、而且这次运行没有人在等回答（Audience 随这次处理的信件变，不能进指令）
     runtime._clock = lambda: datetime(2026, 1, 2, 23, 30, tzinfo=UTC)  # noqa: SLF001
-    later = runtime.scope(agent, session_id="s1", origin=Origin.USER, audience=Audience.NONE)
-    evening = await runtime.instructions(agent, later, None)
+    later = runtime.scope(agent, session_id="s1", audience=Audience.NONE)
+    evening = await runtime.instructions(agent, later, None, "note")
 
     assert morning == evening
     assert _TIME not in morning and "notified" not in morning

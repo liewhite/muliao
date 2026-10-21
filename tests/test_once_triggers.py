@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from muliao.errors import Conflict, InvalidInput
-from muliao.platform.tooling import Origin
+from muliao.sessions.api import Origin
 from muliao.triggers.once import OnceKind
 from muliao.triggers.precheck import Precheck
 from tests.conftest import login

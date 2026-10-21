@@ -19,13 +19,13 @@ from muliao.files.api import load_metas
 from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
-from muliao.platform.tooling import Origin
 from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
 from muliao.sessions.history import since_last_response, since_last_response_among
 from muliao.sessions.info import keyed_rows_among
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import post_in, queued_among, queued_in
+from muliao.sessions.origins import Origin
 from muliao.sessions.pending import UserAnswered, pending_questions
 from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
 from muliao.sessions.tables import Mail, MailKind, Session

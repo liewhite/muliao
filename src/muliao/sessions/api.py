@@ -5,7 +5,7 @@
 - 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；结局与运行中检查经定向命令
   WorkEnded / WorkCheckIn（sessions.events）；
 - 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙）、AgentHistory（反思用的步数与记录）；
-- 会话种类与 HTTP 层用的读模型、展示事件。
+- 会话来源（Origin：发送方新建会话时给出）、会话种类与 HTTP 层用的读模型、展示事件。
 """
 
 from muliao.sessions.activity import SessionActivity, WorkState
@@ -15,6 +15,7 @@ from muliao.sessions.inbound import Inbound, NewSession, SessionKey, receive_com
 from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.live import LiveRun, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
+from muliao.sessions.origins import Origin
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.service import default_title
@@ -22,6 +23,7 @@ from muliao.sessions.transcript import Item
 from muliao.sessions.work import SessionWork
 
 __all__ = [
+    "Origin",
     "SessionActivity",
     "WorkState",
     "SessionKind",

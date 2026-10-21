@@ -18,7 +18,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 
 from muliao.agent_runtime.conventions import INTERRUPTED_TOOL_RESULT, RUN_EVENTS, format_event
 from muliao.platform.tables import Task, TaskStatus
-from muliao.platform.tooling import Origin
+from muliao.sessions.api import Origin
 from muliao.sessions.codec import dump_message
 from muliao.sessions.consumer import interrupted_calls
 from muliao.sessions.lanes import RUN_TASK

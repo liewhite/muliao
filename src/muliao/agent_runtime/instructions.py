@@ -13,31 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from muliao.agents.api import CorruptResource, SkillMeta
-from muliao.platform.tooling import Audience, Origin
-
-_ORIGIN_NOTES: dict[Origin, str] = {
-    Origin.USER: "The user started this conversation in the app and may be reading along.",
-    Origin.TRIGGER: (
-        "This run was started by a trigger (a schedule, or an external event shown inside <event>); nobody is "
-        "watching. Each firing starts a fresh conversation unless its sender continues this one, so keep anything "
-        "later firings need in memory or workspace files."
-    ),
-    Origin.DELEGATION: "Another agent opened this conversation with you.",
-    Origin.ISSUE: (
-        "This conversation is dedicated to one issue on the muliao issue board that is assigned to you, and is "
-        "continued each time the issue needs you again: while it is `todo` or `in_progress`, every change others "
-        "make to it (comments, status, assignee, edits, a dependency finishing) arrives here as a short message "
-        "carrying only that new activity. Read the full issue (description, dependencies, whole timeline) with "
-        "`issue_show` before you start, and again whenever the message is not enough. An issue that depends on "
-        "others is delivered only once all of them are `done` or `cancelled`; a cancelled dependency may mean "
-        "this issue is no longer needed. Work on it here, then record the outcome on the issue with the `issue_*` "
-        "tools: comment with what you did or found (`issue_comment`), and move it on with `issue_update`, e.g. "
-        "status `in_progress` while working, `blocked` with a comment explaining why. When you have finished, do "
-        "not set `done` yourself: set status `in_review` and assignee `user`, and the user moves it to `done` "
-        "after reviewing. Hand it to another agent by changing the assignee. Nobody is watching this "
-        "conversation: the user reads the issue, not this conversation."
-    ),
-}
+from muliao.platform.tooling import Audience
 
 _AUDIENCE_NOTES: dict[Audience, str] = {
     Audience.USER: "The user is notified with your final answer and may reply here.",
@@ -73,7 +49,7 @@ def build_run_context(*, now_local: datetime, audience: Audience | None) -> str:
     - 当前时间：每次运行都不同。
     - 回答交给谁（Audience）：由这次运行处理的信件推导（sessions.kinds.KindPolicy.audience），同一个会话的不同
       运行会不同——用户在等回答的那次是 `user`，后台触发的那次是 `none`。
-    会话来源（Origin）不在这里：它是会话创建时定下、整个会话不变的，留在 instructions 里。
+    会话来源的说明不在这里：它是会话创建时定下、整个会话不变的，留在 instructions 里（origin_note）。
     """
     lines = [f"[Current local time: {now_local.isoformat(timespec='minutes')} ({now_local.tzname()})]"]
     if audience is not None:
@@ -95,20 +71,21 @@ def build_instructions(
     public_instructions: str,
     agent_instructions: str,
     workspace: Path,
-    origin: Origin | None,
+    origin_note: str | None,
     memory: str,
     skills: Sequence[SkillMeta],
     corrupt_skills: Sequence[CorruptResource],
     memory_limit: int,
     summary: str | None,
 ) -> str:
-    """这个 agent 在这个会话里的指令。参数只能是会话级、agent 级的稳定内容（见模块说明）。"""
+    """这个 agent 在这个会话里的指令。参数只能是会话级、agent 级的稳定内容（见模块说明）。origin_note 是会话来源的
+    说明，由会话领域给出（sessions.origins）；不属于会话的运行（反思）没有。"""
     context = [
         f"- You are agent {agent_name!r}: {agent_description}",
         f"- Workspace (base for relative paths and shell cwd): {workspace}",
     ]
-    if origin is not None:
-        context.append(f"- {_ORIGIN_NOTES[origin]}")
+    if origin_note is not None:
+        context.append(f"- {origin_note}")
     # 坏的 skill 逐项说明（不让整次运行失败，见 agents.resources.CorruptResource）：agent 可以重写或删掉它
     skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] + [
         f"- {c.describe()}" for c in corrupt_skills

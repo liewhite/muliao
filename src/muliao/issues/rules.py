@@ -164,8 +164,8 @@ def render_issue(issue: IssueView) -> str:
 
 def delivery_message(issue: IssueView) -> str:
     """投进 issue 会话的一封信：一行摘要加这次的动态（issue.activities 只含这次的动态），不随时间线变长。
-    完整内容由 agent 自己 issue_show；怎么处理 issue 的说明在会话来源的固定说明里（agent_runtime 的
-    _ORIGIN_NOTES），不在信里重复。投递时上游都已完成（rules.recipient），所以摘要列出上游及其状态，不列等待。"""
+    完整内容由 agent 自己 issue_show；怎么处理 issue 的说明在会话来源的固定说明里（sessions.origins
+    的 ISSUE），不在信里重复。投递时上游都已完成（rules.recipient），所以摘要列出上游及其状态，不列等待。"""
     summary = [f"#{issue.id}: {issue.title}", f"status: {issue.status}", f"assignee: {issue.assignee}"]
     if issue.depends_on:
         summary.append(f"depends on: {_dependencies(issue.depends_on)}")

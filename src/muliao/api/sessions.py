@@ -7,13 +7,13 @@ from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.container import Container
 from muliao.platform.tables import Task, TaskStatus
-from muliao.platform.tooling import Origin
 from muliao.sessions.api import (
     CallResult,
     Inbound,
     Item,
     LiveRun,
     NewSession,
+    Origin,
     QuestionAnswer,
     RunEvent,
     SessionKind,

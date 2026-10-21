@@ -53,10 +53,10 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit
-from muliao.platform.tooling import Origin
 from muliao.platform.values import KEEP, Keep, local_time
 from muliao.sessions.api import (
     Inbound,
+    Origin,
     SessionActivity,
     SessionKey,
     WorkState,

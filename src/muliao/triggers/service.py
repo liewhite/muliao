@@ -39,11 +39,11 @@ from muliao.platform.ids import new_id
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Clock, Commit
-from muliao.platform.tooling import Origin
 from muliao.platform.values import KEEP, Keep, local_time
 from muliao.sessions.api import (
     Inbound,
     NewSession,
+    Origin,
     SessionActivity,
     WorkState,
     receive_command_in,

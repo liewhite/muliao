@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.platform.tooling import Origin
 from muliao.sessions.kinds import TOP_LEVEL
+from muliao.sessions.origins import Origin
 from muliao.sessions.tables import Session
 
 

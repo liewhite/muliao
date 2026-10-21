@@ -8,7 +8,7 @@ import pytest
 from muliao.agent_runtime.mcp import McpTransport, mcp_config
 from muliao.api.triggers import TriggerKindName, TriggerOut
 from muliao.errors import InvalidInput
-from muliao.platform.tooling import Origin
+from muliao.sessions.api import Origin
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
 from tests.conftest import login

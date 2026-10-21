@@ -7,7 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict
 
 from muliao.platform.messaging import Command, DomainEvent
-from muliao.platform.tooling import Origin
+from muliao.sessions.origins import Origin
 
 
 class Ending(StrEnum):

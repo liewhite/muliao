@@ -20,10 +20,10 @@ from muliao.agent_runtime.conventions import run_context_index
 from muliao.notifications.service import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
-from muliao.platform.tooling import Origin
 from muliao.platform.worker import Worker
 from muliao.reflection.service import REFLECTION_TASK
 from muliao.reflection.tables import Reflection, ReflectionCheckpoint
+from muliao.sessions.api import Origin
 from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
 from muliao.sessions.inbound import Inbound, NewSession

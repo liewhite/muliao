@@ -213,7 +213,7 @@ class ReflectionHandler:
         transcript = await self._history.transcript(agent.id, from_id, to_id, max_item_chars=_ITEM_CHARS)
         if transcript:
             prompt = REFLECTION_PROMPT.format(transcript=bounded(transcript))
-            scope = self._runtime.scope(agent, session_id=None, origin=None, audience=None)
+            scope = self._runtime.scope(agent, session_id=None, audience=None)
             # 反思读的转录里可能有不可信输入：只开放自我改进，以及该 agent 本来就有的写公共 skill 的权限
             profile = self._tool_groups.profile(agent.id, agent.tool_groups, within=REFLECTION_GROUPS)
             result = await self._runtime.run_once(agent, scope, prompt, profile)

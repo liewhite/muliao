@@ -2,7 +2,7 @@
 
 import httpx
 
-from muliao.platform.tooling import Origin
+from muliao.sessions.api import Origin
 from tests.conftest import login
 from tests.test_flow import drain, history_of, last_user_prompt
 

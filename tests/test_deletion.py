@@ -11,8 +11,8 @@ from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
-from muliao.platform.tooling import Origin
 from muliao.reflection.service import REFLECTION_TASK
+from muliao.sessions.api import Origin
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from tests.test_flow import deliver, drain, start

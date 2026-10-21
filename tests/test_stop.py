@@ -328,10 +328,10 @@ async def test_stopping_a_resumed_run_before_its_first_step_closes_the_history(
     entered, gate = asyncio.Event(), asyncio.Event()
     original = AgentRuntime.instructions
 
-    async def slow(self, agent, scope, summary):  # noqa: ANN001, ANN202
+    async def slow(self, agent, scope, summary, origin_note):  # noqa: ANN001, ANN202
         entered.set()
         await gate.wait()
-        return await original(self, agent, scope, summary)
+        return await original(self, agent, scope, summary, origin_note)
 
     monkeypatch.setattr(AgentRuntime, "instructions", slow)
     await reply(container, session_id, "again")

@@ -36,6 +36,7 @@ from muliao.sessions.holds import called_in
 from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import RunPayload, hand_over_in, queued_in, wake_in
+from muliao.sessions.origins import origin_note
 from muliao.sessions.pending import (
     Delegated,
     answered_in,
@@ -236,7 +237,7 @@ class Consumer:
         # 过的、和这次要处理的信件
         awaited = any(m.awaited for m in [*state.handled, *queued])
         audience = policy_of(session.kind).audience(awaited)
-        scope = self._runtime.scope(agent, session_id=session.id, origin=session.origin, audience=audience)
+        scope = self._runtime.scope(agent, session_id=session.id, audience=audience)
         # 随运行变化的上下文（当前时间、回答交给谁）不进 instructions——那是缓存前缀——而是挂在这次运行新增的
         # 第一条请求上（sessions.steps._before_request）
         state.run_context = self._runtime.run_context(audience)
@@ -251,6 +252,7 @@ class Consumer:
                     history,
                     profile,
                     self._steps.hooks(state),
+                    origin_note=origin_note(session.origin),
                     summary=context.summary,
                     deferred=deferred,
                 )
