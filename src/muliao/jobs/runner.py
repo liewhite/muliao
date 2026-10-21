@@ -347,7 +347,7 @@ class JobRunner:
         async with self._db.transaction() as s:
             job = await _own(s, job_id, agent_id)
             if job.status != JobStatus.RUNNING:
-                raise Conflict(f"job {job_id} is not running (it {job.status})")
+                raise Conflict(f"job {job_id} is not running (status: {job.status})")
         handle = self._running.get(job_id)
         if handle is None or handle.proc.returncode is not None:
             # 进程刚好自己退出了，结局正在记下

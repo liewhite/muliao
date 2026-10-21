@@ -550,6 +550,59 @@ async def test_edit_file_replace_all_and_helpful_misses(container, make_agent, m
     assert "y = 1" in outputs[5] and "return y" in outputs[5] and "y = 2" in outputs[5]
 
 
+async def test_edit_file_applies_several_edits_all_or_nothing(container, make_agent, models):
+    me = await make_agent("alpha", model="tools")
+    content = "a = 1\nb = 2\nc = 3\n"
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("write_file", {"path": "m.py", "content": content}),
+            (
+                "edit_file",
+                {
+                    "path": "m.py",
+                    "edits": [
+                        {"old_text": "a = 1", "new_text": "a = 10"},
+                        {"old_text": "missing", "new_text": "x"},
+                    ],
+                },
+            ),
+            ("read_file", {"path": "m.py"}),
+            (
+                "edit_file",
+                {
+                    "path": "m.py",
+                    "edits": [
+                        {"old_text": "a = 1", "new_text": "a = 10"},
+                        {"old_text": "a = 10\nb", "new_text": "a = 10\nbb"},
+                        {"old_text": " = ", "new_text": "=", "replace_all": True},
+                    ],
+                },
+            ),
+            ("read_file", {"path": "m.py"}),
+            (
+                "edit_file",
+                {
+                    "path": "m.py",
+                    "old_text": "a",
+                    "new_text": "z",
+                    "edits": [{"old_text": "b", "new_text": "y"}],
+                },
+            ),
+            ("edit_file", {"path": "m.py", "new_text": "z"}),
+        ],
+    )
+    assert "edit 2 of 2" in outputs[1] and "1 earlier edit(s) applied" in outputs[1]
+    assert "nothing was written" in outputs[1]
+    assert "1\ta = 1\n2\tb = 2\n3\tc = 3" in outputs[2]
+    assert "5 replacements" in outputs[3]
+    assert "1\ta=10\n2\tbb=2\n3\tc=3" in outputs[4]
+    assert "not both" in outputs[5]
+    assert "old_text must not be empty" in outputs[6]
+
+
 async def test_read_file_truncates_very_long_lines(container, make_agent, models):
     me = await make_agent("alpha", model="tools")
     outputs = await run_tools(

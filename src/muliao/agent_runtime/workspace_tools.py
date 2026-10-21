@@ -9,6 +9,7 @@ import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.conventions import TOOL_ATTACHMENTS, attachment_of
@@ -23,6 +24,16 @@ from muliao.vault.api import Vault
 log = logging.getLogger(__name__)
 
 _MAX_LINE_CHARS = 2000
+
+
+class TextEdit(BaseModel):
+    """edit_file 一次调用里的一处替换。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    old_text: str = Field(description="Exact text to replace.")
+    new_text: str = Field(description="Replacement text.")
+    replace_all: bool = Field(default=False, description="Replace every occurrence instead of exactly one.")
 
 
 @dataclass(frozen=True)
@@ -146,26 +157,37 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
 
     @ts.tool
     async def edit_file(
-        ctx: RunContext[RunScope], path: str, old_text: str, new_text: str, replace_all: bool = False
+        ctx: RunContext[RunScope],
+        path: str,
+        old_text: str = "",
+        new_text: str = "",
+        replace_all: bool = False,
+        edits: tuple[TextEdit, ...] = (),
     ) -> str:
         """Replace text in a file. `old_text` must occur exactly once, unless `replace_all` is set.
         Copy `old_text` exactly from the file as it is now (without read_file's line-number prefix), with enough
-        surrounding lines to be unique.
+        surrounding lines to be unique. To change several places in the same file in one call, pass `edits`
+        instead of `old_text`/`new_text`: they are applied in order, and if any of them fails nothing is written.
 
         Args:
             path: File path.
-            old_text: Exact text to replace.
+            old_text: Exact text to replace (omit when using `edits`).
             new_text: Replacement text.
             replace_all: Replace every occurrence (e.g. renaming a variable) instead of exactly one.
+            edits: Several replacements in this file, applied in order; each later one sees the earlier ones'
+                result.
         """
+        if edits and (old_text or new_text or replace_all):
+            raise InvalidInput("pass either old_text/new_text/replace_all or edits, not both")
+        if not edits and not old_text:
+            raise InvalidInput("old_text must not be empty (or pass edits)")
         target = resolve(ctx.deps, path)
         if not target.is_file():
             raise NotFound(f"file not found: {target}")
-        content = target.read_text(encoding="utf-8")
-        if replace_all:
-            content, count = text_edit.replace_all(content, old_text, new_text, str(target))
-        else:
-            content, count = text_edit.replace_once(content, old_text, new_text, str(target)), 1
+        changes = [(e.old_text, e.new_text, e.replace_all) for e in edits] or [
+            (old_text, new_text, replace_all)
+        ]
+        content, count = text_edit.replace_each(target.read_text(encoding="utf-8"), changes, str(target))
         target.write_text(content, encoding="utf-8")
         return f"edited {target} ({count} replacement{'s' if count > 1 else ''})"
 

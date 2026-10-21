@@ -1,0 +1,2 @@
+# ripgrep 跳过的路径（不影响 git）：提交进仓库的前端构建产物是压缩过的长行 JS，搜 src 时会刷屏
+src/muliao/webui/assets/

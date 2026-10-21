@@ -24,6 +24,25 @@ def replace_all(current: str, old: str, new: str, what: str) -> tuple[str, int]:
     return current.replace(old, new), count
 
 
+def replace_each(current: str, edits: list[tuple[str, str, bool]], what: str) -> tuple[str, int]:
+    """依次做多处替换（每项 (old, new, 是否替换全部)，后一项作用在前面替换后的文本上），返回新文本与总替换数。
+    任何一项失败都整体失败，报错指出是第几项；调用方只在成功后写盘，所以不会留下改了一半的文件。"""
+    total = 0
+    for i, (old, new, every) in enumerate(edits, 1):
+        try:
+            if every:
+                current, count = replace_all(current, old, new, what)
+            else:
+                current, count = replace_once(current, old, new, what), 1
+        except InvalidInput as e:
+            if len(edits) == 1:
+                raise
+            after = f" (checked against the text with the {i - 1} earlier edit(s) applied)" if i > 1 else ""
+            raise InvalidInput(f"edit {i} of {len(edits)}{after}: {e}; nothing was written") from e
+        total += count
+    return current, total
+
+
 def _miss(current: str, old: str, count: int, rule: str) -> str:
     """替换失败的说明，带上能让模型改对的线索：多处时在哪几行，没有时最接近的是哪里。"""
     message = f"{rule}, found {count} occurrences"
