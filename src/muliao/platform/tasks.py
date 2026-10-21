@@ -66,6 +66,11 @@ class TaskQueue:
     def now(self) -> datetime:
         return self._clock()
 
+    @property
+    def max_attempts(self) -> int:
+        """尝试次数的上限：重试与启动恢复共用（Worker._recover）。"""
+        return self._max_attempts
+
     def enqueue(
         self,
         s: AsyncSession,
@@ -170,7 +175,8 @@ class TaskQueue:
         return tasks
 
     async def recover(self) -> list[Task]:
-        """启动时调用：上次进程遗留的 running 复位为 pending，返回被恢复的 task。"""
+        """启动时调用：上次进程遗留的 running 复位为 pending，返回被恢复的 task。尝试次数是否已经用完由
+        调用方判断（Worker._recover 把用完的记为最终失败，不再恢复）。"""
         async with self._db.transaction() as s:
             tasks = list((await s.scalars(select(Task).where(Task.status == TaskStatus.RUNNING))).all())
             for task in tasks:

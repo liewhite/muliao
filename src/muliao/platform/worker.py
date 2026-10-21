@@ -51,6 +51,10 @@ class TaskHandler(Protocol):
         ...
 
 
+class Interrupted(Exception):
+    """任务被中断（进程退出）后恢复的次数已经用完：不再恢复，记为最终失败。见 Worker._recover。"""
+
+
 class _SettleFailed(Exception):
     """task 最终失败时的收尾钩子（TaskHandler.failed_in）抛出了异常；与记账本身的失败区分开。"""
 
@@ -88,11 +92,7 @@ class Worker:
         )
 
     async def run_forever(self) -> None:
-        for task in await self._queue.recover():
-            log.warning(
-                "recovered interrupted task",
-                extra={"task_id": task.id, "kind": task.kind, "lane": task.lane, "attempt": task.attempts},
-            )
+        await self._recover()
         # 执行中的任务都属于这个任务组：worker 被取消（关停）时它们一起被取消，不会留在后台
         async with anyio.create_task_group() as group:
             while True:
@@ -103,6 +103,26 @@ class Worker:
                     await self._wait_for_work()
                     continue
                 group.start_soon(self._process_in_slot, task, name=f"task-{task.id}")
+
+    async def _recover(self) -> None:
+        """启动时把上次进程遗留的 running 复位为 pending 重新执行（队列的 recover），尝试次数已经用完的除外：
+        任务本身会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去，还一直占住它的 lane。
+        这时按最终失败记账（和重试用完一样的上限 task_max_attempts，钩子照常收尾、失败照常可见），用户在「任务」页
+        手动重试即可重新开始（重试把尝试次数清零）。不归这个 worker 处理的种类照常复位，留给处理它的 worker。"""
+        for task in await self._queue.recover():
+            ctx = {"task_id": task.id, "kind": task.kind, "lane": task.lane, "attempt": task.attempts}
+            if task.attempts >= self._queue.max_attempts and task.kind in self._handlers:
+                log.error("recovered task has used up its attempts; failing it instead", extra=ctx)
+                await self._record_failure(
+                    task,
+                    Interrupted(
+                        f"interrupted while running; its {task.attempts} attempts are used up, "
+                        f"not recovering it again"
+                    ),
+                    ctx,
+                )
+            else:
+                log.warning("recovered interrupted task", extra=ctx)
 
     async def run_now(self, task_id: int) -> None:
         """在调用方的任务里立刻执行这一个投递任务（经同一个执行边界：时限、重试或失败记账），不占 worker 的槽位。

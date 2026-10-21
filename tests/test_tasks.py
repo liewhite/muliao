@@ -1,11 +1,13 @@
+import asyncio
 from datetime import timedelta
 
 import pytest
 
 from muliao.errors import Conflict
 from muliao.platform.db import utcnow
-from muliao.platform.tables import TaskKind, TaskStatus
+from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import no_commit
+from muliao.platform.worker import Worker
 
 
 async def _nothing(_s, _task) -> None:  # noqa: ANN001
@@ -90,3 +92,48 @@ async def test_recover_resets_running_tasks(container, make_agent):
 
     assert [t.id for t in await container.queue.recover()] == [task.id]
     assert (await container.queue.claim(list(TaskKind))).id == task.id
+
+
+async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recovered_forever(
+    container, make_agent
+):
+    """任务自己让进程退出时（事故：agent 的 shell 命令重启了服务），恢复—重启—再恢复会无限循环下去，还一直占住它的
+    lane：尝试次数用完就记为最终失败，钩子照常收尾，用户可手动重试。"""
+    alpha = (await make_agent()).id
+    task = await _enqueue(container, "a", alpha)
+    settled: list[int] = []
+
+    class Handler:
+        async def execute(self, _task: Task):  # noqa: ANN202
+            raise AssertionError("an exhausted task must not be executed again")
+
+        async def failed_in(self, _s, failing: Task) -> None:  # noqa: ANN001
+            settled.append(failing.id)
+
+    async with container.db.transaction() as s:
+        row = await s.get(Task, task.id)
+        row.status, row.attempts = TaskStatus.RUNNING, container.queue.max_attempts
+
+    worker = Worker(
+        container.queue,
+        {TaskKind.DELIVER: Handler()},
+        container.bus,
+        concurrency=1,
+        task_timeout_seconds=5,
+    )
+    running = asyncio.create_task(worker.run_forever())
+    try:
+        async with asyncio.timeout(5):
+            while True:
+                await asyncio.sleep(0.02)
+                async with container.db.transaction() as s:
+                    row = await s.get(Task, task.id)
+                    status, error = row.status, row.error
+                if status != TaskStatus.RUNNING:
+                    break
+    finally:
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+
+    assert status == TaskStatus.FAILED and "attempts are used up" in error
+    assert settled == [task.id]
