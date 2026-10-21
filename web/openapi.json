@@ -695,6 +695,7 @@
     "/api/sessions": {
       "get": {
         "summary": "List Sessions",
+        "description": "正在运行的会话置顶，其余按最近更新排序。",
         "operationId": "list_sessions_api_sessions_get",
         "parameters": [
           {
@@ -782,7 +783,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/SessionOut"
+                    "$ref": "#/components/schemas/SessionListItem"
                   },
                   "title": "Response List Sessions Api Sessions Get"
                 }
@@ -4553,6 +4554,106 @@
           "private_thread"
         ],
         "title": "SessionKind"
+      },
+      "SessionListItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/Origin"
+          },
+          "origin_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Ref"
+          },
+          "parent_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Session Id"
+          },
+          "thread": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SessionKind"
+          },
+          "user_writable": {
+            "type": "boolean",
+            "title": "User Writable"
+          },
+          "deletable": {
+            "type": "boolean",
+            "title": "Deletable"
+          },
+          "unread": {
+            "type": "boolean",
+            "title": "Unread"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agent_id",
+          "title",
+          "origin",
+          "origin_ref",
+          "parent_session_id",
+          "thread",
+          "kind",
+          "user_writable",
+          "deletable",
+          "unread",
+          "created_at",
+          "updated_at",
+          "running"
+        ],
+        "title": "SessionListItem",
+        "description": "会话列表里的一行：多一个只在列表里算的「此刻有运行在进行」（会话页看 SessionDetail.run）。"
       },
       "SessionOut": {
         "properties": {

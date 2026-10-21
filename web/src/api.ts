@@ -21,6 +21,8 @@ export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
 /** 修改 agent 的请求体：整体替换，字段全部必填（新建用 Schemas['AgentCreate']） */
 export type AgentInput = Schemas['AgentUpdate']
 export type Session = WithAgentId<Schemas['SessionOut'], 'agent_id'>
+// 会话列表里的一行：多一个「此刻有运行在进行」，运行中的排在最前（接口排序）
+export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'>
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['NotificationOut']
 
@@ -220,7 +222,7 @@ export const api = {
 
   /** origin_ref 是发起方在它那个 origin 里的身份：触发器的 id，用来列出某个触发器发起过的会话 */
   sessions: (query: { agent_id?: AgentId; origin?: Origin[]; origin_ref?: string; limit?: number; offset?: number }) =>
-    branded<Session[]>(call('get', '/api/sessions', { query })),
+    branded<SessionListItem[]>(call('get', '/api/sessions', { query })),
   session: (session_id: string) =>
     branded<SessionDetail>(call('get', '/api/sessions/{session_id}', { path: { session_id } })),
   startSession: (agent_id: AgentId, prompt: string, attachments: string[]) =>

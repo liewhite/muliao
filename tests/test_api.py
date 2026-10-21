@@ -182,3 +182,43 @@ async def test_opening_a_session_marks_it_and_its_notifications_read(client, con
 
     assert (await client.get("/api/notifications/unread")).json() == {"count": 0}
     assert not (await container.sessions.get(session.id)).unread
+
+
+async def test_session_list_pins_running_sessions_and_marks_them(client, container, make_agent):
+    from muliao.platform.tables import Task, TaskKind, TaskStatus
+    from tests.test_flow import drain, start
+
+    agent = await make_agent("alpha")
+    older = await start(container, agent.id, "older")
+    await drain(container)
+    newer = await start(container, agent.id, "newer")
+    await drain(container)
+    await login(client)
+    listed = (await client.get("/api/sessions")).json()
+    assert [(s["id"], s["running"]) for s in listed] == [(newer.id, False), (older.id, False)]
+
+    # 较早的会话又在运行（运行任务进行中）：置顶并标记；排队的运行不算
+    async with container.db.transaction() as s:
+        s.add(
+            Task(
+                kind=TaskKind.RUN,
+                lane=f"session:{older.id}",
+                agent_id=agent.id,
+                session_id=older.id,
+                payload={},
+                status=TaskStatus.RUNNING,
+            )
+        )
+        s.add(
+            Task(
+                kind=TaskKind.RUN,
+                lane=f"session:{newer.id}",
+                agent_id=agent.id,
+                session_id=newer.id,
+                payload={},
+                status=TaskStatus.PENDING,
+            )
+        )
+    listed = (await client.get("/api/sessions")).json()
+    assert [(s["id"], s["running"]) for s in listed] == [(older.id, True), (newer.id, False)]
+    assert (await client.get("/api/sessions", params={"origin": "trigger"})).json() == []

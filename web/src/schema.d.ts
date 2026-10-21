@@ -233,7 +233,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Sessions */
+        /**
+         * List Sessions
+         * @description 正在运行的会话置顶，其余按最近更新排序。
+         */
         get: operations["list_sessions_api_sessions_get"];
         put?: never;
         /** Start Session */
@@ -1683,6 +1686,44 @@ export interface components {
          * @enum {string}
          */
         SessionKind: "conversation" | "thread" | "private_thread";
+        /**
+         * SessionListItem
+         * @description 会话列表里的一行：多一个只在列表里算的「此刻有运行在进行」（会话页看 SessionDetail.run）。
+         */
+        SessionListItem: {
+            /** Id */
+            id: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Title */
+            title: string;
+            origin: components["schemas"]["Origin"];
+            /** Origin Ref */
+            origin_ref: string | null;
+            /** Parent Session Id */
+            parent_session_id: string | null;
+            /** Thread */
+            thread: string | null;
+            kind: components["schemas"]["SessionKind"];
+            /** User Writable */
+            user_writable: boolean;
+            /** Deletable */
+            deletable: boolean;
+            /** Unread */
+            unread: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Running */
+            running: boolean;
+        };
         /** SessionOut */
         SessionOut: {
             /** Id */
@@ -2539,7 +2580,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SessionOut"][];
+                    "application/json": components["schemas"]["SessionListItem"][];
                 };
             };
             /** @description Validation Error */

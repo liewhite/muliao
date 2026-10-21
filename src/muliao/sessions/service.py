@@ -7,13 +7,13 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from pydantic_ai.messages import ModelMessage
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tables import Task, TaskStatus
+from muliao.platform.tables import Task, TaskKind, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.platform.tooling import Origin
 from muliao.sessions.codec import load_messages
@@ -139,14 +139,16 @@ class SessionService:
         offset: int,
         origin_ref: str | None = None,
     ) -> list[Session]:
-        """会话列表只含列出的种类（KindPolicy.listed）；私有 thread 从父会话进入。
+        """会话列表只含列出的种类（KindPolicy.listed）；私有 thread 从父会话进入。正在运行的会话置顶，其余按最近
+        更新排序。
 
         origin_ref 是发起方在它那个 origin 里的身份（触发器的 id），用来列出某个发起方开过的会话。
         """
+        running = exists().where(_running_run(), Task.session_id == Session.id)
         query = (
             select(Session)
             .where(Session.kind.in_(LISTED))
-            .order_by(Session.updated_at.desc())
+            .order_by(running.desc(), Session.updated_at.desc())
             .limit(limit)
             .offset(offset)
         )
@@ -158,6 +160,12 @@ class SessionService:
             query = query.where(Session.origin_ref == origin_ref)
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
+
+    async def running_among(self, session_ids: Sequence[str]) -> set[str]:
+        """其中此刻有运行在进行的会话（会话列表的「运行中」标记）。"""
+        async with self._db.transaction() as s:
+            query = select(Task.session_id).where(_running_run(), Task.session_id.in_(session_ids))
+            return {x for x in (await s.scalars(query)).all() if x is not None}
 
     async def threads(self, parent_id: str) -> list[Session]:
         """父会话开出的 thread（含私有的），按创建顺序。"""
@@ -219,6 +227,11 @@ class SessionService:
                     "delete that session instead"
                 )
             await delete_sessions(s, self._queue, self._messaging, [session])
+
+
+def _running_run() -> ColumnElement[bool]:
+    """进行中的运行任务（不含排队的运行与压缩）。"""
+    return and_(Task.kind == TaskKind.RUN, Task.status == TaskStatus.RUNNING)
 
 
 async def _history_in(s: AsyncSession, session_id: str) -> list[tuple[int, ModelMessage]]:

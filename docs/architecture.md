@@ -278,6 +278,8 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
 
 thread 种类只由委派创建（`origin` 为 delegation，带父会话），新建会话时检查种类与来源一致。会话接口随会话下发 `user_writable` 与 `deletable`，界面不另写一份规则。
 
+会话列表（`SessionService.list`）把此刻有运行在进行的会话（run task 处于 running，不含排队与压缩）置顶，其余按最近更新排序；列表接口的每一行（`SessionListItem`）带 `running`，界面据此标记「运行中」、按 agent 分组时有运行的 agent 排在前面。运行开始与结束都有 task 事件，列表据此重新拉取。
+
 ### thread 与结果路由
 
 agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一封信」，thread 由自己的消费者经 worker 运行：

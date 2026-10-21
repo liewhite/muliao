@@ -61,6 +61,12 @@ class SessionOut(BaseModel):
         )
 
 
+class SessionListItem(SessionOut):
+    """会话列表里的一行：多一个只在列表里算的「此刻有运行在进行」（会话页看 SessionDetail.run）。"""
+
+    running: bool
+
+
 class TaskOut(BaseModel):
     id: int
     kind: TaskKind
@@ -172,11 +178,13 @@ async def list_sessions(
     origin_ref: str | None = Query(None, description="发起方在它那个 origin 里的身份，如触发器的 id"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-) -> list[SessionOut]:
+) -> list[SessionListItem]:
+    """正在运行的会话置顶，其余按最近更新排序。"""
     sessions = await c.sessions.list(
         agent_id=agent_id, origins=origin, origin_ref=origin_ref, limit=limit, offset=offset
     )
-    return [SessionOut.of(s) for s in sessions]
+    running = await c.sessions.running_among([s.id for s in sessions])
+    return [SessionListItem(**SessionOut.of(s).model_dump(), running=s.id in running) for s in sessions]
 
 
 @router.post("/sessions", status_code=201)

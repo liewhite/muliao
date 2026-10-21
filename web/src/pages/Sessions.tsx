@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { Card, Chip } from '@heroui/react'
+import { Card, Chip, Spinner } from '@heroui/react'
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, asAgentId, type AgentId, type Origin, type Session, sessionRoute } from '../api'
+import { api, asAgentId, type AgentId, type Origin, type SessionListItem, sessionRoute } from '../api'
 import { useServerEvents } from '../events'
 import { groupByAgent } from '../sessionGroups'
 import {
@@ -48,13 +48,15 @@ function loadCollapsed(): Set<string> {
   }
 }
 
-function SessionCard({ s }: { s: Session }) {
+// 运行中的会话：接口已把它们置顶；卡片左侧描强调色边、标题前转圈、带「运行中」标签
+function SessionCard({ s }: { s: SessionListItem }) {
   return (
     <Link to={sessionRoute(s.id)}>
-      <Card className="transition-colors hover:bg-surface-hover">
+      <Card className={`transition-colors hover:bg-surface-hover ${s.running ? 'border-l-4 border-accent bg-accent/5' : ''}`}>
         <Card.Content className="flex flex-row items-center gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 font-medium">
+              {s.running && <Spinner size="sm" aria-label="运行中" />}
               {s.unread && (
                 <>
                   <span className="size-2 shrink-0 rounded-full bg-accent" aria-hidden />
@@ -67,6 +69,11 @@ function SessionCard({ s }: { s: Session }) {
               <Chip size="sm" variant="secondary">
                 {ORIGIN_LABEL[s.origin]}
               </Chip>
+              {s.running && (
+                <Chip size="sm" color="accent" variant="soft">
+                  运行中
+                </Chip>
+              )}
             </div>
           </div>
           <span className="shrink-0 text-xs text-muted">{relativeTime(s.updated_at)}</span>
@@ -148,6 +155,12 @@ export default function Sessions() {
                       {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                       <span>{agentLabel(agents.data, g.agentId)}</span>
                       <span className="font-normal">{g.sessions.length}</span>
+                      {g.running > 0 && (
+                        <Chip size="sm" color="accent" variant="soft">
+                          <Spinner size="sm" color="current" />
+                          {g.running} 运行中
+                        </Chip>
+                      )}
                       {g.unread > 0 && (
                         <Chip size="sm" color="accent" variant="soft">
                           {g.unread} 未读

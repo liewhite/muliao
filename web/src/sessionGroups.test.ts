@@ -10,18 +10,20 @@ describe('groupByAgent', () => {
     expect(groupByAgent([])).toEqual([])
   })
 
-  it('按首次出现排列分组，组内保持顺序并统计未读', () => {
+  it('按首次出现排列分组，组内保持顺序并统计未读与运行中', () => {
     const list = [
-      { id: 1, agent_id: b, unread: true },
-      { id: 2, agent_id: a, unread: false },
-      { id: 3, agent_id: b, unread: false },
-      { id: 4, agent_id: a, unread: true },
-      { id: 5, agent_id: b, unread: true },
+      { id: 1, agent_id: b, unread: true, running: true },
+      { id: 2, agent_id: a, unread: false, running: false },
+      { id: 3, agent_id: b, unread: false, running: true },
+      { id: 4, agent_id: a, unread: true, running: false },
+      { id: 5, agent_id: b, unread: true, running: false },
     ]
     const groups = groupByAgent(list)
     expect(groups.map((g) => g.agentId)).toEqual([b, a])
     expect(groups[0].sessions.map((s) => s.id)).toEqual([1, 3, 5])
     expect(groups[0].unread).toBe(2)
+    expect(groups[0].running).toBe(2)
+    expect(groups[1].running).toBe(0)
     expect(groups[1].sessions.map((s) => s.id)).toEqual([2, 4])
     expect(groups[1].unread).toBe(1)
   })
