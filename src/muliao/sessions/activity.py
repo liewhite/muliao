@@ -17,7 +17,7 @@ from muliao.platform.tooling import Origin
 from muliao.sessions.holds import with_active_among
 from muliao.sessions.inbound import open_asks_among
 from muliao.sessions.info import keyed_sessions_among
-from muliao.sessions.kinds import SessionKind
+from muliao.sessions.kinds import TOP_LEVEL
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
 from muliao.sessions.ownership import owned_threads_in
 from muliao.sessions.tables import Session
@@ -50,7 +50,7 @@ async def work_states_in(
         select(Session.id, Session.origin, Session.origin_ref, Session.agent_id).where(
             Session.id.in_(session_ids),
             Session.origin_ref.is_not(None),
-            Session.kind == SessionKind.CONVERSATION,
+            Session.kind.in_(TOP_LEVEL),
         )
     )
     for x, origin, origin_ref, agent_id in keyed:

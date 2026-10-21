@@ -271,13 +271,13 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
 
 会话的行为差别只在 `sessions/kinds.py` 定义一处（`KindPolicy`），别处读策略，不按种类分支：
 
-| 种类 | 由谁开出 | 用户能写 | 列在会话列表、标未读 | 归父会话所有（随它删除、不能单独删除） | 回答交给 | 续聊用 |
-|---|---|---|---|---|---|---|
-| `conversation` | 用户、触发器 | 是 | 是 | 否 | 用户（在等时） | — |
-| `thread` | `delegate_task` | 是 | 是 | 否 | 用户（在等时）；`report_back` 交回父会话 | `delegate_task` |
-| `private_thread` | `ask_agent` | 否（只读） | 否（从父会话进入） | 是 | 发问的 agent（作为 `ask_agent` 的结果） | `ask_agent` |
+| 种类 | 由谁开出 | 私有 | 用户能写 | 列在会话列表、标未读 | 归父会话所有（随它删除、不能单独删除） | 回答交给 | 续聊用 |
+|---|---|---|---|---|---|---|---|
+| `conversation` | 用户、触发器 | 否 | 是 | 是 | 否 | 用户（在等时） | — |
+| `thread` | `delegate_task` | 否 | 是 | 是 | 否 | 用户（在等时）；`report_back` 交回父会话 | `delegate_task` |
+| `private_thread` | `ask_agent` | 是 | 否（只读） | 否（从父会话进入） | 是 | 发问的 agent（作为 `ask_agent` 的结果） | `ask_agent` |
 
-thread 种类只由委派创建（`origin` 为 delegation，带父会话），新建会话时检查种类与来源一致。会话接口随会话下发 `user_writable` 与 `deletable`，界面不另写一份规则。
+thread 种类只由委派创建（`origin` 为 delegation，带父会话，`KindPolicy.opened_by_delegation`），新建会话时检查种类与来源一致；按发送方定位会话只在顶层种类里找（`kinds.TOP_LEVEL`）。「私有」（只有开它的会话能继续，`list_threads` 与界面据此标出）与「用户能写」是两条规则，碰巧对同一种类成立。会话接口随会话下发 `user_writable`、`deletable` 与 `private`，界面不另写一份规则。续聊工具名与工具注册共用常量（`kinds.DELEGATE_TASK`、`deferred.ASK_AGENT`），tests/test_tool_schemas.py 断言它们都已注册。
 
 会话列表（`SessionService.list`）把此刻有运行在进行的会话（run task 处于 running，不含排队与压缩）置顶，其余按最近更新排序；列表接口的每一行（`SessionListItem`）带工作状态 `state`（`SessionActivity` 的同一条规则，见下文「工作状态」），界面据此标记「运行中」（转圈）或「等待中」（沙漏）；按 agent 分组时，不空闲的会话单独成一个「进行中」区，置于所有 agent 分组之上（带 agent 名），其余会话再按 agent 分组。运行开始与结束都有 task 事件，列表据此重新拉取。
 
@@ -340,6 +340,13 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 ### 挂起的调用（`ask_user` 与 `ask_agent`，`sessions/pending.py`）
 
 两者是同一件事：**模型调用了一个要等别人回信的工具**。工具抛出 pydantic-ai 的 `CallDeferred`，这次运行停在这里正常结束，不占 worker、不在 worker 里等。回信是一封回答信件（`MailKind.ANSWER`，`tool_call_id →` 带工具名的结果信封 `{"tool": "ask_user" | "ask_agent", "result": …}`，读的一方按 `tool` 区分，不按形状），消费者开始下一次运行时把它作为 `DeferredToolResults` 交回，模型看到的就是「我问了，对方这样答」。
+
+两者的差别只写在一张表里（`sessions/deferred.py` 的 `DeferredTool`），各处查表，不按工具名分支；工具注册时显式用表里的名字：
+
+| 工具 | 要占用才算挂起（`needs_hold`） | 没交出去时可原样重放（`replayable`） | 停止时仍挂着（`kept_open_on_stop`） | 是给用户的提问（`asks_user`） | 没等到回答就继续时的结果（`skipped_result`） |
+|---|---|---|---|---|---|
+| `ask_user` | 否 | 否（没结果的总是挂着） | 是 | 是 | 没回答 / 跳过 |
+| `ask_agent` | 是 | 是 | 否 | 否 | `STILL_WORKING` |
 
 - **哪些调用还挂着**由历史推导（`pending_calls`），不另存状态：没有结果的 `ask_user` 调用等用户；没有结果、并且已经交出去（本会话有带它的调用 id 的占用）的 `ask_agent` 调用等 agent（没有占用的不算挂着：回复保存后、投递提交前失败，它是待执行的调用，续跑时再执行——这一步里还有别的没出结果的调用时整步都不重放，见「从哪里开始」）。「调用是否已有结果」只在 `conventions.unanswered_calls` 定义一处，参数被拒绝、交还模型重试的调用也算有结果。挂起的调用只可能在历史末尾：之后的运行都会先关闭它们。
 - **什么时候继续**（`waiting`，唯一规则）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件（检查、完成通知）留在信箱里，等它们一起交给模型。唤醒（`mailbox.wake_in`）与消费者开头共用这一条。

@@ -12,7 +12,7 @@ pydantic-ai 的 CallDeferred，这次运行停在这里正常结束，不在 wor
 
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Annotated, Final, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 from pydantic_ai import ToolReturn
@@ -20,21 +20,11 @@ from pydantic_ai.messages import ModelMessage, ToolCallPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import Answer, Attachment, unanswered_calls
+from muliao.sessions.deferred import ASK_AGENT, DEFERRED_TOOLS, asks_user, deferred_tool
 from muliao.sessions.history import since_last_response
 from muliao.sessions.holds import called_in
-from muliao.sessions.questions import (
-    ASK_USER,
-    NOT_ANSWERED,
-    SKIPPED,
-    AskResult,
-    Question,
-    late_answer_lines,
-    questions_of,
-)
+from muliao.sessions.questions import ASK_USER, AskResult, Question, late_answer_lines, questions_of
 from muliao.sessions.tables import Mail, MailKind
-
-ASK_AGENT: Final = "ask_agent"
-DEFERRED_TOOLS: Final = frozenset({ASK_USER, ASK_AGENT})
 
 
 class AgentAnswer(BaseModel):
@@ -86,31 +76,26 @@ def call_result(value: object) -> CallResult:
     return _CALL_RESULT.validate_python(value)
 
 
-# ask_agent 答复之前来了新消息：这次调用不再等，模型知道回答之后会作为事件送达
-STILL_WORKING = (
-    "A new message arrived before the agent you asked answered. Its answer will reach you as an event "
-    "in this conversation when it is ready."
-)
-
 # 这个会话里已经交出去的 ask_agent 调用 id（带 call_id 的占用是事实来源，sessions.holds.called_in）
 Delegated = AbstractSet[str]
 
 
 def pending_calls(history: Sequence[ModelMessage], delegated: Delegated) -> dict[str, ToolCallPart]:
-    """还在等回信的调用，按出现顺序：没有结果的 ask_user 调用（参数被拒绝、交还模型重试的有结果，不算），以及已经
-    交出去、还没有结果的 ask_agent 调用。没有占用的 ask_agent 不是在等回信：工具还没执行完（回复保存后、投递
-    提交前失败），它是待执行的调用，续跑时再执行（Threads.dispatch 按调用 id 幂等；这一步里还有别的没出结果的
-    调用时整步都不重放，见 sessions.consumer.interrupted_calls）。"""
-    return {
-        c.tool_call_id: c
-        for c in unanswered_calls(history)
-        if c.tool_name == ASK_USER or (c.tool_name == ASK_AGENT and c.tool_call_id in delegated)
-    }
+    """还在等回信的调用，按出现顺序：没有结果的挂起工具调用（参数被拒绝、交还模型重试的有结果，不算）；要占用的
+    （ask_agent，DeferredTool.needs_hold）只算已经交出去的。没有占用的 ask_agent 不是在等回信：工具还没执行完
+    （回复保存后、投递提交前失败），它是待执行的调用，续跑时再执行（Threads.dispatch 按调用 id 幂等；这一步里
+    还有别的没出结果的调用时整步都不重放，见 sessions.consumer.interrupted_calls）。"""
+    return {c.tool_call_id: c for c in unanswered_calls(history) if _is_pending(c, delegated)}
+
+
+def _is_pending(call: ToolCallPart, delegated: Delegated) -> bool:
+    tool = deferred_tool(call.tool_name)
+    return tool is not None and (not tool.needs_hold or call.tool_call_id in delegated)
 
 
 def pending_questions(history: Sequence[ModelMessage]) -> dict[str, list[Question]]:
     """挂起的 ask_user 调用里的问题。"""
-    return {c.tool_call_id: questions_of(c) for c in unanswered_calls(history) if c.tool_name == ASK_USER}
+    return {c.tool_call_id: questions_of(c) for c in unanswered_calls(history) if asks_user(c.tool_name)}
 
 
 async def pending_in(s: AsyncSession, session_id: str) -> dict[str, ToolCallPart]:
@@ -145,9 +130,10 @@ def waiting(history: Sequence[ModelMessage], queued: Sequence[Mail], delegated: 
 def deferred_results(
     pending: Mapping[str, ToolCallPart], answers: Mapping[str, CallResult], delegated: Delegated
 ) -> dict[str, object]:
-    """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（来了新消息，或这次只回答了一部分）：ask_user 记为
-    没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后作为事件送达。"""
-    any_answered = any(r.tool == ASK_USER for r in answers.values())
+    """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（来了新消息，或这次只回答了一部分）用工具的
+    DeferredTool.skipped_result：ask_user 记为没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后
+    作为事件送达。"""
+    any_answered = any(asks_user(r.tool) for r in answers.values())
     results: dict[str, object] = {}
     for call_id, call in pending.items():
         result = answers.get(call_id)
@@ -155,10 +141,8 @@ def deferred_results(
             if result.tool != call.tool_name:
                 raise RuntimeError(f"call {call_id} of {call.tool_name} got an answer for {result.tool}")
             results[call_id] = result.tool_return()
-        elif call.tool_name == ASK_USER:
-            results[call_id] = (SKIPPED if any_answered else NOT_ANSWERED).model_dump()
         else:
-            results[call_id] = STILL_WORKING
+            results[call_id] = DEFERRED_TOOLS[call.tool_name].skipped_result(any_answered)
     return results
 
 

@@ -293,7 +293,7 @@ function ThreadRow({ thread, agents }: { thread: Session; agents: Agent[] | unde
       <GitBranch className="size-3.5 shrink-0 text-muted" />
       <span className="truncate font-medium">{thread.thread}</span>
       <span className="truncate text-muted">{agentLabel(agents, thread.agent_id)}</span>
-      {thread.kind === 'private_thread' && (
+      {thread.private && (
         <Chip size="sm" variant="soft">
           <Lock className="size-3" />
           私有

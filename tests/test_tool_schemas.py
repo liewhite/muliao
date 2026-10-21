@@ -62,3 +62,16 @@ async def test_redacted_secret_arguments_exist_in_the_registered_tool_schemas(co
     for name, secret in SECRET_TOOL_ARGS.items():
         assert name in params, f"{name} is not a registered tool"
         assert secret <= params[name], f"{name} has no parameter {set(secret - params[name])}"
+
+
+async def test_deferred_tools_and_thread_tools_are_registered_under_their_table_names(container):
+    """挂起工具表（sessions.deferred）与续聊工具（KindPolicy.continued_by）按名字查：工具改了名而表没跟上，挂起判断
+    与续聊提示会悄悄失效。"""
+    from muliao.sessions.deferred import DEFERRED_TOOLS
+    from muliao.sessions.kinds import SessionKind, policy_of
+
+    toolsets = [t for g in container.consumer._tool_groups.groups.values() for t in g]  # noqa: SLF001
+    toolsets += list(container.consumer._tool_groups.always)  # noqa: SLF001
+    names = {tool for ts in toolsets if isinstance(ts, FunctionToolset) for tool in ts.tools}
+    continued_by = {p.continued_by for k in SessionKind if (p := policy_of(k)).continued_by is not None}
+    assert set(DEFERRED_TOOLS) | continued_by <= names

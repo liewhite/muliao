@@ -1908,6 +1908,8 @@ export interface components {
             user_writable: boolean;
             /** Deletable */
             deletable: boolean;
+            /** Private */
+            private: boolean;
             /** Unread */
             unread: boolean;
             /**
@@ -1942,6 +1944,8 @@ export interface components {
             user_writable: boolean;
             /** Deletable */
             deletable: boolean;
+            /** Private */
+            private: boolean;
             /** Unread */
             unread: boolean;
             /**

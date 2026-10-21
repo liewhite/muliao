@@ -28,6 +28,7 @@ from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
+from muliao.sessions.deferred import DEFERRED_TOOLS, asks_user, replayable
 from muliao.sessions.finish import RunEnd, RunFinisher, load_session
 from muliao.sessions.halt import Halted, SessionHalt
 from muliao.sessions.history import interrupted_results, latest_compaction, load_context
@@ -36,8 +37,6 @@ from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import RunPayload, hand_over_in, queued_in, wake_in
 from muliao.sessions.pending import (
-    ASK_AGENT,
-    DEFERRED_TOOLS,
     Delegated,
     answered_in,
     deferred_results,
@@ -45,7 +44,7 @@ from muliao.sessions.pending import (
     pending_calls,
     waiting,
 )
-from muliao.sessions.questions import ASK_USER, questions_of, waiting_text
+from muliao.sessions.questions import questions_of, waiting_text
 from muliao.sessions.settlement import settle_failure_in
 from muliao.sessions.steps import CompactionDue, RunState, Steps
 from muliao.sessions.stopping import StoppableRuns, Stopped
@@ -81,12 +80,12 @@ def interrupted_calls(history: list[ModelMessage], delegated: Delegated) -> list
         return []
     pending = pending_calls(history, delegated)
     calls = [c for c in unanswered_calls(history) if c.tool_call_id not in pending]
-    return [] if all(c.tool_name == ASK_AGENT for c in calls) else calls
+    return [] if all(replayable(c.tool_name) for c in calls) else calls
 
 
 def paused_end(calls: Sequence[ToolCallPart]) -> RunEnd:
     """停在这些挂起的调用上：ask_user 的问题要告诉用户。"""
-    questions = [q for c in calls if c.tool_name == ASK_USER for q in questions_of(c)]
+    questions = [q for c in calls if asks_user(c.tool_name) for q in questions_of(c)]
     return RunEnd(
         answer=waiting_text(questions) if questions else "",
         paused=True,

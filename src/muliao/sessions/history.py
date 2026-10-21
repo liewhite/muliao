@@ -23,7 +23,7 @@ from muliao.agent_runtime.api import (
     unanswered_calls,
 )
 from muliao.sessions.codec import load_messages
-from muliao.sessions.questions import ASK_USER
+from muliao.sessions.deferred import kept_open_on_stop
 from muliao.sessions.tables import Compaction, Message
 
 
@@ -158,7 +158,9 @@ def stopped_results(history: Sequence[ModelMessage]) -> list[ModelMessage]:
     """没出结果的工具调用补上「被用户停止、可能已部分执行」的结果；等用户回答的提问除外（它在等人回答，不是没做完
     的调用，用户仍可回答）。"""
     return _results_for(
-        [c for c in unanswered_calls(history) if c.tool_name != ASK_USER], STOPPED_TOOL_RESULT, "success"
+        [c for c in unanswered_calls(history) if not kept_open_on_stop(c.tool_name)],
+        STOPPED_TOOL_RESULT,
+        "success",
     )
 
 

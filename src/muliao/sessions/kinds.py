@@ -2,8 +2,13 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Final
 
 from muliao.platform.tooling import Audience
+from muliao.sessions.deferred import ASK_AGENT
+
+# 开 thread 的工具名（工具注册时显式用它，见 sessions.delegation_tools）；ask_agent 的在 sessions.deferred
+DELEGATE_TASK: Final = "delegate_task"
 
 
 class SessionKind(StrEnum):
@@ -17,6 +22,10 @@ class SessionKind(StrEnum):
 
 @dataclass(frozen=True)
 class KindPolicy:
+    # 由委派开出（有父会话与 thread 名）；否则是顶层会话（用户或触发器发起）
+    opened_by_delegation: bool
+    # 私有：只有开它的会话能继续，用户只能看（list_threads 与界面据此标出）
+    private: bool
     # 用户能在里面发消息
     user_writable: bool
     # 出现在会话列表（收件箱）里、运行结束时标未读
@@ -37,21 +46,31 @@ class KindPolicy:
 
 _POLICIES = {
     SessionKind.CONVERSATION: KindPolicy(
-        user_writable=True, listed=True, owned_by_parent=False, answers_to_agent=False, continued_by=None
-    ),
-    SessionKind.THREAD: KindPolicy(
+        opened_by_delegation=False,
+        private=False,
         user_writable=True,
         listed=True,
         owned_by_parent=False,
         answers_to_agent=False,
-        continued_by="delegate_task",
+        continued_by=None,
+    ),
+    SessionKind.THREAD: KindPolicy(
+        opened_by_delegation=True,
+        private=False,
+        user_writable=True,
+        listed=True,
+        owned_by_parent=False,
+        answers_to_agent=False,
+        continued_by=DELEGATE_TASK,
     ),
     SessionKind.PRIVATE_THREAD: KindPolicy(
+        opened_by_delegation=True,
+        private=True,
         user_writable=False,
         listed=False,
         owned_by_parent=True,
         answers_to_agent=True,
-        continued_by="ask_agent",
+        continued_by=ASK_AGENT,
     ),
 }
 
@@ -59,6 +78,8 @@ _POLICIES = {
 OWNED_BY_PARENT = frozenset(k for k, p in _POLICIES.items() if p.owned_by_parent)
 # 出现在会话列表里的种类
 LISTED = frozenset(k for k, p in _POLICIES.items() if p.listed)
+# 顶层会话的种类（不是委派开出的）：按发送方定位会话（inbound.SessionKey）只在这些里找
+TOP_LEVEL = frozenset(k for k, p in _POLICIES.items() if not p.opened_by_delegation)
 
 
 def policy_of(kind: SessionKind) -> KindPolicy:

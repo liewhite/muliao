@@ -5340,6 +5340,10 @@
             "type": "boolean",
             "title": "Deletable"
           },
+          "private": {
+            "type": "boolean",
+            "title": "Private"
+          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -5370,6 +5374,7 @@
           "kind",
           "user_writable",
           "deletable",
+          "private",
           "unread",
           "created_at",
           "updated_at",
@@ -5439,6 +5444,10 @@
             "type": "boolean",
             "title": "Deletable"
           },
+          "private": {
+            "type": "boolean",
+            "title": "Private"
+          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -5466,6 +5475,7 @@
           "kind",
           "user_writable",
           "deletable",
+          "private",
           "unread",
           "created_at",
           "updated_at"

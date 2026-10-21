@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tooling import Origin
-from muliao.sessions.kinds import SessionKind
+from muliao.sessions.kinds import TOP_LEVEL
 from muliao.sessions.tables import Session
 
 
@@ -43,7 +43,7 @@ async def keyed_rows_among(
         .where(
             Session.origin == origin,
             Session.origin_ref.in_(list(origin_refs)),
-            Session.kind == SessionKind.CONVERSATION,
+            Session.kind.in_(TOP_LEVEL),
         )
         .order_by(Session.created_at, Session.id)
     )

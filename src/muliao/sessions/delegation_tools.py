@@ -12,8 +12,9 @@ from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.activity import WorkState
+from muliao.sessions.deferred import ASK_AGENT
 from muliao.sessions.halt import Halted
-from muliao.sessions.kinds import SessionKind, policy_of
+from muliao.sessions.kinds import DELEGATE_TASK, SessionKind, policy_of
 from muliao.sessions.threads import Threads, validate_thread
 
 _ANSWER_PREVIEW = 500
@@ -65,7 +66,7 @@ def delegation_toolset(
         return [AgentInfo(name=a.name, description=a.description) for a in await agents.list()]
 
     # 检查间隔是配置的值（runtime.job_check_seconds），写进说明
-    @ts.tool(description=_DELEGATE_DESCRIPTION.format(check=check_seconds))
+    @ts.tool(name=DELEGATE_TASK, description=_DELEGATE_DESCRIPTION.format(check=check_seconds))
     async def delegate_task(
         ctx: RunContext[RunScope], agent: str, task: str, thread: str, report_back: bool = False
     ) -> ToolReturn:
@@ -106,7 +107,7 @@ def delegation_toolset(
             metadata={TOOL_THREADS: [child.id]},
         )
 
-    @ts.tool
+    @ts.tool(name=ASK_AGENT)
     async def ask_agent(ctx: RunContext[RunScope], agent: str, message: str, thread: str) -> str:
         """Ask an agent and wait for its answer, which is returned as this tool's result. The thread is private
         to this conversation (the user can read but not reply). Files it shares are shown to the user with your
@@ -175,7 +176,7 @@ when its latest run failed for good."""
             ThreadInfo(
                 thread=v.thread,
                 agent=names[v.agent_id],
-                private=not policy_of(v.kind).user_writable,
+                private=policy_of(v.kind).private,
                 status=v.state.work,
                 failure=v.state.failure,
                 answer=truncate(v.state.answer, _ANSWER_PREVIEW) if v.state.answer else None,

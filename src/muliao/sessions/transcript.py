@@ -33,7 +33,8 @@ from muliao.agent_runtime.api import (
 )
 from muliao.files.api import parse_file_url
 from muliao.platform.text_edit import truncate
-from muliao.sessions.questions import ASK_USER, AnsweredQuestion, AskResult, Question, questions_of
+from muliao.sessions.deferred import asks_user
+from muliao.sessions.questions import AnsweredQuestion, AskResult, Question, questions_of
 
 ItemType = Literal[
     "user", "event", "assistant", "thinking", "tool_call", "tool_result", "tool_error", "stopped"
@@ -91,7 +92,7 @@ def _item(
 
 def call_item(part: ToolCallPart) -> Item:
     item = _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id)
-    if part.tool_name == ASK_USER:
+    if asks_user(part.tool_name):
         try:
             questions = questions_of(part)
         except (ValidationError, KeyError):
@@ -109,7 +110,7 @@ def annotate_asks(items: list[Item], answerable: Collection[str], submitted: Col
     results = {
         i.tool_call_id: i
         for i in items
-        if i.tool_name == ASK_USER and i.type in ("tool_result", "tool_error")
+        if i.tool_name is not None and asks_user(i.tool_name) and i.type in ("tool_result", "tool_error")
     }
     return [_annotated(item, results.get(item.tool_call_id), answerable, submitted) for item in items]
 

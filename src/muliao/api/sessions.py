@@ -37,9 +37,11 @@ class SessionOut(BaseModel):
     parent_session_id: str | None
     thread: str | None
     kind: SessionKind
-    # 种类的规则（sessions.kinds.KindPolicy）随会话下发，界面不另写一份：用户能否在里面发消息、能否单独删除
+    # 种类的规则（sessions.kinds.KindPolicy）随会话下发，界面不另写一份：用户能否在里面发消息、能否单独删除、是否私有
     user_writable: bool
     deletable: bool
+    # 私有 thread：只有开它的会话能继续
+    private: bool
     unread: bool
     created_at: datetime
     updated_at: datetime
@@ -57,6 +59,7 @@ class SessionOut(BaseModel):
             kind=s.kind,
             user_writable=policy_of(s.kind).user_writable,
             deletable=not policy_of(s.kind).owned_by_parent,
+            private=policy_of(s.kind).private,
             unread=s.unread,
             created_at=s.created_at,
             updated_at=s.updated_at,

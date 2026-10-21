@@ -123,7 +123,7 @@ async def create_session(
     is_thread = origin == Origin.DELEGATION
     if (
         (spec.parent_session_id is not None) != is_thread
-        or (spec.kind != SessionKind.CONVERSATION) != is_thread
+        or policy_of(spec.kind).opened_by_delegation != is_thread
         or (spec.thread is not None) != is_thread
     ):
         raise ValueError(
@@ -258,7 +258,7 @@ def _receive_command(inbound: Inbound) -> Receive:
         _key_ref(inbound)
         key = ReceiveKey(agent_id=target.agent_id, title=target.title)
     else:
-        if target.id is None or target.kind != SessionKind.CONVERSATION:
+        if target.id is None or policy_of(target.kind).opened_by_delegation:
             raise ValueError(
                 f"a Receive command creates a top-level session with a preassigned id, got {target}"
             )
