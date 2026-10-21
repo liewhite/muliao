@@ -13,8 +13,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tasks import TaskQueue
+from muliao.platform.tooling import Origin
 from muliao.sessions.holds import has_active_in, with_active_among
 from muliao.sessions.inbound import open_asks_among
+from muliao.sessions.info import keyed_sessions_among
+from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
 from muliao.sessions.tables import Session
 from muliao.sessions.threads import owned_threads_in
@@ -45,7 +48,9 @@ async def work_states_in(
     # 按发送方定位（inbound.SessionKey）投给它、还没投递的来信在按 key 命名的 lane 上
     keyed = await s.execute(
         select(Session.id, Session.origin, Session.origin_ref, Session.agent_id).where(
-            Session.id.in_(session_ids), Session.origin_ref.is_not(None)
+            Session.id.in_(session_ids),
+            Session.origin_ref.is_not(None),
+            Session.kind == SessionKind.CONVERSATION,
         )
     )
     for x, origin, origin_ref, agent_id in keyed:
@@ -60,6 +65,27 @@ async def work_states_in(
         if x in held or asks[x].answerable
         else WorkState.IDLE
         for x in session_ids
+    }
+
+
+async def keyed_work_states_in(
+    s: AsyncSession, queue: TaskQueue, origin: Origin, keys: Collection[tuple[str, str]]
+) -> dict[tuple[str, str], WorkState | None]:
+    """按发送方定位的会话（inbound.SessionKey）的工作状态，key 是 (origin_ref, agent id)：会话存在时是它的状态；还没
+    建出来、但按 key 投给它的来信还没投递时是 running（信一投就建出会话开始处理）；否则 None。"""
+    keyed = await keyed_sessions_among(s, origin, {ref for ref, _ in keys})
+    found = {k: keyed[k[0]][k[1]].id for k in keys if k[1] in keyed[k[0]]}
+    states = await work_states_in(s, queue, list(found.values()))
+    pending = await queue.busy_lanes(
+        s, [keyed_receive_lane(origin, ref, agent) for ref, agent in keys if (ref, agent) not in found]
+    )
+    return {
+        k: states[found[k]]
+        if k in found
+        else WorkState.RUNNING
+        if keyed_receive_lane(origin, *k) in pending
+        else None
+        for k in keys
     }
 
 
@@ -93,8 +119,10 @@ class SessionActivity:
     async def work_state_in(self, s: AsyncSession, session_id: str) -> WorkState:
         return await work_state_in(s, self._queue, session_id)
 
-    async def work_states_in(self, s: AsyncSession, session_ids: Collection[str]) -> dict[str, WorkState]:
-        return await work_states_in(s, self._queue, session_ids)
+    async def keyed_work_states_in(
+        self, s: AsyncSession, origin: Origin, keys: Collection[tuple[str, str]]
+    ) -> dict[tuple[str, str], WorkState | None]:
+        return await keyed_work_states_in(s, self._queue, origin, keys)
 
     async def blocks_agent_deletion_in(self, s: AsyncSession, agent_id: str) -> bool:
         return await agent_deletion_blocked_in(s, self._queue, agent_id)

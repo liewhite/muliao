@@ -113,3 +113,47 @@ def test_existing_triggers_survive_the_finished_at_upgrade_and_only_then_share_n
         conn.execute("update triggers set finished_at = '2026-01-02' where name = 'daily'")
         _insert_trigger(conn, "daily")
         assert conn.execute("select count(*) from triggers where name = 'daily'").fetchone()[0] == 2
+
+
+def test_issue_assignees_merge_into_one_column_and_back(tmp_path):
+    """被指派人两列合成一列（agent id / "user" / NULL），降级换算回来；认领、让出的时间线删除；编号仍不复用。"""
+    from alembic import command
+
+    path = tmp_path / "m.db"
+    migrate(path, "663aa18d63fb")
+    with sqlite3.connect(path) as conn:
+        for id_, agent, to_user in [(1, "a1a1a1a1a1a1", 0), (2, None, 1), (3, None, 0)]:
+            conn.execute(
+                "insert into issues (id, title, description, status, priority, assignee_agent_id, "
+                "assigned_to_user, sessions, created_at, updated_at) "
+                "values (?, 't', '', 'todo', 'none', ?, ?, '{}', '2026-01-01', '2026-01-01')",
+                (id_, agent, to_user),
+            )
+        for kind in ("comment", "claimed", "released"):
+            conn.execute(
+                "insert into issue_activities (issue_id, created_at, kind) values (1, '2026-01-01', ?)",
+                (kind,),
+            )
+        conn.execute("delete from issues where id = 3")
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, assignee from issues order by id").fetchall() == [
+            (1, "a1a1a1a1a1a1"),
+            (2, "user"),
+        ]
+        assert conn.execute("select kind from issue_activities").fetchall() == [("comment",)]
+        conn.execute(
+            "insert into issues (title, description, status, priority, created_at, updated_at) "
+            "values ('t', '', 'todo', 'none', '2026-01-01', '2026-01-01')"
+        )
+        assert conn.execute("select max(id) from issues").fetchone()[0] == 4
+
+    from muliao.platform.db import _migration_engine
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "663aa18d63fb")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "select id, assignee_agent_id, assigned_to_user from issues order by id"
+        ).fetchall() == [(1, "a1a1a1a1a1a1", 0), (2, None, 1), (4, None, 0)]

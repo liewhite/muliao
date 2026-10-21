@@ -116,7 +116,8 @@ async def test_changes_before_delivery_still_create_only_one_session(container, 
     await container.issues.comment(None, issue.id, "second")
     await deliver(container)
     [session] = await _issue_sessions(container)
-    assert len(await _mail(container, session.id)) == 3
+    mails = await _mail(container, session.id)
+    assert ["created the issue" in mails[0], "first" in mails[1], "second" in mails[2]] == [True] * 3
 
 
 async def test_an_agent_acting_in_its_issue_session_does_not_deliver_to_itself(container, make_agent):
@@ -292,3 +293,16 @@ async def test_deleting_the_owner_agent_clears_ownership(container, make_agent):
     async with container.db.transaction() as s:
         await commit(s)
     assert (await container.issues.get(issue.id)).issue.owner_agent_id is None
+
+
+async def test_acting_from_the_session_of_another_issue_is_delivered(container, make_agent):
+    alpha = (await make_agent()).id
+    x = await container.issues.create(None, owner=alpha, title="x", status=TODO, assignee=alpha)
+    y = await container.issues.create(None, owner=alpha, title="y", status=TODO, assignee=alpha)
+    await drain(container)
+    sessions = {s.origin_ref: s.id for s in await _issue_sessions(container)}
+    # 在 x 的会话里评论 y：不是 y 自己的会话，投进 y 的会话
+    await container.issues.comment(alpha, y.id, "from x", session_id=sessions[str(x.id)])
+    await deliver(container)
+    assert "from x" in (await _mail(container, sessions[str(y.id)]))[-1]
+    assert len(await _mail(container, sessions[str(x.id)])) == 1

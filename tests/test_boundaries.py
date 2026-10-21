@@ -108,7 +108,7 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
         "keyed_sessions_among",
         "hold_registered_in",
         "SessionActivity.work_state_in",
-        "SessionActivity.work_states_in",
+        "SessionActivity.keyed_work_states_in",
         "SessionActivity.blocks_agent_deletion_in",
     },
 }

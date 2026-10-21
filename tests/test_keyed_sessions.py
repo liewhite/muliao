@@ -75,3 +75,19 @@ async def test_a_keyed_receive_command_round_trips(container, make_agent):
     async with container.db.transaction() as s:
         command = await receive_command_in(s, inbound)
     assert inbound_of(command) == inbound
+
+
+async def test_a_key_with_undelivered_mail_and_no_session_yet_is_running(container, make_agent):
+    alpha = (await make_agent()).id
+    activity = SessionActivity(container.queue)
+    async with container.db.transaction() as s:
+        assert await activity.keyed_work_states_in(s, Origin.ISSUE, [("1", alpha)]) == {("1", alpha): None}
+    await _send(container, _keyed(alpha, "1", "a"))
+    async with container.db.transaction() as s:
+        states = await activity.keyed_work_states_in(s, Origin.ISSUE, [("1", alpha)])
+    assert states == {("1", alpha): WorkState.RUNNING}
+    assert await _keyed_sessions(container, "1") == {}
+    await drain(container)
+    async with container.db.transaction() as s:
+        states = await activity.keyed_work_states_in(s, Origin.ISSUE, [("1", alpha)])
+    assert states == {("1", alpha): WorkState.IDLE}

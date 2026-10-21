@@ -21,6 +21,14 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _keep_sequence(alter) -> None:  # noqa: ANN001
+    """batch 重建表会把 sqlite_sequence 重置为现存的最大 id：记下原值并恢复，删掉的最大编号也不复用。"""
+    seq = op.get_bind().exec_driver_sql("SELECT seq FROM sqlite_sequence WHERE name = 'issues'").scalar()
+    alter()
+    if seq is not None:
+        op.execute(f"UPDATE sqlite_sequence SET seq = MAX(seq, {int(seq)}) WHERE name = 'issues'")
+
+
 def upgrade() -> None:
     with op.batch_alter_table("issues", schema=None) as batch_op:
         batch_op.add_column(sa.Column("assignee", sa.String(length=32), nullable=True))
@@ -28,6 +36,10 @@ def upgrade() -> None:
         "UPDATE issues SET assignee = CASE WHEN assigned_to_user THEN 'user' ELSE assignee_agent_id END"
     )
     op.execute("DELETE FROM issue_activities WHERE kind IN ('claimed', 'released')")
+    _keep_sequence(_drop_old_columns)
+
+
+def _drop_old_columns() -> None:
     # 删列要重建表：带上 AUTOINCREMENT（issue 编号永不复用）
     with op.batch_alter_table("issues", schema=None, table_kwargs={"sqlite_autoincrement": True}) as batch_op:
         batch_op.drop_index(batch_op.f("ix_issues_assignee_agent_id"))
@@ -45,9 +57,13 @@ def downgrade() -> None:
         )
         batch_op.add_column(sa.Column("sessions", sqlite.JSON(), nullable=False, server_default="{}"))
     op.execute(
-        "UPDATE issues SET assigned_to_user = (assignee = 'user'), "
+        "UPDATE issues SET assigned_to_user = (assignee IS 'user'), "
         "assignee_agent_id = CASE WHEN assignee = 'user' THEN NULL ELSE assignee END"
     )
+    _keep_sequence(_drop_new_column)
+
+
+def _drop_new_column() -> None:
     with op.batch_alter_table("issues", schema=None, table_kwargs={"sqlite_autoincrement": True}) as batch_op:
         batch_op.drop_index(batch_op.f("ix_issues_assignee"))
         batch_op.create_index(batch_op.f("ix_issues_assignee_agent_id"), ["assignee_agent_id"], unique=False)

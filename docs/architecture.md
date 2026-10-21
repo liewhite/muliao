@@ -491,7 +491,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - 检查期间触发器被删除、停用或改了检查，这次结果作废，成功与失败都一样（旧命令的失败不会记到新配置上）。同一个触发器的两次检查恰好并发（如手动运行撞上定时）时，后提交的以先提交的输出为基线，最坏多触发一次，自然收敛，不加锁。`last_checked_at` 记最近一次检查的时间，让用户看到「在检查、只是没事」。
 - 不提供 Hermes 的 no_agent（输出原样推送、不经过 agent）：它绕过「一切都经过会话」，推送的内容不属于任何会话；需要省模型调用时用 `changed` 只在变化时叫 agent。
 
-**投信**：别的领域投信只有一个入口 `sessions.api.receive_command_in`（只读：校验来信、返回定向命令 `Receive`，发送方在同一事务里 `send_in`）。`TriggerService.fire` 在触发器自己的事务里校验来信（读的会话、agent、文件都是只会单向变化或不变的事实，不合规当场报错给调用方）、记下触发（时间、前置检查的输出、上一次的会话），同一事务发出定向命令 `Receive`（新建会话的 id 在这里预先分配），由会话领域在自己的事务里投信：记下触发与投信都恰好一次。提交之后马上执行这条投递（`Worker.run_now`），通常返回时会话已经存在，调用方可以立即续写；做不到（lane 正忙）就由 worker 稍后投递，这期间续写它会得到 404。`Receive` 按目标会话分 lane，同一会话的来信按发送顺序投递；按 `SessionKey` 定位的投递在会话存在之前就要有 lane，按 key（来源、发送方、agent）命名，同一个 key 串行，「没有就建」不会建出两个会话（工作状态也看这条 lane 上没投递的来信）。投递时会话或 agent 已被删除就丢弃并记日志。投递处理器自己的失败按队列规则记账（重试或失败可见），不抛给调用方；只有领取这条投递时出错（如数据库暂时不可用）请求才报错，投递仍由 worker 完成，外部调用方此时重试会多触发一次。
+**投信**：别的领域投信只有一个入口 `sessions.api.receive_command_in`（只读：校验来信、返回定向命令 `Receive`，发送方在同一事务里 `send_in`）。`TriggerService.fire` 在触发器自己的事务里校验来信（读的会话、agent、文件都是只会单向变化或不变的事实，不合规当场报错给调用方）、记下触发（时间、前置检查的输出、上一次的会话），同一事务发出定向命令 `Receive`（新建会话的 id 在这里预先分配），由会话领域在自己的事务里投信：记下触发与投信都恰好一次。提交之后马上执行这条投递（`Worker.run_now`），通常返回时会话已经存在，调用方可以立即续写；做不到（lane 正忙）就由 worker 稍后投递，这期间续写它会得到 404。`Receive` 按目标会话分 lane，同一会话的来信按发送顺序投递；按 `SessionKey` 定位的投递在会话存在之前就要有 lane，按 key（来源、发送方、agent）命名，同一个 key 串行，「没有就建」不会建出两个会话（工作状态也看这条 lane 上没投递的来信；会话还没建出来、信还排着时算 running，`SessionActivity.keyed_work_states_in`）。按 key 投信的发送方（issue）只用 key 投，不按会话 id 续写它的会话，所以同一会话的来信只在一条 lane 上、顺序不乱。投递时会话或 agent 已被删除就丢弃并记日志。投递处理器自己的失败按队列规则记账（重试或失败可见），不抛给调用方；只有领取这条投递时出错（如数据库暂时不可用）请求才报错，投递仍由 worker 完成，外部调用方此时重试会多触发一次。
 
 任何未归档的触发器都可以在界面上或用 `trigger_run` 立即运行一次（不带事件内容）；有前置检查时同样先跑检查，可以用来测试整条链路。事件内容（若有）原样附在处理说明之后：
 
@@ -594,11 +594,11 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - **状态**：backlog / todo / in_progress / in_review / blocked / done / cancelled。**负责项目（owner）**：一个 agent（一个 agent 负责一个项目），创建时必填，不随指派变化，只能显式修改（时间线记一条）；按它筛选（`issue_list(owner=)`、`GET /api/issues?owner=`、界面的「负责项目」）看一个项目的全部来龙去脉。负责的 agent 被删除时置空。**指派人**（单列 `assignee`）：agent id、用户（`"user"`），或未指派（NULL）——现在谁在做。界面上的操作以用户身份进行（actor 为 None），工具以调用它的 agent 身份进行。
 - **时间线**：每次创建、评论、每个真正变了的字段各记一条 `IssueActivity`，只增不改；删除 issue 一起删。
 - **issue 会话**：每个（issue, agent）对应唯一一个会话，归会话领域：`origin=issue`、`origin_ref` 为 issue id、agent，按 `SessionKey` 定位，没有就建（会话被删了下次就新建）。issue 领域不存会话 id；界面与 `IssueOut.sessions` 上「各 agent 的会话」由 `sessions.api.keyed_sessions_among` 派生。issue 只在它自己的会话里做：普通对话只建 issue、派 issue（没有认领、让出之类的登记）。
-- **投递**（`issues.rules.recipient`，纯函数）：issue 上的每条动态——创建、评论、状态、指派、标题、描述、优先级、负责项目的修改——都作为一封信投进收件人的 issue 会话，内容是这次的动态加上 issue 的当前视图（描述与完整时间线）和处理指引（`rules.GUIDE`）。收件人是动作之后被指派的 agent；动作之后处于 todo / in_progress（包括这次动作让它进入）才投：backlog 是以后再做，in_review / done 等是已经交出去。被指派的 agent 在它自己这个 issue 会话里的动作不投回那里（避免自激循环）；它在别的会话（如普通对话）里给自己建、派、转 todo 或评论，照常投进 issue 会话。一次修改改了几个字段就带上这几条动态，只投一封。两个 agent 互相改派不加限制。
+- **投递**（`issues.rules.recipient`，纯函数）：issue 上的每条动态——创建、评论、状态、指派、标题、描述、优先级、负责项目的修改——都作为一封信投进收件人的 issue 会话，内容是这次的动态加上 issue 的当前视图（描述与完整时间线）和处理指引（`rules.GUIDE`）。收件人是动作之后被指派的 agent；动作之后处于 todo / in_progress（包括这次动作让它进入）才投：backlog 是以后再做，in_review / done 等是已经交出去。被指派的 agent 在它自己这个 issue 会话里的动作不投回那里（避免自激循环）；它在别的会话（如普通对话、别的 issue 的会话、它从 issue 会话委派出去的 thread）里给自己建、派、转 todo 或评论，照常投进 issue 会话——thread 里的动作因此会回投一次，但不会循环（回投不产生新的动态）。一次修改改了几个字段就带上这几条动态，只投一封。两个 agent 互相改派不加限制。
 - **投信**：在 issue 的事务里经 `receive_command_in` 得到定向命令 `Receive`（来源 `Origin.ISSUE`，目标 `SessionKey`）并 `send_in`，提交后 `run_now`；没有用户在等（awaited = False），结果记在 issue 上。
 - **停滞**（`rules.stalled`，唯一规则）：todo / in_progress、指派给 agent，而它的 issue 会话空闲或不存在。`IssueService.work` 一次算出一批 issue 的各 agent 会话、被指派 agent 会话的工作状态（`SessionActivity.work_states_in`：running / waiting / idle）与是否停滞，`issue_list` 与接口的 `assignee_session`、`stalled` 都来自它。界面在 `stalled` 的卡片上标「没人在处理」；巡检 agent（issue-watch）的前置检查读接口的 `stalled`，评论来唤醒被指派的 agent——与界面同一条规则。
 - **交给用户**：agent 把 issue 指派给用户时发 `Notify` 推送，点开是它交出 issue 的那个会话。
-- **先审核再完成**：agent 做完不自己设 done，而是设 in_review 并指派给用户，由用户审核后拖进 done。这是约定，写在唤醒说明（`rules.WAKE_GUIDE`）和 `issue_update` 的工具说明里，代码不拦。
+- **先审核再完成**：agent 做完不自己设 done，而是设 in_review 并指派给用户，由用户审核后拖进 done。这是约定，写在唤醒说明（`rules.GUIDE`）和 `issue_update` 的工具说明里，代码不拦。
 - **删除 agent**：订阅 `AgentDeleting`，指派给它、归它负责的 issue 改为未指派、无负责人（各记一条时间线）。它的 issue 会话随它由会话领域删除，issue 领域没有要清理的会话引用。
 
 ## 22. 暂缓的项

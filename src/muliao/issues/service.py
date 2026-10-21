@@ -163,16 +163,11 @@ class IssueService:
         查询次数与 issue 数无关。"""
         async with self._db.transaction() as s:
             keyed = await keyed_sessions_among(s, Origin.ISSUE, [str(i.id) for i in issues])
-            assignee_sessions = {
-                i.id: keyed[str(i.id)][i.assignee].id
-                for i in issues
-                if i.assignee is not None and i.assignee in keyed[str(i.id)]
-            }
-            states = await self._activity.work_states_in(s, list(assignee_sessions.values()))
+            keys = {i.id: (str(i.id), i.assignee) for i in issues if i.assignee not in (None, USER)}
+            states = await self._activity.keyed_work_states_in(s, Origin.ISSUE, list(keys.values()))
         work = {}
         for i in issues:
-            sid = assignee_sessions.get(i.id)
-            state = None if sid is None else states[sid]
+            state = states[keys[i.id]] if i.id in keys else None
             work[i.id] = IssueWork(
                 sessions={agent: info.id for agent, info in keyed[str(i.id)].items()},
                 assignee_session=state,
