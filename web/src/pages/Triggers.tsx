@@ -33,6 +33,8 @@ type ConfigChange = (c: Config | null) => void
 
 interface KindView {
   label: string
+  /** 选择方式时的一句话说明（后端的 description 是写给 agent 的，太长） */
+  summary?: string
   /** 新建时的初始配置。是函数而不是常量：一次性触发器的默认时间要在打开表单时才算 */
   emptyConfig: () => Config
   ConfigEditor: (props: { config: Config; onChange: ConfigChange }) => ReactNode
@@ -250,6 +252,7 @@ function WebhookToken({ trigger, onChange }: { trigger: Trigger; onChange: () =>
 const KIND_VIEWS: Record<string, KindView> = {
   schedule: {
     label: '定时',
+    summary: '按 cron 表达式周期运行',
     emptyConfig: () => ({ cron: '*/5 * * * *' }),
     ConfigEditor: CronEditor,
     Status: ({ trigger }) => (
@@ -261,12 +264,14 @@ const KIND_VIEWS: Record<string, KindView> = {
   },
   once: {
     label: '一次性',
+    summary: '到指定时间运行一次，之后移入「已完成」',
     emptyConfig: () => ({ at: inAnHour(new Date()) }),
     ConfigEditor: RunAtEditor,
     Status: ({ trigger }) => <span>计划 {formatTime(String(trigger.status.run_at))}</span>,
   },
   webhook: {
     label: 'Webhook',
+    summary: '收到 HTTP POST 时运行',
     emptyConfig: () => ({}),
     ConfigEditor: () => null,
     Status: ({ trigger }) => (
@@ -495,7 +500,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
           setKind(k)
           if (k) setConfig(viewOf(k).emptyConfig())
         }}
-        options={kinds.map((k) => ({ id: k.name, label: viewOf(k.name).label, description: k.description }))}
+        options={kinds.map((k) => ({ id: k.name, label: viewOf(k.name).label, description: viewOf(k.name).summary }))}
       />
       <TextInput
         label="名称"
