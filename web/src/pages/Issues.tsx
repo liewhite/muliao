@@ -3,7 +3,7 @@ import { Card, Chip } from '@heroui/react'
 import { DndContext, MouseSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, type Agent, type Issue, type IssuePriority, type IssueStatus } from '../api'
-import { useServerEvents } from '../events'
+import { shouldRefetch, useServerEvents } from '../events'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
@@ -300,7 +300,7 @@ export default function Issues() {
   const move = useAction()
   useServerEvents((e) => {
     // agent 的运行里可能改了 issue：运行结束、或重连后重新拉取
-    if (e.type === 'reconnected' || (e.type === 'task' && e.kind === 'run')) void loaded.reload()
+    if (shouldRefetch(e)) void loaded.reload()
   })
   const changeView = (v: View) => {
     localStorage.setItem(VIEW_KEY, v)

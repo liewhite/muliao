@@ -3,7 +3,7 @@ import { Button, Card } from '@heroui/react'
 import { MessageSquare, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, asAgentId, sessionRoute, type Agent, type IssueDetail, type IssuePriority, type IssueStatus } from '../api'
-import { useServerEvents } from '../events'
+import { shouldRefetch, useServerEvents } from '../events'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
@@ -228,7 +228,7 @@ export default function IssueView() {
   const issueId = Number(id)
   const detail = useLoad(() => api.issue(issueId), [issueId])
   useServerEvents((e) => {
-    if (e.type === 'reconnected' || (e.type === 'task' && e.kind === 'run')) void detail.reload()
+    if (shouldRefetch(e)) void detail.reload()
   })
   return (
     <Loading state={detail}>{(d) => <Issue detail={d} reload={detail.reload} />}</Loading>

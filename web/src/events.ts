@@ -69,6 +69,9 @@ export type PageEvent = Exclude<Schemas['ServerEvent'], HeartbeatEvent> | Reconn
 
 type Listener = (e: PageEvent) => void
 
+/** 列表/详情页是否要从 API 重新拉取：断线重连（期间可能丢了事件），或某次运行的状态变了 */
+export const shouldRefetch = (e: PageEvent) => e.type === 'reconnected' || (e.type === 'task' && e.kind === 'run')
+
 /** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
 export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {
   return loadedVersion !== null && serverVersion !== null && loadedVersion !== serverVersion

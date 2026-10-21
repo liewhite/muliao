@@ -256,7 +256,19 @@ export function ErrorAlert({ error, title = '出错了' }: { error: string | nul
   )
 }
 
+/**
+ * 首次加载失败才整页报错；已有数据时重新拉取失败（网络抖动等）照常显示已有内容，只在顶部提示错误，
+ * 下次重新拉取成功后提示自动消失。
+ */
 export function Loading<T>({ state, children }: { state: Loaded<T>; children: (data: T) => ReactNode }) {
+  if (state.data !== undefined && state.error) {
+    return (
+      <>
+        <ErrorAlert error={state.error} title="重新加载失败，显示的是之前的内容" />
+        {children(state.data)}
+      </>
+    )
+  }
   if (state.error) return <ErrorAlert error={state.error} title="加载失败" />
   if (state.data === undefined) {
     return (
