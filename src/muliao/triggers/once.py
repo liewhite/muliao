@@ -5,6 +5,9 @@
 触发失败（原因记在 disabled_reason 上）都算用掉，归档与触发的先后由 triggers.due 保证（至多触发一次）。
 
 用户或 agent 的「立即运行」（TriggerService.run）不消耗它预定的那一次：那是管理操作，用来试跑。
+
+停用期间错过了预定时间的，重新启用时 configure 会拒绝（时间已过去）：要么改成新的时间，要么删掉——
+不补一次，也不悄悄顺延。
 """
 
 from __future__ import annotations
