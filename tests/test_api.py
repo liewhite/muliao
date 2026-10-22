@@ -160,6 +160,33 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     assert (await client.delete(f"/api/agents/{other['id']}")).status_code == 204
 
 
+async def test_default_agent_is_at_most_one_and_goes_with_the_agent(client):
+    await login(client)
+    a = (await client.post("/api/agents", json={"name": "a", "description": "x"})).json()
+    b = (await client.post("/api/agents", json={"name": "b", "description": "x"})).json()
+    assert not a["is_default"]
+
+    async def defaults() -> list[str]:
+        return [x["name"] for x in (await client.get("/api/agents")).json() if x["is_default"]]
+
+    resp = await client.put(f"/api/agents/{a['id']}/default")
+    assert resp.status_code == 200 and resp.json()["is_default"]
+    assert await defaults() == ["a"]
+    # 设另一个为默认就取代原来的
+    assert (await client.put(f"/api/agents/{b['id']}/default")).json()["is_default"]
+    assert await defaults() == ["b"]
+    # 取消不是默认的 agent 不影响现有默认
+    assert not (await client.delete(f"/api/agents/{a['id']}/default")).json()["is_default"]
+    assert await defaults() == ["b"]
+    assert (await client.put("/api/agents/nope/default")).status_code == 404
+    # 删除默认 agent 后没有默认
+    assert (await client.delete(f"/api/agents/{b['id']}")).status_code == 204
+    assert await defaults() == []
+    assert (await client.put(f"/api/agents/{a['id']}/default")).json()["is_default"]
+    assert not (await client.delete(f"/api/agents/{a['id']}/default")).json()["is_default"]
+    assert await defaults() == []
+
+
 async def test_agent_defaults_endpoint_matches_config(client, container):
     await login(client)
     defaults = (await client.get("/api/agent-defaults")).json()

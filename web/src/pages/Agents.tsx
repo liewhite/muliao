@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button, Card, Chip, Tabs, toast, type Key } from '@heroui/react'
-import { Copy, MessageSquarePlus, Plus, Trash2 } from 'lucide-react'
+import { Copy, MessageSquarePlus, Plus, Star, Trash2 } from 'lucide-react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
@@ -61,7 +61,12 @@ export function AgentList() {
                         <Card.Title>{a.name}</Card.Title>
                         <Card.Description>{a.description}</Card.Description>
                       </Card.Header>
-                      <Card.Footer>
+                      <Card.Footer className="flex flex-wrap gap-2">
+                        {a.is_default && (
+                          <Chip size="sm" color="accent" variant="soft">
+                            默认
+                          </Chip>
+                        )}
                         <Chip size="sm" variant="secondary">
                           {a.model}
                         </Chip>
@@ -246,6 +251,15 @@ export function AgentDetail() {
     }
   }
 
+  async function toggleDefault(on: boolean) {
+    if (await action.run(() => api.setDefaultAgent(id, on))) {
+      toast.success(on ? '已设为默认 agent' : '已取消默认')
+      // 列表里的「默认」标记与新对话的默认选择跟着更新
+      announceChange('agents')
+      void agent.reload()
+    }
+  }
+
   return (
     <Page
       title={name}
@@ -283,6 +297,15 @@ export function AgentDetail() {
                   </div>
                   <div className="text-muted">
                     创建于 {formatTime(a.created_at)}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-muted">
+                      {a.is_default ? '系统默认 agent：新对话默认选中它' : '不是默认 agent'}
+                    </span>
+                    <Button size="sm" variant="ghost" isDisabled={action.busy} onPress={() => void toggleDefault(!a.is_default)}>
+                      <Star className="size-4" />
+                      {a.is_default ? '取消默认' : '设为默认'}
+                    </Button>
                   </div>
                 </Card.Content>
               </Card>

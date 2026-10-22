@@ -11,7 +11,9 @@ export default function NewSession() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const agents = useAgents()
-  const [agent, setAgent] = useState<string | null>(params.get('agent'))
+  // 显式选的（URL ?agent= 或用户选择）优先，否则是系统默认 agent；都没有就留空让用户选
+  const [chosen, setAgent] = useState<string | null>(params.get('agent'))
+  const agent = chosen ?? agents.data?.find((a) => a.is_default)?.id ?? null
   const [prompt, setPrompt] = useState('')
   const uploads = useUploads()
   const action = useAction()

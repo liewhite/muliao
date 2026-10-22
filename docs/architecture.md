@@ -6,7 +6,7 @@
 
 | 概念 | 含义 | 事实存放处（唯一来源） |
 |---|---|---|
-| Agent | 一个助手：描述（角色）、模型、工具组、私有记忆、私有 skill、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符；不能取 `user`，模型按名称指派 issue 时它指用户，`naming.new_agent_name`）。删除进行中时记下发起者（`deleting_by`），不再出现在列表与名称解析里 | `agents` 表；私有资源在 `data/resources/agents/<id>/`，工作目录 `data/workspaces/<id>/` |
+| Agent | 一个助手：描述（角色）、模型、工具组、私有记忆、私有 skill、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符；不能取 `user`，模型按名称指派 issue 时它指用户，`naming.new_agent_name`）。删除进行中时记下发起者（`deleting_by`），不再出现在列表与名称解析里。最多一个是系统默认 agent（`is_default`，部分唯一索引；`AgentService.set_default`，HTTP `PUT/DELETE /api/agents/{id}/default`）：Web 新对话默认选中它，随 agent 行一起删除 | `agents` 表；私有资源在 `data/resources/agents/<id>/`，工作目录 `data/workspaces/<id>/` |
 | Session | 某个 agent 的一段对话，由某个触发源创建。种类（`kind`）决定它的规则：顶层会话、公开 thread、私有 thread（第 7 节） | `sessions` 表 |
 | Message | pydantic-ai `ModelMessage` 原样序列化 | `messages` 表（每行一条 ModelMessage） |
 | Mail | 投进某个会话信箱、交给它的 agent 的一封信件：用户消息（含附件）、对挂起调用的回答、触发器与委派来的任务、后台任务与 thread 的事件、运行中检查。按到达顺序排列，记下用户是否在等它的回答、不透明的关联 id（委派来的信件以委派的 holder 为关联 id，会话据此结清）、幂等键、状态（排队 / 已处理 / 被丢弃）与处理它的那次运行 | `mail` 表 |

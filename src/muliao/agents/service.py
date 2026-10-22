@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.active import active_row_in
@@ -79,6 +79,8 @@ class AgentInfo:
     model: str
     tool_groups: tuple[str, ...]
     created_at: datetime
+    # 系统默认 agent（Web 新对话默认选中它），最多一个
+    is_default: bool
 
 
 def info_of(agent: Agent) -> AgentInfo:
@@ -89,6 +91,7 @@ def info_of(agent: Agent) -> AgentInfo:
         model=agent.model,
         tool_groups=tuple(agent.tool_groups),
         created_at=agent.created_at,
+        is_default=agent.is_default,
     )
 
 
@@ -256,6 +259,17 @@ class AgentService:
             # JSON 列只在整体赋值时被追踪
             agent.tool_groups = list(fields.tool_groups)
             await s.flush()
+            return info_of(agent)
+
+    async def set_default(self, agent_id: str, is_default: bool) -> AgentInfo:
+        """设为（或取消）系统默认 agent。设为默认时同一事务里先清掉旧的，始终最多一个；取消不是默认的 agent 不做任何事。"""
+        async with self._db.transaction() as s:
+            agent = await active_row_in(s, agent_id)
+            if is_default:
+                await s.execute(update(Agent).where(Agent.is_default).values(is_default=False))
+            agent.is_default = is_default
+            await s.flush()
+            await s.refresh(agent)
             return info_of(agent)
 
     def _validated(self, agent: Agent, patch: AgentPatch) -> _AgentFields:

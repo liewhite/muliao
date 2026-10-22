@@ -378,3 +378,36 @@ def test_check_ins_are_backfilled_on_mail_and_message_metadata(tmp_path):
             "metadata"
         ]
         assert metadata == {"muliao_run_context": 0, "muliao_events": [0, 2, 3]}
+
+
+def test_agents_is_default_adds_no_default_and_downgrades(tmp_path):
+    """agents.is_default（#132）：已有 agent 升级后都不是默认；部分唯一索引只允许一个默认；降级删掉列，agent 保留。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "75eeddddf94a")
+    with sqlite3.connect(path) as conn:
+        for id_ in ("a1", "a2"):
+            conn.execute(
+                "insert into agents (id, name, description, model, tool_groups, created_at, updated_at) "
+                "values (?, ?, 'd', 'p:m', '[]', '2026-01-01', '2026-01-01')",
+                (id_, id_),
+            )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, is_default from agents order by id").fetchall() == [
+            ("a1", 0),
+            ("a2", 0),
+        ]
+        conn.execute("update agents set is_default = 1 where id = 'a1'")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("update agents set is_default = 1 where id = 'a2'")
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "75eeddddf94a")
+    with sqlite3.connect(path) as conn:
+        assert "is_default" not in {r[1] for r in conn.execute("pragma table_info(agents)")}
+        assert conn.execute("select id from agents order by id").fetchall() == [("a1",), ("a2",)]

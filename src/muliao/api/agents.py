@@ -34,6 +34,8 @@ class AgentOut(BaseModel):
     model: str
     tool_groups: list[str]
     created_at: datetime
+    # 系统默认 agent：Web 新对话默认选中它，最多一个
+    is_default: bool
 
     @classmethod
     def of(cls, a: AgentInfo) -> "AgentOut":
@@ -44,6 +46,7 @@ class AgentOut(BaseModel):
             model=a.model,
             tool_groups=list(a.tool_groups),
             created_at=a.created_at,
+            is_default=a.is_default,
         )
 
 
@@ -121,6 +124,18 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         tool_groups=body.tool_groups,
     )
     return AgentOut.of(await c.agents.update(agent_id, patch))
+
+
+@router.put("/agents/{agent_id}/default")
+async def set_default_agent(c: C, agent_id: str) -> AgentOut:
+    """设为系统默认 agent（取代原来的默认）。"""
+    return AgentOut.of(await c.agents.set_default(agent_id, True))
+
+
+@router.delete("/agents/{agent_id}/default")
+async def unset_default_agent(c: C, agent_id: str) -> AgentOut:
+    """取消它的系统默认身份；它不是默认时不做任何事。"""
+    return AgentOut.of(await c.agents.set_default(agent_id, False))
 
 
 @router.delete("/agents/{agent_id}", status_code=204)

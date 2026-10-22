@@ -219,6 +219,13 @@ export const api = {
   updateAgent: (agent_id: AgentId, body: AgentInput) =>
     branded<Agent>(call('put', '/api/agents/{agent_id}', { path: { agent_id }, body })),
   deleteAgent: (agent_id: AgentId) => call('delete', '/api/agents/{agent_id}', { path: { agent_id } }),
+  /** 设为（true）或取消（false）系统默认 agent：Web 新对话默认选中它 */
+  setDefaultAgent: (agent_id: AgentId, on: boolean) =>
+    branded<Agent>(
+      on
+        ? call('put', '/api/agents/{agent_id}/default', { path: { agent_id } })
+        : call('delete', '/api/agents/{agent_id}/default', { path: { agent_id } }),
+    ),
   /** owner 为 null 时是全局记忆（所有 agent 共享） */
   memory: (owner: AgentId | null) => call('get', '/api/memory', { query: { owner } }),
   setMemory: (owner: AgentId | null, content: string) => call('put', '/api/memory', { body: { owner, content } }),

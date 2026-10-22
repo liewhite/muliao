@@ -363,6 +363,84 @@
         }
       }
     },
+    "/api/agents/{agent_id}/default": {
+      "put": {
+        "summary": "Set Default Agent",
+        "description": "设为系统默认 agent（取代原来的默认）。",
+        "operationId": "set_default_agent_api_agents__agent_id__default_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Unset Default Agent",
+        "description": "取消它的系统默认身份；它不是默认时不做任何事。",
+        "operationId": "unset_default_agent_api_agents__agent_id__default_delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/memory": {
       "get": {
         "summary": "Get Memory",
@@ -3086,6 +3164,10 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
           }
         },
         "type": "object",
@@ -3095,7 +3177,8 @@
           "description",
           "model",
           "tool_groups",
-          "created_at"
+          "created_at",
+          "is_default"
         ],
         "title": "AgentOut"
       },
