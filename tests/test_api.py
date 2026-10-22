@@ -304,6 +304,11 @@ async def test_session_list_pins_every_session_that_is_not_idle_even_beyond_the_
     detail = (await client.get(f"/api/sessions/{oldest.id}")).json()
     assert (detail["run"], detail["state"]) == (None, "waiting")
 
+    # 没有运行也停得了：停止清掉占用，详情与列表都回到 idle
+    assert (await client.post(f"/api/sessions/{oldest.id}/stop")).status_code == 202
+    assert (await client.get(f"/api/sessions/{oldest.id}")).json()["state"] == "idle"
+    assert [s["state"] for s in (await client.get("/api/sessions")).json()] == ["idle"] * 3
+
 
 async def test_an_agent_being_deleted_reads_as_missing(client, container, make_agent):
     """删除窗口里它的私有资源（指令、记忆）可能已经删了：读它与它的资源一律 404，不读到一半变成 500。"""

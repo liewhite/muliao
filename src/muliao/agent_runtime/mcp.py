@@ -84,7 +84,8 @@ class _SecretSafe(WrapperToolset[RunScope]):
             with self.guard():
                 return await self.wrapped.__aexit__(*args)
         except (McpFailed, TransientError) as e:
-            log.warning("mcp server disconnect failed", extra={"mcp": self.server, "error": str(e)})
+            # toolset id 带归属（mcp-<范围>:<owner>:<名称>），同名的私有 server 分得开
+            log.warning("mcp server disconnect failed", extra={"mcp": self.wrapped.id, "error": str(e)})
             return None
 
     async def get_tools(self, ctx: RunContext[RunScope]) -> dict[str, ToolsetTool[RunScope]]:

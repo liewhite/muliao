@@ -56,7 +56,7 @@ class SessionView:
     run: Task | None
     threads: list[Session]
     live: LiveRun | None
-    # 工作状态（与会话列表同一条规则）：不是 idle 就有可停的事（运行、排队的来信、后台任务与委派、挂起的提问）
+    # 工作状态（与会话列表同一条规则）：不是 idle 就显示停止。只剩挂起的提问时停止不清掉它（提问仍可回答，sessions.halt）
     state: WorkState
 
 

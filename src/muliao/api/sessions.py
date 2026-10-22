@@ -178,7 +178,7 @@ class SessionDetail(BaseModel):
     # 正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状，见 sessions.live.LiveRuns），让中途打开页面也能从这一段
     # 的开头看起；没有则为 null
     live: LiveRunOut | None
-    # 工作状态（与会话列表同一条规则）：不是 idle 就有可停止的事（运行、排队的来信、后台任务与委派、挂起的提问），前端据此显示停止
+    # 工作状态（与会话列表同一条规则）：不是 idle 前端就显示停止。只剩挂起的提问时停止不清掉它（提问仍可回答）
     state: WorkState
 
 

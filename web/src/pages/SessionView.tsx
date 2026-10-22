@@ -634,7 +634,15 @@ export default function SessionView() {
                 busy={action.busy}
                 active={detail.data !== undefined && detail.data.state !== 'idle'}
                 onSend={() => void send()}
-                onStop={() => void action.run(() => api.stop(id))}
+                onStop={() =>
+                  // 停止没在运行的会话（等后台任务、委派）不产生前端收得到的事件：自己重新拉取，列表也跟着变
+                  void action.run(() =>
+                    api.stop(id).then(() => {
+                      announceChange('sessions')
+                      return detail.reload()
+                    }),
+                  )
+                }
               />
             )}
           </div>
