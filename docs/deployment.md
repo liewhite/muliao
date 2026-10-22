@@ -29,7 +29,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.muliao.plist
 launchctl kickstart -k gui/$(id -u)/com.muliao    # 重启（升级后）
 ```
 
-agent 的 shell 与 stdio MCP 只继承服务的 `PATH`（示例 plist 里的那一串），不读 shell 配置：nvm 装的 node 在服务里找不到。agent 常用、要放进这些目录的命令用 Homebrew 装（落在 `/opt/homebrew/bin`）：`brew install ripgrep node@24 coreutils`——`rg` 是工具说明里指定的搜索方式；`node`/`npm`/`npx` 给前端构建和 `npx` 起的 MCP；coreutils 补上 macOS 没有的 `timeout`（它只把 macOS 没有的命令不加 `g` 前缀地装进去，`ls`/`sed` 等仍是系统自带的版本）。
+agent 的 shell 与 stdio MCP 只继承服务的 `PATH`（示例 plist 里的那一串），不读 shell 配置：nvm 装的 node 在服务里找不到。agent 常用、要放进这些目录的命令用 Homebrew 装（落在 `/opt/homebrew/bin`）：`brew install ripgrep node@24 coreutils && brew link node@24`——`rg` 是工具说明里指定的搜索方式；`node`/`npm`/`npx` 给前端构建和 `npx` 起的 MCP（node@24 是 keg-only，要 `brew link` 才进 `/opt/homebrew/bin`）；coreutils 补上 macOS 没有的 `timeout`（它只把 macOS 没有的命令不加 `g` 前缀地装进去，`ls`/`sed` 等仍是系统自带的版本）。
 
 ## 开发
 

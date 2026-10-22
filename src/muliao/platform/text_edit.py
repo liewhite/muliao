@@ -49,9 +49,6 @@ def replace_each(current: str, edits: list[tuple[str, str, bool]], what: str) ->
 def changed_ranges(before: str, after: str, context: int) -> list[tuple[int, int]]:
     """after 里改动过的行（各带前后 context 行，相邻的合并）的 [起, 止) 行号范围，0 起算。按前后文本比对得出，
     与替换的先后次序无关（后一处替换可能挪动前一处的位置）。纯删除的地方只剩上下文行；整个文件被删空时为空列表。"""
-    if before == after:
-        # 没有改动时 get_grouped_opcodes 仍会给出一组开头的上下文
-        return []
     matcher = difflib.SequenceMatcher(None, before.splitlines(), after.splitlines(), autojunk=False)
     ranges = []
     for group in matcher.get_grouped_opcodes(context):

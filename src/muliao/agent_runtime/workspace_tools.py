@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 _MAX_LINE_CHARS = 2000
 # edit_file 成功后展示的改动前后上下文行数：够确认改对了，不必再回读文件
 _EDIT_CONTEXT_LINES = 2
+_DEFAULT_READ_LIMIT = 2000
 
 
 class TextEdit(BaseModel):
@@ -43,7 +44,7 @@ class FileRange(BaseModel):
 
     path: str = Field(description="File path.")
     offset: int = Field(default=0, description="First line to return (0-based).")
-    limit: int = Field(default=2000, description="Maximum number of lines to return.")
+    limit: int = Field(default=_DEFAULT_READ_LIMIT, description="Maximum number of lines to return.")
 
 
 @dataclass(frozen=True)
@@ -134,7 +135,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         ctx: RunContext[RunScope],
         path: str | None = None,
         offset: int = 0,
-        limit: int = 2000,
+        limit: int = _DEFAULT_READ_LIMIT,
         reads: tuple[FileRange, ...] = (),
     ) -> str:
         """Read a text file; lines are numbered. Relative paths are resolved against your workspace.
@@ -148,7 +149,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             reads: List of {path, offset, limit} parts to read, shown in this order; a part that cannot be
                 read shows its error and the others are still returned.
         """
-        if reads and (path is not None or offset != 0 or limit != 2000):
+        if reads and (path is not None or offset != 0 or limit != _DEFAULT_READ_LIMIT):
             raise InvalidInput("pass either path/offset/limit or reads, not both")
         if not reads:
             if path is None:
@@ -161,8 +162,9 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             target = resolve(ctx.deps, part.path)
             try:
                 excerpt = _read_range(target, part.offset, part.limit)
-            except (InvalidInput, NotFound) as e:
-                sections.append(f"==> {target}: {e} <==")
+            except (InvalidInput, NotFound, OSError) as e:
+                # 标题用模型给的路径认出是哪一段（有的错误信息里不带路径）
+                sections.append(f"==> {part.path}: {e} <==")
                 continue
             sections.append(f"==> {target} {excerpt.span} <==\n{excerpt.body}{excerpt.more_note}")
         return truncate("\n\n".join(sections), limits.max_output_chars)
@@ -223,7 +225,10 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         head = f"edited {target} ({count} replacement{'s' if count > 1 else ''}; now {len(lines)} lines)"
         ranges = text_edit.changed_ranges(before, content, _EDIT_CONTEXT_LINES)
         if not ranges:
-            return f"{head}; the text is unchanged" if before == content else head
+            # 没有可展示的行：没变、删空了，或只改了行尾（换行符、末尾换行）
+            if before == content:
+                return f"{head}; the text is unchanged"
+            return f"{head}; the file is now empty" if not lines else f"{head}; only line endings changed"
         excerpts = [f"lines {start + 1}-{end}:\n{_numbered(lines, start, end)}" for start, end in ranges]
         return truncate(
             "\n".join([f"{head}. Changed lines with context:", *excerpts]), limits.max_output_chars

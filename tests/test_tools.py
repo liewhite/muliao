@@ -635,6 +635,7 @@ async def test_read_file_reads_several_parts_with_line_numbers_and_reports_bad_p
         [
             ("write_file", {"path": "a.txt", "content": content}),
             ("write_file", {"path": "b.txt", "content": "only\n"}),
+            ("write_file", {"path": "empty.txt", "content": ""}),
             (
                 "read_file",
                 {
@@ -644,6 +645,7 @@ async def test_read_file_reads_several_parts_with_line_numbers_and_reports_bad_p
                         {"path": "a.txt", "offset": 8},
                         {"path": "b.txt"},
                         {"path": "a.txt", "offset": 50},
+                        {"path": "empty.txt"},
                     ]
                 },
             ),
@@ -651,18 +653,20 @@ async def test_read_file_reads_several_parts_with_line_numbers_and_reports_bad_p
             ("read_file", {}),
         ],
     )
-    out = outputs[2]
+    assert "(0 lines, 0 chars)" in outputs[2]
+    out = outputs[3]
     assert "a.txt lines 2-3 of 10 <==\n2\tline2\n3\tline3\n… 7 more lines" in out
     assert "missing.txt: file not found" in out
     assert "a.txt lines 9-10 of 10 <==\n9\tline9\n10\tline10" in out
     assert "b.txt lines 1-1 of 1 <==\n1\tonly" in out
-    assert "offset 50 is past the end" in out
+    assert "==> a.txt: offset 50 is past the end" in out
+    assert "empty.txt (empty file) <==" in out
     # 按给出的次序
     assert (
         out.index("lines 2-3") < out.index("missing.txt") < out.index("lines 9-10") < out.index("b.txt lines")
     )
-    assert "not both" in outputs[3]
-    assert "path is required" in outputs[4]
+    assert "not both" in outputs[4]
+    assert "path is required" in outputs[5]
 
 
 async def test_edit_file_shows_the_changed_lines_with_numbers_so_no_reread_is_needed(
@@ -688,6 +692,9 @@ async def test_edit_file_shows_the_changed_lines_with_numbers_so_no_reread_is_ne
                 },
             ),
             ("edit_file", {"path": "e.txt", "old_text": "l1\n", "new_text": "l1\n"}),
+            ("write_file", {"path": "n.txt", "content": "a\nb"}),
+            ("edit_file", {"path": "n.txt", "old_text": "b", "new_text": "b\n"}),
+            ("edit_file", {"path": "n.txt", "old_text": "a\nb\n", "new_text": ""}),
         ],
     )
     assert outputs[0].startswith("created ") and "(20 lines, " in outputs[0]
@@ -699,6 +706,8 @@ async def test_edit_file_shows_the_changed_lines_with_numbers_so_no_reread_is_ne
     # 删除处只剩上下文，行号是改后的
     assert "lines 14-17:\n14\tl13\n15\tl14\n16\tl16\n17\tl17" in edited
     assert "the text is unchanged" in outputs[3]
+    assert "only line endings changed" in outputs[5]
+    assert "now 0 lines); the file is now empty" in outputs[6]
 
 
 async def test_read_file_truncates_very_long_lines(container, make_agent, models):
