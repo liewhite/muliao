@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import InvalidInput
@@ -33,6 +33,17 @@ class OnceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     at: datetime
+
+    @field_validator("at", mode="before")
+    @classmethod
+    def _iso_text(cls, value: object) -> object:
+        # 契约是 ISO 8601 文本，按标准库解析：pydantic 自己的解析还会接受 unix 时间戳（含数字字符串）
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.strip())
+            except ValueError:
+                pass
+        raise ValueError('expected an ISO 8601 time string, e.g. "2026-10-22T10:30"')
 
 
 class OnceStatus(BaseModel):
