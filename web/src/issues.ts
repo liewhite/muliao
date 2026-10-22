@@ -2,8 +2,8 @@
 
 import type { Agent, Issue, IssueActivity, IssuePriority, IssueStatus } from './api'
 
-/** 看板的列顺序（也是列表视图的分组顺序） */
-export const STATUSES: readonly IssueStatus[] = ['backlog', 'todo', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled']
+/** 看板的列顺序（也是列表视图的分组顺序）；受阻最不常用，放最后 */
+export const STATUSES: readonly IssueStatus[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled', 'blocked']
 
 export const STATUS_LABEL: Record<IssueStatus, string> = {
   backlog: 'Backlog',
