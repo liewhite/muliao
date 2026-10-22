@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentNames, active_agent_in, agent_names_in
 from muliao.agents.events import AgentDeleting
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.issues.rules import (
     FINISHED,
     SYSTEM_ACTOR,
@@ -39,6 +39,7 @@ from muliao.issues.rules import (
     cycle_through,
     delivery_message,
     failure_summary,
+    handed_by,
     recipient,
     render_issue,
     stalled,
@@ -117,6 +118,14 @@ def _snapshot(issue: Issue, links: Links) -> Snapshot:
     return Snapshot(status=issue.status, assignee=issue.assignee, waiting_on=waiting_on(links.depends_on))
 
 
+def _check_handed_to_user(issue: Issue) -> None:
+    """审核只对当前指派给用户的 issue：已经打回、又被改派（两台设备、通知过时）时拒绝，不覆盖别人刚做的事。"""
+    if issue.assignee != USER:
+        raise Conflict(
+            f"issue #{issue.id} is not assigned to you (assignee: {issue.assignee}), nothing to review"
+        )
+
+
 def _ids(found: Sequence[Dependency]) -> list[int]:
     return [d.id for d in found]
 
@@ -166,6 +175,7 @@ class IssueService:
                     title=f"#{issue.id} 运行失败：{issue.title}",
                     body=summary,
                     session_id=event.session_id,
+                    issue_id=None,
                 ),
             )
             log.info("issue run failure recorded", extra={"issue_id": issue_id, "run_id": event.run_id})
@@ -302,44 +312,124 @@ class IssueService:
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
             before = issue.status, issue.assignee
-            happened: list[IssueActivity] = []
-
-            def record(kind: ActivityKind, change: tuple[Any, Any] | None = None) -> None:
-                happened.append(self._record(s, issue, actor, kind, change=change))
-
-            if title is not None and _title(title) != issue.title:
-                record(ActivityKind.TITLE, (issue.title, _title(title)))
-                issue.title = _title(title)
-            if description is not None and description != issue.description:
-                record(ActivityKind.DESCRIPTION)
-                issue.description = description
-            if depends_on is not None:
-                replaced = await self._set_depends_on_in(s, issue, depends_on)
-                if replaced is not None:
-                    record(ActivityKind.DEPENDS_ON, replaced)
-            if status is not None and status != issue.status:
-                record(ActivityKind.STATUS, (issue.status, status))
-                issue.status = status
-            if owner is not None and owner != issue.owner_agent_id:
-                await active_agent_in(s, owner)
-                record(ActivityKind.OWNER, (issue.owner_agent_id, owner))
-                issue.owner_agent_id = owner
-            if priority is not None and priority != issue.priority:
-                record(ActivityKind.PRIORITY, (issue.priority, priority))
-                issue.priority = priority
-            if not isinstance(assignee, Keep) and assignee != issue.assignee:
-                await self._check_assignee_in(s, assignee)
-                record(ActivityKind.ASSIGNEE, (issue.assignee, assignee))
-                issue.assignee = assignee
+            happened = await self._apply_in(
+                s,
+                issue,
+                actor,
+                owner=owner,
+                title=title,
+                description=description,
+                status=status,
+                priority=priority,
+                assignee=assignee,
+                depends_on=depends_on,
+            )
             if not happened:
                 return issue
-            issue.updated_at = utcnow()
-            wake = [await self._after_change_in(s, before[1], issue, actor, session_id, happened)]
-            if before[0] not in FINISHED and issue.status in FINISHED:
-                wake += await self._unblock_in(s, issue, before[0], actor, session_id)
+            wake = await self._changed_in(s, issue, before, actor, session_id, happened)
         log.info("issue updated", extra={"issue_id": issue_id, "actor": actor, "status": issue.status})
         await self._deliver(*wake)
         return issue
+
+    async def approve(self, issue_id: int) -> Issue:
+        """用户审核通过交给自己的 issue：设为 done（有下游时照常放行）。"""
+        async with self._db.transaction() as s:
+            issue = await self._get_in(s, issue_id)
+            _check_handed_to_user(issue)
+            before = issue.status, issue.assignee
+            happened = await self._apply_in(s, issue, None, status=IssueStatus.DONE)
+            if not happened:
+                return issue
+            wake = await self._changed_in(s, issue, before, None, None, happened)
+        log.info("issue approved", extra={"issue_id": issue_id})
+        await self._deliver(*wake)
+        return issue
+
+    async def reject(self, issue_id: int, reason: str) -> Issue:
+        """用户打回交给自己的 issue：理由记成评论，回到 todo，指派给把它交给用户的那个 agent（rules.handed_by）。
+        三条动态一起投进那个 agent 的 issue 会话（一封信）。"""
+        if not reason.strip():
+            raise InvalidInput("the reason for sending an issue back must not be empty")
+        async with self._db.transaction() as s:
+            issue = await self._get_in(s, issue_id)
+            _check_handed_to_user(issue)
+            activities = await self._activities_in(s, issue_id)
+            assigners = [a.actor_agent_id for a in activities if a.kind == ActivityKind.ASSIGNEE]
+            agent = handed_by(issue.creator_agent_id, assigners)
+            if agent is None:
+                raise Conflict(
+                    f"issue #{issue_id} was not handed to you by an agent: assign it to an agent yourself"
+                )
+            before = issue.status, issue.assignee
+            happened = [self._record(s, issue, None, ActivityKind.COMMENT, body=reason)]
+            happened += await self._apply_in(s, issue, None, status=IssueStatus.TODO, assignee=agent)
+            wake = await self._changed_in(s, issue, before, None, None, happened)
+        log.info("issue sent back", extra={"issue_id": issue_id, "assignee": agent})
+        await self._deliver(*wake)
+        return issue
+
+    async def _apply_in(
+        self,
+        s: AsyncSession,
+        issue: Issue,
+        actor: str | None,
+        *,
+        owner: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        status: IssueStatus | None = None,
+        priority: IssuePriority | None = None,
+        assignee: str | None | Keep = KEEP,
+        depends_on: Sequence[int] | None = None,
+    ) -> list[IssueActivity]:
+        """改 issue 的字段（取值规则同 update），每个真正变了的字段记一条时间线，返回这些动态。"""
+        happened: list[IssueActivity] = []
+
+        def record(kind: ActivityKind, change: tuple[Any, Any] | None = None) -> None:
+            happened.append(self._record(s, issue, actor, kind, change=change))
+
+        if title is not None and _title(title) != issue.title:
+            record(ActivityKind.TITLE, (issue.title, _title(title)))
+            issue.title = _title(title)
+        if description is not None and description != issue.description:
+            record(ActivityKind.DESCRIPTION)
+            issue.description = description
+        if depends_on is not None:
+            replaced = await self._set_depends_on_in(s, issue, depends_on)
+            if replaced is not None:
+                record(ActivityKind.DEPENDS_ON, replaced)
+        if status is not None and status != issue.status:
+            record(ActivityKind.STATUS, (issue.status, status))
+            issue.status = status
+        if owner is not None and owner != issue.owner_agent_id:
+            await active_agent_in(s, owner)
+            record(ActivityKind.OWNER, (issue.owner_agent_id, owner))
+            issue.owner_agent_id = owner
+        if priority is not None and priority != issue.priority:
+            record(ActivityKind.PRIORITY, (issue.priority, priority))
+            issue.priority = priority
+        if not isinstance(assignee, Keep) and assignee != issue.assignee:
+            await self._check_assignee_in(s, assignee)
+            record(ActivityKind.ASSIGNEE, (issue.assignee, assignee))
+            issue.assignee = assignee
+        return happened
+
+    async def _changed_in(
+        self,
+        s: AsyncSession,
+        issue: Issue,
+        before: tuple[IssueStatus, str | None],
+        actor: str | None,
+        session_id: str | None,
+        happened: list[IssueActivity],
+    ) -> list[Task | None]:
+        """issue 变了（happened 非空）之后：更新时间，投递这些动态；从（改动前的状态, 指派人）进入 done / cancelled 时
+        通知下游。返回要马上执行的投递。"""
+        issue.updated_at = utcnow()
+        wake = [await self._after_change_in(s, before[1], issue, actor, session_id, happened)]
+        if before[0] not in FINISHED and issue.status in FINISHED:
+            wake += await self._unblock_in(s, issue, before[0], actor, session_id)
+        return wake
 
     async def comment(
         self, actor: str | None, issue_id: int, body: str, *, session_id: str | None = None
@@ -491,7 +581,8 @@ class IssueService:
         happened: list[IssueActivity],
     ) -> Task | None:
         if actor is not None and issue.assignee == USER and assignee_before != USER:
-            # agent 把 issue 交给用户：推送通知，点开是它交出 issue 的那个会话
+            # agent 把 issue 交给用户：推送通知，点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话
+            # （打开会话即已读，会话删除时通知随之删除）
             self._messaging.send_in(
                 s,
                 Notify(
@@ -499,6 +590,7 @@ class IssueService:
                     title=f"#{issue.id} 指派给你：{issue.title}",
                     body=f"状态 {issue.status}",
                     session_id=session_id,
+                    issue_id=issue.id,
                 ),
             )
         return await self._deliver_in(s, issue, actor, session_id, happened)

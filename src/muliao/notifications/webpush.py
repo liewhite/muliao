@@ -38,6 +38,15 @@ _PUSH_THREADS = 4
 _TTL_SECONDS = 24 * 3600
 
 
+def _url(notification: Notification) -> str:
+    """点开通知打开的页面：交给用户审核的 issue、通知关于的会话，系统通知看通知页。"""
+    if notification.issue_id is not None:
+        return f"/issues/{notification.issue_id}"
+    if notification.session_id is not None:
+        return f"/sessions/{notification.session_id}"
+    return "/notifications"
+
+
 class VapidKeys:
     def __init__(self, key_path: Path):
         if not key_path.exists():
@@ -93,11 +102,10 @@ class WebPushDelivery:
             {
                 "title": notification.title,
                 "body": truncate(notification.body, _BODY_MAX_CHARS),
-                # 系统通知不指向会话，点开看通知页
-                "url": f"/sessions/{notification.session_id}"
-                if notification.session_id
-                else "/notifications",
+                "url": _url(notification),
                 "session_id": notification.session_id,
+                # 有它时 Service Worker 给通知加「通过」「打回」按钮（只有 Chromium 显示）
+                "issue_id": notification.issue_id,
                 "badge": unread,
             },
             ensure_ascii=False,

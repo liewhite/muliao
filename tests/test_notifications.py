@@ -43,10 +43,42 @@ async def test_push_carries_the_unread_count_and_system_notifications_open_the_n
     monkeypatch.setattr(WebPushDelivery, "_push", lambda _self, _sub, data: payloads.append(json.loads(data)))
 
     await _webpush(container).send(
-        _sub("a"), Notification(id=1, title="t", body="b", session_id=None), unread=3
+        _sub("a"), Notification(id=1, title="t", body="b", session_id=None, issue_id=None), unread=3
     )
 
-    assert payloads == [{"title": "t", "body": "b", "url": "/notifications", "session_id": None, "badge": 3}]
+    assert payloads == [
+        {"title": "t", "body": "b", "url": "/notifications", "session_id": None, "issue_id": None, "badge": 3}
+    ]
+
+
+async def test_a_notification_opens_its_issue_before_its_session(container, monkeypatch):
+    payloads: list[dict] = []
+    monkeypatch.setattr(WebPushDelivery, "_push", lambda _self, _sub, data: payloads.append(json.loads(data)))
+
+    for issue_id in (7, None):
+        notification = Notification(id=1, title="t", body="b", session_id="s1", issue_id=issue_id)
+        await _webpush(container).send(_sub("a"), notification, unread=1)
+
+    assert [(p["url"], p["issue_id"]) for p in payloads] == [("/issues/7", 7), ("/sessions/s1", None)]
+
+
+async def test_opening_an_issue_marks_the_notifications_asking_to_review_it_read(container):
+    from muliao.notifications.events import Notify
+    from muliao.platform.messaging import Delivery
+
+    for issue_id in (7, 8, None):
+        notify = Notify(agent_id=None, title=f"{issue_id}", body="b", session_id=None, issue_id=issue_id)
+        commit = await container.notifications.on_notify(notify, Delivery("m"))
+        async with container.db.transaction() as s:
+            await commit(s)
+
+    await container.notifications.mark_issue_read(7)
+
+    assert [(n.issue_id, n.unread) for n in await container.notifications.list(10)] == [
+        (None, True),
+        (8, True),
+        (7, False),
+    ]
 
 
 async def test_a_notification_is_one_deliver_task_per_device(container):

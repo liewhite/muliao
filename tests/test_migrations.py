@@ -219,3 +219,29 @@ def test_issue_dependencies_downgrade_drops_the_table_and_its_activities(tmp_pat
         assert conn.execute("select kind from issue_activities").fetchall() == [("comment",)]
         tables = {r[0] for r in conn.execute("select name from sqlite_master where type = 'table'")}
         assert "issue_dependencies" not in tables
+
+
+def test_dropping_notifications_issue_id_keeps_notifications_and_their_ids(tmp_path):
+    """降级删 notifications.issue_id 要重建表：通知保留，删掉的最大 id 不复用（id 是已读游标）。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        for id_, issue_id in ((1, 7), (2, None)):
+            conn.execute(
+                "insert into notifications (id, title, body, issue_id, unread, created_at) "
+                "values (?, 't', 'b', ?, 1, '2026-01-01')",
+                (id_, issue_id),
+            )
+        conn.execute("delete from notifications where id = 2")
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "b9716fea0122")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id from notifications").fetchall() == [(1,)]
+        conn.execute(
+            "insert into notifications (title, body, unread, created_at) values ('n', 'b', 1, '2026-01-01')"
+        )
+        assert conn.execute("select max(id) from notifications").fetchone() == (3,)

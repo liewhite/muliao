@@ -169,6 +169,7 @@ class ScheduleDue:
             since=now if streak is None else streak.since,
             previous_state=previous,
             session_id=trigger.last_session_id,
+            issue_id=None,
             notified=notified or notify,
         )
         if notify:

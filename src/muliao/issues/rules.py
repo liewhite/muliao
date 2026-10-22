@@ -55,6 +55,14 @@ class Snapshot:
     waiting_on: tuple[int, ...]
 
 
+def handed_by(creator: str | None, assigners: Sequence[str | None]) -> str | None:
+    """把当前指派给用户的 issue 交给用户的 agent（用户打回时指派回给它）：最近一条指派动态的 actor（它把指派人
+    改成了用户）；从未改过指派人时是创建者（创建时就指派给了用户）。assigners 是按时间排序的各条指派动态的 actor。
+    这次交接是用户自己或系统做的时为 None。"""
+    actor = assigners[-1] if assigners else creator
+    return None if actor in (None, SYSTEM_ACTOR) else actor
+
+
 def _agent_assignee(issue: Snapshot) -> str | None:
     return None if issue.assignee in (None, USER) else issue.assignee
 

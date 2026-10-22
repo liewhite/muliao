@@ -451,6 +451,7 @@ class TriggerService:
                     title=f"触发器 {trigger.name} 的前置检查出错",
                     body=error[:500],
                     session_id=None,
+                    issue_id=None,
                 ),
             )
 

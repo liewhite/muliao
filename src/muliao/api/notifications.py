@@ -14,6 +14,8 @@ class NotificationOut(BaseModel):
     title: str
     body: str
     session_id: str | None
+    # 交给用户审核的 issue：点开打开它而不是会话
+    issue_id: int | None
     unread: bool
     created_at: datetime
 
@@ -24,6 +26,7 @@ class NotificationOut(BaseModel):
             title=n.title,
             body=n.body,
             session_id=n.session_id,
+            issue_id=n.issue_id,
             unread=n.unread,
             created_at=n.created_at,
         )
@@ -51,3 +54,9 @@ async def unread(c: C) -> UnreadOut:
 @router.post("/read", status_code=204)
 async def mark_read(c: C, body: MarkReadIn) -> None:
     await c.notifications.mark_read(body.through_id)
+
+
+@router.post("/issues/{issue_id}/read", status_code=204)
+async def mark_issue_read(c: C, issue_id: int) -> None:
+    """打开了 issue：请用户审核它的通知标为已读。"""
+    await c.notifications.mark_issue_read(issue_id)

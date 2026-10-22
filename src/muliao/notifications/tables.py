@@ -19,6 +19,9 @@ class Notification(Base):
     body: Mapped[str] = mapped_column(Text)
     # 点开通知打开的会话，随会话删除；系统通知（前置检查告警、推送测试）为 None
     session_id: Mapped[str | None] = mapped_column(session_ref(), index=True)
+    # 交给用户审核的 issue（Notify.issue_id）：点开打开它而不是会话，打开它即已读。不设外键：issue 属于别的领域，
+    # issue 被删后通知照旧指向它（点开看到「不存在」），随会话删除
+    issue_id: Mapped[int | None] = mapped_column(index=True)
     # 打开通知页或它指向的会话即为已读
     unread: Mapped[bool] = mapped_column(default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

@@ -16,8 +16,10 @@ class Notify(Command):
     agent_id: str | None
     title: str
     body: str
-    # 点开通知打开的会话；系统通知为 None
+    # 通知关于的会话（打开它即已读、随它删除）；系统通知为 None
     session_id: str | None
+    # 交给用户审核的 issue：点开通知打开它（而不是会话），可以直接通过或打回；其余通知为 None
+    issue_id: int | None
 
 
 class NotificationEvent(BaseModel):

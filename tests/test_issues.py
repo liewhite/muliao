@@ -7,9 +7,9 @@ from sqlalchemy import select
 
 from muliao.agent_runtime.instructions import build_instructions
 from muliao.agents.events import AgentDeleting
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.issues.api import USER, ActivityKind, IssueStatus, WorkState
-from muliao.issues.rules import SYSTEM_ACTOR, Snapshot, cycle_through, recipient, stalled
+from muliao.issues.rules import SYSTEM_ACTOR, Snapshot, cycle_through, handed_by, recipient, stalled
 from muliao.platform.messaging import Delivery
 from muliao.sessions.api import Origin
 from muliao.sessions.origins import origin_note
@@ -210,6 +210,95 @@ async def test_an_agent_handing_an_issue_to_the_user_notifies_them(container, ma
     async with container.db.transaction() as s:
         [note] = (await s.scalars(select(Notification))).all()
     assert note.title.startswith(f"#{issue.id} ") and note.session_id == chat.id
+    # 点开打开 issue（在那里审核）
+    assert note.issue_id == issue.id
+
+
+def test_the_agent_that_handed_an_issue_to_the_user_is_the_last_assigner():
+    assert handed_by("creator", ["a", "b"]) == "b"
+    # 创建时就指派给了用户
+    assert handed_by("creator", []) == "creator"
+    # 用户自己、系统做的交接：没有可以打回的 agent
+    assert handed_by("creator", ["a", None]) is None
+    assert handed_by(None, []) is None
+    assert handed_by("creator", [SYSTEM_ACTOR]) is None
+
+
+async def _handed_to_user(container, agent: str):
+    """agent 在它的 issue 会话里做完，交给用户审核。"""
+    issue = await container.issues.create(None, owner=agent, title="Ship it", status=TODO, assignee=agent)
+    await drain(container)
+    [session] = await _issue_sessions(container)
+    await container.issues.update(agent, issue.id, session_id=session.id, status=REVIEW, assignee=USER)
+    await drain(container)
+    return issue, session
+
+
+async def test_approving_an_issue_handed_to_the_user_finishes_it_and_unblocks_downstream(
+    container, make_agent
+):
+    alpha = (await make_agent("alpha")).id
+    issue, _ = await _handed_to_user(container, alpha)
+    downstream = await container.issues.create(
+        None, owner=alpha, title="next", status=TODO, assignee=alpha, depends_on=[issue.id]
+    )
+
+    approved = await container.issues.approve(issue.id)
+
+    assert (approved.status, approved.assignee) == (DONE, USER)
+    last = (await container.issues.get(issue.id)).activities[-1]
+    # 以用户的身份记在时间线上
+    assert (last.actor_agent_id, last.kind, last.change) == (
+        None,
+        ActivityKind.STATUS,
+        {"from": REVIEW, "to": DONE},
+    )
+    assert (await container.issues.get(downstream.id)).activities[-1].kind == ActivityKind.DEPENDENCY
+    # 连点、另一台设备再点一次：什么都不变
+    await container.issues.approve(issue.id)
+    assert (await container.issues.get(issue.id)).activities[-1].id == last.id
+    # 已经打回给 agent：不能再通过
+    await container.issues.update(None, issue.id, assignee=alpha)
+    with pytest.raises(Conflict):
+        await container.issues.approve(issue.id)
+
+
+async def test_sending_an_issue_back_comments_and_returns_it_to_the_agent_that_handed_it_over(
+    container, make_agent
+):
+    alpha = (await make_agent("alpha")).id
+    issue, session = await _handed_to_user(container, alpha)
+    before = len(await _mail(container, session.id))
+
+    with pytest.raises(InvalidInput):
+        await container.issues.reject(issue.id, "  ")
+    rejected = await container.issues.reject(issue.id, "the button is misaligned")
+    await deliver(container)
+
+    assert (rejected.status, rejected.assignee) == (TODO, alpha)
+    activities = (await container.issues.get(issue.id)).activities[-3:]
+    assert [(a.actor_agent_id, a.kind) for a in activities] == [
+        (None, ActivityKind.COMMENT),
+        (None, ActivityKind.STATUS),
+        (None, ActivityKind.ASSIGNEE),
+    ]
+    assert activities[0].body == "the button is misaligned"
+    # 三条动态一封信，投进 agent 原来的 issue 会话
+    mails = await _mail(container, session.id)
+    assert len(mails) == before + 1
+    assert "the button is misaligned" in mails[-1] and "in_review -> todo" in mails[-1]
+    assert [s.id for s in await _issue_sessions(container)] == [session.id]
+    with pytest.raises(Conflict):
+        await container.issues.reject(issue.id, "again")
+
+
+async def test_an_issue_the_user_assigned_to_themselves_cannot_be_sent_back(container, make_agent):
+    alpha = (await make_agent("alpha")).id
+    issue = await container.issues.create(None, owner=alpha, title="mine", status=REVIEW, assignee=USER)
+
+    with pytest.raises(Conflict, match="not handed to you by an agent"):
+        await container.issues.reject(issue.id, "why")
+    assert (await container.issues.get(issue.id)).issue.status == REVIEW
 
 
 async def test_a_deleted_issue_session_is_replaced_on_the_next_delivery(container, make_agent):
@@ -280,6 +369,11 @@ async def test_http_issue_lifecycle(client, container, make_agent):
         issue_id
     ]
     assert (await client.post(f"/api/issues/{issue_id}/comments", json={"body": "hi"})).status_code == 201
+    # 审核：用户自己指派给自己的没有 agent 可以打回
+    resp = await client.post(f"/api/issues/{issue_id}/reject", json={"reason": "no"})
+    assert resp.status_code == 409
+    resp = await client.post(f"/api/issues/{issue_id}/approve")
+    assert resp.status_code == 200 and resp.json()["status"] == "done"
 
     assert (await client.delete(f"/api/issues/{issue_id}")).status_code == 204
     assert (await client.get(f"/api/issues/{issue_id}")).status_code == 404

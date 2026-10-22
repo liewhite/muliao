@@ -84,7 +84,12 @@ class Notifications:
             await self._enqueue_in(
                 s,
                 command.agent_id,
-                Notification(title=command.title, body=command.body, session_id=command.session_id),
+                Notification(
+                    title=command.title,
+                    body=command.body,
+                    session_id=command.session_id,
+                    issue_id=command.issue_id,
+                ),
             )
 
         return commit
@@ -144,6 +149,15 @@ class Notifications:
             )
 
         return commit
+
+    async def mark_issue_read(self, issue_id: int) -> None:
+        """用户打开了 issue：请他审核这个 issue 的通知标为已读（与打开会话标记指向会话的通知一样）。"""
+        async with self._db.transaction() as s:
+            await s.execute(
+                update(Notification)
+                .where(Notification.issue_id == issue_id, Notification.unread.is_(True))
+                .values(unread=False)
+            )
 
     async def list(self, limit: int) -> list[Notification]:
         async with self._db.transaction() as s:

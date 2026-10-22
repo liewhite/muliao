@@ -119,6 +119,11 @@ class CommentIn(BaseModel):
     body: str
 
 
+class RejectIn(BaseModel):
+    # 打回的理由，记成评论
+    reason: str
+
+
 async def _out(c: C, issue: Issue) -> IssueOut:
     return IssueOut.of(issue, (await c.issues.work([issue]))[issue.id])
 
@@ -178,6 +183,18 @@ async def update_issue(c: C, issue_id: int, body: IssuePatch) -> IssueOut:
 @router.post("/issues/{issue_id}/comments", status_code=201)
 async def comment_issue(c: C, issue_id: int, body: CommentIn) -> ActivityOut:
     return ActivityOut.of(await c.issues.comment(None, issue_id, body.body))
+
+
+@router.post("/issues/{issue_id}/approve")
+async def approve_issue(c: C, issue_id: int) -> IssueOut:
+    """审核通过指派给用户的 issue：设为 done。没有指派给用户时 409。"""
+    return await _out(c, await c.issues.approve(issue_id))
+
+
+@router.post("/issues/{issue_id}/reject")
+async def reject_issue(c: C, issue_id: int, body: RejectIn) -> IssueOut:
+    """打回指派给用户的 issue：理由记成评论，回到 todo，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。"""
+    return await _out(c, await c.issues.reject(issue_id, body.reason))
 
 
 @router.delete("/issues/{issue_id}", status_code=204)
