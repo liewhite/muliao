@@ -614,3 +614,16 @@ async def test_a_run_failure_on_a_deleted_issue_is_ignored(container, make_agent
     async with container.db.transaction() as s:
         await commit(s)
     assert await _notifications(container) == []
+
+
+async def test_a_transient_failure_is_recorded_once_its_retries_are_used_up(container, make_agent, models):
+    alpha = (await make_agent("alpha", model="m")).id
+    models.models["m"] = _failing(503, times=1000)
+    issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
+    await drain(container)
+
+    failed = [
+        a for a in (await container.issues.get(issue.id)).activities if a.kind == ActivityKind.RUN_FAILED
+    ]
+    assert len(failed) == 1 and "503" in failed[0].body
+    assert len(await _notifications(container)) == 1

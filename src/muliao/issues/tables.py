@@ -42,7 +42,7 @@ class ActivityKind(StrEnum):
     DEPENDS_ON = "depends_on"
     # 一个上游完成（done / cancelled）：change 为 {"issue": 上游 id, "from": 原状态, "to": 新状态}
     DEPENDENCY = "dependency"
-    # 被指派 agent 在这个 issue 会话里的运行最终失败了：actor 是该 agent，body 是错误摘要（rules.failure_summary）
+    # 某个 agent 在它这个 issue 的会话里的运行最终失败了：actor 是该 agent，body 是错误摘要（rules.failure_summary）
     RUN_FAILED = "run_failed"
 
 
@@ -77,6 +77,7 @@ class IssueActivity(Base):
     """issue 时间线上的一条：评论（body），或一次属性变化（change 为 {"from": ..., "to": ...}）。只增不改。
 
     actor_agent_id 为做这件事的 agent，用户做的为 None，系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR。
+    RUN_FAILED 由平台记下，actor 是运行失败的那个 agent（这件事的主体）。
     """
 
     __tablename__ = "issue_activities"

@@ -69,7 +69,7 @@ function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | u
           <li key={a.id} className="flex items-center gap-2 px-1 text-xs text-muted">
             <span className="size-1.5 shrink-0 rounded-full bg-muted" aria-hidden />
             <span className="font-medium text-foreground">{actorName(agents, a.actor_agent_id)}</span>
-            <span className="min-w-0">{activityText(agents, a)}</span>
+            <span className="min-w-0 break-words">{activityText(agents, a)}</span>
             <span className="ml-auto shrink-0">{formatTime(a.created_at)}</span>
           </li>
         ),
