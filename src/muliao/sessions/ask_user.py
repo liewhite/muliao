@@ -1,7 +1,7 @@
 """向用户提问：一次几个选择题，用户在界面上回答（见 sessions.questions）。
 
 工具总是列出（工具列表在缓存前缀最前面，随运行增减会让整个前缀失效）；没有用户等着这次回答时
-（私有 thread、触发器、运行中检查、反思与临时 agent），调用被拒绝并交还模型。"""
+（私有 thread、触发器、运行中检查、临时 agent），调用被拒绝并交还模型。"""
 
 from pydantic_ai import FunctionToolset, RunContext
 

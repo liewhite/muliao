@@ -9,7 +9,6 @@ from muliao.api.files import FileOut
 from muliao.container import Container
 from muliao.notifications.api import DELIVER_TASK
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
-from muliao.reflection.api import REFLECTION_TASK
 from muliao.sessions.api import (
     COMPACTION_TASK,
     RUN_TASK,
@@ -80,7 +79,7 @@ class SessionListItem(SessionOut):
 
 # 任务种类：各领域在自己的 api 导出，这里组成接口契约（tests 检查它恰好是 worker 登记的种类）。进 OpenAPI 后前端
 # 按种类判断时用生成的类型（web/src/events.ts 的 TaskKind），后端改名时前端编译失败，而不是悄悄不再匹配
-TaskKind = Literal[EVENT_TASK, RUN_TASK, COMPACTION_TASK, REFLECTION_TASK, DELIVER_TASK]
+TaskKind = Literal[EVENT_TASK, RUN_TASK, COMPACTION_TASK, DELIVER_TASK]
 
 
 class TaskOut(BaseModel):

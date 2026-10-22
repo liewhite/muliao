@@ -11,7 +11,6 @@ from muliao.platform.db import utcnow
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tasks import no_commit
 from muliao.platform.worker import Worker
-from muliao.reflection.service import REFLECTION_TASK
 from muliao.sessions.lanes import RUN_TASK
 
 
@@ -156,7 +155,6 @@ async def test_retention_prunes_only_old_done_event_and_deliver_tasks(container,
         "recent_event": (EVENT_TASK, TaskStatus.DONE, recent),
         "old_failed_event": (EVENT_TASK, TaskStatus.FAILED, old),
         "old_run": (RUN_TASK, TaskStatus.DONE, old),
-        "old_reflection": (REFLECTION_TASK, TaskStatus.DONE, old),
         "pending_event": (EVENT_TASK, TaskStatus.PENDING, None),
     }
     ids = {}

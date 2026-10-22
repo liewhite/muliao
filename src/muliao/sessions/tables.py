@@ -49,7 +49,7 @@ class Session(Base):
 
 
 class Message(Base):
-    """一条 pydantic-ai ModelMessage，`payload` 为其 JSON。id 单调递增，用作反思区间。"""
+    """一条 pydantic-ai ModelMessage，`payload` 为其 JSON。id 单调递增。"""
 
     __tablename__ = "messages"
 

@@ -8,7 +8,6 @@ from muliao.jobs import tables as jobs  # noqa: F401
 from muliao.notifications import tables as notifications  # noqa: F401
 from muliao.platform import tables as platform  # noqa: F401
 from muliao.platform.db import Base  # noqa: E402  先导入全部表定义，映射才完整
-from muliao.reflection import tables as reflection  # noqa: F401
 from muliao.sessions import tables as sessions  # noqa: F401
 from muliao.triggers import tables as triggers  # noqa: F401
 from muliao.usage import tables as usage  # noqa: F401

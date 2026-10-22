@@ -114,16 +114,13 @@ def make_agent(container: Assembly) -> Callable:
     """创建 agent 并返回它；测试通过返回值的 .id 引用它（id 由系统生成）。"""
     from muliao.agents.service import AgentSpec
 
-    async def _make(
-        name: str = "alpha", *, model: str = "test", reflect_every: int = 10, description: str = "test agent"
-    ):
+    async def _make(name: str = "alpha", *, model: str = "test", description: str = "test agent"):
         return await container.agents.create(
             AgentSpec(
                 name=name,
                 description=description,
                 model=model,
                 instructions="Be helpful.",
-                reflect_every=reflect_every,
             ),
             author="user",
         )

@@ -245,3 +245,52 @@ def test_dropping_notifications_issue_id_keeps_notifications_and_their_ids(tmp_p
             "insert into notifications (title, body, unread, created_at) values ('n', 'b', 1, '2026-01-01')"
         )
         assert conn.execute("select max(id) from notifications").fetchone() == (3,)
+
+
+def test_dropping_reflections_keeps_agents_other_tasks_and_usage(tmp_path):
+    """去掉强制反思（#116）：反思的表、agents.reflect_every 与 reflection 任务删掉；agent、别的任务与 kind=reflection
+    的用量账目保留。降级恢复结构，reflect_every 回填 30。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "b62e70969c23")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, tool_groups, reflect_every, created_at, updated_at) "
+            "values ('a1', 'alpha', 'd', 'p:m', '[]', 10, '2026-01-01', '2026-01-01')"
+        )
+        conn.execute(
+            "insert into reflections (agent_id, from_message_id, to_message_id, output, messages, created_at) "
+            "values ('a1', 0, 5, 'o', '[]', '2026-01-01')"
+        )
+        conn.execute("insert into reflection_checkpoints (agent_id, message_id) values ('a1', 5)")
+        for id_, kind, status in (
+            (1, "reflection", "pending"),
+            (2, "reflection", "done"),
+            (3, "run", "done"),
+        ):
+            conn.execute(
+                "insert into tasks (id, kind, lane, agent_id, payload, status, attempts, not_before, created_at) "
+                "values (?, ?, 'l', 'a1', '{}', ?, 0, '2026-01-01', '2026-01-01')",
+                (id_, kind, status),
+            )
+        conn.execute(
+            "insert into model_usage (created_at, agent_id, kind, model, requests, input_tokens, output_tokens, "
+            "cache_read_tokens, cache_write_tokens) values ('2026-01-01', 'a1', 'reflection', 'p:m', 1, 2, 3, 0, 0)"
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert {"reflections", "reflection_checkpoints"}.isdisjoint(_tables(path))
+        assert "reflect_every" not in {r[1] for r in conn.execute("pragma table_info(agents)")}
+        assert conn.execute("select id, name from agents").fetchall() == [("a1", "alpha")]
+        assert conn.execute("select id, kind from tasks").fetchall() == [(3, "run")]
+        assert conn.execute("select kind from model_usage").fetchall() == [("reflection",)]
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "b62e70969c23")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select reflect_every from agents").fetchall() == [(30,)]
+        assert conn.execute("select count(*) from reflections").fetchone() == (0,)

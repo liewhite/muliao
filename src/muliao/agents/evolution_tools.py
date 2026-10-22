@@ -1,4 +1,4 @@
-"""自我进化工具：私有 skill、memory 与自己的指令（每个 agent 总是可用），以及写公共 skill（单独的工具组）。turn 和反思共用。"""
+"""自我进化工具：私有 skill、memory 与自己的指令（每个 agent 总是可用），以及写公共 skill（单独的工具组）。"""
 
 from pydantic_ai import FunctionToolset, RunContext
 

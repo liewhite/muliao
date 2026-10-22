@@ -11,12 +11,6 @@ _MESSAGE: pydantic.TypeAdapter[ModelMessage] = pydantic.TypeAdapter(
 )
 
 
-# 序列化后消息种类所在的字段与模型回复的取值（pydantic-ai 的 ModelResponse.kind）：库里按它数步数（sessions.agent_history），
-# tests/test_stores.py 固定这个格式，升级 pydantic-ai 时格式变了会在测试里暴露，不会让计数悄悄归零
-KIND_PATH = "$.kind"
-RESPONSE_KIND = "response"
-
-
 def dump_message(message: ModelMessage) -> str:
     return _MESSAGE.dump_json(message).decode()
 

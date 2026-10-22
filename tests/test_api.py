@@ -141,10 +141,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     renamed = {**agent, "name": "Research Assistant 📚"}
     resp = await client.put(
         path,
-        json={
-            k: renamed[k]
-            for k in ("name", "description", "model", "instructions", "reflect_every", "tool_groups")
-        },
+        json={k: renamed[k] for k in ("name", "description", "model", "instructions", "tool_groups")},
     )
     assert resp.status_code == 200 and resp.json()["name"] == "Research Assistant 📚"
     assert (await client.get(path)).json()["id"] == agent["id"]
@@ -158,23 +155,20 @@ async def test_agent_identified_by_id_and_renamable(client, container):
         "description": "d",
         "model": agent["model"],
         "instructions": "",
-        "reflect_every": 5,
         "tool_groups": agent["tool_groups"],
     }
     assert (await client.put(path, json=clash)).status_code == 409
     assert (await client.delete(f"/api/agents/{other['id']}")).status_code == 204
 
 
-async def test_agent_defaults_endpoint_reflects_config(client, container):
+async def test_agent_defaults_endpoint_matches_config(client, container):
     await login(client)
     defaults = (await client.get("/api/agent-defaults")).json()
     assert defaults == {
         "model": container.settings.llm.default_model,
-        "reflect_every": container.settings.runtime.default_reflect_every,
         "groups": [{"name": g.name, "label": g.label} for g in container.agents.defaults.groups],
         "default_tool_groups": container.agents.defaults.group_names,
     }
-    assert container.settings.runtime.default_reflect_every == 30
 
 
 async def test_marking_notifications_read_stops_at_the_one_the_user_saw(client):
@@ -319,5 +313,5 @@ async def test_an_agent_being_deleted_reads_as_missing(client, container, make_a
         (await s.get(Agent, agent.id)).deleting_by = "user"
     await login(client)
 
-    for path in ("", "/memory", "/reflections"):
+    for path in ("", "/memory"):
         assert (await client.get(f"/api/agents/{agent.id}{path}")).status_code == 404, path

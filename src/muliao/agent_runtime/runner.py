@@ -1,7 +1,7 @@
 """执行一次 agent 运行：组装 instructions、toolsets、模型，转发流式事件到总线。"""
 
 import logging
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -60,8 +60,8 @@ from muliao.platform.tasks import Clock
 from muliao.platform.tooling import Audience, RunScope
 from muliao.usage.api import RunKind, UsageEntry, UsageLog, UsageTotals
 
-# pydantic-ai 不传 usage_limits 时默认 request_limit=50。任何运行（长期 agent 的轮次与反思、临时 agent）都不设请求数
-# 上限：开发任务上百步是常态，运行不设总时长，靠用户停止收束（反思见 architecture.md「TaskHandler 接口」）。
+# pydantic-ai 不传 usage_limits 时默认 request_limit=50。任何运行（长期 agent 的轮次、临时 agent）都不设请求数
+# 上限：开发任务上百步是常态，运行不设总时长，靠用户停止收束。
 _UNLIMITED = UsageLimits(request_limit=None)
 
 log = logging.getLogger(__name__)
@@ -98,8 +98,8 @@ class StepHooks:
 
 @dataclass(frozen=True)
 class RunProfile:
-    """一次运行开放的工具：对话按 agent 选用的工具组组合（ToolGroups），反思只开放自我改进（加上 agent 已有的写公共
-    skill），临时 agent 只开放文件与 shell（加调用方可见的 MCP，以及配置了 [web] 时的网页搜索与抓取）。"""
+    """一次运行开放的工具：对话按 agent 选用的工具组组合（ToolGroups），临时 agent 只开放文件与 shell
+    （加调用方可见的 MCP，以及配置了 [web] 时的网页搜索与抓取）。"""
 
     toolsets: Sequence[AbstractToolset[RunScope]]
 
@@ -115,19 +115,13 @@ class ToolGroups:
     groups: Mapping[str, Sequence[AbstractToolset[RunScope]]]
     always: Sequence[AbstractToolset[RunScope]]
 
-    def profile(
-        self, agent_id: str, names: Sequence[str], *, within: Collection[str] | None = None
-    ) -> RunProfile:
-        """按 agent 选用的组组合工具；within 给出时只取其中这些组（反思只可能用到写公共 skill）。"""
-        if within is not None and not set(within) <= set(self.groups):
-            raise RuntimeError(
-                f"restriction names unknown tool groups {sorted(set(within) - set(self.groups))}"
-            )
+    def profile(self, agent_id: str, names: Sequence[str]) -> RunProfile:
+        """按 agent 选用的组组合工具。"""
         unknown = [n for n in names if n not in self.groups]
         if unknown:
             # 写入时已校验（AgentService）；读到未知组说明数据与代码不一致
             raise RuntimeError(f"agent {agent_id} references unknown tool groups {unknown}")
-        chosen = [self.groups[n] for n in names if within is None or n in within]
+        chosen = [self.groups[n] for n in names]
         return RunProfile(toolsets=[*self.always, *(t for g in chosen for t in g)])
 
 
@@ -162,13 +156,13 @@ class AgentRuntime:
     def workspace(self, agent_id: str) -> Path:
         return self._agents.workspace(agent_id)
 
-    def scope(self, agent: AgentInfo, *, session_id: str | None, audience: Audience | None) -> RunScope:
+    def scope(self, agent: AgentInfo, *, session_id: str, audience: Audience | None) -> RunScope:
         return RunScope(
             agent_id=agent.id, workspace=self.workspace(agent.id), session_id=session_id, audience=audience
         )
 
     async def instructions(
-        self, agent: AgentInfo, scope: RunScope, summary: str | None, origin_note: str | None
+        self, agent: AgentInfo, scope: RunScope, summary: str | None, origin_note: str
     ) -> str:
         """这次运行的指令。只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字：它是缓存前缀
         （agent_runtime.instructions 的模块说明）。随运行变化的那几行走 run_context。origin_note 是会话来源的说明
@@ -190,7 +184,7 @@ class AgentRuntime:
 
     def run_context(self, audience: Audience | None) -> str:
         """这次运行开头交给模型的运行上下文（当前时间等，见 instructions.build_run_context）。会话的运行由
-        sessions.steps 挂到本次新增的第一条请求上；没有历史的运行（反思、临时 agent）直接放在 prompt 前面。"""
+        sessions.steps 挂到本次新增的第一条请求上；没有历史的运行（临时 agent）直接放在 prompt 前面。"""
         return build_run_context(now_local=self._clock().astimezone(self._tz), audience=audience)
 
     async def run_steps(
@@ -258,19 +252,6 @@ class AgentRuntime:
         )
         return outcome_of(result)
 
-    async def run_once(self, agent: AgentInfo, scope: RunScope, prompt: str, profile: RunProfile) -> Finished:
-        """agent 一次不属于会话的运行（反思）：带它完整的指令，没有历史，不逐步保存。"""
-        return await self._run_plain(
-            model=agent.model,
-            instructions=await self.instructions(agent, scope, None, None),
-            profile=profile,
-            scope=scope,
-            context=self.run_context(scope.audience),
-            prompt=prompt,
-            kind=RunKind.REFLECTION,
-            billed_to=scope.session_id,
-        )
-
     async def run_temp(
         self,
         parent: AgentInfo,
@@ -284,7 +265,7 @@ class AgentRuntime:
     ) -> Answer:
         """一次性的临时 agent：替 parent 做一件事，返回最终回答，以及它用工具挂给用户的文件（如 share_file）。
 
-        没有记忆、skill、历史与反思；工具来自 profile（不含委派与再开临时 agent），MCP 与 secret 按 parent 的视角。
+        没有记忆、skill 与历史；工具来自 profile（不含委派与再开临时 agent），MCP 与 secret 按 parent 的视角。
         也不带公共 prompt：公共 prompt 约定的是长期 agent 之间的共同规则，临时 agent 只执行调用方交给它的任务。
         不属于任何会话，运行事件不推到会话页。和长期 agent 一样不设请求数上限。
 

@@ -277,7 +277,7 @@ async def test_a_user_message_that_looks_like_an_event_is_still_a_user_message(c
     assert [i.type for i in to_items(history)] == ["user", "assistant"]
 
 
-def test_events_read_as_events_in_transcripts_for_reflection_and_compaction():
+def test_events_read_as_events_in_compaction_transcripts():
     request = ModelRequest(
         parts=[UserPromptPart([format_event("job:7", "exit 0"), "thanks"])], metadata={RUN_EVENTS: [0]}
     )

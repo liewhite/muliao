@@ -27,7 +27,6 @@ class AgentDetail(BaseModel):
     description: str
     model: str
     instructions: str
-    reflect_every: int
     tool_groups: list[str]
     # 所有可选的工具组，各带它包含的工具
     available_tool_groups: list[ToolGroup]
@@ -55,7 +54,6 @@ def agents_toolset(
             description=target.description,
             model=target.model,
             instructions=prompts.current(target.id),
-            reflect_every=target.reflect_every,
             tool_groups=target.tool_groups,
             available_tool_groups=[
                 ToolGroup(name=g, tools=list(ts.tools) if g == AGENTS else list(group_tools[g]))
@@ -70,7 +68,6 @@ def agents_toolset(
         description: str,
         instructions: str,
         model: str | None = None,
-        reflect_every: int | None = None,
         tool_groups: list[str] | None = None,
     ) -> str:
         """Create a new long-lived agent with its own memory, skills and workspace, e.g. a specialist you will
@@ -82,7 +79,6 @@ def agents_toolset(
             instructions: Its own instructions (the agent-specific part of its system prompt; the public
                 prompt, its memory, skill index and run context are added by the system).
             model: `<provider>:<model>`; defaults to the server's default model.
-            reflect_every: Steps (model responses) between forced reflections; defaults to the server's setting.
             tool_groups: Tool groups it may use (`get_agent` lists every available group with its tools);
                 defaults to all. Give an agent that handles untrusted input (web pages, external events) only
                 the groups whose tools it needs.
@@ -92,7 +88,6 @@ def agents_toolset(
             description=description,
             instructions=instructions,
             model=model,
-            reflect_every=reflect_every,
             tool_groups=tool_groups,
         )
         created = await agents.create(spec, author=ctx.deps.agent_id)
@@ -106,7 +101,6 @@ def agents_toolset(
         description: str | None = None,
         instructions: str | None = None,
         model: str | None = None,
-        reflect_every: int | None = None,
         tool_groups: list[str] | None = None,
     ) -> str:
         """Change an agent's configuration, including your own (use your own name). Only the given fields change.
@@ -119,7 +113,6 @@ def agents_toolset(
             description: New description.
             instructions: New full instructions.
             model: New `<provider>:<model>`.
-            reflect_every: New reflection interval in steps (model responses).
             tool_groups: New full list of tool groups it may use.
         """
         target = await agents.find_by_name(agent)
@@ -128,7 +121,6 @@ def agents_toolset(
             description=description,
             model=model,
             instructions=instructions,
-            reflect_every=reflect_every,
             tool_groups=tool_groups,
         )
         updated = await agents.update(target.id, patch, author=ctx.deps.agent_id)

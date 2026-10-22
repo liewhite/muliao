@@ -11,13 +11,13 @@ from muliao.platform.tables import agent_ref, session_ref
 
 
 class RunKind(StrEnum):
-    """哪一类运行用掉的 token（agent_runtime 的四个模型调用入口各对应一个）。"""
+    """哪一类运行用掉的 token（agent_runtime 的三个模型调用入口各对应一个，另有一个只在历史行里出现的值）。"""
 
     # 会话的一次运行（AgentRuntime.run_steps）
     RUN = "run"
     # 上下文压缩的一次总结（summarize）
     COMPACTION = "compaction"
-    # 强制反思（run_once）
+    # 已删除的每 N 步强制反思（#116）：不再产生，只为读出保留的历史账目行
     REFLECTION = "reflection"
     # 临时 agent（run_temp）
     TEMP_AGENT = "temp_agent"
@@ -38,7 +38,7 @@ class ModelUsage(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     agent_id: Mapped[str] = mapped_column(agent_ref())
-    # 不属于任何会话的运行（反思）为空；临时 agent 记发起它的那个会话
+    # 不属于任何会话的运行（历史上的强制反思）为空；临时 agent 记发起它的那个会话
     session_id: Mapped[str | None] = mapped_column(session_ref())
     kind: Mapped[RunKind] = mapped_column(StrEnumType(RunKind))
     # "<provider 名>:<模型名>"，与 agents.model 同一格式

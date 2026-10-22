@@ -1,4 +1,4 @@
-"""端到端：触发 → 任务队列 → agent 运行 → 持久化 → 反思 / 通知 / 委派。"""
+"""端到端：触发 → 任务队列 → agent 运行 → 持久化 → 通知 / 委派。"""
 
 import asyncio
 import re
@@ -21,8 +21,6 @@ from muliao.notifications.service import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.worker import Worker
-from muliao.reflection.service import REFLECTION_TASK
-from muliao.reflection.tables import Reflection, ReflectionCheckpoint
 from muliao.sessions.api import Origin
 from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
@@ -259,45 +257,25 @@ async def test_reply_continues_with_full_history(container, make_agent, models):
     assert [type(m).__name__ for m in history] == ["ModelRequest", "ModelResponse"] * 2
 
 
-async def test_reflection_runs_every_n_steps_over_the_window_and_can_write_skills(
-    container, make_agent, models
-):
-    alpha = (await make_agent("alpha", model="m", reflect_every=2)).id
-    transcripts: list[str] = []
+async def test_long_runs_schedule_nothing_besides_the_run_itself(container, make_agent, models):
+    """平台不再每 N 步插入反思（#116）：一次 40 步的运行之后，模型只被这次运行调用，队列里没有别的种类的任务。"""
+    alpha = (await make_agent("alpha", model="m")).id
+    prompts: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        prompt = last_user_prompt(messages)
-        if "scheduled self-review" not in prompt:
-            return ModelResponse(parts=[TextPart("done")])
-        if tool_returns(messages):
-            return ModelResponse(parts=[TextPart("Created skill tea-making.")])
-        transcripts.append(prompt)
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    "write_skill", {"name": "tea-making", "description": "Make tea", "content": "boil"}
-                )
-            ]
-        )
+        prompts.append(last_user_prompt(messages))
+        if len(prompts) < 40:
+            return ModelResponse(parts=[ToolCallPart("list_agents", {}, tool_call_id=f"c{len(prompts)}")])
+        return ModelResponse(parts=[TextPart("done")])
 
     models.models["m"] = scripted(fn)
-    await start(container, alpha, "first task", origin=Origin.TRIGGER)
-    await start(container, alpha, "second task", origin=Origin.TRIGGER)
+    await start(container, alpha, "long task", origin=Origin.TRIGGER)
     await drain(container)
 
-    reflections = await tasks_of(container, REFLECTION_TASK)
-    assert len(reflections) == 1 and reflections[0].status == TaskStatus.DONE
-    assert "first task" in transcripts[0] and "second task" in transcripts[0]
-    assert container.skills.read(alpha, "tea-making").meta.description == "Make tea"
+    assert len(prompts) == 40 and set(prompts) == {"long task"}
     async with container.db.transaction() as s:
-        rows = (await s.scalars(select(Reflection))).all()
-    assert [r.output for r in rows] == ["Created skill tea-making."]
-    agent = await container.agents.get(alpha)
-    # 步数由消息推导：检查点推进之后归零
-    assert (await container.reflection_log.steps_since([agent]))[alpha] == 0
-    async with container.db.transaction() as s:
-        checkpoint = await s.get(ReflectionCheckpoint, alpha)
-    assert checkpoint.message_id == reflections[0].payload["to_message_id"]
+        kinds = set((await s.scalars(select(Task.kind))).all())
+    assert kinds <= {RUN_TASK, EVENT_TASK, DELIVER_TASK}
 
 
 async def test_transient_model_error_is_retried_and_converges(container, make_agent, models):

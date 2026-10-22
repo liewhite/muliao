@@ -196,7 +196,7 @@ class ModelRegistry:
         return sorted(names)
 
     def resolve(self, model: str) -> Model:
-        """所有模型调用（会话运行、反思、压缩、临时 agent）都经这里拿到模型，并发上限在这里统一套上。"""
+        """所有模型调用（会话运行、压缩、临时 agent）都经这里拿到模型，并发上限在这里统一套上。"""
         name, cfg, model_name = self._split(model)
         return ConcurrencyLimitedModel(
             KINDS[cfg.type].model(model_name, self._provider(name, cfg), cfg), self._limiters[name]

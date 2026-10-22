@@ -201,7 +201,7 @@ async def test_the_agent_creates_a_once_trigger_and_later_looks_up_what_came_of_
 ):
     from tests.test_tools import run_tools
 
-    me = await make_agent("manager", model="tools", reflect_every=100)
+    me = await make_agent("manager", model="tools")
 
     created = await run_tools(
         container,

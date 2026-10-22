@@ -1,4 +1,4 @@
-"""用量：每次模型运行（对话、压缩、反思、临时 agent）记一条，按时间范围与维度汇总。"""
+"""用量：每次模型运行（对话、压缩、临时 agent）记一条，按时间范围与维度汇总。"""
 
 import asyncio
 from datetime import UTC, datetime, timedelta
@@ -21,7 +21,7 @@ from tests.test_flow import drain, start, tasks_of
 from tests.test_tools import run_tools
 
 # 一次模型调用报告的用量：input 是输入总数，其中 80 命中缓存、10 写入缓存（pydantic-ai 的口径）。
-# 只在非流式请求（反思、压缩、临时 agent）里原样保留：会话的运行是流式的，FunctionModel 那时自己估算 token，
+# 只在非流式请求（压缩、临时 agent）里原样保留：会话的运行是流式的，FunctionModel 那时自己估算 token，
 # 所以会话运行的测试只断言「记下来了」，确切数值由非流式的那几条覆盖
 REPLY_USAGE = RequestUsage(input_tokens=100, output_tokens=5, cache_read_tokens=80, cache_write_tokens=10)
 
@@ -44,7 +44,7 @@ async def usage_rows(container) -> list[ModelUsage]:
 
 
 async def test_a_turn_records_its_usage_against_its_agent_and_session(container, make_agent, models):
-    alpha = await make_agent("alpha", model="m", reflect_every=100)
+    alpha = await make_agent("alpha", model="m")
     models.models["m"] = answering()
 
     session = await start(container, alpha.id, "hi", origin=Origin.TRIGGER)
@@ -57,7 +57,7 @@ async def test_a_turn_records_its_usage_against_its_agent_and_session(container,
 
 
 async def test_compaction_is_billed_to_the_session_it_compacts(container, make_agent, models, monkeypatch):
-    alpha = await make_agent("alpha", model="m", reflect_every=100)
+    alpha = await make_agent("alpha", model="m")
 
     def fn(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         text = "SUMMARY" if info.instructions == COMPACTION_INSTRUCTIONS else "ok"
@@ -83,24 +83,8 @@ async def test_compaction_is_billed_to_the_session_it_compacts(container, make_a
     assert compactions and all(r.session_id == session.id and r.model == "m" for r in compactions)
 
 
-async def test_reflection_is_recorded_without_a_session_and_keeps_the_cache_counts(
-    container, make_agent, models
-):
-    alpha = await make_agent("alpha", model="m", reflect_every=1)
-    models.models["m"] = answering()
-
-    await start(container, alpha.id, "hi", origin=Origin.TRIGGER)
-    await drain(container)
-
-    [reflection] = [r for r in await usage_rows(container) if r.kind == RunKind.REFLECTION]
-    assert reflection.agent_id == alpha.id and reflection.session_id is None
-    # 模型报告的四项计数原样入库（缓存读写是 input_tokens 的一部分）
-    assert (reflection.requests, reflection.input_tokens, reflection.output_tokens) == (1, 100, 5)
-    assert (reflection.cache_read_tokens, reflection.cache_write_tokens) == (80, 10)
-
-
 async def test_a_temp_agent_is_billed_to_the_session_that_started_it(container, make_agent, models):
-    me = await make_agent("manager", model="tools", reflect_every=100)
+    me = await make_agent("manager", model="tools")
     models.models["helper"] = answering("helped")
 
     outputs = await run_tools(
@@ -113,10 +97,13 @@ async def test_a_temp_agent_is_billed_to_the_session_that_started_it(container, 
     # 临时 agent 不属于任何会话，但它的开销算发起它的那次运行的
     assert temp.model == "helper" and temp.session_id == run.session_id
     assert temp.agent_id == me.id
+    # 模型报告的四项计数原样入库（缓存读写是 input_tokens 的一部分）
+    assert (temp.requests, temp.input_tokens, temp.output_tokens) == (1, 100, 5)
+    assert (temp.cache_read_tokens, temp.cache_write_tokens) == (80, 10)
 
 
 async def test_a_run_that_fails_still_records_what_it_already_spent(container, make_agent, models):
-    alpha = await make_agent("alpha", model="m", reflect_every=100)
+    alpha = await make_agent("alpha", model="m")
 
     def fn(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         if any(isinstance(m, ModelResponse) for m in messages):
@@ -141,7 +128,7 @@ async def test_a_run_that_fails_still_records_what_it_already_spent(container, m
 
 async def test_a_stopped_run_still_records_what_it_spent(client, container, make_agent, models):
     await login(client)
-    alpha = await make_agent("alpha", model="slow", reflect_every=100)
+    alpha = await make_agent("alpha", model="slow")
 
     def fn(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         return ModelResponse(
@@ -170,7 +157,7 @@ async def test_a_stopped_run_still_records_what_it_spent(client, container, make
 
 
 async def test_a_failure_to_record_usage_does_not_fail_the_run(container, make_agent, models, monkeypatch):
-    alpha = await make_agent("alpha", model="m", reflect_every=100)
+    alpha = await make_agent("alpha", model="m")
     models.models["m"] = answering("still answered")
 
     async def boom(_entry: UsageEntry) -> None:

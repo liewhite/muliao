@@ -1,5 +1,5 @@
 """一次运行的收尾（与运行记为完成在同一个事务里），只写会话自己的数据：已读状态、委派的结清、唤醒下一次运行，并发布
-RunEnded（推送、反思调度由各自的领域订阅）。
+RunEnded（通知领域订阅它做推送）。
 运行被用户停止时的委派结局与信箱由停止处理（sessions.halt），这里只做其余部分。"""
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ class RunFinisher:
             if state.messages:
                 session.updated_at = utcnow()
                 session.unread = policy_of(session.kind).listed
-                # 推送、反思调度由各自的领域订阅（运行结束后随即投递）
+                # 推送由通知领域订阅（运行结束后随即投递）
                 self._messaging.publish_in(
                     s,
                     RunEndedEvent(

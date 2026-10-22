@@ -449,61 +449,6 @@
         }
       }
     },
-    "/api/agents/{agent_id}/reflections": {
-      "get": {
-        "summary": "List Reflections",
-        "operationId": "list_reflections_api_agents__agent_id__reflections_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 200,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ReflectionOut"
-                  },
-                  "title": "Response List Reflections Api Agents  Agent Id  Reflections Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/skills": {
       "get": {
         "summary": "List Skills",
@@ -3100,17 +3045,6 @@
             "title": "Instructions",
             "default": ""
           },
-          "reflect_every": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reflect Every"
-          },
           "tool_groups": {
             "anyOf": [
               {
@@ -3139,10 +3073,6 @@
             "type": "string",
             "title": "Model"
           },
-          "reflect_every": {
-            "type": "integer",
-            "title": "Reflect Every"
-          },
           "groups": {
             "items": {
               "$ref": "#/components/schemas/ToolGroupOut"
@@ -3161,7 +3091,6 @@
         "type": "object",
         "required": [
           "model",
-          "reflect_every",
           "groups",
           "default_tool_groups"
         ],
@@ -3189,20 +3118,12 @@
             "type": "string",
             "title": "Instructions"
           },
-          "reflect_every": {
-            "type": "integer",
-            "title": "Reflect Every"
-          },
           "tool_groups": {
             "items": {
               "type": "string"
             },
             "type": "array",
             "title": "Tool Groups"
-          },
-          "steps_since_reflection": {
-            "type": "integer",
-            "title": "Steps Since Reflection"
           },
           "created_at": {
             "type": "string",
@@ -3217,9 +3138,7 @@
           "description",
           "model",
           "instructions",
-          "reflect_every",
           "tool_groups",
-          "steps_since_reflection",
           "created_at"
         ],
         "title": "AgentOut"
@@ -3242,10 +3161,6 @@
             "type": "string",
             "title": "Instructions"
           },
-          "reflect_every": {
-            "type": "integer",
-            "title": "Reflect Every"
-          },
           "tool_groups": {
             "items": {
               "type": "string"
@@ -3260,7 +3175,6 @@
           "description",
           "model",
           "instructions",
-          "reflect_every",
           "tool_groups"
         ],
         "title": "AgentUpdate",
@@ -4869,40 +4783,6 @@
         "title": "QuestionAnswer",
         "description": "用户对一个问题的回答：选中的选项，和/或「其他」里填的文字。"
       },
-      "ReflectionOut": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "from_message_id": {
-            "type": "integer",
-            "title": "From Message Id"
-          },
-          "to_message_id": {
-            "type": "integer",
-            "title": "To Message Id"
-          },
-          "output": {
-            "type": "string",
-            "title": "Output"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "from_message_id",
-          "to_message_id",
-          "output",
-          "created_at"
-        ],
-        "title": "ReflectionOut"
-      },
       "RejectIn": {
         "properties": {
           "reason": {
@@ -5892,7 +5772,6 @@
               "event",
               "run",
               "compaction",
-              "reflection",
               "deliver"
             ],
             "title": "Kind"

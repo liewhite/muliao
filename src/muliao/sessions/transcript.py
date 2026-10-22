@@ -1,4 +1,4 @@
-"""把 pydantic-ai 消息转换为展示条目（Item）：会话页的历史、运行中的实时条目（sessions.steps）、反思与压缩的文字记录
+"""把 pydantic-ai 消息转换为展示条目（Item）：会话页的历史、运行中的实时条目（sessions.steps）、压缩的文字记录
 共用这一份投影，前端只渲染与合并，不再自己投影。
 
 消息上的约定（metadata 键、标记、合成结果）登记在 muliao.agent_runtime.conventions，这里只读它们来展示。
@@ -226,13 +226,13 @@ def _user_item(content: str | Sequence[Any]) -> Item:
 
 
 def to_items(messages: Sequence[ModelMessage], saved_at: datetime | None = None) -> list[Item]:
-    """saved_at：这些消息保存的时间，即其中工具调用开始执行的时间（见 call_item）；不需要时间的投影（压缩、反思的
+    """saved_at：这些消息保存的时间，即其中工具调用开始执行的时间（见 call_item）；不需要时间的投影（压缩的
     文字记录）不给。"""
     items: list[Item] = []
     for msg in messages:
         if isinstance(msg, ModelRequest):
             # 运行上下文那一段（RUN_CONTEXT）不展示：它是我们加给模型的，不是用户说的话。它仍在消息里原样重放，
-            # 所以这里只是不投影，派生出这份条目的地方（会话页、压缩的文字记录、反思）都看不到它
+            # 所以这里只是不投影，派生出这份条目的地方（会话页、压缩的文字记录）都看不到它
             context_at = run_context_index(msg)
             for index, part in enumerate(msg.parts):
                 if index == context_at:

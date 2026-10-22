@@ -45,9 +45,6 @@ CATALOG: tuple[ToolGroupInfo, ...] = (
     ToolGroupInfo(WEB, "网页搜索与抓取", needs_web=True),
 )
 
-# 反思读的转录里可能有不可信输入：自我改进之外只开放该 agent 本来就有的写公共 skill
-REFLECTION_GROUPS = frozenset({PUBLIC_SKILLS})
-
 
 def available(web_configured: bool) -> tuple[ToolGroupInfo, ...]:
     """当前配置下存在的组，按目录顺序。"""

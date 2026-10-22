@@ -1,6 +1,6 @@
 """持久化任务队列。
 
-所有工作（会话的一次运行、压缩、反思、投递）都是 task。语义：
+所有工作（会话的一次运行、压缩、投递）都是 task。语义：
 - 同一 lane 内严格 FIFO、最多一个 running；不同 lane 并发。
 - 契约内的暂时性失败按指数退避重试，超过上限置 failed；其他失败直接 failed。
 - 进程崩溃遗留的 running 在启动时复位为 pending（见 docs/architecture.md「用最终正确性换架构简化」）。

@@ -86,7 +86,7 @@ def test_steps_split_where_no_call_is_left_dangling():
 async def test_compaction_summarizes_older_steps_and_the_next_run_uses_the_summary(
     container, make_agent, models
 ):
-    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    alpha = (await make_agent("alpha", model="m")).id
     keep = container.settings.runtime.compaction_keep_steps
     n = keep // 2 + 2
     session, recorder = await _session_with_exchanges(container, models, alpha, n)
@@ -116,7 +116,7 @@ async def test_compaction_summarizes_older_steps_and_the_next_run_uses_the_summa
 
 
 async def test_second_compaction_folds_in_previous_summary(container, make_agent, models):
-    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    alpha = (await make_agent("alpha", model="m")).id
     keep = container.settings.runtime.compaction_keep_steps
     session, recorder = await _session_with_exchanges(container, models, alpha, keep // 2 + 1)
     await _enqueue_compaction(container, session)
@@ -134,7 +134,7 @@ async def test_second_compaction_folds_in_previous_summary(container, make_agent
 
 
 async def test_compaction_with_nothing_beyond_kept_steps_is_a_noop(container, make_agent, models):
-    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    alpha = (await make_agent("alpha", model="m")).id
     session, recorder = await _session_with_exchanges(container, models, alpha, 2)
 
     await _enqueue_compaction(container, session)
@@ -185,7 +185,7 @@ async def test_oversized_backlog_is_compacted_in_batches_until_converged(
     import muliao.sessions.compaction as compaction
 
     monkeypatch.setattr(compaction, "_TRANSCRIPT_CHARS", 1)  # 每批只取一步
-    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    alpha = (await make_agent("alpha", model="m")).id
     keep = container.settings.runtime.compaction_keep_steps
     session, recorder = await _session_with_exchanges(container, models, alpha, keep // 2 + 3)
 
@@ -202,7 +202,7 @@ async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make
     """运行中途上下文超过阈值：这次请求保存后停下、压缩，再从它续跑；留下的部分从一条回复开始时补接续的用户消息。"""
     monkeypatch.setattr(container.compactor, "_threshold", 1)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
-    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    alpha = (await make_agent("alpha", model="m")).id
     seen: list[tuple[list[ModelMessage], str | None]] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -272,7 +272,7 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
         await asyncio.Event().wait()
 
     monkeypatch.setattr(AgentRuntime, "summarize", blocked)
-    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    alpha = (await make_agent("alpha", model="m")).id
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         return ModelResponse(parts=[ToolCallPart("memory_append", {"entry": "- x"}, tool_call_id="c")])
@@ -298,7 +298,7 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
 async def test_a_run_that_compacts_at_its_start_does_not_compact_again_before_a_new_reply(
     container, make_agent, models, monkeypatch
 ):
-    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    alpha = (await make_agent("alpha", model="m")).id
     session, recorder = await _session_with_exchanges(container, models, alpha, 3)
     monkeypatch.setattr(container.compactor, "_threshold", 1)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
@@ -324,7 +324,7 @@ async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
     monkeypatch.setattr(compaction, "context_tokens", tokens)
     monkeypatch.setattr(container.compactor, "_threshold", 1000)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
-    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    alpha = (await make_agent("alpha", model="m")).id
     summaries = {"n": 0}
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -366,7 +366,7 @@ async def test_a_run_compacted_past_its_own_start_gets_its_run_context_again(
     """长运行中途压缩切过了它自己的第一条请求（挂着运行上下文的那条）：之后的新请求重新挂一段，模型仍看得到当前时间。"""
     monkeypatch.setattr(container.compactor, "_threshold", 1)
     monkeypatch.setattr(container.compactor, "_keep_steps", 1)
-    alpha = (await make_agent("alpha", model="m", reflect_every=100)).id
+    alpha = (await make_agent("alpha", model="m")).id
     seen: list[list[ModelMessage]] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

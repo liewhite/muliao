@@ -60,7 +60,7 @@ class LiveRuns:
     一次请求就换一段（step），发 saved 事件让前端重新拉取历史；回复在工具执行前就已保存，但这一段的事件已经在展示它，
     会话接口不在历史里重复显示（after_message_id）。和事件总线一样只是展示加速：进程重启时没保存的部分本来也会
     重跑，缓存丢了无妨。事件带上这一段的 run_id 与递增的 seq，前端用它们把快照与之后经 SSE 收到的事件合并，并发现
-    两者之间的缺口。没有会话的运行（反思、临时 agent）不推事件（agent_runtime.runner）。生命周期只由消费者管
+    两者之间的缺口。没有会话的运行（临时 agent）不推事件（agent_runtime.runner）。生命周期只由消费者管
     （sessions.consumer，begin / step / end）。
     """
 

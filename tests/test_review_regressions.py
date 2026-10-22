@@ -20,7 +20,7 @@ from tests.test_flow import call_then_answer, drain, history_of, start
 
 
 async def test_message_ids_never_reused_after_deleting_latest_session(container, make_agent):
-    alpha = (await make_agent("alpha", reflect_every=100)).id
+    alpha = (await make_agent("alpha")).id
     first = await start(container, alpha, "one", origin=Origin.TRIGGER)
     await drain(container)
     async with container.db.transaction() as s:
@@ -59,14 +59,12 @@ async def test_deleting_session_or_agent_with_running_task_is_rejected(container
         await container.agent_lifecycle.delete(alpha, author="user")
 
 
-async def test_agent_api_rejects_zero_reflect_every_and_partial_update(container, tmp_path):
+async def test_agent_api_rejects_partial_update(container, tmp_path):
     from tests.conftest import app_of, login
 
     app = app_of(container, tmp_path / "no-web")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         await login(client)
-        resp = await client.post("/api/agents", json={"name": "a", "description": "d", "reflect_every": 0})
-        assert resp.status_code == 422
         agent = (
             await client.post("/api/agents", json={"name": "a", "description": "d", "model": "custom"})
         ).json()
@@ -296,9 +294,9 @@ async def test_running_out_of_vault_set_retries_keeps_the_value_out_of_the_logge
 
 
 async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_transient_error(
-    container, make_agent, models
+    container, make_agent, models, tmp_path
 ):
-    """worker 不认识 SDK 的异常：压缩（summarize）与反思（run_once）这些入口同样要换成 TransientError 才会重试。"""
+    """worker 不认识 SDK 的异常：压缩（summarize）与临时 agent（run_temp）这些入口同样要换成 TransientError 才会重试。"""
     from muliao.agent_runtime.runner import RunProfile
 
     agent = await make_agent("alpha", model="m")
@@ -312,6 +310,13 @@ async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_tr
     runtime = container.consumer._runtime  # noqa: SLF001
     with pytest.raises(TransientError, match="503"):
         await runtime.summarize(agent, "s1", "summarize", "text")
-    scope = runtime.scope(agent, session_id=None, audience=None)
     with pytest.raises(TransientError, match="503"):
-        await runtime.run_once(agent, scope, "reflect", RunProfile(toolsets=[]))
+        await runtime.run_temp(
+            agent,
+            task="t",
+            instructions="",
+            model="m",
+            profile=RunProfile(toolsets=[]),
+            workspace=tmp_path,
+            session_id=None,
+        )

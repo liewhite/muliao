@@ -20,7 +20,7 @@ class Ending(StrEnum):
 
 
 class RunEnded(DomainEvent):
-    """一次运行结束了（完成、停在挂起的调用上、被停止）；没有可交给模型的空闲收尾不发。通知、反思各自订阅。"""
+    """一次运行结束了（完成、停在挂起的调用上、被停止）；没有可交给模型的空闲收尾不发。通知领域订阅。"""
 
     TYPE = "session.run_ended"
     session_id: str

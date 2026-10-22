@@ -3,7 +3,7 @@
 两者的分工只有一条规则：**instructions 只放同一个会话的不同运行之间不会变的内容，随运行变化的放进运行上下文**。
 原因是缓存前缀——instructions 渲染成提供方的 system，缓存断点就放在它末尾（llm.ANTHROPIC_CACHE_SETTINGS），
 DeepSeek 等自动前缀缓存同样从这里开始匹配。instructions 里只要有一个每次运行都不同的值（最早是「当前时间」），
-整段历史每次运行都要重新写入缓存（写缓存比普通输入还贵），同一个 agent 的不同会话、反思、压缩也只能复用工具定义
+整段历史每次运行都要重新写入缓存（写缓存比普通输入还贵），同一个 agent 的不同会话、压缩也只能复用工具定义
 那一段。运行上下文放进这次运行新增的第一条请求（conventions.attach_run_context），它随消息入库、之后原样重放，
 旧消息保持字节不变。
 """
@@ -71,7 +71,7 @@ def build_instructions(
     public_instructions: str,
     agent_instructions: str,
     workspace: Path,
-    origin_note: str | None,
+    origin_note: str,
     memory: str,
     skills: Sequence[SkillMeta],
     corrupt_skills: Sequence[CorruptResource],
@@ -79,13 +79,12 @@ def build_instructions(
     summary: str | None,
 ) -> str:
     """这个 agent 在这个会话里的指令。参数只能是会话级、agent 级的稳定内容（见模块说明）。origin_note 是会话来源的
-    说明，由会话领域给出（sessions.origins）；不属于会话的运行（反思）没有。"""
+    说明，由会话领域给出（sessions.origins）。"""
     context = [
         f"- You are agent {agent_name!r}: {agent_description}",
         f"- Workspace (base for relative paths and shell cwd): {workspace}",
+        f"- {origin_note}",
     ]
-    if origin_note is not None:
-        context.append(f"- {origin_note}")
     # 坏的 skill 逐项说明（不让整次运行失败，见 agents.resources.CorruptResource）：agent 可以重写或删掉它
     skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] + [
         f"- {c.describe()}" for c in corrupt_skills

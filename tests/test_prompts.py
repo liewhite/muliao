@@ -144,31 +144,17 @@ async def test_cleared_public_prompt_keeps_a_browsable_restorable_history(client
     assert container.prompts.current(None) == "v1"
 
 
-async def test_reflection_refines_own_instructions_as_a_versioned_change(container, make_agent, models):
-    from pydantic_ai.messages import ToolCallPart
+async def test_an_agent_refines_its_own_instructions_as_a_versioned_change(container, make_agent, models):
+    from tests.test_flow import call_then_answer
 
-    from tests.test_flow import last_user_prompt, tool_returns
-
-    agent = await make_agent("alpha", model="m", reflect_every=1)
-    seen_tools: list[str] = []
-
-    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        if "scheduled self-review" not in last_user_prompt(messages):
-            return ModelResponse(parts=[TextPart("done")])
-        if tool_returns(messages):
-            return ModelResponse(parts=[TextPart("Added a rule.")])
-        seen_tools.extend(t.name for t in info.function_tools)
-        args = {"old_text": "", "new_text": "Always reply in Chinese."}
-        return ModelResponse(parts=[ToolCallPart("instructions_replace", args)])
-
-    models.models["m"] = scripted(fn)
+    agent = await make_agent("alpha", model="m")
+    args = {"old_text": "", "new_text": "Always reply in Chinese."}
+    models.models["m"] = call_then_answer("instructions_replace", args, "Added a rule.")
     await start(container, agent.id, "hello")
     await drain(container)
 
     assert container.prompts.current(agent.id) == "Be helpful.\n\nAlways reply in Chinese.\n"
     assert (await prompt_history(container, agent.id))[0].author == agent.id
-    # 反思只开放自我改进；该 agent 有 public_skills（默认全部开放）所以也能写公共 skill
-    assert "instructions_replace" in seen_tools and "run_shell" not in seen_tools
 
 
 async def test_agent_without_resource_files_can_still_be_deleted(container, make_agent):

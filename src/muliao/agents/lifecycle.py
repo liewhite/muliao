@@ -1,11 +1,11 @@
 """删除 agent（docs/architecture.md 第 10 节）：agent 领域发起、各领域清理自己的数据的流程。
 
-1. delete：它的会话有忙的、或它的反思在排队或运行，就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除
+1. delete：它的会话有忙的，就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除
    （不再出现在列表与名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in），同一事务发布
    AgentDeleting。
 2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域删除它的全部会话（标记之后它的会话不会再收到
-   来信），然后发布 AgentSessionsCleared；触发器、vault、反思各自删除。
-3. 收到 AgentSessionsCleared：它的反思还在跑就等（重试），否则删除资源目录与这一行。
+   来信），然后发布 AgentSessionsCleared；触发器、vault 各自删除。
+3. 收到 AgentSessionsCleared：注入的查询仍报告有工作在进行就等（重试），否则删除资源目录与这一行。
 """
 
 import logging
@@ -25,7 +25,7 @@ from muliao.sessions.events import AgentSessionsCleared
 log = logging.getLogger(__name__)
 
 
-# 删除这个 agent 会打断的工作还在进行（别的领域的只读查询，组合根注入：它的会话忙、它的反思在排队或执行）
+# 删除这个 agent 会打断的工作还在进行（别的领域的只读查询，组合根注入，如它的会话忙）
 DeletionBlocker = Callable[[AsyncSession, str], Awaitable[bool]]
 
 
@@ -79,7 +79,7 @@ class AgentLifecycle:
                 )
             author = agent.deleting_by
             if blocking := await self._blocking_in(s, event.agent_id):
-                # 会话已经删光；还在进行的工作（例如执行中的反思会写资源）结束后再删
+                # 会话已经删光；还在进行的工作结束后再删
                 raise TransientError(f"agent {event.agent_id} still has work running: {blocking}")
         # 资源目录不在数据库事务里：重放时它已经不在，删除是空操作
         await self._agents.remove_files(event.agent_id, author)

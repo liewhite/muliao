@@ -25,7 +25,7 @@ class RunScope:
 
     agent_id: str
     workspace: Path
-    # 反思与临时 agent 不属于任何会话，以下两项均为 None
+    # 临时 agent 不属于任何会话，以下两项均为 None
     session_id: str | None
     audience: Audience | None
     # 运行开始时工具组发现、要告诉模型的问题（如这次连不上的 MCP server）：工具组构建、连接时追加，运行把它们放进

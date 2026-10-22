@@ -1,12 +1,11 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from muliao.agents.api import USER, AgentInfo, AgentPatch, AgentSpec, SkillMeta, ToolGroupInfo
 from muliao.api.deps import C, check_owner
 from muliao.api.resources import CorruptOut
-from muliao.reflection.tables import Reflection
 
 router = APIRouter()
 
@@ -17,7 +16,6 @@ class AgentCreate(BaseModel):
     # 缺省（null）时使用服务端配置的默认值
     model: str | None = None
     instructions: str = ""
-    reflect_every: int | None = None
     tool_groups: list[str] | None = None
 
 
@@ -28,7 +26,6 @@ class AgentUpdate(BaseModel):
     description: str
     model: str
     instructions: str
-    reflect_every: int
     tool_groups: list[str]
 
 
@@ -38,36 +35,24 @@ class AgentOut(BaseModel):
     description: str
     model: str
     instructions: str
-    reflect_every: int
     tool_groups: list[str]
-    # 自上次反思以来的步数（模型回复数），由消息推导
-    steps_since_reflection: int
     created_at: datetime
 
     @classmethod
-    def of(cls, a: AgentInfo, instructions: str, steps_since_reflection: int) -> "AgentOut":
+    def of(cls, a: AgentInfo, instructions: str) -> "AgentOut":
         return cls(
             id=a.id,
             name=a.name,
             description=a.description,
             model=a.model,
             instructions=instructions,
-            reflect_every=a.reflect_every,
             tool_groups=list(a.tool_groups),
-            steps_since_reflection=steps_since_reflection,
             created_at=a.created_at,
         )
 
 
-async def _outs(c: C, agents: list[AgentInfo]) -> list[AgentOut]:
-    """AgentOut 的唯一构造入口：一次取齐这些 agent 的反思进度。"""
-    steps = await c.reflection.steps_since(agents)
-    return [AgentOut.of(a, c.prompts.current(a.id), steps[a.id]) for a in agents]
-
-
-async def _out(c: C, agent: AgentInfo) -> AgentOut:
-    [out] = await _outs(c, [agent])
-    return out
+def _out(c: C, agent: AgentInfo) -> AgentOut:
+    return AgentOut.of(agent, c.prompts.current(agent.id))
 
 
 class ToolGroupOut(BaseModel):
@@ -83,7 +68,6 @@ class ToolGroupOut(BaseModel):
 
 class AgentDefaultsOut(BaseModel):
     model: str
-    reflect_every: int
     # 当前配置下可选的工具组，按目录顺序
     groups: list[ToolGroupOut]
     # 新建 agent 默认开启的组：当前配置下的全部组
@@ -96,7 +80,6 @@ async def agent_defaults(c: C) -> AgentDefaultsOut:
     d = c.agents.defaults
     return AgentDefaultsOut(
         model=d.model,
-        reflect_every=d.reflect_every,
         groups=[ToolGroupOut.of(g) for g in d.groups],
         default_tool_groups=d.group_names,
     )
@@ -116,7 +99,7 @@ async def list_provider_models(c: C, name: str) -> list[str]:
 
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
-    return await _outs(c, await c.agents.list())
+    return [_out(c, a) for a in await c.agents.list()]
 
 
 @router.post("/agents", status_code=201)
@@ -126,16 +109,15 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
         description=body.description,
         instructions=body.instructions,
         model=body.model,
-        reflect_every=body.reflect_every,
         tool_groups=body.tool_groups,
     )
-    return await _out(c, await c.agents.create(spec, author=USER))
+    return _out(c, await c.agents.create(spec, author=USER))
 
 
 @router.get("/agents/{agent_id}")
 async def get_agent(c: C, agent_id: str) -> AgentOut:
     # 正在删除的按不存在处理：它的指令（私有资源）可能已经删了
-    return await _out(c, await c.agents.get_active(agent_id))
+    return _out(c, await c.agents.get_active(agent_id))
 
 
 @router.put("/agents/{agent_id}")
@@ -146,10 +128,9 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         description=body.description,
         model=body.model,
         instructions=body.instructions,
-        reflect_every=body.reflect_every,
         tool_groups=body.tool_groups,
     )
-    return await _out(c, await c.agents.update(agent_id, patch, author=USER))
+    return _out(c, await c.agents.update(agent_id, patch, author=USER))
 
 
 @router.delete("/agents/{agent_id}", status_code=204)
@@ -175,30 +156,6 @@ async def get_memory(c: C, agent_id: str) -> MemoryOut:
 @router.put("/agents/{agent_id}/memory")
 async def put_memory(c: C, agent_id: str, body: MemoryIn) -> MemoryOut:
     return MemoryOut(content=await c.memory.write(agent_id, body.content, USER), max_chars=c.memory.max_chars)
-
-
-class ReflectionOut(BaseModel):
-    id: int
-    from_message_id: int
-    to_message_id: int
-    output: str
-    created_at: datetime
-
-    @classmethod
-    def of(cls, r: Reflection) -> "ReflectionOut":
-        return cls(
-            id=r.id,
-            from_message_id=r.from_message_id,
-            to_message_id=r.to_message_id,
-            output=r.output,
-            created_at=r.created_at,
-        )
-
-
-@router.get("/agents/{agent_id}/reflections")
-async def list_reflections(c: C, agent_id: str, limit: int = Query(50, ge=1, le=200)) -> list[ReflectionOut]:
-    await check_owner(c, agent_id)
-    return [ReflectionOut.of(r) for r in await c.reflection.list(agent_id, limit)]
 
 
 class SkillOut(BaseModel):

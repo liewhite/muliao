@@ -1,7 +1,6 @@
 """删除经事件完成（docs/architecture.md 第 10 节与第 7 节「thread 与结果路由」）：没有跨领域外键，各领域按 SessionDeleted / AgentDeleting 清理
 自己的数据；先停止再删除时迟到的结局不产生失败投递。"""
 
-import logging
 import sys
 from types import SimpleNamespace
 
@@ -14,7 +13,6 @@ from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
-from muliao.reflection.service import REFLECTION_TASK
 from muliao.sessions.api import Origin
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.lanes import RUN_TASK, session_lane
@@ -155,51 +153,6 @@ async def test_an_agent_with_a_busy_session_is_not_deleted(container, make_agent
     await wait_until_done(container, job.id)
 
 
-async def test_an_agent_with_a_queued_reflection_is_not_deleted(container, make_agent, models):
-    from muliao.reflection.service import reflection_lane
-
-    agent = await make_agent("alpha")
-    async with container.db.transaction() as s:
-        container.queue.enqueue(
-            s,
-            kind=REFLECTION_TASK,
-            lane=reflection_lane(agent.id),
-            agent_id=agent.id,
-            session_id=None,
-            payload={"from_message_id": 0, "to_message_id": 0},
-        )
-    with pytest.raises(Conflict, match="working"):
-        await container.agent_lifecycle.delete(agent.id, author="user")
-
-
-async def test_a_reflection_started_after_the_deletion_mark_is_skipped(container, make_agent, caplog):
-    """反思排队之后 agent 才进入删除流程（这里直接打标记，跳过删除前的忙碌检查）：这次反思不做、不调模型；
-    一次查询就区分出「正在删除」，行不存在才是 bug。"""
-    from muliao.reflection.service import reflection_lane
-
-    agent = await make_agent("alpha")
-    assert (await container.agents.active_unless_deleting(agent.id)) == await container.agents.get(agent.id)
-    async with container.db.transaction() as s:
-        container.queue.enqueue(
-            s,
-            kind=REFLECTION_TASK,
-            lane=reflection_lane(agent.id),
-            agent_id=agent.id,
-            session_id=None,
-            payload={"from_message_id": 0, "to_message_id": 1},
-        )
-        (await s.get(Agent, agent.id)).deleting_by = "user"
-    assert await container.agents.active_unless_deleting(agent.id) is None
-    with pytest.raises(NotFound):
-        await container.agents.active_unless_deleting("0" * 12)
-
-    with caplog.at_level(logging.INFO, logger="muliao.reflection.service"):
-        await drain(container)
-
-    assert "reflection of a deleting agent skipped" in caplog.text
-    assert await _failed_tasks(container) == []
-
-
 async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     agent = await make_agent("alpha")
     await container.agent_lifecycle.delete(agent.id, author="user")
@@ -317,29 +270,6 @@ async def test_deleting_a_session_before_its_run_ended_is_delivered_leaves_no_no
     await drain(container)
 
     assert await container.notifications.list(10) == []
-    assert await _failed_tasks(container) == []
-
-
-async def test_deleting_an_agent_before_its_run_ended_is_delivered_schedules_no_reflection(
-    container, make_agent, models
-):
-    from muliao.reflection.tables import ReflectionCheckpoint
-    from tests.test_flow import run_only
-
-    agent = await make_agent("alpha")
-    async with container.db.transaction() as s:
-        (await s.get(Agent, agent.id)).reflect_every = 1
-    await start(container, agent.id, "hi")
-    await run_only(container)
-    await container.agent_lifecycle.delete(agent.id, author="user")
-    assert await _lanes_of(container, "reflection.run_ended", "reflection.agent_deleting") == {
-        f"reflection-events:{agent.id}"
-    }
-    await drain(container)
-
-    async with container.db.transaction() as s:
-        assert await s.get(ReflectionCheckpoint, agent.id) is None
-        assert (await s.scalars(select(Task).where(Task.kind == REFLECTION_TASK))).all() == []
     assert await _failed_tasks(container) == []
 
 
@@ -466,8 +396,7 @@ async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(con
 
 
 async def test_a_deleting_agents_private_resources_can_no_longer_be_written(container, make_agent):
-    """写私有资源之前 owner 必须还可用：由资源仓库在它的锁里检查（agents.active，ResourceRepo），不论写入来自 HTTP、工具
-    还是反思；删除流程之后在同一把锁里删掉资源目录，所以不会留下孤儿目录。公共资源不受影响。"""
+    """写私有资源之前 owner 必须还可用：由资源仓库在它的锁里检查（agents.active，ResourceRepo），不论写入来自 HTTP 还是工具；删除流程之后在同一把锁里删掉资源目录，所以不会留下孤儿目录。公共资源不受影响。"""
     from muliao.agents.api import McpTransport, mcp_config
 
     agent = await make_agent("alpha")

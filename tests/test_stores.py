@@ -584,18 +584,6 @@ async def test_reconcile_converges_from_any_mix_of_staged_and_unstaged_changes(
     assert await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA) is not None
 
 
-def test_stored_responses_carry_the_kind_that_step_counting_queries():
-    import json
-
-    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
-
-    from muliao.sessions.codec import KIND_PATH, RESPONSE_KIND, dump_message
-
-    field = KIND_PATH.removeprefix("$.")
-    assert json.loads(dump_message(ModelResponse(parts=[TextPart("x")])))[field] == RESPONSE_KIND
-    assert json.loads(dump_message(ModelRequest(parts=[UserPromptPart("x")])))[field] != RESPONSE_KIND
-
-
 async def test_contents_at_reads_every_revision_in_one_batch(repo: ResourceRepo):
     """历史里每一版的内容一次读出（cat-file --batch），与版本一一对应：多行、非 ASCII、空内容都按字节长度切分。"""
     path = repo.root / "public" / "prompt.md"

@@ -18,7 +18,7 @@ LAYERS: list[set[str]] = [
     {"vault"},
     {"agent_runtime"},
     {"sessions"},
-    {"jobs", "reflection", "notifications", "triggers", "issues"},
+    {"jobs", "notifications", "triggers", "issues"},
 ]
 DOMAINS = set().union(*LAYERS)
 RANK = {d: rank for rank, layer in enumerate(LAYERS) for d in layer}
@@ -227,7 +227,6 @@ def test_public_functions_in_the_callers_transaction_are_reviewed_read_only_quer
 # 组合根注入给删除 agent 的阻止查询（不经 api 模块，同样在调用方的事务里执行）：也只能是审查过的只读查询
 READ_ONLY_DELETION_BLOCKERS = {
     "SessionActivity.blocks_agent_deletion_in",
-    "ReflectionScheduler.blocks_agent_deletion_in",
 }
 
 

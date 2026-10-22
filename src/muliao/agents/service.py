@@ -32,7 +32,6 @@ class AgentDefaults:
     """新建 agent 时未指定的字段取这些值（来自服务端配置）；API 与工具共用这一份。"""
 
     model: str
-    reflect_every: int
     # 当前配置下可选的工具组（tool_catalog.available）：校验与默认值都从它取
     groups: tuple[ToolGroupInfo, ...]
 
@@ -43,13 +42,12 @@ class AgentDefaults:
 
 @dataclass(frozen=True)
 class AgentSpec:
-    """新建 agent。model / reflect_every / tool_groups 为 None 时取 AgentDefaults。"""
+    """新建 agent。model / tool_groups 为 None 时取 AgentDefaults。"""
 
     name: str
     description: str
     instructions: str
     model: str | None = None
-    reflect_every: int | None = None
     tool_groups: list[str] | None = None
 
 
@@ -61,7 +59,6 @@ class AgentPatch:
     description: str | None = None
     model: str | None = None
     instructions: str | None = None
-    reflect_every: int | None = None
     tool_groups: list[str] | None = None
 
 
@@ -72,7 +69,6 @@ class _AgentFields:
     name: str
     description: str
     model: str
-    reflect_every: int
     tool_groups: list[str]
 
 
@@ -85,7 +81,6 @@ class AgentInfo:
     description: str
     model: str
     tool_groups: tuple[str, ...]
-    reflect_every: int
     created_at: datetime
 
 
@@ -96,7 +91,6 @@ def info_of(agent: Agent) -> AgentInfo:
         description=agent.description,
         model=agent.model,
         tool_groups=tuple(agent.tool_groups),
-        reflect_every=agent.reflect_every,
         created_at=agent.created_at,
     )
 
@@ -207,11 +201,9 @@ class AgentService:
         if leftovers:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
-    def _check(self, *, description: str, model: str, reflect_every: int, tool_groups: list[str]) -> None:
+    def _check(self, *, description: str, model: str, tool_groups: list[str]) -> None:
         if not description.strip():
             raise InvalidInput("agent description must not be empty")
-        if reflect_every < 1:
-            raise InvalidInput("reflect_every must be >= 1")
         unknown = self._unavailable_groups(tool_groups)
         if unknown or len(set(tool_groups)) != len(tool_groups):
             raise InvalidInput(
@@ -229,11 +221,8 @@ class AgentService:
         """author：创建者，"user" 或创建它的 agent 的 id（记在指令的第一版上）。"""
         name = new_agent_name(spec.name)
         model = self.defaults.model if spec.model is None else spec.model
-        reflect_every = self.defaults.reflect_every if spec.reflect_every is None else spec.reflect_every
         tool_groups = self.defaults.group_names if spec.tool_groups is None else spec.tool_groups
-        self._check(
-            description=spec.description, model=model, reflect_every=reflect_every, tool_groups=tool_groups
-        )
+        self._check(description=spec.description, model=model, tool_groups=tool_groups)
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
         # 先写资源文件、后插数据库行：agent 一旦存在，它的指令与记忆就必须在（每一轮、agent 列表都要读）。
@@ -254,7 +243,6 @@ class AgentService:
                 name=name,
                 description=spec.description,
                 model=model,
-                reflect_every=reflect_every,
                 tool_groups=tool_groups,
             )
             s.add(agent)
@@ -279,7 +267,6 @@ class AgentService:
             fields = self._validated(agent, patch)
             await self._ensure_name_free(s, fields.name, agent_id)
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
-            agent.reflect_every = fields.reflect_every
             # JSON 列只在整体赋值时被追踪
             agent.tool_groups = list(fields.tool_groups)
             if instructions_changed:
@@ -293,15 +280,9 @@ class AgentService:
             name=agent.name if patch.name is None else new_agent_name(patch.name),
             description=agent.description if patch.description is None else patch.description,
             model=agent.model if patch.model is None else patch.model,
-            reflect_every=agent.reflect_every if patch.reflect_every is None else patch.reflect_every,
             tool_groups=agent.tool_groups if patch.tool_groups is None else patch.tool_groups,
         )
-        self._check(
-            description=fields.description,
-            model=fields.model,
-            reflect_every=fields.reflect_every,
-            tool_groups=fields.tool_groups,
-        )
+        self._check(description=fields.description, model=fields.model, tool_groups=fields.tool_groups)
         return fields
 
     async def get_active(self, agent_id: str) -> AgentInfo:
@@ -309,13 +290,6 @@ class AgentService:
         同一事务里用 active_agent_in，私有资源由资源仓库在它的锁里检查（agents.active，ResourceRepo）。"""
         async with self._db.transaction() as s:
             return await active_agent_in(s, agent_id)
-
-    async def active_unless_deleting(self, agent_id: str) -> AgentInfo | None:
-        """一次查询区分三种情况：还可用的返回它，正在删除的返回 None；行不存在报 NotFound——给调用方保证行还在的地方用
-        （例如 agent 的 lane 上的任务：删除流程的最后一步等 lane 空闲），不存在就是 bug。"""
-        async with self._db.transaction() as s:
-            agent = await _row_in(s, agent_id)
-            return None if agent.deleting_by is not None else info_of(agent)
 
     async def get(self, agent_id: str) -> AgentInfo:
         """agent（包括正在删除的）。"""

@@ -182,7 +182,7 @@ when its latest run failed for good."""
 
 
 def _require_session(ctx: RunContext[RunScope]) -> str:
-    """委派组只组合进有会话的运行（反思与临时 agent 的工具组合里没有它）。"""
+    """委派组只组合进有会话的运行（临时 agent 的工具组合里没有它）。"""
     if ctx.deps.session_id is None:
         raise RuntimeError(f"delegation tools used outside a session by agent {ctx.deps.agent_id}")
     return ctx.deps.session_id

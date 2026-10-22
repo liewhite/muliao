@@ -268,7 +268,9 @@ async def test_parallel_partial_updates_of_one_agent_both_survive(container, mak
                     ToolCallPart(
                         "update_agent", {"agent": "worker", "description": "new desc"}, tool_call_id="a"
                     ),
-                    ToolCallPart("update_agent", {"agent": "worker", "reflect_every": 7}, tool_call_id="b"),
+                    ToolCallPart(
+                        "update_agent", {"agent": "worker", "new_name": "worker2"}, tool_call_id="b"
+                    ),
                 ]
             )
         return ModelResponse(parts=[TextPart("done")])
@@ -278,7 +280,7 @@ async def test_parallel_partial_updates_of_one_agent_both_survive(container, mak
     await drain(container)
 
     updated = await container.agents.get(target.id)
-    assert (updated.description, updated.reflect_every) == ("new desc", 7)
+    assert (updated.description, updated.name) == ("new desc", "worker2")
     # 未给出的指令不被改写：不追加版本
     assert len(await prompt_history(container, target.id)) == 1
 

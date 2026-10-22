@@ -129,8 +129,6 @@ class TranscriptionConfig(_Section):
 class RuntimeConfig(_Section):
     task_max_attempts: int = Field(default=5, ge=1)
     task_retry_base_seconds: float = Field(default=5.0, gt=0)
-    # 新建 agent 的默认反思间隔（步，即模型回复数）
-    default_reflect_every: int = Field(default=30, ge=1)
     # 发给模型的上下文（上一次请求的输入 token）超过此值，就在步与步之间压缩该 session 的早期上下文
     compaction_threshold_tokens: int = Field(default=100_000, ge=1000)
     # 压缩时保留最近这么多步原文不压缩（一步是一次模型回复及其工具结果）

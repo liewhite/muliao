@@ -57,8 +57,6 @@ from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import Commit, TaskAdmin, TaskQueue
 from muliao.platform.tooling import RunScope
 from muliao.platform.worker import RunNow, Worker, register_handlers
-from muliao.reflection.service import REFLECTION_TASK, ReflectionHandler, ReflectionLog, ReflectionScheduler
-from muliao.sessions.agent_history import AgentHistory
 from muliao.sessions.api import SessionActivity
 from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import CompactionHandler, Compactor
@@ -96,7 +94,7 @@ log = logging.getLogger(__name__)
 class Container:
     """HTTP 层看到的组合根：各领域的门面（类型都由领域的 api 模块导出）、平台的展示事件流与「任务」页的操作，以及
     服务的生命周期。HTTP 层只经这些调用领域，拿不到领域内部的对象（消费者、队列的排任务与领取、资源仓库的直接写入、
-    总线的发布……）：窄接口（TaskAdmin、RevisionHistory、EventFeed、ReflectionLog）是只转发窄方法的包装对象，运行时
+    总线的发布……）：窄接口（TaskAdmin、RevisionHistory、EventFeed）是只转发窄方法的包装对象，运行时
     也拿不到背后的完整对象。tests/test_boundaries 检查字段的声明类型，以及运行时的值恰好是声明的类型。"""
 
     # SSE：进程内的展示事件（只订阅）
@@ -118,7 +116,6 @@ class Container:
     webhooks: Webhooks
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
-    reflection: ReflectionLog
     models: ModelRegistry
     files: FileStore
     usage: UsageLog
@@ -165,8 +162,6 @@ class Assembly:
     work: WorkWatcher
     retention: TaskRetention
     compactor: Compactor
-    reflection: ReflectionScheduler
-    reflection_log: ReflectionLog
     consumer: Consumer
     # 停止会话的命令（sessions.halt.SessionStopper）
     stopper: SessionStopper
@@ -197,7 +192,6 @@ class Assembly:
             webhooks=self.webhooks,
             push_subscriptions=self.push_subscriptions,
             vapid=self.vapid,
-            reflection=self.reflection_log,
             models=self.models,
             files=self.files,
             usage=self.usage,
@@ -307,17 +301,10 @@ def assemble(
         memory,
         model_checker or models.check,
         prompts,
-        AgentDefaults(settings.llm.default_model, settings.runtime.default_reflect_every, groups),
+        AgentDefaults(settings.llm.default_model, groups),
     )
     activity = SessionActivity(queue)
-    agent_history = AgentHistory(db)
-    reflection = ReflectionScheduler(db, queue, agents, agent_history)
-    agent_lifecycle = AgentLifecycle(
-        db,
-        agents,
-        messaging,
-        {"sessions": activity.blocks_agent_deletion_in, "reflection": reflection.blocks_agent_deletion_in},
-    )
+    agent_lifecycle = AgentLifecycle(db, agents, messaging, {"sessions": activity.blocks_agent_deletion_in})
     # 停止会话不依赖消费者：正在进行的运行的登记与 SessionHalt 先构造，消费者用同一份登记运行
     runs: StoppableRuns[Commit] = StoppableRuns(db.exclusive)
     halt = SessionHalt(db, queue, messaging)
@@ -389,7 +376,7 @@ def assemble(
     temp_profile = RunProfile(toolsets=[workspace_toolset(vault, limits, files), *web_tools, mcp_tools])
     # 每个组的实现，按目录的组名常量登记：与目录的组不一一对应是代码不一致，在启动时报出
     implementations = {
-        # 对话里用的这份带后台任务（只有会话运行会选用工具组；反思不开放它）
+        # 对话里用的这份带后台任务（只有会话运行会选用工具组）
         tool_catalog.WORKSPACE: [session_workspace_toolset(vault, limits, files, jobs)],
         tool_catalog.TEMP_AGENT: [temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir)],
         tool_catalog.DELEGATION: [
@@ -433,7 +420,6 @@ def assemble(
     vault.subscribe(messaging)
     triggers.subscribe(messaging)
     issues.subscribe(messaging)
-    reflection.subscribe(messaging)
     consumer = Consumer(
         db,
         runtime,
@@ -453,7 +439,6 @@ def assemble(
             (EVENT_TASK, messaging),
             (RUN_TASK, RunHandler(consumer, queue, messaging)),
             (COMPACTION_TASK, CompactionHandler(db, compactor)),
-            (REFLECTION_TASK, ReflectionHandler(db, runtime, tool_groups, agents, agent_history)),
             (DELIVER_TASK, DeliverHandler(db, pusher)),
         ),
         bus,
@@ -493,8 +478,6 @@ def assemble(
         # 只清理投递类的任务（docs/architecture.md 3.2「保留」）
         retention=TaskRetention(queue, prunable=(EVENT_TASK, DELIVER_TASK)),
         compactor=compactor,
-        reflection=reflection,
-        reflection_log=ReflectionLog(db, agent_history),
         consumer=consumer,
         stopper=stopper,
         models=models,
