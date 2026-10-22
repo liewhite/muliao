@@ -303,6 +303,15 @@ class AgentService:
         async with self._db.transaction() as s:
             return await active_agent_in(s, agent_id)
 
+    async def active_unless_deleting(self, agent_id: str) -> AgentInfo | None:
+        """一次查询区分三种情况：还可用的返回它，正在删除的返回 None；行不存在报 NotFound——给调用方保证行还在的地方用
+        （例如 agent 的 lane 上的任务：删除流程的最后一步等 lane 空闲），不存在就是 bug。"""
+        async with self._db.transaction() as s:
+            agent = await s.get(Agent, agent_id)
+            if agent is None:
+                raise NotFound(f"agent {agent_id!r} not found")
+            return None if agent.deleting_by is not None else info_of(agent)
+
     async def get(self, agent_id: str) -> AgentInfo:
         """agent（包括正在删除的）。"""
         async with self._db.transaction() as s:

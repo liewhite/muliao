@@ -212,11 +212,9 @@ class ReflectionHandler:
         if task.agent_id is None:
             raise RuntimeError(f"reflection task {task.id} must reference an agent")
         from_id, to_id = task.payload["from_message_id"], task.payload["to_message_id"]
-        # 反思的 lane 忙时 agent 的行不会被删（删除流程的最后一步等这条 lane 空闲）：行不在是 bug，agent_in 报错
-        await self._agents.get(task.agent_id)
-        try:
-            agent = await self._agents.get_active(task.agent_id)
-        except NotFound:
+        # 反思的 lane 忙时 agent 的行不会被删（删除流程的最后一步等这条 lane 空闲）：行不在是 bug，这里报 NotFound
+        agent = await self._agents.active_unless_deleting(task.agent_id)
+        if agent is None:
             # 投递之后 agent 进入删除流程：删除流程会结束排队的反思，这一次（已开始）不做
             log.info("reflection of a deleting agent skipped", extra={"agent": task.agent_id})
             return no_commit
