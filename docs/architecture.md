@@ -523,7 +523,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。公共 skill 对�
 
 **威胁模型：agent 与运行服务的系统用户同等可信。** agent 能执行任意 shell 命令，因此能读到服务能读到的一切——包括配置文件里的 `vault.key` 与 LLM API key、数据库文件。下面的措施只防止 secret **意外**进入对话记录、日志和前端，不防 agent 本身：
 
-能缩小的是**提示注入的影响面**：处理外部事件或网页内容的 agent 用 `tool_groups` 只开放它需要的工具组（例如只开 `notify`），这样即使输入里带有恶意指令，它也删不了 agent、改不了公共 skill（它的描述进入所有 agent 的 skill 索引）；但全局记忆不受工具组限制，见下面的「持久化」、用不了 MCP、动不了 vault 和触发器。选组时按组里的工具实际能做什么判断（`get_agent` 列出每组的工具），不另设「权限等级」标记：例如 `workspace` 有 shell，`temp_agent` 的临时 agent 自带 shell，`delegation` 与 `issues` 借目标 agent 自己的工具组之手做事，`agents` 可以给自己加组，`triggers` 可以让任意 agent 带着任意说明定时运行，`mcp_admin` 可以添加运行任意命令的 stdio MCP。`web` 本身就是不可信内容的入口（搜索结果与网页正文），也是外发通道：抓取的 URL 可以带上对话里的任何内容，发给搜索服务与目标站点。所以「只开 `notify` + `web`」看似很窄，对处理不可信输入的 agent 已经是一条完整的外泄链路，这类 agent 不应选 `web`；配置了 `[web]` 后新建 agent 默认也包括它。
+能缩小的是**提示注入的影响面**：处理外部事件或网页内容的 agent 用 `tool_groups` 只开放它需要的工具组（例如只开 `notify`），这样即使输入里带有恶意指令，它也删不了 agent、改不了公共 skill（它的描述进入所有 agent 的 skill 索引）、用不了 MCP、动不了 vault 和触发器；但记忆（含全局记忆）不受工具组限制，见下面的「持久化」。选组时按组里的工具实际能做什么判断（`get_agent` 列出每组的工具），不另设「权限等级」标记：例如 `workspace` 有 shell，`temp_agent` 的临时 agent 自带 shell，`delegation` 与 `issues` 借目标 agent 自己的工具组之手做事，`agents` 可以给自己加组，`triggers` 可以让任意 agent 带着任意说明定时运行，`mcp_admin` 可以添加运行任意命令的 stdio MCP。`web` 本身就是不可信内容的入口（搜索结果与网页正文），也是外发通道：抓取的 URL 可以带上对话里的任何内容，发给搜索服务与目标站点。所以「只开 `notify` + `web`」看似很窄，对处理不可信输入的 agent 已经是一条完整的外泄链路，这类 agent 不应选 `web`；配置了 `[web]` 后新建 agent 默认也包括它。
 
 注入还可能**持久化**：记忆（含全局记忆）与私有 skill 总是开放（不受 `tool_groups` 限制），处理不可信输入的 agent 可能把注入的内容写进它们，之后该 agent 的每次运行都会带着它；写进全局记忆的会带进**每个** agent 的运行（全局记忆由各 agent 的自进化共同维护，这是有意的取舍）。工具组不变，不能越权。缓解手段是版本历史与作者记录：界面上能看到每一版是谁改的，随时回滚；每日的知识审查也审全局记忆的改动。
 
