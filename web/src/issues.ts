@@ -1,19 +1,20 @@
 // issue 看板的纯逻辑：状态与优先级的展示顺序、按状态分列、时间线文字
 
-import type { Agent, Issue, IssueActivity, IssuePriority, IssueStatus } from './api'
+import { USER, type Agent, type Issue, type IssueActivity, type IssuePriority, type IssueStatus } from './api'
 
-/** 看板的列顺序（也是列表视图的分组顺序）；受阻最不常用，放最后 */
-export const STATUSES: readonly IssueStatus[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled', 'blocked']
-
+/** 状态的标签；键的顺序就是看板的列顺序（也是列表视图的分组顺序）：受阻最不常用，放最后 */
 export const STATUS_LABEL: Record<IssueStatus, string> = {
   backlog: 'Backlog',
   todo: 'Todo',
   in_progress: '进行中',
   in_review: '待审核',
-  blocked: '受阻',
   done: '完成',
   cancelled: '已取消',
+  blocked: '受阻',
 }
+
+/** 看板的列顺序：从 STATUS_LABEL 的键推导，Record 保证每个状态都在 */
+export const STATUSES = Object.keys(STATUS_LABEL) as readonly IssueStatus[]
 
 /** 状态圆点的颜色（Tailwind 类） */
 export const STATUS_COLOR: Record<IssueStatus, string> = {
@@ -26,8 +27,7 @@ export const STATUS_COLOR: Record<IssueStatus, string> = {
   cancelled: 'border-muted bg-muted',
 }
 
-export const PRIORITIES: readonly IssuePriority[] = ['urgent', 'high', 'medium', 'low', 'none']
-
+/** 优先级的标签；键的顺序就是展示顺序 */
 export const PRIORITY_LABEL: Record<IssuePriority, string> = {
   urgent: '紧急',
   high: '高',
@@ -36,8 +36,8 @@ export const PRIORITY_LABEL: Record<IssuePriority, string> = {
   none: '无优先级',
 }
 
-/** 指派人取值里表示用户的那个（与后端 issues.rules.USER 一致） */
-export const USER = 'user'
+/** 优先级的展示顺序：从 PRIORITY_LABEL 的键推导 */
+export const PRIORITIES = Object.keys(PRIORITY_LABEL) as readonly IssuePriority[]
 
 export const issueRoute = (id: number) => `/issues/${id}`
 

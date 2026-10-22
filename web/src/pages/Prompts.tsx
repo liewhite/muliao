@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Disclosure, toast } from '@heroui/react'
 import { History, RotateCcw } from 'lucide-react'
-import { api, type AgentId, type ResourceKind } from '../api'
+import { USER, api, type AgentId, type ResourceKind } from '../api'
 import {
   ActionButton,
   EmptyHint,
@@ -64,7 +64,7 @@ export function ResourceHistory({
                   <Card key={r.rev} variant="secondary">
                     <Card.Header className="flex flex-row items-center gap-2">
                       <Card.Description className="flex-1">
-                        {formatTime(r.created_at)} · {r.author === 'user' ? '用户' : agentLabel(agents.data, r.author as AgentId)}
+                        {formatTime(r.created_at)} · {r.author === USER ? '用户' : agentLabel(agents.data, r.author as AgentId)}
                       </Card.Description>
                       {i === 0 ? (
                         <Chip size="sm" color="success" variant="soft">

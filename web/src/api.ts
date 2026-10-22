@@ -27,6 +27,9 @@ export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['NotificationOut']
 
+/** 指代用户的那个值（与后端 agents.api.USER 一致）：issue 的指派人、资源修改的作者等 */
+export const USER = 'user'
+
 /** 引用文件的地址前缀（与后端 muliao.files.FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
 export const FILES_PATH = '/api/files'
 
