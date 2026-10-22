@@ -36,17 +36,39 @@ self.addEventListener('push', (event) => {
   )
 })
 
+// 待跳转的页面存在 Cache Storage（页面与 SW 同源共用，SW 被系统终止也不丢），每次点击一条，由页面取走（取走即删、只认最新的），见 swNavigate.ts。
+// 不只靠消息：iOS 主屏应用在后台被挂起或冷启动时消息会丢，页面停在原处。
+// 叫醒页面用 BroadcastChannel 而不是 client.postMessage：不依赖 clients.matchAll 列出窗口（iOS 应用开着时可能列不出，
+// 于是去 openWindow，而它对已开着的应用不跳转，#133）
+const PENDING_CACHE = 'muliao-pending-navigation'
+
 // 打开（或聚焦已打开的窗口并跳转到）url
 async function open(url) {
+  try {
+    const at = Date.now()
+    const cache = await self.caches.open(PENDING_CACHE)
+    await cache.put(`/pending-navigation/${at}-${Math.random()}`, new Response(JSON.stringify({ url, at })))
+    // 叫醒开着的页面马上来取；在后台或正在加载时收不到也无妨，它回到前台、加载完时自己会取
+    const wake = new self.BroadcastChannel(PENDING_CACHE)
+    wake.postMessage({ type: 'navigate' })
+    wake.close()
+  } catch (e) {
+    // 存不下就只是开着的应用不跳；应用照样要拉起来（没打开时 openWindow 仍直接打开 url）
+    console.error('recording the pending navigation failed', url, e)
+  }
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
   // 优先用户正在看的窗口
   const client = windows.find((c) => c.focused) ?? windows.find((c) => c.visibilityState === 'visible') ?? windows[0]
   if (client === undefined) {
-    await self.clients.openWindow(url)
+    // 打不开（iOS 有时只把应用拉起到首页）时，页面加载后从 Cache Storage 取到 url 再跳
+    try {
+      await self.clients.openWindow(url)
+    } catch (e) {
+      console.error('opening a window failed', e)
+    }
     return
   }
-  // 先发跳转再聚焦：focus 在部分平台（iOS 主屏应用）会被拒绝，拒绝了也要跳；页面在重新加载时消息由 swNavigate.ts 暂存
-  client.postMessage({ type: 'navigate', url })
+  // focus 在部分平台（iOS 主屏应用）会被拒绝，系统点通知本来就会把应用切到前台
   try {
     await client.focus()
   } catch (e) {
