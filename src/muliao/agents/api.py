@@ -1,6 +1,6 @@
 """agent 领域的公开接口：别的领域只经这里（与 agents.events）使用 agent 领域（docs/architecture.md 2.3）。
 
-- 查询：AgentService 的 get / get_active / find_by_name / list，事务内的 agent_in / active_agent_in，返回 AgentInfo；
+- 查询：AgentService 的 get / get_active / active_unless_deleting / find_by_name / list，事务内的 agent_in / active_agent_in，返回 AgentInfo；
   名称映射 AgentService.names / 事务内的 agent_names_in（AgentNames，已删除的 agent 也有展示名）；
 - 删除 agent（AgentLifecycle）；
 - 资源：指令、记忆、skill 的存取（自我改进工具与指令组装用），MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、资源的版本历史（RevisionHistory，只读）；

@@ -263,7 +263,7 @@ class JobRunner:
             await s.delete(job)
             log.info("background job that never started discarded", extra={"job_id": job.id})
             return
-        self._interrupt_in(s, job, reason, last, may_be_alive=may_be_alive)
+        await self._interrupt_in(s, job, reason, last, may_be_alive=may_be_alive)
 
     async def _cleanup(self, job_id: int, stage: str, cleanup: Coroutine[Any, Any, None]) -> None:
         """启动失败后的清理：屏蔽取消、设时限；做不完就记下来，交给对账。"""
@@ -350,7 +350,9 @@ class JobRunner:
             "background job finished", extra={"job_id": job_id, "status": status, "exit_code": exit_code}
         )
 
-    def _interrupt_in(self, s: AsyncSession, job: Job, reason: str, last: str, *, may_be_alive: bool) -> None:
+    async def _interrupt_in(
+        self, s: AsyncSession, job: Job, reason: str, last: str, *, may_be_alive: bool
+    ) -> None:
         """把一个不再有人监督的任务记为被中断并告诉 agent。recover（崩溃后启动）、对账（监督意外结束）、关停共用。"""
         now = self._clock()
         job.status, job.finished_at = JobStatus.INTERRUPTED, now
@@ -504,11 +506,11 @@ class JobRunner:
         if not handles:
             return
 
-        async def interrupt(s: AsyncSession, job: Job, last: str) -> None:
-            self._interrupt_in(s, job, "the service was stopped", last, may_be_alive=False)
-
         await self._close_each(
-            lambda: select(Job).where(Job.id.in_(list(handles)), Job.status == JobStatus.RUNNING), interrupt
+            lambda: select(Job).where(Job.id.in_(list(handles)), Job.status == JobStatus.RUNNING),
+            lambda s, job, last: self._interrupt_in(
+                s, job, "the service was stopped", last, may_be_alive=False
+            ),
         )
         log.info("background jobs stopped with the service", extra={"job_ids": list(handles)})
 

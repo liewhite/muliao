@@ -26,8 +26,10 @@ from muliao.vault.tables import Secret
 
 log = logging.getLogger(__name__)
 
-# secret key 的语法：存储时校验与模板里的引用共用这一份
-_KEY_SYNTAX = r"[A-Za-z_][A-Za-z0-9_]{0,99}"
+# secret key 的语法：存储时校验与模板里的引用共用这一份。长度上限只在存储时检查：引用了超长 key 的模板照样认作引用，
+# 解析时按「不存在」报错，而不是当成字面文本原样代入
+_KEY_SYNTAX = r"[A-Za-z_][A-Za-z0-9_]*"
+_KEY_MAX = 100
 _KEY = re.compile(rf"^{_KEY_SYNTAX}$")
 # 配置模板中的引用语法：${vault:KEY}
 VAULT_REF = re.compile(rf"\$\{{vault:({_KEY_SYNTAX})\}}")
@@ -47,8 +49,10 @@ class SecretInfo:
 
 
 def validate_key(key: str) -> str:
-    if not _KEY.fullmatch(key):
-        raise InvalidInput(f"invalid secret key {key!r}: must match {_KEY.pattern}")
+    if not _KEY.fullmatch(key) or len(key) > _KEY_MAX:
+        raise InvalidInput(
+            f"invalid secret key {key!r}: must match {_KEY.pattern} and be at most {_KEY_MAX} characters"
+        )
     return key
 
 

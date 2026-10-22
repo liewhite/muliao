@@ -126,10 +126,15 @@ async def agent_names_in(s: AsyncSession) -> AgentNames:
 async def agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     """agent（包括正在删除的）。在调用方的事务里读它的展示信息（名称、模型）：这些字段的修改与调用方的写入之间没有
     先后要求。"""
+    return info_of(await _row_in(s, agent_id))
+
+
+async def _row_in(s: AsyncSession, agent_id: str) -> Agent:
+    """agent 的行（包括正在删除的）；不存在报 NotFound。"""
     agent = await s.get(Agent, agent_id)
     if agent is None:
         raise NotFound(f"agent {agent_id!r} not found")
-    return info_of(agent)
+    return agent
 
 
 class AgentService:
@@ -307,9 +312,7 @@ class AgentService:
         """一次查询区分三种情况：还可用的返回它，正在删除的返回 None；行不存在报 NotFound——给调用方保证行还在的地方用
         （例如 agent 的 lane 上的任务：删除流程的最后一步等 lane 空闲），不存在就是 bug。"""
         async with self._db.transaction() as s:
-            agent = await s.get(Agent, agent_id)
-            if agent is None:
-                raise NotFound(f"agent {agent_id!r} not found")
+            agent = await _row_in(s, agent_id)
             return None if agent.deleting_by is not None else info_of(agent)
 
     async def get(self, agent_id: str) -> AgentInfo:

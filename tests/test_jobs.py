@@ -592,3 +592,44 @@ async def test_output_of_a_quiet_job_reaches_the_log_even_with_long_secrets(tmp_
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_an_orphan_that_ends_while_its_log_is_read_is_left_alone(container, make_agent, models):
+    """对账在事务外读日志（_close_each）：读日志期间候选任务的状态变了（这里由别处记为结束），写事务里重新选取时
+    就不再收尾它——不改它的结局、不删它的行、不投「被中断」。"""
+    import threading
+
+    from muliao.jobs import runner as runner_module
+
+    session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
+    await container.jobs.kill(job.id, job.agent_id)
+    await wait_until_done(container, job.id)
+    await deliver(container)
+    # 让它看起来像监督意外结束的任务：库里还是 running，本进程没人监督
+    async with container.db.transaction() as s:
+        (await s.get(Job, job.id)).status = JobStatus.RUNNING
+    real_tail = runner_module.tail
+    entered, gate = threading.Event(), threading.Event()
+
+    def slow_tail(path):  # noqa: ANN001, ANN202
+        entered.set()
+        gate.wait(10)
+        return real_tail(path)
+
+    runner_module.tail = slow_tail
+    try:
+        check = asyncio.create_task(container.jobs.check())
+        await asyncio.to_thread(entered.wait, 5)
+        async with container.db.transaction() as s:
+            (await s.get(Job, job.id)).status = JobStatus.KILLED
+        gate.set()
+        assert await check == 0
+    finally:
+        gate.set()
+        runner_module.tail = real_tail
+    await deliver(container)
+
+    async with container.db.transaction() as s:
+        assert (await s.get(Job, job.id)).status == JobStatus.KILLED
+    events = [m.content for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
+    assert not any("interrupted" in e for e in events)
