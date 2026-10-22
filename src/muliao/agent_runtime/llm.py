@@ -2,6 +2,7 @@
 `[llm.providers.<名>]` 的键。密钥与地址只来自配置文件。"""
 
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -10,8 +11,10 @@ import httpx2
 import openai
 from google.genai import errors as google_errors
 from google.genai import types as google_types
+from pydantic_ai.concurrency import AbstractConcurrencyLimiter, ConcurrencyLimiter
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
+from pydantic_ai.models.concurrency import ConcurrencyLimitedModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.providers import Provider
@@ -118,11 +121,40 @@ KINDS: dict[ProviderType, ProviderKind] = {
 }
 
 
+class _ProviderLimiter(AbstractConcurrencyLimiter):
+    """一个 provider 同时进行的模型请求上限（ProviderConfig.max_concurrency），记录排队：请求要等配额时记一条，
+    拿到时记等了多久——慢是因为排队还是因为模型本身，从日志能分清。"""
+
+    def __init__(self, provider: str, max_running: int):
+        self._provider = provider
+        self._limiter = ConcurrencyLimiter(max_running, name=f"provider:{provider}")
+
+    async def acquire(self, source: str) -> None:
+        if self._limiter.available_count:
+            await self._limiter.acquire(source)
+            return
+        ctx = {"provider": self._provider, "source": source, "waiting": self._limiter.waiting_count + 1}
+        log.info("model request waiting for a slot", extra=ctx)
+        started = time.monotonic()
+        await self._limiter.acquire(source)
+        log.info(
+            "model request got a slot",
+            extra={**ctx, "waited_seconds": round(time.monotonic() - started, 1)},
+        )
+
+    def release(self) -> None:
+        self._limiter.release()
+
+
 class ModelRegistry:
     def __init__(self, config: LlmConfig):
         self._config = config
         # 每个 provider 一个客户端，在所有 agent 间复用连接池
         self._providers: dict[str, Provider] = {}  # type: ignore[type-arg]
+        # 每个 provider 一个并发上限，这个 provider 下的所有模型共用
+        self._limiters = {
+            name: _ProviderLimiter(name, cfg.max_concurrency) for name, cfg in config.providers.items()
+        }
 
     def _split(self, model: str) -> tuple[str, ProviderConfig, str]:
         try:
@@ -164,5 +196,8 @@ class ModelRegistry:
         return sorted(names)
 
     def resolve(self, model: str) -> Model:
+        """所有模型调用（会话运行、反思、压缩、临时 agent）都经这里拿到模型，并发上限在这里统一套上。"""
         name, cfg, model_name = self._split(model)
-        return KINDS[cfg.type].model(model_name, self._provider(name, cfg), cfg)
+        return ConcurrencyLimitedModel(
+            KINDS[cfg.type].model(model_name, self._provider(name, cfg), cfg), self._limiters[name]
+        )

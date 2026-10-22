@@ -635,3 +635,35 @@ async def test_read_file_truncates_very_long_lines(container, make_agent, models
         ],
     )
     assert "[line truncated]" in outputs[1] and "2\tok" in outputs[1] and len(outputs[1]) < 2100
+
+
+async def test_a_temp_agent_started_from_a_tool_shares_the_model_limit_without_deadlock(
+    container, make_agent, models
+):
+    """模型请求按 provider 限流（agent_runtime.llm），会话运行与它在工具里开的临时 agent 用同一个 provider：上限为 1
+    时也能跑完。工具在模型请求结束、配额还掉之后才执行；pydantic-ai 的嵌套检测只看正在进行的请求。升级 pydantic-ai
+    后这一点若变了，这里会卡住或报 UserError。"""
+    from pydantic_ai.models.concurrency import ConcurrencyLimitedModel
+
+    from muliao.agent_runtime.llm import _ProviderLimiter
+
+    me = await make_agent("manager", model="outer")
+    limiter = _ProviderLimiter("p", 1)
+    answers: list[str] = []
+
+    def outer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if sum(isinstance(m, ModelResponse) for m in messages) == 0:
+            return ModelResponse(
+                parts=[ToolCallPart("run_temp_agent", {"task": "x", "model": "helper"}, tool_call_id="t")]
+            )
+        answers.extend(str(p.content) for p in tool_returns(messages))
+        return ModelResponse(parts=[TextPart("done")])
+
+    models.models["outer"] = ConcurrencyLimitedModel(scripted(outer), limiter)
+    models.models["helper"] = ConcurrencyLimitedModel(
+        scripted(lambda _m, _i: ModelResponse(parts=[TextPart("helped")])), limiter
+    )
+    await start(container, me.id, "do it", origin=Origin.TRIGGER)
+    await drain(container, limit_seconds=5)
+
+    assert answers == ["helped"]

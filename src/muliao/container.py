@@ -91,9 +91,6 @@ from muliao.vault.tools import vault_toolset
 
 log = logging.getLogger(__name__)
 
-# 投递 worker 的槽位：投递短小（进程内的事件、一次推送请求），几个槽位就够，不随 agent 并发配置变化
-_DELIVERY_CONCURRENCY = 4
-
 
 @dataclass(frozen=True)
 class Container:
@@ -159,8 +156,7 @@ class Assembly:
     webhooks: Webhooks
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
-    # agent 工作与投递各一个 worker（见 build_container）
-    workers: tuple[Worker, Worker]
+    worker: Worker
     messaging: Messaging
     threads: Threads
     mail: MailReconciler
@@ -218,8 +214,7 @@ class Assembly:
         try:
             await self._prepare()
             async with self.jobs.running(), anyio.create_task_group() as root:
-                for worker in self.workers:
-                    root.start_soon(_loop, f"worker({','.join(sorted(worker.kinds))})", worker.run_forever)
+                root.start_soon(_loop, "worker", self.worker.run_forever)
                 root.start_soon(_loop, "due", self.due_triggers.run_forever)
                 root.start_soon(_loop, "mail", self.mail.run_forever)
                 root.start_soon(_loop, "checks", self.work.run_forever)
@@ -245,9 +240,8 @@ class Assembly:
         await asyncio.to_thread(self.files.recover)
         # 上次运行留下的「运行中」后台任务：进程已随服务结束，记为被中断并通知 agent（worker 处理这些事件之前）
         await self.jobs.recover()
-        # 所有循环开始之前，按顺序恢复上次进程遗留的 running task（Worker.recover）
-        for worker in self.workers:
-            await worker.recover()
+        # 所有循环开始之前恢复上次进程遗留的 running task（Worker.recover）
+        await self.worker.recover()
 
 
 async def _loop(name: str, run_forever: Callable[[], Awaitable[None]]) -> None:
@@ -452,27 +446,20 @@ def assemble(
         halt,
         compactor,
     )
-    # 各领域的任务种类在这里登记处理器，分给两个 worker，各有各的槽位：调用模型、时长没有上限的 agent 工作占满
-    # 槽位时，毫秒到秒级的投递（事件、推送）不必排在它们后面（曾经 4 个会话运行占满槽位，79 个投递排队 17 分钟）。
-    # 队列只接受登记过的种类（TaskQueue.accept）
-    agent_work = Worker(
+    # 各领域的任务种类在这里登记处理器；队列只接受登记过的种类（TaskQueue.accept）
+    worker = Worker(
         queue,
         register_handlers(
+            (EVENT_TASK, messaging),
             (RUN_TASK, RunHandler(consumer, queue, messaging)),
             (COMPACTION_TASK, CompactionHandler(db, compactor)),
             (REFLECTION_TASK, ReflectionHandler(db, runtime, tool_groups, agents, agent_history)),
+            (DELIVER_TASK, DeliverHandler(db, pusher)),
         ),
         bus,
-        concurrency=settings.runtime.worker_concurrency,
     )
-    deliveries = Worker(
-        queue,
-        register_handlers((EVENT_TASK, messaging), (DELIVER_TASK, DeliverHandler(db, pusher))),
-        bus,
-        concurrency=_DELIVERY_CONCURRENCY,
-    )
-    run_now.bind(deliveries)
-    queue.accept(agent_work.kinds, deliveries.kinds)
+    run_now.bind(worker)
+    queue.accept(worker.kinds)
 
     return Assembly(
         settings=settings,
@@ -496,7 +483,7 @@ def assemble(
         webhooks=webhooks,
         push_subscriptions=push_subscriptions,
         vapid=vapid,
-        workers=(agent_work, deliveries),
+        worker=worker,
         messaging=messaging,
         threads=threads,
         mail=MailReconciler(db, queue),

@@ -24,7 +24,7 @@ class DoIt(Command):
 
 
 async def run_worker(container, messaging: Messaging) -> None:
-    worker = Worker(container.queue, {EVENT_TASK: messaging}, container.bus, concurrency=4)
+    worker = Worker(container.queue, {EVENT_TASK: messaging}, container.bus)
     async with anyio.create_task_group() as group:
         group.start_soon(worker.run_forever)
         await idle(container)
@@ -167,7 +167,7 @@ async def test_a_delivery_this_version_cannot_read_fails_at_once_and_can_be_retr
 
 
 def _now_worker(container, messaging: Messaging) -> Worker:
-    return Worker(container.queue, {EVENT_TASK: messaging}, container.bus, concurrency=1)
+    return Worker(container.queue, {EVENT_TASK: messaging}, container.bus)
 
 
 async def test_run_now_executes_a_committed_command_at_once(container):

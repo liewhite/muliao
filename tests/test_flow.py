@@ -30,12 +30,11 @@ from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Mail, Message
-from tests.conftest import run_workers
 from tests.scripted import scripted
 
 
 async def drain(container, limit_seconds: float = 10.0) -> None:
-    worker = asyncio.create_task(run_workers(container))
+    worker = asyncio.create_task(container.worker.run_forever())
     try:
         await idle(container, limit_seconds)
     finally:
@@ -59,7 +58,7 @@ async def run_only(container, limit_seconds: float = 10.0) -> None:
 
 async def work_only(container, handlers: dict, limit_seconds: float) -> None:
     """只执行这些种类的 task，直到它们都做完。"""
-    worker = Worker(container.queue, handlers, container.bus, concurrency=1)
+    worker = Worker(container.queue, handlers, container.bus)
     task = asyncio.create_task(worker.run_forever())
     try:
         async with asyncio.timeout(limit_seconds):
@@ -82,7 +81,7 @@ async def work_only(container, handlers: dict, limit_seconds: float) -> None:
 
 
 async def idle(container, limit_seconds: float = 10.0) -> None:
-    """等已经在跑的 worker 把任务做完（不另起 worker：worker 启动时会把 running 的任务当作上次遗留的来恢复）。"""
+    """等已经在跑的 worker 把任务做完（不另起 worker）。"""
     async with asyncio.timeout(limit_seconds):
         while True:
             await asyncio.sleep(0.02)

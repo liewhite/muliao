@@ -49,6 +49,9 @@ api_key = ""
 # 可选，默认 true，只对 type = "anthropic" 有效（填在别的 type 上会启动失败）：开启 Anthropic 的 prompt
 # caching，在指令、工具定义与消息末尾放缓存断点，长上下文的重复前缀按缓存价计费。关掉就不发送任何缓存设置
 # prompt_cache = true
+# 可选，默认 4：同时进行的模型请求上限，这个 provider 下所有模型、所有 agent 共用（流式请求在整个流期间占一个）。
+# 超过时请求排队等待，日志里有 "model request waiting for a slot"。会话、事件与推送本身不设并发上限
+# max_concurrency = 4
 
 # [llm.providers.openai]
 # type = "openai"
@@ -82,7 +85,6 @@ api_key = ""
 
 # 可选：运行参数，以下为默认值
 # [runtime]
-# worker_concurrency = 4          # 同时运行的 agent 任务数（会话运行、压缩、反思）；事件与推送另有槽位
 # task_max_attempts = 5           # 暂时性失败的最大尝试次数
 # task_retry_base_seconds = 5.0   # 重试退避基数（指数增长）
 # default_reflect_every = 30      # 新建 agent 的默认反思间隔（步，即模型回复数）

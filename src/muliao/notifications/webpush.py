@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import anyio
 import requests
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from py_vapid import Vapid02, b64urlencode
@@ -31,6 +31,10 @@ _TRANSPORT_FAILURES = (
 )
 # 推送服务限制载荷约 4KB（加密后），正文截断留足余量
 _BODY_MAX_CHARS = 600
+# 同时进行的推送请求（pywebpush 是同步的，每个占一个线程，最长约 30 秒）：任务不设并发上限（platform.worker），
+# 推送服务变慢时不能占满线程池、拖慢别的线程上的工作（附件读取、文件写入），在用的地方限流
+# 被取消（关停）时等线程里的请求结束（最长约 30 秒）再退出，不在后台留下无人管的线程；没做完的投递由启动恢复重做
+_PUSH_THREADS = 4
 _TTL_SECONDS = 24 * 3600
 
 
@@ -81,6 +85,7 @@ class WebPushDelivery:
         self._subs = subscriptions
         self._keys = keys
         self._subject = subject
+        self._threads = anyio.CapacityLimiter(_PUSH_THREADS)
 
     async def send(self, subscription: PushSubscription, notification: Notification, unread: int) -> None:
         """投递到一个订阅：失效订阅删除，暂时性失败抛 TransientError 交给任务重试（只重推这一台），其余 4xx 属于本端问题。"""
@@ -97,7 +102,7 @@ class WebPushDelivery:
             },
             ensure_ascii=False,
         )
-        status = await asyncio.to_thread(self._push, subscription, data)
+        status = await anyio.to_thread.run_sync(self._push, subscription, data, limiter=self._threads)
         # 不记 endpoint：它的完整路径即订阅凭据，只记推送服务的主机
         host = urlsplit(subscription.endpoint).hostname
         extra = {

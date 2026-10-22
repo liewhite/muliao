@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.concurrency import ConcurrencyLimitedModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 
@@ -69,9 +70,9 @@ def test_registry_builds_model_type_from_provider_config():
     )
     registry = ModelRegistry(LlmConfig.model_validate(raw))
 
-    assert isinstance(registry.resolve("claude:claude-sonnet-5-5"), AnthropicModel)
+    assert isinstance(registry.resolve("claude:claude-sonnet-5-5").wrapped, AnthropicModel)
     model = registry.resolve("deepseek:deepseek-chat")
-    assert isinstance(model, OpenAIChatModel) and model.model_name == "deepseek-chat"
+    assert isinstance(model.wrapped, OpenAIChatModel) and model.model_name == "deepseek-chat"
     with pytest.raises(InvalidInput, match="not configured"):
         registry.check("openai:gpt-5")
     with pytest.raises(InvalidInput, match="<provider>:<model>"):
@@ -92,10 +93,53 @@ def test_each_provider_type_builds_its_model_class():
             "g": {"type": "google", "api_key": "k"},
         }
     )
-    assert isinstance(registry.resolve("a:m"), AnthropicModel)
-    assert isinstance(registry.resolve("o:m"), OpenAIChatModel)
-    assert isinstance(registry.resolve("r:m"), OpenAIResponsesModel)
-    assert isinstance(registry.resolve("g:m"), GoogleModel)
+    assert isinstance(registry.resolve("a:m").wrapped, AnthropicModel)
+    assert isinstance(registry.resolve("o:m").wrapped, OpenAIChatModel)
+    assert isinstance(registry.resolve("r:m").wrapped, OpenAIResponsesModel)
+    assert isinstance(registry.resolve("g:m").wrapped, GoogleModel)
+
+
+def test_models_of_one_provider_share_its_concurrency_limit():
+    """模型请求的并发上限按 provider：同一 provider 的所有模型（所有 agent）共用一个，provider 之间互不影响；
+    默认 4，可在 provider 上配置。"""
+    registry = _registry(
+        {
+            "a": {"type": "anthropic", "api_key": "k"},
+            "o": {"type": "openai", "api_key": "k", "max_concurrency": 2},
+        }
+    )
+    a1, a2, o = registry.resolve("a:m1"), registry.resolve("a:m2"), registry.resolve("o:m")
+    assert all(isinstance(m, ConcurrencyLimitedModel) for m in (a1, a2, o))
+    assert a1._limiter is a2._limiter and a1._limiter is not o._limiter  # noqa: SLF001
+    assert registry._limiters["a"]._limiter.max_running == 4  # noqa: SLF001
+    assert registry._limiters["o"]._limiter.max_running == 2  # noqa: SLF001
+
+
+async def test_a_model_request_over_the_limit_waits_and_the_wait_is_logged(caplog):
+    """超过上限的请求排队，而不是失败；排队与等了多久记日志，慢是排队还是模型本身从日志能分清。"""
+    import anyio
+
+    from muliao.agent_runtime.llm import _ProviderLimiter
+
+    caplog.set_level("INFO", logger="muliao.agent_runtime.llm")
+    limiter = _ProviderLimiter("a", 1)
+    await limiter.acquire("model:m")
+    got = anyio.Event()
+
+    async def second() -> None:
+        await limiter.acquire("model:m")
+        got.set()
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(second)
+        await anyio.sleep(0.05)
+        assert not got.is_set()
+        limiter.release()
+        with anyio.fail_after(5):
+            await got.wait()
+        limiter.release()
+    messages = [r.getMessage() for r in caplog.records if r.name == "muliao.agent_runtime.llm"]
+    assert messages == ["model request waiting for a slot", "model request got a slot"]
 
 
 def test_sdk_base_url_env_vars_are_ignored(monkeypatch):

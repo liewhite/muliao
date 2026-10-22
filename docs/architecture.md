@@ -109,7 +109,7 @@ muliao/
 - 每个领域都有 `api.py`（`__all__` 只列公开接口），缺了测试就失败：在调用方事务里执行的公开函数（参数里有调用方的事务）只能是登记过的只读查询，这条检查只看得到 `api` 模块。领域内部在自己事务里的写入（如通知的 `_enqueue_in`）是私有的。平台不认识领域的词汇：任务种类、会话来源、LLM SDK 的异常都在各自的领域里（3.2、第 5 节）。
 - HTTP 适配层经领域的 `api`（与 `events`）调用领域，另外可以 import 领域的 `tables`，把领域交给它的行序列化成响应（它是适配器，不是领域，不另造一套读模型）。它拿到的对象只有 `container.Container` 上的：各领域的门面（字段类型都由领域的 `api` 导出）、平台的展示事件流（`EventFeed`，只订阅）与任务列表（`TaskAdmin`）、服务的生命周期；窄接口（`TaskAdmin`、`RevisionHistory`、`EventFeed`、`ReflectionLog`）是只转发窄方法的包装对象，不是 Protocol 标注——项目不跑类型检查，标注挡不住 HTTP 层调到完整对象的别的方法。测试检查字段的声明类型，也检查运行时的值恰好是声明的类型；装配出的全部对象在 `container.Assembly`，服务入口只把它的 `container` 交给 HTTP 层，测试夹具直接持有 `Assembly`。业务规则（例如写私有资源前 owner 必须还可用、只发文件时用文件名作标题、启动时已存 agent 的模型与工具组必须可用）都在领域里，HTTP 层与组合根不另写一份。
 
-**组合根没有构造环**：用到「停止会话」的领域（会话门面、委派工具、删除 agent 的会话清理）依赖端口 `sessions.halt.StopSession`，组合根交给它们的实现是 `sessions.halt.SessionStopper`，它由正在进行的运行的登记（`StoppableRuns`）与 `SessionHalt` 组成，先于消费者构造，消费者用同一份登记运行；要马上执行自己提交的投递的领域（会话、触发器、issue）拿的是 `platform.worker.RunNow` 端口，worker 由各领域的处理器组成、在最后构造，构造后把投递 worker 绑定到端口，绑定之前调用当场报错。
+**组合根没有构造环**：用到「停止会话」的领域（会话门面、委派工具、删除 agent 的会话清理）依赖端口 `sessions.halt.StopSession`，组合根交给它们的实现是 `sessions.halt.SessionStopper`，它由正在进行的运行的登记（`StoppableRuns`）与 `SessionHalt` 组成，先于消费者构造，消费者用同一份登记运行；要马上执行自己提交的投递的领域（会话、触发器、issue）拿的是 `platform.worker.RunNow` 端口，worker 由各领域的处理器组成、在最后构造，构造后绑定到端口，绑定之前调用当场报错。
 
 经 `api` 的依赖无环、有方向：`files`、`agents`、`usage`、`speech` → `vault` → `agent_runtime` → `sessions` → `jobs`、`reflection`、`notifications`、`triggers`、`issues`（`tests/test_boundaries.py` 的 `LAYERS`：领域只能 import 更早一层的 `api`，同层与反向都不行；新增领域要在那里定层）。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
 
@@ -127,10 +127,10 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 
 - **任务种类**：`tasks.kind` 是不透明的字符串，由各领域定义（会话的 `run`、`compaction` 在 `sessions/lanes.py`，反思的 `reflection`、通知的 `deliver` 在各自的 service），在组合根为它登记处理器；平台只有自己的 `event`（`platform.tables.EVENT_TASK`），不枚举领域的种类。`tasks.agent_id` / `session_id` 是有意的例外：平台为「任务」页展示（以及日志）而保留的归属引用，对平台是不透明的，平台不解释它们（是否属于哪个会话、会话忙不忙由会话领域判断）。登记时同一种类出现两次即报错（`platform.worker.register_handlers`），队列只接受登记过的种类（`TaskQueue.accept`，此后 `enqueue` 当场拒绝别的种类）。库里还没完成的 task 若是没有处理器的种类（如改名前写入的旧值），启动时记 error（`TaskQueue.check_kinds`）：它永远不会被领取，还挡住它的 lane，只能由人恢复处理器或在库里删掉它。
 - **TaskHandler 接口**：每种 kind 一个实现，worker 只负责领取、调用、按结果记账，不关心 kind 的细节。处理器分两段：`execute` 做事（可以开自己的事务、调用别的领域的命令），返回的 `Commit` 与「task 记为完成」在同一个事务里提交（`TaskQueue.complete`）。task 不设总时限：一次运行跑多久由 agent 自己判断，卡住的单个调用由各自的时限兜底（`run_shell` 的 timeout、MCP 工具调用的读超时、web 工具与推送的请求时限、模型 HTTP 请求每次读的空闲时限等；持续慢速输出的流不受后者约束），会话轮次与临时 agent 整体靠用户停止。反思运行没有停止入口：失控时只能重启，并等它耗尽 `task_max_attempts`（反思只开放改资源的短工具，这种情况罕见）。
-- **两个 worker**：组合根把种类分给两个 worker，各有自己的槽位，按种类领取（`TaskQueue.claim(kinds)`）。agent worker 执行调用模型、时长没有上限的 `run`、`compaction`、`reflection`，槽位数是 `runtime.worker_concurrency`；投递 worker 执行毫秒到秒级的 `event`、`deliver`，槽位数是组合根里的常量。共用槽位时，几个长时间的会话运行就能占满全部槽位，投递（后台任务结束、已读、推送）排在后面干等（曾经排队 17 分钟）。分工由组合根决定，平台不认识种类。每个 worker 有自己的唤醒事件（`TaskQueue.waiter`）：共用一个时，一个 worker 的 clear 会吞掉另一个还没看到的唤醒。
-- **失败**：契约内的失败（第 5 节）按指数退避重试，上限 `task_max_attempts`；最终失败时处理器的 `failed_in` 在记下失败的同一事务里收尾（如把失败交回等着的会话）。「任务」页可查并可手动重试（沿用原 id，所以仍按原顺序；重试把尝试次数清零）。进程崩溃后启动时把 `running` 复位为 `pending`（`Worker.recover`：在启动阶段、任何循环开始之前按 worker 顺序执行，放在领取循环里会复位另一个 worker 已经领走的 task；按种类恢复，没有处理器的种类不复位，由 `TaskQueue.check_kinds` 报出），尝试次数已经用完的除外：任务自己会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去、还一直占住它的 lane，这时按最终失败记账（同一个上限，收尾钩子照常执行，失败照常可见）。
+- **并发：任务不设上限，在稀缺资源处限流**：worker 领取并执行所有可领取的 task（`Worker.run_forever`），同一 lane 内的顺序与互斥由队列保证，task 本身只是一个协程，不是稀缺资源。稀缺的是模型调用（限流与费用）：每个 provider 一个并发上限（`ProviderConfig.max_concurrency`，默认 4），这个 provider 下所有模型、所有 agent 共用，在 `ModelRegistry.resolve` 统一套上（pydantic-ai 的 `ConcurrencyLimitedModel`，流式请求在整个流期间占一个），请求排队与等了多久记日志（`model request waiting for a slot` / `got a slot`）。所有模型调用（会话运行、反思、压缩、临时 agent）都经 `resolve` 拿模型，所以一处限住全部；一个运行只在真正请求模型时排队，跑工具、等后台任务时不占配额。机器算力（agent 跑的测试、编译）不限，由操作系统调度。别的有限资源同样在用的地方限：Web Push 的同步请求每个占一个线程，限 4 个（`notifications/webpush.py`），推送服务变慢时不会占满线程池、拖慢附件读取等别的线程上的工作。曾经按 task 数设槽位（`runtime.worker_concurrency`）：槽位既限多了（4 个长时间的会话运行占满槽位，79 个毫秒级的投递排队 17 分钟；跑工具的运行挡着别的会话调用模型），又没限住真正的负载（4 个运行可能同时请求模型，也可能都在跑测试），所以去掉。
+- **失败**：契约内的失败（第 5 节）按指数退避重试，上限 `task_max_attempts`；最终失败时处理器的 `failed_in` 在记下失败的同一事务里收尾（如把失败交回等着的会话）。「任务」页可查并可手动重试（沿用原 id，所以仍按原顺序；重试把尝试次数清零）。进程崩溃后启动时把 `running` 复位为 `pending`（`Worker.recover`：在启动阶段、任何循环与 HTTP 开始之前执行，放在领取循环里会复位抢先开始的请求或运行经 `run_now` 已经领走的 task；按种类恢复，没有处理器的种类不复位，由 `TaskQueue.check_kinds` 报出），尝试次数已经用完的除外：任务自己会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去、还一直占住它的 lane，这时按最终失败记账（同一个上限，收尾钩子照常执行，失败照常可见）。
 - **保留**（`platform/retention.py`）：启动时与之后每天一次，删掉 7 天前已完成（done）的 `event`、`deliver` 任务（这两种由组合根交给它），它们完成后没有别的数据引用；failed 一律保留供排查与重试。`run` 不删：`mail.consumed_by` 指向它且 ON DELETE CASCADE，删了会连带删掉它处理过的信件与幂等键；`reflection`、`compaction` 量小，留着。
-- **马上执行**（`Worker.run_now`）：发送方提交了一条定向命令或一个事件之后希望它马上生效时，在调用方的任务里经同一个执行边界执行这一条投递（只用于短小的 `event` 投递，不占投递 worker 的槽位）；此刻不可领取（lane 被挡住、已被领取）就交给 worker。调用方随时可能被取消（请求断开、调用它的运行被停止），被取消时在屏蔽作用域里把还在 running 的它放回 pending 再照常抛出——投递的写入与完成同一事务，重做是安全的。
+- **马上执行**（`Worker.run_now`）：发送方提交了一条定向命令或一个事件之后希望它马上生效时，在调用方的任务里经同一个执行边界执行这一条投递（只用于短小的 `event` 投递）；此刻不可领取（lane 被挡住、已被领取）就交给 worker。调用方随时可能被取消（请求断开、调用它的运行被停止），被取消时在屏蔽作用域里把还在 running 的它放回 pending 再照常抛出——投递的写入与完成同一事务，重做是安全的。
 
 ### 3.3 事件：以投递任务作为 outbox
 
@@ -555,7 +555,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 ## 16. 部署形态与边界
 
-- **单进程**：事务串行化与 task 领取依赖进程内锁，所以只跑一个进程。这不影响 agent 并发：agent worker 同时执行 `runtime.worker_concurrency` 个 task（不同 session、不同 agent 并行，同一 session 串行）。模型调用与工具执行都是异步 IO，不占事务锁。
+- **单进程**：事务串行化与 task 领取依赖进程内锁，所以只跑一个进程。这不影响 agent 并发：worker 同时执行所有可领取的 task（不同 session、不同 agent 并行，同一 session 串行），模型请求按 provider 限流（见 3.2「并发」）。模型调用与工具执行都是异步 IO，不占事务锁。
 - **外部消息**：能主动推送的外部系统接入 webhook 触发器；只能拉取的由定时触发器拉取（见第 14 节）。
 - **上下文压缩的覆盖范围**：按上一次请求报告的 token 数在步与步之间压缩，不预估下一次请求的大小：一步里的工具结果极大、直接超出模型上限时，那次运行失败可见，在会话页点「压缩」后重试即可。不自动识别各提供方的超限错误，因为错误格式各不相同，无法可靠识别。
 

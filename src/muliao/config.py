@@ -68,6 +68,9 @@ class ProviderConfig(_Section):
     # 只对 type = "anthropic" 有意义：是否在请求里放 prompt caching 的缓存断点（llm.ANTHROPIC_CACHE_SETTINGS）。
     # 其他协议下填它多半是误解（它不会生效），所以显式填写即报错，而不是静默忽略
     prompt_cache: bool = True
+    # 同时进行的模型请求上限（这个 provider 下所有模型、所有 agent 共用；流式请求在整个流期间占一个）。
+    # 稀缺的是模型调用（限流与费用），不是任务：任务调度本身不设上限（platform.worker）
+    max_concurrency: int = Field(default=4, ge=1)
 
     @model_validator(mode="after")
     def _prompt_cache_only_for_anthropic(self) -> "ProviderConfig":
@@ -124,7 +127,6 @@ class TranscriptionConfig(_Section):
 
 
 class RuntimeConfig(_Section):
-    worker_concurrency: int = Field(default=4, ge=1)
     task_max_attempts: int = Field(default=5, ge=1)
     task_retry_base_seconds: float = Field(default=5.0, gt=0)
     # 新建 agent 的默认反思间隔（步，即模型回复数）

@@ -13,7 +13,6 @@ from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, SessionHold
-from tests.conftest import run_workers
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, history_of, start, tasks_of
 from tests.test_mailbox import Recorder
@@ -254,7 +253,7 @@ async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_h
         async def failed_in(self, s, task):  # noqa: ANN001, ANN202
             """不会被调到。"""
 
-    worker = Worker(container.queue, {RUN_TASK: Handler()}, container.bus, concurrency=1)
+    worker = Worker(container.queue, {RUN_TASK: Handler()}, container.bus)
     monkeypatch.setattr(container.queue, "fail", fake_fail)
 
     await worker._record_failure(Task(id=1, kind=RUN_TASK), RuntimeError("boom"), {})  # noqa: SLF001
@@ -297,7 +296,7 @@ async def test_stopping_the_parent_stops_its_reported_threads_and_they_do_not_re
 
     models.models["l"] = scripted(lead_fn)
     parent = await start(container, lead, "go")
-    worker = asyncio.create_task(run_workers(container))
+    worker = asyncio.create_task(container.worker.run_forever())
     try:
         async with asyncio.timeout(5):
             await running.wait()
@@ -497,7 +496,7 @@ async def test_a_user_message_while_waiting_on_an_agent_continues_and_the_answer
         runs = [r for r in await tasks_of(container, RUN_TASK) if r.session_id == parent.id]
         return len(runs) >= n and all(r.status == TaskStatus.DONE for r in runs)
 
-    worker = asyncio.create_task(run_workers(container))
+    worker = asyncio.create_task(container.worker.run_forever())
     try:
         await _until(lambda: parent_runs_done(1))
         # 发问方停在 ask_agent 上：用户插话，它不再等，这次调用记为「回答之后作为事件送达」
@@ -537,7 +536,7 @@ async def test_stopping_a_private_thread_answers_the_waiting_ask_with_stopped(co
         yield "never"
 
     parent, seen = await _asking(container, make_agent, models, FunctionModel(stream_function=blocked))
-    worker = asyncio.create_task(run_workers(container))
+    worker = asyncio.create_task(container.worker.run_forever())
     try:
         async with asyncio.timeout(5):
             await running.wait()
@@ -790,7 +789,7 @@ async def test_a_private_thread_answers_only_after_its_background_job_finishes(c
         )
 
     parent, seen = await _asking(container, make_agent, models, scripted(helper_fn))
-    worker = asyncio.create_task(run_workers(container))
+    worker = asyncio.create_task(container.worker.run_forever())
     try:
         await _until(lambda: _has(seen))
     finally:
@@ -831,7 +830,7 @@ async def test_a_thread_waiting_on_its_own_background_job_is_listed_as_waiting_n
         # 回答先于运行的收尾提交：等收尾之后再看
         return [(x.work, x.answer) for x in await states()] == [(WorkState.WAITING, "started, will report")]
 
-    worker = asyncio.create_task(run_workers(container))
+    worker = asyncio.create_task(container.worker.run_forever())
     try:
         await _until(waiting_with_its_first_answer)
         [state] = await states()

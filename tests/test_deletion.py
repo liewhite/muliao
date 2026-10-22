@@ -18,7 +18,6 @@ from muliao.reflection.service import REFLECTION_TASK
 from muliao.sessions.api import Origin
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.lanes import RUN_TASK, session_lane
-from tests.conftest import run_workers
 from tests.test_flow import deliver, drain, start
 from tests.test_jobs import start_job, wait_until_done
 
@@ -431,7 +430,7 @@ async def test_deleting_an_agent_whose_run_is_executing_stops_it_and_completes(
         return False
 
     monkeypatch.setattr(container.agent_lifecycle, "_blockers", {"sessions": not_busy})
-    worker = asyncio.create_task(run_workers(container))
+    worker = asyncio.create_task(container.worker.run_forever())
     try:
         await asyncio.wait_for(started.wait(), 5)
         await container.agent_lifecycle.delete(agent.id, author="user")

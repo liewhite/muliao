@@ -58,16 +58,10 @@ class Worker:
         queue: TaskQueue,
         handlers: dict[str, TaskHandler],
         bus: EventBus,
-        *,
-        concurrency: int,
     ):
         self._queue = queue
         self._handlers = handlers
         self._bus = bus
-        self._concurrency = concurrency
-        self._wake = queue.waiter()
-        # run_forever 正在进行：并发上限是每次运行各自的槽位，同时跑两次上限就翻倍，所以只允许一次
-        self._running = False
 
     @property
     def kinds(self) -> frozenset[str]:
@@ -87,33 +81,23 @@ class Worker:
         )
 
     async def run_forever(self) -> None:
-        if self._running:
-            raise RuntimeError("worker is already running; a second run_forever would double its concurrency")
-        self._running = True
-        try:
-            await self._run()
-        finally:
-            self._running = False
-
-    async def _run(self) -> None:
-        # 槽位属于这一次运行（与任务组同生命周期）：停在领取中途时没还的槽位随这次运行一起丢弃，同一个 worker
-        # 再次启动时槽位是满的（槽位曾放在实例上，漏够 concurrency 次后再启动的 worker 永远领不到任务）
-        slots = anyio.Semaphore(self._concurrency)
+        """领取并执行所有可领取的 task，不设并发上限：同一 lane 内的顺序与互斥由队列保证（_claimable），task 本身
+        只是一个协程，不是稀缺资源。稀缺的是它们用到的东西，在用的地方限流（模型请求按 provider，见 agent_runtime.llm）。
+        曾经按 task 数设槽位：几个长时间的会话运行占满槽位，毫秒级的投递排队 17 分钟，在跑工具、不用模型的运行也
+        挡着别的会话调用模型。"""
         # 执行中的任务都属于这个任务组：worker 被取消（关停）时它们一起被取消，不会留在后台
         async with anyio.create_task_group() as group:
             while True:
-                await slots.acquire()
                 task = await self._queue.claim(self.kinds)
                 if task is None:
-                    slots.release()
                     await self._wait_for_work()
                     continue
-                group.start_soon(self._process_in_slot, task, slots, name=f"task-{task.id}")
+                group.start_soon(self._process, task, name=f"task-{task.id}")
 
     async def recover(self) -> None:
-        """启动阶段（任何 worker 开始领取、任何运行开始之前，由组合根顺序调用）把上次进程遗留的这个 worker 种类的
-        running 复位为 pending 重新执行（队列的 recover）；放在领取循环里时，另一个 worker 已经领走（含 run_now）的
-        task 会被复位、执行两次。尝试次数已经用完的除外：
+        """启动阶段（领取循环、HTTP 与别的循环开始之前，由组合根调用）把上次进程遗留的 running 复位为 pending 重新
+        执行（队列的 recover）；放在领取循环里时，抢先开始的请求或运行经 run_now 领走的 task 会被复位、执行两次。
+        尝试次数已经用完的除外：
         任务本身会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去，还一直占住它的 lane。
         这时按最终失败记账（和重试用完一样的上限 task_max_attempts，钩子照常收尾、失败照常可见），用户在「任务」页
         手动重试即可重新开始（重试把尝试次数清零）。只恢复自己的种类（TaskQueue.recover）。"""
@@ -133,9 +117,9 @@ class Worker:
                 log.warning("recovered interrupted task", extra=ctx)
 
     async def run_now(self, task_id: int) -> None:
-        """在调用方的任务里立刻执行这一个投递任务（经同一个执行边界：时限、重试或失败记账），不占 worker 的槽位。
+        """在调用方的任务里立刻执行这一个投递任务（经同一个执行边界：重试或失败记账）。
         用于发送方提交了定向命令之后希望它马上生效（例如触发器新建的会话在返回会话 id 之前就已存在）；只用于短小的
-        投递（EVENT_TASK），运行这类长任务仍由 worker 按并发上限执行。此刻不可领取就什么都不做，照常由 worker 执行。
+        投递（EVENT_TASK）。此刻不可领取就什么都不做，照常由 worker 执行。
 
         取消语义与 worker 不同：worker 的任务只被关停取消，下次启动由 recover 复位；这里的调用方随时可能被取消（请求
         断开、调用它的运行被停止）。被取消时在屏蔽作用域里把还在 running 的它放回 pending 交给 worker，再照常抛出
@@ -162,18 +146,12 @@ class Worker:
                 )
             raise
 
-    async def _process_in_slot(self, task: Task, slots: anyio.Semaphore) -> None:
-        try:
-            await self._process(task)
-        finally:
-            slots.release()
-
     async def _wait_for_work(self) -> None:
-        self._wake.clear()
+        self._queue.wake.clear()
         due = await self._queue.next_due(self.kinds)
         timeout = _IDLE_POLL_SECONDS if due is None else max(0.05, (due - self._queue.now()).total_seconds())
         with anyio.move_on_after(min(timeout, _IDLE_POLL_SECONDS)):
-            await self._wake.wait()
+            await self._queue.wake.wait()
 
     async def _process(self, task: Task) -> None:
         ctx = {"task_id": task.id, "kind": task.kind, "lane": task.lane, "attempt": task.attempts}

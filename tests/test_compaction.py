@@ -21,7 +21,6 @@ from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS, select_steps, st
 from muliao.sessions.history import CONTINUATION
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, session_lane
 from muliao.sessions.tables import Compaction, Message
-from tests.conftest import run_workers
 from tests.scripted import scripted
 from tests.test_flow import drain, history_of, last_user_prompt, reply, start
 
@@ -280,7 +279,7 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
 
     models.models["m"] = scripted(fn)
     session = await start(container, alpha, "go", origin=Origin.TRIGGER)
-    worker = asyncio.create_task(run_workers(container))
+    worker = asyncio.create_task(container.worker.run_forever())
     try:
         async with asyncio.timeout(5):
             await entered.wait()
