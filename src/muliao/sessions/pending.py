@@ -1,6 +1,6 @@
-"""挂起的工具调用：模型调用了一个要等别人回信的工具（ask_user 等用户、ask_agent 等另一个 agent），工具抛出
-pydantic-ai 的 CallDeferred，这次运行停在这里正常结束，不在 worker 里等。回信是一封回答信件（MailKind.ANSWER），
-作为那次调用的结果（DeferredToolResults）交回，模型看到的就是「我问了，对方这样答」。设计见 docs/architecture.md
+"""挂起的工具调用：模型调用了一个要等别人回信的工具（ask_user 等用户、ask_agent 等另一个 agent），工具调用
+agent_runtime 的 defer_call，这次运行停在这里正常结束，不在 worker 里等。回信是一封回答信件（MailKind.ANSWER），
+作为那次调用的结果（run_steps 的 deferred）交回，模型看到的就是「我问了，对方这样答」。设计见 docs/architecture.md
 「挂起的调用」。
 
 - 哪些调用还挂着由历史推导（pending_calls），不另存状态。

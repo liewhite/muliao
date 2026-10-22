@@ -3,8 +3,9 @@
 工具总是列出（工具列表在缓存前缀最前面，随运行增减会让整个前缀失效）；没有用户等着这次回答时
 （私有 thread、触发器、运行中检查、反思与临时 agent），调用被拒绝并交还模型。"""
 
-from pydantic_ai import CallDeferred, FunctionToolset, RunContext
+from pydantic_ai import FunctionToolset, RunContext
 
+from muliao.agent_runtime.api import defer_call
 from muliao.errors import Conflict
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.questions import ASK_USER, Questions
@@ -34,6 +35,6 @@ def ask_user_toolset() -> FunctionToolset[RunScope]:
         """
         if not ctx.deps.user_waits:
             raise Conflict(NO_USER_WAITING)
-        raise CallDeferred()
+        defer_call()
 
     return ts

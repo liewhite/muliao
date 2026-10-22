@@ -97,6 +97,33 @@ def test_domains_only_use_each_others_api():
     assert _violations() == []
 
 
+# pydantic-ai 的运行与挂起类型只在 agent_runtime 里用（docs/architecture.md 2.1）：别的领域经它的 Finished / Paused、
+# `{调用 id: 结果}` 与 defer_call。消息类型（pydantic_ai.messages）是历史的存储形态，不在此列
+RUN_TYPES = {
+    "AgentRun",
+    "AgentRunResult",
+    "ApprovalRequired",
+    "CallDeferred",
+    "DeferredToolRequests",
+    "DeferredToolResults",
+}
+
+
+def test_only_agent_runtime_touches_the_model_librarys_run_types():
+    problems = []
+    for path in SRC.rglob("*.py"):
+        if path.relative_to(SRC).parts[0] == "agent_runtime":
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "pydantic_ai":
+                problems += [
+                    f"{path.relative_to(SRC)}:{node.lineno} imports {a.name}"
+                    for a in node.names
+                    if a.name in RUN_TYPES
+                ]
+    assert sorted(problems) == []
+
+
 def test_relative_imports_are_resolved_to_the_module_they_name(tmp_path):
     import pytest
 

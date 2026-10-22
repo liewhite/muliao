@@ -5,12 +5,19 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, C
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import anyio
 from pydantic_ai import Agent as PaiAgent
-from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, UsageLimits
+from pydantic_ai import (
+    AgentRun,
+    AgentRunResult,
+    DeferredToolRequests,
+    DeferredToolResults,
+    UsageLimits,
+    UserPromptNode,
+)
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
@@ -42,6 +49,7 @@ from muliao.agent_runtime.instructions import (
     with_notices,
 )
 from muliao.agent_runtime.llm import ModelResolver
+from muliao.agent_runtime.outcome import Finished, Paused, deferred_results, finished_of, outcome_of
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.transient import transient_as_retryable
@@ -192,84 +200,69 @@ class AgentRuntime:
         *,
         origin_note: str,
         summary: str | None = None,
-        deferred: DeferredToolResults | None = None,
-    ) -> AgentRunResult[str | DeferredToolRequests]:
+        deferred: Mapping[str, object] | None = None,
+    ) -> Finished | Paused:
         """会话的一次运行，逐步驱动（pydantic-ai 的 agent.iter）：每次请求模型之前、模型回复之后回调 hooks，消费者
-        在那里并入新信件、保存这一步。可以停在挂起的工具调用上（ask_user，见 sessions.questions）：输出为
-        DeferredToolRequests；之后带着 deferred（用户的回答）再运行就从那里继续。
+        在那里并入新信件、保存这一步。可以停在挂起的工具调用上（工具调用了 defer_call，如 ask_user，见
+        sessions.questions）：结局为 Paused；之后带着 deferred（`{调用 id: 结果}`，如用户的回答）再运行就从那里继续。
 
         prompt 为 None 时从历史续跑：历史停在一条请求上就重发它，停在带工具调用的回复上就执行这些调用（pydantic-ai
         的续跑语义）。"""
-        model = agent.model
-        session_id = scope.session_id
-        if session_id is None:
+        if scope.session_id is None:
             raise RuntimeError(f"a stepwise run needs a session, agent {scope.agent_id} has none")
-        ctx = {
-            "agent": scope.agent_id,
-            "session_id": session_id,
-            "model": model,
-            "workspace": str(scope.workspace),
-        }
-        # 每次驱动一份 notices：压缩后续跑会重新连接工具组
-        scope = replace(scope, notices=[])
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
-        resumed = frozenset(deferred.calls) if deferred is not None else frozenset()
-        async with self._billed(RunKind.RUN, scope.agent_id, model, session_id, ctx, len(history)) as usage:
-            with tool_input_kept_out_of_failures():
-                async with self._pai.iter(
-                    None if prompt is None else list(prompt),
-                    model=self._resolve_model(model),
-                    instructions=await self.instructions(agent, scope, summary, origin_note),
-                    message_history=list(history),
-                    deps=scope,
-                    toolsets=self._toolsets(profile),
-                    output_type=[str, DeferredToolRequests],
-                    deferred_tool_results=deferred,
-                    usage=usage,
-                    usage_limits=_UNLIMITED,
-                ) as run:
-                    node = run.next_node
-                    if not PaiAgent.is_user_prompt_node(node):
-                        raise RuntimeError(f"agent run did not start with the user prompt node: {node!r}")
-                    node = await run.next(node)
-                    # 工具组在进入 iter 时已经构建、连接（notices 已经齐了）
-                    await hooks.started(run.ctx.state.message_history, scope.notices)
-                    while not isinstance(node, End):
-                        if PaiAgent.is_model_request_node(node):
-                            await hooks.before_request(node.request, run.ctx.state.message_history)
-                            async with node.stream(run.ctx) as stream:
-                                await _forward_events(stream, hooks, resumed)
-                            node = await run.next(node)
-                            messages = run.ctx.state.message_history
-                            response = messages[-1]
-                            if not isinstance(response, ModelResponse):
-                                raise RuntimeError(
-                                    f"model request ended without a response, history ends with {response!r}"
-                                )
-                            await hooks.after_response(response, messages)
-                        elif PaiAgent.is_call_tools_node(node):
-                            async with node.stream(run.ctx) as stream:
-                                await _forward_events(stream, hooks, resumed)
-                            node = await run.next(node)
-                        else:
-                            node = await run.next(node)
-                    result = run.result
-        if result is None:
-            raise RuntimeError("agent run ended without a result")
-        return result
+        resumed = frozenset(deferred or ())
 
-    async def run_once(
-        self, agent: AgentInfo, scope: RunScope, prompt: str, profile: RunProfile
-    ) -> AgentRunResult[str]:
+        async def steer(
+            run: AgentRun[RunScope, Any], first: UserPromptNode[RunScope, Any], scope: RunScope
+        ) -> None:
+            node = await run.next(first)
+            # 工具组在进入 iter 时已经构建、连接（notices 已经齐了）
+            await hooks.started(run.ctx.state.message_history, scope.notices)
+            while not isinstance(node, End):
+                if PaiAgent.is_model_request_node(node):
+                    await hooks.before_request(node.request, run.ctx.state.message_history)
+                    async with node.stream(run.ctx) as stream:
+                        await _forward_events(stream, hooks, resumed)
+                    node = await run.next(node)
+                    messages = run.ctx.state.message_history
+                    response = messages[-1]
+                    if not isinstance(response, ModelResponse):
+                        raise RuntimeError(
+                            f"model request ended without a response, history ends with {response!r}"
+                        )
+                    await hooks.after_response(response, messages)
+                elif PaiAgent.is_call_tools_node(node):
+                    async with node.stream(run.ctx) as stream:
+                        await _forward_events(stream, hooks, resumed)
+                    node = await run.next(node)
+                else:
+                    node = await run.next(node)
+
+        result = await self._drive(
+            kind=RunKind.RUN,
+            model=agent.model,
+            scope=scope,
+            billed_to=scope.session_id,
+            instructions=await self.instructions(agent, scope, summary, origin_note),
+            profile=profile,
+            prompt=None if prompt is None else list(prompt),
+            history=history,
+            output_type=[str, DeferredToolRequests],
+            deferred=deferred_results(deferred),
+            steer=steer,
+        )
+        return outcome_of(result)
+
+    async def run_once(self, agent: AgentInfo, scope: RunScope, prompt: str, profile: RunProfile) -> Finished:
         """agent 一次不属于会话的运行（反思）：带它完整的指令，没有历史，不逐步保存。"""
-        return await self._execute(
+        return await self._run_plain(
             model=agent.model,
             instructions=await self.instructions(agent, scope, None, None),
-            toolsets=self._toolsets(profile),
+            profile=profile,
             scope=scope,
             context=self.run_context(scope.audience),
             prompt=prompt,
-            history=(),
             kind=RunKind.REFLECTION,
             billed_to=scope.session_id,
         )
@@ -295,40 +288,82 @@ class AgentRuntime:
         是那次运行的开销，记到那个会话名下。
         """
         scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, audience=None)
-        result = await self._execute(
+        finished = await self._run_plain(
             model=model,
             instructions=build_temp_instructions(
                 parent_name=parent.name, workspace=workspace, extra=instructions
             ),
-            toolsets=self._toolsets(profile),
+            profile=profile,
             # 临时 agent 没有听众（回答交回调用方那次工具调用），运行上下文只有当前时间
             context=self.run_context(None),
             prompt=task,
             scope=scope,
-            history=(),
             kind=RunKind.TEMP_AGENT,
             billed_to=session_id,
         )
-        return Answer.of_run(result.output, result.new_messages())
+        return Answer.of_run(finished.answer, finished.messages)
 
     @staticmethod
     def _toolsets(profile: RunProfile) -> list[AbstractToolset[RunScope]]:
         return [DomainErrorsAsRetry(t) for t in profile.toolsets]
 
-    async def _execute(
+    async def _run_plain(
         self,
         *,
         model: str,
         instructions: str,
-        toolsets: list[AbstractToolset[RunScope]],
+        profile: RunProfile,
         scope: RunScope,
         context: str,
         prompt: str,
-        history: Sequence[ModelMessage],
         kind: RunKind,
         billed_to: str | None,
-    ) -> AgentRunResult[str]:
-        """没有历史逐步保存的一次运行：运行上下文（context）放在 prompt 前面。"""
+    ) -> Finished:
+        """没有历史、不逐步保存的一次运行：运行上下文（context）放在 prompt 前面。"""
+
+        async def steer(
+            run: AgentRun[RunScope, Any], first: UserPromptNode[RunScope, Any], scope: RunScope
+        ) -> None:
+            # 工具组在进入 iter 时已经连接，notices 这时才齐；prompt 在这个节点运行时才交给模型。
+            # pydantic-ai 的 RunContext.prompt 取的是传给 iter 的那个（None），本项目不读它
+            first.user_prompt = f"{with_notices(context, scope.notices)}\n\n{prompt}"
+            async for _ in run:
+                pass
+
+        result = await self._drive(
+            kind=kind,
+            model=model,
+            scope=scope,
+            billed_to=billed_to,
+            instructions=instructions,
+            profile=profile,
+            prompt=None,
+            history=(),
+            output_type=str,
+            deferred=None,
+            steer=steer,
+        )
+        return finished_of(result)
+
+    async def _drive(
+        self,
+        *,
+        kind: RunKind,
+        model: str,
+        scope: RunScope,
+        billed_to: str | None,
+        instructions: str,
+        profile: RunProfile,
+        prompt: list[UserContent] | None,
+        history: Sequence[ModelMessage],
+        output_type: Any,
+        deferred: DeferredToolResults | None,
+        steer: Callable[[AgentRun[RunScope, Any], UserPromptNode[RunScope, Any], RunScope], Awaitable[None]],
+    ) -> AgentRunResult[Any]:
+        """一次带工具的模型运行的外壳（会话的逐步运行与没有历史的运行共用）：记账与日志（_billed）、工具失败信息里
+        不带参数、启动 pydantic-ai 的运行并确认它从用户 prompt 节点开始，交给 steer 从那个节点驱动到结束，最后取结果。
+
+        steer 拿到的 scope 是这次驱动自己的一份（notices 为空，工具组连接时往里加）：压缩后续跑会重新连接工具组。"""
         scope = replace(scope, notices=[])
         ctx = {
             "agent": scope.agent_id,
@@ -339,23 +374,21 @@ class AgentRuntime:
         async with self._billed(kind, scope.agent_id, model, billed_to, ctx, len(history)) as usage:
             with tool_input_kept_out_of_failures():
                 async with self._pai.iter(
-                    None,
+                    prompt,
                     model=self._resolve_model(model),
                     instructions=instructions,
                     message_history=list(history),
                     deps=scope,
-                    toolsets=toolsets,
-                    usage_limits=_UNLIMITED,
+                    toolsets=self._toolsets(profile),
+                    output_type=output_type,
+                    deferred_tool_results=deferred,
                     usage=usage,
+                    usage_limits=_UNLIMITED,
                 ) as run:
-                    node = run.next_node
-                    if not PaiAgent.is_user_prompt_node(node):
-                        raise RuntimeError(f"agent run did not start with the user prompt node: {node!r}")
-                    # 工具组在进入 iter 时已经连接，notices 这时才齐；prompt 在这个节点运行时才交给模型。
-                    # pydantic-ai 的 RunContext.prompt 取的是传给 iter 的那个（None），本项目不读它
-                    node.user_prompt = f"{with_notices(context, scope.notices)}\n\n{prompt}"
-                    async for _ in run:
-                        pass
+                    first = run.next_node
+                    if not PaiAgent.is_user_prompt_node(first):
+                        raise RuntimeError(f"agent run did not start with the user prompt node: {first!r}")
+                    await steer(run, first, scope)
                     result = run.result
         if result is None:
             raise RuntimeError("agent run ended without a result")

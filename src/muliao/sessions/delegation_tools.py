@@ -2,9 +2,9 @@
 list_threads。委派的生命周期见 sessions.delegation。"""
 
 from pydantic import BaseModel
-from pydantic_ai import CallDeferred, FunctionToolset, ModelRetry, RunContext, ToolReturn
+from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolReturn
 
-from muliao.agent_runtime.api import TOOL_THREADS
+from muliao.agent_runtime.api import TOOL_THREADS, defer_call
 from muliao.agents.api import AgentService
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
@@ -134,7 +134,7 @@ def delegation_toolset(
                 key=ctx.tool_call_id,
             )
         # 发问方的运行停在这次调用上，不占 worker；对方的结局作为这次调用的结果交回（sessions.pending）
-        raise CallDeferred()
+        defer_call()
 
     @ts.tool
     async def stop_thread(ctx: RunContext[RunScope], thread: str) -> str:
