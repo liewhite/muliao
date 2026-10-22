@@ -74,7 +74,7 @@ async def test_a_once_trigger_in_the_past_is_refused_at_creation(container, make
 def test_a_once_time_without_an_offset_is_read_in_the_server_timezone():
     kind = OnceKind(ZoneInfo("Asia/Shanghai"))
 
-    config, state = kind.configure({"at": " 2099-01-02T10:30 "})
+    config, state = kind.configure({"at": "2099-01-02T10:30"})
 
     # 到期时间就是配置本身，没有随运行变化的状态
     assert (config, state) == ({"at": "2099-01-02T10:30:00+08:00"}, {})
@@ -82,7 +82,7 @@ def test_a_once_time_without_an_offset_is_read_in_the_server_timezone():
 
 @pytest.mark.parametrize("at", ["next tuesday", "2099-13-40T00:00"], ids=["not-a-time", "impossible-date"])
 def test_a_once_time_that_is_not_iso_8601_is_refused(at):
-    with pytest.raises(InvalidInput, match="expected ISO 8601"):
+    with pytest.raises(InvalidInput, match="invalid once trigger config"):
         OnceKind(ZoneInfo("UTC")).configure({"at": at})
 
 

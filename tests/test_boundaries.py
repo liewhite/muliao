@@ -156,8 +156,6 @@ READ_ONLY_IN_CALLER_TRANSACTION = {
         "SessionActivity.keyed_work_states_in",
         "SessionActivity.blocks_agent_deletion_in",
     },
-    # 触发器领域内部（各触发方式）用的查询；TriggerService 由 api 导出给 HTTP 层
-    "triggers": {"TriggerService.busy_in"},
 }
 
 

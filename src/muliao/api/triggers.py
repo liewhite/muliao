@@ -112,7 +112,7 @@ def _out(c: C, t: Trigger) -> TriggerOut:
             kind=t.kind,
             prompt=t.prompt,
             config=t.config,
-            status=c.triggers.kind(t.kind).status(t).model_dump(),
+            status=c.triggers.status_of(t),
             enabled=t.enabled,
             precheck=None if t.precheck is None else Precheck.model_validate(t.precheck),
             last_checked_at=t.last_checked_at,

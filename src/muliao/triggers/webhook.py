@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from muliao.errors import InvalidInput, Unauthorized
 from muliao.platform.db import Database
-from muliao.triggers.service import TriggerService, trigger_in
+from muliao.triggers.service import TriggerService, parse_config, set_state, trigger_in
 from muliao.triggers.tables import Trigger
 
 log = logging.getLogger(__name__)
@@ -58,8 +58,7 @@ class WebhookKind:
         self._public_url = public_url
 
     def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        if config:
-            raise InvalidInput(f"webhook trigger config must be {{}}, got {config!r}")
+        parse_config(KIND, WebhookConfig, config)
         return {}, {}
 
     def status(self, trigger: Trigger) -> WebhookStatus:
@@ -106,6 +105,6 @@ class Webhooks:
             trigger = await trigger_in(s, trigger_id)
             if trigger.kind != KIND:
                 raise InvalidInput(f"trigger {trigger.name!r} is a {trigger.kind} trigger, not a webhook")
-            self._triggers.set_state(trigger, token_hash=_hash(token))
+            set_state(trigger, token_hash=_hash(token))
         log.info("webhook token generated", extra={"trigger_id": trigger_id})
         return token

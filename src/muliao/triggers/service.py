@@ -21,10 +21,11 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,14 +41,7 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Clock, Commit
 from muliao.platform.values import KEEP, Keep, local_time
-from muliao.sessions.api import (
-    Inbound,
-    NewSession,
-    Origin,
-    SessionActivity,
-    WorkState,
-    receive_command_in,
-)
+from muliao.sessions.api import Inbound, NewSession, Origin, receive_command_in
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 from muliao.triggers.tables import Trigger
 
@@ -100,6 +94,14 @@ def event_prompt(instructions: str, payload: str | None) -> str:
     return f"{instructions.strip()}\n\n<event>\n{payload}\n</event>"
 
 
+def parse_config[M: BaseModel](kind: str, model: type[M], config: dict[str, Any]) -> M:
+    """按这种方式的配置类型（同时是 HTTP 接口里的 config 类型，extra=forbid）校验 config，不合法时报 InvalidInput。"""
+    try:
+        return model.model_validate(config)
+    except ValidationError as e:
+        raise InvalidInput(f"invalid {kind} trigger config {config!r}: {e}") from e
+
+
 async def trigger_in(s: AsyncSession, trigger_id: int) -> Trigger:
     """在调用方事务里取这一行（触发器领域内部用，不公开：HTTP 层与别的领域经 TriggerService 的命令与查询）。"""
     trigger = await s.get(Trigger, trigger_id)
@@ -108,11 +110,25 @@ async def trigger_in(s: AsyncSession, trigger_id: int) -> Trigger:
     return trigger
 
 
+def set_state(trigger: Trigger, **values: Any) -> None:
+    """激活机制维护自己的运行状态（触发器领域内部用，在调用方事务里改这一行）。JSON 列只在整体赋值时被追踪。"""
+    trigger.state = {**trigger.state, **values}
+
+
+def finish_in(trigger: Trigger, now: datetime) -> None:
+    """归档：这个触发器不会再触发了（一次性触发器用掉了它那一次），在调用方的事务里改这一行（触发器领域内部用）。
+
+    归档之后它不出现在默认列表里，也不能再修改、启用或立即运行；行保留着，它发起过的会话因此仍查得到
+    是谁发的，同名的触发器也可以重新创建。
+    """
+    trigger.finished_at = now
+    log.info("trigger finished", extra={"trigger": trigger.name, "kind": trigger.kind})
+
+
 class TriggerService:
     def __init__(
         self,
         db: Database,
-        activity: SessionActivity,
         kinds: Mapping[str, TriggerKind],
         tz: ZoneInfo,
         precheck: PrecheckRunner,
@@ -125,7 +141,6 @@ class TriggerService:
         # 马上执行一个已提交的投递任务（Worker.run_now）
         self._run_now = run_now
         self._db = db
-        self._activity = activity
         self.kinds = dict(kinds)
         self._tz = tz
         self._clock = clock
@@ -158,6 +173,10 @@ class TriggerService:
         if name not in self.kinds:
             raise InvalidInput(f"unknown trigger kind {name!r}; available: {sorted(self.kinds)}")
         return self.kinds[name]
+
+    def status_of(self, trigger: Trigger) -> dict[str, Any]:
+        """这个触发器的运行状态（由它的触发方式给出，见 TriggerKind.status），JSON 形式。"""
+        return self.kind(trigger.kind).status(trigger).model_dump(mode="json")
 
     async def create(
         self,
@@ -250,20 +269,6 @@ class TriggerService:
         self._changed()
         return True
 
-    @staticmethod
-    def set_state(trigger: Trigger, **values: Any) -> None:
-        """激活机制维护自己的运行状态（在调用方事务里改这一行）。JSON 列只在整体赋值时被追踪。"""
-        trigger.state = {**trigger.state, **values}
-
-    def finish_in(self, trigger: Trigger) -> None:
-        """归档：这个触发器不会再触发了（一次性触发器用掉了它那一次），在调用方的事务里改这一行。
-
-        归档之后它不出现在默认列表里，也不能再修改、启用或立即运行；行保留着，它发起过的会话因此仍查得到
-        是谁发的，同名的触发器也可以重新创建。
-        """
-        trigger.finished_at = self._clock()
-        log.info("trigger finished", extra={"trigger": trigger.name, "kind": trigger.kind})
-
     async def delete(self, trigger_id: int) -> None:
         async with self._db.transaction() as s:
             trigger = await trigger_in(s, trigger_id)
@@ -311,14 +316,6 @@ class TriggerService:
                     "(see trigger_list(finished=true)), so there is nothing to change, run or delete"
                 )
             raise NotFound(f"trigger {name!r} not found")
-
-    async def busy_in(self, s: AsyncSession, trigger: Trigger) -> bool:
-        """上一次触发的会话是否还有没做完的事（定时触发据此避免重叠，会话领域的工作状态）：在运行、有还没投递的来信
-        （包括这次的），或在等后台任务、委派、用户回答——等待中的会话结果回来会自动接着做，再开一个会重叠。"""
-        return (
-            trigger.last_session_id is not None
-            and await self._activity.work_state_in(s, trigger.last_session_id) != WorkState.IDLE
-        )
 
     async def _deliver_in(
         self, s: AsyncSession, trigger: Trigger, payload: str | None, session_id: str | None

@@ -1,6 +1,6 @@
 """一次性定时触发：config = {"at": "<ISO 8601 时间>"}，不带时区的按服务端配置的时区解释。
 
-到点触发一次，这一次用掉之后就归档（TriggerService.finish_in）：不再出现在触发器列表里，也不能再修改、启用或
+到点触发一次，这一次用掉之后就归档（service.finish_in）：不再出现在触发器列表里，也不能再修改、启用或
 立即运行，但行保留着，它发起过的会话仍查得到是谁发的。「用掉」与触发的结果无关——真的投递、前置检查判定没事、
 触发失败（原因记在 disabled_reason 上）都算用掉，归档与触发的先后由 triggers.due 保证（至多触发一次）。
 
@@ -16,20 +16,22 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import InvalidInput
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
 from muliao.triggers.due import stored_time
-from muliao.triggers.service import TriggerService
+from muliao.triggers.service import finish_in, parse_config
 from muliao.triggers.tables import Trigger
 
 KIND = "once"
 
 
 class OnceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     at: datetime
 
 
@@ -52,23 +54,14 @@ class OnceKind:
         self._clock = clock
 
     def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        if set(config) != {"at"} or not isinstance(config["at"], str):
-            raise InvalidInput(f'once trigger config must be {{"at": "<ISO 8601 time>"}}, got {config!r}')
-        at = self._parse(config["at"])
+        at = parse_config(KIND, OnceConfig, config).at
+        # 不带时区的按服务端时区解释（用户与 agent 说的都是本地时间）
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=self._tz)
         if at <= self._clock():
             raise InvalidInput(f"once trigger time {config['at']!r} is in the past")
         # 到期时间就是配置本身，没有随运行变化的状态
         return {"at": at.isoformat()}, {}
-
-    def _parse(self, text: str) -> datetime:
-        try:
-            at = datetime.fromisoformat(text.strip())
-        except ValueError as e:
-            raise InvalidInput(
-                f"invalid once trigger time {text!r}: expected ISO 8601, e.g. 2026-10-22T10:30"
-            ) from e
-        # 不带时区的按服务端时区解释（用户与 agent 说的都是本地时间）
-        return at if at.tzinfo is not None else at.replace(tzinfo=self._tz)
 
     def status(self, trigger: Trigger) -> OnceStatus:
         return OnceStatus(run_at=run_at(trigger))
@@ -83,12 +76,9 @@ class OnceDue:
 
     kind = KIND
 
-    def __init__(self, triggers: TriggerService):
-        self._triggers = triggers
-
     def due_at(self, trigger: Trigger) -> datetime:
         return run_at(trigger)
 
-    async def consume_in(self, _s: AsyncSession, trigger: Trigger, _now: datetime) -> str | None:
-        self._triggers.finish_in(trigger)
+    async def consume_in(self, _s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
+        finish_in(trigger, now)
         return None

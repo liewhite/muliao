@@ -8,10 +8,11 @@ import pytest
 from muliao.agents.api import McpTransport, mcp_config
 from muliao.api.triggers import TriggerKindName, TriggerOut
 from muliao.errors import InvalidInput
-from muliao.sessions.api import Origin
+from muliao.sessions.api import Origin, SessionActivity
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
-from muliao.triggers.service import trigger_in
+from muliao.triggers.schedule import previous_fire_busy_in
+from muliao.triggers.service import set_state, trigger_in
 from tests.conftest import login
 from tests.test_flow import drain, history_of, start
 
@@ -26,7 +27,7 @@ async def _make_due(container, trigger_id: int) -> None:
     past = (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()
     async with container.db.transaction() as s:
         trigger = await trigger_in(s, trigger_id)
-        container.triggers.set_state(trigger, next_run_at=past)
+        set_state(trigger, next_run_at=past)
 
 
 async def test_schedule_fires_new_session_without_notifying_and_schedules_next(container, make_agent):
@@ -332,6 +333,30 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     assert results == ["tok-123"]
 
 
+@pytest.mark.parametrize(
+    ("kind", "config"),
+    [
+        ("schedule", {"cron": "* * * * *", "tz": "UTC"}),
+        ("schedule", {"cron": 5}),
+        ("once", {"at": "2099-01-02T10:30", "repeat": True}),
+        ("once", {}),
+        ("webhook", {"secret": "x"}),
+    ],
+    ids=[
+        "schedule-extra-key",
+        "schedule-not-a-string",
+        "once-extra-key",
+        "once-missing-at",
+        "webhook-extra-key",
+    ],
+)
+async def test_a_config_outside_its_kinds_schema_is_refused(container, make_agent, kind, config):
+    """配置只按各方式的配置类型（也是 HTTP 接口里的 config 类型）校验一遍：多余或缺少的键、类型不对都当场拒绝。"""
+    alpha = (await make_agent()).id
+    with pytest.raises(InvalidInput, match=f"invalid {kind} trigger config"):
+        await container.triggers.create(name="bad", agent_id=alpha, kind=kind, prompt="p", config=config)
+
+
 async def test_a_cron_expression_with_seconds_is_refused(container, make_agent):
     """契约是 5 段表达式；带秒的 6 段（croniter 也接受）`* * * * * *` 会每秒触发一次。"""
     from muliao.errors import InvalidInput
@@ -546,7 +571,9 @@ async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_
     container.triggers._run_now = later  # noqa: SLF001  模拟投递没能马上执行
     await container.triggers.fire(trigger.id)
     async with container.db.transaction() as s:
-        assert await container.triggers.busy_in(s, await trigger_in(s, trigger.id))
+        assert await previous_fire_busy_in(
+            s, SessionActivity(container.queue), await trigger_in(s, trigger.id)
+        )
 
 
 async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(container, make_agent):
@@ -562,7 +589,9 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
 
     async def busy() -> bool:
         async with container.db.transaction() as s:
-            return await container.triggers.busy_in(s, await trigger_in(s, trigger.id))
+            return await previous_fire_busy_in(
+                s, SessionActivity(container.queue), await trigger_in(s, trigger.id)
+            )
 
     assert not await busy()
     async with container.db.transaction() as s:
