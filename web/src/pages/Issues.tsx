@@ -26,6 +26,7 @@ import {
   issueRefs,
   parseIssueRefs,
 } from '../issues'
+import { NODE_HEIGHT, NODE_WIDTH, edgePath, graphIssues, layoutIssueGraph, type GraphScope } from '../issueGraph'
 import {
   ActionButton,
   CollapsibleForm,
@@ -45,10 +46,11 @@ import {
   useLoad,
 } from '../ui'
 
-type View = 'board' | 'list'
+type View = 'board' | 'list' | 'graph'
 // 「所有项目」选项的 id；查询时映射为不过滤
 const ALL_OWNERS = '@all'
 const VIEW_KEY = 'muliao.issues.view'
+const GRAPH_SCOPE_KEY = 'muliao.issues.graphScope'
 
 export function StatusDot({ status }: { status: IssueStatus }) {
   return <span className={`inline-block size-3 shrink-0 rounded-full border-2 ${STATUS_COLOR[status]}`} aria-hidden />
@@ -303,6 +305,81 @@ function ListSection({ status, issues, agents }: { status: IssueStatus; issues: 
   )
 }
 
+/** 依赖图里边的颜色：悬停相连、依赖已完成/取消、依赖还没完成 */
+const EDGE_COLOR = {
+  hover: { stroke: 'stroke-accent', fill: 'fill-accent' },
+  settled: { stroke: 'stroke-muted opacity-60', fill: 'fill-muted' },
+  open: { stroke: 'stroke-warning', fill: 'fill-warning' },
+} as const
+
+/** 依赖图：依赖在左、依赖它的在右；卡片按状态打点、owner 色条，边在依赖未完成时是实线（还挡着下游），完成/取消后为虚线 */
+function DependencyGraph({ issues, agents, scope }: { issues: Issue[]; agents: Agent[] | undefined; scope: GraphScope }) {
+  // 悬停的卡片：高亮与它直接相连的边
+  const [hover, setHover] = useState<number | null>(null)
+  const shown = graphIssues(issues, scope)
+  if (shown.length === 0)
+    return <EmptyHint>{scope === 'open' ? '没有未完成的依赖关系' : '还没有带依赖关系的 issue'}</EmptyHint>
+  const g = layoutIssueGraph(shown)
+  const touches = (e: { from: number; to: number }) => hover !== null && (e.from === hover || e.to === hover)
+  return (
+    <div className="overflow-auto px-4 py-3">
+      <div className="relative" style={{ width: g.width, height: g.height }}>
+        <svg className="pointer-events-none absolute inset-0" width={g.width} height={g.height} aria-hidden>
+          {/* 箭头按边的颜色各备一个：context-stroke 在旧浏览器上不生效 */}
+          <defs>
+            {Object.entries(EDGE_COLOR).map(([kind, color]) => (
+              <marker key={kind} id={`issue-arrow-${kind}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                <path d="M0,0 L10,5 L0,10 z" className={color.fill} />
+              </marker>
+            ))}
+          </defs>
+          {/* 高亮的边最后画，压在别的边上面 */}
+          {[...g.edges]
+            .sort((a, b) => Number(touches(a)) - Number(touches(b)))
+            .map((e) => {
+              const kind = touches(e) ? 'hover' : e.settled ? 'settled' : 'open'
+              return (
+                <path
+                  key={`${e.from}-${e.to}`}
+                  d={edgePath(e.points)}
+                  fill="none"
+                  markerEnd={`url(#issue-arrow-${kind})`}
+                  strokeWidth={kind === 'hover' ? 2.5 : 1.5}
+                  strokeDasharray={e.settled ? '5 4' : undefined}
+                  className={EDGE_COLOR[kind].stroke}
+                />
+              )
+            })}
+        </svg>
+        {g.nodes.map(({ issue, x, y }) => {
+          const hue = ownerHue(agents, issue.owner)
+          return (
+            <Link
+              key={issue.id}
+              to={issueRoute(issue.id)}
+              onMouseEnter={() => setHover(issue.id)}
+              onMouseLeave={() => setHover(null)}
+              className={`absolute flex flex-col justify-between gap-1 rounded-lg border border-l-4 border-separator bg-surface px-2.5 py-1.5 text-sm shadow-sm transition-colors hover:bg-surface-hover ${
+                hue === null ? '' : 'owner-color border-l-(--owner-fg)'
+              } ${issue.status === 'done' || issue.status === 'cancelled' ? 'opacity-60' : ''}`}
+              style={{ ...ownerStyle(hue), left: x, top: y, width: NODE_WIDTH, height: NODE_HEIGHT }}
+              title={`#${issue.id} ${issue.title}`}
+            >
+              <span className="line-clamp-2 leading-snug font-medium">{issue.title}</span>
+              <span className="flex items-center gap-1.5 text-xs text-muted">
+                <StatusDot status={issue.status} />
+                <span>#{issue.id}</span>
+                <span>{STATUS_LABEL[issue.status]}</span>
+                <span className="ml-auto truncate">→ {assigneeLabel(agents, issue.assignee)}</span>
+              </span>
+            </Link>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated: () => void }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -391,6 +468,13 @@ export default function Issues() {
     localStorage.setItem(VIEW_KEY, v)
     setView(v)
   }
+  const [graphScope, setGraphScope] = useState<GraphScope>(
+    () => (localStorage.getItem(GRAPH_SCOPE_KEY) as GraphScope | null) ?? 'open',
+  )
+  const changeGraphScope = (s: GraphScope) => {
+    localStorage.setItem(GRAPH_SCOPE_KEY, s)
+    setGraphScope(s)
+  }
   const onMove = (id: number, status: IssueStatus) => {
     const pending: PendingMove = { status, at: new Date().toISOString() }
     if (moving.size === 0) setMoveError(null)
@@ -421,8 +505,20 @@ export default function Issues() {
         options={[
           { id: 'board', label: '看板' },
           { id: 'list', label: '列表' },
+          { id: 'graph', label: '依赖图' },
         ]}
       />
+      {view === 'graph' && (
+        <Segmented
+          label="依赖图范围"
+          value={graphScope}
+          onChange={changeGraphScope}
+          options={[
+            { id: 'open', label: '有未完成的依赖链' },
+            { id: 'all', label: '全部依赖链' },
+          ]}
+        />
+      )}
       <OwnerSelect
         agents={agents.data}
         label="负责项目"
@@ -435,11 +531,18 @@ export default function Issues() {
     </div>
   )
   return (
-    <Page title="Issues" wide={view === 'board'}>
+    <Page title="Issues" wide={view !== 'list'}>
       {view === 'board' ? (
         <>
           <div className="mx-auto w-full max-w-3xl px-4 pt-3">{toolbar}</div>
           <Loading state={{ ...loaded, data: issues }}>{(list) => <Board issues={list} agents={agents.data} onMove={onMove} />}</Loading>
+        </>
+      ) : view === 'graph' ? (
+        <>
+          <div className="mx-auto w-full max-w-3xl px-4 pt-3">{toolbar}</div>
+          <Loading state={{ ...loaded, data: issues }}>
+            {(list) => <DependencyGraph issues={list} agents={agents.data} scope={graphScope} />}
+          </Loading>
         </>
       ) : (
         <>

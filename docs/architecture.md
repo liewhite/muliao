@@ -607,7 +607,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 ## 21. issue 看板
 
-**职责**：人与 agent 协作的事项（`issues/`，表 `issues`、`issue_activities` 与 `issue_dependencies`）。界面上有看板（拖拽改状态）、列表与详情页；agent 用工具组 `issues`（`issue_list/show/create/update/comment`）读写。
+**职责**：人与 agent 协作的事项（`issues/`，表 `issues`、`issue_activities` 与 `issue_dependencies`）。界面上有看板（拖拽改状态）、列表、依赖图（`web/src/issueGraph.ts`：前端用 dagre 把已加载 issue 之间的 `depends_on` 排成从左到右的分层图，默认只显示含未完成 issue 的依赖链，无依赖关系的不画）与详情页；agent 用工具组 `issues`（`issue_list/show/create/update/comment`）读写。
 
 - **状态**：backlog / todo / in_progress / in_review / blocked / done / cancelled。**负责项目（owner）**：一个 agent（一个 agent 负责一个项目），创建时必填，不随指派变化，只能显式修改（时间线记一条）；按它筛选（`issue_list(owner=)`、`GET /api/issues?owner=`、界面的「负责项目」）看一个项目的全部来龙去脉。负责的 agent 被删除时置空。**指派人**（单列 `assignee`）：agent id、用户（`"user"`），或未指派（NULL）——现在谁在做。界面上的操作以用户身份进行（actor 为 None），工具以调用它的 agent 身份进行。
 - **时间线**：每次创建、评论、每个真正变了的字段各记一条 `IssueActivity`，只增不改；删除 issue 一起删。
