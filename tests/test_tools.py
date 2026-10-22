@@ -623,6 +623,84 @@ async def test_edit_file_applies_several_edits_all_or_nothing(container, make_ag
     assert "1\ta=10\n2\tbb=2\n3\tc=3" in outputs[9]
 
 
+async def test_read_file_reads_several_parts_with_line_numbers_and_reports_bad_parts_inline(
+    container, make_agent, models
+):
+    me = await make_agent("alpha", model="tools")
+    content = "".join(f"line{i}\n" for i in range(1, 11))
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("write_file", {"path": "a.txt", "content": content}),
+            ("write_file", {"path": "b.txt", "content": "only\n"}),
+            (
+                "read_file",
+                {
+                    "reads": [
+                        {"path": "a.txt", "offset": 1, "limit": 2},
+                        {"path": "missing.txt"},
+                        {"path": "a.txt", "offset": 8},
+                        {"path": "b.txt"},
+                        {"path": "a.txt", "offset": 50},
+                    ]
+                },
+            ),
+            ("read_file", {"path": "a.txt", "reads": [{"path": "b.txt"}]}),
+            ("read_file", {}),
+        ],
+    )
+    out = outputs[2]
+    assert "a.txt lines 2-3 of 10 <==\n2\tline2\n3\tline3\n… 7 more lines" in out
+    assert "missing.txt: file not found" in out
+    assert "a.txt lines 9-10 of 10 <==\n9\tline9\n10\tline10" in out
+    assert "b.txt lines 1-1 of 1 <==\n1\tonly" in out
+    assert "offset 50 is past the end" in out
+    # 按给出的次序
+    assert (
+        out.index("lines 2-3") < out.index("missing.txt") < out.index("lines 9-10") < out.index("b.txt lines")
+    )
+    assert "not both" in outputs[3]
+    assert "path is required" in outputs[4]
+
+
+async def test_edit_file_shows_the_changed_lines_with_numbers_so_no_reread_is_needed(
+    container, make_agent, models
+):
+    me = await make_agent("alpha", model="tools")
+    content = "".join(f"l{i}\n" for i in range(1, 21))
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("write_file", {"path": "e.txt", "content": content}),
+            ("write_file", {"path": "e.txt", "content": content}),
+            (
+                "edit_file",
+                {
+                    "path": "e.txt",
+                    "edits": [
+                        {"old_text": "l3\n", "new_text": "l3\nnew\n"},
+                        {"old_text": "l15\n", "new_text": ""},
+                    ],
+                },
+            ),
+            ("edit_file", {"path": "e.txt", "old_text": "l1\n", "new_text": "l1\n"}),
+        ],
+    )
+    assert outputs[0].startswith("created ") and "(20 lines, " in outputs[0]
+    assert outputs[1].startswith("overwrote ")
+    edited = outputs[2]
+    assert "(2 replacements; now 20 lines)" in edited
+    # 插入处：前后各 2 行上下文
+    assert "lines 2-6:\n2\tl2\n3\tl3\n4\tnew\n5\tl4\n6\tl5" in edited
+    # 删除处只剩上下文，行号是改后的
+    assert "lines 14-17:\n14\tl13\n15\tl14\n16\tl16\n17\tl17" in edited
+    assert "the text is unchanged" in outputs[3]
+
+
 async def test_read_file_truncates_very_long_lines(container, make_agent, models):
     me = await make_agent("alpha", model="tools")
     outputs = await run_tools(

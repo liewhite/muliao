@@ -24,6 +24,8 @@ from muliao.vault.api import Vault
 log = logging.getLogger(__name__)
 
 _MAX_LINE_CHARS = 2000
+# edit_file 成功后展示的改动前后上下文行数：够确认改对了，不必再回读文件
+_EDIT_CONTEXT_LINES = 2
 
 
 class TextEdit(BaseModel):
@@ -33,6 +35,15 @@ class TextEdit(BaseModel):
     old_text: str = Field(description="Exact text to replace.")
     new_text: str = Field(description="Replacement text.")
     replace_all: bool = Field(default=False, description="Replace every occurrence instead of exactly one.")
+
+
+class FileRange(BaseModel):
+    # read_file 一次调用里要读的一段
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(description="File path.")
+    offset: int = Field(default=0, description="First line to return (0-based).")
+    limit: int = Field(default=2000, description="Maximum number of lines to return.")
 
 
 @dataclass(frozen=True)
@@ -54,7 +65,8 @@ _SHELL_DESCRIPTION = (
     "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
     "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
     "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules. "
-    "Read files with read_file and change them with edit_file / write_file rather than cat, sed or heredocs."
+    "Read files with read_file (one call can read several files or parts, with line numbers) and change them "
+    "with edit_file / write_file rather than cat, sed or heredocs."
 )
 
 
@@ -118,28 +130,42 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
-    async def read_file(ctx: RunContext[RunScope], path: str, offset: int = 0, limit: int = 2000) -> str:
-        """Read a text file. Relative paths are resolved against your workspace.
+    async def read_file(
+        ctx: RunContext[RunScope],
+        path: str | None = None,
+        offset: int = 0,
+        limit: int = 2000,
+        reads: tuple[FileRange, ...] = (),
+    ) -> str:
+        """Read a text file; lines are numbered. Relative paths are resolved against your workspace.
+        To read several files or several parts of one file in one call, pass `reads` instead of
+        `path`/`offset`/`limit`; each part is shown under a `==> path lines A-B of N <==` header.
 
         Args:
-            path: File path.
+            path: File path (omit when using `reads`).
             offset: First line to return (0-based).
             limit: Maximum number of lines to return.
+            reads: List of {path, offset, limit} parts to read, shown in this order; a part that cannot be
+                read shows its error and the others are still returned.
         """
-        if offset < 0 or limit < 1:
-            # 负数在切片里有别的意思（从末尾数），会返回看起来正常、其实不对的内容
-            raise InvalidInput(f"offset must be >= 0 and limit >= 1, got offset={offset} limit={limit}")
-        target = resolve(ctx.deps, path)
-        if not target.is_file():
-            raise NotFound(f"file not found: {target}")
-        lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
-        if offset and offset >= len(lines):
-            raise InvalidInput(f"offset {offset} is past the end: {target} has {len(lines)} lines")
-        selected = lines[offset : offset + limit]
-        # 一行压缩过的 JS/JSON 能吃掉整个输出预算，单行截断
-        body = "\n".join(f"{i + offset + 1}\t{_clip(line)}" for i, line in enumerate(selected))
-        more = len(lines) - offset - len(selected)
-        return truncate(body, limits.max_output_chars) + (f"\n… {more} more lines" if more > 0 else "")
+        if reads and (path is not None or offset != 0 or limit != 2000):
+            raise InvalidInput("pass either path/offset/limit or reads, not both")
+        if not reads:
+            if path is None:
+                raise InvalidInput("path is required (or pass reads)")
+            target = resolve(ctx.deps, path)
+            excerpt = _read_range(target, offset, limit)
+            return truncate(excerpt.body, limits.max_output_chars) + excerpt.more_note
+        sections = []
+        for part in reads:
+            target = resolve(ctx.deps, part.path)
+            try:
+                excerpt = _read_range(target, part.offset, part.limit)
+            except (InvalidInput, NotFound) as e:
+                sections.append(f"==> {target}: {e} <==")
+                continue
+            sections.append(f"==> {target} {excerpt.span} <==\n{excerpt.body}{excerpt.more_note}")
+        return truncate("\n\n".join(sections), limits.max_output_chars)
 
     @ts.tool
     async def write_file(ctx: RunContext[RunScope], path: str, content: str) -> str:
@@ -150,9 +176,11 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             content: Full file content.
         """
         target = resolve(ctx.deps, path)
+        existed = target.is_file()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
-        return f"wrote {len(content)} chars to {target}"
+        verb = "overwrote" if existed else "created"
+        return f"{verb} {target} ({len(content.splitlines())} lines, {len(content)} chars)"
 
     @ts.tool
     async def edit_file(
@@ -188,9 +216,18 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         changes = [(e.old_text, e.new_text, e.replace_all) for e in edits] or [
             (old_text, new_text, replace_all)
         ]
-        content, count = text_edit.replace_each(target.read_text(encoding="utf-8"), changes, str(target))
+        before = target.read_text(encoding="utf-8")
+        content, count = text_edit.replace_each(before, changes, str(target))
         target.write_text(content, encoding="utf-8")
-        return f"edited {target} ({count} replacement{'s' if count > 1 else ''})"
+        lines = content.splitlines()
+        head = f"edited {target} ({count} replacement{'s' if count > 1 else ''}; now {len(lines)} lines)"
+        ranges = text_edit.changed_ranges(before, content, _EDIT_CONTEXT_LINES)
+        if not ranges:
+            return f"{head}; the text is unchanged" if before == content else head
+        excerpts = [f"lines {start + 1}-{end}:\n{_numbered(lines, start, end)}" for start, end in ranges]
+        return truncate(
+            "\n".join([f"{head}. Changed lines with context:", *excerpts]), limits.max_output_chars
+        )
 
     @ts.tool
     async def share_file(ctx: RunContext[RunScope], path: str) -> ToolReturn:
@@ -219,6 +256,40 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         )
 
     return ts
+
+
+@dataclass(frozen=True)
+class _Excerpt:
+    # 「lines A-B of N」，多段读取时作为每段的标题
+    span: str
+    # 带行号的正文
+    body: str
+    # 后面还有行时注明还剩多少，否则为空；与正文分开，正文被截断时它也还在
+    more_note: str
+
+
+def _read_range(target: Path, offset: int, limit: int) -> _Excerpt:
+    if offset < 0 or limit < 1:
+        # 负数在切片里有别的意思（从末尾数），会返回看起来正常、其实不对的内容
+        raise InvalidInput(f"offset must be >= 0 and limit >= 1, got offset={offset} limit={limit}")
+    if not target.is_file():
+        raise NotFound(f"file not found: {target}")
+    lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    if offset and offset >= len(lines):
+        raise InvalidInput(f"offset {offset} is past the end: {target} has {len(lines)} lines")
+    end = min(offset + limit, len(lines))
+    more = len(lines) - end
+    return _Excerpt(
+        span=f"lines {offset + 1}-{end} of {len(lines)}" if lines else "(empty file)",
+        body=_numbered(lines, offset, end),
+        more_note=f"\n… {more} more lines" if more > 0 else "",
+    )
+
+
+def _numbered(lines: list[str], start: int, end: int) -> str:
+    """lines[start:end]，每行前加 1 起算的行号和制表符（read_file 与 edit_file 的回显同一格式）。"""
+    # 一行压缩过的 JS/JSON 能吃掉整个输出预算，单行截断
+    return "\n".join(f"{i + 1}\t{_clip(lines[i])}" for i in range(start, end))
 
 
 def _clip(line: str) -> str:

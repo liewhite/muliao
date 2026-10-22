@@ -1,6 +1,7 @@
 """文本的唯一规则（纯函数）：修改文本——替换恰好出现一次的片段，或追加一段（记忆、指令、skill 正文、工作区文件都用它）；
 截断过长的文本（交给模型、展示、通知的长输出都用它）。"""
 
+import difflib
 import re
 
 from muliao.errors import InvalidInput
@@ -43,6 +44,21 @@ def replace_each(current: str, edits: list[tuple[str, str, bool]], what: str) ->
             raise InvalidInput(f"edit {i} of {len(edits)}{after}: {e}; nothing was written") from e
         total += count
     return current, total
+
+
+def changed_ranges(before: str, after: str, context: int) -> list[tuple[int, int]]:
+    """after 里改动过的行（各带前后 context 行，相邻的合并）的 [起, 止) 行号范围，0 起算。按前后文本比对得出，
+    与替换的先后次序无关（后一处替换可能挪动前一处的位置）。纯删除的地方只剩上下文行；整个文件被删空时为空列表。"""
+    if before == after:
+        # 没有改动时 get_grouped_opcodes 仍会给出一组开头的上下文
+        return []
+    matcher = difflib.SequenceMatcher(None, before.splitlines(), after.splitlines(), autojunk=False)
+    ranges = []
+    for group in matcher.get_grouped_opcodes(context):
+        start, end = group[0][3], group[-1][4]
+        if start < end:
+            ranges.append((start, end))
+    return ranges
 
 
 def _miss(current: str, old: str, count: int, rule: str) -> str:
