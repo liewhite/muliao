@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,7 +28,7 @@ from typing import Any
 
 import anyio
 from anyio.abc import TaskGroup
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import Conflict, NotFound
@@ -220,13 +220,39 @@ class JobRunner:
         await self._close_unstarted(job_id, "its process id could not be recorded (see server log)")
 
     async def _close_unstarted(self, job_id: int, reason: str) -> None:
+        await self._close_each(
+            lambda: select(Job).where(Job.id == job_id, Job.status == JobStatus.RUNNING),
+            lambda s, job, last: self._close_unsupervised_in(s, job, reason, last, may_be_alive=False),
+        )
+
+    async def _close_each(
+        self,
+        stale: Callable[[], Select[tuple[Job]]],
+        close: Callable[[AsyncSession, Job, str], Awaitable[None]],
+    ) -> list[Job]:
+        """按 stale 选出的任务逐个收尾（close 拿到它输出的最后几行）。日志在事务外的线程里读（事务里不做文件 IO）：
+        先读一遍候选，读好日志，再在写事务里重新按 stale 选一遍，只收尾两次都选中的（之间状态变了的不动，新出现的
+        留给下一次）。stale 是构造查询的函数：每次选都按当时的状态构造。返回收尾了的任务。"""
         async with self._db.transaction() as s:
-            job = await s.get(Job, job_id)
-            if job is not None and job.status == JobStatus.RUNNING:
-                await self._close_unsupervised_in(s, job, reason, may_be_alive=False)
+            candidates = list((await s.scalars(stale())).all())
+        if not candidates:
+            return []
+        tails = await self._tails(candidates)
+        async with self._db.transaction() as s:
+            closed = [job for job in (await s.scalars(stale())).all() if job.id in tails]
+            for job in closed:
+                await close(s, job, tails[job.id])
+        return closed
+
+    async def _tails(self, jobs: list[Job]) -> dict[int, str]:
+        """各任务输出的最后几行（在线程里读文件）。"""
+        return {j.id: await asyncio.to_thread(tail, self._log_file(j)) for j in jobs}
+
+    def _log_file(self, job: Job) -> Path:
+        return self._workspace_of(job.agent_id) / job.log_path
 
     async def _close_unsupervised_in(
-        self, s: AsyncSession, job: Job, reason: str, *, may_be_alive: bool
+        self, s: AsyncSession, job: Job, reason: str, last: str, *, may_be_alive: bool
     ) -> None:
         """没有监督者的任务行（启动失败、监督意外结束）的唯一收敛规则：会话还在、上面没登记过占用，说明任务没开始过，
         删掉这一行；否则记为被中断，交回会话并释放占用（会话已删除时交回得到「会话已不在」，行照样保留终态）。占用行
@@ -237,7 +263,7 @@ class JobRunner:
             await s.delete(job)
             log.info("background job that never started discarded", extra={"job_id": job.id})
             return
-        await self._interrupt_in(s, job, reason, may_be_alive=may_be_alive)
+        self._interrupt_in(s, job, reason, last, may_be_alive=may_be_alive)
 
     async def _cleanup(self, job_id: int, stage: str, cleanup: Coroutine[Any, Any, None]) -> None:
         """启动失败后的清理：屏蔽取消、设时限；做不完就记下来，交给对账。"""
@@ -260,7 +286,7 @@ class JobRunner:
             with handle.scope:
                 status, exit_code, note = await self._watch(job_id, handle, log_file, secrets)
                 # 写结局失败（如数据库暂时不可用）时这一行停在 running；撤销登记后由 check 的对账收敛
-                await self._finish(job_id, handle, status, exit_code, note)
+                await self._finish(job_id, log_file, status, exit_code, note)
         except Exception:
             log.exception("background job supervisor crashed", extra={"job_id": job_id})
         finally:
@@ -305,8 +331,10 @@ class JobRunner:
         )
 
     async def _finish(
-        self, job_id: int, handle: _Running, status: JobStatus, exit_code: int | None, note: str | None
+        self, job_id: int, log_file: Path, status: JobStatus, exit_code: int | None, note: str | None
     ) -> None:
+        # 事务里不做文件 IO：进程已经结束，先读好输出的最后几行
+        last = await asyncio.to_thread(tail, log_file)
         async with self._db.transaction() as s:
             job = await s.get(Job, job_id)
             if job is None:
@@ -317,13 +345,12 @@ class JobRunner:
                 raise RuntimeError(f"job {job_id} already ended as {job.status}, cannot record {status}")
             now = self._clock()
             job.status, job.exit_code, job.finished_at = status, exit_code, now
-            text = _final_text(job, now, tail(self._workspace_of(job.agent_id) / job.log_path), note)
-            self._report_in(s, job, text)
+            self._report_in(s, job, _final_text(job, now, last, note))
         log.info(
             "background job finished", extra={"job_id": job_id, "status": status, "exit_code": exit_code}
         )
 
-    async def _interrupt_in(self, s: AsyncSession, job: Job, reason: str, *, may_be_alive: bool) -> None:
+    def _interrupt_in(self, s: AsyncSession, job: Job, reason: str, last: str, *, may_be_alive: bool) -> None:
         """把一个不再有人监督的任务记为被中断并告诉 agent。recover（崩溃后启动）、对账（监督意外结束）、关停共用。"""
         now = self._clock()
         job.status, job.finished_at = JobStatus.INTERRUPTED, now
@@ -334,8 +361,7 @@ class JobRunner:
                 f". Its process group {job.pid} may still be running: check with `pgrep -g {job.pid}` and stop it "
                 f"with `kill -- -{job.pid}` if it should not keep running"
             )
-        text = _final_text(job, now, tail(self._workspace_of(job.agent_id) / job.log_path), note)
-        self._report_in(s, job, text)
+        self._report_in(s, job, _final_text(job, now, last, note))
 
     def _report_in(self, s: AsyncSession, job: Job, text: str) -> None:
         """结局与「一定交回会话」同一个事务（定向命令）：会话投一封事件信件并释放占用；会话已被停止（占用已清掉）
@@ -390,7 +416,7 @@ class JobRunner:
             exit_code=job.exit_code,
             log_path=job.log_path,
             running_for=_duration(job.started_at, end),
-            tail=await asyncio.to_thread(tail, self._workspace_of(job.agent_id) / job.log_path),
+            tail=await asyncio.to_thread(tail, self._log_file(job)),
         )
 
     async def check(self) -> int:
@@ -399,19 +425,14 @@ class JobRunner:
 
         先对账：记为运行中、却不在本进程监督之下、也不在启动中的任务（记下结局时失败、监督意外结束、启动失败后的
         清理没做完），按 recover 的同一套逻辑记为被中断并告诉 agent。"""
-        async with self._db.transaction() as s:
-            orphans = (
-                await s.scalars(
-                    select(Job).where(
-                        Job.status == JobStatus.RUNNING,
-                        Job.id.not_in([*self._running, *self._starting]),
-                    )
-                )
-            ).all()
-            for job in orphans:
-                await self._close_unsupervised_in(
-                    s, job, "its supervision ended unexpectedly (see server log)", may_be_alive=True
-                )
+        orphans = await self._close_each(
+            lambda: select(Job).where(
+                Job.status == JobStatus.RUNNING, Job.id.not_in([*self._running, *self._starting])
+            ),
+            lambda s, job, last: self._close_unsupervised_in(
+                s, job, "its supervision ended unexpectedly (see server log)", last, may_be_alive=True
+            ),
+        )
         if orphans:
             log.warning(
                 "unsupervised background jobs marked interrupted", extra={"job_ids": [j.id for j in orphans]}
@@ -425,9 +446,7 @@ class JobRunner:
                     )
                 ).all()
             )
-        tails = {
-            j.id: await asyncio.to_thread(tail, self._workspace_of(j.agent_id) / j.log_path) for j in running
-        }
+        tails = await self._tails(running)
         # 在确认任务仍在运行的同一个事务里发出检查命令：与记下结局（同一事务发出 WorkEnded）互斥，检查要么先于结束
         # 排进同一条 lane，要么任务已经结束、不再发
         sent = 0
@@ -446,12 +465,12 @@ class JobRunner:
     async def recover(self) -> None:
         """启动时（还没有任务在跑）：正常关停已把任务记为被中断，这里剩下的是服务意外退出（被强杀、崩溃）时还在跑的。
         进程自成进程组，不随服务退出，可能还活着：如实告诉 agent，不盲杀（pid 可能已被复用）。"""
-        async with self._db.transaction() as s:
-            stale = list((await s.scalars(select(Job).where(Job.status == JobStatus.RUNNING))).all())
-            for job in stale:
-                await self._close_unsupervised_in(
-                    s, job, "the service stopped unexpectedly", may_be_alive=True
-                )
+        stale = await self._close_each(
+            lambda: select(Job).where(Job.status == JobStatus.RUNNING),
+            lambda s, job, last: self._close_unsupervised_in(
+                s, job, "the service stopped unexpectedly", last, may_be_alive=True
+            ),
+        )
         if stale:
             log.warning(
                 "background jobs left by an unexpected stop", extra={"job_ids": [j.id for j in stale]}
@@ -484,11 +503,13 @@ class JobRunner:
             )
         if not handles:
             return
-        async with self._db.transaction() as s:
-            for job_id in handles:
-                job = await s.get(Job, job_id)
-                if job is not None and job.status == JobStatus.RUNNING:
-                    await self._interrupt_in(s, job, "the service was stopped", may_be_alive=False)
+
+        async def interrupt(s: AsyncSession, job: Job, last: str) -> None:
+            self._interrupt_in(s, job, "the service was stopped", last, may_be_alive=False)
+
+        await self._close_each(
+            lambda: select(Job).where(Job.id.in_(list(handles)), Job.status == JobStatus.RUNNING), interrupt
+        )
         log.info("background jobs stopped with the service", extra={"job_ids": list(handles)})
 
 
