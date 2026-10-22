@@ -44,8 +44,8 @@ class TriggerInfo(BaseModel):
 _CREATE_DESCRIPTION = """\
 Create a trigger that starts a new conversation of an agent with `prompt` (plus the event, if the kind \
 carries one). See `trigger_kinds` for the kinds and their `config`. Triggered runs do not notify the user \
-automatically: the prompt should say when to notify the user (`notify_user`). A webhook only works after the user \
-generates its token in the app; tell the user to do that.
+automatically: the prompt should say when to notify the user (`notify_user`, so that agent needs the notify \
+tools). A webhook only works after the user generates its token in the app; tell the user to do that.
 
 For frequent checks (e.g. every minute) add a `precheck`, so the agent only runs when something happened: a \
 bash command run in the agent's workspace before each firing, with the event body (webhook) on stdin. \

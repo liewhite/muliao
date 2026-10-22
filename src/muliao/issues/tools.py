@@ -102,9 +102,9 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         depends_on: tuple[int, ...] = (),
     ) -> str:
         """Create an issue. Each agent works on an issue in one conversation dedicated to it; while the issue is
-        `todo` or `in_progress`, its creation and every later change are delivered there to the assigned agent,
-        except changes made from that very conversation (also when the assignee is you: create it here, it is
-        worked on there). Use `backlog` for later work.
+        `todo` or `in_progress`, its creation and every later change are delivered there to the assigned agent
+        (also when the assignee is you: create it here, it is worked on there), except changes made from that
+        very conversation. Use `backlog` for later work.
         To run issues in order, give `depends_on`: the issue is delivered only once all of them are `done` or
         `cancelled` (changes before that are only recorded), so a chain can be created as `todo` up front.
 

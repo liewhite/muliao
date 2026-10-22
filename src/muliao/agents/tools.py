@@ -80,7 +80,7 @@ def agents_toolset(
             name: Display name, unique among agents.
             description: What it is for; other agents choose whom to delegate to by this.
             instructions: Its own instructions (the agent-specific part of its system prompt; the public
-                prompt and run context are added separately).
+                prompt, its memory, skill index and run context are added by the system).
             model: `<provider>:<model>`; defaults to the server's default model.
             reflect_every: Steps (model responses) between forced reflections; defaults to the server's setting.
             tool_groups: Tool groups it may use (`get_agent` lists every available group with its tools);
@@ -138,8 +138,8 @@ def agents_toolset(
     async def delete_agent(ctx: RunContext[RunScope], agent: str) -> str:
         """Delete another agent with its sessions, memory, skills, private secrets and MCP servers, triggers
         and workspace. Irreversible. Threads its conversations opened with other agents that the user
-        can see are kept as standalone sessions; threads it was working on for others are deleted, and whoever
-        delegated them gets the outcome "deleted". You cannot delete yourself.
+        can see are kept as standalone sessions; threads it was working on for others are deleted, and any
+        unfinished work in them is reported back to its delegator as deleted. You cannot delete yourself.
 
         Args:
             agent: Name of the agent to delete.
