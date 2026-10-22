@@ -247,6 +247,22 @@ describe('foldCheckIns', () => {
     ])
   })
 
+  it('folds thinking only when it leads to a filler reply', () => {
+    const views = fold([
+      check('job:3', 'running', '1'),
+      item('thinking', '还在跑，等着'),
+      item('assistant', '…'),
+      check('job:3', 'running', '2'),
+      item('thinking', '输出卡住了'),
+      item('assistant', '我去看看日志'),
+    ])
+    expect(views.map((v) => (v.kind === 'checks' ? `${v.source}×${v.checks.length}` : v.kind))).toEqual([
+      'job:3×2',
+      'process',
+      'assistant',
+    ])
+  })
+
   it('leaves a filler reply that does not follow a check-in alone', () => {
     expect(fold([item('user', 'hi'), item('assistant', '…')]).map((v) => v.kind)).toEqual(['user', 'assistant'])
   })

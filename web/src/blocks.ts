@@ -152,16 +152,18 @@ export function groupSteps(blocks: Block[]): View[] {
 }
 
 /** agent 对检查只回的占位答复（全局约定：没有新进展时回“…”），合并检查时一起收起 */
-const isFiller = (v: View) => v.kind === 'assistant' && ['', '…', '...'].includes(v.text.trim())
+const isFiller = (v: View | undefined) => v?.kind === 'assistant' && ['', '…', '...'].includes(v.text.trim())
+const onlyThinking = (v: View) => v.kind === 'process' && v.steps.every((s) => s.kind === 'thinking')
 
 /**
- * 连续的运行中检查（夹在中间的占位答复“…”一并收起）按来源各合成一条，按该来源第一次出现的位置排。
- * 别的任何块（用户消息、结局事件、工具调用、实际回答）都会断开这一串；结局事件照常单独显示
+ * 连续的运行中检查（夹在中间的占位答复“…”、以及紧接着占位答复的纯思考一并收起）按来源各合成一条，按该来源第一次
+ * 出现的位置排。别的任何块（用户消息、结局事件、工具调用、实际回答）都会断开这一串；结局事件照常单独显示
  */
 export function foldCheckIns(views: View[]): View[] {
   const folded: View[] = []
   let run: Map<string, CheckIn[]> | null = null
-  for (const view of views) {
+  for (const [i, view] of views.entries()) {
+    if (run !== null && onlyThinking(view) && isFiller(views[i + 1])) continue
     if (view.kind === 'event' && view.checkIn) {
       run ??= new Map()
       const checks = run.get(view.source)

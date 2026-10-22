@@ -221,7 +221,7 @@ function SourceLabel({ source, ctx }: { source: string; ctx: SessionContext }) {
         <Link to={sessionRoute(parsed.id)} className="flex min-w-0 shrink items-center gap-1 text-accent hover:underline">
           <GitBranch className="size-3.5 shrink-0" />
           <span className="truncate">
-            {thread ? `${thread.thread ?? thread.title}（${agentLabel(ctx.agents, thread.agent_id)}）` : 'thread'}
+            {thread ? `${thread.thread}（${agentLabel(ctx.agents, thread.agent_id)}）` : 'thread'}
           </span>
         </Link>
       )

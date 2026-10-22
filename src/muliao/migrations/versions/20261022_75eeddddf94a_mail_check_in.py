@@ -97,4 +97,5 @@ def downgrade() -> None:
         "UPDATE messages SET payload = json_remove(payload, '$.metadata.muliao_check_ins') "
         "WHERE json_extract(payload, '$.metadata.muliao_check_ins') IS NOT NULL"
     )
+    # SQLite 原生 DROP COLUMN（3.35+）：不重建表，mail 的 AUTOINCREMENT 与 sqlite_sequence 不受影响
     op.drop_column("mail", "check_in")
