@@ -26,9 +26,11 @@ from muliao.vault.tables import Secret
 
 log = logging.getLogger(__name__)
 
-_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,99}$")
+# secret key 的语法：存储时校验与模板里的引用共用这一份
+_KEY_SYNTAX = r"[A-Za-z_][A-Za-z0-9_]{0,99}"
+_KEY = re.compile(rf"^{_KEY_SYNTAX}$")
 # 配置模板中的引用语法：${vault:KEY}
-VAULT_REF = re.compile(r"\$\{vault:([A-Za-z_][A-Za-z0-9_]*)\}")
+VAULT_REF = re.compile(rf"\$\{{vault:({_KEY_SYNTAX})\}}")
 
 
 def fill(template: str, values: Mapping[str, str]) -> str:
