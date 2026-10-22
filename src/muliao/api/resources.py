@@ -47,7 +47,7 @@ class _Resource:
 
 
 async def _resource(c: C, kind: ResourceKind, owner: str | None) -> _Resource:
-    # 读历史与恢复一版之前；恢复的写入仍由 store 在锁里检查（agents.active）
+    # 读历史与恢复一版之前；恢复的写入仍由资源仓库在锁里检查（agents.active）
     await check_owner(c, owner)
     match kind:
         case ResourceKind.PROMPT:

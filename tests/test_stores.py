@@ -26,13 +26,13 @@ def _git(*args: str) -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path, seed_resources) -> ResourceRepo:
-    return ResourceRepo(seed_resources(tmp_path / "resources"))
+    return ResourceRepo(seed_resources(tmp_path / "resources"), any_owner)
 
 
 async def test_ensure_initialises_a_fresh_repository(tmp_path: Path):
     """其余用例用的是 conftest 里初始化过一次的模板仓库的副本，初始化本身在这里测。"""
     root = tmp_path / "fresh"
-    await ResourceRepo(root).ensure()
+    await ResourceRepo(root, any_owner).ensure()
 
     assert _git("-C", str(root), "rev-list", "--count", "HEAD").strip() == "1"
     assert _git("-C", str(root), "config", "user.name").strip() == SYSTEM
@@ -40,7 +40,7 @@ async def test_ensure_initialises_a_fresh_repository(tmp_path: Path):
 
 @pytest.fixture
 def skills(repo: ResourceRepo) -> SkillStore:
-    return SkillStore(repo, any_owner)
+    return SkillStore(repo)
 
 
 async def test_private_skill_shadows_public_skill_with_same_name(skills: SkillStore):
@@ -116,6 +116,42 @@ async def test_corrupt_skills_of_other_agents_are_not_reported(skills: SkillStor
     assert [c.name for c in skills.index(BETA)[1]] == ["broken"]
 
 
+async def test_corrupt_items_are_logged_once_where_handed_out_and_dangling_links_are_skipped(
+    skills: SkillStore, repo: ResourceRepo, caplog
+):
+    """坏项只在交出它的地方记一次 error；悬空的符号链接（agent 用 shell 留下的）不算一项，也不让列出失败。"""
+    await skills.write(None, "good", "fine", "x", "user")
+    d = repo.owner_dir(None) / "skills" / "broken"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("no frontmatter")
+    mcp_dir = repo.owner_dir(None) / "mcp"
+    mcp_dir.mkdir(parents=True)
+    (mcp_dir / "bad.json").write_text("{not json")
+    (repo.owner_dir(None) / "skills" / "dangling").mkdir()
+    (repo.owner_dir(None) / "skills" / "dangling" / "SKILL.md").symlink_to(d / "missing.md")
+    (mcp_dir / "gone.json").symlink_to(mcp_dir / "missing.json")
+    from muliao.agents.mcp import McpRegistry
+
+    async def no_probe(_server):
+        raise AssertionError("not probed")
+
+    mcp = McpRegistry(repo, no_probe)
+
+    def logged() -> list[str]:
+        return [r.resource for r in caplog.records if r.getMessage() == "corrupt resource"]
+
+    # 管理界面：列出读得出来的不记，交出坏的那次记
+    assert [s.name for s in skills.list(None)] == ["good"]
+    assert logged() == []
+    assert [c.name for c in skills.corrupt_in(None)] == ["broken"]
+    assert mcp.list(None) == [] and [c.name for c in mcp.corrupt_in(None)] == ["bad"]
+    assert logged() == ["broken", "bad"]
+    caplog.clear()
+    visible, corrupt = skills.index(ALPHA)
+    assert [s.name for s in visible] == ["good"] and [c.name for c in corrupt] == ["broken"]
+    assert logged() == ["broken"]
+
+
 async def test_delete_missing_skill_raises_not_found(skills: SkillStore):
     with pytest.raises(NotFound):
         await skills.delete(None, "nope", "user")
@@ -137,7 +173,7 @@ async def test_every_change_is_a_revision_with_its_author(skills: SkillStore, re
 
 @pytest.fixture
 async def memory(repo: ResourceRepo) -> MemoryStore:
-    store = MemoryStore(repo, max_chars=50, check_owner=any_owner)
+    store = MemoryStore(repo, max_chars=50)
     await repo.apply({store.path(ALPHA): ""}, "init", "user")
     return store
 
@@ -358,7 +394,7 @@ async def test_a_change_made_outside_the_tools_is_recorded_before_the_next_write
 async def test_editing_a_skill_replaces_or_appends_to_its_body_and_keeps_name_and_description(
     repo: ResourceRepo,
 ):
-    skills = SkillStore(repo, any_owner)
+    skills = SkillStore(repo)
     await skills.write(ALPHA, "digest", "When digesting", "step one\nstep two", ALPHA)
 
     await skills.edit(ALPHA, "digest", ALPHA, old="step two", new="step 2")
@@ -377,7 +413,7 @@ async def test_editing_a_skill_replaces_or_appends_to_its_body_and_keeps_name_an
 async def test_editing_a_skill_can_change_only_its_description_or_body_and_description_in_one_revision(
     repo: ResourceRepo, owner: str | None
 ):
-    skills = SkillStore(repo, any_owner)
+    skills = SkillStore(repo)
     await skills.write(owner, "digest", "When digesting", "step one\nstep two", ALPHA)
 
     meta = await skills.edit(owner, "digest", ALPHA, description="  When summarizing a channel  ")
@@ -396,7 +432,7 @@ async def test_editing_a_skill_can_change_only_its_description_or_body_and_descr
 async def test_editing_a_skill_rejects_invalid_combinations_without_changing_it(
     repo: ResourceRepo, owner: str | None
 ):
-    skills = SkillStore(repo, any_owner)
+    skills = SkillStore(repo)
     await skills.write(owner, "digest", "When digesting", "step\nstep", ALPHA)
 
     with pytest.raises(InvalidInput, match="nothing to change"):
@@ -412,7 +448,7 @@ async def test_editing_a_skill_rejects_invalid_combinations_without_changing_it(
 
 async def test_files_outside_the_resource_layout_never_enter_history(repo: ResourceRepo, tmp_path: Path):
     """agent 在 skill 目录里放的杂物不进历史；一个没有提交的嵌套仓库（git add 会失败）也不影响任何写入。"""
-    skills = SkillStore(repo, any_owner)
+    skills = SkillStore(repo)
     await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
     skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
     (skill_dir / "notes.tmp").write_text("agent's own scratch")
@@ -454,7 +490,7 @@ async def test_every_file_the_stores_write_is_in_the_resource_layout(container, 
     ["edit", "delete", "new skill", "path with space"],
 )
 async def test_reconcile_records_each_kind_of_outside_change(repo: ResourceRepo, outside: str):
-    skills = SkillStore(repo, any_owner)
+    skills = SkillStore(repo)
     await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
     skill = repo.owner_dir(ALPHA) / "skills" / "digest" / "SKILL.md"
     target = {
@@ -478,7 +514,7 @@ async def test_reconcile_records_each_kind_of_outside_change(repo: ResourceRepo,
 
 async def test_recover_commits_a_rename_left_staged_by_a_killed_reconcile(repo: ResourceRepo):
     """进程死在 reconcile 的 add 与 commit 之间、暂存区里留下一次重命名：之后的收敛不能被它卡住。"""
-    skills = SkillStore(repo, any_owner)
+    skills = SkillStore(repo)
     await skills.write(ALPHA, "old", "When digesting", "steps", ALPHA)
     old_dir = repo.owner_dir(ALPHA) / "skills" / "old"
     old_dir.rename(old_dir.with_name("new"))
@@ -506,7 +542,7 @@ async def test_a_symlink_named_like_a_partial_write_does_not_stop_startup(repo: 
 async def test_writing_a_skill_whose_directory_is_a_nested_repository_fails_instead_of_going_unversioned(
     repo: ResourceRepo,
 ):
-    skills = SkillStore(repo, any_owner)
+    skills = SkillStore(repo)
     await repo.ensure()
     skill_dir = repo.owner_dir(ALPHA) / "skills" / "cloned"
     skill_dir.mkdir(parents=True)
@@ -529,7 +565,7 @@ async def test_writing_a_skill_whose_directory_is_a_nested_repository_fails_inst
 async def test_reconcile_converges_from_any_mix_of_staged_and_unstaged_changes(
     repo: ResourceRepo, staged: str, then: str
 ):
-    skills = SkillStore(repo, any_owner)
+    skills = SkillStore(repo)
     await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
     skill_dir = repo.owner_dir(ALPHA) / "skills" / ("fresh" if staged == "new" else "digest")
     skill_dir.mkdir(exist_ok=True)
@@ -574,41 +610,66 @@ async def test_contents_at_reads_every_revision_in_one_batch(repo: ResourceRepo)
         await repo.contents_at([revisions[0].rev], other)
 
 
-async def test_a_failing_precondition_writes_and_commits_nothing(repo: ResourceRepo):
+async def test_a_write_for_an_unavailable_owner_writes_and_commits_nothing(repo: ResourceRepo):
+    """owner 由路径推出、默认检查：store 不必记得传，漏不掉。"""
+    checked: list[str | None] = []
+
+    async def refuse(owner: str | None) -> None:
+        checked.append(owner)
+        if owner is not None:
+            raise NotFound("agent gone")
+
+    guarded = ResourceRepo(repo.root, refuse)
     path = repo.owner_dir(ALPHA) / "MEMORY.md"
     head = _git("-C", str(repo.root), "rev-parse", "HEAD")
 
-    async def refuse() -> None:
-        raise NotFound("agent gone")
-
     with pytest.raises(NotFound):
-        await repo.apply({path: "x"}, "memory", ALPHA, precondition=refuse)
+        await guarded.apply({path: "x"}, "memory", ALPHA)
     with pytest.raises(NotFound):
-        await repo.update(path, lambda _c: "x", "memory", ALPHA, precondition=refuse)
+        await guarded.update(path, lambda _c: "x", "memory", ALPHA)
+    with pytest.raises(NotFound):
+        await SkillStore(guarded).write(ALPHA, "s", "d", "x", ALPHA)
+    # 一次写入涉及的每个 owner 都查：公共的放行不足以让同次的私有写入通过
+    with pytest.raises(NotFound):
+        await guarded.apply({repo.root / "public" / "PROMPT.md": "p", path: "x"}, "both", "user")
 
+    assert checked == [ALPHA, ALPHA, ALPHA, None, ALPHA]
     assert not repo.owner_dir(ALPHA).exists()
     assert _git("-C", str(repo.root), "rev-parse", "HEAD") == head
+    # 显式不查的只有创建与删除 agent
+    assert await guarded.apply({path: "x"}, "create agent", "user", unchecked=True) is not None
 
 
-async def test_the_precondition_runs_inside_the_repository_lock(repo: ResourceRepo):
+async def test_a_path_outside_every_owner_directory_is_not_a_resource(repo: ResourceRepo):
+    with pytest.raises(ValueError, match="not inside an owner directory"):
+        await repo.apply({repo.root / "stray.md": "x"}, "stray", "user")
+    with pytest.raises(ValueError, match="not inside an owner directory"):
+        await repo.apply({repo.root / "agents" / "..x" / "MEMORY.md": "x"}, "stray", "user")
+
+
+async def test_the_owner_check_runs_inside_the_repository_lock(repo: ResourceRepo):
     """检查与写入之间插不进别的写入（例如删除 agent 删掉它的目录）：检查在锁里执行。"""
     path = repo.owner_dir(ALPHA) / "MEMORY.md"
     checking, release = anyio.Event(), anyio.Event()
     order: list[str] = []
 
-    async def slow_check() -> None:
+    async def slow_check(owner: str | None) -> None:
+        if owner is None:
+            return
         checking.set()
         await release.wait()
         order.append("checked")
 
+    guarded = ResourceRepo(repo.root, slow_check)
+
     async def other_write() -> None:
         await checking.wait()
-        await repo.apply({repo.owner_dir(ALPHA): None}, "delete agent", "user")
+        await guarded.apply({repo.owner_dir(ALPHA): None}, "delete agent", "user", unchecked=True)
         order.append("deleted")
 
     async with anyio.create_task_group() as group:
         group.start_soon(other_write)
-        group.start_soon(partial(repo.apply, {path: "fact\n"}, "memory", ALPHA, precondition=slow_check))
+        group.start_soon(partial(guarded.apply, {path: "fact\n"}, "memory", ALPHA))
         await checking.wait()
         await anyio.sleep(0.1)
         assert order == []

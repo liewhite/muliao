@@ -83,6 +83,19 @@ async def test_get_agent_lists_each_tool_group_with_the_tools_it_registers(conta
     assert "full access" not in detail
 
 
+def test_tool_group_implementations_must_match_the_catalog_both_ways():
+    from muliao.agents import tool_catalog
+    from muliao.container import _check_implementations
+
+    complete = {g.name: [] for g in tool_catalog.CATALOG}
+    _check_implementations(complete)
+    with pytest.raises(RuntimeError, match=r"missing \['web'\]"):
+        _check_implementations({k: v for k, v in complete.items() if k != tool_catalog.WEB})
+    # 多出的组选不到：不能静默丢掉
+    with pytest.raises(RuntimeError, match=r"unknown \['webb'\]"):
+        _check_implementations({**complete, "webb": []})
+
+
 async def test_agent_edits_public_prompt(container, make_agent, models):
     me = await make_agent("manager", model="tools")
     outputs = await run_tools(

@@ -466,7 +466,7 @@ async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(con
 
 
 async def test_a_deleting_agents_private_resources_can_no_longer_be_written(container, make_agent):
-    """写私有资源之前 owner 必须还可用：由各 store 在资源仓库的锁里检查（agents.active），不论写入来自 HTTP、工具
+    """写私有资源之前 owner 必须还可用：由资源仓库在它的锁里检查（agents.active，ResourceRepo），不论写入来自 HTTP、工具
     还是反思；删除流程之后在同一把锁里删掉资源目录，所以不会留下孤儿目录。公共资源不受影响。"""
     from muliao.agents.api import McpTransport, mcp_config
 

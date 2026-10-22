@@ -41,6 +41,10 @@ class ModelSlot:
         return self.models.get(name, self._default)
 
 
+async def _no_owner_check(_owner: str | None) -> None:
+    """模板仓库只初始化、不写资源。"""
+
+
 @pytest.fixture(scope="session")
 def resources_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """初始化过一次的资源仓库（init、config、初始提交，与生产的 ResourceRepo.ensure 相同）。
@@ -49,7 +53,7 @@ def resources_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     ensure() 看到 .git 已存在就直接跳过。
     """
     root = tmp_path_factory.mktemp("resources-template") / "resources"
-    asyncio.run(ResourceRepo(root).ensure())
+    asyncio.run(ResourceRepo(root, _no_owner_check).ensure())
     return root
 
 

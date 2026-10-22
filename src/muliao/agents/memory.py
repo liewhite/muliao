@@ -1,10 +1,8 @@
 """Agent 私有记忆：一份有长度上限的 markdown，每轮全文注入 instructions。存在资源仓库里，每次修改提交一版。"""
 
 from collections.abc import Callable
-from functools import partial
 from pathlib import Path
 
-from muliao.agents.active import OwnerCheck
 from muliao.agents.resources import ResourceRepo
 from muliao.errors import CorruptState, InvalidInput
 from muliao.platform import text_edit
@@ -17,10 +15,9 @@ class MemoryFull(InvalidInput):
 
 
 class MemoryStore:
-    def __init__(self, repo: ResourceRepo, max_chars: int, check_owner: OwnerCheck):
+    def __init__(self, repo: ResourceRepo, max_chars: int):
+        # 写记忆之前 agent 还可用的检查由仓库做（ResourceRepo）
         self._repo = repo
-        # 写记忆之前在仓库的锁里检查 agent 还可用（agents.active）
-        self._check_owner = check_owner
         self.max_chars = max_chars
 
     def path(self, agent: str) -> Path:
@@ -66,7 +63,5 @@ class MemoryStore:
             result.append(updated)
             return updated
 
-        await self._repo.update(
-            path, transform, f"memory of {agent}", author, precondition=partial(self._check_owner, agent)
-        )
+        await self._repo.update(path, transform, f"memory of {agent}", author)
         return result[0]

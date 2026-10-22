@@ -40,8 +40,8 @@ from muliao.errors import CorruptState, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
 
-# 写入之前、在仓库的锁里执行的检查（ResourceRepo.apply / update）
-Precondition = Callable[[], Awaitable[None]]
+# 为 owner 写资源之前的检查（实现见 agents.active.ActiveOwners）；owner 为 None（公共资源）时不查
+OwnerCheck = Callable[[str | None], Awaitable[None]]
 
 USER = "user"
 # 系统自己做的提交（初始化、启动时的收敛）
@@ -95,32 +95,60 @@ class CorruptResource:
         )
 
 
-def scan_resources[T](
-    kind: str, owner: str | None, files: Iterable[tuple[str, Path]], load: Callable[[Path], T], repair: str
-) -> tuple[list[T], list[CorruptResource]]:
-    """owner 名下一种资源的全部文件（名称与路径），各读一次：读得出来的，和读不出来的（load 抛 CorruptState：
-    CorruptResource，每次读到都记 error）。坏的只是这一项，不连累别的。"""
-    loaded: list[T] = []
-    corrupt: list[CorruptResource] = []
-    for name, path in files:
-        try:
-            loaded.append(load(path))
-        except CorruptState as e:
-            log.error(
-                "corrupt resource", extra={"kind": kind, "owner": owner, "resource": name, "error": str(e)}
-            )
-            corrupt.append(CorruptResource(kind, owner, name, path, str(e), repair=repair))
-    return loaded, corrupt
+def _reported(corrupt: list[CorruptResource]) -> list[CorruptResource]:
+    """交出去的坏资源，每次都记 error（只在交出的地方记：只要读得出来的那些的列出不记，一次读取不记两遍）。"""
+    for c in corrupt:
+        log.error(
+            "corrupt resource",
+            extra={"kind": c.kind, "owner": c.owner, "resource": c.name, "error": c.problem},
+        )
+    return corrupt
 
 
-def scan_index[T](
-    agent_id: str, scan: Callable[[str | None], tuple[list[T], list[CorruptResource]]]
-) -> tuple[list[T], list[CorruptResource]]:
-    """agent 的索引要的两个目录（它私有的在前，然后公共的）各扫一次：读得出来的（交给调用方按同名遮蔽合并），和
-    两边读不出来的。坏的不参与遮蔽——读不出来就不知道它是什么。"""
-    private, private_corrupt = scan(agent_id)
-    public, public_corrupt = scan(None)
-    return private + public, private_corrupt + public_corrupt
+@dataclass(frozen=True)
+class ResourceFiles[T]:
+    """一种每项一个文件的资源（skill、MCP server）在 owner 目录下的存放与列出：读得出来的，和读不出来的
+    （load 抛 CorruptState 即 CorruptResource，坏的只是这一项，不连累别的）。各 store 只给出自己的差别。"""
+
+    repo: ResourceRepo
+    # 种类与修复方式，见 CorruptResource
+    kind: str
+    repair: str
+    # owner 目录下的子目录，与其中每一项的文件（glob，相对子目录）
+    subdir: str
+    pattern: str
+    # 由文件位置决定的名称（内容坏了也知道是哪一项）
+    name: Callable[[Path], str]
+    load: Callable[[str | None, Path], T]
+
+    def dir(self, owner: str | None) -> Path:
+        return self.repo.owner_dir(owner) / self.subdir
+
+    def _scan(self, owner: str | None) -> tuple[list[T], list[CorruptResource]]:
+        loaded: list[T] = []
+        corrupt: list[CorruptResource] = []
+        # 悬空的符号链接不算一项（与按名称读、删的 exists() 判断一致）：报成坏项也删不掉
+        for path in sorted(p for p in self.dir(owner).glob(self.pattern) if p.exists()):
+            try:
+                loaded.append(self.load(owner, path))
+            except CorruptState as e:
+                corrupt.append(CorruptResource(self.kind, owner, self.name(path), path, str(e), self.repair))
+        return loaded, corrupt
+
+    def list(self, owner: str | None) -> list[T]:
+        """owner 名下读得出来的；坏的见 corrupt_in。"""
+        return self._scan(owner)[0]
+
+    def corrupt_in(self, owner: str | None) -> list[CorruptResource]:
+        """owner 名下读不出来的（管理界面列出，供修复或删除）。"""
+        return _reported(self._scan(owner)[1])
+
+    def index(self, agent_id: str) -> tuple[list[T], list[CorruptResource]]:
+        """agent 的索引要的两个目录（它私有的在前，然后公共的）各扫一次：读得出来的（交给调用方按同名遮蔽合并），和
+        两边读不出来的。坏的不参与遮蔽——读不出来就不知道它是什么。"""
+        private, private_corrupt = self._scan(agent_id)
+        public, public_corrupt = self._scan(None)
+        return private + public, _reported(private_corrupt + public_corrupt)
 
 
 @dataclass(frozen=True)
@@ -174,7 +202,7 @@ def _write(path: Path, content: str) -> None:
 
 class RevisionHistory:
     """资源文件的版本历史，只读，转发给 ResourceRepo。HTTP 层拿到的是这个对象而不是仓库本身，所以在运行时也写不了；
-    写入（包括恢复到某一版）一律经各 store，带上 owner 的检查（agents.active）。"""
+    写入（包括恢复到某一版）一律经各 store，owner 由资源仓库在锁里检查（agents.active）。"""
 
     def __init__(self, repo: ResourceRepo):
         self._repo = repo
@@ -190,10 +218,35 @@ class RevisionHistory:
 
 
 class ResourceRepo:
-    def __init__(self, root: Path):
+    """写入（apply / update）默认在锁里、写入之前检查涉及的每个 owner 还可用（check_owner，agents.active）：owner 由路径推出
+    （owner_dir 的布局），不靠各 store 记得传。只有创建 agent（它的行还不存在）与删除 agent 的资源目录（它已是
+    正在删除）显式传 unchecked=True。"""
+
+    def __init__(self, root: Path, check_owner: OwnerCheck):
         self.root = root
+        self._check_owner = check_owner
         self._lock = asyncio.Lock()
         self._ready = False
+
+    async def check_owner(self, owner: str | None) -> None:
+        """不写入、不加锁地先查一次 owner 还可用（如新增 MCP server 在连接验证之前）；写入时锁里那次才是准的。"""
+        await self._check_owner(owner)
+
+    def _owner_of(self, path: Path) -> str | None:
+        """路径所属的 owner（owner_dir 的反向）；不在任何 owner 目录下的路径不是资源，直接报错。
+
+        按 relative() 解析后的路径判断（与提交用的是同一个相对路径）：经符号链接的目录写到别的 owner 名下时，查的是实际
+        被写的那个 owner；链接所在的 agent 若正在删除，它的目录随后在同一把锁里被删掉，不留孤儿。"""
+        parts = self.relative(path).split("/")
+        if parts[0] == _PUBLIC:
+            return None
+        if parts[0] == _AGENTS and len(parts) >= 2 and AGENT_ID.fullmatch(parts[1]):
+            return parts[1]
+        raise ValueError(f"{path} is not inside an owner directory of the resource repository")
+
+    async def _check_owners_locked(self, paths: Iterable[Path]) -> None:
+        for owner in sorted({self._owner_of(p) for p in paths}, key=lambda o: o or ""):
+            await self._check_owner(owner)
 
     def owner_dir(self, owner: str | None) -> Path:
         """资源归属的目录：None 为公共，否则为该 agent 私有。布局只在这里定义。
@@ -327,14 +380,14 @@ class ResourceRepo:
         message: str,
         author: str,
         *,
-        precondition: Precondition | None = None,
+        unchecked: bool = False,
     ) -> str | None:
         """写入（内容为 None 表示删除该文件或目录）并提交，原子地：要么提交成功，要么什么都没发生。
 
-        precondition 在锁里、写入之前执行，抛出领域错误即拒绝这次写入（例如 owner 必须还可用，agents.active）。"""
+        写入之前在锁里检查涉及的 owner 还可用（不可用即拒绝这次写入），unchecked=True 时跳过（见类说明）。"""
         async with self._lock:
-            if precondition is not None:
-                await precondition()
+            if not unchecked:
+                await self._check_owners_locked(changes)
             # 外部写入先单独记一版，不并进这次作者的提交
             await self._reconcile_locked()
             return await self._apply_locked(changes, message, author)
@@ -345,16 +398,13 @@ class ResourceRepo:
         transform: Callable[[str | None], str | None],
         message: str,
         author: str,
-        *,
-        precondition: Precondition | None = None,
     ) -> str | None:
         """读取当前内容（不存在为 None）、变换、写入并提交，整个过程在同一把锁里：并发的修改互不覆盖。
 
-        transform 返回新内容（None 表示删除），或抛出领域错误拒绝这次修改。precondition 同 apply。
+        transform 返回新内容（None 表示删除），或抛出领域错误拒绝这次修改。owner 的检查同 apply（总是检查）。
         """
         async with self._lock:
-            if precondition is not None:
-                await precondition()
+            await self._check_owners_locked([path])
             # 先收敛外部写入再读：读到的就是刚提交的版本，变换的结果不会悄悄盖掉一次外部写入
             await self._reconcile_locked()
             return await self._apply_locked({path: transform(_read_optional(path))}, message, author)

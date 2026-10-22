@@ -16,24 +16,33 @@ class ToolGroupInfo:
     needs_web: bool = False
 
 
+# 组名常量：组合根按它登记每组的实现，别处引用组名也用它，不写字面量
 WORKSPACE = "workspace"
+TEMP_AGENT = "temp_agent"
+DELEGATION = "delegation"
+NOTIFY = "notify"
 AGENTS = "agents"
 PUBLIC_SKILLS = "public_skills"
 MCP = "mcp"
+MCP_ADMIN = "mcp_admin"
+VAULT = "vault"
+TRIGGERS = "triggers"
+ISSUES = "issues"
+WEB = "web"
 
 CATALOG: tuple[ToolGroupInfo, ...] = (
     ToolGroupInfo(WORKSPACE, "文件与 shell"),
-    ToolGroupInfo("temp_agent", "临时 agent"),
-    ToolGroupInfo("delegation", "委派给其他 agent"),
-    ToolGroupInfo("notify", "推送通知"),
+    ToolGroupInfo(TEMP_AGENT, "临时 agent"),
+    ToolGroupInfo(DELEGATION, "委派给其他 agent"),
+    ToolGroupInfo(NOTIFY, "推送通知"),
     ToolGroupInfo(AGENTS, "管理 agent 与公共指令"),
     ToolGroupInfo(PUBLIC_SKILLS, "写公共 skill"),
     ToolGroupInfo(MCP, "使用 MCP"),
-    ToolGroupInfo("mcp_admin", "管理 MCP"),
-    ToolGroupInfo("vault", "管理 vault"),
-    ToolGroupInfo("triggers", "管理触发器"),
-    ToolGroupInfo("issues", "issue 看板"),
-    ToolGroupInfo("web", "网页搜索与抓取", needs_web=True),
+    ToolGroupInfo(MCP_ADMIN, "管理 MCP"),
+    ToolGroupInfo(VAULT, "管理 vault"),
+    ToolGroupInfo(TRIGGERS, "管理触发器"),
+    ToolGroupInfo(ISSUES, "issue 看板"),
+    ToolGroupInfo(WEB, "网页搜索与抓取", needs_web=True),
 )
 
 # 反思读的转录里可能有不可信输入：自我改进之外只开放该 agent 本来就有的写公共 skill

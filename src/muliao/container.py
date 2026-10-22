@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
@@ -293,12 +293,11 @@ def assemble(
     run_now = RunNow()
     vault = Vault(db, settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
-    resources = ResourceRepo(settings.resources_dir)
-    # 写私有资源之前，各 store 在资源仓库的锁里检查 owner 还可用（agents.active）
-    owners = ActiveOwners(db)
-    skills = SkillStore(resources, owners)
-    memory = MemoryStore(resources, settings.runtime.memory_max_chars, owners)
-    prompts = PromptStore(resources, owners)
+    # 写私有资源之前，资源仓库在它的锁里检查 owner 还可用（agents.active）
+    resources = ResourceRepo(settings.resources_dir, ActiveOwners(db))
+    skills = SkillStore(resources)
+    memory = MemoryStore(resources, settings.runtime.memory_max_chars)
+    prompts = PromptStore(resources)
     agents = AgentService(
         db,
         settings.workspaces_dir,
@@ -325,7 +324,7 @@ def assemble(
     notifications = Notifications(db, queue, bus)
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，「使用 MCP」组按配置的可用 server 连接
     mcp_connector = McpConnector(vault)
-    mcp = McpRegistry(resources, mcp_connector.probe, owners)
+    mcp = McpRegistry(resources, mcp_connector.probe)
     mcp_tools = mcp_connector.toolset(mcp.index)
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
@@ -386,20 +385,24 @@ def assemble(
     ]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
     temp_profile = RunProfile(toolsets=[workspace_toolset(vault, limits, files), *web_tools, mcp_tools])
-    # 每个组的实现，按目录取：目录里有、这里没有的组是代码不一致，在启动时报出
+    # 每个组的实现，按目录的组名常量登记：与目录的组不一一对应是代码不一致，在启动时报出
     implementations = {
         # 对话里用的这份带后台任务（只有会话运行会选用工具组；反思不开放它）
-        "workspace": [session_workspace_toolset(vault, limits, files, jobs)],
-        "temp_agent": [temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir)],
-        "delegation": [delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds)],
-        "notify": [notify_toolset(notifications)],
-        "public_skills": [public_skills_toolset(skills)],
-        "mcp": [mcp_tools],
-        "mcp_admin": [mcp_admin_toolset(mcp)],
-        "vault": [vault_toolset(vault)],
-        "triggers": ([triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)]),
-        "issues": [issues_toolset(issues, agents)],
-        "web": web_tools,
+        tool_catalog.WORKSPACE: [session_workspace_toolset(vault, limits, files, jobs)],
+        tool_catalog.TEMP_AGENT: [temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir)],
+        tool_catalog.DELEGATION: [
+            delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds)
+        ],
+        tool_catalog.NOTIFY: [notify_toolset(notifications)],
+        tool_catalog.PUBLIC_SKILLS: [public_skills_toolset(skills)],
+        tool_catalog.MCP: [mcp_tools],
+        tool_catalog.MCP_ADMIN: [mcp_admin_toolset(mcp)],
+        tool_catalog.VAULT: [vault_toolset(vault)],
+        tool_catalog.TRIGGERS: [
+            triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)
+        ],
+        tool_catalog.ISSUES: [issues_toolset(issues, agents)],
+        tool_catalog.WEB: web_tools,
     }
     # get_agent 给模型列出每组实际包含的工具（从注册的工具集取，不另写一份）；MCP 的工具每次运行按可见的 server 构建
     group_tools = {
@@ -409,8 +412,7 @@ def assemble(
     }
     group_tools[tool_catalog.MCP] = [MCP_TOOL_NAMES]
     implementations[tool_catalog.AGENTS] = [agents_toolset(agents, agent_lifecycle, prompts, group_tools)]
-    if missing := [g.name for g in tool_catalog.CATALOG if g.name not in implementations]:
-        raise RuntimeError(f"tool groups in the catalog without an implementation: {missing}")
+    _check_implementations(implementations)
     tool_groups = ToolGroups(groups={g.name: implementations[g.name] for g in groups}, always=always_tools)
     compactor = Compactor(
         db,
@@ -502,6 +504,16 @@ def assemble(
         http=http,
         transcriber=transcriber,
     )
+
+
+def _check_implementations(implementations: Mapping[str, object]) -> None:
+    """组合根登记的组必须与目录的组一一对应：缺实现的组选了没工具，多出的组选不到、被静默丢掉。"""
+    catalog = {g.name for g in tool_catalog.CATALOG}
+    if set(implementations) != catalog:
+        raise RuntimeError(
+            "tool group implementations do not match the catalog: "
+            f"missing {sorted(catalog - set(implementations))}, unknown {sorted(set(implementations) - catalog)}"
+        )
 
 
 def _function_tools(group: str, toolset: AbstractToolset[RunScope]) -> list[str]:

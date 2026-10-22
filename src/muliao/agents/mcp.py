@@ -13,15 +13,13 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from functools import partial
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-from muliao.agents.active import OwnerCheck
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import scope_of, shadowing
-from muliao.agents.resources import CorruptResource, ResourceRepo, scan_index, scan_resources
+from muliao.agents.resources import CorruptResource, ResourceFiles, ResourceRepo
 from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
@@ -111,25 +109,31 @@ McpProbe = Callable[[McpServer], Awaitable[list[str]]]
 
 
 class McpRegistry:
-    def __init__(self, repo: ResourceRepo, probe: McpProbe, check_owner: OwnerCheck):
+    def __init__(self, repo: ResourceRepo, probe: McpProbe):
+        # 写私有配置之前 owner 还可用的检查由仓库做（ResourceRepo）
         self._repo = repo
-        # 写私有配置之前在仓库的锁里检查 owner 还可用（agents.active）
-        self._check_owner = check_owner
         self._probe = probe
-
-    def _dir(self, owner: str | None) -> Path:
-        return self._repo.owner_dir(owner) / "mcp"
+        self._files = ResourceFiles(
+            repo,
+            kind="MCP server",
+            repair="removed and added again",
+            subdir="mcp",
+            pattern="*.json",
+            name=lambda path: path.stem,
+            load=self._load,
+        )
 
     def _path(self, owner: str | None, name: str) -> Path:
-        return self._dir(owner) / f"{validate_slug('mcp server', name)}.json"
+        return self._files.dir(owner) / f"{validate_slug('mcp server', name)}.json"
 
     def _load(self, owner: str | None, path: Path) -> McpServer:
         """手工改坏的文件在这里报错（带路径），不带着错误的类型或含义继续运行；可以用 remove 删掉。列出 server 时
-        它单独报出（_scan），不连累别的 server。"""
+        它单独报出（ResourceFiles），不连累别的 server。"""
         try:
             validate_slug("mcp server", path.stem)
             config = McpConfig.model_validate_json(path.read_text(encoding="utf-8"))
-        except (ValueError, InvalidInput) as e:
+        # 读不了的文件（如没有读权限）同样只坏这一项
+        except (ValueError, InvalidInput, OSError) as e:
             # 文件数据损坏（多半是手工改坏的）：不是调用方的输入错误，交给人修复
             raise CorruptState(f"corrupt MCP config {path}: {e}") from e
         return McpServer(owner=owner, name=path.stem, config=config)
@@ -138,23 +142,13 @@ class McpRegistry:
         """实际连接 server 并列出工具名（检验配置能否工作；连不上是 InvalidInput）。"""
         return await self._probe(server)
 
-    def _scan(self, owner: str | None) -> tuple[list[McpServer], list[CorruptResource]]:
-        """owner 名下的 server：读得出来的，和配置坏了的（CorruptResource，每次读到都记 error）。"""
-        directory = self._dir(owner)
-        if not directory.exists():
-            return [], []
-        files = [(path.stem, path) for path in sorted(directory.glob("*.json"))]
-        return scan_resources(
-            "MCP server", owner, files, lambda path: self._load(owner, path), repair="removed and added again"
-        )
-
     def list(self, owner: str | None) -> list[McpServer]:
         """owner 名下配置读得出来的 server；坏的见 corrupt_in。"""
-        return self._scan(owner)[0]
+        return self._files.list(owner)
 
     def corrupt_in(self, owner: str | None) -> list[CorruptResource]:
         """owner 名下配置坏了的 server（管理界面与 mcp_list 列出，供删掉重加）。"""
-        return self._scan(owner)[1]
+        return self._files.corrupt_in(owner)
 
     def view(self, owner: str | None) -> list[tuple[McpServer, bool]]:
         """管理界面：owner 视角下的 server，即它私有的（在前）与公共的，各自标明是否被同名私有 server 遮蔽。
@@ -166,7 +160,7 @@ class McpRegistry:
     def listing(self, agent_id: str) -> tuple[list[tuple[McpServer, bool]], list[CorruptResource]]:
         """agent 视角下的全部 server（它私有的在前，然后公共的，含停用的），各自标明是否生效（已启用且未被同名私有
         server 遮蔽），以及它私有的与公共的里配置坏了的。坏的不参与同名遮蔽（是否启用都读不出来）。每个目录只扫一次。"""
-        servers, corrupt = scan_index(agent_id, self._scan)
+        servers, corrupt = self._files.index(agent_id)
         return [
             (s, s.enabled and not shadowed) for s, shadowed in _with_shadowing(servers, agent_id)
         ], corrupt
@@ -189,7 +183,7 @@ class McpRegistry:
         validate_slug("mcp server", name)
         server = McpServer(owner=owner, name=name, config=config)
         # 连接验证之前先查一次 owner（正在删除的 agent 不必白跑一次连接）；写入时锁里的那次才是准的
-        await self._check_owner(owner)
+        await self._repo.check_owner(owner)
         tools = await self.probe(server) if probe else []
 
         def create(current: str | None) -> str:
@@ -202,7 +196,6 @@ class McpRegistry:
             create,
             f"add {scope_of(owner)} MCP server {name}",
             author,
-            precondition=partial(self._check_owner, owner),
         )
         log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
@@ -219,7 +212,6 @@ class McpRegistry:
             delete,
             f"remove {scope_of(owner)} MCP server {name}",
             author,
-            precondition=partial(self._check_owner, owner),
         )
 
     async def set_enabled(self, owner: str | None, name: str, enabled: bool, author: str) -> McpServer:
@@ -239,7 +231,7 @@ class McpRegistry:
             return _dump(updated)
 
         message = f"{'enable' if enabled else 'disable'} {scope_of(owner)} MCP server {name}"
-        await self._repo.update(path, toggle, message, author, precondition=partial(self._check_owner, owner))
+        await self._repo.update(path, toggle, message, author)
         return result[0]
 
 

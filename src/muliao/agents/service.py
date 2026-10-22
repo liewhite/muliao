@@ -244,6 +244,8 @@ class AgentService:
             {self._memory.path(agent_id): "", self._prompts.path(agent_id): spec.instructions},
             f"create agent {agent_id}",
             author,
+            # 它的行在资源写入之后才插入：此刻还不是可用的 owner
+            unchecked=True,
         )
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
@@ -304,7 +306,7 @@ class AgentService:
 
     async def get_active(self, agent_id: str) -> AgentInfo:
         """还可用的 agent：正在删除的按不存在处理（例如读它的私有资源时）。为它写数据的检查在写入的地方：数据库数据在
-        同一事务里用 active_agent_in，私有资源由各 store 在资源仓库的锁里检查（agents.active）。"""
+        同一事务里用 active_agent_in，私有资源由资源仓库在它的锁里检查（agents.active，ResourceRepo）。"""
         async with self._db.transaction() as s:
             return await active_agent_in(s, agent_id)
 
@@ -365,4 +367,7 @@ class AgentService:
                     "workspace of a deleted agent could not be fully removed",
                     extra={"agent": agent_id, "path": str(workspace), "error": repr(e)},
                 )
-        await self._repo.apply({self._repo.owner_dir(agent_id): None}, f"delete agent {agent_id}", author)
+        # 它已是正在删除（不再可用）：在同一把锁里删掉目录，之前检查通过的写入都在它之前（agents.active）
+        await self._repo.apply(
+            {self._repo.owner_dir(agent_id): None}, f"delete agent {agent_id}", author, unchecked=True
+        )
