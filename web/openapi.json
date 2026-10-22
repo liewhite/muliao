@@ -2376,6 +2376,39 @@
         }
       }
     },
+    "/api/notifications/issues/{issue_id}/read": {
+      "post": {
+        "summary": "Mark Issue Read",
+        "description": "打开了 issue：请用户审核它的通知标为已读。",
+        "operationId": "mark_issue_read_api_notifications_issues__issue_id__read_post",
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/usage": {
       "get": {
         "summary": "Usage Summary",
@@ -2719,6 +2752,96 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ActivityOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/issues/{issue_id}/approve": {
+      "post": {
+        "summary": "Approve Issue",
+        "description": "审核通过指派给用户的 issue：设为 done。没有指派给用户时 409。",
+        "operationId": "approve_issue_api_issues__issue_id__approve_post",
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/issues/{issue_id}/reject": {
+      "post": {
+        "summary": "Reject Issue",
+        "description": "打回指派给用户的 issue：理由记成评论，回到 todo，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。",
+        "operationId": "reject_issue_api_issues__issue_id__reject_post",
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueOut"
                 }
               }
             }
@@ -4352,6 +4475,17 @@
             ],
             "title": "Session Id"
           },
+          "issue_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issue Id"
+          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -4368,6 +4502,7 @@
           "title",
           "body",
           "session_id",
+          "issue_id",
           "unread",
           "created_at"
         ],
@@ -4742,6 +4877,19 @@
           "created_at"
         ],
         "title": "ReflectionOut"
+      },
+      "RejectIn": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "RejectIn"
       },
       "ReplyIn": {
         "properties": {

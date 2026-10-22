@@ -805,6 +805,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notifications/issues/{issue_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark Issue Read
+         * @description 打开了 issue：请用户审核它的通知标为已读。
+         */
+        post: operations["mark_issue_read_api_notifications_issues__issue_id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/usage": {
         parameters: {
             query?: never;
@@ -876,6 +896,46 @@ export interface paths {
         put?: never;
         /** Comment Issue */
         post: operations["comment_issue_api_issues__issue_id__comments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/issues/{issue_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Issue
+         * @description 审核通过指派给用户的 issue：设为 done。没有指派给用户时 409。
+         */
+        post: operations["approve_issue_api_issues__issue_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/issues/{issue_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Issue
+         * @description 打回指派给用户的 issue：理由记成评论，回到 todo，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。
+         */
+        post: operations["reject_issue_api_issues__issue_id__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1508,6 +1568,8 @@ export interface components {
             body: string;
             /** Session Id */
             session_id: string | null;
+            /** Issue Id */
+            issue_id: number | null;
             /** Unread */
             unread: boolean;
             /**
@@ -1668,6 +1730,11 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** RejectIn */
+        RejectIn: {
+            /** Reason */
+            reason: string;
         };
         /** ReplyIn */
         ReplyIn: {
@@ -3947,6 +4014,35 @@ export interface operations {
             };
         };
     };
+    mark_issue_read_api_notifications_issues__issue_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     usage_summary_api_usage_get: {
         parameters: {
             query: {
@@ -4163,6 +4259,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActivityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_issue_api_issues__issue_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_issue_api_issues__issue_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueOut"];
                 };
             };
             /** @description Validation Error */

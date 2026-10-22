@@ -169,7 +169,6 @@ class ScheduleDue:
             since=now if streak is None else streak.since,
             previous_state=previous,
             session_id=trigger.last_session_id,
-            issue_id=None,
             notified=notified or notify,
         )
         if notify:
@@ -188,4 +187,5 @@ class ScheduleDue:
             ),
             # 点开通知打开挡路的那个会话
             session_id=trigger.last_session_id,
+            issue_id=None,
         )

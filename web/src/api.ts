@@ -258,6 +258,9 @@ export const api = {
   unreadNotifications: () => call('get', '/api/notifications/unread'),
   /** 标记到 throughId（用户看到的最新一条）为止已读，之后才到的保持未读 */
   markNotificationsRead: (throughId: number) => call('post', '/api/notifications/read', { body: { through_id: throughId } }),
+  /** 打开了 issue：请用户审核它的通知标为已读 */
+  markIssueNotificationsRead: (issue_id: number) =>
+    call('post', '/api/notifications/issues/{issue_id}/read', { path: { issue_id } }),
   /** 停止正在进行的运行；停止前已经产生的部分照常保存 */
   stop: (session_id: string) => call('post', '/api/sessions/{session_id}/stop', { path: { session_id } }),
   compact: (session_id: string) => call('post', '/api/sessions/{session_id}/compact', { path: { session_id } }),
@@ -315,6 +318,10 @@ export const api = {
   commentIssue: (issue_id: number, body: string) =>
     call('post', '/api/issues/{issue_id}/comments', { path: { issue_id }, body: { body } }),
   deleteIssue: (issue_id: number) => call('delete', '/api/issues/{issue_id}', { path: { issue_id } }),
+  /** 审核指派给用户的 issue：通过 → done；打回 → 理由记成评论、回到 todo、指派回交给用户的 agent */
+  approveIssue: (issue_id: number) => call('post', '/api/issues/{issue_id}/approve', { path: { issue_id } }),
+  rejectIssue: (issue_id: number, reason: string) =>
+    call('post', '/api/issues/{issue_id}/reject', { path: { issue_id }, body: { reason } }),
 
   vapidKey: () => call('get', '/api/push/vapid'),
   subscribePush: (body: Schemas['PushSubscriptionIn']) => call('post', '/api/push/subscriptions', { body }),

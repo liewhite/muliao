@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Card } from '@heroui/react'
 import { MessageSquare, Pencil, Trash2 } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   SYSTEM_ACTOR,
+  USER,
   api,
   asAgentId,
   sessionRoute,
@@ -13,6 +14,7 @@ import {
   type IssueStatus,
 } from '../api'
 import { useRefetch } from '../events'
+import { refreshUnread } from '../unread'
 import {
   PRIORITIES,
   PRIORITY_LABEL,
@@ -134,6 +136,53 @@ function Editor({ detail, onSaved, onCancel }: { detail: IssueDetail; onSaved: (
   )
 }
 
+// 指派给用户的 issue 在这里审核（推送通知点开就是这一页；Chromium 通知上的「打回」带 ?review=reject 打开，聚焦理由）
+function Review({ issueId, reload }: { issueId: number; reload: () => Promise<void> }) {
+  const [params] = useSearchParams()
+  const [reason, setReason] = useState('')
+  const review = useAction()
+  const reject = () => {
+    if (review.busy || !reason.trim()) return
+    void review.run(async () => {
+      await api.rejectIssue(issueId, reason)
+      setReason('')
+      await reload()
+    })
+  }
+  return (
+    <Card>
+      <Card.Content className="flex flex-col gap-2">
+        <p className="text-sm font-medium">待你审核</p>
+        <TextAreaInput
+          label="打回理由（记成评论，回到待办并指派回交给你的 agent）"
+          value={reason}
+          onChange={setReason}
+          rows={2}
+          autoFocus={params.get('review') === 'reject'}
+          onSubmit={reject}
+        />
+        <ErrorAlert error={review.error} />
+        <div className="flex gap-2">
+          <ActionButton
+            isPending={review.busy}
+            onPress={() =>
+              void review.run(async () => {
+                await api.approveIssue(issueId)
+                await reload()
+              })
+            }
+          >
+            通过
+          </ActionButton>
+          <ActionButton variant="danger-soft" isPending={review.busy} isDisabled={!reason.trim()} onPress={reject}>
+            打回
+          </ActionButton>
+        </div>
+      </Card.Content>
+    </Card>
+  )
+}
+
 function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<void> }) {
   const agents = useAgents()
   const navigate = useNavigate()
@@ -199,6 +248,8 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
           {issue.description.trim() ? <Markdown text={issue.description} /> : <p className="text-sm text-muted">没有描述</p>}
         </div>
       )}
+
+      {issue.assignee === USER && issue.status !== 'done' && <Review issueId={issue.id} reload={reload} />}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <SelectInput
@@ -285,6 +336,13 @@ export default function IssueView() {
   const issueId = Number(id)
   const detail = useLoad(() => api.issue(issueId), [issueId])
   useRefetch('issues', detail.reload)
+  // 看到了 issue 就看到了请你审核它的通知（与打开会话一样）
+  useEffect(() => {
+    void api
+      .markIssueNotificationsRead(issueId)
+      .then(refreshUnread)
+      .catch((e) => console.error('marking issue notifications read failed', e))
+  }, [issueId])
   return (
     <Loading state={detail}>{(d) => <Issue detail={d} reload={detail.reload} />}</Loading>
   )
