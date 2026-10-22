@@ -62,6 +62,14 @@ async def test_a_notification_opens_its_issue_before_its_session(container, monk
     assert [(p["url"], p["issue_id"]) for p in payloads] == [("/issues/7", 7), ("/sessions/s1", None)]
 
 
+def test_a_notification_opens_its_issue_its_session_or_nothing():
+    def url(session_id, issue_id):  # noqa: ANN001, ANN202
+        return Notification(title="t", body="b", session_id=session_id, issue_id=issue_id).url
+
+    # 通知页与推送都用它（推送在没有时打开通知页）
+    assert [url("s1", 7), url("s1", None), url(None, None)] == ["/issues/7", "/sessions/s1", None]
+
+
 async def test_opening_an_issue_marks_the_notifications_asking_to_review_it_read(container):
     from muliao.notifications.events import Notify
     from muliao.platform.messaging import Delivery

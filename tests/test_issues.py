@@ -294,6 +294,17 @@ async def test_sending_an_issue_back_comments_and_returns_it_to_the_agent_that_h
         await container.issues.approve(issue.id)
 
 
+async def test_a_cancelled_issue_is_not_reviewed(container, make_agent):
+    alpha = (await make_agent("alpha")).id
+    issue, _ = await _handed_to_user(container, alpha)
+    await container.issues.update(None, issue.id, status=IssueStatus.CANCELLED)
+
+    with pytest.raises(Conflict, match="already cancelled"):
+        await container.issues.approve(issue.id)
+    with pytest.raises(Conflict, match="already cancelled"):
+        await container.issues.reject(issue.id, "redo")
+
+
 async def test_an_issue_handed_over_by_a_deleted_agent_cannot_be_sent_back(container, make_agent):
     alpha = (await make_agent("alpha")).id
     issue, _ = await _handed_to_user(container, alpha)
@@ -382,10 +393,11 @@ async def test_http_issue_lifecycle(client, container, make_agent):
     ]
     assert (await client.post(f"/api/issues/{issue_id}/comments", json={"body": "hi"})).status_code == 201
     # 审核：用户自己指派给自己的没有 agent 可以打回
+    assert (await client.get(f"/api/issues/{issue_id}")).json()["issue"]["reviewable"]
     resp = await client.post(f"/api/issues/{issue_id}/reject", json={"reason": "no"})
     assert resp.status_code == 409
     resp = await client.post(f"/api/issues/{issue_id}/approve")
-    assert resp.status_code == 200 and resp.json()["status"] == "done"
+    assert resp.status_code == 200 and resp.json()["status"] == "done" and not resp.json()["reviewable"]
 
     assert (await client.delete(f"/api/issues/{issue_id}")).status_code == 204
     assert (await client.get(f"/api/issues/{issue_id}")).status_code == 404

@@ -566,7 +566,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - **SSE 用 FastAPI 自带的事件流**（`/api/events`，`EventSourceResponse`）：每条 data 按 `ServerEvent` 校验并序列化。`ServerEvent` 是具名组件，前端的事件联合直接取它（openapi-typescript 还不认识 OpenAPI 3.2 的 `itemSchema`），只加上前端自己产生的两种：`connected`（每次连上都发，第一次也发：页面的首次请求可能早于订阅建立）与 `changed`（页面自己改了某类数据，如删会话、标已读、增删改 agent，服务端不为这些发事件；分屏并排的列表据此刷新，`events.announceChange`）。数据库是唯一事实源，事件只是展示加速：前端收到任务状态变化、`saved`、连上、`changed` 时从接口重新拉取（按所展示的数据类别 `Resource` 重新拉取的页面用 `events.useRefetch`，会话页按运行事件自己合并；agent 列表是各处共用的一份缓存 `ui.useAgents`）。单个页面监听器抛错不影响其他监听器（`reportError` 报告）。
 - **实时条目与历史同一个投影**（`sessions/transcript.py`）：前端把快照（会话接口的 `live`）与之后收到的事件按 `run_id`、`seq` 合并，完整条目原样接上，文字增量接在同类最后一条后面（`events.liveItems`），不自己投影。
 - **结构化状态由后端给出**：`ask_user` 条目的状态见第 7 节；前端不解析工具结果文本。
-- **路由**：前端会话页地址只由 `api.sessionRoute` 构造（推送通知点开的地址由后端 `notifications/webpush.py` 生成，与它一致）；webhook 地址只由 `triggers.webhook.hook_url` 构造。
+- **路由**：前端会话页地址只由 `api.sessionRoute` 构造（通知点开的地址由后端 `Notification.url` 唯一给出，推送与通知页（`NotificationOut.url`）共用，与前端路由一致）；webhook 地址只由 `triggers.webhook.hook_url` 构造。
 
 ## 18. 领域之间的最终一致：三条判据
 
