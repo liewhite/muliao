@@ -99,7 +99,7 @@ _TRIGGER_OUT: TypeAdapter[TriggerOut] = TypeAdapter(TriggerOut)
 
 
 class FiredOut(BaseModel):
-    # 前置检查判定这次不触发时为 null
+    # 触发一次的结果（手动触发与 webhook 共用）：前置检查判定这次不触发时为 null
     session_id: str | None
 
 

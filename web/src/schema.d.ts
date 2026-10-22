@@ -1225,11 +1225,6 @@ export interface components {
             /** Ui Version */
             ui_version: string | null;
         };
-        /** HookOut */
-        HookOut: {
-            /** Session Id */
-            session_id: string | null;
-        };
         /** IssueCreate */
         IssueCreate: {
             /** Title */
@@ -2320,7 +2315,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HookOut"];
+                    "application/json": components["schemas"]["FiredOut"];
                 };
             };
             /** @description Validation Error */

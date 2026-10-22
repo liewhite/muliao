@@ -180,4 +180,4 @@ async def subscribe(c: C, body: PushSubscriptionIn) -> None:
 
 @router.post("/push/test", status_code=202, response_class=Response)
 async def test_push(c: C) -> None:
-    await c.notifications.notify(None, "Muliao", "推送通知已开启。", None)
+    await c.notifications.send_test()

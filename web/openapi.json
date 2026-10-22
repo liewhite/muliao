@@ -85,7 +85,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HookOut"
+                  "$ref": "#/components/schemas/FiredOut"
                 }
               }
             }
@@ -3514,26 +3514,6 @@
         ],
         "title": "HeartbeatEvent",
         "description": "连上就发一次、之后每隔一段时间发一次：前端据此判断连接是否还活着（间隔随心跳下发），并比较前端构建的版本。"
-      },
-      "HookOut": {
-        "properties": {
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "session_id"
-        ],
-        "title": "HookOut"
       },
       "IssueCreate": {
         "properties": {

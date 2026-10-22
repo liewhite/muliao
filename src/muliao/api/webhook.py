@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from muliao.api.deps import C, read_limited
+from muliao.api.triggers import FiredOut
 from muliao.errors import InvalidInput, Unauthorized
 from muliao.triggers.api import EVENT_MAX_BYTES, PrecheckFailed
 
@@ -13,18 +14,13 @@ public_router = APIRouter()
 router = APIRouter()
 
 
-class HookOut(BaseModel):
-    # 前置检查判定这次不触发时为 null
-    session_id: str | None
-
-
 class TokenOut(BaseModel):
     # 明文只返回这一次
     token: str
 
 
 @public_router.post("/api/hooks/{name}", status_code=202)
-async def hook(c: C, name: str, request: Request, session_id: str | None = None) -> HookOut:
+async def hook(c: C, name: str, request: Request, session_id: str | None = None) -> FiredOut:
     """外部事件入口：Authorization: Bearer <token>。不带 session_id 时新建会话；带上之前返回的则在该会话里继续。"""
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not token:
@@ -41,7 +37,7 @@ async def hook(c: C, name: str, request: Request, session_id: str | None = None)
     except PrecheckFailed as e:
         # 原因（可能含脚本的 stderr）只记在触发器上给用户看，不交给外部调用方
         raise HTTPException(status_code=502, detail="trigger precheck failed") from e
-    return HookOut(session_id=delivered)
+    return FiredOut(session_id=delivered)
 
 
 @router.post("/triggers/{trigger_id}/webhook/token")

@@ -121,6 +121,10 @@ class Notifications:
         async with self._db.transaction() as s:
             await self._enqueue_in(s, agent_id, Notification(title=title, body=body, session_id=session_id))
 
+    async def send_test(self) -> None:
+        """用户在界面上开启推送后发的测试通知（系统通知，不打开会话）。"""
+        await self.notify(None, "Muliao", "推送通知已开启。", None)
+
     async def on_session_deleted(self, event: SessionDeleted, _delivery: Delivery) -> Commit:
         """指向被删会话的通知随它删除。"""
 
