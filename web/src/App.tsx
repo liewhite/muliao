@@ -12,7 +12,7 @@ import Issues from './pages/Issues'
 import IssueView from './pages/IssueView'
 import Mcp from './pages/Mcp'
 import Vault from './pages/Vault'
-import PublicPrompt from './pages/Prompts'
+import GlobalMemory from './pages/Memory'
 import NewSession from './pages/NewSession'
 import Notifications from './pages/Notifications'
 import SessionView from './pages/SessionView'
@@ -175,7 +175,7 @@ function Shell() {
               <Route path="/issues" element={<Issues />} />
               <Route path="/issues/:id" element={<IssueRoute />} />
               <Route path="/settings" element={<Settings />} />
-              <Route path="/prompt" element={<PublicPrompt />} />
+              <Route path="/memory" element={<GlobalMemory />} />
               <Route path="/skills" element={<PublicSkills />} />
               <Route path="/skills/edit" element={<SkillEditor />} />
               <Route path="/mcp" element={<Mcp />} />

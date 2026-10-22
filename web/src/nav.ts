@@ -38,7 +38,7 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
   {
     title: '公共资源',
     items: [
-      { to: '/prompt', label: '公共指令', Icon: ScrollText },
+      { to: '/memory', label: '全局记忆', Icon: ScrollText },
       { to: '/skills', label: '公共 Skills', Icon: Sparkles },
       { to: '/mcp', label: '公共 MCP servers', Icon: Plug },
       { to: '/vault', label: '公共 Vault', Icon: KeyRound },

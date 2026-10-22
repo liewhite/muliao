@@ -219,9 +219,9 @@ export const api = {
   updateAgent: (agent_id: AgentId, body: AgentInput) =>
     branded<Agent>(call('put', '/api/agents/{agent_id}', { path: { agent_id }, body })),
   deleteAgent: (agent_id: AgentId) => call('delete', '/api/agents/{agent_id}', { path: { agent_id } }),
-  memory: (agent_id: AgentId) => call('get', '/api/agents/{agent_id}/memory', { path: { agent_id } }),
-  setMemory: (agent_id: AgentId, content: string) =>
-    call('put', '/api/agents/{agent_id}/memory', { path: { agent_id }, body: { content } }),
+  /** owner 为 null 时是全局记忆（所有 agent 共享） */
+  memory: (owner: AgentId | null) => call('get', '/api/memory', { query: { owner } }),
+  setMemory: (owner: AgentId | null, content: string) => call('put', '/api/memory', { body: { owner, content } }),
 
   skills: (owner: string | null) => call('get', '/api/skills', { query: { owner } }),
   corruptSkills: (owner: AgentId | null) => call('get', '/api/skills/corrupt', { query: { owner } }),
@@ -290,7 +290,6 @@ export const api = {
     call('get', '/api/resources/{kind}/history', { path: { kind }, query: { owner } }),
   restore: (kind: ResourceKind, owner: AgentId | null, rev: string) =>
     call('post', '/api/resources/{kind}/restore', { path: { kind }, body: { owner, rev } }),
-  setPublicPrompt: (content: string) => call('put', '/api/prompts/public', { body: { content } }),
   /** owner 视角：它的私有 server 在前，然后是公共的（shadowed 标明被同名私有项遮蔽）；owner 为 null 只有公共的 */
   mcp: (owner: AgentId | null) => branded<McpServer[]>(call('get', '/api/mcp', { query: { owner } })),
   addMcp: (body: McpInput) => branded<McpServer>(call('post', '/api/mcp', { body })),

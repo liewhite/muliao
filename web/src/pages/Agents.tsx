@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Button, Card, Chip, Tabs, toast, type Key } from '@heroui/react'
 import { Copy, MessageSquarePlus, Plus, Trash2 } from 'lucide-react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
@@ -9,7 +9,6 @@ import {
   newSessionRoute,
   type Agent,
   type AgentDefaults,
-  type AgentId,
   type AgentInput,
   type ToolGroup,
 } from '../api'
@@ -21,7 +20,6 @@ import { ActionButton,
   Loading,
   Page,
   SelectInput,
-  TextAreaInput,
   TextInput,
   ToggleSwitch,
   formatTime,
@@ -31,7 +29,7 @@ import { ActionButton,
   useLoad,
 } from '../ui'
 import { McpManager } from './Mcp'
-import { ResourceHistory } from './Prompts'
+import { MemoryEditor } from './Memory'
 import { SkillList } from './Skills'
 import { SecretManager } from './Vault'
 import { refreshUnreadLogged } from '../unread'
@@ -82,14 +80,13 @@ export function AgentList() {
 
 function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
   if (agent) {
-    const { name, description, model, instructions, tool_groups } = agent
-    return { name, description, model, instructions, tool_groups }
+    const { name, description, model, tool_groups } = agent
+    return { name, description, model, tool_groups }
   }
   return {
     name: '',
     description: '',
     model: defaults.model,
-    instructions: '',
     tool_groups: defaults.default_tool_groups,
   }
 }
@@ -99,7 +96,7 @@ function ToolGroupsInput({ all, value, onChange }: { all: ToolGroup[]; value: st
   return (
     <div className="flex flex-col gap-2">
       <div className="text-sm font-medium">可用工具</div>
-      <div className="text-xs text-muted">记忆、私有 skill 和自己的指令总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的</div>
+      <div className="text-xs text-muted">记忆（含全局记忆）和私有 skill 总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的</div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {all.map((group) => (
           <label key={group.name} className="flex items-center gap-2 text-sm">
@@ -184,18 +181,12 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
       />
       <TextInput
         label="职责描述"
-        hint="其他 agent 委派任务时据此选择"
+        hint="它的角色：agent 自己每次运行都会看到，其他 agent 委派任务时据此选择"
         value={input.description}
         onChange={(description) => set({ description })}
         isRequired
       />
       <ModelInput value={input.model ?? ''} onChange={(model) => set({ model })} />
-      <TextAreaInput
-        label="指令（system prompt）"
-        value={input.instructions}
-        onChange={(instructions) => set({ instructions })}
-        rows={8}
-      />
       <ToolGroupsInput all={defaults.groups} value={input.tool_groups} onChange={(tool_groups) => set({ tool_groups })} />
       <ErrorAlert error={action.error} />
       <ActionButton isPending={action.busy} onPress={() => void save()}>
@@ -218,47 +209,6 @@ export function AgentCreate() {
         </Card.Content>
       </Card>
     </Page>
-  )
-}
-
-function MemoryEditor({ agentId }: { agentId: AgentId }) {
-  const memory = useLoad(() => api.memory(agentId), [agentId])
-  const [content, setContent] = useState('')
-  const action = useAction()
-  useEffect(() => {
-    if (memory.data) setContent(memory.data.content)
-  }, [memory.data])
-
-  return (
-    <Loading state={memory}>
-      {(m) => (
-        <div className="flex flex-col gap-3">
-          <TextAreaInput
-            label={`记忆（${content.length}/${m.max_chars} 字符）`}
-            hint="agent 每次运行都会看到全部记忆，也会自行修改"
-            value={content}
-            onChange={setContent}
-            rows={14}
-            mono
-          />
-          <ErrorAlert error={action.error} />
-          <ActionButton
-            isDisabled={content === m.content}
-            isPending={action.busy}
-            onPress={() =>
-              void action.run(async () => {
-                await api.setMemory(agentId, content)
-                toast.success('记忆已保存')
-                await memory.reload()
-              })
-            }
-          >
-            保存记忆
-          </ActionButton>
-          <ResourceHistory kind="memory" owner={agentId} current={m.content} onRestored={() => void memory.reload()} />
-        </div>
-      )}
-    </Loading>
   )
 }
 
@@ -341,14 +291,13 @@ export function AgentDetail() {
                   <Loading state={defaults}>
                     {(d) => (
                       <AgentForm
-                        key={`${a.id}-${a.name}-${a.instructions}`}
+                        key={`${a.id}-${a.name}-${a.description}`}
                         agent={a}
                         defaults={d}
                         onSaved={() => void agent.reload()}
                       />
                     )}
                   </Loading>
-                  <ResourceHistory kind="prompt" owner={a.id} current={a.instructions} onRestored={() => void agent.reload()} />
                 </Card.Content>
               </Card>
               <ErrorAlert error={action.error} />
@@ -358,7 +307,7 @@ export function AgentDetail() {
               </Button>
             </Tabs.Panel>
             <Tabs.Panel id="memory" className="pt-3">
-              <MemoryEditor agentId={a.id} />
+              <MemoryEditor owner={a.id} hint="agent 每次运行都会看到全部记忆，也会自行修改" />
             </Tabs.Panel>
             <Tabs.Panel id="skills" className="pt-3">
               <SkillList owner={a.id} />

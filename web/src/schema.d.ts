@@ -152,17 +152,20 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/memory": {
+    "/api/memory": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Memory */
-        get: operations["get_memory_api_agents__agent_id__memory_get"];
+        /**
+         * Get Memory
+         * @description owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。
+         */
+        get: operations["get_memory_api_memory_get"];
         /** Put Memory */
-        put: operations["put_memory_api_agents__agent_id__memory_put"];
+        put: operations["put_memory_api_memory_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -582,23 +585,6 @@ export interface paths {
          * @description 把某一版的内容作为新的一版写入。
          */
         post: operations["restore_api_resources__kind__restore_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/prompts/public": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Set Public Prompt */
-        put: operations["set_public_prompt_api_prompts_public_put"];
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1059,11 +1045,6 @@ export interface components {
             description: string;
             /** Model */
             model?: string | null;
-            /**
-             * Instructions
-             * @default
-             */
-            instructions: string;
             /** Tool Groups */
             tool_groups?: string[] | null;
         };
@@ -1086,8 +1067,6 @@ export interface components {
             description: string;
             /** Model */
             model: string;
-            /** Instructions */
-            instructions: string;
             /** Tool Groups */
             tool_groups: string[];
             /**
@@ -1107,8 +1086,6 @@ export interface components {
             description: string;
             /** Model */
             model: string;
-            /** Instructions */
-            instructions: string;
             /** Tool Groups */
             tool_groups: string[];
         };
@@ -1184,11 +1161,6 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
-        };
-        /** ContentIn */
-        ContentIn: {
-            /** Content */
-            content: string;
         };
         /**
          * CorruptOut
@@ -1509,6 +1481,8 @@ export interface components {
         McpTransport: "stdio" | "http";
         /** MemoryIn */
         MemoryIn: {
+            /** Owner */
+            owner: string | null;
             /** Content */
             content: string;
         };
@@ -1720,7 +1694,7 @@ export interface components {
          * ResourceKind
          * @enum {string}
          */
-        ResourceKind: "prompt" | "memory";
+        ResourceKind: "memory";
         /** RestoreIn */
         RestoreIn: {
             /** Owner */
@@ -2593,13 +2567,13 @@ export interface operations {
             };
         };
     };
-    get_memory_api_agents__agent_id__memory_get: {
+    get_memory_api_memory_get: {
         parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: string;
+            query?: {
+                owner?: string | null;
             };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -2624,13 +2598,11 @@ export interface operations {
             };
         };
     };
-    put_memory_api_agents__agent_id__memory_put: {
+    put_memory_api_memory_put: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                agent_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody: {
@@ -3536,37 +3508,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["RestoreIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_public_prompt_api_prompts_public_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ContentIn"];
             };
         };
         responses: {

@@ -91,46 +91,53 @@ export function ResourceHistory({
   )
 }
 
-/** 公共 prompt：合并进所有 agent 的指令，位于各 agent 自己的指令之前 */
-export default function PublicPrompt() {
-  const history = useLoad(() => api.history('prompt', null), [])
+/** 一份记忆（owner 为 null 即全局记忆）：编辑、保存，以及它的历史版本 */
+export function MemoryEditor({ owner, hint }: { owner: AgentId | null; hint: string }) {
+  const memory = useLoad(() => api.memory(owner), [owner])
   const [content, setContent] = useState('')
   const action = useAction()
-  // 从未设置过公共指令时没有任何版本，即为空
-  const current = history.data?.[0]?.content ?? ''
-  useEffect(() => setContent(current), [current])
-  const reload = () => void history.reload()
+  useEffect(() => {
+    if (memory.data) setContent(memory.data.content)
+  }, [memory.data])
 
   return (
-    <Page title="公共指令">
-      <Loading state={history}>
-        {() => (
-          <div className="flex flex-col gap-3">
-            <TextAreaInput
-              label="公共指令"
-              hint="所有 agent 都会看到，放在各自指令之前；agent 也可以用工具修改它。每次保存都会留下一个版本"
-              value={content}
-              onChange={setContent}
-              rows={14}
-            />
-            <ErrorAlert error={action.error} />
-            <ActionButton
-              isDisabled={content === current}
-              isPending={action.busy}
-              onPress={() =>
-                void action.run(async () => {
-                  await api.setPublicPrompt(content)
-                  toast.success('已保存')
-                  reload()
-                })
-              }
-            >
-              保存
-            </ActionButton>
-            <ResourceHistory kind="prompt" owner={null} current={current} onRestored={reload} />
-          </div>
-        )}
-      </Loading>
+    <Loading state={memory}>
+      {(m) => (
+        <div className="flex flex-col gap-3">
+          <TextAreaInput
+            label={`记忆（${content.length}/${m.max_chars} 字符）`}
+            hint={hint}
+            value={content}
+            onChange={setContent}
+            rows={14}
+            mono
+          />
+          <ErrorAlert error={action.error} />
+          <ActionButton
+            isDisabled={content === m.content}
+            isPending={action.busy}
+            onPress={() =>
+              void action.run(async () => {
+                await api.setMemory(owner, content)
+                toast.success('记忆已保存')
+                await memory.reload()
+              })
+            }
+          >
+            保存记忆
+          </ActionButton>
+          <ResourceHistory kind="memory" owner={owner} current={m.content} onRestored={() => void memory.reload()} />
+        </div>
+      )}
+    </Loading>
+  )
+}
+
+/** 全局记忆：所有 agent 共享，放在各自的记忆之前；各 agent 的自进化也会修改它 */
+export default function GlobalMemory() {
+  return (
+    <Page title="全局记忆">
+      <MemoryEditor owner={null} hint="所有 agent 每次运行都会看到，放在各自的记忆之前；agent 也会用工具修改它。每次保存都会留下一个版本" />
     </Page>
   )
 }
