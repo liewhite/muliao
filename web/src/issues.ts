@@ -62,7 +62,7 @@ export function ownerLabel(agents: Agent[] | undefined, owner: string | null): s
   return agents?.find((a) => a.id === owner)?.name ?? owner
 }
 
-/** 相邻两个 agent 的色相间隔：黄金角，任意多个 agent 依次取色都分得最开 */
+/** 相邻两个 agent 的色相间隔：黄金角，每加一个 agent 都落在已有色相间较大的空隙里（十个以上会出现约 20° 的相近色） */
 const GOLDEN_ANGLE = 137.508
 
 /**
@@ -72,7 +72,7 @@ const GOLDEN_ANGLE = 137.508
  */
 export function ownerHue(agents: Agent[] | undefined, owner: string | null): number | null {
   if (owner === null || agents === undefined) return null
-  const order = [...agents].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+  const order = [...agents].sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id.localeCompare(b.id))
   const rank = order.findIndex((a) => a.id === owner)
   return rank === -1 ? null : Math.round((rank * GOLDEN_ANGLE) % 360)
 }
