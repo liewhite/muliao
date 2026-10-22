@@ -5,7 +5,7 @@
    AgentDeleting。
 2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域删除它的全部会话（标记之后它的会话不会再收到
    来信），然后发布 AgentSessionsCleared；触发器、vault 各自删除。
-3. 收到 AgentSessionsCleared：注入的查询仍报告有工作在进行就等（重试），否则删除资源目录与这一行。
+3. 收到 AgentSessionsCleared：删除资源目录与这一行。
 """
 
 import logging
@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agents.events import AgentDeleting
 from muliao.agents.service import AgentService
 from muliao.agents.tables import Agent
-from muliao.errors import Conflict, NotFound, TransientError
+from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, no_commit
@@ -78,9 +78,6 @@ class AgentLifecycle:
                     f"agent {event.agent_id} had its sessions cleared but is not being deleted"
                 )
             author = agent.deleting_by
-            if blocking := await self._blocking_in(s, event.agent_id):
-                # 会话已经删光；还在进行的工作结束后再删
-                raise TransientError(f"agent {event.agent_id} still has work running: {blocking}")
         # 资源目录不在数据库事务里：重放时它已经不在，删除是空操作
         await self._agents.remove_files(event.agent_id, author)
         log.info("resources of a deleted agent removed", extra={"agent": event.agent_id})
