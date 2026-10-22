@@ -57,7 +57,7 @@ function Collapsible({ title, children }: { title: ReactNode; children: ReactNod
 }
 
 // 被退回不是故障：参数不合法或工具报了可纠正的错误，模型会据此修正后重试，所以不用醒目的报错样式
-const TOOL_STATUS_LABELS: Record<ToolStatus, string> = { running: '运行中', rejected: '被退回', done: '完成' }
+const TOOL_STATUS_LABELS: Record<ToolStatus, string> = { running: '运行中', unfinished: '未完成', rejected: '被退回', done: '完成' }
 
 /** 步骤的时间：运行中每秒刷新已运行时长，结束后是开始时间与耗时；没有时间时不显示 */
 function SpanText({ span }: { span: Span | null }) {
@@ -66,7 +66,7 @@ function SpanText({ span }: { span: Span | null }) {
 }
 
 function ToolBlock({ tool, live }: { tool: ToolView; live: boolean }) {
-  const status = toolStatus(tool)
+  const status = toolStatus(tool, live)
   return (
     <Collapsible
       title={
@@ -111,8 +111,12 @@ function StepBlock({ step, live }: { step: Step; live: boolean }) {
 
 /** 连续的思考与工具调用收成一组，默认折叠；标题汇总步骤数与状态，展开后每一步仍可单独展开。工具发出的文件显示在组下方 */
 function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
-  const { label, running, rejected } = summarizeSteps(steps)
-  const status = running !== null ? `运行中：${running}` : rejected > 0 ? `完成 · ${rejected} 次被退回` : '完成'
+  const live = ctx.view === 'live'
+  const { label, running, unfinished, rejected } = summarizeSteps(steps, live)
+  const status =
+    running !== null
+      ? `运行中：${running}`
+      : [unfinished > 0 ? `${unfinished} 次未完成` : '完成', ...(rejected > 0 ? [`${rejected} 次被退回`] : [])].join(' · ')
   return (
     <>
       <Collapsible
@@ -121,7 +125,7 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
             {running !== null && <Spinner size="sm" />}
             <span className="text-foreground">{label}</span>
             <span className="ml-auto flex gap-2 whitespace-nowrap text-xs">
-              <SpanText span={groupSpan(steps, ctx.view === 'live')} />
+              <SpanText span={groupSpan(steps, live)} />
               <span>{status}</span>
             </span>
           </>
@@ -129,7 +133,7 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
       >
         <div className="flex flex-col gap-2">
           {steps.map((step, i) => (
-            <StepBlock key={i} step={step} live={ctx.view === 'live'} />
+            <StepBlock key={i} step={step} live={live} />
           ))}
         </div>
       </Collapsible>

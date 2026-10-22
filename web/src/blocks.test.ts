@@ -118,13 +118,23 @@ describe('summarizeSteps', () => {
   })
 
   it('counts tool calls, mentions thinking, and reports the running tool and calls returned to the model', () => {
-    expect(summarizeSteps([{ kind: 'thinking', text: 'x' }, tool('ok'), tool('err', true), tool(null)])).toEqual({
+    expect(summarizeSteps([{ kind: 'thinking', text: 'x' }, tool('ok'), tool('err', true), tool(null)], true)).toEqual({
       label: '思考 · 3 次工具调用',
       running: 'run_shell',
+      unfinished: 0,
       rejected: 1,
     })
-    expect(summarizeSteps([tool('ok')])).toEqual({ label: '1 次工具调用', running: null, rejected: 0 })
-    expect(summarizeSteps([{ kind: 'thinking', text: 'x' }]).label).toBe('思考')
+    expect(summarizeSteps([tool('ok')], true)).toEqual({ label: '1 次工具调用', running: null, unfinished: 0, rejected: 0 })
+    expect(summarizeSteps([{ kind: 'thinking', text: 'x' }], true).label).toBe('思考')
+  })
+
+  it('reports a call without a result in history as unfinished, not running', () => {
+    expect(summarizeSteps([tool('ok'), tool(null)], false)).toEqual({
+      label: '2 次工具调用',
+      running: null,
+      unfinished: 1,
+      rejected: 0,
+    })
   })
 })
 

@@ -117,11 +117,15 @@ export function toBlocks(items: Item[]): Block[] {
   return blocks
 }
 
-export type ToolStatus = 'running' | 'rejected' | 'done'
+export type ToolStatus = 'running' | 'unfinished' | 'rejected' | 'done'
 
-/** 工具状态的唯一判定：没有结果的调用在执行中（运行中的这一段），或运行在执行它时失败、等重试再执行 */
-export function toolStatus(tool: ToolView): ToolStatus {
-  return tool.result === null ? 'running' : tool.rejected ? 'rejected' : 'done'
+/**
+ * 工具状态的唯一判定。live：条目是否来自正在进行的运行。没有结果的调用只有在当前运行里才在执行；
+ * 历史里的（运行在执行它时失败、等重试或续跑）并没有在执行，是未完成
+ */
+export function toolStatus(tool: ToolView, live: boolean): ToolStatus {
+  if (tool.result === null) return live ? 'running' : 'unfinished'
+  return tool.rejected ? 'rejected' : 'done'
 }
 
 const isStep = (b: Block): b is Step => b.kind === 'thinking' || b.kind === 'tool'
@@ -162,19 +166,23 @@ export interface StepsSummary {
   label: string
   /** 还在运行的工具名；没有则为 null */
   running: string | null
+  /** 历史里没有结果、也不在执行的调用数 */
+  unfinished: number
   /** 被退回、由模型修正的调用数 */
   rejected: number
 }
 
-export function summarizeSteps(steps: Step[]): StepsSummary {
+export function summarizeSteps(steps: Step[], live: boolean): StepsSummary {
   const tools = steps.flatMap((s) => (s.kind === 'tool' ? [s.tool] : []))
   const label = [
     ...(steps.some((s) => s.kind === 'thinking') ? ['思考'] : []),
     ...(tools.length > 0 ? [`${tools.length} 次工具调用`] : []),
   ].join(' · ')
+  const statuses = tools.map((t) => toolStatus(t, live))
   return {
     label,
-    running: tools.find((t) => toolStatus(t) === 'running')?.name ?? null,
-    rejected: tools.filter((t) => toolStatus(t) === 'rejected').length,
+    running: tools.find((_, i) => statuses[i] === 'running')?.name ?? null,
+    unfinished: statuses.filter((s) => s === 'unfinished').length,
+    rejected: statuses.filter((s) => s === 'rejected').length,
   }
 }

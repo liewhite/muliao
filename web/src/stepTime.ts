@@ -25,7 +25,7 @@ export const isRunning = (span: Span | null): boolean => (span?.runningSince.len
 export function toolSpan(tool: ToolView, live: boolean): Span | null {
   if (tool.startedAt === null) return null
   const start = Date.parse(tool.startedAt)
-  if (live && toolStatus(tool) === 'running') return { start, spent: 0, runningSince: [start], endUnknown: false }
+  if (toolStatus(tool, live) === 'running') return { start, spent: 0, runningSince: [start], endUnknown: false }
   if (tool.result === null || tool.finishedAt === null) return { start, spent: 0, runningSince: [], endUnknown: true }
   return { start, spent: Date.parse(tool.finishedAt) - start, runningSince: [], endUnknown: false }
 }
