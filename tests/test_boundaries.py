@@ -238,20 +238,19 @@ async def test_injected_agent_deletion_blockers_are_reviewed_read_only_queries(c
 
 def test_the_http_layer_sees_only_domain_facades():
     """HTTP 层只经 Container 调用领域（docs/architecture.md 2.3）：它的字段类型都由领域的 api 模块导出，或是逐个
-    审过的平台类型与配置；领域内部的对象（消费者、压缩、信箱……）、平台的数据库与队列不在其中。import 检查拦不住
+    审过的平台类型；领域内部的对象（消费者、压缩、信箱……）、平台的数据库与队列不在其中。import 检查拦不住
     经 Container 取到的对象，由这里拦。"""
     import dataclasses
     import importlib
     import types
     import typing
 
-    from muliao.config import Settings
     from muliao.container import Container
     from muliao.platform.bus import EventFeed
     from muliao.platform.tasks import TaskAdmin
 
     # 平台类型：展示事件流（只订阅）与「任务」页的窄口
-    reviewed = (Settings, EventFeed, TaskAdmin)
+    reviewed = (EventFeed, TaskAdmin)
 
     exported = [
         getattr(module, name)

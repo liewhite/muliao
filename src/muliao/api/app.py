@@ -29,6 +29,7 @@ from muliao.api import (
 from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, require_auth
 from muliao.api.deps import C
 from muliao.api.events import HeartbeatEvent, ServerEvent
+from muliao.config import AuthConfig
 from muliao.container import Container
 from muliao.errors import (
     Conflict,
@@ -167,18 +168,17 @@ def _mount_web(app: FastAPI, web_dir: Path) -> None:
         return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
 
-def create_app(container: Container, web_dir: Path) -> FastAPI:
+def create_app(container: Container, web_dir: Path, *, auth: AuthConfig, public_url: str) -> FastAPI:
+    """HTTP 层只拿它用到的配置：登录与 cookie 签名（auth）、对外地址（决定 cookie 是否 Secure）。"""
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         async with container.running():
             yield
 
     app = FastAPI(title=TITLE, lifespan=lifespan)
-    settings = container.settings
     app.state.container = container
-    app.state.auth = Auth(
-        settings.auth.secret_key.get_secret_value(), settings.auth.password.get_secret_value()
-    )
+    app.state.auth = Auth(auth.secret_key.get_secret_value(), auth.password.get_secret_value())
 
     @app.exception_handler(DomainError)
     async def domain_error(_request: Request, exc: DomainError) -> JSONResponse:
@@ -188,7 +188,7 @@ def create_app(container: Container, web_dir: Path) -> FastAPI:
     async def upstream_failed(_request: Request, exc: UpstreamFailed) -> JSONResponse:
         return JSONResponse(status_code=502, content={"detail": str(exc)})
 
-    app.state.secure_cookie = settings.server.public_url.startswith("https://")
+    app.state.secure_cookie = public_url.startswith("https://")
     app.state.ui_version = ui_version(web_dir)
     _install_api(app)
     _mount_web(app, web_dir)

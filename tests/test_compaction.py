@@ -237,12 +237,11 @@ async def _tasks(container, kind: str) -> list[Task]:
 async def test_manual_compaction_endpoint(container, make_agent, tmp_path):
     import httpx
 
-    from muliao.api.app import create_app
-    from tests.conftest import login
+    from tests.conftest import app_of, login
 
     alpha = (await make_agent("alpha")).id
     session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
-    app = create_app(container.container, tmp_path / "no-web")
+    app = app_of(container, tmp_path / "no-web")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         await login(client)
         first = await client.post(f"/api/sessions/{session.id}/compact")

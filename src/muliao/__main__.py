@@ -23,7 +23,9 @@ def main() -> None:
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
     settings = load_settings(args.config)
     setup_logging(settings.log_level)
-    app = create_app(assemble(settings).container, WEB_DIR)
+    app = create_app(
+        assemble(settings).container, WEB_DIR, auth=settings.auth, public_url=settings.server.public_url
+    )
     uvicorn.run(
         app, host=settings.server.host, port=settings.server.port, log_config=None, proxy_headers=True
     )

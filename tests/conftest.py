@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import FastAPI
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models import Model
 
@@ -121,9 +122,15 @@ def make_agent(container: Assembly) -> Callable:
     return _make
 
 
+def app_of(assembly: Assembly, web_dir: Path) -> FastAPI:
+    """服务入口（__main__）同样的装配：HTTP 层只拿 container 与它用到的配置。"""
+    settings = assembly.settings
+    return create_app(assembly.container, web_dir, auth=settings.auth, public_url=settings.server.public_url)
+
+
 @pytest.fixture
 async def client(container: Assembly, tmp_path: Path) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app(container.container, tmp_path / "no-web")
+    app = app_of(container, tmp_path / "no-web")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

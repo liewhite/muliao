@@ -99,7 +99,6 @@ class Container:
     总线的发布……）：窄接口（TaskAdmin、RevisionHistory、EventFeed、ReflectionLog）是只转发窄方法的包装对象，运行时
     也拿不到背后的完整对象。tests/test_boundaries 检查字段的声明类型，以及运行时的值恰好是声明的类型。"""
 
-    settings: Settings
     # SSE：进程内的展示事件（只订阅）
     bus: EventFeed
     # 「任务」页：列出与人工重试
@@ -182,7 +181,6 @@ class Assembly:
     @property
     def container(self) -> Container:
         return Container(
-            settings=self.settings,
             bus=EventFeed(self.bus),
             tasks=TaskAdmin(self.queue),
             vault=self.vault,

@@ -3,9 +3,8 @@
 import asyncio
 import json
 
-from muliao.api.app import create_app
 from muliao.sessions.live import SavedEvent
-from tests.conftest import login
+from tests.conftest import app_of, login
 
 
 async def _read_events(app, cookie: str, count: int, after_connect) -> list[dict]:
@@ -61,7 +60,7 @@ async def _read_events(app, cookie: str, count: int, after_connect) -> list[dict
 async def test_the_event_stream_sends_a_heartbeat_then_bus_events(client, container, tmp_path):
     await login(client)
     cookie = "; ".join(f"{k}={v}" for k, v in client.cookies.items())
-    app = create_app(container.container, tmp_path / "no-web")
+    app = app_of(container, tmp_path / "no-web")
 
     events = await _read_events(app, cookie, 2, lambda: container.bus.publish(SavedEvent(session_id="s1")))
 

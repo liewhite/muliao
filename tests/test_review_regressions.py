@@ -60,10 +60,9 @@ async def test_deleting_session_or_agent_with_running_task_is_rejected(container
 
 
 async def test_agent_api_rejects_zero_reflect_every_and_partial_update(container, tmp_path):
-    from muliao.api.app import create_app
-    from tests.conftest import login
+    from tests.conftest import app_of, login
 
-    app = create_app(container.container, tmp_path / "no-web")
+    app = app_of(container, tmp_path / "no-web")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         await login(client)
         resp = await client.post("/api/agents", json={"name": "a", "description": "d", "reflect_every": 0})
