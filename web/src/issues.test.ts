@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Issue, IssueActivity } from './api'
-import { FOLD_LIMIT, activityText, assigneeLabel, foldIssues, groupByStatus, moveIssues, parseIssueRefs } from './issues'
+import { FOLD_LIMIT, activityText, assigneeLabel, foldIssues, groupByStatus, moveIssues, ownerHue, parseIssueRefs } from './issues'
 
 const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   id,
@@ -89,5 +89,26 @@ describe('parseIssueRefs', () => {
     expect(parseIssueRefs('#1, 2 ，#30')).toEqual([1, 2, 30])
     expect(parseIssueRefs('  ')).toEqual([])
     expect(parseIssueRefs('#1, abc')).toBeNull()
+  })
+})
+
+describe('ownerHue', () => {
+  const agent = (id: string, created_at: string) => ({ id, name: id, created_at }) as unknown as Agent
+  const team = [agent('b', '2026-10-02T00:00:00Z'), agent('a', '2026-10-01T00:00:00Z'), agent('c', '2026-10-03T00:00:00Z')]
+
+  it('gives agents hues a golden angle apart in creation order, whatever the list order', () => {
+    expect(['a', 'b', 'c'].map((id) => ownerHue(team, id))).toEqual([0, 138, 275])
+    expect(ownerHue([...team].reverse(), 'b')).toBe(138)
+  })
+
+  it('keeps existing hues when a newer agent is added', () => {
+    const grown = [...team, agent('0', '2026-10-04T00:00:00Z')]
+    expect(['a', 'b', 'c'].map((id) => ownerHue(grown, id))).toEqual([0, 138, 275])
+  })
+
+  it('is null without an owner, for a deleted agent, or before agents load', () => {
+    expect(ownerHue(team, null)).toBeNull()
+    expect(ownerHue(team, 'gone')).toBeNull()
+    expect(ownerHue(undefined, 'a')).toBeNull()
   })
 })

@@ -461,6 +461,8 @@ export interface Option {
   id: string
   label: string
   description?: string
+  /** 显示在标签前的标记（如负责项目的色点） */
+  prefix?: ReactNode
 }
 
 export function SelectInput({
@@ -505,7 +507,10 @@ export function SelectInput({
           {options.map((o) => (
             <ListBox.Item key={o.id} id={o.id} textValue={o.label}>
               <div className="flex flex-col">
-                <span>{o.label}</span>
+                <span className="flex items-center gap-2">
+                  {o.prefix}
+                  {o.label}
+                </span>
                 {o.description && <span className="text-xs text-muted">{o.description}</span>}
               </div>
               <ListBox.ItemIndicator />

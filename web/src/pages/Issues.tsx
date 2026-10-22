@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type ComponentProps, type CSSProperties } from 'react'
 import { Card, Chip } from '@heroui/react'
 import { DndContext, KeyboardSensor, MouseSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { Link, useNavigate } from 'react-router-dom'
@@ -16,6 +16,7 @@ import {
   assigneeOptions,
   FOLD_LIMIT,
   foldIssues,
+  ownerHue,
   ownerLabel,
   groupByStatus,
   issueRoute,
@@ -31,6 +32,7 @@ import {
   EmptyHint,
   ErrorAlert,
   Loading,
+  type Option,
   Page,
   Segmented,
   SelectInput,
@@ -52,9 +54,63 @@ export function StatusDot({ status }: { status: IssueStatus }) {
   return <span className={`inline-block size-3 shrink-0 rounded-full border-2 ${STATUS_COLOR[status]}`} aria-hidden />
 }
 
-function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefined }) {
+/** 带负责项目色相的样式：配合 owner-color 类（styles.css）得到 --owner-fg / --owner-bg；不着色时为 undefined */
+function ownerStyle(hue: number | null): CSSProperties | undefined {
+  return hue === null ? undefined : ({ '--owner-hue': hue } as CSSProperties)
+}
+
+/** 负责项目的色点；不着色时是灰点 */
+export function OwnerDot({ agents, owner }: { agents: Agent[] | undefined; owner: string | null }) {
+  const hue = ownerHue(agents, owner)
   return (
-    <Card className="cursor-pointer transition-colors hover:bg-surface-hover">
+    <span
+      className={`inline-block size-2.5 shrink-0 rounded-full ${hue === null ? 'bg-muted' : 'owner-color bg-(--owner-fg)'}`}
+      style={ownerStyle(hue)}
+      aria-hidden
+    />
+  )
+}
+
+/** 负责项目的胶囊：浅色底 + owner 色文字 */
+function OwnerChip({ agents, owner }: { agents: Agent[] | undefined; owner: string }) {
+  const hue = ownerHue(agents, owner)
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
+        hue === null ? 'bg-default text-muted' : 'owner-color bg-(--owner-bg) text-(--owner-fg)'
+      }`}
+      style={ownerStyle(hue)}
+    >
+      <OwnerDot agents={agents} owner={owner} />
+      {ownerLabel(agents, owner)}
+    </span>
+  )
+}
+
+/** 选负责项目的下拉框：每个 agent 前带它的色点；leading 是排在 agent 前面的额外选项（如「所有项目」） */
+export function OwnerSelect({
+  agents,
+  leading = [],
+  ...props
+}: Omit<ComponentProps<typeof SelectInput>, 'options'> & { agents: Agent[] | undefined; leading?: Option[] }) {
+  const options = (agents ?? []).map((a) => ({
+    id: a.id as string,
+    label: a.name,
+    prefix: <OwnerDot agents={agents} owner={a.id} />,
+  }))
+  return <SelectInput {...props} options={[...leading, ...options]} />
+}
+
+function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefined }) {
+  const hue = ownerHue(agents, issue.owner)
+  // 左侧色条用 owner 色：扫一眼列就能按项目分组
+  return (
+    <Card
+      className={`cursor-pointer border-l-4 transition-colors hover:bg-surface-hover ${
+        hue === null ? 'border-l-transparent' : 'owner-color border-l-(--owner-fg)'
+      }`}
+      style={ownerStyle(hue)}
+    >
         <Card.Content className="flex flex-col gap-1.5 p-3">
           <div className="flex items-center gap-2 text-xs text-muted">
             <span>#{issue.id}</span>
@@ -68,9 +124,7 @@ function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefine
               </Chip>
             )}
             {issue.owner !== null && (
-              <Chip size="sm" variant="secondary">
-                {ownerLabel(agents, issue.owner)}
-              </Chip>
+              <OwnerChip agents={agents} owner={issue.owner} />
             )}
             <Chip size="sm" variant="soft">
               → {assigneeLabel(agents, issue.assignee)}
@@ -238,6 +292,7 @@ function ListSection({ status, issues, agents }: { status: IssueStatus; issues: 
         >
           <span className="w-10 shrink-0 text-xs text-muted">#{i.id}</span>
           <StatusDot status={i.status} />
+          <OwnerDot agents={agents} owner={i.owner} />
           <span className="min-w-0 flex-1 truncate">{i.title}</span>
           {i.priority !== 'none' && <span className="shrink-0 text-xs text-muted">{PRIORITY_LABEL[i.priority]}</span>}
           <span className="w-20 shrink-0 truncate text-right text-xs text-muted">{assigneeLabel(agents, i.assignee)}</span>
@@ -282,12 +337,12 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
       <TextInput label="标题" value={title} onChange={setTitle} isRequired />
       <TextAreaInput label="描述（Markdown）" value={description} onChange={setDescription} rows={4} />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <SelectInput
+        <OwnerSelect
+          agents={agents}
           label="负责项目（owner）"
           hint="转派给别人做也不变"
           value={owner}
           onChange={setOwner}
-          options={(agents ?? []).map((a) => ({ id: a.id as string, label: a.name }))}
         />
         <SelectInput
           label="状态"
@@ -368,11 +423,12 @@ export default function Issues() {
           { id: 'list', label: '列表' },
         ]}
       />
-      <SelectInput
+      <OwnerSelect
+        agents={agents.data}
         label="负责项目"
         value={owner}
         onChange={setOwner}
-        options={[{ id: ALL_OWNERS, label: '所有项目' }, ...(agents.data ?? []).map((a) => ({ id: a.id as string, label: a.name }))]}
+        leading={[{ id: ALL_OWNERS, label: '所有项目' }]}
       />
       <NewIssueForm agents={agents.data} onCreated={() => void loaded.reload()} />
       <ErrorAlert error={moveError} />

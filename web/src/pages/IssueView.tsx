@@ -43,7 +43,7 @@ import {
   useConfirm,
   useLoad,
 } from '../ui'
-import { StatusDot } from './Issues'
+import { OwnerSelect, StatusDot } from './Issues'
 
 function actorName(agents: Agent[] | undefined, actor: string | null) {
   if (actor === null) return '我'
@@ -251,12 +251,12 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
       {issue.reviewable && <Review issueId={issue.id} reload={reload} />}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <SelectInput
+        <OwnerSelect
+          agents={agents.data}
           label="负责项目（owner）"
           value={issue.owner}
           placeholder="无负责项目"
           onChange={(v) => patch({ owner: v })}
-          options={(agents.data ?? []).map((a) => ({ id: a.id as string, label: a.name }))}
           isDisabled={change.busy}
         />
         <SelectInput

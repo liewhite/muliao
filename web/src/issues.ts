@@ -62,6 +62,21 @@ export function ownerLabel(agents: Agent[] | undefined, owner: string | null): s
   return agents?.find((a) => a.id === owner)?.name ?? owner
 }
 
+/** 相邻两个 agent 的色相间隔：黄金角，任意多个 agent 依次取色都分得最开 */
+const GOLDEN_ANGLE = 137.508
+
+/**
+ * 负责项目的色相（0–360），看板卡片、筛选、详情页都从这里取色，同一 agent 处处同色。按 agent 的创建顺序依次取黄金角：
+ * 新建的 agent 排在最后，已有的颜色不变；不用名字/id 的哈希，是因为十来个 agent 时哈希必然有几个撞成几乎同色。
+ * 负责的 agent 已被删除、或 agent 列表还没加载完时为 null（不着色）。
+ */
+export function ownerHue(agents: Agent[] | undefined, owner: string | null): number | null {
+  if (owner === null || agents === undefined) return null
+  const order = [...agents].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+  const rank = order.findIndex((a) => a.id === owner)
+  return rank === -1 ? null : Math.round((rank * GOLDEN_ANGLE) % 360)
+}
+
 export function assigneeLabel(agents: Agent[] | undefined, assignee: string | null): string {
   if (assignee === null) return '未指派'
   if (assignee === USER) return '我'

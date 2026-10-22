@@ -29,3 +29,15 @@ textarea,
 select {
   font-size: max(16px, 1em);
 }
+
+/* 负责项目（owner）的颜色：色相由 issues.ts 的 ownerHue 给出（内联 --owner-hue），这里按亮/暗主题定亮度与彩度。用 oklch：
+   各色相亮度一致，黄、绿也和蓝、紫一样对比度够 */
+.owner-color {
+  --owner-fg: oklch(0.5 0.13 var(--owner-hue));
+  --owner-bg: oklch(0.95 0.04 var(--owner-hue));
+}
+
+.dark .owner-color {
+  --owner-fg: oklch(0.8 0.12 var(--owner-hue));
+  --owner-bg: oklch(0.3 0.06 var(--owner-hue));
+}
