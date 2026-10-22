@@ -526,5 +526,5 @@ def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
 
     issue = built(Origin.ISSUE)
     assert "`issue_show`" in issue and "`in_review` and assignee `user`" in issue
-    assert "set it `done` yourself" in issue
+    assert "set it `done` yourself" in issue and "under `blocks`" in issue
     assert "issue_show" not in built(Origin.USER)

@@ -107,8 +107,9 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         very conversation. Use `backlog` for later work.
         To run issues in order, give `depends_on`: the issue is delivered only once all of them are `done` or
         `cancelled` (changes before that are only recorded), so a chain can be created as `todo` up front.
-        To break down a larger piece of work: create the steps as issues (ordered among themselves with
-        `depends_on`), then a parent issue with the overall goal that depends on all of them.
+        To break down a larger piece of work: create the steps as `backlog` issues (ordered among themselves
+        with `depends_on`), then a `todo` parent issue with the overall goal that depends on all of them, then
+        move the steps to `todo`.
 
         Args:
             title: One-line summary.
@@ -149,8 +150,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         """Change an issue; only the given fields change. When the issue is (or now becomes) `todo`/`in_progress`
         and assigned to an agent, the change is delivered to that agent in its conversation for the issue, except
         when the agent makes it from that very conversation. Finished work goes to `in_review` with assignee
-        `user`, and the user moves it to `done` after reviewing; only a step other issues depend on (listed
-        under `blocks`) is set `done` directly when finished, so the issues waiting for it start.
+        `user`, and the user moves it to `done` after reviewing; but when other issues depend on it (`issue_show`
+        lists them under `blocks`), set it `done` yourself when finished, so the issues waiting for it can start.
 
         Args:
             issue_id: Issue number.
