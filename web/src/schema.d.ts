@@ -1343,6 +1343,8 @@ export interface components {
             blocks: number[];
             /** Waiting On */
             waiting_on: number[];
+            /** Reviewable */
+            reviewable: boolean;
             /**
              * Created At
              * Format: date-time
@@ -1570,6 +1572,8 @@ export interface components {
             session_id: string | null;
             /** Issue Id */
             issue_id: number | null;
+            /** Url */
+            url: string | null;
             /** Unread */
             unread: boolean;
             /**

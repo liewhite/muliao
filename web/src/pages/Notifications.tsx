@@ -2,21 +2,14 @@ import { useEffect } from 'react'
 import { Card } from '@heroui/react'
 import { ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type AppNotification, sessionRoute } from '../api'
+import { api, type AppNotification } from '../api'
 import { useServerEvents } from '../events'
-import { issueRoute } from '../issues'
 import { notificationsMayHaveChanged, refreshUnread } from '../unread'
 import { EmptyHint, Loading, Page, formatTime, useLoad } from '../ui'
 
-// 点开打开的页面（与推送的 url 一致）：交给用户审核的 issue、通知关于的会话；系统通知没有
-function targetOf(n: AppNotification): string | null {
-  if (n.issue_id !== null) return issueRoute(n.issue_id)
-  return n.session_id ? sessionRoute(n.session_id) : null
-}
-
 function NotificationCard({ n }: { n: AppNotification }) {
   return (
-    <Card className={targetOf(n) ? 'transition-colors hover:bg-surface-hover' : undefined}>
+    <Card className={n.url ? 'transition-colors hover:bg-surface-hover' : undefined}>
       <Card.Content className="flex flex-row items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 font-medium">
@@ -31,7 +24,7 @@ function NotificationCard({ n }: { n: AppNotification }) {
           <div className="mt-1 line-clamp-6 whitespace-pre-wrap break-words text-sm text-muted">{n.body}</div>
           <div className="mt-1 text-xs text-muted">{formatTime(n.created_at)}</div>
         </div>
-        {targetOf(n) && <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted" aria-hidden />}
+        {n.url && <ChevronRight className="mt-0.5 size-4 shrink-0 text-muted" aria-hidden />}
       </Card.Content>
     </Card>
   )
@@ -61,16 +54,16 @@ export default function Notifications() {
             <EmptyHint>没有通知</EmptyHint>
           ) : (
             <div className="flex flex-col gap-2">
-              {list.map((n) => {
-                const to = targetOf(n)
-                return to ? (
-                  <Link key={n.id} to={to}>
+              {list.map((n) =>
+                // 点开打开的页面由服务端给出（与推送一致）；系统通知没有
+                n.url ? (
+                  <Link key={n.id} to={n.url}>
                     <NotificationCard n={n} />
                   </Link>
                 ) : (
                   <NotificationCard key={n.id} n={n} />
-                )
-              })}
+                ),
+              )}
             </div>
           )
         }

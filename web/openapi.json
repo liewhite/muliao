@@ -3804,6 +3804,10 @@
             "type": "array",
             "title": "Waiting On"
           },
+          "reviewable": {
+            "type": "boolean",
+            "title": "Reviewable"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -3831,6 +3835,7 @@
           "depends_on",
           "blocks",
           "waiting_on",
+          "reviewable",
           "created_at",
           "updated_at"
         ],
@@ -4486,6 +4491,17 @@
             ],
             "title": "Issue Id"
           },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -4503,6 +4519,7 @@
           "body",
           "session_id",
           "issue_id",
+          "url",
           "unread",
           "created_at"
         ],

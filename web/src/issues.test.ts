@@ -17,6 +17,7 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   depends_on: [],
   blocks: [],
   waiting_on: [],
+  reviewable: false,
   created_at: '2026-10-21T00:00:00Z',
   updated_at: '2026-10-21T00:00:00Z',
   ...over,

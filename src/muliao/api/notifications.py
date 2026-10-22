@@ -14,8 +14,10 @@ class NotificationOut(BaseModel):
     title: str
     body: str
     session_id: str | None
-    # 交给用户审核的 issue：点开打开它而不是会话
+    # 交给用户审核的 issue
     issue_id: int | None
+    # 点开打开的页面（与推送的一致）；系统通知为 null
+    url: str | None
     unread: bool
     created_at: datetime
 
@@ -27,6 +29,7 @@ class NotificationOut(BaseModel):
             body=n.body,
             session_id=n.session_id,
             issue_id=n.issue_id,
+            url=n.url,
             unread=n.unread,
             created_at=n.created_at,
         )

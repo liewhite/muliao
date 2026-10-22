@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from muliao.api.deps import C
-from muliao.issues.api import ActivityKind, IssuePriority, IssueStatus, IssueWork, WorkState
+from muliao.issues.api import ActivityKind, IssuePriority, IssueStatus, IssueWork, WorkState, reviewable
 from muliao.issues.tables import Issue, IssueActivity
 from muliao.platform.values import KEEP, Keep
 
@@ -36,6 +36,8 @@ class IssueOut(BaseModel):
     depends_on: list[int]
     blocks: list[int]
     waiting_on: list[int]
+    # 用户能审核（通过或打回）：指派给用户、还没结束
+    reviewable: bool
     created_at: datetime
     updated_at: datetime
 
@@ -56,6 +58,7 @@ class IssueOut(BaseModel):
             depends_on=[d.id for d in work.depends_on],
             blocks=[d.id for d in work.blocks],
             waiting_on=list(work.waiting_on),
+            reviewable=reviewable(i.status, i.assignee),
             created_at=i.created_at,
             updated_at=i.updated_at,
         )

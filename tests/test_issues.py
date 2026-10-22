@@ -254,13 +254,12 @@ async def test_approving_an_issue_handed_to_the_user_finishes_it_and_unblocks_do
         {"from": REVIEW, "to": DONE},
     )
     assert (await container.issues.get(downstream.id)).activities[-1].kind == ActivityKind.DEPENDENCY
-    # 连点、另一台设备再点一次：什么都不变
-    await container.issues.approve(issue.id)
-    assert (await container.issues.get(issue.id)).activities[-1].id == last.id
-    # 已经打回给 agent：不能再通过
-    await container.issues.update(None, issue.id, assignee=alpha)
-    with pytest.raises(Conflict):
+    # 审过了（连点、另一台设备）：不再通过或打回
+    with pytest.raises(Conflict, match="already done"):
         await container.issues.approve(issue.id)
+    with pytest.raises(Conflict, match="already done"):
+        await container.issues.reject(issue.id, "reopen")
+    assert (await container.issues.get(issue.id)).activities[-1].id == last.id
 
 
 async def test_sending_an_issue_back_comments_and_returns_it_to_the_agent_that_handed_it_over(
@@ -288,8 +287,21 @@ async def test_sending_an_issue_back_comments_and_returns_it_to_the_agent_that_h
     assert len(mails) == before + 1
     assert "the button is misaligned" in mails[-1] and "in_review -> todo" in mails[-1]
     assert [s.id for s in await _issue_sessions(container)] == [session.id]
-    with pytest.raises(Conflict):
+    # 已经打回给 agent：不能再审
+    with pytest.raises(Conflict, match="not assigned to you"):
         await container.issues.reject(issue.id, "again")
+    with pytest.raises(Conflict, match="not assigned to you"):
+        await container.issues.approve(issue.id)
+
+
+async def test_an_issue_handed_over_by_a_deleted_agent_cannot_be_sent_back(container, make_agent):
+    alpha = (await make_agent("alpha")).id
+    issue, _ = await _handed_to_user(container, alpha)
+    await container.agent_lifecycle.delete(alpha, author="user")
+    await drain(container)
+
+    with pytest.raises(Conflict, match="no longer exists"):
+        await container.issues.reject(issue.id, "redo")
 
 
 async def test_an_issue_the_user_assigned_to_themselves_cannot_be_sent_back(container, make_agent):

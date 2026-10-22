@@ -55,6 +55,11 @@ class Snapshot:
     waiting_on: tuple[int, ...]
 
 
+def reviewable(status: IssueStatus, assignee: str | None) -> bool:
+    """用户能审核（通过或打回）的 issue：当前指派给用户、还没结束。"""
+    return assignee == USER and status not in FINISHED
+
+
 def handed_by(creator: str | None, assigners: Sequence[str | None]) -> str | None:
     """把当前指派给用户的 issue 交给用户的 agent（用户打回时指派回给它）：最近一条指派动态的 actor（它把指派人
     改成了用户）；从未改过指派人时是创建者（创建时就指派给了用户）。assigners 是按时间排序的各条指派动态的 actor。

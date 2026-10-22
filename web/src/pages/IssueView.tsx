@@ -4,7 +4,6 @@ import { MessageSquare, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   SYSTEM_ACTOR,
-  USER,
   api,
   asAgentId,
   sessionRoute,
@@ -249,7 +248,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
         </div>
       )}
 
-      {issue.assignee === USER && issue.status !== 'done' && <Review issueId={issue.id} reload={reload} />}
+      {issue.reviewable && <Review issueId={issue.id} reload={reload} />}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <SelectInput

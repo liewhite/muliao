@@ -42,6 +42,7 @@ from muliao.issues.rules import (
     handed_by,
     recipient,
     render_issue,
+    reviewable,
     stalled,
     waiting_on,
 )
@@ -119,11 +120,15 @@ def _snapshot(issue: Issue, links: Links) -> Snapshot:
 
 
 def _check_handed_to_user(issue: Issue) -> None:
-    """审核只对当前指派给用户的 issue：已经打回、又被改派（两台设备、通知过时）时拒绝，不覆盖别人刚做的事。"""
+    """审核只对当前指派给用户、还没结束（不在 FINISHED）的 issue：已经审过、又被改派或取消（连点、两台设备、通知
+    过时）时拒绝，不覆盖别人刚做的事。"""
+    if reviewable(issue.status, issue.assignee):
+        return
     if issue.assignee != USER:
         raise Conflict(
             f"issue #{issue.id} is not assigned to you (assignee: {issue.assignee}), nothing to review"
         )
+    raise Conflict(f"issue #{issue.id} is already {issue.status}, nothing to review")
 
 
 def _ids(found: Sequence[Dependency]) -> list[int]:
@@ -360,6 +365,13 @@ class IssueService:
                 raise Conflict(
                     f"issue #{issue_id} was not handed to you by an agent: assign it to an agent yourself"
                 )
+            try:
+                await active_agent_in(s, agent)
+            except NotFound:
+                raise Conflict(
+                    f"the agent that handed issue #{issue_id} to you no longer exists: "
+                    "assign it to an agent yourself"
+                ) from None
             before = issue.status, issue.assignee
             happened = [self._record(s, issue, None, ActivityKind.COMMENT, body=reason)]
             happened += await self._apply_in(s, issue, None, status=IssueStatus.TODO, assignee=agent)
