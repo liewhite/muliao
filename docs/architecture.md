@@ -489,7 +489,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 | kind | config | state | 激活机制 |
 |---|---|---|---|
-| `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at` | `DueRunner` + `ScheduleDue`：消耗这次到期 = 推进到下次时间；上一次触发的会话不空闲时跳过本次（会话领域的工作状态 `SessionActivity.work_state_in` 不是 idle：在运行、有还没投递的 `Receive`，或在等后台任务、委派、用户回答）；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起） |
+| `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at`；连续跳过时还有 `skipped`（次数、起始时间、挡路会话在 running 还是 waiting、本轮是否已通知） | `DueRunner` + `ScheduleDue`：消耗这次到期 = 推进到下次时间；上一次触发的会话不空闲时跳过本次（会话领域的工作状态 `SessionActivity.work_state_in` 不是 idle：在运行、有还没投递的 `Receive`，或在等后台任务、委派、用户回答）。跳过要看得见：连续跳过记在 `state.skipped`，状态里给出 `skipped`（界面显示「已跳过 N 次」）；挡路的会话在等待（可能永远等不到，如没人回答的提问）时 `Notify` 用户，每轮连续跳过只通知一次，在运行的不通知（运行偶尔长过一个周期是常态）；下次真正触发时清除；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起） |
 | `once` | `{"at": "<ISO 8601 时间>"}`，不带时区的按配置的时区解释，创建时必须在将来 | `{}`（到期时间就是配置本身） | `DueRunner` + `OnceDue`：消耗这次到期 = 归档（`finished_at`）。到点只触发一次，之后从列表里消失 |
 | `webhook` | `{}` | `token_hash` | `Webhooks`：`POST /api/hooks/{name}[?session_id=]` 凭 token 鉴权 |
 

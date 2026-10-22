@@ -340,7 +340,7 @@ def assemble(
         run_now,
     )
     # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
-    due_triggers = DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind), OnceDue()])
+    due_triggers = DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind, messaging), OnceDue()])
     webhooks = Webhooks(db, triggers)
     issues = IssueService(db, messaging, tz, run_now, activity)
     push_subscriptions = PushSubscriptions(db)

@@ -4962,11 +4962,22 @@
             "type": "string",
             "format": "date-time",
             "title": "Next Run At"
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkippedFires"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
         "required": [
-          "next_run_at"
+          "next_run_at",
+          "skipped"
         ],
         "title": "ScheduleStatus"
       },
@@ -5563,6 +5574,34 @@
           "owner"
         ],
         "title": "SkillOut"
+      },
+      "SkippedFires": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          },
+          "previous": {
+            "type": "string",
+            "enum": [
+              "running",
+              "waiting"
+            ],
+            "title": "Previous"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count",
+          "since",
+          "previous"
+        ],
+        "title": "SkippedFires"
       },
       "StartIn": {
         "properties": {

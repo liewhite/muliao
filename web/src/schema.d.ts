@@ -1794,6 +1794,7 @@ export interface components {
              * Format: date-time
              */
             next_run_at: string;
+            skipped: components["schemas"]["SkippedFires"] | null;
         };
         /** ScheduleTriggerOut */
         ScheduleTriggerOut: {
@@ -1984,6 +1985,21 @@ export interface components {
             description: string;
             /** Owner */
             owner: string | null;
+        };
+        /** SkippedFires */
+        SkippedFires: {
+            /** Count */
+            count: number;
+            /**
+             * Since
+             * Format: date-time
+             */
+            since: string;
+            /**
+             * Previous
+             * @enum {string}
+             */
+            previous: "running" | "waiting";
         };
         /** StartIn */
         StartIn: {

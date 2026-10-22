@@ -265,6 +265,13 @@ function KindStatus({ trigger }: { trigger: Trigger }) {
         <span>
           <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{trigger.config.cron}</code>
           {trigger.enabled && <> · 下次 {formatTime(trigger.status.next_run_at)}</>}
+          {trigger.status.skipped && (
+            <span className="text-warning">
+              {' '}
+              · 自 {formatTime(trigger.status.skipped.since)} 起已跳过 {trigger.status.skipped.count} 次：上次的会话
+              {trigger.status.skipped.previous === 'waiting' ? '在等待（后台任务、委派或你的回答）' : '还在运行'}
+            </span>
+          )}
         </span>
       )
     case 'once':

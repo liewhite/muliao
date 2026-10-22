@@ -8,10 +8,10 @@ import pytest
 from muliao.agents.api import McpTransport, mcp_config
 from muliao.api.triggers import TriggerKindName, TriggerOut
 from muliao.errors import InvalidInput
-from muliao.sessions.api import Origin, SessionActivity
+from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
-from muliao.triggers.schedule import previous_fire_busy_in
+from muliao.triggers.schedule import previous_fire_state_in
 from muliao.triggers.service import set_state, trigger_in
 from tests.conftest import login
 from tests.test_flow import drain, history_of, start
@@ -69,6 +69,75 @@ async def test_schedule_skips_fire_while_previous_run_is_unfinished(container, m
     await _make_due(container, trigger.id)
     await schedules.fire_due()
     assert len(await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0)) == 2
+
+
+async def test_skipped_fires_show_in_status_and_clear_when_it_fires_again(container, make_agent):
+    """跳过要看得见：连续跳过的次数、起始时间、挡路会话的状态在触发器状态里；在运行的不通知；再触发时清除。"""
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    trigger = await triggers.create(
+        name="slack", agent_id=alpha, kind="schedule", prompt="check", config={"cron": "* * * * *"}
+    )
+    await _make_due(container, trigger.id)
+    await schedules.fire_due()
+    for _ in range(2):  # 第一次的 turn 仍是 pending
+        await _make_due(container, trigger.id)
+        await schedules.fire_due()
+
+    skipped = triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
+    assert (skipped["count"], skipped["previous"]) == (2, "running")
+    assert datetime.fromisoformat(skipped["since"]) <= datetime.now().astimezone()
+    await drain(container)
+    assert await container.notifications.list(10) == []
+
+    await _make_due(container, trigger.id)
+    await schedules.fire_due()
+    assert triggers.status_of(await triggers.get_by_name("slack"))["skipped"] is None
+    assert len(await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0)) == 2
+
+
+async def test_skipping_behind_a_waiting_session_notifies_the_user_once_per_streak(container, make_agent):
+    """挡路的会话在等外面的结果（可能永远等不到，如没人回答的提问）：通知用户一次，点开是那个会话；
+    同一轮连续跳过不再通知，触发过一次之后的新一轮再通知。"""
+    from muliao.sessions.holds import get_in, hold_in, release
+
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    trigger = await triggers.create(
+        name="slack", agent_id=alpha, kind="schedule", prompt="check", config={"cron": "* * * * *"}
+    )
+
+    async def fire_and_wait(holder: str) -> str:
+        await _make_due(container, trigger.id)
+        await schedules.fire_due()
+        await drain(container)
+        session_id = (await triggers.get_by_name("slack")).last_session_id
+        async with container.db.transaction() as s:
+            await hold_in(s, session_id, holder, awaited=False)
+        return session_id
+
+    async def skip_twice() -> None:
+        for _ in range(2):
+            await _make_due(container, trigger.id)
+            await schedules.fire_due()
+        await drain(container)
+
+    first = await fire_and_wait("job:1")
+    await skip_twice()
+
+    skipped = triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
+    assert (skipped["count"], skipped["previous"]) == (2, "waiting")
+    assert "notified" not in skipped
+    notes = await container.notifications.list(10)
+    assert [(n.session_id, "slack" in n.title) for n in notes] == [(first, True)]
+
+    async with container.db.transaction() as s:
+        hold = await get_in(s, first, "job:1")
+        assert hold is not None
+        release(hold)
+    second = await fire_and_wait("job:2")
+    await skip_twice()
+    assert [n.session_id for n in await container.notifications.list(10)] == [second, first]
 
 
 async def test_broken_schedule_trigger_is_disabled_without_blocking_others(container, make_agent):
@@ -571,7 +640,7 @@ async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_
     container.triggers._run_now = later  # noqa: SLF001  模拟投递没能马上执行
     await container.triggers.fire(trigger.id)
     async with container.db.transaction() as s:
-        assert await previous_fire_busy_in(
+        assert WorkState.IDLE != await previous_fire_state_in(
             s, SessionActivity(container.queue), await trigger_in(s, trigger.id)
         )
 
@@ -589,7 +658,7 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
 
     async def busy() -> bool:
         async with container.db.transaction() as s:
-            return await previous_fire_busy_in(
+            return WorkState.IDLE != await previous_fire_state_in(
                 s, SessionActivity(container.queue), await trigger_in(s, trigger.id)
             )
 
@@ -623,7 +692,8 @@ async def test_trigger_list_returns_each_kinds_typed_status(client, container, m
         await container.triggers.create(name=name, agent_id=alpha, kind=kind, prompt="p", config=config)
     await login(client)
     listed = {t["kind"]: t for t in (await client.get("/api/triggers")).json()}
-    assert set(listed["schedule"]["status"]) == {"next_run_at"}
+    assert set(listed["schedule"]["status"]) == {"next_run_at", "skipped"}
+    assert listed["schedule"]["status"]["skipped"] is None
     assert listed["once"]["status"]["run_at"].startswith("2099-01-01T10:00")
     assert listed["webhook"]["status"] == {"url": "http://test/api/hooks/w", "has_token": False}
 
