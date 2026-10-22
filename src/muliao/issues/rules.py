@@ -12,15 +12,16 @@ from muliao.sessions.api import WorkState
 
 
 # 时间线上「系统」做的动作的 actor（例如删除 agent 时清理指派人、负责人）：既不是用户（None）也不是某个 agent。
-# 不是 12 位十六进制，不会与 agent id 相同
-SYSTEM = "system"
+# 不是 12 位十六进制，不会与 agent id 相同。名为 "system" 的 agent 在展示上会与它同名，只影响展示（没有按 actor
+# 名称做的操作），所以不像 USER 那样保留这个名称
+SYSTEM_ACTOR = "system"
 
 
 def actor_name(actor: str | None, names: AgentNames) -> str:
-    """时间线 actor 的展示名：用户（None）是 USER，系统是 SYSTEM，agent 按 id 换成名字。"""
+    """时间线 actor 的展示名：用户（None）是 USER，系统是 SYSTEM_ACTOR，agent 按 id 换成名字。"""
     if actor is None:
         return USER
-    return SYSTEM if actor == SYSTEM else names[actor]
+    return SYSTEM_ACTOR if actor == SYSTEM_ACTOR else names[actor]
 
 
 def assignee_name(assignee: str, names: AgentNames) -> str:

@@ -4,7 +4,7 @@
 发出定向命令 Receive，提交后马上投递（run_now）。信投进这个 agent 在这个 issue 上唯一的会话：会话领域按发送方
 （Origin.ISSUE，origin_ref 为 issue id）与 agent 定位，没有就新建（sessions.api.SessionKey）；这里不存会话 id。
 
-actor 是做这件事的 agent id，用户为 None，系统自己的清理（删除 agent）为 rules.SYSTEM；session_id 是 agent 动手时所在的会话。它在自己这个 issue 会话里的动作
+actor 是做这件事的 agent id，用户为 None，系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR；session_id 是 agent 动手时所在的会话。它在自己这个 issue 会话里的动作
 不投回那个会话（避免自激）；issue 只在它自己的会话里做，普通对话只建、派 issue。
 
 依赖（issue_dependencies，有向无环）：还在等上游的 issue 不投、不算停滞（rules.recipient / rules.stalled 看
@@ -28,7 +28,7 @@ from muliao.agents.events import AgentDeleting
 from muliao.errors import InvalidInput, NotFound
 from muliao.issues.rules import (
     FINISHED,
-    SYSTEM,
+    SYSTEM_ACTOR,
     USER,
     ActivityView,
     Dependency,
@@ -149,10 +149,10 @@ class IssueService:
             for issue in (await s.scalars(query)).all():
                 if issue.assignee == event.agent_id:
                     issue.assignee = None
-                    self._record(s, issue, SYSTEM, ActivityKind.ASSIGNEE, change=(event.agent_id, None))
+                    self._record(s, issue, SYSTEM_ACTOR, ActivityKind.ASSIGNEE, change=(event.agent_id, None))
                 if issue.owner_agent_id == event.agent_id:
                     issue.owner_agent_id = None
-                    self._record(s, issue, SYSTEM, ActivityKind.OWNER, change=(event.agent_id, None))
+                    self._record(s, issue, SYSTEM_ACTOR, ActivityKind.OWNER, change=(event.agent_id, None))
                 issue.updated_at = utcnow()
 
         return commit

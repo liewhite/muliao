@@ -74,7 +74,7 @@ class Issue(Base):
 class IssueActivity(Base):
     """issue 时间线上的一条：评论（body），或一次属性变化（change 为 {"from": ..., "to": ...}）。只增不改。
 
-    actor_agent_id 为做这件事的 agent，用户做的为 None，系统自己的清理（删除 agent）为 rules.SYSTEM。
+    actor_agent_id 为做这件事的 agent，用户做的为 None，系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR。
     """
 
     __tablename__ = "issue_activities"
