@@ -54,7 +54,7 @@ export default function App() {
   useEffect(() => {
     if (auth !== 'in') return
     void syncPushSubscription().catch((e) => console.error('push subscription sync failed', e))
-    // 通知点击时 Service Worker 让已打开的窗口跳转（含登录确认前就到了的那次，见 swNavigate.ts）
+    // 点通知后跳到 swNavigate 取到的页面（含外壳挂载前就取到的那次，见 swNavigate.ts）
     return handleNavigation((url) => navigate(url))
   }, [auth, navigate])
 
