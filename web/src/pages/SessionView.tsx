@@ -28,7 +28,7 @@ import {
   type ToolStatus,
   type ToolView,
 } from '../blocks'
-import { groupSpan, spanLabel, toolSpan, useNow, type Span } from '../stepTime'
+import { groupSpan, isRunning, spanLabel, toolSpan, useNow, type Span } from '../stepTime'
 import { AnsweredQuestions, QuestionForm, QuestionNote } from '../questions'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
@@ -61,7 +61,7 @@ const TOOL_STATUS_LABELS: Record<ToolStatus, string> = { running: '运行中', r
 
 /** 步骤的时间：运行中每秒刷新已运行时长，结束后是开始时间与耗时；没有时间时不显示 */
 function SpanText({ span }: { span: Span | null }) {
-  const now = useNow(span?.running ?? false)
+  const now = useNow(isRunning(span))
   return span && <span className="tabular-nums">{spanLabel(span, now)}</span>
 }
 

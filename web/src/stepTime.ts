@@ -4,36 +4,41 @@
 import { useEffect, useState } from 'react'
 import { toolStatus, type Step, type ToolView } from './blocks'
 
-/** 一个步骤或一组步骤的时间段，毫秒时间戳。running：还在执行（显示已运行时长）；end 为 null 且不在运行：结束时间未知 */
+/**
+ * 一个步骤或一组步骤的耗时，毫秒。组的耗时是组内各工具耗时之和（并行的也各自累加），不是首个开始到最后结束的墙钟时间，
+ * 工具之间模型思考、生成的时间不算。
+ * start：最早开始的时刻；spent：已结束的工具耗时之和；runningSince：正在执行的工具各自的开始时刻（显示已运行时长）；
+ * unknown：有不在执行、结束时间却未知的工具（这时已结束的组只显示开始时间）
+ */
 export interface Span {
   start: number
-  end: number | null
-  running: boolean
+  spent: number
+  runningSince: number[]
+  unknown: boolean
 }
+
+export const isRunning = (span: Span | null): boolean => (span?.runningSince.length ?? 0) > 0
 
 /**
  * live：条目是否来自正在进行的运行。历史里没有结果的调用（执行时失败、等重试或续跑）并没有在执行，不计时，只显示开始时间
  */
 export function toolSpan(tool: ToolView, live: boolean): Span | null {
   if (tool.startedAt === null) return null
-  const running = live && toolStatus(tool) === 'running'
-  return {
-    start: Date.parse(tool.startedAt),
-    end: tool.result === null || tool.finishedAt === null ? null : Date.parse(tool.finishedAt),
-    running,
-  }
+  const start = Date.parse(tool.startedAt)
+  if (live && toolStatus(tool) === 'running') return { start, spent: 0, runningSince: [start], unknown: false }
+  if (tool.result === null || tool.finishedAt === null) return { start, spent: 0, runningSince: [], unknown: true }
+  return { start, spent: Date.parse(tool.finishedAt) - start, runningSince: [], unknown: false }
 }
 
-/** 一组步骤：从最早开始的工具算起；有工具在运行就是运行中；每个有开始时间的工具都知道结束时间才给出结束（取最晚的） */
+/** 一组步骤：从最早开始的工具算起，耗时为各工具耗时之和，与展开后各行相加一致 */
 export function groupSpan(steps: Step[], live: boolean): Span | null {
   const spans = steps.flatMap((s) => (s.kind === 'tool' ? [toolSpan(s.tool, live)] : [])).filter((s) => s !== null)
   if (spans.length === 0) return null
-  const running = spans.some((s) => s.running)
-  const ends = spans.map((s) => s.end)
   return {
     start: Math.min(...spans.map((s) => s.start)),
-    end: running || ends.some((e) => e === null) ? null : Math.max(...(ends as number[])),
-    running,
+    spent: spans.reduce((sum, s) => sum + s.spent, 0),
+    runningSince: spans.flatMap((s) => s.runningSince),
+    unknown: spans.some((s) => s.unknown),
   }
 }
 
@@ -55,12 +60,18 @@ export function formatClock(at: number, now: number): string {
   return new Date(now).toDateString() === d.toDateString() ? time : `${d.getMonth() + 1}-${d.getDate()} ${time}`
 }
 
-/** 运行中：「已运行 1m23s」；已结束：「13:05:12 · 4.2s」；结束时间未知：只有开始时间 */
+/**
+ * 运行中：「已运行 1m23s」，已结束的耗时加上正在执行的已运行时长，组结束时数字连续；
+ * 已结束：「13:05:12 · 4.2s」；有结束时间未知的：只有开始时间
+ */
 export function spanLabel(span: Span, now: number): string {
-  // 浏览器与服务端可能不是同一台机器，时钟的偏差可能让刚开始的调用算出负数
-  if (span.running) return `已运行 ${formatDuration(Math.max(0, now - span.start), true)}`
+  if (isRunning(span)) {
+    // 浏览器与服务端可能不是同一台机器，时钟的偏差可能让刚开始的调用算出负数
+    const elapsed = span.runningSince.reduce((sum, s) => sum + Math.max(0, now - s), span.spent)
+    return `已运行 ${formatDuration(elapsed, true)}`
+  }
   const start = formatClock(span.start, now)
-  return span.end === null ? start : `${start} · ${formatDuration(span.end - span.start)}`
+  return span.unknown ? start : `${start} · ${formatDuration(span.spent)}`
 }
 
 /** 当前时间（毫秒）；active 时每秒刷新一次，用于运行中步骤的计时 */
