@@ -281,7 +281,7 @@ async def test_private_thread_is_read_only_for_user_and_hidden_from_list(contain
     with pytest.raises(Conflict):
         await reply(container, child.id, "hi")
     listed = await container.sessions.list(agent_id=None, origins=None, limit=50, offset=0)
-    assert [x.id for x in listed] == [parent.id]
+    assert [x.session.id for x in listed] == [parent.id]
     async with container.db.transaction() as s:
         assert not (await s.get(Session, child.id)).unread
 

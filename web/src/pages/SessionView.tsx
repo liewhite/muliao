@@ -351,7 +351,7 @@ function Composer({
   uploads,
   voice,
   busy,
-  running,
+  active,
   onSend,
   onStop,
 }: {
@@ -360,8 +360,8 @@ function Composer({
   uploads: Uploads
   voice: VoiceInput
   busy: boolean
-  /** 这个会话有一轮正在运行：显示停止按钮（运行中也可以继续发消息，会排在后面） */
-  running: boolean
+  /** 这个会话有事在进行（工作状态不是 idle：运行、排队、等后台任务或委派）：显示停止按钮（进行中也可以继续发消息，会排在后面） */
+  active: boolean
   onSend: () => void
   onStop: () => void
 }) {
@@ -386,7 +386,7 @@ function Composer({
             className="resize-none"
           />
         </TextField>
-        {running && (
+        {active && (
           <Button isIconOnly variant="danger-soft" isDisabled={busy} onPress={onStop} aria-label="停止">
             <Square className="size-4" />
           </Button>
@@ -632,7 +632,7 @@ export default function SessionView() {
                 uploads={uploads}
                 voice={voice}
                 busy={action.busy}
-                running={detail.data?.run?.status === 'running'}
+                active={detail.data !== undefined && detail.data.state !== 'idle'}
                 onSend={() => void send()}
                 onStop={() => void action.run(() => api.stop(id))}
               />

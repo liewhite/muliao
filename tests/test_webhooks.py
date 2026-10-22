@@ -42,7 +42,7 @@ async def test_each_event_starts_a_new_session_with_payload_in_prompt(client, co
     await drain(container)
 
     sessions = await container.sessions.list(agent_id=alpha, origins=[Origin.TRIGGER], limit=10, offset=0)
-    assert {s.id for s in sessions} == {first.json()["session_id"], second.json()["session_id"]}
+    assert {s.session.id for s in sessions} == {first.json()["session_id"], second.json()["session_id"]}
     prompt = last_user_prompt(await history_of(container, first.json()["session_id"]))
     assert prompt == 'Triage this GitHub event.\n\n<event>\n{"action": "opened"}\n</event>'
     # 事件触发的一轮不自动推送

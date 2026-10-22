@@ -746,7 +746,7 @@
     "/api/sessions": {
       "get": {
         "summary": "List Sessions",
-        "description": "正在运行的会话置顶，其余按最近更新排序。",
+        "description": "工作状态不是 idle 的会话（在全部符合筛选的会话里，不只是这一页）置顶，其余按最近更新排序。",
         "operationId": "list_sessions_api_sessions_get",
         "parameters": [
           {
@@ -5249,6 +5249,9 @@
                 "type": "null"
               }
             ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/WorkState"
           }
         },
         "type": "object",
@@ -5259,7 +5262,8 @@
           "mail",
           "run",
           "threads",
-          "live"
+          "live",
+          "state"
         ],
         "title": "SessionDetail"
       },

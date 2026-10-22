@@ -255,7 +255,7 @@ export interface paths {
         };
         /**
          * List Sessions
-         * @description 正在运行的会话置顶，其余按最近更新排序。
+         * @description 工作状态不是 idle 的会话（在全部符合筛选的会话里，不只是这一页）置顶，其余按最近更新排序。
          */
         get: operations["list_sessions_api_sessions_get"];
         put?: never;
@@ -1874,6 +1874,7 @@ export interface components {
             /** Threads */
             threads: components["schemas"]["SessionOut"][];
             live: components["schemas"]["LiveRunOut"] | null;
+            state: components["schemas"]["WorkState"];
         };
         /**
          * SessionKind

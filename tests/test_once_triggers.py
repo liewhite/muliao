@@ -60,7 +60,7 @@ async def test_once_fires_at_its_time_and_is_then_archived_with_its_session(cont
     sessions = await container.sessions.list(
         agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
     )
-    assert [s.id for s in sessions] == [archived.last_session_id]
+    assert [s.session.id for s in sessions] == [archived.last_session_id]
 
 
 async def test_a_once_trigger_in_the_past_is_refused_at_creation(container, make_agent):
@@ -172,7 +172,7 @@ async def test_running_a_once_trigger_by_hand_does_not_use_up_its_firing(contain
     history = await container.sessions.list(
         agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
     )
-    assert {s.id for s in history} == {manual, archived.last_session_id}
+    assert {s.session.id for s in history} == {manual, archived.last_session_id}
 
 
 async def test_the_api_lists_the_archived_ones_separately_with_the_sessions_they_started(

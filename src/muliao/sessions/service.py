@@ -6,7 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import ColumnElement, and_, exists, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import Conflict, NotFound
@@ -31,7 +31,6 @@ from muliao.sessions.inbound import (
     target_in,
 )
 from muliao.sessions.kinds import LISTED, policy_of
-from muliao.sessions.lanes import RUN_TASK, session_lane_of
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.origins import Origin
@@ -57,6 +56,16 @@ class SessionView:
     run: Task | None
     threads: list[Session]
     live: LiveRun | None
+    # 工作状态（与会话列表同一条规则）：不是 idle 就有可停的事（运行、排队的来信、后台任务与委派、挂起的提问）
+    state: WorkState
+
+
+@dataclass(frozen=True)
+class ListedSession:
+    """会话列表的一行：会话与排序时用的工作状态（同一次计算，置顶与标记对得上）。"""
+
+    session: Session
+    state: WorkState
 
 
 class SessionService:
@@ -105,6 +114,7 @@ class SessionService:
             latest = await latest_run(s, session_id)
             mail = await visible_in(s, session_id)
             threads = await threads_of(s, session_id)
+            state = (await work_states_in(s, self._queue, [session_id]))[session_id]
         shown = [
             (message_id, payload)
             for message_id, payload in rows
@@ -127,6 +137,7 @@ class SessionService:
             run=None if latest is None or latest.status == TaskStatus.DONE else latest,
             threads=threads,
             live=live,
+            state=state,
         )
 
     async def receive(self, inbound: Inbound) -> Received:
@@ -162,33 +173,33 @@ class SessionService:
         limit: int,
         offset: int,
         origin_ref: str | None = None,
-    ) -> list[Session]:
-        """会话列表只含列出的种类（KindPolicy.listed）；私有 thread 从父会话进入。正在运行的会话置顶，其余按最近
-        更新排序。
+    ) -> list[ListedSession]:
+        """会话列表只含列出的种类（KindPolicy.listed）；私有 thread 从父会话进入。工作状态不是 idle 的会话（在运行、
+        在等后台任务/委派/用户回答，与 issue 看板、触发器同一条规则）置顶，其余按最近更新排序。
 
-        origin_ref 是发起方在它那个 origin 里的身份（触发器的 id），用来列出某个发起方开过的会话。
+        置顶看的是筛选后的全部会话（不只是这一页），所以第一页就含全部进行中的会话：工作状态的查询次数与会话数无关，
+        代价是每个会话读一条最后的消息（挂起的提问）。origin_ref 是发起方在它那个 origin 里的身份（触发器的 id），
+        用来列出某个发起方开过的会话。
         """
-        running = exists().where(_running_run(), Task.lane == session_lane_of(Session.id))
-        query = (
-            select(Session)
-            .where(Session.kind.in_(LISTED))
-            .order_by(running.desc(), Session.updated_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+        conditions = [Session.kind.in_(LISTED)]
         if agent_id is not None:
-            query = query.where(Session.agent_id == agent_id)
+            conditions.append(Session.agent_id == agent_id)
         if origins is not None:
-            query = query.where(Session.origin.in_(list(origins)))
+            conditions.append(Session.origin.in_(list(origins)))
         if origin_ref is not None:
-            query = query.where(Session.origin_ref == origin_ref)
+            conditions.append(Session.origin_ref == origin_ref)
         async with self._db.transaction() as s:
-            return list((await s.scalars(query)).all())
-
-    async def work_states(self, session_ids: Sequence[str]) -> dict[str, WorkState]:
-        """这些会话的工作状态（会话列表每一行的标记，与 issue 看板、触发器同一条规则）。"""
-        async with self._db.transaction() as s:
-            return await work_states_in(s, self._queue, session_ids)
+            ids = list((await s.scalars(select(Session.id).where(*conditions))).all())
+            states = await work_states_in(s, self._queue, ids)
+            active = [x for x in ids if states[x] != WorkState.IDLE]
+            page = await s.scalars(
+                select(Session)
+                .where(*conditions)
+                .order_by(Session.id.in_(active).desc(), Session.updated_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            return [ListedSession(x, states[x.id]) for x in page.all()]
 
     async def mark_read(self, session_id: str) -> None:
         """用户看过了会话：清掉会话的未读，同一事务发布 SessionRead（通知领域据此把指向它的通知标为已读）。提交后
@@ -239,8 +250,3 @@ class SessionService:
                     "delete that session instead"
                 )
             await delete_sessions(s, self._queue, self._messaging, [session])
-
-
-def _running_run() -> ColumnElement[bool]:
-    """进行中的运行任务（不含排队的运行与压缩）。"""
-    return and_(Task.kind == RUN_TASK, Task.status == TaskStatus.RUNNING)

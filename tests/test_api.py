@@ -255,7 +255,7 @@ async def test_session_list_pins_running_sessions_and_marks_them(client, contain
     listed = (await client.get("/api/sessions")).json()
     assert [(s["id"], s["state"]) for s in listed] == [(newer.id, "idle"), (older.id, "idle")]
 
-    # 较早的会话又在运行（运行任务进行中）：置顶；排队的运行不置顶，但同样标记为在运行（工作状态）
+    # 较早的会话又在运行（运行任务进行中）：置顶；排队的运行同样算在运行（工作状态），置顶的之间按最近更新排序
     async with container.db.transaction() as s:
         s.add(
             Task(
@@ -278,5 +278,28 @@ async def test_session_list_pins_running_sessions_and_marks_them(client, contain
             )
         )
     listed = (await client.get("/api/sessions")).json()
-    assert [(s["id"], s["state"]) for s in listed] == [(older.id, "running"), (newer.id, "running")]
+    assert [(s["id"], s["state"]) for s in listed] == [(newer.id, "running"), (older.id, "running")]
     assert (await client.get("/api/sessions", params={"origin": "trigger"})).json() == []
+
+
+async def test_session_list_pins_every_session_that_is_not_idle_even_beyond_the_first_page(
+    client, container, make_agent
+):
+    """置顶与标记是同一条规则（工作状态）：在等后台任务的会话（没有运行）也置顶，且看的是全部会话，不只这一页。"""
+    from muliao.sessions.holds import hold_in
+    from tests.test_flow import drain, start
+
+    agent = await make_agent("alpha")
+    oldest = await start(container, agent.id, "oldest")
+    await drain(container)
+    for prompt in ("middle", "newest"):
+        await start(container, agent.id, prompt)
+        await drain(container)
+    async with container.db.transaction() as s:
+        await hold_in(s, oldest.id, "job:1", awaited=False)
+    await login(client)
+
+    [first] = (await client.get("/api/sessions", params={"limit": 1})).json()
+    assert (first["id"], first["state"]) == (oldest.id, "waiting")
+    detail = (await client.get(f"/api/sessions/{oldest.id}")).json()
+    assert (detail["run"], detail["state"]) == (None, "waiting")

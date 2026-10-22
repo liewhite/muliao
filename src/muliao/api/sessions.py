@@ -178,6 +178,8 @@ class SessionDetail(BaseModel):
     # 正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状，见 sessions.live.LiveRuns），让中途打开页面也能从这一段
     # 的开头看起；没有则为 null
     live: LiveRunOut | None
+    # 工作状态（与会话列表同一条规则）：不是 idle 就有可停止的事（运行、排队的来信、后台任务与委派、挂起的提问），前端据此显示停止
+    state: WorkState
 
 
 class StartIn(BaseModel):
@@ -203,12 +205,11 @@ async def list_sessions(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[SessionListItem]:
-    """正在运行的会话置顶，其余按最近更新排序。"""
-    sessions = await c.sessions.list(
+    """工作状态不是 idle 的会话（在全部符合筛选的会话里，不只是这一页）置顶，其余按最近更新排序。"""
+    listed = await c.sessions.list(
         agent_id=agent_id, origins=origin, origin_ref=origin_ref, limit=limit, offset=offset
     )
-    states = await c.sessions.work_states([s.id for s in sessions])
-    return [SessionListItem(**SessionOut.of(s).model_dump(), state=states[s.id]) for s in sessions]
+    return [SessionListItem(**SessionOut.of(x.session).model_dump(), state=x.state) for x in listed]
 
 
 @router.post("/sessions", status_code=201)
@@ -237,6 +238,7 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         run=None if view.run is None else TaskOut.of(view.run),
         threads=[SessionOut.of(t) for t in view.threads],
         live=None if view.live is None else LiveRunOut.of(view.live),
+        state=view.state,
     )
 
 
