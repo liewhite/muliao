@@ -47,7 +47,7 @@ def agents_toolset(
         """Show an agent's full configuration, including its instructions. Use your own name to see yours.
 
         Args:
-            agent: Agent name from `list_agents`.
+            agent: Agent name.
         """
         target = await agents.find_by_name(agent)
         return AgentDetail(
@@ -74,12 +74,13 @@ def agents_toolset(
         tool_groups: list[str] | None = None,
     ) -> str:
         """Create a new long-lived agent with its own memory, skills and workspace, e.g. a specialist you will
-        delegate to repeatedly. For a one-off job use `run_temp_agent` instead.
+        delegate to repeatedly. For a one-off job use a temporary agent (`run_temp_agent`, if you have it) instead.
 
         Args:
             name: Display name, unique among agents.
             description: What it is for; other agents choose whom to delegate to by this.
-            instructions: Its system prompt.
+            instructions: Its own instructions (the agent-specific part of its system prompt; the public
+                prompt and run context are added separately).
             model: `<provider>:<model>`; defaults to the server's default model.
             reflect_every: Steps (model responses) between forced reflections; defaults to the server's setting.
             tool_groups: Tool groups it may use (`get_agent` lists every available group with its tools);
@@ -109,14 +110,14 @@ def agents_toolset(
         tool_groups: list[str] | None = None,
     ) -> str:
         """Change an agent's configuration, including your own (use your own name). Only the given fields change.
-        Instructions replace the whole system prompt: read it first with `get_agent`. Every change is kept in a
-        version history the user can roll back.
+        Instructions replace the agent's whole own instructions (the agent-specific part of its system prompt):
+        read them first with `get_agent`. Every change is kept in a version history the user can roll back.
 
         Args:
             agent: Name of the agent to change.
             new_name: New display name.
             description: New description.
-            instructions: New full system prompt.
+            instructions: New full instructions.
             model: New `<provider>:<model>`.
             reflect_every: New reflection interval in steps (model responses).
             tool_groups: New full list of tool groups it may use.
@@ -136,8 +137,9 @@ def agents_toolset(
     @ts.tool
     async def delete_agent(ctx: RunContext[RunScope], agent: str) -> str:
         """Delete another agent with its sessions, memory, skills, private secrets and MCP servers, triggers
-        and workspace. Irreversible. Threads it was given by other conversations that the user can
-        see are kept as standalone sessions. You cannot delete yourself.
+        and workspace. Irreversible. Threads its conversations opened with other agents that the user
+        can see are kept as standalone sessions; threads it was working on for others are deleted, and whoever
+        delegated them gets the outcome "deleted". You cannot delete yourself.
 
         Args:
             agent: Name of the agent to delete.

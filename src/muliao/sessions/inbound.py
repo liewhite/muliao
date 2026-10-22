@@ -77,7 +77,7 @@ class Inbound:
     """一封来信：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 投进某个会话的信箱」（sessions.mailbox）。
 
     session 为已有会话的 id 时在其中继续，为 NewSession 时新建会话，为 SessionKey 时按发送方定位（没有就新建）。
-    origin_ref 标识具体的发送方：触发器 id、委派方（父）会话 id；用户为 None。
+    origin_ref 标识具体的发送方：触发器 id、issue id、委派方（父）会话 id；用户为 None。
     """
 
     origin: Origin

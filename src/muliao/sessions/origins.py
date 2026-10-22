@@ -23,8 +23,8 @@ _NOTES: dict[Origin, str] = {
     Origin.DELEGATION: "Another agent opened this conversation with you.",
     Origin.ISSUE: (
         "This conversation is dedicated to one issue on the muliao issue board that is assigned to you, and is "
-        "continued each time the issue needs you again: while it is `todo` or `in_progress`, every change others "
-        "make to it (comments, status, assignee, edits, a dependency finishing) arrives here as a short message "
+        "continued each time the issue needs you again: while it is `todo` or `in_progress`, every change to it "
+        "(comments, status, assignee, edits, a dependency finishing) except those you make here arrives here as a short message "
         "carrying only that new activity. Read the full issue (description, dependencies, whole timeline) with "
         "`issue_show` before you start, and again whenever the message is not enough. An issue that depends on "
         "others is delivered only once all of them are `done` or `cancelled`; a cancelled dependency may mean "

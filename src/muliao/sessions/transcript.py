@@ -1,4 +1,4 @@
-"""把 pydantic-ai 消息转换为展示条目（Item）：会话页的历史、运行中的实时条目（agent_runtime.runner）、反思与压缩的文字记录
+"""把 pydantic-ai 消息转换为展示条目（Item）：会话页的历史、运行中的实时条目（sessions.steps）、反思与压缩的文字记录
 共用这一份投影，前端只渲染与合并，不再自己投影。
 
 消息上的约定（metadata 键、标记、合成结果）登记在 muliao.agent_runtime.conventions，这里只读它们来展示。
@@ -23,9 +23,9 @@ from pydantic_ai.messages import (
 )
 
 from muliao.agent_runtime.api import (
-    RUN_STOPPED,
     Attachment,
     event_indices,
+    is_stopped,
     parse_event,
     run_context_index,
     tool_attachments,
@@ -218,7 +218,7 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
                     items.append(_item("thinking", part.content))
                 elif isinstance(part, ToolCallPart):
                     items.append(call_item(part))
-        if msg.metadata is not None and msg.metadata.get(RUN_STOPPED):
+        if is_stopped(msg):
             items.append(_item("stopped", ""))
     return items
 

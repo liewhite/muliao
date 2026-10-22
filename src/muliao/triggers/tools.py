@@ -44,7 +44,7 @@ class TriggerInfo(BaseModel):
 _CREATE_DESCRIPTION = """\
 Create a trigger that starts a new conversation of an agent with `prompt` (plus the event, if the kind \
 carries one). See `trigger_kinds` for the kinds and their `config`. Triggered runs do not notify the user \
-automatically: the prompt should say when to call `notify_user`. A webhook only works after the user \
+automatically: the prompt should say when to notify the user (`notify_user`). A webhook only works after the user \
 generates its token in the app; tell the user to do that.
 
 For frequent checks (e.g. every minute) add a `precheck`, so the agent only runs when something happened: a \
@@ -115,7 +115,7 @@ def triggers_toolset(
             config: Kind-specific settings, e.g. {"cron": "0 9 * * *"} for a schedule, {"at":
                 "2026-10-22T10:30"} for a one-off `once` trigger (never a cron expression with a date:
                 that fires again every year and stays in the list).
-            agent: Name of the agent to run (see `list_agents`); defaults to you.
+            agent: Name of the agent to run; defaults to you.
             precheck: Optional command deciding whether to fire; see above.
         """
         agent_id = (await agents.find_by_name(agent)).id if agent is not None else ctx.deps.agent_id

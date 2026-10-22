@@ -20,7 +20,7 @@ class Session(Base):
     agent_id: Mapped[str] = mapped_column(agent_ref(), index=True)
     title: Mapped[str] = mapped_column(String(200))
     origin: Mapped[Origin] = mapped_column(StrEnumType(Origin))
-    # cron 触发的会话记录 cron job id
+    # 具体的发送方（sessions.inbound）：触发器 id、issue id、委派方（父）会话 id；用户开的会话为 None
     origin_ref: Mapped[str | None] = mapped_column(String(64))
     # 委派产生的子会话：父会话与它在父会话内的 thread 名（模型用 thread 名指代子会话）
     parent_session_id: Mapped[str | None] = mapped_column(

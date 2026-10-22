@@ -1,5 +1,5 @@
 class DomainError(Exception):
-    """领域层错误的基类。API 层映射为 4xx（上游失败为 502）；工具层映射为 ModelRetry 交还给模型修正。"""
+    """领域层错误的基类。API 层映射为 4xx（ScriptFailed 为 502，见 api.app._STATUS）；工具层映射为 ModelRetry 交还给模型修正。"""
 
 
 class NotFound(DomainError):
@@ -28,8 +28,7 @@ class TooLarge(DomainError):
 
 class ScriptFailed(DomainError):
     """系统替调用方执行它写的脚本（如触发器的前置检查）失败：脚本非 0 退出、超时、输出过大，或执行所需的
-    secret 不可见。API 映射为 502
-    并带出原因（可能含脚本的 stderr，只给已登录的用户）；工具层照常交还模型，由它修改脚本。"""
+    secret 不可见。API 映射为 502 并带出原因（可能含脚本的 stderr，只给已登录的用户）；工具层照常交还模型，由它修改脚本。"""
 
 
 class UpstreamFailed(Exception):

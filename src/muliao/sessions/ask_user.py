@@ -11,7 +11,7 @@ from muliao.sessions.questions import ASK_USER, Questions
 
 NO_USER_WAITING = (
     "No user is waiting for this run's answer, so nobody can answer questions here. Decide yourself, "
-    "or call `notify_user` if the user must know something, and carry on."
+    "or send the user a notification (`notify_user`, if you have it) if they must know something, and carry on."
 )
 
 

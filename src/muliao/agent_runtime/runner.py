@@ -93,7 +93,7 @@ class StepHooks:
 @dataclass(frozen=True)
 class RunProfile:
     """一次运行开放的工具：对话按 agent 选用的工具组组合（ToolGroups），反思只开放自我改进（加上 agent 已有的写公共
-    skill），临时 agent 只开放文件与 shell（加调用方可见的 MCP）。"""
+    skill），临时 agent 只开放文件与 shell（加调用方可见的 MCP，以及配置了 [web] 时的网页搜索与抓取）。"""
 
     toolsets: Sequence[AbstractToolset[RunScope]]
 

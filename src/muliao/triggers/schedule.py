@@ -4,7 +4,8 @@
 
 - 下次时间记在 state["next_run_at"]；到点先推进到下次（消耗这次到期），再触发。
 - 错过的触发（进程停机期间）只补一次，然后从当前时间算下一次。
-- 不重叠：上一次触发的会话仍有未完成的运行时跳过本次，并记 info 日志。
+- 不重叠：上一次触发的会话还没做完时跳过本次，并记 info 日志。没做完指它的工作状态不是空闲：在运行、有还没投递的
+  来信，或在等后台任务、委派、用户回答（TriggerService.busy_in）。
 - 停用后重新启用，下次时间从启用时算起（TriggerService 在重新启用时重新推导 state），不补暂停期间的触发。
 """
 
@@ -40,7 +41,8 @@ class ScheduleKind:
     name = KIND
     description = (
         'Fires on a schedule. config: {"cron": "<5-field cron expression>"} in the server timezone, '
-        'e.g. {"cron": "*/5 * * * *"}. Skips a firing while the previous run is unfinished. For a task that '
+        'e.g. {"cron": "*/5 * * * *"}. Skips a firing while the conversation the previous firing started is '
+        "still busy: running, or waiting on background jobs, delegated work or the user's answer. For a task that "
         "should happen once, use the `once` kind: a cron expression with a date would fire again every year."
     )
 
@@ -84,7 +86,8 @@ def _cron(trigger: Trigger) -> str:
 
 
 class ScheduleDue:
-    """定时触发的到期规则：到点推进到下次时间，上一次触发的会话还没做完时跳过这一次。"""
+    """定时触发的到期规则：到点推进到下次时间，上一次触发的会话还没做完（在运行，或在等后台任务、委派、
+    用户回答：TriggerService.busy_in）时跳过这一次。"""
 
     kind = KIND
 

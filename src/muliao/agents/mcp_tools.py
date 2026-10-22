@@ -75,7 +75,7 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
     ) -> str:
         """Register an MCP server. The server is connected once to verify it and list its tools;
         nothing is saved if that fails. Its tools become available from your next run, prefixed `<name>_`.
-        Never put secrets in plain text: store them with `vault_set` and reference them as `${vault:KEY}`
+        Never put secrets in plain text: keep them in the vault and reference them as `${vault:KEY}`
         inside args, url, env or headers.
 
         Args:

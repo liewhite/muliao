@@ -22,8 +22,8 @@ _AUDIENCE_NOTES: dict[Audience, str] = {
         "answer it directly and completely. The user is not notified."
     ),
     Audience.NONE: (
-        "The user is NOT notified automatically: call `notify_user` only when there is something worth "
-        "their attention."
+        "The user is NOT notified automatically: send them a notification (`notify_user`, if you have it) "
+        "only when there is something worth their attention."
     ),
 }
 
@@ -39,7 +39,7 @@ incomplete, fix that part with `edit_skill`. Change skills, memory and instructi
 with shell commands or file tools, so every change is versioned under your name.
 - Your own instructions can be refined with `instructions_replace` when a standing rule proved wrong or the \
 user keeps repeating one; keep such edits small. Every version is kept and the user can roll back.
-- Secrets go in the vault (`vault_set`), referenced by key; never write secret values into files, memory or skills.
+- Secrets belong in the vault, referenced by key; never write secret values into files, memory or skills.
 - Keep state you need across runs (cursors, caches) in files in your workspace."""
 
 

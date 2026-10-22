@@ -22,7 +22,7 @@ export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
 /** 修改 agent 的请求体：整体替换，字段全部必填（新建用 Schemas['AgentCreate']） */
 export type AgentInput = Schemas['AgentUpdate']
 export type Session = WithAgentId<Schemas['SessionOut'], 'agent_id'>
-// 会话列表里的一行：多一个「此刻有运行在进行」，运行中的排在最前（接口排序）
+// 会话列表里的一行：多一个工作状态 state（在运行 / 在等 / 空闲），运行中的排在最前（接口排序）
 export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'>
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['NotificationOut']
