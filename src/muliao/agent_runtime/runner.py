@@ -41,7 +41,7 @@ from pydantic_ai.usage import RunUsage
 from pydantic_graph import End
 
 from muliao.agent_runtime.answers import Answer
-from muliao.agent_runtime.attachments import AttachmentsForModel
+from muliao.agent_runtime.attachments import AttachmentsForModel, ToolImagesToFiles
 from muliao.agent_runtime.instructions import (
     build_instructions,
     build_run_context,
@@ -153,7 +153,11 @@ class AgentRuntime:
         self._clock = clock
         self._resolve_model = resolve_model
         self._usage = usage
-        self._pai = PaiAgent(deps_type=RunScope, output_type=str, capabilities=[AttachmentsForModel(files)])
+        self._pai = PaiAgent(
+            deps_type=RunScope,
+            output_type=str,
+            capabilities=[AttachmentsForModel(files), ToolImagesToFiles(files)],
+        )
 
     def workspace(self, agent_id: str) -> Path:
         return self._agents.workspace(agent_id)

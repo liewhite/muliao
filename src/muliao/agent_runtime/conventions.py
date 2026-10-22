@@ -7,6 +7,7 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 |---|---|---|---|
 | `TOOL_ATTACHMENTS`：工具挂给用户的文件 | ToolReturnPart.metadata | share_file、run_temp_agent、ask_agent（agent_runtime.answers） | 会话条目、实时事件、转交给调用方 |
 | `TOOL_THREADS`：工具开出或续写的子会话 | ToolReturnPart.metadata | delegate_task、ask_agent | 会话条目、实时事件 |
+| 工具交回的图片（`result_images`） | ToolReturnPart.content 列表里的 ImageUrl（文件引用） | attachments.ToolImagesToFiles（如 MCP 截图） | 模型（AttachmentsForModel 展开）、会话条目、实时事件；不转交调用方 |
 | `RUN_STOPPED`：运行被用户停止 | 停止时最后保存的那条消息的 metadata | sessions.history | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
 | `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | sessions.history | 模型（之后的运行）；会话条目（made_up_result：没有结束时间） |
 | `INTERRUPTED_TOOL_RESULT`：进程退出时没出结果的调用 | 合成的 ToolReturnPart 内容（`outcome='interrupted'`） | sessions.history | 模型（续跑的那次请求）；会话条目（同上） |
@@ -25,6 +26,7 @@ from typing import TypedDict
 
 from pydantic import TypeAdapter
 from pydantic_ai.messages import (
+    ImageUrl,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -146,6 +148,18 @@ def tool_attachments(part: ToolReturnPart | RetryPromptPart) -> list[Attachment]
     for a in attachments:
         parse_file_url(a["url"])
     return attachments
+
+
+def result_images(part: ToolReturnPart | RetryPromptPart) -> list[Attachment]:
+    """工具交回、已存进文件存储的图片（attachments.ToolImagesToFiles）。它们是给模型看的结果，会话里显示在这次调用处；
+    不是挂给用户的文件（TOOL_ATTACHMENTS），所以不进 shared_attachments、不转交调用方。"""
+    if not isinstance(part, ToolReturnPart) or not isinstance(part.content, list):
+        return []
+    return [
+        Attachment(url=c.url, name=parse_file_url(c.url)[1], media_type=c.media_type, inline=True)
+        for c in part.content
+        if isinstance(c, ImageUrl)
+    ]
 
 
 def tool_threads(part: ToolReturnPart | RetryPromptPart) -> list[str]:

@@ -11,6 +11,7 @@ import logging
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Self
 
 from fastmcp.client.transports import StdioTransport
@@ -163,8 +164,10 @@ class McpConnector:
     def __init__(self, vault: Vault):
         self._vault = vault
 
-    async def build_toolset(self, server: McpServer) -> AbstractToolset:
-        """解析 vault 引用并构建 toolset；工具名以 `<server名>_` 为前缀避免冲突。"""
+    async def build_toolset(self, server: McpServer, cwd: Path | None) -> AbstractToolset:
+        """解析 vault 引用并构建 toolset；工具名以 `<server名>_` 为前缀避免冲突。cwd：stdio server 进程的工作目录——运行时是
+        这次运行的工作目录，server 写出的文件（如浏览器的截图、页面快照）落在 agent 的文件工具与 shell 读得到的地方；
+        新增时的探测没有运行，为 None（沿用服务进程的）。"""
         c = server.config
         # 只解析一次：代入配置的与脱敏用的是同一份明文
         secrets = await self._vault.resolve_many(server.owner, _vault_keys(c))
@@ -174,6 +177,7 @@ class McpConnector:
                 command=c.command,
                 args=[fill(a, secrets) for a in c.args],
                 env={k: fill(v, secrets) for k, v in c.env.items()} or None,
+                cwd=str(cwd) if cwd else None,
             )
             toolset = MCPToolset(client, id=f"mcp-{server.key}", init_timeout=_CONNECT_TIMEOUT)
         else:
@@ -198,7 +202,7 @@ class McpConnector:
             toolsets: list[AbstractToolset[RunScope]] = []
             for server in servers:
                 try:
-                    toolsets.append(await self.build_toolset(server))
+                    toolsets.append(await self.build_toolset(server, ctx.deps.workspace))
                 except NotFound as e:
                     # 配置引用的 secret 不在了（vault.resolve_many）
                     _skip(notices, agent=agent, server=server.name, reason=f"MCP server {server.name!r}: {e}")
@@ -215,7 +219,7 @@ class McpConnector:
         各种传输层异常（进程退出、HTTP 错误、协议错误）统一转为 InvalidInput，把原因交还给调用方修正。
         vault 引用缺失在构建阶段以 NotFound 报出，不在此转换。
         """
-        safe = _secret_safe(await self.build_toolset(server))
+        safe = _secret_safe(await self.build_toolset(server, None))
         try:
             # 与运行期同一个连接、列工具与脱敏入口
             async with safe:

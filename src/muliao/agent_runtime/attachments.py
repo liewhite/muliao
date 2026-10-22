@@ -5,15 +5,21 @@
 - 模型形态：每次模型请求前由 `AttachmentsForModel` 展开成一段说明（名称、类型、大小、在工作目录里的路径），
   能内联的图片再附上内容。展开只改这一次请求，不改持久化的历史，所以数据库里不会出现文件内容的副本。
 
+工具交回的图片（如 MCP 浏览器的截图）走同一套：`ToolImagesToFiles` 在工具执行完、结果写进历史之前把能内联的图片
+存进文件存储，结果里换成 ImageUrl 引用；发请求时 `AttachmentsForModel` 把它换回内容，放在工具结果里交给模型
+（不加说明：它没有复制进工作目录）。
+
 附件同时复制进 agent 工作目录的 `uploads/<id>/<名称>`，供文件工具与 shell 处理（与 ChatGPT 把上传文件放进
 沙箱目录的做法一致）。那是派生副本，agent 可以随意修改；不可变的原件只在 FileStore 里。
 """
 
 import asyncio
+import mimetypes
 import shutil
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
+from typing import TypeGuard
 
 from pydantic_ai import RunContext
 from pydantic_ai.capabilities import AbstractCapability
@@ -23,12 +29,15 @@ from pydantic_ai.messages import (
     ImageUrl,
     ModelMessage,
     ModelRequest,
+    ToolCallPart,
+    ToolReturnPart,
     UserContent,
     UserPromptPart,
 )
 from pydantic_ai.models import ModelRequestContext
+from pydantic_ai.tools import ToolDefinition
 
-from muliao.files.api import FileMeta, FileStore, parse_file_url
+from muliao.files.api import INLINE_IMAGE_TYPES, FileMeta, FileStore, parse_file_url
 from muliao.platform.tooling import RunScope
 
 UPLOADS_DIR = "uploads"
@@ -81,6 +90,11 @@ class AttachmentsForModel(AbstractCapability[RunScope]):
         data = await asyncio.to_thread(self.store.read, meta)
         return [describe(meta), BinaryContent(data, media_type=meta.media_type)]
 
+    async def _image(self, item: ImageUrl, metas: dict[str, FileMeta]) -> BinaryContent:
+        """工具结果里的图片引用（ToolImagesToFiles 存下的）换回内容。"""
+        meta = metas[parse_file_url(item.url)[0]]
+        return BinaryContent(await asyncio.to_thread(self.store.read, meta), media_type=meta.media_type)
+
     async def _expand_message(self, message: ModelMessage, metas: dict[str, FileMeta]) -> ModelMessage:
         if not isinstance(message, ModelRequest):
             return message
@@ -89,6 +103,12 @@ class AttachmentsForModel(AbstractCapability[RunScope]):
             if isinstance(part, UserPromptPart) and not isinstance(part.content, str):
                 content = [x for item in part.content for x in await self._expand(item, metas)]
                 part = replace(part, content=content)
+            elif isinstance(part, ToolReturnPart) and isinstance(part.content, list):
+                tool_content = [
+                    await self._image(item, metas) if isinstance(item, ImageUrl) else item
+                    for item in part.content
+                ]
+                part = replace(part, content=tool_content)
             parts.append(part)
         return replace(message, parts=parts)
 
@@ -101,13 +121,60 @@ class AttachmentsForModel(AbstractCapability[RunScope]):
             for m in request_context.messages
             if isinstance(m, ModelRequest)
             for p in m.parts
-            if isinstance(p, UserPromptPart) and not isinstance(p.content, str)
-            for item in p.content
-            if isinstance(item, ImageUrl | DocumentUrl)
+            for item in _file_refs(p)
         ]
         metas = {f.id: f for f in await self.store.referenced(list(dict.fromkeys(ids)))}
         messages = [await self._expand_message(m, metas) for m in request_context.messages]
         return replace(request_context, messages=messages)
+
+    @classmethod
+    def get_serialization_name(cls) -> str | None:
+        return None
+
+
+def _file_refs(part: object) -> list[ImageUrl | DocumentUrl]:
+    """一个消息段里的文件引用（存储形态）：用户消息里的附件、工具结果里存下的图片。"""
+    if isinstance(part, UserPromptPart) and not isinstance(part.content, str):
+        return [item for item in part.content if isinstance(item, ImageUrl | DocumentUrl)]
+    if isinstance(part, ToolReturnPart) and isinstance(part.content, list):
+        return [item for item in part.content if isinstance(item, ImageUrl)]
+    return []
+
+
+def _is_inline_image(item: object) -> TypeGuard[BinaryContent]:
+    return isinstance(item, BinaryContent) and item.media_type in INLINE_IMAGE_TYPES
+
+
+@dataclass
+class ToolImagesToFiles(AbstractCapability[RunScope]):
+    """工具结果里能内联的图片存进文件存储、换成 ImageUrl 引用（见模块说明）。结果是单个图片或内容列表（MCP 工具的
+    形态）；有图片时结果总是列表，AttachmentsForModel 只在列表里找引用。其他二进制内容（音频、PDF）原样留着。"""
+
+    store: FileStore
+
+    async def _stored(self, item: BinaryContent, name: str) -> ImageUrl:
+        async def chunks() -> AsyncIterator[bytes]:
+            yield item.data
+
+        ext = mimetypes.guess_extension(item.media_type) or ""
+        meta = await self.store.put(f"{name}{ext}", item.media_type, chunks())
+        return ImageUrl(url=meta.url, media_type=meta.media_type)
+
+    async def after_tool_execute(
+        self,
+        ctx: RunContext[RunScope],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: dict[str, object],
+        result: object,
+    ) -> object:
+        items = result if isinstance(result, list) else [result]
+        if not any(_is_inline_image(item) for item in items):
+            return result
+        return [
+            await self._stored(item, call.tool_name) if _is_inline_image(item) else item for item in items
+        ]
 
     @classmethod
     def get_serialization_name(cls) -> str | None:

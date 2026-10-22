@@ -408,7 +408,7 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
 
     row, tools = await container.mcp.add(alpha, "echo", spec, probe=True, author="user")
 
-    assert sorted(tools) == ["echo", "token"]
+    assert sorted(tools) == ["cwd", "echo", "screenshot", "token"]
     assert row.config.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
     assert [s.name for s in container.mcp.index(alpha)[0]] == ["echo"]
     assert container.mcp.index("b2b2b2b2b2b2")[0] == []
@@ -464,6 +464,81 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     items = to_items(await history_of(container, session.id))
     results = [i.text for i in items if i.type == "tool_result"]
     assert results == ["tok-123"]
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    # 临时目录可能经过符号链接（macOS 的 /var → /private/var）
+    return a.samefile(b)
+
+
+async def test_a_stdio_mcp_server_runs_in_the_agents_workspace(container, make_agent, models):
+    from tests.test_flow import call_then_answer
+
+    alpha = (await make_agent("alpha", model="m")).id
+    spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
+    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    models.models["m"] = call_then_answer("echo_cwd", {}, "done")
+
+    session = await start(container, alpha, "where?")
+    await drain(container, limit_seconds=30)
+
+    from muliao.sessions.transcript import to_items
+
+    items = to_items(await history_of(container, session.id))
+    [result] = [i.text for i in items if i.type == "tool_result"]
+    assert _same_dir(Path(result), container.agents.workspace(alpha))
+
+
+async def test_an_image_a_tool_returns_is_stored_as_a_file_and_shown_to_the_model_and_in_the_session(
+    container, make_agent, models
+):
+    from pydantic_ai.messages import (
+        BinaryContent,
+        ImageUrl,
+        ModelMessage,
+        ModelResponse,
+        TextPart,
+        ToolCallPart,
+    )
+    from pydantic_ai.models.function import AgentInfo
+
+    from muliao.sessions.transcript import to_items
+    from tests.fixtures.echo_mcp import PNG
+    from tests.test_flow import scripted, tool_returns
+
+    alpha = (await make_agent("alpha", model="m")).id
+    spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
+    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    seen = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if returns := tool_returns(messages):
+            seen.extend(returns)
+            return ModelResponse(parts=[TextPart("looks fine")])
+        return ModelResponse(parts=[ToolCallPart("echo_screenshot", {})])
+
+    models.models["m"] = scripted(fn)
+    session = await start(container, alpha, "shoot")
+    await drain(container, limit_seconds=30)
+
+    # 模型在工具结果里拿到图片内容
+    [given] = seen
+    assert given.content == ["page shot", BinaryContent(PNG, media_type="image/png")]
+    # 历史里只存引用，内容在文件存储里
+    [stored] = [
+        p for m in await history_of(container, session.id) for p in m.parts if p.part_kind == "tool-return"
+    ]
+    [caption, ref] = stored.content
+    assert caption == "page shot" and isinstance(ref, ImageUrl)
+    [meta] = await container.files.referenced([ref.url.split("/")[3]])
+    assert (meta.name, meta.media_type) == ("echo_screenshot.png", "image/png")
+    assert container.files.read(meta) == PNG
+    # 会话里这次调用处显示图片，文字是其余的结果
+    [item] = [i for i in to_items(await history_of(container, session.id)) if i.type == "tool_result"]
+    assert item.text == "page shot"
+    assert item.attachments == [
+        {"url": ref.url, "name": "echo_screenshot.png", "media_type": "image/png", "inline": True}
+    ]
 
 
 async def test_an_mcp_tool_call_that_fails_is_handed_back_to_the_model_with_its_secrets_redacted(

@@ -29,6 +29,7 @@ from muliao.agent_runtime.api import (
     is_stopped,
     made_up_result,
     parse_event,
+    result_images,
     run_context_index,
     tool_attachments,
     tool_threads,
@@ -175,7 +176,7 @@ def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
             part.model_response_str(),
             part.tool_name,
             part.tool_call_id,
-            tool_attachments(part),
+            [*tool_attachments(part), *result_images(part)],
             tool_threads(part),
             at=None if made_up_result(part) else part.timestamp,
         )
