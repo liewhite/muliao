@@ -1,5 +1,6 @@
 """用量接口：按时间范围汇总 token 用量。"""
 
+from dataclasses import asdict
 from datetime import date
 
 from fastapi import APIRouter, Query
@@ -33,11 +34,7 @@ class UsageOut(BaseModel):
             agent_id=b.agent_id,
             model=b.model,
             day=b.day,
-            requests=b.totals.requests,
-            input_tokens=b.totals.input_tokens,
-            output_tokens=b.totals.output_tokens,
-            cache_read_tokens=b.totals.cache_read_tokens,
-            cache_write_tokens=b.totals.cache_write_tokens,
+            **asdict(b.totals),
         )
 
 

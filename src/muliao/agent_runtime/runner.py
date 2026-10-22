@@ -3,7 +3,7 @@
 import logging
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -58,7 +58,7 @@ from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
 from muliao.platform.tooling import Audience, RunScope
-from muliao.usage.api import RunKind, UsageEntry, UsageLog
+from muliao.usage.api import RunKind, UsageEntry, UsageLog, UsageTotals
 
 # pydantic-ai 不传 usage_limits 时默认 request_limit=50。任何运行（长期 agent 的轮次与反思、临时 agent）都不设请求数
 # 上限：开发任务上百步是常态，运行不设总时长，靠用户停止收束（反思见 architecture.md「TaskHandler 接口」）。
@@ -445,30 +445,17 @@ class AgentRuntime:
         用户才按停止，这一条用量会随取消一起丢掉。不为它加防御——结局和「停止早到一瞬」一样，消息都已逐步保存，
         代价只是一条账目。
         """
-        log.info(
-            "agent run finished",
-            extra={
-                **ctx,
-                "requests": usage.requests,
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "cache_read_tokens": usage.cache_read_tokens,
-                "cache_write_tokens": usage.cache_write_tokens,
-            },
-        )
-        if not (usage.requests or usage.input_tokens or usage.output_tokens):
-            return
-        entry = UsageEntry(
-            agent_id=agent_id,
-            session_id=session_id,
-            kind=kind,
-            model=model,
+        totals = UsageTotals(
             requests=usage.requests,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cache_read_tokens=usage.cache_read_tokens,
             cache_write_tokens=usage.cache_write_tokens,
         )
+        log.info("agent run finished", extra={**ctx, **asdict(totals)})
+        if totals == UsageTotals.zero():
+            return
+        entry = UsageEntry(agent_id=agent_id, session_id=session_id, kind=kind, model=model, totals=totals)
         failed: Exception | None = None
         with anyio.CancelScope(shield=True), anyio.move_on_after(_BILLING_SECONDS) as limited:
             try:

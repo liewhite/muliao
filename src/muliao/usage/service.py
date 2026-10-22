@@ -6,7 +6,7 @@
 
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import date, datetime
 from enum import StrEnum
 from zoneinfo import ZoneInfo
@@ -15,21 +15,6 @@ from sqlalchemy import select
 
 from muliao.platform.db import Database
 from muliao.usage.tables import ModelUsage, RunKind
-
-
-@dataclass(frozen=True)
-class UsageEntry:
-    """一次模型运行的用量。token 口径见 ModelUsage：input_tokens 已包含缓存读写。"""
-
-    agent_id: str
-    session_id: str | None
-    kind: RunKind
-    model: str
-    requests: int
-    input_tokens: int
-    output_tokens: int
-    cache_read_tokens: int
-    cache_write_tokens: int
 
 
 class UsageGroup(StrEnum):
@@ -42,13 +27,37 @@ class UsageGroup(StrEnum):
 
 @dataclass(frozen=True)
 class UsageTotals:
-    """一组用量的各项计数之和。input_tokens 已包含缓存读写，不要再相加。"""
+    """用量的各项计数（一次运行的，或一组的和）。input_tokens 已包含缓存读写，不要再相加。
+
+    计数有哪几项只在这里列出：写入、查询、相加都从它的字段推导（COUNTS）。"""
 
     requests: int
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
+
+    @classmethod
+    def zero(cls) -> "UsageTotals":
+        return cls(*(0 for _ in COUNTS))
+
+    def __add__(self, other: "UsageTotals") -> "UsageTotals":
+        return UsageTotals(*(getattr(self, f) + getattr(other, f) for f in COUNTS))
+
+
+# 计数的字段名（与 ModelUsage 的列同名）
+COUNTS = tuple(f.name for f in fields(UsageTotals))
+
+
+@dataclass(frozen=True)
+class UsageEntry:
+    """一次模型运行的用量。token 口径见 ModelUsage：input_tokens 已包含缓存读写。"""
+
+    agent_id: str
+    session_id: str | None
+    kind: RunKind
+    model: str
+    totals: UsageTotals
 
 
 @dataclass(frozen=True)
@@ -68,21 +77,7 @@ class _Row:
     created_at: datetime
     agent_id: str
     model: str
-    requests: int
-    input_tokens: int
-    output_tokens: int
-    cache_read_tokens: int
-    cache_write_tokens: int
-
-    @property
-    def counts(self) -> tuple[int, ...]:
-        return (
-            self.requests,
-            self.input_tokens,
-            self.output_tokens,
-            self.cache_read_tokens,
-            self.cache_write_tokens,
-        )
+    totals: UsageTotals
 
 
 def _summarize(rows: Iterable[_Row], group_by: Sequence[UsageGroup], tz: ZoneInfo) -> list[UsageBucket]:
@@ -91,18 +86,18 @@ def _summarize(rows: Iterable[_Row], group_by: Sequence[UsageGroup], tz: ZoneInf
     「天」按 tz（配置的时区）里的日历日划分——用量要和人看日历的方式对齐，不按 UTC 日切。
     """
     chosen = set(group_by)
-    summed: dict[tuple[str | None, str | None, date | None], tuple[int, ...]] = defaultdict(lambda: (0,) * 5)
+    summed: dict[tuple[str | None, str | None, date | None], UsageTotals] = defaultdict(UsageTotals.zero)
     for row in rows:
         key = (
             row.agent_id if UsageGroup.AGENT in chosen else None,
             row.model if UsageGroup.MODEL in chosen else None,
             row.created_at.astimezone(tz).date() if UsageGroup.DAY in chosen else None,
         )
-        summed[key] = tuple(a + b for a, b in zip(summed[key], row.counts, strict=True))
+        summed[key] += row.totals
     return [
-        UsageBucket(agent_id=agent_id, model=model, day=day, totals=UsageTotals(*counts))
+        UsageBucket(agent_id=agent_id, model=model, day=day, totals=totals)
         # 维度没选中时取值是 None，不能和 str / date 比较：排序键统一成字符串
-        for (agent_id, model, day), counts in sorted(
+        for (agent_id, model, day), totals in sorted(
             summed.items(), key=lambda kv: (str(kv[0][2] or ""), kv[0][0] or "", kv[0][1] or "")
         )
     ]
@@ -124,11 +119,7 @@ class UsageLog:
                     session_id=entry.session_id,
                     kind=entry.kind,
                     model=entry.model,
-                    requests=entry.requests,
-                    input_tokens=entry.input_tokens,
-                    output_tokens=entry.output_tokens,
-                    cache_read_tokens=entry.cache_read_tokens,
-                    cache_write_tokens=entry.cache_write_tokens,
+                    **asdict(entry.totals),
                 )
             )
 
@@ -142,12 +133,8 @@ class UsageLog:
                     ModelUsage.created_at,
                     ModelUsage.agent_id,
                     ModelUsage.model,
-                    ModelUsage.requests,
-                    ModelUsage.input_tokens,
-                    ModelUsage.output_tokens,
-                    ModelUsage.cache_read_tokens,
-                    ModelUsage.cache_write_tokens,
+                    *(getattr(ModelUsage, f) for f in COUNTS),
                 ).where(ModelUsage.created_at >= since, ModelUsage.created_at < until)
             )
-            rows = [_Row(*r) for r in result.all()]
+            rows = [_Row(*r[:3], UsageTotals(*r[3:])) for r in result.all()]
         return _summarize(rows, group_by, self._tz)

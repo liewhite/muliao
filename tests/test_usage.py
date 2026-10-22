@@ -13,7 +13,7 @@ from sqlalchemy import select
 from muliao.sessions.api import Origin
 from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, session_lane
-from muliao.usage.api import RunKind, UsageEntry, UsageGroup
+from muliao.usage.api import RunKind, UsageEntry, UsageGroup, UsageTotals
 from muliao.usage.tables import ModelUsage
 from tests.conftest import login
 from tests.scripted import scripted
@@ -194,11 +194,13 @@ async def _record(container, when: datetime, *, agent: str, model: str, tokens: 
             session_id=None,
             kind=RunKind.RUN,
             model=model,
-            requests=1,
-            input_tokens=tokens,
-            output_tokens=1,
-            cache_read_tokens=tokens // 2,
-            cache_write_tokens=0,
+            totals=UsageTotals(
+                requests=1,
+                input_tokens=tokens,
+                output_tokens=1,
+                cache_read_tokens=tokens // 2,
+                cache_write_tokens=0,
+            ),
         )
     )
     # record 用的是默认的 created_at；汇总按时间分组，这里直接改成要的时刻
@@ -300,3 +302,12 @@ async def test_the_api_without_a_grouping_gives_one_total(client, container):
     assert [(b["agent_id"], b["model"], b["day"], b["input_tokens"]) for b in resp.json()] == [
         (None, None, None, 30)
     ]
+
+
+def test_every_count_is_a_column_and_in_the_http_output():
+    """计数只在 UsageTotals 里列出：表的列与接口的字段要与它同名，写入与输出才能直接从它推导。"""
+    from muliao.api.usage import UsageOut
+    from muliao.usage.service import COUNTS
+
+    assert set(COUNTS) <= set(ModelUsage.__table__.columns.keys())
+    assert set(COUNTS) <= set(UsageOut.model_fields)
