@@ -7,8 +7,10 @@ from dataclasses import dataclass, replace
 from pydantic_ai.messages import ModelRequest, UserContent, UserPromptPart
 
 from muliao.agent_runtime.api import (
+    RUN_CHECK_INS,
     RUN_EVENTS,
     AgentRuntime,
+    check_in_indices,
     copy_to_workspace,
     event_indices,
     format_event,
@@ -22,10 +24,11 @@ from muliao.sessions.tables import Mail, MailKind
 
 @dataclass(frozen=True)
 class Content:
-    """一批信件的内容段，以及其中哪些段是事件（下标）。"""
+    """一批信件的内容段，以及其中哪些段是事件、哪些事件是运行中检查（下标）。"""
 
     items: list[UserContent]
     events: list[int]
+    check_ins: list[int]
 
 
 class ContentBuilder:
@@ -38,6 +41,7 @@ class ContentBuilder:
         工作目录（派生副本，原件在文件存储里）。"""
         items: list[UserContent] = []
         events: list[int] = []
+        check_ins: list[int] = []
         for m in mail:
             if m.kind == MailKind.ANSWER:
                 items.append(late_text([call_result(v) for v in m.answers.values()]))
@@ -46,12 +50,14 @@ class ContentBuilder:
                     # post_in 校验过事件必有来源
                     raise RuntimeError(f"event mail {m.id} has no source")
                 events.append(len(items))
+                if m.check_in:
+                    check_ins.append(len(items))
                 items.append(format_event(m.source, m.content))
             else:
                 files = await self._files.referenced(m.attachments)
                 await copy_to_workspace(self._files, files, self._runtime.workspace(agent_id))
                 items += [*([m.content] if m.content.strip() else []), *references(files)]
-        return Content(items, events)
+        return Content(items, events, check_ins)
 
 
 def append_content(request: ModelRequest, content: Content) -> None:
@@ -63,14 +69,23 @@ def append_content(request: ModelRequest, content: Content) -> None:
         if isinstance(part, UserPromptPart) and i != context_at:
             existing = [part.content] if isinstance(part.content, str) else list(part.content)
             request.parts[i] = replace(part, content=[*existing, *content.items])
-            mark_events(request, len(existing), content.events)
+            mark_events(request, len(existing), content)
             return
     request.parts.append(UserPromptPart(content.items))
-    mark_events(request, 0, content.events)
+    mark_events(request, 0, content)
 
 
-def mark_events(request: ModelRequest, offset: int, events: Sequence[int]) -> None:
-    """在请求上记下用户消息里哪些段是事件（RUN_EVENTS）。"""
-    if events:
+def mark_events(request: ModelRequest, offset: int, content: Content) -> None:
+    """在请求上记下用户消息里哪些段是事件（RUN_EVENTS）、其中哪些是运行中检查（RUN_CHECK_INS）。"""
+    if content.events:
         marked = event_indices(request)
-        request.metadata = {**(request.metadata or {}), RUN_EVENTS: [*marked, *(offset + i for i in events)]}
+        request.metadata = {
+            **(request.metadata or {}),
+            RUN_EVENTS: [*marked, *(offset + i for i in content.events)],
+        }
+    if content.check_ins:
+        marked = check_in_indices(request)
+        request.metadata = {
+            **(request.metadata or {}),
+            RUN_CHECK_INS: [*marked, *(offset + i for i in content.check_ins)],
+        }

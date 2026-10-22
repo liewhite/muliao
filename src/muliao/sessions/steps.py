@@ -17,7 +17,7 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.text_edit import truncate
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import Compactor, Verdict
-from muliao.sessions.content import ContentBuilder, append_content, mark_events
+from muliao.sessions.content import Content, ContentBuilder, append_content, mark_events
 from muliao.sessions.history import marked_stopped, stopped_results
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import consume_in, queued_in
@@ -48,8 +48,8 @@ class RunState:
     live: list[ModelMessage] | None = None
     # 交给模型、等这一步保存时记为已处理的信件
     taken: list[Mail] = field(default_factory=list)
-    # 开头交给模型的内容里哪些段是事件，第一次请求保存前标上
-    opening_events: list[int] = field(default_factory=list)
+    # 开头交给模型的内容（标出其中哪些段是事件、检查），第一次请求保存前标上
+    opening: Content | None = None
     # 这次运行的运行上下文（agent_runtime.instructions.build_run_context），由消费者在运行开始时定下：挂到本次
     # 新增的第一条请求上之后清空，一次运行只带一段
     run_context: str = ""
@@ -110,9 +110,9 @@ class Steps:
         async with self._db.transaction() as s:
             taken = {t.id for t in state.taken}
             arrived = [m for m in await queued_in(s, state.session.id) if m.id not in taken]
-        if state.opening_events:
-            mark_events(request, 0, state.opening_events)
-            state.opening_events = []
+        if state.opening is not None:
+            mark_events(request, 0, state.opening)
+            state.opening = None
         if arrived:
             # 运行中途没有挂起的调用（调用只在运行结束时挂起），这时到达的回答都是迟到的
             state.taken += arrived

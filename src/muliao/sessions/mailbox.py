@@ -44,6 +44,7 @@ async def post_in(
     content: str,
     awaited: bool,
     source: str | None = None,
+    check_in: bool = False,
     attachments: Sequence[str] = (),
     answers: Mapping[str, Any] | None = None,
     correlation: str | None = None,
@@ -52,6 +53,8 @@ async def post_in(
     """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。带 dedupe_key 的投信只投一次：已经投过就返回那封。"""
     if kind == MailKind.EVENT and (not source or len(source) > _SOURCE_MAX or '"' in source):
         raise ValueError(f"event source must be 1-{_SOURCE_MAX} characters without quotes, got {source!r}")
+    if check_in and kind != MailKind.EVENT:
+        raise ValueError(f"only events can be check-ins, got a {kind} mail")
     session = await s.get(Session, session_id)
     if session is None:
         raise NotFound(f"session {session_id!r} not found")
@@ -67,6 +70,7 @@ async def post_in(
         kind=kind,
         source=source,
         content=content,
+        check_in=check_in,
         attachments=list(attachments),
         answers=dict(answers or {}),
         awaited=awaited,
@@ -263,5 +267,14 @@ async def post_check_in(
         return False
     if await has_queued_from(s, owner_session_id, source):
         return False
-    await post_in(s, queue, owner_session_id, kind=MailKind.EVENT, source=source, content=text, awaited=False)
+    await post_in(
+        s,
+        queue,
+        owner_session_id,
+        kind=MailKind.EVENT,
+        source=source,
+        content=text,
+        awaited=False,
+        check_in=True,
+    )
     return True

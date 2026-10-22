@@ -117,6 +117,8 @@ class MailOut(BaseModel):
     kind: MailKind
     # 事件的发送方（如 job:12）；用户消息与回答为 null
     source: str | None
+    # 事件是运行中检查（工作还在进行）
+    check_in: bool
     content: str
     attachments: list[FileOut]
     # 回答信件：tool_call_id -> 那次挂起调用的结果（用户的回答，或被问 agent 的结局）
@@ -134,6 +136,7 @@ async def mail_outs(c: Container, mail: list[Mail]) -> list[MailOut]:
             id=m.id,
             kind=m.kind,
             source=m.source,
+            check_in=m.check_in,
             content=m.content,
             attachments=[files[i] for i in m.attachments],
             answers={k: call_result(v) for k, v in m.answers.items()},

@@ -5,6 +5,7 @@ from muliao.agent_runtime.answers import Answer
 from muliao.agent_runtime.attachments import copy_to_workspace, references
 from muliao.agent_runtime.conventions import (
     INTERRUPTED_TOOL_RESULT,
+    RUN_CHECK_INS,
     RUN_CONTEXT,
     RUN_EVENTS,
     RUN_STOPPED,
@@ -16,6 +17,7 @@ from muliao.agent_runtime.conventions import (
     attach_run_context,
     attachment_of_ref,
     calls_in,
+    check_in_indices,
     event_indices,
     format_event,
     is_stopped,
@@ -40,6 +42,7 @@ __all__ = [
     "attachment_of_ref",
     "INTERRUPTED_TOOL_RESULT",
     "ModelRegistry",
+    "RUN_CHECK_INS",
     "RUN_CONTEXT",
     "RUN_EVENTS",
     "RUN_STOPPED",
@@ -58,6 +61,7 @@ __all__ = [
     "answer_text",
     "attach_run_context",
     "calls_in",
+    "check_in_indices",
     "copy_to_workspace",
     "defer_call",
     "event_indices",

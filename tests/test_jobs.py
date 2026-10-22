@@ -14,8 +14,9 @@ from muliao.sessions.api import Origin
 from muliao.sessions.holds import has_active_in, hold_in
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Mail, MailState
+from muliao.sessions.transcript import to_items
 from tests.scripted import scripted
-from tests.test_flow import deliver, drain, start
+from tests.test_flow import deliver, drain, history_of, start
 from tests.test_mailbox import Recorder
 
 
@@ -94,7 +95,7 @@ async def test_running_jobs_get_check_events_without_piling_up_and_can_be_killed
     assert await container.jobs.check() == 1
     await deliver(container)
     checks = [m for m in await queued_events(container, session.id) if m.source == f"job:{job.id}"]
-    assert len(checks) == 1
+    assert len(checks) == 1 and checks[0].check_in
     await drain(container)
     assert "still running" in recorder.prompts[-1][0] and "started" in recorder.prompts[-1][0]
 
@@ -103,6 +104,10 @@ async def test_running_jobs_get_check_events_without_piling_up_and_can_be_killed
     await drain(container)
     assert killed.status == JobStatus.KILLED
     assert "was killed" in recorder.prompts[-1][0]
+    # 界面上检查与结局可以区分（显式标记，不靠文字）
+    events = [i for i in to_items(await history_of(container, session.id)) if i.type == "event"]
+    assert [(i.tool_name, i.check_in) for i in events] == [(f"job:{job.id}", True), (f"job:{job.id}", False)]
+    assert all(i.at is not None for i in events)
     with pytest.raises(Conflict, match="not running"):
         await container.jobs.kill(job.id, job.agent_id)
 

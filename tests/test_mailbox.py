@@ -4,6 +4,7 @@
 import json
 from collections.abc import AsyncIterator
 
+import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
@@ -16,11 +17,12 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
-from muliao.agent_runtime.conventions import INTERRUPTED_TOOL_RESULT, RUN_EVENTS, format_event
+from muliao.agent_runtime.conventions import INTERRUPTED_TOOL_RESULT, RUN_CHECK_INS, RUN_EVENTS, format_event
 from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.api import Origin
 from muliao.sessions.codec import dump_message
 from muliao.sessions.consumer import interrupted_calls
+from muliao.sessions.content import Content, append_content
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import post_in, queued_in
 from muliao.sessions.tables import Mail, MailKind, MailState, Message
@@ -283,6 +285,40 @@ def test_events_read_as_events_in_compaction_transcripts():
     )
     text = to_text(to_items([request]), max_item_chars=1000)
     assert text.splitlines() == ["[EVENT job:7] exit 0", "[USER] thanks"]
+
+
+def test_check_ins_are_marked_among_the_events_where_they_land_in_the_prompt():
+    """检查信件并进已有的用户消息时，标记（RUN_CHECK_INS）随事件一起按偏移记下，界面据此区分检查与结局。"""
+    request = ModelRequest(parts=[UserPromptPart(["user says"])])
+    content = Content(
+        [format_event("job:7", "still running"), "more", format_event("job:7", "exit 0")], [0, 2], [0]
+    )
+    append_content(request, content)
+    assert request.metadata == {RUN_EVENTS: [1, 3], RUN_CHECK_INS: [1]}
+    items = to_items([request])
+    assert [(i.type, i.check_in) for i in items] == [
+        ("user", False),
+        ("event", True),
+        ("user", False),
+        ("event", False),
+    ]
+
+
+async def test_only_events_can_be_check_ins(container, make_agent, models):
+    agent = await make_agent("alpha", model="rec")
+    models.models["rec"] = scripted(Recorder())
+    session = await start(container, agent.id, "hi", origin=Origin.TRIGGER)
+    with pytest.raises(ValueError, match="only events"):
+        async with container.db.transaction() as s:
+            await post_in(
+                s,
+                container.queue,
+                session.id,
+                kind=MailKind.MESSAGE,
+                content="x",
+                awaited=False,
+                check_in=True,
+            )
 
 
 async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(container, make_agent, models):

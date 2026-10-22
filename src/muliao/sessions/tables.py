@@ -107,6 +107,8 @@ class Mail(Base):
     # 发送方：事件的来源（如 job:12、thread:<会话 id>，交给模型时标在事件上）；用户消息为 None
     source: Mapped[str | None] = mapped_column(String(100))
     content: Mapped[str] = mapped_column(Text)
+    # 事件是运行中检查（mailbox.post_check_in 投的，工作还在进行）：交给模型时记进 RUN_CHECK_INS，界面合并连续的检查
+    check_in: Mapped[bool] = mapped_column(default=False, server_default="0")
     # 随消息发送的文件 id（muliao.files.store）
     attachments: Mapped[list[str]] = mapped_column(JSON, default=list)
     # ANSWER：tool_call_id -> 那次调用的结果（sessions.pending.CallResult 的 dump）

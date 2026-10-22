@@ -304,7 +304,7 @@ class Consumer:
                 await hand_over_in(s, state.run_id, queued[-1].id)
         content = await self._content.of(state.agent.id, [m for m in queued if not is_on_time(m, pending)])
         # 开头的内容由 pydantic-ai 放进第一次请求的用户消息（下标从 0 起），事件在那次请求保存前标上
-        state.opening_events = content.events
+        state.opening = content
         return (content.items or None), deferred
 
     # ---- 停止（命令见 sessions.halt.SessionStopper）----

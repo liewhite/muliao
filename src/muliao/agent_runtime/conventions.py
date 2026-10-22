@@ -14,6 +14,7 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 | `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | sessions.questions 定义、sessions.deferred 填入 | 模型、会话条目 |
 | 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart | — | unanswered_calls：挂起的提问、压缩切点、停止时补结果 |
 | `RUN_EVENTS`：这一步交给模型的事件信件 | 事件各占用户消息内容的一段（format_event），metadata 记下是第几段 | sessions.content | 模型、会话条目 |
+| `RUN_CHECK_INS`：其中哪些是运行中检查（信件的 check_in） | 同上，metadata 记下是第几段（RUN_EVENTS 的子集） | sessions.content | 会话条目（界面合并连续的检查） |
 | `RUN_CONTEXT`：这次运行的运行上下文（当前时间等） | 单独一段用户消息，metadata 记下它是第几个 part | sessions.steps | 模型；会话条目不展示它 |
 
 metadata 的键都带 `muliao_` 前缀：metadata 是 pydantic-ai 开放给所有工具（含 MCP 包装）的字段，通用的键名可能撞上形状
@@ -56,6 +57,8 @@ INTERRUPTED_TOOL_RESULT = (
 # 交给模型的事件信件（sessions.mailbox）：每条事件是用户消息内容里独立的一段，格式见 format_event；
 # 那条 ModelRequest 的 metadata[RUN_EVENTS] 是这些段在内容里的下标
 RUN_EVENTS = "muliao_events"
+# 其中运行中检查（sessions.mailbox.post_check_in 投的信件）的下标记在 metadata[RUN_CHECK_INS]，是 RUN_EVENTS 的子集
+RUN_CHECK_INS = "muliao_check_ins"
 _EVENT = re.compile(r'\A<event source="(?P<source>[^"]*)">\n(?P<content>.*)\n</event>\Z', re.DOTALL)
 
 
@@ -110,6 +113,11 @@ def answer_text(response: ModelResponse) -> str:
 def event_indices(message: ModelMessage) -> list[int]:
     """这条消息里哪些内容段是会话事件（RUN_EVENTS）；没有事件为空。"""
     return list((message.metadata or {}).get(RUN_EVENTS, []))
+
+
+def check_in_indices(message: ModelMessage) -> list[int]:
+    """这条消息里哪些事件段是运行中检查（RUN_CHECK_INS）；没有为空。"""
+    return list((message.metadata or {}).get(RUN_CHECK_INS, []))
 
 
 class Attachment(TypedDict):

@@ -296,3 +296,85 @@ def test_dropping_reflections_keeps_agents_other_tasks_and_usage(tmp_path):
     with sqlite3.connect(path) as conn:
         assert conn.execute("select reflect_every from agents").fetchall() == [(30,)]
         assert conn.execute("select count(*) from reflections").fetchone() == (0,)
+
+
+def test_check_ins_are_backfilled_on_mail_and_message_metadata(tmp_path):
+    """运行中检查显式标记（#121）：按当时检查信件的文字回填 mail.check_in 与请求 metadata 的 muliao_check_ins；
+    结局事件不算检查。降级删列并去掉 metadata 里的标记。"""
+    import json
+
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "b97a9752ebad")
+    job_check = "Background job 3 is still running (0m05s so far).\nCommand: x\nNo output yet."
+    job_end = "Background job 3 finished with exit code 0 after 1m00s."
+    thread_check = (
+        "Thread 'fix' (ops) is waiting for work it started. Keep waiting, you will get an event with its answer; "
+        "if it is no longer needed, call stop_thread('fix')."
+    )
+    thread_end = "Thread 'fix' (ops) finished your task. Its answer:\nok"
+
+    def event(source: str, content: str) -> str:
+        return f'<event source="{source}">\n{content}\n</event>'
+
+    request = {
+        "parts": [
+            {"content": "now", "part_kind": "user-prompt"},
+            {
+                "content": [
+                    event("job:3", job_check),
+                    "hi",
+                    event("thread:t1", thread_end),
+                    event("thread:t1", thread_check),
+                ],
+                "part_kind": "user-prompt",
+            },
+        ],
+        "kind": "request",
+        "metadata": {"muliao_run_context": 0, "muliao_events": [0, 2, 3]},
+    }
+    plain = {"parts": [{"content": "hello", "part_kind": "user-prompt"}], "kind": "request", "metadata": None}
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into sessions (id, agent_id, title, origin, kind, unread, created_at, updated_at) "
+            "values ('s1', 'a1', 't', 'user', 'chat', 0, '2026-01-01', '2026-01-01')"
+        )
+        for id_, kind, source, content in (
+            (1, "event", "job:3", job_check),
+            (2, "event", "job:3", job_end),
+            (3, "event", "thread:t1", thread_check),
+            (4, "event", "thread:t1", thread_end),
+            (5, "message", None, job_check),
+        ):
+            conn.execute(
+                "insert into mail (id, session_id, kind, source, content, attachments, answers, awaited, "
+                "correlation_settled, state, created_at) values (?, 's1', ?, ?, ?, '[]', '{}', 0, 0, 'consumed', "
+                "'2026-01-01')",
+                (id_, kind, source, content),
+            )
+        for id_, payload in ((1, request), (2, plain)):
+            conn.execute(
+                "insert into messages (id, session_id, task_id, payload, created_at) values (?, 's1', 1, ?, '2026-01-01')",
+                (id_, json.dumps(payload)),
+            )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id from mail where check_in order by id").fetchall() == [(1,), (3,)]
+        metadata = json.loads(conn.execute("select payload from messages where id = 1").fetchone()[0])[
+            "metadata"
+        ]
+        assert metadata == {"muliao_run_context": 0, "muliao_events": [0, 2, 3], "muliao_check_ins": [0, 3]}
+        assert json.loads(conn.execute("select payload from messages where id = 2").fetchone()[0]) == plain
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "b97a9752ebad")
+    with sqlite3.connect(path) as conn:
+        assert "check_in" not in {r[1] for r in conn.execute("pragma table_info(mail)")}
+        metadata = json.loads(conn.execute("select payload from messages where id = 1").fetchone()[0])[
+            "metadata"
+        ]
+        assert metadata == {"muliao_run_context": 0, "muliao_events": [0, 2, 3]}

@@ -26,6 +26,7 @@ from pydantic_ai.messages import (
 from muliao.agent_runtime.api import (
     Attachment,
     attachment_of_ref,
+    check_in_indices,
     event_indices,
     is_stopped,
     made_up_result,
@@ -62,6 +63,8 @@ class Item(BaseModel):
     text: str
     # 会话事件（type 为 event）：tool_name 是事件的来源（如 job:12），text 是事件内容
     tool_name: str | None
+    # 事件是运行中检查（RUN_CHECK_INS，工作还在进行）；其他条目为 False
+    check_in: bool
     tool_call_id: str | None
     # 来源消息的数据库 id；会话接口填充，用于定位压缩点；实时条目为 None
     message_id: int | None
@@ -73,8 +76,8 @@ class Item(BaseModel):
     images: list[Attachment]
     # ask_user 的调用（参数合法时）；其他条目为 None
     ask: AskView | None
-    # 工具调用开始执行的时间（tool_call），或工具结束的时间（tool_result、tool_error）；其他条目，以及拿不到真实时间的
-    # （被中断后补上的结果、调用方没给保存时间的投影）为 None
+    # 工具调用开始执行的时间（tool_call），工具结束的时间（tool_result、tool_error），或事件交给模型的时间（event，
+    # 所在用户消息段的 timestamp）；其他条目，以及拿不到真实时间的（被中断后补上的结果、调用方没给保存时间的投影）为 None
     at: datetime | None
 
 
@@ -87,11 +90,13 @@ def _item(
     threads: list[str] | None = None,
     at: datetime | None = None,
     images: list[Attachment] | None = None,
+    check_in: bool = False,
 ) -> Item:
     return Item(
         type=type_,
         text=text,
         tool_name=tool_name,
+        check_in=check_in,
         tool_call_id=tool_call_id,
         message_id=None,
         attachments=attachments or [],
@@ -188,8 +193,12 @@ def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
     return _item("tool_error", part.model_response(), part.tool_name, part.tool_call_id, at=part.timestamp)
 
 
-def _prompt_items(content: str | Sequence[Any], events: Sequence[int]) -> list[Item]:
-    """一条用户消息展示成的条目：会话事件（RUN_EVENTS 标出的内容段）各自成条，其余连续的内容合成一条用户消息。"""
+def _prompt_items(part: UserPromptPart, events: Sequence[int], check_ins: Sequence[int]) -> list[Item]:
+    """一条用户消息展示成的条目：会话事件（RUN_EVENTS 标出的内容段，其中 RUN_CHECK_INS 标出的是运行中检查）各自
+    成条，其余连续的内容合成一条用户消息。"""
+    content = part.content
+    if not set(check_ins) <= set(events):
+        raise RuntimeError(f"check-in segments {list(check_ins)} are not all events {list(events)}")
     if not events:
         return [_user_item(content)]
     if isinstance(content, str):
@@ -202,7 +211,7 @@ def _prompt_items(content: str | Sequence[Any], events: Sequence[int]) -> list[I
                 items.append(_user_item(own))
                 own = []
             source, text = parse_event(c)
-            items.append(_item("event", text, tool_name=source))
+            items.append(_item("event", text, tool_name=source, at=part.timestamp, check_in=i in check_ins))
         else:
             own.append(c)
     if own:
@@ -238,7 +247,7 @@ def to_items(messages: Sequence[ModelMessage], saved_at: datetime | None = None)
                 if index == context_at:
                     continue
                 if isinstance(part, UserPromptPart):
-                    items.extend(_prompt_items(part.content, event_indices(msg)))
+                    items.extend(_prompt_items(part, event_indices(msg), check_in_indices(msg)))
                 elif isinstance(part, ToolReturnPart | RetryPromptPart):
                     items.append(result_item(part))
         elif isinstance(msg, ModelResponse):

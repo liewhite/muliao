@@ -3833,6 +3833,10 @@
             ],
             "title": "Tool Name"
           },
+          "check_in": {
+            "type": "boolean",
+            "title": "Check In"
+          },
           "tool_call_id": {
             "anyOf": [
               {
@@ -3904,6 +3908,7 @@
           "type",
           "text",
           "tool_name",
+          "check_in",
           "tool_call_id",
           "message_id",
           "attachments",
@@ -3992,6 +3997,10 @@
             ],
             "title": "Source"
           },
+          "check_in": {
+            "type": "boolean",
+            "title": "Check In"
+          },
           "content": {
             "type": "string",
             "title": "Content"
@@ -4038,6 +4047,7 @@
           "id",
           "kind",
           "source",
+          "check_in",
           "content",
           "attachments",
           "answers",
