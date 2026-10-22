@@ -228,7 +228,7 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
 
 ### 停止会话
 
-用户可以停止会话（`POST /api/sessions/{id}/stop`，界面上运行中显示停止按钮）。停止就是消费停止、信箱清空，连带停下它发起的异步工作。做法同 ChatGPT、Claude Code：停止前已经产生的部分照常保存，因为工具的副作用（shell、写文件）已经发生，之后的模型必须知道做过什么，否则会重复执行。
+用户可以停止会话（`POST /api/sessions/{id}/stop`，界面在会话的工作状态不是 idle 时显示停止按钮：会话详情 `SessionDetail.state` 与列表同一条规则，所以排队中的运行、在等后台任务或委派的会话也停得了）。停止就是消费停止、信箱清空，连带停下它发起的异步工作。做法同 ChatGPT、Claude Code：停止前已经产生的部分照常保存，因为工具的副作用（shell、写文件）已经发生，之后的模型必须知道做过什么，否则会重复执行。
 
 - **只取消模型运行**：`StoppableRuns` 把运行放在单独的子任务里，停止只取消它；worker 的任务没有被取消，所以与关停（它取消外层任务，已保存的步骤留着、由队列恢复或重试续跑）区分开（第 4 节）。
 - **补齐已产生的部分**（`steps.save_stopped`）：每一步本来就保存了，运行中被停止时只需保存当前这一步还没保存的部分：消费者从 pydantic-ai 运行中的历史（`ctx.state.message_history`，逐步驱动时直接拿到）取出它们，还没出结果的工具调用补上「被用户停止、可能已部分执行」的结果（用 `conventions.unanswered_calls` 判断），最后一条标上 `RUN_STOPPED`，展示为「已停止」。正在生成的那段回答由 pydantic-ai 以 `state='interrupted'` 留在运行历史里，一起保存（之后也会发给模型）；其中参数还没生成完的工具调用同样补上结果，参数在落库前脱敏，截断到无法解析的 `vault_set` 参数整体替换。压缩进行中被停止时，触发压缩的那次请求已经保存，不重复补结果。未核实：被打断的思考块（没有签名）发给 Anthropic 等提供方会不会被拒，遇到时那次运行失败可见。
@@ -284,7 +284,7 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
 
 thread 种类只由委派创建（`origin` 为 delegation，带父会话，`KindPolicy.opened_by_delegation`），新建会话时检查种类与来源一致；按发送方定位会话只在顶层种类里找（`kinds.TOP_LEVEL`）。「私有」（只有开它的会话能继续，`list_threads` 与界面据此标出）与「用户能写」是两条规则，碰巧对同一种类成立。会话接口随会话下发 `user_writable`、`deletable` 与 `private`，界面不另写一份规则。续聊工具名与工具注册共用常量（`kinds.DELEGATE_TASK`、`deferred.ASK_AGENT`），tests/test_tool_schemas.py 断言它们都已注册。
 
-会话列表（`SessionService.list`）把此刻有运行在进行的会话（run task 处于 running，不含排队与压缩）置顶，其余按最近更新排序；列表接口的每一行（`SessionListItem`）带工作状态 `state`（`SessionActivity` 的同一条规则，见下文「工作状态」），界面据此标记「运行中」（转圈）或「等待中」（沙漏）；按 agent 分组时，不空闲的会话单独成一个「进行中」区，置于所有 agent 分组之上（带 agent 名），其余会话再按 agent 分组。运行开始与结束都有 task 事件，列表据此重新拉取。
+会话列表（`SessionService.list`）把工作状态不是 idle 的会话置顶（在符合筛选的全部会话里算，不只这一页，所以第一页就含全部进行中的会话；代价是每个会话读一条最后的消息，看有没有挂起的提问），其余按最近更新排序；列表接口的每一行（`SessionListItem`）带工作状态 `state`（`SessionActivity` 的同一条规则，见下文「工作状态」；与置顶是同一次计算），界面据此标记「运行中」（转圈）或「等待中」（沙漏）；按 agent 分组时，不空闲的会话单独成一个「进行中」区，置于所有 agent 分组之上（带 agent 名），其余会话再按 agent 分组。运行开始与结束都有 task 事件，列表据此重新拉取。
 
 **工作状态**（`activity.work_states_in`，唯一规则；会话列表、issue 看板、定时触发避免重叠、`list_threads` 与委派的运行中检查都用它）：`running` 会话的 lane 上有排队或进行中的任务，或有投给它、还没投递的 `Receive`；`waiting` 运行停了但在等外面的结果——有 active 占用（后台任务、委派出去的工作）或还能回答的 ask_user 提问；否则 `idle`。running 与 waiting 都是「事情还没做完」：等待中的会话结果回来会自动接着做，所以除了展示，各处只区分 idle 与否。批量计算，查询次数与会话数无关（列表一次几百个，事务持有全局写锁）；挂起的提问只可能在最后一条模型回复里（之前每条回复的调用在下一条回复前都已有结果），所以只读最后一条回复起的消息（`history.since_last_response`），不加载整段上下文。它与删除检查回答不同的问题：挂起的提问没有人在外面做事，不挡删除；删除检查同样批量查（lane 与 active 占用各一次）。挂起的调用（`pending.pending_in`、唤醒的 `wake_in`）也同理只读最后一条回复起的消息；需要整段上下文的只有消费者与停止。
 
