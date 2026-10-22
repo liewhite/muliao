@@ -46,12 +46,8 @@ async def registered_in(s: AsyncSession, session_id: str, holder: str) -> bool:
     return await get_in(s, session_id, holder) is not None
 
 
-async def release_in(s: AsyncSession, session_id: str, holder: str) -> HoldStatus:
-    """把占用记为已释放，返回释放前的状态。已经被停止清掉（cleared）的不变：调用方不再投信。会话存在而占用从未登记
-    过是 bug，直接报错。"""
-    hold = await get_in(s, session_id, holder)
-    if hold is None:
-        raise RuntimeError(f"session {session_id} has no hold {holder}")
+def release(hold: SessionHold) -> HoldStatus:
+    """把占用记为已释放（随调用方的事务提交），返回释放前的状态。已经被停止清掉（cleared）的不变：调用方不再投信。"""
     before = hold.status
     if before == HoldStatus.ACTIVE:
         hold.status, hold.ended_at = HoldStatus.RELEASED, utcnow()

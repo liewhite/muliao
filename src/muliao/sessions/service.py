@@ -23,14 +23,15 @@ from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.inbound import (
     Inbound,
     Received,
-    check_receivable_in,
     inbound_of,
     open_asks,
     receive,
+    receive_into,
     receive_lane_of,
+    target_in,
 )
 from muliao.sessions.kinds import LISTED, policy_of
-from muliao.sessions.lanes import RUN_TASK
+from muliao.sessions.lanes import RUN_TASK, session_lane_of
 from muliao.sessions.live import LiveRun, LiveRuns
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.origins import Origin
@@ -167,7 +168,7 @@ class SessionService:
 
         origin_ref 是发起方在它那个 origin 里的身份（触发器的 id），用来列出某个发起方开过的会话。
         """
-        running = exists().where(_running_run(), Task.session_id == Session.id)
+        running = exists().where(_running_run(), Task.lane == session_lane_of(Session.id))
         query = (
             select(Session)
             .where(Session.kind.in_(LISTED))
@@ -216,7 +217,7 @@ class SessionService:
 
         async def commit(s: AsyncSession) -> None:
             try:
-                await check_receivable_in(s, inbound)
+                target = await target_in(s, inbound)
             except NotFound as e:
                 # 发送方校验之后会话或 agent 被删除：契约内的变化，这封信不再有收件人
                 log.info(
@@ -224,7 +225,7 @@ class SessionService:
                     extra={"message_id": delivery.message_id, "origin": command.origin, "reason": str(e)},
                 )
                 return
-            await receive(s, self._queue, inbound)
+            await receive_into(s, self._queue, inbound, *target)
 
         return commit
 

@@ -29,12 +29,13 @@ from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
 from muliao.sessions.deferred import DEFERRED_TOOLS, questions_in, replayable
-from muliao.sessions.finish import RunEnd, RunFinisher, load_session
+from muliao.sessions.finish import RunEnd, RunFinisher
 from muliao.sessions.halt import Halted, SessionHalt
 from muliao.sessions.history import interrupted_results, latest_compaction, load_context
 from muliao.sessions.holds import called_in
 from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRuns
+from muliao.sessions.loading import load_session
 from muliao.sessions.mailbox import RunPayload, hand_over_in, queued_in, wake_in
 from muliao.sessions.origins import origin_note
 from muliao.sessions.pending import (

@@ -9,17 +9,16 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import shared_attachments
-from muliao.agents.api import AgentInfo, agent_in
 from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.events import RunEnded as RunEndedEvent
 from muliao.sessions.holds import has_active_in
 from muliao.sessions.kinds import policy_of
+from muliao.sessions.loading import load_session
 from muliao.sessions.mailbox import queued_in, wake_in
 from muliao.sessions.settlement import settle_finished_in
 from muliao.sessions.steps import RunState
-from muliao.sessions.tables import Session
 
 
 @dataclass(frozen=True)
@@ -33,13 +32,6 @@ class RunEnd:
     # 停下来等用户回答提问：要告诉用户
     asked_user: bool
     stopped: bool
-
-
-async def load_session(s: AsyncSession, session_id: str) -> tuple[Session, AgentInfo]:
-    session = await s.get(Session, session_id)
-    if session is None:
-        raise RuntimeError(f"session {session_id} vanished during its run")
-    return session, await agent_in(s, session.agent_id)
 
 
 class RunFinisher:

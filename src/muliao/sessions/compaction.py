@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import AgentRuntime, calls_in, results_in
-from muliao.agents.api import AgentInfo, active_agent_in, agent_in
+from muliao.agents.api import AgentInfo, active_agent_in
 from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskStatus
@@ -29,6 +29,7 @@ from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.history import latest_compaction, rows_after
 from muliao.sessions.lanes import COMPACTION_TASK, session_lane
+from muliao.sessions.loading import load_session
 from muliao.sessions.tables import Compaction, Message, Session
 from muliao.sessions.transcript import to_items, to_text
 
@@ -237,10 +238,7 @@ class CompactionHandler:
         if task.session_id is None:
             raise RuntimeError(f"compaction task {task.id} must reference a session")
         async with self._db.transaction() as s:
-            session = await s.get(Session, task.session_id)
-            if session is None:
-                raise RuntimeError(f"compaction task {task.id} references a missing session")
-            agent = await agent_in(s, session.agent_id)
+            session, agent = await load_session(s, task.session_id)
         if not await self._compactor.compact(session, agent):
             log.info("nothing to compact beyond the kept steps", extra={"session_id": session.id})
         return no_commit

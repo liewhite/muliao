@@ -18,7 +18,7 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.events import WorkCheckIn, WorkEnded
-from muliao.sessions.holds import get_in, hold_in, release_in
+from muliao.sessions.holds import get_in, hold_in, release
 from muliao.sessions.lanes import work_lane
 from muliao.sessions.mailbox import post_check_in, post_in
 from muliao.sessions.pending import AgentAnswer, AgentAnswered, pending_in
@@ -71,8 +71,9 @@ async def deliver_in(
         return Delivered.GONE
     hold = await get_in(s, session_id, holder)
     if hold is None:
+        # 会话存在而占用从未登记过是 bug
         raise RuntimeError(f"session {session_id} has no hold {holder}")
-    before = await release_in(s, session_id, holder)
+    before = release(hold)
     if before == HoldStatus.CLEARED:
         log.info("outcome for a stopped session dropped", extra={"session_id": session_id, "holder": holder})
         return Delivered.DROPPED

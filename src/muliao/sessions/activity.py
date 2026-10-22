@@ -1,6 +1,6 @@
 """会话忙不忙：别的领域与删除规则问的两个不同问题（docs/architecture.md 第 7 节）。
 
-- 工作状态（work_state_in：running / waiting / idle，唯一规则）：会话列表、issue 看板、触发器避免重叠触发都看它；
+- 工作状态（SessionActivity.work_state_in：running / waiting / idle，唯一规则）：会话列表、issue 看板、触发器避免重叠触发都看它；
 - 删除会不会打断工作（blocking_deletion_in 及按 agent 的版本）：删除会话、删除 agent 的检查。
 
 看哪些 lane、哪些占用是会话领域的实现细节：别的领域经 SessionActivity 问，不拿任务队列。
@@ -35,10 +35,6 @@ class WorkState(StrEnum):
     IDLE = "idle"
 
 
-async def work_state_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> WorkState:
-    return (await work_states_in(s, queue, [session_id]))[session_id]
-
-
 async def work_states_in(
     s: AsyncSession, queue: TaskQueue, session_ids: Collection[str]
 ) -> dict[str, WorkState]:
@@ -68,32 +64,11 @@ async def work_states_in(
     }
 
 
-async def keyed_work_states_in(
-    s: AsyncSession, queue: TaskQueue, origin: Origin, keys: Collection[tuple[str, str]]
-) -> dict[tuple[str, str], WorkState | None]:
-    """按发送方定位的会话（inbound.SessionKey）的工作状态，key 是 (origin_ref, agent id)：会话存在时是它的状态；还没
-    建出来、但按 key 投给它的来信还没投递时是 running（信一投就建出会话开始处理）；否则 None。"""
-    keyed = await keyed_sessions_among(s, origin, {ref for ref, _ in keys})
-    found = {k: keyed[k[0]][k[1]].id for k in keys if k[1] in keyed[k[0]]}
-    states = await work_states_in(s, queue, list(found.values()))
-    pending = await queue.busy_lanes(
-        s, [keyed_receive_lane(origin, ref, agent) for ref, agent in keys if (ref, agent) not in found]
-    )
-    return {
-        k: states[found[k]]
-        if k in found
-        else WorkState.RUNNING
-        if keyed_receive_lane(origin, *k) in pending
-        else None
-        for k in keys
-    }
-
-
 async def blocking_deletion_in(
     s: AsyncSession, queue: TaskQueue, sessions: Mapping[str, Session]
 ) -> list[str]:
     """其中忙、因而不能删除的会话：lane 上有排队或运行中的任务（运行、压缩），或有人替它在外面做事（后台任务、委派
-    出去的工作）。与工作状态（work_state_in）回答的是不同的问题：挂起的提问没有人在外面做事，不挡删除。"""
+    出去的工作）。与工作状态（SessionActivity.work_state_in）回答的是不同的问题：挂起的提问没有人在外面做事，不挡删除。"""
     busy = await queue.busy_lanes(s, [session_lane(x) for x in sessions])
     held = await with_active_among(s, list(sessions))
     return [x for x in sessions if session_lane(x) in busy or x in held]
@@ -105,11 +80,6 @@ async def sessions_blocking_agent_deletion_in(s: AsyncSession, queue: TaskQueue,
     return await blocking_deletion_in(s, queue, await owned_threads_in(s, roots))
 
 
-async def agent_deletion_blocked_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> bool:
-    """删除这个 agent 时会被删除的会话里有忙的（删除 agent 前的检查，与删除时的判断同一条规则）。"""
-    return bool(await sessions_blocking_agent_deletion_in(s, queue, agent_id))
-
-
 class SessionActivity:
     """别的领域问「会话忙不忙」的查询（只读，在调用方的事务里）：看哪些 lane、哪些占用是会话领域的实现细节，不交给
     调用方。两个问题不同：工作状态（会话列表、issue 看板、触发器避免重叠触发），删除会不会打断工作（删除 agent 的
@@ -119,12 +89,28 @@ class SessionActivity:
         self._queue = queue
 
     async def work_state_in(self, s: AsyncSession, session_id: str) -> WorkState:
-        return await work_state_in(s, self._queue, session_id)
+        return (await work_states_in(s, self._queue, [session_id]))[session_id]
 
     async def keyed_work_states_in(
         self, s: AsyncSession, origin: Origin, keys: Collection[tuple[str, str]]
     ) -> dict[tuple[str, str], WorkState | None]:
-        return await keyed_work_states_in(s, self._queue, origin, keys)
+        """按发送方定位的会话（inbound.SessionKey）的工作状态，key 是 (origin_ref, agent id)：会话存在时是它的状态；还没
+        建出来、但按 key 投给它的来信还没投递时是 running（信一投就建出会话开始处理）；否则 None。"""
+        keyed = await keyed_sessions_among(s, origin, {ref for ref, _ in keys})
+        found = {k: keyed[k[0]][k[1]].id for k in keys if k[1] in keyed[k[0]]}
+        states = await work_states_in(s, self._queue, list(found.values()))
+        pending = await self._queue.busy_lanes(
+            s, [keyed_receive_lane(origin, ref, agent) for ref, agent in keys if (ref, agent) not in found]
+        )
+        return {
+            k: states[found[k]]
+            if k in found
+            else WorkState.RUNNING
+            if keyed_receive_lane(origin, *k) in pending
+            else None
+            for k in keys
+        }
 
     async def blocks_agent_deletion_in(self, s: AsyncSession, agent_id: str) -> bool:
-        return await agent_deletion_blocked_in(s, self._queue, agent_id)
+        """删除这个 agent 时会被删除的会话里有忙的（删除 agent 前的检查，与删除时的判断同一条规则）。"""
+        return bool(await sessions_blocking_agent_deletion_in(s, self._queue, agent_id))

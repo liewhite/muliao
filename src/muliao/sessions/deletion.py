@@ -84,7 +84,7 @@ class AgentSessionsCleanup:
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
         """删除 agent 的流程：删除它的全部会话（连同私有 thread），发布 AgentSessionsCleared（没有会话也发）。
 
-        标记删除之后它的会话不再收到来信（ensure_agent_active_in），但仍可能有会话忙：删除前的检查与标记分属两个
+        标记删除之后它的会话不再收到来信（inbound 在事务里用 active_agent_in 检查），但仍可能有会话忙：删除前的检查与标记分属两个
         事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会让会话变忙。
         忙的会话先停止（每个只停一次；停止也本来是删除的前提：它们的工作随 agent 一起放弃），再在时限内等它们空闲：
         正在执行的运行被取消后，停止事务在它退出之后才执行（清掉占用、结束排队的任务），正在执行的压缩做完才空闲。

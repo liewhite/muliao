@@ -551,7 +551,7 @@ async def test_a_fire_not_yet_delivered_counts_as_busy_so_the_schedule_does_not_
 
 async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(container, make_agent):
     """上一次触发的会话停了，但还在等后台任务（active 占用）：结果回来会接着做，这次不再触发；占用释放后空闲。"""
-    from muliao.sessions.holds import hold_in, release_in
+    from muliao.sessions.holds import get_in, hold_in, release
 
     alpha = (await make_agent("alpha")).id
     trigger = await container.triggers.create(
@@ -569,7 +569,9 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
         await hold_in(s, session_id, "job:1", awaited=False)
     assert await busy()
     async with container.db.transaction() as s:
-        await release_in(s, session_id, "job:1")
+        hold = await get_in(s, session_id, "job:1")
+        assert hold is not None
+        release(hold)
     assert not await busy()
 
 

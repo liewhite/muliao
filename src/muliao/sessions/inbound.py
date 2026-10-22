@@ -4,7 +4,10 @@
   自己的事务里校验（同一套规则，只读）、得到定向命令 Receive 发出，由会话领域在自己的事务里投信。
 - 目标会话三种：续写已有的、新建、按发送方定位（SessionKey：同一发送方给同一个 agent 的来信进同一个会话，没有就建）。
 - 续写规则：用户可以在任何用户能写的会话里继续；其他来源只能续写自己发起的会话。
-- 新建会话只有 create_session 一处实现（来信与 thread 都经过它）。"""
+- 新建会话只有 create_session 一处实现（来信与 thread 都经过它）。
+- 会话只为还可用的 agent 新建、继续：在本事务里用 agents 的 active_agent_in 检查，正在删除的按不存在处理。agent 只会
+  从可用变为正在删除、再变为不存在，没有先查后写的竞态：删除标记提交之后，它的会话不会再收到来信、变忙，删除流程
+  清理会话时不必等待（docs/architecture.md 第 10 节）。"""
 
 import logging
 from collections.abc import Collection, Mapping, Sequence
@@ -124,20 +127,13 @@ def _check_may_continue(session: Session, origin: Origin, origin_ref: str | None
         )
 
 
-async def ensure_agent_active_in(s: AsyncSession, agent_id: str) -> None:
-    """会话只为还可用的 agent 新建、继续：正在删除的按不存在处理（agents 的 active_agent_in）。agent 只会从可用变为
-    正在删除、再变为不存在，在本事务里检查没有先查后写的竞态：删除标记提交之后，它的会话不会再收到来信、变忙，
-    删除流程清理会话时不必等待（docs/architecture.md 第 10 节）。"""
-    await active_agent_in(s, agent_id)
-
-
 async def create_session(
     s: AsyncSession, *, origin: Origin, origin_ref: str | None, spec: NewSession
 ) -> Session:
     """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
     if not isinstance(spec.title, str):
         raise ValueError(f"a new session needs a title by now (receive derives one), got {spec}")
-    await ensure_agent_active_in(s, spec.agent_id)
+    await active_agent_in(s, spec.agent_id)
     is_thread = origin == Origin.DELEGATION
     if (
         (spec.parent_session_id is not None) != is_thread
@@ -219,35 +215,28 @@ async def _resolve_answers(
     return resolved
 
 
-async def _target_in(s: AsyncSession, inbound: Inbound) -> tuple[Session | None, list[FileMeta]]:
+async def target_in(s: AsyncSession, inbound: Inbound) -> tuple[Session | None, list[FileMeta]]:
     """来信的校验规则（只读）：内容不为空、附件存在、目标会话存在且发送方可以续写、agent 还可用。返回要续写的会话
     （新建时为 None）与附件的元数据（推导标题时用，不再读一遍）。"""
     if not inbound.content.strip() and not inbound.attachments and not inbound.answers:
         raise InvalidInput("message must not be empty")
     attachments = await load_metas(s, inbound.attachments)
     if isinstance(inbound.session, NewSession):
-        await ensure_agent_active_in(s, inbound.session.agent_id)
+        await active_agent_in(s, inbound.session.agent_id)
         return None, attachments
     if isinstance(inbound.session, SessionKey):
         key = inbound.session
         session = await keyed_session_in(s, inbound.origin, _key_ref(inbound), key.agent_id)
         if session is None:
-            await ensure_agent_active_in(s, key.agent_id)
+            await active_agent_in(s, key.agent_id)
             return None, attachments
     else:
         session = await s.get(Session, inbound.session)
         if session is None:
             raise NotFound(f"session {inbound.session!r} not found")
     _check_may_continue(session, inbound.origin, inbound.origin_ref)
-    await ensure_agent_active_in(s, session.agent_id)
+    await active_agent_in(s, session.agent_id)
     return session, attachments
-
-
-async def check_receivable_in(s: AsyncSession, inbound: Inbound) -> None:
-    """在发送方的事务里校验一封来信（不写入），之后经定向命令 Receive 投递。校验读的都是只会单向变化或不变的事实
-    （会话与 agent 是否还在、会话的发起方、文件），投递时只剩「期间被删除」这一种契约内的变化（docs/architecture.md
-    2.2）。"""
-    await _target_in(s, inbound)
 
 
 def receive_lane_of(command: Receive) -> str:
@@ -299,8 +288,9 @@ def _receive_command(inbound: Inbound) -> Receive:
 async def receive_command_in(s: AsyncSession, inbound: Inbound) -> Receive:
     """别的领域投信的唯一入口（只读）：在发送方的事务里校验这封来信（不合规的当场报错给发送方），返回定向命令
     Receive。发送方在同一事务里 send_in 它，由会话领域在自己的事务里投进信箱——发送方记下的状态与投信一起提交，
-    投递恰好一次；提交后可以让投递任务马上执行（run_now）。"""
-    await check_receivable_in(s, inbound)
+    投递恰好一次；提交后可以让投递任务马上执行（run_now）。校验读的都是只会单向变化或不变的事实（会话与 agent
+    是否还在、会话的发起方、文件），投递时只剩「期间被删除」这一种契约内的变化（docs/architecture.md 2.2）。"""
+    await target_in(s, inbound)
     return _receive_command(inbound)
 
 
@@ -334,7 +324,18 @@ def _derived_title(inbound: Inbound, attachments: Sequence[FileMeta]) -> str:
 
 async def receive(s: AsyncSession, queue: TaskQueue, inbound: Inbound) -> Received:
     """所有来信的唯一入口：确定会话（继续或新建），把它投进会话的信箱。"""
-    session, attachments = await _target_in(s, inbound)
+    return await receive_into(s, queue, inbound, *await target_in(s, inbound))
+
+
+async def receive_into(
+    s: AsyncSession,
+    queue: TaskQueue,
+    inbound: Inbound,
+    session: Session | None,
+    attachments: Sequence[FileMeta],
+) -> Received:
+    """把已经校验过的来信（target_in 的结果：要续写的会话，新建时为 None；附件的元数据）投进会话的信箱。只给要先
+    单独处理校验结果的调用方（Receive 的投递）；其余一律经 receive。"""
     if session is None:
         target = inbound.session
         if isinstance(target, str):
