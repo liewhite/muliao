@@ -36,7 +36,7 @@ from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.origins import Origin
 from muliao.sessions.tables import Compaction, Mail, Message, Session
 from muliao.sessions.threads import threads_of
-from muliao.sessions.transcript import Item, annotate_asks, to_items
+from muliao.sessions.transcript import Item, annotate_asks, checked_times, to_items
 
 log = logging.getLogger(__name__)
 
@@ -121,13 +121,15 @@ class SessionService:
             if live is None or live.after_message_id is None or message_id <= live.after_message_id
         ]
         items = annotate_asks(
-            [
-                item.model_copy(update={"message_id": message_id})
-                for (message_id, _, created_at), message in zip(
-                    shown, load_messages(p for _, p, _ in shown), strict=True
-                )
-                for item in to_items([message], saved_at=created_at)
-            ],
+            checked_times(
+                [
+                    item.model_copy(update={"message_id": message_id})
+                    for (message_id, _, created_at), message in zip(
+                        shown, load_messages(p for _, p, _ in shown), strict=True
+                    )
+                    for item in to_items([message], saved_at=created_at)
+                ]
+            ),
             answerable=asks.answerable.keys(),
             submitted=asks.submitted,
         )

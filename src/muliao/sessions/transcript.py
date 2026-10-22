@@ -27,6 +27,7 @@ from muliao.agent_runtime.api import (
     Attachment,
     event_indices,
     is_stopped,
+    made_up_result,
     parse_event,
     run_context_index,
     tool_attachments,
@@ -146,9 +147,28 @@ def _annotated(
     return item.model_copy(update={"ask": item.ask.model_copy(update=update)})
 
 
+def checked_times(items: list[Item]) -> list[Item]:
+    """去掉不可信的开始时间：结果早于调用开始的。这是 10-20 之前的历史——那时一整轮在结束时才一次提交，回复那一行的
+    保存时间是这一轮结束的时间，不是工具开始执行的时间。"""
+    ends = {
+        i.tool_call_id: i.at
+        for i in items
+        if i.type in ("tool_result", "tool_error") and i.tool_call_id is not None and i.at is not None
+    }
+    return [
+        item.model_copy(update={"at": None})
+        if item.type == "tool_call"
+        and item.at is not None
+        and item.tool_call_id in ends
+        and ends[item.tool_call_id] < item.at
+        else item
+        for item in items
+    ]
+
+
 def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
-    """工具结果，或参数被拒绝、交还模型重试的结果。结束时间取结果上的 timestamp（产生结果时打上）；被中断的调用
-    （outcome='interrupted'）的结果是事后补的，它的时间不是调用结束的时间，不给。"""
+    """工具结果，或参数被拒绝、交还模型重试的结果。结束时间取结果上的 timestamp（产生结果时打上）；停止、中断时
+    事后补上的结果（made_up_result），它的时间不是调用结束的时间，不给。"""
     if isinstance(part, ToolReturnPart):
         return _item(
             "tool_result",
@@ -157,7 +177,7 @@ def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
             part.tool_call_id,
             tool_attachments(part),
             tool_threads(part),
-            at=None if part.outcome == "interrupted" else part.timestamp,
+            at=None if made_up_result(part) else part.timestamp,
         )
     return _item("tool_error", part.model_response(), part.tool_name, part.tool_call_id, at=part.timestamp)
 

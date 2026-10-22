@@ -65,7 +65,7 @@ function SpanText({ span }: { span: Span | null }) {
   return span && <span className="tabular-nums">{spanLabel(span, now)}</span>
 }
 
-function ToolBlock({ tool }: { tool: ToolView }) {
+function ToolBlock({ tool, live }: { tool: ToolView; live: boolean }) {
   const status = toolStatus(tool)
   return (
     <Collapsible
@@ -73,7 +73,7 @@ function ToolBlock({ tool }: { tool: ToolView }) {
         <>
           <span className="font-mono text-foreground">{tool.name}</span>
           <span className="ml-auto flex gap-2 whitespace-nowrap text-xs">
-            <SpanText span={toolSpan(tool)} />
+            <SpanText span={toolSpan(tool, live)} />
             <span>{TOOL_STATUS_LABELS[status]}</span>
           </span>
         </>
@@ -98,9 +98,9 @@ function UserBubble({ text, attachments, pending }: { text: string; attachments:
   )
 }
 
-function StepBlock({ step }: { step: Step }) {
+function StepBlock({ step, live }: { step: Step; live: boolean }) {
   return step.kind === 'tool' ? (
-    <ToolBlock tool={step.tool} />
+    <ToolBlock tool={step.tool} live={live} />
   ) : (
     <Collapsible title="思考">
       <div className="whitespace-pre-wrap">{step.text}</div>
@@ -120,7 +120,7 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
             {running !== null && <Spinner size="sm" />}
             <span className="text-foreground">{label}</span>
             <span className="ml-auto flex gap-2 whitespace-nowrap text-xs">
-              <SpanText span={groupSpan(steps)} />
+              <SpanText span={groupSpan(steps, ctx.view === 'live')} />
               <span>{status}</span>
             </span>
           </>
@@ -128,7 +128,7 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
       >
         <div className="flex flex-col gap-2">
           {steps.map((step, i) => (
-            <StepBlock key={i} step={step} />
+            <StepBlock key={i} step={step} live={ctx.view === 'live'} />
           ))}
         </div>
       </Collapsible>
