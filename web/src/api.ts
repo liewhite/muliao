@@ -64,7 +64,6 @@ export type LiveRun = Schemas['LiveRunOut']
 
 export type Skill = Schemas['SkillDetail']
 export type Memory = Schemas['MemoryOut']
-export type Reflection = Schemas['ReflectionOut']
 export type TriggerKind = Schemas['TriggerKindOut']
 export type Precheck = Schemas['Precheck']
 /** 按 kind 区分的联合：收窄 kind 后 config 与 status 就是这种方式的类型 */
@@ -223,7 +222,6 @@ export const api = {
   memory: (agent_id: AgentId) => call('get', '/api/agents/{agent_id}/memory', { path: { agent_id } }),
   setMemory: (agent_id: AgentId, content: string) =>
     call('put', '/api/agents/{agent_id}/memory', { path: { agent_id }, body: { content } }),
-  reflections: (agent_id: AgentId) => call('get', '/api/agents/{agent_id}/reflections', { path: { agent_id } }),
 
   skills: (owner: string | null) => call('get', '/api/skills', { query: { owner } }),
   corruptSkills: (owner: AgentId | null) => call('get', '/api/skills/corrupt', { query: { owner } }),

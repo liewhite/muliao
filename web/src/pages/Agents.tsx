@@ -19,7 +19,6 @@ import { ActionButton,
   ErrorAlert,
   LinkButton,
   Loading,
-  Markdown,
   Page,
   SelectInput,
   TextAreaInput,
@@ -81,20 +80,16 @@ export function AgentList() {
   )
 }
 
-/** 表单状态：反思间隔清空时为 null（新建时表示用默认值，修改时必须填写） */
-type AgentFormInput = Omit<AgentInput, 'reflect_every'> & { reflect_every: number | null }
-
-function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentFormInput {
+function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
   if (agent) {
-    const { name, description, model, instructions, reflect_every, tool_groups } = agent
-    return { name, description, model, instructions, reflect_every, tool_groups }
+    const { name, description, model, instructions, tool_groups } = agent
+    return { name, description, model, instructions, tool_groups }
   }
   return {
     name: '',
     description: '',
     model: defaults.model,
     instructions: '',
-    reflect_every: defaults.reflect_every,
     tool_groups: defaults.default_tool_groups,
   }
 }
@@ -163,20 +158,14 @@ function ModelInput({ value, onChange }: { value: string; onChange: (v: string) 
   )
 }
 
-function updateOf(input: AgentFormInput): AgentInput {
-  const { reflect_every } = input
-  if (reflect_every === null) throw new Error('请填写反思间隔')
-  return { ...input, reflect_every }
-}
-
 function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: AgentDefaults; onSaved: (a: Agent) => void }) {
-  const [input, setInput] = useState<AgentFormInput>(() => initialInput(agent, defaults))
+  const [input, setInput] = useState<AgentInput>(() => initialInput(agent, defaults))
   const action = useAction()
-  const set = (patch: Partial<AgentFormInput>) => setInput((prev) => ({ ...prev, ...patch }))
+  const set = (patch: Partial<AgentInput>) => setInput((prev) => ({ ...prev, ...patch }))
 
   async function save() {
     await action.run(async () => {
-      const saved = agent ? await api.updateAgent(agent.id, updateOf(input)) : await api.createAgent(input)
+      const saved = agent ? await api.updateAgent(agent.id, input) : await api.createAgent(input)
       toast.success(agent ? '已保存' : '已创建')
       // 分屏时旁边的 agent 列表（以及各处的 agent 名称）跟着更新
       announceChange('agents')
@@ -206,13 +195,6 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         value={input.instructions}
         onChange={(instructions) => set({ instructions })}
         rows={8}
-      />
-      <TextInput
-        label="反思间隔（步）"
-        hint="每完成这么多步（模型回复），强制回顾一次是否需要更新 skill 和记忆"
-        type="number"
-        value={input.reflect_every === null ? '' : String(input.reflect_every)}
-        onChange={(v) => set({ reflect_every: v ? Number(v) : null })}
       />
       <ToolGroupsInput all={defaults.groups} value={input.tool_groups} onChange={(tool_groups) => set({ tool_groups })} />
       <ErrorAlert error={action.error} />
@@ -280,41 +262,12 @@ function MemoryEditor({ agentId }: { agentId: AgentId }) {
   )
 }
 
-function Reflections({ agentId }: { agentId: AgentId }) {
-  const reflections = useLoad(() => api.reflections(agentId), [agentId])
-  return (
-    <Loading state={reflections}>
-      {(list) =>
-        list.length === 0 ? (
-          <EmptyHint>还没有反思记录</EmptyHint>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {list.map((r) => (
-              <Card key={r.id}>
-                <Card.Header>
-                  <Card.Description>
-                    {formatTime(r.created_at)} · 消息 #{r.from_message_id + 1}–#{r.to_message_id}
-                  </Card.Description>
-                </Card.Header>
-                <Card.Content>
-                  <Markdown text={r.output} />
-                </Card.Content>
-              </Card>
-            ))}
-          </div>
-        )
-      }
-    </Loading>
-  )
-}
-
 const DETAIL_TABS = [
   ['config', '配置'],
   ['memory', '记忆'],
   ['skills', 'Skills'],
   ['mcp', 'MCP'],
   ['secrets', 'Secrets'],
-  ['reflections', '反思'],
 ] as const
 
 export function AgentDetail() {
@@ -379,7 +332,7 @@ export function AgentDetail() {
                     </Button>
                   </div>
                   <div className="text-muted">
-                    距下次反思：{Math.max(0, a.reflect_every - a.steps_since_reflection)} 步 · 创建于 {formatTime(a.created_at)}
+                    创建于 {formatTime(a.created_at)}
                   </div>
                 </Card.Content>
               </Card>
@@ -417,9 +370,6 @@ export function AgentDetail() {
             <Tabs.Panel id="secrets" className="flex flex-col gap-3 pt-3">
               <p className="text-sm text-muted">私有 secret 只有这个 agent 能用；同名时遮蔽公共的。</p>
               <SecretManager owner={a.id} />
-            </Tabs.Panel>
-            <Tabs.Panel id="reflections" className="pt-3">
-              <Reflections agentId={a.id} />
             </Tabs.Panel>
           </Tabs>
         )}

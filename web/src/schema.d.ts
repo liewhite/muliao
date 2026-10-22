@@ -170,23 +170,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agent_id}/reflections": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Reflections */
-        get: operations["list_reflections_api_agents__agent_id__reflections_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/skills": {
         parameters: {
             query?: never;
@@ -1081,8 +1064,6 @@ export interface components {
              * @default
              */
             instructions: string;
-            /** Reflect Every */
-            reflect_every?: number | null;
             /** Tool Groups */
             tool_groups?: string[] | null;
         };
@@ -1090,8 +1071,6 @@ export interface components {
         AgentDefaultsOut: {
             /** Model */
             model: string;
-            /** Reflect Every */
-            reflect_every: number;
             /** Groups */
             groups: components["schemas"]["ToolGroupOut"][];
             /** Default Tool Groups */
@@ -1109,12 +1088,8 @@ export interface components {
             model: string;
             /** Instructions */
             instructions: string;
-            /** Reflect Every */
-            reflect_every: number;
             /** Tool Groups */
             tool_groups: string[];
-            /** Steps Since Reflection */
-            steps_since_reflection: number;
             /**
              * Created At
              * Format: date-time
@@ -1134,8 +1109,6 @@ export interface components {
             model: string;
             /** Instructions */
             instructions: string;
-            /** Reflect Every */
-            reflect_every: number;
             /** Tool Groups */
             tool_groups: string[];
         };
@@ -1721,22 +1694,6 @@ export interface components {
             /** Other */
             other?: string | null;
         };
-        /** ReflectionOut */
-        ReflectionOut: {
-            /** Id */
-            id: number;
-            /** From Message Id */
-            from_message_id: number;
-            /** To Message Id */
-            to_message_id: number;
-            /** Output */
-            output: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
         /** RejectIn */
         RejectIn: {
             /** Reason */
@@ -2116,7 +2073,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "event" | "run" | "compaction" | "reflection" | "deliver";
+            kind: "event" | "run" | "compaction" | "deliver";
             /** Agent Id */
             agent_id: string | null;
             /** Session Id */
@@ -2689,39 +2646,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_reflections_api_agents__agent_id__reflections_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path: {
-                agent_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReflectionOut"][];
                 };
             };
             /** @description Validation Error */
