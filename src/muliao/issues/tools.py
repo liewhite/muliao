@@ -107,9 +107,8 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         very conversation. Use `backlog` for later work.
         To run issues in order, give `depends_on`: the issue is delivered only once all of them are `done` or
         `cancelled` (changes before that are only recorded), so a chain can be created as `todo` up front.
-        To break down a larger piece of work: create the steps as `backlog` issues (ordered among themselves
-        with `depends_on`), then a `todo` parent issue with the overall goal that depends on all of them, then
-        move the steps to `todo`.
+        To break down a larger piece of work: create the steps as `todo` issues (ordered among themselves with
+        `depends_on`), then right away a `todo` parent issue with the overall goal that depends on all of them.
 
         Args:
             title: One-line summary.
