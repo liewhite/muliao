@@ -41,6 +41,11 @@ class KindPolicy:
         只存 user_writable 一份。"""
         return not self.user_writable
 
+    @property
+    def deletable(self) -> bool:
+        """能单独删除：不归父会话所有的（归父会话的随它删除）。"""
+        return not self.owned_by_parent
+
     def audience(self, user_waits: bool) -> Audience:
         """这次运行的回答给谁看。"""
         if self.answers_to_agent:

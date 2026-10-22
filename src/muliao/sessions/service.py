@@ -233,7 +233,7 @@ class SessionService:
         """用户删除会话（规则见 deletion.delete_sessions）。归父会话所有的 thread 随它删除，不能单独删除。"""
         async with self._db.transaction() as s:
             session = await self._get(s, session_id)
-            if policy_of(session.kind).owned_by_parent:
+            if not policy_of(session.kind).deletable:
                 raise Conflict(
                     f"session {session_id} is a {session.kind} owned by the session that opened it; "
                     "delete that session instead"

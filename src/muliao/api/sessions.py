@@ -63,7 +63,7 @@ class SessionOut(BaseModel):
             thread=s.thread,
             kind=s.kind,
             user_writable=policy_of(s.kind).user_writable,
-            deletable=not policy_of(s.kind).owned_by_parent,
+            deletable=policy_of(s.kind).deletable,
             private=policy_of(s.kind).private,
             unread=s.unread,
             created_at=s.created_at,
