@@ -1340,6 +1340,8 @@ export interface components {
             text: string;
             /** Tool Name */
             tool_name: string | null;
+            /** Check In */
+            check_in: boolean;
             /** Tool Call Id */
             tool_call_id: string | null;
             /** Message Id */
@@ -1382,6 +1384,8 @@ export interface components {
             kind: components["schemas"]["MailKind"];
             /** Source */
             source: string | null;
+            /** Check In */
+            check_in: boolean;
             /** Content */
             content: string;
             /** Attachments */

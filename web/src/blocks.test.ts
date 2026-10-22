@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { AskView, Item } from './api'
-import { groupSteps, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
+import { foldCheckIns, groupSteps, parseSource, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
 
 const item = (type: Item['type'], text: string, tool_call_id: string | null = null, at: string | null = null): Item => ({
   at,
   type,
   text,
   tool_name: tool_call_id ? 'run_shell' : null,
+  check_in: false,
   tool_call_id,
   message_id: null,
   attachments: [],
@@ -193,8 +194,69 @@ describe('session events', () => {
   it('become their own block with the source, not part of a user bubble', () => {
     const event: Item = { ...item('event', 'job 1 finished'), tool_name: 'job:1' }
     expect(toBlocks([event, item('user', 'hi')])).toEqual([
-      { kind: 'event', source: 'job:1', text: 'job 1 finished' },
+      { kind: 'event', source: 'job:1', text: 'job 1 finished', checkIn: false, at: null },
       { kind: 'user', text: 'hi', attachments: [] },
     ])
+  })
+})
+
+describe('foldCheckIns', () => {
+  const check = (source: string, text: string, at: string): Item => ({ ...item('event', text, null, at), tool_name: source, check_in: true })
+  const ending = (source: string, text: string): Item => ({ ...item('event', text), tool_name: source })
+  const fold = (items: Item[]) => foldCheckIns(groupSteps(toBlocks(items)))
+
+  it('folds consecutive check-ins of a source with the filler replies between them into one line', () => {
+    const views = fold([
+      check('thread:t1', 'still working (1 min)', '10:01'),
+      item('assistant', '…'),
+      check('thread:t1', 'still working (2 min)', '10:02'),
+      item('assistant', ' ... '),
+      check('thread:t1', 'still working (3 min)', '10:03'),
+      ending('thread:t1', 'finished your task'),
+      item('assistant', '它做完了'),
+    ])
+    expect(views).toEqual([
+      {
+        kind: 'checks',
+        source: 'thread:t1',
+        checks: [
+          { text: 'still working (1 min)', at: '10:01' },
+          { text: 'still working (2 min)', at: '10:02' },
+          { text: 'still working (3 min)', at: '10:03' },
+        ],
+      },
+      { kind: 'event', source: 'thread:t1', text: 'finished your task', checkIn: false, at: null },
+      { kind: 'assistant', text: '它做完了' },
+    ])
+  })
+
+  it('keeps interleaved sources apart and breaks the run on anything that is not a filler', () => {
+    const views = fold([
+      check('job:3', 'running', '1'),
+      check('thread:t1', 'working', '2'),
+      item('assistant', '…'),
+      check('job:3', 'running', '3'),
+      item('assistant', '日志里有报错，我去看看'),
+      check('job:3', 'running', '4'),
+    ])
+    expect(views.map((v) => (v.kind === 'checks' ? `${v.source}×${v.checks.length}` : v.kind))).toEqual([
+      'job:3×2',
+      'thread:t1×1',
+      'assistant',
+      'job:3×1',
+    ])
+  })
+
+  it('leaves a filler reply that does not follow a check-in alone', () => {
+    expect(fold([item('user', 'hi'), item('assistant', '…')]).map((v) => v.kind)).toEqual(['user', 'assistant'])
+  })
+})
+
+describe('parseSource', () => {
+  it('reads threads and background jobs, anything else stays as is', () => {
+    expect(parseSource('thread:abc-1')).toEqual({ kind: 'thread', id: 'abc-1' })
+    expect(parseSource('job:12')).toEqual({ kind: 'job', id: 12 })
+    expect(parseSource('job:x')).toEqual({ kind: 'other', source: 'job:x' })
+    expect(parseSource('webhook')).toEqual({ kind: 'other', source: 'webhook' })
   })
 })

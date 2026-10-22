@@ -16,7 +16,9 @@ import {
   sessionRoute,
 } from '../api'
 import {
+  foldCheckIns,
   groupSteps,
+  parseSource,
   stepAttachments,
   stepThreads,
   unlinkedThreads,
@@ -24,6 +26,7 @@ import {
   toBlocks,
   toolStatus,
   type AskBlock as AskBlockData,
+  type CheckIn,
   type Step,
   type ToolStatus,
   type ToolView,
@@ -65,13 +68,15 @@ function IssueTitle({ session }: { session: Session }) {
   )
 }
 
-function Collapsible({ title, children }: { title: ReactNode; children: ReactNode }) {
+/** lead：放在展开按钮之前、自己可以点的内容（如指向 thread 的链接），不能嵌在按钮里 */
+function Collapsible({ title, children, lead }: { title: ReactNode; children: ReactNode; lead?: ReactNode }) {
   return (
     <Disclosure
       className="max-w-[88%] self-start rounded-xl border border-dashed border-separator px-3 py-1.5 text-sm text-muted"
     >
-      <Disclosure.Heading>
-        <Disclosure.Trigger className="flex w-full items-center gap-2 text-left">
+      <Disclosure.Heading className="flex items-center gap-2">
+        {lead}
+        <Disclosure.Trigger className="flex min-w-0 flex-1 items-center gap-2 text-left">
           {title}
           <Disclosure.Indicator />
         </Disclosure.Trigger>
@@ -201,19 +206,71 @@ function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) 
   }
 }
 
-/** 会话事件（后台任务完成、运行中的检查……）：不是用户说的话，单独显示，默认收起内容 */
-function EventNote({ source, text }: { source: string; text: string }) {
+/** 事件来源的可读名称：thread 显示名字与 agent（可点开），后台任务显示编号 */
+function SourceLabel({ source, ctx }: { source: string; ctx: SessionContext }) {
+  const parsed = parseSource(source)
+  switch (parsed.kind) {
+    case 'job':
+      return <span className="shrink-0 text-foreground">后台任务 #{parsed.id}</span>
+    case 'other':
+      return <span className="shrink-0 font-mono text-foreground">{parsed.source}</span>
+    case 'thread': {
+      const thread = ctx.threads.get(parsed.id)
+      if (!thread && ctx.view === 'history') return <span className="shrink-0">thread（已删除）</span>
+      return (
+        <Link to={sessionRoute(parsed.id)} className="flex min-w-0 shrink items-center gap-1 text-accent hover:underline">
+          <GitBranch className="size-3.5 shrink-0" />
+          <span className="truncate">
+            {thread ? `${thread.thread ?? thread.title}（${agentLabel(ctx.agents, thread.agent_id)}）` : 'thread'}
+          </span>
+        </Link>
+      )
+    }
+  }
+}
+
+/** 会话事件（后台任务完成、thread 交回结果……）：不是用户说的话，单独显示，默认收起内容 */
+function EventNote({ lead, text }: { lead: ReactNode; text: string }) {
   return (
     <Collapsible
-      title={
+      lead={
         <>
           <BellDot className="size-3.5 shrink-0" />
-          <span className="font-mono text-foreground">{source}</span>
-          <span className="truncate">{text.split('\n', 1)[0]}</span>
+          {lead}
         </>
       }
+      title={<span className="truncate">{text.split('\n', 1)[0]}</span>}
     >
       <pre className={CODE_BLOCK}>{text}</pre>
+    </Collapsible>
+  )
+}
+
+/** 同一来源连续的运行中检查（blocks.foldCheckIns）：一行汇总，展开看每次检查 */
+function CheckInsNote({ source, checks, ctx }: { source: string; checks: CheckIn[]; ctx: SessionContext }) {
+  const last = checks[checks.length - 1].at
+  return (
+    <Collapsible
+      lead={
+        <>
+          <BellDot className="size-3.5 shrink-0" />
+          <SourceLabel source={source} ctx={ctx} />
+        </>
+      }
+      title={
+        <span className="truncate">
+          仍在进行 · 已检查 {checks.length} 次{last && ` · 最近 ${formatTime(last)}`}
+        </span>
+      }
+    >
+      <div className="flex flex-col gap-2">
+        {checks.map((c, i) => (
+          <div key={i} className="flex flex-col gap-1">
+            {c.at && <span className="text-xs">{formatTime(c.at)}</span>}
+            <pre className={CODE_BLOCK}>{c.text}</pre>
+          </div>
+        ))}
+      </div>
     </Collapsible>
   )
 }
@@ -221,7 +278,7 @@ function EventNote({ source, text }: { source: string; text: string }) {
 function Blocks({ items, ctx }: { items: Item[]; ctx: SessionContext }) {
   return (
     <>
-      {groupSteps(toBlocks(items)).map((v, i) => {
+      {foldCheckIns(groupSteps(toBlocks(items))).map((v, i) => {
         switch (v.kind) {
           case 'ask':
             return <AskBlock key={i} block={v.ask} ctx={ctx} />
@@ -235,7 +292,9 @@ function Blocks({ items, ctx }: { items: Item[]; ctx: SessionContext }) {
           case 'user':
             return <UserBubble key={i} text={v.text} attachments={v.attachments} />
           case 'event':
-            return <EventNote key={i} source={v.source} text={v.text} />
+            return <EventNote key={i} lead={<SourceLabel source={v.source} ctx={ctx} />} text={v.text} />
+          case 'checks':
+            return <CheckInsNote key={i} source={v.source} checks={v.checks} ctx={ctx} />
           case 'assistant':
             return (
               <div key={i} className="max-w-[88%] self-start rounded-2xl rounded-bl-md bg-surface px-3.5 py-2.5 shadow-sm">
@@ -280,18 +339,22 @@ function History({ items, compactions, ctx }: { items: Item[]; compactions: Comp
 }
 
 /** 显示在历史之后的信件：排队中的显示为待处理，最近一次停止丢弃的划掉 */
-function MailNote({ mail }: { mail: Mail }) {
+function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
   const discarded = mail.state === 'discarded'
   return (
     <div className={`flex flex-col gap-1.5 ${discarded ? 'line-through opacity-50' : ''}`}>
       {mail.kind === 'event' ? (
-        <EventNote source={mail.source ?? '?'} text={mail.content} />
+        mail.check_in ? (
+          <CheckInsNote source={mail.source ?? '?'} checks={[{ text: mail.content, at: mail.created_at }]} ctx={ctx} />
+        ) : (
+          <EventNote lead={<SourceLabel source={mail.source ?? '?'} ctx={ctx} />} text={mail.content} />
+        )
       ) : mail.kind === 'answer' ? (
         Object.values(mail.answers).map((result, i) =>
           result.tool === 'ask_user' ? (
             <AnsweredQuestions key={i} answers={result.result.answers} />
           ) : (
-            <EventNote key={i} source="agent 的回答" text={result.result.text} />
+            <EventNote key={i} lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={result.result.text} />
           ),
         )
       ) : (
@@ -722,7 +785,7 @@ export default function SessionView() {
               )}
               <History items={d.items} compactions={d.compactions} ctx={ctx} />
               {d.mail.map((m) => (
-                <MailNote key={m.id} mail={m} />
+                <MailNote key={m.id} mail={m} ctx={ctx} />
               ))}
               {d.run && <RunStatus run={d.run} onRetry={(tid) => void action.run(() => api.retryTask(tid)).then(() => detail.reload())} />}
               {shownLive.length > 0 && (

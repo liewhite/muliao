@@ -27,7 +27,8 @@ export interface AskBlock {
 
 export type Block =
   | { kind: 'user'; text: string; attachments: Attachment[] }
-  | { kind: 'event'; source: string; text: string }
+  /** checkIn：运行中检查（工作还在进行，后端显式标记）；at：交给 agent 的时间 */
+  | { kind: 'event'; source: string; text: string; checkIn: boolean; at: string | null }
   | { kind: 'assistant'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolView }
@@ -36,7 +37,15 @@ export type Block =
 
 /** 过程步骤：思考与工具调用。连续的步骤收进一个折叠组，回答与说明文字留在组外 */
 export type Step = Extract<Block, { kind: 'thinking' | 'tool' }>
-export type View = Exclude<Block, Step> | { kind: 'process'; steps: Step[] }
+/** 同一来源的一串运行中检查（foldCheckIns） */
+export interface CheckIn {
+  text: string
+  at: string | null
+}
+export type View =
+  | Exclude<Block, Step>
+  | { kind: 'process'; steps: Step[] }
+  | { kind: 'checks'; source: string; checks: CheckIn[] }
 
 /** 把扁平条目整理成展示块：工具调用与其结果（按 tool_call_id）合并为一块。 */
 export function toBlocks(items: Item[]): Block[] {
@@ -58,7 +67,7 @@ export function toBlocks(items: Item[]): Block[] {
         break
       case 'event':
         if (item.tool_name === null) throw new Error('event item without a source')
-        blocks.push({ kind: 'event', source: item.tool_name, text: item.text })
+        blocks.push({ kind: 'event', source: item.tool_name, text: item.text, checkIn: item.check_in, at: item.at })
         break
       case 'stopped':
         blocks.push({ kind: 'stopped' })
@@ -140,6 +149,48 @@ export function groupSteps(blocks: Block[]): View[] {
     else views.push({ kind: 'process', steps: [block] })
   }
   return views
+}
+
+/** agent 对检查只回的占位答复（全局约定：没有新进展时回“…”），合并检查时一起收起 */
+const isFiller = (v: View) => v.kind === 'assistant' && ['', '…', '...'].includes(v.text.trim())
+
+/**
+ * 连续的运行中检查（夹在中间的占位答复“…”一并收起）按来源各合成一条，按该来源第一次出现的位置排。
+ * 别的任何块（用户消息、结局事件、工具调用、实际回答）都会断开这一串；结局事件照常单独显示
+ */
+export function foldCheckIns(views: View[]): View[] {
+  const folded: View[] = []
+  let run: Map<string, CheckIn[]> | null = null
+  for (const view of views) {
+    if (view.kind === 'event' && view.checkIn) {
+      run ??= new Map()
+      const checks = run.get(view.source)
+      const check = { text: view.text, at: view.at }
+      if (checks) checks.push(check)
+      else {
+        const fresh = [check]
+        run.set(view.source, fresh)
+        folded.push({ kind: 'checks', source: view.source, checks: fresh })
+      }
+    } else if (run !== null && isFiller(view)) {
+      continue
+    } else {
+      run = null
+      folded.push(view)
+    }
+  }
+  return folded
+}
+
+/** 事件来源（信件的 source）的含义：thread:<子会话 id>、job:<后台任务号> */
+export type EventSource = { kind: 'thread'; id: string } | { kind: 'job'; id: number } | { kind: 'other'; source: string }
+
+export function parseSource(source: string): EventSource {
+  const thread = /^thread:(.+)$/.exec(source)
+  if (thread) return { kind: 'thread', id: thread[1] }
+  const job = /^job:(\d+)$/.exec(source)
+  if (job) return { kind: 'job', id: Number(job[1]) }
+  return { kind: 'other', source }
 }
 
 /** 一组步骤里委派开出或续写的 thread（子会话 id），按出现顺序、去重 */
