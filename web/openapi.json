@@ -4387,6 +4387,7 @@
             "title": "At"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "at"
@@ -4968,6 +4969,7 @@
             "title": "Cron"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "cron"

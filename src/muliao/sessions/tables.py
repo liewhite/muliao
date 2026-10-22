@@ -12,13 +12,16 @@ from muliao.platform.tables import agent_ref
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.origins import Origin
 
+# 会话标题的列宽：发送方给的标题过长时由新建会话的入口（inbound.create_session）截断
+TITLE_LENGTH = 200
+
 
 class Session(Base):
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     agent_id: Mapped[str] = mapped_column(agent_ref(), index=True)
-    title: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(TITLE_LENGTH))
     origin: Mapped[Origin] = mapped_column(StrEnumType(Origin))
     # 具体的发送方（sessions.inbound）：触发器 id、issue id、委派方（父）会话 id；用户开的会话为 None
     origin_ref: Mapped[str | None] = mapped_column(String(64))

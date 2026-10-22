@@ -33,6 +33,7 @@ from muliao.issues.rules import (
     Dependency,
     IssueView,
     Snapshot,
+    assignee_name,
     cycle_through,
     delivery_message,
     recipient,
@@ -62,7 +63,6 @@ from muliao.sessions.api import (
     WorkState,
     keyed_sessions_among,
     receive_command_in,
-    session_in,
 )
 
 log = logging.getLogger(__name__)
@@ -458,7 +458,7 @@ class IssueService:
                 s,
                 Notify(
                     agent_id=actor,
-                    title=f"#{issue.id} 指派给你：{issue.title}"[:200],
+                    title=f"#{issue.id} 指派给你：{issue.title}",
                     body=f"状态 {issue.status}",
                     session_id=session_id,
                 ),
@@ -471,14 +471,9 @@ class IssueService:
         """动作是不是 agent 在它自己这个 issue 会话里做的：是则返回它（这次动态不投回那里）。"""
         if actor is None or session_id is None:
             return None
-        info = await session_in(s, session_id)
-        if (
-            info is None
-            or info.agent_id != actor
-            or (info.origin, info.origin_ref) != (Origin.ISSUE, str(issue.id))
-        ):
-            return None
-        return actor
+        ref = str(issue.id)
+        its_session = (await keyed_sessions_among(s, Origin.ISSUE, [ref]))[ref].get(actor)
+        return actor if its_session is not None and its_session.id == session_id else None
 
     async def _deliver_in(
         self,
@@ -501,7 +496,7 @@ class IssueService:
             origin=Origin.ISSUE,
             origin_ref=str(issue.id),
             content=delivery_message(letter),
-            session=SessionKey(agent_id=agent, title=f"#{issue.id} {issue.title}"[:200]),
+            session=SessionKey(agent_id=agent, title=f"#{issue.id} {issue.title}"),
             awaited=False,
         )
         delivery = self._messaging.send_in(s, await receive_command_in(s, inbound))
@@ -524,9 +519,7 @@ class IssueService:
             return USER if agent_id is None else names[agent_id]
 
         def assignee(value: Any) -> str:
-            if value is None:
-                return "unassigned"
-            return USER if value == USER else names[value]
+            return "unassigned" if value is None else assignee_name(value, names)
 
         def issues(ids: list[int]) -> str:
             return ", ".join(f"#{i}" for i in ids) or "none"

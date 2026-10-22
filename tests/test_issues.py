@@ -131,6 +131,19 @@ async def test_changes_before_delivery_still_create_only_one_session(container, 
     assert ["created the issue" in mails[0], "first" in mails[1], "second" in mails[2]] == [True] * 3
 
 
+async def test_a_long_issue_title_is_shortened_to_fit_the_session_title(container, make_agent):
+    """issue 标题可以比会话标题的列宽长：截断由新建会话的入口统一做，issue 这边原样给出。"""
+    from muliao.sessions.tables import TITLE_LENGTH
+
+    alpha = (await make_agent()).id
+    issue = await container.issues.create(None, owner=alpha, title="x" * 300, status=TODO, assignee=alpha)
+    await deliver(container)
+    [session] = await _issue_sessions(container)
+    assert len(session.title) == TITLE_LENGTH
+    assert session.title.startswith(f"#{issue.id} xxx")
+    assert session.title.endswith("x…")
+
+
 async def test_an_agent_acting_in_its_issue_session_does_not_deliver_to_itself(container, make_agent):
     alpha = (await make_agent()).id
     issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)

@@ -7,7 +7,7 @@ from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.api import AgentNames, AgentService
 from muliao.errors import InvalidInput
-from muliao.issues.rules import USER
+from muliao.issues.rules import USER, assignee_name
 from muliao.issues.service import IssueService, IssueWork
 from muliao.issues.tables import Issue, IssuePriority, IssueStatus
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -49,7 +49,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             owner=None if issue.owner_agent_id is None else names[issue.owner_agent_id],
             status=issue.status,
             priority=issue.priority,
-            assignee=None if assignee is None else USER if assignee == USER else names[assignee],
+            assignee=None if assignee is None else assignee_name(assignee, names),
             assignee_session=work.assignee_session,
             stalled=work.stalled,
             depends_on=[d.id for d in work.depends_on],

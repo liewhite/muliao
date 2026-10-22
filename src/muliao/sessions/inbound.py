@@ -32,7 +32,7 @@ from muliao.sessions.mailbox import post_in, queued_among, queued_in
 from muliao.sessions.origins import Origin
 from muliao.sessions.pending import UserAnswered, pending_questions
 from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
-from muliao.sessions.tables import Mail, MailKind, Session
+from muliao.sessions.tables import TITLE_LENGTH, Mail, MailKind, Session
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,11 @@ _TITLE_MAX = 60
 def default_title(text: str) -> str:
     """没给标题的新会话的标题：内容的第一行，过长时截断。"""
     first = text.strip().splitlines()[0] if text.strip() else ""
-    return first if len(first) <= _TITLE_MAX else first[: _TITLE_MAX - 1] + "…"
+    return _shorten(first, _TITLE_MAX)
+
+
+def _shorten(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 class DerivedTitle(Enum):
@@ -151,7 +155,8 @@ async def create_session(
     session = Session(
         id=new_id() if spec.id is None else spec.id,
         agent_id=spec.agent_id,
-        title=spec.title,
+        # 发送方给的标题（如 issue 标题）可能比列宽长，在这里统一截断
+        title=_shorten(spec.title, TITLE_LENGTH),
         origin=origin,
         # 委派的发起方即 parent_session_id
         origin_ref=None if origin == Origin.DELEGATION else origin_ref,
