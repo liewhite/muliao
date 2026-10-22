@@ -24,7 +24,7 @@ from muliao.sessions.tables import Mail, MailState, Session
 log = logging.getLogger(__name__)
 
 
-async def unsettled_in(s: AsyncSession, session_id: str, states: Sequence[MailState]) -> list[Mail]:
+async def _unsettled_in(s: AsyncSession, session_id: str, states: Sequence[MailState]) -> list[Mail]:
     """会话里带关联、还没结清的信件。"""
     rows = await s.scalars(
         select(Mail)
@@ -39,7 +39,7 @@ async def unsettled_in(s: AsyncSession, session_id: str, states: Sequence[MailSt
     return list(rows.all())
 
 
-async def settle_in(
+async def _settle_in(
     s: AsyncSession,
     queue: TaskQueue,
     session: Session,
@@ -66,6 +66,50 @@ async def settle_in(
     return correlations
 
 
+async def settle_finished_in(
+    s: AsyncSession, queue: TaskQueue, session: Session, answer: str, attachments: Sequence[Attachment]
+) -> list[str]:
+    """运行正常结束且工作做完（sessions.finish）：已交给模型、还没结清的委派以「完成」结清，带上回答与附件。委派可能
+    跨几次运行：停在挂起的调用上、或还有工作没做完时，由之后那次做完的运行结清。"""
+    return await _settle_in(
+        s,
+        queue,
+        session,
+        await _unsettled_in(s, session.id, [MailState.CONSUMED]),
+        Ending.FINISHED,
+        answer,
+        attachments,
+    )
+
+
+async def settle_stopped_in(
+    s: AsyncSession, queue: TaskQueue, session: Session, answer: str
+) -> tuple[list[str], list[int]]:
+    """用户停止（sessions.halt）：交给这个会话、还没结清的委派（排着的与已交给模型的）以「停止」结清，带上最近的
+    回答；然后清空信箱（mailbox.discard_in）。返回结清的关联与丢弃的信件。"""
+    settled = await _settle_in(
+        s,
+        queue,
+        session,
+        await _unsettled_in(s, session.id, [MailState.QUEUED, MailState.CONSUMED]),
+        Ending.STOPPED,
+        answer,
+    )
+    return settled, await discard_in(s, session.id)
+
+
+async def settle_deleted_in(s: AsyncSession, queue: TaskQueue, session: Session) -> list[str]:
+    """会话被删除（sessions.deletion）：交给它、还没结清的委派（排着的与已交给模型的）以「被删除」结清。"""
+    return await _settle_in(
+        s,
+        queue,
+        session,
+        await _unsettled_in(s, session.id, [MailState.QUEUED, MailState.CONSUMED]),
+        Ending.DELETED,
+        "",
+    )
+
+
 def failure_of(run: Task) -> str:
     """失败的运行的错误说明；队列契约保证 failed 一定带 error。"""
     if run.status != TaskStatus.FAILED or run.error is None:
@@ -86,12 +130,12 @@ async def settle_failure_in(s: AsyncSession, queue: TaskQueue, session: Session,
 
     两条执行路径共用这一个函数：队列记下最终失败时（RunHandler.failed_in），以及它没做成时信箱对账补做
     （reconcile_failures）。"""
-    stranded = [m for m in await unsettled_in(s, session.id, [MailState.QUEUED]) if handed_to(m, run)]
-    settled = await settle_in(
+    stranded = [m for m in await _unsettled_in(s, session.id, [MailState.QUEUED]) if handed_to(m, run)]
+    settled = await _settle_in(
         s,
         queue,
         session,
-        [*await unsettled_in(s, session.id, [MailState.CONSUMED]), *stranded],
+        [*await _unsettled_in(s, session.id, [MailState.CONSUMED]), *stranded],
         Ending.FAILED,
         failure_of(run),
     )

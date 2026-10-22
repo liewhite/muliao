@@ -14,16 +14,14 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
-import anyio
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import CorruptState, NotFound
-from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.history import since_last_response
@@ -35,7 +33,6 @@ from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Sessio
 log = logging.getLogger(__name__)
 
 _SOURCE_MAX = 100
-_RECONCILE_SECONDS = 30.0
 
 
 async def post_in(
@@ -249,49 +246,6 @@ async def has_queued_from(s: AsyncSession, session_id: str, source: str) -> bool
             )
         )
     )
-
-
-class MailReconciler:
-    """定期对账：有信件在排队、却没有被及时唤醒的会话（投递时的事务失败、进程重启），按同一条规则补上。"""
-
-    def __init__(
-        self,
-        db: Database,
-        queue: TaskQueue,
-        settle_failures: Callable[[], Awaitable[list[str]]],
-        interval_seconds: float = _RECONCILE_SECONDS,
-    ):
-        self._db = db
-        self._queue = queue
-        # 最终失败的运行没能结清的委派（settlement.reconcile_failures），同一个对账节奏补做
-        self._settle_failures = settle_failures
-        self._interval = interval_seconds
-
-    async def reconcile(self) -> int:
-        """补投递的运行数。先补做失败的结清再唤醒：交给过失败运行、还排着的委派信件先退出信箱，不被唤醒的新运行
-        取走。"""
-        settled = await self._settle_failures()
-        if settled:
-            # 只有收尾钩子失败时才会走到这里
-            log.warning("reconcile settled delegations of failed runs", extra={"session_ids": settled})
-        async with self._db.transaction() as s:
-            waiting = (
-                await s.scalars(
-                    select(Session)
-                    .where(Session.id.in_(select(Mail.session_id).where(Mail.state == MailState.QUEUED)))
-                    .order_by(Session.id)
-                )
-            ).all()
-            woken = [session.id for session in waiting if await wake_in(s, self._queue, session)]
-        if woken:
-            # 投信时与运行结束（含最终失败）时都已唤醒过；到这里多半是那次没做成（事务失败、重启），补了什么要可查
-            log.info("reconcile woke consumers for queued mail", extra={"session_ids": woken})
-        return len(woken)
-
-    async def run_forever(self) -> None:
-        while True:
-            await self.reconcile()
-            await anyio.sleep(self._interval)
 
 
 async def post_check_in(

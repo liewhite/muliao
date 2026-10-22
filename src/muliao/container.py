@@ -71,9 +71,8 @@ from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt, SessionStopper
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveRuns
-from muliao.sessions.mailbox import MailReconciler
+from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.service import SessionService
-from muliao.sessions.settlement import reconcile_failures
 from muliao.sessions.steps import Steps
 from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.threads import Threads
@@ -508,7 +507,7 @@ def assemble(
         worker=worker,
         messaging=messaging,
         threads=threads,
-        mail=MailReconciler(db, queue, lambda: reconcile_failures(db, queue)),
+        mail=MailReconciler(db, queue),
         jobs=jobs,
         thread_checks=thread_checks,
         work=WorkWatcher([jobs, thread_checks], settings.runtime.job_check_seconds),

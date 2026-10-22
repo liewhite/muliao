@@ -26,14 +26,14 @@ from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.delegation import threads_of_holds_in
-from muliao.sessions.events import Ending, SessionStopped, StopThread
+from muliao.sessions.events import SessionStopped, StopThread
 from muliao.sessions.history import latest_answer, marked_stopped, since_last_response, stopped_results
 from muliao.sessions.holds import clear_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
-from muliao.sessions.mailbox import discard_in, latest_run
-from muliao.sessions.settlement import settle_in, unsettled_in
+from muliao.sessions.mailbox import latest_run
+from muliao.sessions.settlement import settle_stopped_in
 from muliao.sessions.stopping import StoppableRuns
-from muliao.sessions.tables import MailState, Message, Session
+from muliao.sessions.tables import Message, Session
 
 log = logging.getLogger(__name__)
 
@@ -90,17 +90,11 @@ class SessionHalt:
                 t.id for t in await self._queue.finish_pending_in(s, session_lane(session_id), RUN_TASK)
             ]
             cleared = await clear_in(s, session_id)
-            settled = await settle_in(
-                s,
-                self._queue,
-                session,
-                await unsettled_in(s, session_id, [MailState.QUEUED, MailState.CONSUMED]),
-                Ending.STOPPED,
-                await latest_answer(s, session_id),
+            settled, discarded = await settle_stopped_in(
+                s, self._queue, session, await latest_answer(s, session_id)
             )
-            discarded = await discard_in(s, session_id)
             # 被清掉的委派：做这些工作的 thread 一起停下（逐层，由它们自己的停止继续）
-            threads = await threads_of_holds_in(s, cleared)
+            threads = list(dict.fromkeys((await threads_of_holds_in(s, cleared)).values()))
             for thread_id in threads:
                 self._messaging.send_in(s, StopThread(session_id=thread_id))
             self._messaging.publish_in(s, SessionStopped(session_id=session_id, cleared=cleared))

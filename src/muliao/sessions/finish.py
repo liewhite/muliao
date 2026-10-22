@@ -13,14 +13,13 @@ from muliao.agents.api import AgentInfo, agent_in
 from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
-from muliao.sessions.events import Ending
 from muliao.sessions.events import RunEnded as RunEndedEvent
 from muliao.sessions.holds import has_active_in
 from muliao.sessions.kinds import policy_of
 from muliao.sessions.mailbox import queued_in, wake_in
-from muliao.sessions.settlement import settle_in, unsettled_in
+from muliao.sessions.settlement import settle_finished_in
 from muliao.sessions.steps import RunState
-from muliao.sessions.tables import MailState, Session
+from muliao.sessions.tables import Session
 
 
 @dataclass(frozen=True)
@@ -89,15 +88,8 @@ class RunFinisher:
                     ),
                 )
             if not end.stopped and not end.paused and await self._work_done(s, session.id):
-                # 处理中的委派结清。委派可能跨几次运行：停在挂起的调用上、或还有工作没做完时，由之后那次做完的运行结清
-                await settle_in(
-                    s,
-                    self._queue,
-                    session,
-                    await unsettled_in(s, session.id, [MailState.CONSUMED]),
-                    Ending.FINISHED,
-                    end.answer,
-                    shared_attachments(state.messages),
+                await settle_finished_in(
+                    s, self._queue, session, end.answer, shared_attachments(state.messages)
                 )
             await wake_in(s, self._queue, session, finished=state.run_id)
 

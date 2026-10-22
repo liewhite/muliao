@@ -123,15 +123,18 @@ async def hand_back_in(
         )
 
 
-async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> list[str]:
-    """做这些委派的 thread（由以 holder 为关联 id 的信件推出），按出现顺序去重。不是委派的占用（后台任务）没有
-    这样的信件。"""
+async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> dict[str, str]:
+    """委派占用者 → 做这项委派的 thread（「委派 holder → thread」的唯一推导：由以 holder 为关联 id 的信件推出，
+    一项委派只投给一个 thread），按信件先后排列。不是委派的占用（后台任务）没有这样的信件，不在结果里。"""
     if not holders:
-        return []
-    rows = await s.scalars(
-        select(Mail.session_id).where(Mail.correlation.in_(list(holders))).order_by(Mail.id)
+        return {}
+    rows = await s.execute(
+        select(Mail.correlation, Mail.session_id).where(Mail.correlation.in_(list(holders))).order_by(Mail.id)
     )
-    return list(dict.fromkeys(rows.all()))
+    threads: dict[str, str] = {}
+    for holder, thread_id in rows.all():
+        threads.setdefault(holder, thread_id)
+    return threads
 
 
 class ThreadChecks:
@@ -145,19 +148,24 @@ class ThreadChecks:
     async def check(self) -> int:
         posted = 0
         async with self._db.transaction() as s:
-            rows = (
-                await s.execute(
-                    select(SessionHold, Mail.session_id)
-                    .join(Mail, Mail.correlation == SessionHold.holder)
+            holds = (
+                await s.scalars(
+                    select(SessionHold)
                     .where(SessionHold.status == HoldStatus.ACTIVE)
                     .order_by(SessionHold.id)
                 )
             ).all()
+            threads = await threads_of_holds_in(s, [hold.holder for hold in holds])
             due: dict[tuple[str, str], SessionHold] = {}
             # 按发起会话取一次（一个会话可能同时有几个委派）
             pending: dict[str, Collection[str]] = {}
-            for hold, child_id in rows:
+            for hold in holds:
+                child_id = threads.get(hold.holder)
+                if child_id is None:
+                    # 不是委派的占用（后台任务）
+                    continue
                 if (hold.session_id, child_id) in due:
+                    # 同一个发起方对同一个 thread 的几项委派，检查一次
                     continue
                 if hold.call_id is not None:
                     if hold.session_id not in pending:
@@ -177,7 +185,7 @@ class ThreadChecks:
             for (_, child_id), hold in due.items():
                 child = children.get(child_id)
                 if child is None:
-                    # 不变量断言：信件随会话删除，join 不会给出已删除的 thread
+                    # 不变量断言：信件随会话删除，推导不会给出已删除的 thread
                     raise RuntimeError(f"delegation {hold.holder} has mail in a missing thread {child_id}")
                 if child.agent_id not in agents:
                     agents[child.agent_id] = await agent_in(s, child.agent_id)

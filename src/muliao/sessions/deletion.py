@@ -12,12 +12,12 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.activity import blocking_deletion_in, sessions_blocking_agent_deletion_in
-from muliao.sessions.events import AgentSessionsCleared, Ending, SessionDeleted
+from muliao.sessions.events import AgentSessionsCleared, SessionDeleted
 from muliao.sessions.halt import StopSession
 from muliao.sessions.lanes import agent_deleting_lane
 from muliao.sessions.ownership import owned_threads_in
-from muliao.sessions.settlement import settle_in, unsettled_in
-from muliao.sessions.tables import MailState, Session
+from muliao.sessions.settlement import settle_deleted_in
+from muliao.sessions.tables import Session
 
 log = logging.getLogger(__name__)
 
@@ -43,14 +43,7 @@ async def delete_sessions(
         )
     for session in doomed.values():
         # 交给被删会话、还没结清的工作交回「被删除」
-        await settle_in(
-            s,
-            queue,
-            session,
-            await unsettled_in(s, session.id, [MailState.QUEUED, MailState.CONSUMED]),
-            Ending.DELETED,
-            "",
-        )
+        await settle_deleted_in(s, queue, session)
     for session in doomed.values():
         await s.delete(session)
         messaging.publish_in(s, SessionDeleted(session_id=session.id, agent_id=session.agent_id))
