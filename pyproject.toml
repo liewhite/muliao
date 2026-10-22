@@ -10,7 +10,9 @@ requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
     "alembic>=1.20.0",
-    "anthropic>=1.15.0",
+    # <2：anthropic 2.x 把 BetaMessageParam 等改成 Union 类型别名，当前 pydantic-ai 实例化它们会报
+    # "Cannot instantiate typing.Union"（2026-10-22 线上两次全挂）。等 pydantic-ai 支持 2.x 后再放开。
+    "anthropic>=1.15.0,<2",
     "anyio>=4.15.1",
     "croniter>=6.2.4",
     "cryptography>=50.0.2",
