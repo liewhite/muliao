@@ -363,7 +363,8 @@ class AgentRuntime:
         """一次带工具的模型运行的外壳（会话的逐步运行与没有历史的运行共用）：记账与日志（_billed）、工具失败信息里
         不带参数、启动 pydantic-ai 的运行并确认它从用户 prompt 节点开始，交给 steer 从那个节点驱动到结束，最后取结果。
 
-        steer 拿到的 scope（driven）是这次驱动自己的一份，notices 要从它读，不是调用方传进来的那份（notices 为空，工具组连接时往里加）：压缩后续跑会重新连接工具组。"""
+        steer 拿到的 scope（driven）是这次驱动自己的一份（notices 为空，工具组连接时往里加），notices 要从它读而不是
+        调用方那份：压缩后续跑会重新连接工具组。"""
         scope = replace(scope, notices=[])
         ctx = {
             "agent": scope.agent_id,
