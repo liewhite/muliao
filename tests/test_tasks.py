@@ -271,7 +271,7 @@ async def test_startup_reports_unfinished_tasks_of_kinds_without_a_handler(conta
                 ),
             ]
         )
-    await container._check_task_kinds()  # noqa: SLF001
+    await container.worker.check_kinds()
     [record] = [r for r in caplog.records if "no handler" in r.message]
     assert record.levelname == "ERROR" and record.kinds == ["renamed"]
 

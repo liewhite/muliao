@@ -34,6 +34,7 @@ from pathlib import Path
 
 import anyio
 
+from muliao.agents.ids import AGENT_ID
 from muliao.agents.ownership import scope_of
 from muliao.errors import CorruptState, InvalidInput, NotFound
 
@@ -50,8 +51,6 @@ _PUBLIC = "public"
 _AGENTS = "agents"
 _FIELD = "\x1f"
 _REV = re.compile(r"^[0-9a-f]{40}$")
-# 与 ids.new_agent_id 的格式一致
-_AGENT_ID = re.compile(r"^[0-9a-f]{12}$")
 _TMP = ".tmp"
 # 资源文件（相对仓库根目录的 glob，`*` 不跨目录）：见模块说明的布局。reconcile 与 recover 只处理它们。
 # 文件名由各 store 拥有（MEMORY_FILE、SKILL_FILE……），这里是副本，由 test_every_file_the_stores_write_is_in_the_resource_layout 守护
@@ -204,7 +203,7 @@ class ResourceRepo:
         """
         if owner is None:
             return self.root / _PUBLIC
-        if not _AGENT_ID.fullmatch(owner):
+        if not AGENT_ID.fullmatch(owner):
             raise InvalidInput(f"invalid agent id {owner!r}")
         return self.root / _AGENTS / owner
 

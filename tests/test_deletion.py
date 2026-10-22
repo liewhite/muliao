@@ -85,7 +85,7 @@ async def test_a_workspace_that_cannot_be_fully_removed_does_not_block_deleting_
     assert "workspace of a deleted agent could not be fully removed" in caplog.text
     # 残留由启动检查列进日志
     caplog.clear()
-    await container._check_orphan_resources()
+    await container.agents.verify_stored()
     [leftover] = [r for r in caplog.records if r.getMessage() == "workspaces of deleted agents remain"]
     assert leftover.agent_ids == [agent.id]
 
@@ -96,7 +96,7 @@ async def test_the_startup_check_does_not_report_an_agent_still_being_deleted(co
     # 只标记、不投递：它的目录还在是正常的，删除流程会删
     await container.agent_lifecycle.delete(agent.id, author="user")
 
-    await container._check_orphan_resources()
+    await container.agents.verify_stored()
 
     assert "deleted agents remain" not in caplog.text
 

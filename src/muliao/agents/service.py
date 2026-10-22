@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.active import active_row_in
+from muliao.agents.ids import new_agent_id
 from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import new_agent_name, normalize_agent_name
 from muliao.agents.prompts import PromptStore
@@ -22,7 +23,6 @@ from muliao.agents.tables import Agent
 from muliao.agents.tool_catalog import ToolGroupInfo
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
-from muliao.platform.ids import new_agent_id
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class AgentService:
     def workspace(self, agent_id: str) -> Path:
         return self._workspaces_dir / agent_id
 
-    def workspace_owners(self) -> list[str]:
+    def _workspace_owners(self) -> list[str]:
         """有工作目录的 agent id。"""
         root = self._workspaces_dir
         return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
@@ -167,7 +167,9 @@ class AgentService:
 
     async def verify_stored(self) -> None:
         """启动检查：已存 agent 的模型必须能被当前配置解析、选用的工具组必须都可用，与新建、修改时同一套规则。
-        配置改动（删 provider、改名、去掉 [web]）在启动时暴露，而不是散落到每个任务里失败。正在删除的不查。"""
+        配置改动（删 provider、改名、去掉 [web]）在启动时暴露，而不是散落到每个任务里失败。正在删除的不查。
+        先报出已删除 agent 的残留目录（只记录，不阻止启动）。"""
+        await self._report_leftovers()
         agents = await self.list()
         broken = []
         for agent in agents:
@@ -188,6 +190,17 @@ class AgentService:
             raise RuntimeError(
                 "agents use tool groups unavailable with current config:\n" + "\n".join(broken)
             )
+
+    async def _report_leftovers(self) -> None:
+        """数据库里已删除、还留着资源目录（删除时提交失败所致）或工作目录（删除时没删干净）的 agent：记录出来，由人决定
+        是否清理。正在删除的不算：它的目录由删除流程删。"""
+        known = await self._ids()
+        orphans = [o for o in self._repo.agent_owners() if o not in known]
+        if orphans:
+            log.warning("resource directories of deleted agents remain", extra={"agent_ids": orphans})
+        leftovers = [o for o in self._workspace_owners() if o not in known]
+        if leftovers:
+            log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
     def _check(self, *, description: str, model: str, reflect_every: int, tool_groups: list[str]) -> None:
         if not description.strip():
@@ -321,7 +334,7 @@ class AgentService:
             ).all()
             return [info_of(a) for a in rows]
 
-    async def ids(self) -> set[str]:
+    async def _ids(self) -> set[str]:
         """数据库里所有 agent 的 id，正在删除的也算（它的目录还在是正常的，删除流程会删）。"""
         async with self._db.transaction() as s:
             return set((await s.scalars(select(Agent.id))).all())
@@ -335,7 +348,7 @@ class AgentService:
                 await asyncio.to_thread(shutil.rmtree, workspace)
             except OSError as e:
                 # 例如它留在后台的进程还在往里写（目录删空后又出现新文件）。工作目录只是文件：删不干净不能让删除卡在
-                # deleting 一直重试；残留留给启动检查列出（workspace_owners），由人清理
+                # deleting 一直重试；残留留给启动检查列出（verify_stored），由人清理
                 log.warning(
                     "workspace of a deleted agent could not be fully removed",
                     extra={"agent": agent_id, "path": str(workspace), "error": repr(e)},

@@ -73,6 +73,15 @@ class Worker:
         """这个 worker 处理的任务种类（组合根登记的处理器）。"""
         return frozenset(self._handlers)
 
+    async def check_kinds(self) -> None:
+        """启动检查。任务种类是不透明的字符串（platform.tables）：库里还没完成的 task 若是没有处理器登记的种类（例如
+        改名后留下的旧值），它永远不会被领取，还挡住它的 lane（停止会话也解不开）。新写入的已由 TaskQueue.accept
+        拒绝，这里报的是库里留下的旧行。启动时报出来，由人处理：恢复它的处理器，或在库里删掉它；「任务」页上它没有
+        可做的操作。"""
+        unknown = sorted(await self._queue.unfinished_kinds() - self.kinds)
+        if unknown:
+            log.error("unfinished tasks of kinds no handler is registered for", extra={"kinds": unknown})
+
     def _publish(self, task: Task, status: TaskStatus, error: str | None = None) -> None:
         self._bus.publish(
             TaskEvent(

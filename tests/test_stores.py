@@ -12,7 +12,7 @@ from muliao.agents.skills import SkillStore
 from muliao.errors import CorruptState, InvalidInput, NotFound
 from tests.test_flow import drain
 
-# agent id 的格式（与 ids.new_agent_id 一致）
+# agent id 的格式（agents.ids.AGENT_ID）
 ALPHA, BETA = "a1a1a1a1a1a1", "b2b2b2b2b2b2"
 
 
