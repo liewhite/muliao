@@ -38,6 +38,20 @@ class RunEnded(DomainEvent):
     awaited: bool
 
 
+class RunFailed(DomainEvent):
+    """一次运行最终失败了（暂时性失败的重试用完，或契约外的失败），在队列记下失败的事务里发布（RunHandler.failed_in）。
+    带上会话的来源，订阅方按来源认领自己的会话（如 issue 看板在 issue 时间线上记一笔）；不自动重试。"""
+
+    TYPE = "session.run_failed"
+    session_id: str
+    agent_id: str
+    run_id: int
+    origin: Origin
+    origin_ref: str | None
+    # 失败的原文（task.error：异常类型与信息）
+    error: str
+
+
 class SessionStopped(DomainEvent):
     """会话被用户停止：cleared 是被清掉的占用（它在外面的工作被放弃）。"""
 

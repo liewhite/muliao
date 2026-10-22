@@ -30,12 +30,14 @@ from muliao.agent_runtime.api import (
     unanswered_calls,
 )
 from muliao.platform.db import Database
+from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
 from muliao.sessions.deferred import DEFERRED_TOOLS, questions_in, replayable
+from muliao.sessions.events import RunFailed
 from muliao.sessions.finish import RunEnd, RunFinisher
 from muliao.sessions.halt import Halted, SessionHalt
 from muliao.sessions.history import interrupted_results, latest_compaction, load_context
@@ -339,9 +341,10 @@ async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
 class RunHandler:
     """队列里的运行（run task）。"""
 
-    def __init__(self, consumer: Consumer, queue: TaskQueue):
+    def __init__(self, consumer: Consumer, queue: TaskQueue, messaging: Messaging):
         self._consumer = consumer
         self._queue = queue
+        self._messaging = messaging
 
     async def execute(self, task: Task) -> Commit:
         if task.session_id is None:
@@ -354,9 +357,23 @@ class RunHandler:
         全部（包括早先停在挂起调用上的运行处理过的、被续跑接管的），加上交给过这次运行、还排着的——运行在第一次保存
         之前就失败时，开头取走的信件一直排着，也不会再有运行因为它们被唤醒（mailbox.handed_to）；它们随结清一起
         退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：同一个事务里立即唤醒新的运行处理它们（如对
-        同一 thread 的第二项委派），不等信箱对账。队列已把这次运行记为 failed，唤醒不会把它当成忙。"""
-        if task.session_id is None:
-            raise RuntimeError(f"run {task.id} has no session")
-        child, _agent = await load_session(s, task.session_id)
+        同一 thread 的第二项委派），不等信箱对账。队列已把这次运行记为 failed，唤醒不会把它当成忙。
+
+        同一事务发布 RunFailed（如 issue 看板据此在时间线上记一笔、通知用户）。这个钩子自己失败时（worker 不带钩子记下
+        失败）不发：失败仍在任务页与日志里可见。"""
+        if task.session_id is None or task.error is None:
+            raise RuntimeError(f"run {task.id} has no session or no recorded error")
+        child, agent = await load_session(s, task.session_id)
         await settle_failure_in(s, self._queue, child, task)
         await wake_in(s, self._queue, child)
+        self._messaging.publish_in(
+            s,
+            RunFailed(
+                session_id=child.id,
+                agent_id=agent.id,
+                run_id=task.id,
+                origin=child.origin,
+                origin_ref=child.origin_ref,
+                error=task.error,
+            ),
+        )

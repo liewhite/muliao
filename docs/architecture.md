@@ -325,7 +325,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 **关联与结清**（`sessions/settlement.py`）：委派来的信件带关联 id（它的 holder）。会话自己判断关联什么时候结束，在同一个事务里把结局交回发起方（第 8 节），时机只有下面几个，每个时机一个入口（结清哪些信件只在 settlement 里决定，调用方不传状态集合）：
 
 - **完成**：运行结束的事务里（`sessions.finish`），运行正常结束、没有停在挂起的调用上、信箱里没有还要交给模型的信件、没有 active 占用 → 会话内已处理、还未结清的全部关联以 `finished` 结清，带回答与文件（`settle_finished_in`）。占用释放总是伴随一封信件，信件会唤醒下一次运行，结清由那次运行结束时判断。
-- **最终失败**：队列记失败的事务里（`RunHandler.failed_in`），会话内已处理、还未结清的全部关联，加上交给过这次运行、还排着的（运行在第一次保存之前就失败时，开头取走的信件一直排着，它们不会再唤醒运行，`mailbox.handed_to`；它们随之记为被丢弃），以 `failed` 结清（`settle_failure_in`）；同一个事务里接着 `wake_in`：运行开始之后才到的信件（如对同一 thread 的第二项委派）当场唤醒下一次运行，不等对账。按会话范围而不是按处理它的运行，所以早先停在 `ask_user` 上的运行处理过的委派、被续跑接管的信件都包括在内。`failed_in` 自己失败时（worker 不带钩子记下失败），由信箱对账（`sessions/reconcile.py` 的 `MailReconciler` 调 `reconcile_failures`）以同一个函数补做，每个会话一个事务。
+- **最终失败**：队列记失败的事务里（`RunHandler.failed_in`），会话内已处理、还未结清的全部关联，加上交给过这次运行、还排着的（运行在第一次保存之前就失败时，开头取走的信件一直排着，它们不会再唤醒运行，`mailbox.handed_to`；它们随之记为被丢弃），以 `failed` 结清（`settle_failure_in`）；同一个事务里接着 `wake_in`：运行开始之后才到的信件（如对同一 thread 的第二项委派）当场唤醒下一次运行，不等对账；并发布 `RunFailed`（带会话来源，订阅方按来源认领，如 issue 看板在时间线记一笔并通知用户，第 21 节）。按会话范围而不是按处理它的运行，所以早先停在 `ask_user` 上的运行处理过的委派、被续跑接管的信件都包括在内。`failed_in` 自己失败时（worker 不带钩子记下失败），由信箱对账（`sessions/reconcile.py` 的 `MailReconciler` 调 `reconcile_failures`）以同一个函数补做，每个会话一个事务。
 - **停止 / 删除**：未结清的关联（排着的与已处理的）以 `stopped` / `deleted` 结清（`settle_stopped_in` 随后清空信箱 / `settle_deleted_in`）。
 
 `mail.correlation_settled` 保证每个关联只结清一次，交回与结清、占用的释放在同一个事务里，所以每项委派的结局只交回一次（第 8 节）。
@@ -524,7 +524,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - token 是我们签发给外部系统的凭证，事实来源是触发器自己：`state` 里只存 SHA-256，明文只在生成时返回一次，**只能由用户在界面上生成**（agent 创建的 webhook 在用户生成 token 之前收不到事件）。不放进 vault——vault 存的是外部系统发给我们的凭证。
 - 不校验各平台自己的签名格式（GitHub、Slack 等各不相同）。需要时由发送方把 token 放进 Authorization 头，或在中间加一层转发。
 
-**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警、定时触发被等待中的会话挡住与 issue 交给用户（定向命令 `Notify`）、推送测试，都经 `Notifications` 内部的 `_enqueue_in` 在通知领域自己的事务里写一条 `notifications` 行，并给当时的每个推送订阅各排一个 deliver task（只带 `notification_id` 与订阅的 endpoint；没有订阅就只留在通知页）。DeliverHandler 投递时读出通知、订阅（排队后已退订就跳过）和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到新通知事件（SSE `notification`，写下通知的事务提交后发出，与有没有推送订阅无关）和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时只由会话领域标记（`SessionService.mark_read`），同一事务发布 `SessionRead`，通知领域订阅它把指向这个会话的通知标为已读（提交后 `run_now` 马上投递，通常请求返回时未读数已更新；同一 lane 上有更早的投递时由 worker 稍后处理，界面在 `event` 投递完成时重新取未读数）。通知随它指向的会话删除（订阅 `SessionDeleted`）；`RunEnded`、`SessionRead`、`SessionDeleted` 在同一条按会话的 lane 上；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
+**通知**（`notifications/`：`service.py` 是通知的读写，`delivery.py`、`webpush.py` 只管投递）：运行的回答给在等它的用户（订阅 `RunEnded`：处理过的信件有 `awaited`，且做完了或停下来问用户，用户自己停止的不推）、agent 调 `notify_user`、前置检查告警、定时触发被等待中的会话挡住、issue 交给用户与 issue 会话的运行失败（定向命令 `Notify`）、推送测试，都经 `Notifications` 内部的 `_enqueue_in` 在通知领域自己的事务里写一条 `notifications` 行，并给当时的每个推送订阅各排一个 deliver task（只带 `notification_id` 与订阅的 endpoint；没有订阅就只留在通知页）。DeliverHandler 投递时读出通知、订阅（排队后已退订就跳过）和当时的未读数，Web Push 的载荷带上这个数，Service Worker 收到后设置应用图标角标（Badging API，iOS 16.4+ 主屏应用）；应用在打开、回到前台、收到新通知事件（SSE `notification`，写下通知的事务提交后发出，与有没有推送订阅无关）和标记已读之后从服务端重新取未读数，刷新导航上的数字与角标。已读规则：打开通知页标记到列出的最新一条为止（之后才到的保持未读）；打开会话时只由会话领域标记（`SessionService.mark_read`），同一事务发布 `SessionRead`，通知领域订阅它把指向这个会话的通知标为已读（提交后 `run_now` 马上投递，通常请求返回时未读数已更新；同一 lane 上有更早的投递时由 worker 稍后处理，界面在 `event` 投递完成时重新取未读数）。通知随它指向的会话删除（订阅 `SessionDeleted`）；`RunEnded`、`SessionRead`、`SessionDeleted` 在同一条按会话的 lane 上；系统通知点开进通知页，所以前置检查告警在检查恢复、`precheck_error` 清除之后仍看得到。
 
 通知只有 Web Push 一种渠道。不支持主动推送的外部消息源（例如只能拉取的 Slack 未读）用定时触发器拉取：例如每分钟让 agent 通过 Slack MCP（或 skill 中的脚本 + vault token）读取未读消息，游标由 agent 存在自己的工作目录。
 
@@ -616,6 +616,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - **交给用户**：agent 把 issue 指派给用户时发 `Notify` 推送，点开是它交出 issue 的那个会话。
 - **先审核再完成**：agent 做完不自己设 done，而是设 in_review 并指派给用户，由用户审核后拖进 done。例外：有别的 issue 依赖它（`issue_show` 的 `blocks` 非空，典型是大需求拆出的子 issue）时，做完由 agent 自己设 done，放行下游；拆法是子 issue 直接建成 todo、之间用依赖排序，紧接着建一个依赖全部子 issue 的 todo 父 issue（总目标与验收）；第一个子 issue 可能在父 issue 建出来之前就开工，所以约定做完时再 `issue_show` 一次看 `blocks`。全部子 issue 完成后父 issue 才投递，集成验收后照常 in_review 交给用户（拆分步骤见公共 skill `issue-breakdown`）。这些是约定，写在 issue 会话的来源说明（`sessions.origins` 的 ISSUE）和 `issue_create`/`issue_update` 的工具说明里，代码不拦。
 - **删除 agent**：订阅 `AgentDeleting`，指派给它、归它负责的 issue 改为未指派、无负责人（各记一条时间线，actor 是系统 `rules.SYSTEM_ACTOR`（`"system"`），不是用户；同时更新 `updated_at`）。它的 issue 会话随它由会话领域删除，issue 领域没有要清理的会话引用。
+- **运行失败**：会话领域在运行最终失败的事务里（`RunHandler.failed_in`：暂时性失败的重试用完，或契约外的失败；还在等重试的不算）发布 `RunFailed`（会话、agent、运行、会话来源与 `origin_ref`、错误原文），issue 领域订阅它、只认 `Origin.ISSUE` 的会话（按会话来源认领，不读 tasks 表）：在该 issue 时间线上记一条 `run_failed` 动态（actor 是失败的那个 agent，body 是 `rules.failure_summary` 截断到 500 字的错误摘要），更新 `updated_at`，并发 `Notify`（点开是那个 issue 会话）。这条动态不投递、不改状态：投进会话就等于自动重试，永久性错误会陷入循环；之后有人评论或改动时照常投递、唤醒 agent。issue 已被删除时只记日志。`failed_in` 自己失败（worker 不带钩子记下失败）时不发，失败仍在任务页与日志里可见。
 
 ## 22. 暂缓的项
 

@@ -528,3 +528,89 @@ def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
     assert "`issue_show`" in issue and "`in_review` and assignee `user`" in issue
     assert "set it `done` yourself" in issue and "under `blocks`" in issue
     assert "issue_show" not in built(Origin.USER)
+
+
+def _failing(status_code: int, times: int):
+    """前 times 次请求以这个 HTTP 状态失败，之后回答 ok。"""
+    from pydantic_ai.exceptions import ModelHTTPError
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    from tests.scripted import scripted
+
+    calls = {"n": 0}
+
+    def fn(_messages, _info):
+        calls["n"] += 1
+        if calls["n"] <= times:
+            raise ModelHTTPError(status_code=status_code, model_name="m", body="boom " * 200)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    return scripted(fn)
+
+
+async def _notifications(container):
+    from muliao.notifications.tables import Notification
+
+    async with container.db.transaction() as s:
+        return list((await s.scalars(select(Notification).order_by(Notification.id))).all())
+
+
+async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(container, make_agent, models):
+    from muliao.issues.rules import FAILURE_SUMMARY_MAX
+
+    alpha = (await make_agent("alpha", model="m")).id
+    models.models["m"] = _failing(400, times=1)
+    issue = await container.issues.create(None, owner=alpha, title="Fix it", status=TODO, assignee=alpha)
+    await drain(container)
+
+    detail = await container.issues.get(issue.id)
+    failed = detail.activities[-1]
+    assert failed.kind == ActivityKind.RUN_FAILED and failed.actor_agent_id == alpha
+    assert failed.body.startswith("ModelHTTPError") and "400" in failed.body
+    assert len(failed.body) == FAILURE_SUMMARY_MAX and failed.body.endswith("…")
+    # 状态不变、不自动重试：失败的动态不投进会话
+    assert detail.issue.status == TODO
+    [session] = await _issue_sessions(container)
+    assert len(await _mail(container, session.id)) == 1
+    [note] = await _notifications(container)
+    assert note.title == f"#{issue.id} 运行失败：Fix it" and note.session_id == session.id
+    assert note.body == failed.body
+    assert "alpha's run in its issue session failed: ModelHTTPError" in await container.issues.render(
+        issue.id
+    )
+
+    # 之后的动态照常投递、唤醒 agent
+    await container.issues.comment(None, issue.id, "try again")
+    await drain(container)
+    assert (await container.issues.get(issue.id)).activities[-1].kind == ActivityKind.COMMENT
+    assert len(await _mail(container, session.id)) == 2
+    assert len(await _notifications(container)) == 1
+
+
+async def test_failed_runs_outside_issue_sessions_and_retried_ones_are_not_recorded(
+    container, make_agent, models
+):
+    alpha = (await make_agent("alpha", model="m")).id
+    models.models["m"] = _failing(400, times=1)
+    await start(container, alpha, "hi", origin=Origin.TRIGGER)
+    await drain(container)
+    # 暂时性失败、重试后成功的不记
+    models.models["m"] = _failing(503, times=1)
+    issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
+    await drain(container)
+
+    assert [a.kind for a in (await container.issues.get(issue.id)).activities] == [ActivityKind.CREATED]
+    assert await _notifications(container) == []
+
+
+async def test_a_run_failure_on_a_deleted_issue_is_ignored(container, make_agent):
+    from muliao.sessions.events import RunFailed
+
+    alpha = (await make_agent()).id
+    event = RunFailed(
+        session_id="s", agent_id=alpha, run_id=1, origin=Origin.ISSUE, origin_ref="999", error="Boom"
+    )
+    commit = await container.issues.on_run_failed(event, Delivery("m"))
+    async with container.db.transaction() as s:
+        await commit(s)
+    assert await _notifications(container) == []

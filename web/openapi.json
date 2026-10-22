@@ -2840,7 +2840,8 @@
           "title",
           "description",
           "depends_on",
-          "dependency"
+          "dependency",
+          "run_failed"
         ],
         "title": "ActivityKind"
       },

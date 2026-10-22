@@ -447,7 +447,7 @@ def assemble(
     # 各领域的任务种类在这里登记处理器；队列只接受登记过的种类（TaskQueue.accept）
     handlers = register_handlers(
         (EVENT_TASK, messaging),
-        (RUN_TASK, RunHandler(consumer, queue)),
+        (RUN_TASK, RunHandler(consumer, queue, messaging)),
         (COMPACTION_TASK, CompactionHandler(db, compactor)),
         (REFLECTION_TASK, ReflectionHandler(db, runtime, tool_groups, agents, agent_history)),
         (DELIVER_TASK, DeliverHandler(db, pusher)),

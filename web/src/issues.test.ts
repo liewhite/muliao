@@ -77,6 +77,9 @@ describe('issues', () => {
     expect(activityText(agents, { ...change('dependency', 'todo', 'done'), change: { issue: 3, from: 'todo', to: 'done' } })).toBe(
       '把依赖 #3 的状态从「Todo」改为「完成」',
     )
+    expect(activityText(agents, { ...change('run_failed', null, null), change: null, body: 'Boom: bad' })).toBe(
+      '在 issue 会话里的运行失败了：Boom: bad',
+    )
   })
 })
 

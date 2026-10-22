@@ -38,6 +38,7 @@ from muliao.issues.rules import (
     assignee_name,
     cycle_through,
     delivery_message,
+    failure_summary,
     recipient,
     render_issue,
     stalled,
@@ -55,7 +56,7 @@ from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
-from muliao.platform.tasks import Commit
+from muliao.platform.tasks import Commit, no_commit
 from muliao.platform.values import KEEP, Keep, local_time
 from muliao.sessions.api import (
     Inbound,
@@ -66,6 +67,7 @@ from muliao.sessions.api import (
     keyed_sessions_among,
     receive_command_in,
 )
+from muliao.sessions.events import RunFailed
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +139,38 @@ class IssueService:
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
+        messaging.subscribe(RunFailed, "issues.run_failed", self.on_run_failed)
+
+    async def on_run_failed(self, event: RunFailed, _delivery: Delivery) -> Commit:
+        """issue 会话里的运行最终失败：在 issue 时间线上以该 agent 的名义记一笔（失败的是它的运行），并通知用户，点开是那个
+        会话。不投递这条动态、不改状态：投进会话就是自动重试，永久性的错误会陪它无限循环；之后有新动态时照常投递、唤醒它。
+        其他来源的会话、已被删除的 issue 不处理。"""
+        if event.origin != Origin.ISSUE or event.origin_ref is None:
+            return no_commit
+        issue_id = int(event.origin_ref)
+
+        async def commit(s: AsyncSession) -> None:
+            issue = await s.get(Issue, issue_id)
+            if issue is None:
+                log.info(
+                    "run failed on a deleted issue", extra={"issue_id": issue_id, "run_id": event.run_id}
+                )
+                return
+            summary = failure_summary(event.error)
+            self._record(s, issue, event.agent_id, ActivityKind.RUN_FAILED, body=summary)
+            issue.updated_at = utcnow()
+            self._messaging.send_in(
+                s,
+                Notify(
+                    agent_id=event.agent_id,
+                    title=f"#{issue.id} 运行失败：{issue.title}",
+                    body=summary,
+                    session_id=event.session_id,
+                ),
+            )
+            log.info("issue run failure recorded", extra={"issue_id": issue_id, "run_id": event.run_id})
+
+        return commit
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
         """删除 agent 的流程：指派给它、归它负责的 issue 改为未指派、无负责人（以系统身份记在时间线上）。它的会话由会话

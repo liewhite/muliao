@@ -49,7 +49,11 @@ async def deliver(container, limit_seconds: float = 10.0) -> None:
 
 async def run_only(container, limit_seconds: float = 10.0) -> None:
     """只执行运行（不投递事件）：运行发布的事件留着排队，测试可以安排它们与别的操作的先后。"""
-    await work_only(container, {RUN_TASK: RunHandler(container.consumer, container.queue)}, limit_seconds)
+    await work_only(
+        container,
+        {RUN_TASK: RunHandler(container.consumer, container.queue, container.messaging)},
+        limit_seconds,
+    )
 
 
 async def work_only(container, handlers: dict, limit_seconds: float) -> None:

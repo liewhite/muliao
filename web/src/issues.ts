@@ -137,6 +137,8 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
       return `把依赖从「${issueRefs(a.change?.from as number[])}」改为「${issueRefs(a.change?.to as number[])}」`
     case 'dependency':
       return `把依赖 #${a.change?.issue} 的状态从「${statusLabel(a.change?.from)}」改为「${statusLabel(a.change?.to)}」`
+    case 'run_failed':
+      return `在 issue 会话里的运行失败了：${a.body}`
     default: {
       const what = { status: '状态', assignee: '指派', owner: '负责项目', priority: '优先级', title: '标题' }[a.kind]
       return `把${what}从「${valueLabel(agents, a, a.change?.from)}」改为「${valueLabel(agents, a, a.change?.to)}」`
