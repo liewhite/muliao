@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { AskView, Item } from './api'
 import { groupSteps, stepAttachments, stepThreads, summarizeSteps, toBlocks, unlinkedThreads, type Step } from './blocks'
 
-const item = (type: Item['type'], text: string, tool_call_id: string | null = null): Item => ({
+const item = (type: Item['type'], text: string, tool_call_id: string | null = null, at: string | null = null): Item => ({
+  at,
   type,
   text,
   tool_name: tool_call_id ? 'run_shell' : null,
@@ -88,10 +89,23 @@ describe('streaming stability', () => {
   })
 })
 
+describe('toBlocks times', () => {
+  it('takes the start from the call and the end from its result', () => {
+    const [block] = toBlocks([
+      item('tool_call', '{}', 'a', '2026-10-22T05:00:00Z'),
+      item('tool_result', 'ok', 'a', '2026-10-22T05:00:04Z'),
+    ])
+    expect(block.kind === 'tool' && [block.tool.startedAt, block.tool.finishedAt]).toEqual([
+      '2026-10-22T05:00:00Z',
+      '2026-10-22T05:00:04Z',
+    ])
+  })
+})
+
 describe('summarizeSteps', () => {
   const tool = (result: string | null, rejected = false): Step => ({
     kind: 'tool',
-    tool: { name: 'run_shell', args: '', result, rejected, attachments: [], threads: [] },
+    tool: { name: 'run_shell', args: '', result, rejected, attachments: [], threads: [], startedAt: null, finishedAt: null },
   })
 
   it('counts tool calls, mentions thinking, and reports the running tool and calls returned to the model', () => {

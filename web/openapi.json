@@ -3898,6 +3898,18 @@
                 "type": "null"
               }
             ]
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
           }
         },
         "type": "object",
@@ -3909,7 +3921,8 @@
           "message_id",
           "attachments",
           "threads",
-          "ask"
+          "ask",
+          "at"
         ],
         "title": "Item"
       },

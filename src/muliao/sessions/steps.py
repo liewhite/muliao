@@ -13,7 +13,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
 
 from muliao.agent_runtime.api import StepHooks, attach_run_context, redact_messages, with_notices
 from muliao.agents.api import AgentInfo
-from muliao.platform.db import Database
+from muliao.platform.db import Database, utcnow
 from muliao.platform.text_edit import truncate
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import Compactor, Verdict
@@ -86,7 +86,7 @@ class Steps:
                 state.session.id, state.session.agent_id, kind, text
             ),
             on_tool_call=lambda part: self._live.publish_item(
-                state.session.id, state.session.agent_id, _preview(call_item(part))
+                state.session.id, state.session.agent_id, _preview(call_item(part, utcnow()))
             ),
             on_tool_result=lambda part: self._live.publish_item(
                 state.session.id, state.session.agent_id, _preview(result_item(part))

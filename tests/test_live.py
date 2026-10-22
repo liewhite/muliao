@@ -1,10 +1,12 @@
 """中途打开会话页：拿到正在进行的这一轮已经产生的运行事件；提交后由数据库接管。"""
 
 import asyncio
+from datetime import datetime
 
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo
 
+from muliao.sessions.transcript import result_item
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, tool_returns
@@ -42,6 +44,15 @@ async def test_a_page_opened_mid_turn_sees_the_turn_from_its_start(client, conta
     detail = (await client.get(f"/api/sessions/{session_id}")).json()
     assert detail["live"] is None and detail["items"][-1]["text"] == "done"
 
+    # 工具调用带开始执行的时间：运行中的事件与保存后的历史给的是同一个时刻（前者收到调用事件时、后者回复保存时，
+    # 都在执行之前）；结果带结束的时间，两者之差就是工具真实的耗时
+    live_call = next(e["item"] for e in live["events"] if _label(e) == "tool_call")
+    call, result = (i for i in detail["items"] if i["tool_call_id"] == "s")
+    started, saved_start = datetime.fromisoformat(live_call["at"]), datetime.fromisoformat(call["at"])
+    assert abs((started - saved_start).total_seconds()) < 0.5
+    assert (datetime.fromisoformat(result["at"]) - saved_start).total_seconds() >= 0.9
+    assert all(i["at"] is None for i in detail["items"] if i["tool_call_id"] is None)
+
 
 async def test_a_failed_turn_leaves_no_live_events_behind(client, container, make_agent, models):
     await login(client)
@@ -67,6 +78,14 @@ async def test_a_failed_turn_leaves_no_live_events_behind(client, container, mak
     assert detail["run"]["status"] == "failed"
     assert detail["live"] is None
     assert container.live.snapshot(session_id) is None
+
+
+def test_a_result_made_up_for_an_interrupted_call_has_no_end_time():
+    # 补上的结果是重启后才合成的，它的 timestamp 不是调用结束的时间
+    interrupted = ToolReturnPart("run_shell", "Interrupted", tool_call_id="x", outcome="interrupted")
+    done = ToolReturnPart("run_shell", "ok", tool_call_id="y")
+    assert result_item(interrupted).at is None
+    assert result_item(done).at == done.timestamp
 
 
 def _label(event: dict) -> str:

@@ -5,6 +5,7 @@
 """
 
 from collections.abc import Collection, Sequence
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
@@ -68,6 +69,9 @@ class Item(BaseModel):
     threads: list[str]
     # ask_user 的调用（参数合法时）；其他条目为 None
     ask: AskView | None
+    # 工具调用开始执行的时间（tool_call），或工具结束的时间（tool_result、tool_error）；其他条目，以及拿不到真实时间的
+    # （被中断后补上的结果、调用方没给保存时间的投影）为 None
+    at: datetime | None
 
 
 def _item(
@@ -77,6 +81,7 @@ def _item(
     tool_call_id: str | None = None,
     attachments: list[Attachment] | None = None,
     threads: list[str] | None = None,
+    at: datetime | None = None,
 ) -> Item:
     return Item(
         type=type_,
@@ -87,11 +92,14 @@ def _item(
         attachments=attachments or [],
         threads=threads or [],
         ask=None,
+        at=at,
     )
 
 
-def call_item(part: ToolCallPart) -> Item:
-    item = _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id)
+def call_item(part: ToolCallPart, started_at: datetime | None) -> Item:
+    """started_at：调用开始执行的时间。回复在执行工具之前保存（sessions.steps），所以历史里是回复那一行的保存时间，
+    运行中是收到调用事件的时间。"""
+    item = _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id, at=started_at)
     try:
         questions = questions_in(part)
     except (ValidationError, KeyError):
@@ -139,7 +147,8 @@ def _annotated(
 
 
 def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
-    """工具结果，或参数被拒绝、交还模型重试的结果。"""
+    """工具结果，或参数被拒绝、交还模型重试的结果。结束时间取结果上的 timestamp（产生结果时打上）；被中断的调用
+    （outcome='interrupted'）的结果是事后补的，它的时间不是调用结束的时间，不给。"""
     if isinstance(part, ToolReturnPart):
         return _item(
             "tool_result",
@@ -148,8 +157,9 @@ def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
             part.tool_call_id,
             tool_attachments(part),
             tool_threads(part),
+            at=None if part.outcome == "interrupted" else part.timestamp,
         )
-    return _item("tool_error", part.model_response(), part.tool_name, part.tool_call_id)
+    return _item("tool_error", part.model_response(), part.tool_name, part.tool_call_id, at=part.timestamp)
 
 
 def _prompt_items(content: str | Sequence[Any], events: Sequence[int]) -> list[Item]:
@@ -196,7 +206,9 @@ def _user_item(content: str | Sequence[Any]) -> Item:
     return _item("user", "\n".join(texts), attachments=attachments)
 
 
-def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
+def to_items(messages: Sequence[ModelMessage], saved_at: datetime | None = None) -> list[Item]:
+    """saved_at：这些消息保存的时间，即其中工具调用开始执行的时间（见 call_item）；不需要时间的投影（压缩、反思的
+    文字记录）不给。"""
     items: list[Item] = []
     for msg in messages:
         if isinstance(msg, ModelRequest):
@@ -217,7 +229,7 @@ def to_items(messages: Sequence[ModelMessage]) -> list[Item]:
                 elif isinstance(part, ThinkingPart) and part.content:
                     items.append(_item("thinking", part.content))
                 elif isinstance(part, ToolCallPart):
-                    items.append(call_item(part))
+                    items.append(call_item(part, saved_at))
         if is_stopped(msg):
             items.append(_item("stopped", ""))
     return items

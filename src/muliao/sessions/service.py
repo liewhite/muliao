@@ -98,7 +98,7 @@ class SessionService:
             session = await self._get(s, session_id)
             rows = (
                 await s.execute(
-                    select(Message.id, Message.payload)
+                    select(Message.id, Message.payload, Message.created_at)
                     .where(Message.session_id == session_id)
                     .order_by(Message.id)
                 )
@@ -116,15 +116,17 @@ class SessionService:
             threads = await threads_of(s, session_id)
             state = (await work_states_in(s, self._queue, [session_id]))[session_id]
         shown = [
-            (message_id, payload)
-            for message_id, payload in rows
+            (message_id, payload, created_at)
+            for message_id, payload, created_at in rows
             if live is None or live.after_message_id is None or message_id <= live.after_message_id
         ]
         items = annotate_asks(
             [
                 item.model_copy(update={"message_id": message_id})
-                for (message_id, _), message in zip(shown, load_messages(p for _, p in shown), strict=True)
-                for item in to_items([message])
+                for (message_id, _, created_at), message in zip(
+                    shown, load_messages(p for _, p, _ in shown), strict=True
+                )
+                for item in to_items([message], saved_at=created_at)
             ],
             answerable=asks.answerable.keys(),
             submitted=asks.submitted,

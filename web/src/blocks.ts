@@ -12,6 +12,9 @@ export interface ToolView {
   attachments: Attachment[]
   /** 工具结果关联的子会话 id（委派开出的 thread）：同样显示在过程组外，就在开它的那次调用处 */
   threads: string[]
+  /** 开始执行、结束的时间（调用与结果条目上的 at，由后端给出）；拿不到的为 null */
+  startedAt: string | null
+  finishedAt: string | null
 }
 
 /** 一次 ask_user 提问：是要用户操作的交互，不收进过程组。状态与内容都由后端给出（条目上的 ask） */
@@ -63,7 +66,16 @@ export function toBlocks(items: Item[]): Block[] {
         blocks.push({ kind: item.type, text: item.text })
         break
       case 'tool_call': {
-        const tool: ToolView = { name: item.tool_name ?? '?', args: item.text, result: null, rejected: false, attachments: [], threads: [] }
+        const tool: ToolView = {
+          name: item.tool_name ?? '?',
+          args: item.text,
+          result: null,
+          rejected: false,
+          attachments: [],
+          threads: [],
+          startedAt: item.at,
+          finishedAt: null,
+        }
         if (item.tool_call_id) tools.set(item.tool_call_id, tool)
         blocks.push({ kind: 'tool', tool })
         break
@@ -76,6 +88,7 @@ export function toBlocks(items: Item[]): Block[] {
           tool.rejected = item.type === 'tool_error'
           tool.attachments = item.attachments
           tool.threads = item.threads
+          tool.finishedAt = item.at
         } else {
           // 没有对应调用的错误（如输出校验重试）单独展示
           blocks.push({
@@ -87,6 +100,8 @@ export function toBlocks(items: Item[]): Block[] {
               rejected: true,
               attachments: item.attachments,
               threads: item.threads,
+              startedAt: null,
+              finishedAt: item.at,
             },
           })
         }

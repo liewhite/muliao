@@ -62,6 +62,7 @@ export function liveItems(events: RunEvent[]): Item[] {
         attachments: [],
         threads: [],
         ask: null,
+        at: null,
       })
   }
   return items

@@ -8,7 +8,7 @@ const delta = (item_type: 'assistant' | 'thinking', text: string): RunEvent => (
 const tool = (type: 'tool_call' | 'tool_result', text: string, tool_call_id: string): RunEvent => ({
   ...base,
   event: 'item',
-  item: { type, text, tool_name: 'tool', tool_call_id, message_id: null, attachments: [], threads: [], ask: null },
+  item: { type, text, tool_name: 'tool', tool_call_id, message_id: null, attachments: [], threads: [], ask: null, at: null },
 })
 
 describe('liveItems', () => {

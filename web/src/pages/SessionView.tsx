@@ -28,6 +28,7 @@ import {
   type ToolStatus,
   type ToolView,
 } from '../blocks'
+import { groupSpan, spanLabel, toolSpan, useNow, type Span } from '../stepTime'
 import { AnsweredQuestions, QuestionForm, QuestionNote } from '../questions'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
@@ -58,6 +59,12 @@ function Collapsible({ title, children }: { title: ReactNode; children: ReactNod
 // 被退回不是故障：参数不合法或工具报了可纠正的错误，模型会据此修正后重试，所以不用醒目的报错样式
 const TOOL_STATUS_LABELS: Record<ToolStatus, string> = { running: '运行中', rejected: '被退回', done: '完成' }
 
+/** 步骤的时间：运行中每秒刷新已运行时长，结束后是开始时间与耗时；没有时间时不显示 */
+function SpanText({ span }: { span: Span | null }) {
+  const now = useNow(span?.running ?? false)
+  return span && <span className="tabular-nums">{spanLabel(span, now)}</span>
+}
+
 function ToolBlock({ tool }: { tool: ToolView }) {
   const status = toolStatus(tool)
   return (
@@ -65,7 +72,10 @@ function ToolBlock({ tool }: { tool: ToolView }) {
       title={
         <>
           <span className="font-mono text-foreground">{tool.name}</span>
-          <span className="ml-auto whitespace-nowrap text-xs">{TOOL_STATUS_LABELS[status]}</span>
+          <span className="ml-auto flex gap-2 whitespace-nowrap text-xs">
+            <SpanText span={toolSpan(tool)} />
+            <span>{TOOL_STATUS_LABELS[status]}</span>
+          </span>
         </>
       }
     >
@@ -109,7 +119,10 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
           <>
             {running !== null && <Spinner size="sm" />}
             <span className="text-foreground">{label}</span>
-            <span className="ml-auto whitespace-nowrap text-xs">{status}</span>
+            <span className="ml-auto flex gap-2 whitespace-nowrap text-xs">
+              <SpanText span={groupSpan(steps)} />
+              <span>{status}</span>
+            </span>
           </>
         }
       >
