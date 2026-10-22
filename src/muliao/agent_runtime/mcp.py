@@ -2,6 +2,7 @@
 
 一个 server 出问题只影响它自己：配置文件坏了（CorruptResource）、引用的 secret 不在了、连不上，这次运行就没有它的
 工具，其余 server 照常可用（列工具失败同样只跳过它）；原因记日志，并作为 RunScope.notices 放进这次运行开头的运行上下文告诉模型。
+运行中调用工具失败只是这次调用失败（ToolFailed 交还模型），断开失败只记 warning。
 """
 
 from __future__ import annotations
@@ -54,13 +55,14 @@ class _SecretSafe(WrapperToolset[RunScope]):
     """MCP 的连接、列工具、调用工具、断开失败时，异常文本可能带着已代入 secret 的 URL、参数或请求头（如 HTTP 错误
     里的完整 URL），它会进 tasks.error、服务日志（带 traceback）并交还给调用方。运行期与 probe 都经 guard：换成信息
     里 secret 明文已替换为 [secret:KEY] 的异常（与 run_shell 同一份 redact），不带原始异常链；暂时性失败仍是
-    TransientError，照常由任务队列重试。secrets 与代入配置的是同一份明文（build_toolset 只解析一次）。"""
+    TransientError，照常由任务队列重试。调用工具的非暂时性失败是 ToolFailed（交还模型），断开失败只记 warning。secrets 与代入配置的是同一份明文（build_toolset 只解析一次）。"""
 
     server: str
     secrets: Mapping[str, str]
 
     @contextmanager
-    def guard(self) -> Iterator[None]:
+    def guard(self, failed: type[Exception] = McpFailed) -> Iterator[None]:
+        """非暂时性失败换成 `failed`（默认 McpFailed；调用工具时是 ToolFailed，交还模型）。"""
         try:
             yield
         except _TOOL_OUTCOMES:
@@ -69,7 +71,7 @@ class _SecretSafe(WrapperToolset[RunScope]):
             raise type(e)(redact(e.message, self.secrets)) from None
         except Exception as e:
             message = redact(f"MCP server {self.server!r} failed: {_describe(e)}", self.secrets)
-            raise (TransientError if is_transient(e) else McpFailed)(message) from None
+            raise (TransientError if is_transient(e) else failed)(message) from None
 
     async def __aenter__(self) -> Self:
         with self.guard():
@@ -77,8 +79,13 @@ class _SecretSafe(WrapperToolset[RunScope]):
         return self
 
     async def __aexit__(self, *args: Any) -> bool | None:
-        with self.guard():
-            return await self.wrapped.__aexit__(*args)
+        """断开失败只记 warning：工具都用完了，不让已经做完的运行（或探测）因此失败。"""
+        try:
+            with self.guard():
+                return await self.wrapped.__aexit__(*args)
+        except (McpFailed, TransientError) as e:
+            log.warning("mcp server disconnect failed", extra={"mcp": self.server, "error": str(e)})
+            return None
 
     async def get_tools(self, ctx: RunContext[RunScope]) -> dict[str, ToolsetTool[RunScope]]:
         with self.guard():
@@ -94,7 +101,8 @@ class _SecretSafe(WrapperToolset[RunScope]):
     async def call_tool(
         self, name: str, tool_args: dict[str, Any], ctx: RunContext[RunScope], tool: ToolsetTool[RunScope]
     ) -> Any:
-        with self.guard():
+        # server 在调用中出错只是这次调用失败，交还模型（暂时性失败仍由任务队列重试）
+        with self.guard(ToolFailed):
             return await self.wrapped.call_tool(name, tool_args, ctx, tool)
 
 

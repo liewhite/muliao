@@ -466,6 +466,82 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     assert results == ["tok-123"]
 
 
+async def test_an_mcp_tool_call_that_fails_is_handed_back_to_the_model_with_its_secrets_redacted(
+    container, make_agent, models, monkeypatch
+):
+    """一个 server 在调用中出错（非暂时性）只是这次调用失败：模型看到脱敏后的原因，整次运行照常完成。"""
+    from pydantic_ai.mcp import MCPToolset
+
+    from muliao.platform.tables import TaskStatus
+    from muliao.sessions.lanes import RUN_TASK
+    from muliao.sessions.transcript import to_items
+    from tests.test_flow import call_then_answer, tasks_of
+
+    async def explode(self, name, tool_args, ctx, tool):  # noqa: ANN001, ANN202
+        raise RuntimeError("tool crashed holding tok-123")
+
+    monkeypatch.setattr(MCPToolset, "call_tool", explode)
+    alpha = (await make_agent("alpha", model="m")).id
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
+    spec = mcp_config(
+        transport=McpTransport.STDIO,
+        command=sys.executable,
+        args=[ECHO_SERVER],
+        env={"TOKEN": "${vault:ECHO_TOKEN}"},
+    )
+    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    models.models["m"] = call_then_answer("echo_token", {}, "it failed")
+
+    session = await start(container, alpha, "token?")
+    await drain(container, limit_seconds=30)
+
+    [run] = await tasks_of(container, RUN_TASK)
+    assert run.status == TaskStatus.DONE
+    items = to_items(await history_of(container, session.id))
+    [result] = [i.text for i in items if i.type == "tool_result"]
+    assert "MCP server 'echo' failed" in result and "tool crashed" in result
+    assert "tok-123" not in result and "[secret:ECHO_TOKEN]" in result
+    assert items[-1].text == "it failed"
+
+
+async def test_an_mcp_server_that_fails_to_disconnect_does_not_fail_the_run(
+    container, make_agent, models, monkeypatch, caplog
+):
+    """断开失败时工具都已用完：只记 warning，已经产出回答的运行照常完成。"""
+    from pydantic_ai.mcp import MCPToolset
+
+    from muliao.platform.tables import TaskStatus
+    from muliao.sessions.lanes import RUN_TASK
+    from tests.test_flow import call_then_answer, tasks_of
+
+    aexit = MCPToolset.__aexit__
+
+    async def fail_after_exit(self, *args):  # noqa: ANN001, ANN202
+        await aexit(self, *args)
+        if self._running_count == 0:  # 真正断开连接的那一次（列工具、调用时的嵌套进出不算）
+            raise RuntimeError("disconnect exploded")
+
+    monkeypatch.setattr(MCPToolset, "__aexit__", fail_after_exit)
+    alpha = (await make_agent("alpha", model="m")).id
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
+    spec = mcp_config(
+        transport=McpTransport.STDIO,
+        command=sys.executable,
+        args=[ECHO_SERVER],
+        env={"TOKEN": "${vault:ECHO_TOKEN}"},
+    )
+    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    models.models["m"] = call_then_answer("echo_token", {}, "got it")
+
+    await start(container, alpha, "token?")
+    await drain(container, limit_seconds=30)
+
+    [run] = await tasks_of(container, RUN_TASK)
+    assert run.status == TaskStatus.DONE
+    [warning] = [r for r in caplog.records if r.message == "mcp server disconnect failed"]
+    assert "disconnect exploded" in warning.error
+
+
 @pytest.mark.parametrize(
     ("kind", "config"),
     [
