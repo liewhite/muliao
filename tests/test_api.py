@@ -172,6 +172,9 @@ async def test_default_agent_is_at_most_one_and_goes_with_the_agent(client):
     resp = await client.put(f"/api/agents/{a['id']}/default")
     assert resp.status_code == 200 and resp.json()["is_default"]
     assert await defaults() == ["a"]
+    # 再设一次仍是默认
+    assert (await client.put(f"/api/agents/{a['id']}/default")).json()["is_default"]
+    assert await defaults() == ["a"]
     # 设另一个为默认就取代原来的
     assert (await client.put(f"/api/agents/{b['id']}/default")).json()["is_default"]
     assert await defaults() == ["b"]

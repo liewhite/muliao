@@ -266,10 +266,11 @@ class AgentService:
         async with self._db.transaction() as s:
             agent = await active_row_in(s, agent_id)
             if is_default:
-                await s.execute(update(Agent).where(Agent.is_default).values(is_default=False))
+                await s.execute(
+                    update(Agent).where(Agent.is_default, Agent.id != agent_id).values(is_default=False)
+                )
             agent.is_default = is_default
             await s.flush()
-            await s.refresh(agent)
             return info_of(agent)
 
     def _validated(self, agent: Agent, patch: AgentPatch) -> _AgentFields:
