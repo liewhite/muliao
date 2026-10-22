@@ -7,7 +7,7 @@ from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ToolCallPart
 
 from muliao.agent_runtime.api import Finished, Paused
-from muliao.agent_runtime.outcome import deferred_results, outcome_of
+from muliao.agent_runtime.outcome import outcome_of
 
 
 def _result(output: object) -> SimpleNamespace:
@@ -28,9 +28,3 @@ def test_a_run_asking_for_approval_is_rejected():
     call = ToolCallPart(tool_name="run_shell", args={}, tool_call_id="c1")
     with pytest.raises(RuntimeError, match="approvals.*run_shell"):
         outcome_of(_result(DeferredToolRequests(approvals=[call])))  # type: ignore[arg-type]
-
-
-def test_results_are_handed_back_by_call_id():
-    assert deferred_results(None) is None
-    handed = deferred_results({"c1": "yes"})
-    assert handed is not None and handed.calls == {"c1": "yes"}

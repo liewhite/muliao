@@ -121,7 +121,7 @@ def test_only_agent_runtime_touches_the_model_librarys_run_types():
                     for a in node.names
                     if a.name in RUN_TYPES
                 ]
-    assert sorted(problems) == []
+    assert problems == []
 
 
 def test_relative_imports_are_resolved_to_the_module_they_name(tmp_path):

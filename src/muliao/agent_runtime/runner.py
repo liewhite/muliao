@@ -49,7 +49,7 @@ from muliao.agent_runtime.instructions import (
     with_notices,
 )
 from muliao.agent_runtime.llm import ModelResolver
-from muliao.agent_runtime.outcome import Finished, Paused, deferred_results, finished_of, outcome_of
+from muliao.agent_runtime.outcome import Finished, Paused, finished_of, outcome_of
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.transient import transient_as_retryable
@@ -214,11 +214,11 @@ class AgentRuntime:
         resumed = frozenset(deferred or ())
 
         async def steer(
-            run: AgentRun[RunScope, Any], first: UserPromptNode[RunScope, Any], scope: RunScope
+            run: AgentRun[RunScope, Any], first: UserPromptNode[RunScope, Any], driven: RunScope
         ) -> None:
             node = await run.next(first)
-            # 工具组在进入 iter 时已经构建、连接（notices 已经齐了）
-            await hooks.started(run.ctx.state.message_history, scope.notices)
+            # 工具组在进入 iter 时已经构建、连接（notices 已经齐了，在这次驱动的 scope 里）
+            await hooks.started(run.ctx.state.message_history, driven.notices)
             while not isinstance(node, End):
                 if PaiAgent.is_model_request_node(node):
                     await hooks.before_request(node.request, run.ctx.state.message_history)
@@ -249,7 +249,7 @@ class AgentRuntime:
             prompt=None if prompt is None else list(prompt),
             history=history,
             output_type=[str, DeferredToolRequests],
-            deferred=deferred_results(deferred),
+            deferred=None if deferred is None else DeferredToolResults(calls=dict(deferred)),
             steer=steer,
         )
         return outcome_of(result)
@@ -322,11 +322,11 @@ class AgentRuntime:
         """没有历史、不逐步保存的一次运行：运行上下文（context）放在 prompt 前面。"""
 
         async def steer(
-            run: AgentRun[RunScope, Any], first: UserPromptNode[RunScope, Any], scope: RunScope
+            run: AgentRun[RunScope, Any], first: UserPromptNode[RunScope, Any], driven: RunScope
         ) -> None:
-            # 工具组在进入 iter 时已经连接，notices 这时才齐；prompt 在这个节点运行时才交给模型。
+            # 工具组在进入 iter 时已经连接，notices 这时才齐（在这次驱动的 scope 里）；prompt 在这个节点运行时才交给模型。
             # pydantic-ai 的 RunContext.prompt 取的是传给 iter 的那个（None），本项目不读它
-            first.user_prompt = f"{with_notices(context, scope.notices)}\n\n{prompt}"
+            first.user_prompt = f"{with_notices(context, driven.notices)}\n\n{prompt}"
             async for _ in run:
                 pass
 
@@ -363,7 +363,7 @@ class AgentRuntime:
         """一次带工具的模型运行的外壳（会话的逐步运行与没有历史的运行共用）：记账与日志（_billed）、工具失败信息里
         不带参数、启动 pydantic-ai 的运行并确认它从用户 prompt 节点开始，交给 steer 从那个节点驱动到结束，最后取结果。
 
-        steer 拿到的 scope 是这次驱动自己的一份（notices 为空，工具组连接时往里加）：压缩后续跑会重新连接工具组。"""
+        steer 拿到的 scope（driven）是这次驱动自己的一份，notices 要从它读，不是调用方传进来的那份（notices 为空，工具组连接时往里加）：压缩后续跑会重新连接工具组。"""
         scope = replace(scope, notices=[])
         ctx = {
             "agent": scope.agent_id,

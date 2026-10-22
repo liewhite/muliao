@@ -5,11 +5,10 @@
 （ModelMessage、ToolCallPart 等）是会话历史的存储形态，不在此列。
 """
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import NoReturn
 
-from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults
+from pydantic_ai import AgentRunResult, DeferredToolRequests
 from pydantic_ai.exceptions import CallDeferred
 from pydantic_ai.messages import ModelMessage, ToolCallPart
 
@@ -41,12 +40,8 @@ def finished_of(result: AgentRunResult[str]) -> Finished:
 def outcome_of(result: AgentRunResult[str | DeferredToolRequests]) -> Finished | Paused:
     output = result.output
     if isinstance(output, str):
-        return Finished(answer=output, messages=result.new_messages())
+        return Finished(answer=output, messages=result.new_messages())  # 同 finished_of；类型在这里才收窄
     if output.approvals:
         # 本项目没有需要批准的工具（只用 defer_call 挂起）：出现说明工具与这里的约定不一致
         raise RuntimeError(f"run requested approvals: {[c.tool_name for c in output.approvals]}")
     return Paused(calls=tuple(output.calls))
-
-
-def deferred_results(results: Mapping[str, object] | None) -> DeferredToolResults | None:
-    return None if results is None else DeferredToolResults(calls=dict(results))
