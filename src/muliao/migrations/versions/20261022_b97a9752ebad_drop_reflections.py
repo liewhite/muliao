@@ -1,10 +1,12 @@
 """drop reflections
 
 去掉每 N 步强制反思（#116）：删除表 reflections、reflection_checkpoints 与 agents.reflect_every 列，并删除
-tasks 里种类为 reflection 的任务（不再有处理器；未完成的留着会挡住 lane、在启动检查里报错）。会删数据：
+tasks 里种类为 reflection 的任务（不再有处理器；未完成的留着会挡住 lane、在启动检查里报错），以及投给反思订阅者
+（lane `reflection-events:<agent>`）的事件投递（订阅者已不存在，未完成的会失败且无法重试）。会删数据：
 反思记录与这些任务行只留在升级前的备份里。model_usage 里 kind=reflection 的账目行保留不动。
 
-降级只恢复结构：两张表为空，reflect_every 回填 30（当时的默认值），删掉的任务行不恢复。
+降级只恢复结构：两张表为空，reflect_every 回填 30（当时的默认值；列上留着 server_default，旧代码总是显式
+写值，不受影响），删掉的任务行不恢复。
 
 Revision ID: b97a9752ebad
 Revises: b62e70969c23
@@ -24,6 +26,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.execute("DELETE FROM tasks WHERE kind = 'reflection'")
+    op.execute("DELETE FROM tasks WHERE kind = 'event' AND lane LIKE 'reflection-events:%'")
     with op.batch_alter_table("reflections", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_reflections_agent_id"))
     op.drop_table("reflections")

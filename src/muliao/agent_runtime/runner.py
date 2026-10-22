@@ -273,54 +273,26 @@ class AgentRuntime:
         是那次运行的开销，记到那个会话名下。
         """
         scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, audience=None)
-        finished = await self._run_plain(
-            model=model,
-            instructions=build_temp_instructions(
-                parent_name=parent.name, workspace=workspace, extra=instructions
-            ),
-            profile=profile,
-            # 临时 agent 没有听众（回答交回调用方那次工具调用），运行上下文只有当前时间
-            context=self.run_context(None),
-            prompt=task,
-            scope=scope,
-            kind=RunKind.TEMP_AGENT,
-            billed_to=session_id,
-        )
-        return Answer.of_run(finished.answer, finished.messages)
-
-    @staticmethod
-    def _toolsets(profile: RunProfile) -> list[AbstractToolset[RunScope]]:
-        return [DomainErrorsAsRetry(t) for t in profile.toolsets]
-
-    async def _run_plain(
-        self,
-        *,
-        model: str,
-        instructions: str,
-        profile: RunProfile,
-        scope: RunScope,
-        context: str,
-        prompt: str,
-        kind: RunKind,
-        billed_to: str | None,
-    ) -> Finished:
-        """没有历史、不逐步保存的一次运行：运行上下文（context）放在 prompt 前面。"""
+        # 临时 agent 没有听众（回答交回调用方那次工具调用），运行上下文只有当前时间
+        context = self.run_context(None)
 
         async def steer(
             run: AgentRun[RunScope, Any], first: UserPromptNode[RunScope, Any], driven: RunScope
         ) -> None:
             # 工具组在进入 iter 时已经连接，notices 这时才齐（在这次驱动的 scope 里）；prompt 在这个节点运行时才交给模型。
             # pydantic-ai 的 RunContext.prompt 取的是传给 iter 的那个（None），本项目不读它
-            first.user_prompt = f"{with_notices(context, driven.notices)}\n\n{prompt}"
+            first.user_prompt = f"{with_notices(context, driven.notices)}\n\n{task}"
             async for _ in run:
                 pass
 
         result = await self._drive(
-            kind=kind,
+            kind=RunKind.TEMP_AGENT,
             model=model,
             scope=scope,
-            billed_to=billed_to,
-            instructions=instructions,
+            billed_to=session_id,
+            instructions=build_temp_instructions(
+                parent_name=parent.name, workspace=workspace, extra=instructions
+            ),
             profile=profile,
             prompt=None,
             history=(),
@@ -328,7 +300,12 @@ class AgentRuntime:
             deferred=None,
             steer=steer,
         )
-        return finished_of(result)
+        finished = finished_of(result)
+        return Answer.of_run(finished.answer, finished.messages)
+
+    @staticmethod
+    def _toolsets(profile: RunProfile) -> list[AbstractToolset[RunScope]]:
+        return [DomainErrorsAsRetry(t) for t in profile.toolsets]
 
     async def _drive(
         self,

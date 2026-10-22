@@ -248,7 +248,7 @@ def test_dropping_notifications_issue_id_keeps_notifications_and_their_ids(tmp_p
 
 
 def test_dropping_reflections_keeps_agents_other_tasks_and_usage(tmp_path):
-    """去掉强制反思（#116）：反思的表、agents.reflect_every 与 reflection 任务删掉；agent、别的任务与 kind=reflection
+    """去掉强制反思（#116）：反思的表、agents.reflect_every、reflection 任务与投给反思订阅者的事件删掉；agent、别的任务与 kind=reflection
     的用量账目保留。降级恢复结构，reflect_every 回填 30。"""
     from alembic import command
 
@@ -268,15 +268,17 @@ def test_dropping_reflections_keeps_agents_other_tasks_and_usage(tmp_path):
             "values ('a1', 0, 5, 'o', '[]', '2026-01-01')"
         )
         conn.execute("insert into reflection_checkpoints (agent_id, message_id) values ('a1', 5)")
-        for id_, kind, status in (
-            (1, "reflection", "pending"),
-            (2, "reflection", "done"),
-            (3, "run", "done"),
+        for id_, kind, lane, status in (
+            (1, "reflection", "reflection:a1", "pending"),
+            (2, "reflection", "reflection:a1", "done"),
+            (3, "run", "session:s1", "done"),
+            (4, "event", "reflection-events:a1", "failed"),
+            (5, "event", "notifications:s1", "pending"),
         ):
             conn.execute(
                 "insert into tasks (id, kind, lane, agent_id, payload, status, attempts, not_before, created_at) "
-                "values (?, ?, 'l', 'a1', '{}', ?, 0, '2026-01-01', '2026-01-01')",
-                (id_, kind, status),
+                "values (?, ?, ?, 'a1', '{}', ?, 0, '2026-01-01', '2026-01-01')",
+                (id_, kind, lane, status),
             )
         conn.execute(
             "insert into model_usage (created_at, agent_id, kind, model, requests, input_tokens, output_tokens, "
@@ -287,7 +289,7 @@ def test_dropping_reflections_keeps_agents_other_tasks_and_usage(tmp_path):
         assert {"reflections", "reflection_checkpoints"}.isdisjoint(_tables(path))
         assert "reflect_every" not in {r[1] for r in conn.execute("pragma table_info(agents)")}
         assert conn.execute("select id, name from agents").fetchall() == [("a1", "alpha")]
-        assert conn.execute("select id, kind from tasks").fetchall() == [(3, "run")]
+        assert conn.execute("select id, kind from tasks").fetchall() == [(3, "run"), (5, "event")]
         assert conn.execute("select kind from model_usage").fetchall() == [("reflection",)]
     with _migration_engine(path).begin() as connection:
         command.downgrade(alembic_config(connection), "b62e70969c23")

@@ -60,7 +60,7 @@ def build_run_context(*, now_local: datetime, audience: Audience | None) -> str:
 def with_notices(run_context: str, notices: Sequence[str]) -> str:
     """运行上下文接上这次运行的工具组在开始时发现的问题（RunScope.notices，如连不上的 MCP server），一条一行。
     它们只有工具组连接之后才知道，所以单独接上：会话的运行在第一步之前（sessions.steps），没有历史的运行在交给模型
-    之前（AgentRuntime._run_plain）。"""
+    之前（AgentRuntime.run_temp）。"""
     return "\n".join([*([run_context] if run_context else []), *(f"[{n}]" for n in notices)])
 
 
