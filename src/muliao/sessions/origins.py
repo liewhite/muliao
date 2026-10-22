@@ -30,9 +30,11 @@ _NOTES: dict[Origin, str] = {
         "others is delivered only once all of them are `done` or `cancelled`; a cancelled dependency may mean "
         "this issue is no longer needed. Work on it here, then record the outcome on the issue with the `issue_*` "
         "tools: comment with what you did or found (`issue_comment`), and move it on with `issue_update`, e.g. "
-        "status `in_progress` while working, `blocked` with a comment explaining why. When you have finished, do "
-        "not set `done` yourself: set status `in_review` and assignee `user`, and the user moves it to `done` "
-        "after reviewing. Hand it to another agent by changing the assignee. Nobody is watching this "
+        "status `in_progress` while working, `blocked` with a comment explaining why. When you have finished: if "
+        "other issues depend on this one (`issue_show` lists them under `blocks`), it is a step of a larger piece "
+        "of work, so set it `done` yourself and the next steps start; otherwise do not set `done` yourself: set "
+        "status `in_review` and assignee `user`, and the user moves it to `done` after reviewing. Hand it to "
+        "another agent by changing the assignee. Nobody is watching this "
         "conversation: the user reads the issue, not this conversation."
     ),
 }

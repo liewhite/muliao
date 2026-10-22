@@ -614,7 +614,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 - **投信**：在 issue 的事务里经 `receive_command_in` 得到定向命令 `Receive`（来源 `Origin.ISSUE`，目标 `SessionKey`）并 `send_in`，提交后 `run_now`；没有用户在等（awaited = False），结果记在 issue 上。
 - **停滞**（`rules.stalled`，唯一规则）：todo / in_progress、不在等上游、指派给 agent，而它的 issue 会话空闲或不存在。`IssueService.work` 一次算出一批 issue 的各 agent 会话、被指派 agent 会话的工作状态（`SessionActivity.work_states_in`：running / waiting / idle）与是否停滞，`issue_list` 与接口的 `assignee_session`、`stalled` 都来自它。界面在 `stalled` 的卡片上标「没人在处理」；巡检 agent（issue-watch）的前置检查读接口的 `stalled`，评论来唤醒被指派的 agent——与界面同一条规则。
 - **交给用户**：agent 把 issue 指派给用户时发 `Notify` 推送，点开是它交出 issue 的那个会话。
-- **先审核再完成**：agent 做完不自己设 done，而是设 in_review 并指派给用户，由用户审核后拖进 done。这是约定，写在 issue 会话的来源说明（`sessions.origins` 的 ISSUE）和 `issue_update` 的工具说明里，代码不拦。
+- **先审核再完成**：agent 做完不自己设 done，而是设 in_review 并指派给用户，由用户审核后拖进 done。例外是大需求拆出的子 issue：有别的 issue 依赖它（`blocks` 非空）时，做完由 agent 自己设 done，下游随即开工；拆法是子 issue 之间用依赖排序，再建一个依赖全部子 issue 的父 issue（总目标与验收），全部子 issue 完成后父 issue 才投递，集成验收后照常 in_review 交给用户（拆分步骤见公共 skill `issue-breakdown`）。这些是约定，写在 issue 会话的来源说明（`sessions.origins` 的 ISSUE）和 `issue_create`/`issue_update` 的工具说明里，代码不拦。
 - **删除 agent**：订阅 `AgentDeleting`，指派给它、归它负责的 issue 改为未指派、无负责人（各记一条时间线，actor 是系统 `rules.SYSTEM_ACTOR`（`"system"`），不是用户；同时更新 `updated_at`）。它的 issue 会话随它由会话领域删除，issue 领域没有要清理的会话引用。
 
 ## 22. 暂缓的项
