@@ -6,8 +6,10 @@ import App from './App'
 import { ErrorBoundary } from './ErrorBoundary'
 import './styles.css'
 import { registerServiceWorker } from './push'
+import { listenForNavigation } from './swNavigate'
 import { ConfirmProvider } from './ui'
 
+listenForNavigation()
 void registerServiceWorker().catch((e) => console.error('service worker registration failed', e))
 
 createRoot(document.getElementById('root')!).render(

@@ -34,9 +34,36 @@ import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads 
 import { appendTranscript, useVoiceInput, type VoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
 import { isSendShortcut, SEND_HINT } from '../sendKey'
-import { announceChange, isTaskOf, liveItems, mergeLive, useServerEvents, withoutCovered, type RunEvent } from '../events'
+import { announceChange, isTaskOf, liveItems, mergeLive, useRefetch, useServerEvents, withoutCovered, type RunEvent } from '../events'
+import { STATUS_LABEL, issueIdOf, issueRoute } from '../issues'
+import { useReturnState } from '../nav'
+import { StatusDot } from './Issues'
 import { refreshUnread, refreshUnreadLogged } from '../unread'
 import { CODE_BLOCK, ErrorAlert, Loading, Markdown, Page, agentLabel, formatTime, useAction, useAgents, useConfirm, useLoad } from '../ui'
+
+/**
+ * issue 会话的页头标题：指回它的 issue，显示编号、标题、当前状态（随 issue 变化刷新）；在 issue 页返回回到这个会话。
+ * 取不到 issue（如已删除，会话保留）时显示会话自己的标题和原因
+ */
+function IssueTitle({ session }: { session: Session }) {
+  const issueId = issueIdOf(session)
+  const from = useReturnState()
+  const detail = useLoad(() => api.issue(issueId), [issueId])
+  useRefetch('issues', detail.reload)
+  const issue = detail.data?.issue
+  return (
+    <Link
+      to={issueRoute(issueId)}
+      state={from}
+      className="flex min-w-0 items-center gap-1.5 hover:text-accent"
+    >
+      {issue && <StatusDot status={issue.status} />}
+      <span className="min-w-0 truncate">{issue ? `#${issueId} ${issue.title}` : session.title}</span>
+      {issue && <span className="shrink-0 text-xs font-normal text-muted">{STATUS_LABEL[issue.status]}</span>}
+      {detail.error && <span className="shrink-0 text-xs font-normal text-danger">{detail.error}</span>}
+    </Link>
+  )
+}
 
 function Collapsible({ title, children }: { title: ReactNode; children: ReactNode }) {
   return (
@@ -601,7 +628,9 @@ export default function SessionView() {
     <Page
       scrollRef={bottom.scrollRef}
       back={parentRoute}
-      title={session?.title ?? '会话'}
+      title={
+        session?.origin === 'issue' ? <IssueTitle session={session} /> : (session?.title ?? '会话')
+      }
       actions={
         <>
           <Button

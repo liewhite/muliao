@@ -39,14 +39,19 @@ self.addEventListener('push', (event) => {
 // 打开（或聚焦已打开的窗口并跳转到）url
 async function open(url) {
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-  for (const client of windows) {
-    if ('focus' in client) {
-      await client.focus()
-      client.postMessage({ type: 'navigate', url })
-      return
-    }
+  // 优先用户正在看的窗口
+  const client = windows.find((c) => c.focused) ?? windows.find((c) => c.visibilityState === 'visible') ?? windows[0]
+  if (client === undefined) {
+    await self.clients.openWindow(url)
+    return
   }
-  await self.clients.openWindow(url)
+  // 先发跳转再聚焦：focus 在部分平台（iOS 主屏应用）会被拒绝，拒绝了也要跳；页面在重新加载时消息由 swNavigate.ts 暂存
+  client.postMessage({ type: 'navigate', url })
+  try {
+    await client.focus()
+  } catch (e) {
+    console.error('focusing the window failed', e)
+  }
 }
 
 // 通知上的「通过」：直接调接口（同源请求带登录 cookie）；没成功（登录过期、已被改派……）就打开详情页让用户看到原因

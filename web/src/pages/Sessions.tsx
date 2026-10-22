@@ -2,39 +2,23 @@ import { useState } from 'react'
 import { Card, Chip, Spinner } from '@heroui/react'
 import { ChevronDown, ChevronRight, Hourglass, Plus } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
-import { api, asAgentId, type AgentId, type Origin, type SessionListItem, sessionRoute } from '../api'
+import { api, type AgentId, type SessionListItem, sessionRoute } from '../api'
 import { useRefetch } from '../events'
-import { groupByAgent, splitActive } from '../sessionGroups'
+import { FILTERS, ORIGIN_LABEL, groupByAgent, parseFilter, splitActive, type Filter } from '../sessionGroups'
 import {
   EmptyHint,
   LinkButton,
   Loading,
   Page,
   Segmented,
-  SelectInput,
   agentLabel,
   relativeTime,
   useAgents,
   useLoad,
 } from '../ui'
 
-const ORIGIN_LABEL: Record<Origin, string> = {
-  user: '对话',
-  trigger: '触发',
-  delegation: '委派',
-  issue: 'Issue',
-}
-
-// 触发器（定时、外部事件）每次触发、issue 唤醒 agent 都会产生会话，默认不显示以免淹没收件箱
-const FILTERS = {
-  inbox: { label: '收件箱', origins: ['user', 'delegation'] as Origin[] },
-  auto: { label: '自动', origins: ['trigger', 'issue'] as Origin[] },
-  all: { label: '全部', origins: undefined },
-}
-type Filter = keyof typeof FILTERS
-
-// 「所有 agent」选项的 id；查询时映射为不过滤
-const ALL_AGENTS = '@all'
+// 选中的分类跨刷新、跨页面记住：从会话或 issue 回来时停在原来的分类（不放 URL：宽屏分屏时右侧切会话会换掉 URL）
+const FILTER_KEY = 'muliao.sessions.filter'
 
 // 折叠起来的 agent 分组，跨刷新记住
 const COLLAPSED_KEY = 'muliao.sessions.collapsed'
@@ -104,8 +88,11 @@ function SessionCard({ s, agentName }: { s: SessionListItem; agentName?: string 
 }
 
 export default function Sessions() {
-  const [filter, setFilter] = useState<Filter>('inbox')
-  const [agent, setAgent] = useState(ALL_AGENTS)
+  const [filter, setFilterState] = useState(() => parseFilter(localStorage.getItem(FILTER_KEY)))
+  const setFilter = (f: Filter) => {
+    localStorage.setItem(FILTER_KEY, f)
+    setFilterState(f)
+  }
   const agents = useAgents()
   const [collapsed, setCollapsed] = useState(loadCollapsed)
   const toggle = (id: AgentId) =>
@@ -120,10 +107,9 @@ export default function Sessions() {
     () =>
       api.sessions({
         origin: FILTERS[filter].origins,
-        agent_id: agent === ALL_AGENTS ? undefined : asAgentId(agent),
         limit: 200,
       }),
-    [filter, agent],
+    [filter],
   )
   useRefetch('sessions', sessions.reload)
 
@@ -137,39 +123,20 @@ export default function Sessions() {
         </LinkButton>
       }
     >
-      <div className="flex flex-wrap items-end gap-3">
-        <Segmented
-          label="会话筛选"
-          value={filter}
-          onChange={setFilter}
-          options={Object.entries(FILTERS).map(([id, f]) => ({
-            id: id as Filter,
-            label: f.label,
-          }))}
-        />
-        <div className="min-w-40 flex-1">
-          <SelectInput
-            label="Agent"
-            value={agent}
-            onChange={setAgent}
-            options={[
-              { id: ALL_AGENTS, label: '所有 agent' },
-              ...(agents.data ?? []).map((a) => ({ id: a.id, label: a.name })),
-            ]}
-          />
-        </div>
-      </div>
+      <Segmented
+        label="会话分类"
+        value={filter}
+        onChange={setFilter}
+        options={Object.entries(FILTERS).map(([id, f]) => ({
+          id: id as Filter,
+          label: f.label,
+        }))}
+      />
       <Loading state={sessions}>
         {(list) => {
           const { active, rest } = splitActive(list)
           return list.length === 0 ? (
             <EmptyHint>没有会话</EmptyHint>
-          ) : agent !== ALL_AGENTS ? (
-            <div className="flex flex-col gap-2">
-              {list.map((s) => (
-                <SessionCard key={s.id} s={s} />
-              ))}
-            </div>
           ) : (
             <div className="flex flex-col gap-4">
               {active.length > 0 && (

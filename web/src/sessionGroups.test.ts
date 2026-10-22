@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { asAgentId } from './api'
-import { groupByAgent, splitActive } from './sessionGroups'
+import { FILTERS, ORIGIN_LABEL, groupByAgent, parseFilter, splitActive } from './sessionGroups'
 
 const a = asAgentId('agent-a')
 const b = asAgentId('agent-b')
@@ -38,5 +38,22 @@ describe('splitActive', () => {
     const { active, rest } = splitActive(list)
     expect(active.map((s) => s.id)).toEqual([1, 3])
     expect(rest.map((s) => s.id)).toEqual([2, 4])
+  })
+})
+
+describe('FILTERS', () => {
+  it('每个会话来源恰好属于一个分类', () => {
+    const covered = Object.values(FILTERS).flatMap((f) => f.origins)
+    expect([...covered].sort()).toEqual(Object.keys(ORIGIN_LABEL).sort())
+  })
+})
+
+describe('parseFilter', () => {
+  it('记住的分类原样取回，没记过或不认识的值回到「对话」', () => {
+    expect(parseFilter('issue')).toBe('issue')
+    expect(parseFilter('auto')).toBe('auto')
+    expect(parseFilter(null)).toBe('chat')
+    expect(parseFilter('inbox')).toBe('chat')
+    expect(parseFilter('toString')).toBe('chat')
   })
 })

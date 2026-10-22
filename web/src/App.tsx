@@ -20,6 +20,7 @@ import Sessions from './pages/Sessions'
 import { PublicSkills, SkillEditor } from './pages/Skills'
 import UsagePage from './pages/Usage'
 import { syncPushSubscription } from './push'
+import { handleNavigation } from './swNavigate'
 import { ErrorAlert, errorMessage } from './ui'
 import { AdminDrawer, AdminNav } from './AdminMenu'
 import { ListDetail } from './ListDetail'
@@ -53,12 +54,8 @@ export default function App() {
   useEffect(() => {
     if (auth !== 'in') return
     void syncPushSubscription().catch((e) => console.error('push subscription sync failed', e))
-    // 通知点击时 Service Worker 让已打开的窗口跳转
-    const onMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'navigate') navigate(e.data.url)
-    }
-    navigator.serviceWorker?.addEventListener('message', onMessage)
-    return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
+    // 通知点击时 Service Worker 让已打开的窗口跳转（含登录确认前就到了的那次，见 swNavigate.ts）
+    return handleNavigation((url) => navigate(url))
   }, [auth, navigate])
 
   if (bootError) {

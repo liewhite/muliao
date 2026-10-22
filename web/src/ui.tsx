@@ -33,7 +33,7 @@ import {
   type Key,
 } from '@heroui/react'
 import { ChevronLeft, Menu, Plus } from 'lucide-react'
-import { useOpenAdminMenu } from './nav'
+import { backTarget, useOpenAdminMenu } from './nav'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import rehypeKatex from 'rehype-katex'
@@ -190,12 +190,13 @@ export function Page({
   children: ReactNode
 }) {
   const navigate = useNavigate()
+  const { state } = useLocation()
   const openAdminMenu = useOpenAdminMenu()
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-2 border-b border-separator bg-surface px-3 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2">
         {back !== undefined ? (
-          <Button isIconOnly variant="ghost" size="sm" aria-label="返回" onPress={() => navigate(back)}>
+          <Button isIconOnly variant="ghost" size="sm" aria-label="返回" onPress={() => navigate(backTarget(state, back))}>
             <ChevronLeft className="size-5" />
           </Button>
         ) : (

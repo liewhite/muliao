@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   Activity,
   BarChart3,
@@ -53,6 +54,28 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
 /** 路径是否属于管理菜单里的某一项（含其子页面，如 /agents/:id） */
 export function isAdminPath(pathname: string): boolean {
   return ADMIN_GROUPS.some((g) => g.items.some((i) => pathname === i.to || pathname.startsWith(`${i.to}/`)))
+}
+
+/**
+ * 跳到另一页时带上的「从哪来」（Link 的 state）：目标页左上角的返回回到这里，而不是它固定的上级页
+ * （如从 issue 点进它的会话，返回回到 issue；从通知点进来，返回回到通知）。没带（直接打开、点推送）时用固定的上级页。
+ * 返回是跳到来源页（压一条新历史）而不是后退：页面左上角的返回始终是「上一级」，不依赖浏览器历史里有什么（点推送、直接打开时没有）。
+ */
+export type ReturnState = { from: string }
+
+export function returnTo(here: { pathname: string; search: string }): ReturnState {
+  return { from: here.pathname + here.search }
+}
+
+/** 当前页作为来源：给这一页上的 Link 作 state */
+export function useReturnState(): ReturnState {
+  return returnTo(useLocation())
+}
+
+/** 返回按钮的目标：来源页带了 ReturnState 就回来源页，否则回页面固定的上级页 */
+export function backTarget(state: unknown, fallback: string): string {
+  const from = (state as Partial<ReturnState> | null)?.from
+  return typeof from === 'string' ? from : fallback
 }
 
 /** 打开管理菜单（抽屉）；由登录后的外壳提供 */

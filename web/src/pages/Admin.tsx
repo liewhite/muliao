@@ -3,6 +3,7 @@ import { Button, Card, Chip, Form, toast } from '@heroui/react'
 import { BellRing, LogOut, RotateCcw } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, unauthorizedEvent, type TaskStatus, sessionRoute } from '../api'
+import { useReturnState } from '../nav'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
 import { ActionButton,
   EmptyHint,
@@ -36,6 +37,7 @@ const STATUS_COLOR: Record<TaskStatus, 'danger' | 'success' | 'warning' | 'accen
 }
 
 export function Tasks() {
+  const from = useReturnState()
   const [filter, setFilter] = useState<StatusFilter>('failed')
   const tasks = useLoad(() => api.tasks(STATUS_FILTERS[filter].status), [filter])
   const agents = useAgents()
@@ -77,7 +79,7 @@ export function Tasks() {
                       {t.session_id && (
                         <>
                           {' · '}
-                          <Link className="text-accent" to={sessionRoute(t.session_id)}>
+                          <Link className="text-accent" to={sessionRoute(t.session_id)} state={from}>
                             会话
                           </Link>
                         </>

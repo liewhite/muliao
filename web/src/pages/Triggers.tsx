@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Alert, Button, Card, Chip, Disclosure, toast } from '@heroui/react'
 import { Archive, Copy, History, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useReturnState } from '../nav'
 import {
   api,
   asAgentId,
@@ -306,6 +307,7 @@ function TriggerSessions({ trigger }: { trigger: Trigger }) {
 }
 
 function SessionList({ triggerId }: { triggerId: number }) {
+  const from = useReturnState()
   const sessions = useLoad(
     () => api.sessions({ origin: ['trigger'], origin_ref: String(triggerId), limit: 50 }),
     [triggerId],
@@ -319,7 +321,7 @@ function SessionList({ triggerId }: { triggerId: number }) {
           <ul className="flex flex-col gap-1.5 text-sm">
             {list.map((s) => (
               <li key={s.id} className="flex flex-wrap items-baseline gap-2">
-                <Link className="text-accent" to={sessionRoute(s.id)}>
+                <Link className="text-accent" to={sessionRoute(s.id)} state={from}>
                   {s.title}
                 </Link>
                 <span className="text-xs text-muted">{formatTime(s.created_at)}</span>
@@ -333,6 +335,7 @@ function SessionList({ triggerId }: { triggerId: number }) {
 }
 
 function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
+  const from = useReturnState()
   const confirm = useConfirm()
   const [editing, setEditing] = useState(false)
   const [prompt, setPrompt] = useState(trigger.prompt)
@@ -391,7 +394,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           {trigger.last_session_id && (
             <>
               {' · '}
-              <Link className="text-accent" to={sessionRoute(trigger.last_session_id)}>
+              <Link className="text-accent" to={sessionRoute(trigger.last_session_id)} state={from}>
                 上次会话
               </Link>
             </>
@@ -540,6 +543,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
 
 /** 已归档的触发器：跑完的一次性触发器。只能看结果与删除，不能再改、启用或运行 */
 function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
+  const from = useReturnState()
   const confirm = useConfirm()
   const action = useAction()
 
@@ -568,7 +572,7 @@ function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agen
       <Card.Content className="flex flex-col gap-3">
         <div className="text-xs text-muted">
           {trigger.last_session_id ? (
-            <Link className="text-accent" to={sessionRoute(trigger.last_session_id)}>
+            <Link className="text-accent" to={sessionRoute(trigger.last_session_id)} state={from}>
               这次触发的会话
             </Link>
           ) : (

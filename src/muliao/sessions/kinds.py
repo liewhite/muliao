@@ -26,7 +26,7 @@ class KindPolicy:
     opened_by_delegation: bool
     # 用户能在里面发消息；不能的就是私有的（见 private）
     user_writable: bool
-    # 出现在会话列表（收件箱）里、运行结束时标未读
+    # 出现在会话列表里、运行结束时标未读
     listed: bool
     # 归父会话所有：随父会话删除，不能单独删除
     owned_by_parent: bool

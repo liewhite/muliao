@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Agent, Issue, IssueActivity } from './api'
-import { FOLD_LIMIT, activityText, assigneeLabel, foldIssues, groupByStatus, moveIssues, ownerHue, parseIssueRefs } from './issues'
+import { FOLD_LIMIT, activityText, assigneeLabel, foldIssues, groupByStatus, issueIdOf, moveIssues, ownerHue, parseIssueRefs } from './issues'
 
 const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   id,
@@ -110,5 +110,18 @@ describe('ownerHue', () => {
     expect(ownerHue(team, null)).toBeNull()
     expect(ownerHue(team, 'gone')).toBeNull()
     expect(ownerHue(undefined, 'a')).toBeNull()
+  })
+})
+
+describe('issueIdOf', () => {
+  it('issue 会话取 origin_ref 里的编号', () => {
+    expect(issueIdOf({ id: 's', origin: 'issue', origin_ref: '120' })).toBe(120)
+  })
+
+  it('不是 issue 会话或编号不合法时报错', () => {
+    expect(() => issueIdOf({ id: 's', origin: 'user', origin_ref: null })).toThrow(/会话 s/)
+    expect(() => issueIdOf({ id: 's', origin: 'issue', origin_ref: null })).toThrow()
+    expect(() => issueIdOf({ id: 's', origin: 'issue', origin_ref: 'abc' })).toThrow()
+    expect(() => issueIdOf({ id: 's', origin: 'issue', origin_ref: '0' })).toThrow()
   })
 })

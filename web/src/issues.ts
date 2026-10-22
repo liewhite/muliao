@@ -44,6 +44,15 @@ export const PRIORITIES = Object.keys(PRIORITY_LABEL) as readonly IssuePriority[
 
 export const issueRoute = (id: number) => `/issues/${id}`
 
+/** issue 会话（origin=issue）的 issue 编号：后端契约是 origin_ref 为 issue id，不符合就报错而不是去请求一个不存在的 issue */
+export function issueIdOf(session: { id: string; origin: string; origin_ref: string | null }): number {
+  const id = Number(session.origin_ref)
+  if (session.origin !== 'issue' || session.origin_ref === null || !Number.isInteger(id) || id <= 0) {
+    throw new Error(`会话 ${session.id} 不是 issue 会话或 origin_ref 不是 issue 编号：${session.origin}/${session.origin_ref}`)
+  }
+  return id
+}
+
 /** 指派人下拉框里「未指派」的 id（选项 id 必须非空） */
 export const UNASSIGNED = '@none'
 

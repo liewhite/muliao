@@ -4,6 +4,7 @@ import { ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type AppNotification } from '../api'
 import { useServerEvents } from '../events'
+import { useReturnState } from '../nav'
 import { notificationsMayHaveChanged, refreshUnread } from '../unread'
 import { EmptyHint, Loading, Page, formatTime, useLoad } from '../ui'
 
@@ -31,6 +32,7 @@ function NotificationCard({ n }: { n: AppNotification }) {
 }
 
 export default function Notifications() {
+  const from = useReturnState()
   const notifications = useLoad(() => api.notifications(), [])
   useServerEvents((e) => {
     if (notificationsMayHaveChanged(e)) void notifications.reload()
@@ -55,9 +57,9 @@ export default function Notifications() {
           ) : (
             <div className="flex flex-col gap-2">
               {list.map((n) =>
-                // 点开打开的页面由服务端给出（与推送一致）；系统通知没有
+                // 点开打开的页面由服务端给出（与推送一致），返回回到通知页；系统通知没有
                 n.url ? (
-                  <Link key={n.id} to={n.url}>
+                  <Link key={n.id} to={n.url} state={from}>
                     <NotificationCard n={n} />
                   </Link>
                 ) : (

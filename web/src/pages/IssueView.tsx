@@ -13,6 +13,7 @@ import {
   type IssueStatus,
 } from '../api'
 import { useRefetch } from '../events'
+import { useReturnState } from '../nav'
 import { refreshUnread } from '../unread'
 import {
   PRIORITIES,
@@ -80,8 +81,9 @@ function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | u
 }
 
 function IssueLinks({ ids }: { ids: number[] }) {
+  const from = useReturnState()
   return ids.map((i) => (
-    <Link key={i} to={issueRoute(i)} className="text-accent">
+    <Link key={i} to={issueRoute(i)} state={from} className="text-accent">
       #{i}
     </Link>
   ))
@@ -185,6 +187,7 @@ function Review({ issueId, reload }: { issueId: number; reload: () => Promise<vo
 function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<void> }) {
   const agents = useAgents()
   const navigate = useNavigate()
+  const from = useReturnState()
   const confirm = useConfirm()
   const [editing, setEditing] = useState(false)
   const [comment, setComment] = useState('')
@@ -229,6 +232,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
         </>
       }
     >
+      {/* 标题下面先放属性、审核与关联会话（打开页面最常看、最常改的），再放正文；编辑时标题和正文一起在编辑器里 */}
       {editing ? (
         <Editor
           detail={detail}
@@ -239,18 +243,13 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
           }}
         />
       ) : (
-        <div className="flex flex-col gap-2">
-          <h2 className="flex items-center gap-2 text-xl font-semibold">
-            <StatusDot status={issue.status} />
-            {issue.title}
-          </h2>
-          {issue.description.trim() ? <Markdown text={issue.description} /> : <p className="text-sm text-muted">没有描述</p>}
-        </div>
+        <h2 className="flex items-center gap-2 text-xl font-semibold">
+          <StatusDot status={issue.status} />
+          {issue.title}
+        </h2>
       )}
 
-      {issue.reviewable && <Review issueId={issue.id} reload={reload} />}
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <OwnerSelect
           agents={agents.data}
           label="负责项目（owner）"
@@ -304,13 +303,27 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
       )}
 
       {sessions.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <span className="text-muted">关联会话</span>
           {sessions.map(([agentId, sessionId]) => (
-            <Link key={sessionId} to={sessionRoute(sessionId)} className="flex items-center gap-1 text-sm text-accent">
+            <Link
+              key={sessionId}
+              to={sessionRoute(sessionId)}
+              state={from}
+              className="flex items-center gap-1 text-accent"
+            >
               <MessageSquare className="size-4" />
               {agentLabel(agents.data, asAgentId(agentId))} 的会话
             </Link>
           ))}
+        </div>
+      )}
+
+      {issue.reviewable && <Review issueId={issue.id} reload={reload} />}
+
+      {!editing && (
+        <div className="border-t border-separator pt-3">
+          {issue.description.trim() ? <Markdown text={issue.description} /> : <p className="text-sm text-muted">没有描述</p>}
         </div>
       )}
 

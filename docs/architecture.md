@@ -292,9 +292,9 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 | 工具 | 父 agent | 子 session | 处理它的运行的回答 |
 |---|---|---|---|
-| `delegate_task(agent, task, thread)` | 立即继续，不等 | 公开 thread：进收件箱，用户可追问 | 推送给用户；父 agent 拿不到 |
+| `delegate_task(agent, task, thread)` | 立即继续，不等 | 公开 thread：进会话页「对话」，用户可追问 | 推送给用户；父 agent 拿不到 |
 | `delegate_task(..., report_back=true)` | 立即继续，不等 | 同上 | 不直接推送，作为事件交回父会话（第 8 节） |
-| `ask_agent(agent, message, thread)` | 停在这次调用上等回信（见「挂起的调用」） | 私有 thread：不进收件箱，用户只读 | 作为这次调用的结果交回父 agent |
+| `ask_agent(agent, message, thread)` | 停在这次调用上等回信（见「挂起的调用」） | 私有 thread：不进会话页「对话」，用户只读 | 作为这次调用的结果交回父 agent |
 
 **界面上 thread 显示在开出或续写它的那次调用处**：两个工具都把 thread 的会话 id 挂在工具结果的 metadata 上（`conventions.TOOL_THREADS`，与 `TOOL_ATTACHMENTS` 同一约定，不发给模型、随消息持久化、实时条目里也带），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新的对话）。没有任何条目引用的 thread 列在末尾「未关联到调用的 thread」：开出后调用被用户停止的（停止补上的结果不带 thread）、开出后调用失败的（交还模型重试的结果不带 thread）。不为后两种补记 metadata，那会把这个约定散到停止与重试的路径里。历史里引用的 thread 不在会话的 thread 列表中，说明它已被删除，显示为「thread 已删除」。
 
