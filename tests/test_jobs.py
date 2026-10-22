@@ -268,7 +268,6 @@ async def test_a_check_while_a_job_records_its_outcome_does_not_report_it_interr
     container, make_agent, models, monkeypatch
 ):
     """进程自然退出、结局正在写的那一刻碰上检查：监督者还登记着，对账不能抢先记成被中断。"""
-    session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 0.3")
     real_finish = container.jobs._finish  # noqa: SLF001
     writing = asyncio.Event()
     release = asyncio.Event()
@@ -278,7 +277,9 @@ async def test_a_check_while_a_job_records_its_outcome_does_not_report_it_interr
         await release.wait()
         await real_finish(*args, **kwargs)
 
+    # 在开任务之前换掉：start_job 要跑完整轮运行，满载时比命令本身还慢，之后再换就赶不上它写结局
     monkeypatch.setattr(container.jobs, "_finish", slow_finish)
+    session, job, _recorder, _agent = await start_job(container, make_agent, models, "true")
     await asyncio.wait_for(writing.wait(), 5)
     await container.jobs.check()
     release.set()
