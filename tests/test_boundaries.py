@@ -302,4 +302,4 @@ async def test_the_task_kinds_in_the_http_contract_are_exactly_the_registered_on
 
     from muliao.api.sessions import TaskKind
 
-    assert set(typing.get_args(TaskKind)) == container.worker.kinds
+    assert set(typing.get_args(TaskKind)) == container.queue.kinds

@@ -13,6 +13,7 @@ from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, SessionHold
+from tests.conftest import run_workers
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, history_of, start, tasks_of
 from tests.test_mailbox import Recorder
@@ -296,7 +297,7 @@ async def test_stopping_the_parent_stops_its_reported_threads_and_they_do_not_re
 
     models.models["l"] = scripted(lead_fn)
     parent = await start(container, lead, "go")
-    worker = asyncio.create_task(container.worker.run_forever())
+    worker = asyncio.create_task(run_workers(container))
     try:
         async with asyncio.timeout(5):
             await running.wait()
@@ -496,7 +497,7 @@ async def test_a_user_message_while_waiting_on_an_agent_continues_and_the_answer
         runs = [r for r in await tasks_of(container, RUN_TASK) if r.session_id == parent.id]
         return len(runs) >= n and all(r.status == TaskStatus.DONE for r in runs)
 
-    worker = asyncio.create_task(container.worker.run_forever())
+    worker = asyncio.create_task(run_workers(container))
     try:
         await _until(lambda: parent_runs_done(1))
         # 发问方停在 ask_agent 上：用户插话，它不再等，这次调用记为「回答之后作为事件送达」
@@ -536,7 +537,7 @@ async def test_stopping_a_private_thread_answers_the_waiting_ask_with_stopped(co
         yield "never"
 
     parent, seen = await _asking(container, make_agent, models, FunctionModel(stream_function=blocked))
-    worker = asyncio.create_task(container.worker.run_forever())
+    worker = asyncio.create_task(run_workers(container))
     try:
         async with asyncio.timeout(5):
             await running.wait()
@@ -590,7 +591,7 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
 async def test_no_check_ins_while_the_delegator_waits_on_the_ask(container, make_agent, models):
     parent, _seen = await _asking(container, make_agent, models, scripted(Recorder()))
     # 只跑发问方那次运行：它停在 ask_agent 上，子 thread 的运行还排着
-    run = await container.queue.claim(container.worker.kinds)
+    run = await container.queue.claim(container.queue.kinds)
     assert run is not None and run.session_id == parent.id
     await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
     # 检查信件要等回答一起才交给模型，这时不发
@@ -643,7 +644,7 @@ async def test_stopping_the_asker_while_it_waits_abandons_the_ask(container, mak
     from muliao.agent_runtime.conventions import STOPPED_TOOL_RESULT
 
     parent, seen = await _asking(container, make_agent, models, echo("checked"))
-    run = await container.queue.claim(container.worker.kinds)
+    run = await container.queue.claim(container.queue.kinds)
     assert run is not None and run.session_id == parent.id
     await container.queue.complete(run.id, await container.consumer.run(run.id, parent.id))
 
@@ -789,7 +790,7 @@ async def test_a_private_thread_answers_only_after_its_background_job_finishes(c
         )
 
     parent, seen = await _asking(container, make_agent, models, scripted(helper_fn))
-    worker = asyncio.create_task(container.worker.run_forever())
+    worker = asyncio.create_task(run_workers(container))
     try:
         await _until(lambda: _has(seen))
     finally:
@@ -830,7 +831,7 @@ async def test_a_thread_waiting_on_its_own_background_job_is_listed_as_waiting_n
         # 回答先于运行的收尾提交：等收尾之后再看
         return [(x.work, x.answer) for x in await states()] == [(WorkState.WAITING, "started, will report")]
 
-    worker = asyncio.create_task(container.worker.run_forever())
+    worker = asyncio.create_task(run_workers(container))
     try:
         await _until(waiting_with_its_first_answer)
         [state] = await states()

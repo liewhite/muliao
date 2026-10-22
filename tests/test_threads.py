@@ -16,6 +16,7 @@ from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Message, Session
 from muliao.sessions.threads import threads_of as sessions_threads_of
+from tests.conftest import run_workers
 from tests.scripted import scripted
 from tests.test_flow import drain, history_of, idle, last_user_prompt, reply, start, tasks_of, tool_returns
 
@@ -338,7 +339,7 @@ async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_
         call("ask_agent", {"agent": "slow", "message": "q", "thread": "t"}), answer_with_tool_results("a")
     )
     parent = await start(container, lead, "go")
-    worker = asyncio.create_task(container.worker.run_forever())
+    worker = asyncio.create_task(run_workers(container))
     try:
         async with asyncio.timeout(5):
             await running.wait()

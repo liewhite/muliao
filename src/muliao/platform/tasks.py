@@ -77,26 +77,57 @@ class TaskQueue:
         self._clock = clock
         # 有处理器的任务种类（accept），登记之前不接受任何 task
         self._kinds: frozenset[str] = frozenset()
-        self.wake = asyncio.Event()
+        # 每个 worker 一个唤醒事件（waiter）：共用一个时，一个 worker 的 clear 会吞掉另一个还没看到的唤醒
+        self._waiters: list[asyncio.Event] = []
 
-    def accept(self, kinds: frozenset[str]) -> None:
-        """登记有处理器的任务种类（组合根建好 worker 后调用一次）。没有处理器的 task 永远不会被领取，还挡住同一
-        lane 后面的 task（_claimable 不看种类），所以 enqueue 当场拒绝别的种类。"""
+    def waiter(self) -> asyncio.Event:
+        """给一个 worker 的唤醒事件：有 task 可能变得可领取时（提交、完成、失败、放回）置位，由 worker 自己清除。"""
+        wake = asyncio.Event()
+        self._waiters.append(wake)
+        return wake
+
+    def _wake(self) -> None:
+        for wake in self._waiters:
+            wake.set()
+
+    def accept(self, *worker_kinds: frozenset[str]) -> None:
+        """登记各 worker 处理的任务种类（组合根建好 worker 后调用一次）。没有处理器的 task 永远不会被领取，还挡住
+        同一 lane 后面的 task（_claimable 不看种类），所以 enqueue 当场拒绝别的种类。一个种类只能归一个 worker：
+        两个 worker 都领同一种类，各自的槽位与恢复就不再管得住它。"""
         if self._kinds:
             raise RuntimeError("task kinds are already registered")
-        self._kinds = kinds
+        seen: set[str] = set()
+        for kinds in worker_kinds:
+            if shared := seen & kinds:
+                raise ValueError(f"task kinds {sorted(shared)} are handled by more than one worker")
+            seen |= kinds
+        self._kinds = frozenset(seen)
+
+    @property
+    def kinds(self) -> frozenset[str]:
+        """有处理器的任务种类（accept 登记的，各 worker 种类的并集）。"""
+        return self._kinds
+
+    async def check_kinds(self) -> None:
+        """启动检查。任务种类是不透明的字符串（platform.tables）：库里还没完成的 task 若是没有处理器登记的种类（例如
+        改名后留下的旧值），它永远不会被领取，还挡住它的 lane（停止会话也解不开）。新写入的已由 accept 之后的
+        enqueue 拒绝，这里报的是库里留下的旧行。启动时报出来，由人处理：恢复它的处理器，或在库里删掉它；「任务」页上
+        它没有可做的操作。"""
+        unknown = sorted(await self.unfinished_kinds() - self._kinds)
+        if unknown:
+            log.error("unfinished tasks of kinds no handler is registered for", extra={"kinds": unknown})
 
     def now(self) -> datetime:
         return self._clock()
 
     @property
     def max_attempts(self) -> int:
-        """尝试次数的上限：重试与启动恢复共用（Worker._recover）。"""
+        """尝试次数的上限：重试与启动恢复共用（Worker.recover）。"""
         return self._max_attempts
 
     def _wake_after_commit(self, s: AsyncSession) -> None:
         """这个事务提交后唤醒 worker（新的可领取 task 在提交前对它不可见）。"""
-        event.listen(s.sync_session, "after_commit", lambda _s: self.wake.set(), once=True)
+        event.listen(s.sync_session, "after_commit", lambda _s: self._wake(), once=True)
 
     def enqueue(
         self,
@@ -141,7 +172,7 @@ class TaskQueue:
             if task is None or task.status != TaskStatus.RUNNING:
                 return False
             task.status = TaskStatus.PENDING
-        self.wake.set()
+        self._wake()
         return True
 
     async def _claim(self, query: Select[tuple[Task]]) -> Task | None:
@@ -168,7 +199,7 @@ class TaskQueue:
             task.error = None
             task.finished_at = self._clock()
         # 同 lane 的后续 task 现在可以领取了
-        self.wake.set()
+        self._wake()
 
     async def fail(self, task_id: int, error: str, *, retryable: bool, on_final: Settle) -> Task:
         async with self._db.transaction() as s:
@@ -185,7 +216,7 @@ class TaskQueue:
                 task.finished_at = self._clock()
                 await on_final(s, task)
         # 重试时间点或同 lane 的后续 task 需要重新计算等待
-        self.wake.set()
+        self._wake()
         return task
 
     async def finish_pending_in(self, s: AsyncSession, lane: str, kind: str) -> list[Task]:
@@ -203,11 +234,13 @@ class TaskQueue:
             task.status, task.finished_at = TaskStatus.DONE, self._clock()
         return tasks
 
-    async def recover(self) -> list[Task]:
-        """启动时调用：上次进程遗留的 running 复位为 pending，返回被恢复的 task。尝试次数是否已经用完由
-        调用方判断（Worker._recover 把用完的记为最终失败，不再恢复）。"""
+    async def recover(self, kinds: Collection[str]) -> list[Task]:
+        """启动时（任何 worker 开始领取之前）调用：上次进程遗留的这些种类的 running 复位为 pending，返回被恢复的
+        task。按种类恢复，因为用完尝试次数的要由处理它的 worker 的处理器收尾；没有处理器的种类不复位（复位了也不会
+        被领取），由 check_kinds 报出。尝试次数是否已经用完由调用方判断（Worker.recover 把用完的记为最终失败）。"""
         async with self._db.transaction() as s:
-            tasks = list((await s.scalars(select(Task).where(Task.status == TaskStatus.RUNNING))).all())
+            running = select(Task).where(Task.status == TaskStatus.RUNNING, Task.kind.in_(list(kinds)))
+            tasks = list((await s.scalars(running)).all())
             for task in tasks:
                 task.status = TaskStatus.PENDING
             return tasks
@@ -250,7 +283,7 @@ class TaskQueue:
             return result.rowcount
 
     async def unfinished_kinds(self) -> set[str]:
-        """还没完成（pending、running）的 task 有哪些种类（启动时核对每种都有处理器，见 Worker.check_kinds）。"""
+        """还没完成（pending、running）的 task 有哪些种类（启动时核对每种都有处理器，见 check_kinds）。"""
         async with self._db.transaction() as s:
             query = (
                 select(Task.kind).where(Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING])).distinct()

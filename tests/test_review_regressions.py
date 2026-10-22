@@ -42,16 +42,16 @@ async def test_next_due_ignores_tasks_blocked_by_running_lane(container, make_ag
             container.queue.enqueue(
                 s, kind=DELIVER_TASK, lane="x", agent_id=alpha, session_id=None, payload={}
             )
-    await container.queue.claim(container.worker.kinds)
+    await container.queue.claim(container.queue.kinds)
 
     # 第二个 task 被同 lane 的 running 挡住，不应让 worker 以为马上有活可干
-    assert await container.queue.next_due(container.worker.kinds) is None
+    assert await container.queue.next_due(container.queue.kinds) is None
 
 
 async def test_deleting_session_or_agent_with_running_task_is_rejected(container, make_agent):
     alpha = (await make_agent()).id
     session = await start(container, alpha, "hi")
-    await container.queue.claim(container.worker.kinds)
+    await container.queue.claim(container.queue.kinds)
 
     with pytest.raises(Conflict):
         await container.sessions.delete(session.id)
@@ -143,7 +143,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
 
     models.models["m"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("ok")]))
     await container.queue.retry(turn.id)
-    claimed = await container.queue.claim(container.worker.kinds)
+    claimed = await container.queue.claim(container.queue.kinds)
     assert claimed.error is not None  # 运行期间仍能看到上次为什么失败
 
 

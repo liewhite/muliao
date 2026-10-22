@@ -4,6 +4,7 @@ import shutil
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
+import anyio
 import httpx
 import pytest
 from cryptography.fernet import Fernet
@@ -102,6 +103,19 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Asse
     async with c.jobs.running():
         yield c
     await c.db.engine.dispose()
+
+
+async def restart(container: Assembly) -> None:
+    """模拟进程重启后的启动恢复（服务里在 Container.running 的启动阶段、任何循环开始之前执行）。"""
+    for worker in container.workers:
+        await worker.recover()
+
+
+async def run_workers(container: Assembly) -> None:
+    """跑组合根的全部 worker（服务里由 Container.running 启动）；测试取消它即全部停止。"""
+    async with anyio.create_task_group() as group:
+        for worker in container.workers:
+            group.start_soon(worker.run_forever)
 
 
 @pytest.fixture

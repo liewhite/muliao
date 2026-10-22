@@ -41,7 +41,7 @@ def register_handlers(*entries: tuple[str, TaskHandler]) -> dict[str, TaskHandle
 
 
 class Interrupted(Exception):
-    """任务被中断（进程退出）后恢复的次数已经用完：不再恢复，记为最终失败。见 Worker._recover。"""
+    """任务被中断（进程退出）后恢复的次数已经用完：不再恢复，记为最终失败。见 Worker.recover。"""
 
 
 class _SettleFailed(Exception):
@@ -65,6 +65,7 @@ class Worker:
         self._handlers = handlers
         self._bus = bus
         self._concurrency = concurrency
+        self._wake = queue.waiter()
         # run_forever 正在进行：并发上限是每次运行各自的槽位，同时跑两次上限就翻倍，所以只允许一次
         self._running = False
 
@@ -72,15 +73,6 @@ class Worker:
     def kinds(self) -> frozenset[str]:
         """这个 worker 处理的任务种类（组合根登记的处理器）。"""
         return frozenset(self._handlers)
-
-    async def check_kinds(self) -> None:
-        """启动检查。任务种类是不透明的字符串（platform.tables）：库里还没完成的 task 若是没有处理器登记的种类（例如
-        改名后留下的旧值），它永远不会被领取，还挡住它的 lane（停止会话也解不开）。新写入的已由 TaskQueue.accept
-        拒绝，这里报的是库里留下的旧行。启动时报出来，由人处理：恢复它的处理器，或在库里删掉它；「任务」页上它没有
-        可做的操作。"""
-        unknown = sorted(await self._queue.unfinished_kinds() - self.kinds)
-        if unknown:
-            log.error("unfinished tasks of kinds no handler is registered for", extra={"kinds": unknown})
 
     def _publish(self, task: Task, status: TaskStatus, error: str | None = None) -> None:
         self._bus.publish(
@@ -104,7 +96,6 @@ class Worker:
             self._running = False
 
     async def _run(self) -> None:
-        await self._recover()
         # 槽位属于这一次运行（与任务组同生命周期）：停在领取中途时没还的槽位随这次运行一起丢弃，同一个 worker
         # 再次启动时槽位是满的（槽位曾放在实例上，漏够 concurrency 次后再启动的 worker 永远领不到任务）
         slots = anyio.Semaphore(self._concurrency)
@@ -119,14 +110,16 @@ class Worker:
                     continue
                 group.start_soon(self._process_in_slot, task, slots, name=f"task-{task.id}")
 
-    async def _recover(self) -> None:
-        """启动时把上次进程遗留的 running 复位为 pending 重新执行（队列的 recover），尝试次数已经用完的除外：
+    async def recover(self) -> None:
+        """启动阶段（任何 worker 开始领取、任何运行开始之前，由组合根顺序调用）把上次进程遗留的这个 worker 种类的
+        running 复位为 pending 重新执行（队列的 recover）；放在领取循环里时，另一个 worker 已经领走（含 run_now）的
+        task 会被复位、执行两次。尝试次数已经用完的除外：
         任务本身会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去，还一直占住它的 lane。
         这时按最终失败记账（和重试用完一样的上限 task_max_attempts，钩子照常收尾、失败照常可见），用户在「任务」页
-        手动重试即可重新开始（重试把尝试次数清零）。不归这个 worker 处理的种类照常复位，留给处理它的 worker。"""
-        for task in await self._queue.recover():
+        手动重试即可重新开始（重试把尝试次数清零）。只恢复自己的种类（TaskQueue.recover）。"""
+        for task in await self._queue.recover(self.kinds):
             ctx = {"task_id": task.id, "kind": task.kind, "lane": task.lane, "attempt": task.attempts}
-            if task.attempts >= self._queue.max_attempts and task.kind in self._handlers:
+            if task.attempts >= self._queue.max_attempts:
                 log.error("recovered task has used up its attempts; failing it instead", extra=ctx)
                 await self._record_failure(
                     task,
@@ -176,11 +169,11 @@ class Worker:
             slots.release()
 
     async def _wait_for_work(self) -> None:
-        self._queue.wake.clear()
+        self._wake.clear()
         due = await self._queue.next_due(self.kinds)
         timeout = _IDLE_POLL_SECONDS if due is None else max(0.05, (due - self._queue.now()).total_seconds())
         with anyio.move_on_after(min(timeout, _IDLE_POLL_SECONDS)):
-            await self._queue.wake.wait()
+            await self._wake.wait()
 
     async def _process(self, task: Task) -> None:
         ctx = {"task_id": task.id, "kind": task.kind, "lane": task.lane, "attempt": task.attempts}

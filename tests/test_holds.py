@@ -14,6 +14,7 @@ from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 from muliao.sessions.work import Delivered, deliver_in
+from tests.conftest import run_workers
 from tests.scripted import scripted
 from tests.test_delegations import _asking
 from tests.test_flow import drain, start, tool_returns
@@ -222,7 +223,7 @@ async def test_a_hold_registered_while_the_run_winds_down_is_cleared_by_the_stop
 
     consumer_module.Consumer._stopped = hold_then_stop
     try:
-        worker = asyncio.create_task(container.worker.run_forever())
+        worker = asyncio.create_task(run_workers(container))
         await asyncio.wait_for(started.wait(), 5)
         await container.stopper(session.id)
         from tests.test_flow import idle

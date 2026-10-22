@@ -20,7 +20,7 @@ from muliao.platform.tables import TaskStatus
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import post_in
 from muliao.sessions.tables import MailKind, MailState
-from tests.conftest import login
+from tests.conftest import login, run_workers
 from tests.scripted import scripted
 from tests.test_flow import drain, history_of, mail_of, tasks_of
 
@@ -143,7 +143,7 @@ async def test_shutdown_is_not_a_stop_the_turn_is_left_for_recovery(client, cont
     session_id = (await client.post("/api/sessions", json={"agent_id": agent.id, "prompt": "go"})).json()[
         "id"
     ]
-    worker = asyncio.create_task(container.worker.run_forever())
+    worker = asyncio.create_task(run_workers(container))
 
     async def slow_tool_running() -> bool:
         live = container.live.snapshot(session_id)

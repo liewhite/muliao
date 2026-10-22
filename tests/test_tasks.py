@@ -12,7 +12,8 @@ from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tasks import no_commit
 from muliao.platform.worker import Worker
 from muliao.reflection.service import REFLECTION_TASK
-from muliao.sessions.lanes import RUN_TASK
+from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
+from tests.conftest import run_workers
 
 
 async def _nothing(_s, _task) -> None:  # noqa: ANN001
@@ -33,13 +34,13 @@ async def test_lane_is_fifo_and_exclusive_while_other_lanes_run(container, make_
     b1 = await _enqueue(container, "b", alpha)
     q = container.queue
 
-    first = await q.claim(container.worker.kinds)
-    second = await q.claim(container.worker.kinds)
+    first = await q.claim(container.queue.kinds)
+    second = await q.claim(container.queue.kinds)
     assert (first.id, second.id) == (a1.id, b1.id)
-    assert await q.claim(container.worker.kinds) is None  # a2 被 a1 阻塞
+    assert await q.claim(container.queue.kinds) is None  # a2 被 a1 阻塞
 
     await q.complete(first.id, no_commit)
-    third = await q.claim(container.worker.kinds)
+    third = await q.claim(container.queue.kinds)
     assert third.id == a2.id
 
 
@@ -50,13 +51,13 @@ async def test_transient_failure_backs_off_then_fails_after_max_attempts(contain
     max_attempts = container.settings.runtime.task_max_attempts
 
     for attempt in range(1, max_attempts + 1):
-        claimed = await q.claim(container.worker.kinds)
+        claimed = await q.claim(container.queue.kinds)
         if claimed is None:  # 退避尚未到期，直接把 not_before 拨到现在
             async with container.db.transaction() as s:
                 from muliao.platform.tables import Task
 
                 (await s.get(Task, task.id)).not_before = utcnow() - timedelta(seconds=1)
-            claimed = await q.claim(container.worker.kinds)
+            claimed = await q.claim(container.queue.kinds)
         assert claimed.attempts == attempt
         failed = await q.fail(claimed.id, "boom", retryable=True, on_final=_nothing)
 
@@ -68,21 +69,21 @@ async def test_non_retryable_failure_fails_immediately_and_can_be_retried_manual
     alpha = (await make_agent()).id
     task = await _enqueue(container, "a", alpha)
     q = container.queue
-    await q.claim(container.worker.kinds)
+    await q.claim(container.queue.kinds)
 
     failed = await q.fail(task.id, "bug", retryable=False, on_final=_nothing)
     assert failed.status == TaskStatus.FAILED
 
     retried = await q.retry(task.id)
     assert retried.status == TaskStatus.PENDING and retried.attempts == 0
-    assert (await q.claim(container.worker.kinds)).id == task.id
+    assert (await q.claim(container.queue.kinds)).id == task.id
 
 
 async def test_retry_is_refused_while_lane_has_newer_unfinished_work(container, make_agent):
     alpha = (await make_agent()).id
     q = container.queue
     old = await _enqueue(container, "a", alpha)
-    await q.claim(container.worker.kinds)
+    await q.claim(container.queue.kinds)
     await q.fail(old.id, "bug", retryable=False, on_final=_nothing)
     await _enqueue(container, "a", alpha)
 
@@ -93,10 +94,10 @@ async def test_retry_is_refused_while_lane_has_newer_unfinished_work(container, 
 async def test_recover_resets_running_tasks(container, make_agent):
     alpha = (await make_agent()).id
     task = await _enqueue(container, "a", alpha)
-    await container.queue.claim(container.worker.kinds)
+    await container.queue.claim(container.queue.kinds)
 
-    assert [t.id for t in await container.queue.recover()] == [task.id]
-    assert (await container.queue.claim(container.worker.kinds)).id == task.id
+    assert [t.id for t in await container.queue.recover(container.queue.kinds)] == [task.id]
+    assert (await container.queue.claim(container.queue.kinds)).id == task.id
 
 
 async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recovered_forever(
@@ -125,6 +126,7 @@ async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recover
         container.bus,
         concurrency=1,
     )
+    await worker.recover()
     running = asyncio.create_task(worker.run_forever())
     try:
         async with asyncio.timeout(5):
@@ -271,7 +273,7 @@ async def test_startup_reports_unfinished_tasks_of_kinds_without_a_handler(conta
                 ),
             ]
         )
-    await container.worker.check_kinds()
+    await container.queue.check_kinds()
     [record] = [r for r in caplog.records if "no handler" in r.message]
     assert record.levelname == "ERROR" and record.kinds == ["renamed"]
 
@@ -291,3 +293,117 @@ def test_registering_a_task_kind_twice_is_refused():
 
     with pytest.raises(ValueError, match="'run' is registered twice"):
         register_handlers((RUN_TASK, object()), (EVENT_TASK, object()), (RUN_TASK, object()))
+
+
+async def test_deliveries_are_not_held_up_by_agent_work_filling_its_slots(container, make_agent):
+    """agent 工作（会话运行等，时长没有上限）与投递各有自己的 worker 和槽位：agent 工作占满槽位、还有排队的时候，
+    投递照样马上执行（事故：4 个会话运行占满共用的槽位，79 个投递排队 17 分钟）。两个 worker 都空闲等待时，
+    新任务唤醒各自的 worker。"""
+    alpha = (await make_agent()).id
+    agent_kinds, delivery_kinds = (w.kinds for w in container.workers)
+    assert agent_kinds == {RUN_TASK, COMPACTION_TASK, REFLECTION_TASK}
+    assert delivery_kinds == {EVENT_TASK, DELIVER_TASK}
+    started: list[str] = []
+    running_agent_work = asyncio.Event()
+    delivered = asyncio.Event()
+
+    class Blocking:
+        async def execute(self, task: Task):  # noqa: ANN202
+            started.append(task.lane)
+            running_agent_work.set()
+            await anyio.sleep_forever()
+
+        async def failed_in(self, _s, _task: Task) -> None:  # noqa: ANN001
+            pass
+
+    class Recording:
+        async def execute(self, _task: Task):  # noqa: ANN202
+            delivered.set()
+            return no_commit
+
+        async def failed_in(self, _s, _task: Task) -> None:  # noqa: ANN001
+            pass
+
+    # 与组合根同样的分工，处理器换成假的；agent 工作只有一个槽位
+    agent_work = Worker(container.queue, {k: Blocking() for k in agent_kinds}, container.bus, concurrency=1)
+    deliveries = Worker(
+        container.queue, {k: Recording() for k in delivery_kinds}, container.bus, concurrency=1
+    )
+
+    async def run_both() -> None:
+        async with anyio.create_task_group() as group:
+            group.start_soon(agent_work.run_forever)
+            group.start_soon(deliveries.run_forever)
+
+    running = asyncio.create_task(run_both())
+    try:
+        await asyncio.sleep(0.1)  # 两个 worker 都已空闲等待
+        async with container.db.transaction() as s:
+            for lane in ("run-a", "run-b"):
+                container.queue.enqueue(
+                    s, kind=RUN_TASK, lane=lane, agent_id=alpha, session_id=None, payload={}
+                )
+        await asyncio.wait_for(running_agent_work.wait(), 5)
+        await _enqueue(container, "deliver-a", alpha)
+        await asyncio.wait_for(delivered.wait(), 5)
+        assert started == ["run-a"]  # 第二个运行还在排队：agent 工作的槽位确实是满的
+    finally:
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+
+
+async def test_recover_resets_only_the_kinds_asked_for(container, make_agent):
+    """每个 worker 启动时只恢复自己的种类：另一个 worker 可能已经领走了它的 task，复位会让它执行两次。"""
+    alpha = (await make_agent()).id
+    async with container.db.transaction() as s:
+        run = container.queue.enqueue(s, kind=RUN_TASK, lane="r", agent_id=alpha, session_id=None, payload={})
+    event = await _enqueue(container, "d", alpha)
+    q = container.queue
+    claimed = {(await q.claim([RUN_TASK])).id, (await q.claim([DELIVER_TASK])).id}
+    assert claimed == {run.id, event.id}
+
+    assert [t.id for t in await q.recover([DELIVER_TASK])] == [event.id]
+    async with container.db.transaction() as s:
+        assert (await s.get(Task, run.id)).status == TaskStatus.RUNNING
+
+
+async def test_one_worker_clearing_its_wake_does_not_swallow_another_workers_wake(container, make_agent):
+    """两个 worker 共用一个唤醒事件时，一个 worker 在另一个查完队列、还没开始等待之间 clear，会吞掉这次唤醒，
+    后者要到轮询超时（30 秒）才看到新任务。每个 worker 的唤醒是独立的。"""
+    alpha = (await make_agent()).id
+    first, second = container.queue.waiter(), container.queue.waiter()
+    first.clear()
+    second.clear()
+    await _enqueue(container, "a", alpha)
+    assert first.is_set() and second.is_set()
+    first.clear()
+    assert second.is_set()
+
+
+async def test_a_kind_handled_by_two_workers_is_refused(container):
+    """一个种类只能归一个 worker：两个 worker 都领它，各自的槽位与启动恢复就管不住它（一个的恢复会复位另一个刚领走
+    的 task）。组合根装配时当场报错。"""
+    from muliao.platform.tasks import TaskQueue
+
+    queue = TaskQueue(container.db, max_attempts=1, retry_base_seconds=1.0)
+    with pytest.raises(ValueError, match=r"\['event'\] are handled by more than one worker"):
+        queue.accept(frozenset({RUN_TASK, EVENT_TASK}), frozenset({EVENT_TASK, DELIVER_TASK}))
+
+
+async def test_startup_recovers_running_tasks_before_any_worker_claims(container, make_agent):
+    """启动恢复在启动阶段顺序执行（Container.running 的 _prepare），领取循环里不再恢复：否则一个 worker 恢复时会
+    复位另一个 worker 已经领走的 task（如运行里 run_now 当场执行的投递），同一个 task 执行两次。"""
+    alpha = (await make_agent()).id
+    task = await _enqueue(container, "a", alpha)
+    await container.queue.claim([DELIVER_TASK])
+
+    running = asyncio.create_task(run_workers(container))
+    await asyncio.sleep(0.1)
+    running.cancel()
+    await asyncio.gather(running, return_exceptions=True)
+    async with container.db.transaction() as s:
+        assert (await s.get(Task, task.id)).status == TaskStatus.RUNNING
+
+    await container._prepare()
+    async with container.db.transaction() as s:
+        assert (await s.get(Task, task.id)).status == TaskStatus.PENDING

@@ -82,7 +82,7 @@ api_key = ""
 
 # 可选：运行参数，以下为默认值
 # [runtime]
-# worker_concurrency = 4          # 同时运行的任务数
+# worker_concurrency = 4          # 同时运行的 agent 任务数（会话运行、压缩、反思）；事件与推送另有槽位
 # task_max_attempts = 5           # 暂时性失败的最大尝试次数
 # task_retry_base_seconds = 5.0   # 重试退避基数（指数增长）
 # default_reflect_every = 30      # 新建 agent 的默认反思间隔（步，即模型回复数）

@@ -30,11 +30,12 @@ from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Mail, Message
+from tests.conftest import run_workers
 from tests.scripted import scripted
 
 
 async def drain(container, limit_seconds: float = 10.0) -> None:
-    worker = asyncio.create_task(container.worker.run_forever())
+    worker = asyncio.create_task(run_workers(container))
     try:
         await idle(container, limit_seconds)
     finally:

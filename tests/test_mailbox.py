@@ -25,7 +25,7 @@ from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import post_in, queued_in
 from muliao.sessions.tables import Mail, MailKind, MailState, Message
 from muliao.sessions.transcript import to_items, to_text
-from tests.conftest import login
+from tests.conftest import login, restart
 from tests.scripted import scripted
 from tests.test_flow import drain, history_of, mail_of, reply, start, tasks_of, user_prompts
 from tests.test_questions import QUESTIONS
@@ -314,6 +314,7 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
         )
         (await s.get(Task, run.id)).status = TaskStatus.RUNNING
 
+    await restart(container)
     await drain(container)
 
     # 工具没有再执行一遍，模型看到的是「被中断、没有重跑」的结果
@@ -418,6 +419,7 @@ async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_agai
         (await s.get(Task, run.id)).status = TaskStatus.RUNNING
 
     # 恢复这次运行：提问还挂着（继续等用户），被打断的 memory_append 当场补上结果
+    await restart(container)
     await drain(container)
     history = await history_of(container, session_id)
     [filled] = [p for m in history for p in getattr(m, "parts", []) if isinstance(p, ToolReturnPart)]
