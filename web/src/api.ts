@@ -22,14 +22,14 @@ export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
 /** 修改 agent 的请求体：整体替换，字段全部必填（新建用 Schemas['AgentCreate']） */
 export type AgentInput = Schemas['AgentUpdate']
 export type Session = WithAgentId<Schemas['SessionOut'], 'agent_id'>
-// 会话列表里的一行：多一个工作状态 state（在运行 / 在等 / 空闲），运行中的排在最前（接口排序）
+// 会话列表里的一行：多一个工作状态 state（在运行 / 在等 / 空闲），不空闲的（在运行、在等）排在最前（接口排序）
 export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'>
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['NotificationOut']
 
 /** 指代用户的那个值（与后端 agents.api.USER 一致）：issue 的指派人、资源修改的作者等 */
 export const USER = 'user'
-/** issue 时间线上系统自己的动作（删除 agent 时的清理）的 actor（与后端 issues.rules.SYSTEM 一致） */
+/** issue 时间线上系统自己的动作（删除 agent 时的清理）的 actor（与后端 issues.rules.SYSTEM_ACTOR 一致） */
 export const SYSTEM_ACTOR = 'system'
 
 /** 引用文件的地址前缀（与后端 muliao.files.FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
