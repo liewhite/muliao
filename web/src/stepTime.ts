@@ -8,13 +8,13 @@ import { toolStatus, type Step, type ToolView } from './blocks'
  * 一个步骤或一组步骤的耗时，毫秒。组的耗时是组内各工具耗时之和（并行的也各自累加），不是首个开始到最后结束的墙钟时间，
  * 工具之间模型思考、生成的时间不算。
  * start：最早开始的时刻；spent：已结束的工具耗时之和；runningSince：正在执行的工具各自的开始时刻（显示已运行时长）；
- * unknown：有不在执行、结束时间却未知的工具（这时已结束的组只显示开始时间）
+ * endUnknown：有不在执行、结束时间却未知的工具（这时已结束的组只显示开始时间）
  */
 export interface Span {
   start: number
   spent: number
   runningSince: number[]
-  unknown: boolean
+  endUnknown: boolean
 }
 
 export const isRunning = (span: Span | null): boolean => (span?.runningSince.length ?? 0) > 0
@@ -25,9 +25,9 @@ export const isRunning = (span: Span | null): boolean => (span?.runningSince.len
 export function toolSpan(tool: ToolView, live: boolean): Span | null {
   if (tool.startedAt === null) return null
   const start = Date.parse(tool.startedAt)
-  if (live && toolStatus(tool) === 'running') return { start, spent: 0, runningSince: [start], unknown: false }
-  if (tool.result === null || tool.finishedAt === null) return { start, spent: 0, runningSince: [], unknown: true }
-  return { start, spent: Date.parse(tool.finishedAt) - start, runningSince: [], unknown: false }
+  if (live && toolStatus(tool) === 'running') return { start, spent: 0, runningSince: [start], endUnknown: false }
+  if (tool.result === null || tool.finishedAt === null) return { start, spent: 0, runningSince: [], endUnknown: true }
+  return { start, spent: Date.parse(tool.finishedAt) - start, runningSince: [], endUnknown: false }
 }
 
 /** 一组步骤：从最早开始的工具算起，耗时为各工具耗时之和，与展开后各行相加一致 */
@@ -38,7 +38,7 @@ export function groupSpan(steps: Step[], live: boolean): Span | null {
     start: Math.min(...spans.map((s) => s.start)),
     spent: spans.reduce((sum, s) => sum + s.spent, 0),
     runningSince: spans.flatMap((s) => s.runningSince),
-    unknown: spans.some((s) => s.unknown),
+    endUnknown: spans.some((s) => s.endUnknown),
   }
 }
 
@@ -71,7 +71,7 @@ export function spanLabel(span: Span, now: number): string {
     return `已运行 ${formatDuration(elapsed, true)}`
   }
   const start = formatClock(span.start, now)
-  return span.unknown ? start : `${start} · ${formatDuration(span.spent)}`
+  return span.endUnknown ? start : `${start} · ${formatDuration(span.spent)}`
 }
 
 /** 当前时间（毫秒）；active 时每秒刷新一次，用于运行中步骤的计时 */

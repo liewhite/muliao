@@ -44,7 +44,7 @@ describe('toolSpan', () => {
       start: ms(T0),
       spent: 4200,
       runningSince: [],
-      unknown: false,
+      endUnknown: false,
     })
   })
 
@@ -53,16 +53,21 @@ describe('toolSpan', () => {
       start: ms(T0),
       spent: 0,
       runningSince: [ms(T0)],
-      unknown: false,
+      endUnknown: false,
     })
   })
 
   it('is not running when a call in the history has no result: it failed and waits to be resumed', () => {
-    expect(toolSpan(tool(T0, null, null), false)).toEqual({ start: ms(T0), spent: 0, runningSince: [], unknown: true })
+    expect(toolSpan(tool(T0, null, null), false)).toEqual({
+      start: ms(T0),
+      spent: 0,
+      runningSince: [],
+      endUnknown: true,
+    })
   })
 
   it('is unknown when the end is unknown and nothing without a start', () => {
-    expect(toolSpan(tool(T0, null), false)?.unknown).toBe(true)
+    expect(toolSpan(tool(T0, null), false)?.endUnknown).toBe(true)
     expect(toolSpan(tool(null, '2026-10-22T05:00:04Z'), false)).toBeNull()
   })
 })
@@ -77,7 +82,7 @@ describe('groupSpan', () => {
       ],
       false,
     )
-    expect(span).toEqual({ start: ms(T0), spent: 15_000, runningSince: [], unknown: false })
+    expect(span).toEqual({ start: ms(T0), spent: 15_000, runningSince: [], endUnknown: false })
   })
 
   it('sums parallel tools each on its own', () => {
@@ -90,8 +95,13 @@ describe('groupSpan', () => {
       [step(tool(T0, '2026-10-22T05:00:05Z')), step(tool('2026-10-22T05:00:30Z', null, null))],
       true,
     )
-    expect(running).toEqual({ start: ms(T0), spent: 5000, runningSince: [ms('2026-10-22T05:00:30Z')], unknown: false })
-    expect(groupSpan([step(tool(T0, '2026-10-22T05:00:05Z')), step(tool(T0, null))], true)?.unknown).toBe(true)
+    expect(running).toEqual({
+      start: ms(T0),
+      spent: 5000,
+      runningSince: [ms('2026-10-22T05:00:30Z')],
+      endUnknown: false,
+    })
+    expect(groupSpan([step(tool(T0, '2026-10-22T05:00:05Z')), step(tool(T0, null))], true)?.endUnknown).toBe(true)
   })
 
   it('is absent without any timed tool', () => {
@@ -105,7 +115,7 @@ describe('spanLabel', () => {
     start: ms(T0),
     spent,
     runningSince: since,
-    unknown: false,
+    endUnknown: false,
   })
 
   it('shows elapsed time while running: finished durations plus the running calls so far', () => {
@@ -115,8 +125,12 @@ describe('spanLabel', () => {
   })
 
   it('continues from the running count when the group finishes', () => {
-    const live = spanLabel(running(5000, ms(T0) + 80_000), now)
-    const done = spanLabel({ start: ms(T0), spent: 8000, runningSince: [], unknown: false }, now)
+    // 两个调用之间隔了 75s 的模型时间，不计入
+    const first = step(tool(T0, '2026-10-22T05:00:05Z'))
+    const second = '2026-10-22T05:01:20Z'
+    const end = '2026-10-22T05:01:23Z'
+    const live = spanLabel(groupSpan([first, step(tool(second, null, null))], true)!, ms(end))
+    const done = spanLabel(groupSpan([first, step(tool(second, end))], true)!, ms(end))
     expect(live).toBe('已运行 8s')
     expect(done).toBe(`${formatClock(ms(T0), now)} · 8.0s`)
   })
@@ -127,7 +141,7 @@ describe('spanLabel', () => {
 
   it('shows start time and duration when finished, start only when an end is unknown', () => {
     const start = formatClock(ms(T0), now)
-    expect(spanLabel({ start: ms(T0), spent: 4200, runningSince: [], unknown: false }, now)).toBe(`${start} · 4.2s`)
-    expect(spanLabel({ start: ms(T0), spent: 4200, runningSince: [], unknown: true }, now)).toBe(start)
+    expect(spanLabel({ start: ms(T0), spent: 4200, runningSince: [], endUnknown: false }, now)).toBe(`${start} · 4.2s`)
+    expect(spanLabel({ start: ms(T0), spent: 4200, runningSince: [], endUnknown: true }, now)).toBe(start)
   })
 })
