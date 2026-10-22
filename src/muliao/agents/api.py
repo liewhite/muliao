@@ -11,7 +11,6 @@
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpConfig, McpRegistry, McpServer, McpTransport, mcp_config
 from muliao.agents.memory import MemoryStore
-from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import Scope, owned_by, owner_of, scope_of, shadowing, visible, visible_owners
 from muliao.agents.prompts import PromptStore
 from muliao.agents.resources import USER, CorruptResource, Revision, RevisionHistory
@@ -58,7 +57,6 @@ __all__ = [
     "owner_of",
     "scope_of",
     "shadowing",
-    "validate_slug",
     "visible",
     "visible_owners",
 ]

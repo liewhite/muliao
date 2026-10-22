@@ -49,15 +49,6 @@ class Delivery:
     """一次投递：消息 id 是幂等键的来源（同一事件投给不同订阅者时 id 相同）。"""
 
     message_id: str
-    task_id: int
-
-
-@dataclass(frozen=True)
-class Published:
-    """一次发布：事件 id 与每个订阅者的投递任务（发送方提交之后可以让它们马上执行，Worker.run_now）。"""
-
-    id: str
-    deliveries: list[Task]
 
 
 type Handler[M: Message] = Callable[[M, Delivery], Awaitable[Commit]]
@@ -127,14 +118,14 @@ class Messaging:
 
     # ---- 发送（在发送方的事务里） ----
 
-    def publish_in(self, s: AsyncSession, event: DomainEvent) -> Published:
-        """为每个订阅者插入一条投递任务。没有订阅者时什么都不插。"""
+    def publish_in(self, s: AsyncSession, event: DomainEvent) -> list[Task]:
+        """为每个订阅者插入一条投递任务，返回它们（发送方提交之后可以让它们马上执行，Worker.run_now）。没有订阅者时
+        什么都不插。"""
         message_id = new_id()
-        deliveries = [
+        return [
             self._enqueue(s, receiver, event, message_id)
             for receiver in self._subscribers.get(event.TYPE, [])
         ]
-        return Published(message_id, deliveries)
 
     def send_in(self, s: AsyncSession, command: Command) -> Task:
         """返回投递任务：发送方提交之后可以让它马上执行（Worker.run_now）。"""
@@ -183,7 +174,7 @@ class Messaging:
                 "message_id": payload["id"],
             },
         )
-        return await receiver.handler(message, Delivery(message_id=payload["id"], task_id=task.id))
+        return await receiver.handler(message, Delivery(message_id=payload["id"]))
 
     async def failed_in(self, s: AsyncSession, task: Task) -> None:
         """投递最终失败只需可见（任务记录与日志）；人工重试按原 id 保持顺序（TaskQueue.retry）。"""

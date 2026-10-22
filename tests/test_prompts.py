@@ -3,6 +3,7 @@
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
+from muliao.agents.api import Revision
 from muliao.agents.service import AgentPatch
 from tests.conftest import login
 from tests.scripted import scripted
@@ -48,24 +49,28 @@ async def test_a_corrupt_public_skill_is_listed_as_corrupt_in_the_index_and_the_
     assert "- public skill 'broken' is corrupt and cannot be used until it is rewritten or deleted:" in index
 
 
-async def test_agent_instruction_changes_are_versioned_and_restorable(container, make_agent):
+async def prompt_history(container, owner: str | None) -> list[Revision]:
+    return await container.resources.history(container.prompts.path(owner), 10)
+
+
+async def test_agent_instruction_changes_are_versioned_and_restorable(client, container, make_agent):
     agent = await make_agent("alpha")
     spec = AgentPatch(instructions="v2")
-    await container.agents.update(agent.id, spec, author="user")
+    await container.agents.update(agent.id, spec, author=agent.id)
     assert container.prompts.current(agent.id) == "v2"
     # 指令未变时不追加新版本
-    await container.agents.update(agent.id, spec, author=agent.id)
+    await container.agents.update(agent.id, spec, author="user")
 
-    history = await container.prompts.history(agent.id, 10)
-    contents = [await container.prompts.read_at(agent.id, r.rev) for r in history]
-    assert list(zip(contents, [r.author for r in history], strict=True)) == [
-        ("v2", "user"),
-        ("Be helpful.", "user"),
-    ]
+    await login(client)
+    history = (await client.get(f"/api/resources/prompt/history?owner={agent.id}")).json()
+    assert [(r["content"], r["author"]) for r in history] == [("v2", agent.id), ("Be helpful.", "user")]
 
-    await container.prompts.restore(agent.id, history[1].rev, agent.id)
+    resp = await client.post(
+        "/api/resources/prompt/restore", json={"owner": agent.id, "rev": history[1]["rev"]}
+    )
+    assert resp.status_code == 204
     assert container.prompts.current(agent.id) == "Be helpful."
-    assert (await container.prompts.history(agent.id, 10))[0].author == agent.id
+    assert (await prompt_history(container, agent.id))[0].author == "user"
 
 
 async def test_resource_api_edits_public_prompt_and_restores_prompt_and_memory(client, container, make_agent):
@@ -115,7 +120,7 @@ async def test_deleting_agent_drops_its_files_but_not_public_prompt_history(cont
     # 删除的清理经事件完成
     await drain(container)
 
-    assert [r.author for r in await container.prompts.history(None, 10)] == [agent.id]
+    assert [r.author for r in await prompt_history(container, None)] == [agent.id]
     assert not container.prompts.path(agent.id).exists()
     # 被删 agent 的历史仍在仓库里，可以审计
     assert len(await container.resources.history(container.prompts.path(agent.id), 10)) == 2
@@ -124,7 +129,7 @@ async def test_deleting_agent_drops_its_files_but_not_public_prompt_history(cont
 async def test_empty_public_prompt_is_the_same_as_none(container):
     assert container.prompts.current(None) == ""
     assert await container.prompts.set(None, "", "user") is False
-    assert await container.prompts.history(None, 10) == []
+    assert await prompt_history(container, None) == []
 
 
 async def test_cleared_public_prompt_keeps_a_browsable_restorable_history(client, container):
@@ -161,7 +166,7 @@ async def test_reflection_refines_own_instructions_as_a_versioned_change(contain
     await drain(container)
 
     assert container.prompts.current(agent.id) == "Be helpful.\n\nAlways reply in Chinese.\n"
-    assert (await container.prompts.history(agent.id, 10))[0].author == agent.id
+    assert (await prompt_history(container, agent.id))[0].author == agent.id
     # 反思只开放自我改进；该 agent 有 public_skills（默认全部开放）所以也能写公共 skill
     assert "instructions_replace" in seen_tools and "run_shell" not in seen_tools
 

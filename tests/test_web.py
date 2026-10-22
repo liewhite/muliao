@@ -153,7 +153,7 @@ async def test_web_agent_searches_and_fetches_with_truncation_and_rejections_go_
     web_container, models
 ):
     container, web = web_container
-    assert "web" in container.agents.defaults.tool_groups
+    assert "web" in container.agents.defaults.group_names
     agent = await container.agents.create(
         AgentSpec(name="reader", description="d", instructions="", model="tools", tool_groups=["web"]),
         author="user",
@@ -196,7 +196,7 @@ async def test_temp_agent_gets_web_tools_when_web_is_configured(web_container, m
 async def test_without_web_config_there_is_no_web_group_and_agents_using_it_block_startup(
     container, web_container
 ):
-    assert "web" not in container.agents.defaults.tool_groups
+    assert "web" not in container.agents.defaults.group_names
     with pytest.raises(InvalidInput, match="tool groups"):
         await container.agents.create(
             AgentSpec(name="x", description="d", instructions="", tool_groups=["web"]), author="user"

@@ -50,10 +50,11 @@ async def test_each_subscriber_handles_a_committed_event_once_with_the_same_id(c
     messaging.subscribe(Happened, "a", recorder("a"))
     messaging.subscribe(Happened, "b", recorder("b"))
     async with container.db.transaction() as s:
-        event_id = messaging.publish_in(s, Happened(n=1)).id
+        messaging.publish_in(s, Happened(n=1))
     await run_worker(container, messaging)
 
-    assert seen == {"a": [(1, event_id)], "b": [(1, event_id)]}
+    [(n, event_id)] = seen["a"]
+    assert n == 1 and seen["b"] == [(1, event_id)]
     assert [t.status for t in await deliveries(container)] == [TaskStatus.DONE, TaskStatus.DONE]
 
 
@@ -105,10 +106,10 @@ async def test_a_handlers_commit_is_atomic_with_the_delivery_and_a_retry_redeliv
 
     messaging.subscribe(Happened, "a", handle)
     async with container.db.transaction() as s:
-        event_id = messaging.publish_in(s, Happened(n=1)).id
+        messaging.publish_in(s, Happened(n=1))
     await run_worker(container, messaging)
 
-    assert attempts == [event_id, event_id] and committed == [event_id]
+    assert attempts == [attempts[0]] * 2 and committed == [attempts[0]]
 
 
 async def test_a_command_goes_to_its_one_handler_and_needs_one(container):

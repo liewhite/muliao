@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 import anyio
 from pydantic_ai import Agent as PaiAgent
-from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, RunContext, UsageLimits
+from pydantic_ai import AgentRunResult, DeferredToolRequests, DeferredToolResults, UsageLimits
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
@@ -62,8 +62,6 @@ TextKind = Literal["assistant", "thinking"]
 
 # 运行结束后记用量最多等这么久。记账在屏蔽作用域里进行（被取消的运行也花了 token），加时限是为了关停不被它拖住
 _BILLING_SECONDS = 10.0
-
-EventHandler = Callable[[RunContext[RunScope], AsyncIterable[AgentStreamEvent]], Awaitable[None]]
 
 
 @dataclass(frozen=True)

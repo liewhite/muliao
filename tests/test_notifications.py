@@ -3,6 +3,7 @@ import json
 
 import pytest
 import requests
+from sqlalchemy import select
 
 import muliao.notifications.webpush as webpush_module
 from muliao.errors import TransientError
@@ -155,10 +156,9 @@ async def test_push_statuses_decide_retry_failure_or_removal(container, monkeypa
     with pytest.raises(TransientError, match="503"):
         await delivery.send(_sub("busy"), note, unread=1)
 
-    assert sorted(s.endpoint.rsplit("/", 1)[1] for s in await container.push_subscriptions.list()) == [
-        "bad",
-        "busy",
-    ]
+    async with container.db.transaction() as s:
+        endpoints = (await s.scalars(select(PushSubscription.endpoint))).all()
+    assert sorted(e.rsplit("/", 1)[1] for e in endpoints) == ["bad", "busy"]
 
 
 async def test_any_transport_failure_is_retried(container, monkeypatch):

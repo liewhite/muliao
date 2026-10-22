@@ -102,9 +102,6 @@ class SkillStore:
         skills, corrupt = scan_index(agent, self._scan)
         return visible(skills, agent_id=agent, owner=lambda s: s.owner, name=lambda s: s.name), corrupt
 
-    def visible_to(self, agent: str) -> list[SkillMeta]:
-        return self.index(agent)[0]
-
     def _existing(self, owner: str | None, name: str) -> Path:
         skill_dir = self._root(owner) / validate_slug("skill", name)
         if not (skill_dir / SKILL_FILE).exists():

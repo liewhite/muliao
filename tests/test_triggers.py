@@ -276,8 +276,8 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
 
     assert sorted(tools) == ["echo", "token"]
     assert row.config.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
-    assert [s.name for s in container.mcp.visible_to(alpha)] == ["echo"]
-    assert container.mcp.visible_to("b2b2b2b2b2b2") == []
+    assert [s.name for s in container.mcp.index(alpha)[0]] == ["echo"]
+    assert container.mcp.index("b2b2b2b2b2b2")[0] == []
 
 
 async def test_mcp_view_marks_public_servers_shadowed_by_enabled_private_ones(container, make_agent):
@@ -292,10 +292,10 @@ async def test_mcp_view_marks_public_servers_shadowed_by_enabled_private_ones(co
 
     assert view(alpha) == [(alpha, "echo", False), (None, "echo", True), (None, "other", False)]
     assert view(None) == [(None, "echo", False), (None, "other", False)]
-    # 停用的私有 server 不生效，也就不遮蔽公共的：与 visible_to 一致
+    # 停用的私有 server 不生效，也就不遮蔽公共的：与 index 一致
     await container.mcp.set_enabled(alpha, "echo", False, "user")
     assert view(alpha) == [(alpha, "echo", False), (None, "echo", False), (None, "other", False)]
-    assert [(s.owner, s.name) for s in container.mcp.visible_to(alpha)] == [(None, "echo"), (None, "other")]
+    assert [(s.owner, s.name) for s in container.mcp.index(alpha)[0]] == [(None, "echo"), (None, "other")]
 
 
 async def test_mcp_add_failing_probe_saves_nothing(container):

@@ -139,7 +139,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     models.models["m"] = scripted(fail)
     await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
-    turn = (await container.queue.list(status=TaskStatus.FAILED, session_id=None, limit=5))[0]
+    turn = (await container.queue.list(status=TaskStatus.FAILED, limit=5))[0]
     assert turn.attempts == container.settings.runtime.task_max_attempts and "503" in turn.error
 
     models.models["m"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("ok")]))

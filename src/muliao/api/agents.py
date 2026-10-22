@@ -75,12 +75,10 @@ class ToolGroupOut(BaseModel):
 
     name: str
     label: str
-    # 新建 agent 时默认开启
-    default: bool
 
     @classmethod
     def of(cls, g: ToolGroupInfo) -> "ToolGroupOut":
-        return cls(name=g.name, label=g.label, default=g.default)
+        return cls(name=g.name, label=g.label)
 
 
 class AgentDefaultsOut(BaseModel):
@@ -88,7 +86,7 @@ class AgentDefaultsOut(BaseModel):
     reflect_every: int
     # 当前配置下可选的工具组，按目录顺序
     groups: list[ToolGroupOut]
-    # 新建 agent 默认开启的组
+    # 新建 agent 默认开启的组：当前配置下的全部组
     default_tool_groups: list[str]
 
 
@@ -100,7 +98,7 @@ async def agent_defaults(c: C) -> AgentDefaultsOut:
         model=d.model,
         reflect_every=d.reflect_every,
         groups=[ToolGroupOut.of(g) for g in d.groups],
-        default_tool_groups=d.tool_groups,
+        default_tool_groups=d.group_names,
     )
 
 

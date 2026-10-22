@@ -534,7 +534,7 @@ async def test_stopping_a_thread_that_is_already_deleted_is_a_no_op(container, m
     await drain(container)
     await container.sessions.delete(session.id)
 
-    commit = await container.sessions.on_stop_thread(StopThread(session_id=session.id), Delivery("m", 0))
+    commit = await container.sessions.on_stop_thread(StopThread(session_id=session.id), Delivery("m"))
     async with container.db.transaction() as s:
         await commit(s)
 

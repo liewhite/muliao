@@ -37,11 +37,6 @@ class AgentDefaults:
     groups: tuple[ToolGroupInfo, ...]
 
     @property
-    def tool_groups(self) -> list[str]:
-        """新建 agent 默认开启的组。"""
-        return [g.name for g in self.groups if g.default]
-
-    @property
     def group_names(self) -> list[str]:
         return [g.name for g in self.groups]
 
@@ -217,7 +212,7 @@ class AgentService:
         name = new_agent_name(spec.name)
         model = self.defaults.model if spec.model is None else spec.model
         reflect_every = self.defaults.reflect_every if spec.reflect_every is None else spec.reflect_every
-        tool_groups = list(self.defaults.tool_groups) if spec.tool_groups is None else spec.tool_groups
+        tool_groups = self.defaults.group_names if spec.tool_groups is None else spec.tool_groups
         self._check(
             description=spec.description, model=model, reflect_every=reflect_every, tool_groups=tool_groups
         )

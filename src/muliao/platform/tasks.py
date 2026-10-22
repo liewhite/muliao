@@ -62,8 +62,8 @@ class TaskAdmin:
     def __init__(self, queue: TaskQueue):
         self._queue = queue
 
-    async def list(self, *, status: TaskStatus | None, session_id: str | None, limit: int) -> list[Task]:
-        return await self._queue.list(status=status, session_id=session_id, limit=limit)
+    async def list(self, *, status: TaskStatus | None, limit: int) -> list[Task]:
+        return await self._queue.list(status=status, limit=limit)
 
     async def retry(self, task_id: int) -> Task:
         return await self._queue.retry(task_id)
@@ -263,12 +263,10 @@ class TaskQueue:
         async with self._db.transaction() as s:
             return await s.scalar(select(func.min(claimable.c.not_before)))
 
-    async def list(self, *, status: TaskStatus | None, session_id: str | None, limit: int) -> list[Task]:
+    async def list(self, *, status: TaskStatus | None, limit: int) -> list[Task]:
         query = select(Task).order_by(Task.id.desc()).limit(limit)
         if status is not None:
             query = query.where(Task.status == status)
-        if session_id is not None:
-            query = query.where(Task.session_id == session_id)
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
 

@@ -171,10 +171,8 @@ async def test_agent_defaults_endpoint_reflects_config(client, container):
     assert defaults == {
         "model": container.settings.llm.default_model,
         "reflect_every": container.settings.runtime.default_reflect_every,
-        "groups": [
-            {"name": g.name, "label": g.label, "default": g.default} for g in container.agents.defaults.groups
-        ],
-        "default_tool_groups": container.agents.defaults.tool_groups,
+        "groups": [{"name": g.name, "label": g.label} for g in container.agents.defaults.groups],
+        "default_tool_groups": container.agents.defaults.group_names,
     }
     assert container.settings.runtime.default_reflect_every == 30
 

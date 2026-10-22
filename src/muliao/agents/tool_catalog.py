@@ -1,4 +1,4 @@
-"""agent 可选用的工具组目录：组名、界面上的说明、新建 agent 时是否默认开启，在这里唯一登记。
+"""agent 可选用的工具组目录：组名、界面上的说明，在这里唯一登记。新建 agent 未指定时开启当前配置下的全部组。
 
 组名是 agent 配置的一部分（agents.tool_groups 存的就是它）；校验（AgentService）、界面（/api/agent-defaults）、给模型看的
 可选组（get_agent，连同每组实际注册的工具）、组合根里每组的实现（agent_runtime.runner.ToolGroups）都从这里取，不各存一份。
@@ -12,8 +12,6 @@ from dataclasses import dataclass
 class ToolGroupInfo:
     name: str
     label: str
-    # 新建 agent 时是否默认开启
-    default: bool = True
     # 只在配置了 [web] 时存在
     needs_web: bool = False
 

@@ -176,9 +176,6 @@ class McpRegistry:
         listing, corrupt = self.listing(agent_id)
         return [s for s, active in listing if active], corrupt
 
-    def visible_to(self, agent_id: str) -> list[McpServer]:
-        return self.index(agent_id)[0]
-
     def get(self, owner: str | None, name: str) -> McpServer:
         path = self._path(owner, name)
         if not path.exists():

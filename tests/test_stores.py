@@ -48,7 +48,7 @@ async def test_private_skill_shadows_public_skill_with_same_name(skills: SkillSt
     await skills.write(ALPHA, "digest", "private digest", "private body", "user")
     await skills.write(None, "other", "other public", "x", "user")
 
-    visible = {(s.name, s.scope) for s in skills.visible_to(ALPHA)}
+    visible = {(s.name, s.scope) for s in skills.index(ALPHA)[0]}
 
     assert visible == {("digest", "private"), ("other", "public")}
     assert skills.resolve(ALPHA, "digest").body.strip() == "private body"
@@ -88,7 +88,7 @@ async def test_a_corrupt_skill_is_reported_on_its_own_without_hiding_the_others(
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text(content)
 
-    assert [s.name for s in skills.visible_to(ALPHA)] == ["mine", "good"]
+    assert [s.name for s in skills.index(ALPHA)[0]] == ["mine", "good"]
     [corrupt] = skills.index(ALPHA)[1]
     assert (corrupt.name, corrupt.owner, corrupt.kind) == ("real", None, "skill")
     assert problem in corrupt.problem and str(d) in corrupt.problem

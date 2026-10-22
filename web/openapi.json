@@ -5800,17 +5800,12 @@
           "label": {
             "type": "string",
             "title": "Label"
-          },
-          "default": {
-            "type": "boolean",
-            "title": "Default"
           }
         },
         "type": "object",
         "required": [
           "name",
-          "label",
-          "default"
+          "label"
         ],
         "title": "ToolGroupOut",
         "description": "一个可选的工具组（tool_catalog）。"

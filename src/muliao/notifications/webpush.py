@@ -10,7 +10,6 @@ import requests
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from py_vapid import Vapid02, b64urlencode
 from pywebpush import WebPushException, webpush
-from sqlalchemy import select
 
 from muliao.errors import InvalidInput, TransientError
 from muliao.notifications.tables import Notification, PushSubscription
@@ -75,10 +74,6 @@ class PushSubscriptions:
             row = await s.get(PushSubscription, endpoint)
             if row is not None:
                 await s.delete(row)
-
-    async def list(self) -> list[PushSubscription]:
-        async with self._db.transaction() as s:
-            return list((await s.scalars(select(PushSubscription))).all())
 
 
 class WebPushDelivery:

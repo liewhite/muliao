@@ -10,7 +10,7 @@ from functools import partial
 from pathlib import Path
 
 from muliao.agents.active import OwnerCheck
-from muliao.agents.resources import ResourceRepo, Revision
+from muliao.agents.resources import ResourceRepo
 from muliao.errors import CorruptState
 from muliao.platform import text_edit
 
@@ -65,17 +65,6 @@ class PromptStore:
             path, transform, message, author, precondition=partial(self._check_owner, owner)
         )
         return updated is not None
-
-    async def history(self, owner: str | None, limit: int) -> list[Revision]:
-        """新的在前；第一条即当前生效的一版。"""
-        return await self._repo.history(self.path(owner), limit)
-
-    async def read_at(self, owner: str | None, rev: str) -> str:
-        return await self._repo.read_at(rev, self.path(owner))
-
-    async def restore(self, owner: str | None, rev: str, author: str) -> bool:
-        """把某一版的内容作为新的一版写入（与当前相同则不写）。"""
-        return await self.set(owner, await self.read_at(owner, rev), author)
 
 
 def _missing(owner: str, path: Path) -> CorruptState:

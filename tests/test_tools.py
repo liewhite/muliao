@@ -17,6 +17,7 @@ from muliao.sessions.api import Origin
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
+from tests.test_prompts import prompt_history
 
 
 async def run_tools(container, models, agent_id: str, calls: list[tuple[str, dict]]) -> list[str]:
@@ -64,7 +65,7 @@ async def test_agent_creates_and_reconfigures_agents_with_versioned_instructions
     assert outputs[3] == "deleted agent researcher"
     assert [a.name for a in await container.agents.list()] == ["manager"]
     # 自己改自己的指令：留有版本，作者是自己
-    [latest, *_] = await container.prompts.history(me.id, 10)
+    [latest, *_] = await prompt_history(container, me.id)
     assert (container.prompts.current(me.id), latest.author) == ("Delegate research to researcher.", me.id)
     # 结果里只出现名称，不出现 id
     assert me.id not in "\n".join(outputs)
@@ -96,7 +97,7 @@ async def test_agent_edits_public_prompt(container, make_agent, models):
     )
 
     assert outputs == ["(no public prompt)", "public prompt updated", "Be brief."]
-    assert (await container.prompts.history(None, 10))[0].author == me.id
+    assert (await prompt_history(container, None))[0].author == me.id
 
 
 async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_agent, models):
@@ -123,7 +124,7 @@ async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_age
     assert outputs[0].startswith("updated trigger daily (paused)")
     assert not (await container.triggers.get_by_name("daily")).enabled
     assert "echo" in outputs[1]
-    assert [m.name for m in container.mcp.visible_to(me.id)] == ["echo"]
+    assert [m.name for m in container.mcp.index(me.id)[0]] == ["echo"]
 
 
 async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
@@ -266,7 +267,7 @@ async def test_parallel_partial_updates_of_one_agent_both_survive(container, mak
     updated = await container.agents.get(target.id)
     assert (updated.description, updated.reflect_every) == ("new desc", 7)
     # 未给出的指令不被改写：不追加版本
-    assert len(await container.prompts.history(target.id, 10)) == 1
+    assert len(await prompt_history(container, target.id)) == 1
 
 
 async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agent, models):

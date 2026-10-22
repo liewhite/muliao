@@ -217,7 +217,7 @@ async def test_deleting_an_agent_unassigns_its_issues(container, make_agent):
     alpha = (await make_agent()).id
     issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
     await deliver(container)
-    commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m", 0))
+    commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m"))
     async with container.db.transaction() as s:
         await commit(s)
     detail = await container.issues.get(issue.id)
@@ -300,7 +300,7 @@ async def test_the_owner_stays_when_the_issue_is_reassigned_and_filters_a_projec
 async def test_deleting_the_owner_agent_clears_ownership(container, make_agent):
     alpha = (await make_agent()).id
     issue = await container.issues.create(None, owner=alpha, title="t")
-    commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m", 0))
+    commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m"))
     async with container.db.transaction() as s:
         await commit(s)
     assert (await container.issues.get(issue.id)).issue.owner_agent_id is None

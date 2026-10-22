@@ -289,7 +289,7 @@ async def delete_session(c: C, session_id: str) -> None:
 async def list_tasks(
     c: C, status: TaskStatus | None = None, limit: int = Query(100, ge=1, le=500)
 ) -> list[TaskOut]:
-    return [TaskOut.of(t) for t in await c.tasks.list(status=status, session_id=None, limit=limit)]
+    return [TaskOut.of(t) for t in await c.tasks.list(status=status, limit=limit)]
 
 
 @router.post("/tasks/{task_id}/retry")

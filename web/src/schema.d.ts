@@ -2075,8 +2075,6 @@ export interface components {
             name: string;
             /** Label */
             label: string;
-            /** Default */
-            default: boolean;
         };
         /** TranscriptOut */
         TranscriptOut: {

@@ -196,8 +196,8 @@ class SessionService:
         事件投递完成时再取未读数）。订阅者的处理必须短小（在请求里执行）。"""
         async with self._db.transaction() as s:
             (await self._get(s, session_id)).unread = False
-            published = self._messaging.publish_in(s, SessionRead(session_id=session_id))
-        for task in published.deliveries:
+            deliveries = self._messaging.publish_in(s, SessionRead(session_id=session_id))
+        for task in deliveries:
             await self._run_now(task.id)
 
     def subscribe(self, messaging: Messaging) -> None:
