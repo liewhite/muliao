@@ -314,3 +314,9 @@ async def test_an_agent_being_deleted_reads_as_missing(client, container, make_a
 
     assert (await client.get(f"/api/agents/{agent.id}")).status_code == 404
     assert (await client.get("/api/memory", params={"owner": agent.id})).status_code == 404
+
+
+async def test_mcp_api_rejects_path_traversal_owners(client, make_agent):
+    await login(client)
+    for owner in ("..", "../public"):
+        assert (await client.post("/api/mcp/tools", params={"name": "x", "owner": owner})).status_code == 422

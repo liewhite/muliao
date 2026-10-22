@@ -421,3 +421,14 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
             await write()
     assert not (container.resources.owner_dir(agent.id) / "skills" / "t").exists()
     await container.skills.write(None, "pub", "d", "b", "user")
+
+
+async def test_agent_without_resource_files_can_still_be_deleted(container, make_agent):
+    agent = await make_agent("alpha")
+    await container.resources.apply({container.resources.owner_dir(agent.id): None}, "lost", "user")
+
+    await container.agent_lifecycle.delete(agent.id, author="user")
+    # 删除的清理经事件完成
+    await drain(container)
+
+    assert await container.agents.list() == []

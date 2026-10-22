@@ -729,3 +729,26 @@ async def test_a_temp_agent_started_from_a_tool_shares_the_model_limit_without_d
     await drain(container, limit_seconds=5)
 
     assert answers == ["helped"]
+
+
+async def test_a_corrupt_public_skill_is_listed_as_corrupt_in_the_index_and_the_run_goes_on(
+    container, make_agent, models
+):
+    alpha = (await make_agent("alpha", model="m")).id
+    await container.skills.write(None, "good", "a good skill", "x", "user")
+    broken = container.resources.owner_dir(None) / "skills" / "broken"
+    broken.mkdir(parents=True)
+    (broken / "SKILL.md").write_text("---\nname: [oops\n---\nbody")
+    seen: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(info.instructions or "")
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["m"] = scripted(fn)
+    await start(container, alpha, "hi")
+    await drain(container)
+
+    index = seen[0][seen[0].index("## Skill index") :]
+    assert "- `good` (public): a good skill" in index
+    assert "- public skill 'broken' is corrupt and cannot be used until it is rewritten or deleted:" in index

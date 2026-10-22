@@ -62,7 +62,7 @@ class MemoryStore:
                 # 给出要腾出的确切字数：只说「超了」时模型往往一次只缩短新条目几个字，反复撞墙
                 over = len(updated) - self.max_chars
                 raise MemoryFull(
-                    f"{_label(owner)} would be {len(updated)} chars, limit is {self.max_chars} "
+                    f"{'global memory' if owner is None else 'your memory'} would be {len(updated)} chars, limit is {self.max_chars} "
                     f"(now {len(current or '')}): free at least {over} chars first by condensing or deleting "
                     "existing entries with memory_replace (aim for a few hundred chars of headroom), then retry"
                 )

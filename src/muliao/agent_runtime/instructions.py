@@ -30,7 +30,7 @@ _AUDIENCE_NOTES: dict[Audience, str] = {
 
 SELF_IMPROVEMENT = """\
 ## Self-improvement
-Your knowledge is memory and skills, nothing else.
+Everything you learn persists only as memory or skills.
 - Memory: your private memory and the global memory shared by all agents (above), each limited to \
 {memory_limit} characters. Record durable facts (user preferences, environment details, corrections, lessons \
 learned) with `memory_append`; fix or condense with `memory_replace`. Use `scope="public"` only for facts and \

@@ -136,7 +136,8 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     def _status(scope: Scope, content: str) -> str:
-        return f"{scope} memory updated ({len(content)}/{store.max_chars} chars)"
+        which = "global memory" if scope == "public" else "memory"
+        return f"{which} updated ({len(content)}/{store.max_chars} chars)"
 
     @ts.tool
     async def memory_append(ctx: RunContext[RunScope], entry: str, scope: Scope = "private") -> str:
@@ -145,7 +146,7 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
 
         Args:
             entry: One concise markdown line or short block.
-            scope: `private` (only you) or `public` (the global memory every agent sees; only for facts and
+            scope: `private` (seen only by you) or `public` (the global memory every agent sees; only for facts and
                 rules that hold for all agents).
         """
         me = ctx.deps.agent_id
