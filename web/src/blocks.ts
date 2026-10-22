@@ -10,6 +10,8 @@ export interface ToolView {
   rejected: boolean
   /** 工具结果挂给用户的文件：显示在过程组外，折叠不影响看到它们 */
   attachments: Attachment[]
+  /** 工具交回给模型的图片（如浏览器截图）：属于这次调用的过程，显示在调用里，随过程组折叠 */
+  images: Attachment[]
   /** 工具结果关联的子会话 id（委派开出的 thread）：同样显示在过程组外，就在开它的那次调用处 */
   threads: string[]
   /** 开始执行、结束的时间（调用与结果条目上的 at，由后端给出）；拿不到的为 null */
@@ -72,6 +74,7 @@ export function toBlocks(items: Item[]): Block[] {
           result: null,
           rejected: false,
           attachments: [],
+          images: [],
           threads: [],
           startedAt: item.at,
           finishedAt: null,
@@ -87,6 +90,7 @@ export function toBlocks(items: Item[]): Block[] {
           tool.result = item.text
           tool.rejected = item.type === 'tool_error'
           tool.attachments = item.attachments
+          tool.images = item.images
           tool.threads = item.threads
           tool.finishedAt = item.at
         } else {
@@ -99,6 +103,7 @@ export function toBlocks(items: Item[]): Block[] {
               result: item.text,
               rejected: true,
               attachments: item.attachments,
+              images: item.images,
               threads: item.threads,
               startedAt: null,
               finishedAt: item.at,

@@ -8,6 +8,7 @@ const tool = (startedAt: string | null, finishedAt: string | null, result: strin
   result,
   rejected: false,
   attachments: [],
+  images: [],
   threads: [],
   startedAt,
   finishedAt,

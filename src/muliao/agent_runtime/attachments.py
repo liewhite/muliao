@@ -37,6 +37,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.tools import ToolDefinition
 
+from muliao.agent_runtime.conventions import result_image_refs
 from muliao.files.api import INLINE_IMAGE_TYPES, FileMeta, FileStore, parse_file_url
 from muliao.platform.tooling import RunScope
 
@@ -87,12 +88,9 @@ class AttachmentsForModel(AbstractCapability[RunScope]):
         meta = metas[parse_file_url(item.url)[0]]
         if not meta.is_inline_image:
             return [describe(meta)]
-        data = await asyncio.to_thread(self.store.read, meta)
-        return [describe(meta), BinaryContent(data, media_type=meta.media_type)]
+        return [describe(meta), await self._content(meta)]
 
-    async def _image(self, item: ImageUrl, metas: dict[str, FileMeta]) -> BinaryContent:
-        """工具结果里的图片引用（ToolImagesToFiles 存下的）换回内容。"""
-        meta = metas[parse_file_url(item.url)[0]]
+    async def _content(self, meta: FileMeta) -> BinaryContent:
         return BinaryContent(await asyncio.to_thread(self.store.read, meta), media_type=meta.media_type)
 
     async def _expand_message(self, message: ModelMessage, metas: dict[str, FileMeta]) -> ModelMessage:
@@ -103,9 +101,11 @@ class AttachmentsForModel(AbstractCapability[RunScope]):
             if isinstance(part, UserPromptPart) and not isinstance(part.content, str):
                 content = [x for item in part.content for x in await self._expand(item, metas)]
                 part = replace(part, content=content)
-            elif isinstance(part, ToolReturnPart) and isinstance(part.content, list):
+            elif refs := result_image_refs(part):
+                # 工具结果里的图片（ToolImagesToFiles 存下的）换回内容，其余原样
+                assert isinstance(part, ToolReturnPart) and isinstance(part.content, list)
                 tool_content = [
-                    await self._image(item, metas) if isinstance(item, ImageUrl) else item
+                    await self._content(metas[parse_file_url(item.url)[0]]) if item in refs else item
                     for item in part.content
                 ]
                 part = replace(part, content=tool_content)
@@ -136,9 +136,7 @@ def _file_refs(part: object) -> list[ImageUrl | DocumentUrl]:
     """一个消息段里的文件引用（存储形态）：用户消息里的附件、工具结果里存下的图片。"""
     if isinstance(part, UserPromptPart) and not isinstance(part.content, str):
         return [item for item in part.content if isinstance(item, ImageUrl | DocumentUrl)]
-    if isinstance(part, ToolReturnPart) and isinstance(part.content, list):
-        return [item for item in part.content if isinstance(item, ImageUrl)]
-    return []
+    return list(result_image_refs(part))
 
 
 def _is_inline_image(item: object) -> TypeGuard[BinaryContent]:
@@ -147,8 +145,9 @@ def _is_inline_image(item: object) -> TypeGuard[BinaryContent]:
 
 @dataclass
 class ToolImagesToFiles(AbstractCapability[RunScope]):
-    """工具结果里能内联的图片存进文件存储、换成 ImageUrl 引用（见模块说明）。结果是单个图片或内容列表（MCP 工具的
-    形态）；有图片时结果总是列表，AttachmentsForModel 只在列表里找引用。其他二进制内容（音频、PDF）原样留着。"""
+    """工具结果里能内联的图片存进文件存储、换成 ImageUrl 引用（见模块说明）。只处理 MCP 工具的结果形态：单个
+    图片或内容列表；有图片时结果总是列表（conventions.result_image_refs 只在列表里找引用）。包在 ToolReturn 里的
+    结果与其他二进制内容（音频、PDF）原样留着。存不下（如超过 upload_max_bytes）按契约外的失败让这次运行失败。"""
 
     store: FileStore
 

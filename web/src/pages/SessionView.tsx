@@ -81,6 +81,7 @@ function ToolBlock({ tool, live }: { tool: ToolView; live: boolean }) {
     >
       {tool.args && tool.args !== '{}' && <pre className={CODE_BLOCK}>{tool.args}</pre>}
       {tool.result !== null && <pre className={CODE_BLOCK}>{tool.result}</pre>}
+      <AttachmentList files={tool.images} />
     </Collapsible>
   )
 }

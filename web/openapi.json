@@ -4017,6 +4017,13 @@
             "type": "array",
             "title": "Threads"
           },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "type": "array",
+            "title": "Images"
+          },
           "ask": {
             "anyOf": [
               {
@@ -4049,6 +4056,7 @@
           "message_id",
           "attachments",
           "threads",
+          "images",
           "ask",
           "at"
         ],

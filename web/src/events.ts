@@ -60,6 +60,7 @@ export function liveItems(events: RunEvent[]): Item[] {
         tool_call_id: null,
         message_id: null,
         attachments: [],
+        images: [],
         threads: [],
         ask: null,
         at: null,

@@ -1403,6 +1403,8 @@ export interface components {
             attachments: components["schemas"]["Attachment"][];
             /** Threads */
             threads: string[];
+            /** Images */
+            images: components["schemas"]["Attachment"][];
             ask: components["schemas"]["AskView"] | null;
             /** At */
             at: string | null;

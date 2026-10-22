@@ -26,6 +26,7 @@ from typing import TypedDict
 
 from pydantic import TypeAdapter
 from pydantic_ai.messages import (
+    DocumentUrl,
     ImageUrl,
     ModelMessage,
     ModelRequest,
@@ -150,16 +151,27 @@ def tool_attachments(part: ToolReturnPart | RetryPromptPart) -> list[Attachment]
     return attachments
 
 
-def result_images(part: ToolReturnPart | RetryPromptPart) -> list[Attachment]:
-    """工具交回、已存进文件存储的图片（attachments.ToolImagesToFiles）。它们是给模型看的结果，会话里显示在这次调用处；
-    不是挂给用户的文件（TOOL_ATTACHMENTS），所以不进 shared_attachments、不转交调用方。"""
+def attachment_of_ref(ref: ImageUrl | DocumentUrl) -> Attachment:
+    """消息里一个文件引用（存储形态）的展示形式：图片内联，其余是下载链接。"""
+    return Attachment(
+        url=ref.url,
+        name=parse_file_url(ref.url)[1],
+        media_type=ref.media_type,
+        inline=isinstance(ref, ImageUrl),
+    )
+
+
+def result_image_refs(part: object) -> list[ImageUrl]:
+    """工具交回、已存进文件存储的图片引用（attachments.ToolImagesToFiles 写下：有图片的结果总是内容列表）。"""
     if not isinstance(part, ToolReturnPart) or not isinstance(part.content, list):
         return []
-    return [
-        Attachment(url=c.url, name=parse_file_url(c.url)[1], media_type=c.media_type, inline=True)
-        for c in part.content
-        if isinstance(c, ImageUrl)
-    ]
+    return [c for c in part.content if isinstance(c, ImageUrl)]
+
+
+def result_images(part: ToolReturnPart | RetryPromptPart) -> list[Attachment]:
+    """工具交回的图片的展示形式。它们是给模型看的结果，会话里显示在这次调用的过程里（Item.images）；不是挂给用户的
+    文件（TOOL_ATTACHMENTS），所以不进 shared_attachments、不转交调用方。"""
+    return [attachment_of_ref(r) for r in result_image_refs(part)]
 
 
 def tool_threads(part: ToolReturnPart | RetryPromptPart) -> list[str]:

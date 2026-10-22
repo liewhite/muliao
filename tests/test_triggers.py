@@ -502,6 +502,7 @@ async def test_an_image_a_tool_returns_is_stored_as_a_file_and_shown_to_the_mode
     )
     from pydantic_ai.models.function import AgentInfo
 
+    from muliao.files.api import parse_file_url
     from muliao.sessions.transcript import to_items
     from tests.fixtures.echo_mcp import PNG
     from tests.test_flow import scripted, tool_returns
@@ -530,15 +531,42 @@ async def test_an_image_a_tool_returns_is_stored_as_a_file_and_shown_to_the_mode
     ]
     [caption, ref] = stored.content
     assert caption == "page shot" and isinstance(ref, ImageUrl)
-    [meta] = await container.files.referenced([ref.url.split("/")[3]])
+    [meta] = await container.files.referenced([parse_file_url(ref.url)[0]])
     assert (meta.name, meta.media_type) == ("echo_screenshot.png", "image/png")
     assert container.files.read(meta) == PNG
-    # 会话里这次调用处显示图片，文字是其余的结果
+    # 会话里图片属于这次调用的过程（images），不是给用户的文件；文字是其余的结果
     [item] = [i for i in to_items(await history_of(container, session.id)) if i.type == "tool_result"]
     assert item.text == "page shot"
-    assert item.attachments == [
+    assert item.attachments == []
+    assert item.images == [
         {"url": ref.url, "name": "echo_screenshot.png", "media_type": "image/png", "inline": True}
     ]
+
+
+async def test_a_tool_result_that_is_a_single_image_becomes_a_list_holding_its_file_reference(container):
+    from pydantic_ai.messages import BinaryContent, ImageUrl, ToolCallPart
+
+    from muliao.agent_runtime.attachments import ToolImagesToFiles
+    from muliao.files.api import parse_file_url
+
+    shot = BinaryContent(b"\x89PNG", media_type="image/png")
+    audio = BinaryContent(b"RIFF", media_type="audio/wav")
+    hook = ToolImagesToFiles(container.files)
+
+    [ref] = await hook.after_tool_execute(
+        None, call=ToolCallPart("shot", {}), tool_def=None, args={}, result=shot
+    )
+    assert isinstance(ref, ImageUrl)
+    assert parse_file_url(ref.url)[1] == "shot.png"
+    # 没有图片的结果（包括其他二进制内容）原样交回
+    assert (
+        await hook.after_tool_execute(None, call=ToolCallPart("a", {}), tool_def=None, args={}, result=audio)
+        is audio
+    )
+    assert (
+        await hook.after_tool_execute(None, call=ToolCallPart("a", {}), tool_def=None, args={}, result="x")
+        == "x"
+    )
 
 
 async def test_an_mcp_tool_call_that_fails_is_handed_back_to_the_model_with_its_secrets_redacted(

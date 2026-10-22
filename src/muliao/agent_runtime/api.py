@@ -14,6 +14,7 @@ from muliao.agent_runtime.conventions import (
     Attachment,
     answer_text,
     attach_run_context,
+    attachment_of_ref,
     calls_in,
     event_indices,
     format_event,
@@ -36,6 +37,7 @@ from muliao.agent_runtime.runner import AgentRuntime, RunProfile, StepHooks, Too
 from muliao.agent_runtime.workspace_tools import ShellLimits, file_toolset, run_foreground, shell_description
 
 __all__ = [
+    "attachment_of_ref",
     "INTERRUPTED_TOOL_RESULT",
     "ModelRegistry",
     "RUN_CONTEXT",

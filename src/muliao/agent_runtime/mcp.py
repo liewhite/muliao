@@ -177,7 +177,7 @@ class McpConnector:
                 command=c.command,
                 args=[fill(a, secrets) for a in c.args],
                 env={k: fill(v, secrets) for k, v in c.env.items()} or None,
-                cwd=str(cwd) if cwd else None,
+                cwd=None if cwd is None else str(cwd),
             )
             toolset = MCPToolset(client, id=f"mcp-{server.key}", init_timeout=_CONNECT_TIMEOUT)
         else:

@@ -25,6 +25,7 @@ from pydantic_ai.messages import (
 
 from muliao.agent_runtime.api import (
     Attachment,
+    attachment_of_ref,
     event_indices,
     is_stopped,
     made_up_result,
@@ -34,7 +35,6 @@ from muliao.agent_runtime.api import (
     tool_attachments,
     tool_threads,
 )
-from muliao.files.api import parse_file_url
 from muliao.platform.text_edit import truncate
 from muliao.sessions.deferred import asks_user, questions_in
 from muliao.sessions.questions import AnsweredQuestion, AskResult, Question
@@ -69,6 +69,8 @@ class Item(BaseModel):
     attachments: list[Attachment]
     # 工具结果关联的子会话 id（TOOL_THREADS）；其他条目为空
     threads: list[str]
+    # 工具交回给模型的图片（conventions.result_images，如浏览器截图）：属于这次调用的过程，不是给用户的文件；其他条目为空
+    images: list[Attachment]
     # ask_user 的调用（参数合法时）；其他条目为 None
     ask: AskView | None
     # 工具调用开始执行的时间（tool_call），或工具结束的时间（tool_result、tool_error）；其他条目，以及拿不到真实时间的
@@ -84,6 +86,7 @@ def _item(
     attachments: list[Attachment] | None = None,
     threads: list[str] | None = None,
     at: datetime | None = None,
+    images: list[Attachment] | None = None,
 ) -> Item:
     return Item(
         type=type_,
@@ -93,6 +96,7 @@ def _item(
         message_id=None,
         attachments=attachments or [],
         threads=threads or [],
+        images=images or [],
         ask=None,
         at=at,
     )
@@ -176,8 +180,9 @@ def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
             part.model_response_str(),
             part.tool_name,
             part.tool_call_id,
-            [*tool_attachments(part), *result_images(part)],
+            tool_attachments(part),
             tool_threads(part),
+            images=result_images(part),
             at=None if made_up_result(part) else part.timestamp,
         )
     return _item("tool_error", part.model_response(), part.tool_name, part.tool_call_id, at=part.timestamp)
@@ -214,14 +219,7 @@ def _user_item(content: str | Sequence[Any]) -> Item:
         if isinstance(c, str):
             texts.append(c)
         elif isinstance(c, ImageUrl | DocumentUrl):
-            attachments.append(
-                Attachment(
-                    url=c.url,
-                    name=parse_file_url(c.url)[1],
-                    media_type=c.media_type,
-                    inline=isinstance(c, ImageUrl),
-                )
-            )
+            attachments.append(attachment_of_ref(c))
         else:
             raise RuntimeError(f"stored user prompt holds unsupported content {type(c).__name__}")
     return _item("user", "\n".join(texts), attachments=attachments)

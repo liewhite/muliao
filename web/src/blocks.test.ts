@@ -10,6 +10,7 @@ const item = (type: Item['type'], text: string, tool_call_id: string | null = nu
   tool_call_id,
   message_id: null,
   attachments: [],
+  images: [],
   threads: [],
   ask: null,
 })
@@ -56,6 +57,14 @@ describe('stepAttachments', () => {
     expect(views).toHaveLength(1)
     const group = views[0]
     expect(group.kind === 'process' && stepAttachments(group.steps)).toEqual([chart, report])
+  })
+
+  it('keeps images a tool returned to the model inside the call, not with the files for the user', () => {
+    const shot = { url: '/api/files/3/shot.png', name: 'shot.png', media_type: 'image/png', inline: true }
+    const views = groupSteps(toBlocks([item('tool_call', '{}', 'a'), { ...item('tool_result', 'page', 'a'), images: [shot] }]))
+    const group = views[0]
+    expect(group.kind === 'process' && stepAttachments(group.steps)).toEqual([])
+    expect(group.kind === 'process' && group.steps[0].kind === 'tool' && group.steps[0].tool.images).toEqual([shot])
   })
 })
 
@@ -105,7 +114,7 @@ describe('toBlocks times', () => {
 describe('summarizeSteps', () => {
   const tool = (result: string | null, rejected = false): Step => ({
     kind: 'tool',
-    tool: { name: 'run_shell', args: '', result, rejected, attachments: [], threads: [], startedAt: null, finishedAt: null },
+    tool: { name: 'run_shell', args: '', result, rejected, attachments: [], images: [], threads: [], startedAt: null, finishedAt: null },
   })
 
   it('counts tool calls, mentions thinking, and reports the running tool and calls returned to the model', () => {
