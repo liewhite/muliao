@@ -2,6 +2,7 @@
 
 import { Graph, layout, type Point } from '@dagrejs/dagre'
 import type { Issue } from './api'
+import { isFinished } from './issues'
 
 /** 节点（卡片）的尺寸，渲染与布局共用 */
 export const NODE_WIDTH = 224
@@ -33,8 +34,6 @@ export interface GraphLayout {
   width: number
   height: number
 }
-
-const FINAL = new Set<Issue['status']>(['done', 'cancelled'])
 
 /** 已加载的 issue 之间的依赖边（依赖指向未加载的 issue，如按项目筛选掉了的，不画） */
 function dependencyEdges(issues: Issue[]): [number, number][] {
@@ -69,7 +68,7 @@ export function graphIssues(issues: Issue[], scope: GraphScope): Issue[] {
   const byId = new Map(issues.map((i) => [i.id, i]))
   const keep = new Set(
     dependencyGroups(issues)
-      .filter((g) => scope === 'all' || g.some((id) => !FINAL.has(byId.get(id)!.status)))
+      .filter((g) => scope === 'all' || g.some((id) => !isFinished(byId.get(id)!.status)))
       .flat(),
   )
   return issues.filter((i) => keep.has(i.id))
@@ -96,11 +95,11 @@ export function layoutIssueGraph(issues: Issue[]): GraphLayout {
     edges: edges.map(([from, to]) => ({
       from,
       to,
-      settled: FINAL.has(status.get(from)!),
-      points: g.edge(String(from), String(to)).points ?? [],
+      settled: isFinished(status.get(from)!),
+      points: g.edge(String(from), String(to)).points!,
     })),
-    width: label.width ?? 0,
-    height: label.height ?? 0,
+    width: label.width!,
+    height: label.height!,
   }
 }
 

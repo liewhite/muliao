@@ -1,4 +1,4 @@
-import { useRef, useState, type ComponentProps, type CSSProperties } from 'react'
+import { useMemo, useRef, useState, type ComponentProps, type CSSProperties } from 'react'
 import { Card, Chip } from '@heroui/react'
 import { DndContext, KeyboardSensor, MouseSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { Link, useNavigate } from 'react-router-dom'
@@ -16,6 +16,7 @@ import {
   assigneeOptions,
   FOLD_LIMIT,
   foldIssues,
+  isFinished,
   ownerHue,
   ownerLabel,
   groupByStatus,
@@ -316,10 +317,10 @@ const EDGE_COLOR = {
 function DependencyGraph({ issues, agents, scope }: { issues: Issue[]; agents: Agent[] | undefined; scope: GraphScope }) {
   // 悬停的卡片：高亮与它直接相连的边
   const [hover, setHover] = useState<number | null>(null)
-  const shown = graphIssues(issues, scope)
-  if (shown.length === 0)
+  // 悬停只改边的样式，不重新布局
+  const g = useMemo(() => layoutIssueGraph(graphIssues(issues, scope)), [issues, scope])
+  if (g.nodes.length === 0)
     return <EmptyHint>{scope === 'open' ? '没有未完成的依赖关系' : '还没有带依赖关系的 issue'}</EmptyHint>
-  const g = layoutIssueGraph(shown)
   const touches = (e: { from: number; to: number }) => hover !== null && (e.from === hover || e.to === hover)
   return (
     <div className="overflow-auto px-4 py-3">
@@ -361,7 +362,7 @@ function DependencyGraph({ issues, agents, scope }: { issues: Issue[]; agents: A
               onMouseLeave={() => setHover(null)}
               className={`absolute flex flex-col justify-between gap-1 rounded-lg border border-l-4 border-separator bg-surface px-2.5 py-1.5 text-sm shadow-sm transition-colors hover:bg-surface-hover ${
                 hue === null ? '' : 'owner-color border-l-(--owner-fg)'
-              } ${issue.status === 'done' || issue.status === 'cancelled' ? 'opacity-60' : ''}`}
+              } ${isFinished(issue.status) ? 'opacity-60' : ''}`}
               style={{ ...ownerStyle(hue), left: x, top: y, width: NODE_WIDTH, height: NODE_HEIGHT }}
               title={`#${issue.id} ${issue.title}`}
             >
@@ -370,6 +371,7 @@ function DependencyGraph({ issues, agents, scope }: { issues: Issue[]; agents: A
                 <StatusDot status={issue.status} />
                 <span>#{issue.id}</span>
                 <span>{STATUS_LABEL[issue.status]}</span>
+                {issue.stalled && <span className="text-warning">没人在处理</span>}
                 <span className="ml-auto truncate">→ {assigneeLabel(agents, issue.assignee)}</span>
               </span>
             </Link>
@@ -532,16 +534,17 @@ export default function Issues() {
   )
   return (
     <Page title="Issues" wide={view !== 'list'}>
-      {view === 'board' ? (
-        <>
-          <div className="mx-auto w-full max-w-3xl px-4 pt-3">{toolbar}</div>
-          <Loading state={{ ...loaded, data: issues }}>{(list) => <Board issues={list} agents={agents.data} onMove={onMove} />}</Loading>
-        </>
-      ) : view === 'graph' ? (
+      {view !== 'list' ? (
         <>
           <div className="mx-auto w-full max-w-3xl px-4 pt-3">{toolbar}</div>
           <Loading state={{ ...loaded, data: issues }}>
-            {(list) => <DependencyGraph issues={list} agents={agents.data} scope={graphScope} />}
+            {(list) =>
+              view === 'board' ? (
+                <Board issues={list} agents={agents.data} onMove={onMove} />
+              ) : (
+                <DependencyGraph issues={list} agents={agents.data} scope={graphScope} />
+              )
+            }
           </Loading>
         </>
       ) : (

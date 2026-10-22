@@ -16,6 +16,9 @@ export const STATUS_LABEL: Record<IssueStatus, string> = {
 /** 看板的列顺序：从 STATUS_LABEL 的键推导，Record 保证每个状态都在 */
 export const STATUSES = Object.keys(STATUS_LABEL) as readonly IssueStatus[]
 
+/** 已结束的状态（完成、取消）：不再挡着依赖它的 issue（与后端 issues/rules.py 一致） */
+export const isFinished = (status: IssueStatus) => status === 'done' || status === 'cancelled'
+
 /** 状态圆点的颜色（Tailwind 类） */
 export const STATUS_COLOR: Record<IssueStatus, string> = {
   backlog: 'border-muted',
