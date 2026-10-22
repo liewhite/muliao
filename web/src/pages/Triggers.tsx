@@ -269,7 +269,7 @@ function KindStatus({ trigger }: { trigger: Trigger }) {
             <span className="text-warning">
               {' '}
               · 自 {formatTime(trigger.status.skipped.since)} 起已跳过 {trigger.status.skipped.count} 次：上次的会话
-              {trigger.status.skipped.previous === 'waiting' ? '在等待（后台任务、委派或你的回答）' : '还在运行'}
+              {trigger.status.skipped.previous_state === 'waiting' ? '在等待（后台任务、委派或你的回答）' : '还在运行'}
             </span>
           )}
         </span>

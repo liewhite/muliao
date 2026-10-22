@@ -7,14 +7,15 @@
 - 不重叠：上一次触发的会话还没做完（定义见 previous_fire_state_in）时跳过本次，并记 info 日志。
 - 跳过要看得见：连续跳过记在 state["skipped"]（次数、从何时起、挡路的会话在运行还是在等待），作为状态给界面与
   模型看；挡路的会话在等待（后台任务、委派、用户回答——可能永远等不到，如没人回答的提问）时通知用户，每轮连续
-  跳过只通知一次。在运行的不通知：运行偶尔长过一个周期是常态。下次真正触发时清除。
+  跳过只通知一次。在运行的不通知：运行偶尔长过一个周期是常态。下次真正触发、改配置或重新启用时清除；挡路的会话换了（手动「立即
+  运行」开了新会话）算新的一轮。
 - 停用后重新启用，下次时间从启用时算起（TriggerService 在重新启用时重新推导 state），不补暂停期间的触发。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from croniter import CroniterBadDateError, croniter
@@ -41,14 +42,16 @@ class ScheduleConfig(BaseModel):
 
 
 class SkippedFires(BaseModel):
-    # 连续跳过了几次、第一次跳过的时间，以及最近一次跳过时上一次触发的会话（last_session_id）在运行还是在等待
+    # 连续跳过了几次、第一次跳过的时间，以及最近一次跳过时上一次触发的会话（last_session_id）的工作状态（不会是 idle）
     count: int
     since: datetime
-    previous: Literal["running", "waiting"]
+    previous_state: WorkState
 
 
 class _SkipStreak(SkippedFires):
-    # 存在 state["skipped"] 里的样子：多记这一轮是否已通知过用户（不给界面看）
+    # 存在 state["skipped"] 里的样子，多记两件不给界面看的事：挡路的是哪个会话（手动「立即运行」换了会话就是新的一轮），
+    # 以及这一轮是否已通知过用户
+    session_id: str
     notified: bool
 
 
@@ -65,8 +68,8 @@ class ScheduleKind:
         'e.g. {"cron": "*/5 * * * *"}. Skips a firing while the conversation the previous firing started is '
         "still busy: running, or waiting on background jobs, delegated work or the user's answer; status.skipped "
         "then counts the consecutive skips, and the user is notified once when that conversation is waiting. "
-        "For a task that "
-        "should happen once, use the `once` kind: a cron expression with a date would fire again every year."
+        "For a task that should happen once, use the `once` kind: a cron expression with a date would fire "
+        "again every year."
     )
 
     def __init__(self, tz: ZoneInfo, clock: Clock = utcnow):
@@ -87,13 +90,17 @@ class ScheduleKind:
 
     def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         expr = parse_config(KIND, ScheduleConfig, config).cron
-        return {"cron": expr}, {"next_run_at": self.next_run(expr, self._clock()).isoformat()}
+        # 改配置、重新启用都从头算：之前的连续跳过（连同它是否通知过）不带过来
+        return {"cron": expr}, {
+            "next_run_at": self.next_run(expr, self._clock()).isoformat(),
+            "skipped": None,
+        }
 
     def status(self, trigger: Trigger) -> ScheduleStatus:
         streak = _streak(trigger)
         return ScheduleStatus(
             next_run_at=next_run_at(trigger),
-            skipped=None if streak is None else SkippedFires(**streak.model_dump(exclude={"notified"})),
+            skipped=None if streak is None else SkippedFires.model_validate(streak, from_attributes=True),
         )
 
 
@@ -148,18 +155,20 @@ class ScheduleDue:
     async def consume_in(self, s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
         set_state(trigger, next_run_at=self._kind.next_run(_cron(trigger), now).isoformat())
         previous = await previous_fire_state_in(s, self._activity, trigger)
-        streak = _streak(trigger)
         if previous == WorkState.IDLE:
-            if streak is not None:
-                # JSON 列只在整体赋值时被追踪
-                trigger.state = {k: v for k, v in trigger.state.items() if k != "skipped"}
+            set_state(trigger, skipped=None)
             return None
+        assert trigger.last_session_id is not None  # 从没触发过的是 idle
+        streak = _streak(trigger)
+        if streak is not None and streak.session_id != trigger.last_session_id:
+            streak = None
         notified = streak is not None and streak.notified
         notify = previous == WorkState.WAITING and not notified
         streak = _SkipStreak(
             count=1 if streak is None else streak.count + 1,
             since=now if streak is None else streak.since,
-            previous=previous.value,
+            previous_state=previous,
+            session_id=trigger.last_session_id,
             notified=notified or notify,
         )
         if notify:

@@ -5586,20 +5586,15 @@
             "format": "date-time",
             "title": "Since"
           },
-          "previous": {
-            "type": "string",
-            "enum": [
-              "running",
-              "waiting"
-            ],
-            "title": "Previous"
+          "previous_state": {
+            "$ref": "#/components/schemas/WorkState"
           }
         },
         "type": "object",
         "required": [
           "count",
           "since",
-          "previous"
+          "previous_state"
         ],
         "title": "SkippedFires"
       },

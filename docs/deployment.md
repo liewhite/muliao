@@ -71,7 +71,7 @@ VAPID 密钥在首次启动时生成于 `data/vapid_private.pem`，更换它会�
 4. 「触发」页新建触发器：方式选「定时」，cron 表达式 `* * * * *`，agent 选 `slack-triage`。
 5. 被委派的 agent 在自己的新 session 中处理，完成后推送通知；点开通知进入该 session 可继续回复。
 
-定时触发不会重叠执行：上一次触发的 session 仍在运行时会跳过本次。
+定时触发不会重叠执行：上一次触发的 session 还没做完（在运行，或在等后台任务、委派、你的回答）时跳过本次；跳过会显示在触发页上，挡路的 session 在等待时会通知你一次（规则见 docs/architecture.md 的 `schedule`）。
 
 ## 数据
 

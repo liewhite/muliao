@@ -85,7 +85,7 @@ async def test_skipped_fires_show_in_status_and_clear_when_it_fires_again(contai
         await schedules.fire_due()
 
     skipped = triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
-    assert (skipped["count"], skipped["previous"]) == (2, "running")
+    assert (skipped["count"], skipped["previous_state"]) == (2, "running")
     assert datetime.fromisoformat(skipped["since"]) <= datetime.now().astimezone()
     await drain(container)
     assert await container.notifications.list(10) == []
@@ -126,8 +126,8 @@ async def test_skipping_behind_a_waiting_session_notifies_the_user_once_per_stre
     await skip_twice()
 
     skipped = triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
-    assert (skipped["count"], skipped["previous"]) == (2, "waiting")
-    assert "notified" not in skipped
+    assert (skipped["count"], skipped["previous_state"]) == (2, "waiting")
+    assert set(skipped) == {"count", "since", "previous_state"}
     notes = await container.notifications.list(10)
     assert [(n.session_id, "slack" in n.title) for n in notes] == [(first, True)]
 
@@ -138,6 +138,70 @@ async def test_skipping_behind_a_waiting_session_notifies_the_user_once_per_stre
     second = await fire_and_wait("job:2")
     await skip_twice()
     assert [n.session_id for n in await container.notifications.list(10)] == [second, first]
+
+
+async def test_a_streak_that_turns_from_running_to_waiting_notifies_then(container, make_agent):
+    from muliao.sessions.holds import hold_in
+
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    trigger = await triggers.create(
+        name="slack", agent_id=alpha, kind="schedule", prompt="check", config={"cron": "* * * * *"}
+    )
+    await _make_due(container, trigger.id)
+    await schedules.fire_due()
+    await _make_due(container, trigger.id)
+    await schedules.fire_due()  # 第一次的 turn 仍是 pending：在运行，不通知
+    await drain(container)
+    assert await container.notifications.list(10) == []
+    session_id = (await triggers.get_by_name("slack")).last_session_id
+    async with container.db.transaction() as s:
+        await hold_in(s, session_id, "job:1", awaited=False)
+
+    for _ in range(2):
+        await _make_due(container, trigger.id)
+        await schedules.fire_due()
+    await drain(container)
+
+    skipped = triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
+    assert (skipped["count"], skipped["previous_state"]) == (3, "waiting")
+    assert [n.session_id for n in await container.notifications.list(10)] == [session_id]
+
+
+async def test_a_new_blocking_session_or_reenabling_starts_a_new_streak(container, make_agent):
+    """手动「立即运行」换了挡路的会话：新的一轮（计数重来、等待时再通知）；停用再启用也从头算。"""
+    from muliao.sessions.holds import hold_in
+
+    alpha = (await make_agent()).id
+    triggers, schedules = _schedule(container)
+    trigger = await triggers.create(
+        name="slack", agent_id=alpha, kind="schedule", prompt="check", config={"cron": "* * * * *"}
+    )
+
+    async def wait_on(session_id: str, holder: str) -> None:
+        async with container.db.transaction() as s:
+            await hold_in(s, session_id, holder, awaited=False)
+
+    async def skip() -> dict:
+        await _make_due(container, trigger.id)
+        await schedules.fire_due()
+        await drain(container)
+        return triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
+
+    first = await triggers.run(trigger.id)
+    await drain(container)
+    await wait_on(first, "job:1")
+    assert (await skip())["count"] == 1
+    second = await triggers.run(trigger.id)
+    await drain(container)
+    await wait_on(second, "job:2")
+
+    assert (await skip())["count"] == 1
+    assert [n.session_id for n in await container.notifications.list(10)] == [second, first]
+
+    await triggers.update(trigger.id, enabled=False)
+    await triggers.update(trigger.id, enabled=True)
+    assert triggers.status_of(await triggers.get_by_name("slack"))["skipped"] is None
 
 
 async def test_broken_schedule_trigger_is_disabled_without_blocking_others(container, make_agent):

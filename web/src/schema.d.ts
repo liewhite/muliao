@@ -1995,11 +1995,7 @@ export interface components {
              * Format: date-time
              */
             since: string;
-            /**
-             * Previous
-             * @enum {string}
-             */
-            previous: "running" | "waiting";
+            previous_state: components["schemas"]["WorkState"];
         };
         /** StartIn */
         StartIn: {
