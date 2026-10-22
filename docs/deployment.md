@@ -5,10 +5,10 @@
 前端构建产物随包分发（`src/muliao/webui/`），安装端不需要 node：
 
 ```bash
-uv tool install git+https://github.com/liewhite/muliao.git
-# 升级
-uv tool upgrade muliao     # 或 uv tool install --force git+https://github.com/liewhite/muliao.git
+deploy/install.sh          # 安装或升级到 main；也可以指定分支或 tag：deploy/install.sh <引用>
 ```
+
+不要直接 `uv tool install git+…` 或 `uv tool upgrade`：它们不读 `uv.lock`，会重新解析依赖，装到测试没跑过的版本组合（2026-10-22 装上 anthropic 2.0，与 pydantic-ai 不兼容，所有模型调用失败）。脚本把锁文件导出为约束再安装，线上版本与测试一致。脚本会自己克隆仓库，部署机上不需要仓库副本，可以从开发机直接执行：`ssh <主机> 'zsh -l -s [引用]' < deploy/install.sh`（用登录 shell 是为了拿到 Homebrew 的 PATH 里的 uv）。安装后重启服务才生效（见下文 launchd）。
 
 所有配置（监听地址、登录密码、密钥、LLM provider 与 API key）都在一个 TOML 文件里，模板见仓库根目录 `config.example.toml`，每项都有注释。程序自身不读环境变量；LLM 的 base_url 未填时使用官方地址，不受 `*_BASE_URL` 环境变量影响。
 
