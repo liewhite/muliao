@@ -29,6 +29,8 @@ export type AppNotification = Schemas['NotificationOut']
 
 /** 指代用户的那个值（与后端 agents.api.USER 一致）：issue 的指派人、资源修改的作者等 */
 export const USER = 'user'
+/** issue 时间线上系统自己的动作（删除 agent 时的清理）的 actor（与后端 issues.rules.SYSTEM 一致） */
+export const SYSTEM_ACTOR = 'system'
 
 /** 引用文件的地址前缀（与后端 muliao.files.FILES_PATH 一致）：回答里只有指向这里的图片会被渲染 */
 export const FILES_PATH = '/api/files'

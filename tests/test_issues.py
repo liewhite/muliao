@@ -9,7 +9,7 @@ from muliao.agent_runtime.instructions import build_instructions
 from muliao.agents.events import AgentDeleting
 from muliao.errors import InvalidInput, NotFound
 from muliao.issues.api import USER, ActivityKind, IssueStatus, WorkState
-from muliao.issues.rules import Snapshot, cycle_through, recipient, stalled
+from muliao.issues.rules import SYSTEM, Snapshot, cycle_through, recipient, stalled
 from muliao.platform.messaging import Delivery
 from muliao.sessions.api import Origin
 from muliao.sessions.origins import origin_note
@@ -230,12 +230,17 @@ async def test_deleting_an_agent_unassigns_its_issues(container, make_agent):
     alpha = (await make_agent()).id
     issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
     await deliver(container)
+    before = (await container.issues.get(issue.id)).issue.updated_at
     commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m"))
     async with container.db.transaction() as s:
         await commit(s)
     detail = await container.issues.get(issue.id)
     assert detail.issue.assignee is None
     assert detail.activities[-1].change == {"from": alpha, "to": None}
+    # 清理是系统做的，不是用户
+    assert detail.activities[-1].actor_agent_id == SYSTEM
+    assert detail.issue.updated_at > before
+    assert "system changed assignee: alpha -> unassigned" in await container.issues.render(issue.id)
 
 
 async def test_assigning_to_an_unknown_agent_is_refused(container, make_agent):
@@ -316,7 +321,9 @@ async def test_deleting_the_owner_agent_clears_ownership(container, make_agent):
     commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m"))
     async with container.db.transaction() as s:
         await commit(s)
-    assert (await container.issues.get(issue.id)).issue.owner_agent_id is None
+    detail = await container.issues.get(issue.id)
+    assert detail.issue.owner_agent_id is None
+    assert (detail.activities[-1].kind, detail.activities[-1].actor_agent_id) == (ActivityKind.OWNER, SYSTEM)
 
 
 async def test_acting_from_the_session_of_another_issue_is_delivered(container, make_agent):

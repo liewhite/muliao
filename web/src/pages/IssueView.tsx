@@ -2,7 +2,16 @@ import { useState } from 'react'
 import { Button, Card } from '@heroui/react'
 import { MessageSquare, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, asAgentId, sessionRoute, type Agent, type IssueDetail, type IssuePriority, type IssueStatus } from '../api'
+import {
+  SYSTEM_ACTOR,
+  api,
+  asAgentId,
+  sessionRoute,
+  type Agent,
+  type IssueDetail,
+  type IssuePriority,
+  type IssueStatus,
+} from '../api'
 import { useRefetch } from '../events'
 import {
   PRIORITIES,
@@ -36,7 +45,8 @@ import {
 import { StatusDot } from './Issues'
 
 function actorName(agents: Agent[] | undefined, actor: string | null) {
-  return actor === null ? '我' : agentLabel(agents, asAgentId(actor))
+  if (actor === null) return '我'
+  return actor === SYSTEM_ACTOR ? '系统' : agentLabel(agents, asAgentId(actor))
 }
 
 function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | undefined }) {

@@ -64,7 +64,7 @@ class IssueOut(BaseModel):
 class ActivityOut(BaseModel):
     id: int
     created_at: datetime
-    # 做这件事的 agent id；用户为 null
+    # 做这件事的 agent id；用户为 null，系统自己的清理（删除 agent）为 "system"
     actor_agent_id: str | None
     kind: ActivityKind
     # 评论内容

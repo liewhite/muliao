@@ -11,6 +11,18 @@ from muliao.sessions.api import WorkState
 # 不会与它相同；agent 名称也不能取它（agents.naming.new_agent_name），工具里按名称指派时不会混淆
 
 
+# 时间线上「系统」做的动作的 actor（例如删除 agent 时清理指派人、负责人）：既不是用户（None）也不是某个 agent。
+# 不是 12 位十六进制，不会与 agent id 相同
+SYSTEM = "system"
+
+
+def actor_name(actor: str | None, names: AgentNames) -> str:
+    """时间线 actor 的展示名：用户（None）是 USER，系统是 SYSTEM，agent 按 id 换成名字。"""
+    if actor is None:
+        return USER
+    return SYSTEM if actor == SYSTEM else names[actor]
+
+
 def assignee_name(assignee: str, names: AgentNames) -> str:
     """指派人的展示名：用户就是 USER，agent 按 id 换成名字。"""
     return USER if assignee == USER else names[assignee]
@@ -88,7 +100,7 @@ def cycle_through(
 
 @dataclass(frozen=True)
 class ActivityView:
-    """渲染给模型看的一条时间线。actor 是展示名（「用户」或 agent 名）。"""
+    """渲染给模型看的一条时间线。actor 是展示名（用户、系统或 agent 名，见 actor_name）。"""
 
     at: str
     actor: str
