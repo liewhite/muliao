@@ -303,3 +303,16 @@ async def test_session_list_pins_every_session_that_is_not_idle_even_beyond_the_
     assert (first["id"], first["state"]) == (oldest.id, "waiting")
     detail = (await client.get(f"/api/sessions/{oldest.id}")).json()
     assert (detail["run"], detail["state"]) == (None, "waiting")
+
+
+async def test_an_agent_being_deleted_reads_as_missing(client, container, make_agent):
+    """删除窗口里它的私有资源（指令、记忆）可能已经删了：读它与它的资源一律 404，不读到一半变成 500。"""
+    from muliao.agents.tables import Agent
+
+    agent = await make_agent("alpha")
+    async with container.db.transaction() as s:
+        (await s.get(Agent, agent.id)).deleting_by = "user"
+    await login(client)
+
+    for path in ("", "/memory", "/reflections"):
+        assert (await client.get(f"/api/agents/{agent.id}{path}")).status_code == 404, path

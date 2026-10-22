@@ -134,7 +134,8 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
 
 @router.get("/agents/{agent_id}")
 async def get_agent(c: C, agent_id: str) -> AgentOut:
-    return await _out(c, await c.agents.get(agent_id))
+    # 正在删除的按不存在处理：它的指令（私有资源）可能已经删了
+    return await _out(c, await c.agents.get_active(agent_id))
 
 
 @router.put("/agents/{agent_id}")
@@ -167,7 +168,7 @@ class MemoryIn(BaseModel):
 
 @router.get("/agents/{agent_id}/memory")
 async def get_memory(c: C, agent_id: str) -> MemoryOut:
-    await c.agents.get(agent_id)
+    await check_owner(c, agent_id)
     return MemoryOut(content=c.memory.read(agent_id), max_chars=c.memory.max_chars)
 
 
@@ -196,7 +197,7 @@ class ReflectionOut(BaseModel):
 
 @router.get("/agents/{agent_id}/reflections")
 async def list_reflections(c: C, agent_id: str, limit: int = Query(50, ge=1, le=200)) -> list[ReflectionOut]:
-    await c.agents.get(agent_id)
+    await check_owner(c, agent_id)
     return [ReflectionOut.of(r) for r in await c.reflection.list(agent_id, limit)]
 
 
