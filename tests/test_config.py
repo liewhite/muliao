@@ -176,7 +176,7 @@ async def test_startup_rejects_agents_with_unresolvable_models(settings, models)
     c = assemble(settings, resolve_model=models)  # 使用真实的配置校验
     async with c.running():
         agent = await c.agents.create(
-            AgentSpec(name="ok", description="d", model="fake:m", instructions=""),
+            AgentSpec(name="ok", description="d", model="fake:m"),
             author="user",
         )
     try:

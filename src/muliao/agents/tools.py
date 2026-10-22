@@ -1,8 +1,4 @@
-"""agent 的目录与管理：查看、创建、修改、删除 agent，以及读写公共 prompt。
-
-给模型看的是名称和描述，不出现 id。指令和公共 prompt 的每次修改都记在版本历史里（作者是做出修改的 agent），
-用户可以在界面上回滚。
-"""
+"""agent 的目录与管理：查看、创建、修改、删除 agent。给模型看的是名称和描述，不出现 id。"""
 
 from collections.abc import Mapping, Sequence
 
@@ -10,7 +6,6 @@ from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.lifecycle import AgentLifecycle
-from muliao.agents.prompts import PromptStore
 from muliao.agents.service import AgentPatch, AgentService, AgentSpec
 from muliao.agents.tool_catalog import AGENTS
 from muliao.errors import InvalidInput
@@ -26,7 +21,6 @@ class AgentDetail(BaseModel):
     name: str
     description: str
     model: str
-    instructions: str
     tool_groups: list[str]
     # 所有可选的工具组，各带它包含的工具
     available_tool_groups: list[ToolGroup]
@@ -35,7 +29,6 @@ class AgentDetail(BaseModel):
 def agents_toolset(
     agents: AgentService,
     lifecycle: AgentLifecycle,
-    prompts: PromptStore,
     group_tools: Mapping[str, Sequence[str]],
 ) -> FunctionToolset[RunScope]:
     """group_tools：除本组以外每个工具组包含的工具（组合根从各组实际注册的工具集取）；本组的工具在这里定义，自己补上。"""
@@ -43,7 +36,7 @@ def agents_toolset(
 
     @ts.tool_plain
     async def get_agent(agent: str) -> AgentDetail:
-        """Show an agent's full configuration, including its instructions. Use your own name to see yours.
+        """Show an agent's configuration and every available tool group. Use your own name to see yours.
 
         Args:
             agent: Agent name.
@@ -53,7 +46,6 @@ def agents_toolset(
             name=target.name,
             description=target.description,
             model=target.model,
-            instructions=prompts.current(target.id),
             tool_groups=target.tool_groups,
             available_tool_groups=[
                 ToolGroup(name=g, tools=list(ts.tools) if g == AGENTS else list(group_tools[g]))
@@ -66,7 +58,6 @@ def agents_toolset(
         ctx: RunContext[RunScope],
         name: str,
         description: str,
-        instructions: str,
         model: str | None = None,
         tool_groups: list[str] | None = None,
     ) -> str:
@@ -75,9 +66,8 @@ def agents_toolset(
 
         Args:
             name: Display name, unique among agents.
-            description: What it is for; other agents choose whom to delegate to by this.
-            instructions: Its own instructions (the agent-specific part of its system prompt; the public
-                prompt, its memory, skill index and run context are added by the system).
+            description: What it is for (its role); it is shown to the agent itself and other agents choose
+                whom to delegate to by it. The agent starts with an empty memory and grows it by itself.
             model: `<provider>:<model>`; defaults to the server's default model.
             tool_groups: Tool groups it may use (`get_agent` lists every available group with its tools);
                 defaults to all. Give an agent that handles untrusted input (web pages, external events) only
@@ -86,7 +76,6 @@ def agents_toolset(
         spec = AgentSpec(
             name=name,
             description=description,
-            instructions=instructions,
             model=model,
             tool_groups=tool_groups,
         )
@@ -99,19 +88,15 @@ def agents_toolset(
         agent: str,
         new_name: str | None = None,
         description: str | None = None,
-        instructions: str | None = None,
         model: str | None = None,
         tool_groups: list[str] | None = None,
     ) -> str:
         """Change an agent's configuration, including your own (use your own name). Only the given fields change.
-        Instructions replace the agent's whole own instructions (the agent-specific part of its system prompt):
-        read them first with `get_agent`. Every change is kept in a version history the user can roll back.
 
         Args:
             agent: Name of the agent to change.
             new_name: New display name.
             description: New description.
-            instructions: New full instructions.
             model: New `<provider>:<model>`.
             tool_groups: New full list of tool groups it may use.
         """
@@ -120,10 +105,9 @@ def agents_toolset(
             name=new_name,
             description=description,
             model=model,
-            instructions=instructions,
             tool_groups=tool_groups,
         )
-        updated = await agents.update(target.id, patch, author=ctx.deps.agent_id)
+        updated = await agents.update(target.id, patch)
         return f"updated agent {updated.name}"
 
     @ts.tool
@@ -143,21 +127,5 @@ def agents_toolset(
             )
         await lifecycle.delete(target.id, author=ctx.deps.agent_id)
         return f"deleted agent {target.name}"
-
-    @ts.tool_plain
-    async def get_public_prompt() -> str:
-        """Show the public prompt: shared instructions placed before every agent's own instructions."""
-        return prompts.current(None) or "(no public prompt)"
-
-    @ts.tool
-    async def set_public_prompt(ctx: RunContext[RunScope], content: str) -> str:
-        """Replace the public prompt shared by every agent. Read it first with `get_public_prompt`; keep it to rules
-        that truly apply to all agents. Every change is kept in a version history the user can roll back.
-
-        Args:
-            content: The new full public prompt; empty removes it.
-        """
-        changed = await prompts.set(None, content, ctx.deps.agent_id)
-        return "public prompt updated" if changed else "public prompt unchanged"
 
     return ts

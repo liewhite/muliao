@@ -30,15 +30,15 @@ _AUDIENCE_NOTES: dict[Audience, str] = {
 
 SELF_IMPROVEMENT = """\
 ## Self-improvement
-- Your memory is private and limited to {memory_limit} characters. Record durable facts (user preferences, \
-environment details, corrections, lessons learned) with `memory_append`; fix or condense with `memory_replace`. \
-Never record secrets or one-off details.
+Your knowledge is memory and skills, nothing else.
+- Memory: your private memory and the global memory shared by all agents (above), each limited to \
+{memory_limit} characters. Record durable facts (user preferences, environment details, corrections, lessons \
+learned) with `memory_append`; fix or condense with `memory_replace`. Use `scope="public"` only for facts and \
+rules that hold for every agent. Never record secrets or one-off details.
 - Skills are reusable procedures. Before a task that matches a skill in the index, call `read_skill`. After \
 working out a non-trivial procedure likely to recur, save it with `write_skill`; when a skill proves wrong or \
-incomplete, fix that part with `edit_skill`. Change skills, memory and instructions only through these tools, never \
-with shell commands or file tools, so every change is versioned under your name.
-- Your own instructions can be refined with `instructions_replace` when a standing rule proved wrong or the \
-user keeps repeating one; keep such edits small. Every version is kept and the user can roll back.
+incomplete, fix that part with `edit_skill`. Change skills and memory only through these tools, never with shell \
+commands or file tools, so every change is versioned under your name and the user can roll it back.
 - Secrets belong in the vault, referenced by key; never write secret values into files, memory or skills.
 - Keep state you need across runs (cursors, caches) in files in your workspace."""
 
@@ -68,8 +68,7 @@ def build_instructions(
     *,
     agent_name: str,
     agent_description: str,
-    public_instructions: str,
-    agent_instructions: str,
+    global_memory: str,
     workspace: Path,
     origin_note: str,
     memory: str,
@@ -89,12 +88,12 @@ def build_instructions(
     skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] + [
         f"- {c.describe()}" for c in corrupt_skills
     ] or ["(no skills yet)"]
-    # 公共 prompt 在前、agent 自己的指令在后：具体的指令可以细化或覆盖通用规则
+    # 全局记忆在前、agent 自己的记忆在后：具体的可以细化或覆盖通用规则
     sections = [
-        public_instructions.strip(),
-        agent_instructions.strip(),
+        "## Global memory\nShared by every agent.\n"
+        f"<global_memory>\n{global_memory.strip() or '(empty)'}\n</global_memory>",
         "## Runtime context\n" + "\n".join(context),
-        f"## Memory\n<memory>\n{memory.strip() or '(empty)'}\n</memory>",
+        f"## Memory\nYour private memory.\n<memory>\n{memory.strip() or '(empty)'}\n</memory>",
         "## Skill index\n" + "\n".join(skill_lines),
         SELF_IMPROVEMENT.format(memory_limit=memory_limit),
     ]

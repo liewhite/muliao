@@ -24,7 +24,6 @@ from muliao.agent_runtime.workspace_tools import ShellLimits, workspace_toolset
 from muliao.agents import tool_catalog
 from muliao.agents.active import ActiveOwners
 from muliao.agents.evolution_tools import (
-    instructions_toolset,
     memory_toolset,
     public_skills_toolset,
     skills_toolset,
@@ -33,7 +32,6 @@ from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
-from muliao.agents.prompts import PromptStore
 from muliao.agents.resources import ResourceRepo, RevisionHistory
 from muliao.agents.service import AgentDefaults, AgentService
 from muliao.agents.skills import SkillStore
@@ -106,7 +104,6 @@ class Container:
     resources: RevisionHistory
     skills: SkillStore
     memory: MemoryStore
-    prompts: PromptStore
     agents: AgentService
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
@@ -140,7 +137,6 @@ class Assembly:
     resources: ResourceRepo
     skills: SkillStore
     memory: MemoryStore
-    prompts: PromptStore
     agents: AgentService
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
@@ -182,7 +178,6 @@ class Assembly:
             resources=RevisionHistory(self.resources),
             skills=self.skills,
             memory=self.memory,
-            prompts=self.prompts,
             agents=self.agents,
             agent_lifecycle=self.agent_lifecycle,
             sessions=self.sessions,
@@ -293,14 +288,12 @@ def assemble(
     resources = ResourceRepo(settings.resources_dir, ActiveOwners(db))
     skills = SkillStore(resources)
     memory = MemoryStore(resources, settings.runtime.memory_max_chars)
-    prompts = PromptStore(resources)
     agents = AgentService(
         db,
         settings.workspaces_dir,
         resources,
         memory,
         model_checker or models.check,
-        prompts,
         AgentDefaults(settings.llm.default_model, groups),
     )
     activity = SessionActivity(queue)
@@ -342,7 +335,6 @@ def assemble(
         agents=agents,
         skills=skills,
         memory=memory,
-        prompts=prompts,
         tz=tz,
         resolve_model=resolve_model or models.resolve,
         files=files,
@@ -369,7 +361,6 @@ def assemble(
     always_tools = [
         skills_toolset(skills),
         memory_toolset(memory),
-        instructions_toolset(prompts),
         ask_user_toolset(),
     ]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
@@ -400,7 +391,7 @@ def assemble(
         if name != tool_catalog.MCP
     }
     group_tools[tool_catalog.MCP] = [MCP_TOOL_NAMES]
-    implementations[tool_catalog.AGENTS] = [agents_toolset(agents, agent_lifecycle, prompts, group_tools)]
+    implementations[tool_catalog.AGENTS] = [agents_toolset(agents, agent_lifecycle, group_tools)]
     _check_implementations(implementations)
     tool_groups = ToolGroups(groups={g.name: implementations[g.name] for g in groups}, always=always_tools)
     compactor = Compactor(
@@ -456,7 +447,6 @@ def assemble(
         resources=resources,
         skills=skills,
         memory=memory,
-        prompts=prompts,
         agents=agents,
         agent_lifecycle=agent_lifecycle,
         sessions=sessions,

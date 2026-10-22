@@ -17,12 +17,11 @@ from muliao.agents.active import active_row_in
 from muliao.agents.ids import new_agent_id
 from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import new_agent_name, normalize_agent_name
-from muliao.agents.prompts import PromptStore
 from muliao.agents.resources import ResourceRepo
 from muliao.agents.tables import Agent
 from muliao.agents.tool_catalog import ToolGroupInfo
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.platform.db import Database, utcnow
+from muliao.platform.db import Database
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +45,6 @@ class AgentSpec:
 
     name: str
     description: str
-    instructions: str
     model: str | None = None
     tool_groups: list[str] | None = None
 
@@ -58,7 +56,6 @@ class AgentPatch:
     name: str | None = None
     description: str | None = None
     model: str | None = None
-    instructions: str | None = None
     tool_groups: list[str] | None = None
 
 
@@ -141,10 +138,8 @@ class AgentService:
         repo: ResourceRepo,
         memory: MemoryStore,
         model_checker: Callable[[str], None],
-        prompts: PromptStore,
         defaults: AgentDefaults,
     ):
-        self._prompts = prompts
         self._db = db
         self._workspaces_dir = workspaces_dir
         self._repo = repo
@@ -218,19 +213,19 @@ class AgentService:
             raise Conflict(f"agent name {name!r} is already taken by another agent")
 
     async def create(self, spec: AgentSpec, *, author: str) -> AgentInfo:
-        """author：创建者，"user" 或创建它的 agent 的 id（记在指令的第一版上）。"""
+        """author：创建者，"user" 或创建它的 agent 的 id（记在记忆的第一版上）。新 agent 的记忆是空的。"""
         name = new_agent_name(spec.name)
         model = self.defaults.model if spec.model is None else spec.model
         tool_groups = self.defaults.group_names if spec.tool_groups is None else spec.tool_groups
         self._check(description=spec.description, model=model, tool_groups=tool_groups)
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
-        # 先写资源文件、后插数据库行：agent 一旦存在，它的指令与记忆就必须在（每一轮、agent 列表都要读）。
+        # 先写资源文件、后插数据库行：agent 一旦存在，它的记忆就必须在（每一轮都要读）。
         # 资源写入失败时什么都没留下（apply 原子），报错就是没有生效；只有并发创建同名 agent 时下面的检查会冲突，
         # 留下的资源目录由启动时的孤儿检查报告（与删除 agent 时提交失败同一种情况）
         agent_id = new_agent_id()
         await self._repo.apply(
-            {self._memory.path(agent_id): "", self._prompts.path(agent_id): spec.instructions},
+            {self._memory.path(agent_id): ""},
             f"create agent {agent_id}",
             author,
             # 它的行在资源写入之后才插入：此刻还不是可用的 owner
@@ -251,17 +246,8 @@ class AgentService:
             await s.flush()
             return info_of(agent)
 
-    async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> AgentInfo:
-        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。指令有变化时追加一版（author 同 create）。
-
-        先校验全部字段，再写指令（资源仓库），最后改数据库行：校验或指令写入失败时什么都没生效。只有写完指令后
-        恰好被并发改名撞了名字，才会出现指令已更新、其余字段报错（窗口极小，报错可见，重试即可）。"""
-        async with self._db.transaction() as s:
-            fields = self._validated(await active_row_in(s, agent_id), patch)
-            await self._ensure_name_free(s, fields.name, agent_id)
-        instructions_changed = patch.instructions is not None and await self._prompts.set(
-            agent_id, patch.instructions, author
-        )
+    async def update(self, agent_id: str, patch: AgentPatch) -> AgentInfo:
+        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。"""
         async with self._db.transaction() as s:
             agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)
@@ -269,8 +255,6 @@ class AgentService:
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
             # JSON 列只在整体赋值时被追踪
             agent.tool_groups = list(fields.tool_groups)
-            if instructions_changed:
-                agent.updated_at = utcnow()
             await s.flush()
             return info_of(agent)
 
@@ -328,7 +312,7 @@ class AgentService:
             return set((await s.scalars(select(Agent.id))).all())
 
     async def remove_files(self, agent_id: str, author: str) -> None:
-        """删除 agent 的工作目录与私有资源（记忆、指令、skill、MCP 配置，删除记入资源仓库）。数据库行由调用方删除。"""
+        """删除 agent 的工作目录与私有资源（记忆、skill、MCP 配置，删除记入资源仓库）。数据库行由调用方删除。"""
         workspace = self.workspace(agent_id)
         if workspace.exists():
             # 工作目录里可能有 venv、clone 的仓库、后台任务日志：放到线程里删，不阻塞事件循环

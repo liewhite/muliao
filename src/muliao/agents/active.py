@@ -2,7 +2,7 @@
 
 agent 只会从可用变为正在删除、再变为不存在。为某个 agent 写数据之前检查它还可用：
 - 数据库数据在写入的同一事务里检查（agents.service.active_agent_in）；
-- 私有资源（skill、记忆、指令、MCP 配置）由资源仓库在它的锁里、写入之前检查（ActiveOwners，owner 由写入的路径推出，
+- 私有资源（skill、记忆、MCP 配置）由资源仓库在它的锁里、写入之前检查（ActiveOwners，owner 由写入的路径推出，
   见 ResourceRepo）。删除 agent 先提交删除标记、再在同一把锁里删掉它的资源目录（AgentService.remove_files），所以
   检查通过的写入一定落在删除之前、被删除流程一起删掉，不会留下孤儿目录。
 """

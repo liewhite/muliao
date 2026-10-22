@@ -53,7 +53,7 @@ from muliao.agent_runtime.outcome import Finished, Paused, finished_of, outcome_
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.transient import transient_as_retryable
-from muliao.agents.api import AgentInfo, AgentService, MemoryStore, PromptStore, SkillStore
+from muliao.agents.api import AgentInfo, AgentService, MemoryStore, SkillStore
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
@@ -107,7 +107,7 @@ class RunProfile:
 @dataclass(frozen=True)
 class ToolGroups:
     """agent 按名称选用的工具组（组名见 tool_catalog），每组是若干工具集。always 里的（自我改进：私有 skill 与
-    memory、提问）对每个 agent 都开放。
+    记忆、提问）对每个 agent 都开放。
 
     用途是限制处理不可信输入的 agent 能做什么（例如处理外部事件的 agent 只开放通知）。
     """
@@ -132,7 +132,6 @@ class AgentRuntime:
         agents: AgentService,
         skills: SkillStore,
         memory: MemoryStore,
-        prompts: PromptStore,
         tz: ZoneInfo,
         clock: Clock = utcnow,
         resolve_model: ModelResolver,
@@ -142,7 +141,6 @@ class AgentRuntime:
         self._agents = agents
         self._skills = skills
         self._memory = memory
-        self._prompts = prompts
         self._tz = tz
         self._clock = clock
         self._resolve_model = resolve_model
@@ -171,8 +169,7 @@ class AgentRuntime:
         return build_instructions(
             agent_name=agent.name,
             agent_description=agent.description,
-            public_instructions=self._prompts.current(None),
-            agent_instructions=self._prompts.current(agent.id),
+            global_memory=self._memory.read(None),
             workspace=scope.workspace,
             origin_note=origin_note,
             memory=self._memory.read(agent.id),
@@ -266,7 +263,7 @@ class AgentRuntime:
         """一次性的临时 agent：替 parent 做一件事，返回最终回答，以及它用工具挂给用户的文件（如 share_file）。
 
         没有记忆、skill 与历史；工具来自 profile（不含委派与再开临时 agent），MCP 与 secret 按 parent 的视角。
-        也不带公共 prompt：公共 prompt 约定的是长期 agent 之间的共同规则，临时 agent 只执行调用方交给它的任务。
+        也不带全局记忆：它约定的是长期 agent 之间的共同规则，临时 agent 只执行调用方交给它的任务。
         不属于任何会话，运行事件不推到会话页。和长期 agent 一样不设请求数上限。
 
         session_id 是发起它的那个会话：临时 agent 自己不属于任何会话（RunScope 里仍是 None），但它花的 token

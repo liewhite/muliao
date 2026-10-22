@@ -363,18 +363,26 @@
         }
       }
     },
-    "/api/agents/{agent_id}/memory": {
+    "/api/memory": {
       "get": {
         "summary": "Get Memory",
-        "operationId": "get_memory_api_agents__agent_id__memory_get",
+        "description": "owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。",
+        "operationId": "get_memory_api_memory_get",
         "parameters": [
           {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
+            "name": "owner",
+            "in": "query",
+            "required": false,
             "schema": {
-              "type": "string",
-              "title": "Agent Id"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
             }
           }
         ],
@@ -403,18 +411,7 @@
       },
       "put": {
         "summary": "Put Memory",
-        "operationId": "put_memory_api_agents__agent_id__memory_put",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Agent Id"
-            }
-          }
-        ],
+        "operationId": "put_memory_api_memory_put",
         "requestBody": {
           "required": true,
           "content": {
@@ -1789,37 +1786,6 @@
         }
       }
     },
-    "/api/prompts/public": {
-      "put": {
-        "summary": "Set Public Prompt",
-        "operationId": "set_public_prompt_api_prompts_public_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ContentIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/trigger-kinds": {
       "get": {
         "summary": "Trigger Kinds",
@@ -3040,11 +3006,6 @@
             ],
             "title": "Model"
           },
-          "instructions": {
-            "type": "string",
-            "title": "Instructions",
-            "default": ""
-          },
           "tool_groups": {
             "anyOf": [
               {
@@ -3114,10 +3075,6 @@
             "type": "string",
             "title": "Model"
           },
-          "instructions": {
-            "type": "string",
-            "title": "Instructions"
-          },
           "tool_groups": {
             "items": {
               "type": "string"
@@ -3137,7 +3094,6 @@
           "name",
           "description",
           "model",
-          "instructions",
           "tool_groups",
           "created_at"
         ],
@@ -3157,10 +3113,6 @@
             "type": "string",
             "title": "Model"
           },
-          "instructions": {
-            "type": "string",
-            "title": "Instructions"
-          },
           "tool_groups": {
             "items": {
               "type": "string"
@@ -3174,7 +3126,6 @@
           "name",
           "description",
           "model",
-          "instructions",
           "tool_groups"
         ],
         "title": "AgentUpdate",
@@ -3373,19 +3324,6 @@
           "created_at"
         ],
         "title": "CompactionOut"
-      },
-      "ContentIn": {
-        "properties": {
-          "content": {
-            "type": "string",
-            "title": "Content"
-          }
-        },
-        "type": "object",
-        "required": [
-          "content"
-        ],
-        "title": "ContentIn"
       },
       "CorruptOut": {
         "properties": {
@@ -4316,6 +4254,17 @@
       },
       "MemoryIn": {
         "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
           "content": {
             "type": "string",
             "title": "Content"
@@ -4323,6 +4272,7 @@
         },
         "type": "object",
         "required": [
+          "owner",
           "content"
         ],
         "title": "MemoryIn"
@@ -4831,7 +4781,6 @@
       "ResourceKind": {
         "type": "string",
         "enum": [
-          "prompt",
           "memory"
         ],
         "title": "ResourceKind"

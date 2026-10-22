@@ -472,7 +472,7 @@ async def test_every_file_the_stores_write_is_in_the_resource_layout(container, 
 
     agent = (await make_agent(ALPHA)).id
     await container.memory.append(agent, "fact", agent)
-    await container.prompts.set(None, "public rules", "user")
+    await container.memory.append(None, "public rules", "user")
     for owner in (agent, None):
         await container.skills.write(owner, "digest", "When digesting", "steps", "user")
         spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
@@ -481,7 +481,7 @@ async def test_every_file_the_stores_write_is_in_the_resource_layout(container, 
     root = container.resources.root
     files = (await asyncio.to_thread(_git, "-C", str(root), "ls-files")).split()
     in_layout = (await asyncio.to_thread(_git, "-C", str(root), "ls-files", "--", *RESOURCE_PATHSPEC)).split()
-    assert len(files) == 7
+    assert len(files) == 6
     assert in_layout == files
 
 
@@ -619,7 +619,7 @@ async def test_a_write_for_an_unavailable_owner_writes_and_commits_nothing(repo:
         await SkillStore(guarded).write(ALPHA, "s", "d", "x", ALPHA)
     # 一次写入涉及的每个 owner 都查：公共的放行不足以让同次的私有写入通过
     with pytest.raises(NotFound):
-        await guarded.apply({repo.root / "public" / "PROMPT.md": "p", path: "x"}, "both", "user")
+        await guarded.apply({repo.root / "public" / "MEMORY.md": "p", path: "x"}, "both", "user")
 
     assert checked == [ALPHA, ALPHA, ALPHA, None, ALPHA]
     assert not repo.owner_dir(ALPHA).exists()

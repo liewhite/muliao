@@ -631,8 +631,7 @@ def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
         return build_instructions(
             agent_name="a",
             agent_description="",
-            public_instructions="",
-            agent_instructions="",
+            global_memory="",
             workspace=Path("/w"),
             origin_note=origin_note(origin),
             memory="",

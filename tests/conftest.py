@@ -120,7 +120,6 @@ def make_agent(container: Assembly) -> Callable:
                 name=name,
                 description=description,
                 model=model,
-                instructions="Be helpful.",
             ),
             author="user",
         )

@@ -134,7 +134,7 @@ class SkillStore:
         description: str | None = None,
     ) -> SkillMeta:
         """改一个 skill，不整篇重写：正文的一部分、描述，或两者一起（同一次提交）。
-        正文规则同记忆与指令（见 text_edit.edit）：old 恰好出现一次时替换为 new，old 为空时把 new 追加到末尾；
+        正文规则同记忆（见 text_edit.edit）：old 恰好出现一次时替换为 new，old 为空时把 new 追加到末尾；
         old、new 都为空表示不改正文。description 为 None 表示不改描述。什么都不改是错误。名称不变。"""
         edits_body = bool(old or new)
         if description is not None:

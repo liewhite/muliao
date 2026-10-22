@@ -35,7 +35,7 @@ CATALOG: tuple[ToolGroupInfo, ...] = (
     ToolGroupInfo(TEMP_AGENT, "临时 agent"),
     ToolGroupInfo(DELEGATION, "委派给其他 agent"),
     ToolGroupInfo(NOTIFY, "推送通知"),
-    ToolGroupInfo(AGENTS, "管理 agent 与公共指令"),
+    ToolGroupInfo(AGENTS, "管理 agent"),
     ToolGroupInfo(PUBLIC_SKILLS, "写公共 skill"),
     ToolGroupInfo(MCP, "使用 MCP"),
     ToolGroupInfo(MCP_ADMIN, "管理 MCP"),

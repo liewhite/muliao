@@ -1,4 +1,4 @@
-"""agent 能用工具完成的系统操作：管理 agent 与公共 prompt、MCP 启停、cron 修改、事件触发器、vault、thread 列表。"""
+"""agent 能用工具完成的系统操作：管理 agent、MCP 启停、cron 修改、事件触发器、vault、thread 列表。"""
 
 import pytest
 from pydantic_ai.messages import (
@@ -17,7 +17,6 @@ from muliao.sessions.api import Origin
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
-from tests.test_prompts import prompt_history
 
 
 async def run_tools(container, models, agent_id: str, calls: list[tuple[str, dict]]) -> list[str]:
@@ -41,9 +40,7 @@ async def run_tools(container, models, agent_id: str, calls: list[tuple[str, dic
     return outputs
 
 
-async def test_agent_creates_and_reconfigures_agents_with_versioned_instructions(
-    container, make_agent, models
-):
+async def test_agent_creates_and_reconfigures_agents(container, make_agent, models):
     me = await make_agent("manager", model="tools")
     outputs = await run_tools(
         container,
@@ -52,21 +49,19 @@ async def test_agent_creates_and_reconfigures_agents_with_versioned_instructions
         [
             (
                 "create_agent",
-                {"name": "researcher", "description": "finds facts", "instructions": "Cite sources."},
+                {"name": "researcher", "description": "finds facts"},
             ),
-            ("update_agent", {"agent": "manager", "instructions": "Delegate research to researcher."}),
+            ("update_agent", {"agent": "manager", "description": "Delegates research to researcher."}),
             ("get_agent", {"agent": "researcher"}),
             ("delete_agent", {"agent": "researcher"}),
         ],
     )
 
     assert outputs[0] == "created agent researcher"
-    assert "Cite sources." in outputs[2] and "fake:default" in outputs[2]  # 未指定模型时取服务端默认值
+    assert "finds facts" in outputs[2] and "fake:default" in outputs[2]  # 未指定模型时取服务端默认值
     assert outputs[3] == "deleted agent researcher"
     assert [a.name for a in await container.agents.list()] == ["manager"]
-    # 自己改自己的指令：留有版本，作者是自己
-    [latest, *_] = await prompt_history(container, me.id)
-    assert (container.prompts.current(me.id), latest.author) == ("Delegate research to researcher.", me.id)
+    assert (await container.agents.get(me.id)).description == "Delegates research to researcher."
     # 结果里只出现名称，不出现 id
     assert me.id not in "\n".join(outputs)
 
@@ -94,23 +89,6 @@ def test_tool_group_implementations_must_match_the_catalog_both_ways():
     # 多出的组选不到：不能静默丢掉
     with pytest.raises(RuntimeError, match=r"unknown \['webb'\]"):
         _check_implementations({**complete, "webb": []})
-
-
-async def test_agent_edits_public_prompt(container, make_agent, models):
-    me = await make_agent("manager", model="tools")
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            ("get_public_prompt", {}),
-            ("set_public_prompt", {"content": "Be brief."}),
-            ("get_public_prompt", {}),
-        ],
-    )
-
-    assert outputs == ["(no public prompt)", "public prompt updated", "Be brief."]
-    assert (await prompt_history(container, None))[0].author == me.id
 
 
 async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_agent, models):
@@ -281,8 +259,6 @@ async def test_parallel_partial_updates_of_one_agent_both_survive(container, mak
 
     updated = await container.agents.get(target.id)
     assert (updated.description, updated.name) == ("new desc", "worker2")
-    # 未给出的指令不被改写：不追加版本
-    assert len(await prompt_history(container, target.id)) == 1
 
 
 async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agent, models):
@@ -293,7 +269,7 @@ async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agen
         models,
         me.id,
         [
-            ("create_agent", {"name": "worker", "description": "d", "instructions": ""}),
+            ("create_agent", {"name": "worker", "description": "d"}),
             ("update_agent", {"agent": "manager", "new_name": "worker"}),
             ("delete_agent", {"agent": "manager"}),
         ],
@@ -394,9 +370,7 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
     from muliao.errors import InvalidInput
 
     triage = await container.agents.create(
-        AgentSpec(
-            name="triage", description="handles webhooks", instructions="", model="m", tool_groups=["notify"]
-        ),
+        AgentSpec(name="triage", description="handles webhooks", model="m", tool_groups=["notify"]),
         author="user",
     )
     seen: list[str] = []
@@ -418,13 +392,12 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
             "edit_skill",
             "memory_append",
             "memory_replace",
-            "instructions_replace",
             "ask_user",
         ]
     )
     with pytest.raises(InvalidInput, match="tool groups"):
         await container.agents.create(
-            AgentSpec(name="x", description="d", instructions="", tool_groups=["root"]), author="user"
+            AgentSpec(name="x", description="d", tool_groups=["root"]), author="user"
         )
 
 
@@ -436,7 +409,7 @@ async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container,
         None, "echo", spec, probe=False, author="user"
     )  # 公共 MCP：受限 agent 也看不到它的工具
     triage = await container.agents.create(
-        AgentSpec(name="triage", description="d", instructions="", model="m", tool_groups=["notify"]),
+        AgentSpec(name="triage", description="d", model="m", tool_groups=["notify"]),
         author="user",
     )
     seen: list[str] = []
@@ -457,7 +430,7 @@ async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, 
     from muliao.agents.service import AgentSpec
 
     await container.agents.create(
-        AgentSpec(name="narrow", description="d", instructions="", model="n", tool_groups=["notify"]),
+        AgentSpec(name="narrow", description="d", model="n", tool_groups=["notify"]),
         author="user",
     )
     seen: list[str] = []

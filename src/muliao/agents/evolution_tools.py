@@ -1,9 +1,9 @@
-"""自我进化工具：私有 skill、memory 与自己的指令（每个 agent 总是可用），以及写公共 skill（单独的工具组）。"""
+"""自我进化工具：私有 skill 与记忆（含全局记忆，每个 agent 总是可用），以及写公共 skill（单独的工具组）。"""
 
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.memory import MemoryStore
-from muliao.agents.prompts import PromptStore
+from muliao.agents.ownership import Scope, owner_of
 from muliao.agents.skills import SkillStore
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
@@ -72,7 +72,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
 
 
 def public_skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
-    """写公共 skill：它的描述进入每个 agent 的 instructions，等同于改所有 agent 共享的指令，所以单独成组。"""
+    """写公共 skill：它的描述进入每个 agent 的 skill 索引，所以单独成组。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
@@ -131,51 +131,39 @@ async def _edit(
 
 
 def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
+    """记忆：自己的（private）与所有 agent 共享的全局记忆（public）。两者每个 agent 都能写：全局记忆由各 agent
+    的自进化共同维护，每次修改记一版（作者是改的 agent），用户可在界面上回滚。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    def _status(content: str) -> str:
-        return f"memory updated ({len(content)}/{store.max_chars} chars)"
+    def _status(scope: Scope, content: str) -> str:
+        return f"{scope} memory updated ({len(content)}/{store.max_chars} chars)"
 
     @ts.tool
-    async def memory_append(ctx: RunContext[RunScope], entry: str) -> str:
-        """Append a durable fact to your private memory (user preferences, environment facts, lessons learned).
-        Your whole memory is shown to you at the start of every run.
+    async def memory_append(ctx: RunContext[RunScope], entry: str, scope: Scope = "private") -> str:
+        """Append a durable fact to your memory (user preferences, environment facts, lessons learned).
+        Your private memory and the global memory are both shown to you at the start of every run.
 
         Args:
             entry: One concise markdown line or short block.
-        """
-        return _status(await store.append(ctx.deps.agent_id, entry, ctx.deps.agent_id))
-
-    @ts.tool
-    async def memory_replace(ctx: RunContext[RunScope], old_text: str, new_text: str) -> str:
-        """Correct, condense or delete part of your memory. `old_text` must occur exactly once;
-        an empty `new_text` deletes it.
-
-        Args:
-            old_text: Exact text currently in memory.
-            new_text: Replacement text.
-        """
-        return _status(await store.replace(ctx.deps.agent_id, old_text, new_text, ctx.deps.agent_id))
-
-    return ts
-
-
-def instructions_toolset(prompts: PromptStore) -> FunctionToolset[RunScope]:
-    """改自己的指令：只影响自己，每次修改记一版（作者是自己），用户可在界面上回滚。"""
-    ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
-
-    @ts.tool
-    async def instructions_replace(ctx: RunContext[RunScope], old_text: str, new_text: str) -> str:
-        """Refine your own instructions (the agent-specific part of your system prompt), e.g. to fix a rule that
-        proved wrong or add one the user keeps asking for. `old_text` must occur exactly once in them; an empty
-        `old_text` appends `new_text` at the end. Keep changes small; the user can roll back any version.
-
-        Args:
-            old_text: Exact text currently in your instructions, or empty to append.
-            new_text: Replacement (or appended) text; empty deletes `old_text`.
+            scope: `private` (only you) or `public` (the global memory every agent sees; only for facts and
+                rules that hold for all agents).
         """
         me = ctx.deps.agent_id
-        changed = await prompts.edit(me, old_text, new_text, me)
-        return "instructions updated" if changed else "instructions unchanged"
+        return _status(scope, await store.append(owner_of(scope, me), entry, me))
+
+    @ts.tool
+    async def memory_replace(
+        ctx: RunContext[RunScope], old_text: str, new_text: str, scope: Scope = "private"
+    ) -> str:
+        """Correct, condense or delete part of your memory or the global memory. `old_text` must occur
+        exactly once; an empty `new_text` deletes it.
+
+        Args:
+            old_text: Exact text currently in that memory.
+            new_text: Replacement text.
+            scope: `private` (your memory) or `public` (the global memory).
+        """
+        me = ctx.deps.agent_id
+        return _status(scope, await store.replace(owner_of(scope, me), old_text, new_text, me))
 
     return ts

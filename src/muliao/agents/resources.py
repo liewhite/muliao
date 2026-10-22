@@ -1,9 +1,9 @@
-"""agent 能改的文本资源（指令、公共 prompt、记忆、skill、MCP 配置）存成文件，用 git 管理版本。
+"""agent 能改的文本资源（记忆、skill、MCP 配置）存成文件，用 git 管理版本。
 
 布局（resources 根目录就是一个 git 仓库）：
 
-    public/                 公共资源：PROMPT.md、skills/<name>/SKILL.md、mcp/<name>.json
-    agents/<agent id>/      agent 私有资源：PROMPT.md、MEMORY.md、skills/<name>/SKILL.md、mcp/<name>.json
+    public/                 公共资源：MEMORY.md（全局记忆）、skills/<name>/SKILL.md、mcp/<name>.json
+    agents/<agent id>/      agent 私有资源：MEMORY.md、skills/<name>/SKILL.md、mcp/<name>.json
 
 每次修改写文件后提交一次，作者是 "user" 或做出修改的 agent 的 id。历史与回滚都来自 git：
 回滚就是把旧版本的内容写回并作为新的一次提交，历史只增不改。
@@ -55,10 +55,9 @@ _TMP = ".tmp"
 # 资源文件（相对仓库根目录的 glob，`*` 不跨目录）：见模块说明的布局。reconcile 与 recover 只处理它们。
 # 文件名由各 store 拥有（MEMORY_FILE、SKILL_FILE……），这里是副本，由 test_every_file_the_stores_write_is_in_the_resource_layout 守护
 RESOURCE_FILES = (
-    "public/PROMPT.md",
+    "public/MEMORY.md",
     "public/skills/*/SKILL.md",
     "public/mcp/*.json",
-    "agents/*/PROMPT.md",
     "agents/*/MEMORY.md",
     "agents/*/skills/*/SKILL.md",
     "agents/*/mcp/*.json",

@@ -15,7 +15,6 @@ class AgentCreate(BaseModel):
     description: str
     # 缺省（null）时使用服务端配置的默认值
     model: str | None = None
-    instructions: str = ""
     tool_groups: list[str] | None = None
 
 
@@ -25,7 +24,6 @@ class AgentUpdate(BaseModel):
     name: str
     description: str
     model: str
-    instructions: str
     tool_groups: list[str]
 
 
@@ -34,25 +32,19 @@ class AgentOut(BaseModel):
     name: str
     description: str
     model: str
-    instructions: str
     tool_groups: list[str]
     created_at: datetime
 
     @classmethod
-    def of(cls, a: AgentInfo, instructions: str) -> "AgentOut":
+    def of(cls, a: AgentInfo) -> "AgentOut":
         return cls(
             id=a.id,
             name=a.name,
             description=a.description,
             model=a.model,
-            instructions=instructions,
             tool_groups=list(a.tool_groups),
             created_at=a.created_at,
         )
-
-
-def _out(c: C, agent: AgentInfo) -> AgentOut:
-    return AgentOut.of(agent, c.prompts.current(agent.id))
 
 
 class ToolGroupOut(BaseModel):
@@ -99,7 +91,7 @@ async def list_provider_models(c: C, name: str) -> list[str]:
 
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
-    return [_out(c, a) for a in await c.agents.list()]
+    return [AgentOut.of(a) for a in await c.agents.list()]
 
 
 @router.post("/agents", status_code=201)
@@ -107,17 +99,16 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
     spec = AgentSpec(
         name=body.name,
         description=body.description,
-        instructions=body.instructions,
         model=body.model,
         tool_groups=body.tool_groups,
     )
-    return _out(c, await c.agents.create(spec, author=USER))
+    return AgentOut.of(await c.agents.create(spec, author=USER))
 
 
 @router.get("/agents/{agent_id}")
 async def get_agent(c: C, agent_id: str) -> AgentOut:
-    # 正在删除的按不存在处理：它的指令（私有资源）可能已经删了
-    return _out(c, await c.agents.get_active(agent_id))
+    # 正在删除的按不存在处理
+    return AgentOut.of(await c.agents.get_active(agent_id))
 
 
 @router.put("/agents/{agent_id}")
@@ -127,10 +118,9 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         name=body.name,
         description=body.description,
         model=body.model,
-        instructions=body.instructions,
         tool_groups=body.tool_groups,
     )
-    return _out(c, await c.agents.update(agent_id, patch, author=USER))
+    return AgentOut.of(await c.agents.update(agent_id, patch))
 
 
 @router.delete("/agents/{agent_id}", status_code=204)
@@ -144,18 +134,23 @@ class MemoryOut(BaseModel):
 
 
 class MemoryIn(BaseModel):
+    # 为空即全局记忆
+    owner: str | None
     content: str
 
 
-@router.get("/agents/{agent_id}/memory")
-async def get_memory(c: C, agent_id: str) -> MemoryOut:
-    await check_owner(c, agent_id)
-    return MemoryOut(content=c.memory.read(agent_id), max_chars=c.memory.max_chars)
+@router.get("/memory")
+async def get_memory(c: C, owner: str | None = None) -> MemoryOut:
+    """owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。"""
+    await check_owner(c, owner)
+    return MemoryOut(content=c.memory.read(owner), max_chars=c.memory.max_chars)
 
 
-@router.put("/agents/{agent_id}/memory")
-async def put_memory(c: C, agent_id: str, body: MemoryIn) -> MemoryOut:
-    return MemoryOut(content=await c.memory.write(agent_id, body.content, USER), max_chars=c.memory.max_chars)
+@router.put("/memory")
+async def put_memory(c: C, body: MemoryIn) -> MemoryOut:
+    return MemoryOut(
+        content=await c.memory.write(body.owner, body.content, USER), max_chars=c.memory.max_chars
+    )
 
 
 class SkillOut(BaseModel):

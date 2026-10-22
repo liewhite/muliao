@@ -6,7 +6,7 @@
 
 | 概念 | 含义 | 事实存放处（唯一来源） |
 |---|---|---|
-| Agent | 一个助手：模型、指令、私有记忆、私有 skill、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符；不能取 `user`，模型按名称指派 issue 时它指用户，`naming.new_agent_name`）。删除进行中时记下发起者（`deleting_by`），不再出现在列表与名称解析里 | `agents` 表；私有资源在 `data/resources/agents/<id>/`，工作目录 `data/workspaces/<id>/` |
+| Agent | 一个助手：描述（角色）、模型、工具组、私有记忆、私有 skill、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符；不能取 `user`，模型按名称指派 issue 时它指用户，`naming.new_agent_name`）。删除进行中时记下发起者（`deleting_by`），不再出现在列表与名称解析里 | `agents` 表；私有资源在 `data/resources/agents/<id>/`，工作目录 `data/workspaces/<id>/` |
 | Session | 某个 agent 的一段对话，由某个触发源创建。种类（`kind`）决定它的规则：顶层会话、公开 thread、私有 thread（第 7 节） | `sessions` 表 |
 | Message | pydantic-ai `ModelMessage` 原样序列化 | `messages` 表（每行一条 ModelMessage） |
 | Mail | 投进某个会话信箱、交给它的 agent 的一封信件：用户消息（含附件）、对挂起调用的回答、触发器与委派来的任务、后台任务与 thread 的事件、运行中检查。按到达顺序排列，记下用户是否在等它的回答、不透明的关联 id（委派来的信件以委派的 holder 为关联 id，会话据此结清）、幂等键、状态（排队 / 已处理 / 被丢弃）与处理它的那次运行 | `mail` 表 |
@@ -15,8 +15,7 @@
 | Compaction | session 早期消息的摘要，之后发给模型的上下文用它代替 `through_message_id` 及之前的消息 | `compactions` 表 |
 | Job | agent 在后台跑的一条 shell 命令：发起它的会话、命令、注入的 secret 名、pid、状态（运行中 / 退出 / 被结束 / 被中断）、退出码。永久保留 | `jobs` 表；输出在工作目录的 `jobs/<id>.log` |
 | Skill | `SKILL.md`（YAML frontmatter: name, description + 正文）。公共 skill 与 agent 私有 skill | `resources/public/skills/<name>/`、`resources/agents/<id>/skills/<name>/` |
-| Prompt | agent 自己的指令，或合并进所有 agent 的公共 prompt | `resources/agents/<id>/PROMPT.md`、`resources/public/PROMPT.md` |
-| Memory | agent 私有记忆，一份有长度上限的 markdown | `resources/agents/<id>/MEMORY.md` |
+| Memory | 记忆，一份有长度上限的 markdown：所有 agent 共享的全局记忆，或 agent 私有的记忆。agent 的知识只有记忆与 skill 两种（没有单独的「指令」） | `resources/public/MEMORY.md`、`resources/agents/<id>/MEMORY.md` |
 | MCP server | agent 私有或公共的 MCP 连接配置，可引用 vault | `resources/{public,agents/<id>}/mcp/<name>.json` |
 | Secret | 加密保存的密码/token，通过 key 引用；公共或 agent 私有 | `secrets` 表（Fernet 加密） |
 | File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
@@ -35,11 +34,10 @@ data/
   files/tmp/                   # 上传中的临时文件，启动时清空
   resources/                   # git 仓库：agent 能改的文本资源，每次修改提交一版（见 muliao.agents.resources）
     public/
-      PROMPT.md                # 公共 prompt（合并进所有 agent）
+      MEMORY.md                # 全局记忆（所有 agent 共享）
       skills/<name>/SKILL.md   # 公共 skill
       mcp/<name>.json          # 公共 MCP server
     agents/<id>/
-      PROMPT.md                # agent 的指令
       MEMORY.md                # 私有记忆
       skills/<name>/SKILL.md   # 私有 skill（同名时遮蔽公共 skill）
       mcp/<name>.json          # 私有 MCP server（同名时遮蔽公共的）
@@ -47,7 +45,7 @@ data/
   tmp/                         # 临时 agent 的工作目录，用完即删
 ```
 
-**资源的版本管理**：agent 能改的文本资源都存成文件，用一个 git 仓库（`data/resources/`）管理版本：每次修改提交一次，作者是 `user` 或做出修改的 agent 的 id；历史与回滚都来自 git（回滚 = 把旧版本内容写回并作为新的一次提交）。版本管理只管布局里的资源文件（`resources.RESOURCE_FILES`，唯一定义：各级 `PROMPT.md`、agent 的 `MEMORY.md`、`skills/<name>/SKILL.md`、`mcp/<name>.json`）。仓库也会被绕过工具写入：agent 有 shell 与文件工具，能直接改这些文件；进程在写入中途被杀也会留下写完未提交的变化。两者用同一个机制收敛：每次写入之前（先于读取当前内容）、以及启动时，把资源文件上的这类变化先单独提交为一次 reconcile（作者记为系统，含义是「来源不明的外部写入」），所以外部写入最迟在下一次任何资源写入时进入历史，也不会被并进下一个作者的提交。布局之外的东西（agent 放进 skill 目录的脚本、虚拟环境、嵌套仓库、临时文件）不进历史：历史只增不改，进去就删不掉，也不能让一个目录里的杂物让所有资源写入失败。工具说明要求 agent 只用工具改这些资源，局部修改用 `edit_skill`，不必整篇重写。被绕过工具改坏、读不出来的 skill 或 MCP 配置（`resources.CorruptResource`）只影响它自己：列出资源时跳过并单独交出（每次读到记 error 日志），skill 索引里逐项写明「已损坏、原因」，MCP 的写进运行上下文；直接读或局部修改它照样报错（`read_skill`、`edit_skill`、`mcp_set_enabled` 交还模型），删除只看文件在不在，坏的也删得掉；skill 整篇重写（`write_skill`）即修复，MCP 没有覆盖写入的入口，删掉重加（`CorruptResource.repair`，说明里写明怎么修）。坏的项不参与同名遮蔽（读不出来就不知道它是什么），所以坏掉的私有 skill 或 MCP 的同名公共项照常可见。管理界面在各列表下另行列出坏的项（`GET /api/skills/corrupt`、`/api/mcp/corrupt`），可以删除；`mcp_list` 带 `corrupt`。secret 不在这里——它们加密存在数据库的 vault 里，不需要版本管理。
+**资源的版本管理**：agent 能改的文本资源都存成文件，用一个 git 仓库（`data/resources/`）管理版本：每次修改提交一次，作者是 `user` 或做出修改的 agent 的 id；历史与回滚都来自 git（回滚 = 把旧版本内容写回并作为新的一次提交）。版本管理只管布局里的资源文件（`resources.RESOURCE_FILES`，唯一定义：各级 `MEMORY.md`、`skills/<name>/SKILL.md`、`mcp/<name>.json`）。仓库也会被绕过工具写入：agent 有 shell 与文件工具，能直接改这些文件；进程在写入中途被杀也会留下写完未提交的变化。两者用同一个机制收敛：每次写入之前（先于读取当前内容）、以及启动时，把资源文件上的这类变化先单独提交为一次 reconcile（作者记为系统，含义是「来源不明的外部写入」），所以外部写入最迟在下一次任何资源写入时进入历史，也不会被并进下一个作者的提交。布局之外的东西（agent 放进 skill 目录的脚本、虚拟环境、嵌套仓库、临时文件）不进历史：历史只增不改，进去就删不掉，也不能让一个目录里的杂物让所有资源写入失败。工具说明要求 agent 只用工具改这些资源，局部修改用 `edit_skill`，不必整篇重写。被绕过工具改坏、读不出来的 skill 或 MCP 配置（`resources.CorruptResource`）只影响它自己：列出资源时跳过并单独交出（每次读到记 error 日志），skill 索引里逐项写明「已损坏、原因」，MCP 的写进运行上下文；直接读或局部修改它照样报错（`read_skill`、`edit_skill`、`mcp_set_enabled` 交还模型），删除只看文件在不在，坏的也删得掉；skill 整篇重写（`write_skill`）即修复，MCP 没有覆盖写入的入口，删掉重加（`CorruptResource.repair`，说明里写明怎么修）。坏的项不参与同名遮蔽（读不出来就不知道它是什么），所以坏掉的私有 skill 或 MCP 的同名公共项照常可见。管理界面在各列表下另行列出坏的项（`GET /api/skills/corrupt`、`/api/mcp/corrupt`），可以删除；`mcp_list` 带 `corrupt`。secret 不在这里——它们加密存在数据库的 vault 里，不需要版本管理。
 
 用最终正确性换简化：文件与 git 不在数据库事务里，不追求两者的强一致。
 - 换掉的：跨数据库与文件的分布式事务（例如删除 agent 时数据库行与资源目录同时成功）。
@@ -248,15 +246,14 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
 一次运行的组装（`sessions/consumer.py` 驱动，`agent_runtime/runner.py` 组装上下文与工具）：
 
 - **原则：给模型看的是名称和描述，给程序用的是 id。** 工具参数、返回值、instructions 里只出现 agent 名称；名称唯一，由工具层（`AgentService.find_by_name`）解析为 id，写错时把可用名称列表作为错误交还模型。id 只会作为文件路径的一部分（`agents/<id>/…`）出现在工作目录里。`tests/test_flow.py::test_model_sees_agent_names_never_ids` 守住这条规则。
-- **instructions** = 公共 prompt + agent 自身指令 + 运行上下文（agent 名、工作目录、session 来源的说明——由会话领域给出（`sessions.origins.origin_note`），运行时不认识来源）+ memory 全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。**只放同一个会话的不同运行之间不会变的内容**：instructions 渲染成提供方的 system，缓存断点就放在它末尾（下面「prompt caching」），里面只要有一个每次运行都不同的值，整段历史每次运行都要重新写入缓存，同一个 agent 的不同会话、压缩也只能复用工具定义那一段。
+- **instructions** = 全局记忆 + 运行上下文（agent 名、工作目录、session 来源的说明——由会话领域给出（`sessions.origins.origin_note`），运行时不认识来源）+ agent 自己的记忆全文 + skill 索引（名称、描述、作用域）+ 自我进化守则。**只放同一个会话的不同运行之间不会变的内容**：instructions 渲染成提供方的 system，缓存断点就放在它末尾（下面「prompt caching」），里面只要有一个每次运行都不同的值，整段历史每次运行都要重新写入缓存，同一个 agent 的不同会话、压缩也只能复用工具定义那一段。
 - **运行上下文**（`instructions.build_run_context`）= 必须随运行变化、因而不能进 instructions 的那几行：当前时间，「回答交给谁」（`Audience`，由这次运行处理的信件推导，同一个会话的不同运行会不同），以及工具组在这次运行连接时发现、要告诉模型的问题（`RunScope.notices`，如不可用的 MCP server，`instructions.with_notices` 一条一行接在后面；它们在进入 pydantic-ai 的 iter、工具组连接之后才齐，所以由 `StepHooks.started` 交给 `sessions.steps`，每次驱动覆盖一次）。会话来源（`Origin`）是会话创建时定下的，留在 instructions 里。它作为单独一段用户消息挂在**这次运行新增的第一条请求**上（`conventions.attach_run_context`，`sessions.steps` 在信件并入之后挂），随消息入库、之后原样重放——旧消息字节不变，缓存才命中；会话条目里不展示它（`transcript.to_items` 按 `RUN_CONTEXT` 跳过），它不是用户说的话。从历史续跑、重发末尾那条已保存请求的那一步不挂（改已保存的消息就等于作废它之前的缓存），这段留给这次运行的下一条新请求。运行中途压缩把挂着它的那条请求压进了摘要时（长运行会切过自己的开头），下一条新请求重新挂一段（`RunState.run_context_row` 记下挂在哪条消息上）。没有历史的运行（临时 agent）直接放在 prompt 前面（`AgentRuntime.run_temp` 在工具组连接之后、第一个节点运行之前写进 prompt）。
-- **toolsets**（每个领域一个模块，各领域的 `tools.py` 与 `agent_runtime/*_tools.py`）。对话里开放哪些由 agent 的 `tool_groups` 决定。组的目录在 `tool_catalog.py` 唯一登记（组名、界面标签、是否依赖 `[web]`）：`AgentService` 用它校验，`/api/agent-defaults` 把标签下发给界面，`get_agent` 给模型列出每个组实际包含的工具（组合根从各组注册的工具集取工具名，MCP 组的工具按运行构建，只说明命名方式），不另写一份描述，组合根按它的组名常量给每组接上实现（`agent_runtime.runner.ToolGroups`；登记的组与目录不一一对应时启动即报错）。组：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`、`issues`（issue 看板）、`web`（只在配置了 `[web]` 时存在）；私有 skill、memory 与自己的指令（自我改进）总是开放，读公共 skill 也总是可以；向用户提问（`ask_user`，见第 7 节）也总是开放并总是列出（工具列表在 prompt 缓存前缀的最前面，随运行增减会让整个前缀失效），但只在用户等着这次运行的回答（`Audience.USER`）时可用，否则调用被拒绝、交还模型。每种运行各用自己的工具组合（`RunProfile`），工具里不做「这是哪种运行」的运行时检查：有会话的运行按 `tool_groups` 组合，临时 agent 是固定的一组。**工具列表只由 agent 配置（`tool_groups`）与运行种类（`RunProfile`）决定，不随单次运行的状态变化**（工具定义在 prompt 缓存前缀的最前面，列表一变整个前缀失效）：不用 `prepare` 按运行状态隐藏工具；依赖运行状态的前提（例如 `ask_user` 要有用户在等）在调用时检查，不满足就抛领域错误、交还模型。新建 agent 未指定时开启当前配置下的全部组；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP 与配置了的网页搜索，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
+- **toolsets**（每个领域一个模块，各领域的 `tools.py` 与 `agent_runtime/*_tools.py`）。对话里开放哪些由 agent 的 `tool_groups` 决定。组的目录在 `tool_catalog.py` 唯一登记（组名、界面标签、是否依赖 `[web]`）：`AgentService` 用它校验，`/api/agent-defaults` 把标签下发给界面，`get_agent` 给模型列出每个组实际包含的工具（组合根从各组注册的工具集取工具名，MCP 组的工具按运行构建，只说明命名方式），不另写一份描述，组合根按它的组名常量给每组接上实现（`agent_runtime.runner.ToolGroups`；登记的组与目录不一一对应时启动即报错）。组：`workspace`、`temp_agent`、`delegation`、`notify`、`agents`、`public_skills`（写公共 skill）、`mcp`（使用 MCP server）、`mcp_admin`（管理 MCP）、`vault`、`triggers`、`issues`（issue 看板）、`web`（只在配置了 `[web]` 时存在）；私有 skill 与记忆（含全局记忆，自我改进）总是开放，读公共 skill 也总是可以；向用户提问（`ask_user`，见第 7 节）也总是开放并总是列出（工具列表在 prompt 缓存前缀的最前面，随运行增减会让整个前缀失效），但只在用户等着这次运行的回答（`Audience.USER`）时可用，否则调用被拒绝、交还模型。每种运行各用自己的工具组合（`RunProfile`），工具里不做「这是哪种运行」的运行时检查：有会话的运行按 `tool_groups` 组合，临时 agent 是固定的一组。**工具列表只由 agent 配置（`tool_groups`）与运行种类（`RunProfile`）决定，不随单次运行的状态变化**（工具定义在 prompt 缓存前缀的最前面，列表一变整个前缀失效）：不用 `prepare` 按运行状态隐藏工具；依赖运行状态的前提（例如 `ask_user` 要有用户在等）在调用时检查，不满足就抛领域错误、交还模型。新建 agent 未指定时开启当前配置下的全部组；处理不可信输入（外部事件、网页内容）的 agent 应只开放需要的组，限制提示注入能造成的后果。临时 agent 有固定的工具集（文件与 shell，加上调用方可见的 MCP 与配置了的网页搜索，不看调用方是否选了 `mcp`；`temp_agent` 本来就等同于全部权限），不受 `tool_groups` 影响：
   - 局部修改（`update_agent`、`trigger_update`）由领域服务在一个事务里读取并只改给出的字段，工具层不读后整体写回：同一响应里并行的多个修改、以及用户在界面上的同时修改互不覆盖。面向模型的错误信息只带名称，不带 id。
   - `workspace`：`read_file`（带行号；单行超过 2000 字符截断；`reads` 一次读多个文件或同一文件的多段，每段一个 `==> path lines A-B of N <==` 标题，读不了的段就地写出错误、其余照常返回——审计里 agent 用 `sed -n` 一条命令读好几段，输出没有行号）/ `write_file`（回报新建还是覆盖、行数）/ `edit_file`（`replace_all` 替换全部；`edits` 一次改同一文件的多处，依次作用、任何一处失败就整体不写盘，报错指出第几处，规则在 `platform.text_edit.replace_each`；失败时说明多处在哪几行、或最接近的是哪几行只差空白；成功时回显改后文件里改动处的行（前后各 2 行上下文、带行号，按改前改后比对得出：`platform.text_edit.changed_ranges`），省掉回读确认）/ `share_file`（把文件发给用户，见第 7 节「附件与文件」）/ `run_shell`（cwd = 工作目录，最小环境变量，可按 key 注入 secret，输出中的 secret 明文被替换为 `[secret:KEY]`；`background: true` 时作为后台任务运行，见第 9 节）/ `job_status` / `job_kill`。后台任务的部分只在会话版的工具集里（`jobs.tools.session_workspace_toolset`，有会话的运行用它；临时 agent 用不带后台任务的 `agent_runtime.workspace_tools.workspace_toolset`），所以没有会话的运行里根本没有这些工具。不做强隔离——按需求为单人本机使用。不自己实现搜索工具：搜索靠 shell 里的 ripgrep（`rg`，本机需安装），run_shell 的说明里写明用法，并要求读改文件用专用工具而不是 cat/sed；说明里还写明输出上限（`runtime.tool_output_max_chars`，与 web_fetch 共用），提醒模型自己用 `head`/`tail`/`rg -m`/`cut -c` 控制输出长度。
-  - `skills`：`read_skill`（私有或公共）/ `write_skill` / `edit_skill`（改正文的一部分：替换恰好出现一次的片段，或追加；这条规则只在 `platform.text_edit.edit` 写一次，指令、skill 正文与 `edit_file` 共用；可选 `description` 同时或单独改描述，一次提交；什么都不改是错误，规则在 `SkillStore.edit`，私有与公共共用）/ `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `edit_public_skill` / `delete_public_skill`。
-  - `memory`：`memory_append` / `memory_replace`，超长时 `ModelRetry` 告诉模型至少要腾出多少字。工具的领域错误一律先 `ModelRetry` 交还模型修正；同一工具连续失败用完重试预算（`TOOL_MAX_RETRIES`）后改为 `ToolFailed`，模型看到失败结果、换做法或跳过这步，不终止整轮运行（`DomainErrorsAsRetry`）。
-  - `instructions`：`instructions_replace`（改自己的指令：替换恰好出现一次的片段，或追加），每次修改记一版、作者是自己。
-  - `agents`：`get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己） / `get_public_prompt` / `set_public_prompt`。指令与公共 prompt 的修改都留版本，作者记为做出修改的 agent，用户可回滚。
+  - `skills`：`read_skill`（私有或公共）/ `write_skill` / `edit_skill`（改正文的一部分：替换恰好出现一次的片段，或追加；这条规则只在 `platform.text_edit.edit` 写一次，skill 正文与 `edit_file` 共用；可选 `description` 同时或单独改描述，一次提交；什么都不改是错误，规则在 `SkillStore.edit`，私有与公共共用）/ `delete_skill`（只限私有）；写公共 skill 在 `public_skills` 组：`write_public_skill` / `edit_public_skill` / `delete_public_skill`。
+  - `memory`：`memory_append` / `memory_replace`，`scope` 为 `private`（自己的记忆，默认）或 `public`（全局记忆，所有 agent 都能写，作者记为改的 agent），超长时 `ModelRetry` 告诉模型至少要腾出多少字。工具的领域错误一律先 `ModelRetry` 交还模型修正；同一工具连续失败用完重试预算（`TOOL_MAX_RETRIES`）后改为 `ToolFailed`，模型看到失败结果、换做法或跳过这步，不终止整轮运行（`DomainErrorsAsRetry`）。
+  - `agents`：`get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己）。agent 只有名称、描述、模型、工具组；新建的 agent 记忆为空，角色写在描述里（它出现在 agent 自己的运行上下文里，也是委派时选人的依据）。
   - `delegation`：`list_agents`（返回 name、description）/ `delegate_task` / `ask_agent` / `list_threads` / `stop_thread`（停止一个 thread：结束它正在进行的运行、清空它的信箱）（按名称指定目标 agent、按 thread 名指定子会话，见第 7 节）。
   - `notify`：`notify_user`（显式 Web Push）。
   - `temp_agent`：`run_temp_agent(task, instructions?, model?)`：一次性的临时 agent，在调用方那一步里同步运行（同一响应中的多次调用并行），返回它的最终回答。它只有文件与 shell 工具（工作目录在 `data/tmp/` 下临时创建、结束即删除）、调用方的 MCP，以及配置了 `[web]` 时的 `web_search` / `web_fetch`，secret 按调用方的视角解析；没有记忆、skill、会话与委派，也不能再开临时 agent。适合抓取网页并总结、分析文件这类做完即丢的事；需要长期积累的专长应 `create_agent` 后委派。临时 agent 不是沙箱：它和调用方有相同的 shell 权限、secret 与 MCP，工具说明里也这样告诉模型。和长期 agent 一样不设模型请求数上限；失败（如模型 API 错误）向上传播，按调用方那次运行的失败统一处理（暂时性失败重试，续跑时这次调用补上「被中断」的结果，不重新执行）。工作目录在 finally 里删除；删除失败或进程中途被杀时留到下次启动，由启动时清空 `data/tmp`（只归临时 agent 使用）统一收敛，删除失败记 error 日志、不改变运行结果。启动时删不掉的目录（例如脱离进程组的后台进程还在写）同样记 error 日志后跳过，不阻止服务启动：残留目录只占空间，不影响正确性。
@@ -441,16 +438,13 @@ Alembic 管理表结构（`src/muliao/migrations/`，随包分发），启动时
 ### Skill
 agent 在任何一次运行里都可以主动 `write_skill`。公共 skill 对所有 agent 可见；私有 skill 只对自己可见，同名时私有遮蔽公共。
 
-**归属与合并规则（skill、MCP server、secret 共用，只在 `ownership.shadowing` 实现一次，`visible` 由它得出）**：资源归属某个 agent（私有）或公共；agent 看到自己的私有资源加上公共资源，同名时私有遮蔽公共，其他 agent 的私有资源不可见。prompt 不是按名称合并，而是公共 prompt 与 agent 指令拼接（见下）。「私有」是可见范围和命名空间的划分，不是安全隔离：agent 能执行任意命令、读到数据库与 vault 主密钥（见第 15 节）。界面按同一条规则安排归属位置：管理菜单（左上角按钮打开）的「公共资源」组只管理公共资源（公共指令、公共 Skills、公共 MCP servers、公共 Vault），私有资源在 agent 详情页的 Skills / MCP / Secrets 标签里管理，下方只读列出该 agent 继承的公共项并标出被同名私有项覆盖的。MCP 与 vault 的列表接口按 owner 视角返回（`GET /api/mcp?owner=`、`/api/vault?owner=`：私有在前、公共在后），公共项是否被遮蔽由后端给出 `shadowed`（MCP 只有已启用的私有 server 才遮蔽，与运行时一致）；前端 `web/src/ownership.ts` 只按归属把列表分成两段，不实现遮蔽规则。
+**归属与合并规则（skill、MCP server、secret 共用，只在 `ownership.shadowing` 实现一次，`visible` 由它得出）**：资源归属某个 agent（私有）或公共；agent 看到自己的私有资源加上公共资源，同名时私有遮蔽公共，其他 agent 的私有资源不可见。记忆不按名称合并，全局记忆与 agent 自己的记忆各占一段（见下）。「私有」是可见范围和命名空间的划分，不是安全隔离：agent 能执行任意命令、读到数据库与 vault 主密钥（见第 15 节）。界面按同一条规则安排归属位置：管理菜单（左上角按钮打开）的「公共资源」组只管理公共资源（全局记忆、公共 Skills、公共 MCP servers、公共 Vault），私有资源在 agent 详情页的 Skills / MCP / Secrets 标签里管理，下方只读列出该 agent 继承的公共项并标出被同名私有项覆盖的。MCP 与 vault 的列表接口按 owner 视角返回（`GET /api/mcp?owner=`、`/api/vault?owner=`：私有在前、公共在后），公共项是否被遮蔽由后端给出 `shadowed`（MCP 只有已启用的私有 server 才遮蔽，与运行时一致）；前端 `web/src/ownership.ts` 只按归属把列表分成两段，不实现遮蔽规则。
 
-### Prompt（公共 prompt 与 agent 指令）
-agent 的指令是资源仓库里的 `agents/<id>/PROMPT.md`，公共 prompt 是 `public/PROMPT.md`（合并进所有 agent，放在各自的指令之前）。当前生效的就是文件内容（`agents` 表里没有指令列），读取当前内容与修改都经过 `PromptStore`（历史与按版本读取直接走资源仓库的 `RevisionHistory`）；修改即提交一版并记录作者（`user` 或做出修改的 agent），回滚即把旧版内容作为新的一版写入，历史只增不改。内容未变时不提交；空的公共 prompt 等同于没有（清空也提交一版空文件，历史里不会出现「文件不存在」的版本）。指令与记忆的历史和恢复通过 `/api/resources/{prompt|memory}/history|restore`，界面在公共指令页和 agent 的配置、记忆标签里；接口只列最近 50 版，更早的仍在仓库里。
-
-### Memory
-agent 私有、有长度上限（`memory_max_chars`），每次运行全文注入 instructions。
+### Memory（全局记忆与 agent 记忆）
+全局记忆是资源仓库里的 `public/MEMORY.md`，agent 的记忆是 `agents/<id>/MEMORY.md`；两者同一套规则（`MemoryStore`，owner 为 None 即全局）：有长度上限（`memory_max_chars`），每次运行全文放进 instructions（全局在最前，agent 自己的在运行上下文之后），修改即提交一版并记录作者（`user` 或做出修改的 agent），回滚即把旧版内容作为新的一版写入。全局记忆从未写过时为空；agent 的记忆在创建时写入（空文件），缺失即数据不一致。读写接口 `GET/PUT /api/memory?owner=`（owner 缺省为全局），历史与恢复 `/api/resources/memory/history|restore`；界面在「全局记忆」页和 agent 的记忆标签里；接口只列最近 50 版，更早的仍在仓库里。#117 之前还有 agent 指令（`agents/<id>/PROMPT.md`）和公共 prompt（`public/PROMPT.md`），已删除：前者不迁移，后者原样改为全局记忆，旧内容留在资源仓库的 git 历史里。
 
 ### 自我进化
-平台不在运行之间插入强制反思（#116 删掉了每 N 步的 reflection）。agent 改记忆、私有 skill、自己的指令（`instructions_replace`）都在自己的会话里用自我改进工具完成，这些都是资源仓库里的文件，每次修改都有版本，用户可回滚。定期的整理由 trigger 驱动、按公共 skill 执行（每日 self-evolve → curator 上提 → muliao 审查），不是平台机制。
+平台不在运行之间插入强制反思（#116 删掉了每 N 步的 reflection）。agent 改记忆（自己的与全局的）、私有 skill 都在自己的会话里用自我改进工具完成，这些都是资源仓库里的文件，每次修改都有版本，用户可回滚。定期的整理由 trigger 驱动、按公共 skill 执行（每日 self-evolve → curator 上提 → muliao 审查），不是平台机制。
 
 ## 14. 触发源与通知
 
@@ -531,7 +525,7 @@ agent 私有、有长度上限（`memory_max_chars`），每次运行全文注�
 
 能缩小的是**提示注入的影响面**：处理外部事件或网页内容的 agent 用 `tool_groups` 只开放它需要的工具组（例如只开 `notify`），这样即使输入里带有恶意指令，它也删不了 agent、改不了公共指令和公共 skill（两者都会进入所有 agent 的 instructions）、用不了 MCP、动不了 vault 和触发器。选组时按组里的工具实际能做什么判断（`get_agent` 列出每组的工具），不另设「权限等级」标记：例如 `workspace` 有 shell，`temp_agent` 的临时 agent 自带 shell，`delegation` 与 `issues` 借目标 agent 自己的工具组之手做事，`agents` 可以给自己加组，`triggers` 可以让任意 agent 带着任意说明定时运行，`mcp_admin` 可以添加运行任意命令的 stdio MCP。`web` 本身就是不可信内容的入口（搜索结果与网页正文），也是外发通道：抓取的 URL 可以带上对话里的任何内容，发给搜索服务与目标站点。所以「只开 `notify` + `web`」看似很窄，对处理不可信输入的 agent 已经是一条完整的外泄链路，这类 agent 不应选 `web`；配置了 `[web]` 后新建 agent 默认也包括它。
 
-注入还可能**持久化**：记忆、私有 skill 与自己的指令总是开放（不受 `tool_groups` 限制），处理不可信输入的 agent 可能把注入的内容写进它们，之后该 agent 的每次运行都会带着它。影响限于这个 agent 自己（工具组不变，不能越权），但指令在 system prompt 里的权威性比记忆高。缓解手段是版本历史与作者记录：界面上能看到每一版是谁改的，随时回滚。
+注入还可能**持久化**：记忆（含全局记忆）与私有 skill 总是开放（不受 `tool_groups` 限制），处理不可信输入的 agent 可能把注入的内容写进它们，之后该 agent 的每次运行都会带着它；写进全局记忆的会带进**每个** agent 的运行（全局记忆由各 agent 的自进化共同维护，这是有意的取舍）。工具组不变，不能越权。缓解手段是版本历史与作者记录：界面上能看到每一版是谁改的，随时回滚；每日的知识审查也审全局记忆的改动。
 
 - shell 只继承少量环境变量（`PATH`、`HOME` 等）；
 - `run_shell(secrets=[KEY])` 输出中的 secret 明文被替换为 `[secret:KEY]`（逐字匹配，编码后的输出不会被替换）；

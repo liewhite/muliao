@@ -1,4 +1,4 @@
-"""MCP server 的配置：带版本的资源，和 skill、memory、指令一样归 agent 领域。
+"""MCP server 的配置：带版本的资源，和 skill、记忆一样归 agent 领域。
 
 配置是资源仓库里的 JSON 文件（public/mcp/<name>.json、agents/<id>/mcp/<name>.json，见 muliao.agents.resources）：
 归属与名称由文件位置决定，每次修改提交一版。agent 看到的 server 按 ownership.shadowing 合并公共与私有。

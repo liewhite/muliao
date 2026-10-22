@@ -155,7 +155,7 @@ async def test_web_agent_searches_and_fetches_with_truncation_and_rejections_go_
     container, web = web_container
     assert "web" in container.agents.defaults.group_names
     agent = await container.agents.create(
-        AgentSpec(name="reader", description="d", instructions="", model="tools", tool_groups=["web"]),
+        AgentSpec(name="reader", description="d", model="tools", tool_groups=["web"]),
         author="user",
     )
 
@@ -179,7 +179,7 @@ async def test_web_agent_searches_and_fetches_with_truncation_and_rejections_go_
 async def test_temp_agent_gets_web_tools_when_web_is_configured(web_container, models):
     container, _ = web_container
     me = await container.agents.create(
-        AgentSpec(name="manager", description="d", instructions="", model="tools"), author="user"
+        AgentSpec(name="manager", description="d", model="tools"), author="user"
     )
     seen: list[str] = []
 
@@ -199,13 +199,13 @@ async def test_without_web_config_there_is_no_web_group_and_agents_using_it_bloc
     assert "web" not in container.agents.defaults.group_names
     with pytest.raises(InvalidInput, match="tool groups"):
         await container.agents.create(
-            AgentSpec(name="x", description="d", instructions="", tool_groups=["web"]), author="user"
+            AgentSpec(name="x", description="d", tool_groups=["web"]), author="user"
         )
 
     # 同一份数据先在配置了 web 时选上它，再换成没配置的进程启动检查
     with_web, _ = web_container
     await with_web.agents.create(
-        AgentSpec(name="reader", description="d", instructions="", tool_groups=["web"]), author="user"
+        AgentSpec(name="reader", description="d", tool_groups=["web"]), author="user"
     )
     without_web = assemble(with_web.settings, model_checker=lambda _m: None)
     with pytest.raises(RuntimeError, match=r"reader .*\['web'\]"):

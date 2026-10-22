@@ -48,11 +48,11 @@ async def test_skill_and_memory_endpoints(client):
     assert [s["name"] for s in (await client.get("/api/skills")).json()] == ["shared"]
     assert (await client.get("/api/skills", params={"owner": agent_id})).json() == []
 
-    resp = await client.put(f"/api/agents/{agent_id}/memory", json={"content": "- fact"})
+    resp = await client.put("/api/memory", json={"owner": agent_id, "content": "- fact"})
     assert resp.json()["content"] == "- fact"
-    assert (
-        await client.put(f"/api/agents/{agent_id}/memory", json={"content": "x" * 10_000})
-    ).status_code == 422
+    for owner in (agent_id, None):
+        too_long = {"owner": owner, "content": "x" * 10_000}
+        assert (await client.put("/api/memory", json=too_long)).status_code == 422
 
 
 async def test_vault_never_returns_values(client):
@@ -141,7 +141,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     renamed = {**agent, "name": "Research Assistant 📚"}
     resp = await client.put(
         path,
-        json={k: renamed[k] for k in ("name", "description", "model", "instructions", "tool_groups")},
+        json={k: renamed[k] for k in ("name", "description", "model", "tool_groups")},
     )
     assert resp.status_code == 200 and resp.json()["name"] == "Research Assistant 📚"
     assert (await client.get(path)).json()["id"] == agent["id"]
@@ -154,7 +154,6 @@ async def test_agent_identified_by_id_and_renamable(client, container):
         "name": "other",
         "description": "d",
         "model": agent["model"],
-        "instructions": "",
         "tool_groups": agent["tool_groups"],
     }
     assert (await client.put(path, json=clash)).status_code == 409
@@ -203,7 +202,7 @@ async def test_a_failed_resource_write_leaves_no_half_created_agent(client, cont
     await container.resources.ensure()
     monkeypatch.setattr(container.resources, "_git", failing_git)
     with pytest.raises(RuntimeError, match="index.lock"):
-        await container.agents.create(AgentSpec(name="half", description="d", instructions=""), author="user")
+        await container.agents.create(AgentSpec(name="half", description="d"), author="user")
     monkeypatch.undo()
 
     # 资源仓库里也没留下这个从未存在的 agent 的目录（否则启动检查会把它报成已删除 agent 的残留）
@@ -313,5 +312,5 @@ async def test_an_agent_being_deleted_reads_as_missing(client, container, make_a
         (await s.get(Agent, agent.id)).deleting_by = "user"
     await login(client)
 
-    for path in ("", "/memory"):
-        assert (await client.get(f"/api/agents/{agent.id}{path}")).status_code == 404, path
+    assert (await client.get(f"/api/agents/{agent.id}")).status_code == 404
+    assert (await client.get("/api/memory", params={"owner": agent.id})).status_code == 404

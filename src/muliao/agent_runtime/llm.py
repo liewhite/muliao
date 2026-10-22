@@ -31,7 +31,7 @@ ModelResolver = Callable[[str], Model]
 
 
 # Anthropic 的 prompt caching（https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching）：
-# 在每次请求都原样重发的前缀上放缓存断点——指令（instructions，含公共 prompt、记忆、skill 目录）、工具定义，
+# 在每次请求都原样重发的前缀上放缓存断点——指令（instructions，含全局记忆、记忆、skill 目录）、工具定义，
 # 以及消息末尾（让已经发过的历史在下一次请求里命中缓存）。三个断点，不超过 Anthropic 一次请求最多 4 个的上限
 # （超出的断点 pydantic_ai.models.anthropic._limit_cache_points 会按从旧到新剔除，我们不依赖它）。
 # 用 anthropic_cache_messages 而不是服务端自动放断点的 anthropic_cache：type = "anthropic" 也用于 Anthropic

@@ -177,7 +177,7 @@ class Settings(_Section):
 
     @property
     def resources_dir(self) -> Path:
-        """agent 能改的文本资源（指令、记忆、skill、MCP 配置），是一个 git 仓库，见 muliao.agents.resources。"""
+        """agent 能改的文本资源（记忆、skill、MCP 配置），是一个 git 仓库，见 muliao.agents.resources。"""
         return self.data_dir / "resources"
 
     @property
