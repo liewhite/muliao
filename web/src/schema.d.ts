@@ -84,7 +84,7 @@ export interface paths {
         };
         /**
          * List Permissions
-         * @description 全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 工具是 mcp:<server>:<tool>，不在其中。
+         * @description 全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 不归工具权限管，不在其中。
          */
         get: operations["list_permissions_api_permissions_get"];
         put?: never;
@@ -106,7 +106,7 @@ export interface paths {
         put?: never;
         /**
          * Resolve Permissions
-         * @description agent 配置（还没保存的也行）最终能用的工具：public + 角色 + allow / deny，与运行时同一套计算。
+         * @description agent 配置（还没保存的也行）最终能用的工具：角色 + allow / deny，与运行时同一套计算。
          */
         post: operations["resolve_permissions_api_permissions_resolve_post"];
         delete?: never;
@@ -1212,6 +1212,11 @@ export interface components {
              */
             deny: string[];
             /**
+             * Mcp Servers
+             * @default []
+             */
+            mcp_servers: string[];
+            /**
              * Thinking
              * @default default
              * @enum {string}
@@ -1241,6 +1246,8 @@ export interface components {
             allow: string[];
             /** Deny */
             deny: string[];
+            /** Mcp Servers */
+            mcp_servers: string[];
             /**
              * Thinking
              * @enum {string}
@@ -1271,6 +1278,8 @@ export interface components {
             allow: string[];
             /** Deny */
             deny: string[];
+            /** Mcp Servers */
+            mcp_servers: string[];
             /**
              * Thinking
              * @enum {string}
@@ -1830,9 +1839,7 @@ export interface components {
              * Access
              * @enum {string}
              */
-            access: "read" | "write" | "irreversible";
-            /** Note */
-            note: string;
+            access: "read" | "write";
         };
         /** Precheck */
         Precheck: {
@@ -1926,14 +1933,13 @@ export interface components {
         };
         /**
          * ResolvedOut
-         * @description 按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具；能开临时 agent 时另有临时 agent 按同一份规则能用的。
+         * @description 按规则最终能用的工具（MCP 不归权限管，不在其中）；能开临时 agent 时另有临时 agent 按同一份规则能用的工具名。
          */
         ResolvedOut: {
             /** Tools */
             tools: components["schemas"]["PermissionOut"][];
-            /** Mcp */
-            mcp: boolean;
-            temp_agent: components["schemas"]["ResolvedOut"] | null;
+            /** Temp Agent */
+            temp_agent: string[] | null;
         };
         /**
          * ResourceKind

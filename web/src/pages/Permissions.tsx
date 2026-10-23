@@ -16,16 +16,15 @@ import {
   useLoad,
 } from '../ui'
 
-const ACCESS: Record<ToolPermission['access'], { label: string; color: 'default' | 'warning' | 'danger' }> = {
+const ACCESS: Record<ToolPermission['access'], { label: string; color: 'default' | 'warning' }> = {
   read: { label: '读', color: 'default' },
   write: { label: '写', color: 'warning' },
-  irreversible: { label: '不可逆', color: 'danger' },
 }
 
 /** 通配符列表的输入：空格或逗号分隔 */
 const parsePatterns = (text: string) => text.split(/[\s,]+/).filter(Boolean)
 
-/** 按规则最终能用的工具：每个标读 / 写 / 不可逆和附注（如 shell 可绕开其余权限） */
+/** 按规则最终能用的工具（MCP 不归权限管，不在其中）：每个标读 / 写 */
 export function ToolList({ resolved }: { resolved: ResolvedTools }) {
   return (
     <div className="flex flex-col gap-1 text-sm">
@@ -36,24 +35,19 @@ export function ToolList({ resolved }: { resolved: ResolvedTools }) {
           </Chip>
           <span className="font-mono">{t.tool}</span>
           <span className="font-mono text-xs text-muted">{t.id}</span>
-          {t.note && <span className={`text-xs ${t.access === 'irreversible' ? 'text-danger' : 'text-muted'}`}>{t.note}</span>}
-          {t.tool === 'run_temp_agent' && resolved.temp_agent && <TempAgentTools resolved={resolved.temp_agent} />}
+          {t.tool === 'run_temp_agent' && resolved.temp_agent && <TempAgentTools tools={resolved.temp_agent} />}
         </div>
       ))}
-      {resolved.mcp && (
-        <div className="text-xs text-muted">另有 MCP 工具：权限 id 为 mcp:&lt;server&gt;:&lt;tool&gt;，按同样的规则放行</div>
-      )}
-      {resolved.tools.length === 0 && !resolved.mcp && <span className="text-muted">没有工具</span>}
+      {resolved.tools.length === 0 && <span className="text-muted">没有工具</span>}
     </div>
   )
 }
 
-/** 临时 agent 按同一份规则能用的工具（调用方工具的子集） */
-function TempAgentTools({ resolved }: { resolved: ResolvedTools }) {
-  const names = [...resolved.tools.map((t) => t.tool), ...(resolved.mcp ? ['MCP'] : [])]
+/** 临时 agent 按同一份规则能用的工具（调用方工具的子集），另有调用方的 MCP */
+function TempAgentTools({ tools }: { tools: string[] }) {
   return (
     <span className="w-full ps-10 text-xs text-muted">
-      临时 agent 能用：{names.length ? <span className="font-mono">{names.join('、')}</span> : '没有工具'}
+      临时 agent 能用：{tools.length ? <span className="font-mono">{tools.join('、')}</span> : '没有内置工具'}，另有调用方的 MCP
     </span>
   )
 }
@@ -65,8 +59,7 @@ export function ToolsDisclosure({ resolved, title = '最终能用的工具' }: {
       <Disclosure.Heading>
         <Disclosure.Trigger className="flex items-center gap-1 text-sm text-muted">
           <Disclosure.Indicator className="ms-0" />
-          {title}（{resolved.tools.length}
-          {resolved.mcp ? ' + MCP' : ''}）
+          {title}（{resolved.tools.length}）
         </Disclosure.Trigger>
       </Disclosure.Heading>
       <Disclosure.Content>
@@ -90,16 +83,13 @@ export function PermissionsInput({ value, onChange }: { value: PermissionValue; 
   return (
     <div className="flex flex-col gap-2">
       <div className="text-sm font-medium">工具权限</div>
-      <div className="text-xs text-muted">
-        public（记忆、私有 skill、工作历史、提问、读 issue）每个 agent 自动拥有。权限用于防误操作、少占上下文，不是安全隔离：有 shell 就能绕开其余权限
-      </div>
+      <div className="text-xs text-muted">admin 是全部工具；agent 是除写全局资源和管理 agent 以外的全部工具</div>
       <Loading state={roles}>
         {(list) => {
-          const assignable = list.filter((r) => r.name !== 'public')
-          const names = assignable.map((r) => r.name)
+          const names = list.map((r) => r.name)
           return (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {assignable.map((r) => (
+              {list.map((r) => (
                 <label key={r.name} className="flex items-center gap-2 text-sm">
                   <ToggleSwitch
                     label={r.name}
@@ -124,7 +114,7 @@ export function PermissionsInput({ value, onChange }: { value: PermissionValue; 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <TextInput
           label="额外允许"
-          hint="通配符，空格分隔，如 issue:* mcp:playwright:*"
+          hint="通配符，空格分隔，如 issue:*"
           mono
           value={allowText}
           onChange={(t) => {
@@ -134,7 +124,7 @@ export function PermissionsInput({ value, onChange }: { value: PermissionValue; 
         />
         <TextInput
           label="禁止"
-          hint="优先于所有允许，如 agent:delete"
+          hint="优先于所有允许，如 trigger:*"
           mono
           value={denyText}
           onChange={(t) => {
@@ -148,6 +138,38 @@ export function PermissionsInput({ value, onChange }: { value: PermissionValue; 
       ) : (
         resolved.data && <ToolsDisclosure resolved={resolved.data} />
       )}
+    </div>
+  )
+}
+
+/** 勾选的公共 MCP server（不归工具权限管）：agent 运行时连接它自己的私有 server 与这些 */
+export function McpServersInput({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const servers = useLoad(() => api.mcp(null), [])
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="text-sm font-medium">公共 MCP</div>
+      <div className="text-xs text-muted">勾选的公共 server 的工具给这个 agent；它自己的私有 server 总是可用</div>
+      <Loading state={servers}>
+        {(list) =>
+          list.length === 0 ? (
+            <span className="text-sm text-muted">没有公共 MCP server</span>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {list.map((m) => (
+                <label key={m.name} className="flex items-center gap-2 text-sm">
+                  <ToggleSwitch
+                    label={m.name}
+                    isSelected={value.includes(m.name)}
+                    onChange={(on) => onChange(on ? [...value, m.name] : value.filter((n) => n !== m.name))}
+                  />
+                  <span className="font-mono">{m.name}</span>
+                  {!m.enabled && <span className="text-xs text-muted">已停用</span>}
+                </label>
+              ))}
+            </div>
+          )
+        }
+      </Loading>
     </div>
   )
 }
@@ -241,7 +263,7 @@ export function Roles() {
   return (
     <Page title="角色与权限">
       <p className="text-sm text-muted">
-        每个工具有一个权限 id（资源:动作），角色是一组通配符 allow / deny，deny 优先。agent 的权限 = public + 它的角色 + 它自己的 allow / deny，在 agent 配置里选。
+        每个工具有一个权限 id（资源:动作），角色是一组通配符 allow / deny，deny 优先。agent 的权限 = 它的角色 + 它自己的 allow / deny，在 agent 配置里选。MCP 不归权限管，在 agent 配置里勾选公共 server。
       </p>
       <CollapsibleForm title="新建角色">
         <RoleForm
