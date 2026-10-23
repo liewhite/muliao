@@ -15,6 +15,7 @@ from muliao.sessions.holds import has_active_in, hold_in
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Mail, MailState
 from muliao.sessions.transcript import to_items
+from tests.conftest import session_tools
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, history_of, start
 from tests.test_mailbox import Recorder
@@ -155,9 +156,9 @@ async def test_runs_without_a_session_get_no_background_jobs(container):
     plain = workspace_toolset(container.vault, ShellLimits(10, 20, 1000), container.files)
     assert "job_status" not in plain.tools and "job_kill" not in plain.tools
     assert "background" not in plain.tools["run_shell"].function_schema.json_schema["properties"]
-    session = container.consumer._tool_groups.groups["workspace"][0]  # noqa: SLF001
-    assert {"job_status", "job_kill"} <= set(session.tools)
-    assert "background" in session.tools["run_shell"].function_schema.json_schema["properties"]
+    session = session_tools(container)
+    assert {"job_status", "job_kill"} <= set(session)
+    assert "background" in session["run_shell"].function_schema.json_schema["properties"]
 
 
 async def test_a_session_with_a_running_job_cannot_be_deleted(container, make_agent, models):

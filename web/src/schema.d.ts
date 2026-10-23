@@ -75,6 +75,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Permissions
+         * @description 全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 工具是 mcp:<server>:<tool>，不在其中。
+         */
+        get: operations["list_permissions_api_permissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/permissions/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Permissions
+         * @description agent 配置（还没保存的也行）最终能用的工具：public + 角色 + allow / deny，与运行时同一套计算。
+         */
+        post: operations["resolve_permissions_api_permissions_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Roles
+         * @description 全部角色：内置在前，自建的按名称。
+         */
+        get: operations["list_roles_api_roles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/roles/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Role
+         * @description 整体替换自建角色的描述与规则；从引用它的 agent 的下一次运行起生效。
+         */
+        put: operations["update_role_api_roles__name__put"];
+        /** Create Role */
+        post: operations["create_role_api_roles__name__post"];
+        /**
+         * Delete Role
+         * @description 有 agent 引用时 409。
+         */
+        delete: operations["delete_role_api_roles__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/providers": {
         parameters: {
             query?: never;
@@ -1114,8 +1199,18 @@ export interface components {
             description: string;
             /** Model */
             model?: string | null;
-            /** Tool Groups */
-            tool_groups?: string[] | null;
+            /** Roles */
+            roles?: string[] | null;
+            /**
+             * Allow
+             * @default []
+             */
+            allow: string[];
+            /**
+             * Deny
+             * @default []
+             */
+            deny: string[];
             /**
              * Thinking
              * @default default
@@ -1127,10 +1222,8 @@ export interface components {
         AgentDefaultsOut: {
             /** Model */
             model: string;
-            /** Groups */
-            groups: components["schemas"]["ToolGroupOut"][];
-            /** Default Tool Groups */
-            default_tool_groups: string[];
+            /** Roles */
+            roles: string[];
         };
         /** AgentOut */
         AgentOut: {
@@ -1142,8 +1235,12 @@ export interface components {
             description: string;
             /** Model */
             model: string;
-            /** Tool Groups */
-            tool_groups: string[];
+            /** Roles */
+            roles: string[];
+            /** Allow */
+            allow: string[];
+            /** Deny */
+            deny: string[];
             /**
              * Thinking
              * @enum {string}
@@ -1168,8 +1265,12 @@ export interface components {
             description: string;
             /** Model */
             model: string;
-            /** Tool Groups */
-            tool_groups: string[];
+            /** Roles */
+            roles: string[];
+            /** Allow */
+            allow: string[];
+            /** Deny */
+            deny: string[];
             /**
              * Thinking
              * @enum {string}
@@ -1716,6 +1817,23 @@ export interface components {
          * @enum {string}
          */
         Origin: "user" | "trigger" | "delegation" | "issue";
+        /**
+         * PermissionOut
+         * @description 一个工具的权限（agents.permissions.TOOL_PERMISSIONS）。
+         */
+        PermissionOut: {
+            /** Tool */
+            tool: string;
+            /** Id */
+            id: string;
+            /**
+             * Access
+             * @enum {string}
+             */
+            access: "read" | "write" | "irreversible";
+            /** Note */
+            note: string;
+        };
         /** Precheck */
         Precheck: {
             /**
@@ -1807,6 +1925,16 @@ export interface components {
             };
         };
         /**
+         * ResolvedOut
+         * @description 按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具。
+         */
+        ResolvedOut: {
+            /** Tools */
+            tools: components["schemas"]["PermissionOut"][];
+            /** Mcp */
+            mcp: boolean;
+        };
+        /**
          * ResourceKind
          * @enum {string}
          */
@@ -1831,6 +1959,38 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** RoleIn */
+        RoleIn: {
+            /** Description */
+            description: string;
+            /** Allow */
+            allow: string[];
+            /** Deny */
+            deny: string[];
+        };
+        /** RoleOut */
+        RoleOut: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Allow */
+            allow: string[];
+            /** Deny */
+            deny: string[];
+            /** Builtin */
+            builtin: boolean;
+            resolved: components["schemas"]["ResolvedOut"];
+        };
+        /** RulesIn */
+        RulesIn: {
+            /** Roles */
+            roles: string[];
+            /** Allow */
+            allow: string[];
+            /** Deny */
+            deny: string[];
         };
         /**
          * RunDeltaEvent
@@ -2268,16 +2428,6 @@ export interface components {
             /** Token */
             token: string;
         };
-        /**
-         * ToolGroupOut
-         * @description 一个可选的工具组（tool_catalog）。
-         */
-        ToolGroupOut: {
-            /** Name */
-            name: string;
-            /** Label */
-            label: string;
-        };
         /** TranscriptOut */
         TranscriptOut: {
             /** Text */
@@ -2552,6 +2702,178 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentDefaultsOut"];
+                };
+            };
+        };
+    };
+    list_permissions_api_permissions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionOut"][];
+                };
+            };
+        };
+    };
+    resolve_permissions_api_permissions_resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RulesIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_roles_api_roles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleOut"][];
+                };
+            };
+        };
+    };
+    update_role_api_roles__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_role_api_roles__name__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_role_api_roles__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

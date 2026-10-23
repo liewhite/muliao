@@ -35,7 +35,7 @@ from muliao.agent_runtime.instructions import with_notices
 from muliao.agent_runtime.llm import ModelRegistry
 from muliao.agent_runtime.outcome import Finished, Paused, defer_call
 from muliao.agent_runtime.redaction import redact_messages
-from muliao.agent_runtime.runner import AgentRuntime, RunProfile, StepHooks, ToolGroups
+from muliao.agent_runtime.runner import AgentRuntime, RunProfile, StepHooks, Toolbox
 from muliao.agent_runtime.workspace_tools import ShellLimits, file_toolset, run_foreground, shell_description
 
 __all__ = [
@@ -57,7 +57,7 @@ __all__ = [
     "RunProfile",
     "ShellLimits",
     "StepHooks",
-    "ToolGroups",
+    "Toolbox",
     "answer_text",
     "attach_run_context",
     "calls_in",

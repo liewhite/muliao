@@ -5,12 +5,14 @@ run_shell 有约 14% 的调用把 secrets 传成了 "[\\"KEY\\"]"，即使它自
 用不可为空的类型加空默认值；只有 None 本身有含义（「用默认」或「不改」）时才允许可为空，并在这里登记原因。
 """
 
-from pydantic_ai import FunctionToolset
+from tests.conftest import session_tools
 
 # (工具, 参数) -> None 的含义
 NULL_MEANS_SOMETHING = {
-    ("create_agent", "tool_groups"): "None = 全部工具组（新建 agent 的默认）",
-    ("update_agent", "tool_groups"): "None = 不改",
+    ("create_agent", "roles"): "None = 默认角色（AgentDefaults.roles）",
+    ("update_agent", "roles"): "None = 不改",
+    ("update_agent", "allow"): "None = 不改",
+    ("update_agent", "deny"): "None = 不改",
     ("trigger_update", "config"): "None = 不改",
     ("trigger_create", "precheck"): "None = 不设前置检查（Precheck 没有「空检查」可以代替）",
     ("trigger_update", "precheck"): "None = 不改",
@@ -33,13 +35,9 @@ def _nullable_containers(schema: dict) -> list[str]:
 
 
 async def test_array_and_object_parameters_are_not_nullable_unless_null_means_something(container):
-    toolsets = [t for g in container.consumer._tool_groups.groups.values() for t in g]  # noqa: SLF001
-    toolsets += list(container.consumer._tool_groups.always)  # noqa: SLF001
     offending = [
         (tool.name, param)
-        for ts in toolsets
-        if isinstance(ts, FunctionToolset)
-        for tool in ts.tools.values()
+        for tool in session_tools(container).values()
         for param in _nullable_containers(tool.function_schema.json_schema)
         if (tool.name, param) not in NULL_MEANS_SOMETHING
     ]
@@ -50,13 +48,9 @@ async def test_redacted_secret_arguments_exist_in_the_registered_tool_schemas(co
     """脱敏表若与工具定义脱节（改了工具名或参数名），secret 明文会悄悄进入 messages 表和 SSE。"""
     from muliao.vault.api import SECRET_TOOL_ARGS
 
-    toolsets = [t for g in container.consumer._tool_groups.groups.values() for t in g]  # noqa: SLF001
-    toolsets += list(container.consumer._tool_groups.always)  # noqa: SLF001
     params = {
         tool.name: set(tool.function_schema.json_schema.get("properties", {}))
-        for ts in toolsets
-        if isinstance(ts, FunctionToolset)
-        for tool in ts.tools.values()
+        for tool in session_tools(container).values()
     }
     assert SECRET_TOOL_ARGS
     for name, secret in SECRET_TOOL_ARGS.items():
@@ -70,9 +64,7 @@ async def test_deferred_tools_and_thread_tools_are_registered_under_their_table_
     from muliao.sessions.deferred import DEFERRED_TOOLS
     from muliao.sessions.kinds import SessionKind, policy_of
 
-    toolsets = [t for g in container.consumer._tool_groups.groups.values() for t in g]  # noqa: SLF001
-    toolsets += list(container.consumer._tool_groups.always)  # noqa: SLF001
-    names = {tool for ts in toolsets if isinstance(ts, FunctionToolset) for tool in ts.tools}
+    names = set(session_tools(container))
     continued_by = {p.continued_by for k in SessionKind if (p := policy_of(k)).continued_by is not None}
     missing = (set(DEFERRED_TOOLS) | continued_by) - names
     assert not missing, missing

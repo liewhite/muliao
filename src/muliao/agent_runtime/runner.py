@@ -15,6 +15,7 @@ from pydantic_ai import (
     AgentRunResult,
     DeferredToolRequests,
     DeferredToolResults,
+    FunctionToolset,
     UsageLimits,
     UserPromptNode,
 )
@@ -55,7 +56,7 @@ from muliao.agent_runtime.outcome import Finished, Paused, finished_of, outcome_
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.transient import transient_as_retryable
-from muliao.agents.api import AgentInfo, AgentService, MemoryStore, SkillStore, Thinking
+from muliao.agents.api import MCP_PREFIX, AgentInfo, AgentService, MemoryStore, Rules, SkillStore, Thinking
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
@@ -100,31 +101,39 @@ class StepHooks:
 
 @dataclass(frozen=True)
 class RunProfile:
-    """一次运行开放的工具：对话按 agent 选用的工具组组合（ToolGroups），临时 agent 只开放文件与 shell
+    """一次运行开放的工具：对话按 agent 的权限规则从 Toolbox 里取，临时 agent 只开放文件与 shell
     （加调用方可见的 MCP，以及配置了 [web] 时的网页搜索与抓取）。"""
 
     toolsets: Sequence[AbstractToolset[RunScope]]
 
 
 @dataclass(frozen=True)
-class ToolGroups:
-    """agent 按名称选用的工具组（组名见 tool_catalog），每组是若干工具集。always 里的（自我改进：私有 skill 与
-    记忆，工作历史，提问）对每个 agent 都开放。
+class Toolbox:
+    """有会话的运行可用的全部工具：静态的工具集（每个工具的权限见 agents.permissions.TOOL_PERMISSIONS）与按运行构建的
+    MCP。一次运行开放哪些由 agent 的权限规则在运行开始时算定（profile），调用时不再判断。"""
 
-    用途是限制处理不可信输入的 agent 能做什么（例如处理外部事件的 agent 只开放通知）。
-    """
+    toolsets: Sequence[FunctionToolset[RunScope]]
+    # 按规则放行（mcp:<server>:<tool>）的 MCP 工具，每次运行按可见的 server 构建
+    mcp: Callable[[Rules], AbstractToolset[RunScope]]
+    # agent 现在的权限规则（AgentService.rules：角色按现在的定义展开）
+    rules_of: Callable[[AgentInfo], Awaitable[Rules]]
 
-    groups: Mapping[str, Sequence[AbstractToolset[RunScope]]]
-    always: Sequence[AbstractToolset[RunScope]]
+    def tool_names(self) -> list[str]:
+        return [name for ts in self.toolsets for name in ts.tools]
 
-    def profile(self, agent_id: str, names: Sequence[str]) -> RunProfile:
-        """按 agent 选用的组组合工具。"""
-        unknown = [n for n in names if n not in self.groups]
-        if unknown:
-            # 写入时已校验（AgentService）；读到未知组说明数据与代码不一致
-            raise RuntimeError(f"agent {agent_id} references unknown tool groups {unknown}")
-        chosen = [self.groups[n] for n in names]
-        return RunProfile(toolsets=[*self.always, *(t for g in chosen for t in g)])
+    async def profile(self, agent: AgentInfo) -> RunProfile:
+        return self.allowed(await self.rules_of(agent))
+
+    def allowed(self, rules: Rules) -> RunProfile:
+        allowed = set(rules.tools(self.tool_names()))
+        static: list[AbstractToolset[RunScope]] = [
+            ts.filtered(lambda _ctx, td: td.name in allowed)
+            for ts in self.toolsets
+            if allowed & set(ts.tools)
+        ]
+        # 规则不可能放行任何 MCP 工具时不连接 server
+        mcp = [self.mcp(rules)] if rules.may_allow_prefix(MCP_PREFIX) else []
+        return RunProfile(toolsets=[*static, *mcp])
 
 
 class AgentRuntime:

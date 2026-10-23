@@ -122,6 +122,219 @@
         }
       }
     },
+    "/api/permissions": {
+      "get": {
+        "summary": "List Permissions",
+        "description": "全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 工具是 mcp:<server>:<tool>，不在其中。",
+        "operationId": "list_permissions_api_permissions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PermissionOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Permissions Api Permissions Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/permissions/resolve": {
+      "post": {
+        "summary": "Resolve Permissions",
+        "description": "agent 配置（还没保存的也行）最终能用的工具：public + 角色 + allow / deny，与运行时同一套计算。",
+        "operationId": "resolve_permissions_api_permissions_resolve_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RulesIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolvedOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/roles": {
+      "get": {
+        "summary": "List Roles",
+        "description": "全部角色：内置在前，自建的按名称。",
+        "operationId": "list_roles_api_roles_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RoleOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Roles Api Roles Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/roles/{name}": {
+      "post": {
+        "summary": "Create Role",
+        "operationId": "create_role_api_roles__name__post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Role",
+        "description": "整体替换自建角色的描述与规则；从引用它的 agent 的下一次运行起生效。",
+        "operationId": "update_role_api_roles__name__put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Role",
+        "description": "有 agent 引用时 409。",
+        "operationId": "delete_role_api_roles__name__delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/providers": {
       "get": {
         "summary": "List Providers",
@@ -3317,7 +3530,7 @@
             ],
             "title": "Model"
           },
-          "tool_groups": {
+          "roles": {
             "anyOf": [
               {
                 "items": {
@@ -3329,7 +3542,23 @@
                 "type": "null"
               }
             ],
-            "title": "Tool Groups"
+            "title": "Roles"
+          },
+          "allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allow",
+            "default": []
+          },
+          "deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deny",
+            "default": []
           },
           "thinking": {
             "type": "string",
@@ -3358,26 +3587,18 @@
             "type": "string",
             "title": "Model"
           },
-          "groups": {
-            "items": {
-              "$ref": "#/components/schemas/ToolGroupOut"
-            },
-            "type": "array",
-            "title": "Groups"
-          },
-          "default_tool_groups": {
+          "roles": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Default Tool Groups"
+            "title": "Roles"
           }
         },
         "type": "object",
         "required": [
           "model",
-          "groups",
-          "default_tool_groups"
+          "roles"
         ],
         "title": "AgentDefaultsOut"
       },
@@ -3399,12 +3620,26 @@
             "type": "string",
             "title": "Model"
           },
-          "tool_groups": {
+          "roles": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Tool Groups"
+            "title": "Roles"
+          },
+          "allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allow"
+          },
+          "deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deny"
           },
           "thinking": {
             "type": "string",
@@ -3434,7 +3669,9 @@
           "name",
           "description",
           "model",
-          "tool_groups",
+          "roles",
+          "allow",
+          "deny",
           "thinking",
           "created_at",
           "is_default"
@@ -3455,12 +3692,26 @@
             "type": "string",
             "title": "Model"
           },
-          "tool_groups": {
+          "roles": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Tool Groups"
+            "title": "Roles"
+          },
+          "allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allow"
+          },
+          "deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deny"
           },
           "thinking": {
             "type": "string",
@@ -3480,7 +3731,9 @@
           "name",
           "description",
           "model",
-          "tool_groups",
+          "roles",
+          "allow",
+          "deny",
           "thinking"
         ],
         "title": "AgentUpdate",
@@ -5012,6 +5265,40 @@
         "title": "Origin",
         "description": "会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派、issue 看板唤醒被指派的 agent。"
       },
+      "PermissionOut": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "title": "Tool"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "irreversible"
+            ],
+            "title": "Access"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool",
+          "id",
+          "access",
+          "note"
+        ],
+        "title": "PermissionOut",
+        "description": "一个工具的权限（agents.permissions.TOOL_PERMISSIONS）。"
+      },
       "Precheck": {
         "properties": {
           "command": {
@@ -5196,6 +5483,28 @@
         ],
         "title": "ReplyIn"
       },
+      "ResolvedOut": {
+        "properties": {
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionOut"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "mcp": {
+            "type": "boolean",
+            "title": "Mcp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tools",
+          "mcp"
+        ],
+        "title": "ResolvedOut",
+        "description": "按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具。"
+      },
       "ResourceKind": {
         "type": "string",
         "enum": [
@@ -5255,6 +5564,110 @@
           "created_at"
         ],
         "title": "RevisionOut"
+      },
+      "RoleIn": {
+        "properties": {
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allow"
+          },
+          "deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deny"
+          }
+        },
+        "type": "object",
+        "required": [
+          "description",
+          "allow",
+          "deny"
+        ],
+        "title": "RoleIn"
+      },
+      "RoleOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allow"
+          },
+          "deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deny"
+          },
+          "builtin": {
+            "type": "boolean",
+            "title": "Builtin"
+          },
+          "resolved": {
+            "$ref": "#/components/schemas/ResolvedOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "allow",
+          "deny",
+          "builtin",
+          "resolved"
+        ],
+        "title": "RoleOut"
+      },
+      "RulesIn": {
+        "properties": {
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allow"
+          },
+          "deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deny"
+          }
+        },
+        "type": "object",
+        "required": [
+          "roles",
+          "allow",
+          "deny"
+        ],
+        "title": "RulesIn"
       },
       "RunDeltaEvent": {
         "properties": {
@@ -6488,25 +6901,6 @@
           "token"
         ],
         "title": "TokenOut"
-      },
-      "ToolGroupOut": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "label"
-        ],
-        "title": "ToolGroupOut",
-        "description": "一个可选的工具组（tool_catalog）。"
       },
       "TranscriptOut": {
         "properties": {

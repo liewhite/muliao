@@ -78,8 +78,11 @@ export type ResourceKind = Schemas['ResourceKind']
 export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
 export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
 export type SecretInfo = WithAgentId<Schemas['SecretOut'], 'owner'>
-/** 一个可选的工具组（后端 tool_catalog） */
-export type ToolGroup = Schemas['ToolGroupOut']
+/** 角色（内置或自建）与它能用的工具；后端 agents/permissions.py、agents/roles.py */
+export type Role = Schemas['RoleOut']
+export type RoleInput = Schemas['RoleIn']
+export type ToolPermission = Schemas['PermissionOut']
+export type ResolvedTools = Schemas['ResolvedOut']
 export type IssueStatus = Schemas['IssueStatus']
 export type IssuePriority = Schemas['IssuePriority']
 /** assignee：agent id、'user'（用户），或 null（未指派） */
@@ -218,6 +221,13 @@ export const api = {
 
   agents: () => branded<Agent[]>(call('get', '/api/agents')),
   agentDefaults: () => call('get', '/api/agent-defaults'),
+  /** 全部角色：内置在前（public 每个 agent 自动拥有），自建的按名称；各带只按它自己的规则能用的工具 */
+  roles: () => call('get', '/api/roles'),
+  createRole: (name: string, body: RoleInput) => call('post', '/api/roles/{name}', { path: { name }, body }),
+  updateRole: (name: string, body: RoleInput) => call('put', '/api/roles/{name}', { path: { name }, body }),
+  deleteRole: (name: string) => call('delete', '/api/roles/{name}', { path: { name } }),
+  /** agent 配置（还没保存的也行）最终能用的工具：与运行时同一套计算 */
+  resolvePermissions: (body: Schemas['RulesIn']) => call('post', '/api/permissions/resolve', { body }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
   agentHistory: (agent_id: AgentId, query?: string) =>
     branded<HistoryEntry[]>(

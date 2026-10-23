@@ -177,9 +177,8 @@ async def test_web_agent_searches_and_fetches_with_truncation_and_rejections_go_
     web_container, models
 ):
     container, web = web_container
-    assert "web" in container.agents.defaults.group_names
     agent = await container.agents.create(
-        AgentSpec(name="reader", description="d", model="tools", tool_groups=["web"]),
+        AgentSpec(name="reader", description="d", model="tools", roles=["web"]),
         author="user",
     )
 
@@ -217,23 +216,19 @@ async def test_temp_agent_gets_web_tools_when_web_is_configured(web_container, m
     assert {"web_search", "web_fetch", "run_shell"} <= set(seen)
 
 
-async def test_without_web_config_there_is_no_web_group_and_agents_using_it_block_startup(
-    container, web_container
-):
-    assert "web" not in container.agents.defaults.group_names
-    with pytest.raises(InvalidInput, match="tool groups"):
-        await container.agents.create(
-            AgentSpec(name="x", description="d", tool_groups=["web"]), author="user"
-        )
-
-    # 同一份数据先在配置了 web 时选上它，再换成没配置的进程启动检查
+async def test_without_web_config_the_web_role_grants_no_tools_and_does_not_block_startup(web_container):
+    # 同一份数据先在配置了 web 时选上它，再换成没配置的进程：角色只是规则，没注册的工具就没有
     with_web, _ = web_container
-    await with_web.agents.create(
-        AgentSpec(name="reader", description="d", tool_groups=["web"]), author="user"
+    reader = await with_web.agents.create(
+        AgentSpec(name="reader", description="d", roles=["web"]), author="user"
     )
     without_web = assemble(with_web.settings, model_checker=lambda _m, _t: None)
-    with pytest.raises(RuntimeError, match=r"reader .*\['web'\]"):
-        await without_web.agents.verify_stored()
+    await without_web.agents.verify_stored()
+    toolbox = without_web.consumer._toolbox  # noqa: SLF001
+    assert "web_search" not in toolbox.tool_names()
+    # 界面与 get_agent 也不列出这次配置没有的工具（与运行时取同一份注册的工具）
+    assert "web_search" not in without_web.agents.resolve(await without_web.agents.rules(reader)).tools
+    assert "web_search" in with_web.agents.resolve(await with_web.agents.rules(reader)).tools
     await without_web.db.engine.dispose()
 
 

@@ -510,3 +510,38 @@ def test_dropping_sessions_unread_keeps_sessions_their_messages_and_backfills_on
             ("s1", 0),
             ("s2", 1),
         ]
+
+
+def test_tool_groups_become_same_named_roles_and_downgrade_expands_admin(tmp_path):
+    """工具权限改为角色（#172）：tool_groups 原样变成 roles（每个组都有同名内置角色），allow / deny 为空；降级把 admin
+    展开成全部组、去掉自建角色，删掉 roles 表。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "820a32ee48fd")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, tool_groups, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', '[\"notify\", \"issues\"]', '2026-01-01', '2026-01-01')"
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select roles, allow, deny from agents").fetchall() == [
+            ('["notify", "issues"]', "[]", "[]")
+        ]
+        conn.execute(
+            "insert into agents (id, name, description, model, roles, created_at, updated_at) "
+            "values ('a2', 'a2', 'd', 'p:m', '[\"admin\", \"mine\"]', '2026-01-01', '2026-01-01')"
+        )
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "820a32ee48fd")
+    with sqlite3.connect(path) as conn:
+        rows = dict(conn.execute("select id, tool_groups from agents").fetchall())
+        assert {r[1] for r in conn.execute("pragma table_info(agents)")} & {"roles", "allow", "deny"} == set()
+    assert rows["a1"] == '["notify", "issues"]'
+    assert rows["a2"].startswith('["workspace", ') and rows["a2"].endswith('"web"]')
+    assert "roles" not in _tables(path)

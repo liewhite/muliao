@@ -7,6 +7,7 @@ import { closeServerEvents, useUiOutdated } from './events'
 import { useUnreadCount, useUnreadSync } from './unread'
 import { AgentCreate, AgentDetail, AgentList } from './pages/Agents'
 import { Login, Settings, Tasks } from './pages/Admin'
+import { Roles } from './pages/Permissions'
 import Triggers from './pages/Triggers'
 import Issues from './pages/Issues'
 import IssueView from './pages/IssueView'
@@ -184,6 +185,7 @@ function Shell() {
                 <Route path="new" element={<AgentCreate />} />
                 <Route path=":id" element={<AgentRoute />} />
               </Route>
+              <Route path="/roles" element={<Roles />} />
               <Route path="/triggers" element={<Triggers />} />
               <Route path="/issues" element={<Issues />} />
               <Route path="/issues/:id" element={<IssueRoute />} />

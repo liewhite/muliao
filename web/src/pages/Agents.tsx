@@ -10,7 +10,6 @@ import {
   type Agent,
   type AgentDefaults,
   type AgentInput,
-  type ToolGroup,
 } from '../api'
 import { ActionButton,
   copyText,
@@ -21,7 +20,6 @@ import { ActionButton,
   Page,
   SelectInput,
   TextInput,
-  ToggleSwitch,
   formatTime,
   useAction,
   useAgents,
@@ -29,6 +27,7 @@ import { ActionButton,
   useLoad,
 } from '../ui'
 import { McpManager } from './Mcp'
+import { PermissionsInput } from './Permissions'
 import { MemoryEditor } from './Memory'
 import { HistoryList } from './History'
 import { SkillList } from './Skills'
@@ -91,14 +90,16 @@ export function AgentList() {
 
 function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
   if (agent) {
-    const { name, description, model, tool_groups, thinking } = agent
-    return { name, description, model, tool_groups, thinking }
+    const { name, description, model, roles, allow, deny, thinking } = agent
+    return { name, description, model, roles, allow, deny, thinking }
   }
   return {
     name: '',
     description: '',
     model: defaults.model,
-    tool_groups: defaults.default_tool_groups,
+    roles: defaults.roles,
+    allow: [],
+    deny: [],
     thinking: 'default',
   }
 }
@@ -113,30 +114,6 @@ const THINKING_LABEL: Record<Thinking, string> = {
   medium: 'medium',
   high: 'high',
   xhigh: 'xhigh',
-}
-
-function ToolGroupsInput({ all, value, onChange }: { all: ToolGroup[]; value: string[]; onChange: (v: string[]) => void }) {
-  const names = all.map((g) => g.name)
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="text-sm font-medium">可用工具</div>
-      <div className="text-xs text-muted">记忆（含全局记忆）、私有 skill 和工作历史总是开放。处理不可信内容（外部事件、网页）的 agent 只开放它需要的</div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {all.map((group) => (
-          <label key={group.name} className="flex items-center gap-2 text-sm">
-            <ToggleSwitch
-              label={group.label}
-              isSelected={value.includes(group.name)}
-              onChange={(on) =>
-                onChange(on ? names.filter((g) => g === group.name || value.includes(g)) : value.filter((g) => g !== group.name))
-              }
-            />
-            {group.label}
-          </label>
-        ))}
-      </div>
-    </div>
-  )
 }
 
 /** agent 的模型 "<provider 名>:<模型名>"：provider 来自服务端配置，模型名向该 provider 实时查询；旁边是它的思考档位 */
@@ -233,7 +210,10 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         thinking={input.thinking}
         onThinkingChange={(thinking) => set({ thinking })}
       />
-      <ToolGroupsInput all={defaults.groups} value={input.tool_groups} onChange={(tool_groups) => set({ tool_groups })} />
+      <PermissionsInput
+        value={{ roles: input.roles, allow: input.allow, deny: input.deny }}
+        onChange={(p) => set(p)}
+      />
       <ErrorAlert error={action.error} />
       <ActionButton isPending={action.busy} onPress={() => void save()}>
         保存
@@ -272,7 +252,7 @@ export function AgentDetail() {
   const navigate = useNavigate()
   const confirm = useConfirm()
   const agent = useLoad(() => api.agent(id), [id])
-  // 可选的工具组列表只来自服务端
+  // 新建时的默认值来自服务端
   const defaults = useLoad(() => api.agentDefaults(), [])
   const [tab, setTab] = useState<Key>('config')
   const action = useAction()

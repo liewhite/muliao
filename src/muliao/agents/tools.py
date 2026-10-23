@@ -1,20 +1,32 @@
 """agent 的目录与管理：查看、创建、修改、删除 agent。给模型看的是名称和描述，不出现 id。"""
 
-from collections.abc import Mapping, Sequence
-
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.lifecycle import AgentLifecycle
+from muliao.agents.permissions import MCP_NOTE, TOOL_PERMISSIONS, Permission
+from muliao.agents.roles import RoleService
 from muliao.agents.service import AgentPatch, AgentService, AgentSpec, Thinking
-from muliao.agents.tool_catalog import AGENTS
 from muliao.errors import InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
-class ToolGroup(BaseModel):
+class ToolPermission(BaseModel):
+    tool: str
+    permission: str
+    access: str
+    note: str = ""
+
+    @classmethod
+    def of(cls, tool: str, p: Permission) -> "ToolPermission":
+        return cls(tool=tool, permission=p.id, access=p.access, note=p.note)
+
+
+class RoleDetail(BaseModel):
     name: str
-    tools: list[str]
+    description: str
+    allow: list[str]
+    deny: list[str]
 
 
 class AgentDetail(BaseModel):
@@ -22,37 +34,52 @@ class AgentDetail(BaseModel):
     description: str
     model: str
     thinking: Thinking
-    tool_groups: list[str]
-    # 所有可选的工具组，各带它包含的工具
-    available_tool_groups: list[ToolGroup]
+    roles: list[str]
+    allow: list[str]
+    deny: list[str]
+    # 按 public + 角色 + allow/deny 算出的最终工具（不含 MCP）
+    tools: list[str]
+    # 可能有 MCP 工具时是它们的说明（权限 mcp:<server>:<tool>，同样按 allow / deny 判断），否则 "none"
+    mcp: str
+    # 全部角色（public 每个 agent 自动拥有）与全部工具的权限 id，写 roles / allow / deny 时参照
+    available_roles: list[RoleDetail]
+    permissions: list[ToolPermission]
 
 
 def agents_toolset(
     agents: AgentService,
+    roles: RoleService,
     lifecycle: AgentLifecycle,
-    group_tools: Mapping[str, Sequence[str]],
 ) -> FunctionToolset[RunScope]:
-    """group_tools：除本组以外每个工具组包含的工具（组合根从各组实际注册的工具集取）；本组的工具在这里定义，自己补上。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool_plain
     async def get_agent(agent: str) -> AgentDetail:
-        """Show an agent's configuration and every available tool group. Use your own name to see yours.
+        """Show an agent's configuration, the tools it ends up with, every role and every tool permission id.
+        Use your own name to see yours.
 
         Args:
             agent: Agent name.
         """
         target = await agents.find_by_name(agent)
+        resolved = agents.resolve(await agents.rules(target))
         return AgentDetail(
             name=target.name,
             description=target.description,
             model=target.model,
             thinking=target.thinking,
-            tool_groups=target.tool_groups,
-            available_tool_groups=[
-                ToolGroup(name=g, tools=list(ts.tools) if g == AGENTS else list(group_tools[g]))
-                for g in agents.defaults.group_names
+            roles=list(target.roles),
+            allow=list(target.allow),
+            deny=list(target.deny),
+            tools=resolved.tools,
+            mcp=MCP_NOTE if resolved.mcp else "none",
+            available_roles=[
+                RoleDetail(
+                    name=r.name, description=r.description, allow=list(r.rules.allow), deny=list(r.rules.deny)
+                )
+                for r in await roles.list()
             ],
+            permissions=[ToolPermission.of(t, TOOL_PERMISSIONS[t]) for t in agents.tools],
         )
 
     @ts.tool
@@ -61,7 +88,9 @@ def agents_toolset(
         name: str,
         description: str,
         model: str | None = None,
-        tool_groups: list[str] | None = None,
+        roles: list[str] | None = None,
+        allow: tuple[str, ...] = (),
+        deny: tuple[str, ...] = (),
         thinking: Thinking = "default",
     ) -> str:
         """Create a new long-lived agent with its own memory, skills and workspace, e.g. a specialist you will
@@ -72,9 +101,10 @@ def agents_toolset(
             description: What it is for (its role); it is shown to the agent itself and other agents choose
                 whom to delegate to by it. The agent starts with an empty memory and grows it by itself.
             model: `<provider>:<model>`; defaults to the server's default model.
-            tool_groups: Tool groups it may use (`get_agent` lists every available group with its tools);
-                defaults to all. Give an agent that handles untrusted input (web pages, external events) only
-                the groups whose tools it needs.
+            roles: Roles it gets on top of `public` (`get_agent` lists every role and permission id); defaults
+                to `admin` (every tool). Give it only what its job needs: fewer tools mean fewer mistakes.
+            allow: Extra permission patterns to allow, e.g. `issue:*`, `mcp:playwright:*` (fnmatch wildcards).
+            deny: Permission patterns to deny; deny wins over every allow, e.g. `agent:delete`.
             thinking: Thinking/reasoning effort of its model: `default` sends nothing (the model's own default),
                 `off` disables it, the others set the effort level.
         """
@@ -82,7 +112,9 @@ def agents_toolset(
             name=name,
             description=description,
             model=model,
-            tool_groups=tool_groups,
+            roles=roles,
+            allow=allow,
+            deny=deny,
             thinking=thinking,
         )
         created = await agents.create(spec, author=ctx.deps.agent_id)
@@ -95,7 +127,9 @@ def agents_toolset(
         new_name: str | None = None,
         description: str | None = None,
         model: str | None = None,
-        tool_groups: list[str] | None = None,
+        roles: list[str] | None = None,
+        allow: tuple[str, ...] | None = None,
+        deny: tuple[str, ...] | None = None,
         thinking: Thinking | None = None,
     ) -> str:
         """Change an agent's configuration, including your own (use your own name). Only the given fields change.
@@ -105,7 +139,9 @@ def agents_toolset(
             new_name: New display name.
             description: New description.
             model: New `<provider>:<model>`.
-            tool_groups: New full list of tool groups it may use.
+            roles: New full list of roles (besides `public`).
+            allow: New full list of extra permission patterns to allow.
+            deny: New full list of permission patterns to deny.
             thinking: New thinking/reasoning effort (`default` = the model's own default).
         """
         target = await agents.find_by_name(agent)
@@ -113,7 +149,9 @@ def agents_toolset(
             name=new_name,
             description=description,
             model=model,
-            tool_groups=tool_groups,
+            roles=roles,
+            allow=allow,
+            deny=deny,
             thinking=thinking,
         )
         updated = await agents.update(target.id, patch)

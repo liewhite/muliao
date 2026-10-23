@@ -1,18 +1,23 @@
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
 from muliao.agents.api import (
     MAX_PACKAGE_BYTES,
+    TOOL_PERMISSIONS,
     USER,
     AgentInfo,
     AgentPatch,
     AgentSpec,
+    Permission,
+    Resolved,
+    Role,
+    RoleSpec,
     SkillImport,
     SkillMeta,
     Thinking,
-    ToolGroupInfo,
 )
 from muliao.api.deps import C, check_owner, read_limited
 from muliao.api.resources import CorruptOut
@@ -25,7 +30,10 @@ class AgentCreate(BaseModel):
     description: str
     # 缺省（null）时使用服务端配置的默认值
     model: str | None = None
-    tool_groups: list[str] | None = None
+    # 缺省（null）时为 AgentDefaults.roles
+    roles: list[str] | None = None
+    allow: list[str] = []
+    deny: list[str] = []
     # 思考档位："default" 不传，按模型与服务端的默认
     thinking: Thinking = "default"
 
@@ -36,7 +44,9 @@ class AgentUpdate(BaseModel):
     name: str
     description: str
     model: str
-    tool_groups: list[str]
+    roles: list[str]
+    allow: list[str]
+    deny: list[str]
     thinking: Thinking
 
 
@@ -45,7 +55,9 @@ class AgentOut(BaseModel):
     name: str
     description: str
     model: str
-    tool_groups: list[str]
+    roles: list[str]
+    allow: list[str]
+    deny: list[str]
     thinking: Thinking
     created_at: datetime
     # 系统默认 agent：Web 新对话默认选中它，最多一个
@@ -58,41 +70,121 @@ class AgentOut(BaseModel):
             name=a.name,
             description=a.description,
             model=a.model,
-            tool_groups=list(a.tool_groups),
+            roles=list(a.roles),
+            allow=list(a.allow),
+            deny=list(a.deny),
             thinking=a.thinking,
             created_at=a.created_at,
             is_default=a.is_default,
         )
 
 
-class ToolGroupOut(BaseModel):
-    """一个可选的工具组（tool_catalog）。"""
-
-    name: str
-    label: str
-
-    @classmethod
-    def of(cls, g: ToolGroupInfo) -> "ToolGroupOut":
-        return cls(name=g.name, label=g.label)
-
-
 class AgentDefaultsOut(BaseModel):
     model: str
-    # 当前配置下可选的工具组，按目录顺序
-    groups: list[ToolGroupOut]
-    # 新建 agent 默认开启的组：当前配置下的全部组
-    default_tool_groups: list[str]
+    # 新建 agent 默认的角色
+    roles: list[str]
 
 
 @router.get("/agent-defaults")
 async def agent_defaults(c: C) -> AgentDefaultsOut:
     """新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。"""
     d = c.agents.defaults
-    return AgentDefaultsOut(
-        model=d.model,
-        groups=[ToolGroupOut.of(g) for g in d.groups],
-        default_tool_groups=d.group_names,
-    )
+    return AgentDefaultsOut(model=d.model, roles=list(d.roles))
+
+
+class PermissionOut(BaseModel):
+    """一个工具的权限（agents.permissions.TOOL_PERMISSIONS）。"""
+
+    tool: str
+    id: str
+    access: Literal["read", "write", "irreversible"]
+    note: str
+
+    @classmethod
+    def of(cls, tool: str, p: Permission) -> "PermissionOut":
+        return cls(tool=tool, id=p.id, access=p.access.value, note=p.note)
+
+
+@router.get("/permissions")
+async def list_permissions() -> list[PermissionOut]:
+    """全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 工具是 mcp:<server>:<tool>，不在其中。"""
+    return [PermissionOut.of(t, p) for t, p in TOOL_PERMISSIONS.items()]
+
+
+class RulesIn(BaseModel):
+    roles: list[str]
+    allow: list[str]
+    deny: list[str]
+
+
+class ResolvedOut(BaseModel):
+    """按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具。"""
+
+    tools: list[PermissionOut]
+    mcp: bool
+
+    @classmethod
+    def of(cls, r: Resolved) -> "ResolvedOut":
+        return cls(tools=[PermissionOut.of(t, TOOL_PERMISSIONS[t]) for t in r.tools], mcp=r.mcp)
+
+
+@router.post("/permissions/resolve")
+async def resolve_permissions(c: C, body: RulesIn) -> ResolvedOut:
+    """agent 配置（还没保存的也行）最终能用的工具：public + 角色 + allow / deny，与运行时同一套计算。"""
+    return ResolvedOut.of(await c.agents.preview(body.roles, body.allow, body.deny))
+
+
+class RoleOut(BaseModel):
+    name: str
+    description: str
+    allow: list[str]
+    deny: list[str]
+    # 内置角色不能改、不能删；public 每个 agent 自动拥有
+    builtin: bool
+    # 只按这个角色自己的规则能用的工具
+    resolved: ResolvedOut
+
+    @classmethod
+    def of(cls, r: Role, resolved: Resolved) -> "RoleOut":
+        return cls(
+            name=r.name,
+            description=r.description,
+            allow=list(r.rules.allow),
+            deny=list(r.rules.deny),
+            builtin=r.builtin,
+            resolved=ResolvedOut.of(resolved),
+        )
+
+
+class RoleIn(BaseModel):
+    description: str
+    allow: list[str]
+    deny: list[str]
+
+
+@router.get("/roles")
+async def list_roles(c: C) -> list[RoleOut]:
+    """全部角色：内置在前，自建的按名称。"""
+    return [RoleOut.of(r, c.agents.resolve(r.rules)) for r in await c.roles.list()]
+
+
+@router.post("/roles/{name}", status_code=201)
+async def create_role(c: C, name: str, body: RoleIn) -> RoleOut:
+    role = await c.roles.create(RoleSpec(name, body.description, body.allow, body.deny))
+    return RoleOut.of(role, c.agents.resolve(role.rules))
+
+
+@router.put("/roles/{name}")
+async def update_role(c: C, name: str, body: RoleIn) -> RoleOut:
+    """整体替换自建角色的描述与规则；从引用它的 agent 的下一次运行起生效。"""
+    role = await c.roles.update(RoleSpec(name, body.description, body.allow, body.deny))
+    return RoleOut.of(role, c.agents.resolve(role.rules))
+
+
+@router.delete("/roles/{name}", status_code=204)
+async def delete_role(c: C, name: str) -> None:
+    """有 agent 引用时 409。"""
+    await c.roles.delete(name)
 
 
 @router.get("/providers")
@@ -118,7 +210,9 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
         name=body.name,
         description=body.description,
         model=body.model,
-        tool_groups=body.tool_groups,
+        roles=body.roles,
+        allow=body.allow,
+        deny=body.deny,
         thinking=body.thinking,
     )
     return AgentOut.of(await c.agents.create(spec, author=USER))
@@ -137,7 +231,9 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         name=body.name,
         description=body.description,
         model=body.model,
-        tool_groups=body.tool_groups,
+        roles=body.roles,
+        allow=body.allow,
+        deny=body.deny,
         thinking=body.thinking,
     )
     return AgentOut.of(await c.agents.update(agent_id, patch))

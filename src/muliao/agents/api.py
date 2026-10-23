@@ -5,14 +5,27 @@
 - 删除 agent（AgentLifecycle）；
 - 资源：记忆（全局与 agent 的）、skill 的存取与标准 .skill 文件的导入导出（自我改进工具与 instructions 组装用），MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、资源的版本历史（RevisionHistory，只读）；
 - 归属规则：公共与 agent 私有的资源、secret 按同一套规则可见（ownership）；
-- 工具组目录（tool_catalog）。
+- 工具权限（permissions：每个工具的权限 id 与访问级别、规则、内置角色）与角色（roles：内置加用户自建）。
 """
 
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpConfig, McpRegistry, McpServer, McpTransport, mcp_config
 from muliao.agents.memory import MemoryStore
 from muliao.agents.ownership import Scope, owned_by, owner_of, scope_of, shadowing, visible, visible_owners
+from muliao.agents.permissions import (
+    MCP_NOTE,
+    MCP_PREFIX,
+    TOOL_PERMISSIONS,
+    Access,
+    Permission,
+    Resolved,
+    Role,
+    Rules,
+    mcp_permission,
+    mcp_server_prefix,
+)
 from muliao.agents.resources import USER, CorruptResource, Revision, RevisionHistory
+from muliao.agents.roles import RoleService, RoleSpec
 from muliao.agents.service import (
     AgentInfo,
     AgentNames,
@@ -26,7 +39,6 @@ from muliao.agents.service import (
 )
 from muliao.agents.skill_package import MAX_PACKAGE_BYTES
 from muliao.agents.skills import SkillImport, SkillMeta, SkillStore
-from muliao.agents.tool_catalog import ToolGroupInfo
 
 __all__ = [
     "AgentLifecycle",
@@ -51,7 +63,18 @@ __all__ = [
     "SkillImport",
     "SkillMeta",
     "SkillStore",
-    "ToolGroupInfo",
+    "Access",
+    "MCP_NOTE",
+    "MCP_PREFIX",
+    "Permission",
+    "Resolved",
+    "Role",
+    "RoleService",
+    "RoleSpec",
+    "Rules",
+    "TOOL_PERMISSIONS",
+    "mcp_permission",
+    "mcp_server_prefix",
     "active_agent_in",
     "agent_in",
     "agent_names_in",

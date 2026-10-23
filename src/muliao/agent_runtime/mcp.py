@@ -21,7 +21,15 @@ from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset, ToolsetTool, WrapperToolset
 
 from muliao.agent_runtime.transient import is_transient
-from muliao.agents.api import CorruptResource, McpConfig, McpServer, McpTransport
+from muliao.agents.api import (
+    CorruptResource,
+    McpConfig,
+    McpServer,
+    McpTransport,
+    Rules,
+    mcp_permission,
+    mcp_server_prefix,
+)
 from muliao.errors import InvalidInput, NotFound, TransientError
 from muliao.platform.shell import redact
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -123,6 +131,8 @@ class _Reachable(CombinedToolset[RunScope]):
     servers: list[str] = field(default_factory=list)
     agent: str = ""
     notices: list[str] = field(default_factory=list)
+    # 按权限 id（agents.api.mcp_permission）放行哪些工具；None 是全部（临时 agent）
+    rules: Rules | None = None
 
     async def __aenter__(self) -> Self:
         reachable: list[AbstractToolset[RunScope]] = []
@@ -137,7 +147,7 @@ class _Reachable(CombinedToolset[RunScope]):
                 except (McpFailed, TransientError) as e:
                     _skip(self.notices, agent=self.agent, server=name, reason=str(e))
                     continue
-                reachable.append(toolset)
+                reachable.append(toolset if self.rules is None else _permitted(toolset, name, self.rules))
             self._exit_stack = stack.pop_all()
         self.toolsets = reachable
         return self
@@ -151,14 +161,18 @@ def _secret_safe(toolset: AbstractToolset[RunScope]) -> _SecretSafe:
     return safe
 
 
+def _permitted(toolset: AbstractToolset[RunScope], server: str, rules: Rules) -> AbstractToolset[RunScope]:
+    """只留权限放行的工具。工具名带 `<server>_` 前缀（build_toolset），权限 id 用原始工具名。"""
+    prefix = f"{server}_"
+    return toolset.filtered(
+        lambda _ctx, td: rules.allows(mcp_permission(server, td.name.removeprefix(prefix)))
+    )
+
+
 def _skip(notices: list[str], *, agent: str, server: str, reason: str) -> None:
     """这次运行跳过一个 server：记日志，并告诉模型（notices）。reason 已脱敏。"""
     log.warning("mcp server unavailable", extra={"agent": agent, "mcp": server, "error": reason})
     notices.append(f"An MCP server is unavailable this run, so its tools are missing: {reason}")
-
-
-# 「使用 MCP」组的工具：每次运行按 agent 可见的 server 构建，工具名带 server 前缀（给模型看的工具组说明用它）
-MCP_TOOL_NAMES = "<server>_<tool> for every tool of the MCP servers the agent can see"
 
 
 class McpConnector:
@@ -196,14 +210,17 @@ class McpConnector:
             )
         return _SecretSafe(toolset, server=server.name, secrets=secrets).prefixed(server.name)
 
-    def toolset(self, index: McpIndex) -> DynamicToolset[RunScope]:
-        """「使用 MCP」：每次运行时按这次运行的 agent（RunScope.agent_id；临时 agent 用调用方的视角）取可见的 server
-        （index）构建，与其他工具组一样是一个 toolset，没有可见的 server 时为空。"""
+    def toolset(self, index: McpIndex, rules: Rules | None = None) -> DynamicToolset[RunScope]:
+        """使用 MCP：每次运行时按这次运行的 agent（RunScope.agent_id；临时 agent 用调用方的视角）取可见的 server
+        （index）构建，是一个 toolset，没有可见的 server 时为空。rules：agent 的权限规则，按 `mcp:<server>:<tool>` 放行
+        工具，不可能放行它任何工具的 server 不连接；None 是全部（临时 agent）。"""
 
         async def build(ctx: RunContext[RunScope]) -> AbstractToolset[RunScope] | None:
             agent, notices = ctx.deps.agent_id, ctx.deps.notices
             servers, corrupt = index(agent)
             notices += [c.describe() for c in corrupt]
+            if rules is not None:
+                servers = [s for s in servers if rules.may_allow_prefix(mcp_server_prefix(s.name))]
             names: list[str] = []
             toolsets: list[AbstractToolset[RunScope]] = []
             for server in servers:
@@ -214,7 +231,11 @@ class McpConnector:
                     _skip(notices, agent=agent, server=server.name, reason=f"MCP server {server.name!r}: {e}")
                     continue
                 names.append(server.name)
-            return _Reachable(toolsets, servers=names, agent=agent, notices=notices) if toolsets else None
+            return (
+                _Reachable(toolsets, servers=names, agent=agent, notices=notices, rules=rules)
+                if toolsets
+                else None
+            )
 
         return DynamicToolset(build, per_run_step=False)
 

@@ -14,11 +14,10 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.profiles import ModelProfile
 
-from muliao.agent_runtime.mcp import MCP_TOOL_NAMES
 from muliao.agents.api import AgentPatch, McpTransport, mcp_config
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
-from tests.conftest import login
+from tests.conftest import login, session_tools
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
 
@@ -72,29 +71,41 @@ async def test_agent_creates_and_reconfigures_agents(container, make_agent, mode
     assert me.id not in "\n".join(outputs)
 
 
-async def test_get_agent_lists_each_tool_group_with_the_tools_it_registers(container, make_agent, models):
+async def test_get_agent_shows_roles_resulting_tools_and_every_permission(container, make_agent, models):
+    from muliao.agents.service import AgentSpec
+
+    await container.agents.create(
+        AgentSpec(name="narrow", description="d", model="n", roles=["issues"], deny=["issue:update"]),
+        author="user",
+    )
     me = await make_agent("manager", model="tools")
-    [detail] = await run_tools(container, models, me.id, [("get_agent", {"agent": "manager"})])
+    [detail] = await run_tools(container, models, me.id, [("get_agent", {"agent": "narrow"})])
 
-    # 每组的工具取自实际注册的工具集，包括 get_agent 自己所在的组；MCP 的工具按运行构建，只说明命名方式
-    assert "name='workspace', tools=[" in detail and "'run_shell'" in detail
-    assert "name='agents', tools=['get_agent', 'create_agent'" in detail
-    assert "'issue_create'" in detail
-    assert f"name='mcp', tools=['{MCP_TOOL_NAMES}']" in detail
-    assert "full access" not in detail
+    assert "roles=['issues']" in detail and "deny=['issue:update']" in detail
+    # 最终工具：public 的加角色的，减去 deny；没有 MCP
+    assert "'issue_create'" in detail and "'memory_append'" in detail
+    assert "'issue_update'" not in detail.split("available_roles")[0]
+    assert "mcp='none'" in detail
+    # 参照：全部角色与每个工具的权限 id、访问级别（没配置 [web] 时不列 web 工具）
+    assert "name='admin'" in detail and "allow=['*']" in detail
+    assert "tool='delete_agent', permission='agent:delete', access='irreversible'" in detail
+    assert "web_search" not in detail
 
 
-def test_tool_group_implementations_must_match_the_catalog_both_ways():
-    from muliao.agents import tool_catalog
-    from muliao.container import _check_implementations
+def test_registered_tools_must_match_the_permission_table_both_ways():
+    from muliao.agents.permissions import TOOL_PERMISSIONS
+    from muliao.container import _check_permissions
 
-    complete = {g.name: [] for g in tool_catalog.CATALOG}
-    _check_implementations(complete)
-    with pytest.raises(RuntimeError, match=r"missing \['web'\]"):
-        _check_implementations({k: v for k, v in complete.items() if k != tool_catalog.WEB})
-    # 多出的组选不到：不能静默丢掉
-    with pytest.raises(RuntimeError, match=r"unknown \['webb'\]"):
-        _check_implementations({**complete, "webb": []})
+    every = list(TOOL_PERMISSIONS)
+    _check_permissions(every, web_configured=True)
+    _check_permissions([t for t in every if not t.startswith("web_")], web_configured=False)
+    with pytest.raises(RuntimeError, match=r"unregistered \['web_fetch', 'web_search'\]"):
+        _check_permissions([t for t in every if not t.startswith("web_")], web_configured=True)
+    # 没登记权限的工具谁也拿不到：启动即报
+    with pytest.raises(RuntimeError, match=r"without permission \['new_tool'\]"):
+        _check_permissions([*every, "new_tool"], web_configured=True)
+    with pytest.raises(RuntimeError, match=r"duplicated \['run_shell'\]"):
+        _check_permissions([*every, "run_shell"], web_configured=True)
 
 
 async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_agent, models):
@@ -371,12 +382,12 @@ def test_unremovable_leftover_is_logged_and_does_not_block_startup(tmp_path, mon
     assert any("not removable" in r.getMessage() for r in caplog.records)
 
 
-async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, models):
+async def test_agent_sees_only_its_roles_tools_plus_public(container, models):
     from muliao.agents.service import AgentSpec
     from muliao.errors import InvalidInput
 
     triage = await container.agents.create(
-        AgentSpec(name="triage", description="handles webhooks", model="m", tool_groups=["notify"]),
+        AgentSpec(name="triage", description="handles webhooks", model="m", roles=["notify"]),
         author="user",
     )
     seen: list[str] = []
@@ -401,12 +412,17 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
             "history_append",
             "history_search",
             "ask_user",
+            "issue_list",
+            "issue_show",
         ]
     )
-    with pytest.raises(InvalidInput, match="tool groups"):
-        await container.agents.create(
-            AgentSpec(name="x", description="d", tool_groups=["root"]), author="user"
-        )
+    with pytest.raises(InvalidInput, match="roles must be"):
+        await container.agents.create(AgentSpec(name="x", description="d", roles=["root"]), author="user")
+    # public 自动拥有，不用选
+    with pytest.raises(InvalidInput, match="roles must be"):
+        await container.agents.create(AgentSpec(name="x", description="d", roles=["public"]), author="user")
+    with pytest.raises(InvalidInput, match="match no tool permission"):
+        await container.agents.create(AgentSpec(name="x", description="d", allow=["isue:*"]), author="user")
 
 
 async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container, models):
@@ -417,7 +433,7 @@ async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container,
         None, "echo", spec, probe=False, author="user"
     )  # 公共 MCP：受限 agent 也看不到它的工具
     triage = await container.agents.create(
-        AgentSpec(name="triage", description="d", model="m", tool_groups=["notify"]),
+        AgentSpec(name="triage", description="d", model="m", roles=["notify"]),
         author="user",
     )
     seen: list[str] = []
@@ -434,11 +450,11 @@ async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container,
     assert "write_skill" in seen  # 私有 skill 仍可写
 
 
-async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, models):
+async def test_asked_agent_runs_with_its_own_permissions(container, make_agent, models):
     from muliao.agents.service import AgentSpec
 
     await container.agents.create(
-        AgentSpec(name="narrow", description="d", model="n", tool_groups=["notify"]),
+        AgentSpec(name="narrow", description="d", model="n", roles=["notify"]),
         author="user",
     )
     seen: list[str] = []
@@ -457,9 +473,11 @@ async def test_asked_agent_runs_with_its_own_tool_groups(container, make_agent, 
     assert "run_shell" not in seen and "notify_user" in seen
 
 
-async def test_public_skills_group_can_edit_part_of_a_public_skill(container):
-    [toolset] = container.consumer._tool_groups.groups["public_skills"]  # noqa: SLF001
-    assert set(toolset.tools) == {"write_public_skill", "edit_public_skill", "delete_public_skill"}
+def test_public_skills_role_can_edit_part_of_a_public_skill():
+    from muliao.agents.permissions import BUILTIN_ROLES, TOOL_PERMISSIONS
+
+    tools = BUILTIN_ROLES["public_skills"].rules.tools(list(TOOL_PERMISSIONS))
+    assert tools == ["write_public_skill", "edit_public_skill", "delete_public_skill"]
 
 
 @pytest.mark.parametrize(("tool", "public"), [("edit_skill", False), ("edit_public_skill", True)])
@@ -491,8 +509,7 @@ async def test_edit_skill_tools_change_description_body_or_both_and_reject_empty
 
 async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):
     """agent 写检查脚本时要知道时限：生产上一个「正常 15 秒、网络抖动时重试 30~60 秒」的脚本反复超时。"""
-    toolset = container.consumer._tool_groups.groups["triggers"][0]  # noqa: SLF001
-    create = toolset.tools["trigger_create"]
+    create = session_tools(container)["trigger_create"]
     limit = container.settings.runtime.precheck_timeout_seconds
     assert f"longer than {limit:g} seconds" in create.description
     # 参数说明仍来自 docstring
@@ -500,7 +517,7 @@ async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit
 
 
 async def test_run_shell_tells_the_model_its_configured_limits(container):
-    run_shell = container.consumer._tool_groups.groups["workspace"][0].tools["run_shell"]  # noqa: SLF001
+    run_shell = session_tools(container)["run_shell"]
     runtime = container.settings.runtime
     assert f"after {runtime.shell_default_timeout:g} seconds" in run_shell.description
     assert f"at most {runtime.shell_max_timeout:g}" in run_shell.description

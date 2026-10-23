@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Plug,
   ScrollText,
+  ShieldCheck,
   Settings,
   Sparkles,
   Zap,
@@ -31,6 +32,7 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
     title: '运行',
     items: [
       { to: '/agents', label: 'Agents', Icon: Bot },
+      { to: '/roles', label: '角色与权限', Icon: ShieldCheck },
       { to: '/triggers', label: '触发', Icon: Zap },
       { to: '/tasks', label: '任务与失败记录', Icon: Activity },
       { to: '/usage', label: 'Token 用量', Icon: BarChart3 },

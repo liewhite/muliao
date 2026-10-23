@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
@@ -15,13 +15,12 @@ from pydantic_ai import FunctionToolset
 from pydantic_ai.toolsets import AbstractToolset, DynamicToolset
 
 from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
-from muliao.agent_runtime.mcp import MCP_TOOL_NAMES, McpConnector
-from muliao.agent_runtime.runner import AgentRuntime, RunProfile, ToolGroups
+from muliao.agent_runtime.mcp import McpConnector
+from muliao.agent_runtime.runner import AgentRuntime, RunProfile, Toolbox
 from muliao.agent_runtime.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.agent_runtime.web import WebProvider, build_web_provider
 from muliao.agent_runtime.web_tools import web_toolset
 from muliao.agent_runtime.workspace_tools import ShellLimits, workspace_toolset
-from muliao.agents import tool_catalog
 from muliao.agents.active import ActiveOwners
 from muliao.agents.evolution_tools import (
     memory_toolset,
@@ -32,7 +31,9 @@ from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
+from muliao.agents.permissions import available_tools
 from muliao.agents.resources import ResourceRepo, RevisionHistory
+from muliao.agents.roles import RoleService
 from muliao.agents.service import AgentDefaults, AgentService, Thinking
 from muliao.agents.skills import SkillStore
 from muliao.agents.tools import agents_toolset
@@ -108,6 +109,7 @@ class Container:
     skills: SkillStore
     memory: MemoryStore
     agents: AgentService
+    roles: RoleService
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
     notifications: Notifications
@@ -142,6 +144,7 @@ class Assembly:
     skills: SkillStore
     memory: MemoryStore
     agents: AgentService
+    roles: RoleService
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
     notifications: Notifications
@@ -186,6 +189,7 @@ class Assembly:
             skills=self.skills,
             memory=self.memory,
             agents=self.agents,
+            roles=self.roles,
             agent_lifecycle=self.agent_lifecycle,
             sessions=self.sessions,
             notifications=self.notifications,
@@ -289,9 +293,8 @@ def assemble(
         web = build_web_provider(settings.web, http)
     if transcriber is None and settings.transcription is not None:
         transcriber = build_transcriber(settings.transcription, http)
-    # 「配置了哪些可选能力」只在这里判断一次，工具组名称、注册表与临时 agent 的工具都由它导出
+    # 「配置了哪些可选能力」只在这里判断一次，注册的工具（权限表核对）与临时 agent 的工具都由它导出
     web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
-    groups = tool_catalog.available(web_configured=bool(web_tools))
     tz = ZoneInfo(settings.timezone)
     db = Database(create_engine(settings.db_path), check_writes=check_writes)
     bus = EventBus()
@@ -313,8 +316,10 @@ def assemble(
         resources,
         memory,
         model_checker or models.check,
-        AgentDefaults(settings.llm.default_model, groups),
+        AgentDefaults(settings.llm.default_model),
+        available_tools(web_configured=bool(web_tools)),
     )
+    roles = RoleService(db)
     activity = SessionActivity(queue)
     agent_lifecycle = AgentLifecycle(db, agents, messaging, {"sessions": activity.blocks_agent_deletion_in})
     # 停止会话不依赖消费者：正在进行的运行的登记与 SessionHalt 先构造，消费者用同一份登记运行
@@ -390,35 +395,31 @@ def assemble(
     ]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
     temp_profile = RunProfile(toolsets=[workspace_toolset(vault, limits, files), *web_tools, mcp_tools])
-    # 每个组的实现，按目录的组名常量登记：与目录的组不一一对应是代码不一致，在启动时报出
-    implementations = {
-        # 对话里用的这份带后台任务（只有会话运行会选用工具组）
-        tool_catalog.WORKSPACE: [session_workspace_toolset(vault, limits, files, jobs)],
-        tool_catalog.TEMP_AGENT: [temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir)],
-        tool_catalog.DELEGATION: [
-            delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds)
-        ],
-        tool_catalog.NOTIFY: [notify_toolset(notifications)],
-        tool_catalog.PUBLIC_SKILLS: [public_skills_toolset(skills)],
-        tool_catalog.MCP: [mcp_tools],
-        tool_catalog.MCP_ADMIN: [mcp_admin_toolset(mcp)],
-        tool_catalog.VAULT: [vault_toolset(vault)],
-        tool_catalog.TRIGGERS: [
-            triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds)
-        ],
-        tool_catalog.ISSUES: [issues_toolset(issues, agents)],
-        tool_catalog.WEB: web_tools,
-    }
-    # get_agent 给模型列出每组实际包含的工具（从注册的工具集取，不另写一份）；MCP 的工具每次运行按可见的 server 构建
-    group_tools = {
-        name: [tool for ts in toolsets for tool in _function_tools(name, ts)]
-        for name, toolsets in implementations.items()
-        if name != tool_catalog.MCP
-    }
-    group_tools[tool_catalog.MCP] = [MCP_TOOL_NAMES]
-    implementations[tool_catalog.AGENTS] = [agents_toolset(agents, agent_lifecycle, group_tools)]
-    _check_implementations(implementations)
-    tool_groups = ToolGroups(groups={g.name: implementations[g.name] for g in groups}, always=always_tools)
+    # 有会话的运行可用的全部静态工具集；每个工具的权限在 agents.permissions 登记，一次运行开放哪些按 agent 的权限规则
+    # 算（Toolbox.profile）
+    static_toolsets = [
+        *always_tools,
+        # 对话里用的这份带后台任务（只有会话运行会用 Toolbox）
+        session_workspace_toolset(vault, limits, files, jobs),
+        temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir),
+        delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds),
+        notify_toolset(notifications),
+        public_skills_toolset(skills),
+        mcp_admin_toolset(mcp),
+        vault_toolset(vault),
+        triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds),
+        issues_toolset(issues, agents),
+        *web_tools,
+    ]
+    static_toolsets.append(agents_toolset(agents, roles, agent_lifecycle))
+    toolbox = Toolbox(
+        toolsets=static_toolsets,
+        mcp=lambda rules: mcp_connector.toolset(mcp.index, rules),
+        rules_of=agents.rules,
+    )
+    _check_permissions(
+        [n for ts in static_toolsets for n in _function_tools(ts)], web_configured=bool(web_tools)
+    )
     compactor = Compactor(
         db,
         runtime,
@@ -439,7 +440,7 @@ def assemble(
     consumer = Consumer(
         db,
         runtime,
-        tool_groups,
+        toolbox,
         live,
         content,
         Steps(db, live, content, compactor),
@@ -473,6 +474,7 @@ def assemble(
         skills=skills,
         memory=memory,
         agents=agents,
+        roles=roles,
         agent_lifecycle=agent_lifecycle,
         sessions=sessions,
         notifications=notifications,
@@ -506,20 +508,21 @@ def assemble(
     )
 
 
-def _check_implementations(implementations: Mapping[str, object]) -> None:
-    """组合根登记的组必须与目录的组一一对应：缺实现的组选了没工具，多出的组选不到、被静默丢掉。"""
-    catalog = {g.name for g in tool_catalog.CATALOG}
-    if set(implementations) != catalog:
+def _check_permissions(registered: list[str], *, web_configured: bool) -> None:
+    """注册的工具与当前配置下的权限表（agents.permissions.available_tools）必须一一对应：没登记的工具没有权限 id、谁也
+    拿不到，表里多出的说明工具改了名；界面与 get_agent 算最终工具用的也是这张表，一致才说得准。"""
+    expected = set(available_tools(web_configured=web_configured))
+    duplicated = sorted({n for n in registered if registered.count(n) > 1})
+    if set(registered) != expected or duplicated:
         raise RuntimeError(
-            "tool group implementations do not match the catalog: "
-            f"missing {sorted(catalog - set(implementations))}, unknown {sorted(set(implementations) - catalog)}"
+            "registered tools do not match the permission table: "
+            f"unregistered {sorted(expected - set(registered))}, without permission {sorted(set(registered) - expected)}, "
+            f"duplicated {duplicated}"
         )
 
 
-def _function_tools(group: str, toolset: AbstractToolset[RunScope]) -> list[str]:
-    """一个静态工具集里注册的工具名；静态的组只由 FunctionToolset 组成，别的是代码不一致。"""
+def _function_tools(toolset: AbstractToolset[RunScope]) -> list[str]:
+    """一个静态工具集里注册的工具名；静态的工具集只能是 FunctionToolset，别的是代码不一致。"""
     if not isinstance(toolset, FunctionToolset):
-        raise RuntimeError(
-            f"tool group {group} has a toolset whose tools are not known up front: {toolset!r}"
-        )
+        raise RuntimeError(f"a static toolset has tools that are not known up front: {toolset!r}")
     return list(toolset.tools)

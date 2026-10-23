@@ -181,7 +181,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     renamed = {**agent, "name": "Research Assistant 📚"}
     resp = await client.put(
         path,
-        json={k: renamed[k] for k in ("name", "description", "model", "tool_groups", "thinking")},
+        json={k: renamed[k] for k in ("name", "description", "model", "roles", "allow", "deny", "thinking")},
     )
     assert resp.status_code == 200 and resp.json()["name"] == "Research Assistant 📚"
     assert (await client.get(path)).json()["id"] == agent["id"]
@@ -194,7 +194,9 @@ async def test_agent_identified_by_id_and_renamable(client, container):
         "name": "other",
         "description": "d",
         "model": agent["model"],
-        "tool_groups": agent["tool_groups"],
+        "roles": agent["roles"],
+        "allow": [],
+        "deny": [],
         "thinking": "default",
     }
     assert (await client.put(path, json=clash)).status_code == 409
@@ -234,11 +236,7 @@ async def test_default_agent_is_at_most_one_and_goes_with_the_agent(client):
 async def test_agent_defaults_endpoint_matches_config(client, container):
     await login(client)
     defaults = (await client.get("/api/agent-defaults")).json()
-    assert defaults == {
-        "model": container.settings.llm.default_model,
-        "groups": [{"name": g.name, "label": g.label} for g in container.agents.defaults.groups],
-        "default_tool_groups": container.agents.defaults.group_names,
-    }
+    assert defaults == {"model": container.settings.llm.default_model, "roles": ["admin"]}
 
 
 async def test_marking_notifications_read_stops_at_the_one_the_user_saw(client):
@@ -405,7 +403,7 @@ async def test_agent_thinking_is_set_and_validated_over_http(client, models):
     assert resp.status_code == 201, resp.text
     agent = resp.json()
     assert agent["thinking"] == "high"
-    body = {k: agent[k] for k in ("name", "description", "model", "tool_groups")}
+    body = {k: agent[k] for k in ("name", "description", "model", "roles", "allow", "deny")}
     resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "off"})
     assert resp.json()["thinking"] == "off"
     # 整体替换：thinking 必填；不在档位里的值拒绝

@@ -24,7 +24,7 @@ from muliao.agent_runtime.api import (
     AgentRuntime,
     Finished,
     Paused,
-    ToolGroups,
+    Toolbox,
     answer_text,
     is_stopped,
     unanswered_calls,
@@ -130,7 +130,7 @@ class Consumer:
         self,
         db: Database,
         runtime: AgentRuntime,
-        tool_groups: ToolGroups,
+        toolbox: Toolbox,
         live: LiveRuns,
         content: ContentBuilder,
         steps: Steps,
@@ -141,7 +141,7 @@ class Consumer:
     ):
         self._db = db
         self._runtime = runtime
-        self._tool_groups = tool_groups
+        self._toolbox = toolbox
         self._live = live
         self._content = content
         self._steps = steps
@@ -250,7 +250,7 @@ class Consumer:
         # 随运行变化的上下文（当前时间、回答交给谁）不进 instructions——那是缓存前缀——而是挂在这次运行新增的
         # 第一条请求上（sessions.steps._before_request）
         state.run_context = self._runtime.run_context(audience)
-        profile = self._tool_groups.profile(agent.id, agent.tool_groups)
+        profile = await self._toolbox.profile(agent)
         self._live.begin(session_id, last_message)
         while True:
             try:

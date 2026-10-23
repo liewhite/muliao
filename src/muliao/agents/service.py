@@ -18,9 +18,10 @@ from muliao.agents.active import active_row_in
 from muliao.agents.ids import new_agent_id
 from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import new_agent_name, normalize_agent_name
+from muliao.agents.permissions import DEFAULT_ROLES, Resolved, Rules, check_patterns
 from muliao.agents.resources import ResourceRepo
+from muliao.agents.roles import check_assignable_in, roles_in, rules_in
 from muliao.agents.tables import Agent
-from muliao.agents.tool_catalog import ToolGroupInfo
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database
 
@@ -38,22 +39,19 @@ class AgentDefaults:
     """新建 agent 时未指定的字段取这些值（来自服务端配置）；API 与工具共用这一份。"""
 
     model: str
-    # 当前配置下可选的工具组（tool_catalog.available）：校验与默认值都从它取
-    groups: tuple[ToolGroupInfo, ...]
-
-    @property
-    def group_names(self) -> list[str]:
-        return [g.name for g in self.groups]
+    roles: tuple[str, ...] = DEFAULT_ROLES
 
 
 @dataclass(frozen=True)
 class AgentSpec:
-    """新建 agent。model / tool_groups 为 None 时取 AgentDefaults。"""
+    """新建 agent。model / roles 为 None 时取 AgentDefaults。"""
 
     name: str
     description: str
     model: str | None = None
-    tool_groups: list[str] | None = None
+    roles: Sequence[str] | None = None
+    allow: Sequence[str] = ()
+    deny: Sequence[str] = ()
     thinking: Thinking = "default"
 
 
@@ -64,7 +62,9 @@ class AgentPatch:
     name: str | None = None
     description: str | None = None
     model: str | None = None
-    tool_groups: list[str] | None = None
+    roles: Sequence[str] | None = None
+    allow: Sequence[str] | None = None
+    deny: Sequence[str] | None = None
     thinking: Thinking | None = None
 
 
@@ -75,7 +75,9 @@ class _AgentFields:
     name: str
     description: str
     model: str
-    tool_groups: list[str]
+    roles: list[str]
+    allow: list[str]
+    deny: list[str]
     thinking: Thinking
 
 
@@ -87,7 +89,10 @@ class AgentInfo:
     name: str
     description: str
     model: str
-    tool_groups: tuple[str, ...]
+    # 工具权限（agents.permissions）：角色与自己的 allow / deny；最终规则用 AgentService.rules 算
+    roles: tuple[str, ...]
+    allow: tuple[str, ...]
+    deny: tuple[str, ...]
     thinking: Thinking
     created_at: datetime
     # 系统默认 agent（Web 新对话默认选中它），最多一个
@@ -100,7 +105,9 @@ def info_of(agent: Agent) -> AgentInfo:
         name=agent.name,
         description=agent.description,
         model=agent.model,
-        tool_groups=tuple(agent.tool_groups),
+        roles=tuple(agent.roles),
+        allow=tuple(agent.allow),
+        deny=tuple(agent.deny),
         # 写入时与启动时已校验（_check_thinking_level）
         thinking=cast(Thinking, agent.thinking),
         created_at=agent.created_at,
@@ -162,6 +169,8 @@ class AgentService:
         # (模型, 思考档位) 在当前配置下不能运行时报 InvalidInput（agent_runtime.llm.ModelRegistry.check）
         model_checker: Callable[[str, Thinking], None],
         defaults: AgentDefaults,
+        # 当前配置下注册的工具（permissions.available_tools）：算最终工具时只在它里面取
+        tools: Sequence[str],
     ):
         self._db = db
         self._workspaces_dir = workspaces_dir
@@ -169,6 +178,7 @@ class AgentService:
         self._memory = memory
         self._check_model = model_checker
         self.defaults = defaults
+        self.tools = tuple(tools)
 
     def workspace(self, agent_id: str) -> Path:
         return self._workspaces_dir / agent_id
@@ -178,14 +188,28 @@ class AgentService:
         root = self._workspaces_dir
         return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
-    def _unavailable_groups(self, tool_groups: Sequence[str]) -> list[str]:
-        """不在当前配置可用的组里的组名（例如去掉 [web] 配置后的 web）。"""
-        return [g for g in tool_groups if g not in self.defaults.group_names]
+    async def rules(self, agent: AgentInfo) -> Rules:
+        """agent 的最终权限规则（public + 角色 + 自己的 allow / deny），按角色现在的定义算。"""
+        async with self._db.transaction() as s:
+            return await rules_in(s, agent.roles, agent.allow, agent.deny)
+
+    def resolve(self, rules: Rules) -> Resolved:
+        """按规则最终能用的工具（界面、get_agent）。运行时（agent_runtime.Toolbox）按实际注册的工具集算，两者一致由组合根
+        启动时核对 available_tools 与注册的工具保证（container._check_permissions）。"""
+        return Resolved.of(rules, self.tools)
+
+    async def preview(self, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> Resolved:
+        """还没保存的配置会得到的工具（界面预览），与写入时同样校验。"""
+        check_patterns(allow)
+        check_patterns(deny)
+        async with self._db.transaction() as s:
+            await check_assignable_in(s, roles)
+            return self.resolve(await rules_in(s, roles, allow, deny))
 
     async def verify_stored(self) -> None:
-        """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、选用的工具组必须都可用，与新建、修改时同一套规则。
-        配置改动（删 provider、改名、去掉 [web]）在启动时暴露，而不是散落到每个任务里失败。正在删除的不查。
-        先报出已删除 agent 的残留目录（只记录，不阻止启动）。"""
+        """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、角色必须都在、权限通配符（含自建角色的）必须仍
+        匹配已登记的权限，与新建、修改时同一套规则。配置或代码改动（删 provider、工具改名）在启动时暴露，而不是散落到
+        每个任务里失败。正在删除的不查。先报出已删除 agent 的残留目录（只记录，不阻止启动）。"""
         await self._report_leftovers()
         agents = await self.list()
         broken = []
@@ -200,15 +224,25 @@ class AgentService:
                 "agents reference models or thinking levels not runnable with current config:\n"
                 + "\n".join(broken)
             )
-        broken = [
-            f"{a.name} ({a.id}): {sorted(unknown)}"
+        async with self._db.transaction() as s:
+            roles = await roles_in(s)
+        broken = []
+        for owner, rules in [
+            *((f"role {r.name}", r.rules) for r in roles.values() if not r.builtin),
+            *((f"agent {a.name} ({a.id})", Rules(a.allow, a.deny)) for a in agents),
+        ]:
+            try:
+                check_patterns(rules.allow)
+                check_patterns(rules.deny)
+            except InvalidInput as e:
+                broken.append(f"{owner}: {e}")
+        broken += [
+            f"agent {a.name} ({a.id}): unknown roles {unknown}"
             for a in agents
-            if (unknown := self._unavailable_groups(a.tool_groups))
+            if (unknown := [r for r in a.roles if r not in roles])
         ]
         if broken:
-            raise RuntimeError(
-                "agents use tool groups unavailable with current config:\n" + "\n".join(broken)
-            )
+            raise RuntimeError("stored tool permissions are invalid:\n" + "\n".join(broken))
 
     async def _report_leftovers(self) -> None:
         """数据库里已删除、还留着资源目录（删除时提交失败所致）或工作目录（删除时没删干净）的 agent：记录出来，由人决定
@@ -221,16 +255,14 @@ class AgentService:
         if leftovers:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
-    def _check(self, *, description: str, model: str, tool_groups: list[str], thinking: Thinking) -> None:
-        _check_thinking_level(thinking)
-        if not description.strip():
+    def _check(self, fields: _AgentFields) -> None:
+        """不依赖数据库的校验；角色是否存在在写事务里查（roles.check_assignable_in）。"""
+        _check_thinking_level(fields.thinking)
+        if not fields.description.strip():
             raise InvalidInput("agent description must not be empty")
-        unknown = self._unavailable_groups(tool_groups)
-        if unknown or len(set(tool_groups)) != len(tool_groups):
-            raise InvalidInput(
-                f"tool groups must be distinct names from {self.defaults.group_names}, got {tool_groups}"
-            )
-        self._check_model(model, thinking)
+        check_patterns(fields.allow)
+        check_patterns(fields.deny)
+        self._check_model(fields.model, fields.thinking)
 
     async def _ensure_name_free(self, s: AsyncSession, name: str, agent_id: str | None) -> None:
         holder = await s.scalar(select(Agent.id).where(Agent.name == name))
@@ -240,14 +272,20 @@ class AgentService:
 
     async def create(self, spec: AgentSpec, *, author: str) -> AgentInfo:
         """author：创建者，"user" 或创建它的 agent 的 id（记在记忆的第一版上）。新 agent 的记忆是空的。"""
-        name = new_agent_name(spec.name)
-        model = self.defaults.model if spec.model is None else spec.model
-        tool_groups = self.defaults.group_names if spec.tool_groups is None else spec.tool_groups
-        self._check(
-            description=spec.description, model=model, tool_groups=tool_groups, thinking=spec.thinking
+        fields = _AgentFields(
+            name=new_agent_name(spec.name),
+            description=spec.description,
+            model=self.defaults.model if spec.model is None else spec.model,
+            roles=list(self.defaults.roles if spec.roles is None else spec.roles),
+            allow=list(spec.allow),
+            deny=list(spec.deny),
+            thinking=spec.thinking,
         )
+        self._check(fields)
+        name = fields.name
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
+            await check_assignable_in(s, fields.roles)
         # 先写资源文件、后插数据库行：agent 一旦存在，它的记忆就必须在（每一轮都要读）。
         # 资源写入失败时什么都没留下（apply 原子），报错就是没有生效；只有并发创建同名 agent 时下面的检查会冲突，
         # 留下的资源目录由启动时的孤儿检查报告（与删除 agent 时提交失败同一种情况）
@@ -261,13 +299,16 @@ class AgentService:
         )
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
+            await check_assignable_in(s, fields.roles)
             agent = Agent(
                 id=agent_id,
                 name=name,
-                description=spec.description,
-                model=model,
-                tool_groups=tool_groups,
-                thinking=spec.thinking,
+                description=fields.description,
+                model=fields.model,
+                roles=fields.roles,
+                allow=fields.allow,
+                deny=fields.deny,
+                thinking=fields.thinking,
             )
             s.add(agent)
             # 工作目录与数据库行同事务：建不出来则不插行
@@ -281,10 +322,11 @@ class AgentService:
             agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)
             await self._ensure_name_free(s, fields.name, agent_id)
+            await check_assignable_in(s, fields.roles)
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
             agent.thinking = fields.thinking
             # JSON 列只在整体赋值时被追踪
-            agent.tool_groups = list(fields.tool_groups)
+            agent.roles, agent.allow, agent.deny = fields.roles, fields.allow, fields.deny
             await s.flush()
             return info_of(agent)
 
@@ -306,15 +348,12 @@ class AgentService:
             name=agent.name if patch.name is None else new_agent_name(patch.name),
             description=agent.description if patch.description is None else patch.description,
             model=agent.model if patch.model is None else patch.model,
-            tool_groups=agent.tool_groups if patch.tool_groups is None else patch.tool_groups,
+            roles=list(agent.roles if patch.roles is None else patch.roles),
+            allow=list(agent.allow if patch.allow is None else patch.allow),
+            deny=list(agent.deny if patch.deny is None else patch.deny),
             thinking=cast(Thinking, agent.thinking) if patch.thinking is None else patch.thinking,
         )
-        self._check(
-            description=fields.description,
-            model=fields.model,
-            tool_groups=fields.tool_groups,
-            thinking=fields.thinking,
-        )
+        self._check(fields)
         return fields
 
     async def get_active(self, agent_id: str) -> AgentInfo:

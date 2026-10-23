@@ -10,6 +10,7 @@ from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models import Model
+from pydantic_ai.tools import Tool
 
 from muliao.agent_runtime.llm import check_thinking
 from muliao.agents.resources import ResourceRepo
@@ -130,6 +131,12 @@ def make_agent(container: Assembly) -> Callable:
         )
 
     return _make
+
+
+def session_tools(assembly: Assembly) -> dict[str, Tool]:
+    """有会话的运行可用的全部静态工具（Toolbox），按工具名。"""
+    toolbox = assembly.consumer._toolbox  # noqa: SLF001
+    return {name: tool for ts in toolbox.toolsets for name, tool in ts.tools.items()}
 
 
 def app_of(assembly: Assembly, web_dir: Path) -> FastAPI:
