@@ -54,7 +54,6 @@ TOOL_PERMISSIONS: dict[str, Permission] = {
     "run_shell": Permission("shell:run", W),
     "job_status": Permission("shell.job:status", R),
     "job_kill": Permission("shell.job:kill", W),
-    "run_temp_agent": Permission("temp_agent:run", W),
     # agent 与委派
     "list_agents": Permission("agent:list", R),
     "get_agent": Permission("agent:get", R),
@@ -104,19 +103,6 @@ TOOL_PERMISSIONS: dict[str, Permission] = {
     "web_fetch": Permission("web:fetch", R),
 }
 
-# 临时 agent 固定的那组工具（另有调用方的 MCP）；实际能用的是其中被调用方的权限规则放行的（Resolved.temp_agent），
-# 所以临时 agent 的工具总是调用方工具的子集。组合根启动时核对它与临时 agent 实际注册的工具集一致
-# （container._check_permissions）
-TEMP_AGENT_TOOLS: tuple[str, ...] = (
-    "read_file",
-    "write_file",
-    "edit_file",
-    "share_file",
-    "run_shell",
-    "web_search",
-    "web_fetch",
-)
-
 
 def available_tools(*, web_configured: bool) -> tuple[str, ...]:
     """当前配置下实际注册的工具（web 只在配置了 [web] 时注册），按登记顺序。组合根启动时核对注册的工具就是它；
@@ -164,17 +150,13 @@ class Rules:
 
 @dataclass(frozen=True)
 class Resolved:
-    """按规则最终能用的工具（当前配置下注册的里面放行的，按登记顺序）。能开临时 agent 时，temp_agent 是临时 agent
-    按同一份规则能用的（TEMP_AGENT_TOOLS 里放行的），否则为 None。MCP 不在其中（不归权限管）。"""
+    """按规则最终能用的工具（当前配置下注册的里面放行的，按登记顺序）。MCP 不在其中（不归权限管）。"""
 
     tools: list[str]
-    temp_agent: list[str] | None = None
 
     @staticmethod
     def of(rules: Rules, available: Collection[str]) -> Resolved:
-        tools = rules.tools(available)
-        temp = [t for t in tools if t in TEMP_AGENT_TOOLS] if "run_temp_agent" in tools else None
-        return Resolved(tools, temp)
+        return Resolved(rules.tools(available))
 
 
 @dataclass(frozen=True)
@@ -209,7 +191,9 @@ BUILTIN_ROLES: dict[str, Role] = {
         "除写全局资源（公共 skill、全局记忆、公共 secret、公共 MCP 配置）和管理 agent 以外的全部工具",
         Rules(
             allow=tuple(
-                p.id for p in TOOL_PERMISSIONS.values() if not any(fnmatchcase(p.id, g) for g in GLOBAL_WRITES)
+                p.id
+                for p in TOOL_PERMISSIONS.values()
+                if not any(fnmatchcase(p.id, g) for g in GLOBAL_WRITES)
             )
         ),
         builtin=True,

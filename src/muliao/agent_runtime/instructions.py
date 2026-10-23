@@ -44,7 +44,7 @@ commands or file tools, so every change is versioned under your name and the use
 - Keep state you need across runs (cursors, caches) in files in your workspace."""
 
 
-def build_run_context(*, now_local: datetime, audience: Audience | None) -> str:
+def build_run_context(*, now_local: datetime, audience: Audience) -> str:
     """一次运行开头交给模型的运行上下文：必须随运行变化、因而不能放进 instructions 的那几行（见模块说明）。
 
     - 当前时间：每次运行都不同。
@@ -52,16 +52,15 @@ def build_run_context(*, now_local: datetime, audience: Audience | None) -> str:
       运行会不同——用户在等回答的那次是 `user`，后台触发的那次是 `none`。
     会话来源的说明不在这里：它是会话创建时定下、整个会话不变的，留在 instructions 里（origin_note）。
     """
-    lines = [f"[Current local time: {now_local.isoformat(timespec='minutes')} ({now_local.tzname()})]"]
-    if audience is not None:
-        lines.append(f"[{_AUDIENCE_NOTES[audience]}]")
-    return "\n".join(lines)
+    return (
+        f"[Current local time: {now_local.isoformat(timespec='minutes')} ({now_local.tzname()})]\n"
+        f"[{_AUDIENCE_NOTES[audience]}]"
+    )
 
 
 def with_notices(run_context: str, notices: Sequence[str]) -> str:
     """运行上下文接上这次运行的工具组在开始时发现的问题（RunScope.notices，如连不上的 MCP server），一条一行。
-    它们只有工具组连接之后才知道，所以单独接上：会话的运行在第一步之前（sessions.steps），没有历史的运行在交给模型
-    之前（AgentRuntime.run_temp）。"""
+    它们只有工具组连接之后才知道，所以在第一步之前单独接上（sessions.steps）。"""
     return "\n".join([*([run_context] if run_context else []), *(f"[{n}]" for n in notices)])
 
 
@@ -104,19 +103,3 @@ def build_instructions(
             f"the messages after it follow in full.\n<summary>\n{summary}\n</summary>"
         )
     return "\n\n".join(s for s in sections if s)
-
-
-TEMP_AGENT_INSTRUCTIONS = """\
-You are a temporary helper agent working for agent {parent_name!r} on a single task. You have no memory and \
-nothing you do is remembered: your final answer is returned to that agent as a tool result, so make it complete \
-and self-contained. Do not ask questions back; if something is missing, say what and do what you can.
-
-## Runtime context
-- Temporary workspace (base for relative paths and shell cwd, deleted when you finish): {workspace}
-- Secrets are referenced by key as the agent you work for would (`run_shell(secrets=[KEY])`)."""
-
-
-def build_temp_instructions(*, parent_name: str, workspace: Path, extra: str) -> str:
-    """临时 agent 的指令。同样只放稳定内容：当前时间随任务一起交给它（AgentRuntime.run_temp）。"""
-    base = TEMP_AGENT_INSTRUCTIONS.format(parent_name=parent_name, workspace=workspace)
-    return f"{extra.strip()}\n\n{base}" if extra.strip() else base

@@ -35,20 +35,10 @@ export function ToolList({ resolved }: { resolved: ResolvedTools }) {
           </Chip>
           <span className="font-mono">{t.tool}</span>
           <span className="font-mono text-xs text-muted">{t.id}</span>
-          {t.tool === 'run_temp_agent' && resolved.temp_agent && <TempAgentTools tools={resolved.temp_agent} />}
         </div>
       ))}
       {resolved.tools.length === 0 && <span className="text-muted">没有工具</span>}
     </div>
-  )
-}
-
-/** 临时 agent 按同一份规则能用的工具（调用方工具的子集），另有调用方的 MCP */
-function TempAgentTools({ tools }: { tools: string[] }) {
-  return (
-    <span className="w-full ps-10 text-xs text-muted">
-      临时 agent 能用：{tools.length ? <span className="font-mono">{tools.join('、')}</span> : '没有内置工具'}，另有调用方的 MCP
-    </span>
   )
 }
 

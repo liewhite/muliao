@@ -14,7 +14,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.profiles import ModelProfile
 
-from muliao.agents.api import AgentPatch, AgentSpec, McpTransport, mcp_config
+from muliao.agents.api import AgentPatch, McpTransport, mcp_config
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
 from tests.conftest import login, session_tools
@@ -94,26 +94,19 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
 
 
 def test_registered_tools_must_match_the_permission_table_both_ways():
-    from muliao.agents.permissions import TEMP_AGENT_TOOLS, TOOL_PERMISSIONS
+    from muliao.agents.permissions import TOOL_PERMISSIONS
     from muliao.container import _check_permissions
 
     every = list(TOOL_PERMISSIONS)
-    temp = list(TEMP_AGENT_TOOLS)
-    no_web = [t for t in temp if not t.startswith("web_")]
-    _check_permissions(every, temp, web_configured=True)
-    _check_permissions([t for t in every if not t.startswith("web_")], no_web, web_configured=False)
+    _check_permissions(every, web_configured=True)
+    _check_permissions([t for t in every if not t.startswith("web_")], web_configured=False)
     with pytest.raises(RuntimeError, match=r"unregistered \['web_fetch', 'web_search'\]"):
-        _check_permissions([t for t in every if not t.startswith("web_")], temp, web_configured=True)
+        _check_permissions([t for t in every if not t.startswith("web_")], web_configured=True)
     # 没登记权限的工具谁也拿不到：启动即报
     with pytest.raises(RuntimeError, match=r"without permission \['new_tool'\]"):
-        _check_permissions([*every, "new_tool"], temp, web_configured=True)
+        _check_permissions([*every, "new_tool"], web_configured=True)
     with pytest.raises(RuntimeError, match=r"duplicated \['run_shell'\]"):
-        _check_permissions([*every, "run_shell"], temp, web_configured=True)
-    # 临时 agent 注册的工具与 TEMP_AGENT_TOOLS 不一致（界面列出的就不准）：启动即报
-    with pytest.raises(RuntimeError, match=r"temp agent tools"):
-        _check_permissions(every, no_web, web_configured=True)
-    with pytest.raises(RuntimeError, match=r"temp agent tools"):
-        _check_permissions(every, [*temp, "job_kill"], web_configured=True)
+        _check_permissions([*every, "run_shell"], web_configured=True)
 
 
 async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_agent, models):
@@ -216,93 +209,6 @@ async def test_list_threads_shows_each_thread_with_its_state(container, make_age
     assert "review" in outputs[1] and "worker" in outputs[1] and "'idle'" in outputs[1]
 
 
-async def test_temp_agent_runs_once_in_a_discarded_workspace_and_returns_its_answer(
-    container, make_agent, models
-):
-    me = await make_agent("manager", model="tools", roles=["admin"])
-    await container.vault.set(me.id, "API_KEY", "k-123")
-    seen: dict[str, object] = {}
-
-    def helper(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        seen.setdefault("tools", sorted(t.name for t in info.function_tools))
-        seen.setdefault("instructions", info.instructions or "")
-        step = sum(isinstance(m, ModelResponse) for m in messages)
-        if step == 0:
-            return ModelResponse(
-                parts=[ToolCallPart("write_file", {"path": "notes.txt", "content": "x"}, tool_call_id="w")]
-            )
-        if step == 1:
-            command = 'pwd && test -n "$API_KEY" && echo has-key'
-            return ModelResponse(
-                parts=[
-                    ToolCallPart("run_shell", {"command": command, "secrets": ["API_KEY"]}, tool_call_id="s")
-                ]
-            )
-        seen["shell"] = str(tool_returns(messages)[0].content)
-        return ModelResponse(parts=[TextPart("summary: page says hello")])
-
-    models.models["helper"] = scripted(helper)
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [("run_temp_agent", {"task": "summarize https://example.com", "model": "helper"})],
-    )
-
-    assert outputs == ["summary: page says hello"]
-    workspace = str(seen["shell"]).splitlines()[1]
-    assert workspace.startswith(str(container.settings.temp_dir)) and "has-key" in str(seen["shell"])
-    assert workspace and list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240  测试里的同步检查
-    # 只有文件与 shell：没有记忆、skill、委派，也不能再开临时 agent
-    assert seen["tools"] == ["edit_file", "read_file", "run_shell", "share_file", "write_file"]
-    assert "temporary helper agent working for agent 'manager'" in str(seen["instructions"])
-    # 不留下会话
-    assert len(await container.sessions.list(agent_id=None, origins=None, limit=10, offset=0)) == 1
-
-
-@pytest.mark.parametrize(
-    ("deny", "expected"),
-    [
-        ((), ["edit_file", "read_file", "run_shell", "share_file", "write_file"]),
-        (("shell:run",), ["edit_file", "read_file", "share_file", "write_file"]),
-    ],
-)
-async def test_temp_agent_only_gets_what_the_callers_permissions_allow(container, models, deny, expected):
-    # 没配置 web、没勾选 MCP：临时 agent 只拿到文件与 shell；调用方禁了 shell:run 时就没有 shell
-    me = await container.agents.create(
-        AgentSpec(name="manager", description="d", model="tools", deny=deny), author="user"
-    )
-    seen: list[str] = []
-
-    def helper(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        seen.extend(sorted(t.name for t in info.function_tools))
-        return ModelResponse(parts=[TextPart("done")])
-
-    models.models["helper"] = scripted(helper)
-    await run_tools(container, models, me.id, [("run_temp_agent", {"task": "t", "model": "helper"})])
-
-    assert seen == expected
-    # 界面与 get_agent 列出的就是这一份（同一份规则算出）
-    resolved = container.agents.resolve(await container.agents.rules(me)).temp_agent
-    assert resolved is not None and sorted(resolved) == expected
-
-
-async def test_get_agent_lists_the_tools_its_temp_agents_get(container, make_agent, models):
-    me = await make_agent("manager", model="tools", roles=["admin"])
-    await container.agents.create(AgentSpec(name="limited", description="d"), author="user")
-    await container.agents.create(
-        AgentSpec(name="plain", description="d", deny=["temp_agent:run"]), author="user"
-    )
-    outputs = await run_tools(
-        container, models, me.id, [("get_agent", {"agent": "limited"}), ("get_agent", {"agent": "plain"})]
-    )
-
-    limited, plain = outputs
-    assert "temp_agent_tools=['read_file', 'write_file', 'edit_file', 'share_file', 'run_shell']" in limited
-    # 不能开临时 agent 时没有这一项
-    assert "temp_agent_tools=None" in plain
-
-
 async def test_parallel_partial_updates_of_one_agent_both_survive(container, make_agent, models):
     me = await make_agent("manager", model="tools", roles=["admin"])
     target = await make_agent("worker")
@@ -347,90 +253,6 @@ async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agen
     assert "cannot delete yourself" in outputs[2]
     for agent_id in (me.id, other.id):
         assert agent_id not in "\n".join(outputs)
-
-
-async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
-    container, make_agent, models
-):
-    from pydantic_ai.exceptions import ModelHTTPError
-
-    from muliao.platform.tables import TaskStatus
-    from muliao.sessions.lanes import RUN_TASK
-    from tests.test_flow import tasks_of
-
-    me = await make_agent("manager", model="tools", roles=["admin"])
-
-    def broken(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        raise ModelHTTPError(status_code=400, model_name="helper", body="bad request")
-
-    models.models["helper"] = scripted(broken)
-    await run_tools(container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})])
-
-    assert list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240
-    [turn] = await tasks_of(container, RUN_TASK)
-    assert turn.status == TaskStatus.FAILED and "400" in turn.error
-
-
-async def test_temp_agent_is_not_capped_by_pydantic_ai_default_request_limit(container, make_agent, models):
-    """临时 agent 和长期 agent 一样不设请求数上限（#45）：越过 pydantic-ai 默认的 50 次请求照样做完。"""
-    me = await make_agent("manager", model="tools", roles=["admin"])
-    steps = 60
-
-    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        if sum(isinstance(m, ModelResponse) for m in messages) >= steps:
-            return ModelResponse(parts=[TextPart("finished")])
-        return ModelResponse(parts=[ToolCallPart("write_file", {"path": "x.txt", "content": "x"})])
-
-    models.models["helper"] = scripted(fn)
-    outputs = await run_tools(
-        container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})]
-    )
-
-    assert outputs == ["finished"]
-    assert list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240
-
-
-async def test_workspace_removal_failure_keeps_answer_and_is_cleared_on_next_start(
-    container, make_agent, models, monkeypatch, caplog
-):
-    import muliao.agent_runtime.temp_agent as temp_agent
-
-    me = await make_agent("manager", model="tools", roles=["admin"])
-    models.models["helper"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("answer")]))
-
-    def stuck(path):  # noqa: ANN001, ANN202
-        raise OSError("Directory not empty")
-
-    monkeypatch.setattr(temp_agent, "_remove", stuck)
-    outputs = await run_tools(
-        container, models, me.id, [("run_temp_agent", {"task": "x", "model": "helper"})]
-    )
-    monkeypatch.undo()
-
-    assert outputs == ["answer"]
-    assert any("will be cleared on next start" in r.getMessage() for r in caplog.records)
-    assert len(list(container.settings.temp_dir.iterdir())) == 1  # noqa: ASYNC240
-    temp_agent.clear_temp_dirs(container.settings.temp_dir)
-    assert list(container.settings.temp_dir.iterdir()) == []  # noqa: ASYNC240
-
-
-def test_unremovable_leftover_is_logged_and_does_not_block_startup(tmp_path, monkeypatch, caplog):
-    import muliao.agent_runtime.temp_agent as temp_agent
-
-    for name in ("temp-agent-a", "temp-agent-b"):
-        (tmp_path / name).mkdir()
-    real = temp_agent._remove
-
-    def selective(path):  # noqa: ANN001, ANN202
-        if path.name == "temp-agent-a":
-            raise PermissionError("busy")
-        real(path)
-
-    monkeypatch.setattr(temp_agent, "_remove", selective)
-    temp_agent.clear_temp_dirs(tmp_path)
-
-    assert [p.name for p in tmp_path.iterdir()] == ["temp-agent-a"]
-    assert any("not removable" in r.getMessage() for r in caplog.records)
 
 
 async def test_agent_role_sees_every_tool_but_global_writes_and_no_unselected_mcp(container, models):
@@ -947,38 +769,6 @@ async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_st
     assert (meta.name, container.files.read(meta)) == ("read_file.png", png)
 
 
-async def test_a_temp_agent_started_from_a_tool_shares_the_model_limit_without_deadlock(
-    container, make_agent, models
-):
-    """模型请求按 provider 限流（agent_runtime.llm），会话运行与它在工具里开的临时 agent 用同一个 provider：上限为 1
-    时也能跑完。工具在模型请求结束、配额还掉之后才执行；pydantic-ai 的嵌套检测只看正在进行的请求。升级 pydantic-ai
-    后这一点若变了，这里会卡住或报 UserError。"""
-    from pydantic_ai.models.concurrency import ConcurrencyLimitedModel
-
-    from muliao.agent_runtime.llm import _ProviderLimiter
-
-    me = await make_agent("manager", model="outer")
-    limiter = _ProviderLimiter("p", 1)
-    answers: list[str] = []
-
-    def outer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        if sum(isinstance(m, ModelResponse) for m in messages) == 0:
-            return ModelResponse(
-                parts=[ToolCallPart("run_temp_agent", {"task": "x", "model": "helper"}, tool_call_id="t")]
-            )
-        answers.extend(str(p.content) for p in tool_returns(messages))
-        return ModelResponse(parts=[TextPart("done")])
-
-    models.models["outer"] = ConcurrencyLimitedModel(scripted(outer), limiter)
-    models.models["helper"] = ConcurrencyLimitedModel(
-        scripted(lambda _m, _i: ModelResponse(parts=[TextPart("helped")])), limiter
-    )
-    await start(container, me.id, "do it", origin=Origin.TRIGGER)
-    await drain(container, limit_seconds=5)
-
-    assert answers == ["helped"]
-
-
 async def test_a_corrupt_public_skill_is_listed_as_corrupt_in_the_index_and_the_run_goes_on(
     container, make_agent, models
 ):
@@ -1014,23 +804,15 @@ def _thinking_seen(seen: list[object]) -> Callable[[list[ModelMessage], AgentInf
     return fn
 
 
-async def test_thinking_level_reaches_the_model_and_temp_agents_inherit_it(container, make_agent, models):
-    """临时 agent 不指定时沿用调用方的档位；"default" 什么都不传；模型不支持的档位如实拒绝。"""
-    models.models["tools"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("x")]), THINKS)
+async def test_agent_updates_its_thinking_level_and_bad_levels_go_back_to_the_model(
+    container, make_agent, models
+):
     me = await make_agent("manager", model="tools", roles=["admin"])
-    await container.agents.update(me.id, AgentPatch(thinking="high"))
-    seen: list[object] = []
-    models.models["helper"] = scripted(_thinking_seen(seen), THINKS)
-    models.models["plain"] = scripted(_thinking_seen(seen))
     outputs = await run_tools(
         container,
         models,
         me.id,
         [
-            ("run_temp_agent", {"task": "x", "model": "helper"}),
-            ("run_temp_agent", {"task": "x", "model": "helper", "thinking": "default"}),
-            ("run_temp_agent", {"task": "x", "model": "helper", "thinking": "off"}),
-            ("run_temp_agent", {"task": "x", "model": "plain"}),
             ("update_agent", {"agent": "manager", "thinking": "low"}),
             ("get_agent", {"agent": "manager"}),
             ("update_agent", {"agent": "manager", "thinking": "max"}),
@@ -1038,10 +820,8 @@ async def test_thinking_level_reaches_the_model_and_temp_agents_inherit_it(conta
         THINKS,
     )
 
-    assert seen == ["high", None, False]
-    assert "'plain' does not take a thinking setting" in outputs[3]
-    assert "thinking='low'" in outputs[5]
-    assert "'xhigh'" in outputs[6]  # 不在档位里：交还模型重试
+    assert "thinking='low'" in outputs[1]
+    assert "'xhigh'" in outputs[2]  # 不在档位里：交还模型重试
     assert (await container.agents.get(me.id)).thinking == "low"
 
 

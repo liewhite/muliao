@@ -1,4 +1,4 @@
-"""用量：每次模型运行（对话、压缩、临时 agent）记一条，按时间范围与维度汇总。"""
+"""用量：每次模型运行（对话、压缩）记一条，按时间范围与维度汇总。"""
 
 import asyncio
 from datetime import UTC, datetime, timedelta
@@ -18,11 +18,10 @@ from muliao.usage.tables import ModelUsage
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tasks_of
-from tests.test_tools import run_tools
 
 # 一次模型调用报告的用量：input 是输入总数，其中 80 命中缓存、10 写入缓存（pydantic-ai 的口径）。
-# 只在非流式请求（压缩、临时 agent）里原样保留：会话的运行是流式的，FunctionModel 那时自己估算 token，
-# 所以会话运行的测试只断言「记下来了」，确切数值由非流式的那几条覆盖
+# 只在非流式请求（压缩）里原样保留：会话的运行是流式的，FunctionModel 那时自己估算 token，
+# 所以会话运行的测试只断言「记下来了」，确切数值由压缩那条覆盖
 REPLY_USAGE = RequestUsage(input_tokens=100, output_tokens=5, cache_read_tokens=80, cache_write_tokens=10)
 
 
@@ -79,27 +78,11 @@ async def test_compaction_is_billed_to_the_session_it_compacts(container, make_a
         )
     await drain(container)
 
-    compactions = [r for r in await usage_rows(container) if r.kind == RunKind.COMPACTION]
-    assert compactions and all(r.session_id == session.id and r.model == "m" for r in compactions)
-
-
-async def test_a_temp_agent_is_billed_to_the_session_that_started_it(container, make_agent, models):
-    me = await make_agent("manager", model="tools")
-    models.models["helper"] = answering("helped")
-
-    outputs = await run_tools(
-        container, models, me.id, [("run_temp_agent", {"task": "t", "model": "helper"})]
-    )
-
-    assert outputs == ["helped"]
-    [temp] = [r for r in await usage_rows(container) if r.kind == RunKind.TEMP_AGENT]
-    [run] = [r for r in await usage_rows(container) if r.kind == RunKind.RUN]
-    # 临时 agent 不属于任何会话，但它的开销算发起它的那次运行的
-    assert temp.model == "helper" and temp.session_id == run.session_id
-    assert temp.agent_id == me.id
+    [compaction] = [r for r in await usage_rows(container) if r.kind == RunKind.COMPACTION]
+    assert (compaction.session_id, compaction.agent_id, compaction.model) == (session.id, alpha.id, "m")
     # 模型报告的四项计数原样入库（缓存读写是 input_tokens 的一部分）
-    assert (temp.requests, temp.input_tokens, temp.output_tokens) == (1, 100, 5)
-    assert (temp.cache_read_tokens, temp.cache_write_tokens) == (80, 10)
+    assert (compaction.requests, compaction.input_tokens, compaction.output_tokens) == (1, 100, 5)
+    assert (compaction.cache_read_tokens, compaction.cache_write_tokens) == (80, 10)
 
 
 async def test_a_run_that_fails_still_records_what_it_already_spent(container, make_agent, models):

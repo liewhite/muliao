@@ -12,7 +12,6 @@ import anyio
 from pydantic_ai import Agent as PaiAgent
 from pydantic_ai import (
     AgentRun,
-    AgentRunResult,
     DeferredToolRequests,
     DeferredToolResults,
     FunctionToolset,
@@ -43,16 +42,10 @@ from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 from pydantic_graph import End
 
-from muliao.agent_runtime.answers import Answer
 from muliao.agent_runtime.attachments import AttachmentsForModel, ToolImagesToFiles
-from muliao.agent_runtime.instructions import (
-    build_instructions,
-    build_run_context,
-    build_temp_instructions,
-    with_notices,
-)
+from muliao.agent_runtime.instructions import build_instructions, build_run_context
 from muliao.agent_runtime.llm import ModelResolver, check_thinking, model_settings
-from muliao.agent_runtime.outcome import Finished, Paused, finished_of, outcome_of
+from muliao.agent_runtime.outcome import Finished, Paused, outcome_of
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.transient import transient_as_retryable
@@ -63,7 +56,7 @@ from muliao.platform.tasks import Clock
 from muliao.platform.tooling import Audience, RunScope
 from muliao.usage.api import RunKind, UsageEntry, UsageLog, UsageTotals
 
-# pydantic-ai 不传 usage_limits 时默认 request_limit=50。任何运行（长期 agent 的轮次、临时 agent）都不设请求数
+# pydantic-ai 不传 usage_limits 时默认 request_limit=50。运行不设请求数
 # 上限：开发任务上百步是常态，运行不设总时长，靠用户停止收束。
 _UNLIMITED = UsageLimits(request_limit=None)
 
@@ -101,14 +94,14 @@ class StepHooks:
 
 @dataclass(frozen=True)
 class RunProfile:
-    """一次运行开放的工具：对话与临时 agent 各从自己的 Toolbox 里按（调用方）agent 的权限规则取。"""
+    """一次运行开放的工具：从 Toolbox 里按 agent 的权限规则取。"""
 
     toolsets: Sequence[AbstractToolset[RunScope]]
 
 
 @dataclass(frozen=True)
 class Toolbox:
-    """一种运行（有会话的运行、临时 agent）可用的全部工具：静态的工具集（每个工具的权限见 agents.permissions.TOOL_PERMISSIONS）与按运行构建的
+    """运行可用的全部工具：静态的工具集（每个工具的权限见 agents.permissions.TOOL_PERMISSIONS）与按运行构建的
     MCP。一次运行开放哪些在运行开始时算定（profile），调用时不再判断：静态工具按 agent 的权限规则，MCP 不归权限管，
     是 agent 的私有 server 与它勾选的公共 server（AgentInfo.mcp_servers）。"""
 
@@ -160,7 +153,7 @@ class AgentRuntime:
     def workspace(self, agent_id: str) -> Path:
         return self._agents.workspace(agent_id)
 
-    def scope(self, agent: AgentInfo, *, session_id: str, audience: Audience | None) -> RunScope:
+    def scope(self, agent: AgentInfo, *, session_id: str, audience: Audience) -> RunScope:
         return RunScope(
             agent_id=agent.id, workspace=self.workspace(agent.id), session_id=session_id, audience=audience
         )
@@ -185,9 +178,9 @@ class AgentRuntime:
             summary=summary,
         )
 
-    def run_context(self, audience: Audience | None) -> str:
-        """这次运行开头交给模型的运行上下文（当前时间等，见 instructions.build_run_context）。会话的运行由
-        sessions.steps 挂到本次新增的第一条请求上；没有历史的运行（临时 agent）直接放在 prompt 前面。"""
+    def run_context(self, audience: Audience) -> str:
+        """这次运行开头交给模型的运行上下文（当前时间等，见 instructions.build_run_context），由 sessions.steps
+        挂到本次新增的第一条请求上。"""
         return build_run_context(now_local=self._clock().astimezone(self._tz), audience=audience)
 
     async def run_steps(
@@ -208,172 +201,58 @@ class AgentRuntime:
         sessions.questions）：结局为 Paused；之后带着 deferred（`{调用 id: 结果}`，如用户的回答）再运行就从那里继续。
 
         prompt 为 None 时从历史续跑：历史停在一条请求上就重发它，停在带工具调用的回复上就执行这些调用（pydantic-ai
-        的续跑语义）。"""
-        if scope.session_id is None:
-            raise RuntimeError(f"a stepwise run needs a session, agent {scope.agent_id} has none")
+        的续跑语义）。
+
+        外壳：记账与日志（_billed）、工具失败信息里不带参数（tool_input_kept_out_of_failures）、确认运行从用户 prompt
+        节点开始，再由 _step_through 逐步驱动到结束。"""
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred or ())
-
-        async def steer(
-            run: AgentRun[RunScope, Any], first: UserPromptNode[RunScope, Any], driven: RunScope
-        ) -> None:
-            node = await run.next(first)
-            # 工具组在进入 iter 时已经构建、连接（notices 已经齐了，在这次驱动的 scope 里）
-            await hooks.started(run.ctx.state.message_history, driven.notices)
-            while not isinstance(node, End):
-                if PaiAgent.is_model_request_node(node):
-                    await hooks.before_request(node.request, run.ctx.state.message_history)
-                    async with node.stream(run.ctx) as stream:
-                        await _forward_events(stream, hooks, resumed)
-                    node = await run.next(node)
-                    messages = run.ctx.state.message_history
-                    response = messages[-1]
-                    if not isinstance(response, ModelResponse):
-                        raise RuntimeError(
-                            f"model request ended without a response, history ends with {response!r}"
-                        )
-                    await hooks.after_response(response, messages)
-                elif PaiAgent.is_call_tools_node(node):
-                    async with node.stream(run.ctx) as stream:
-                        await _forward_events(stream, hooks, resumed)
-                    node = await run.next(node)
-                else:
-                    node = await run.next(node)
-
-        result = await self._drive(
-            kind=RunKind.RUN,
-            model=agent.model,
-            thinking=agent.thinking,
-            scope=scope,
-            billed_to=scope.session_id,
-            instructions=await self.instructions(agent, scope, summary, origin_note),
-            profile=profile,
-            prompt=None if prompt is None else list(prompt),
-            history=history,
-            output_type=[str, DeferredToolRequests],
-            deferred=None if deferred is None else DeferredToolResults(calls=dict(deferred)),
-            steer=steer,
-        )
-        return outcome_of(result)
-
-    async def run_temp(
-        self,
-        parent: AgentInfo,
-        *,
-        task: str,
-        instructions: str,
-        model: str,
-        thinking: Thinking,
-        profile: RunProfile,
-        workspace: Path,
-        session_id: str | None,
-    ) -> Answer:
-        """一次性的临时 agent：替 parent 做一件事，返回最终回答，以及它用工具挂给用户的文件（如 share_file）。
-
-        没有记忆、skill 与历史；工具来自 profile（不含委派与再开临时 agent），MCP 与 secret 按 parent 的视角。
-        也不带全局记忆：它约定的是长期 agent 之间的共同规则，临时 agent 只执行调用方交给它的任务。
-        不属于任何会话，运行事件不推到会话页。和长期 agent 一样不设请求数上限。
-
-        session_id 是发起它的那个会话：临时 agent 自己不属于任何会话（RunScope 里仍是 None），但它花的 token
-        是那次运行的开销，记到那个会话名下。
-        """
-        scope = RunScope(agent_id=parent.id, workspace=workspace, session_id=None, audience=None)
-        # 临时 agent 没有听众（回答交回调用方那次工具调用），运行上下文只有当前时间
-        context = self.run_context(None)
-
-        async def steer(
-            run: AgentRun[RunScope, Any], first: UserPromptNode[RunScope, Any], driven: RunScope
-        ) -> None:
-            # 工具组在进入 iter 时已经连接，notices 这时才齐（在这次驱动的 scope 里）；prompt 在这个节点运行时才交给模型。
-            # pydantic-ai 的 RunContext.prompt 取的是传给 iter 的那个（None），本项目不读它
-            first.user_prompt = f"{with_notices(context, driven.notices)}\n\n{task}"
-            async for _ in run:
-                pass
-
-        result = await self._drive(
-            kind=RunKind.TEMP_AGENT,
-            model=model,
-            thinking=thinking,
-            scope=scope,
-            billed_to=session_id,
-            instructions=build_temp_instructions(
-                parent_name=parent.name, workspace=workspace, extra=instructions
-            ),
-            profile=profile,
-            prompt=None,
-            history=(),
-            output_type=str,
-            deferred=None,
-            steer=steer,
-        )
-        finished = finished_of(result)
-        return Answer.of_run(finished.answer, finished.messages)
-
-    def _model(self, model: str, thinking: Thinking) -> tuple[Model, ModelSettings | None]:
-        """模型与这次运行的 model settings（思考档位）。档位会被模型悄悄忽略时报 InvalidInput（llm.check_thinking）：
-        agent 存下的档位在写入与启动时已查过，这里拦住的是临时 agent 指定的档位，以及依赖升级后模型 profile 变了的情况；
-        每次都查而不分入口，成本只是读 profile。"""
-        resolved = self._resolve_model(model)
-        check_thinking(model, resolved, thinking)
-        return resolved, model_settings(thinking)
-
-    @staticmethod
-    def _toolsets(profile: RunProfile) -> list[AbstractToolset[RunScope]]:
-        return [DomainErrorsAsRetry(t) for t in profile.toolsets]
-
-    async def _drive(
-        self,
-        *,
-        kind: RunKind,
-        model: str,
-        thinking: Thinking,
-        scope: RunScope,
-        billed_to: str | None,
-        instructions: str,
-        profile: RunProfile,
-        prompt: list[UserContent] | None,
-        history: Sequence[ModelMessage],
-        output_type: Any,
-        deferred: DeferredToolResults | None,
-        steer: Callable[[AgentRun[RunScope, Any], UserPromptNode[RunScope, Any], RunScope], Awaitable[None]],
-    ) -> AgentRunResult[Any]:
-        """一次带工具的模型运行的外壳（会话的逐步运行与没有历史的运行共用）：记账与日志（_billed）、工具失败信息里
-        不带参数、启动 pydantic-ai 的运行并确认它从用户 prompt 节点开始，交给 steer 从那个节点驱动到结束，最后取结果。
-
-        steer 拿到的 scope（driven）是这次驱动自己的一份（notices 为空，工具组连接时往里加），notices 要从它读而不是
-        调用方那份：压缩后续跑会重新连接工具组。"""
+        instructions = await self.instructions(agent, scope, summary, origin_note)
+        # 这次驱动自己的一份 scope：notices 为空，工具组连接时往里加；压缩后续跑会重新连接工具组
         scope = replace(scope, notices=[])
         ctx = {
             "agent": scope.agent_id,
             "session_id": scope.session_id,
-            "model": model,
-            "thinking": thinking,
+            "model": agent.model,
+            "thinking": agent.thinking,
             "workspace": str(scope.workspace),
         }
-        resolved, settings = self._model(model, thinking)
-        async with self._billed(kind, scope.agent_id, model, billed_to, ctx, len(history)) as usage:
+        resolved, settings = self._model(agent.model, agent.thinking)
+        async with self._billed(
+            RunKind.RUN, scope.agent_id, agent.model, scope.session_id, ctx, len(history)
+        ) as usage:
             with tool_input_kept_out_of_failures():
                 async with self._pai.iter(
-                    prompt,
+                    None if prompt is None else list(prompt),
                     model=resolved,
                     model_settings=settings,
                     instructions=instructions,
                     message_history=list(history),
                     deps=scope,
-                    toolsets=self._toolsets(profile),
-                    output_type=output_type,
-                    deferred_tool_results=deferred,
+                    toolsets=[DomainErrorsAsRetry(t) for t in profile.toolsets],
+                    output_type=[str, DeferredToolRequests],
+                    deferred_tool_results=None
+                    if deferred is None
+                    else DeferredToolResults(calls=dict(deferred)),
                     usage=usage,
                     usage_limits=_UNLIMITED,
                 ) as run:
                     first = run.next_node
                     if not PaiAgent.is_user_prompt_node(first):
                         raise RuntimeError(f"agent run did not start with the user prompt node: {first!r}")
-                    await steer(run, first, scope)
+                    await _step_through(run, first, hooks, resumed, scope.notices)
                     result = run.result
         if result is None:
             raise RuntimeError("agent run ended without a result")
-        return result
+        return outcome_of(result)
+
+    def _model(self, model: str, thinking: Thinking) -> tuple[Model, ModelSettings | None]:
+        """模型与这次运行的 model settings（思考档位）。档位会被模型悄悄忽略时报 InvalidInput（llm.check_thinking）：
+        agent 存下的档位在写入与启动时已查过，这里拦住的是依赖升级后模型 profile 变了的情况；每次都查而不分入口，
+        成本只是读 profile。"""
+        resolved = self._resolve_model(model)
+        check_thinking(model, resolved, thinking)
+        return resolved, model_settings(thinking)
 
     async def summarize(self, agent: AgentInfo, session_id: str, instructions: str, prompt: str) -> str:
         """用该 agent 的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文）。不转发事件到前端。"""
@@ -451,6 +330,36 @@ class AgentRuntime:
             log.error("recording model usage failed: %r", failed, extra={**ctx, "kind": kind.value})
         elif limited.cancelled_caught:
             log.error("recording model usage timed out", extra={**ctx, "kind": kind.value})
+
+
+async def _step_through(
+    run: AgentRun[RunScope, Any],
+    first: UserPromptNode[RunScope, Any],
+    hooks: StepHooks,
+    resumed: frozenset[str],
+    notices: Sequence[str],
+) -> None:
+    """从用户 prompt 节点把运行逐步驱动到结束，在每次请求模型之前、模型回复之后回调 hooks。notices 是这次驱动的
+    scope 里的那份列表：工具组在进入 iter 时已经构建、连接，到这里已经齐了。"""
+    node = await run.next(first)
+    await hooks.started(run.ctx.state.message_history, notices)
+    while not isinstance(node, End):
+        if PaiAgent.is_model_request_node(node):
+            await hooks.before_request(node.request, run.ctx.state.message_history)
+            async with node.stream(run.ctx) as stream:
+                await _forward_events(stream, hooks, resumed)
+            node = await run.next(node)
+            messages = run.ctx.state.message_history
+            response = messages[-1]
+            if not isinstance(response, ModelResponse):
+                raise RuntimeError(f"model request ended without a response, history ends with {response!r}")
+            await hooks.after_response(response, messages)
+        elif PaiAgent.is_call_tools_node(node):
+            async with node.stream(run.ctx) as stream:
+                await _forward_events(stream, hooks, resumed)
+            node = await run.next(node)
+        else:
+            node = await run.next(node)
 
 
 async def _forward_events(

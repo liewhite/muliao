@@ -40,8 +40,6 @@ class AgentDetail(BaseModel):
     tools: list[str]
     # 勾选的公共 MCP server（不归工具权限管；另有它自己的私有 server）
     mcp_servers: list[str]
-    # 能开临时 agent 时，临时 agent 按同一份规则能用的工具（tools 的子集，另有同样的 MCP），否则 null
-    temp_agent_tools: list[str] | None
     # 全部角色与全部工具的权限 id，写 roles / allow / deny 时参照
     available_roles: list[RoleDetail]
     permissions: list[ToolPermission]
@@ -75,7 +73,6 @@ def agents_toolset(
             deny=list(target.deny),
             tools=resolved.tools,
             mcp_servers=list(target.mcp_servers),
-            temp_agent_tools=resolved.temp_agent,
             available_roles=[
                 RoleDetail(
                     name=r.name, description=r.description, allow=list(r.rules.allow), deny=list(r.rules.deny)
@@ -98,7 +95,8 @@ def agents_toolset(
         thinking: Thinking = "default",
     ) -> str:
         """Create a new long-lived agent with its own memory, skills and workspace, e.g. a specialist you will
-        delegate to repeatedly. For a one-off job use a temporary agent (`run_temp_agent`, if you have it) instead.
+        delegate to repeatedly. For a one-off job delegate to yourself instead (`ask_agent` / `delegate_task`
+        with your own name).
 
         Args:
             name: Display name, unique among agents.

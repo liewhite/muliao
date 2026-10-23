@@ -33,14 +33,10 @@ def defer_call() -> NoReturn:
     raise CallDeferred()
 
 
-def finished_of(result: AgentRunResult[str]) -> Finished:
-    return Finished(answer=result.output, messages=result.new_messages())
-
-
 def outcome_of(result: AgentRunResult[str | DeferredToolRequests]) -> Finished | Paused:
     output = result.output
     if isinstance(output, str):
-        return Finished(answer=output, messages=result.new_messages())  # 同 finished_of；类型在这里才收窄
+        return Finished(answer=output, messages=result.new_messages())
     if output.approvals:
         # 本项目没有需要批准的工具（只用 defer_call 挂起）：出现说明工具与这里的约定不一致
         raise RuntimeError(f"run requested approvals: {[c.tool_name for c in output.approvals]}")

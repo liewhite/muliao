@@ -5,15 +5,12 @@ import json
 import httpx
 import pytest
 from pydantic import ValidationError
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
-from pydantic_ai.models.function import AgentInfo
 
 from muliao.agent_runtime.web import DeepSeekWeb, Page, SearchHit
 from muliao.agents.service import AgentSpec
 from muliao.container import assemble
 from muliao.errors import InvalidInput, TransientError
 from muliao.platform.db import migrate
-from tests.scripted import scripted
 from tests.test_tools import run_tools
 
 
@@ -197,23 +194,6 @@ async def test_web_agent_searches_and_fetches_with_truncation_and_rejections_go_
     assert "about t" in outputs[0]
     assert outputs[1] == "# Title\n\n" + "x" * 21 + "…[truncated 29 chars]"
     assert "HTTP 404: no content" in outputs[2]
-
-
-async def test_temp_agent_gets_web_tools_when_web_is_configured(web_container, models):
-    container, _ = web_container
-    me = await container.agents.create(
-        AgentSpec(name="manager", description="d", model="tools"), author="user"
-    )
-    seen: list[str] = []
-
-    def helper(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        seen.extend(t.name for t in info.function_tools)
-        return ModelResponse(parts=[TextPart("done")])
-
-    models.models["helper"] = scripted(helper)
-    await run_tools(container, models, me.id, [("run_temp_agent", {"task": "t", "model": "helper"})])
-
-    assert {"web_search", "web_fetch", "run_shell"} <= set(seen)
 
 
 async def test_without_web_config_web_permissions_grant_no_tools_and_does_not_block_startup(web_container):

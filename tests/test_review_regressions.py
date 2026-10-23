@@ -302,11 +302,9 @@ async def test_running_out_of_vault_set_retries_keeps_the_value_out_of_the_logge
 
 
 async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_model_unavailable(
-    container, make_agent, models, tmp_path
+    container, make_agent, models
 ):
-    """worker 不认识 SDK 的异常：压缩（summarize）与临时 agent（run_temp）这些入口同样要换成 ModelUnavailable 才会按模型策略重试。"""
-    from muliao.agent_runtime.runner import RunProfile
-
+    """worker 不认识 SDK 的异常：会话运行之外的入口（压缩 summarize）同样要换成 ModelUnavailable 才会按模型策略重试。"""
     agent = await make_agent("alpha", model="m")
 
     def overloaded(_m, _i) -> ModelResponse:
@@ -318,14 +316,3 @@ async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_mo
     runtime = container.consumer._runtime  # noqa: SLF001
     with pytest.raises(ModelUnavailable, match="503"):
         await runtime.summarize(agent, "s1", "summarize", "text")
-    with pytest.raises(ModelUnavailable, match="503"):
-        await runtime.run_temp(
-            agent,
-            task="t",
-            instructions="",
-            model="m",
-            thinking="default",
-            profile=RunProfile(toolsets=[]),
-            workspace=tmp_path,
-            session_id=None,
-        )

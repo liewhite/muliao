@@ -1,5 +1,5 @@
-"""有会话的运行的工作区工具：文件与 shell（agent_runtime.workspace_tools）加上后台任务——run_shell 可以 background，
-job_status、job_kill。后台任务属于会话（结局投回发起它的会话），所以只组合进有会话的运行。"""
+"""工作区工具：文件与前台 shell（agent_runtime.workspace_tools）加上后台任务——run_shell 可以 background，
+job_status、job_kill。后台任务属于发起它的会话（结局投回那个会话）。"""
 
 from pydantic_ai import FunctionToolset, RunContext
 
@@ -19,7 +19,7 @@ _BACKGROUND_DESCRIPTION = (
 )
 
 
-def session_workspace_toolset(
+def workspace_toolset(
     vault: Vault, limits: ShellLimits, files: FileStore, jobs: JobRunner
 ) -> FunctionToolset[RunScope]:
     """文件、shell 与后台任务。"""
@@ -49,9 +49,6 @@ def session_workspace_toolset(
             raise InvalidInput(
                 "background jobs have no timeout; leave `timeout` out (kill them with job_kill)"
             )
-        if ctx.deps.session_id is None:
-            # 这组工具只组合进有会话的运行
-            raise RuntimeError(f"session workspace tools used outside a session by agent {ctx.deps.agent_id}")
         job = await jobs.start(
             session_id=ctx.deps.session_id,
             agent_id=ctx.deps.agent_id,

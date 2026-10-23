@@ -199,7 +199,6 @@ async def test_permissions_and_roles_api(client, container):
     ).json()
     names = [t["tool"] for t in resolved["tools"]]
     assert "run_shell" in names and "memory_append" not in names and "write_public_skill" not in names
-    assert "run_shell" in resolved["temp_agent"]
     bad = await client.post("/api/permissions/resolve", json={"roles": ["nope"], "allow": [], "deny": []})
     assert bad.status_code == 422
 

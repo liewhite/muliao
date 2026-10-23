@@ -25,9 +25,8 @@ class RunScope:
 
     agent_id: str
     workspace: Path
-    # 临时 agent 不属于任何会话，以下两项均为 None
-    session_id: str | None
-    audience: Audience | None
+    session_id: str
+    audience: Audience
     # 运行开始时工具组发现、要告诉模型的问题（如这次连不上的 MCP server）：工具组构建、连接时追加，运行把它们放进
     # 开头交给模型的运行上下文（AgentRuntime）。每次驱动一份：只由 AgentRuntime 在驱动前换新（dataclasses.replace），
     # 别处构造的 RunScope 不要和别的运行共用这个列表

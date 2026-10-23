@@ -180,29 +180,15 @@ async def test_shared_files_are_shown_to_the_user_without_the_model_repeating_th
     assert resp.content == PNG and resp.headers["content-disposition"].startswith("inline")
 
 
-async def test_files_shared_by_a_temp_agent_reach_the_user_through_the_caller(
-    client, container, make_agent, models
-):
+async def test_a_shared_svg_is_offered_for_download_not_inline(client, container, make_agent, models):
     me = await make_agent("manager", model="tools")
-
-    def helper(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        step = sum(isinstance(m, ModelResponse) for m in messages)
-        if step == 0:
-            return ModelResponse(
-                parts=[
-                    ToolCallPart("write_file", {"path": "plot.svg", "content": "<svg/>"}, tool_call_id="w")
-                ]
-            )
-        if step == 1:
-            return ModelResponse(parts=[ToolCallPart("share_file", {"path": "plot.svg"}, tool_call_id="s")])
-        return ModelResponse(parts=[TextPart("plotted")])
-
-    models.models["helper"] = scripted(helper)
-    outputs = await run_tools(
-        container, models, me.id, [("run_temp_agent", {"task": "plot it", "model": "helper"})]
+    await run_tools(
+        container,
+        models,
+        me.id,
+        [("write_file", {"path": "plot.svg", "content": "<svg/>"}), ("share_file", {"path": "plot.svg"})],
     )
 
-    assert outputs[0].startswith("plotted") and "'plot.svg'" in outputs[0]
     shared = await _shared_attachments(client)
     # SVG 能带脚本，不内联显示，只能下载
     assert [(a["name"], a["media_type"], a["inline"]) for a in shared] == [

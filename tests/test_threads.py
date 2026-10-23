@@ -130,6 +130,62 @@ async def test_parallel_asks_run_concurrently_and_asks_to_one_thread_are_answere
     assert a_seen == [1]
 
 
+async def test_an_agent_asks_itself_in_parallel_threads(container, make_agent, models):
+    """一次性的杂活委派给自己（#183 删掉了临时 agent）：同一响应里问自己的几个 thread 并行，各自是这个 agent 的
+    新会话，回答交回发问的那次调用。"""
+    me = (await make_agent("me", model="m")).id
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if last_user_prompt(messages[:1]) != "go":
+            return ModelResponse(parts=[TextPart(f"did {last_user_prompt(messages)}")])
+        if len(messages) == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "ask_agent", {"agent": "me", "message": "x", "thread": "me-x"}, tool_call_id="c1"
+                    ),
+                    ToolCallPart(
+                        "ask_agent", {"agent": "me", "message": "y", "thread": "me-y"}, tool_call_id="c2"
+                    ),
+                ]
+            )
+        return answer_with_tool_results("all")(messages)
+
+    models.models["m"] = scripted(fn)
+    parent = await start(container, me, "go")
+    await drain(container)
+
+    assert await last_answer(container, parent.id) == "all: did x | did y"
+    children = await threads_of(container, parent.id)
+    assert sorted((c.thread, c.agent_id, c.kind) for c in children) == [
+        ("me-x", me, SessionKind.PRIVATE_THREAD),
+        ("me-y", me, SessionKind.PRIVATE_THREAD),
+    ]
+
+
+async def test_asking_itself_under_a_provider_limit_of_one_does_not_deadlock(container, make_agent, models):
+    """模型请求按 provider 限流（agent_runtime.llm）：发问方停在 ask_agent 上时不占配额（请求结束才执行工具，挂起后
+    运行结束），所以上限为 1 时问自己也能跑完。"""
+    from pydantic_ai.models.concurrency import ConcurrencyLimitedModel
+
+    from muliao.agent_runtime.llm import _ProviderLimiter
+
+    me = (await make_agent("me", model="m")).id
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if last_user_prompt(messages[:1]) != "go":
+            return ModelResponse(parts=[TextPart("helped")])
+        if len(messages) == 1:
+            return call("ask_agent", {"agent": "me", "message": "x", "thread": "me-x"})(messages)
+        return answer_with_tool_results("got")(messages)
+
+    models.models["m"] = ConcurrencyLimitedModel(scripted(fn), _ProviderLimiter("p", 1))
+    parent = await start(container, me, "go")
+    await drain(container, limit_seconds=5)
+
+    assert await last_answer(container, parent.id) == "got: helped"
+
+
 async def test_nested_ask_returns_the_final_answer_of_the_whole_chain(container, make_agent, models):
     lead = (await make_agent("lead", model="l")).id
     await make_agent("mid", model="m")

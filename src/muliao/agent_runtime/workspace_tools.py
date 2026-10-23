@@ -1,7 +1,6 @@
 """文件与 shell 工具。相对路径以 agent 工作目录为基准；不做强隔离（单人本机使用，见架构文档）。
 
-workspace_toolset 是文件与前台 shell（临时 agent）；有会话的运行用 jobs.tools.session_workspace_toolset，它由这里的
-文件工具与前台执行加上后台任务组成。
+这里是文件工具与前台执行；组合进运行的是 jobs.tools.workspace_toolset，它在此之上加上后台任务。
 """
 
 import logging
@@ -89,32 +88,6 @@ def shell_description(limits: ShellLimits) -> str:
     return _SHELL_DESCRIPTION.format(
         default=limits.default_timeout, max=limits.max_timeout, max_output=limits.max_output_chars
     )
-
-
-def workspace_toolset(vault: Vault, limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
-    """文件与前台 shell。"""
-    ts = file_toolset(limits, files)
-
-    @ts.tool(description=shell_description(limits))
-    async def run_shell(
-        ctx: RunContext[RunScope],
-        command: str,
-        timeout: float | None = None,  # noqa: ASYNC109  工具参数，面向模型的命名
-        # 不写成 `list[str] | None`：可为空的数组在 schema 里是 anyOf[array, null]，模型更容易把数组写成 JSON 字符串
-        secrets: tuple[str, ...] = (),
-    ) -> str:
-        """The description is set in the decorator (it carries the configured limits).
-
-        Args:
-            command: The command line to run.
-            timeout: Seconds before the command is killed.
-            secrets: Vault keys (your private ones or public ones) to expose to the command as environment
-                variables of the same name.
-                Secret values in the output are replaced by `[secret:KEY]`.
-        """
-        return await run_foreground(vault, limits, ctx.deps, command, timeout, secrets)
-
-    return ts
 
 
 async def run_foreground(

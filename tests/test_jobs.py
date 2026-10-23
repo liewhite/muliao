@@ -15,7 +15,6 @@ from muliao.sessions.holds import has_active_in, hold_in
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Mail, MailState
 from muliao.sessions.transcript import to_items
-from tests.conftest import session_tools
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, history_of, start
 from tests.test_mailbox import Recorder
@@ -147,18 +146,6 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
     assert "pgrep -g 424242" in event_text
     # 发起它的运行有用户在等：处理中断通知的运行推送
     assert len(await container.notifications.list(100)) == 1
-
-
-async def test_runs_without_a_session_get_no_background_jobs(container):
-    """后台任务属于会话：临时 agent 用的那份工作区工具没有 background 参数，也没有 job 工具（靠不提供，不靠运行时检查）。"""
-    from muliao.agent_runtime.workspace_tools import ShellLimits, workspace_toolset
-
-    plain = workspace_toolset(container.vault, ShellLimits(10, 20, 1000), container.files)
-    assert "job_status" not in plain.tools and "job_kill" not in plain.tools
-    assert "background" not in plain.tools["run_shell"].function_schema.json_schema["properties"]
-    session = session_tools(container)
-    assert {"job_status", "job_kill"} <= set(session)
-    assert "background" in session["run_shell"].function_schema.json_schema["properties"]
 
 
 async def test_a_session_with_a_running_job_cannot_be_deleted(container, make_agent, models):

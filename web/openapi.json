@@ -5509,29 +5509,14 @@
             },
             "type": "array",
             "title": "Tools"
-          },
-          "temp_agent": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Temp Agent"
           }
         },
         "type": "object",
         "required": [
-          "tools",
-          "temp_agent"
+          "tools"
         ],
         "title": "ResolvedOut",
-        "description": "按规则最终能用的工具（MCP 不归权限管，不在其中）；能开临时 agent 时另有临时 agent 按同一份规则能用的工具名。"
+        "description": "按规则最终能用的工具（MCP 不归权限管，不在其中）。"
       },
       "ResourceKind": {
         "type": "string",

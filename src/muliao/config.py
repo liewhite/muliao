@@ -192,11 +192,6 @@ class Settings(_Section):
         return self.data_dir / "workspaces"
 
     @property
-    def temp_dir(self) -> Path:
-        """临时 agent 的工作目录在这里创建，用完即删。"""
-        return self.data_dir / "tmp"
-
-    @property
     def files_dir(self) -> Path:
         """对话里出现的文件，内容不可变，见 muliao.files.store。"""
         return self.data_dir / "files"

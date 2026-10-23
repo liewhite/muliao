@@ -16,10 +16,9 @@ from pydantic_ai.toolsets import AbstractToolset
 from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
 from muliao.agent_runtime.mcp import McpConnector
 from muliao.agent_runtime.runner import AgentRuntime, Toolbox
-from muliao.agent_runtime.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.agent_runtime.web import WebProvider, build_web_provider
 from muliao.agent_runtime.web_tools import web_toolset
-from muliao.agent_runtime.workspace_tools import ShellLimits, workspace_toolset
+from muliao.agent_runtime.workspace_tools import ShellLimits
 from muliao.agents.active import ActiveOwners
 from muliao.agents.evolution_tools import (
     memory_toolset,
@@ -30,7 +29,7 @@ from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
-from muliao.agents.permissions import TEMP_AGENT_TOOLS, available_tools
+from muliao.agents.permissions import available_tools
 from muliao.agents.resources import ResourceRepo, RevisionHistory
 from muliao.agents.roles import RoleService
 from muliao.agents.service import AgentDefaults, AgentService, Thinking
@@ -43,7 +42,7 @@ from muliao.history.tools import history_toolset
 from muliao.issues.api import IssueService
 from muliao.issues.tools import issues_toolset
 from muliao.jobs.runner import JobRunner
-from muliao.jobs.tools import session_workspace_toolset
+from muliao.jobs.tools import workspace_toolset
 from muliao.notifications.delivery import DeliverHandler
 from muliao.notifications.service import DELIVER_TASK, Notifications
 from muliao.notifications.tools import notify_toolset
@@ -148,8 +147,6 @@ class Assembly:
     sessions: SessionService
     notifications: Notifications
     mcp: McpRegistry
-    # 临时 agent 固定的那组工具（按调用方的规则放行）
-    temp_toolbox: Toolbox
     triggers: TriggerService
     due_triggers: DueRunner
     # 流式触发器托管的常驻命令
@@ -236,8 +233,6 @@ class Assembly:
         await self.resources.recover()
         await self.agents.verify_stored()
         await self.queue.check_kinds()
-        # 在 worker 恢复任务之前：此时没有临时 agent 在运行
-        await asyncio.to_thread(clear_temp_dirs, self.settings.temp_dir)
         await asyncio.to_thread(self.files.recover)
         # 上次运行留下的「运行中」后台任务：进程已随服务结束，记为被中断并通知 agent（worker 处理这些事件之前）
         await self.jobs.recover()
@@ -292,7 +287,7 @@ def assemble(
         web = build_web_provider(settings.web, http)
     if transcriber is None and settings.transcription is not None:
         transcriber = build_transcriber(settings.transcription, http)
-    # 「配置了哪些可选能力」只在这里判断一次，注册的工具（权限表核对）与临时 agent 的工具都由它导出
+    # 「配置了哪些可选能力」只在这里判断一次，注册的工具与权限表核对都由它导出
     web_tools = [] if web is None else [web_toolset(web, settings.runtime.tool_output_max_chars)]
     tz = ZoneInfo(settings.timezone)
     db = Database(create_engine(settings.db_path), check_writes=check_writes)
@@ -396,18 +391,11 @@ def assemble(
     def mcp_tools(selected: Sequence[str]) -> AbstractToolset[RunScope]:
         return mcp_connector.toolset(mcp.index, selected)
 
-    # 临时 agent 固定的一组：文件与 shell、配置了的网页搜索、MCP（没有记忆、skill、委派，也不能再开临时 agent），
-    # 每次按调用方的权限规则取放行的那部分
-    temp_toolbox = Toolbox(
-        toolsets=[workspace_toolset(vault, limits, files), *web_tools], mcp=mcp_tools, rules_of=agents.rules
-    )
-    # 有会话的运行可用的全部静态工具集；每个工具的权限在 agents.permissions 登记，一次运行开放哪些按 agent 的权限规则
+    # 运行可用的全部静态工具集；每个工具的权限在 agents.permissions 登记，一次运行开放哪些按 agent 的权限规则
     # 算（Toolbox.profile）
     static_toolsets = [
         *always_tools,
-        # 对话里用的这份带后台任务（临时 agent 的 temp_toolbox 用不带后台任务的 workspace_toolset）
-        session_workspace_toolset(vault, limits, files, jobs),
-        temp_agent_toolset(runtime, agents, temp_toolbox, settings.temp_dir),
+        workspace_toolset(vault, limits, files, jobs),
         delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds),
         notify_toolset(notifications),
         public_skills_toolset(skills),
@@ -423,7 +411,7 @@ def assemble(
         mcp=mcp_tools,
         rules_of=agents.rules,
     )
-    _check_permissions(toolbox.tool_names(), temp_toolbox.tool_names(), web_configured=bool(web_tools))
+    _check_permissions(toolbox.tool_names(), web_configured=bool(web_tools))
     compactor = Compactor(
         db,
         runtime,
@@ -483,7 +471,6 @@ def assemble(
         sessions=sessions,
         notifications=notifications,
         mcp=mcp,
-        temp_toolbox=temp_toolbox,
         triggers=triggers,
         due_triggers=due_triggers,
         streams=streams,
@@ -512,16 +499,10 @@ def assemble(
     )
 
 
-def _check_permissions(registered: list[str], temp: list[str], *, web_configured: bool) -> None:
+def _check_permissions(registered: list[str], *, web_configured: bool) -> None:
     """注册的工具与当前配置下的权限表（agents.permissions.available_tools）必须一一对应：没登记的工具没有权限 id、谁也
-    拿不到，表里多出的说明工具改了名；界面与 get_agent 算最终工具用的也是这张表，一致才说得准。临时 agent 注册的工具
-    同样必须是 TEMP_AGENT_TOOLS 里当前配置有的那些（界面列出的临时 agent 工具按它算）。"""
+    拿不到，表里多出的说明工具改了名；界面与 get_agent 算最终工具用的也是这张表，一致才说得准。"""
     expected = set(available_tools(web_configured=web_configured))
-    expected_temp = set(TEMP_AGENT_TOOLS) & expected
-    if sorted(temp) != sorted(expected_temp):
-        raise RuntimeError(
-            f"temp agent tools {sorted(temp)} do not match TEMP_AGENT_TOOLS here: {sorted(expected_temp)}"
-        )
     duplicated = sorted({n for n in registered if registered.count(n) > 1})
     if set(registered) != expected or duplicated:
         raise RuntimeError(

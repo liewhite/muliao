@@ -198,7 +198,7 @@ class McpConnector:
         return _SecretSafe(toolset, server=server.name, secrets=secrets).prefixed(server.name)
 
     def toolset(self, index: McpIndex, selected: Sequence[str]) -> DynamicToolset[RunScope]:
-        """使用 MCP：每次运行时按这次运行的 agent（RunScope.agent_id；临时 agent 用调用方的视角）取可用的 server
+        """使用 MCP：每次运行时按这次运行的 agent（RunScope.agent_id）取可用的 server
         （index：它私有的与勾选了的公共 server，selected）构建，是一个 toolset，没有可用的 server 时为空。"""
 
         async def build(ctx: RunContext[RunScope]) -> AbstractToolset[RunScope] | None:

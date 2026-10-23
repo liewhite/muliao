@@ -122,17 +122,13 @@ class RulesIn(BaseModel):
 
 
 class ResolvedOut(BaseModel):
-    """按规则最终能用的工具（MCP 不归权限管，不在其中）；能开临时 agent 时另有临时 agent 按同一份规则能用的工具名。"""
+    """按规则最终能用的工具（MCP 不归权限管，不在其中）。"""
 
     tools: list[PermissionOut]
-    temp_agent: list[str] | None
 
     @classmethod
     def of(cls, r: Resolved) -> "ResolvedOut":
-        return cls(
-            tools=[PermissionOut.of(t, TOOL_PERMISSIONS[t]) for t in r.tools],
-            temp_agent=r.temp_agent,
-        )
+        return cls(tools=[PermissionOut.of(t, TOOL_PERMISSIONS[t]) for t in r.tools])
 
 
 @router.post("/permissions/resolve")

@@ -12,7 +12,6 @@
   监督意外结束（如记下结局时数据库失败），由每次检查前的对账发现。
 - 任务对 agent 可见（工作目录本来就是 agent 级的，job_status / job_kill 按 agent 检查归属），事件归发起它的会话。
   日志大小不设上限（按「不限制」的决定）。
-- 临时 agent 没有会话、没有信箱接收事件，不能开后台任务。
 """
 
 from __future__ import annotations
@@ -144,8 +143,7 @@ class JobRunner:
         secrets: list[str],
         awaited: bool,
     ) -> Job:
-        """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。只在有会话的运行里能开
-        （jobs.tools.session_workspace_toolset）。"""
+        """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。"""
         group = self._group
         if group is None:
             raise RuntimeError("background jobs can only start while the job runner is running")

@@ -42,7 +42,9 @@ Hand a task to an agent and keep going without waiting. It runs in a thread the 
 By default the user is notified with its answer and you do NOT get it back. With `report_back: true` the answer \
 (or its failure) comes back to you as an event in this conversation instead, with a check-in event about every \
 {check:g} seconds while it is still working (events reach you like messages, between your tool calls if you are \
-busy), so you can keep going and act on the result when it arrives. If you need the answer before you can continue, use `ask_agent`."""
+busy), so you can keep going and act on the result when it arrives. If you need the answer before you can continue, use `ask_agent`. \
+The agent can be yourself (your own name): a fresh conversation of you, with your memory, skills and tools, for \
+work to run on the side."""
 
 
 def delegation_toolset(
@@ -68,14 +70,14 @@ def delegation_toolset(
         """The description is `_DELEGATE_DESCRIPTION` (it carries the configured check-in interval).
 
         Args:
-            agent: Target agent name from `list_agents`.
+            agent: Target agent name from `list_agents`, or your own name.
             task: Self-contained task description; the agent cannot see this conversation except through
                 earlier messages in the same thread.
             thread: Short name of the thread, e.g. "weekly-report". Reusing a thread name continues that
                 conversation with its full context; use a new name for an unrelated task.
             report_back: Get the thread's answer back as an event in this conversation.
         """
-        parent_id = _require_session(ctx)
+        parent_id = ctx.deps.session_id
         target = await agents.find_by_name(agent)
         async with db.transaction() as s:
             if report_back:
@@ -109,13 +111,16 @@ def delegation_toolset(
         reply. Ask again in the same thread to follow up with the agent's context intact, e.g. review -> fix ->
         review again. Several asks in one response run in parallel. Your reply pauses until the answers arrive; if
         the user writes to you meanwhile, you continue and the answer reaches you later as an event.
+        The agent can be yourself (your own name): a fresh conversation of you, with your memory, skills and tools,
+        for a self-contained side job (e.g. a code review, or several parts of a task in parallel) whose context
+        you do not want in this conversation.
 
         Args:
-            agent: Target agent name from `list_agents`.
+            agent: Target agent name from `list_agents`, or your own name.
             message: Self-contained request; the agent sees only this thread's history.
             thread: Short name of the thread, e.g. "code-review". Reuse it to continue the same conversation.
         """
-        parent_id = _require_session(ctx)
+        parent_id = ctx.deps.session_id
         target = await agents.find_by_name(agent)
         if not message.strip():
             raise InvalidInput("message must not be empty")
@@ -146,7 +151,7 @@ def delegation_toolset(
         Args:
             thread: The thread name used with `delegate_task` or `ask_agent`.
         """
-        parent_id = _require_session(ctx)
+        parent_id = ctx.deps.session_id
         async with db.transaction() as s:
             child_id = await threads.thread_id_in(s, parent_id, validate_thread(thread))
         if child_id is None:
@@ -162,7 +167,7 @@ def delegation_toolset(
 but it is waiting for work it started or answers it asked for: not finished yet), idle (nothing in progress). \
 `answer` is its latest reply; while it is not idle that reply is intermediate, not its result. `failure` is set \
 when its latest run failed for good."""
-        parent_id = _require_session(ctx)
+        parent_id = ctx.deps.session_id
         async with db.transaction() as s:
             views = await threads.list_in(s, parent_id)
         # 包括正在删除的 agent（它的 thread 在删除流程里随后删除）
@@ -180,10 +185,3 @@ when its latest run failed for good."""
         ]
 
     return ts
-
-
-def _require_session(ctx: RunContext[RunScope]) -> str:
-    """委派组只组合进有会话的运行（临时 agent 的工具组合里没有它）。"""
-    if ctx.deps.session_id is None:
-        raise RuntimeError(f"delegation tools used outside a session by agent {ctx.deps.agent_id}")
-    return ctx.deps.session_id

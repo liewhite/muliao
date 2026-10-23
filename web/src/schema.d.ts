@@ -1933,13 +1933,11 @@ export interface components {
         };
         /**
          * ResolvedOut
-         * @description 按规则最终能用的工具（MCP 不归权限管，不在其中）；能开临时 agent 时另有临时 agent 按同一份规则能用的工具名。
+         * @description 按规则最终能用的工具（MCP 不归权限管，不在其中）。
          */
         ResolvedOut: {
             /** Tools */
             tools: components["schemas"]["PermissionOut"][];
-            /** Temp Agent */
-            temp_agent: string[] | null;
         };
         /**
          * ResourceKind
