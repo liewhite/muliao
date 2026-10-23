@@ -101,15 +101,14 @@ class StepHooks:
 
 @dataclass(frozen=True)
 class RunProfile:
-    """一次运行开放的工具：对话按 agent 的权限规则从 Toolbox 里取，临时 agent 只开放文件与 shell
-    （加调用方可见的 MCP，以及配置了 [web] 时的网页搜索与抓取）。"""
+    """一次运行开放的工具：对话与临时 agent 各从自己的 Toolbox 里按（调用方）agent 的权限规则取。"""
 
     toolsets: Sequence[AbstractToolset[RunScope]]
 
 
 @dataclass(frozen=True)
 class Toolbox:
-    """有会话的运行可用的全部工具：静态的工具集（每个工具的权限见 agents.permissions.TOOL_PERMISSIONS）与按运行构建的
+    """一种运行（有会话的运行、临时 agent）可用的全部工具：静态的工具集（每个工具的权限见 agents.permissions.TOOL_PERMISSIONS）与按运行构建的
     MCP。一次运行开放哪些由 agent 的权限规则在运行开始时算定（profile），调用时不再判断。"""
 
     toolsets: Sequence[FunctionToolset[RunScope]]

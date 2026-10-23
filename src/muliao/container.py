@@ -404,7 +404,7 @@ def assemble(
     # 算（Toolbox.profile）
     static_toolsets = [
         *always_tools,
-        # 对话里用的这份带后台任务（只有会话运行会用 Toolbox）
+        # 对话里用的这份带后台任务（临时 agent 的 temp_toolbox 用不带后台任务的 workspace_toolset）
         session_workspace_toolset(vault, limits, files, jobs),
         temp_agent_toolset(runtime, agents, temp_toolbox, settings.temp_dir),
         delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds),
