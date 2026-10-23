@@ -27,10 +27,9 @@ _MAX_LINE_CHARS = 2000
 # edit_file 成功后展示的改动前后上下文行数：够确认改对了，不必再回读文件
 _EDIT_CONTEXT_LINES = 2
 _DEFAULT_READ_LIMIT = 2000
-# read_file 按行截断时给标题、续读说明和段间分隔留的字符数（预算 = 输出上限减去它）
-_READ_NOTE_RESERVE = 300
-# 多段读取剩余预算不到这么多时，后面的段不再读，只列出来
-_MIN_PART_BUDGET = 200
+# read_file 按行截断时，正文之外每段还要放的字符数的上界：`==> path lines A-B of N <==` 标题里路径以外的部分、
+# 续读说明、段间分隔（正文预算 = 剩余预算 - 路径长 - 它）
+_PART_OVERHEAD = 200
 # read_file 交给模型看的图片上限（文件字节数）：Anthropic API 单张图片限 5MB，按 base64 编码后的长度算，即原始字节
 # 的 3/4（其他 provider 更宽）。超过就拒绝、不在这里缩放：放进历史后每次请求都会被 provider 拒绝
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4
@@ -170,36 +169,10 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
                 if offset != 0 or limit != _DEFAULT_READ_LIMIT:
                     raise InvalidInput(f"offset/limit do not apply to an image file: {target}")
                 return _read_image(target, media_type)
-            excerpt = _read_range(target, offset, limit, limits.max_output_chars - _READ_NOTE_RESERVE)
-            # 按行截断后正文已在预算内；只有单行比整个预算还长时这里才会再截
+            excerpt = _read_range(target, offset, limit, limits.max_output_chars - _PART_OVERHEAD)
+            # 按行截断后正文已在预算内；只有第一行就比整个预算还长时这里才会再截
             return truncate(excerpt.body, limits.max_output_chars) + excerpt.more_note
-        sections = []
-        budget = limits.max_output_chars - _READ_NOTE_RESERVE
-        for part in reads:
-            if budget < _MIN_PART_BUDGET:
-                # 输出上限已用完：逐段说明没读的，模型照着另起一次调用，不必猜 offset
-                sections.append(
-                    f"==> {part.path}: not read, output limit reached; read it in another call "
-                    f"(offset={part.offset}, limit={part.limit}) <=="
-                )
-                continue
-            target = resolve(ctx.deps, part.path)
-            try:
-                if _image_type(target):
-                    raise InvalidInput("an image file cannot be read in reads; read it alone with path")
-                # 标题长度先估出来扣掉（行号范围最多几十个字符）
-                excerpt = _read_range(target, part.offset, part.limit, budget - len(str(target)) - 50)
-            except (InvalidInput, NotFound, OSError) as e:
-                # 标题用模型给的路径认出是哪一段（有的错误信息里不带路径）
-                section = f"==> {part.path}: {e} <=="
-            else:
-                section = f"==> {target} {excerpt.span} <==\n{excerpt.body}{excerpt.more_note}"
-                if excerpt.cut:
-                    budget = 0
-            sections.append(section)
-            budget -= len(section) + 2
-        # 兜底：单行比预算还长时才会用到
-        return truncate("\n\n".join(sections), limits.max_output_chars)
+        return _read_parts(ctx.deps, reads, limits.max_output_chars)
 
     @ts.tool
     async def write_file(ctx: RunContext[RunScope], path: str, content: str) -> str:
@@ -330,6 +303,57 @@ def _read_image(target: Path, media_type: str) -> list[str | BinaryContent]:
     return [f"{target} ({media_type}, {len(data)} bytes)", BinaryContent(data, media_type=media_type)]
 
 
+def _read_parts(scope: RunScope, reads: tuple[FileRange, ...], max_chars: int) -> str:
+    """read_file 的多段读取：按次序读，共用一个输出预算。预算用完的那段在整行处停下并写明续读的 offset；之后
+    的段不再读，最后一行逐个列出（这一行不参与截断），模型照着另起一次调用、不必猜。"""
+    sections: list[tuple[FileRange, str]] = []
+    skipped: list[FileRange] = []
+    budget = max_chars
+    for part in reads:
+        target = resolve(scope, part.path)
+        body_budget = budget - len(str(target)) - _PART_OVERHEAD
+        if skipped or body_budget <= 0:
+            skipped.append(part)
+            continue
+        try:
+            if _image_type(target):
+                raise InvalidInput("an image file cannot be read in reads; read it alone with path")
+            excerpt = _read_range(target, part.offset, part.limit, body_budget)
+        except (InvalidInput, NotFound, OSError) as e:
+            # 标题用模型给的路径认出是哪一段（有的错误信息里不带路径）
+            section = f"==> {part.path}: {e} <=="
+        else:
+            if sections and len(excerpt.body) > body_budget:
+                # 第一行就放不下（_read_range 至少给一行）：前面已有内容时不硬塞，留到下一次调用
+                skipped.append(part)
+                continue
+            section = f"==> {target} {excerpt.span} <==\n{excerpt.body}{excerpt.more_note}"
+            if excerpt.cut:
+                budget = 0
+        sections.append((part, section))
+        budget -= len(section) + 2
+    while True:
+        body = "\n\n".join(s for _, s in sections)
+        tail = _not_read_note(skipped)
+        if len(body) + len(tail) <= max_chars or len(sections) <= 1:
+            break
+        # 未读列表太长、放不下了：把最后读的一段也挤进列表，不在正文中间截
+        part, _ = sections.pop()
+        skipped.insert(0, part)
+    # 兜底：只有第一段的第一行就比预算还长时才会截到正文
+    return (truncate(body, max(max_chars - len(tail), 0)) + tail).lstrip("\n")
+
+
+def _not_read_note(skipped: list[FileRange]) -> str:
+    if not skipped:
+        return ""
+    listed = "; ".join(
+        f"{p.path} offset={p.offset}" + (f" limit={p.limit}" if p.limit != _DEFAULT_READ_LIMIT else "")
+        for p in skipped
+    )
+    return f"\n\n==> not read, output limit reached; read in another call: {listed} <=="
+
+
 def _read_range(target: Path, offset: int, limit: int, budget: int) -> _Excerpt:
     """读 lines[offset:offset+limit]，带行号的正文不超过 budget 个字符：在最后一整行停下（至少给一行），并在
     more_note 里写明读到第几行、用什么 offset 接着读。"""
@@ -352,7 +376,9 @@ def _read_range(target: Path, offset: int, limit: int, budget: int) -> _Excerpt:
         rows.append(row)
     stop = offset + len(rows)
     if stop < end:
-        rest = f", limit={end - stop}" if end < len(lines) else ""
+        # 给了 limit 且没读到文件末尾时才提 limit；默认 limit 的窗口不是模型要的，照着读会以为文件到那里就完了
+        explicit = limit != _DEFAULT_READ_LIMIT and end < len(lines)
+        rest = f", limit={end - stop}" if explicit else ""
         note = (
             f"\n… output limit reached: shown up to line {stop} of {len(lines)}; "
             f"continue with offset={stop}{rest}"

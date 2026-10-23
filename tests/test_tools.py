@@ -725,6 +725,10 @@ async def small_output_container(settings, models):
     await c.db.engine.dispose()
 
 
+# 多到两段短正文加未读列表放不进 1000 字符、一段加列表放得进
+N_SKIPPED = 30
+
+
 async def test_read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_where_to_continue(
     small_output_container, models
 ):
@@ -742,6 +746,19 @@ async def test_read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_w
             ("read_file", {"path": "a.txt"}),
             ("read_file", {"path": "a.txt", "offset": 10, "limit": 200}),
             ("read_file", {"reads": [{"path": "a.txt", "limit": 5}, {"path": "a.txt"}, {"path": "b.txt"}]}),
+            ("write_file", {"path": "wide.txt", "content": "w" * 1500 + "\n"}),
+            # 第二段第一行就放不下：不硬塞；未读的段很多时列表也不被截
+            (
+                "read_file",
+                {
+                    "reads": [
+                        {"path": "a.txt", "limit": 3},
+                        {"path": "a.txt", "offset": 10, "limit": 3},
+                        {"path": "wide.txt"},
+                        *({"path": f"d{i:02}.py", "offset": i} for i in range(N_SKIPPED)),
+                    ]
+                },
+            ),
         ],
     )
     single = outputs[1]
@@ -762,9 +779,17 @@ async def test_read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_w
     second = multi.split("\n\n")[1]
     stop = int(second.rsplit("shown up to line ", 1)[1].split(" ")[0])
     assert f"a.txt lines 1-{stop} of 300 <==" in second and second.endswith(f"continue with offset={stop}")
-    assert multi.endswith(
-        "==> b.txt: not read, output limit reached; read it in another call (offset=0, limit=2000) <=="
+    assert multi.endswith("\n\n==> not read, output limit reached; read in another call: b.txt offset=0 <==")
+    many = outputs[5]
+    assert len(many) <= 1000 and "truncated" not in many
+    # 列表放不下时连已读的第二段也挤进列表，只剩第一段；其余按次序列出
+    head, tail = many.split("\n\n==> not read, output limit reached; read in another call: ")
+    assert head.startswith("==> ") and head.endswith(
+        "a.txt lines 1-3 of 300 <==\n1\tline001\n2\tline002\n3\tline003\n… 297 more lines"
     )
+    listed = tail.removesuffix(" <==").split("; ")
+    assert listed[:2] == ["a.txt offset=10 limit=3", "wide.txt offset=0"]
+    assert listed[2:] == [f"d{i:02}.py offset={i}" for i in range(N_SKIPPED)]
 
 
 async def test_read_file_truncates_very_long_lines(container, make_agent, models):
