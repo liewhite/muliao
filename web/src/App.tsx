@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, useTheme } from '@heroui/react'
 import { Menu } from 'lucide-react'
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -51,12 +51,28 @@ export default function App() {
     return () => unauthorizedEvent.removeEventListener('unauthorized', onUnauthorized)
   }, [])
 
+  // BrowserRouter 下 navigate 随路径变化换新函数：放进 ref，下面的 effect 只随登录状态执行，不在每次切页时重跑（#135）
+  const navigateRef = useRef(navigate)
+  useEffect(() => {
+    navigateRef.current = navigate
+  }, [navigate])
+
   useEffect(() => {
     if (auth !== 'in') return
-    void syncPushSubscription().catch((e) => console.error('push subscription sync failed', e))
+    // 订阅可能被浏览器轮换：登录后（页面可见时）和每次回到前台时同步一次
+    const sync = () => {
+      if (document.visibilityState !== 'visible') return
+      syncPushSubscription().catch((e) => console.error('push subscription sync failed', e))
+    }
+    sync()
+    document.addEventListener('visibilitychange', sync)
     // 点通知后跳到 swNavigate 取到的页面（含外壳挂载前就取到的那次，见 swNavigate.ts）
-    return handleNavigation((url) => navigate(url))
-  }, [auth, navigate])
+    const stop = handleNavigation((url) => navigateRef.current(url))
+    return () => {
+      document.removeEventListener('visibilitychange', sync)
+      stop()
+    }
+  }, [auth])
 
   if (bootError) {
     return (
