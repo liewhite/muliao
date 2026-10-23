@@ -591,6 +591,18 @@ function useFollowBottom() {
   return { scrollRef, contentEndRef, atBottom, pin }
 }
 
+/** 用户看过了这个会话：指向它的通知标为已读（会话的未读由通知派生），标记本身幂等 */
+function markSessionRead(id: string) {
+  void api
+    .markRead(id)
+    .then(() => {
+      // 分屏时旁边的会话列表要去掉未读点
+      announceChange('sessions')
+      return refreshUnread()
+    })
+    .catch((e) => console.error('marking session read failed', e))
+}
+
 export default function SessionView() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
@@ -618,8 +630,8 @@ export default function SessionView() {
       if (e.type === 'run') setLive((prev) => [...withoutCovered(detail.data?.live ?? null, prev, e), e])
       // 又保存了一步：重新拉取历史；新快照换成新的一段，合并时丢掉上一段的事件
       else if (e.type === 'saved') void detail.reload()
-      // 指向这个会话的新通知（常在运行结束之后才写下）：会话变未读，重新拉取后由下面的 effect 标记已读
-      else if (e.type === 'notification') void detail.reload()
+      // 看着它时又来了指向它的通知（会话的未读由通知派生）：用户已经在看，直接标记已读
+      else if (e.type === 'notification') markSessionRead(id)
       else if (isTaskOf(e, 'run', 'compaction')) {
         // 运行状态变化后以数据库为准重新拉取，清空临时流
         if (e.status !== 'running') setLive([])
@@ -636,18 +648,8 @@ export default function SessionView() {
     if (merged.gap) void reload()
   }, [merged.gap, reload])
 
-  // 打开会话、以及看着它时又来了指向它的通知（会话的未读由通知派生），都标记已读；标记本身幂等
-  const unread = detail.data?.session.unread
-  useEffect(() => {
-    void api
-      .markRead(id)
-      .then(() => {
-        // 分屏时旁边的会话列表要去掉未读点
-        announceChange('sessions')
-        return refreshUnread()
-      })
-      .catch((e) => console.error('marking session read failed', e))
-  }, [id, unread])
+  // 打开会话即标记已读（看着它时新来的通知见上面的事件处理）
+  useEffect(() => markSessionRead(id), [id])
 
   // 打开会话时从底部看起（每个会话一个页面实例，只在挂载时）
   const { pin } = bottom

@@ -22,7 +22,7 @@ from muliao.platform.bus import EventBus
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
-from muliao.sessions.api import policy_of, session_in
+from muliao.sessions.api import SessionInfo, policy_of, session_in
 from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted, SessionRead
 
 log = logging.getLogger(__name__)
@@ -108,13 +108,7 @@ class Notifications:
             return no_commit
 
         async def commit(s: AsyncSession) -> None:
-            # 正常情况下同一会话的 SessionDeleted 排在后面（session_events_lane）；这条投递失败后被人工重试时可能已在
-            # 删除之后。会话只会从存在变为删除，在本事务里检查没有竞态
-            if await session_in(s, event.session_id) is None:
-                log.info(
-                    "run of a deleted session not notified",
-                    extra={"session_id": event.session_id, "run_id": event.run_id},
-                )
+            if await _run_session_in(s, event) is None:
                 return
             await self._enqueue_in(
                 s,
@@ -133,15 +127,8 @@ class Notifications:
         （由那里的 agent 处理），不单独通知；运行中途的工具报错不走这里。"""
 
         async def commit(s: AsyncSession) -> None:
-            # 与 on_run_ended 同理：人工重试的投递可能已在会话删除之后
-            session = await session_in(s, event.session_id)
-            if session is None:
-                log.info(
-                    "failed run of a deleted session not notified",
-                    extra={"session_id": event.session_id, "run_id": event.run_id},
-                )
-                return
-            if not policy_of(session.kind).listed:
+            session = await _run_session_in(s, event)
+            if session is None or not policy_of(session.kind).listed:
                 return
             await self._enqueue_in(
                 s,
@@ -218,6 +205,18 @@ class Notifications:
                 .where(Notification.id <= through_id, Notification.unread.is_(True))
                 .values(unread=False)
             )
+
+
+async def _run_session_in(s: AsyncSession, event: RunEnded | RunFailed) -> SessionInfo | None:
+    """这次运行的会话；已删除时记日志、返回 None（不为它写通知）。正常情况下同一会话的 SessionDeleted 排在后面
+    （session_events_lane）；投递失败后被人工重试时可能已在删除之后。会话只会从存在变为删除，在本事务里检查没有竞态。"""
+    session = await session_in(s, event.session_id)
+    if session is None:
+        log.info(
+            "run of a deleted session not notified",
+            extra={"session_id": event.session_id, "run_id": event.run_id, "event": event.TYPE},
+        )
+    return session
 
 
 async def unread_count_in(s: AsyncSession) -> int:
