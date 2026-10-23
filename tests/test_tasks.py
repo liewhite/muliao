@@ -318,11 +318,11 @@ def test_default_retry_policies_ride_out_a_model_outage_but_give_up_on_other_fai
     """#144：relay 503 曾持续 9–30 分钟，原来所有暂时性失败共用 5 次（约 75 秒）就判失败，用户只能手动重试。
     按线上默认配置算：模型不可用的重试窗口约 30 分钟、单次间隔封顶 5 分钟；其余暂时性失败仍是 5 次约 75 秒。"""
     from muliao.config import RuntimeConfig
+    from muliao.container import retries_of
     from muliao.platform.tasks import RetryPolicy
 
-    d = RuntimeConfig()
-    model = RetryPolicy(d.model_retry_max_attempts, d.task_retry_base_seconds, d.task_retry_max_delay_seconds)
-    transient = RetryPolicy(d.task_max_attempts, d.task_retry_base_seconds, d.task_retry_max_delay_seconds)
+    retries = retries_of(RuntimeConfig())
+    model, transient = retries.model, retries.transient
 
     def window(p: RetryPolicy) -> float:
         return sum(p.delay(n) for n in range(1, p.max_attempts))
@@ -330,6 +330,21 @@ def test_default_retry_policies_ride_out_a_model_outage_but_give_up_on_other_fai
     assert [model.delay(n) for n in range(1, 9)] == [5, 10, 20, 40, 80, 160, 300, 300]
     assert 25 * 60 <= window(model) <= 35 * 60
     assert window(transient) == 5 + 10 + 20 + 40
+
+
+async def test_a_task_interrupted_between_the_two_limits_is_recovered_not_failed(container, make_agent):
+    """尝试次数不记是哪类失败用掉的：启动恢复按较大的上限判断，正在按模型策略抗故障的运行不会因一次重启被判失败。"""
+    alpha = (await make_agent()).id
+    task = await _enqueue(container, "a", alpha)
+    q = container.queue
+    async with container.db.transaction() as s:
+        row = await s.get(Task, task.id)
+        row.status, row.attempts = TaskStatus.RUNNING, q.retries.transient.max_attempts
+    assert q.retries.transient.max_attempts < q.retries.max_attempts
+
+    await Worker(q, {DELIVER_TASK: object()}, container.bus).recover()  # type: ignore[dict-item]
+    async with container.db.transaction() as s:
+        assert (await s.get(Task, task.id)).status == TaskStatus.PENDING
 
 
 async def test_model_unavailable_retries_past_the_ordinary_limit_up_to_its_own(container, make_agent):

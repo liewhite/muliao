@@ -49,7 +49,9 @@ class RetryPolicy:
 class Retries:
     """哪些失败重试、按什么策略。模型不可用（ModelUnavailable）的故障常持续几分钟到半小时，用更长的 model；
     其余暂时性失败（TransientError、超时）用 transient。别的异常一律按确定性失败记账：平台不认识任何 SDK 的异常类型
-    （模型与网络层的由 agent_runtime 换成 ModelUnavailable）。"""
+    （模型与网络层的由 agent_runtime 换成 ModelUnavailable）。
+    尝试次数是两类失败共用的一个计数（task.attempts 不记由哪类用掉）：扛过几次模型故障后再遇到一次普通暂时性失败，
+    可能已超过 transient 的上限而直接最终失败。"""
 
     transient: RetryPolicy
     model: RetryPolicy

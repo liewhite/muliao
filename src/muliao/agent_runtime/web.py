@@ -103,12 +103,19 @@ class DeepSeekWeb:
         self._headers = {"Authorization": f"Bearer {api_key}"}
 
     async def _post(self, op: _Op, body: dict[str, object]) -> object:
-        resp = await self._client.post(
-            f"{self._base_url}/v1/tools/{op}",
-            json=body,
-            headers=self._headers,
-            timeout=_DEEPSEEK_TIMEOUT_SECONDS,
-        )
+        try:
+            resp = await self._client.post(
+                f"{self._base_url}/v1/tools/{op}",
+                json=body,
+                headers=self._headers,
+                timeout=_DEEPSEEK_TIMEOUT_SECONDS,
+            )
+        except httpx.TransportError as e:
+            # 连不上、读超时也是这个适配层自己的暂时性失败：自己换成 TransientError，否则冒到运行边界会被当作模型
+            # 不可用（ModelUnavailable），按长得多的模型重试上限重试
+            reason = f"deepseek {op} failed: {type(e).__name__}: {e}"
+            log.warning("web request failed", extra={"provider": "deepseek", "op": op, "reason": reason})
+            raise TransientError(reason) from e
         if resp.status_code == 200:
             return resp.json()
         message = _error_message(resp)

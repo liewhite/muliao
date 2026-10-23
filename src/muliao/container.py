@@ -36,7 +36,7 @@ from muliao.agents.resources import ResourceRepo, RevisionHistory
 from muliao.agents.service import AgentDefaults, AgentService
 from muliao.agents.skills import SkillStore
 from muliao.agents.tools import agents_toolset
-from muliao.config import Settings
+from muliao.config import RuntimeConfig, Settings
 from muliao.files.store import FileStore
 from muliao.issues.api import IssueService
 from muliao.issues.tools import issues_toolset
@@ -247,6 +247,20 @@ async def _loop(name: str, run_forever: Callable[[], Awaitable[None]]) -> None:
     os.kill(os.getpid(), signal.SIGTERM)
 
 
+def retries_of(runtime: RuntimeConfig) -> Retries:
+    """[runtime] 里的重试配置：两种策略共用退避参数，只有尝试次数不同。"""
+    return Retries(
+        transient=RetryPolicy(
+            runtime.task_max_attempts, runtime.task_retry_base_seconds, runtime.task_retry_max_delay_seconds
+        ),
+        model=RetryPolicy(
+            runtime.model_retry_max_attempts,
+            runtime.task_retry_base_seconds,
+            runtime.task_retry_max_delay_seconds,
+        ),
+    )
+
+
 def assemble(
     settings: Settings,
     *,
@@ -273,20 +287,7 @@ def assemble(
     db = Database(create_engine(settings.db_path), check_writes=check_writes)
     bus = EventBus()
     live = LiveRuns(bus)
-    limits = settings.runtime
-    queue = TaskQueue(
-        db,
-        retries=Retries(
-            transient=RetryPolicy(
-                limits.task_max_attempts, limits.task_retry_base_seconds, limits.task_retry_max_delay_seconds
-            ),
-            model=RetryPolicy(
-                limits.model_retry_max_attempts,
-                limits.task_retry_base_seconds,
-                limits.task_retry_max_delay_seconds,
-            ),
-        ),
-    )
+    queue = TaskQueue(db, retries=retries_of(settings.runtime))
     # 领域事件与定向命令：订阅与命令处理者在下面各领域构造之后登记
     messaging = Messaging(queue)
     # 马上执行已提交的投递（Worker.run_now）：worker 由各领域的处理器组成，在最后构造、绑定

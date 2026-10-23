@@ -118,6 +118,20 @@ async def test_deepseek_transient_error_without_json_body_reports_raw_text():
         await _deepseek(lambda _r: httpx.Response(502, text="<html>bad gateway")).search("q", 1)
 
 
+@pytest.mark.parametrize("failure", [httpx.ConnectError("refused"), httpx.ReadTimeout("slow")])
+async def test_deepseek_unreachable_is_its_own_transient_error_not_a_model_outage(failure):
+    """#144：连不上的原始 httpx 异常冒到运行边界会被当作模型不可用，按长得多的模型重试上限重试。"""
+    from muliao.agent_runtime.transient import transient_as_retryable
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        raise failure
+
+    with pytest.raises(TransientError, match=f"deepseek search failed: {type(failure).__name__}") as caught:
+        with transient_as_retryable():
+            await _deepseek(handler).search("q", 1)
+    assert type(caught.value) is TransientError
+
+
 def test_deepseek_without_base_url_uses_the_official_address():
     from pydantic import SecretStr
 
