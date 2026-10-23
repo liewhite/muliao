@@ -4,7 +4,7 @@ from alembic import context
 from sqlalchemy import create_engine
 
 import muliao.schema  # noqa: F401  注册所有表
-from muliao.platform.db import Base, StrEnumType, UTCDateTime
+from muliao.platform.db import Base, StrEnumType, UTCDateTime, include_name
 
 config = context.config
 
@@ -21,7 +21,11 @@ def _render_item(type_: str, obj: object, autogen_context: object) -> str | bool
 def _run(connection) -> None:  # noqa: ANN001
     # SQLite 不支持大多数 ALTER，batch 模式以「建新表-拷数据-换名」实现
     context.configure(
-        connection=connection, target_metadata=Base.metadata, render_as_batch=True, render_item=_render_item
+        connection=connection,
+        target_metadata=Base.metadata,
+        render_as_batch=True,
+        render_item=_render_item,
+        include_name=include_name,
     )
     with context.begin_transaction():
         context.run_migrations()

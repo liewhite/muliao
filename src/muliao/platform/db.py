@@ -60,6 +60,19 @@ class Base(DeclarativeBase):
     pass
 
 
+# 迁移建出、却不在 metadata 里的表（如 FTS5 虚表）：领域在自己的 tables 模块里登记表名
+UNMANAGED_TABLES: set[str] = set()
+# SQLite 为 FTS5 虚表建的影子表后缀
+_FTS5_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
+
+
+def include_name(name: str | None, type_: str, parent_names: object) -> bool:
+    """Alembic 比对结构时跳过登记的非 ORM 表，以及它们作为 FTS5 虚表的影子表（`<名>_data` 等）。"""
+    if type_ != "table" or name is None:
+        return True
+    return name not in {t + suffix for t in UNMANAGED_TABLES for suffix in ("", *_FTS5_SHADOWS)}
+
+
 def create_engine(db_path: Path) -> AsyncEngine:
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
 

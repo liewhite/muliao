@@ -392,6 +392,8 @@ async def test_agent_sees_only_its_tool_groups_plus_self_improvement(container, 
             "edit_skill",
             "memory_append",
             "memory_replace",
+            "history_append",
+            "history_search",
             "ask_user",
         ]
     )

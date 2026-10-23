@@ -107,7 +107,7 @@ class RunProfile:
 @dataclass(frozen=True)
 class ToolGroups:
     """agent 按名称选用的工具组（组名见 tool_catalog），每组是若干工具集。always 里的（自我改进：私有 skill 与
-    记忆、提问）对每个 agent 都开放。
+    记忆，工作历史，提问）对每个 agent 都开放。
 
     用途是限制处理不可信输入的 agent 能做什么（例如处理外部事件的 agent 只开放通知）。
     """

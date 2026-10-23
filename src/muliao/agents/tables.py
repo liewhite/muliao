@@ -19,7 +19,7 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
-    # 选用的工具组名称（见 agent_runtime.runner.ToolGroups）；自我改进的工具总是开放
+    # 选用的工具组名称（见 agent_runtime.runner.ToolGroups）；自我改进与工作历史的工具总是开放
     tool_groups: Mapped[list[str]] = mapped_column(JSON)
     # 正在删除时是发起删除的作者（docs/architecture.md 第 10 节）：不出现在列表与名称解析里，各领域清理完它的数据后删除
     # 这一行与资源目录（资源仓库的删除提交记这个作者）

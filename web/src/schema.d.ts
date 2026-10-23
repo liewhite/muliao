@@ -935,6 +935,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/{agent_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent History
+         * @description agent 的工作历史：没给 query 按日期倒序；给了按关键词检索（规则同工具 history_search）。since / until 含两端。
+         */
+        get: operations["agent_history_api_agents__agent_id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/features": {
         parameters: {
             query?: never;
@@ -1255,6 +1275,31 @@ export interface components {
             interval_seconds: number;
             /** Ui Version */
             ui_version: string | null;
+        };
+        /** HistoryOut */
+        HistoryOut: {
+            /** Id */
+            id: number;
+            /** Agent Id */
+            agent_id: string;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Title */
+            title: string;
+            /** Summary */
+            summary: string;
+            /** Refs */
+            refs: string[];
+            /** Importance */
+            importance: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** IssueCreate */
         IssueCreate: {
@@ -4288,6 +4333,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IssueOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_history_api_agents__agent_id__history_get: {
+        parameters: {
+            query?: {
+                query?: string | null;
+                since?: string | null;
+                until?: string | null;
+                min_importance?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryOut"][];
                 };
             };
             /** @description Validation Error */

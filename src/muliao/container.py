@@ -38,6 +38,8 @@ from muliao.agents.skills import SkillStore
 from muliao.agents.tools import agents_toolset
 from muliao.config import RuntimeConfig, Settings
 from muliao.files.store import FileStore
+from muliao.history.service import HistoryLog
+from muliao.history.tools import history_toolset
 from muliao.issues.api import IssueService
 from muliao.issues.tools import issues_toolset
 from muliao.jobs.runner import JobRunner
@@ -117,6 +119,7 @@ class Container:
     files: FileStore
     usage: UsageLog
     issues: IssueService
+    history: HistoryLog
     # 语音转文字；没配置 [transcription] 时为 None，界面不显示语音输入
     transcriber: Transcriber | None
     # 服务的整个生命周期（Assembly.running）
@@ -165,6 +168,7 @@ class Assembly:
     files: FileStore
     usage: UsageLog
     issues: IssueService
+    history: HistoryLog
     # 联网搜索、语音转写共用的出站 HTTP 客户端
     http: httpx.AsyncClient
     transcriber: Transcriber | None
@@ -191,6 +195,7 @@ class Assembly:
             files=self.files,
             usage=self.usage,
             issues=self.issues,
+            history=self.history,
             transcriber=self.transcriber,
             running=self.running,
         )
@@ -341,6 +346,7 @@ def assemble(
     pusher = WebPushDelivery(push_subscriptions, vapid, settings.push.vapid_subject)
 
     usage = UsageLog(db, tz)
+    history = HistoryLog(db, tz)
     runtime = AgentRuntime(
         agents=agents,
         skills=skills,
@@ -367,10 +373,11 @@ def assemble(
         settings.runtime.shell_max_timeout,
         settings.runtime.tool_output_max_chars,
     )
-    # 总是开放：自我改进，以及向用户提问（工具列表保持稳定以命中缓存；没有用户会回答的运行里调用被拒绝，见 sessions.ask_user）
+    # 总是开放：自我改进、工作历史（每日自进化人人都写），以及向用户提问（工具列表保持稳定以命中缓存；没有用户会回答的运行里调用被拒绝，见 sessions.ask_user）
     always_tools = [
         skills_toolset(skills),
         memory_toolset(memory),
+        history_toolset(history, agents),
         ask_user_toolset(),
     ]
     # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
@@ -484,6 +491,7 @@ def assemble(
         files=files,
         usage=usage,
         issues=issues,
+        history=history,
         http=http,
         transcriber=transcriber,
     )

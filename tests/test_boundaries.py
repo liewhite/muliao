@@ -18,7 +18,7 @@ LAYERS: list[set[str]] = [
     {"vault"},
     {"agent_runtime"},
     {"sessions"},
-    {"jobs", "notifications", "triggers", "issues"},
+    {"jobs", "notifications", "triggers", "issues", "history"},
 ]
 DOMAINS = set().union(*LAYERS)
 RANK = {d: rank for rank, layer in enumerate(LAYERS) for d in layer}

@@ -7,7 +7,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 import muliao.platform.db
-from muliao.platform.db import Base, Database, alembic_config, create_engine, migrate
+from muliao.platform.db import Base, Database, alembic_config, create_engine, include_name, migrate
 
 
 def _tables(path) -> set[str]:  # noqa: ANN001
@@ -21,7 +21,7 @@ async def test_migrated_schema_matches_models(tmp_path):
     engine = create_engine(tmp_path / "m.db")
 
     def diff(conn):  # noqa: ANN001, ANN202
-        ctx = MigrationContext.configure(conn, opts={"render_as_batch": True})
+        ctx = MigrationContext.configure(conn, opts={"render_as_batch": True, "include_name": include_name})
         return compare_metadata(ctx, Base.metadata)
 
     async with engine.connect() as conn:
@@ -411,3 +411,31 @@ def test_agents_is_default_adds_no_default_and_downgrades(tmp_path):
     with sqlite3.connect(path) as conn:
         assert "is_default" not in {r[1] for r in conn.execute("pragma table_info(agents)")}
         assert conn.execute("select id from agents order by id").fetchall() == [("a1",), ("a2",)]
+
+
+def test_agent_history_is_append_only_searchable_and_downgrades(tmp_path):
+    """agent_history（#155）：插入即进 FTS 虚表；UPDATE / DELETE 被触发器拒绝；降级删掉表、虚表与触发器。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agent_history (agent_id, day, title, summary, refs, importance, created_at) "
+            "values ('a1', '2026-10-22', '部署历史表', '加了检索', '[\"#155\"]', 2, '2026-10-23')"
+        )
+        assert conn.execute(
+            "select rowid from agent_history_fts where agent_history_fts match '\"历史表\"'"
+        ).fetchall() == [(1,)]
+        for sql in ("update agent_history set title = 'x'", "delete from agent_history"):
+            with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+                conn.execute(sql)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "c0012ec9d2f2")
+    with sqlite3.connect(path) as conn:
+        names = {r[0] for r in conn.execute("select name from sqlite_master")}
+    assert not {n for n in names if n.startswith("agent_history")}
+    migrate(path)
+    assert {"agent_history", "agent_history_fts"} <= _tables(path)

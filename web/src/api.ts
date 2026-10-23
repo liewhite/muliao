@@ -46,6 +46,8 @@ export type Task = WithAgentId<Schemas['TaskOut'], 'agent_id'>
 /** 一个分组的用量汇总；没有参与分组的维度为 null。input_tokens 已含缓存读写，不要相加 */
 export type Usage = WithAgentId<Schemas['UsageOut'], 'agent_id'>
 export type UsageGroup = Schemas['UsageGroup']
+/** agent 做过的一件事（只追加，由 agent 在每日自进化时写） */
+export type HistoryEntry = WithAgentId<Schemas['HistoryOut'], 'agent_id'>
 
 export type Question = Schemas['Question']
 export type QuestionAnswer = Schemas['QuestionAnswer']
@@ -208,6 +210,11 @@ export const api = {
 
   agents: () => branded<Agent[]>(call('get', '/api/agents')),
   agentDefaults: () => call('get', '/api/agent-defaults'),
+  /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
+  agentHistory: (agent_id: AgentId, query?: string) =>
+    branded<HistoryEntry[]>(
+      call('get', '/api/agents/{agent_id}/history', { path: { agent_id }, query: { query, limit: 200 } }),
+    ),
   /** 服务端配置决定的可选能力（如语音输入） */
   features: () => call('get', '/api/features'),
   /** 服务端配置的 LLM provider 名 */

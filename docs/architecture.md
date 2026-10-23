@@ -20,6 +20,7 @@
 | Secret | 加密保存的密码/token，通过 key 引用；公共或 agent 私有 | `secrets` 表（Fernet 加密） |
 | File | 对话里出现的文件：用户随消息发送的图片与附件、agent 用 `share_file` 发出的文件。写入后不可变，按 id 引用，引用形式唯一（`/api/files/<id>/<名称>`）；与消息相互独立，删除会话不删文件 | `files` 表（元数据）；内容按 sha256 存在 `data/files/` |
 | Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，每台设备（推送订阅）一个 deliver task，只引用通知与订阅，内容不另存一份 | `notifications` 表 |
+| History（工作历史）| agent 做过的一件事：哪天（配置时区的日历日）、标题、2–5 行摘要、引用（issue、会话、commit）、重要程度 1–3。只追加：agent 用 `history_append` 写自己的，库里的触发器拒绝 UPDATE / DELETE；不随 agent 删除而消失 | `agent_history` 表 + FTS5 虚表 `agent_history_fts` |
 | ModelUsage（用量） | 一次模型运行报告的 token 用量：时间、agent、会话（没有就为空）、运行类型（对话 / 压缩 / 临时 agent；历史行里还有已删除的强制反思 `reflection`）、模型、请求数与各项 token。只增不改，也不随 agent 与会话的删除而消失——它是账目 | `model_usage` 表 |
 | Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、负责项目（owner agent，必填、不随指派变）、指派人（agent / 用户 / 无）、依赖的上游 issue（有向无环）、时间线（评论与属性变化）。处于 todo / in_progress 且上游都已完成时，每条动态投进被指派 agent 在这个 issue 上唯一的会话；没有 agent 接手时，用户的评论投给 owner | `issues`、`issue_activities`、`issue_dependencies` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件；触发方式（定时、一次性、webhook……）多态实现。跑完不会再触发的归档（`finished_at`），离开列表但留下历史 | `triggers` 表 |
@@ -67,6 +68,7 @@ muliao/
   usage/           模型用量：每次运行记一条，按时间范围汇总
   issues/          issue 看板：人与 agent 协作的事项，动态按状态与指派投进 agent 的 issue 会话
   speech/          语音输入：把界面录下的语音转成文字（可选，配置 [transcription] 才有）
+  history/         工作历史：agent 做过的事，只追加，按时间与关键词检索
   vault/  files/  notifications/  triggers/
   api/             HTTP 适配
   container.py     组合根：构造领域、注册事件订阅、组装工具组；只做装配，不含业务规则
@@ -108,7 +110,7 @@ muliao/
 
 **组合根没有构造环**：用到「停止会话」的领域（会话门面、委派工具、删除 agent 的会话清理）依赖端口 `sessions.halt.StopSession`，组合根交给它们的实现是 `sessions.halt.SessionStopper`，它由正在进行的运行的登记（`StoppableRuns`）与 `SessionHalt` 组成，先于消费者构造，消费者用同一份登记运行；要马上执行自己提交的投递的领域（会话、触发器、issue）拿的是 `platform.worker.RunNow` 端口，worker 由各领域的处理器组成、在最后构造，构造后绑定到端口，绑定之前调用当场报错。
 
-经 `api` 的依赖无环、有方向：`files`、`agents`、`usage`、`speech` → `vault` → `agent_runtime` → `sessions` → `jobs`、`notifications`、`triggers`、`issues`（`tests/test_boundaries.py` 的 `LAYERS`：领域只能 import 更早一层的 `api`，同层与反向都不行；新增领域要在那里定层）。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
+经 `api` 的依赖无环、有方向：`files`、`agents`、`usage`、`speech` → `vault` → `agent_runtime` → `sessions` → `jobs`、`notifications`、`triggers`、`issues`、`history`（`tests/test_boundaries.py` 的 `LAYERS`：领域只能 import 更早一层的 `api`，同层与反向都不行；新增领域要在那里定层）。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
 
 **一个写事务只写一个领域的表**（外加平台的任务表，它是每个领域的 outbox）：`Database(check_writes=...)` 记下每个事务的 ORM 写入与 insert / update / delete 语句，测试的容器打开 `schema.single_domain_writes` 作为开发期断言。数据库层的级联（`ON DELETE CASCADE`）不在记录里，它们都在会话领域内部。
 
@@ -444,7 +446,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。公共 skill 对�
 全局记忆是资源仓库里的 `public/MEMORY.md`，agent 的记忆是 `agents/<id>/MEMORY.md`；两者同一套规则（`MemoryStore`，owner 为 None 即全局）：有长度上限（`memory_max_chars`），每次运行全文放进 instructions（全局在最前，agent 自己的在运行上下文之后），修改即提交一版并记录作者（`user` 或做出修改的 agent），回滚即把旧版内容作为新的一版写入。全局记忆从未写过时为空；agent 的记忆在创建时写入（空文件），缺失即数据不一致。读写接口 `GET/PUT /api/memory?owner=`（owner 缺省为全局），历史与恢复 `/api/resources/memory/history|restore`；界面在「全局记忆」页和 agent 的记忆标签里；接口只列最近 50 版，更早的仍在仓库里。
 
 ### 自我进化
-平台不在运行之间插入强制反思（#116 删掉了每 N 步的 reflection）。agent 改记忆（自己的与全局的）、私有 skill 都在自己的会话里用自我改进工具完成，这些都是资源仓库里的文件，每次修改都有版本，用户可回滚。定期的整理由 trigger 驱动、按公共 skill 执行（每日 self-evolve → curator 上提 → muliao 审查），不是平台机制。
+平台不在运行之间插入强制反思（#116 删掉了每 N 步的 reflection）。agent 改记忆（自己的与全局的）、私有 skill 都在自己的会话里用自我改进工具完成，这些都是资源仓库里的文件，每次修改都有版本，用户可回滚。定期的整理由 trigger 驱动、按公共 skill 执行（每日 self-evolve → curator 上提 → muliao 审查），不是平台机制。每日 self-evolve 的第一步是把前一天做过的事写进工作历史（第 22 节）。
 
 ## 14. 触发源与通知
 
@@ -609,7 +611,17 @@ agent 在任何一次运行里都可以主动 `write_skill`。公共 skill 对�
 - **删除 agent**：订阅 `AgentDeleting`，指派给它、归它负责的 issue 改为未指派、无负责人（各记一条时间线，actor 是系统 `rules.SYSTEM_ACTOR`（`"system"`），不是用户；同时更新 `updated_at`）。它的 issue 会话随它由会话领域删除，issue 领域没有要清理的会话引用。
 - **运行失败**：会话领域在运行最终失败的事务里（`RunHandler.failed_in`：暂时性失败的重试用完，或契约外的失败；还在等重试的不算）发布 `RunFailed`（会话、agent、运行、会话来源与 `origin_ref`、错误原文），issue 领域订阅它、只认 `Origin.ISSUE` 的会话（按会话来源认领，不读 tasks 表）：在该 issue 时间线上记一条 `run_failed` 动态（actor 是失败的那个 agent，body 是 `rules.failure_summary` 截断到 500 字的错误摘要），更新 `updated_at`，并发 `Notify`（点开是那个 issue 会话）。这条动态不投递、不改状态：投进会话就等于自动重试，永久性错误会陷入循环；之后有人评论或改动时照常投递、唤醒 agent。issue 已被删除时只记日志。`failed_in` 自己失败（worker 不带钩子记下失败）时不发，失败仍在任务页与日志里可见。
 
-## 22. 暂缓的项
+## 22. 工作历史
+
+**职责**：记下每个 agent 做过的事，供以后回答「做过什么、什么时候、为什么」（`history/`，表 `agent_history`）。记忆与 skill 是规则，历史只是事实，不约束做法。
+
+- **写入**：agent 自己用 `history_append(entries)` 写（工具总是开放，与记忆、skill 一起，只能写自己的），一件事一条：`day`（工作发生的日历日，按配置的 `timezone`，不能晚于今天）、标题（≤200 字）、摘要、`refs`（字符串列表）、`importance`（1 一般、2 重要、3 很重要）。一次调用的条目全部合法才写入。何时写、怎么写是约定：每日 self-evolve 第一步总结前一天，先 `history_search` 查那天写过没有（公共 skill `self-evolve`），平台不拦重复。
+- **只追加**：迁移建出触发器，`UPDATE` / `DELETE` 直接 `RAISE(ABORT)`；没有改、删的工具或接口。删除 agent 不清理它的历史（同用量，`agent_id` 是不透明的 id；工具 `history_search(agent=all)` 里显示为已删除的 agent，界面只在 agent 详情页展示，删掉后看不到）。以后 batch 重建这张表的迁移必须重建这些触发器。
+- **检索**（`HistoryLog.search`，工具 `history_search`、`GET /api/agents/{id}/history`）：按 agent（工具默认自己，可给名字或 `all`）、日期范围（含两端）、最低重要程度过滤。没给 query 按日期倒序；给了按空白切词、每个词都要出现在标题、摘要或引用里：词都不短于 3 个字符时走 FTS5（`tokenize='trigram'`，中文可用）按 bm25 排序（trigram 要求 SQLite ≥ 3.34，部署环境 3.53），有更短的词（trigram 匹配不了）就逐词 `LIKE`、按日期倒序。不做 embedding：语义问题由 agent 按时间捞出一段再自己判断。
+- **FTS 虚表**不在 ORM 的 metadata 里：`history.tables` 把它登记进 `platform.db.UNMANAGED_TABLES`，Alembic 比对结构（`env.py`、迁移测试）用 `include_name` 跳过它与影子表；插入时由 AFTER INSERT 触发器同步（行不改不删，只需要这一个），引用索引的是 JSON 解码后的值，LIKE 分支同样经 `json_each` 匹配值，不匹配 JSON 原文。
+- **界面**：agent 详情页「历史」标签，按日期分组列出，可按关键词搜索（搜索结果按相关度平铺，每条标日期）（`web/src/pages/History.tsx`）。
+
+## 23. 暂缓的项
 
 - **临时 agent 改为用完即删的 thread**：运行只剩一种模型，失败只重做自己。等占用与结清稳定之后再定。
 - **自己写 agent loop**（框架只做模型客户端）：改动限于 `agent_runtime` 的运行端口（第 2.1 节）。
