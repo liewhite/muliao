@@ -449,7 +449,7 @@ async def test_a_pending_ask_points_at_its_thread_before_the_answer(container, m
         async with asyncio.timeout(5):
             await running.wait()
         [child] = await threads_of(container, parent.id)
-        # 发问方的运行停在这次调用上之后，调用在历史里（运行中它在实时快照里，见下一个用例）
+        # 发问方的运行停在这次调用上之后，调用在历史里（运行中它在实时快照里，见 test_transcript.py 的 test_the_live_snapshot_points_pending_calls_at_their_threads）
         async with asyncio.timeout(5):
             while (view := await container.sessions.detail(parent.id)).live is not None:  # noqa: ASYNC110  轮询会话状态，没有可等的事件
                 await asyncio.sleep(0.01)

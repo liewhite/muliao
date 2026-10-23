@@ -28,6 +28,7 @@ from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Clock, TaskQueue
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.events import Ending
+from muliao.sessions.holds import calls_in
 from muliao.sessions.mailbox import latest_runs_among, post_check_in
 from muliao.sessions.pending import AgentAnswer, pending_in
 from muliao.sessions.tables import HoldStatus, Mail, Session, SessionHold
@@ -140,16 +141,10 @@ async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> dict[s
 async def call_threads_in(s: AsyncSession, session_id: str) -> dict[str, str]:
     """这个会话里交出去的挂起调用（ask_agent）→ 做它的 thread。调用还挂着、没有结果时，界面靠它把 thread 显示在调用处
     （有了结果之后由结果上的 TOOL_THREADS 关联）。"""
-    rows = (
-        await s.execute(
-            select(SessionHold.call_id, SessionHold.holder).where(
-                SessionHold.session_id == session_id, SessionHold.call_id.is_not(None)
-            )
-        )
-    ).all()
-    threads = await threads_of_holds_in(s, [holder for _, holder in rows])
+    calls = await calls_in(s, session_id)
+    threads = await threads_of_holds_in(s, list(calls.values()))
     # 不在 threads 里的：thread 已删除，关联信件随它删除
-    return {call_id: threads[holder] for call_id, holder in rows if call_id is not None and holder in threads}
+    return {call_id: threads[holder] for call_id, holder in calls.items() if holder in threads}
 
 
 class ThreadChecks:

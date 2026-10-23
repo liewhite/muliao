@@ -70,7 +70,8 @@ class Item(BaseModel):
     message_id: int | None
     # 用户消息的附件（见 agent_runtime.attachments 的存储形态），或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
     attachments: list[Attachment]
-    # 工具结果关联的子会话 id（TOOL_THREADS）；其他条目为空
+    # 工具结果关联的子会话 id（TOOL_THREADS）；还没有结果的调用（挂起的 ask_agent）由会话接口填上它交出去的 thread
+    # （annotate_pending_threads）；其他条目为空
     threads: list[str]
     # 工具交回给模型的图片（conventions.result_images，如浏览器截图）：属于这次调用的过程，不是给用户的文件；其他条目为空
     images: list[Attachment]

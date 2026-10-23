@@ -91,11 +91,16 @@ async def with_active_among(s: AsyncSession, session_ids: Collection[str]) -> se
     return set(rows.all())
 
 
-async def called_in(s: AsyncSession, session_id: str) -> set[str]:
-    """这个会话里已经交出去的挂起调用（带 call_id 的占用，不论状态）。"""
-    rows = await s.scalars(
-        select(SessionHold.call_id).where(
+async def calls_in(s: AsyncSession, session_id: str) -> dict[str, str]:
+    """这个会话里已经交出去的挂起调用（带 call_id 的占用，不论状态）：调用 id → 占用者。"""
+    rows = await s.execute(
+        select(SessionHold.call_id, SessionHold.holder).where(
             SessionHold.session_id == session_id, SessionHold.call_id.is_not(None)
         )
     )
-    return {c for c in rows.all() if c is not None}
+    return {call_id: holder for call_id, holder in rows.all() if call_id is not None}
+
+
+async def called_in(s: AsyncSession, session_id: str) -> set[str]:
+    """这个会话里已经交出去的挂起调用 id（calls_in 的键）。"""
+    return set(await calls_in(s, session_id))
