@@ -27,6 +27,10 @@ _MAX_LINE_CHARS = 2000
 # edit_file 成功后展示的改动前后上下文行数：够确认改对了，不必再回读文件
 _EDIT_CONTEXT_LINES = 2
 _DEFAULT_READ_LIMIT = 2000
+# read_file 按行截断时给标题、续读说明和段间分隔留的字符数（预算 = 输出上限减去它）
+_READ_NOTE_RESERVE = 300
+# 多段读取剩余预算不到这么多时，后面的段不再读，只列出来
+_MIN_PART_BUDGET = 200
 # read_file 交给模型看的图片上限（文件字节数）：Anthropic API 单张图片限 5MB，按 base64 编码后的长度算，即原始字节
 # 的 3/4（其他 provider 更宽）。超过就拒绝、不在这里缩放：放进历史后每次请求都会被 provider 拒绝
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4
@@ -144,6 +148,8 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         """Read a text file; lines are numbered. Relative paths are resolved against your workspace.
         To read several files or several parts of one file in one call, pass `reads` instead of
         `path`/`offset`/`limit`; each part is shown under a `==> path lines A-B of N <==` header.
+        Output is limited in size: when the limit is reached, reading stops after a whole line and says which
+        offset to continue from (parts not read at all are listed).
         An image file (PNG, JPEG, GIF, WebP) passed as `path` is returned as an image you can see, e.g. a
         screenshot or a chart you made.
 
@@ -164,20 +170,35 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
                 if offset != 0 or limit != _DEFAULT_READ_LIMIT:
                     raise InvalidInput(f"offset/limit do not apply to an image file: {target}")
                 return _read_image(target, media_type)
-            excerpt = _read_range(target, offset, limit)
+            excerpt = _read_range(target, offset, limit, limits.max_output_chars - _READ_NOTE_RESERVE)
+            # 按行截断后正文已在预算内；只有单行比整个预算还长时这里才会再截
             return truncate(excerpt.body, limits.max_output_chars) + excerpt.more_note
         sections = []
+        budget = limits.max_output_chars - _READ_NOTE_RESERVE
         for part in reads:
+            if budget < _MIN_PART_BUDGET:
+                # 输出上限已用完：逐段说明没读的，模型照着另起一次调用，不必猜 offset
+                sections.append(
+                    f"==> {part.path}: not read, output limit reached; read it in another call "
+                    f"(offset={part.offset}, limit={part.limit}) <=="
+                )
+                continue
             target = resolve(ctx.deps, part.path)
             try:
                 if _image_type(target):
                     raise InvalidInput("an image file cannot be read in reads; read it alone with path")
-                excerpt = _read_range(target, part.offset, part.limit)
+                # 标题长度先估出来扣掉（行号范围最多几十个字符）
+                excerpt = _read_range(target, part.offset, part.limit, budget - len(str(target)) - 50)
             except (InvalidInput, NotFound, OSError) as e:
                 # 标题用模型给的路径认出是哪一段（有的错误信息里不带路径）
-                sections.append(f"==> {part.path}: {e} <==")
-                continue
-            sections.append(f"==> {target} {excerpt.span} <==\n{excerpt.body}{excerpt.more_note}")
+                section = f"==> {part.path}: {e} <=="
+            else:
+                section = f"==> {target} {excerpt.span} <==\n{excerpt.body}{excerpt.more_note}"
+                if excerpt.cut:
+                    budget = 0
+            sections.append(section)
+            budget -= len(section) + 2
+        # 兜底：单行比预算还长时才会用到
         return truncate("\n\n".join(sections), limits.max_output_chars)
 
     @ts.tool
@@ -277,8 +298,10 @@ class _Excerpt:
     span: str
     # 带行号的正文
     body: str
-    # 后面还有行时注明还剩多少，否则为空；与正文分开，正文被截断时它也还在
+    # 后面还有行时注明还剩多少（因输出上限停下时写明从哪一行接着读），否则为空；与正文分开，正文被截断时它也还在
     more_note: str
+    # 是否因输出上限没读完要求的行
+    cut: bool
 
 
 def _media_type(path: Path) -> str:
@@ -307,7 +330,9 @@ def _read_image(target: Path, media_type: str) -> list[str | BinaryContent]:
     return [f"{target} ({media_type}, {len(data)} bytes)", BinaryContent(data, media_type=media_type)]
 
 
-def _read_range(target: Path, offset: int, limit: int) -> _Excerpt:
+def _read_range(target: Path, offset: int, limit: int, budget: int) -> _Excerpt:
+    """读 lines[offset:offset+limit]，带行号的正文不超过 budget 个字符：在最后一整行停下（至少给一行），并在
+    more_note 里写明读到第几行、用什么 offset 接着读。"""
     if offset < 0 or limit < 1:
         # 负数在切片里有别的意思（从末尾数），会返回看起来正常、其实不对的内容
         raise InvalidInput(f"offset must be >= 0 and limit >= 1, got offset={offset} limit={limit}")
@@ -317,11 +342,29 @@ def _read_range(target: Path, offset: int, limit: int) -> _Excerpt:
     if offset and offset >= len(lines):
         raise InvalidInput(f"offset {offset} is past the end: {target} has {len(lines)} lines")
     end = min(offset + limit, len(lines))
-    more = len(lines) - end
+    rows: list[str] = []
+    used = 0
+    for i in range(offset, end):
+        row = _numbered(lines, i, i + 1)
+        used += len(row) + (1 if rows else 0)
+        if rows and used > budget:
+            break
+        rows.append(row)
+    stop = offset + len(rows)
+    if stop < end:
+        rest = f", limit={end - stop}" if end < len(lines) else ""
+        note = (
+            f"\n… output limit reached: shown up to line {stop} of {len(lines)}; "
+            f"continue with offset={stop}{rest}"
+        )
+    else:
+        more = len(lines) - end
+        note = f"\n… {more} more lines" if more > 0 else ""
     return _Excerpt(
-        span=f"lines {offset + 1}-{end} of {len(lines)}" if lines else "(empty file)",
-        body=_numbered(lines, offset, end),
-        more_note=f"\n… {more} more lines" if more > 0 else "",
+        span=f"lines {offset + 1}-{stop} of {len(lines)}" if lines else "(empty file)",
+        body="\n".join(rows),
+        more_note=note,
+        cut=stop < end,
     )
 
 

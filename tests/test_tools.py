@@ -711,6 +711,62 @@ async def test_edit_file_shows_the_changed_lines_with_numbers_so_no_reread_is_ne
     assert "now 0 lines); the file is now empty" in outputs[6]
 
 
+@pytest.fixture
+async def small_output_container(settings, models):
+    from muliao.container import assemble
+    from muliao.platform.db import migrate
+
+    settings = settings.model_copy(
+        update={"runtime": settings.runtime.model_copy(update={"tool_output_max_chars": 1000})}
+    )
+    c = assemble(settings, resolve_model=models, model_checker=lambda _m, _t: None)
+    migrate(settings.db_path)
+    yield c
+    await c.db.engine.dispose()
+
+
+async def test_read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_where_to_continue(
+    small_output_container, models
+):
+    from muliao.agents.service import AgentSpec
+
+    container = small_output_container
+    me = await container.agents.create(AgentSpec(name="alpha", description="d", model="tools"), author="user")
+    content = "".join(f"line{i:03}\n" for i in range(1, 301))
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("write_file", {"path": "a.txt", "content": content}),
+            ("read_file", {"path": "a.txt"}),
+            ("read_file", {"path": "a.txt", "offset": 10, "limit": 200}),
+            ("read_file", {"reads": [{"path": "a.txt", "limit": 5}, {"path": "a.txt"}, {"path": "b.txt"}]}),
+        ],
+    )
+    single = outputs[1]
+    assert len(single) <= 1000 and "truncated" not in single
+    body, note = single.rsplit("\n", 1)
+    last = int(body.rsplit("\n", 1)[1].split("\t")[0])
+    # 最后一行完整，续读说明指向下一行（offset 0 起算 = 已读到的 1 起算行号）
+    assert body.endswith(f"{last}\tline{last:03}")
+    assert note == f"… output limit reached: shown up to line {last} of 300; continue with offset={last}"
+    ranged = outputs[2]
+    stop = int(ranged.rsplit("shown up to line ", 1)[1].split(" ")[0])
+    assert ranged.startswith("11\tline011") and ranged.endswith(
+        f"continue with offset={stop}, limit={210 - stop}"
+    )
+    multi = outputs[3]
+    assert len(multi) <= 1000 and "truncated" not in multi
+    assert "a.txt lines 1-5 of 300 <==" in multi and "\n… 295 more lines" in multi
+    second = multi.split("\n\n")[1]
+    stop = int(second.rsplit("shown up to line ", 1)[1].split(" ")[0])
+    assert f"a.txt lines 1-{stop} of 300 <==" in second and second.endswith(f"continue with offset={stop}")
+    assert multi.endswith(
+        "==> b.txt: not read, output limit reached; read it in another call (offset=0, limit=2000) <=="
+    )
+
+
 async def test_read_file_truncates_very_long_lines(container, make_agent, models):
     me = await make_agent("alpha", model="tools")
     outputs = await run_tools(
