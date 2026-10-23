@@ -46,13 +46,14 @@ class WebProvider(Protocol):
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 # 抓取要等对方站点，给足时间；挂起时及时报错，而不是一直占着这次运行
 _DEEPSEEK_TIMEOUT_SECONDS = 60.0
-# 文档：408、429、5xx 等待后重试
+# 文档：408、429、5xx 等待后重试；例外：fetch 带错误体的 408/504 是目标站点超时，见 _DEEPSEEK_REJECTED_INPUT
 _DEEPSEEK_TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})
 
 _Op = Literal["search", "fetch"]
 # 由模型给出的输入引起、按契约交还模型修正的状态码，按接口区分：400 字段值无效、413 请求体过大；
 # fetch 另有 403 被安全策略拒绝、404 抓取不到可用内容，以及带契约错误体的 408/504：是目标站点抓取超时
-# （如 "Request timeout"），重试同一 URL 多半还是超时，交还模型决定换 URL 还是放弃（#134）。其余（401 key 无效、402 余额不足、search 的 403/404……）
+# （如 "Request timeout"），重试同一 URL 多半还是超时，交还模型决定换 URL 还是放弃（#134）。
+# 其余（401 key 无效、402 余额不足、search 的 403/404……）
 # 是配置、账户问题或契约之外的响应，模型改不了，让这一轮失败可见
 _DEEPSEEK_REJECTED_INPUT: dict[_Op, frozenset[int]] = {
     "search": frozenset({400, 413}),
