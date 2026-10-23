@@ -306,15 +306,18 @@ async def test_the_task_kinds_in_the_http_contract_are_exactly_the_registered_on
 
 def test_tools_refuse_with_domain_errors_not_model_retry():
     """工具的拒绝一律抛 DomainError，由 agent_runtime.tool_errors 统一交还模型：在那里预算用完时改成 ToolFailed，
-    不让整轮运行失败。工具自己抛 ModelRetry 会绕过这层，连续 3 次就把整轮打成失败（#145）。"""
+    不让整轮运行失败。工具自己抛 ModelRetry 会绕过这层，连续 3 次就把整轮打成失败（#145）。所以除了这层和把 MCP
+    server 的 ModelRetry 换成 DomainError 的 mcp 模块，源码里不得出现 ModelRetry（裸名、属性、导入都算）。"""
     allowed = {SRC / "agent_runtime" / "tool_errors.py", SRC / "agent_runtime" / "mcp.py"}
     offenders = []
     for path in SRC.rglob("*.py"):
         if path in allowed or "webui" in path.parts:
             continue
         for node in ast.walk(ast.parse(path.read_text())):
-            if isinstance(node, ast.Raise) and node.exc is not None:
-                call = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
-                if isinstance(call, ast.Name) and call.id == "ModelRetry":
-                    offenders.append(f"{path.relative_to(SRC)}:{node.lineno}")
+            if (
+                (isinstance(node, ast.Name) and node.id == "ModelRetry")
+                or (isinstance(node, ast.Attribute) and node.attr == "ModelRetry")
+                or (isinstance(node, ast.alias) and node.name == "ModelRetry")
+            ):
+                offenders.append(f"{path.relative_to(SRC)}:{getattr(node, 'lineno', '?')}")
     assert offenders == []

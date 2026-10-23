@@ -24,7 +24,7 @@ from muliao.agent_runtime.transient import is_transient
 from muliao.agents.api import CorruptResource, McpConfig, McpServer, McpTransport
 from muliao.errors import InvalidInput, NotFound, TransientError
 from muliao.platform.shell import redact
-from muliao.platform.tooling import RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.vault.api import VAULT_REF, Vault, fill
 
 log = logging.getLogger(__name__)
@@ -39,8 +39,9 @@ class McpFailed(Exception):
     """MCP server 连接或通信失败。信息已脱敏，原始异常不挂在后面（见 _SecretSafe）。"""
 
 
-# 工具调用的正常结局（延后执行、等待批准），不是 server 故障，原样放行；交还模型的错误（ModelRetry、ToolFailed）
-# 保留类型、只脱敏信息（文本来自 server 或网关）
+# 工具调用的正常结局（延后执行、等待批准），不是 server 故障，原样放行。交还模型的错误只脱敏信息（文本来自 server
+# 或网关）：ToolFailed 保留类型；ModelRetry（server 拒绝这次调用，MCPToolset 默认如此报）换成 InvalidInput，由
+# DomainErrorsAsRetry 统一管重试预算，连续拒绝不终止整轮运行（#145）
 _TOOL_OUTCOMES = (CallDeferred, ApprovalRequired)
 
 
@@ -68,8 +69,10 @@ class _SecretSafe(WrapperToolset[RunScope]):
             yield
         except _TOOL_OUTCOMES:
             raise
-        except (ModelRetry, ToolFailed) as e:
-            raise type(e)(redact(e.message, self.secrets)) from None
+        except ModelRetry as e:
+            raise InvalidInput(redact(e.message, self.secrets)) from None
+        except ToolFailed as e:
+            raise ToolFailed(redact(e.message, self.secrets)) from None
         except Exception as e:
             message = redact(f"MCP server {self.server!r} failed: {_describe(e)}", self.secrets)
             raise (TransientError if is_transient(e) else failed)(message) from None
@@ -179,7 +182,9 @@ class McpConnector:
                 env={k: fill(v, secrets) for k, v in c.env.items()} or None,
                 cwd=None if cwd is None else str(cwd),
             )
-            toolset = MCPToolset(client, id=f"mcp-{server.key}", init_timeout=_CONNECT_TIMEOUT)
+            toolset = MCPToolset(
+                client, id=f"mcp-{server.key}", init_timeout=_CONNECT_TIMEOUT, max_retries=TOOL_MAX_RETRIES
+            )
         else:
             assert c.url is not None
             toolset = MCPToolset(
@@ -187,6 +192,7 @@ class McpConnector:
                 id=f"mcp-{server.key}",
                 headers={k: fill(v, secrets) for k, v in c.headers.items()} or None,
                 init_timeout=_CONNECT_TIMEOUT,
+                max_retries=TOOL_MAX_RETRIES,
             )
         return _SecretSafe(toolset, server=server.name, secrets=secrets).prefixed(server.name)
 

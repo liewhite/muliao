@@ -607,6 +607,62 @@ async def test_an_mcp_tool_call_that_fails_is_handed_back_to_the_model_with_its_
     assert items[-1].text == "it failed"
 
 
+async def test_an_mcp_server_that_keeps_rejecting_a_call_does_not_fail_the_run(
+    container, make_agent, models, monkeypatch
+):
+    """server 拒绝调用（MCPToolset 报 ModelRetry）与平台工具的领域错误一样计入重试预算，用完后以失败结果交还模型，
+    不终止整轮运行（#145）；拒绝的文本照样脱敏。"""
+    from pydantic_ai import ModelRetry
+    from pydantic_ai.mcp import MCPToolset
+    from pydantic_ai.messages import (
+        ModelMessage,
+        ModelRequest,
+        ModelResponse,
+        RetryPromptPart,
+        TextPart,
+        ToolCallPart,
+        ToolReturnPart,
+    )
+    from pydantic_ai.models.function import AgentInfo
+
+    from muliao.platform.tables import TaskStatus
+    from muliao.sessions.lanes import RUN_TASK
+    from tests.test_flow import scripted, tasks_of
+
+    async def refuse(self, name, tool_args, ctx, tool):  # noqa: ANN001, ANN202
+        raise ModelRetry("not allowed for tok-123")
+
+    monkeypatch.setattr(MCPToolset, "call_tool", refuse)
+    alpha = (await make_agent("alpha", model="m")).id
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
+    spec = mcp_config(
+        transport=McpTransport.STDIO,
+        command=sys.executable,
+        args=[ECHO_SERVER],
+        env={"TOKEN": "${vault:ECHO_TOKEN}"},
+    )
+    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    seen: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        last = messages[-1]
+        parts = last.parts if isinstance(last, ModelRequest) else []
+        seen.extend(str(p.content) for p in parts if isinstance(p, RetryPromptPart | ToolReturnPart))
+        if len(seen) >= 5:
+            return ModelResponse(parts=[TextPart("gave up")])
+        return ModelResponse(parts=[ToolCallPart("echo_token", {})])
+
+    models.models["m"] = scripted(fn)
+    await start(container, alpha, "token?")
+    await drain(container, limit_seconds=30)
+
+    [run] = await tasks_of(container, RUN_TASK)
+    assert run.status == TaskStatus.DONE
+    assert len(seen) == 5
+    assert all("not allowed" in t and "tok-123" not in t and "[secret:ECHO_TOKEN]" in t for t in seen)
+    assert "stop retrying" in seen[3] and "stop retrying" not in seen[2]
+
+
 async def test_an_mcp_server_that_fails_to_disconnect_does_not_fail_the_run(
     container, make_agent, models, monkeypatch, caplog
 ):
