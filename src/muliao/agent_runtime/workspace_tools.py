@@ -27,8 +27,9 @@ _MAX_LINE_CHARS = 2000
 # edit_file 成功后展示的改动前后上下文行数：够确认改对了，不必再回读文件
 _EDIT_CONTEXT_LINES = 2
 _DEFAULT_READ_LIMIT = 2000
-# read_file 交给模型看的图片上限：Anthropic API 单张图片 5MB（其他 provider 更宽），超过就拒绝，不在这里缩放
-_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+# read_file 交给模型看的图片上限（文件字节数）：Anthropic API 单张图片限 5MB，按 base64 编码后的长度算，即原始字节
+# 的 3/4（其他 provider 更宽）。超过就拒绝、不在这里缩放：放进历史后每次请求都会被 provider 拒绝
+_MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4
 
 
 class TextEdit(BaseModel):
@@ -257,10 +258,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         target = resolve(ctx.deps, path)
         if not target.is_file():
             raise NotFound(f"file not found: {target}")
-        # 扩展名认不出、或是压缩过的（x.tar.gz 会被认成 tar 而丢掉 gzip）时，用 RFC 2046 的「未知二进制」类型，按附件下载
-        guessed, encoding = mimetypes.guess_type(target.name)
-        media_type = guessed if guessed and encoding is None else "application/octet-stream"
-        meta = await files.put_path(target.name, media_type, target)
+        meta = await files.put_path(target.name, _media_type(target), target)
         log.info(
             "file shared with user",
             extra={"agent": ctx.deps.agent_id, "session_id": ctx.deps.session_id, "file_id": meta.id},
@@ -283,26 +281,30 @@ class _Excerpt:
     more_note: str
 
 
-def _image_type(path: Path) -> str | None:
-    """按扩展名认出能交给模型看的图片（与 share_file 一样按扩展名判断类型），其余当文本读。"""
+def _media_type(path: Path) -> str:
+    """按扩展名定工作目录里文件的类型（share_file 与 read_file 共用）。认不出、或是压缩过的（x.tar.gz 会被认成
+    tar 而丢掉 gzip）时，用 RFC 2046 的「未知二进制」类型。"""
     guessed, encoding = mimetypes.guess_type(path.name)
-    return guessed if guessed in INLINE_IMAGE_TYPES and encoding is None else None
+    return guessed if guessed and encoding is None else "application/octet-stream"
+
+
+def _image_type(path: Path) -> str | None:
+    """能交给模型看的图片的类型；其余文件当文本读。"""
+    media_type = _media_type(path)
+    return media_type if media_type in INLINE_IMAGE_TYPES else None
 
 
 def _read_image(target: Path, media_type: str) -> list[str | BinaryContent]:
     """图片以内容交回；attachments.ToolImagesToFiles 把它存进文件存储，历史里只留引用，发请求时再展开给模型。"""
     if not target.is_file():
         raise NotFound(f"file not found: {target}")
-    size = target.stat().st_size
-    if size > _MAX_IMAGE_BYTES:
+    data = target.read_bytes()
+    if len(data) > _MAX_IMAGE_BYTES:
         raise InvalidInput(
-            f"image too large to view: {target} is {size} bytes, the limit is {_MAX_IMAGE_BYTES} bytes; "
+            f"image too large to view: {target} is {len(data)} bytes, the limit is {_MAX_IMAGE_BYTES} bytes; "
             "make a smaller copy first (e.g. `sips -Z 1568 big.png --out small.png`) and read that"
         )
-    return [
-        f"{target} ({media_type}, {size} bytes)",
-        BinaryContent(target.read_bytes(), media_type=media_type),
-    ]
+    return [f"{target} ({media_type}, {len(data)} bytes)", BinaryContent(data, media_type=media_type)]
 
 
 def _read_range(target: Path, offset: int, limit: int) -> _Excerpt:
