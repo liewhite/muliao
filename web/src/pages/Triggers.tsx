@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Alert, Button, Card, Chip, Disclosure, toast } from '@heroui/react'
+import { useState, type ReactNode } from 'react'
+import { Alert, Button, Card, Chip, Disclosure, Modal, toast } from '@heroui/react'
 import { Archive, Copy, History, KeyRound, Pencil, Play, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useReturnState } from '../nav'
@@ -14,6 +14,7 @@ import {
   type TriggerKindName,
   sessionRoute,
 } from '../api'
+import { groupByAgent } from '../triggerGroups'
 import { inAnHour, wallClock } from '../wallClock'
 import {
   ActionButton,
@@ -29,6 +30,7 @@ import {
   ToggleSwitch,
   agentLabel,
   copyText,
+  errorMessage,
   formatTime,
   useAction,
   useAgents,
@@ -410,6 +412,144 @@ function SessionList({ triggerId }: { triggerId: number }) {
   )
 }
 
+/** 启用开关：卡片和详情里共用；失败用 toast 提示（卡片上没有放错误的位置） */
+function EnableSwitch({ trigger, onChange }: { trigger: Trigger; onChange: () => void }) {
+  const [busy, setBusy] = useState(false)
+  async function toggle(enabled: boolean) {
+    setBusy(true)
+    try {
+      await api.updateTrigger(trigger.id, { enabled })
+      onChange()
+    } catch (e) {
+      toast.danger(`${enabled ? '启用' : '停用'}「${trigger.name}」失败：${errorMessage(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <ToggleSwitch
+      label={`启用触发器「${trigger.name}」`}
+      isSelected={trigger.enabled}
+      isDisabled={busy}
+      onChange={(enabled) => void toggle(enabled)}
+    />
+  )
+}
+
+/** 卡片上的一行配置摘要，完整内容在详情里 */
+function kindSummary(trigger: Trigger): string {
+  switch (trigger.kind) {
+    case 'schedule':
+      return trigger.enabled ? `${trigger.config.cron} · 下次 ${formatTime(trigger.status.next_run_at)}` : trigger.config.cron
+    case 'once':
+      return `计划 ${formatTime(trigger.status.run_at)}`
+    case 'webhook':
+      return `POST ${trigger.status.url}`
+    case 'stream':
+      return trigger.config.command
+  }
+}
+
+/** 需要人注意的状态，卡片上只给一句话，原因在详情里 */
+function triggerWarning(trigger: Trigger): string | null {
+  if (trigger.disabled_reason) return '触发失败，已自动停用'
+  if (trigger.precheck_error) return '前置检查出错'
+  switch (trigger.kind) {
+    case 'schedule':
+      return trigger.status.skipped ? `已连续跳过 ${trigger.status.skipped.count} 次` : null
+    case 'webhook':
+      return trigger.status.has_token ? null : '还没有 token'
+    case 'stream':
+      return trigger.status.error ? `连续失败 ${trigger.status.failures} 次` : null
+    case 'once':
+      return null
+  }
+}
+
+/** 网格里的一张卡片：各项只显示开头，点开看详情。整张卡片可点（铺满的透明按钮），开关浮在它上面 */
+function TriggerCard({
+  trigger,
+  agentName,
+  onOpen,
+  onChange,
+}: {
+  trigger: Trigger
+  /** 不按 agent 分组的列表（已完成）在卡片上标出 agent；分组里组头已经写了 */
+  agentName?: string
+  onOpen: () => void
+  /** 已归档的触发器不能启停，不传 */
+  onChange?: () => void
+}) {
+  const warning = triggerWarning(trigger)
+  return (
+    <Card variant={onChange ? 'default' : 'secondary'} className="relative gap-2 transition-shadow hover:shadow-md">
+      <button
+        type="button"
+        aria-label={`查看触发器「${trigger.name}」的详情`}
+        className="absolute inset-0 z-0 cursor-pointer rounded-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        onClick={onOpen}
+      />
+      <div className="pointer-events-none flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium">{trigger.name}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <Chip size="sm" variant="soft">
+              {KIND_LABELS[trigger.kind].label}
+            </Chip>
+            {agentName !== undefined && (
+              <Chip size="sm" color="accent" variant="soft">
+                {agentName}
+              </Chip>
+            )}
+            {warning && (
+              <Chip size="sm" color="warning" variant="soft">
+                {warning}
+              </Chip>
+            )}
+          </div>
+        </div>
+        {onChange && (
+          <div className="pointer-events-auto relative z-10">
+            <EnableSwitch trigger={trigger} onChange={onChange} />
+          </div>
+        )}
+      </div>
+      <div className="pointer-events-none flex min-w-0 flex-col gap-1.5">
+        <code className="truncate font-mono text-xs text-muted">{kindSummary(trigger)}</code>
+        {trigger.precheck && (
+          <div className="truncate text-xs text-muted">
+            前置检查：<code className="font-mono">{trigger.precheck.command}</code>
+          </div>
+        )}
+        <p className="line-clamp-3 whitespace-pre-wrap break-words text-sm">{trigger.prompt}</p>
+        <div className="text-xs text-muted">
+          {trigger.finished_at
+            ? `完成 ${formatTime(trigger.finished_at)}`
+            : trigger.last_fired_at
+              ? `上次触发 ${formatTime(trigger.last_fired_at)}`
+              : '还没有触发过'}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+/** 卡片网格：按容器宽度自动排列，宽屏一行 3–4 张 */
+function CardGrid({ children }: { children: ReactNode }) {
+  return <div className="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-3">{children}</div>
+}
+
+/** 详情弹窗：open 为 false 时关闭（包括详情里删掉了它、列表重新加载后不再有它） */
+function DetailModal({ open, onClose, children }: { open: boolean; onClose: () => void; children: ReactNode }) {
+  return (
+    <Modal.Backdrop isOpen={open} onOpenChange={(o) => !o && onClose()}>
+      <Modal.Container size="lg" scroll="inside">
+        <Modal.Dialog className="sm:max-w-3xl">{children}</Modal.Dialog>
+      </Modal.Container>
+    </Modal.Backdrop>
+  )
+}
+
 function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
   const from = useReturnState()
   const confirm = useConfirm()
@@ -443,10 +583,10 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
   }
 
   return (
-    <Card>
-      <Card.Header className="flex flex-row items-start gap-3">
+    <>
+      <Modal.Header className="flex flex-row items-start gap-3 pr-8">
         <div className="min-w-0 flex-1">
-          <Card.Title>{trigger.name}</Card.Title>
+          <Modal.Heading className="break-all">{trigger.name}</Modal.Heading>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
             <Chip size="sm" variant="soft">
               {KIND_LABELS[trigger.kind].label}
@@ -457,14 +597,9 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
             <KindStatus trigger={trigger} />
           </div>
         </div>
-        <ToggleSwitch
-          label={`启用触发器「${trigger.name}」`}
-          isSelected={trigger.enabled}
-          isDisabled={action.busy}
-          onChange={(enabled) => void action.run(() => api.updateTrigger(trigger.id, { enabled }).then(onChange))}
-        />
-      </Card.Header>
-      <Card.Content className="flex flex-col gap-3">
+        <EnableSwitch trigger={trigger} onChange={onChange} />
+      </Modal.Header>
+      <Modal.Body className="flex flex-col gap-3">
         <div className="text-xs text-muted">
           {trigger.last_fired_at ? <>上次触发 {formatTime(trigger.last_fired_at)}</> : '还没有触发过'}
           {trigger.last_session_id && (
@@ -494,8 +629,8 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           </>
         )}
         <ErrorAlert error={action.error} />
-      </Card.Content>
-      <Card.Footer className="flex flex-wrap gap-2">
+      </Modal.Body>
+      <Modal.Footer className="flex flex-wrap justify-start gap-2">
         {editing ? (
           <>
             <ActionButton
@@ -538,8 +673,9 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
             </Button>
           </>
         )}
-      </Card.Footer>
-    </Card>
+      </Modal.Footer>
+      <Modal.CloseTrigger />
+    </>
   )
 }
 
@@ -617,7 +753,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   )
 }
 
-/** 已归档的触发器：跑完的一次性触发器。只能看结果与删除，不能再改、启用或运行 */
+/** 已归档的触发器（跑完的一次性触发器）的详情：只能看结果与删除，不能再改、启用或运行 */
 function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
   const from = useReturnState()
   const confirm = useConfirm()
@@ -629,23 +765,21 @@ function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agen
   }
 
   return (
-    <Card variant="secondary">
-      <Card.Header className="flex flex-row items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <Card.Title>{trigger.name}</Card.Title>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-            <Chip size="sm" variant="soft">
-              {KIND_LABELS[trigger.kind].label}
-            </Chip>
-            <Chip size="sm" color="accent" variant="soft">
-              {agentLabel(agents, trigger.agent_id)}
-            </Chip>
-            <KindStatus trigger={trigger} />
-            {trigger.finished_at && <span>· 完成 {formatTime(trigger.finished_at)}</span>}
-          </div>
+    <>
+      <Modal.Header className="pr-8">
+        <Modal.Heading className="break-all">{trigger.name}</Modal.Heading>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+          <Chip size="sm" variant="soft">
+            {KIND_LABELS[trigger.kind].label}
+          </Chip>
+          <Chip size="sm" color="accent" variant="soft">
+            {agentLabel(agents, trigger.agent_id)}
+          </Chip>
+          <KindStatus trigger={trigger} />
+          {trigger.finished_at && <span>· 完成 {formatTime(trigger.finished_at)}</span>}
         </div>
-      </Card.Header>
-      <Card.Content className="flex flex-col gap-3">
+      </Modal.Header>
+      <Modal.Body className="flex flex-col gap-3">
         <div className="text-xs text-muted">
           {trigger.last_session_id ? (
             <Link className="text-accent" to={sessionRoute(trigger.last_session_id)} state={from}>
@@ -660,66 +794,105 @@ function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agen
         <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
         <TriggerSessions trigger={trigger} />
         <ErrorAlert error={action.error} />
-      </Card.Content>
-      <Card.Footer>
+      </Modal.Body>
+      <Modal.Footer className="justify-start">
         <Button size="sm" variant="danger-soft" isDisabled={action.busy} onPress={() => void remove()}>
           <Trash2 className="size-4" />
           删除记录
         </Button>
-      </Card.Footer>
-    </Card>
+      </Modal.Footer>
+      <Modal.CloseTrigger />
+    </>
   )
 }
 
 function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
   const finished = useLoad(() => api.triggers(true), [])
+  const [openId, setOpenId] = useState<number | null>(null)
   return (
     <Loading state={finished}>
-      {(list) =>
-        list.length === 0 ? (
-          <EmptyHint>还没有跑完的一次性触发器</EmptyHint>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {list.map((t) => (
-              <FinishedTrigger key={t.id} trigger={t} agents={agents} onChange={() => void finished.reload()} />
-            ))}
-          </div>
+      {(list) => {
+        if (list.length === 0) return <EmptyHint>还没有跑完的一次性触发器</EmptyHint>
+        const open = list.find((t) => t.id === openId)
+        return (
+          <>
+            <CardGrid>
+              {list.map((t) => (
+                <TriggerCard key={t.id} trigger={t} agentName={agentLabel(agents, t.agent_id)} onOpen={() => setOpenId(t.id)} />
+              ))}
+            </CardGrid>
+            <DetailModal open={open !== undefined} onClose={() => setOpenId(null)}>
+              {open && <FinishedTrigger key={open.id} trigger={open} agents={agents} onChange={() => void finished.reload()} />}
+            </DetailModal>
+          </>
         )
-      }
+      }}
     </Loading>
   )
 }
 
-/** 自动发起会话的入口：定时、webhook……方式的差异只在各自的配置与操作 */
+/** 一个 agent 的触发器：可折叠的一组卡片 */
+function AgentGroup({ name, count, children }: { name: string; count: number; children: ReactNode }) {
+  return (
+    <Disclosure defaultExpanded>
+      <Disclosure.Heading>
+        <Disclosure.Trigger className="flex w-full items-center gap-2 px-1 py-1 font-medium">
+          <Disclosure.Indicator />
+          <span className="truncate">{name}</span>
+          <Chip size="sm" variant="soft">
+            {count}
+          </Chip>
+        </Disclosure.Trigger>
+      </Disclosure.Heading>
+      <Disclosure.Content>
+        <Disclosure.Body className="pt-2">{children}</Disclosure.Body>
+      </Disclosure.Content>
+    </Disclosure>
+  )
+}
+
+/** 自动发起会话的入口：定时、webhook……方式的差异只在各自的配置与操作。按 agent 分组的卡片网格，点卡片看详情 */
 export default function Triggers() {
   const triggers = useLoad(() => api.triggers(), [])
   const kinds = useLoad(() => api.triggerKinds(), [])
   const agents = useAgents()
+  // 详情跟着列表走：重新加载后显示最新内容，删掉后自动关闭
+  const [openId, setOpenId] = useState<number | null>(null)
   // 展开时才取已完成的列表，顺便每次展开都是最新的
   const [showFinished, setShowFinished] = useState(false)
+  const reload = () => void triggers.reload()
   return (
-    <Page title="触发">
-      <div className="flex flex-col gap-3">
-        <Loading state={kinds}>
-          {(list) => <TriggerForm kinds={list} agents={agents.data} onCreated={() => void triggers.reload()} />}
-        </Loading>
+    <Page title="触发" wide>
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-3">
+        <Loading state={kinds}>{(list) => <TriggerForm kinds={list} agents={agents.data} onCreated={reload} />}</Loading>
         <Loading state={triggers}>
-          {(list) =>
-            list.length === 0 ? (
-              <EmptyHint>没有触发器</EmptyHint>
-            ) : (
-              <div className="flex flex-col gap-3">
-                {list.map((t) => (
-                  <TriggerItem
-                    key={`${t.id}-${t.prompt}-${JSON.stringify(t.config)}-${JSON.stringify(t.precheck)}`}
-                    trigger={t}
-                    agents={agents.data}
-                    onChange={() => void triggers.reload()}
-                  />
+          {(list) => {
+            if (list.length === 0) return <EmptyHint>没有触发器</EmptyHint>
+            const open = list.find((t) => t.id === openId)
+            return (
+              <>
+                {groupByAgent(list, agents.data).map((g) => (
+                  <AgentGroup key={g.agentId} name={agentLabel(agents.data, g.agentId)} count={g.triggers.length}>
+                    <CardGrid>
+                      {g.triggers.map((t) => (
+                        <TriggerCard key={t.id} trigger={t} onOpen={() => setOpenId(t.id)} onChange={reload} />
+                      ))}
+                    </CardGrid>
+                  </AgentGroup>
                 ))}
-              </div>
+                <DetailModal open={open !== undefined} onClose={() => setOpenId(null)}>
+                  {open && (
+                    <TriggerItem
+                      key={`${open.id}-${open.prompt}-${JSON.stringify(open.config)}-${JSON.stringify(open.precheck)}`}
+                      trigger={open}
+                      agents={agents.data}
+                      onChange={reload}
+                    />
+                  )}
+                </DetailModal>
+              </>
             )
-          }
+          }}
         </Loading>
         <Card>
           <Disclosure onExpandedChange={setShowFinished}>
