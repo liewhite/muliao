@@ -1,10 +1,17 @@
 """文本的唯一规则（纯函数）：修改文本——替换恰好出现一次的片段，或追加一段（记忆、skill 正文、工作区文件都用它）；
-截断过长的文本（交给模型、展示、通知的长输出都用它）。"""
+工作区文件的多处修改（Edit：按原文、按行号区间，按语法结构的在 platform.syntax_edit）；带行号展示；截断过长的文本
+（交给模型、展示、通知的长输出都用它）。"""
 
 import difflib
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Protocol
 
 from muliao.errors import InvalidInput
+
+# 带行号展示时单行的上限：一行压缩过的 JS/JSON 能吃掉整个输出预算
+MAX_LINE_CHARS = 2000
 
 
 def replace_once(current: str, old: str, new: str, what: str) -> str:
@@ -25,18 +32,76 @@ def replace_all(current: str, old: str, new: str, what: str) -> tuple[str, int]:
     return current.replace(old, new), count
 
 
-def replace_each(current: str, edits: list[tuple[str, str, bool]], what: str) -> tuple[str, int]:
-    """依次做多处替换（每项 (old, new, 是否替换全部)，后一项作用在前面替换后的文本上），返回新文本与总替换数。
+class Edit(Protocol):
+    """一处修改：按自己的方式定位要改的地方并替换，返回新文本与替换数；定位不到就抛 InvalidInput。"""
+
+    def apply(self, current: str, what: str) -> tuple[str, int]: ...
+
+
+@dataclass(frozen=True)
+class Replace:
+    """按原文定位：old 恰好出现一次（every 时每一处）替换为 new。"""
+
+    old: str
+    new: str
+    every: bool = False
+
+    def apply(self, current: str, what: str) -> tuple[str, int]:
+        if self.every:
+            return replace_all(current, self.old, self.new, what)
+        return replace_once(current, self.old, self.new, what), 1
+
+
+@dataclass(frozen=True)
+class LineRange:
+    """按行号定位：第 start 到 end 行（1 起算、含两端）整行替换为 new。anchor 是第 start 行的原文（两端空白不计），
+    对不上说明行号已过期（文件变了，或前面的修改挪动了行），报错并展示那几行现在的内容，不改错地方。"""
+
+    start: int
+    end: int
+    anchor: str
+    new: str
+
+    def apply(self, current: str, what: str) -> tuple[str, int]:
+        lines = current.splitlines(keepends=True)
+        if not 1 <= self.start <= self.end:
+            raise InvalidInput(
+                f"need 1 <= start_line <= end_line, got start_line={self.start} end_line={self.end}"
+            )
+        if self.end > len(lines):
+            raise InvalidInput(f"end_line {self.end} is past the end: {what} has {len(lines)} lines")
+        if "\n" in self.anchor.strip():
+            raise InvalidInput("anchor must be the text of the single line start_line, not several lines")
+        line, anchor = lines[self.start - 1].rstrip("\r\n"), self.anchor.strip()
+        # 超长的行在 read_file 里是截断着展示的，照抄截断后的样子也算对上
+        if anchor not in {line.strip(), _clip(line).strip()}:
+            plain = current.splitlines()
+            first, last = max(self.start - 3, 0), min(self.end + 2, len(plain))
+            raise InvalidInput(
+                f"anchor does not match line {self.start} of {what}; lines {first + 1}-{last} are now:\n"
+                f"{numbered(plain, first, last)}\ngive the line numbers and anchor of the text as it is now"
+            )
+        replaced = "".join(lines[self.start - 1 : self.end])
+        head, tail = "".join(lines[: self.start - 1]), "".join(lines[self.end :])
+        return head + as_lines(self.new, replaced) + tail, 1
+
+
+def as_lines(new: str, replaced: str) -> str:
+    """替换整行时的新内容：被替换的行以换行结尾而 new 没有时补上，new 末尾的换行因此可写可不写；new 为空即删掉这些行。"""
+    if new and replaced.endswith("\n") and not new.endswith("\n"):
+        return new + "\n"
+    return new
+
+
+def apply_each(current: str, edits: Sequence[Edit], what: str) -> tuple[str, int]:
+    """依次做多处修改（后一项作用在前面改过的文本上），返回新文本与总替换数。
     任何一项失败都整体失败，报错指出是第几项；调用方只在成功后写盘，所以不会留下改了一半的文件。"""
     if not edits:
         raise InvalidInput("no edits given")
     total = 0
-    for i, (old, new, every) in enumerate(edits, 1):
+    for i, change in enumerate(edits, 1):
         try:
-            if every:
-                current, count = replace_all(current, old, new, what)
-            else:
-                current, count = replace_once(current, old, new, what), 1
+            current, count = change.apply(current, what)
         except InvalidInput as e:
             if len(edits) == 1:
                 raise
@@ -65,8 +130,7 @@ def _miss(current: str, old: str, count: int, rule: str) -> str:
         return message
     if count > 1:
         lines = sorted({current.count("\n", 0, m.start()) + 1 for m in re.finditer(re.escape(old), current)})
-        shown = ", ".join(map(str, lines[:20])) + (" …" if len(lines) > 20 else "")
-        return f"{message} (at lines {shown}); include more surrounding text to make it unique"
+        return f"{message} (at lines {listed(lines)}); include more surrounding text to make it unique"
     wanted = [line.strip() for line in old.splitlines()]
     have = [line.strip() for line in current.splitlines()]
     n = len(wanted)
@@ -97,6 +161,20 @@ def append(current: str, entry: str) -> str:
     if not entry:
         raise InvalidInput("nothing to append")
     return f"{current.rstrip()}\n\n{entry}\n" if current.strip() else f"{entry}\n"
+
+
+def listed(line_numbers: list[int]) -> str:
+    """报错里「在哪几行」的列表，最多列 20 个。"""
+    return ", ".join(map(str, line_numbers[:20])) + (" …" if len(line_numbers) > 20 else "")
+
+
+def numbered(lines: list[str], start: int, end: int) -> str:
+    """lines[start:end]，每行前加 1 起算的行号和制表符（read_file、edit_file 的回显与报错同一格式），过长的行截断。"""
+    return "\n".join(f"{i + 1}\t{_clip(lines[i])}" for i in range(start, end))
+
+
+def _clip(line: str) -> str:
+    return line if len(line) <= MAX_LINE_CHARS else f"{line[:MAX_LINE_CHARS]}…[line truncated]"
 
 
 def truncate(text: str, limit: int) -> str:

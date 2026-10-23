@@ -17,13 +17,13 @@ from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
 from muliao.platform.shell import run_bash
-from muliao.platform.text_edit import truncate
+from muliao.platform.syntax_edit import PatternEdit, language_of
+from muliao.platform.text_edit import numbered, truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 
-_MAX_LINE_CHARS = 2000
 # edit_file 成功后展示的改动前后上下文行数：够确认改对了，不必再回读文件
 _EDIT_CONTEXT_LINES = 2
 _DEFAULT_READ_LIMIT = 2000
@@ -36,12 +36,19 @@ _MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4
 
 
 class TextEdit(BaseModel):
-    # edit_file 一次调用里的一处替换（类 docstring 会进 schema 给模型看，所以用注释）
+    # edit_file 一次调用里的一处修改（类 docstring 会进 schema 给模型看，所以用注释）；定位方式与 edit_file 的同名参数一致
     model_config = ConfigDict(extra="forbid")
 
-    old_text: str = Field(description="Exact text to replace.")
+    old_text: str | None = Field(default=None, description="Exact text to replace.")
+    start_line: int | None = Field(default=None, description="First line to replace (1-based).")
+    end_line: int | None = Field(default=None, description="Last line to replace (inclusive).")
+    anchor: str | None = Field(default=None, description="The current text of line start_line.")
+    pattern: str | None = Field(default=None, description="ast-grep pattern matching the code to replace.")
     new_text: str = Field(description="Replacement text.")
-    replace_all: bool = Field(default=False, description="Replace every occurrence instead of exactly one.")
+    replace_all: bool = Field(
+        default=False,
+        description="Replace every occurrence (old_text) or match (pattern) instead of exactly one.",
+    )
 
 
 class FileRange(BaseModel):
@@ -194,37 +201,69 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         ctx: RunContext[RunScope],
         path: str,
         old_text: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        anchor: str | None = None,
+        pattern: str | None = None,
         new_text: str | None = None,
         replace_all: bool = False,
         edits: tuple[TextEdit, ...] = (),
     ) -> str:
-        """Replace text in a file. `old_text` must occur exactly once, unless `replace_all` is set.
-        Copy `old_text` exactly from the file as it is now (without read_file's line-number prefix), with enough
-        surrounding lines to be unique. To change several places in the same file in one call, pass `edits`
-        instead of `old_text`/`new_text`: they are applied in order, and if any of them fails nothing is written.
+        """Change a file: locate a block in exactly one of three ways and replace it with `new_text`.
+        - `old_text`: exact text that must occur exactly once (unless `replace_all`). Copy it from the file as it
+          is now (without read_file's line-number prefix), with enough surrounding lines to be unique.
+        - `start_line` + `end_line` + `anchor`: whole lines start_line..end_line as numbered by read_file;
+          `anchor` is the current text of line start_line, checked so that stale line numbers fail instead of
+          changing the wrong lines. Good for replacing or deleting a long block without copying it.
+        - `pattern`: an ast-grep pattern for a source file (language from the extension): code where `$VAR`
+          matches one syntax node and `$$$VARS` any number of them, e.g. `def test_x` matches that whole Python
+          function (with its body), `function f($$$A) { $$$B }` a JavaScript one. It must match exactly one place
+          (unless `replace_all`); `new_text` may use its metavariables (`$VAR` becomes the matched code).
+          Only the matched code is replaced and the indentation in front of it stays; lines 2+ of `new_text`
+          get the match's indentation added, so indent them relative to its first line; a multi-line
+          `$$$VARS` is re-indented to where you put it (e.g. one level deeper inside a new `with`).
+          Deleting a match also removes its decorators / `export`, and its lines with the extra blank lines
+          left behind.
+        To change several places in the same file in one call, pass `edits` instead: they are applied in order,
+        each seeing the result of the earlier ones (so list line-range edits from the bottom of the file up), and
+        if any of them fails nothing is written. On success the changed lines are shown with their numbers.
 
         Args:
             path: File path.
             old_text: Exact text to replace (omit when using `edits`).
-            new_text: Replacement text; empty deletes `old_text` (omit when using `edits`).
-            replace_all: Replace every occurrence (e.g. renaming a variable) instead of exactly one (omit when
-                using `edits`).
-            edits: List of {old_text, new_text, replace_all} replacements in this file, applied in order (each
-                sees the result of the earlier ones); each old_text must occur exactly once unless its
-                replace_all is set.
+            start_line: First line to replace (1-based); give with `end_line` and `anchor`.
+            end_line: Last line to replace (inclusive).
+            anchor: The current text of line start_line (leading/trailing whitespace ignored).
+            pattern: ast-grep pattern matching the code to replace.
+            new_text: Replacement text; empty deletes the located text (omit when using `edits`).
+            replace_all: Replace every occurrence of `old_text` or every match of `pattern` (e.g. renaming a
+                variable) instead of exactly one (omit when using `edits`).
+            edits: List of changes to this file, each {new_text} plus one way to locate it (old_text,
+                start_line/end_line/anchor or pattern) and optionally replace_all, applied in order (each sees
+                the result of the earlier ones).
         """
-        if edits and (old_text is not None or new_text is not None or replace_all):
-            raise InvalidInput("pass either old_text/new_text/replace_all or edits, not both")
-        if not edits and (old_text is None or new_text is None):
-            raise InvalidInput("old_text and new_text are required (or pass edits)")
+        single = (old_text, start_line, end_line, anchor, pattern, new_text)
+        if edits and (any(v is not None for v in single) or replace_all):
+            raise InvalidInput("pass either one change (old_text/.../new_text) or edits, not both")
+        if not edits:
+            if new_text is None:
+                raise InvalidInput("new_text is required (or pass edits)")
+            edits = (
+                TextEdit(
+                    old_text=old_text,
+                    start_line=start_line,
+                    end_line=end_line,
+                    anchor=anchor,
+                    pattern=pattern,
+                    new_text=new_text,
+                    replace_all=replace_all,
+                ),
+            )
         target = resolve(ctx.deps, path)
         if not target.is_file():
             raise NotFound(f"file not found: {target}")
-        changes = [(e.old_text, e.new_text, e.replace_all) for e in edits] or [
-            (old_text, new_text, replace_all)
-        ]
         before = target.read_text(encoding="utf-8")
-        content, count = text_edit.replace_each(before, changes, str(target))
+        content, count = text_edit.apply_each(before, [_Located(target, e) for e in edits], str(target))
         target.write_text(content, encoding="utf-8")
         lines = content.splitlines()
         head = f"edited {target} ({count} replacement{'s' if count > 1 else ''}; now {len(lines)} lines)"
@@ -234,7 +273,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             if before == content:
                 return f"{head}; the text is unchanged"
             return f"{head}; the file is now empty" if not lines else f"{head}; only line endings changed"
-        excerpts = [f"lines {start + 1}-{end}:\n{_numbered(lines, start, end)}" for start, end in ranges]
+        excerpts = [f"lines {start + 1}-{end}:\n{numbered(lines, start, end)}" for start, end in ranges]
         return truncate(
             "\n".join([f"{head}. Changed lines with context:", *excerpts]), limits.max_output_chars
         )
@@ -366,7 +405,7 @@ def _read_range(target: Path, offset: int, limit: int, budget: int) -> _Excerpt:
     rows: list[str] = []
     used = 0
     for i in range(offset, end):
-        row = _numbered(lines, i, i + 1)
+        row = numbered(lines, i, i + 1)
         used += len(row) + (1 if rows else 0)
         if rows and used > budget:
             break
@@ -391,11 +430,32 @@ def _read_range(target: Path, offset: int, limit: int, budget: int) -> _Excerpt:
     )
 
 
-def _numbered(lines: list[str], start: int, end: int) -> str:
-    """lines[start:end]，每行前加 1 起算的行号和制表符（read_file 与 edit_file 的回显同一格式）。"""
-    # 一行压缩过的 JS/JSON 能吃掉整个输出预算，单行截断
-    return "\n".join(f"{i + 1}\t{_clip(lines[i])}" for i in range(start, end))
+@dataclass(frozen=True)
+class _Located:
+    """模型给的一处修改：应用时按它的定位方式换成对应的 Edit，定位参数不对也在这时报错，由 apply_each 统一标出是第几处。"""
+
+    target: Path
+    edit: TextEdit
+
+    def apply(self, current: str, what: str) -> tuple[str, int]:
+        return _change_of(self.target, self.edit).apply(current, what)
 
 
-def _clip(line: str) -> str:
-    return line if len(line) <= _MAX_LINE_CHARS else f"{line[:_MAX_LINE_CHARS]}…[line truncated]"
+def _change_of(target: Path, e: TextEdit) -> text_edit.Edit:
+    """一处修改按它给的定位方式（恰好一种）换成对应的 Edit。"""
+    lines = (e.start_line, e.end_line, e.anchor)
+    if any(v is not None for v in lines) and None in lines:
+        raise InvalidInput("start_line, end_line and anchor go together: give all three")
+    given = [e.old_text is not None, e.start_line is not None, e.pattern is not None]
+    if sum(given) != 1:
+        raise InvalidInput(
+            "locate the text in exactly one way: old_text, start_line/end_line/anchor, or pattern"
+        )
+    if e.old_text is not None:
+        return text_edit.Replace(e.old_text, e.new_text, e.replace_all)
+    if e.pattern is not None:
+        return PatternEdit(e.pattern, language_of(target), e.new_text, e.replace_all)
+    if e.replace_all:
+        raise InvalidInput("replace_all does not apply to a line range")
+    assert e.start_line is not None and e.end_line is not None and e.anchor is not None
+    return text_edit.LineRange(e.start_line, e.end_line, e.anchor, e.new_text)
