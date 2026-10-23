@@ -637,8 +637,8 @@ class IssueService:
         user_comment = actor is None and any(a.kind == ActivityKind.COMMENT for a in happened)
         agent = recipient(
             _snapshot(issue, links),
-            user_comment,
-            await self._from_its_session_in(s, issue, actor, session_id),
+            user_comment=user_comment,
+            from_its_session=await self._from_its_session_in(s, issue, actor, session_id),
         )
         if agent is None:
             return None

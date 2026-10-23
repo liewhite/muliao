@@ -49,7 +49,7 @@ TODO, BACKLOG, PROGRESS, REVIEW, DONE = (
     ],
 )
 def test_recipient_rules(issue, from_its_session, to):
-    assert recipient(issue, False, from_its_session) == to
+    assert recipient(issue, user_comment=False, from_its_session=from_its_session) == to
 
 
 def test_stalled_means_an_active_agent_issue_nobody_works_on():
@@ -207,7 +207,7 @@ async def test_backlog_review_and_done_are_not_delivered(container, make_agent):
     ],
 )
 def test_a_user_comment_nobody_takes_goes_to_the_owner(issue, user_comment, to):
-    assert recipient(issue, user_comment, None) == to
+    assert recipient(issue, user_comment=user_comment, from_its_session=None) == to
 
 
 async def test_a_user_comment_on_a_backlog_issue_wakes_its_owner(container, make_agent):
@@ -515,7 +515,7 @@ async def test_acting_from_the_session_of_another_issue_is_delivered(container, 
 
 def test_an_issue_waiting_on_upstream_is_neither_delivered_nor_stalled():
     waiting = Snapshot(TODO, "a", None, (3,))
-    assert recipient(waiting, False, None) is None
+    assert recipient(waiting, user_comment=False, from_its_session=None) is None
     assert not stalled(waiting, None)
 
 
