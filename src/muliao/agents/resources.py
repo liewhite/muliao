@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import posixpath
 import re
 import shutil
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import anyio
 
@@ -44,6 +46,18 @@ log = logging.getLogger(__name__)
 
 # 为 owner 写资源之前的检查（实现见 agents.active.ActiveOwners）；owner 为 None（公共资源）时不查
 OwnerCheck = Callable[[str | None], Awaitable[None]]
+# 一个目录里在版本管理中的文件（暂存区里的路径）：apply_planned 交给 plan 用
+TrackedFiles = Callable[[Path], Awaitable[list[Path]]]
+# git 里普通文件的两种模式
+_REGULAR, _EXECUTABLE = "100644", "100755"
+
+
+@dataclass(frozen=True)
+class VersionedFile:
+    data: bytes
+    # git 里记的可执行位（100755）
+    executable: bool
+
 
 USER = "user"
 # 系统自己做的提交（初始化、启动时的收敛）
@@ -77,12 +91,26 @@ ATTACHMENT_FILES = tuple(f"{d}/**/*.{s}" for d in _SKILL_DIRS for s in ATTACHMEN
 RESOURCE_FILES = STORE_FILES + ATTACHMENT_FILES
 # skill 目录里即使后缀在白名单里也不是附件的：隐藏文件与目录（.env、.venv、.cache……）、依赖与虚拟环境目录。
 # 只作用在 skill 目录里面（git 的 exclude 对整组 pathspec 生效，所以带上 skill 目录前缀），不影响 store 写的文件
-_NOT_ATTACHMENTS = (".*", ".*/**", "node_modules/**", "venv/**", "site-packages/**", "__pycache__/**")
+_HIDDEN = "."
+_NOT_ATTACHMENT_DIRS = ("node_modules", "venv", "site-packages", "__pycache__")
+_NOT_ATTACHMENTS = (f"{_HIDDEN}*", f"{_HIDDEN}*/**", *(f"{d}/**" for d in _NOT_ATTACHMENT_DIRS))
 EXCLUDED_FILES = tuple(f"{d}/**/{p}" for d in _SKILL_DIRS for p in _NOT_ATTACHMENTS)
 # 外部写入的单个文件上限：超过的不收进历史（历史只增不改，进去就删不掉），记 warning。已在历史里的文件变得超限：
 # 历史停在最后一个未超限的版本，工作区保持未提交，缩回上限以内再照常提交。尽力而为：查大小与暂存之间
 # 正在被 shell 写的文件可能已变大
 MAX_EXTERNAL_FILE_BYTES = 256 * 1024
+
+
+def is_attachment(rel: str) -> bool:
+    """skill 目录里的这个相对路径（如 `scripts/run.py`、`SKILL.md`）是不是会进版本管理的文件：给还没写到磁盘上的文件
+    （导入的 .skill 包）预先判断。与上面交给 git 的 ATTACHMENT_FILES / EXCLUDED_FILES 是同一条规则的两种写法，
+    由 test_is_attachment_agrees_with_git 对照 git 的判断守护。"""
+    parts = rel.split("/")
+    *dirs, name = parts
+    if any(p.startswith(_HIDDEN) for p in parts) or any(d in _NOT_ATTACHMENT_DIRS for d in dirs):
+        return False
+    stem, dot, suffix = name.rpartition(".")
+    return bool(dot) and bool(stem) and suffix in ATTACHMENT_SUFFIXES
 
 
 def _literal(rel: str) -> str:
@@ -91,11 +119,29 @@ def _literal(rel: str) -> str:
     return f":(literal){rel}"
 
 
+def _under_common(rel: Sequence[str]) -> tuple[str, ...]:
+    """只接受命令行路径的 git 命令（ls-files、diff）用的 pathspec：这些路径的公共上级，结果再用 _covered 取交集。
+    没有公共上级时是整个仓库（只用于列出，不用于 add/commit）。"""
+    common = posixpath.commonpath(rel)
+    return ("--", _literal(common)) if common else ("--",)
+
+
+def _covered(rel: Sequence[str], files: Iterable[str]) -> set[str]:
+    """rel 里被 files 覆盖的：本身在 files 里，或（目录）它下面有文件在。"""
+    present = set()
+    for f in files:
+        if f:
+            present.add(f)
+            present.update(p.as_posix() for p in PurePosixPath(f).parents)
+    return {r for r in rel if r in present}
+
+
 def _pathspec(files: Iterable[str]) -> tuple[str, ...]:
     return (*(f":(glob){p}" for p in files), *(f":(exclude,glob){p}" for p in EXCLUDED_FILES))
 
 
-# 交给 git 的 pathspec：哪些路径是资源文件只由 git 按它判断，不另写一套匹配
+# 交给 git 的 pathspec：磁盘上哪些路径是资源文件由 git 按它判断；还没落盘的文件（导入的包）只能用 is_attachment
+# 预先判断，两者由测试对照
 RESOURCE_PATHSPEC = _pathspec(RESOURCE_FILES)
 # 本模块写了一半的临时文件（_write）：只有 store 写的文件会有，附件旁边的 *.tmp 是 agent 自己的
 PARTIAL_WRITE_PATHSPEC = _pathspec(f"{p}{_TMP}" for p in STORE_FILES)
@@ -229,7 +275,12 @@ def _remove(path: Path) -> None:
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + _TMP)
-    tmp.write_text(content, encoding="utf-8")
+    # 临时文件不跟随符号链接：agent 用 shell 放在那里的链接会把内容写到别处（写入路径本身由调用方查，
+    # 见 check_no_links）。上次留下的同名文件是写了一半的残留，先删掉
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(content)
     tmp.replace(path)
 
 
@@ -471,6 +522,86 @@ class ResourceRepo:
             await self._reconcile_locked()
             return await self._apply_locked(changes, message, author)
 
+    async def apply_planned(
+        self,
+        plan: Callable[[TrackedFiles], Awaitable[Mapping[Path, str | None]]],
+        message: str,
+        author: str,
+    ) -> str | None:
+        """同 apply，但要写什么在锁里、收敛外部写入之后才算出来：plan 可以看当前状态（文件系统，以及经它的参数
+        看某个目录里在版本管理中的文件）再决定写入，或抛领域错误拒绝。用于一次替换一组文件（如导入覆盖一个 skill），
+        判断与写入之间插不进别的写入。owner 的检查同 apply（总是检查）。"""
+        async with self._lock:
+            await self._reconcile_locked()
+            changes = await plan(self._tracked_under)
+            await self._check_owners_locked(changes)
+            return await self._apply_locked(changes, message, author)
+
+    def check_no_links(self, path: Path) -> None:
+        """路径在仓库里且不经过任何符号链接（按字面拼出的就是它实际指向的）。写入的路径来自外部输入时（导入的包）
+        先查：agent 用 shell 在 skill 目录里建的链接会把写入引到别的 skill、别的 owner 名下或仓库外。"""
+        try:
+            lexical = path.relative_to(self.root)
+        except ValueError:
+            raise InvalidInput(f"{path} is outside the resource repository") from None
+        if path.resolve() != self.root.resolve() / lexical:
+            raise InvalidInput(
+                f"{lexical.as_posix()} goes through a symbolic link in the resource repository"
+            )
+
+    async def versioned_files(self, directory: Path) -> dict[str, VersionedFile]:
+        """目录里在版本管理中的文件（相对这个目录的路径 → 内容）：先收敛外部写入，再按 HEAD 读，所以就是这个目录
+        最新的一版历史。留在历史外的（不在白名单里的、超过上限的）不在里面；已在历史里、后来变得超限的文件是它在
+        历史里的最后一版（见 MAX_EXTERNAL_FILE_BYTES）。只含普通文件，符号链接不算。目录本身不能经过符号链接
+        （check_no_links）：那样读到的是另一个目录的历史。"""
+        self.check_no_links(directory)
+        prefix = self.relative(directory)
+        async with self._lock:
+            await self._reconcile_locked()
+            # ls-tree 的路径参数按字面前缀匹配（不是 pathspec，没有通配与魔法）
+            _, listing = await self._git("ls-tree", "-r", "-z", "HEAD", "--", f"{prefix}/")
+            # 每条「<mode> <type> <oid>\t<path>」；只要普通文件（100644 / 100755）
+            entries = []
+            for entry in listing.split("\0"):
+                if not entry:
+                    continue
+                meta, path = entry.split("\t", 1)
+                mode, kind, oid = meta.split()
+                if kind == "blob" and mode in (_REGULAR, _EXECUTABLE):
+                    entries.append((path.removeprefix(f"{prefix}/"), mode, oid))
+            contents = await self._cat_batch([oid for _, _, oid in entries])
+        return {
+            path: VersionedFile(data, mode == _EXECUTABLE)
+            for (path, mode, _), data in zip(entries, contents, strict=True)
+        }
+
+    async def _cat_batch(self, objects: Sequence[str]) -> list[bytes]:
+        """一次 git cat-file --batch 读出这些对象（oid 或 `<rev>:<path>`）的内容，与 objects 一一对应，不按对象逐个起进程。
+        某个对象不存在时报 NotFound。调用方持锁。"""
+        if not objects:
+            return []
+        _, out = await self._git_bytes(
+            "cat-file", "--batch", stdin="".join(f"{o}\n" for o in objects).encode()
+        )
+        contents = []
+        pos = 0
+        for obj in objects:
+            # 每个对象一行头「<oid> <type> <size>」，随后 size 字节内容与一个换行；找不到时只有「<name> missing」
+            end = out.index(b"\n", pos)
+            header = out[pos:end].split()
+            if header[-1] == b"missing":
+                raise NotFound(f"{obj} does not exist")
+            if len(header) != 3 or not header[2].isdigit():
+                raise RuntimeError(f"git cat-file gave an unexpected header for {obj}: {header!r}")
+            size = int(header[2])
+            contents.append(out[end + 1 : end + 1 + size])
+            pos = end + 1 + size + 1
+        return contents
+
+    async def _tracked_under(self, directory: Path) -> list[Path]:
+        _, out = await self._git("ls-files", "-z", "--", _literal(self.relative(directory)))
+        return [self.root / rel for rel in out.split("\0") if rel]
+
     async def update(
         self,
         path: Path,
@@ -498,24 +629,29 @@ class ResourceRepo:
             for path, content in changes.items():
                 if content is None:
                     _remove(path)
+                    self._prune_inside_skill(path)
                 else:
                     _write(path, content)
             # 删除一个从未提交过的路径（如没有资源目录的 agent）：没有可记录的变化
-            tracked = [r for r in rel if (self.root / r).exists() or await self._tracked(r)]
+            before_add = await self._tracked_among(rel)
+            tracked = [r for r in rel if (self.root / r).exists() or r in before_add]
             if not tracked:
                 return None
-            await self._git("add", "-A", "--", *tracked)
+            # 路径按字面匹配（导入的文件名可能带通配符），经 stdin 传：一次写入的文件可以很多（覆盖导入时删掉旧 skill
+            # 的全部文件）。ls-files 与 diff 不接受 stdin 的路径：它们只给公共上级目录，再在这里取交集
+            await self._git_on_paths(tracked, "add", "-A")
+            after_add = await self._tracked_among(rel)
             for path, r in zip(changes, rel, strict=True):
                 # git add 对它不管的路径（如上级目录是一个嵌套仓库）照样返回 0，不能当成「没有变化」悄悄成功
-                if changes[path] is not None and not await self._tracked(r):
+                if changes[path] is not None and r not in after_add:
                     raise RuntimeError(
                         f"{r} is not versioned by git after adding it; is a parent directory a nested repository?"
                     )
-            unchanged, _ = await self._git("diff", "--cached", "--quiet", "--", *tracked, check=False)
-            if unchanged == 0:
+            _, staged = await self._git("diff", "--cached", "--name-only", "-z", *_under_common(tracked))
+            if not _covered(tracked, staged.split("\0")):
                 return None
-            await self._git(
-                "commit", "-q", "-m", message, f"--author={author} <{author}@muliao>", "--", *tracked
+            await self._git_on_paths(
+                tracked, "commit", "-q", "-m", message, f"--author={author} <{author}@muliao>"
             )
         except BaseException as error:
             # 「报错」等于「没有生效」：还原失败本身也必须可见，不能声称已回滚
@@ -526,16 +662,37 @@ class ResourceRepo:
         log.info("resource committed", extra={"paths": rel, "author": author, "rev": rev.strip()})
         return rev.strip()
 
-    async def _tracked(self, rel: str) -> bool:
-        _, out = await self._git("ls-files", "--", rel)
-        return bool(out.strip())
+    async def _tracked_among(self, rel: Sequence[str]) -> set[str]:
+        """这些路径里在暂存区中的：文件本身在，或（目录）它下面有文件在。一次 ls-files，不按路径逐个起进程。"""
+        _, out = await self._git("ls-files", "-z", *_under_common(rel))
+        return _covered(rel, out.split("\0"))
+
+    def _prune_inside_skill(self, path: Path) -> None:
+        """删掉一个 skill 目录里的文件后，删掉它在 skill 目录里、现在空了的上级目录（不含 skill 目录本身）：git 不记目录，
+        留着会让同一次写入里同名的新文件（覆盖导入时 x.md/ 变成 x.md）写不进去。布局里的目录（public/、skills/……）不动。"""
+        parts = self.relative(path).split("/")
+        # skill 目录是 public/skills/<name> 或 agents/<id>/skills/<name>
+        depth = 3 if parts[0] == _PUBLIC else 4
+        if len(parts) <= depth or parts[depth - 2] != "skills":
+            return
+        for end in range(len(parts) - 1, depth, -1):
+            parent = self.root.joinpath(*parts[:end])
+            if not parent.is_dir() or any(parent.iterdir()):
+                return
+            parent.rmdir()
 
     def _prune_empty_parents(self, path: Path) -> None:
         """删掉一次回滚的新路径为它建出来、现在空了的上级目录（如新 agent 的 agents/<id>/），直到仓库根目录：
         空目录在 git 里不存在，留着只会被启动检查误报成已删除 agent 的残留。"""
         root = self.root.resolve()
         for parent in path.resolve().parents:
-            if parent == root or not parent.is_relative_to(root) or any(parent.iterdir()):
+            # 不是目录：这个上级已被还原成文件（见 _restore）
+            if (
+                parent == root
+                or not parent.is_relative_to(root)
+                or not parent.is_dir()
+                or any(parent.iterdir())
+            ):
                 return
             parent.rmdir()
 
@@ -543,8 +700,13 @@ class ResourceRepo:
         self, before: Mapping[Path, Snapshot], rel: Sequence[str], error: BaseException
     ) -> None:
         try:
+            # 先删掉所有路径上现在的东西（深的先），再写回快照，最后修剪新路径建出来的空目录：同一次写入里一个路径可能
+            # 从目录变成文件（覆盖导入时 x.md/inner.md 变成 x.md）或反过来，逐项还原会撞上对方已写下的东西
+            for path in sorted(before, key=lambda p: len(p.parts), reverse=True):
+                _remove(path)
             for path, snapshot in before.items():
                 _restore_snapshot(path, snapshot)
+            for path, snapshot in before.items():
                 if snapshot is None:
                     self._prune_empty_parents(path)
         except Exception as restore_error:
@@ -557,7 +719,7 @@ class ResourceRepo:
         # 索引里可能已暂存了新内容：撤销暂存失败无妨，下一次 add 会重新暂存当时的文件。写入被取消时也做（屏蔽取消）
         code: int | None = None
         with anyio.CancelScope(shield=True), anyio.move_on_after(_GIT_EXIT_SECONDS):
-            code, _ = await self._git("reset", "-q", "--", *rel, check=False)
+            code, _ = await self._git("reset", "-q", "--", *(_literal(r) for r in rel), check=False)
         log.warning(
             "resource write rolled back",
             extra={"paths": list(rel), "error": repr(error), "unstaged": code == 0},
@@ -579,28 +741,11 @@ class ResourceRepo:
     async def contents_at(self, revs: Sequence[str], path: Path) -> list[str]:
         """这个文件在每个版本（history 列出的）时的内容，与 revs 一一对应：一次 git cat-file --batch 读完，
         不按版本逐个起进程。某个版本里没有这个文件时报错。"""
-        if not revs:
-            return []
         relative = self.relative(path)
         async with self._lock:
             await self.ensure()
-            _, out = await self._git_bytes(
-                "cat-file", "--batch", stdin="".join(f"{rev}:{relative}\n" for rev in revs).encode()
-            )
-        contents = []
-        pos = 0
-        for rev in revs:
-            # 每个对象一行头「<oid> <type> <size>」，随后 size 字节内容与一个换行；找不到时只有「<name> missing」
-            end = out.index(b"\n", pos)
-            header = out[pos:end].split()
-            if header[-1] == b"missing":
-                raise NotFound(f"{relative} does not exist at revision {rev}")
-            if len(header) != 3 or not header[2].isdigit():
-                raise RuntimeError(f"git cat-file gave an unexpected header for {rev}:{relative}: {header!r}")
-            size = int(header[2])
-            contents.append(out[end + 1 : end + 1 + size].decode())
-            pos = end + 1 + size + 1
-        return contents
+            contents = await self._cat_batch([f"{rev}:{relative}" for rev in revs])
+        return [c.decode() for c in contents]
 
     async def read_at(self, rev: str, path: Path) -> str:
         """某个版本时的文件内容；那个版本里没有这个文件时报错。"""

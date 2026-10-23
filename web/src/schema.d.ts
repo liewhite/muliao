@@ -256,6 +256,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/skill/package": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Skill
+         * @description 下载标准 .skill 文件（zip：`<name>/SKILL.md` 与版本管理里的附件）。
+         */
+        get: operations["export_skill_api_skill_package_get"];
+        put?: never;
+        /**
+         * Import Skill
+         * @description 请求体是一个标准 .skill 文件，导入为 owner（缺省为公共）的 skill，一次提交、作者 user。同名 skill 已存在时 409，
+         *     replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，超限 413。
+         */
+        post: operations["import_skill_api_skill_package_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions": {
         parameters: {
             query?: never;
@@ -2048,6 +2073,12 @@ export interface components {
             /** Body */
             body: string;
         };
+        /** SkillImportOut */
+        SkillImportOut: {
+            skill: components["schemas"]["SkillOut"];
+            /** Skipped */
+            skipped: components["schemas"]["SkippedOut"][];
+        };
         /** SkillIn */
         SkillIn: {
             /** Owner */
@@ -2078,6 +2109,13 @@ export interface components {
              */
             since: string;
             previous_state: components["schemas"]["WorkState"];
+        };
+        /** SkippedOut */
+        SkippedOut: {
+            /** Path */
+            path: string;
+            /** Reason */
+            reason: string;
         };
         /** StartIn */
         StartIn: {
@@ -2913,6 +2951,70 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_skill_api_skill_package_get: {
+        parameters: {
+            query: {
+                name: string;
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description <name>.skill */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_skill_api_skill_package_post: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+                replace?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillImportOut"];
+                };
             };
             /** @description Validation Error */
             422: {

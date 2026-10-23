@@ -306,14 +306,14 @@ async def test_failed_commit_leaves_nothing_behind_and_a_retry_works(
     memory: MemoryStore, repo: ResourceRepo, monkeypatch
 ):
     await memory.append(ALPHA, "- kept", ALPHA)
-    real_git = repo._git
+    real_git = repo._git_bytes
 
-    async def failing_commit(*args, check=True):  # noqa: ANN001, ANN202
+    async def failing_commit(*args, check=True, stdin=None):  # noqa: ANN001, ANN202
         if args and args[0] == "commit":
             raise RuntimeError("disk full")
-        return await real_git(*args, check=check)
+        return await real_git(*args, check=check, stdin=stdin)
 
-    monkeypatch.setattr(repo, "_git", failing_commit)
+    monkeypatch.setattr(repo, "_git_bytes", failing_commit)
     with pytest.raises(RuntimeError, match="disk full"):
         await memory.append(ALPHA, "- lost", ALPHA)
     monkeypatch.undo()

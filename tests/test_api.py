@@ -55,6 +55,42 @@ async def test_skill_and_memory_endpoints(client):
         assert (await client.put("/api/memory", json=too_long)).status_code == 422
 
 
+async def test_a_skill_exported_over_http_imports_into_another_owner(client, make_agent):
+    agent_id = (await make_agent()).id
+    await login(client)
+    await client.put(
+        "/api/skill", json={"owner": None, "name": "shared", "description": "for all", "body": "steps"}
+    )
+
+    resp = await client.get("/api/skill/package", params={"name": "shared"})
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "application/zip"
+    assert resp.headers["content-disposition"] == 'attachment; filename="shared.skill"'
+    package = resp.content
+
+    resp = await client.post("/api/skill/package", params={"owner": agent_id}, content=package)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "skill": {"name": "shared", "description": "for all", "owner": agent_id},
+        "skipped": [],
+    }
+    exported = await client.get("/api/skill/package", params={"name": "shared", "owner": agent_id})
+    assert exported.status_code == 200
+    assert (await client.get("/api/skill", params={"name": "shared", "owner": agent_id})).json()[
+        "body"
+    ].strip() == "steps"
+
+    assert (
+        await client.post("/api/skill/package", params={"owner": agent_id}, content=package)
+    ).status_code == 409
+    replaced = await client.post(
+        "/api/skill/package", params={"owner": agent_id, "replace": True}, content=package
+    )
+    assert replaced.status_code == 200
+    assert (await client.post("/api/skill/package", content=b"not a zip")).status_code == 422
+    assert (await client.get("/api/skill/package", params={"name": "nope"})).status_code == 404
+
+
 async def test_vault_never_returns_values(client):
     await login(client)
     assert (
@@ -220,17 +256,17 @@ async def test_a_failed_resource_write_leaves_no_half_created_agent(client, cont
     await login(client)
 
     # 文件照常写下，只有 git 提交失败（如 index.lock 被占用）：apply 要把写下的东西连同建出来的目录一起撤掉
-    real_git = container.resources._git  # noqa: SLF001
+    real_git = container.resources._git_bytes  # noqa: SLF001
 
-    async def failing_git(*args, check=True):  # noqa: ANN001, ANN202
+    async def failing_git(*args, check=True, stdin=None):  # noqa: ANN001, ANN202
         if args and args[0] == "commit":
             raise RuntimeError("git index.lock is held")
-        return await real_git(*args, check=check)
+        return await real_git(*args, check=check, stdin=stdin)
 
     from muliao.agents.service import AgentSpec
 
     await container.resources.ensure()
-    monkeypatch.setattr(container.resources, "_git", failing_git)
+    monkeypatch.setattr(container.resources, "_git_bytes", failing_git)
     with pytest.raises(RuntimeError, match="index.lock"):
         await container.agents.create(AgentSpec(name="half", description="d"), author="user")
     monkeypatch.undo()

@@ -1,10 +1,19 @@
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
-from muliao.agents.api import USER, AgentInfo, AgentPatch, AgentSpec, SkillMeta, ToolGroupInfo
-from muliao.api.deps import C, check_owner
+from muliao.agents.api import (
+    MAX_PACKAGE_BYTES,
+    USER,
+    AgentInfo,
+    AgentPatch,
+    AgentSpec,
+    SkillImport,
+    SkillMeta,
+    ToolGroupInfo,
+)
+from muliao.api.deps import C, check_owner, read_limited
 from muliao.api.resources import CorruptOut
 
 router = APIRouter()
@@ -219,3 +228,51 @@ async def put_skill(c: C, body: SkillIn) -> SkillOut:
 @router.delete("/skill", status_code=204)
 async def delete_skill(c: C, name: str, owner: str | None = None) -> None:
     await c.skills.delete(owner, name, USER)
+
+
+SKILL_PACKAGE_TYPE = "application/zip"
+
+
+@router.get(
+    "/skill/package",
+    response_class=Response,
+    responses={200: {"content": {SKILL_PACKAGE_TYPE: {}}, "description": "<name>.skill"}},
+)
+async def export_skill(c: C, name: str, owner: str | None = None) -> Response:
+    """下载标准 .skill 文件（zip：`<name>/SKILL.md` 与版本管理里的附件）。"""
+    await check_owner(c, owner)
+    package = await c.skills.export(owner, name)
+    return Response(
+        package,
+        media_type=SKILL_PACKAGE_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{name}.skill"'},
+    )
+
+
+class SkippedOut(BaseModel):
+    # 包里的路径（相对 skill 目录；macOS 元数据是包里的完整路径）
+    path: str
+    reason: str
+
+
+class SkillImportOut(BaseModel):
+    skill: SkillOut
+    # 没有导入的文件（二进制、不在后缀白名单里、超过单文件上限、不是 UTF-8 文本……）
+    skipped: list[SkippedOut]
+
+    @classmethod
+    def of(cls, result: SkillImport) -> "SkillImportOut":
+        return cls(
+            skill=SkillOut.of(result.meta),
+            skipped=[SkippedOut(path=s.path, reason=s.reason) for s in result.skipped],
+        )
+
+
+@router.post("/skill/package")
+async def import_skill(
+    c: C, request: Request, owner: str | None = None, replace: bool = False
+) -> SkillImportOut:
+    """请求体是一个标准 .skill 文件，导入为 owner（缺省为公共）的 skill，一次提交、作者 user。同名 skill 已存在时 409，
+    replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，超限 413。"""
+    package = await read_limited(request, MAX_PACKAGE_BYTES)
+    return SkillImportOut.of(await c.skills.import_package(owner, package, USER, replace=replace))

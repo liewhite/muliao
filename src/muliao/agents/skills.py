@@ -13,15 +13,15 @@ from pathlib import Path
 import frontmatter
 import yaml
 
+from muliao.agents import skill_package
 from muliao.agents.naming import validate_slug
 from muliao.agents.ownership import Scope, scope_of, visible
-from muliao.agents.resources import CorruptResource, ResourceFiles, ResourceRepo
-from muliao.errors import CorruptState, InvalidInput, NotFound
+from muliao.agents.resources import CorruptResource, ResourceFiles, ResourceRepo, TrackedFiles
+from muliao.agents.skill_package import SKILL_FILE, Skipped
+from muliao.errors import Conflict, CorruptState, InvalidInput, NotFound
 from muliao.platform import text_edit
 
 log = logging.getLogger(__name__)
-
-SKILL_FILE = "SKILL.md"
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,24 @@ class SkillMeta:
 class Skill:
     meta: SkillMeta
     body: str
+
+
+@dataclass(frozen=True)
+class SkillImport:
+    meta: SkillMeta
+    # 包里没有导入的文件与原因（见 skill_package）
+    skipped: list[Skipped]
+
+
+def _frontmatter(post: frontmatter.Post, dir_name: str) -> tuple[str, str]:
+    """SKILL.md 的 frontmatter 规则：name、description 都是字符串，name 与目录名一致。不合规则时抛 ValueError，
+    由调用方定性：存下的文件不合规则是被改坏了（CorruptState），导入的包不合规则是输入错误（InvalidInput）。"""
+    name, description = post.get("name"), post.get("description")
+    if not isinstance(name, str) or not isinstance(description, str):
+        raise ValueError("frontmatter must contain string 'name' and 'description'")
+    if name != dir_name:
+        raise ValueError(f"frontmatter name {name!r} does not match directory {dir_name!r}")
+    return name, description
 
 
 class SkillStore:
@@ -63,14 +81,11 @@ class SkillStore:
         # 读不了的文件（如没有读权限）也是坏的这一项：单独报出，不让整个列出（每次运行的 skill 索引）失败
         except (yaml.YAMLError, ValueError, OSError) as e:
             raise CorruptState(f"{path}: cannot parse: {e}") from e
-        name, description = post.get("name"), post.get("description")
         # 读的是存下的文件（写入时校验过）：不合法是被绕过工具改坏了，不是调用方的输入错误
-        if not isinstance(name, str) or not isinstance(description, str):
-            raise CorruptState(f"{path}: frontmatter must contain string 'name' and 'description'")
-        if name != skill_dir.name:
-            raise CorruptState(
-                f"{path}: frontmatter name {name!r} does not match directory {skill_dir.name!r}"
-            )
+        try:
+            name, description = _frontmatter(post, skill_dir.name)
+        except ValueError as e:
+            raise CorruptState(f"{path}: {e}") from e
         return Skill(SkillMeta(name, description, owner, path), post.content)
 
     def list(self, owner: str | None) -> list[SkillMeta]:
@@ -166,6 +181,50 @@ class SkillStore:
             author,
         )
         return SkillMeta(name, meta.description if description is None else description, owner, meta.path)
+
+    async def export(self, owner: str | None, name: str) -> bytes:
+        """打成标准 .skill 文件（skill_package）：SKILL.md 与附件在版本历史里的最新一版（ResourceRepo.versioned_files），
+        留在历史外的（.venv、二进制文件……）不在包里。读不出来的 skill 不导出。"""
+        skill_dir = self._existing(owner, name)
+        try:
+            self._load(owner, skill_dir)
+        except CorruptState as e:
+            raise InvalidInput(f"{e}; fix or delete it before exporting") from e
+        return skill_package.pack(name, await self._repo.versioned_files(skill_dir))
+
+    async def import_package(
+        self, owner: str | None, data: bytes, author: str, *, replace: bool
+    ) -> SkillImport:
+        """导入标准 .skill 文件为 owner 的 skill，一次提交。SKILL.md 原样写入（标准里的 license、metadata 等其他
+        frontmatter 键保留），但要满足与 write 相同的规则。同名 skill 已存在时：replace 为假报冲突；为真则覆盖：
+        它在版本管理里、包里没有的文件删掉，留在历史外的（.venv 等）不动。"""
+        package = skill_package.unpack(data)
+        name = package.name
+        try:
+            _, description = _frontmatter(frontmatter.loads(package.files[SKILL_FILE]), name)
+        except (yaml.YAMLError, ValueError) as e:
+            raise InvalidInput(f"{name}/{SKILL_FILE}: {e}") from e
+        description = _valid_description(description)
+        skill_dir = self._files.dir(owner) / name
+        # 不加锁先查一次：正在删除的 agent 报不存在，而不是报它名下的同名冲突（写入时锁里那次才是准的）
+        await self._repo.check_owner(owner)
+
+        async def plan(tracked: TrackedFiles) -> dict[Path, str | None]:
+            # skill 目录本身是链接时，列出的会是别处的文件
+            self._repo.check_no_links(skill_dir)
+            # 版本管理里有这个目录的文件就算已存在（哪怕只剩附件）：不覆盖就不把包并进旧文件里
+            existing = await tracked(skill_dir)
+            if (existing or (skill_dir / SKILL_FILE).exists()) and not replace:
+                raise Conflict(f"{scope_of(owner)} skill {name!r} already exists")
+            changes: dict[Path, str | None] = {path: None for path in existing}
+            changes.update({skill_dir / rel: content for rel, content in package.files.items()})
+            # 写入的路径来自包：不能经 skill 目录里已有的符号链接写到别处
+            for path in changes:
+                self._repo.check_no_links(path)
+            return changes
+
+        await self._repo.apply_planned(plan, f"import {scope_of(owner)} skill {name}", author)
+        return SkillImport(SkillMeta(name, description, owner, skill_dir / SKILL_FILE), package.skipped)
 
     async def delete(self, owner: str | None, name: str, author: str) -> None:
         """只看 skill 在不在，不解析内容：改坏的 skill 也能删掉。"""

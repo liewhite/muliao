@@ -115,7 +115,14 @@ function withQuery(path: string, query?: Query): string {
 export const unauthorizedEvent = new EventTarget()
 
 /** 所有请求的唯一出口：统一的 401 处理与错误信息 */
-async function send<T>(method: string, path: string, query: Query | undefined, body?: { type: string; data: BodyInit }): Promise<T> {
+async function send<T>(
+  method: string,
+  path: string,
+  query: Query | undefined,
+  body?: { type: string; data: BodyInit },
+  // 响应体是文件（如 .skill 包）：成功时原样交出 Blob
+  blob = false,
+): Promise<T> {
   const resp = await fetch(withQuery(path, query), {
     method,
     credentials: 'same-origin',
@@ -139,6 +146,7 @@ async function send<T>(method: string, path: string, query: Query | undefined, b
   // 204 按 HTTP 语义没有响应体。FastAPI 的 204 仍带着 JSONResponse 的 content-type: application/json
   // （fastapi/routing.py 先建 JSONResponse 再清空响应体），所以不能按 Content-Type 判断
   if (resp.status === 204) return undefined as T
+  if (blob) return (await resp.blob()) as T
   // 其余按响应的类型解码：JSON 响应体缺失时 resp.json() 直接报错；没有响应体的接口（stop 这类 202，接口描述里
   // 没有 content，类型为 void）必须真的没有响应体
   if (resp.headers.get('Content-Type')?.startsWith('application/json')) return (await resp.json()) as T
@@ -242,6 +250,12 @@ export const api = {
   skill: (owner: string | null, name: string) => call('get', '/api/skill', { query: { owner, name } }),
   saveSkill: (body: Schemas['SkillIn']) => call('put', '/api/skill', { body }),
   deleteSkill: (owner: string | null, name: string) => call('delete', '/api/skill', { query: { owner, name } }),
+  /** 标准 .skill 文件（zip）；失败时与其他调用一样抛 ApiError，不会把错误体当成文件存下 */
+  exportSkill: (owner: string | null, name: string) =>
+    send<Blob>('GET', '/api/skill/package', { owner, name }, undefined, true),
+  /** 导入标准 .skill 文件；同名 skill 已存在时 409，replace 为 true 时覆盖 */
+  importSkill: (owner: string | null, file: Blob, replace: boolean) =>
+    send<Schemas['SkillImportOut']>('POST', '/api/skill/package', { owner, replace }, { type: 'application/zip', data: file }),
 
   /** origin_ref 是发起方在它那个 origin 里的身份：触发器的 id，用来列出某个触发器发起过的会话 */
   sessions: (query: { agent_id?: AgentId; origin?: Origin[]; origin_ref?: string; limit?: number; offset?: number }) =>
