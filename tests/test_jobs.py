@@ -229,16 +229,18 @@ async def test_a_job_ends_when_its_process_exits_even_if_a_grandchild_keeps_the_
 async def test_a_job_whose_outcome_could_not_be_recorded_is_reconciled(
     container, make_agent, models, monkeypatch
 ):
-    session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 0.5")
-
     async def failing_finish(*_args, **_kwargs):
         raise RuntimeError("database is locked")
 
+    # 在开任务之前换掉：start_job 要跑完整轮运行，满载时比命令本身还慢，之后再换就赶不上它写结局（#157）
     monkeypatch.setattr(container.jobs, "_finish", failing_finish)
-    for _ in range(100):
+    session, job, _recorder, _agent = await start_job(container, make_agent, models, "true")
+    for _ in range(200):
         if job.id not in container.jobs._running:  # noqa: SLF001
             break
         await asyncio.sleep(0.05)
+    else:
+        pytest.fail("the supervisor never ended")
     monkeypatch.undo()
 
     await container.jobs.check()
