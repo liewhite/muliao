@@ -618,6 +618,8 @@ export default function SessionView() {
       if (e.type === 'run') setLive((prev) => [...withoutCovered(detail.data?.live ?? null, prev, e), e])
       // 又保存了一步：重新拉取历史；新快照换成新的一段，合并时丢掉上一段的事件
       else if (e.type === 'saved') void detail.reload()
+      // 指向这个会话的新通知（常在运行结束之后才写下）：会话变未读，重新拉取后由下面的 effect 标记已读
+      else if (e.type === 'notification') void detail.reload()
       else if (isTaskOf(e, 'run', 'compaction')) {
         // 运行状态变化后以数据库为准重新拉取，清空临时流
         if (e.status !== 'running') setLive([])
@@ -634,8 +636,7 @@ export default function SessionView() {
     if (merged.gap) void reload()
   }, [merged.gap, reload])
 
-  // 打开会话、以及看着它时又有了新回答，都标记已读。不按 session.unread 判断要不要调用：指向这个会话的通知
-  // 是另一个事实（notify_user 写的通知可能出现在一轮失败、会话没变未读时），标记本身幂等
+  // 打开会话、以及看着它时又来了指向它的通知（会话的未读由通知派生），都标记已读；标记本身幂等
   const unread = detail.data?.session.unread
   useEffect(() => {
     void api

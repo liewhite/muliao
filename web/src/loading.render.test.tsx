@@ -45,4 +45,10 @@ describe('shouldRefetch', () => {
     expect(shouldRefetch({ type: 'changed', resource: 'sessions' }, 'sessions')).toBe(true)
     expect(shouldRefetch({ type: 'changed', resource: 'agents' }, 'sessions')).toBe(false)
   })
+
+  it('refetches sessions when a notification is written: their unread mark comes from notifications', () => {
+    const note = { type: 'notification', notification_id: 1, session_id: 's' } as const
+    expect(shouldRefetch(note, 'sessions')).toBe(true)
+    expect(shouldRefetch(note, 'agents')).toBe(false)
+  })
 })

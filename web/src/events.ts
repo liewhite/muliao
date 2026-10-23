@@ -107,9 +107,12 @@ export const isTaskOf = (e: PageEvent, ...kinds: TaskKind[]): e is Schemas['Task
   e.type === 'task' && (kinds as string[]).includes(e.kind)
 
 /** 展示 resource 的列表/详情页是否要从 API 重新拉取：连上了（之前可能丢了事件）、某次运行的状态变了（运行里
- * 可能改了它），或这个页面自己改了它 */
+ * 可能改了它），或这个页面自己改了它；会话的未读由通知派生，写下新通知时会话也要重新拉取 */
 export const shouldRefetch = (e: PageEvent, resource: Resource) =>
-  e.type === 'connected' || isTaskOf(e, 'run') || (e.type === 'changed' && e.resource === resource)
+  e.type === 'connected' ||
+  isTaskOf(e, 'run') ||
+  (e.type === 'changed' && e.resource === resource) ||
+  (e.type === 'notification' && resource === 'sessions')
 
 /** 这个页面跑的前端是否已经不是服务端当前的版本：页面加载后第一次心跳给出的版本，之后变了就是升级过 */
 export function isOutdated(loadedVersion: string | null, serverVersion: string | null): boolean {
