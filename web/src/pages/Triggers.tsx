@@ -14,7 +14,7 @@ import {
   type TriggerKindName,
   sessionRoute,
 } from '../api'
-import { groupByAgent } from '../triggerGroups'
+import { groupTriggersByAgent } from '../triggerGroups'
 import { inAnHour, wallClock } from '../wallClock'
 import {
   ActionButton,
@@ -452,7 +452,7 @@ function kindSummary(trigger: Trigger): string {
 
 /** 需要人注意的状态，卡片上只给一句话，原因在详情里 */
 function triggerWarning(trigger: Trigger): string | null {
-  if (trigger.disabled_reason) return '触发失败，已自动停用'
+  if (trigger.disabled_reason) return trigger.finished_at ? '触发失败' : '触发失败，已自动停用'
   if (trigger.precheck_error) return '前置检查出错'
   switch (trigger.kind) {
     case 'schedule':
@@ -539,12 +539,26 @@ function CardGrid({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-3">{children}</div>
 }
 
-/** 详情弹窗：open 为 false 时关闭（包括详情里删掉了它、列表重新加载后不再有它） */
-function DetailModal({ open, onClose, children }: { open: boolean; onClose: () => void; children: ReactNode }) {
+/**
+ * 详情弹窗：trigger 为 undefined 时关闭（包括详情里删掉了它、列表重新加载后不再有它）。
+ * 点背景不关：误触会丢掉编辑草稿和只显示一次的 webhook token；只用 Esc 或关闭按钮
+ */
+function DetailModal({
+  trigger,
+  onClose,
+  children,
+}: {
+  trigger: Trigger | undefined
+  onClose: () => void
+  children: (trigger: Trigger) => ReactNode
+}) {
+  // 关闭动画期间继续显示最后一个，不让弹窗先变空再收起
+  const [shown, setShown] = useState(trigger)
+  if (trigger !== undefined && trigger !== shown) setShown(trigger)
   return (
-    <Modal.Backdrop isOpen={open} onOpenChange={(o) => !o && onClose()}>
+    <Modal.Backdrop isOpen={trigger !== undefined} isDismissable={false} onOpenChange={(o) => !o && onClose()}>
       <Modal.Container size="lg" scroll="inside">
-        <Modal.Dialog className="sm:max-w-3xl">{children}</Modal.Dialog>
+        <Modal.Dialog className="sm:max-w-3xl">{shown && children(shown)}</Modal.Dialog>
       </Modal.Container>
     </Modal.Backdrop>
   )
@@ -821,8 +835,8 @@ function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
                 <TriggerCard key={t.id} trigger={t} agentName={agentLabel(agents, t.agent_id)} onOpen={() => setOpenId(t.id)} />
               ))}
             </CardGrid>
-            <DetailModal open={open !== undefined} onClose={() => setOpenId(null)}>
-              {open && <FinishedTrigger key={open.id} trigger={open} agents={agents} onChange={() => void finished.reload()} />}
+            <DetailModal trigger={open} onClose={() => setOpenId(null)}>
+              {(t) => <FinishedTrigger key={t.id} trigger={t} agents={agents} onChange={() => void finished.reload()} />}
             </DetailModal>
           </>
         )
@@ -871,7 +885,7 @@ export default function Triggers() {
             const open = list.find((t) => t.id === openId)
             return (
               <>
-                {groupByAgent(list, agents.data).map((g) => (
+                {groupTriggersByAgent(list, agents.data).map((g) => (
                   <AgentGroup key={g.agentId} name={agentLabel(agents.data, g.agentId)} count={g.triggers.length}>
                     <CardGrid>
                       {g.triggers.map((t) => (
@@ -880,11 +894,11 @@ export default function Triggers() {
                     </CardGrid>
                   </AgentGroup>
                 ))}
-                <DetailModal open={open !== undefined} onClose={() => setOpenId(null)}>
-                  {open && (
+                <DetailModal trigger={open} onClose={() => setOpenId(null)}>
+                  {(t) => (
                     <TriggerItem
-                      key={`${open.id}-${open.prompt}-${JSON.stringify(open.config)}-${JSON.stringify(open.precheck)}`}
-                      trigger={open}
+                      key={`${t.id}-${t.prompt}-${JSON.stringify(t.config)}-${JSON.stringify(t.precheck)}`}
+                      trigger={t}
                       agents={agents.data}
                       onChange={reload}
                     />

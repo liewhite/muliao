@@ -5,8 +5,12 @@ export interface TriggerGroup {
   triggers: Trigger[]
 }
 
-/** 按 agent 分组：组的顺序同 agent 列表，列表里没有的 agent（尚未加载或已删）排在最后；组内保持原顺序 */
-export function groupByAgent(triggers: Trigger[], agents: Agent[] | undefined): TriggerGroup[] {
+/**
+ * 触发器按 agent 分组：组的顺序同 agent 列表（触发器没有「最近活跃」可排，用固定顺序便于找；
+ * 会话页的 groupByAgent 按最近活跃排、还要数未读，规则不同所以各写一份），列表里没有的 agent
+ * （尚未加载或已删）排在最后；组内保持接口给的顺序
+ */
+export function groupTriggersByAgent(triggers: Trigger[], agents: Agent[] | undefined): TriggerGroup[] {
   const groups = new Map<AgentId, Trigger[]>()
   for (const t of triggers) {
     const list = groups.get(t.agent_id)

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { asAgentId, type Agent, type Trigger } from './api'
-import { groupByAgent } from './triggerGroups'
+import { groupTriggersByAgent } from './triggerGroups'
 
 const a = asAgentId('a')
 const b = asAgentId('b')
@@ -10,9 +10,9 @@ const gone = asAgentId('gone')
 const trigger = (id: number, agentId: typeof a) => ({ id, agent_id: agentId }) as Trigger
 const agent = (id: typeof a) => ({ id }) as Agent
 
-describe('groupByAgent', () => {
+describe('groupTriggersByAgent', () => {
   it('组按 agent 列表的顺序排，组内保持原顺序', () => {
-    const groups = groupByAgent([trigger(1, b), trigger(2, a), trigger(3, b)], [agent(a), agent(b)])
+    const groups = groupTriggersByAgent([trigger(1, b), trigger(2, a), trigger(3, b)], [agent(a), agent(b)])
     expect(groups.map((g) => [g.agentId, g.triggers.map((t) => t.id)])).toEqual([
       [a, [2]],
       [b, [1, 3]],
@@ -20,11 +20,11 @@ describe('groupByAgent', () => {
   })
 
   it('agent 列表里没有的排在最后，列表未加载时仍能分组', () => {
-    expect(groupByAgent([trigger(1, gone), trigger(2, a)], [agent(a)]).map((g) => g.agentId)).toEqual([a, gone])
-    expect(groupByAgent([trigger(1, b), trigger(2, a)], undefined).map((g) => g.agentId)).toEqual([b, a])
+    expect(groupTriggersByAgent([trigger(1, gone), trigger(2, a)], [agent(a)]).map((g) => g.agentId)).toEqual([a, gone])
+    expect(groupTriggersByAgent([trigger(1, b), trigger(2, a)], undefined).map((g) => g.agentId)).toEqual([b, a])
   })
 
   it('没有 agent 的空组不出现', () => {
-    expect(groupByAgent([], [agent(a)])).toEqual([])
+    expect(groupTriggersByAgent([], [agent(a)])).toEqual([])
   })
 })
