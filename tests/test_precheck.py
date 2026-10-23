@@ -1,10 +1,14 @@
-"""触发器的前置检查：有事才调用 agent；changed 模式比较上一次输出（首轮只记基线）；检查出错记录并只告警一次。"""
+"""触发器的前置检查：有事才调用 agent；changed 模式比较上一次输出（首轮只记基线）；检查出错记录并只给 agent 告警一次。"""
+
+from datetime import datetime, timedelta
 
 import pytest
 
 from muliao.errors import NotFound
+from muliao.sessions.api import Origin
 from muliao.sessions.lanes import RUN_TASK
 from muliao.triggers.precheck import Precheck, PrecheckFailed, decide
+from muliao.triggers.service import trigger_in
 from tests.conftest import login
 from tests.test_flow import deliver, mail_of, tasks_of
 from tests.test_triggers import _make_due
@@ -94,7 +98,16 @@ async def test_changed_precheck_skips_the_baseline_and_unchanged_runs(container,
     assert len(await tasks_of(container, RUN_TASK)) == 1
 
 
-async def test_failing_precheck_is_recorded_alerts_once_and_keeps_the_trigger_enabled(container, make_agent):
+async def _alerts(container) -> list[str]:
+    """交给触发器所属 agent 的前置检查告警信件。"""
+    return [
+        m.content for m in await mail_of(container) if m.content.startswith("The precheck of your trigger")
+    ]
+
+
+async def test_a_failing_precheck_is_handed_to_the_agent_once_per_streak_not_to_the_user(
+    container, make_agent
+):
     alpha = (await make_agent()).id
     trigger, workspace = await _schedule(
         container, alpha, Precheck(command="test -f ok || { echo 'no token' >&2; exit 3; }")
@@ -109,15 +122,64 @@ async def test_failing_precheck_is_recorded_alerts_once_and_keeps_the_trigger_en
         and failed.precheck_error is not None
         and "exited with 3: no token" in failed.precheck_error
     )
-    assert await tasks_of(container, RUN_TASK) == []
-    assert len(await container.notifications.list(100)) == 1
-    # 告警留在通知页里：检查恢复、precheck_error 清除之后仍然看得到
-    [alert] = await container.notifications.list(10)
-    assert "watch" in alert.title and "no token" in alert.body and alert.session_id is None
+    # 持续出错只告警一次，告警交给 agent（新会话，来源是这个触发器），不再通知用户
+    [alert] = await _alerts(container)
+    assert "`watch`" in alert and "exited with 3: no token" in alert and "trigger_update" in alert
+    assert "test -f ok" in alert and "fire_when: output" in alert and "<prompt>" not in alert
+    assert await container.notifications.list(100) == []
+    sessions = await container.sessions.list(agent_id=alpha, origins=[Origin.TRIGGER], limit=10, offset=0)
+    assert [x.session.origin_ref for x in sessions] == [str(trigger.id)]
+    # 告警会话不算这个触发器的一次触发
+    assert failed.last_session_id is None
 
     (workspace / "ok").write_text("")
     await _tick(container, trigger.id)
     assert (await container.triggers.get_by_name("watch")).precheck_error is None
+
+    # 恢复之后再出错，再告警一次
+    (workspace / "ok").unlink()
+    await _tick(container, trigger.id)
+    assert len(await _alerts(container)) == 2
+
+
+async def test_a_precheck_alert_the_agent_cannot_receive_falls_back_to_notifying_the_user(
+    container, make_agent, monkeypatch
+):
+    alpha = (await make_agent()).id
+    trigger, _ = await _schedule(container, alpha, Precheck(command="echo gone >&2; exit 2"))
+
+    async def refuse(_s, _inbound):
+        raise NotFound("agent is being deleted")
+
+    monkeypatch.setattr("muliao.triggers.service.receive_command_in", refuse)
+    await _tick(container, trigger.id)
+
+    assert await _alerts(container) == []
+    [note] = await container.notifications.list(10)
+    assert "watch" in note.title and "gone" in note.body and note.session_id is None
+
+
+async def test_an_archived_once_trigger_whose_precheck_failed_tells_the_agent_its_task_was_not_done(
+    container, make_agent
+):
+    alpha = (await make_agent()).id
+    trigger = await container.triggers.create(
+        name="later",
+        agent_id=alpha,
+        kind="once",
+        prompt="Send the weekly report.",
+        config={"at": "2099-01-01T10:00"},
+        precheck=Precheck(command="exit 7"),
+    )
+    container.agents.workspace(alpha).mkdir(parents=True, exist_ok=True)
+    async with container.db.transaction() as s:
+        due = await trigger_in(s, trigger.id)
+        due.config = {"at": (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()}
+    await container.due_triggers.fire_due()
+    await deliver(container)
+
+    [alert] = await _alerts(container)
+    assert "NOT done" in alert and "<prompt>\nSend the weekly report.\n</prompt>" in alert
 
 
 async def test_a_failing_step_inside_a_pipeline_fails_the_precheck(container, make_agent):
@@ -208,8 +270,9 @@ async def test_a_change_too_large_to_hand_over_is_recorded_and_alerted(container
 
     failed = await container.triggers.get_by_name("watch")
     assert failed.precheck_error is not None and "event limit" in failed.precheck_error
-    assert len(await container.notifications.list(100)) == 1
-    assert await tasks_of(container, RUN_TASK) == []
+    [alert] = await _alerts(container)
+    assert "event limit" in alert
+    assert len(await mail_of(container)) == 1
 
 
 async def test_a_failing_precheck_on_a_manual_run_is_a_502_with_the_reason(client, container, make_agent):
@@ -218,6 +281,12 @@ async def test_a_failing_precheck_on_a_manual_run_is_a_502_with_the_reason(clien
     await login(client)
     resp = await client.post(f"/api/triggers/{trigger.id}/run")
     assert resp.status_code == 502 and "boom" in resp.json()["detail"]
+    # 只报给调用方：不记在触发器上（否则会压住之后自动触发时的告警），也不告警
+    await deliver(container)
+    assert (await container.triggers.get_by_name("watch")).precheck_error is None
+    assert await mail_of(container) == [] and await container.notifications.list(10) == []
+    await _tick(container, trigger.id)
+    assert len(await _alerts(container)) == 1
 
 
 async def test_enabling_an_enabled_trigger_keeps_its_error_and_does_not_alert_again(container, make_agent):
@@ -227,7 +296,7 @@ async def test_enabling_an_enabled_trigger_keeps_its_error_and_does_not_alert_ag
     await container.triggers.update(trigger.id, enabled=True)
     assert (await container.triggers.get_by_name("watch")).precheck_error is not None
     await _tick(container, trigger.id)
-    assert len(await container.notifications.list(100)) == 1
+    assert len(await _alerts(container)) == 1
 
 
 async def test_changing_the_precheck_clears_the_old_commands_error(container, make_agent):
@@ -238,4 +307,4 @@ async def test_changing_the_precheck_clears_the_old_commands_error(container, ma
     await container.triggers.update(trigger.id, precheck=Precheck(command="exit 5"))
     assert (await container.triggers.get_by_name("watch")).precheck_error is None
     await _tick(container, trigger.id)
-    assert len(await container.notifications.list(100)) == 2
+    assert len(await _alerts(container)) == 2

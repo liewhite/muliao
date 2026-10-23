@@ -53,9 +53,11 @@ bash command run in the agent's workspace before each firing, with the event bod
 With fire_when "output", exit 0 with output fires and the output becomes the event the agent sees, exit 0 \
 with no output skips; with "changed", it fires only when the output differs from the last run and the \
 agent gets the diff plus the output (the first run only records a baseline). A non-zero exit, or running \
-longer than {timeout:g} seconds (the command is then killed), is recorded as the trigger's error and the user \
-is alerted once. Keep the precheck cheap and well under that limit, retries included; slow work (full scans, \
-long retry loops) belongs in the agent's run, not in the precheck."""
+longer than {timeout:g} seconds (the command is then killed), is recorded as the trigger's error; when the \
+check goes from healthy to failing, the trigger's agent gets one new conversation with the error to fix it \
+(`trigger_run` only reports a failure back to its caller). Keep the precheck cheap and well under that \
+limit, retries included; slow work (full scans, long retry loops) belongs in the agent's run, not in the \
+precheck."""
 
 
 def triggers_toolset(

@@ -17,7 +17,7 @@ class Notification(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(Text)
     body: Mapped[str] = mapped_column(Text)
-    # 通知关于的会话（没有 issue_id 时点开打开它），随会话删除；系统通知（前置检查告警、推送测试）为 None
+    # 通知关于的会话（没有 issue_id 时点开打开它），随会话删除；系统通知（前置检查告警投不到 agent 时的兜底、推送测试）为 None
     session_id: Mapped[str | None] = mapped_column(session_ref(), index=True)
     # 交给用户审核的 issue（Notify.issue_id）：点开打开它而不是会话，打开它即已读。不设外键：issue 属于别的领域，
     # issue 被删后通知照旧指向它（点开看到「不存在」），随会话删除

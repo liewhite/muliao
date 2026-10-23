@@ -365,14 +365,21 @@ class TriggerService:
     async def run(self, trigger_id: int) -> str | None:
         """用户或 agent 的「立即运行一次」（不带事件内容）：管理操作，不消耗一次性触发器预定的那一次。
 
-        有前置检查时同样先跑检查，可以用来测试整条链路；返回交给的会话 id，检查判定没事时为 None。
+        有前置检查时同样先跑检查，可以用来测试整条链路；返回交给的会话 id，检查判定没事时为 None。检查失败只报给
+        调用方（PrecheckFailed），不记在触发器上、不告警：agent 修脚本时用它验证，告警会另开会话重复处理；记下了又会压住之后
+        自动触发时的告警（只在正常变出错时告警），用户点了运行看到报错，脚本的主人却永远收不到。
         """
         async with self._db.transaction() as s:
             await self._manageable_in(s, trigger_id)
-        return await self.fire(trigger_id)
+        return await self.fire(trigger_id, record_failure=False)
 
     async def fire(
-        self, trigger_id: int, payload: str | None = None, session_id: str | None = None
+        self,
+        trigger_id: int,
+        payload: str | None = None,
+        session_id: str | None = None,
+        *,
+        record_failure: bool = True,
     ) -> str | None:
         """所有触发方式的唯一出口，返回交给的会话 id。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
         检查失败记在触发器上并抛出 PrecheckFailed（触发器保持启用：脚本的故障往往是暂时的）。
@@ -380,8 +387,9 @@ class TriggerService:
         这是激活机制的入口，不看是否已归档：按到期时间触发的方式（triggers.due）在调用前就把这次到期消耗掉了，
         一次性触发器那时已经归档。管理操作的「立即运行」走 run。
 
-        触发记下之后马上执行投信（run_now），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。"""
-        fired = await self._fire(trigger_id, payload, session_id)
+        触发记下之后马上执行投信（run_now），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。
+        record_failure 为假时检查失败只上抛、不记在触发器上也不告警（见 run）。"""
+        fired = await self._fire(trigger_id, payload, session_id, record_failure)
         if fired is None:
             return None
         await self._run_now(fired.delivery.id)
@@ -404,7 +412,9 @@ class TriggerService:
             if await self.disable(trigger_id, reason):
                 log.error("trigger disabled: %s", reason, extra={"trigger_id": trigger_id})
 
-    async def _fire(self, trigger_id: int, payload: str | None, session_id: str | None) -> _Fired | None:
+    async def _fire(
+        self, trigger_id: int, payload: str | None, session_id: str | None, record_failure: bool
+    ) -> _Fired | None:
         async with self._db.transaction() as s:
             trigger = await trigger_in(s, trigger_id)
             if not trigger.enabled:
@@ -417,7 +427,8 @@ class TriggerService:
         try:
             output = await self._precheck.run(agent_id, precheck, payload)
         except PrecheckFailed as e:
-            await self._record_failure(trigger_id, stored, str(e))
+            if record_failure:
+                await self._record_failure(trigger_id, stored, str(e))
             raise
 
         failure: PrecheckFailed | None = None
@@ -441,7 +452,8 @@ class TriggerService:
                     )
                     return None
                 return await self._deliver_in(s, trigger, decision.event, session_id)
-        await self._record_failure(trigger_id, stored, str(failure))
+        if record_failure:
+            await self._record_failure(trigger_id, stored, str(failure))
         raise failure
 
     async def _current(self, s: AsyncSession, trigger_id: int, checked: dict[str, Any]) -> Trigger | None:
@@ -458,8 +470,11 @@ class TriggerService:
     async def _record_failure(self, trigger_id: int, checked: dict[str, Any], error: str) -> None:
         async with self._db.transaction() as s:
             trigger = await self._current(s, trigger_id, checked)
-            if trigger is not None:
-                await self._fail_in(s, trigger, error)
+            if trigger is None:
+                return
+            delivery = await self._fail_in(s, trigger, error)
+        if delivery is not None:
+            await self._run_now(delivery.id)
 
     def _succeed_in(self, trigger: Trigger) -> None:
         if trigger.precheck_error is not None:
@@ -469,24 +484,90 @@ class TriggerService:
             )
         trigger.last_checked_at, trigger.precheck_error = self._clock(), None
 
-    async def _fail_in(self, s: AsyncSession, trigger: Trigger, error: str) -> None:
-        """记下失败原因；从正常变为出错时通知用户一次（每分钟检查一次的触发器坏了不会每分钟推送一条）。"""
+    async def _fail_in(self, s: AsyncSession, trigger: Trigger, error: str) -> Task | None:
+        """记下失败原因；从正常变为出错时告警一次（每分钟检查一次的触发器坏了不会每分钟告警一次），返回告警的投递任务。
+
+        检查脚本是触发器所属的 agent 写的，告警交给它（新会话，说明出错原因和怎么处理），由它修脚本或在自己解决不了
+        时通知用户；这封信投不进去（如 agent 正在删除）时退回给用户发通知，不静默吞掉。
+        """
         healthy_before = trigger.precheck_error is None
         trigger.last_checked_at, trigger.precheck_error = self._clock(), error
         log.warning(
             "trigger precheck failed: %s", error, extra={"trigger": trigger.name, "alert": healthy_before}
         )
-        if healthy_before:
-            self._messaging.send_in(
+        if not healthy_before:
+            return None
+        now = self._clock()
+        inbound = Inbound(
+            origin=Origin.TRIGGER,
+            origin_ref=str(trigger.id),
+            content=precheck_alert(trigger, error),
+            session=NewSession(
+                agent_id=trigger.agent_id,
+                title=f"{trigger.name} 前置检查出错 · {local_time(now, self._tz)}",
+                id=new_id(),
+            ),
+            awaited=False,
+        )
+        try:
+            command = await receive_command_in(s, inbound)
+        except DomainError as e:
+            log.warning(
+                "precheck alert could not reach the agent, notifying the user: %s",
+                e,
+                extra={"trigger": trigger.name},
+            )
+            return self._messaging.send_in(
                 s,
                 Notify(
-                    agent_id=trigger.agent_id,
+                    agent_id=None,
                     title=f"触发器 {trigger.name} 的前置检查出错",
                     body=error[:500],
                     session_id=None,
                     issue_id=None,
                 ),
             )
+        return self._messaging.send_in(s, command)
+
+
+def precheck_alert(trigger: Trigger, error: str) -> str:
+    """前置检查从正常变为出错时交给触发器所属 agent 的信件：出错的是哪个检查、原因，以及怎么处理。"""
+    precheck = Precheck.model_validate(trigger.precheck)
+    lines = [
+        f"The precheck of your trigger `{trigger.name}` (kind {trigger.kind}) just started failing, so the "
+        "trigger did not fire this time. You wrote this check, so it is yours to fix; the user has not been told.",
+        "",
+        f"fire_when: {precheck.fire_when}",
+        f"secrets: {', '.join(precheck.secrets) or '(none)'}",
+        "command:",
+        "```bash",
+        precheck.command,
+        "```",
+        "error:",
+        "```",
+        error,
+        "```",
+        "",
+        "What to do:",
+        "- A transient fault (network blip, a remote service briefly down): nothing to fix, the next check "
+        "recovers by itself; consider adding retries to the command if this keeps happening.",
+        "- A bug in the command: fix it with `trigger_update` (new precheck) and verify with `trigger_run`.",
+        "- Something only the user can fix (a missing secret, a permission, an account): `notify_user` with what "
+        "is needed.",
+        "You are told only when the check goes from healthy to failing; while it keeps failing no further "
+        "message comes.",
+    ]
+    if trigger.finished_at is not None:
+        lines += [
+            "",
+            "This was a one-off trigger and it has used up its single firing, so its task was NOT done and it "
+            "cannot be run again. Once the cause is fixed, do the task yourself or create a new trigger for it. "
+            "Its prompt was:",
+            "<prompt>",
+            trigger.prompt,
+            "</prompt>",
+        ]
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)
