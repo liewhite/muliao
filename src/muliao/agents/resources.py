@@ -75,9 +75,12 @@ _SKILL_DIRS = ("public/skills/*", "agents/*/skills/*")
 ATTACHMENT_FILES = tuple(f"{d}/**/*.{s}" for d in _SKILL_DIRS for s in ATTACHMENT_SUFFIXES)
 # 资源文件 = store 写的 + 附件。reconcile 只处理它们
 RESOURCE_FILES = STORE_FILES + ATTACHMENT_FILES
-# 即使后缀在白名单里也不是资源：隐藏文件与目录（.env、.venv、.cache……）、依赖目录
-EXCLUDED_FILES = ("**/.*", "**/.*/**", "**/node_modules/**", "**/venv/**", "**/__pycache__/**")
-# 外部写入的单个文件上限：超过的不收进历史（历史只增不改，进去就删不掉），记 warning
+# skill 目录里即使后缀在白名单里也不是附件的：隐藏文件与目录（.env、.venv、.cache……）、依赖与虚拟环境目录。
+# 只作用在 skill 目录里面（git 的 exclude 对整组 pathspec 生效，所以带上 skill 目录前缀），不影响 store 写的文件
+_NOT_ATTACHMENTS = (".*", ".*/**", "node_modules/**", "venv/**", "site-packages/**", "__pycache__/**")
+EXCLUDED_FILES = tuple(f"{d}/**/{p}" for d in _SKILL_DIRS for p in _NOT_ATTACHMENTS)
+# 外部写入的单个文件上限：超过的不收进历史（历史只增不改，进去就删不掉），记 warning。已在历史里的文件变得超限：
+# 历史停在最后一个未超限的版本，工作区保持未提交，缩回上限以内再照常提交
 MAX_EXTERNAL_FILE_BYTES = 256 * 1024
 
 
@@ -250,8 +253,8 @@ class ResourceRepo:
         self._check_owner = check_owner
         self._lock = asyncio.Lock()
         self._ready = False
-        # 已因超限跳过并记过 warning 的外部写入（路径 → 大小）：每次写入都会 reconcile，同一个文件不重复记
-        self._oversized: dict[str, int] = {}
+        # 已记过 warning 的留在历史外的文件（见 _left_out）
+        self._reported_left_out: set[str] = set()
 
     async def check_owner(self, owner: str | None) -> None:
         """不写入、不加锁地先查一次 owner 还可用（如新增 MCP server 在连接验证之前）；写入时锁里那次才是准的。"""
@@ -380,7 +383,7 @@ class ResourceRepo:
             [entry[3:] for entry in status.split("\0") if entry and entry[1] != " "]
         )
         if unstaged:
-            await self._add_each_possible(unstaged)
+            await self._stage_each_possible(unstaged)
         # 要提交什么由 add 之后的暂存区决定，而不是 add 之前的状态：add 会改变它（暂存过又在工作区删掉的新文件，
         # add 之后既不在 HEAD 也不在暂存区，不能再交给 commit）
         _, staged = await self._git(
@@ -389,39 +392,49 @@ class ResourceRepo:
         paths = [rel for rel in staged.split("\0") if rel]
         if not paths:
             return
-        await self._git(
-            "commit", "-q", "-m", RECONCILE_MESSAGE, f"--author={SYSTEM} <{SYSTEM}@muliao>", "--", *paths
+        await self._git_on_paths(
+            paths, "commit", "-q", "-m", RECONCILE_MESSAGE, f"--author={SYSTEM} <{SYSTEM}@muliao>"
         )
         log.warning("committed resource changes made outside the resource tools", extra={"paths": paths})
 
     def _within_size_limit(self, paths: list[str]) -> list[str]:
-        """去掉超过 MAX_EXTERNAL_FILE_BYTES 的文件（删除照常记录），每个超限文件只记一次 warning。"""
+        """去掉超过 MAX_EXTERNAL_FILE_BYTES 的文件（删除照常记录）。"""
         kept = []
         for rel in paths:
             path = self.root / rel
             size = path.lstat().st_size if path.is_file() and not path.is_symlink() else 0
             if size <= MAX_EXTERNAL_FILE_BYTES:
-                self._oversized.pop(rel, None)
                 kept.append(rel)
-            elif self._oversized.get(rel) != size:
-                self._oversized[rel] = size
-                log.warning(
-                    "resource file too large to version, left out of history",
-                    extra={"path": rel, "size": size, "limit": MAX_EXTERNAL_FILE_BYTES},
-                )
+            else:
+                self._left_out(rel, "too large to version", size=size, limit=MAX_EXTERNAL_FILE_BYTES)
         return kept
 
-    async def _add_each_possible(self, paths: list[str]) -> None:
+    def _left_out(self, rel: str, reason: str, **detail: object) -> None:
+        """记下一个留在历史外的资源文件：每次写入都会 reconcile，同一个文件在进程里只记一次 warning。"""
+        if rel not in self._reported_left_out:
+            self._reported_left_out.add(rel)
+            log.warning(f"resource file {reason}, left out of history", extra={"path": rel, **detail})
+
+    async def _stage_each_possible(self, paths: list[str]) -> None:
         """暂存这些路径；一起暂存失败（如某个文件读不了）时逐个暂存，跳过失败的并记 warning：
-        一个目录里的一个坏文件不能让所有资源写入失败。"""
+        一个目录里的一个坏文件不能让所有资源写入失败。全局性的失败（如锁被占）在随后的写入里照样报错。"""
         try:
-            await self._git("add", "-A", "--", *paths)
+            await self._git_on_paths(paths, "add", "-A")
         except RuntimeError:
             for rel in paths:
                 try:
                     await self._git("add", "-A", "--", rel)
-                except RuntimeError:
-                    log.warning("cannot stage resource file, left out of history", exc_info=True)
+                except RuntimeError as e:
+                    self._left_out(rel, "cannot be staged", error=str(e))
+
+    async def _git_on_paths(self, paths: Sequence[str], *args: str) -> None:
+        """对一组路径运行 git：路径经 stdin 传入，文件再多也不会超出命令行长度上限（那会让所有写入失败）。"""
+        await self._git_bytes(
+            *args,
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+            stdin="".join(f"{p}\0" for p in paths).encode(),
+        )
 
     async def _partial_writes(self) -> list[Path]:
         """资源文件写了一半的临时文件（见 _write）。由 git 按同一组 pattern 列出：不跟随符号链接，不进入嵌套仓库。"""

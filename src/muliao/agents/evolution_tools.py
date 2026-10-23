@@ -4,14 +4,17 @@ from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.memory import MemoryStore
 from muliao.agents.ownership import Scope, owner_of
+from muliao.agents.resources import ATTACHMENT_SUFFIXES, MAX_EXTERNAL_FILE_BYTES
 from muliao.agents.skills import SkillStore
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
-# 写完 skill 时告诉模型附件怎么放（哪些进历史由 agents.resources.RESOURCE_FILES 决定）：只在写 skill 时用得上，
-# 不放进每次请求都带的工具说明
+# 写完 skill 时告诉模型附件怎么放（哪些进历史由 agents.resources 决定，这里从同一份定义生成）：只在写 skill 时
+# 用得上，不放进每次请求都带的工具说明
 _ATTACHMENTS_NOTE = (
-    "; scripts and other text files it needs go in that directory (write them with write_file) and are versioned "
-    "with it; binaries are not versioned: write in the skill how to install them (version and source)"
+    "; scripts and other text files it needs go in that directory (write them with write_file). Files ending in "
+    f"{', '.join('.' + s for s in ATTACHMENT_SUFFIXES)} of at most {MAX_EXTERNAL_FILE_BYTES // 1024} KB are "
+    "versioned with it (not inside hidden, node_modules, venv or site-packages directories); anything else, "
+    "binaries included, is not: write in the skill how to install it (version and source)"
 )
 
 

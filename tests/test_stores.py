@@ -464,6 +464,15 @@ async def test_files_outside_the_resource_layout_never_enter_history(repo: Resou
     nested.mkdir()
     await asyncio.to_thread(_git, "init", "-q", str(nested))
     (nested / "cloned.py").write_text("x = 1\n")
+    # 有提交的嵌套仓库（git clone 的情形）也不进历史，不变成 gitlink
+    cloned = skill_dir / "cloned"
+    cloned.mkdir()
+    await asyncio.to_thread(_git, "init", "-q", str(cloned))
+    (cloned / "lib.py").write_text("x = 1\n")
+    await asyncio.to_thread(_git, "-C", str(cloned), "add", "lib.py")
+    await asyncio.to_thread(
+        _git, "-C", str(cloned), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"
+    )
 
     await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA)
     await repo.recover()
@@ -499,10 +508,17 @@ async def test_text_attachments_in_a_skill_directory_are_versioned(repo: Resourc
     script.write_text("print(2)\n")
     await repo.recover()
     assert len(await repo.history(script, 10)) == 2
-    # 回滚：把旧版本写回并作为新的一次提交
-    await repo.apply({script: await repo.read_at(first, script)}, "restore fetch.py", ALPHA)
+    # 旧版本读得出来，可以写回（agent 用文件工具写回，再由 reconcile 记一版）
+    script.write_text(await repo.read_at(first, script))
+    await repo.recover()
     assert script.read_text() == "print(1)\n"
     assert len(await repo.history(script, 10)) == 3
+    # 删掉一个附件也记一版
+    (skill_dir / "run.sh").unlink()
+    await repo.recover()
+    assert f"agents/{ALPHA}/skills/digest/run.sh" not in (
+        await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")
+    )
 
     await skills.delete(ALPHA, "digest", ALPHA)
     tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split()
@@ -516,7 +532,9 @@ async def test_an_oversized_attachment_is_left_out_with_one_warning(repo: Resour
     big = repo.owner_dir(ALPHA) / "skills" / "digest" / "data.csv"
     big.write_text("x" * (MAX_EXTERNAL_FILE_BYTES + 1))
 
-    for _ in range(3):
+    for extra in range(3):
+        # 继续变大也只记一次
+        big.write_text("x" * (MAX_EXTERNAL_FILE_BYTES + 1 + extra))
         await repo.recover()
     assert not await repo.history(big, 10)
     warned = [r for r in caplog.records if r.getMessage().startswith("resource file too large")]
@@ -526,24 +544,55 @@ async def test_an_oversized_attachment_is_left_out_with_one_warning(repo: Resour
     big.write_text("x\n")
     await repo.recover()
     assert len(await repo.history(big, 10)) == 1
+    # 已在历史里的变得超限：历史停在旧版本，之后的写入也不把它带进提交
+    big.write_text("y" * (MAX_EXTERNAL_FILE_BYTES + 1))
+    await repo.recover()
+    await skills.write(ALPHA, "digest", "When digesting", "more steps", ALPHA)
+    assert len(await repo.history(big, 10)) == 1
+    assert await repo.read_at((await repo.history(big, 1))[0].rev, big) == "x\n"
 
 
-async def test_an_unreadable_attachment_does_not_block_other_changes(repo: ResourceRepo, monkeypatch):
-    """一起暂存失败时逐个暂存：坏的那个留在历史外，其余照常提交，写入不失败。"""
+async def test_many_attachments_do_not_exceed_the_command_line(repo: ResourceRepo, monkeypatch):
+    """路径经 stdin 交给 git：未提交的附件再多，写入也不会因参数过长而失败。"""
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    vendor = repo.owner_dir(ALPHA) / "skills" / "digest" / "vendor"
+    vendor.mkdir()
+    for i in range(300):
+        (vendor / f"m{i}.js").write_text("x\n")
+    real_git = ResourceRepo._git_bytes
+
+    async def short_command_line(self, *args, **kwargs):
+        # 模拟很小的 ARG_MAX：放得下固定的 pathspec，放不下上百个路径
+        if len(args) > len(RESOURCE_PATHSPEC) + 20:
+            raise OSError(7, "Argument list too long")
+        return await real_git(self, *args, **kwargs)
+
+    monkeypatch.setattr(ResourceRepo, "_git_bytes", short_command_line)
+    await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA)
+    tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split()
+    assert f"agents/{ALPHA}/skills/digest/vendor/m299.js" in tracked
+
+
+async def test_an_unreadable_attachment_does_not_block_other_changes(repo: ResourceRepo, caplog, monkeypatch):
+    """一起暂存失败时逐个暂存：坏的那个留在历史外并记 warning，其余照常提交，写入不失败。"""
     skills = SkillStore(repo)
     await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
     skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
-    (skill_dir / "bad.py").write_text("x = 1\n")
+    bad = skill_dir / "bad.py"
+    bad.write_text("x = 1\n")
     (skill_dir / "good.py").write_text("y = 2\n")
-    real_git = ResourceRepo._git
+    real_git = ResourceRepo._git_bytes
 
-    async def failing_add(self, *args, check=True):
-        if args[0] == "add" and any(a.endswith("bad.py") for a in args):
-            raise RuntimeError("git add failed: cannot read bad.py")
-        return await real_git(self, *args, check=check)
+    async def unreadable(self, *args, stdin=None, **kwargs):
+        if args[0] == "add" and (any(a.endswith("bad.py") for a in args) or b"bad.py" in (stdin or b"")):
+            raise RuntimeError("git add failed: error: open(bad.py): Permission denied")
+        return await real_git(self, *args, stdin=stdin, **kwargs)
 
-    monkeypatch.setattr(ResourceRepo, "_git", failing_add)
+    monkeypatch.setattr(ResourceRepo, "_git_bytes", unreadable)
     await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA)
+    warned = [r for r in caplog.records if r.getMessage().startswith("resource file cannot be staged")]
+    assert [r.path for r in warned] == [f"agents/{ALPHA}/skills/digest/bad.py"]
 
     tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split()
     assert f"agents/{ALPHA}/skills/digest/good.py" in tracked
@@ -552,7 +601,7 @@ async def test_an_unreadable_attachment_does_not_block_other_changes(repo: Resou
 
 
 async def test_every_file_the_stores_write_is_in_the_resource_layout(container, make_agent):
-    """RESOURCE_FILES 与各 store 的文件名必须一致：不在布局里的资源文件，外部写入就不会被收敛。"""
+    """STORE_FILES（RESOURCE_FILES 的一部分）与各 store 的文件名必须一致：不在布局里的资源文件，外部写入就不会被收敛。"""
     from muliao.agents.api import McpTransport, mcp_config
 
     agent = (await make_agent(ALPHA)).id
