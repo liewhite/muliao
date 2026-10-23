@@ -51,11 +51,12 @@ _DEEPSEEK_TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})
 
 _Op = Literal["search", "fetch"]
 # 由模型给出的输入引起、按契约交还模型修正的状态码，按接口区分：400 字段值无效、413 请求体过大；
-# fetch 另有 403 被安全策略拒绝、404 抓取不到可用内容。其余（401 key 无效、402 余额不足、search 的 403/404……）
+# fetch 另有 403 被安全策略拒绝、404 抓取不到可用内容，以及带契约错误体的 408/504：是目标站点抓取超时
+# （如 "Request timeout"），重试同一 URL 多半还是超时，交还模型决定换 URL 还是放弃（#134）。其余（401 key 无效、402 余额不足、search 的 403/404……）
 # 是配置、账户问题或契约之外的响应，模型改不了，让这一轮失败可见
 _DEEPSEEK_REJECTED_INPUT: dict[_Op, frozenset[int]] = {
     "search": frozenset({400, 413}),
-    "fetch": frozenset({400, 403, 404, 413}),
+    "fetch": frozenset({400, 403, 404, 408, 413, 504}),
 }
 
 
@@ -114,11 +115,12 @@ class DeepSeekWeb:
             message if message is not None else f"response outside the error contract: {resp.text[:500]}"
         )
         log.warning("web request failed", extra={"provider": "deepseek", "op": op, "reason": reason})
-        if resp.status_code in _DEEPSEEK_TRANSIENT:
-            raise TransientError(reason)
-        # 只有服务按契约拒绝的输入才交还模型；状态码对上而错误体不对（多半是 base_url 指错）是配置问题
+        # 只有服务按契约拒绝的输入才交还模型；状态码对上而错误体不对是网关或配置问题（如网关自己的 504 页面、
+        # base_url 指错），按下面的暂时性/配置失败处理
         if resp.status_code in _DEEPSEEK_REJECTED_INPUT[op] and message is not None:
             raise InvalidInput(reason)
+        if resp.status_code in _DEEPSEEK_TRANSIENT:
+            raise TransientError(reason)
         raise RuntimeError(reason)
 
     async def search(self, query: str, count: int) -> list[SearchHit]:

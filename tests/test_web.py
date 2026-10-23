@@ -71,10 +71,13 @@ async def test_deepseek_fetch_returns_markdown_page():
     ("op", "status", "error"),
     [
         ("fetch", 429, TransientError),
-        ("fetch", 408, TransientError),
+        ("search", 408, TransientError),
         ("search", 500, TransientError),
         ("fetch", 503, TransientError),
-        ("fetch", 504, TransientError),
+        ("search", 504, TransientError),
+        # fetch 带错误体的 408/504 是目标站点超时，交还模型（#134）
+        ("fetch", 408, InvalidInput),
+        ("fetch", 504, InvalidInput),
         ("search", 400, InvalidInput),
         ("search", 413, InvalidInput),
         ("fetch", 403, InvalidInput),
@@ -100,6 +103,13 @@ async def test_rejection_status_without_contract_error_body_is_a_config_failure_
     # 例如 base_url 指到了别的服务：404 页面不是 DeepSeek 的错误体，不能被当成「这个网页抓不到」交还模型
     web = _deepseek(lambda _r: httpx.Response(404, text="<html>Not Found"))
     with pytest.raises(RuntimeError, match="HTTP 404: response outside the error contract: <html>Not Found"):
+        await web.fetch("https://example.com/a")
+
+
+async def test_fetch_gateway_timeout_without_contract_error_body_stays_transient():
+    # 网关自己的 504 页面说明服务本身不可用，不是目标站点超时
+    web = _deepseek(lambda _r: httpx.Response(504, text="<html>Gateway Timeout"))
+    with pytest.raises(TransientError, match="HTTP 504: response outside the error contract"):
         await web.fetch("https://example.com/a")
 
 
