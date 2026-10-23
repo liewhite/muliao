@@ -704,12 +704,16 @@ async def test_read_file_truncates_very_long_lines(container, make_agent, models
 async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_stores_only_a_reference(
     container, make_agent, models, monkeypatch
 ):
+    import base64
+
     from pydantic_ai.messages import BinaryContent, ImageUrl
 
     from muliao.agent_runtime import workspace_tools
     from muliao.files.api import parse_file_url
     from tests.test_flow import history_of
 
+    # 上限按 provider 的 5MB（base64 编码后）换算
+    assert len(base64.b64encode(b"x" * workspace_tools._MAX_IMAGE_BYTES)) <= 5 * 1024 * 1024
     me = await make_agent("alpha", model="tools")
     png = b"\x89PNG\r\n\x1a\n" + b"chart"
     workspace = container.agents.workspace(me.id)
