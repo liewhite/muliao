@@ -465,3 +465,37 @@ async def test_events_survive_a_failure_while_checking_the_previous_session(cont
 
     assert calls["count"] == 2
     assert await _contents(container, alpha) == ["handle\n\n<event>\none\n</event>"]
+
+
+async def test_a_batch_whose_firing_failed_unexpectedly_is_not_fired_again(
+    container, make_agent, monkeypatch
+):
+    """触发开始后意外失败：这一批丢弃、不重试（fire 可能已提交了投递，重试会重复触发），后面的事件照常。"""
+    alpha = (await make_agent()).id
+    events = container.agents.workspace(alpha) / "events.txt"
+    events.parent.mkdir(parents=True, exist_ok=True)
+    events.write_text("lost\n")
+    await _create(container, alpha, "tail -n +1 -F events.txt", debounce_seconds=0)
+    real = container.triggers.fire_activated
+    payloads: list[str | None] = []
+
+    async def flaky(trigger_id, payload=None):  # noqa: ANN001, ANN202
+        payloads.append(payload)
+        if len(payloads) == 1:
+            raise RuntimeError("run_now failed")
+        await real(trigger_id, payload)
+
+    monkeypatch.setattr(container.triggers, "fire_activated", flaky)
+
+    async with _running(_runner(container)):
+        await _until(lambda: _payloads_seen(payloads, 1))
+        with events.open("a") as f:
+            f.write("kept\n")
+        await _until(lambda: _has_sessions(container, alpha, 1))
+
+    assert payloads == ["lost", "kept"]
+    assert await _contents(container, alpha) == ["handle\n\n<event>\nkept\n</event>"]
+
+
+async def _payloads_seen(payloads: list, n: int) -> bool:
+    return len(payloads) >= n
