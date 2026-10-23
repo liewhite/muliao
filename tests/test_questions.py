@@ -297,7 +297,8 @@ async def test_a_later_run_finishes_a_failed_answer_and_retrying_it_does_nothing
     await drain(container)
     assert [json.loads(r)["answered"] for r in asker.results] == [True]
     notes = (await client.get("/api/notifications")).json()
-    assert len(notes) == 3  # 提问、接手的运行回答了回答、之后的消息
+    # 提问、运行失败、接手的运行回答了回答、之后的消息
+    assert len(notes) == 4 and any(n["title"].endswith("运行失败") for n in notes)
 
     before = await history_of(container, session_id)
     assert (await client.post(f"/api/tasks/{failed.id}/retry")).status_code == 200
@@ -305,7 +306,7 @@ async def test_a_later_run_finishes_a_failed_answer_and_retrying_it_does_nothing
     retried = next(t for t in await tasks_of(container, RUN_TASK) if t.id == failed.id)
     assert retried.status == TaskStatus.DONE
     assert await history_of(container, session_id) == before
-    assert len((await client.get("/api/notifications")).json()) == 3
+    assert len((await client.get("/api/notifications")).json()) == 4
 
 
 async def test_a_voided_failed_answer_does_not_block_later_questions(client, container, make_agent, models):
