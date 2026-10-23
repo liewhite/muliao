@@ -34,8 +34,10 @@ _NOTES: dict[Origin, str] = {
         "`issue_show` again: if other issues depend on this one (listed under `blocks`), it is a step of a larger piece "
         "of work, so set it `done` yourself and the next steps start; otherwise do not set `done` yourself: set "
         "status `in_review` and assignee `user`, and the user moves it to `done` after reviewing. Hand it to "
-        "another agent by changing the assignee. Nobody is watching this "
-        "conversation: the user reads the issue, not this conversation."
+        "another agent by changing the assignee. A user comment on an issue nobody is working on (not `todo`/"
+        "`in_progress` with an agent assignee, or still waiting on dependencies) arrives here when you are its "
+        "owner, even if it is not assigned to you: decide whether to close it, assign it to someone, or reply. "
+        "Nobody is watching this conversation: the user reads the issue, not this conversation."
     ),
 }
 

@@ -7,6 +7,8 @@
 actor 是做这件事的 agent id，用户为 None，系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR；session_id 是 agent 动手时所在的会话。它在自己这个 issue 会话里的动作
 不投回那个会话（避免自激）；issue 只在它自己的会话里做，普通对话只建、派 issue。
 
+用户的评论在按上述规则没有 agent 接手时投给负责项目的 agent（owner），见 rules.recipient。
+
 依赖（issue_dependencies，有向无环）：还在等上游的 issue 不投、不算停滞（rules.recipient / rules.stalled 看
 Snapshot.waiting_on）。上游进入 done / cancelled 时，在同一事务里给每个下游记一条 DEPENDENCY 动态并按同一条规则
 投递：下游因此不再等待，那封信就投出去；还在等别的上游就只记时间线。
@@ -116,7 +118,12 @@ def _title(title: str) -> str:
 
 
 def _snapshot(issue: Issue, links: Links) -> Snapshot:
-    return Snapshot(status=issue.status, assignee=issue.assignee, waiting_on=waiting_on(links.depends_on))
+    return Snapshot(
+        status=issue.status,
+        assignee=issue.assignee,
+        owner=issue.owner_agent_id,
+        waiting_on=waiting_on(links.depends_on),
+    )
 
 
 def _check_handed_to_user(issue: Issue) -> None:
@@ -627,8 +634,11 @@ class IssueService:
     ) -> Task | None:
         """在调用方的事务里把这次的动态投给该收到的 agent（rules.recipient），进它在这个 issue 上唯一的会话。"""
         links = (await self._links_in(s, [issue.id]))[issue.id]
+        user_comment = actor is None and any(a.kind == ActivityKind.COMMENT for a in happened)
         agent = recipient(
-            _snapshot(issue, links), await self._from_its_session_in(s, issue, actor, session_id)
+            _snapshot(issue, links),
+            user_comment,
+            await self._from_its_session_in(s, issue, actor, session_id),
         )
         if agent is None:
             return None

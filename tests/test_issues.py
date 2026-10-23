@@ -28,14 +28,14 @@ TODO, BACKLOG, PROGRESS, REVIEW, DONE = (
 @pytest.mark.parametrize(
     ("issue", "from_its_session", "to"),
     [
-        (Snapshot(TODO, "a", ()), None, "a"),
-        (Snapshot(PROGRESS, "a", ()), "b", "a"),
-        (Snapshot(PROGRESS, "a", ()), "a", None),
-        (Snapshot(BACKLOG, "a", ()), None, None),
-        (Snapshot(REVIEW, "a", ()), None, None),
-        (Snapshot(DONE, "a", ()), None, None),
-        (Snapshot(TODO, USER, ()), None, None),
-        (Snapshot(TODO, None, ()), None, None),
+        (Snapshot(TODO, "a", None, ()), None, "a"),
+        (Snapshot(PROGRESS, "a", None, ()), "b", "a"),
+        (Snapshot(PROGRESS, "a", None, ()), "a", None),
+        (Snapshot(BACKLOG, "a", None, ()), None, None),
+        (Snapshot(REVIEW, "a", None, ()), None, None),
+        (Snapshot(DONE, "a", None, ()), None, None),
+        (Snapshot(TODO, USER, None, ()), None, None),
+        (Snapshot(TODO, None, None, ()), None, None),
     ],
     ids=[
         "active",
@@ -49,17 +49,17 @@ TODO, BACKLOG, PROGRESS, REVIEW, DONE = (
     ],
 )
 def test_recipient_rules(issue, from_its_session, to):
-    assert recipient(issue, from_its_session) == to
+    assert recipient(issue, False, from_its_session) == to
 
 
 def test_stalled_means_an_active_agent_issue_nobody_works_on():
-    assert stalled(Snapshot(TODO, "a", ()), None)
-    assert stalled(Snapshot(PROGRESS, "a", ()), WorkState.IDLE)
-    assert not stalled(Snapshot(PROGRESS, "a", ()), WorkState.RUNNING)
-    assert not stalled(Snapshot(TODO, "a", ()), WorkState.WAITING)
-    assert not stalled(Snapshot(BACKLOG, "a", ()), WorkState.IDLE)
-    assert not stalled(Snapshot(TODO, USER, ()), None)
-    assert not stalled(Snapshot(TODO, None, ()), None)
+    assert stalled(Snapshot(TODO, "a", None, ()), None)
+    assert stalled(Snapshot(PROGRESS, "a", None, ()), WorkState.IDLE)
+    assert not stalled(Snapshot(PROGRESS, "a", None, ()), WorkState.RUNNING)
+    assert not stalled(Snapshot(TODO, "a", None, ()), WorkState.WAITING)
+    assert not stalled(Snapshot(BACKLOG, "a", None, ()), WorkState.IDLE)
+    assert not stalled(Snapshot(TODO, USER, None, ()), None)
+    assert not stalled(Snapshot(TODO, None, None, ()), None)
 
 
 async def _issue_sessions(container) -> list[Session]:
@@ -174,14 +174,64 @@ async def test_an_agent_assigning_itself_from_a_chat_starts_the_issue_session(co
 
 
 async def test_backlog_review_and_done_are_not_delivered(container, make_agent):
-    alpha = (await make_agent()).id
+    """不在 todo / in_progress 时，字段修改与 agent 的评论都不投（用户的评论投给 owner，见下一个测试）。"""
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
     issue = await container.issues.create(None, owner=alpha, title="t", assignee=alpha)
-    await container.issues.comment(None, issue.id, "later")
+    await container.issues.comment(beta, issue.id, "later")
     await container.issues.update(None, issue.id, status=REVIEW)
-    await container.issues.comment(None, issue.id, "looks good")
+    await container.issues.comment(beta, issue.id, "looks good")
     await container.issues.update(None, issue.id, status=DONE)
     await deliver(container)
     assert await _issue_sessions(container) == []
+
+
+@pytest.mark.parametrize(
+    ("issue", "user_comment", "to"),
+    [
+        (Snapshot(BACKLOG, "a", "o", ()), True, "o"),
+        (Snapshot(REVIEW, USER, "o", ()), True, "o"),
+        (Snapshot(DONE, None, "o", ()), True, "o"),
+        (Snapshot(TODO, "a", "o", (3,)), True, "o"),
+        (Snapshot(TODO, "a", "o", ()), True, "a"),
+        (Snapshot(BACKLOG, "a", "o", ()), False, None),
+        (Snapshot(BACKLOG, "a", None, ()), True, None),
+    ],
+    ids=[
+        "backlog",
+        "in-review",
+        "done-unassigned",
+        "waiting",
+        "active-only-assignee",
+        "not-user",
+        "no-owner",
+    ],
+)
+def test_a_user_comment_nobody_takes_goes_to_the_owner(issue, user_comment, to):
+    assert recipient(issue, user_comment, None) == to
+
+
+async def test_a_user_comment_on_a_backlog_issue_wakes_its_owner(container, make_agent):
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    issue = await container.issues.create(None, owner=alpha, title="t", assignee=beta)
+    await container.issues.update(None, issue.id, title="t2")
+    await container.issues.comment(beta, issue.id, "agent note")
+    await deliver(container)
+    assert await _issue_sessions(container) == []  # 字段修改、agent 评论不唤起 owner
+
+    await container.issues.comment(None, issue.id, "still needed?")
+    await deliver(container)
+    [session] = await _issue_sessions(container)
+    assert session.agent_id == alpha  # 指派给 beta 但没开工：投给 owner
+    assert "user commented:\n  still needed?" in (await _mail(container, session.id))[0]
+
+    # todo 指派给 beta：用户评论只投给 beta，owner 不再收到
+    await container.issues.update(None, issue.id, status=TODO)
+    await container.issues.comment(None, issue.id, "go")
+    await deliver(container)
+    sessions = await _issue_sessions(container)
+    assert [s.agent_id for s in sessions] == [alpha, beta]
+    assert len(await _mail(container, session.id)) == 1
+    assert "go" in (await _mail(container, sessions[1].id))[-1]
 
 
 async def test_handing_over_delivers_to_the_new_assignee_and_records_the_timeline(container, make_agent):
@@ -464,8 +514,8 @@ async def test_acting_from_the_session_of_another_issue_is_delivered(container, 
 
 
 def test_an_issue_waiting_on_upstream_is_neither_delivered_nor_stalled():
-    waiting = Snapshot(TODO, "a", (3,))
-    assert recipient(waiting, None) is None
+    waiting = Snapshot(TODO, "a", None, (3,))
+    assert recipient(waiting, False, None) is None
     assert not stalled(waiting, None)
 
 
@@ -493,7 +543,7 @@ async def test_a_downstream_issue_is_delivered_when_its_last_upstream_finishes(c
     down = await container.issues.create(
         None, owner=beta, title="down", status=TODO, assignee=beta, depends_on=[up1.id, up2.id]
     )
-    await container.issues.comment(None, down.id, "wait for them")
+    await container.issues.comment(alpha, down.id, "wait for them")  # agent 的评论：不唤起 owner
     await drain(container)
     assert {s.origin_ref for s in await _issue_sessions(container)} == {str(up1.id)}
     work = (await container.issues.work([down]))[down.id]
@@ -619,9 +669,13 @@ async def test_waiting_is_derived_from_the_current_upstream_state(container, mak
     assert session.origin_ref == str(down.id)
     work = (await container.issues.work([down]))[down.id]
     assert (work.waiting_on, work.stalled) == ((up.id,), False)
-    await container.issues.comment(None, down.id, "not yet")
+    await container.issues.comment(alpha, down.id, "not yet")
     await deliver(container)
     assert len(await _mail(container, session.id)) == 1
+    # 用户的评论在等上游时投给 owner（这里 owner 就是被指派的 alpha，同一个会话）
+    await container.issues.comment(None, down.id, "is it blocked?")
+    await deliver(container)
+    assert "is it blocked?" in (await _mail(container, session.id))[-1]
 
 
 def test_issue_sessions_are_told_once_how_to_work_on_the_issue():

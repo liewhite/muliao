@@ -51,6 +51,8 @@ class Snapshot:
 
     status: IssueStatus
     assignee: str | None
+    # 负责项目的 agent id；负责的 agent 被删除后为 None
+    owner: str | None
     # 还没完成（不在 FINISHED）的上游 issue；非空时这个 issue 在等上游，还轮不到它
     waiting_on: tuple[int, ...]
 
@@ -72,29 +74,34 @@ def _agent_assignee(issue: Snapshot) -> str | None:
     return None if issue.assignee in (None, USER) else issue.assignee
 
 
-def recipient(issue: Snapshot, from_its_session: str | None) -> str | None:
+def _assignee_recipient(issue: Snapshot) -> str | None:
+    """该由被指派的 agent 接手时就是它：todo / in_progress、指派给 agent、不在等上游。"""
+    agent = _agent_assignee(issue)
+    return None if agent is None or issue.status not in ACTIVE or issue.waiting_on else agent
+
+
+def recipient(issue: Snapshot, user_comment: bool, from_its_session: str | None) -> str | None:
     """issue 上的一条动态（创建、评论、任何字段的修改）投给谁：动作之后处于 todo / in_progress（包括这次动作让它进入）
     时，投给被指派的 agent；backlog 是以后再做，in_review / done 等是已经交出去，不投。还在等上游（waiting_on 非空）
     时也不投：动态照常记进时间线，最后一个上游完成时投一封信，agent 自己 issue_show 看等待期间的动态。
 
+    例外是用户的评论（user_comment）：按上面的规则没有 agent 接手时（backlog、blocked、in_review、done、cancelled，
+    没指派或指派给用户，在等上游），投给负责项目的 agent，由它判断关掉、派人还是回复；有被指派的 agent 接手时只投给
+    它，同一件事只有一个 agent 负责。agent 的评论与字段修改不唤起 owner，避免 agent 之间来回唤醒。
+
     from_its_session 是在自己这个 issue 会话里动手的 agent（否则为 None）：它自己的动作不投回它正在做事的会话，
     避免自激循环。它在别的会话（如普通对话）里给自己建、派、转 todo，照常投进 issue 会话——issue 只在那里做。
     """
-    agent = _agent_assignee(issue)
-    if agent is None or agent == from_its_session or issue.status not in ACTIVE or issue.waiting_on:
-        return None
-    return agent
+    agent = _assignee_recipient(issue)
+    if agent is not None:
+        return None if agent == from_its_session else agent
+    return issue.owner if user_comment else None
 
 
 def stalled(issue: Snapshot, assignee_session: WorkState | None) -> bool:
     """该有人做却没人在做：todo / in_progress、不在等上游、指派给 agent，它在这个 issue 上的会话空闲或不存在。
     界面与巡检共用。"""
-    return (
-        _agent_assignee(issue) is not None
-        and issue.status in ACTIVE
-        and not issue.waiting_on
-        and assignee_session in (None, WorkState.IDLE)
-    )
+    return _assignee_recipient(issue) is not None and assignee_session in (None, WorkState.IDLE)
 
 
 def cycle_through(

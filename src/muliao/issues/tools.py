@@ -112,8 +112,9 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
 
         Args:
             title: One-line summary.
-            owner: The agent (by name) whose project this is; it stays the owner when the issue is reassigned.
-                Usually yourself for your own project's work.
+            owner: The agent (by name) whose project this is; it stays the owner when the issue is reassigned,
+                and gets the user's comments while no agent is working on the issue. Usually yourself for your own
+                project's work.
             description: Markdown details: context, what done looks like.
             status: Initial status.
             priority: Priority.
