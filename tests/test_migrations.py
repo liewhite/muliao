@@ -439,3 +439,28 @@ def test_agent_history_is_append_only_searchable_and_downgrades(tmp_path):
     assert not {n for n in names if n.startswith("agent_history")}
     migrate(path)
     assert {"agent_history", "agent_history_fts"} <= _tables(path)
+
+
+def test_agents_thinking_defaults_to_default_and_downgrades(tmp_path):
+    """agents.thinking（#171）：已有 agent 升级后为 "default"（不传 thinking，行为不变）；降级删掉列，agent 保留。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "f88bba24ade7")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, tool_groups, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', '[]', '2026-01-01', '2026-01-01')"
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, thinking from agents").fetchall() == [("a1", "default")]
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "f88bba24ade7")
+    with sqlite3.connect(path) as conn:
+        assert "thinking" not in {r[1] for r in conn.execute("pragma table_info(agents)")}
+        assert conn.execute("select id from agents").fetchall() == [("a1",)]

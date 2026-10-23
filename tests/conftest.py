@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models import Model
 
+from muliao.agent_runtime.llm import check_thinking
 from muliao.agents.resources import ResourceRepo
 from muliao.api.app import create_app
 from muliao.config import Settings
@@ -95,7 +96,11 @@ def models() -> ModelSlot:
 @pytest.fixture
 async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Assembly]:
     c = assemble(
-        settings, resolve_model=models, model_checker=lambda _m: None, check_writes=single_domain_writes
+        settings,
+        resolve_model=models,
+        # 不查 provider 配置（测试模型名不带 provider），思考档位按槽位里的模型照实检查
+        model_checker=lambda m, t: check_thinking(m, models(m), t),
+        check_writes=single_domain_writes,
     )
     migrate(settings.db_path)
     # 后台任务的监督者需要它的任务组（服务里由 Assembly.running 打开）；worker 等循环由测试自己驱动

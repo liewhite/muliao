@@ -1,5 +1,7 @@
 """agent 能用工具完成的系统操作：管理 agent、MCP 启停、cron 修改、事件触发器、vault、thread 列表。"""
 
+from collections.abc import Callable
+
 import pytest
 from pydantic_ai.messages import (
     ModelMessage,
@@ -10,16 +12,20 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 from pydantic_ai.models.function import AgentInfo
+from pydantic_ai.profiles import ModelProfile
 
 from muliao.agent_runtime.mcp import MCP_TOOL_NAMES
-from muliao.agents.api import McpTransport, mcp_config
+from muliao.agents.api import AgentPatch, McpTransport, mcp_config
+from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tool_returns
 
 
-async def run_tools(container, models, agent_id: str, calls: list[tuple[str, dict]]) -> list[str]:
+async def run_tools(
+    container, models, agent_id: str, calls: list[tuple[str, dict]], profile: ModelProfile | None = None
+) -> list[str]:
     """让 agent 依次调用这些工具（每次一个），返回每次调用的结果或交还给模型的错误。"""
     outputs: list[str] = []
 
@@ -34,7 +40,7 @@ async def run_tools(container, models, agent_id: str, calls: list[tuple[str, dic
             return ModelResponse(parts=[ToolCallPart(name, args, tool_call_id=f"c{step}")])
         return ModelResponse(parts=[TextPart("done")])
 
-    models.models["tools"] = scripted(fn)
+    models.models["tools"] = scripted(fn, profile)
     await start(container, agent_id, "do it", origin=Origin.TRIGGER)
     await drain(container)
     return outputs
@@ -813,3 +819,73 @@ async def test_a_corrupt_public_skill_is_listed_as_corrupt_in_the_index_and_the_
     index = seen[0][seen[0].index("## Skill index") :]
     assert "- `good` (public): a good skill" in index
     assert "- public skill 'broken' is corrupt and cannot be used until it is rewritten or deleted:" in index
+
+
+THINKS = ModelProfile(supports_thinking=True)
+
+
+def _thinking_seen(seen: list[object]) -> Callable[[list[ModelMessage], AgentInfo], ModelResponse]:
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        # pydantic_ai 把 ModelSettings.thinking 移到请求参数上再交给 provider 换算
+        seen.append(info.model_request_parameters.thinking)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    return fn
+
+
+async def test_thinking_level_reaches_the_model_and_temp_agents_inherit_it(container, make_agent, models):
+    """临时 agent 不指定时沿用调用方的档位；"default" 什么都不传；模型不支持的档位如实拒绝。"""
+    models.models["tools"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("x")]), THINKS)
+    me = await make_agent("manager", model="tools")
+    await container.agents.update(me.id, AgentPatch(thinking="high"))
+    seen: list[object] = []
+    models.models["helper"] = scripted(_thinking_seen(seen), THINKS)
+    models.models["plain"] = scripted(_thinking_seen(seen))
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("run_temp_agent", {"task": "x", "model": "helper"}),
+            ("run_temp_agent", {"task": "x", "model": "helper", "thinking": "default"}),
+            ("run_temp_agent", {"task": "x", "model": "helper", "thinking": "off"}),
+            ("run_temp_agent", {"task": "x", "model": "plain"}),
+            ("update_agent", {"agent": "manager", "thinking": "low"}),
+            ("get_agent", {"agent": "manager"}),
+            ("update_agent", {"agent": "manager", "thinking": "max"}),
+        ],
+        THINKS,
+    )
+
+    assert seen == ["high", None, False]
+    assert "'plain' does not take a thinking setting" in outputs[3]
+    assert "thinking='low'" in outputs[5]
+    assert "'xhigh'" in outputs[6]  # 不在档位里：交还模型重试
+    assert (await container.agents.get(me.id)).thinking == "low"
+
+
+async def test_agent_run_sends_its_thinking_level(container, make_agent, models):
+    seen: list[object] = []
+    models.models["m"] = scripted(_thinking_seen(seen), THINKS)
+    default = await make_agent("plain", model="m")
+    thinker = await make_agent("thinker", model="m")
+    await container.agents.update(thinker.id, AgentPatch(thinking="xhigh"))
+    for agent in (default, thinker):
+        await start(container, agent.id, "q", origin=Origin.TRIGGER)
+        await drain(container)
+
+    assert seen == [None, "xhigh"]
+
+
+async def test_thinking_the_model_would_silently_drop_is_rejected(container, make_agent, models):
+    """pydantic_ai 对 profile 不支持的设置只是丢掉；平台在写入时就拒绝，不让设置看似生效。"""
+    models.models["always"] = scripted(
+        lambda _m, _i: ModelResponse(parts=[]), ModelProfile(thinking_always_enabled=True)
+    )
+    me = await make_agent("a", model="always")
+    with pytest.raises(InvalidInput, match="always thinks"):
+        await container.agents.update(me.id, AgentPatch(thinking="off"))
+    await container.agents.update(me.id, AgentPatch(thinking="medium"))
+    with pytest.raises(InvalidInput, match="does not take a thinking setting"):
+        await container.agents.update(me.id, AgentPatch(model="no-thinking"))
+    assert (await container.agents.get(me.id)).model == "always"

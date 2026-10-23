@@ -74,9 +74,9 @@ def test_registry_builds_model_type_from_provider_config():
     model = registry.resolve("deepseek:deepseek-chat")
     assert isinstance(model.wrapped, OpenAIChatModel) and model.model_name == "deepseek-chat"
     with pytest.raises(InvalidInput, match="not configured"):
-        registry.check("openai:gpt-5")
+        registry.check("openai:gpt-5", "default")
     with pytest.raises(InvalidInput, match="<provider>:<model>"):
-        registry.check("claude")
+        registry.check("claude", "default")
 
 
 def _registry(providers: dict) -> ModelRegistry:

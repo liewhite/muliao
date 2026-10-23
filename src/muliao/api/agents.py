@@ -11,6 +11,7 @@ from muliao.agents.api import (
     AgentSpec,
     SkillImport,
     SkillMeta,
+    Thinking,
     ToolGroupInfo,
 )
 from muliao.api.deps import C, check_owner, read_limited
@@ -25,6 +26,8 @@ class AgentCreate(BaseModel):
     # 缺省（null）时使用服务端配置的默认值
     model: str | None = None
     tool_groups: list[str] | None = None
+    # 思考档位："default" 不传，按模型与服务端的默认
+    thinking: Thinking = "default"
 
 
 class AgentUpdate(BaseModel):
@@ -34,6 +37,7 @@ class AgentUpdate(BaseModel):
     description: str
     model: str
     tool_groups: list[str]
+    thinking: Thinking
 
 
 class AgentOut(BaseModel):
@@ -42,6 +46,7 @@ class AgentOut(BaseModel):
     description: str
     model: str
     tool_groups: list[str]
+    thinking: Thinking
     created_at: datetime
     # 系统默认 agent：Web 新对话默认选中它，最多一个
     is_default: bool
@@ -54,6 +59,7 @@ class AgentOut(BaseModel):
             description=a.description,
             model=a.model,
             tool_groups=list(a.tool_groups),
+            thinking=a.thinking,
             created_at=a.created_at,
             is_default=a.is_default,
         )
@@ -113,6 +119,7 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
         description=body.description,
         model=body.model,
         tool_groups=body.tool_groups,
+        thinking=body.thinking,
     )
     return AgentOut.of(await c.agents.create(spec, author=USER))
 
@@ -131,6 +138,7 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         description=body.description,
         model=body.model,
         tool_groups=body.tool_groups,
+        thinking=body.thinking,
     )
     return AgentOut.of(await c.agents.update(agent_id, patch))
 

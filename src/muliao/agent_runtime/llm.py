@@ -21,7 +21,9 @@ from pydantic_ai.providers import Provider
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
 
+from muliao.agents.api import Thinking
 from muliao.config import LlmConfig, ProviderConfig, ProviderType, split_model
 from muliao.errors import InvalidInput, NotFound, UpstreamFailed
 
@@ -41,6 +43,35 @@ ANTHROPIC_CACHE_SETTINGS = AnthropicModelSettings(
     anthropic_cache_tool_definitions=True,
     anthropic_cache_messages=True,
 )
+
+
+def model_settings(thinking: Thinking) -> ModelSettings | None:
+    """agent 的思考档位对应的运行级 model settings。"default" 什么都不传；其余原样交给 pydantic_ai 统一的
+    ModelSettings.thinking（False 或 effort 档位），由它换算成各 provider 的参数（Anthropic 的 adaptive + effort、
+    OpenAI 兼容接口的 reasoning_effort 等），服务端不接受时如实报错。pydantic_ai 把运行级设置合并在模型自带的设置
+    （ANTHROPIC_CACHE_SETTINGS）之上，两者的键不重叠，互不覆盖。用之前先 check_thinking。"""
+    if thinking == "default":
+        return None
+    return ModelSettings(thinking=False if thinking == "off" else thinking)
+
+
+def check_thinking(name: str, model: Model, thinking: Thinking) -> None:
+    """模型 name（"<provider 名>:<模型名>"，model 是它解析出的模型）能否按这个思考档位运行。判断依据与 pydantic_ai 的
+    Model.prepare_request 相同，但它在不满足时（profile 不支持思考；总在思考的模型上的 off）只是悄悄丢掉设置，
+    这里报 InvalidInput：设置不生效就如实说不生效。
+    profile 由 pydantic_ai 按 provider 类型与模型名推断：经 OpenAI 兼容接口接入的其他厂商模型（如 deepseek）按 OpenAI 的
+    模型名规则判断，可能被判为不支持。"""
+    if thinking == "default":
+        return
+    profile = model.profile
+    always = profile.get("thinking_always_enabled", False)
+    if not (profile.get("supports_thinking", False) or always):
+        raise InvalidInput(
+            f"model {name!r} does not take a thinking setting (per its pydantic_ai profile), "
+            f"only thinking 'default' works with it"
+        )
+    if thinking == "off" and always:
+        raise InvalidInput(f"model {name!r} always thinks, thinking cannot be 'off'")
 
 
 # 查询模型列表时 provider 按其契约可能出现的失败：鉴权、限流、5xx、网络不可达。
@@ -176,8 +207,9 @@ class ModelRegistry:
             provider = self._providers[name] = kind.provider(key, cfg.base_url or kind.official_base_url)
         return provider
 
-    def check(self, model: str) -> None:
-        self._split(model)
+    def check(self, model: str, thinking: Thinking) -> None:
+        """agent 的模型与思考档位在当前配置下能否运行（新建、修改与启动检查时）。不访问网络。"""
+        check_thinking(model, self.resolve(model), thinking)
 
     def provider_names(self) -> list[str]:
         return sorted(self._config.providers)

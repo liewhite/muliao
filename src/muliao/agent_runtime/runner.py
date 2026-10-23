@@ -36,6 +36,8 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserContent,
 )
+from pydantic_ai.models import Model
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 from pydantic_graph import End
@@ -48,12 +50,12 @@ from muliao.agent_runtime.instructions import (
     build_temp_instructions,
     with_notices,
 )
-from muliao.agent_runtime.llm import ModelResolver
+from muliao.agent_runtime.llm import ModelResolver, check_thinking, model_settings
 from muliao.agent_runtime.outcome import Finished, Paused, finished_of, outcome_of
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.transient import transient_as_retryable
-from muliao.agents.api import AgentInfo, AgentService, MemoryStore, SkillStore
+from muliao.agents.api import AgentInfo, AgentService, MemoryStore, SkillStore, Thinking
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
@@ -237,6 +239,7 @@ class AgentRuntime:
         result = await self._drive(
             kind=RunKind.RUN,
             model=agent.model,
+            thinking=agent.thinking,
             scope=scope,
             billed_to=scope.session_id,
             instructions=await self.instructions(agent, scope, summary, origin_note),
@@ -256,6 +259,7 @@ class AgentRuntime:
         task: str,
         instructions: str,
         model: str,
+        thinking: Thinking,
         profile: RunProfile,
         workspace: Path,
         session_id: str | None,
@@ -285,6 +289,7 @@ class AgentRuntime:
         result = await self._drive(
             kind=RunKind.TEMP_AGENT,
             model=model,
+            thinking=thinking,
             scope=scope,
             billed_to=session_id,
             instructions=build_temp_instructions(
@@ -300,6 +305,13 @@ class AgentRuntime:
         finished = finished_of(result)
         return Answer.of_run(finished.answer, finished.messages)
 
+    def _model(self, model: str, thinking: Thinking) -> tuple[Model, ModelSettings | None]:
+        """模型与这次运行的 model settings（思考档位）。档位会被模型悄悄忽略时报 InvalidInput（llm.check_thinking）：
+        agent 的档位在写入时已查过，这里拦住临时 agent 指定的档位与之后改了配置的情况。"""
+        resolved = self._resolve_model(model)
+        check_thinking(model, resolved, thinking)
+        return resolved, model_settings(thinking)
+
     @staticmethod
     def _toolsets(profile: RunProfile) -> list[AbstractToolset[RunScope]]:
         return [DomainErrorsAsRetry(t) for t in profile.toolsets]
@@ -309,6 +321,7 @@ class AgentRuntime:
         *,
         kind: RunKind,
         model: str,
+        thinking: Thinking,
         scope: RunScope,
         billed_to: str | None,
         instructions: str,
@@ -329,13 +342,16 @@ class AgentRuntime:
             "agent": scope.agent_id,
             "session_id": scope.session_id,
             "model": model,
+            "thinking": thinking,
             "workspace": str(scope.workspace),
         }
+        resolved, settings = self._model(model, thinking)
         async with self._billed(kind, scope.agent_id, model, billed_to, ctx, len(history)) as usage:
             with tool_input_kept_out_of_failures():
                 async with self._pai.iter(
                     prompt,
-                    model=self._resolve_model(model),
+                    model=resolved,
+                    model_settings=settings,
                     instructions=instructions,
                     message_history=list(history),
                     deps=scope,
@@ -356,10 +372,15 @@ class AgentRuntime:
 
     async def summarize(self, agent: AgentInfo, session_id: str, instructions: str, prompt: str) -> str:
         """用该 agent 的模型做一次无工具的文本生成（压缩 session_id 这个会话的上下文）。不转发事件到前端。"""
-        ctx = {"agent": agent.id, "session_id": session_id, "model": agent.model}
+        ctx = {"agent": agent.id, "session_id": session_id, "model": agent.model, "thinking": agent.thinking}
+        resolved, settings = self._model(agent.model, agent.thinking)
         async with self._billed(RunKind.COMPACTION, agent.id, agent.model, session_id, ctx) as usage:
             result = await self._pai.run(
-                prompt, model=self._resolve_model(agent.model), instructions=instructions, usage=usage
+                prompt,
+                model=resolved,
+                model_settings=settings,
+                instructions=instructions,
+                usage=usage,
             )
         return result.output
 

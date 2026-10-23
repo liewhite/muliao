@@ -128,7 +128,7 @@ async def speech_client(settings, models, tmp_path):
     c = assemble(
         settings,
         resolve_model=models,
-        model_checker=lambda _m: None,
+        model_checker=lambda _m, _t: None,
         transcriber=_transcriber(handler, max_bytes=10),
     )
     migrate(settings.db_path)

@@ -167,7 +167,7 @@ async def web_container(settings, models):
         update={"runtime": settings.runtime.model_copy(update={"tool_output_max_chars": 30})}
     )
     web = FakeWeb()
-    c = assemble(settings, resolve_model=models, model_checker=lambda _m: None, web=web)
+    c = assemble(settings, resolve_model=models, model_checker=lambda _m, _t: None, web=web)
     migrate(settings.db_path)
     yield c, web
     await c.db.engine.dispose()
@@ -231,7 +231,7 @@ async def test_without_web_config_there_is_no_web_group_and_agents_using_it_bloc
     await with_web.agents.create(
         AgentSpec(name="reader", description="d", tool_groups=["web"]), author="user"
     )
-    without_web = assemble(with_web.settings, model_checker=lambda _m: None)
+    without_web = assemble(with_web.settings, model_checker=lambda _m, _t: None)
     with pytest.raises(RuntimeError, match=r"reader .*\['web'\]"):
         await without_web.agents.verify_stored()
     await without_web.db.engine.dispose()

@@ -5,13 +5,14 @@ from collections.abc import AsyncIterator, Callable
 
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
+from pydantic_ai.profiles import ModelProfile
 
 from muliao.agent_runtime.conventions import unanswered_calls
 
 Script = Callable[[list[ModelMessage], AgentInfo], ModelResponse]
 
 
-def scripted(fn: Script) -> FunctionModel:
+def scripted(fn: Script, profile: ModelProfile | None = None) -> FunctionModel:
     """包装脚本函数，并像真实提供方一样拒绝工具调用缺结果的请求（OpenAI、Anthropic 会返回 400）：function model
     本身不校验，这类缺陷在测试里会被放过。"""
     inner = fn
@@ -34,4 +35,4 @@ def scripted(fn: Script) -> FunctionModel:
             else:
                 raise TypeError(f"unsupported scripted part {part!r}")
 
-    return FunctionModel(fn, stream_function=stream)
+    return FunctionModel(fn, stream_function=stream, profile=profile)

@@ -7,6 +7,7 @@ import pytest
 from pydantic import SecretStr, ValidationError
 from pydantic_ai import Agent as PaiAgent
 from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.settings import ModelSettings
 
 from muliao.agent_runtime import llm
 from muliao.config import LlmConfig, ProviderConfig
@@ -23,8 +24,10 @@ _REPLY = {
 }
 
 
-async def _request_body(*, prompt_cache: bool | None) -> dict:
-    """用真实的 Anthropic SDK 与模型实现发一次请求，返回发到线上的请求体。"""
+async def _request_body(
+    *, prompt_cache: bool | None, model: str = "m", settings: ModelSettings | None = None
+) -> dict:
+    """用真实的 Anthropic SDK 与模型实现发一次请求（settings 是运行级 model settings），返回发到线上的请求体。"""
     sent: list[dict] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -42,14 +45,14 @@ async def _request_body(*, prompt_cache: bool | None) -> dict:
         registry._providers["a"] = AnthropicProvider(  # noqa: SLF001
             api_key="k", base_url="https://api.example", http_client=http
         )
-        agent = PaiAgent(model=registry.resolve("a:m"), instructions="Be helpful.")
+        agent = PaiAgent(model=registry.resolve(f"a:{model}"), instructions="Be helpful.")
 
         @agent.tool_plain
         def look(query: str) -> str:
             """Look something up."""
             return query
 
-        await agent.run("hi")
+        await agent.run("hi", model_settings=settings)
     assert len(sent) == 1
     return sent[0]
 

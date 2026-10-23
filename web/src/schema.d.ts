@@ -1116,6 +1116,12 @@ export interface components {
             model?: string | null;
             /** Tool Groups */
             tool_groups?: string[] | null;
+            /**
+             * Thinking
+             * @default default
+             * @enum {string}
+             */
+            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
         };
         /** AgentDefaultsOut */
         AgentDefaultsOut: {
@@ -1139,6 +1145,11 @@ export interface components {
             /** Tool Groups */
             tool_groups: string[];
             /**
+             * Thinking
+             * @enum {string}
+             */
+            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+            /**
              * Created At
              * Format: date-time
              */
@@ -1159,6 +1170,11 @@ export interface components {
             model: string;
             /** Tool Groups */
             tool_groups: string[];
+            /**
+             * Thinking
+             * @enum {string}
+             */
+            thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
         };
         /** AnsweredQuestion */
         AnsweredQuestion: {

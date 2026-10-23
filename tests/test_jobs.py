@@ -429,7 +429,7 @@ async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_s
     from muliao.agents.service import AgentSpec
     from muliao.container import assemble
 
-    c = assemble(settings, resolve_model=models, model_checker=lambda _m: None)
+    c = assemble(settings, resolve_model=models, model_checker=lambda _m, _t: None)
     async with c.running():
         agent = await c.agents.create(
             AgentSpec(name="alpha", description="d", model="m"),

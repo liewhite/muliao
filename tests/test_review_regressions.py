@@ -324,6 +324,7 @@ async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_mo
             task="t",
             instructions="",
             model="m",
+            thinking="default",
             profile=RunProfile(toolsets=[]),
             workspace=tmp_path,
             session_id=None,

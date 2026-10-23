@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal, cast, get_args
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,12 @@ from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database
 
 log = logging.getLogger(__name__)
+
+# agent 的思考档位，运行时交给 pydantic_ai 的 ModelSettings.thinking（agent_runtime.llm.model_settings）：
+# "default" 什么都不传，按模型与服务端的默认；"off" 关闭；其余是 effort 档位。各 provider 怎么换算、模型不支持
+# 时怎么处理都由 pydantic_ai 与服务端决定，这里不映射
+Thinking = Literal["default", "off", "low", "medium", "high", "xhigh"]
+THINKING_LEVELS: tuple[Thinking, ...] = get_args(Thinking)
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,7 @@ class AgentSpec:
     description: str
     model: str | None = None
     tool_groups: list[str] | None = None
+    thinking: Thinking = "default"
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,7 @@ class AgentPatch:
     description: str | None = None
     model: str | None = None
     tool_groups: list[str] | None = None
+    thinking: Thinking | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,7 @@ class _AgentFields:
     description: str
     model: str
     tool_groups: list[str]
+    thinking: Thinking
 
 
 @dataclass(frozen=True)
@@ -78,6 +88,7 @@ class AgentInfo:
     description: str
     model: str
     tool_groups: tuple[str, ...]
+    thinking: Thinking
     created_at: datetime
     # 系统默认 agent（Web 新对话默认选中它），最多一个
     is_default: bool
@@ -90,6 +101,8 @@ def info_of(agent: Agent) -> AgentInfo:
         description=agent.description,
         model=agent.model,
         tool_groups=tuple(agent.tool_groups),
+        # 写入时已校验（AgentService._check）
+        thinking=cast(Thinking, agent.thinking),
         created_at=agent.created_at,
         is_default=agent.is_default,
     )
@@ -140,7 +153,8 @@ class AgentService:
         workspaces_dir: Path,
         repo: ResourceRepo,
         memory: MemoryStore,
-        model_checker: Callable[[str], None],
+        # (模型, 思考档位) 在当前配置下不能运行时报 InvalidInput（agent_runtime.llm.ModelRegistry.check）
+        model_checker: Callable[[str, Thinking], None],
         defaults: AgentDefaults,
     ):
         self._db = db
@@ -171,12 +185,13 @@ class AgentService:
         broken = []
         for agent in agents:
             try:
-                self._check_model(agent.model)
+                self._check_model(agent.model, agent.thinking)
             except InvalidInput as e:
                 broken.append(f"{agent.name} ({agent.id}): {e}")
         if broken:
             raise RuntimeError(
-                "agents reference models not resolvable with current config:\n" + "\n".join(broken)
+                "agents reference models or thinking levels not runnable with current config:\n"
+                + "\n".join(broken)
             )
         broken = [
             f"{a.name} ({a.id}): {sorted(unknown)}"
@@ -199,7 +214,9 @@ class AgentService:
         if leftovers:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
-    def _check(self, *, description: str, model: str, tool_groups: list[str]) -> None:
+    def _check(self, *, description: str, model: str, tool_groups: list[str], thinking: Thinking) -> None:
+        if thinking not in THINKING_LEVELS:
+            raise InvalidInput(f"thinking must be one of {list(THINKING_LEVELS)}, got {thinking!r}")
         if not description.strip():
             raise InvalidInput("agent description must not be empty")
         unknown = self._unavailable_groups(tool_groups)
@@ -207,7 +224,7 @@ class AgentService:
             raise InvalidInput(
                 f"tool groups must be distinct names from {self.defaults.group_names}, got {tool_groups}"
             )
-        self._check_model(model)
+        self._check_model(model, thinking)
 
     async def _ensure_name_free(self, s: AsyncSession, name: str, agent_id: str | None) -> None:
         holder = await s.scalar(select(Agent.id).where(Agent.name == name))
@@ -220,7 +237,9 @@ class AgentService:
         name = new_agent_name(spec.name)
         model = self.defaults.model if spec.model is None else spec.model
         tool_groups = self.defaults.group_names if spec.tool_groups is None else spec.tool_groups
-        self._check(description=spec.description, model=model, tool_groups=tool_groups)
+        self._check(
+            description=spec.description, model=model, tool_groups=tool_groups, thinking=spec.thinking
+        )
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
         # 先写资源文件、后插数据库行：agent 一旦存在，它的记忆就必须在（每一轮都要读）。
@@ -242,6 +261,7 @@ class AgentService:
                 description=spec.description,
                 model=model,
                 tool_groups=tool_groups,
+                thinking=spec.thinking,
             )
             s.add(agent)
             # 工作目录与数据库行同事务：建不出来则不插行
@@ -256,6 +276,7 @@ class AgentService:
             fields = self._validated(agent, patch)
             await self._ensure_name_free(s, fields.name, agent_id)
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
+            agent.thinking = fields.thinking
             # JSON 列只在整体赋值时被追踪
             agent.tool_groups = list(fields.tool_groups)
             await s.flush()
@@ -280,8 +301,14 @@ class AgentService:
             description=agent.description if patch.description is None else patch.description,
             model=agent.model if patch.model is None else patch.model,
             tool_groups=agent.tool_groups if patch.tool_groups is None else patch.tool_groups,
+            thinking=cast(Thinking, agent.thinking) if patch.thinking is None else patch.thinking,
         )
-        self._check(description=fields.description, model=fields.model, tool_groups=fields.tool_groups)
+        self._check(
+            description=fields.description,
+            model=fields.model,
+            tool_groups=fields.tool_groups,
+            thinking=fields.thinking,
+        )
         return fields
 
     async def get_active(self, agent_id: str) -> AgentInfo:

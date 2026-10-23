@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.lifecycle import AgentLifecycle
-from muliao.agents.service import AgentPatch, AgentService, AgentSpec
+from muliao.agents.service import AgentPatch, AgentService, AgentSpec, Thinking
 from muliao.agents.tool_catalog import AGENTS
 from muliao.errors import InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -21,6 +21,7 @@ class AgentDetail(BaseModel):
     name: str
     description: str
     model: str
+    thinking: Thinking
     tool_groups: list[str]
     # 所有可选的工具组，各带它包含的工具
     available_tool_groups: list[ToolGroup]
@@ -46,6 +47,7 @@ def agents_toolset(
             name=target.name,
             description=target.description,
             model=target.model,
+            thinking=target.thinking,
             tool_groups=target.tool_groups,
             available_tool_groups=[
                 ToolGroup(name=g, tools=list(ts.tools) if g == AGENTS else list(group_tools[g]))
@@ -60,6 +62,7 @@ def agents_toolset(
         description: str,
         model: str | None = None,
         tool_groups: list[str] | None = None,
+        thinking: Thinking = "default",
     ) -> str:
         """Create a new long-lived agent with its own memory, skills and workspace, e.g. a specialist you will
         delegate to repeatedly. For a one-off job use a temporary agent (`run_temp_agent`, if you have it) instead.
@@ -72,12 +75,15 @@ def agents_toolset(
             tool_groups: Tool groups it may use (`get_agent` lists every available group with its tools);
                 defaults to all. Give an agent that handles untrusted input (web pages, external events) only
                 the groups whose tools it needs.
+            thinking: Thinking/reasoning effort of its model: `default` sends nothing (the model's own default),
+                `off` disables it, the others set the effort level.
         """
         spec = AgentSpec(
             name=name,
             description=description,
             model=model,
             tool_groups=tool_groups,
+            thinking=thinking,
         )
         created = await agents.create(spec, author=ctx.deps.agent_id)
         return f"created agent {created.name}"
@@ -90,6 +96,7 @@ def agents_toolset(
         description: str | None = None,
         model: str | None = None,
         tool_groups: list[str] | None = None,
+        thinking: Thinking | None = None,
     ) -> str:
         """Change an agent's configuration, including your own (use your own name). Only the given fields change.
 
@@ -99,6 +106,7 @@ def agents_toolset(
             description: New description.
             model: New `<provider>:<model>`.
             tool_groups: New full list of tool groups it may use.
+            thinking: New thinking/reasoning effort (`default` = the model's own default).
         """
         target = await agents.find_by_name(agent)
         patch = AgentPatch(
@@ -106,6 +114,7 @@ def agents_toolset(
             description=description,
             model=model,
             tool_groups=tool_groups,
+            thinking=thinking,
         )
         updated = await agents.update(target.id, patch)
         return f"updated agent {updated.name}"

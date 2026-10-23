@@ -1,7 +1,10 @@
 import pytest
+from pydantic_ai.messages import ModelResponse
+from pydantic_ai.profiles import ModelProfile
 
 from muliao.api.auth import Auth
 from tests.conftest import login
+from tests.scripted import scripted
 
 
 async def test_api_requires_login(client):
@@ -19,6 +22,7 @@ async def test_agent_session_lifecycle_over_http(client):
     assert agent["model"] == "fake:default" and len(agent["id"]) == 12
     assert (await client.post("/api/agents", json={"name": "alpha", "description": "dup"})).status_code == 409
     assert (await client.post("/api/agents", json={"name": "  ", "description": "x"})).status_code == 422
+    assert agent["thinking"] == "default"  # 未指定时不传 thinking，与之前一致
 
     resp = await client.post("/api/sessions", json={"agent_id": agent["id"], "prompt": "hello there"})
     assert resp.status_code == 201
@@ -177,7 +181,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
     renamed = {**agent, "name": "Research Assistant 📚"}
     resp = await client.put(
         path,
-        json={k: renamed[k] for k in ("name", "description", "model", "tool_groups")},
+        json={k: renamed[k] for k in ("name", "description", "model", "tool_groups", "thinking")},
     )
     assert resp.status_code == 200 and resp.json()["name"] == "Research Assistant 📚"
     assert (await client.get(path)).json()["id"] == agent["id"]
@@ -191,6 +195,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
         "description": "d",
         "model": agent["model"],
         "tool_groups": agent["tool_groups"],
+        "thinking": "default",
     }
     assert (await client.put(path, json=clash)).status_code == 409
     assert (await client.delete(f"/api/agents/{other['id']}")).status_code == 204
@@ -386,3 +391,22 @@ async def test_mcp_api_rejects_path_traversal_owners(client, make_agent):
     await login(client)
     for owner in ("..", "../public"):
         assert (await client.post("/api/mcp/tools", params={"name": "x", "owner": owner})).status_code == 422
+
+
+async def test_agent_thinking_is_set_and_validated_over_http(client, models):
+    await login(client)
+    models.models["fake:default"] = scripted(
+        lambda _m, _i: ModelResponse(parts=[]), ModelProfile(supports_thinking=True)
+    )
+    resp = await client.post("/api/agents", json={"name": "alpha", "description": "d", "thinking": "high"})
+    assert resp.status_code == 201, resp.text
+    agent = resp.json()
+    assert agent["thinking"] == "high"
+    body = {k: agent[k] for k in ("name", "description", "model", "tool_groups")}
+    resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "off"})
+    assert resp.json()["thinking"] == "off"
+    # 整体替换：thinking 必填；不在档位里的值拒绝
+    assert (await client.put(f"/api/agents/{agent['id']}", json=body)).status_code == 422
+    resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "max"})
+    assert resp.status_code == 422
+    assert (await client.get(f"/api/agents/{agent['id']}")).json()["thinking"] == "off"

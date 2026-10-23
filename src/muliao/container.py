@@ -33,7 +33,7 @@ from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
 from muliao.agents.resources import ResourceRepo, RevisionHistory
-from muliao.agents.service import AgentDefaults, AgentService
+from muliao.agents.service import AgentDefaults, AgentService, Thinking
 from muliao.agents.skills import SkillStore
 from muliao.agents.tools import agents_toolset
 from muliao.config import RuntimeConfig, Settings
@@ -274,7 +274,7 @@ def assemble(
     settings: Settings,
     *,
     resolve_model: ModelResolver | None = None,
-    model_checker: Callable[[str], None] | None = None,
+    model_checker: Callable[[str, Thinking], None] | None = None,
     web: WebProvider | None = None,
     transcriber: Transcriber | None = None,
     check_writes: WriteCheck | None = None,

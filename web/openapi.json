@@ -3330,6 +3330,19 @@
               }
             ],
             "title": "Tool Groups"
+          },
+          "thinking": {
+            "type": "string",
+            "enum": [
+              "default",
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "title": "Thinking",
+            "default": "default"
           }
         },
         "type": "object",
@@ -3393,6 +3406,18 @@
             "type": "array",
             "title": "Tool Groups"
           },
+          "thinking": {
+            "type": "string",
+            "enum": [
+              "default",
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "title": "Thinking"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -3410,6 +3435,7 @@
           "description",
           "model",
           "tool_groups",
+          "thinking",
           "created_at",
           "is_default"
         ],
@@ -3435,6 +3461,18 @@
             },
             "type": "array",
             "title": "Tool Groups"
+          },
+          "thinking": {
+            "type": "string",
+            "enum": [
+              "default",
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "title": "Thinking"
           }
         },
         "type": "object",
@@ -3442,7 +3480,8 @@
           "name",
           "description",
           "model",
-          "tool_groups"
+          "tool_groups",
+          "thinking"
         ],
         "title": "AgentUpdate",
         "description": "整体替换：所有字段必填，不会用默认值覆盖已有配置。name 可改（只用于展示）。"

@@ -71,6 +71,11 @@ export function AgentList() {
                         <Chip size="sm" variant="secondary">
                           {a.model}
                         </Chip>
+                        {a.thinking !== 'default' && (
+                          <Chip size="sm" variant="secondary">
+                            思考 {THINKING_LABEL[a.thinking]}
+                          </Chip>
+                        )}
                       </Card.Footer>
                     </Card>
                   )}
@@ -86,15 +91,28 @@ export function AgentList() {
 
 function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
   if (agent) {
-    const { name, description, model, tool_groups } = agent
-    return { name, description, model, tool_groups }
+    const { name, description, model, tool_groups, thinking } = agent
+    return { name, description, model, tool_groups, thinking }
   }
   return {
     name: '',
     description: '',
     model: defaults.model,
     tool_groups: defaults.default_tool_groups,
+    thinking: 'default',
   }
+}
+
+type Thinking = AgentInput['thinking']
+
+/** 思考档位：「默认」什么都不传（模型与服务端的默认）；其余交给 pydantic_ai 换算成各 provider 的参数 */
+const THINKING_LABEL: Record<Thinking, string> = {
+  default: '默认',
+  off: '关闭',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
 }
 
 function ToolGroupsInput({ all, value, onChange }: { all: ToolGroup[]; value: string[]; onChange: (v: string[]) => void }) {
@@ -121,8 +139,18 @@ function ToolGroupsInput({ all, value, onChange }: { all: ToolGroup[]; value: st
   )
 }
 
-/** agent 的模型 "<provider 名>:<模型名>"：provider 来自服务端配置，模型名向该 provider 实时查询 */
-function ModelInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/** agent 的模型 "<provider 名>:<模型名>"：provider 来自服务端配置，模型名向该 provider 实时查询；旁边是它的思考档位 */
+function ModelInput({
+  value,
+  onChange,
+  thinking,
+  onThinkingChange,
+}: {
+  value: string
+  onChange: (v: string) => void
+  thinking: Thinking
+  onThinkingChange: (v: Thinking) => void
+}) {
   const sep = value.indexOf(':')
   const provider = sep > 0 ? value.slice(0, sep) : null
   const model = sep > 0 ? value.slice(sep + 1) : ''
@@ -131,7 +159,7 @@ function ModelInput({ value, onChange }: { value: string; onChange: (v: string) 
   const listed = models.data ?? []
   return (
     <div className="flex flex-col gap-2">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
         <SelectInput
           label="Provider"
           hint="来自服务端配置的 [llm.providers]"
@@ -153,6 +181,13 @@ function ModelInput({ value, onChange }: { value: string; onChange: (v: string) 
           options={listed.map((m) => ({ id: m, label: m }))}
           placeholder={models.loading ? '查询中…' : '请选择'}
           isDisabled={!provider || models.loading}
+        />
+        <SelectInput
+          label="思考"
+          hint="默认＝不传，按模型自己的默认"
+          value={thinking}
+          onChange={(t) => onThinkingChange(t as Thinking)}
+          options={Object.entries(THINKING_LABEL).map(([id, label]) => ({ id, label }))}
         />
       </div>
       <ErrorAlert error={providers.error} title="读取 provider 失败" />
@@ -192,7 +227,12 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         onChange={(description) => set({ description })}
         isRequired
       />
-      <ModelInput value={input.model ?? ''} onChange={(model) => set({ model })} />
+      <ModelInput
+        value={input.model ?? ''}
+        onChange={(model) => set({ model })}
+        thinking={input.thinking}
+        onThinkingChange={(thinking) => set({ thinking })}
+      />
       <ToolGroupsInput all={defaults.groups} value={input.tool_groups} onChange={(tool_groups) => set({ tool_groups })} />
       <ErrorAlert error={action.error} />
       <ActionButton isPending={action.busy} onPress={() => void save()}>

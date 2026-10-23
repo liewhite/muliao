@@ -17,7 +17,7 @@ import anyio
 from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.runner import AgentRuntime, RunProfile
-from muliao.agents.api import AgentService
+from muliao.agents.api import AgentService, Thinking
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 log = logging.getLogger(__name__)
@@ -78,7 +78,11 @@ def temp_agent_toolset(
 
     @ts.tool
     async def run_temp_agent(
-        ctx: RunContext[RunScope], task: str, instructions: str = "", model: str | None = None
+        ctx: RunContext[RunScope],
+        task: str,
+        instructions: str = "",
+        model: str | None = None,
+        thinking: Thinking | None = None,
     ) -> ToolReturn:
         """Run a throwaway helper agent for one self-contained job (e.g. fetch a web page and summarize it, analyze
         some files) and get its final answer. It runs now and you wait for it; several calls in one response run in
@@ -92,6 +96,8 @@ def temp_agent_toolset(
             task: The complete job description.
             instructions: Optional role or rules for the helper, e.g. "You are a careful summarizer.".
             model: `<provider>:<model>` to use, e.g. a cheaper one; defaults to your own model.
+            thinking: Thinking/reasoning effort (`default` = the model's own default, `off` disables it);
+                defaults to your own setting.
         """
         parent = await agents.get(ctx.deps.agent_id)
         workspace = await asyncio.to_thread(_make_workspace, temp_root)
@@ -106,6 +112,7 @@ def temp_agent_toolset(
                 task=task,
                 instructions=instructions,
                 model=parent.model if model is None else model,
+                thinking=parent.thinking if thinking is None else thinking,
                 profile=profile,
                 workspace=workspace,
                 session_id=ctx.deps.session_id,
