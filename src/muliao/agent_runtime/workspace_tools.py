@@ -323,10 +323,6 @@ def _read_parts(scope: RunScope, reads: tuple[FileRange, ...], max_chars: int) -
             # 标题用模型给的路径认出是哪一段（有的错误信息里不带路径）
             section = f"==> {part.path}: {e} <=="
         else:
-            if sections and len(excerpt.body) > body_budget:
-                # 第一行就放不下（_read_range 至少给一行）：前面已有内容时不硬塞，留到下一次调用
-                skipped.append(part)
-                continue
             section = f"==> {target} {excerpt.span} <==\n{excerpt.body}{excerpt.more_note}"
             if excerpt.cut:
                 budget = 0
@@ -337,7 +333,8 @@ def _read_parts(scope: RunScope, reads: tuple[FileRange, ...], max_chars: int) -
         tail = _not_read_note(skipped)
         if len(body) + len(tail) <= max_chars or len(sections) <= 1:
             break
-        # 未读列表太长、放不下了：把最后读的一段也挤进列表，不在正文中间截
+        # 放不下（未读列表太长，或某段第一行就超预算——_read_range 至少给一行）：把最后读的一段挤进列表，
+        # 不在正文中间截
         part, _ = sections.pop()
         skipped.insert(0, part)
     # 兜底：只有第一段的第一行就比预算还长时才会截到正文

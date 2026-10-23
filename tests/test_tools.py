@@ -747,7 +747,7 @@ async def test_read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_w
             ("read_file", {"path": "a.txt", "offset": 10, "limit": 200}),
             ("read_file", {"reads": [{"path": "a.txt", "limit": 5}, {"path": "a.txt"}, {"path": "b.txt"}]}),
             ("write_file", {"path": "wide.txt", "content": "w" * 1500 + "\n"}),
-            # 第二段第一行就放不下：不硬塞；未读的段很多时列表也不被截
+            # wide.txt 第一行就超预算、未读的段很多：都挤进未读列表，列表不被截
             (
                 "read_file",
                 {
