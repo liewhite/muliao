@@ -125,7 +125,7 @@
     "/api/permissions": {
       "get": {
         "summary": "List Permissions",
-        "description": "全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 工具是 mcp:<server>:<tool>，不在其中。",
+        "description": "全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 不归工具权限管，不在其中。",
         "operationId": "list_permissions_api_permissions_get",
         "responses": {
           "200": {
@@ -148,7 +148,7 @@
     "/api/permissions/resolve": {
       "post": {
         "summary": "Resolve Permissions",
-        "description": "agent 配置（还没保存的也行）最终能用的工具：public + 角色 + allow / deny，与运行时同一套计算。",
+        "description": "agent 配置（还没保存的也行）最终能用的工具：角色 + allow / deny，与运行时同一套计算。",
         "operationId": "resolve_permissions_api_permissions_resolve_post",
         "requestBody": {
           "content": {
@@ -3560,6 +3560,14 @@
             "title": "Deny",
             "default": []
           },
+          "mcp_servers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mcp Servers",
+            "default": []
+          },
           "thinking": {
             "type": "string",
             "enum": [
@@ -3641,6 +3649,13 @@
             "type": "array",
             "title": "Deny"
           },
+          "mcp_servers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mcp Servers"
+          },
           "thinking": {
             "type": "string",
             "enum": [
@@ -3672,6 +3687,7 @@
           "roles",
           "allow",
           "deny",
+          "mcp_servers",
           "thinking",
           "created_at",
           "is_default"
@@ -3713,6 +3729,13 @@
             "type": "array",
             "title": "Deny"
           },
+          "mcp_servers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mcp Servers"
+          },
           "thinking": {
             "type": "string",
             "enum": [
@@ -3734,6 +3757,7 @@
           "roles",
           "allow",
           "deny",
+          "mcp_servers",
           "thinking"
         ],
         "title": "AgentUpdate",
@@ -5279,22 +5303,16 @@
             "type": "string",
             "enum": [
               "read",
-              "write",
-              "irreversible"
+              "write"
             ],
             "title": "Access"
-          },
-          "note": {
-            "type": "string",
-            "title": "Note"
           }
         },
         "type": "object",
         "required": [
           "tool",
           "id",
-          "access",
-          "note"
+          "access"
         ],
         "title": "PermissionOut",
         "description": "一个工具的权限（agents.permissions.TOOL_PERMISSIONS）。"
@@ -5492,29 +5510,28 @@
             "type": "array",
             "title": "Tools"
           },
-          "mcp": {
-            "type": "boolean",
-            "title": "Mcp"
-          },
           "temp_agent": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ResolvedOut"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Temp Agent"
           }
         },
         "type": "object",
         "required": [
           "tools",
-          "mcp",
           "temp_agent"
         ],
         "title": "ResolvedOut",
-        "description": "按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具；能开临时 agent 时另有临时 agent 按同一份规则能用的。"
+        "description": "按规则最终能用的工具（MCP 不归权限管，不在其中）；能开临时 agent 时另有临时 agent 按同一份规则能用的工具名。"
       },
       "ResourceKind": {
         "type": "string",

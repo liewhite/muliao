@@ -104,9 +104,9 @@ async def test_a_cleared_agent_memory_is_a_new_version(container, make_agent):
 async def test_an_agent_edits_the_global_memory_as_a_versioned_change_under_its_name(
     container, make_agent, models
 ):
-    agent = await make_agent("alpha", model="m")
-    args = {"entry": "- all agents answer in Chinese", "scope": "public"}
-    models.models["m"] = call_then_answer("memory_append", args, "Added a rule.")
+    agent = await make_agent("alpha", model="m", roles=["admin"])
+    args = {"entry": "- all agents answer in Chinese"}
+    models.models["m"] = call_then_answer("memory_append_public", args, "Added a rule.")
     await start(container, agent.id, "hello")
     await drain(container)
 
@@ -116,7 +116,7 @@ async def test_an_agent_edits_the_global_memory_as_a_versioned_change_under_its_
     assert (await memory_history(container, None))[0].author == agent.id
 
     models.models["m"] = call_then_answer(
-        "memory_replace", {"old_text": "Chinese", "new_text": "English", "scope": "public"}, "Done."
+        "memory_replace_public", {"old_text": "Chinese", "new_text": "English"}, "Done."
     )
     await start(container, agent.id, "again")
     await drain(container)

@@ -46,7 +46,7 @@ async def run_tools(
 
 
 async def test_agent_creates_and_reconfigures_agents(container, make_agent, models):
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     outputs = await run_tools(
         container,
         models,
@@ -75,20 +75,21 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
     from muliao.agents.service import AgentSpec
 
     await container.agents.create(
-        AgentSpec(name="narrow", description="d", model="n", roles=["issues"], deny=["issue:update"]),
+        AgentSpec(name="narrow", description="d", model="n", deny=["issue:update"]),
         author="user",
     )
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     [detail] = await run_tools(container, models, me.id, [("get_agent", {"agent": "narrow"})])
 
-    assert "roles=['issues']" in detail and "deny=['issue:update']" in detail
-    # 最终工具：public 的加角色的，减去 deny；没有 MCP
-    assert "'issue_create'" in detail and "'memory_append'" in detail
-    assert "'issue_update'" not in detail.split("available_roles")[0]
-    assert "mcp='none'" in detail
-    # 参照：全部角色与每个工具的权限 id、访问级别（没配置 [web] 时不列 web 工具）
+    assert "roles=['agent']" in detail and "deny=['issue:update']" in detail
+    # 最终工具：角色的减去 deny；agent 角色没有写全局资源的工具；没勾选公共 MCP
+    tools = detail.split("available_roles")[0]
+    assert "'issue_create'" in tools and "'memory_append'" in tools
+    assert "'issue_update'" not in tools and "'memory_append_public'" not in tools
+    assert "mcp_servers=[]" in detail
+    # 参照：全部角色与每个工具的权限 id、读写（没配置 [web] 时不列 web 工具）
     assert "name='admin'" in detail and "allow=['*']" in detail
-    assert "tool='delete_agent', permission='agent:delete', access='irreversible'" in detail
+    assert "tool='delete_agent', permission='agent:delete', access='write'" in detail
     assert "web_search" not in detail
 
 
@@ -116,7 +117,7 @@ def test_registered_tools_must_match_the_permission_table_both_ways():
 
 
 async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_agent, models):
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     await container.triggers.create(
         name="daily", agent_id=me.id, kind="schedule", prompt="report", config={"cron": "0 9 * * *"}
     )
@@ -139,13 +140,13 @@ async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_age
     assert outputs[0].startswith("updated trigger daily (paused)")
     assert not (await container.triggers.get_by_name("daily")).enabled
     assert "echo" in outputs[1]
-    assert [m.name for m in container.mcp.index(me.id)[0]] == ["echo"]
+    assert [m.name for m in container.mcp.index(me.id, ())[0]] == ["echo"]
 
 
 async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
     client, container, make_agent, models
 ):
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     outputs = await run_tools(
         container,
         models,
@@ -178,7 +179,7 @@ async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
 
 
 async def test_agent_manages_private_and_public_secrets(container, make_agent, models):
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     other = await make_agent("other")
     outputs = await run_tools(
         container,
@@ -186,7 +187,7 @@ async def test_agent_manages_private_and_public_secrets(container, make_agent, m
         me.id,
         [
             ("vault_set", {"key": "A", "value": "private-a", "description": "mine"}),
-            ("vault_set", {"key": "B", "value": "public-b", "description": "shared", "scope": "public"}),
+            ("vault_set_public", {"key": "B", "value": "public-b", "description": "shared"}),
             ("vault_delete", {"key": "A"}),
             ("vault_list", {}),
         ],
@@ -198,7 +199,7 @@ async def test_agent_manages_private_and_public_secrets(container, make_agent, m
 
 
 async def test_list_threads_shows_each_thread_with_its_state(container, make_agent, models):
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     await make_agent("worker")
     outputs = await run_tools(
         container,
@@ -218,7 +219,7 @@ async def test_list_threads_shows_each_thread_with_its_state(container, make_age
 async def test_temp_agent_runs_once_in_a_discarded_workspace_and_returns_its_answer(
     container, make_agent, models
 ):
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     await container.vault.set(me.id, "API_KEY", "k-123")
     seen: dict[str, object] = {}
 
@@ -267,12 +268,9 @@ async def test_temp_agent_runs_once_in_a_discarded_workspace_and_returns_its_ans
     ],
 )
 async def test_temp_agent_only_gets_what_the_callers_permissions_allow(container, models, deny, expected):
-    # 调用方只有 workspace（没有 web、mcp）：临时 agent 只拿到文件与 shell；连 shell:run 也没有时就没有 shell
+    # 没配置 web、没勾选 MCP：临时 agent 只拿到文件与 shell；调用方禁了 shell:run 时就没有 shell
     me = await container.agents.create(
-        AgentSpec(
-            name="manager", description="d", model="tools", roles=["workspace", "temp_agent"], deny=deny
-        ),
-        author="user",
+        AgentSpec(name="manager", description="d", model="tools", deny=deny), author="user"
     )
     seen: list[str] = []
 
@@ -286,16 +284,14 @@ async def test_temp_agent_only_gets_what_the_callers_permissions_allow(container
     assert seen == expected
     # 界面与 get_agent 列出的就是这一份（同一份规则算出）
     resolved = container.agents.resolve(await container.agents.rules(me)).temp_agent
-    assert resolved is not None and sorted(resolved.tools) == expected and not resolved.mcp
+    assert resolved is not None and sorted(resolved) == expected
 
 
 async def test_get_agent_lists_the_tools_its_temp_agents_get(container, make_agent, models):
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
+    await container.agents.create(AgentSpec(name="limited", description="d"), author="user")
     await container.agents.create(
-        AgentSpec(name="limited", description="d", roles=["workspace", "temp_agent"]), author="user"
-    )
-    await container.agents.create(
-        AgentSpec(name="plain", description="d", roles=["workspace"]), author="user"
+        AgentSpec(name="plain", description="d", deny=["temp_agent:run"]), author="user"
     )
     outputs = await run_tools(
         container, models, me.id, [("get_agent", {"agent": "limited"}), ("get_agent", {"agent": "plain"})]
@@ -308,7 +304,7 @@ async def test_get_agent_lists_the_tools_its_temp_agents_get(container, make_age
 
 
 async def test_parallel_partial_updates_of_one_agent_both_survive(container, make_agent, models):
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     target = await make_agent("worker")
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -334,7 +330,7 @@ async def test_parallel_partial_updates_of_one_agent_both_survive(container, mak
 
 
 async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agent, models):
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     other = await make_agent("worker")
     outputs = await run_tools(
         container,
@@ -362,7 +358,7 @@ async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
     from muliao.sessions.lanes import RUN_TASK
     from tests.test_flow import tasks_of
 
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
 
     def broken(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         raise ModelHTTPError(status_code=400, model_name="helper", body="bad request")
@@ -377,7 +373,7 @@ async def test_failed_temp_agent_still_removes_its_workspace_and_fails_the_turn(
 
 async def test_temp_agent_is_not_capped_by_pydantic_ai_default_request_limit(container, make_agent, models):
     """临时 agent 和长期 agent 一样不设请求数上限（#45）：越过 pydantic-ai 默认的 50 次请求照样做完。"""
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     steps = 60
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -399,7 +395,7 @@ async def test_workspace_removal_failure_keeps_answer_and_is_cleared_on_next_sta
 ):
     import muliao.agent_runtime.temp_agent as temp_agent
 
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     models.models["helper"] = scripted(lambda m, i: ModelResponse(parts=[TextPart("answer")]))
 
     def stuck(path):  # noqa: ANN001, ANN202
@@ -437,59 +433,14 @@ def test_unremovable_leftover_is_logged_and_does_not_block_startup(tmp_path, mon
     assert any("not removable" in r.getMessage() for r in caplog.records)
 
 
-async def test_agent_sees_only_its_roles_tools_plus_public(container, models):
-    from muliao.agents.service import AgentSpec
-    from muliao.errors import InvalidInput
-
-    triage = await container.agents.create(
-        AgentSpec(name="triage", description="handles webhooks", model="m", roles=["notify"]),
-        author="user",
-    )
-    seen: list[str] = []
-
-    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        seen.extend(t.name for t in info.function_tools)
-        return ModelResponse(parts=[TextPart("ok")])
-
-    models.models["m"] = scripted(fn)
-    await start(container, triage.id, "event", origin=Origin.TRIGGER)
-    await drain(container)
-
-    assert sorted(seen) == sorted(
-        [
-            "notify_user",
-            "read_skill",
-            "write_skill",
-            "delete_skill",
-            "edit_skill",
-            "memory_append",
-            "memory_replace",
-            "history_append",
-            "history_search",
-            "ask_user",
-            "issue_list",
-            "issue_show",
-        ]
-    )
-    with pytest.raises(InvalidInput, match="roles must be"):
-        await container.agents.create(AgentSpec(name="x", description="d", roles=["root"]), author="user")
-    # public 自动拥有，不用选
-    with pytest.raises(InvalidInput, match="roles must be"):
-        await container.agents.create(AgentSpec(name="x", description="d", roles=["public"]), author="user")
-    with pytest.raises(InvalidInput, match="match no tool permission"):
-        await container.agents.create(AgentSpec(name="x", description="d", allow=["isue:*"]), author="user")
-
-
-async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container, models):
+async def test_agent_role_sees_every_tool_but_global_writes_and_no_unselected_mcp(container, models):
     from muliao.agents.service import AgentSpec
 
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
-    await container.mcp.add(
-        None, "echo", spec, probe=False, author="user"
-    )  # 公共 MCP：受限 agent 也看不到它的工具
+    # 公共 MCP：没勾选就看不到它的工具
+    await container.mcp.add(None, "echo", spec, probe=False, author="user")
     triage = await container.agents.create(
-        AgentSpec(name="triage", description="d", model="m", roles=["notify"]),
-        author="user",
+        AgentSpec(name="triage", description="d", model="m"), author="user"
     )
     seen: list[str] = []
 
@@ -501,16 +452,17 @@ async def test_restricted_agent_cannot_write_public_skills_or_use_mcp(container,
     await start(container, triage.id, "event", origin=Origin.TRIGGER)
     await drain(container)
 
-    assert "write_public_skill" not in seen and not any(name.startswith("echo_") for name in seen)
-    assert "write_skill" in seen  # 私有 skill 仍可写
+    assert sorted(seen) == sorted(container.agents.resolve(await container.agents.rules(triage)).tools)
+    assert not {"write_public_skill", "memory_append_public", "vault_set_public", "create_agent"} & set(seen)
+    assert {"write_skill", "memory_append", "vault_set", "run_shell", "trigger_create"} <= set(seen)
+    assert not any(name.startswith("echo_") for name in seen)
 
 
 async def test_asked_agent_runs_with_its_own_permissions(container, make_agent, models):
     from muliao.agents.service import AgentSpec
 
     await container.agents.create(
-        AgentSpec(name="narrow", description="d", model="n", roles=["notify"]),
-        author="user",
+        AgentSpec(name="narrow", description="d", model="n", deny=["shell:*"]), author="user"
     )
     seen: list[str] = []
 
@@ -519,27 +471,21 @@ async def test_asked_agent_runs_with_its_own_permissions(container, make_agent, 
         return ModelResponse(parts=[TextPart("answer")])
 
     models.models["n"] = scripted(narrow)
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     outputs = await run_tools(
         container, models, me.id, [("ask_agent", {"agent": "narrow", "message": "q", "thread": "t"})]
     )
 
     assert outputs == ["answer"]
-    assert "run_shell" not in seen and "notify_user" in seen
-
-
-def test_public_skills_role_can_edit_part_of_a_public_skill():
-    from muliao.agents.permissions import BUILTIN_ROLES, TOOL_PERMISSIONS
-
-    tools = BUILTIN_ROLES["public_skills"].rules.tools(list(TOOL_PERMISSIONS))
-    assert tools == ["write_public_skill", "edit_public_skill", "delete_public_skill"]
+    # 被问的 agent 用自己的权限，不是调用方（admin）的
+    assert "run_shell" not in seen and "notify_user" in seen and "create_agent" not in seen
 
 
 @pytest.mark.parametrize(("tool", "public"), [("edit_skill", False), ("edit_public_skill", True)])
 async def test_edit_skill_tools_change_description_body_or_both_and_reject_empty_edits(
     container, make_agent, models, tool, public
 ):
-    me = await make_agent("alpha", model="tools")
+    me = await make_agent("alpha", model="tools", roles=["admin"])
     owner = None if public else me.id
     await container.skills.write(owner, "digest", "When digesting", "step one", me.id)
 
@@ -908,7 +854,7 @@ def _thinking_seen(seen: list[object]) -> Callable[[list[ModelMessage], AgentInf
 async def test_thinking_level_reaches_the_model_and_temp_agents_inherit_it(container, make_agent, models):
     """临时 agent 不指定时沿用调用方的档位；"default" 什么都不传；模型不支持的档位如实拒绝。"""
     models.models["tools"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("x")]), THINKS)
-    me = await make_agent("manager", model="tools")
+    me = await make_agent("manager", model="tools", roles=["admin"])
     await container.agents.update(me.id, AgentPatch(thinking="high"))
     seen: list[object] = []
     models.models["helper"] = scripted(_thinking_seen(seen), THINKS)

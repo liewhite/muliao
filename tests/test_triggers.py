@@ -409,8 +409,8 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
 
     assert sorted(tools) == ["cwd", "echo", "screenshot", "token"]
     assert row.config.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
-    assert [s.name for s in container.mcp.index(alpha)[0]] == ["echo"]
-    assert container.mcp.index("b2b2b2b2b2b2")[0] == []
+    assert [s.name for s in container.mcp.index(alpha, ())[0]] == ["echo"]
+    assert container.mcp.index("b2b2b2b2b2b2", ())[0] == []
 
 
 async def test_mcp_view_marks_public_servers_shadowed_by_enabled_private_ones(container, make_agent):
@@ -428,7 +428,12 @@ async def test_mcp_view_marks_public_servers_shadowed_by_enabled_private_ones(co
     # 停用的私有 server 不生效，也就不遮蔽公共的：与 index 一致
     await container.mcp.set_enabled(alpha, "echo", False, "user")
     assert view(alpha) == [(alpha, "echo", False), (None, "echo", False), (None, "other", False)]
-    assert [(s.owner, s.name) for s in container.mcp.index(alpha)[0]] == [(None, "echo"), (None, "other")]
+    assert [(s.owner, s.name) for s in container.mcp.index(alpha, ["echo", "other"])[0]] == [
+        (None, "echo"),
+        (None, "other"),
+    ]
+    # 公共 server 只有勾选了的生效
+    assert [(s.owner, s.name) for s in container.mcp.index(alpha, ["other"])[0]] == [(None, "other")]
 
 
 async def test_mcp_add_failing_probe_saves_nothing(container):
@@ -785,23 +790,20 @@ async def test_a_temp_agent_sees_the_mcp_servers_of_its_caller(container, make_a
     )
     assert answer.text == "ok" and {"echo_echo", "echo_token"} <= set(seen)
 
-    # MCP 同样按调用方的权限：没有 mcp 角色就没有，只放行一个工具就只有它
-    for allow, expected in (((), set()), (("mcp:echo:echo",), {"echo_echo"})):
-        parent = await container.agents.update(
-            parent.id, AgentPatch(roles=["workspace", "temp_agent"], allow=allow)
-        )
-        seen.clear()
-        await container.consumer._runtime.run_temp(  # noqa: SLF001
-            parent,
-            task="t",
-            instructions="",
-            model="temp",
-            thinking="default",
-            profile=await container.temp_toolbox.profile(parent),
-            workspace=tmp_path,
-            session_id=None,
-        )
-        assert {t for t in seen if t.startswith("echo_")} == expected and "run_shell" in seen
+    # 内置工具按调用方的权限，MCP 与调用方的一样（不归权限管）
+    parent = await container.agents.update(parent.id, AgentPatch(deny=["shell:run"]))
+    seen.clear()
+    await container.consumer._runtime.run_temp(  # noqa: SLF001
+        parent,
+        task="t",
+        instructions="",
+        model="temp",
+        thinking="default",
+        profile=await container.temp_toolbox.profile(parent),
+        workspace=tmp_path,
+        session_id=None,
+    )
+    assert {"echo_echo", "echo_token"} <= set(seen) and "run_shell" not in seen
 
 
 def _recording_model(models, name: str) -> tuple[list[str], list[str]]:
@@ -841,6 +843,7 @@ async def test_an_mcp_server_with_a_missing_secret_is_skipped_and_the_model_is_t
     await container.mcp.add(alpha, "echo", broken, probe=False, author="user")
     good = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
     await container.mcp.add(None, "good", good, probe=False, author="user")
+    await container.agents.update(alpha, AgentPatch(mcp_servers=["good"]))
     requests, tools = _recording_model(models, "m")
 
     await start(container, alpha, "token?")
@@ -875,6 +878,7 @@ async def test_an_mcp_server_that_fails_to_list_its_tools_is_skipped_and_the_mod
     spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
     await container.mcp.add(alpha, "broken", spec, probe=False, author="user")
     await container.mcp.add(None, "good", spec, probe=False, author="user")
+    await container.agents.update(alpha, AgentPatch(mcp_servers=["good"]))
     requests, tools = _recording_model(models, "m")
 
     await start(container, alpha, "go")
@@ -894,6 +898,7 @@ async def test_a_corrupt_public_mcp_config_is_reported_to_a_temp_agent_without_f
     parent = await make_agent("alpha", model="m")
     good = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
     await container.mcp.add(None, "good", good, probe=False, author="user")
+    parent = await container.agents.update(parent.id, AgentPatch(mcp_servers=["good"]))
     (container.resources.owner_dir(None) / "mcp" / "bad.json").write_text("{not json")
     requests, tools = _recording_model(models, "temp")
 

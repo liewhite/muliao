@@ -13,6 +13,7 @@ NULL_MEANS_SOMETHING = {
     ("update_agent", "roles"): "None = 不改",
     ("update_agent", "allow"): "None = 不改",
     ("update_agent", "deny"): "None = 不改",
+    ("update_agent", "mcp_servers"): "None = 不改",
     ("trigger_update", "config"): "None = 不改",
     ("trigger_create", "precheck"): "None = 不设前置检查（Precheck 没有「空检查」可以代替）",
     ("trigger_update", "precheck"): "None = 不改",

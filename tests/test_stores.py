@@ -347,7 +347,7 @@ async def test_corrupt_mcp_config_is_reported_with_its_path_on_its_own_and_can_b
             container.mcp.get(None, "echo")
         # 列出时单独报出，不连累别的 server
         assert container.mcp.list(None) == []
-        [corrupt] = container.mcp.index("a1a1a1a1a1a1")[1]
+        [corrupt] = container.mcp.index("a1a1a1a1a1a1", ())[1]
         assert container.mcp.corrupt_in(None) == [corrupt]
         with pytest.raises(InvalidInput, match="remove it and add it again"):
             await container.mcp.set_enabled(None, "echo", False, "user")
