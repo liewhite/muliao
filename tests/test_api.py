@@ -298,11 +298,14 @@ async def test_opening_a_session_marks_it_and_its_notifications_read(client, con
     await drain(container)
     await login(client)
     assert (await client.get("/api/notifications/unread")).json() == {"count": 1}
+    assert (await client.get(f"/api/sessions/{session.id}")).json()["session"]["unread"]
+    assert [s["unread"] for s in (await client.get("/api/sessions")).json()] == [True]
 
     assert (await client.post(f"/api/sessions/{session.id}/read")).status_code == 204
 
     assert (await client.get("/api/notifications/unread")).json() == {"count": 0}
-    assert not (await container.sessions.get(session.id)).unread
+    assert not (await client.get(f"/api/sessions/{session.id}")).json()["session"]["unread"]
+    assert [s["unread"] for s in (await client.get("/api/sessions")).json()] == [False]
 
 
 async def test_session_list_pins_running_sessions_and_marks_them(client, container, make_agent):

@@ -2,12 +2,16 @@
 （Web Push）是 delivery 的事，deliver task 只引用通知与一个推送订阅，内容只存在 notifications 表。
 
 Notifications 是这个领域的唯一服务：写下通知并给每个推送订阅（设备）各排一个 deliver task（notify、定向命令 Notify、
-订阅 RunEnded），通知页与未读数，随会话已读（订阅 SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在同一条 lane 上
-（session_events_lane）。
+订阅 RunEnded 与 RunFailed），通知页与未读数，随会话已读（订阅 SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在
+同一条 lane 上（session_events_lane）。
+
+会话的未读不另存：有指向它的未读通知就是未读（unread_sessions）。需要用户看的只有这几种：用户在等的回答与提问
+（RunEnded）、agent 主动通知（Notify，如 notify_user、issue 交给用户）、运行最终失败（RunFailed）。
 """
 
 import hashlib
 import logging
+from collections.abc import Sequence
 
 from sqlalchemy import delete, event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,8 +22,8 @@ from muliao.platform.bus import EventBus
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
-from muliao.sessions.api import session_in
-from muliao.sessions.events import RunEnded, SessionDeleted, SessionRead
+from muliao.sessions.api import policy_of, session_in
+from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted, SessionRead
 
 log = logging.getLogger(__name__)
 
@@ -34,8 +38,8 @@ def deliver_lane(session_id: str | None, agent_id: str | None, endpoint: str) ->
     return f"deliver:{session_id or agent_id or 'system'}:{device}"
 
 
-def session_events_lane(event: RunEnded | SessionRead | SessionDeleted) -> str:
-    """同一个会话的事件在同一条 lane 上按发布顺序处理：RunEnded 一定先于 SessionDeleted 发布（会话忙时不能删除），
+def session_events_lane(event: RunEnded | RunFailed | SessionRead | SessionDeleted) -> str:
+    """同一个会话的事件在同一条 lane 上按发布顺序处理：RunEnded、RunFailed 一定先于 SessionDeleted 发布（会话忙时不能删除），
     删除的清理之后不会再为它写通知；运行结束之后才打开会话时，SessionRead 排在 RunEnded 之后，标记已读能看到这次
     运行的通知。顺序只对没有失败的投递成立：人工重试的 RunEnded 由处理器检查会话还在。"""
     return f"notifications:{event.session_id}"
@@ -71,6 +75,9 @@ class Notifications:
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended, lane=session_events_lane)
+        messaging.subscribe(
+            RunFailed, "notifications.run_failed", self.on_run_failed, lane=session_events_lane
+        )
         messaging.subscribe(
             SessionDeleted, "notifications.session_deleted", self.on_session_deleted, lane=session_events_lane
         )
@@ -121,6 +128,33 @@ class Notifications:
 
         return commit
 
+    async def on_run_failed(self, event: RunFailed, _delivery: Delivery) -> Commit:
+        """运行最终失败：列在会话列表里的会话都通知用户，点开是那个会话。私有 thread 的失败已作为结果交回发问的会话
+        （由那里的 agent 处理），不单独通知；运行中途的工具报错不走这里。"""
+
+        async def commit(s: AsyncSession) -> None:
+            # 与 on_run_ended 同理：人工重试的投递可能已在会话删除之后
+            session = await session_in(s, event.session_id)
+            if session is None:
+                log.info(
+                    "failed run of a deleted session not notified",
+                    extra={"session_id": event.session_id, "run_id": event.run_id},
+                )
+                return
+            if not policy_of(session.kind).listed:
+                return
+            await self._enqueue_in(
+                s,
+                event.agent_id,
+                Notification(
+                    title=f"{event.agent_name} · {session.title} 运行失败",
+                    body=event.summary,
+                    session_id=event.session_id,
+                ),
+            )
+
+        return commit
+
     async def notify(self, agent_id: str | None, title: str, body: str, session_id: str | None) -> None:
         """agent_id 为 None 表示系统通知，不属于任何 agent；session_id 是点开通知打开的会话。"""
         async with self._db.transaction() as s:
@@ -163,6 +197,14 @@ class Notifications:
         async with self._db.transaction() as s:
             query = select(Notification).order_by(Notification.id.desc()).limit(limit)
             return list((await s.scalars(query)).all())
+
+    async def unread_sessions(self, session_ids: Sequence[str]) -> set[str]:
+        """这些会话里未读的：有指向它的未读通知。"""
+        async with self._db.transaction() as s:
+            query = select(Notification.session_id).where(
+                Notification.session_id.in_(session_ids), Notification.unread.is_(True)
+            )
+            return set((await s.scalars(query)).all())
 
     async def unread_count(self) -> int:
         async with self._db.transaction() as s:

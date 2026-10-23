@@ -727,7 +727,7 @@ async def _notifications(container):
 
 
 async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(container, make_agent, models):
-    from muliao.issues.rules import FAILURE_SUMMARY_MAX
+    from muliao.sessions.events import FAILURE_SUMMARY_MAX
 
     alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = _failing(400, times=1)
@@ -743,9 +743,10 @@ async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(conta
     assert detail.issue.status == TODO
     [session] = await _issue_sessions(container)
     assert len(await _mail(container, session.id)) == 1
+    # 通知由通知领域做（所有列出的会话一样），只有一条
     [note] = await _notifications(container)
-    assert note.title == f"#{issue.id} 运行失败：Fix it" and note.session_id == session.id
-    assert note.body == failed.body
+    assert note.title == f"alpha · {session.title} 运行失败" and note.session_id == session.id
+    assert note.body == failed.body and note.issue_id is None
     assert "alpha's run in its issue session failed: ModelHTTPError" in await container.issues.render(
         issue.id
     )
@@ -763,15 +764,17 @@ async def test_failed_runs_outside_issue_sessions_and_retried_ones_are_not_recor
 ):
     alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = _failing(400, times=1)
-    await start(container, alpha, "hi", origin=Origin.TRIGGER)
+    triggered = await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
+    # 别的会话的失败不记在 issue 上，但一样通知用户
+    assert [n.session_id for n in await _notifications(container)] == [triggered.id]
     # 暂时性失败、重试后成功的不记
     models.models["m"] = _failing(503, times=1)
     issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
     await drain(container)
 
     assert [a.kind for a in (await container.issues.get(issue.id)).activities] == [ActivityKind.CREATED]
-    assert await _notifications(container) == []
+    assert [n.session_id for n in await _notifications(container)] == [triggered.id]
 
 
 async def test_a_run_failure_on_a_deleted_issue_is_ignored(container, make_agent):
@@ -779,9 +782,19 @@ async def test_a_run_failure_on_a_deleted_issue_is_ignored(container, make_agent
 
     alpha = (await make_agent()).id
     event = RunFailed(
-        session_id="s", agent_id=alpha, run_id=1, origin=Origin.ISSUE, origin_ref="999", error="Boom"
+        session_id="s",
+        agent_id=alpha,
+        agent_name="alpha",
+        run_id=1,
+        origin=Origin.ISSUE,
+        origin_ref="999",
+        error="Boom",
     )
     commit = await container.issues.on_run_failed(event, Delivery("m"))
+    async with container.db.transaction() as s:
+        await commit(s)
+    # 没有抛错、不记任何东西；已删的会话也不通知
+    commit = await container.notifications.on_run_failed(event, Delivery("m"))
     async with container.db.transaction() as s:
         await commit(s)
     assert await _notifications(container) == []

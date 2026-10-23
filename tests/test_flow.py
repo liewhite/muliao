@@ -176,9 +176,7 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     session = await start(container, alpha, "I like tea")
     await drain(container)
 
-    detail = await container.sessions.get(session.id)
     history = await history_of(container, session.id)
-    assert detail.unread
     assert container.memory.read(alpha) == "- user likes tea\n"
     assert last_user_prompt(history) == "I like tea"
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "Noted!"
@@ -193,7 +191,7 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     # 看过了会话即看过了指向它的通知（SessionRead，返回时已投递）
     await container.sessions.mark_read(session.id)
     assert await container.notifications.unread_count() == 0
-    assert not (await container.sessions.get(session.id)).unread
+    assert await container.notifications.unread_sessions([session.id]) == set()
 
 
 async def test_a_session_read_before_its_run_ended_event_is_handled_still_reads_that_runs_notification(
@@ -203,7 +201,6 @@ async def test_a_session_read_before_its_run_ended_event_is_handled_still_reads_
     alpha = (await make_agent("alpha")).id
     session = await start(container, alpha, "hi")
     await run_only(container)
-    assert (await container.sessions.get(session.id)).unread
 
     await container.sessions.mark_read(session.id)
     assert await container.notifications.list(10) == []
@@ -213,21 +210,22 @@ async def test_a_session_read_before_its_run_ended_event_is_handled_still_reads_
     assert not note.unread
 
 
-async def test_marking_a_session_read_marks_its_notifications_read_even_if_it_was_not_unread(
-    container, make_agent
-):
-    # notify_user 写的通知可能出现在会话没变未读时：标记已读照样发 SessionRead
+async def test_a_session_is_unread_only_while_a_notification_points_to_it(container, make_agent):
+    # 定时任务正常跑完、没有通知用户：不是未读；notify_user 之类的通知指向它才是，打开会话只清它自己的
     alpha = (await make_agent("alpha")).id
     session = await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
+    assert await container.notifications.unread_sessions([session.id]) == set()
     await container.notifications.notify(alpha, "t", "b", session.id)
     other = await start(container, alpha, "other", origin=Origin.TRIGGER)
     await drain(container)
     await container.notifications.notify(alpha, "t", "b", other.id)
+    assert await container.notifications.unread_sessions([session.id, other.id]) == {session.id, other.id}
     await container.sessions.mark_read(session.id)
     await container.sessions.mark_read(session.id)
 
     assert [n.unread for n in await container.notifications.list(10)] == [True, False]
+    assert await container.notifications.unread_sessions([session.id, other.id]) == {other.id}
 
 
 async def test_triggered_session_does_not_notify_automatically(container, make_agent):

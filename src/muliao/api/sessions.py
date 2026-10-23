@@ -46,12 +46,13 @@ class SessionOut(BaseModel):
     deletable: bool
     # 私有 thread：只有开它的会话能继续
     private: bool
+    # 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生
     unread: bool
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def of(cls, s: Session) -> "SessionOut":
+    def of(cls, s: Session, unread: bool) -> "SessionOut":
         return cls(
             id=s.id,
             agent_id=s.agent_id,
@@ -64,7 +65,7 @@ class SessionOut(BaseModel):
             user_writable=policy_of(s.kind).user_writable,
             deletable=policy_of(s.kind).deletable,
             private=policy_of(s.kind).private,
-            unread=s.unread,
+            unread=unread,
             created_at=s.created_at,
             updated_at=s.updated_at,
         )
@@ -75,6 +76,12 @@ class SessionListItem(SessionOut):
     SessionDetail.run）。"""
 
     state: WorkState
+
+
+async def session_outs(c: Container, sessions: list[Session]) -> list[SessionOut]:
+    """SessionOut 的唯一构造入口：一次取齐这些会话的未读（通知领域）。"""
+    unread = await c.notifications.unread_sessions([s.id for s in sessions])
+    return [SessionOut.of(s, s.id in unread) for s in sessions]
 
 
 # 任务种类：各领域在自己的 api 导出，这里组成接口契约（tests 检查它恰好是 worker 登记的种类）。进 OpenAPI 后前端
@@ -211,7 +218,8 @@ async def list_sessions(
     listed = await c.sessions.list(
         agent_id=agent_id, origins=origin, origin_ref=origin_ref, limit=limit, offset=offset
     )
-    return [SessionListItem(**SessionOut.of(x.session).model_dump(), state=x.state) for x in listed]
+    outs = await session_outs(c, [x.session for x in listed])
+    return [SessionListItem(**o.model_dump(), state=x.state) for o, x in zip(outs, listed, strict=True)]
 
 
 @router.post("/sessions", status_code=201)
@@ -226,19 +234,21 @@ async def start_session(c: C, body: StartIn) -> SessionOut:
             attachments=tuple(body.attachments),
         )
     )
-    return SessionOut.of(received.session)
+    [out] = await session_outs(c, [received.session])
+    return out
 
 
 @router.get("/sessions/{session_id}")
 async def get_session(c: C, session_id: str) -> SessionDetail:
     view = await c.sessions.detail(session_id)
+    session, *threads = await session_outs(c, [view.session, *view.threads])
     return SessionDetail(
-        session=SessionOut.of(view.session),
+        session=session,
         items=view.items,
         compactions=[CompactionOut.of(x) for x in view.compactions],
         mail=await mail_outs(c, view.mail),
         run=None if view.run is None else TaskOut.of(view.run),
-        threads=[SessionOut.of(t) for t in view.threads],
+        threads=threads,
         live=None if view.live is None else LiveRunOut.of(view.live),
         state=view.state,
     )

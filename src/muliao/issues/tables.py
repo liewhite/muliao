@@ -42,7 +42,7 @@ class ActivityKind(StrEnum):
     DEPENDS_ON = "depends_on"
     # 一个上游完成（done / cancelled）：change 为 {"issue": 上游 id, "from": 原状态, "to": 新状态}
     DEPENDENCY = "dependency"
-    # 某个 agent 在它这个 issue 的会话里的运行最终失败了：actor 是该 agent，body 是错误摘要（rules.failure_summary）
+    # 某个 agent 在它这个 issue 的会话里的运行最终失败了：actor 是该 agent，body 是错误摘要（RunFailed.summary）
     RUN_FAILED = "run_failed"
 
 

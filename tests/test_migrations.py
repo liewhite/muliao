@@ -464,3 +464,49 @@ def test_agents_thinking_defaults_to_default_and_downgrades(tmp_path):
     with sqlite3.connect(path) as conn:
         assert "thinking" not in {r[1] for r in conn.execute("pragma table_info(agents)")}
         assert conn.execute("select id from agents").fetchall() == [("a1",)]
+
+
+def test_dropping_sessions_unread_keeps_sessions_their_messages_and_backfills_on_downgrade(tmp_path):
+    """会话未读改为从通知派生（#175）：升级删 sessions.unread（重建 sessions 表，会话、它的消息与通知都保留）；降级
+    加回这一列，按未读通知回填。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "bd1e7f7a8324")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, tool_groups, is_default, thinking, created_at, "
+            "updated_at) values ('a1a1a1a1a1a1', 'a', '', 'm', '[]', 0, 'default', '2026-01-01', '2026-01-01')"
+        )
+        for id_, unread in (("s1", 1), ("s2", 0)):
+            conn.execute(
+                "insert into sessions (id, agent_id, title, origin, kind, unread, created_at, updated_at) "
+                "values (?, 'a1a1a1a1a1a1', 't', 'user', 'conversation', ?, '2026-01-01', '2026-01-01')",
+                (id_, unread),
+            )
+        conn.execute(
+            "insert into messages (session_id, task_id, payload, created_at) values ('s1', 1, '{}', '2026-01-01')"
+        )
+        conn.execute(
+            "insert into notifications (title, body, session_id, unread, created_at) "
+            "values ('n', 'b', 's2', 1, '2026-01-01')"
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        columns = [r[1] for r in conn.execute("pragma table_info(sessions)")]
+        assert "unread" not in columns
+        assert conn.execute("select id from sessions order by id").fetchall() == [("s1",), ("s2",)]
+        assert conn.execute("select session_id from messages").fetchall() == [("s1",)]
+        assert conn.execute("select session_id from notifications").fetchall() == [("s2",)]
+        assert conn.execute("pragma foreign_key_check").fetchall() == []
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "bd1e7f7a8324")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, unread from sessions order by id").fetchall() == [
+            ("s1", 0),
+            ("s2", 1),
+        ]

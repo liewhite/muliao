@@ -38,18 +38,30 @@ class RunEnded(DomainEvent):
     awaited: bool
 
 
+# 运行失败的错误摘要（RunFailed.summary）最多这么多字符
+FAILURE_SUMMARY_MAX = 500
+
+
 class RunFailed(DomainEvent):
     """一次运行最终失败了（暂时性失败的重试用完，或契约外的失败），在队列记下失败的事务里发布（RunHandler.failed_in）。
-    带上会话的来源，订阅方按来源认领自己的会话（如 issue 看板在 issue 时间线上记一笔）；不自动重试。"""
+    通知领域据此通知用户（列在会话列表里的会话）；带上会话的来源，订阅方按来源认领自己的会话（如 issue 看板在 issue
+    时间线上记一笔）。不自动重试。"""
 
     TYPE = "session.run_failed"
     session_id: str
     agent_id: str
+    agent_name: str
     run_id: int
     origin: Origin
     origin_ref: str | None
     # 失败的原文（task.error：异常类型与信息）
     error: str
+
+    @property
+    def summary(self) -> str:
+        """给人看的错误摘要：去掉首尾空白，超长时截断并标出。"""
+        error = self.error.strip()
+        return error if len(error) <= FAILURE_SUMMARY_MAX else error[: FAILURE_SUMMARY_MAX - 1] + "…"
 
 
 class SessionStopped(DomainEvent):
@@ -69,8 +81,8 @@ class SessionDeleted(DomainEvent):
 
 
 class SessionRead(DomainEvent):
-    """用户看过了这个会话（打开它、看着它时又有了新回答）。每次标记都发，不论会话原本是否未读：指向它的通知是
-    订阅者自己的事实（例如一轮失败、会话没变未读时 notify_user 写下的通知）。"""
+    """用户看过了这个会话（打开它、看着它时又有了新回答）。会话的未读就是指向它的未读通知（通知领域），标记
+    已读即把它们标为已读。"""
 
     TYPE = "session.read"
     session_id: str

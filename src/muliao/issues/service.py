@@ -40,7 +40,6 @@ from muliao.issues.rules import (
     assignee_name,
     cycle_through,
     delivery_message,
-    failure_summary,
     handed_by,
     recipient,
     render_issue,
@@ -163,9 +162,9 @@ class IssueService:
         messaging.subscribe(RunFailed, "issues.run_failed", self.on_run_failed)
 
     async def on_run_failed(self, event: RunFailed, _delivery: Delivery) -> Commit:
-        """issue 会话里的运行最终失败：在 issue 时间线上以该 agent 的名义记一笔（失败的是它的运行），并通知用户，点开是那个
-        会话。不投递这条动态、不改状态：投进会话就是自动重试，永久性的错误会陪它无限循环；之后有新动态时照常投递、唤醒它。
-        其他来源的会话、已被删除的 issue 不处理。"""
+        """issue 会话里的运行最终失败：在 issue 时间线上以该 agent 的名义记一笔（失败的是它的运行）。通知用户由通知领域
+        订阅 RunFailed 做，这里不重复发。不投递这条动态、不改状态：投进会话就是自动重试，永久性的错误会陪它无限循环；
+        之后有新动态时照常投递、唤醒它。其他来源的会话、已被删除的 issue 不处理。"""
         if event.origin != Origin.ISSUE or event.origin_ref is None:
             return no_commit
         issue_id = int(event.origin_ref)
@@ -177,19 +176,8 @@ class IssueService:
                     "run failed on a deleted issue", extra={"issue_id": issue_id, "run_id": event.run_id}
                 )
                 return
-            summary = failure_summary(event.error)
-            self._record(s, issue, event.agent_id, ActivityKind.RUN_FAILED, body=summary)
+            self._record(s, issue, event.agent_id, ActivityKind.RUN_FAILED, body=event.summary)
             issue.updated_at = utcnow()
-            self._messaging.send_in(
-                s,
-                Notify(
-                    agent_id=event.agent_id,
-                    title=f"#{issue.id} 运行失败：{issue.title}",
-                    body=summary,
-                    session_id=event.session_id,
-                    issue_id=None,
-                ),
-            )
             log.info("issue run failure recorded", extra={"issue_id": issue_id, "run_id": event.run_id})
 
         return commit

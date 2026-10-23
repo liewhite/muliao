@@ -359,7 +359,7 @@ class RunHandler:
         退出信箱，不会在之后的运行里被悄悄执行。运行开始之后才到的不动：同一个事务里立即唤醒新的运行处理它们（如对
         同一 thread 的第二项委派），不等信箱对账。队列已把这次运行记为 failed，唤醒不会把它当成忙。
 
-        同一事务发布 RunFailed（如 issue 看板据此在时间线上记一笔、通知用户）。这个钩子自己失败时（worker 不带钩子记下
+        同一事务发布 RunFailed（通知领域据此通知用户，issue 看板在时间线上记一笔）。这个钩子自己失败时（worker 不带钩子记下
         失败）不发：失败仍在任务页与日志里可见。"""
         if task.session_id is None or task.error is None:
             raise RuntimeError(f"run {task.id} has no session or no recorded error")
@@ -371,6 +371,7 @@ class RunHandler:
             RunFailed(
                 session_id=child.id,
                 agent_id=agent.id,
+                agent_name=agent.name,
                 run_id=task.id,
                 origin=child.origin,
                 origin_ref=child.origin_ref,

@@ -201,6 +201,8 @@ async def test_a_failed_ask_comes_back_as_its_result_and_the_asker_goes_on(conta
     [child] = await threads_of(container, parent.id)
     [child_run] = await turns_in(container, child.id)
     assert child_run.status == TaskStatus.FAILED and "400" in (child_run.error or "")
+    # 私有 thread 的失败已交回发问方，不单独通知用户：只有发问方给用户的回答
+    assert [n.session_id for n in await container.notifications.list(10)] == [parent.id]
 
 
 async def test_thread_kind_and_owner_are_fixed_at_creation(container, make_agent, models):
@@ -282,8 +284,7 @@ async def test_private_thread_is_read_only_for_user_and_hidden_from_list(contain
         await reply(container, child.id, "hi")
     listed = await container.sessions.list(agent_id=None, origins=None, limit=50, offset=0)
     assert [x.session.id for x in listed] == [parent.id]
-    async with container.db.transaction() as s:
-        assert not (await s.get(Session, child.id)).unread
+    assert await container.notifications.unread_sessions([child.id]) == set()
 
 
 async def test_user_may_continue_any_public_session_but_delegation_only_its_own_threads(

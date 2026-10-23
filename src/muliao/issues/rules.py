@@ -16,15 +16,6 @@ from muliao.sessions.api import WorkState
 # 名称做的操作），所以不像 USER 那样保留这个名称
 SYSTEM_ACTOR = "system"
 
-# 运行失败记在时间线上、发给用户的错误摘要的上限（字符）：完整错误在任务页与日志里
-FAILURE_SUMMARY_MAX = 500
-
-
-def failure_summary(error: str) -> str:
-    """运行失败的错误摘要：去掉首尾空白，超长时截断并标出。"""
-    error = error.strip()
-    return error if len(error) <= FAILURE_SUMMARY_MAX else error[: FAILURE_SUMMARY_MAX - 1] + "…"
-
 
 def actor_name(actor: str | None, names: AgentNames) -> str:
     """时间线 actor 的展示名：用户（None）是 USER，系统是 SYSTEM_ACTOR，agent 按 id 换成名字。"""
