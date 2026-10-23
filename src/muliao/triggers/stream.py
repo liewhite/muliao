@@ -16,7 +16,8 @@
   它结束后合并投递；挡路的会话在等待（可能永远等不到，如没人回答的提问）时通知用户一次（这一份托管进程里每个挡路
   会话一次）。排队的事件以事件上限为界：排满了就不再读命令的输出，管道写满后命令自己阻塞——不丢、不重叠，内存与
   并行会话都有界。单行超过事件上限的丢弃并记日志。
-- 排队的事件只在内存里：服务重启、改配置、停用时丢失；前置检查失败时这一批也丢弃（失败已记在触发器上）。命令自己
+- 排队的事件只在内存里：服务重启、改配置、停用时丢失；一批开始触发后不再重试（至多一次：前置检查失败、
+  触发意外失败都丢弃这一批）；命令退出时队列正满，管道里还没读的输出只限时读、读不完的丢弃。命令自己
   做断线重连、去重与游标，重要的来源要另加轮询兜底（公共 skill stream-listener）。
 - 每次触发走 TriggerService.fire_activated（新开会话；有前置检查时先跑，事件内容作为它的 stdin）。
 """
@@ -40,7 +41,7 @@ from muliao.errors import NotFound
 from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Messaging
-from muliao.platform.output import record_output, tail, wait_exit_code
+from muliao.platform.output import CHUNK, record_output, tail, wait_exit_code
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash
 from muliao.platform.tasks import Clock
 from muliao.sessions.api import SessionActivity, WorkState
@@ -66,7 +67,6 @@ _MAX_BACKOFF_SECONDS = 300.0
 _BUSY_POLL_SECONDS = 2.0
 _ERROR_TAIL_CHARS = 2000
 _LOG_MAX_BYTES = 1024 * 1024
-_CHUNK = 65536
 LOG_DIR = "trigger-logs"
 
 
@@ -235,7 +235,9 @@ class StreamRunner:
                 config = spec.config
             except ValidationError as e:
                 # 配置只经 configure 写入；存下的坏了是数据问题，只停用这一个
-                await self._triggers.disable(spec.trigger_id, f"invalid stored stream config: {e}")
+                await self._safely(
+                    spec, self._triggers.disable(spec.trigger_id, f"invalid stored stream config: {e}")
+                )
                 return
             pending = _Pending(self._max_bytes)
             async with anyio.create_task_group() as group:
@@ -291,7 +293,7 @@ class StreamRunner:
         # spawn 之后的任何一步（包括在这里被取消）都要杀掉进程组，所以紧接着进 try
         try:
             log.info("stream started", extra={"trigger": spec.name, "pid": proc.pid})
-            await self._record(spec, running_since=self._clock().isoformat())
+            await self._safely(spec, self._record(spec, running_since=self._clock().isoformat()))
             async with anyio.create_task_group() as watchers:
                 watchers.start_soon(self._mark_stable, spec, stable)
                 async with anyio.create_task_group() as readers:
@@ -317,7 +319,7 @@ class StreamRunner:
     async def _mark_stable(self, spec: _Spec, stable: anyio.Event) -> None:
         await anyio.sleep(self._stable_seconds)
         stable.set()
-        await self._record(spec, error=None, failures=0)
+        await self._safely(spec, self._record(spec, error=None, failures=0))
 
     async def _read_events(
         self, spec: _Spec, stream: asyncio.StreamReader, secrets: Mapping[str, str], pending: _Pending
@@ -325,7 +327,7 @@ class StreamRunner:
         buf = bytearray()
         # 正在丢弃一个超长行的剩余部分（直到下一个换行）
         skipping = False
-        while chunk := await stream.read(_CHUNK):
+        while chunk := await stream.read(CHUNK):
             buf += chunk
             while (end := buf.find(b"\n")) >= 0:
                 raw = bytes(buf[:end])
@@ -359,10 +361,21 @@ class StreamRunner:
             await pending.ready(config.debounce_seconds)
             try:
                 await self._wait_previous(spec, len(pending.lines), notified)
-                await self._triggers.fire_activated(spec.trigger_id, "\n".join(pending.take()))
             except Exception:
                 # 契约之外的失败（如数据库暂时不可用）：事件留在队列里，稍后再试，不拖垮进程的监督
-                log.exception("stream delivery failed", extra={"trigger": spec.name})
+                log.exception(
+                    "stream delivery could not check the previous session", extra={"trigger": spec.name}
+                )
+                await anyio.sleep(self._busy_poll_seconds)
+                continue
+            batch = pending.take()
+            try:
+                await self._triggers.fire_activated(spec.trigger_id, "\n".join(batch))
+            except Exception:
+                # 一旦开始触发就不重试这一批（至多一次）：fire 可能已经提交了投递才抛出，重试会重复触发
+                log.exception(
+                    "stream delivery failed, batch dropped", extra={"trigger": spec.name, "lines": len(batch)}
+                )
                 await anyio.sleep(self._busy_poll_seconds)
 
     async def _wait_previous(self, spec: _Spec, queued: int, notified: list[str]) -> None:

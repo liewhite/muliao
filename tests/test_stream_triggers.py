@@ -403,3 +403,65 @@ async def test_a_waiting_previous_session_holds_events_and_notifies_once(contain
             assert hold is not None
             release(hold)
         await _until(lambda: _has_sessions(container, alpha, 2))
+
+
+async def test_an_unexpected_failure_of_one_stream_is_a_restart_and_leaves_the_others_running(
+    container, make_agent, monkeypatch
+):
+    """监督者的异常边界：一个触发器启动时意外失败（如日志写不进去）按一次失败退避重启，别的触发器与对账循环照常。"""
+    from muliao.triggers import stream as stream_module
+
+    alpha = (await make_agent()).id
+    real = stream_module._prepare_log
+    broken = {"count": 0}
+
+    def flaky(path, header):  # noqa: ANN001, ANN202
+        if path.name.startswith("bad.") and broken["count"] < 2:
+            broken["count"] += 1
+            raise OSError("disk full")
+        real(path, header)
+
+    monkeypatch.setattr(stream_module, "_prepare_log", flaky)
+    await container.triggers.create(
+        name="bad",
+        agent_id=alpha,
+        kind="stream",
+        prompt="p",
+        config={"command": "echo $$ > bad.pid; sleep 30"},
+    )
+    await _create(container, alpha, "echo good; sleep 30", debounce_seconds=0)
+
+    async with _running(_runner(container)):
+        await _until(lambda: _has_sessions(container, alpha, 1))
+        pid_file = container.agents.workspace(alpha) / "bad.pid"
+
+        async def restarted() -> bool:
+            return pid_file.exists() and pid_file.read_text().strip() != ""
+
+        await _until(restarted)
+
+    status = container.triggers.status_of(await container.triggers.get_by_name("bad"))
+    assert status["failures"] == 2 and "disk full" in status["error"]
+    assert await _contents(container, alpha) == ["handle\n\n<event>\ngood\n</event>"]
+
+
+async def test_events_survive_a_failure_while_checking_the_previous_session(container, make_agent):
+    alpha = (await make_agent()).id
+    await _create(container, alpha, "echo one; sleep 30", debounce_seconds=0)
+    runner = _runner(container)
+    real = runner._wait_previous
+    calls = {"count": 0}
+
+    async def flaky(*args):  # noqa: ANN002, ANN202
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("database is locked")
+        await real(*args)
+
+    runner._wait_previous = flaky  # type: ignore[method-assign]
+
+    async with _running(runner):
+        await _until(lambda: _has_sessions(container, alpha, 1))
+
+    assert calls["count"] == 2
+    assert await _contents(container, alpha) == ["handle\n\n<event>\none\n</event>"]
