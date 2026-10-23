@@ -845,13 +845,14 @@ function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
   )
 }
 
-/** 一个 agent 的触发器：可折叠的一组卡片 */
+/** 一个 agent 的触发器：可折叠的一组卡片。组头靠左，左侧一道强调色竖条 + 加粗大字，和卡片区分开 */
 function AgentGroup({ name, count, children }: { name: string; count: number; children: ReactNode }) {
   return (
     <Disclosure defaultExpanded>
       <Disclosure.Heading>
-        <Disclosure.Trigger className="flex w-full items-center gap-2 px-1 py-1 font-medium">
-          <Disclosure.Indicator />
+        <Disclosure.Trigger className="flex w-full items-center justify-start gap-2 border-l-4 border-accent py-1 pl-2 text-base font-semibold">
+          {/* HeroUI 的指示箭头自带 margin-left:auto（默认放最右），这里要紧跟在左边 */}
+          <Disclosure.Indicator className="ml-0" />
           <span className="truncate">{name}</span>
           <Chip size="sm" variant="soft">
             {count}
