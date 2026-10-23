@@ -33,8 +33,9 @@ SELF_IMPROVEMENT = """\
 Everything you learn persists only as memory or skills.
 - Memory: your private memory and the global memory shared by all agents (above), each limited to \
 {memory_limit} characters. Record durable facts (user preferences, environment details, corrections, lessons \
-learned) with `memory_append`; fix or condense with `memory_replace`. Use `scope="public"` only for facts and \
-rules that hold for every agent. Never record secrets or one-off details.
+learned) with `memory_append`; fix or condense with `memory_replace`. The global memory has its own tools \
+(`memory_append_public`, `memory_replace_public`, if you have them): only for facts and rules that hold for every \
+agent. Never record secrets or one-off details.
 - Skills are reusable procedures. Before a task that matches a skill in the index, call `read_skill`. After \
 working out a non-trivial procedure likely to recur, save it with `write_skill`; when a skill proves wrong or \
 incomplete, fix that part with `edit_skill`. Change skills and memory only through these tools, never with shell \

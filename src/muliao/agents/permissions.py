@@ -1,13 +1,13 @@
-"""工具权限（RBAC）：每个工具的权限 id 与访问级别、通配符规则、内置角色，在这里唯一登记。
+"""工具权限（RBAC）：每个工具的权限 id 与读写、通配符规则、内置角色，在这里唯一登记。
 
-用途是防误操作、减少无关工具占用上下文，不是安全隔离（有 `shell:run` 就能绕开其余权限）。
+用途是防误操作、减少无关工具占用上下文，不是安全隔离。只管内置工具：MCP 不在其中，agent 用自己的私有 server 与
+它勾选的公共 server（AgentInfo.mcp_servers，agent_runtime.mcp）。
 
-- 权限 id 形如 `资源:动作`（`issue:list`、`agent:delete`、`skill.public:write`）；MCP 工具是 `mcp:<server>:<tool>`，
-  按运行时可见的 server 现场得出，不在表里登记。
-- 规则：allow / deny 两组 fnmatch 通配符，deny 优先。agent 的规则 = public 角色 + 它的各个角色 + 它自己的 allow/deny，
-  各自的 allow 与 deny 分别取并集（某个角色的 deny 也作用于别的角色给的权限）。
-- 角色：`public` 每个 agent 自动拥有，不用选；`admin` 是 `*`；另有与原工具组同名的内置角色。用户自建的角色存在
-  roles 表（agents.roles）。
+- 权限 id 形如 `资源:动作`（`issue:list`、`agent:delete`、`skill.public:write`）。写所有 agent 共享的资源（公共 skill、
+  全局记忆、公共 secret、公共 MCP 配置）的是单独的工具，权限 id 的资源带 `.public`。
+- 规则：allow / deny 两组 fnmatch 通配符，deny 优先。agent 的规则 = 它的各个角色 + 它自己的 allow/deny，各自的
+  allow 与 deny 分别取并集（某个角色的 deny 也作用于别的角色给的权限）。
+- 角色：内置 `admin`（全部）与 `agent`（除写全局资源外的全部）；用户自建的角色存在 roles 表（agents.roles）。
 - 运行开始时按规则算出工具列表（agent_runtime.runner.Toolbox），调用时不再判断，工具列表在一次运行里不变。
 """
 
@@ -24,20 +24,15 @@ from muliao.errors import InvalidInput
 class Access(StrEnum):
     READ = "read"
     WRITE = "write"
-    # 做了就收不回（删除不带版本的数据、对外发出、可执行任意命令）
-    IRREVERSIBLE = "irreversible"
 
 
 @dataclass(frozen=True)
 class Permission:
     id: str
     access: Access
-    # 界面与 get_agent 上的附注：这个权限实际能做到的、从 id 看不出来的事
-    note: str = ""
 
 
-R, W, X = Access.READ, Access.WRITE, Access.IRREVERSIBLE
-_BYPASS = "可执行任意命令，能绕开其余权限"
+R, W = Access.READ, Access.WRITE
 
 # 工具名 → 权限：唯一登记处。组合根在启动时核对它与实际注册的工具一一对应（web 只在配置了 [web] 时注册）
 TOOL_PERMISSIONS: dict[str, Permission] = {
@@ -46,8 +41,8 @@ TOOL_PERMISSIONS: dict[str, Permission] = {
     "write_skill": Permission("skill:write", W),
     "edit_skill": Permission("skill:edit", W),
     "delete_skill": Permission("skill:delete", W),
-    "memory_append": Permission("memory:append", W, "scope=public 时写全局记忆"),
-    "memory_replace": Permission("memory:replace", W, "scope=public 时写全局记忆"),
+    "memory_append": Permission("memory:append", W),
+    "memory_replace": Permission("memory:replace", W),
     "history_append": Permission("history:append", W),
     "history_search": Permission("history:search", R),
     "ask_user": Permission("user:ask", R),
@@ -56,41 +51,48 @@ TOOL_PERMISSIONS: dict[str, Permission] = {
     "write_file": Permission("file:write", W),
     "edit_file": Permission("file:edit", W),
     "share_file": Permission("file:share", W),
-    "run_shell": Permission("shell:run", X, _BYPASS),
+    "run_shell": Permission("shell:run", W),
     "job_status": Permission("shell.job:status", R),
     "job_kill": Permission("shell.job:kill", W),
-    "run_temp_agent": Permission("temp_agent:run", W, "临时 agent 的工具是调用方自己的权限放行的那部分"),
+    "run_temp_agent": Permission("temp_agent:run", W),
     # agent 与委派
     "list_agents": Permission("agent:list", R),
     "get_agent": Permission("agent:get", R),
     "create_agent": Permission("agent:create", W),
-    "update_agent": Permission("agent:update", W, "可以给自己加权限"),
-    "delete_agent": Permission("agent:delete", X),
-    "delegate_task": Permission("thread:delegate", W, "借目标 agent 自己的权限做事"),
-    "ask_agent": Permission("thread:ask", W, "借目标 agent 自己的权限做事"),
+    "update_agent": Permission("agent:update", W),
+    "delete_agent": Permission("agent:delete", W),
+    "delegate_task": Permission("thread:delegate", W),
+    "ask_agent": Permission("thread:ask", W),
     "list_threads": Permission("thread:list", R),
     "stop_thread": Permission("thread:stop", W),
     "notify_user": Permission("user:notify", W),
-    # 公共 skill
-    "write_public_skill": Permission("skill.public:write", W, "描述进入所有 agent 的 skill 索引"),
-    "edit_public_skill": Permission("skill.public:edit", W, "描述进入所有 agent 的 skill 索引"),
+    # 全局资源：公共 skill、全局记忆
+    "write_public_skill": Permission("skill.public:write", W),
+    "edit_public_skill": Permission("skill.public:edit", W),
     "delete_public_skill": Permission("skill.public:delete", W),
-    # MCP 配置（使用 MCP 工具是 mcp:<server>:<tool>）
+    "memory_append_public": Permission("memory.public:append", W),
+    "memory_replace_public": Permission("memory.public:replace", W),
+    # MCP 配置
     "mcp_list": Permission("mcp.config:list", R),
-    "mcp_add": Permission("mcp.config:add", W, "可添加运行任意命令的 stdio server"),
+    "mcp_add": Permission("mcp.config:add", W),
     "mcp_remove": Permission("mcp.config:remove", W),
     "mcp_set_enabled": Permission("mcp.config:set_enabled", W),
+    "mcp_add_public": Permission("mcp.config.public:add", W),
+    "mcp_remove_public": Permission("mcp.config.public:remove", W),
+    "mcp_set_enabled_public": Permission("mcp.config.public:set_enabled", W),
     # vault
     "vault_list": Permission("vault:list", R),
     "vault_set": Permission("vault:set", W),
-    "vault_delete": Permission("vault:delete", X),
+    "vault_delete": Permission("vault:delete", W),
+    "vault_set_public": Permission("vault.public:set", W),
+    "vault_delete_public": Permission("vault.public:delete", W),
     # trigger
     "trigger_kinds": Permission("trigger:kinds", R),
     "trigger_list": Permission("trigger:list", R),
-    "trigger_create": Permission("trigger:create", W, "可以让任意 agent 带任意说明定时运行"),
+    "trigger_create": Permission("trigger:create", W),
     "trigger_update": Permission("trigger:update", W),
     "trigger_run": Permission("trigger:run", W),
-    "trigger_delete": Permission("trigger:delete", X),
+    "trigger_delete": Permission("trigger:delete", W),
     # issue
     "issue_list": Permission("issue:list", R),
     "issue_show": Permission("issue:show", R),
@@ -98,12 +100,13 @@ TOOL_PERMISSIONS: dict[str, Permission] = {
     "issue_update": Permission("issue:update", W),
     "issue_comment": Permission("issue:comment", W),
     # 网页
-    "web_search": Permission("web:search", R, "不可信内容的入口，也是外发通道"),
-    "web_fetch": Permission("web:fetch", R, "不可信内容的入口，也是外发通道"),
+    "web_search": Permission("web:search", R),
+    "web_fetch": Permission("web:fetch", R),
 }
 
-# 临时 agent 固定的那组工具（另加 MCP）；实际能用的是其中被调用方的权限规则放行的（Resolved.temp_agent），所以临时
-# agent 的工具总是调用方工具的子集。组合根启动时核对它与临时 agent 实际注册的工具集一致（container._check_permissions）
+# 临时 agent 固定的那组工具（另有调用方的 MCP）；实际能用的是其中被调用方的权限规则放行的（Resolved.temp_agent），
+# 所以临时 agent 的工具总是调用方工具的子集。组合根启动时核对它与临时 agent 实际注册的工具集一致
+# （container._check_permissions）
 TEMP_AGENT_TOOLS: tuple[str, ...] = (
     "read_file",
     "write_file",
@@ -114,18 +117,6 @@ TEMP_AGENT_TOOLS: tuple[str, ...] = (
     "web_fetch",
 )
 
-MCP_PREFIX = "mcp:"
-MCP_NOTE = "tools of the MCP servers it can see, named <server>_<tool>; permission id mcp:<server>:<tool>"
-
-
-def mcp_permission(server: str, tool: str) -> str:
-    return f"{MCP_PREFIX}{server}:{tool}"
-
-
-def mcp_server_prefix(server: str) -> str:
-    """一个 server 的全部工具的权限 id 共同的前缀。"""
-    return f"{MCP_PREFIX}{server}:"
-
 
 def available_tools(*, web_configured: bool) -> tuple[str, ...]:
     """当前配置下实际注册的工具（web 只在配置了 [web] 时注册），按登记顺序。组合根启动时核对注册的工具就是它；
@@ -134,29 +125,16 @@ def available_tools(*, web_configured: bool) -> tuple[str, ...]:
 
 
 def check_patterns(patterns: Sequence[str]) -> None:
-    """规则里的通配符必须至少匹配一个已登记的权限，或是 MCP 的（MCP 工具运行时才知道）：`mcp:<server>:<tool>`，至少
-    写到 server 之后的冒号，或以 * 结尾（如 `mcp:*`）。拼错的规则在写入时报出，而不是悄悄什么都不匹配。"""
+    """规则里的通配符必须至少匹配一个已登记的权限：拼错的规则在写入时报出，而不是悄悄什么都不匹配。"""
     ids = [p.id for p in TOOL_PERMISSIONS.values()]
-
-    def mcp_shaped(p: str) -> bool:
-        return p.startswith(MCP_PREFIX) and (p.count(":") >= 2 or p.endswith("*"))
-
-    bad = [p for p in patterns if not mcp_shaped(p) and not any(fnmatchcase(i, p) for i in ids)]
+    bad = [p for p in patterns if not any(fnmatchcase(i, p) for i in ids)]
     if bad:
         raise InvalidInput(
             f"permission patterns {bad} match no tool permission; ids look like 'issue:list', "
-            "'skill.public:*', 'mcp:<server>:<tool>' (get_agent lists them all)"
+            "'skill.public:*' (get_agent lists them all)"
         )
     if len(set(patterns)) != len(patterns):
         raise InvalidInput(f"permission patterns must be distinct, got {list(patterns)}")
-
-
-def _literal_prefix(pattern: str) -> str:
-    """通配符之前的字面部分。"""
-    for i, ch in enumerate(pattern):
-        if ch in "*?[":
-            return pattern[:i]
-    return pattern
 
 
 @dataclass(frozen=True)
@@ -179,40 +157,24 @@ class Rules:
             fnmatchcase(permission, p) for p in self.deny
         )
 
-    def may_allow_prefix(self, prefix: str) -> bool:
-        """是否可能放行某个以 prefix 开头的权限（MCP 的工具连上 server 才知道）：不可能时不连接。allow 看通配符之前的
-        字面部分是否与 prefix 相容；deny 只认整段覆盖 prefix 的（`*`、`mcp:*`、`mcp:<server>:*`）。保守：可能放行就
-        连接，实际工具再逐个按 allows 过滤。"""
-        allowed = any(
-            (lit := _literal_prefix(p)).startswith(prefix) or prefix.startswith(lit) for p in self.allow
-        )
-        covered = any(
-            p.endswith("*") and _literal_prefix(p) == p[:-1] and prefix.startswith(p[:-1]) for p in self.deny
-        )
-        return allowed and not covered
-
     def tools(self, available: Collection[str]) -> list[str]:
-        """available（当前配置下注册的工具，available_tools）里放行的，按登记顺序；不含 MCP。"""
+        """available（当前配置下注册的工具，available_tools）里放行的，按登记顺序。"""
         return [n for n, perm in TOOL_PERMISSIONS.items() if n in available and self.allows(perm.id)]
 
 
 @dataclass(frozen=True)
 class Resolved:
-    """按规则最终能用的工具（当前配置下注册的里面放行的，按登记顺序），以及是否可能有 MCP 工具。能开临时 agent 时，
-    temp_agent 是临时 agent 按同一份规则能用的（TEMP_AGENT_TOOLS 里放行的，MCP 同样按规则），否则为 None。"""
+    """按规则最终能用的工具（当前配置下注册的里面放行的，按登记顺序）。能开临时 agent 时，temp_agent 是临时 agent
+    按同一份规则能用的（TEMP_AGENT_TOOLS 里放行的），否则为 None。MCP 不在其中（不归权限管）。"""
 
     tools: list[str]
-    mcp: bool
-    temp_agent: Resolved | None = None
+    temp_agent: list[str] | None = None
 
     @staticmethod
     def of(rules: Rules, available: Collection[str]) -> Resolved:
         tools = rules.tools(available)
-        mcp = rules.may_allow_prefix(MCP_PREFIX)
-        temp = (
-            Resolved([t for t in tools if t in TEMP_AGENT_TOOLS], mcp) if "run_temp_agent" in tools else None
-        )
-        return Resolved(tools, mcp, temp)
+        temp = [t for t in tools if t in TEMP_AGENT_TOOLS] if "run_temp_agent" in tools else None
+        return Resolved(tools, temp)
 
 
 @dataclass(frozen=True)
@@ -224,46 +186,29 @@ class Role:
     builtin: bool
 
 
-PUBLIC = "public"
 ADMIN = "admin"
+AGENT = "agent"
 
+# 写所有 agent 共享的资源（全局写）：agent 角色没有，只有 admin 有
+GLOBAL_WRITES: tuple[str, ...] = (
+    "skill.public:*",
+    "memory.public:*",
+    "vault.public:*",
+    "mcp.config.public:*",
+    "agent:create",
+    "agent:update",
+    "agent:delete",
+)
 
-def _builtin(name: str, description: str, *allow: str) -> Role:
-    return Role(name, description, Rules(allow=allow), builtin=True)
-
-
-# 内置角色。public 每个 agent 自动拥有；其余与原来的工具组同名（迁移时 agent 的工具组原样变成角色）
 BUILTIN_ROLES: dict[str, Role] = {
-    r.name: r
-    for r in (
-        _builtin(
-            PUBLIC,
-            "所有 agent 自动拥有：记忆、私有 skill、工作历史、向用户提问、读 issue",
-            "skill:read",
-            "skill:write",
-            "skill:edit",
-            "skill:delete",
-            "memory:*",
-            "history:*",
-            "user:ask",
-            "issue:list",
-            "issue:show",
-        ),
-        _builtin(ADMIN, "全部工具", "*"),
-        _builtin("workspace", "文件与 shell", "file:*", "shell:*", "shell.job:*"),
-        _builtin("temp_agent", "临时 agent", "temp_agent:*"),
-        _builtin("delegation", "委派给其他 agent", "agent:list", "thread:*"),
-        _builtin("notify", "推送通知", "user:notify"),
-        _builtin("agents", "管理 agent", "agent:get", "agent:create", "agent:update", "agent:delete"),
-        _builtin("public_skills", "写公共 skill", "skill.public:*"),
-        _builtin("mcp", "使用 MCP", "mcp:*"),
-        _builtin("mcp_admin", "管理 MCP", "mcp.config:*"),
-        _builtin("vault", "管理 vault", "vault:*"),
-        _builtin("triggers", "管理触发器", "trigger:*"),
-        _builtin("issues", "issue 看板", "issue:*"),
-        _builtin("web", "网页搜索与抓取", "web:*"),
-    )
+    ADMIN: Role(ADMIN, "全部工具", Rules(allow=("*",)), builtin=True),
+    AGENT: Role(
+        AGENT,
+        "除写全局资源（公共 skill、全局记忆、公共 secret、公共 MCP 配置）和管理 agent 以外的全部工具",
+        Rules(allow=("*",), deny=GLOBAL_WRITES),
+        builtin=True,
+    ),
 }
 
 # 新建 agent 未指定角色时
-DEFAULT_ROLES: tuple[str, ...] = (ADMIN,)
+DEFAULT_ROLES: tuple[str, ...] = (AGENT,)

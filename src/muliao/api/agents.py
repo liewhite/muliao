@@ -34,6 +34,8 @@ class AgentCreate(BaseModel):
     roles: list[str] | None = None
     allow: list[str] = []
     deny: list[str] = []
+    # 勾选的公共 MCP server（不归工具权限管）
+    mcp_servers: list[str] = []
     # 思考档位："default" 不传，按模型与服务端的默认
     thinking: Thinking = "default"
 
@@ -47,6 +49,7 @@ class AgentUpdate(BaseModel):
     roles: list[str]
     allow: list[str]
     deny: list[str]
+    mcp_servers: list[str]
     thinking: Thinking
 
 
@@ -58,6 +61,7 @@ class AgentOut(BaseModel):
     roles: list[str]
     allow: list[str]
     deny: list[str]
+    mcp_servers: list[str]
     thinking: Thinking
     created_at: datetime
     # 系统默认 agent：Web 新对话默认选中它，最多一个
@@ -73,6 +77,7 @@ class AgentOut(BaseModel):
             roles=list(a.roles),
             allow=list(a.allow),
             deny=list(a.deny),
+            mcp_servers=list(a.mcp_servers),
             thinking=a.thinking,
             created_at=a.created_at,
             is_default=a.is_default,
@@ -97,17 +102,16 @@ class PermissionOut(BaseModel):
 
     tool: str
     id: str
-    access: Literal["read", "write", "irreversible"]
-    note: str
+    access: Literal["read", "write"]
 
     @classmethod
     def of(cls, tool: str, p: Permission) -> "PermissionOut":
-        return cls(tool=tool, id=p.id, access=p.access.value, note=p.note)
+        return cls(tool=tool, id=p.id, access=p.access.value)
 
 
 @router.get("/permissions")
 async def list_permissions() -> list[PermissionOut]:
-    """全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 工具是 mcp:<server>:<tool>，不在其中。"""
+    """全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 不归工具权限管，不在其中。"""
     return [PermissionOut.of(t, p) for t, p in TOOL_PERMISSIONS.items()]
 
 
@@ -118,24 +122,22 @@ class RulesIn(BaseModel):
 
 
 class ResolvedOut(BaseModel):
-    """按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具；能开临时 agent 时另有临时 agent 按同一份规则能用的。"""
+    """按规则最终能用的工具（MCP 不归权限管，不在其中）；能开临时 agent 时另有临时 agent 按同一份规则能用的工具名。"""
 
     tools: list[PermissionOut]
-    mcp: bool
-    temp_agent: "ResolvedOut | None"
+    temp_agent: list[str] | None
 
     @classmethod
     def of(cls, r: Resolved) -> "ResolvedOut":
         return cls(
             tools=[PermissionOut.of(t, TOOL_PERMISSIONS[t]) for t in r.tools],
-            mcp=r.mcp,
-            temp_agent=None if r.temp_agent is None else cls.of(r.temp_agent),
+            temp_agent=r.temp_agent,
         )
 
 
 @router.post("/permissions/resolve")
 async def resolve_permissions(c: C, body: RulesIn) -> ResolvedOut:
-    """agent 配置（还没保存的也行）最终能用的工具：public + 角色 + allow / deny，与运行时同一套计算。"""
+    """agent 配置（还没保存的也行）最终能用的工具：角色 + allow / deny，与运行时同一套计算。"""
     return ResolvedOut.of(await c.agents.preview(body.roles, body.allow, body.deny))
 
 
@@ -144,7 +146,7 @@ class RoleOut(BaseModel):
     description: str
     allow: list[str]
     deny: list[str]
-    # 内置角色不能改、不能删；public 每个 agent 自动拥有
+    # 内置角色（admin、agent）不能改、不能删
     builtin: bool
     # 只按这个角色自己的规则能用的工具
     resolved: ResolvedOut
@@ -218,6 +220,7 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
         roles=body.roles,
         allow=body.allow,
         deny=body.deny,
+        mcp_servers=body.mcp_servers,
         thinking=body.thinking,
     )
     return AgentOut.of(await c.agents.create(spec, author=USER))
@@ -239,6 +242,7 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         roles=body.roles,
         allow=body.allow,
         deny=body.deny,
+        mcp_servers=body.mcp_servers,
         thinking=body.thinking,
     )
     return AgentOut.of(await c.agents.update(agent_id, patch))

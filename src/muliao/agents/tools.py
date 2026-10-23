@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.lifecycle import AgentLifecycle
-from muliao.agents.permissions import MCP_NOTE, TOOL_PERMISSIONS, Permission
+from muliao.agents.permissions import TOOL_PERMISSIONS, Permission
 from muliao.agents.roles import RoleService
 from muliao.agents.service import AgentPatch, AgentService, AgentSpec, Thinking
 from muliao.errors import InvalidInput
@@ -15,11 +15,10 @@ class ToolPermission(BaseModel):
     tool: str
     permission: str
     access: str
-    note: str = ""
 
     @classmethod
     def of(cls, tool: str, p: Permission) -> "ToolPermission":
-        return cls(tool=tool, permission=p.id, access=p.access, note=p.note)
+        return cls(tool=tool, permission=p.id, access=p.access)
 
 
 class RoleDetail(BaseModel):
@@ -37,13 +36,13 @@ class AgentDetail(BaseModel):
     roles: list[str]
     allow: list[str]
     deny: list[str]
-    # 按 public + 角色 + allow/deny 算出的最终工具（不含 MCP）
+    # 按角色 + allow/deny 算出的最终工具（不含 MCP）
     tools: list[str]
-    # 可能有 MCP 工具时是它们的说明（权限 mcp:<server>:<tool>，同样按 allow / deny 判断），否则 "none"
-    mcp: str
-    # 能开临时 agent 时，临时 agent 按同一份规则能用的工具（tools 的子集；可能有 MCP 时加 "MCP"），否则 null
+    # 勾选的公共 MCP server（不归工具权限管；另有它自己的私有 server）
+    mcp_servers: list[str]
+    # 能开临时 agent 时，临时 agent 按同一份规则能用的工具（tools 的子集，另有同样的 MCP），否则 null
     temp_agent_tools: list[str] | None
-    # 全部角色（public 每个 agent 自动拥有）与全部工具的权限 id，写 roles / allow / deny 时参照
+    # 全部角色与全部工具的权限 id，写 roles / allow / deny 时参照
     available_roles: list[RoleDetail]
     permissions: list[ToolPermission]
 
@@ -57,7 +56,8 @@ def agents_toolset(
 
     @ts.tool_plain
     async def get_agent(agent: str) -> AgentDetail:
-        """Show an agent's configuration, the tools it ends up with, every role and every tool permission id.
+        """Show an agent's configuration, the tools it ends up with, its public MCP servers, every role and every
+        tool permission id.
         Use your own name to see yours.
 
         Args:
@@ -74,10 +74,8 @@ def agents_toolset(
             allow=list(target.allow),
             deny=list(target.deny),
             tools=resolved.tools,
-            mcp=MCP_NOTE if resolved.mcp else "none",
-            temp_agent_tools=None
-            if (temp := resolved.temp_agent) is None
-            else [*temp.tools, *(["MCP"] if temp.mcp else [])],
+            mcp_servers=list(target.mcp_servers),
+            temp_agent_tools=resolved.temp_agent,
             available_roles=[
                 RoleDetail(
                     name=r.name, description=r.description, allow=list(r.rules.allow), deny=list(r.rules.deny)
@@ -96,6 +94,7 @@ def agents_toolset(
         roles: list[str] | None = None,
         allow: tuple[str, ...] = (),
         deny: tuple[str, ...] = (),
+        mcp_servers: tuple[str, ...] = (),
         thinking: Thinking = "default",
     ) -> str:
         """Create a new long-lived agent with its own memory, skills and workspace, e.g. a specialist you will
@@ -106,10 +105,11 @@ def agents_toolset(
             description: What it is for (its role); it is shown to the agent itself and other agents choose
                 whom to delegate to by it. The agent starts with an empty memory and grows it by itself.
             model: `<provider>:<model>`; defaults to the server's default model.
-            roles: Roles it gets on top of `public` (`get_agent` lists every role and permission id); defaults
-                to `admin` (every tool). Give it only what its job needs: fewer tools mean fewer mistakes.
-            allow: Extra permission patterns to allow, e.g. `issue:*`, `mcp:playwright:*` (fnmatch wildcards).
-            deny: Permission patterns to deny; deny wins over every allow, e.g. `agent:delete`.
+            roles: Its roles (`get_agent` lists every role and permission id); defaults to `agent` (every tool
+                except writing what all agents share and managing agents).
+            allow: Extra permission patterns to allow, e.g. `issue:*` (fnmatch wildcards).
+            deny: Permission patterns to deny; deny wins over every allow, e.g. `trigger:*`.
+            mcp_servers: Public MCP servers whose tools it gets (besides its own private ones).
             thinking: Thinking/reasoning effort of its model: `default` sends nothing (the model's own default),
                 `off` disables it, the others set the effort level.
         """
@@ -120,6 +120,7 @@ def agents_toolset(
             roles=roles,
             allow=allow,
             deny=deny,
+            mcp_servers=mcp_servers,
             thinking=thinking,
         )
         created = await agents.create(spec, author=ctx.deps.agent_id)
@@ -135,6 +136,7 @@ def agents_toolset(
         roles: list[str] | None = None,
         allow: tuple[str, ...] | None = None,
         deny: tuple[str, ...] | None = None,
+        mcp_servers: tuple[str, ...] | None = None,
         thinking: Thinking | None = None,
     ) -> str:
         """Change an agent's configuration, including your own (use your own name). Only the given fields change.
@@ -144,9 +146,10 @@ def agents_toolset(
             new_name: New display name.
             description: New description.
             model: New `<provider>:<model>`.
-            roles: New full list of roles (besides `public`).
+            roles: New full list of roles.
             allow: New full list of extra permission patterns to allow.
             deny: New full list of permission patterns to deny.
+            mcp_servers: New full list of public MCP servers whose tools it gets.
             thinking: New thinking/reasoning effort (`default` = the model's own default).
         """
         target = await agents.find_by_name(agent)
@@ -157,6 +160,7 @@ def agents_toolset(
             roles=roles,
             allow=allow,
             deny=deny,
+            mcp_servers=mcp_servers,
             thinking=thinking,
         )
         updated = await agents.update(target.id, patch)

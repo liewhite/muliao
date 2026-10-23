@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -157,17 +157,22 @@ class McpRegistry:
         """
         return _with_shadowing((self.list(owner) if owner is not None else []) + self.list(None), owner)
 
-    def listing(self, agent_id: str) -> tuple[list[tuple[McpServer, bool]], list[CorruptResource]]:
-        """agent 视角下的全部 server（它私有的在前，然后公共的，含停用的），各自标明是否生效（已启用且未被同名私有
-        server 遮蔽），以及它私有的与公共的里配置坏了的。坏的不参与同名遮蔽（是否启用都读不出来）。每个目录只扫一次。"""
+    def listing(
+        self, agent_id: str, selected: Collection[str]
+    ) -> tuple[list[tuple[McpServer, bool]], list[CorruptResource]]:
+        """agent 视角下的全部 server（它私有的在前，然后公共的，含停用的与没勾选的），各自标明是否生效，以及它私有的
+        与公共的里配置坏了的。生效：私有的，或 agent 勾选了的公共的（selected，AgentInfo.mcp_servers），已启用且未被同名私有
+        server 遮蔽。坏的不参与同名遮蔽（是否启用都读不出来）。每个目录只扫一次。"""
         servers, corrupt = self._files.index(agent_id)
-        return [
-            (s, s.enabled and not shadowed) for s, shadowed in _with_shadowing(servers, agent_id)
-        ], corrupt
+        chosen = [s for s in servers if s.owner is not None or s.name in selected]
+        active = {id(s) for s, shadowed in _with_shadowing(chosen, agent_id) if s.enabled and not shadowed}
+        return [(s, id(s) in active) for s in servers], corrupt
 
-    def index(self, agent_id: str) -> tuple[list[McpServer], list[CorruptResource]]:
+    def index(
+        self, agent_id: str, selected: Collection[str]
+    ) -> tuple[list[McpServer], list[CorruptResource]]:
         """agent 可用的 server（listing 里生效的），以及配置坏了的。"""
-        listing, corrupt = self.listing(agent_id)
+        listing, corrupt = self.listing(agent_id, selected)
         return [s for s, active in listing if active], corrupt
 
     def get(self, owner: str | None, name: str) -> McpServer:

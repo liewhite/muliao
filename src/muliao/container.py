@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
@@ -30,7 +30,7 @@ from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
-from muliao.agents.permissions import TEMP_AGENT_TOOLS, Rules, available_tools
+from muliao.agents.permissions import TEMP_AGENT_TOOLS, available_tools
 from muliao.agents.resources import ResourceRepo, RevisionHistory
 from muliao.agents.roles import RoleService
 from muliao.agents.service import AgentDefaults, AgentService, Thinking
@@ -309,6 +309,9 @@ def assemble(
     resources = ResourceRepo(settings.resources_dir, ActiveOwners(db))
     skills = SkillStore(resources)
     memory = MemoryStore(resources, settings.runtime.memory_max_chars)
+    # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接
+    mcp_connector = McpConnector(vault)
+    mcp = McpRegistry(resources, mcp_connector.probe)
     agents = AgentService(
         db,
         settings.workspaces_dir,
@@ -317,6 +320,7 @@ def assemble(
         model_checker or models.check,
         AgentDefaults(settings.llm.default_model),
         available_tools(web_configured=bool(web_tools)),
+        public_mcp=lambda: [s.name for s in mcp.list(None)],
     )
     roles = RoleService(db)
     activity = SessionActivity(queue)
@@ -327,9 +331,6 @@ def assemble(
     stopper = SessionStopper(runs, halt)
     threads = Threads(queue)
     notifications = Notifications(db, queue, bus)
-    # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，「使用 MCP」组按配置的可用 server 连接
-    mcp_connector = McpConnector(vault)
-    mcp = McpRegistry(resources, mcp_connector.probe)
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
     precheck = PrecheckRunner(
@@ -392,8 +393,8 @@ def assemble(
         ask_user_toolset(),
     ]
 
-    def mcp_tools(rules: Rules) -> AbstractToolset[RunScope]:
-        return mcp_connector.toolset(mcp.index, rules)
+    def mcp_tools(selected: Sequence[str]) -> AbstractToolset[RunScope]:
+        return mcp_connector.toolset(mcp.index, selected)
 
     # 临时 agent 固定的一组：文件与 shell、配置了的网页搜索、MCP（没有记忆、skill、委派，也不能再开临时 agent），
     # 每次按调用方的权限规则取放行的那部分
@@ -410,7 +411,7 @@ def assemble(
         delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds),
         notify_toolset(notifications),
         public_skills_toolset(skills),
-        mcp_admin_toolset(mcp),
+        mcp_admin_toolset(mcp, agents),
         vault_toolset(vault),
         triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds),
         issues_toolset(issues, agents),

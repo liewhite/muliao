@@ -74,7 +74,8 @@ def temp_agent_toolset(
     runtime: AgentRuntime, agents: AgentService, toolbox: Toolbox, temp_root: Path
 ) -> FunctionToolset[RunScope]:
     """toolbox 是临时 agent 固定的那组工具（agents.permissions.TEMP_AGENT_TOOLS 与 MCP，不含本工具集：临时 agent
-    不能再开临时 agent）；每次按调用方现在的权限规则取其中放行的，所以临时 agent 的工具是调用方工具的子集。"""
+    不能再开临时 agent）；每次按调用方现在的权限规则取其中放行的，所以临时 agent 的工具是调用方工具的子集，MCP 与
+    调用方的一样。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
@@ -90,8 +91,8 @@ def temp_agent_toolset(
         parallel. Files it shares are shown to the user with your reply. It has no memory, skills or conversation: put everything it needs in `task`, and save anything you
         want to keep yourself.
 
-        It gets the subset of your own permissions among file tools, shell, web search/fetch and MCP; it is NOT a
-        sandbox: with shell it has the same shell access and secrets as you. Its default working directory is a
+        It gets those of your own tools among file tools, shell and web search/fetch, plus your MCP servers; it
+        is NOT a sandbox: with shell it has the same shell access and secrets as you. Its default working directory is a
         temporary one that is deleted afterwards. Be careful handing it untrusted content.
 
         Args:

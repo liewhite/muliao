@@ -19,10 +19,12 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
-    # 工具权限（agents.permissions）：角色名（内置或 roles 表里的；public 自动拥有，不存）与它自己的 allow / deny 通配符
+    # 工具权限（agents.permissions）：角色名（内置或 roles 表里的）与它自己的 allow / deny 通配符
     roles: Mapped[list[str]] = mapped_column(JSON)
     allow: Mapped[list[str]] = mapped_column(JSON, server_default=text("'[]'"))
     deny: Mapped[list[str]] = mapped_column(JSON, server_default=text("'[]'"))
+    # 勾选的公共 MCP server 名（agents.mcp）：运行时连接它自己的私有 server 与这些；不归工具权限管
+    mcp_servers: Mapped[list[str]] = mapped_column(JSON, server_default=text("'[]'"))
     # 思考档位（agents.service.Thinking）；"default" 表示不传、按模型与服务端默认
     thinking: Mapped[str] = mapped_column(String(16), default="default", server_default="default")
     # 正在删除时是发起删除的作者（docs/architecture.md 第 10 节）：不出现在列表与名称解析里，各领域清理完它的数据后删除

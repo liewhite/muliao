@@ -64,7 +64,8 @@ class MemoryStore:
                 raise MemoryFull(
                     f"{'global memory' if owner is None else 'your memory'} would be {len(updated)} chars, limit is {self.max_chars} "
                     f"(now {len(current or '')}): free at least {over} chars first by condensing or deleting "
-                    "existing entries with memory_replace (aim for a few hundred chars of headroom), then retry"
+                    f"existing entries with {'memory_replace_public' if owner is None else 'memory_replace'} "
+                    "(aim for a few hundred chars of headroom), then retry"
                 )
             result.append(updated)
             # 全局记忆从未写过、仍为空：什么都没变，不提交（None 删除一个不存在的路径即无变化）

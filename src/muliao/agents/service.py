@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +52,7 @@ class AgentSpec:
     roles: Sequence[str] | None = None
     allow: Sequence[str] = ()
     deny: Sequence[str] = ()
+    mcp_servers: Sequence[str] = ()
     thinking: Thinking = "default"
 
 
@@ -65,6 +66,7 @@ class AgentPatch:
     roles: Sequence[str] | None = None
     allow: Sequence[str] | None = None
     deny: Sequence[str] | None = None
+    mcp_servers: Sequence[str] | None = None
     thinking: Thinking | None = None
 
 
@@ -78,6 +80,7 @@ class _AgentFields:
     roles: list[str]
     allow: list[str]
     deny: list[str]
+    mcp_servers: list[str]
     thinking: Thinking
 
 
@@ -93,6 +96,8 @@ class AgentInfo:
     roles: tuple[str, ...]
     allow: tuple[str, ...]
     deny: tuple[str, ...]
+    # 勾选的公共 MCP server 名（不归工具权限管）：运行时连接它的私有 server 与这些（McpRegistry.index）
+    mcp_servers: tuple[str, ...]
     thinking: Thinking
     created_at: datetime
     # 系统默认 agent（Web 新对话默认选中它），最多一个
@@ -108,6 +113,7 @@ def info_of(agent: Agent) -> AgentInfo:
         roles=tuple(agent.roles),
         allow=tuple(agent.allow),
         deny=tuple(agent.deny),
+        mcp_servers=tuple(agent.mcp_servers),
         # 写入时与启动时已校验（_check_thinking_level）
         thinking=cast(Thinking, agent.thinking),
         created_at=agent.created_at,
@@ -171,6 +177,9 @@ class AgentService:
         defaults: AgentDefaults,
         # 当前配置下注册的工具（permissions.available_tools）：算最终工具时只在它里面取
         tools: Sequence[str],
+        *,
+        # 现有公共 MCP server 的名字：新勾选的必须在其中（已勾选的 server 被删后留着的名字不生效，也不拦修改）
+        public_mcp: Callable[[], Collection[str]],
     ):
         self._db = db
         self._workspaces_dir = workspaces_dir
@@ -179,6 +188,7 @@ class AgentService:
         self._check_model = model_checker
         self.defaults = defaults
         self.tools = tuple(tools)
+        self._public_mcp = public_mcp
 
     def workspace(self, agent_id: str) -> Path:
         return self._workspaces_dir / agent_id
@@ -189,7 +199,7 @@ class AgentService:
         return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
     async def rules(self, agent: AgentInfo) -> Rules:
-        """agent 的最终权限规则（public + 角色 + 自己的 allow / deny），按角色现在的定义算。"""
+        """agent 的最终权限规则（角色 + 自己的 allow / deny），按角色现在的定义算。"""
         async with self._db.transaction() as s:
             return await rules_in(s, agent.roles, agent.allow, agent.deny)
 
@@ -264,6 +274,17 @@ class AgentService:
         check_patterns(fields.deny)
         self._check_model(fields.model, fields.thinking)
 
+    def _check_mcp_servers(self, selected: Sequence[str], before: Sequence[str]) -> None:
+        """勾选的公共 MCP server：不重复，新勾选的（不在 before 里的）必须是现有的公共 server。"""
+        if len(set(selected)) != len(selected):
+            raise InvalidInput(f"mcp_servers must be distinct, got {list(selected)}")
+        public = set(self._public_mcp())
+        unknown = [n for n in selected if n not in before and n not in public]
+        if unknown:
+            raise InvalidInput(
+                f"mcp_servers {unknown} are not public MCP servers; public ones: {sorted(public)}"
+            )
+
     async def _ensure_name_free(self, s: AsyncSession, name: str, agent_id: str | None) -> None:
         holder = await s.scalar(select(Agent.id).where(Agent.name == name))
         if holder is not None and holder != agent_id:
@@ -279,9 +300,11 @@ class AgentService:
             roles=list(self.defaults.roles if spec.roles is None else spec.roles),
             allow=list(spec.allow),
             deny=list(spec.deny),
+            mcp_servers=list(spec.mcp_servers),
             thinking=spec.thinking,
         )
         self._check(fields)
+        self._check_mcp_servers(fields.mcp_servers, [])
         name = fields.name
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
@@ -308,6 +331,7 @@ class AgentService:
                 roles=fields.roles,
                 allow=fields.allow,
                 deny=fields.deny,
+                mcp_servers=fields.mcp_servers,
                 thinking=fields.thinking,
             )
             s.add(agent)
@@ -327,6 +351,7 @@ class AgentService:
             agent.thinking = fields.thinking
             # JSON 列只在整体赋值时被追踪
             agent.roles, agent.allow, agent.deny = fields.roles, fields.allow, fields.deny
+            agent.mcp_servers = fields.mcp_servers
             await s.flush()
             return info_of(agent)
 
@@ -351,9 +376,11 @@ class AgentService:
             roles=list(agent.roles if patch.roles is None else patch.roles),
             allow=list(agent.allow if patch.allow is None else patch.allow),
             deny=list(agent.deny if patch.deny is None else patch.deny),
+            mcp_servers=list(agent.mcp_servers if patch.mcp_servers is None else patch.mcp_servers),
             thinking=cast(Thinking, agent.thinking) if patch.thinking is None else patch.thinking,
         )
         self._check(fields)
+        self._check_mcp_servers(fields.mcp_servers, agent.mcp_servers)
         return fields
 
     async def get_active(self, agent_id: str) -> AgentInfo:

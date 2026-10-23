@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.naming import validate_slug
-from muliao.agents.permissions import BUILTIN_ROLES, PUBLIC, Role, Rules, check_patterns
+from muliao.agents.permissions import BUILTIN_ROLES, Role, Rules, check_patterns
 from muliao.agents.tables import Agent
 from muliao.agents.tables import Role as RoleRow
 from muliao.errors import Conflict, InvalidInput, NotFound
@@ -39,12 +39,11 @@ async def roles_in(s: AsyncSession) -> dict[str, Role]:
 
 
 async def check_assignable_in(s: AsyncSession, names: Sequence[str]) -> None:
-    """agent 可以选的角色：存在、不重复、不是 public（每个 agent 自动拥有，不用选）。"""
+    """agent 可以选的角色：存在、不重复。"""
     roles = await roles_in(s)
-    unknown = [n for n in names if n not in roles or n == PUBLIC]
+    unknown = [n for n in names if n not in roles]
     if unknown or len(set(names)) != len(names):
-        choices = [n for n in roles if n != PUBLIC]
-        raise InvalidInput(f"roles must be distinct names from {choices}, got {list(names)}")
+        raise InvalidInput(f"roles must be distinct names from {list(roles)}, got {list(names)}")
 
 
 def _check(spec: RoleSpec) -> None:
@@ -104,12 +103,10 @@ class RoleService:
 
 
 async def rules_in(s: AsyncSession, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> Rules:
-    """agent 的最终规则：public + 它的角色 + 它自己的 allow / deny。读到不存在的角色说明数据与代码不一致（写入时已校验、
+    """agent 的最终规则：它的角色 + 它自己的 allow / deny。读到不存在的角色说明数据与代码不一致（写入时已校验、
     被引用的角色不能删；内置角色从代码里去掉时启动检查会报出）。"""
     known = await roles_in(s)
     missing = [r for r in roles if r not in known]
     if missing:
         raise RuntimeError(f"agent references unknown roles {missing}")
-    return Rules.union(
-        [known[PUBLIC].rules, *(known[r].rules for r in roles), Rules(tuple(allow), tuple(deny))]
-    )
+    return Rules.union([*(known[r].rules for r in roles), Rules(tuple(allow), tuple(deny))])

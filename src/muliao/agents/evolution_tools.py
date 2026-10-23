@@ -3,7 +3,6 @@
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.memory import MemoryStore
-from muliao.agents.ownership import Scope, owner_of
 from muliao.agents.resources import ATTACHMENT_SUFFIXES, MAX_EXTERNAL_FILE_BYTES
 from muliao.agents.skills import SkillStore
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -141,40 +140,54 @@ async def _edit(
 
 
 def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
-    """记忆：自己的（private）与所有 agent 共享的全局记忆（public）。两者每个 agent 都能写：全局记忆由各 agent
-    的自进化共同维护，每次修改记一版（作者是改的 agent），用户可在界面上回滚。"""
+    """记忆：自己的与所有 agent 共享的全局记忆，各用各的工具（全局记忆的是 *_public，权限 memory.public:*）。全局记忆
+    由有权限的 agent 的自进化维护，每次修改记一版（作者是改的 agent），用户可在界面上回滚。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    def _status(scope: Scope, content: str) -> str:
-        which = "global memory" if scope == "public" else "memory"
+    def _status(which: str, content: str) -> str:
         return f"{which} updated ({len(content)}/{store.max_chars} chars)"
 
     @ts.tool
-    async def memory_append(ctx: RunContext[RunScope], entry: str, scope: Scope = "private") -> str:
-        """Append a durable fact to your memory (user preferences, environment facts, lessons learned).
-        Your private memory and the global memory are both shown to you at the start of every run.
+    async def memory_append(ctx: RunContext[RunScope], entry: str) -> str:
+        """Append a durable fact to your private memory (user preferences, environment facts, lessons learned).
+        Your memory and the global memory are both shown to you at the start of every run.
 
         Args:
             entry: One concise markdown line or short block.
-            scope: `private` (seen only by you) or `public` (the global memory every agent sees; only for facts and
-                rules that hold for all agents).
         """
         me = ctx.deps.agent_id
-        return _status(scope, await store.append(owner_of(scope, me), entry, me))
+        return _status("memory", await store.append(me, entry, me))
 
     @ts.tool
-    async def memory_replace(
-        ctx: RunContext[RunScope], old_text: str, new_text: str, scope: Scope = "private"
-    ) -> str:
-        """Correct, condense or delete part of your memory or the global memory. `old_text` must occur
-        exactly once; an empty `new_text` deletes it.
+    async def memory_replace(ctx: RunContext[RunScope], old_text: str, new_text: str) -> str:
+        """Correct, condense or delete part of your private memory. `old_text` must occur exactly once; an empty
+        `new_text` deletes it.
 
         Args:
-            old_text: Exact text currently in that memory.
+            old_text: Exact text currently in your memory.
             new_text: Replacement text.
-            scope: `private` (your memory) or `public` (the global memory).
         """
         me = ctx.deps.agent_id
-        return _status(scope, await store.replace(owner_of(scope, me), old_text, new_text, me))
+        return _status("memory", await store.replace(me, old_text, new_text, me))
+
+    @ts.tool
+    async def memory_append_public(ctx: RunContext[RunScope], entry: str) -> str:
+        """Append to the global memory every agent sees: only facts and rules that hold for all agents.
+
+        Args:
+            entry: One concise markdown line or short block.
+        """
+        return _status("global memory", await store.append(None, entry, ctx.deps.agent_id))
+
+    @ts.tool
+    async def memory_replace_public(ctx: RunContext[RunScope], old_text: str, new_text: str) -> str:
+        """Correct, condense or delete part of the global memory. `old_text` must occur exactly once; an empty
+        `new_text` deletes it.
+
+        Args:
+            old_text: Exact text currently in the global memory.
+            new_text: Replacement text.
+        """
+        return _status("global memory", await store.replace(None, old_text, new_text, ctx.deps.agent_id))
 
     return ts

@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 import pytest
@@ -528,7 +529,8 @@ def test_tool_groups_become_same_named_roles_and_downgrade_expands_admin(tmp_pat
             "insert into agents (id, name, description, model, tool_groups, created_at, updated_at) "
             "values ('a1', 'a1', 'd', 'p:m', '[\"notify\", \"issues\"]', '2026-01-01', '2026-01-01')"
         )
-    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.upgrade(alembic_config(connection), "cba7dcdfe011")
     with sqlite3.connect(path) as conn:
         assert conn.execute("select roles, allow, deny from agents").fetchall() == [
             ('["notify", "issues"]', "[]", "[]")
@@ -545,3 +547,44 @@ def test_tool_groups_become_same_named_roles_and_downgrade_expands_admin(tmp_pat
     assert rows["a1"] == '["notify", "issues"]'
     assert rows["a2"].startswith('["workspace", ') and rows["a2"].endswith('"web"]')
     assert "roles" not in _tables(path)
+
+
+def test_roles_become_admin_or_agent_and_downgrade_expands_agent(tmp_path):
+    """两个内置角色（#180）：roles 里有 admin 的为 ["admin"]，其余为 ["agent"]，allow / deny 清空，mcp_servers 为 []。
+    降级时 agent 展开成旧工具组（勾选过公共 MCP 的加 mcp），admin 不变。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "cba7dcdfe011")
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "insert into agents (id, name, description, model, roles, deny, created_at, updated_at) "
+            "values (?, ?, 'd', 'p:m', ?, ?, '2026-01-01', '2026-01-01')",
+            [
+                ("a1", "a1", '["admin"]', "[]"),
+                ("a2", "a2", '["workspace", "agents", "mcp"]', '["agent:create"]'),
+            ],
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "select id, roles, allow, deny, mcp_servers from agents order by id"
+        ).fetchall() == [
+            ("a1", '["admin"]', "[]", "[]", "[]"),
+            ("a2", '["agent"]', "[]", "[]", "[]"),
+        ]
+        conn.execute("update agents set mcp_servers = '[\"playwright\"]' where id = 'a2'")
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "cba7dcdfe011")
+    with sqlite3.connect(path) as conn:
+        rows = dict(conn.execute("select id, roles from agents").fetchall())
+        assert "mcp_servers" not in {r[1] for r in conn.execute("pragma table_info(agents)")}
+    assert rows["a1"] == '["admin"]'
+    groups = json.loads(rows["a2"])
+    assert (
+        "mcp" in groups and "workspace" in groups and not {"agents", "public_skills", "agent"} & set(groups)
+    )

@@ -56,7 +56,7 @@ from muliao.agent_runtime.outcome import Finished, Paused, finished_of, outcome_
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.transient import transient_as_retryable
-from muliao.agents.api import MCP_PREFIX, AgentInfo, AgentService, MemoryStore, Rules, SkillStore, Thinking
+from muliao.agents.api import AgentInfo, AgentService, MemoryStore, Rules, SkillStore, Thinking
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
@@ -109,11 +109,12 @@ class RunProfile:
 @dataclass(frozen=True)
 class Toolbox:
     """一种运行（有会话的运行、临时 agent）可用的全部工具：静态的工具集（每个工具的权限见 agents.permissions.TOOL_PERMISSIONS）与按运行构建的
-    MCP。一次运行开放哪些由 agent 的权限规则在运行开始时算定（profile），调用时不再判断。"""
+    MCP。一次运行开放哪些在运行开始时算定（profile），调用时不再判断：静态工具按 agent 的权限规则，MCP 不归权限管，
+    是 agent 的私有 server 与它勾选的公共 server（AgentInfo.mcp_servers）。"""
 
     toolsets: Sequence[FunctionToolset[RunScope]]
-    # 按规则放行（mcp:<server>:<tool>）的 MCP 工具，每次运行按可见的 server 构建
-    mcp: Callable[[Rules], AbstractToolset[RunScope]]
+    # MCP 工具：按勾选的公共 server 名构建，每次运行按 agent 可用的 server 连接
+    mcp: Callable[[Sequence[str]], AbstractToolset[RunScope]]
     # agent 现在的权限规则（AgentService.rules：角色按现在的定义展开）
     rules_of: Callable[[AgentInfo], Awaitable[Rules]]
 
@@ -121,18 +122,13 @@ class Toolbox:
         return [name for ts in self.toolsets for name in ts.tools]
 
     async def profile(self, agent: AgentInfo) -> RunProfile:
-        return self.allowed(await self.rules_of(agent))
-
-    def allowed(self, rules: Rules) -> RunProfile:
-        allowed = set(rules.tools(self.tool_names()))
+        allowed = set((await self.rules_of(agent)).tools(self.tool_names()))
         static: list[AbstractToolset[RunScope]] = [
             ts.filtered(lambda _ctx, td: td.name in allowed)
             for ts in self.toolsets
             if allowed & set(ts.tools)
         ]
-        # 规则不可能放行任何 MCP 工具时不连接 server
-        mcp = [self.mcp(rules)] if rules.may_allow_prefix(MCP_PREFIX) else []
-        return RunProfile(toolsets=[*static, *mcp])
+        return RunProfile(toolsets=[*static, self.mcp(agent.mcp_servers)])
 
 
 class AgentRuntime:
