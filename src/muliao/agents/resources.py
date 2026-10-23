@@ -424,22 +424,17 @@ class ResourceRepo:
 
     async def _stage_each_possible(self, paths: list[str]) -> None:
         """暂存这些路径；一起暂存失败（如某个文件读不了）时逐个暂存，跳过失败的并记 warning：
-        一个目录里的一个坏文件不能让所有资源写入失败。全局性的失败（如锁被占）在随后的写入里照样报错。"""
+        一个目录里的坏文件不能让所有资源写入失败。"""
         try:
             await self._git_on_paths(paths, "add", "-A")
-        except RuntimeError as error:
-            failed: dict[str, RuntimeError] = {}
+        except RuntimeError:
+            # 全局性的失败（如锁被占）在这里与坏文件分不开，也会逐个记成留在历史外；它在随后的写入里照样报错。
+            # 反过来不行：把「全都失败」当全局失败抛出，几个坏文件就会让所有写入失败
             for rel in paths:
                 try:
                     await self._git("add", "-A", "--", _literal(rel))
                 except RuntimeError as e:
-                    failed[rel] = e
-            # 多个路径一个也暂存不了：是全局性的失败（如锁被占），不是哪个文件坏了，不把它们记成留在历史外。
-            # 只有一个路径时分不出来，按坏文件处理：不能让一个坏文件让所有写入失败
-            if len(paths) > 1 and len(failed) == len(paths):
-                raise error
-            for rel, e in failed.items():
-                self._left_out(rel, "cannot be staged", error=str(e))
+                    self._left_out(rel, "cannot be staged", error=str(e))
 
     async def _git_on_paths(self, paths: Sequence[str], *args: str) -> None:
         """对一组路径运行 git：路径经 stdin 传入，文件再多也不会超出命令行长度上限（那会让所有写入失败）。"""

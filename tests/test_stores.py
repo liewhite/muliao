@@ -580,6 +580,12 @@ async def test_attachment_paths_are_matched_literally(repo: ResourceRepo):
     assert await repo.read_at((await repo.history(tracked_big, 1))[0].rev, tracked_big) == "x = 1\n"
 
 
+async def test_running_git_on_no_paths_is_refused(repo: ResourceRepo):
+    """空的路径列表对 git 是整棵树：拒绝，不让排除的、超限的文件进历史。"""
+    with pytest.raises(ValueError, match="at least one path"):
+        await repo._git_on_paths([], "add", "-A")
+
+
 async def test_many_attachments_do_not_exceed_the_command_line(repo: ResourceRepo, monkeypatch):
     """路径经 stdin 交给 git：未提交的附件再多，写入也不会因参数过长而失败。"""
     skills = SkillStore(repo)
