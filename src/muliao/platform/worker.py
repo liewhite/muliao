@@ -4,7 +4,6 @@ from typing import Protocol
 import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import TransientError
 from muliao.platform.bus import EventBus, TaskEvent
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue
@@ -14,12 +13,6 @@ log = logging.getLogger(__name__)
 _UNCLAIM_SECONDS = 10.0
 
 _IDLE_POLL_SECONDS = 30.0
-
-
-def is_retryable(exc: BaseException) -> bool:
-    """按契约重试的失败：领域与适配层把暂时性失败表达为 TransientError（模型与网络层的由 agent_runtime 换成它），
-    加上超时。别的异常一律按确定性失败记账：平台不认识任何 SDK 的异常类型。"""
-    return isinstance(exc, (TransientError, TimeoutError))
 
 
 class TaskHandler(Protocol):
@@ -99,11 +92,11 @@ class Worker:
         执行（队列的 recover）；放在领取循环里时，抢先开始的请求或运行经 run_now 领走的 task 会被复位、执行两次。
         尝试次数已经用完的除外：
         任务本身会让进程退出时（例如它执行的命令重启了服务），恢复—重启—再恢复会无限循环下去，还一直占住它的 lane。
-        这时按最终失败记账（和重试用完一样的上限 task_max_attempts，钩子照常收尾、失败照常可见），用户在「任务」页
+        这时按最终失败记账（上限取各重试策略中最大的 Retries.max_attempts，钩子照常收尾、失败照常可见），用户在「任务」页
         手动重试即可重新开始（重试把尝试次数清零）。只恢复自己的种类（TaskQueue.recover）。"""
         for task in await self._queue.recover(self.kinds):
             ctx = {"task_id": task.id, "kind": task.kind, "lane": task.lane, "attempt": task.attempts}
-            if task.attempts >= self._queue.max_attempts:
+            if task.attempts >= self._queue.retries.max_attempts:
                 log.error("recovered task has used up its attempts; failing it instead", extra=ctx)
                 await self._record_failure(
                     task,
@@ -175,6 +168,7 @@ class Worker:
     async def _record_failure(self, task: Task, exc: Exception, ctx: dict[str, object]) -> None:
         error = f"{type(exc).__name__}: {exc}"
         settle = self._handlers[task.kind].failed_in
+        retry = self._queue.retries.for_failure(exc)
 
         async def settle_or_mark(s: AsyncSession, failing: Task) -> None:
             try:
@@ -184,9 +178,7 @@ class Worker:
 
         try:
             try:
-                failed = await self._queue.fail(
-                    task.id, error, retryable=is_retryable(exc), on_final=settle_or_mark
-                )
+                failed = await self._queue.fail(task.id, error, retry=retry, on_final=settle_or_mark)
             except _SettleFailed:
                 # 只有收尾钩子（如把失败交回等着的会话）自己失败时走这里；记账本身的失败（如数据库暂时不可用）
                 # 照常交给外层。事务已整体回滚：task 不能因此卡在 running、占住 lane 直到重启，记下钩子的失败后
@@ -194,9 +186,7 @@ class Worker:
                 log.exception(
                     "settling the failed task failed; recording the failure without settling it", extra=ctx
                 )
-                failed = await self._queue.fail(
-                    task.id, error, retryable=is_retryable(exc), on_final=_unsettled
-                )
+                failed = await self._queue.fail(task.id, error, retry=retry, on_final=_unsettled)
         except Exception:
             # 记账本身失败（如 task 已被删除）：留下完整上下文，不能让异常无人接收
             log.exception("could not record task failure: %s", error, extra=ctx)

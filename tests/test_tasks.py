@@ -57,7 +57,7 @@ async def test_transient_failure_backs_off_then_fails_after_max_attempts(contain
                 (await s.get(Task, task.id)).not_before = utcnow() - timedelta(seconds=1)
             claimed = await q.claim(container.queue.kinds)
         assert claimed.attempts == attempt
-        failed = await q.fail(claimed.id, "boom", retryable=True, on_final=_nothing)
+        failed = await q.fail(claimed.id, "boom", retry=q.retries.transient, on_final=_nothing)
 
     assert failed.status == TaskStatus.FAILED
     assert failed.error == "boom"
@@ -69,7 +69,7 @@ async def test_non_retryable_failure_fails_immediately_and_can_be_retried_manual
     q = container.queue
     await q.claim(container.queue.kinds)
 
-    failed = await q.fail(task.id, "bug", retryable=False, on_final=_nothing)
+    failed = await q.fail(task.id, "bug", retry=None, on_final=_nothing)
     assert failed.status == TaskStatus.FAILED
 
     retried = await q.retry(task.id)
@@ -82,7 +82,7 @@ async def test_retry_is_refused_while_lane_has_newer_unfinished_work(container, 
     q = container.queue
     old = await _enqueue(container, "a", alpha)
     await q.claim(container.queue.kinds)
-    await q.fail(old.id, "bug", retryable=False, on_final=_nothing)
+    await q.fail(old.id, "bug", retry=None, on_final=_nothing)
     await _enqueue(container, "a", alpha)
 
     with pytest.raises(Conflict):
@@ -116,7 +116,7 @@ async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recover
 
     async with container.db.transaction() as s:
         row = await s.get(Task, task.id)
-        row.status, row.attempts = TaskStatus.RUNNING, container.queue.max_attempts
+        row.status, row.attempts = TaskStatus.RUNNING, container.queue.retries.max_attempts
 
     worker = Worker(
         container.queue,
@@ -312,3 +312,74 @@ async def test_every_claimable_task_runs_at_once_so_deliveries_never_wait_behind
     finally:
         running.cancel()
         await asyncio.gather(running, return_exceptions=True)
+
+
+def test_default_retry_policies_ride_out_a_model_outage_but_give_up_on_other_failures_quickly():
+    """#144：relay 503 曾持续 9–30 分钟，原来所有暂时性失败共用 5 次（约 75 秒）就判失败，用户只能手动重试。
+    按线上默认配置算：模型不可用的重试窗口约 30 分钟、单次间隔封顶 5 分钟；其余暂时性失败仍是 5 次约 75 秒。"""
+    from muliao.config import RuntimeConfig
+    from muliao.platform.tasks import RetryPolicy
+
+    d = RuntimeConfig()
+    model = RetryPolicy(d.model_retry_max_attempts, d.task_retry_base_seconds, d.task_retry_max_delay_seconds)
+    transient = RetryPolicy(d.task_max_attempts, d.task_retry_base_seconds, d.task_retry_max_delay_seconds)
+
+    def window(p: RetryPolicy) -> float:
+        return sum(p.delay(n) for n in range(1, p.max_attempts))
+
+    assert [model.delay(n) for n in range(1, 9)] == [5, 10, 20, 40, 80, 160, 300, 300]
+    assert 25 * 60 <= window(model) <= 35 * 60
+    assert window(transient) == 5 + 10 + 20 + 40
+
+
+async def test_model_unavailable_retries_past_the_ordinary_limit_up_to_its_own(container, make_agent):
+    from muliao.errors import ModelUnavailable, TransientError
+
+    alpha = (await make_agent()).id
+    q = container.queue
+    ordinary, model = q.retries.transient.max_attempts, q.retries.model.max_attempts
+    assert model > ordinary
+
+    async def exhaust(exc: Exception) -> Task:
+        task = await _enqueue(container, f"lane-{type(exc).__name__}", alpha)
+        while True:
+            async with container.db.transaction() as s:
+                (await s.get(Task, task.id)).not_before = utcnow() - timedelta(seconds=1)
+            claimed = await q.claim_task(task.id, q.kinds)
+            failed = await q.fail(claimed.id, str(exc), retry=q.retries.for_failure(exc), on_final=_nothing)
+            if failed.status == TaskStatus.FAILED:
+                return failed
+
+    assert (await exhaust(TransientError("tool down"))).attempts == ordinary
+    assert (await exhaust(ModelUnavailable("503 No available accounts"))).attempts == model
+
+
+async def test_a_run_survives_a_model_outage_longer_than_the_ordinary_retry_limit(
+    container, make_agent, models
+):
+    """模型连续返回 503 的次数超过一般暂时性失败的上限，运行照样在故障恢复后完成，不需要手动重试。"""
+    from pydantic_ai.exceptions import ModelHTTPError
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    from muliao.sessions.api import Origin
+    from tests.scripted import scripted
+    from tests.test_flow import drain, start
+
+    alpha = (await make_agent("alpha", model="m")).id
+    outage = container.settings.runtime.model_retry_max_attempts - 1
+    assert outage > container.settings.runtime.task_max_attempts
+    calls = 0
+
+    def flaky(_m, _i) -> ModelResponse:  # noqa: ANN001
+        nonlocal calls
+        calls += 1
+        if calls <= outage:
+            raise ModelHTTPError(status_code=503, model_name="m", body="No available accounts")
+        return ModelResponse(parts=[TextPart("ok")])
+
+    models.models["m"] = scripted(flaky)
+    await start(container, alpha, "hi", origin=Origin.TRIGGER)
+    await drain(container)
+
+    [turn] = [t for t in await container.queue.list(status=None, limit=20) if t.kind == RUN_TASK]
+    assert turn.status == TaskStatus.DONE and turn.attempts == outage + 1

@@ -52,7 +52,7 @@ from muliao.platform.db import Database, WriteCheck, create_engine, migrate
 from muliao.platform.messaging import Messaging
 from muliao.platform.retention import TaskRetention
 from muliao.platform.tables import EVENT_TASK
-from muliao.platform.tasks import Commit, TaskAdmin, TaskQueue
+from muliao.platform.tasks import Commit, Retries, RetryPolicy, TaskAdmin, TaskQueue
 from muliao.platform.tooling import RunScope
 from muliao.platform.worker import RunNow, Worker, register_handlers
 from muliao.sessions.api import SessionActivity
@@ -273,10 +273,19 @@ def assemble(
     db = Database(create_engine(settings.db_path), check_writes=check_writes)
     bus = EventBus()
     live = LiveRuns(bus)
+    limits = settings.runtime
     queue = TaskQueue(
         db,
-        max_attempts=settings.runtime.task_max_attempts,
-        retry_base_seconds=settings.runtime.task_retry_base_seconds,
+        retries=Retries(
+            transient=RetryPolicy(
+                limits.task_max_attempts, limits.task_retry_base_seconds, limits.task_retry_max_delay_seconds
+            ),
+            model=RetryPolicy(
+                limits.model_retry_max_attempts,
+                limits.task_retry_base_seconds,
+                limits.task_retry_max_delay_seconds,
+            ),
+        ),
     )
     # 领域事件与定向命令：订阅与命令处理者在下面各领域构造之后登记
     messaging = Messaging(queue)

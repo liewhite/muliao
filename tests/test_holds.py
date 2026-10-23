@@ -385,7 +385,7 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
     async def no_hook(_s, _task):  # noqa: ANN202  模拟 failed_in 没做成：worker 不带钩子记下失败
         return None
 
-    failed = await container.queue.fail(run.id, "boom", retryable=False, on_final=no_hook)
+    failed = await container.queue.fail(run.id, "boom", retry=None, on_final=no_hook)
     assert failed.status == TaskStatus.FAILED
 
     assert await reconcile_failures(container.db, container.queue) == [child.id]
@@ -435,7 +435,7 @@ async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_fail
     async def no_hook(_s, _task):  # noqa: ANN202
         return None
 
-    await container.queue.fail(run.id, "boom", retryable=False, on_final=no_hook)
+    await container.queue.fail(run.id, "boom", retry=None, on_final=no_hook)
     # 失败之后才到：不属于那次运行
     await dispatch("second")
     async with container.db.transaction() as s:

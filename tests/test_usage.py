@@ -120,7 +120,7 @@ async def test_a_run_that_fails_still_records_what_it_already_spent(container, m
     # 暂时性失败按队列规则重试到用完次数；只有第一次尝试的那次请求真的花了 token（之后的尝试从已保存的回复续跑，
     # 请求一发就失败），所以只记一条
     [turn] = await tasks_of(container, RUN_TASK)
-    assert turn.attempts == container.settings.runtime.task_max_attempts
+    assert turn.attempts == container.settings.runtime.model_retry_max_attempts
     assert len(rows) == 1 and all(
         r.kind == RunKind.RUN and r.requests == 1 and r.input_tokens > 0 for r in rows
     )

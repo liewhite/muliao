@@ -8,10 +8,9 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from sqlalchemy import select
 
 from muliao.agent_runtime.transient import is_transient, transient_as_retryable
-from muliao.errors import Conflict, TransientError
+from muliao.errors import Conflict, ModelUnavailable, TransientError
 from muliao.notifications.service import DELIVER_TASK
 from muliao.platform.tables import TaskStatus
-from muliao.platform.worker import is_retryable
 from muliao.sessions.api import Origin
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Message
@@ -104,21 +103,30 @@ def test_only_transport_level_model_api_errors_are_transient():
     assert is_transient(TransientError("x"))
 
 
-def test_the_worker_retries_only_transient_errors_and_timeouts_not_sdk_exceptions():
-    # 平台不认识 SDK 的异常：暂时性的由 agent_runtime 换成 TransientError 之后才会重试
-    assert is_retryable(TransientError("x")) and is_retryable(TimeoutError())
-    assert not is_retryable(ModelHTTPError(status_code=503, model_name="m"))
-    assert not is_retryable(httpx.ConnectError("refused"))
+async def test_the_worker_retries_only_transient_errors_and_timeouts_not_sdk_exceptions(container):
+    # 平台不认识 SDK 的异常：暂时性的由 agent_runtime 换成 ModelUnavailable 之后才会重试
+    retries = container.queue.retries
+    assert retries.for_failure(TransientError("x")) is retries.transient
+    assert retries.for_failure(TimeoutError()) is retries.transient
+    assert retries.for_failure(ModelUnavailable("503")) is retries.model
+    assert retries.for_failure(ModelHTTPError(status_code=503, model_name="m")) is None
+    assert retries.for_failure(httpx.ConnectError("refused")) is None
 
 
 def test_a_model_run_turns_transient_failures_into_transient_error_and_keeps_the_rest():
     request = httpx.Request("POST", "https://api.example")
     connection = ModelAPIError(model_name="m", message="conn")
     connection.__cause__ = APIConnectionError(request=request)
-    with pytest.raises(TransientError, match="ModelAPIError") as caught:
+    with pytest.raises(ModelUnavailable, match="ModelAPIError") as caught:
         with transient_as_retryable():
             raise connection
     assert caught.value.__cause__ is connection
+
+    # 工具、MCP 等适配层自己抛的 TransientError 不升级成模型不可用，仍按普通暂时性失败重试
+    with pytest.raises(TransientError) as caught:
+        with transient_as_retryable():
+            raise TransientError("mcp down")
+    assert type(caught.value) is TransientError
 
     with pytest.raises(ModelHTTPError):
         with transient_as_retryable():
@@ -137,7 +145,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
     turn = (await container.queue.list(status=TaskStatus.FAILED, limit=5))[0]
-    assert turn.attempts == container.settings.runtime.task_max_attempts and "503" in turn.error
+    assert turn.attempts == container.settings.runtime.model_retry_max_attempts and "503" in turn.error
 
     models.models["m"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("ok")]))
     await container.queue.retry(turn.id)
@@ -293,10 +301,10 @@ async def test_running_out_of_vault_set_retries_keeps_the_value_out_of_the_logge
     assert all("super-secret" not in p for p in payloads)
 
 
-async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_transient_error(
+async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_model_unavailable(
     container, make_agent, models, tmp_path
 ):
-    """worker 不认识 SDK 的异常：压缩（summarize）与临时 agent（run_temp）这些入口同样要换成 TransientError 才会重试。"""
+    """worker 不认识 SDK 的异常：压缩（summarize）与临时 agent（run_temp）这些入口同样要换成 ModelUnavailable 才会按模型策略重试。"""
     from muliao.agent_runtime.runner import RunProfile
 
     agent = await make_agent("alpha", model="m")
@@ -308,9 +316,9 @@ async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_tr
 
     models.models["m"] = scripted(overloaded)
     runtime = container.consumer._runtime  # noqa: SLF001
-    with pytest.raises(TransientError, match="503"):
+    with pytest.raises(ModelUnavailable, match="503"):
         await runtime.summarize(agent, "s1", "summarize", "text")
-    with pytest.raises(TransientError, match="503"):
+    with pytest.raises(ModelUnavailable, match="503"):
         await runtime.run_temp(
             agent,
             task="t",

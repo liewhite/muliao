@@ -46,3 +46,9 @@ class CorruptState(Exception):
 
 class TransientError(Exception):
     """外部依赖按其契约可能发生的暂时性失败（5xx、限流、超时）。由任务队列统一重试。"""
+
+
+class ModelUnavailable(TransientError):
+    """模型提供方（或到它的网络）暂时不可用：模型接口的暂时性状态码、连接失败。这类故障常持续几分钟到半小时（如
+    relay 503 No available accounts），任务队列按更长的重试上限重试（runtime.model_retry_max_attempts），其余
+    暂时性失败（工具、推送）照常按 task_max_attempts。"""

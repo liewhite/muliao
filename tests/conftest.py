@@ -82,7 +82,7 @@ def settings(tmp_path: Path, seed_resources: Callable[[Path], Path]) -> Settings
                 "default_model": "fake:default",
                 "providers": {"fake": {"type": "anthropic", "api_key": "unused"}},
             },
-            "runtime": {"task_retry_base_seconds": 0.01},
+            "runtime": {"task_retry_base_seconds": 0.01, "task_retry_max_delay_seconds": 0.04},
         }
     )
 

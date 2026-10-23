@@ -2,7 +2,7 @@
 
 所有工作（会话的一次运行、压缩、投递）都是 task。语义：
 - 同一 lane 内严格 FIFO、最多一个 running；不同 lane 并发。
-- 契约内的暂时性失败按指数退避重试，超过上限置 failed；其他失败直接 failed。
+- 契约内的暂时性失败按指数退避重试，超过上限置 failed（模型不可用的上限更长，见 Retries）；其他失败直接 failed。
 - 进程崩溃遗留的 running 在启动时复位为 pending（见 docs/architecture.md「用最终正确性换架构简化」）。
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Collection
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -18,7 +19,7 @@ from sqlalchemy import Select, delete, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, ModelUnavailable, NotFound, TransientError
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 
@@ -29,6 +30,43 @@ Clock = Callable[[], datetime]
 Commit = Callable[[AsyncSession], Awaitable[None]]
 # task 最终失败（不再重试）时，在记下失败的同一事务里由 handler 收尾（如把失败交回等着结果的会话）
 Settle = Callable[[AsyncSession, Task], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """一类暂时性失败的重试：第 n 次尝试失败后等 base·2^(n-1) 秒（封顶 max_delay），用完 max_attempts 次尝试即最终失败。"""
+
+    max_attempts: int
+    base_seconds: float
+    max_delay_seconds: float
+
+    def delay(self, attempt: int) -> float:
+        """第 attempt 次尝试（从 1 起）失败后等多久再试。"""
+        return min(self.base_seconds * 2 ** (attempt - 1), self.max_delay_seconds)
+
+
+@dataclass(frozen=True)
+class Retries:
+    """哪些失败重试、按什么策略。模型不可用（ModelUnavailable）的故障常持续几分钟到半小时，用更长的 model；
+    其余暂时性失败（TransientError、超时）用 transient。别的异常一律按确定性失败记账：平台不认识任何 SDK 的异常类型
+    （模型与网络层的由 agent_runtime 换成 ModelUnavailable）。"""
+
+    transient: RetryPolicy
+    model: RetryPolicy
+
+    def for_failure(self, exc: BaseException) -> RetryPolicy | None:
+        """这个失败按哪个策略重试；None 表示不重试。"""
+        if isinstance(exc, ModelUnavailable):
+            return self.model
+        if isinstance(exc, (TransientError, TimeoutError)):
+            return self.transient
+        return None
+
+    @property
+    def max_attempts(self) -> int:
+        """任一策略允许的最多尝试次数（启动恢复用，Worker.recover）。取最大值：正在按模型策略重试的任务不能因为
+        一次重启就被记为最终失败。"""
+        return max(self.transient.max_attempts, self.model.max_attempts)
 
 
 async def no_commit(_s: AsyncSession) -> None:
@@ -70,10 +108,9 @@ class TaskAdmin:
 
 
 class TaskQueue:
-    def __init__(self, db: Database, *, max_attempts: int, retry_base_seconds: float, clock: Clock = utcnow):
+    def __init__(self, db: Database, *, retries: Retries, clock: Clock = utcnow):
         self._db = db
-        self._max_attempts = max_attempts
-        self._retry_base = retry_base_seconds
+        self.retries = retries
         self._clock = clock
         # 有处理器的任务种类（accept），登记之前不接受任何 task
         self._kinds: frozenset[str] = frozenset()
@@ -102,11 +139,6 @@ class TaskQueue:
 
     def now(self) -> datetime:
         return self._clock()
-
-    @property
-    def max_attempts(self) -> int:
-        """尝试次数的上限：重试与启动恢复共用（Worker.recover）。"""
-        return self._max_attempts
 
     def _wake_after_commit(self, s: AsyncSession) -> None:
         """这个事务提交后唤醒 worker（新的可领取 task 在提交前对它不可见）。"""
@@ -184,16 +216,16 @@ class TaskQueue:
         # 同 lane 的后续 task 现在可以领取了
         self.wake.set()
 
-    async def fail(self, task_id: int, error: str, *, retryable: bool, on_final: Settle) -> Task:
+    async def fail(self, task_id: int, error: str, *, retry: RetryPolicy | None, on_final: Settle) -> Task:
+        """记下一次失败：按 retry 退避后重试，尝试次数已用完或 retry 为 None（不重试的失败）时记为最终失败。"""
         async with self._db.transaction() as s:
             task = await s.get(Task, task_id)
             if task is None:
                 raise RuntimeError(f"task {task_id} vanished while failing it")
             task.error = error
-            if retryable and task.attempts < self._max_attempts:
-                delay = self._retry_base * 2 ** (task.attempts - 1)
+            if retry is not None and task.attempts < retry.max_attempts:
                 task.status = TaskStatus.PENDING
-                task.not_before = self._clock() + timedelta(seconds=delay)
+                task.not_before = self._clock() + timedelta(seconds=retry.delay(task.attempts))
             else:
                 task.status = TaskStatus.FAILED
                 task.finished_at = self._clock()

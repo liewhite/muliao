@@ -375,7 +375,7 @@ class AgentRuntime:
     ) -> AsyncIterator[RunUsage]:
         """一次模型运行的边界（每个入口都经过它）：记「agent run started」日志（ctx 与带上的历史条数；压缩没有历史这一说，不记），
         交出给 pydantic-ai 累加用量的 RunUsage；运行无论成功、失败还是被取消，退出时都把已花掉的部分记到 session_id 名下
-        （_bill）。运行里抛出的暂时性失败（模型提供方、网络层）在这里换成 TransientError，交给任务队列重试（transient）。"""
+        （_bill）。运行里抛出的暂时性失败（模型提供方、网络层）在这里换成 ModelUnavailable，交给任务队列按模型策略重试（transient）。"""
         log.info("agent run started", extra=dict(ctx) if history is None else {**ctx, "history": history})
         usage = RunUsage()
         try:

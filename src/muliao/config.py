@@ -127,8 +127,14 @@ class TranscriptionConfig(_Section):
 
 
 class RuntimeConfig(_Section):
+    # 暂时性失败的重试（platform.tasks.Retries）：第 n 次尝试失败后等 base·2^(n-1) 秒、封顶 max_delay，
+    # 用完尝试次数即最终失败。工具、推送等一般的暂时性失败最多 task_max_attempts 次（默认 5 次，约 75 秒内）
     task_max_attempts: int = Field(default=5, ge=1)
     task_retry_base_seconds: float = Field(default=5.0, gt=0)
+    task_retry_max_delay_seconds: float = Field(default=300.0, gt=0)
+    # 模型不可用（模型接口 5xx/429、连不上）的故障常持续几分钟到半小时（relay 503），重试次数单独设：默认 12 次，
+    # 等待 5+10+…+160 再加 5×300 秒，约 30 分钟
+    model_retry_max_attempts: int = Field(default=12, ge=1)
     # 发给模型的上下文（上一次请求的输入 token）超过此值，就在步与步之间压缩该 session 的早期上下文
     compaction_threshold_tokens: int = Field(default=100_000, ge=1000)
     # 压缩时保留最近这么多步原文不压缩（一步是一次模型回复及其工具结果）

@@ -245,7 +245,7 @@ async def test_a_failure_to_record_the_failure_itself_does_not_skip_the_settle_h
 
     calls = {"n": 0}
 
-    async def fake_fail(task_id, error, *, retryable, on_final):  # noqa: ANN001, ANN202
+    async def fake_fail(task_id, error, *, retry, on_final):  # noqa: ANN001, ANN202
         calls["n"] += 1
         raise RuntimeError("database is locked")
 
