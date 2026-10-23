@@ -577,7 +577,9 @@ def test_roles_become_admin_or_agent_and_downgrade_expands_agent(tmp_path):
             ("a1", '["admin"]', "[]", "[]", "[]"),
             ("a2", '["agent"]', "[]", "[]", "[]"),
         ]
-        conn.execute("update agents set mcp_servers = '[\"playwright\"]' where id = 'a2'")
+        conn.execute(
+            "update agents set mcp_servers = '[\"playwright\"]', allow = '[\"skill.public:write\"]' where id = 'a2'"
+        )
     with _migration_engine(path).begin() as connection:
         command.downgrade(alembic_config(connection), "cba7dcdfe011")
     with sqlite3.connect(path) as conn:
@@ -588,3 +590,7 @@ def test_roles_become_admin_or_agent_and_downgrade_expands_agent(tmp_path):
     assert (
         "mcp" in groups and "workspace" in groups and not {"agents", "public_skills", "agent"} & set(groups)
     )
+    # 降级补上 agent:get，原有的 allow 保留
+    with sqlite3.connect(path) as conn:
+        allow = dict(conn.execute("select id, allow from agents").fetchall())
+    assert allow == {"a1": "[]", "a2": '["skill.public:write", "agent:get"]'}
