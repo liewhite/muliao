@@ -131,8 +131,8 @@ class _Reachable(CombinedToolset[RunScope]):
     servers: list[str] = field(default_factory=list)
     agent: str = ""
     notices: list[str] = field(default_factory=list)
-    # 按权限 id（agents.api.mcp_permission）放行哪些工具；None 是全部（临时 agent）
-    rules: Rules | None = None
+    # 按权限 id（agents.api.mcp_permission）放行哪些工具（toolset() 总会给出；临时 agent 用调用方的规则）
+    rules: Rules = field(default_factory=Rules)
 
     async def __aenter__(self) -> Self:
         reachable: list[AbstractToolset[RunScope]] = []
@@ -147,7 +147,7 @@ class _Reachable(CombinedToolset[RunScope]):
                 except (McpFailed, TransientError) as e:
                     _skip(self.notices, agent=self.agent, server=name, reason=str(e))
                     continue
-                reachable.append(toolset if self.rules is None else _permitted(toolset, name, self.rules))
+                reachable.append(_permitted(toolset, name, self.rules))
             self._exit_stack = stack.pop_all()
         self.toolsets = reachable
         return self
@@ -210,17 +210,16 @@ class McpConnector:
             )
         return _SecretSafe(toolset, server=server.name, secrets=secrets).prefixed(server.name)
 
-    def toolset(self, index: McpIndex, rules: Rules | None = None) -> DynamicToolset[RunScope]:
+    def toolset(self, index: McpIndex, rules: Rules) -> DynamicToolset[RunScope]:
         """使用 MCP：每次运行时按这次运行的 agent（RunScope.agent_id；临时 agent 用调用方的视角）取可见的 server
         （index）构建，是一个 toolset，没有可见的 server 时为空。rules：agent 的权限规则，按 `mcp:<server>:<tool>` 放行
-        工具，不可能放行它任何工具的 server 不连接；None 是全部（临时 agent）。"""
+        工具，不可能放行它任何工具的 server 不连接（临时 agent 用调用方的规则）。"""
 
         async def build(ctx: RunContext[RunScope]) -> AbstractToolset[RunScope] | None:
             agent, notices = ctx.deps.agent_id, ctx.deps.notices
             servers, corrupt = index(agent)
             notices += [c.describe() for c in corrupt]
-            if rules is not None:
-                servers = [s for s in servers if rules.may_allow_prefix(mcp_server_prefix(s.name))]
+            servers = [s for s in servers if rules.may_allow_prefix(mcp_server_prefix(s.name))]
             names: list[str] = []
             toolsets: list[AbstractToolset[RunScope]] = []
             for server in servers:

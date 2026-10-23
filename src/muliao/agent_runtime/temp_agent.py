@@ -16,7 +16,7 @@ from pathlib import Path
 import anyio
 from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
-from muliao.agent_runtime.runner import AgentRuntime, RunProfile
+from muliao.agent_runtime.runner import AgentRuntime, Toolbox
 from muliao.agents.api import AgentService, Thinking
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
@@ -71,9 +71,10 @@ async def _discard(workspace: Path, agent_id: str, outcome: str) -> None:
 
 
 def temp_agent_toolset(
-    runtime: AgentRuntime, agents: AgentService, profile: RunProfile, temp_root: Path
+    runtime: AgentRuntime, agents: AgentService, toolbox: Toolbox, temp_root: Path
 ) -> FunctionToolset[RunScope]:
-    """profile 是临时 agent 能用的工具：不得包含本工具集（临时 agent 不能再开临时 agent）。"""
+    """toolbox 是临时 agent 固定的那组工具（agents.permissions.TEMP_AGENT_TOOLS 与 MCP，不含本工具集：临时 agent
+    不能再开临时 agent）；每次按调用方现在的权限规则取其中放行的，所以临时 agent 的工具是调用方工具的子集。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
@@ -89,8 +90,9 @@ def temp_agent_toolset(
         parallel. Files it shares are shown to the user with your reply. It has no memory, skills or conversation: put everything it needs in `task`, and save anything you
         want to keep yourself.
 
-        It is NOT a sandbox: it has the same shell access, secrets and MCP servers as you. Its default working
-        directory is a temporary one that is deleted afterwards. Be careful handing it untrusted content.
+        It gets the subset of your own permissions among file tools, shell, web search/fetch and MCP; it is NOT a
+        sandbox: with shell it has the same shell access and secrets as you. Its default working directory is a
+        temporary one that is deleted afterwards. Be careful handing it untrusted content.
 
         Args:
             task: The complete job description.
@@ -100,6 +102,7 @@ def temp_agent_toolset(
                 defaults to your own setting. Pass `default` when picking a model that takes no thinking setting.
         """
         parent = await agents.get(ctx.deps.agent_id)
+        profile = await toolbox.profile(parent)
         workspace = await asyncio.to_thread(_make_workspace, temp_root)
         log.info(
             "temp agent started",

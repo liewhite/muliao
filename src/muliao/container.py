@@ -11,12 +11,11 @@ from zoneinfo import ZoneInfo
 
 import anyio
 import httpx
-from pydantic_ai import FunctionToolset
-from pydantic_ai.toolsets import AbstractToolset, DynamicToolset
+from pydantic_ai.toolsets import AbstractToolset
 
 from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
 from muliao.agent_runtime.mcp import McpConnector
-from muliao.agent_runtime.runner import AgentRuntime, RunProfile, Toolbox
+from muliao.agent_runtime.runner import AgentRuntime, Toolbox
 from muliao.agent_runtime.temp_agent import clear_temp_dirs, temp_agent_toolset
 from muliao.agent_runtime.web import WebProvider, build_web_provider
 from muliao.agent_runtime.web_tools import web_toolset
@@ -31,7 +30,7 @@ from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
-from muliao.agents.permissions import available_tools
+from muliao.agents.permissions import TEMP_AGENT_TOOLS, Rules, available_tools
 from muliao.agents.resources import ResourceRepo, RevisionHistory
 from muliao.agents.roles import RoleService
 from muliao.agents.service import AgentDefaults, AgentService, Thinking
@@ -149,8 +148,8 @@ class Assembly:
     sessions: SessionService
     notifications: Notifications
     mcp: McpRegistry
-    # 「使用 MCP」组（临时 agent 也用它）
-    mcp_tools: DynamicToolset[RunScope]
+    # 临时 agent 固定的那组工具（按调用方的规则放行）
+    temp_toolbox: Toolbox
     triggers: TriggerService
     due_triggers: DueRunner
     # 流式触发器托管的常驻命令
@@ -331,7 +330,6 @@ def assemble(
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，「使用 MCP」组按配置的可用 server 连接
     mcp_connector = McpConnector(vault)
     mcp = McpRegistry(resources, mcp_connector.probe)
-    mcp_tools = mcp_connector.toolset(mcp.index)
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
     precheck = PrecheckRunner(
@@ -393,15 +391,22 @@ def assemble(
         history_toolset(history, agents),
         ask_user_toolset(),
     ]
-    # 临时 agent 只有文件与 shell（加上调用方的 MCP，以及配置了的网页搜索）：没有记忆、skill、委派，也不能再开临时 agent
-    temp_profile = RunProfile(toolsets=[workspace_toolset(vault, limits, files), *web_tools, mcp_tools])
+
+    def mcp_tools(rules: Rules) -> AbstractToolset[RunScope]:
+        return mcp_connector.toolset(mcp.index, rules)
+
+    # 临时 agent 固定的一组：文件与 shell、配置了的网页搜索、MCP（没有记忆、skill、委派，也不能再开临时 agent），
+    # 每次按调用方的权限规则取放行的那部分
+    temp_toolbox = Toolbox(
+        toolsets=[workspace_toolset(vault, limits, files), *web_tools], mcp=mcp_tools, rules_of=agents.rules
+    )
     # 有会话的运行可用的全部静态工具集；每个工具的权限在 agents.permissions 登记，一次运行开放哪些按 agent 的权限规则
     # 算（Toolbox.profile）
     static_toolsets = [
         *always_tools,
         # 对话里用的这份带后台任务（只有会话运行会用 Toolbox）
         session_workspace_toolset(vault, limits, files, jobs),
-        temp_agent_toolset(runtime, agents, temp_profile, settings.temp_dir),
+        temp_agent_toolset(runtime, agents, temp_toolbox, settings.temp_dir),
         delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds),
         notify_toolset(notifications),
         public_skills_toolset(skills),
@@ -414,12 +419,10 @@ def assemble(
     static_toolsets.append(agents_toolset(agents, roles, agent_lifecycle))
     toolbox = Toolbox(
         toolsets=static_toolsets,
-        mcp=lambda rules: mcp_connector.toolset(mcp.index, rules),
+        mcp=mcp_tools,
         rules_of=agents.rules,
     )
-    _check_permissions(
-        [n for ts in static_toolsets for n in _function_tools(ts)], web_configured=bool(web_tools)
-    )
+    _check_permissions(toolbox.tool_names(), temp_toolbox.tool_names(), web_configured=bool(web_tools))
     compactor = Compactor(
         db,
         runtime,
@@ -479,7 +482,7 @@ def assemble(
         sessions=sessions,
         notifications=notifications,
         mcp=mcp,
-        mcp_tools=mcp_tools,
+        temp_toolbox=temp_toolbox,
         triggers=triggers,
         due_triggers=due_triggers,
         streams=streams,
@@ -508,10 +511,16 @@ def assemble(
     )
 
 
-def _check_permissions(registered: list[str], *, web_configured: bool) -> None:
+def _check_permissions(registered: list[str], temp: list[str], *, web_configured: bool) -> None:
     """注册的工具与当前配置下的权限表（agents.permissions.available_tools）必须一一对应：没登记的工具没有权限 id、谁也
-    拿不到，表里多出的说明工具改了名；界面与 get_agent 算最终工具用的也是这张表，一致才说得准。"""
+    拿不到，表里多出的说明工具改了名；界面与 get_agent 算最终工具用的也是这张表，一致才说得准。临时 agent 注册的工具
+    同样必须是 TEMP_AGENT_TOOLS 里当前配置有的那些（界面列出的临时 agent 工具按它算）。"""
     expected = set(available_tools(web_configured=web_configured))
+    expected_temp = set(TEMP_AGENT_TOOLS) & expected
+    if sorted(temp) != sorted(expected_temp):
+        raise RuntimeError(
+            f"temp agent tools {sorted(temp)} do not match TEMP_AGENT_TOOLS here: {sorted(expected_temp)}"
+        )
     duplicated = sorted({n for n in registered if registered.count(n) > 1})
     if set(registered) != expected or duplicated:
         raise RuntimeError(
@@ -519,10 +528,3 @@ def _check_permissions(registered: list[str], *, web_configured: bool) -> None:
             f"unregistered {sorted(expected - set(registered))}, without permission {sorted(set(registered) - expected)}, "
             f"duplicated {duplicated}"
         )
-
-
-def _function_tools(toolset: AbstractToolset[RunScope]) -> list[str]:
-    """一个静态工具集里注册的工具名；静态的工具集只能是 FunctionToolset，别的是代码不一致。"""
-    if not isinstance(toolset, FunctionToolset):
-        raise RuntimeError(f"a static toolset has tools that are not known up front: {toolset!r}")
-    return list(toolset.tools)

@@ -5,7 +5,7 @@ from typing import get_args
 
 import pytest
 
-from muliao.agents.api import McpTransport, mcp_config
+from muliao.agents.api import AgentPatch, McpTransport, mcp_config
 from muliao.api.triggers import TriggerKindName, TriggerOut
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin, SessionActivity, WorkState
@@ -755,7 +755,6 @@ async def test_a_temp_agent_sees_the_mcp_servers_of_its_caller(container, make_a
     from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
     from pydantic_ai.models.function import AgentInfo
 
-    from muliao.agent_runtime.runner import RunProfile
     from tests.scripted import scripted
 
     parent = await make_agent("alpha", model="m")
@@ -780,11 +779,29 @@ async def test_a_temp_agent_sees_the_mcp_servers_of_its_caller(container, make_a
         instructions="",
         model="temp",
         thinking="default",
-        profile=RunProfile(toolsets=[container.mcp_tools]),
+        profile=await container.temp_toolbox.profile(parent),
         workspace=tmp_path,
         session_id=None,
     )
     assert answer.text == "ok" and {"echo_echo", "echo_token"} <= set(seen)
+
+    # MCP 同样按调用方的权限：没有 mcp 角色就没有，只放行一个工具就只有它
+    for allow, expected in (((), set()), (("mcp:echo:echo",), {"echo_echo"})):
+        parent = await container.agents.update(
+            parent.id, AgentPatch(roles=["workspace", "temp_agent"], allow=allow)
+        )
+        seen.clear()
+        await container.consumer._runtime.run_temp(  # noqa: SLF001
+            parent,
+            task="t",
+            instructions="",
+            model="temp",
+            thinking="default",
+            profile=await container.temp_toolbox.profile(parent),
+            workspace=tmp_path,
+            session_id=None,
+        )
+        assert {t for t in seen if t.startswith("echo_")} == expected and "run_shell" in seen
 
 
 def _recording_model(models, name: str) -> tuple[list[str], list[str]]:
@@ -873,7 +890,6 @@ async def test_an_mcp_server_that_fails_to_list_its_tools_is_skipped_and_the_mod
 async def test_a_corrupt_public_mcp_config_is_reported_to_a_temp_agent_without_failing_it(
     container, make_agent, models, tmp_path
 ):
-    from muliao.agent_runtime.runner import RunProfile
 
     parent = await make_agent("alpha", model="m")
     good = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
@@ -887,7 +903,7 @@ async def test_a_corrupt_public_mcp_config_is_reported_to_a_temp_agent_without_f
         instructions="",
         model="temp",
         thinking="default",
-        profile=RunProfile(toolsets=[container.mcp_tools]),
+        profile=await container.temp_toolbox.profile(parent),
         workspace=tmp_path,
         session_id=None,
     )

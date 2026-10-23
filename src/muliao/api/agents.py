@@ -118,14 +118,19 @@ class RulesIn(BaseModel):
 
 
 class ResolvedOut(BaseModel):
-    """按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具。"""
+    """按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具；能开临时 agent 时另有临时 agent 按同一份规则能用的。"""
 
     tools: list[PermissionOut]
     mcp: bool
+    temp_agent: "ResolvedOut | None"
 
     @classmethod
     def of(cls, r: Resolved) -> "ResolvedOut":
-        return cls(tools=[PermissionOut.of(t, TOOL_PERMISSIONS[t]) for t in r.tools], mcp=r.mcp)
+        return cls(
+            tools=[PermissionOut.of(t, TOOL_PERMISSIONS[t]) for t in r.tools],
+            mcp=r.mcp,
+            temp_agent=None if r.temp_agent is None else cls.of(r.temp_agent),
+        )
 
 
 @router.post("/permissions/resolve")

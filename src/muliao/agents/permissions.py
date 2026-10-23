@@ -59,7 +59,7 @@ TOOL_PERMISSIONS: dict[str, Permission] = {
     "run_shell": Permission("shell:run", X, _BYPASS),
     "job_status": Permission("shell.job:status", R),
     "job_kill": Permission("shell.job:kill", W),
-    "run_temp_agent": Permission("temp_agent:run", X, "临时 agent 带 shell，" + _BYPASS),
+    "run_temp_agent": Permission("temp_agent:run", W, "临时 agent 的工具是调用方自己的权限放行的那部分"),
     # agent 与委派
     "list_agents": Permission("agent:list", R),
     "get_agent": Permission("agent:get", R),
@@ -101,6 +101,18 @@ TOOL_PERMISSIONS: dict[str, Permission] = {
     "web_search": Permission("web:search", R, "不可信内容的入口，也是外发通道"),
     "web_fetch": Permission("web:fetch", R, "不可信内容的入口，也是外发通道"),
 }
+
+# 临时 agent 固定的那组工具（另加 MCP）；实际能用的是其中被调用方的权限规则放行的（Resolved.temp_agent），所以临时
+# agent 的工具总是调用方工具的子集。组合根启动时核对它与临时 agent 实际注册的工具集一致（container._check_permissions）
+TEMP_AGENT_TOOLS: tuple[str, ...] = (
+    "read_file",
+    "write_file",
+    "edit_file",
+    "share_file",
+    "run_shell",
+    "web_search",
+    "web_fetch",
+)
 
 MCP_PREFIX = "mcp:"
 MCP_NOTE = "tools of the MCP servers it can see, named <server>_<tool>; permission id mcp:<server>:<tool>"
@@ -186,14 +198,21 @@ class Rules:
 
 @dataclass(frozen=True)
 class Resolved:
-    """按规则最终能用的工具（当前配置下注册的里面放行的，按登记顺序），以及是否可能有 MCP 工具。"""
+    """按规则最终能用的工具（当前配置下注册的里面放行的，按登记顺序），以及是否可能有 MCP 工具。能开临时 agent 时，
+    temp_agent 是临时 agent 按同一份规则能用的（TEMP_AGENT_TOOLS 里放行的，MCP 同样按规则），否则为 None。"""
 
     tools: list[str]
     mcp: bool
+    temp_agent: Resolved | None = None
 
     @staticmethod
     def of(rules: Rules, available: Collection[str]) -> Resolved:
-        return Resolved(rules.tools(available), rules.may_allow_prefix(MCP_PREFIX))
+        tools = rules.tools(available)
+        mcp = rules.may_allow_prefix(MCP_PREFIX)
+        temp = (
+            Resolved([t for t in tools if t in TEMP_AGENT_TOOLS], mcp) if "run_temp_agent" in tools else None
+        )
+        return Resolved(tools, mcp, temp)
 
 
 @dataclass(frozen=True)

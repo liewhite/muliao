@@ -14,7 +14,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.profiles import ModelProfile
 
-from muliao.agents.api import AgentPatch, McpTransport, mcp_config
+from muliao.agents.api import AgentPatch, AgentSpec, McpTransport, mcp_config
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
 from tests.conftest import login, session_tools
@@ -93,19 +93,26 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
 
 
 def test_registered_tools_must_match_the_permission_table_both_ways():
-    from muliao.agents.permissions import TOOL_PERMISSIONS
+    from muliao.agents.permissions import TEMP_AGENT_TOOLS, TOOL_PERMISSIONS
     from muliao.container import _check_permissions
 
     every = list(TOOL_PERMISSIONS)
-    _check_permissions(every, web_configured=True)
-    _check_permissions([t for t in every if not t.startswith("web_")], web_configured=False)
+    temp = list(TEMP_AGENT_TOOLS)
+    no_web = [t for t in temp if not t.startswith("web_")]
+    _check_permissions(every, temp, web_configured=True)
+    _check_permissions([t for t in every if not t.startswith("web_")], no_web, web_configured=False)
     with pytest.raises(RuntimeError, match=r"unregistered \['web_fetch', 'web_search'\]"):
-        _check_permissions([t for t in every if not t.startswith("web_")], web_configured=True)
+        _check_permissions([t for t in every if not t.startswith("web_")], temp, web_configured=True)
     # 没登记权限的工具谁也拿不到：启动即报
     with pytest.raises(RuntimeError, match=r"without permission \['new_tool'\]"):
-        _check_permissions([*every, "new_tool"], web_configured=True)
+        _check_permissions([*every, "new_tool"], temp, web_configured=True)
     with pytest.raises(RuntimeError, match=r"duplicated \['run_shell'\]"):
-        _check_permissions([*every, "run_shell"], web_configured=True)
+        _check_permissions([*every, "run_shell"], temp, web_configured=True)
+    # 临时 agent 注册的工具与 TEMP_AGENT_TOOLS 不一致（界面列出的就不准）：启动即报
+    with pytest.raises(RuntimeError, match=r"temp agent tools"):
+        _check_permissions(every, no_web, web_configured=True)
+    with pytest.raises(RuntimeError, match=r"temp agent tools"):
+        _check_permissions(every, [*temp, "job_kill"], web_configured=True)
 
 
 async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_agent, models):
@@ -250,6 +257,54 @@ async def test_temp_agent_runs_once_in_a_discarded_workspace_and_returns_its_ans
     assert "temporary helper agent working for agent 'manager'" in str(seen["instructions"])
     # 不留下会话
     assert len(await container.sessions.list(agent_id=None, origins=None, limit=10, offset=0)) == 1
+
+
+@pytest.mark.parametrize(
+    ("deny", "expected"),
+    [
+        ((), ["edit_file", "read_file", "run_shell", "share_file", "write_file"]),
+        (("shell:run",), ["edit_file", "read_file", "share_file", "write_file"]),
+    ],
+)
+async def test_temp_agent_only_gets_what_the_callers_permissions_allow(container, models, deny, expected):
+    # 调用方只有 workspace（没有 web、mcp）：临时 agent 只拿到文件与 shell；连 shell:run 也没有时就没有 shell
+    me = await container.agents.create(
+        AgentSpec(
+            name="manager", description="d", model="tools", roles=["workspace", "temp_agent"], deny=deny
+        ),
+        author="user",
+    )
+    seen: list[str] = []
+
+    def helper(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.extend(sorted(t.name for t in info.function_tools))
+        return ModelResponse(parts=[TextPart("done")])
+
+    models.models["helper"] = scripted(helper)
+    await run_tools(container, models, me.id, [("run_temp_agent", {"task": "t", "model": "helper"})])
+
+    assert seen == expected
+    # 界面与 get_agent 列出的就是这一份（同一份规则算出）
+    resolved = container.agents.resolve(await container.agents.rules(me)).temp_agent
+    assert resolved is not None and sorted(resolved.tools) == expected and not resolved.mcp
+
+
+async def test_get_agent_lists_the_tools_its_temp_agents_get(container, make_agent, models):
+    me = await make_agent("manager", model="tools")
+    await container.agents.create(
+        AgentSpec(name="limited", description="d", roles=["workspace", "temp_agent"]), author="user"
+    )
+    await container.agents.create(
+        AgentSpec(name="plain", description="d", roles=["workspace"]), author="user"
+    )
+    outputs = await run_tools(
+        container, models, me.id, [("get_agent", {"agent": "limited"}), ("get_agent", {"agent": "plain"})]
+    )
+
+    limited, plain = outputs
+    assert "temp_agent_tools=['read_file', 'write_file', 'edit_file', 'share_file', 'run_shell']" in limited
+    # 不能开临时 agent 时没有这一项
+    assert "temp_agent_tools=None" in plain
 
 
 async def test_parallel_partial_updates_of_one_agent_both_survive(container, make_agent, models):

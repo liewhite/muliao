@@ -5495,15 +5495,26 @@
           "mcp": {
             "type": "boolean",
             "title": "Mcp"
+          },
+          "temp_agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
         "required": [
           "tools",
-          "mcp"
+          "mcp",
+          "temp_agent"
         ],
         "title": "ResolvedOut",
-        "description": "按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具。"
+        "description": "按规则最终能用的工具（不含 MCP），以及是否可能放行 MCP 工具；能开临时 agent 时另有临时 agent 按同一份规则能用的。"
       },
       "ResourceKind": {
         "type": "string",

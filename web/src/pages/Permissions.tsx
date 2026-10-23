@@ -37,6 +37,7 @@ export function ToolList({ resolved }: { resolved: ResolvedTools }) {
           <span className="font-mono">{t.tool}</span>
           <span className="font-mono text-xs text-muted">{t.id}</span>
           {t.note && <span className={`text-xs ${t.access === 'irreversible' ? 'text-danger' : 'text-muted'}`}>{t.note}</span>}
+          {t.tool === 'run_temp_agent' && resolved.temp_agent && <TempAgentTools resolved={resolved.temp_agent} />}
         </div>
       ))}
       {resolved.mcp && (
@@ -44,6 +45,16 @@ export function ToolList({ resolved }: { resolved: ResolvedTools }) {
       )}
       {resolved.tools.length === 0 && !resolved.mcp && <span className="text-muted">没有工具</span>}
     </div>
+  )
+}
+
+/** 临时 agent 按同一份规则能用的工具（调用方工具的子集） */
+function TempAgentTools({ resolved }: { resolved: ResolvedTools }) {
+  const names = [...resolved.tools.map((t) => t.tool), ...(resolved.mcp ? ['MCP'] : [])]
+  return (
+    <span className="w-full ps-10 text-xs text-muted">
+      临时 agent 能用：{names.length ? <span className="font-mono">{names.join('、')}</span> : '没有工具'}
+    </span>
   )
 }
 

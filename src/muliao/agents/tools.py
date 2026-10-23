@@ -41,6 +41,8 @@ class AgentDetail(BaseModel):
     tools: list[str]
     # 可能有 MCP 工具时是它们的说明（权限 mcp:<server>:<tool>，同样按 allow / deny 判断），否则 "none"
     mcp: str
+    # 能开临时 agent 时，临时 agent 按同一份规则能用的工具（tools 的子集；可能有 MCP 时加 "MCP"），否则 null
+    temp_agent_tools: list[str] | None
     # 全部角色（public 每个 agent 自动拥有）与全部工具的权限 id，写 roles / allow / deny 时参照
     available_roles: list[RoleDetail]
     permissions: list[ToolPermission]
@@ -73,6 +75,9 @@ def agents_toolset(
             deny=list(target.deny),
             tools=resolved.tools,
             mcp=MCP_NOTE if resolved.mcp else "none",
+            temp_agent_tools=None
+            if (temp := resolved.temp_agent) is None
+            else [*temp.tools, *(["MCP"] if temp.mcp else [])],
             available_roles=[
                 RoleDetail(
                     name=r.name, description=r.description, allow=list(r.rules.allow), deny=list(r.rules.deny)
