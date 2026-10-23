@@ -165,9 +165,9 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 
 **异常的传播边界**：
 
-1. **根任务组**（容器启动时开，关停 = 取消它）：只放「意外异常即进程退出」的循环——worker 调度循环、定时触发循环、信箱对账循环、运行中检查的循环、任务保留的循环。它们意外退出是 bug，进程退出交给进程管理器重启。
+1. **根任务组**（容器启动时开，关停 = 取消它）：只放「意外异常即进程退出」的循环——worker 调度循环、定时触发循环、流式触发的对账循环、信箱对账循环、运行中检查的循环、任务保留的循环。它们意外退出是 bug，进程退出交给进程管理器重启。
 2. **每个任务一个边界**：worker 执行的每个 task 在自己的作用域里执行，边界上捕获异常并按队列规则记账（重试或失败），不向上传播，一个运行出错不影响别的运行。
-3. **每个后台任务的监督者一个边界**：意外异常只记 error 日志，由后台任务的对账收敛（「监督意外结束」是契约内的情况）。
+3. **每个后台任务的监督者一个边界**：意外异常只记 error 日志，由后台任务的对账收敛（「监督意外结束」是契约内的情况）。流式触发的每个托管进程同样：一次启动里的意外异常杀掉进程组、记 error 日志，按一次失败退避重启，投递里的意外异常留下事件稍后再试，都不穿出去。
 
 **取消**：
 
@@ -181,7 +181,7 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 |---|---|
 | 保存被停止的那一步（`steps.save_stopped`），每个事务都已屏蔽 | 两个事务之间赶上关停时，剩下的由队列恢复后续跑；停止事务照样关闭历史 |
 | 后台任务启动失败后的清理 | 记 error 日志；行留在 running，检查的对账记为被中断 |
-| 结束进程组并回收（后台任务、同步 shell、前置检查） | 记 error 日志；后台任务由对账或启动时记为被中断 |
+| 结束进程组并回收（后台任务、同步 shell、前置检查、流式触发的常驻命令） | 记 error 日志；后台任务由对账或启动时记为被中断 |
 | git 退出与失败写入后的撤销暂存 | git 被强杀；锁由下次启动的 recover 清理 |
 | 临时 agent 工作目录删除 | 记 error 日志；启动时清空 `data/tmp` |
 | `run_now` 被取消后把任务放回 pending | 记日志；任务留在 running 直到重启时 recover |
@@ -487,11 +487,11 @@ agent 在任何一次运行里都可以主动 `write_skill`。公共 skill 对�
 | `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at`；连续跳过时还有 `skipped`（次数、起始时间、挡路会话的工作状态，以及内部用的挡路会话 id 与本轮是否已通知） | `DueRunner` + `ScheduleDue`：消耗这次到期 = 推进到下次时间；上一次触发的会话不空闲时跳过本次（会话领域的工作状态 `SessionActivity.work_state_in` 不是 idle：在运行、有还没投递的 `Receive`，或在等后台任务、委派、用户回答）。跳过要看得见：连续跳过记在 `state.skipped`，状态里给出 `skipped`（界面显示「已跳过 N 次」）；挡路的会话在等待（可能永远等不到，如没人回答的提问）时 `Notify` 用户，每轮连续跳过只通知一次，在运行的不通知（运行偶尔长过一个周期是常态）；下次真正触发、改配置或重新启用时清除，挡路的会话换了（手动立即运行）算新的一轮；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起） |
 | `once` | `{"at": "<ISO 8601 时间>"}`，不带时区的按配置的时区解释，创建时必须在将来 | `{}`（到期时间就是配置本身） | `DueRunner` + `OnceDue`：消耗这次到期 = 归档（`finished_at`）。到点只触发一次，之后从列表里消失 |
 | `webhook` | `{}` | `token_hash` | `Webhooks`：`POST /api/hooks/{name}[?session_id=]` 凭 token 鉴权 |
-| `stream` | `{"command": "<bash>", "secrets": [...], "debounce_seconds": 5}` | `running_since`、`error`、`failures`（进程的运行状态，换配置时清零） | `StreamRunner`：见下「流式触发」 |
+| `stream` | `{"command": "<bash>", "secrets": [...], "debounce_seconds": 5}` | `running_since`、`error`、`failures`（进程的运行状态，只由 `StreamRunner` 维护、不由配置推导；每个托管进程开始时清零） | `StreamRunner`：见下「流式触发」 |
 
 **按到期时间触发**（`triggers/due.py`，`schedule` 与 `once` 共用）：`DueRunner` 一个循环扫描所有还会到期的触发器，到期的并发触发。每种方式只给出两件事（`DueKind`）：到期时间从哪来（`due_at`），以及**消耗这次到期**时这一行怎么变（`consume_in`：定时推进到下次，一次性归档）。消耗与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）：先提交消耗，再调用 `fire`，所以进程恰好死在两者之间时这一次被跳过，**至多触发一次**；触发前按最新的行重新判断（列出之后被删除、停用、归档或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason`（经 `TriggerService.disable`，和别的修改一样通知监听者）；存下的配置或状态坏了、算不出到期时间的（`due_at` / `consume_in` 抛 `CorruptState`）同样只停用这一个，扫描循环照常继续。
 
-**流式触发**（`triggers/stream.py`）：平台托管一条常驻命令（如 Slack Socket Mode 监听），stdout 每一行是一个事件。`StreamRunner.run_forever` 在根任务组里 `watch()` 触发器变化并对账：每个启用的流式触发器一个受监督的进程（由 agent、配置决定，变了就取消重起），停用、删除、改配置、关停时取消即 `kill_group` 杀掉整个进程组。命令与前置检查、`run_shell` 共用 `platform/shell.py`（`spawn_bash`，pipefail、最小环境、secret 注入与替换），在 agent 工作目录里运行；stderr 追加到 `trigger-logs/<名称>.stderr.log`（1 MiB 轮换）。退出（任何退出码）或 secret 不可见都算一次失败：原因记在 `state.error`，按 1…2^n 秒（上限 5 分钟）退避重启，稳定运行 60 秒算恢复（清错误、计数归零），连续快速失败达 3 次时 `Notify` 一次。进程状态只写给仍启用、配置未变的行（被取消的旧进程不覆盖新的）；停用时状态里的 `running_since` 按启用推导为空。事件在内存里排队：第一行到后等 `debounce_seconds`，上一次触发的会话不是 idle（与定时触发同一个 `previous_fire_state_in`）就继续排队，空闲后合并成一次 `fire`（新会话，有前置检查时事件作为它的 stdin）；挡路的会话在等待时通知一次；排队超过事件上限就不再等、先按上限分批投递（宁可重叠不丢事件），单行超限丢弃并记日志。排队的事件不持久化，重启会丢：断线重连、去重、游标和轮询兜底由命令自己负责（公共 skill `stream-listener`）。
+**流式触发**（`triggers/stream.py`）：平台托管一条常驻命令（如 Slack Socket Mode 监听），stdout 每一行是一个事件。`StreamRunner.run_forever` 在根任务组里 `watch()` 触发器变化并对账：每个启用的流式触发器一个受监督的进程（由 agent、配置决定，变了就取消重起；只改说明不重起），停用、删除、改配置、关停时取消即 `kill_group` 杀掉整个进程组并限时回收。命令与前置检查、`run_shell` 共用 `platform/shell.py`（`spawn_bash`，pipefail、最小环境、secret 注入与替换），在 agent 工作目录里运行；退出以 `returncode` 为准（`platform/output.wait_exit_code`，后代占着管道时 `Process.wait` 不返回），退出后也杀掉整组（留下的后代不随重启越积越多）。stderr 与后台任务共用 `platform/output.record_output`（逐块脱敏、跨块的 secret 不漏、增量解码）追加到 `trigger-logs/<名称>.stderr.log`，每次启动前超过 1 MiB 轮换并写一行分隔。退出（任何退出码）、secret 不可见、一次启动里的意外异常都算一次失败：原因（含日志结尾）记在 `state.error`，按 1…2^n 秒（上限 5 分钟）退避重启，稳定运行 60 秒算恢复（清错误、计数归零），连续快速失败达 3 次时 `Notify` 一次。运行状态只由运行器写，只写给仍启用、配置未变的行（被取消的旧进程不覆盖新的）；每个托管进程开始时清零（服务重启、换配置都从头算）；停用时 `running_since` 按启用推导为空。事件在内存里排队：第一行到后等 `debounce_seconds`，上一次触发的会话不是 idle（与定时触发同一个 `previous_fire_state_in`）就继续排队，空闲后合并成一次 `fire_activated`（新会话，有前置检查时事件作为它的 stdin，失败分类与到期扫描共用）；挡路的会话在等待时通知一次（这份托管进程内每个挡路会话一次，不持久化，服务重启后可能再通知一次）。队列以事件上限为界：排满就不再读命令的输出，管道写满后命令自己阻塞——不重叠、不丢、内存与并行会话有界；单行超限丢弃并记日志。排队的事件不持久化，重启、改配置、停用会丢，前置检查失败时这一批也丢弃：断线重连、去重、游标和轮询兜底由命令自己负责（公共 skill `stream-listener`）。
 
 **归档**（`finished_at`，触发器的公共概念，不属于某一种方式）：这个触发器不会再触发了。一次性触发器在它那次到期被消耗时归档——无论随后是真的投递、前置检查判定没事，还是触发失败（失败另记 `disabled_reason`）。归档之后：不出现在默认列表（`trigger_list`、`GET /triggers`、界面主列表），不能再 `update` / 启用 / 立即运行（`Conflict`），可以删除；名称只在**未归档**的触发器之间唯一（部分唯一索引 `WHERE finished_at IS NULL`），所以同名的可以重新创建，按名称（`get_by_name`、webhook 的鉴权）找到的也只有未归档的那个。行永久保留，`id` 永不复用，它发起过的会话（`origin='trigger'`、`origin_ref` 是它的 id）因此一直查得到是谁发的：`GET /triggers?finished=true` 列出归档的，`GET /sessions?origin=trigger&origin_ref=<id>` 列出某个触发器发起过的会话（走会话领域的查询，触发器领域不碰 `sessions` 表），`trigger_list(finished=true)` 让 agent 查一次性任务的结果（带 `finished_at` 与 `last_session_id`）。
 

@@ -253,7 +253,7 @@ async def test_a_job_whose_outcome_could_not_be_recorded_is_reconciled(
 
 
 async def test_a_long_line_is_split_without_leaking_a_secret_or_breaking_characters(tmp_path):
-    from muliao.jobs.process import _safe_cut
+    from muliao.platform.output import _safe_cut
 
     text = "x" * 10 + "SECRET" + "y" * 10
     # 切口落在 secret 中间时挪到它前面
@@ -307,7 +307,7 @@ async def test_killing_a_job_that_just_exited_is_a_clear_conflict(container, mak
 
 
 def test_the_cut_also_avoids_secrets_overlapping_each_other():
-    from muliao.jobs.process import _safe_cut
+    from muliao.platform.output import _safe_cut
 
     # 挪过一次之后，另一个 secret 跨到了新切口上，要继续挪
     text = "....ABCDEFGH...."
@@ -559,27 +559,27 @@ class _FakeProc:
 
 
 async def test_a_multiline_secret_across_a_read_boundary_never_reaches_the_log(tmp_path):
-    from muliao.jobs.process import _CHUNK, _record
+    from muliao.platform.output import CHUNK, record_output
 
     pem = "-----BEGIN KEY-----\nAAAA\nBBBB\n-----END KEY-----"
     proc = _FakeProc()
     # secret 中间的换行恰好落在第一块里，其余部分在下一块
-    data = "x" * (_CHUNK - 25) + pem + "\ndone\n"
+    data = "x" * (CHUNK - 25) + pem + "\ndone\n"
     proc.stdout.feed_data(data.encode())
     proc.stdout.feed_eof()
     log_file = tmp_path / "out.log"
-    await _record(proc, log_file, {"PEM": pem})
-    assert log_file.read_text() == "x" * (_CHUNK - 25) + "[secret:PEM]\ndone\n"
+    await record_output(proc.stdout, log_file, {"PEM": pem})
+    assert log_file.read_text() == "x" * (CHUNK - 25) + "[secret:PEM]\ndone\n"
 
 
 async def test_output_read_before_a_cancelled_drain_is_written_without_a_secret_prefix(tmp_path):
-    from muliao.jobs.process import _record
+    from muliao.platform.output import record_output
 
     proc = _FakeProc()
     # 没有换行的最后一段也要写出；末尾的 "se" 可能是 secret 的开头，留着不写
     proc.stdout.feed_data(b"line1\nno newline yet se")
     log_file = tmp_path / "out.log"
-    task = asyncio.create_task(_record(proc, log_file, {"K": "sec"}))
+    task = asyncio.create_task(record_output(proc.stdout, log_file, {"K": "sec"}))
     await asyncio.sleep(0.1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -589,12 +589,12 @@ async def test_output_read_before_a_cancelled_drain_is_written_without_a_secret_
 
 async def test_output_of_a_quiet_job_reaches_the_log_even_with_long_secrets(tmp_path):
     """只留着可能是 secret 开头的那一段，不按最长 secret 的长度一律扣住末尾：否则安静下来的进程最后几行看不到。"""
-    from muliao.jobs.process import _record
+    from muliao.platform.output import record_output
 
     proc = _FakeProc()
     proc.stdout.feed_data(b"starting\nlistening on http://localhost:8080\n")
     log_file = tmp_path / "out.log"
-    task = asyncio.create_task(_record(proc, log_file, {"K": "k" * 40}))
+    task = asyncio.create_task(record_output(proc.stdout, log_file, {"K": "k" * 40}))
     await asyncio.sleep(0.1)
     assert log_file.read_text() == "starting\nlistening on http://localhost:8080\n"
     task.cancel()

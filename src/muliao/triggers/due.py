@@ -17,10 +17,9 @@ from typing import Protocol
 import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import Conflict, CorruptState, DomainError, NotFound
+from muliao.errors import CorruptState, DomainError
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock
-from muliao.triggers.precheck import PrecheckFailed
 from muliao.triggers.service import TriggerService
 from muliao.triggers.tables import Trigger
 
@@ -98,25 +97,14 @@ class DueRunner:
 
     async def _fire_one(self, trigger_id: int, now: datetime) -> None:
         try:
-            await self._fire(trigger_id, now)
-        except PrecheckFailed:
-            # 已记在触发器上；脚本的故障往往是暂时的，保持启用，下次照常检查
-            pass
-        except (Conflict, NotFound) as e:
-            # 消耗这次到期之后、触发之前被用户停用或删除：不是触发失败，不覆盖失败原因
-            log.info("due fire skipped: %s", e, extra={"trigger_id": trigger_id})
-        except DomainError as e:
-            await self._disable(trigger_id, f"{type(e).__name__}: {e}")
-
-    async def _fire(self, trigger_id: int, now: datetime) -> None:
-        try:
             if not await self._consume(trigger_id, now):
                 return
-        except CorruptState as e:
+        except (CorruptState, DomainError) as e:
             # 只有这个触发器自己存下的数据（到期规则读的配置与状态）坏了才停用它；触发链路上别处的 CorruptState 照常上抛
             await self._disable(trigger_id, f"{type(e).__name__}: {e}")
             return
-        await self._triggers.fire(trigger_id)
+        # 触发本身的失败按激活机制共用的规则处理（见 TriggerService.fire_activated）
+        await self._triggers.fire_activated(trigger_id)
 
     async def _consume(self, trigger_id: int, now: datetime) -> bool:
         """按最新的行消耗这次到期；返回是否应当触发。"""

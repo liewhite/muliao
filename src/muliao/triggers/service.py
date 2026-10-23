@@ -33,7 +33,7 @@ from sqlalchemy.orm import undefer
 
 from muliao.agents.api import active_agent_in
 from muliao.agents.events import AgentDeleting
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.ids import new_id
@@ -386,6 +386,23 @@ class TriggerService:
             return None
         await self._run_now(fired.delivery.id)
         return fired.session_id
+
+    async def fire_activated(self, trigger_id: int, payload: str | None = None) -> None:
+        """没有调用方等着结果的激活机制（到期扫描、流式）用的 fire：失败按统一的规则处理，不上抛领域错误。
+        - 前置检查失败：已记在触发器上；脚本的故障往往是暂时的，保持启用；
+        - 被停用或删除（Conflict / NotFound）：不是触发失败，只记日志，不覆盖失败原因；
+        - 其余领域错误（如来信被拒绝）：停用并记 disabled_reason。
+        契约之外的异常照常上抛。webhook 的调用方在等结果，直接用 fire。"""
+        try:
+            await self.fire(trigger_id, payload)
+        except PrecheckFailed:
+            pass
+        except (Conflict, NotFound) as e:
+            log.info("activated fire skipped: %s", e, extra={"trigger_id": trigger_id})
+        except DomainError as e:
+            reason = f"{type(e).__name__}: {e}"
+            if await self.disable(trigger_id, reason):
+                log.error("trigger disabled: %s", reason, extra={"trigger_id": trigger_id})
 
     async def _fire(self, trigger_id: int, payload: str | None, session_id: str | None) -> _Fired | None:
         async with self._db.transaction() as s:

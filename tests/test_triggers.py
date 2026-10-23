@@ -361,7 +361,7 @@ async def test_corrupt_state_outside_the_trigger_itself_is_not_blamed_on_it(
     )
     await _make_due(container, trigger.id)
 
-    async def broken_fire(_trigger_id):  # noqa: ANN001, ANN202
+    async def broken_fire(_trigger_id, _payload=None):  # noqa: ANN001, ANN202
         raise CorruptState("agent resources missing")
 
     monkeypatch.setattr(triggers, "fire", broken_fire)

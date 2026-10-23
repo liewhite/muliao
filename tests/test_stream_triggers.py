@@ -249,15 +249,157 @@ async def test_a_missing_secret_is_recorded_as_the_error(container, make_agent):
     assert "NOPE" in container.triggers.status_of(await container.triggers.get_by_name("feed"))["error"]
 
 
-async def test_a_backlog_over_the_event_limit_fires_in_batches_without_waiting(container, make_agent):
+async def test_a_backlog_over_the_event_limit_waits_in_the_pipe_and_goes_one_session_at_a_time(
+    container, make_agent
+):
+    """排队以事件上限为界：排满后不再读命令的输出（命令阻塞），不重叠、不丢。"""
     alpha = (await make_agent()).id
     await _create(
-        container, alpha, "for i in $(seq 1 40); do echo line-$i; done; sleep 30", debounce_seconds=0.2
+        container, alpha, "for i in $(seq 1 40); do echo line-$i; done; sleep 30", debounce_seconds=0
     )
 
     async with _running(_runner(container, max_bytes=100)):
-        await _until(lambda: _has_sessions(container, alpha, 3))
+        await _until(lambda: _has_sessions(container, alpha, 1))
+        await anyio.sleep(0.3)
+        # 第一次触发的会话还没做完：剩下的行留着，不另开会话
+        assert len(await _sessions(container, alpha)) == 1
+        while len(await _sessions(container, alpha)) < 4:
+            await drain(container)
 
-    events = [c.split("<event>\n")[1].split("\n</event>")[0] for c in await _contents(container, alpha)]
-    assert all(len(e.encode()) < 100 for e in events)
-    assert any(e.startswith("line-1\n") for e in events)
+    events = []
+    for item in await _sessions(container, alpha):
+        session = item.session.id
+        async with container.db.transaction() as s:
+            queued = [m.content for m in await queued_in(s, session)]
+        events += [p for p in queued + await _prompts(container, session) if "<event>" in p]
+    lines = [line for e in events for line in e.split("<event>\n")[1].split("\n</event>")[0].split("\n")]
+    assert all(len(e.split("<event>\n")[1].encode()) < 100 + len("</event>") for e in events)
+    assert sorted(lines, key=lambda x: int(x.split("-")[1])) == [
+        f"line-{i}" for i in range(1, len(lines) + 1)
+    ]
+
+
+async def _prompts(container, session_id: str) -> list[str]:
+    return [
+        text
+        for m in await history_of(container, session_id)
+        for p in m.parts
+        if isinstance(p, UserPromptPart)
+        for text in ([p.content] if isinstance(p.content, str) else p.content)
+        if isinstance(text, str)
+    ]
+
+
+async def test_an_overlong_line_is_dropped_and_the_following_lines_still_arrive(container, make_agent):
+    alpha = (await make_agent()).id
+    await _create(container, alpha, "printf '%0300d\\nok\\n' 0; sleep 30", debounce_seconds=0.2)
+
+    async with _running(_runner(container, max_bytes=100)):
+        await _until(lambda: _has_sessions(container, alpha, 1))
+
+    assert await _contents(container, alpha) == ["handle\n\n<event>\nok\n</event>"]
+
+
+async def test_saving_the_same_config_keeps_the_running_state(container, make_agent):
+    """只改说明（界面保存时总会带上原配置）不重启进程，运行状态也不能被清掉。"""
+    alpha = (await make_agent()).id
+    trigger = await _create(container, alpha, "sleep 30")
+
+    async def running() -> bool:
+        return (
+            container.triggers.status_of(await container.triggers.get_by_name("feed"))["running_since"]
+            is not None
+        )
+
+    async with _running(_runner(container)):
+        await _until(running)
+        await container.triggers.update(trigger.id, prompt="new", config={"command": "sleep 30"})
+        await anyio.sleep(0.3)
+        assert await running()
+
+
+async def test_an_exit_is_noticed_even_when_a_child_keeps_the_pipes_and_the_child_is_killed(
+    container, make_agent
+):
+    alpha = (await make_agent()).id
+    kids = container.agents.workspace(alpha) / "kids"
+    await _create(container, alpha, "sleep 30 & echo $! >> kids; exit 1")
+
+    async with _running(_runner(container)):
+
+        async def failed_twice() -> bool:
+            return container.triggers.status_of(await container.triggers.get_by_name("feed"))["failures"] >= 2
+
+        await _until(failed_twice)
+
+    first = int(kids.read_text().split()[0])
+
+    async def gone() -> bool:
+        return not _alive(first)
+
+    await _until(gone)
+
+
+async def test_running_stably_clears_the_error(container, make_agent):
+    alpha = (await make_agent()).id
+    await _create(
+        container, alpha, "if [ -f once ]; then sleep 30; else touch once; echo bad >&2; exit 1; fi"
+    )
+
+    async with _running(_runner(container, stable_seconds=0.3)):
+
+        async def recovered() -> bool:
+            status = container.triggers.status_of(await container.triggers.get_by_name("feed"))
+            return status["running_since"] is not None and status["error"] is None and status["failures"] == 0
+
+        async def failed() -> bool:
+            return container.triggers.status_of(await container.triggers.get_by_name("feed"))["failures"] == 1
+
+        await _until(failed)
+        await _until(recovered)
+
+
+async def test_stderr_is_logged_with_secrets_redacted(container, make_agent):
+    alpha = (await make_agent()).id
+    await container.vault.set(alpha, "TOKEN", "s3cr3t-value")
+    await _create(container, alpha, 'echo "err $TOKEN" >&2; sleep 30', secrets=["TOKEN"])
+    log = container.agents.workspace(alpha) / "trigger-logs" / "feed.stderr.log"
+
+    async def logged() -> bool:
+        return log.exists() and "err " in log.read_text()
+
+    async with _running(_runner(container)):
+        await _until(logged)
+
+    assert "err [secret:TOKEN]" in log.read_text() and "s3cr3t" not in log.read_text()
+
+
+async def test_a_waiting_previous_session_holds_events_and_notifies_once(container, make_agent):
+    from muliao.sessions.holds import get_in, hold_in, release
+
+    alpha = (await make_agent()).id
+    events = container.agents.workspace(alpha) / "events.txt"
+    events.parent.mkdir(parents=True, exist_ok=True)
+    events.write_text("1\n")
+    await _create(container, alpha, "tail -n +1 -F events.txt", debounce_seconds=0)
+
+    async with _running(_runner(container)):
+        await _until(lambda: _has_sessions(container, alpha, 1))
+        await drain(container)
+        first = (await container.triggers.get_by_name("feed")).last_session_id
+        async with container.db.transaction() as s:
+            await hold_in(s, first, "job:1", awaited=False)
+        for line in ("2\n", "3\n"):
+            with events.open("a") as f:
+                f.write(line)
+            await anyio.sleep(0.3)
+        await drain(container)
+        notes = [n for n in await container.notifications.list(10) if "feed" in n.title]
+        assert [n.session_id for n in notes] == [first]
+        assert len(await _sessions(container, alpha)) == 1
+
+        async with container.db.transaction() as s:
+            hold = await get_in(s, first, "job:1")
+            assert hold is not None
+            release(hold)
+        await _until(lambda: _has_sessions(container, alpha, 2))
