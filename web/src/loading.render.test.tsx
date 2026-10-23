@@ -50,7 +50,7 @@ describe('shouldRefetch', () => {
     const note = { type: 'notification', notification_id: 1, session_id: 's' } as const
     expect(shouldRefetch(note, 'sessions')).toBe(true)
     expect(shouldRefetch(note, 'agents')).toBe(false)
-    // 系统通知（前置检查告警、推送测试）不指向会话
+    // 系统通知（前置检查告警投不到 agent 时的兜底、推送测试）不指向会话
     expect(shouldRefetch({ ...note, session_id: null }, 'sessions')).toBe(false)
   })
 })

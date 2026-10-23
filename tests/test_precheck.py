@@ -126,6 +126,8 @@ async def test_a_failing_precheck_is_handed_to_the_agent_once_per_streak_not_to_
     [alert] = await _alerts(container)
     assert "`watch`" in alert and "exited with 3: no token" in alert and "trigger_update" in alert
     assert "test -f ok" in alert and "fire_when: output" in alert and "<prompt>" not in alert
+    [mail] = await mail_of(container)
+    assert not mail.awaited
     assert await container.notifications.list(100) == []
     sessions = await container.sessions.list(agent_id=alpha, origins=[Origin.TRIGGER], limit=10, offset=0)
     assert [x.session.origin_ref for x in sessions] == [str(trigger.id)]
@@ -143,16 +145,17 @@ async def test_a_failing_precheck_is_handed_to_the_agent_once_per_streak_not_to_
 
 
 async def test_a_precheck_alert_the_agent_cannot_receive_falls_back_to_notifying_the_user(
-    container, make_agent, monkeypatch
+    container, make_agent
 ):
+    from muliao.agents.tables import Agent
+
     alpha = (await make_agent()).id
     trigger, _ = await _schedule(container, alpha, Precheck(command="echo gone >&2; exit 2"))
-
-    async def refuse(_s, _inbound):
-        raise NotFound("agent is being deleted")
-
-    monkeypatch.setattr("muliao.triggers.service.receive_command_in", refuse)
+    # 删除窗口里：触发器还在，但 agent 已按不存在处理，告警信投不进去
+    async with container.db.transaction() as s:
+        (await s.get(Agent, alpha)).deleting_by = "user"
     await _tick(container, trigger.id)
+    assert "exited with 2" in (await container.triggers.get_by_name("watch")).precheck_error
 
     assert await _alerts(container) == []
     [note] = await container.notifications.list(10)
@@ -180,6 +183,7 @@ async def test_an_archived_once_trigger_whose_precheck_failed_tells_the_agent_it
 
     [alert] = await _alerts(container)
     assert "NOT done" in alert and "<prompt>\nSend the weekly report.\n</prompt>" in alert
+    assert "trigger_update" not in alert and "trigger_run" not in alert
 
 
 async def test_a_failing_step_inside_a_pipeline_fails_the_precheck(container, make_agent):

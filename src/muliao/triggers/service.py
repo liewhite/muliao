@@ -549,19 +549,27 @@ def precheck_alert(trigger: Trigger, error: str) -> str:
         "```",
         "",
         "What to do:",
-        "- A transient fault (network blip, a remote service briefly down): nothing to fix, the next check "
-        "recovers by itself; consider adding retries to the command if this keeps happening.",
-        "- A bug in the command: fix it with `trigger_update` (new precheck) and verify with `trigger_run`.",
-        "- Something only the user can fix (a missing secret, a permission, an account): `notify_user` with what "
-        "is needed.",
-        "You are told only when the check goes from healthy to failing; while it keeps failing no further "
-        "message comes.",
     ]
-    if trigger.finished_at is not None:
+    user_only = (
+        "- Something only the user can fix (a missing secret, a permission, an account): `notify_user` with what "
+        "is needed."
+    )
+    if trigger.finished_at is None:
         lines += [
-            "",
-            "This was a one-off trigger and it has used up its single firing, so its task was NOT done and it "
-            "cannot be run again. Once the cause is fixed, do the task yourself or create a new trigger for it. "
+            "- A transient fault (network blip, a remote service briefly down): nothing to fix, the next check "
+            "recovers by itself; consider adding retries to the command if this keeps happening.",
+            "- A bug in the command: fix it with `trigger_update` (new precheck) and verify with `trigger_run`.",
+            user_only,
+            "You are told only when the check goes from healthy to failing; while it keeps failing no further "
+            "message comes.",
+        ]
+    else:
+        # 已归档的一次性触发器不能再修改或运行：任务没做，要么自己做，要么重建
+        lines += [
+            "- This was a one-off trigger and it has used up its single firing, so its task was NOT done; it is "
+            "archived and can no longer be updated or run. If the cause was transient or a bug in the command, "
+            "do the task yourself or create a new trigger with a fixed precheck.",
+            user_only,
             "Its prompt was:",
             "<prompt>",
             trigger.prompt,
