@@ -97,7 +97,7 @@ def temp_agent_toolset(
             instructions: Optional role or rules for the helper, e.g. "You are a careful summarizer.".
             model: `<provider>:<model>` to use, e.g. a cheaper one; defaults to your own model.
             thinking: Thinking/reasoning effort (`default` = the model's own default, `off` disables it);
-                defaults to your own setting.
+                defaults to your own setting. Pass `default` when picking a model that takes no thinking setting.
         """
         parent = await agents.get(ctx.deps.agent_id)
         workspace = await asyncio.to_thread(_make_workspace, temp_root)

@@ -101,11 +101,17 @@ def info_of(agent: Agent) -> AgentInfo:
         description=agent.description,
         model=agent.model,
         tool_groups=tuple(agent.tool_groups),
-        # 写入时已校验（AgentService._check）
+        # 写入时与启动时已校验（_check_thinking_level）
         thinking=cast(Thinking, agent.thinking),
         created_at=agent.created_at,
         is_default=agent.is_default,
     )
+
+
+def _check_thinking_level(thinking: str) -> None:
+    """写入时与启动检查时同一条规则（库里的值经 info_of 直接当作 Thinking 用）。"""
+    if thinking not in THINKING_LEVELS:
+        raise InvalidInput(f"thinking must be one of {list(THINKING_LEVELS)}, got {thinking!r}")
 
 
 async def active_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
@@ -177,7 +183,7 @@ class AgentService:
         return [g for g in tool_groups if g not in self.defaults.group_names]
 
     async def verify_stored(self) -> None:
-        """启动检查：已存 agent 的模型必须能被当前配置解析、选用的工具组必须都可用，与新建、修改时同一套规则。
+        """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、选用的工具组必须都可用，与新建、修改时同一套规则。
         配置改动（删 provider、改名、去掉 [web]）在启动时暴露，而不是散落到每个任务里失败。正在删除的不查。
         先报出已删除 agent 的残留目录（只记录，不阻止启动）。"""
         await self._report_leftovers()
@@ -185,6 +191,7 @@ class AgentService:
         broken = []
         for agent in agents:
             try:
+                _check_thinking_level(agent.thinking)
                 self._check_model(agent.model, agent.thinking)
             except InvalidInput as e:
                 broken.append(f"{agent.name} ({agent.id}): {e}")
@@ -215,8 +222,7 @@ class AgentService:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
     def _check(self, *, description: str, model: str, tool_groups: list[str], thinking: Thinking) -> None:
-        if thinking not in THINKING_LEVELS:
-            raise InvalidInput(f"thinking must be one of {list(THINKING_LEVELS)}, got {thinking!r}")
+        _check_thinking_level(thinking)
         if not description.strip():
             raise InvalidInput("agent description must not be empty")
         unknown = self._unavailable_groups(tool_groups)

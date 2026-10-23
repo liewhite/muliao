@@ -307,7 +307,8 @@ class AgentRuntime:
 
     def _model(self, model: str, thinking: Thinking) -> tuple[Model, ModelSettings | None]:
         """模型与这次运行的 model settings（思考档位）。档位会被模型悄悄忽略时报 InvalidInput（llm.check_thinking）：
-        agent 的档位在写入时已查过，这里拦住临时 agent 指定的档位与之后改了配置的情况。"""
+        agent 存下的档位在写入与启动时已查过，这里拦住的是临时 agent 指定的档位，以及依赖升级后模型 profile 变了的情况；
+        每次都查而不分入口，成本只是读 profile。"""
         resolved = self._resolve_model(model)
         check_thinking(model, resolved, thinking)
         return resolved, model_settings(thinking)

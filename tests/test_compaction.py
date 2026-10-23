@@ -10,10 +10,12 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo
+from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.usage import RequestUsage
 from sqlalchemy import select
 
 from muliao.agent_runtime.conventions import run_context_index
+from muliao.agents.api import AgentPatch
 from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.api import Origin
 from muliao.sessions.codec import dump_message, load_messages
@@ -31,11 +33,13 @@ class Recorder:
     def __init__(self) -> None:
         self.turns: list[tuple[str, int, str | None]] = []  # (prompt, 消息数, instructions)
         self.compactions: list[str] = []
+        self.compaction_thinking: list[object] = []  # 压缩请求带上的思考档位
 
     def __call__(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         prompt = last_user_prompt(messages)
         if info.instructions == COMPACTION_INSTRUCTIONS:
             self.compactions.append(prompt)
+            self.compaction_thinking.append(info.model_request_parameters.thinking)
             return ModelResponse(parts=[TextPart(f"SUMMARY#{len(self.compactions)}")])
         self.turns.append((prompt, len(messages), info.instructions))
         return ModelResponse(parts=[TextPart(f"re: {prompt}")])
@@ -53,10 +57,12 @@ async def _enqueue_compaction(container, session) -> None:
         )
 
 
-async def _session_with_exchanges(container, models, agent_id: str, n: int):
+async def _session_with_exchanges(
+    container, models, agent_id: str, n: int, profile: ModelProfile | None = None
+):
     """n 次一问一答（没有工具调用：每条消息各是一步）。"""
     recorder = Recorder()
-    models.models["m"] = scripted(recorder)
+    models.models["m"] = scripted(recorder, profile)
     session = await start(container, agent_id, "turn 1", origin=Origin.TRIGGER)
     await drain(container)
     for i in range(2, n + 1):
@@ -96,6 +102,7 @@ async def test_compaction_summarizes_older_steps_and_the_next_run_uses_the_summa
 
     # 保留窗口之外的四步（前两次问答）被总结
     assert len(recorder.compactions) == 1
+    assert recorder.compaction_thinking == [None]  # 思考档位 default：什么都不传
     assert "turn 1" in recorder.compactions[0] and "turn 2" in recorder.compactions[0]
     assert f"turn {n}" not in recorder.compactions[0]
     async with container.db.transaction() as s:
@@ -403,3 +410,18 @@ async def _rows(container, session_id: str) -> list[tuple[int, ModelMessage]]:
             )
         ).all()
     return [(i, m) for (i, _), m in zip(rows, load_messages(p for _, p in rows), strict=True)]
+
+
+async def test_compaction_uses_the_agents_thinking_level(container, make_agent, models):
+    models.models["m"] = scripted(Recorder(), ModelProfile(supports_thinking=True))
+    alpha = (await make_agent("alpha", model="m")).id
+    await container.agents.update(alpha, AgentPatch(thinking="low"))
+    n = container.settings.runtime.compaction_keep_steps // 2 + 2
+    session, recorder = await _session_with_exchanges(
+        container, models, alpha, n, ModelProfile(supports_thinking=True)
+    )
+
+    await _enqueue_compaction(container, session)
+    await drain(container)
+
+    assert recorder.compaction_thinking == ["low"]
