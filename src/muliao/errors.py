@@ -1,5 +1,5 @@
 class DomainError(Exception):
-    """领域层错误的基类。API 层映射为 4xx（ScriptFailed 为 502，见 api.app._STATUS）；工具层映射为 ModelRetry 交还给模型修正。"""
+    """领域层错误的基类。API 层映射为 4xx（ScriptFailed 为 502，见 api.app._STATUS）；工具层映射为 ModelRetry 交还给模型修正，连续失败用完预算后改为 ToolFailed（agent_runtime.tool_errors）；工具拒绝调用都抛它，不直接抛 ModelRetry。"""
 
 
 class NotFound(DomainError):

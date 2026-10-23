@@ -7,9 +7,10 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel
-from pydantic_ai import FunctionToolset, ModelRetry, RunContext
+from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.api import AgentNames, AgentService
+from muliao.errors import InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.platform.values import KEEP
 from muliao.triggers.precheck import Precheck
@@ -144,7 +145,7 @@ def triggers_toolset(
             remove_precheck: Remove the precheck so every firing runs the agent.
         """
         if precheck is not None and remove_precheck:
-            raise ModelRetry("give either precheck or remove_precheck, not both")
+            raise InvalidInput("give either precheck or remove_precheck, not both")
         trigger = await triggers.get_by_name(name)
         trigger = await triggers.update(
             trigger.id,

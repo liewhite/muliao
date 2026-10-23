@@ -2,10 +2,11 @@
 list_threads。委派的生命周期见 sessions.delegation。"""
 
 from pydantic import BaseModel
-from pydantic_ai import FunctionToolset, ModelRetry, RunContext, ToolReturn
+from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.api import TOOL_THREADS, defer_call
 from muliao.agents.api import AgentService
+from muliao.errors import InvalidInput, NotFound
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -117,7 +118,7 @@ def delegation_toolset(
         parent_id = _require_session(ctx)
         target = await agents.find_by_name(agent)
         if not message.strip():
-            raise ModelRetry("message must not be empty")
+            raise InvalidInput("message must not be empty")
         if ctx.tool_call_id is None:
             raise RuntimeError("ask_agent was called without a tool call id")
         async with db.transaction() as s:
@@ -149,7 +150,7 @@ def delegation_toolset(
         async with db.transaction() as s:
             child_id = await threads.thread_id_in(s, parent_id, validate_thread(thread))
         if child_id is None:
-            raise ModelRetry(f"this conversation has no thread named {thread!r}; see list_threads")
+            raise NotFound(f"this conversation has no thread named {thread!r}; see list_threads")
         if await stop_session(child_id) == Halted.GONE:
             # 查到之后、停止之前被删除了（随所属 agent 删除）
             return f"thread {thread!r} was deleted meanwhile; nothing to stop"
