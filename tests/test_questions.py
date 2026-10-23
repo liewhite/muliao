@@ -16,7 +16,7 @@ from pydantic_ai.models.function import AgentInfo
 
 from muliao.platform.tables import TaskStatus
 from muliao.sessions.api import Origin
-from muliao.sessions.ask_user import NO_USER_WAITING
+from muliao.sessions.ask_user import ASKED_BY_AGENT, NO_USER_WAITING
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import steps_of
 from muliao.sessions.lanes import RUN_TASK
@@ -369,6 +369,45 @@ async def test_a_question_when_no_user_waits_is_rejected_with_the_reason(
     assert ask_states(detail) == {}
     assert [i["type"] for i in detail["items"] if i["tool_call_id"] == "q"] == ["tool_call", "tool_error"]
     assert retries == [NO_USER_WAITING]
+
+
+async def test_a_question_in_a_private_thread_is_handed_back_to_the_asking_agent(
+    client, container, make_agent, models
+):
+    """私有 thread 里是另一个 agent 在问：拒绝时让它把问题写进回答交回发起方，不建议去通知用户。"""
+    from tests.test_flow import tool_returns
+
+    await login(client)
+    lead = await make_agent("lead", model="l")
+    await make_agent("helper", model="h")
+    retries: list[str] = []
+
+    def lead_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if tool_returns(messages):
+            return ModelResponse(parts=[TextPart("ok")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "ask_agent", {"agent": "helper", "message": "x", "thread": "h"}, tool_call_id="a"
+                )
+            ]
+        )
+
+    def helper_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("ask_user", {"questions": QUESTIONS[:1]}, tool_call_id="q")]
+            )
+        retries.extend(str(p.content) for p in messages[-1].parts if isinstance(p, RetryPromptPart))
+        return ModelResponse(parts=[TextPart("请你定：看哪个周期？")])
+
+    models.models["l"] = scripted(lead_fn)
+    models.models["h"] = scripted(helper_fn)
+    await client.post("/api/sessions", json={"agent_id": lead.id, "prompt": "go"})
+    await drain(container)
+
+    assert retries == [ASKED_BY_AGENT]
+    assert "notify_user" not in ASKED_BY_AGENT
 
 
 async def test_a_live_question_is_shown_as_asking(container, make_agent, models):
