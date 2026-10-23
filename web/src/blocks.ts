@@ -84,7 +84,7 @@ export function toBlocks(items: Item[]): Block[] {
           rejected: false,
           attachments: [],
           images: [],
-          threads: [],
+          threads: item.threads,
           startedAt: item.at,
           finishedAt: null,
         }
@@ -202,7 +202,7 @@ export function stepThreads(steps: Step[]): string[] {
 
 /**
  * 没有被任何条目引用的 thread：在 thread 随调用记录之前开出的、开出后调用被停止或失败的。
- * 引用来自完整历史（被压缩的部分也算）。
+ * 引用来自完整历史（被压缩的部分也算）与正在进行的这一段；还挂着的调用（ask_agent）在调用条目上带着它的 thread。
  */
 export function unlinkedThreads<T extends { id: string }>(items: Item[], threads: T[]): T[] {
   const linked = new Set(items.flatMap((i) => i.threads))

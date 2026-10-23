@@ -298,7 +298,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 | `delegate_task(..., report_back=true)` | 立即继续，不等 | 同上 | 不直接推送，作为事件交回父会话（第 8 节） |
 | `ask_agent(agent, message, thread)` | 停在这次调用上等回信（见「挂起的调用」） | 私有 thread：不进会话页「对话」，用户只读 | 作为这次调用的结果交回父 agent |
 
-**界面上 thread 显示在开出或续写它的那次调用处**：两个工具都把 thread 的会话 id 挂在工具结果的 metadata 上（`conventions.TOOL_THREADS`，与 `TOOL_ATTACHMENTS` 同一约定，不发给模型、随消息持久化、实时条目里也带），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新的对话）。没有任何条目引用的 thread 列在末尾「未关联到调用的 thread」：开出后调用被用户停止的（停止补上的结果不带 thread）、开出后调用失败的（交还模型重试的结果不带 thread）。不为后两种补记 metadata，那会把这个约定散到停止与重试的路径里。历史里引用的 thread 不在会话的 thread 列表中，说明它已被删除，显示为「thread 已删除」。
+**界面上 thread 显示在开出或续写它的那次调用处**：两个工具都把 thread 的会话 id 挂在工具结果的 metadata 上（`conventions.TOOL_THREADS`，与 `TOOL_ATTACHMENTS` 同一约定，不发给模型、随消息持久化、实时条目里也带），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新的对话）。`ask_agent` 挂起期间还没有结果：会话接口（`SessionService.detail`）给还没有结果的调用条目填上它交出去的 thread（`transcript.annotate_pending_threads`，历史与实时快照都填），来源是委派自己的记录——发起方带 `call_id` 的占用与以它为关联 id 的信件（`delegation.call_threads_in`），不另存；有了结果之后以结果上的 metadata 为准，调用条目不再填。之后经 SSE 收到的调用条目不填，那时 thread 列表也还没重新拉取，运行一停就重新拉取。没有任何条目（历史与正在进行的这一段）引用的 thread 列在末尾「未关联到调用的 thread」：开出后调用被用户停止的（停止补上的结果不带 thread）、开出后调用失败的（交还模型重试的结果不带 thread）。不为后两种补记 metadata，那会把这个约定散到停止与重试的路径里。历史里引用的 thread 不在会话的 thread 列表中，说明它已被删除，显示为「thread 已删除」。
 
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `thread`，同一父 session 内唯一）。模型只用 thread 名，不接触 session id。同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。thread 的 agent 与种类在创建时确定，用错工具续聊时以可纠正的错误交还模型（`KindPolicy.continued_by`）。
 - **推送按信件、不按 session**：每封信件带「用户是否在等它的回答」（`awaited`，由投信的入口设置，见第 14 节）。一次运行处理过的信件里有用户在等的，就把它的回答推送给用户；否则不推，agent 可以自己 `notify_user`。同一个公开 thread 里，父 agent 委派的任务与用户的追问都推送；`report_back` 的委派不推送，结果交回父 agent。

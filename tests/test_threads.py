@@ -419,6 +419,51 @@ async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_
     await container.agent_lifecycle.delete(slow, author="user")  # 跑完之后可以删
 
 
+async def test_a_pending_ask_points_at_its_thread_before_the_answer(container, make_agent, models):
+    """ask_agent 还挂着（对方没回答）时，调用条目就带上它开出的 thread；回答之后关联在结果上，调用条目不再带。"""
+    import asyncio
+    from collections.abc import AsyncIterator
+
+    from pydantic_ai.models.function import FunctionModel
+
+    lead = (await make_agent("lead", model="l")).id
+    await make_agent("slow", model="s")
+    gate, running = asyncio.Event(), asyncio.Event()
+
+    async def blocked(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        running.set()
+        await gate.wait()
+        yield "done"
+
+    models.models["s"] = FunctionModel(stream_function=blocked)
+    models.models["l"] = steps(
+        call("ask_agent", {"agent": "slow", "message": "q", "thread": "t"}), answer_with_tool_results("a")
+    )
+    parent = await start(container, lead, "go")
+    worker = asyncio.create_task(container.worker.run_forever())
+
+    def ask_items(items: list) -> list[tuple[str, list[str]]]:
+        return [(i.type, i.threads) for i in items if i.tool_name == "ask_agent"]
+
+    try:
+        async with asyncio.timeout(5):
+            await running.wait()
+        [child] = await threads_of(container, parent.id)
+        # 发问方的运行停在这次调用上之后，调用在历史里（运行中它在实时快照里，见下一个用例）
+        async with asyncio.timeout(5):
+            while (view := await container.sessions.detail(parent.id)).live is not None:  # noqa: ASYNC110  轮询会话状态，没有可等的事件
+                await asyncio.sleep(0.01)
+        assert ask_items(view.items) == [("tool_call", [child.id])]
+    finally:
+        gate.set()
+        await idle(container)
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    view = await container.sessions.detail(parent.id)
+    assert ask_items(view.items) == [("tool_call", []), ("tool_result", [child.id])]
+
+
 async def test_delegation_results_point_at_the_thread_they_opened(client, container, make_agent, models):
     from tests.conftest import login
     from tests.test_tools import run_tools

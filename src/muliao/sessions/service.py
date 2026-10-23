@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -17,6 +17,7 @@ from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor
+from muliao.sessions.delegation import call_threads_in
 from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.events import Receive, SessionRead, StopThread
 from muliao.sessions.halt import Halted, StopSession
@@ -31,12 +32,12 @@ from muliao.sessions.inbound import (
     target_in,
 )
 from muliao.sessions.kinds import LISTED, policy_of
-from muliao.sessions.live import LiveRun, LiveRuns
+from muliao.sessions.live import LiveRun, LiveRuns, RunItemEvent
 from muliao.sessions.mailbox import latest_run, visible_in
 from muliao.sessions.origins import Origin
 from muliao.sessions.tables import Compaction, Mail, Message, Session
 from muliao.sessions.threads import threads_of
-from muliao.sessions.transcript import Item, annotate_asks, checked_times, to_items
+from muliao.sessions.transcript import Item, annotate_asks, annotate_pending_threads, checked_times, to_items
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +59,18 @@ class SessionView:
     live: LiveRun | None
     # 工作状态（与会话列表同一条规则）：不是 idle 就显示停止。只剩挂起的提问时停止不清掉它（提问仍可回答，sessions.halt）
     state: WorkState
+
+
+def _with_pending_threads(live: LiveRun, call_threads: Mapping[str, str]) -> LiveRun:
+    """实时快照里还挂着的调用同样挂上它交出去的 thread（transcript.annotate_pending_threads）：中途打开会话页时
+    这一段的调用也显示它开出的 thread。之后经 SSE 收到的调用不带：那时 thread 列表也还没重新拉取。"""
+    items = [e.item for e in live.events if isinstance(e, RunItemEvent)]
+    annotated = iter(annotate_pending_threads(items, call_threads))
+    events = [
+        e.model_copy(update={"item": next(annotated)}) if isinstance(e, RunItemEvent) else e
+        for e in live.events
+    ]
+    return LiveRun(live.run_id, live.after_message_id, events)
 
 
 @dataclass(frozen=True)
@@ -114,6 +127,7 @@ class SessionService:
             latest = await latest_run(s, session_id)
             mail = await visible_in(s, session_id)
             threads = await threads_of(s, session_id)
+            call_threads = await call_threads_in(s, session_id)
             state = (await work_states_in(s, self._queue, [session_id]))[session_id]
         shown = [
             (message_id, payload, created_at)
@@ -121,14 +135,17 @@ class SessionService:
             if live is None or live.after_message_id is None or message_id <= live.after_message_id
         ]
         items = annotate_asks(
-            checked_times(
-                [
-                    item.model_copy(update={"message_id": message_id})
-                    for (message_id, _, created_at), message in zip(
-                        shown, load_messages(p for _, p, _ in shown), strict=True
-                    )
-                    for item in to_items([message], saved_at=created_at)
-                ]
+            annotate_pending_threads(
+                checked_times(
+                    [
+                        item.model_copy(update={"message_id": message_id})
+                        for (message_id, _, created_at), message in zip(
+                            shown, load_messages(p for _, p, _ in shown), strict=True
+                        )
+                        for item in to_items([message], saved_at=created_at)
+                    ]
+                ),
+                call_threads,
             ),
             answerable=asks.answerable.keys(),
             submitted=asks.submitted,
@@ -140,7 +157,7 @@ class SessionService:
             mail=mail,
             run=None if latest is None or latest.status == TaskStatus.DONE else latest,
             threads=threads,
-            live=live,
+            live=None if live is None else _with_pending_threads(live, call_threads),
             state=state,
         )
 

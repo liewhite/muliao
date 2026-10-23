@@ -796,7 +796,7 @@ export default function SessionView() {
                   <Blocks items={liveItems(shownLive)} ctx={{ ...ctx, view: 'live' }} />
                 </div>
               )}
-              <UnlinkedThreads threads={unlinkedThreads(d.items, d.threads)} agents={agents.data} />
+              <UnlinkedThreads threads={unlinkedThreads([...d.items, ...liveItems(shownLive)], d.threads)} agents={agents.data} />
               <div ref={bottom.contentEndRef} aria-hidden />
             </div>
           )

@@ -1,11 +1,11 @@
-"""会话条目上的步骤时间：调用的开始、结果的结束；拿不到真实时间的为 None。"""
+"""会话条目的投影：步骤时间（调用的开始、结果的结束；拿不到真实时间的为 None），挂起调用关联的 thread。"""
 
 from datetime import UTC, datetime, timedelta
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 
 from muliao.sessions.history import interrupted_results, stopped_results
-from muliao.sessions.transcript import checked_times, result_item, to_items
+from muliao.sessions.transcript import annotate_pending_threads, checked_times, result_item, to_items
 
 T0 = datetime(2026, 10, 22, 5, 0, tzinfo=UTC)
 CALL = ToolCallPart("run_shell", {"command": "ls"}, tool_call_id="c")
@@ -43,3 +43,40 @@ def test_a_start_after_the_result_is_dropped_as_untrusted():
         [ModelRequest(parts=[_result(T0)])]
     )
     assert [i.at for i in checked_times(items)] == [None, T0]
+
+
+ASK = ToolCallPart("ask_agent", {"agent": "a", "message": "q", "thread": "t"}, tool_call_id="ask")
+
+
+def test_a_call_still_waiting_points_at_the_thread_it_handed_over():
+    items = to_items([ModelResponse(parts=[ASK, CALL])])
+    assert [(i.tool_call_id, i.threads) for i in annotate_pending_threads(items, {"ask": "th"})] == [
+        ("ask", ["th"]),
+        ("c", []),
+    ]
+
+
+def test_a_stopped_call_does_not_point_at_its_thread():
+    # 停止补上的结果不带 thread：那个 thread 列为未关联，不由占用补回
+    history = [ModelResponse(parts=[ASK])]
+    items = to_items(history) + to_items(stopped_results(history))
+    assert [i.threads for i in annotate_pending_threads(items, {"ask": "th"})] == [[], []]
+
+
+def test_the_live_snapshot_points_pending_calls_at_their_threads():
+    from muliao.sessions.live import LiveRun, RunDeltaEvent, RunItemEvent
+    from muliao.sessions.service import _with_pending_threads
+
+    [call_item] = to_items([ModelResponse(parts=[ASK])])
+    base = {"session_id": "s", "agent": "x", "run_id": "r"}
+    live = LiveRun(
+        "r",
+        1,
+        [
+            RunDeltaEvent(**base, seq=0, item_type="thinking", text="hm"),
+            RunItemEvent(**base, seq=1, item=call_item),
+        ],
+    )
+    shown = _with_pending_threads(live, {"ask": "th"})
+    assert [e.item.threads for e in shown.events if isinstance(e, RunItemEvent)] == [["th"]]
+    assert shown.events[0] == live.events[0] and live.events[1].item.threads == []

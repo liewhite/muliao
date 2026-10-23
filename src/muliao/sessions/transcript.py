@@ -4,7 +4,7 @@
 消息上的约定（metadata 键、标记、合成结果）登记在 muliao.agent_runtime.conventions，这里只读它们来展示。
 """
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Any, Literal
 
@@ -155,6 +155,22 @@ def _annotated(
     else:
         return item
     return item.model_copy(update={"ask": item.ask.model_copy(update=update)})
+
+
+def annotate_pending_threads(items: list[Item], call_threads: Mapping[str, str]) -> list[Item]:
+    """还没有结果的调用（挂起的 ask_agent）挂上它交出去的 thread（call_threads：调用 id → thread，见
+    sessions.delegation.call_threads_in），界面据此把 thread 显示在这次调用处。有结果的调用不填：关联以结果上的
+    TOOL_THREADS 为准（被停止、失败的结果不带 thread，那个 thread 就列为未关联）。"""
+    resolved = {i.tool_call_id for i in items if i.type in ("tool_result", "tool_error")}
+    return [
+        item.model_copy(update={"threads": [call_threads[item.tool_call_id]]})
+        if item.type == "tool_call"
+        and item.tool_call_id is not None
+        and item.tool_call_id not in resolved
+        and item.tool_call_id in call_threads
+        else item
+        for item in items
+    ]
 
 
 def checked_times(items: list[Item]) -> list[Item]:

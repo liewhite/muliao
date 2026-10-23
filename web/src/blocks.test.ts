@@ -181,6 +181,11 @@ describe('stepThreads', () => {
     )
     expect(views[0].kind === 'process' && stepThreads(views[0].steps)).toEqual(['t1', 't2'])
   })
+
+  it('includes the thread of a call still waiting for its answer', () => {
+    const views = groupSteps(toBlocks([{ ...item('tool_call', '{}', 'a'), threads: ['t1'] }]))
+    expect(views[0].kind === 'process' && stepThreads(views[0].steps)).toEqual(['t1'])
+  })
 })
 
 describe('unlinkedThreads', () => {

@@ -137,6 +137,21 @@ async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> dict[s
     return threads
 
 
+async def call_threads_in(s: AsyncSession, session_id: str) -> dict[str, str]:
+    """这个会话里交出去的挂起调用（ask_agent）→ 做它的 thread。调用还挂着、没有结果时，界面靠它把 thread 显示在调用处
+    （有了结果之后由结果上的 TOOL_THREADS 关联）。"""
+    rows = (
+        await s.execute(
+            select(SessionHold.call_id, SessionHold.holder).where(
+                SessionHold.session_id == session_id, SessionHold.call_id.is_not(None)
+            )
+        )
+    ).all()
+    threads = await threads_of_holds_in(s, [holder for _, holder in rows])
+    # 不在 threads 里的：thread 已删除，关联信件随它删除
+    return {call_id: threads[holder] for call_id, holder in rows if call_id is not None and holder in threads}
+
+
 class ThreadChecks:
     """委派的运行中检查（platform.checks.WorkWatcher 的一种工作）。"""
 
