@@ -457,7 +457,14 @@ async def test_files_outside_the_resource_layout_never_enter_history(repo: Resou
     (skill_dir / ".env").write_text("TOKEN=x")
     (skill_dir / "bin").write_bytes(b"\x7fELF")
     (skill_dir / "big.json").write_text("x" * (MAX_EXTERNAL_FILE_BYTES + 1))
-    for deps in (".venv/lib", "node_modules/pkg", "venv/lib", "__pycache__"):
+    for deps in (
+        ".venv/lib",
+        "node_modules/pkg",
+        "venv/lib",
+        "__pycache__",
+        "env/site-packages",
+        "sub/node_modules",
+    ):
         (skill_dir / deps).mkdir(parents=True)
         (skill_dir / deps / "mod.py").write_text("x = 1\n")
     nested = skill_dir / "clone"
@@ -550,6 +557,27 @@ async def test_an_oversized_attachment_is_left_out_with_one_warning(repo: Resour
     await skills.write(ALPHA, "digest", "When digesting", "more steps", ALPHA)
     assert len(await repo.history(big, 10)) == 1
     assert await repo.read_at((await repo.history(big, 1))[0].rev, big) == "x\n"
+
+
+async def test_attachment_paths_are_matched_literally(repo: ResourceRepo):
+    """交给 git 的路径按字面匹配：叫 `*.py` 的文件不会把排除目录里的、超限的文件带进历史。"""
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
+    tracked_big = skill_dir / "a.py"
+    tracked_big.write_text("x = 1\n")
+    await repo.recover()
+    tracked_big.write_text("y" * (MAX_EXTERNAL_FILE_BYTES + 1))
+    (skill_dir / ".venv" / "lib").mkdir(parents=True)
+    (skill_dir / ".venv" / "lib" / "x.py").write_text("x = 1\n")
+    (skill_dir / "*.py").write_text("star = 1\n")
+
+    await repo.recover()
+
+    tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).splitlines()
+    assert f"agents/{ALPHA}/skills/digest/*.py" in tracked
+    assert not [p for p in tracked if ".venv" in p]
+    assert await repo.read_at((await repo.history(tracked_big, 1))[0].rev, tracked_big) == "x = 1\n"
 
 
 async def test_many_attachments_do_not_exceed_the_command_line(repo: ResourceRepo, monkeypatch):

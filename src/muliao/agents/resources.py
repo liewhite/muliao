@@ -80,8 +80,15 @@ RESOURCE_FILES = STORE_FILES + ATTACHMENT_FILES
 _NOT_ATTACHMENTS = (".*", ".*/**", "node_modules/**", "venv/**", "site-packages/**", "__pycache__/**")
 EXCLUDED_FILES = tuple(f"{d}/**/{p}" for d in _SKILL_DIRS for p in _NOT_ATTACHMENTS)
 # 外部写入的单个文件上限：超过的不收进历史（历史只增不改，进去就删不掉），记 warning。已在历史里的文件变得超限：
-# 历史停在最后一个未超限的版本，工作区保持未提交，缩回上限以内再照常提交
+# 历史停在最后一个未超限的版本，工作区保持未提交，缩回上限以内再照常提交。尽力而为：查大小与暂存之间
+# 正在被 shell 写的文件可能已变大
 MAX_EXTERNAL_FILE_BYTES = 256 * 1024
+
+
+def _literal(rel: str) -> str:
+    """按字面匹配一个路径：git 默认把路径当通配模式，叫 `*.py` 的文件会把排除的、超限的文件一起带进历史。
+    不用全局的 --literal-pathspecs：那会让 RESOURCE_PATHSPEC 里的魔法失效。"""
+    return f":(literal){rel}"
 
 
 def _pathspec(files: Iterable[str]) -> tuple[str, ...]:
@@ -420,20 +427,30 @@ class ResourceRepo:
         一个目录里的一个坏文件不能让所有资源写入失败。全局性的失败（如锁被占）在随后的写入里照样报错。"""
         try:
             await self._git_on_paths(paths, "add", "-A")
-        except RuntimeError:
+        except RuntimeError as error:
+            failed: dict[str, RuntimeError] = {}
             for rel in paths:
                 try:
-                    await self._git("add", "-A", "--", rel)
+                    await self._git("add", "-A", "--", _literal(rel))
                 except RuntimeError as e:
-                    self._left_out(rel, "cannot be staged", error=str(e))
+                    failed[rel] = e
+            # 多个路径一个也暂存不了：是全局性的失败（如锁被占），不是哪个文件坏了，不把它们记成留在历史外。
+            # 只有一个路径时分不出来，按坏文件处理：不能让一个坏文件让所有写入失败
+            if len(paths) > 1 and len(failed) == len(paths):
+                raise error
+            for rel, e in failed.items():
+                self._left_out(rel, "cannot be staged", error=str(e))
 
     async def _git_on_paths(self, paths: Sequence[str], *args: str) -> None:
         """对一组路径运行 git：路径经 stdin 传入，文件再多也不会超出命令行长度上限（那会让所有写入失败）。"""
+        # 空的 pathspec 列表对 git 是「整棵树」：会把排除的、超限的文件都带进历史
+        if not paths:
+            raise ValueError(f"git {args[0]} needs at least one path")
         await self._git_bytes(
             *args,
             "--pathspec-from-file=-",
             "--pathspec-file-nul",
-            stdin="".join(f"{p}\0" for p in paths).encode(),
+            stdin="".join(f"{_literal(p)}\0" for p in paths).encode(),
         )
 
     async def _partial_writes(self) -> list[Path]:
