@@ -850,9 +850,9 @@ function AgentGroup({ name, count, children }: { name: string; count: number; ch
   return (
     <Disclosure defaultExpanded>
       <Disclosure.Heading>
-        <Disclosure.Trigger className="flex w-full items-center justify-start gap-2 border-l-4 border-accent py-1 pl-2 text-base font-semibold">
-          {/* HeroUI 的指示箭头自带 margin-left:auto（默认放最右），这里要紧跟在左边 */}
-          <Disclosure.Indicator className="ml-0" />
+        <Disclosure.Trigger className="flex w-full items-center gap-2 border-l-4 border-accent py-1 pl-2 text-base font-semibold">
+          {/* HeroUI 的指示箭头自带 margin-inline-start:auto（默认放最右），这里要紧跟在左边 */}
+          <Disclosure.Indicator className="ms-0" />
           <span className="truncate">{name}</span>
           <Chip size="sm" variant="soft">
             {count}
