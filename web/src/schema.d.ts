@@ -2129,6 +2129,65 @@ export interface components {
              */
             attachments: string[];
         };
+        /** StreamConfig */
+        StreamConfig: {
+            /** Command */
+            command: string;
+            /**
+             * Secrets
+             * @default []
+             */
+            secrets: string[];
+            /**
+             * Debounce Seconds
+             * @default 5
+             */
+            debounce_seconds: number;
+        };
+        /** StreamStatus */
+        StreamStatus: {
+            /** Running Since */
+            running_since: string | null;
+            /** Error */
+            error: string | null;
+            /** Failures */
+            failures: number;
+            /** Stderr Log */
+            stderr_log: string;
+        };
+        /** StreamTriggerOut */
+        StreamTriggerOut: {
+            /** Id */
+            id: number;
+            /** Name */
+            name: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Prompt */
+            prompt: string;
+            /** Enabled */
+            enabled: boolean;
+            precheck: components["schemas"]["Precheck"] | null;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /** Last Fired At */
+            last_fired_at: string | null;
+            /** Last Session Id */
+            last_session_id: string | null;
+            /** Disabled Reason */
+            disabled_reason: string | null;
+            /** Precheck Error */
+            precheck_error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "stream";
+            config: components["schemas"]["StreamConfig"];
+            status: components["schemas"]["StreamStatus"];
+        };
         /**
          * TaskEvent
          * @description 一个 task 的状态变化（前端据此从数据库重新拉取），由 worker 发出。
@@ -2218,7 +2277,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "schedule" | "once" | "webhook";
+            kind: "schedule" | "once" | "webhook" | "stream";
             /** Prompt */
             prompt: string;
             /** Config */
@@ -2233,7 +2292,7 @@ export interface components {
              * Name
              * @enum {string}
              */
-            name: "schedule" | "once" | "webhook";
+            name: "schedule" | "once" | "webhook" | "stream";
             /** Description */
             description: string;
         };
@@ -3806,7 +3865,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": (components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"])[];
+                    "application/json": (components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"] | components["schemas"]["StreamTriggerOut"])[];
                 };
             };
             /** @description Validation Error */
@@ -3839,7 +3898,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"];
+                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"] | components["schemas"]["StreamTriggerOut"];
                 };
             };
             /** @description Validation Error */
@@ -3903,7 +3962,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"];
+                    "application/json": components["schemas"]["ScheduleTriggerOut"] | components["schemas"]["OnceTriggerOut"] | components["schemas"]["WebhookTriggerOut"] | components["schemas"]["StreamTriggerOut"];
                 };
             };
             /** @description Validation Error */

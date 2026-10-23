@@ -29,7 +29,7 @@ from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Clock
 from muliao.sessions.api import SessionActivity, WorkState
 from muliao.triggers.due import stored_time
-from muliao.triggers.service import parse_config, set_state
+from muliao.triggers.service import parse_config, previous_fire_state_in, set_state
 from muliao.triggers.tables import Trigger
 
 KIND = "schedule"
@@ -127,15 +127,6 @@ def _streak(trigger: Trigger) -> _SkipStreak | None:
         raise CorruptState(
             f"trigger {trigger.id} ({trigger.name}) has an invalid skipped state: {raw!r}"
         ) from e
-
-
-async def previous_fire_state_in(s: AsyncSession, activity: SessionActivity, trigger: Trigger) -> WorkState:
-    """上一次触发的会话的工作状态（会话领域的定义），从没触发过时是 idle。不是 idle 就还有没做完的事：在运行、
-    有还没投递的来信（包括这次的），或在等后台任务、委派、用户回答——等待中的会话结果回来会自动接着做，
-    再开一个会重叠。"""
-    if trigger.last_session_id is None:
-        return WorkState.IDLE
-    return await activity.work_state_in(s, trigger.last_session_id)
 
 
 class ScheduleDue:

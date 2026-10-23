@@ -81,6 +81,7 @@ from muliao.triggers.once import OnceDue, OnceKind
 from muliao.triggers.precheck import PrecheckRunner
 from muliao.triggers.schedule import ScheduleDue, ScheduleKind
 from muliao.triggers.service import EVENT_MAX_BYTES, TriggerService
+from muliao.triggers.stream import StreamKind, StreamRunner
 from muliao.triggers.tools import triggers_toolset
 from muliao.triggers.webhook import WebhookKind, Webhooks
 from muliao.usage.service import UsageLog
@@ -149,6 +150,8 @@ class Assembly:
     mcp_tools: DynamicToolset[RunScope]
     triggers: TriggerService
     due_triggers: DueRunner
+    # 流式触发器托管的常驻命令
+    streams: StreamRunner
     webhooks: Webhooks
     push_subscriptions: PushSubscriptions
     vapid: VapidKeys
@@ -210,6 +213,7 @@ class Assembly:
             async with self.jobs.running(), anyio.create_task_group() as root:
                 root.start_soon(_loop, "worker", self.worker.run_forever)
                 root.start_soon(_loop, "due", self.due_triggers.run_forever)
+                root.start_soon(_loop, "streams", self.streams.run_forever)
                 root.start_soon(_loop, "mail", self.mail.run_forever)
                 root.start_soon(_loop, "checks", self.work.run_forever)
                 root.start_soon(_loop, "retention", self.retention.run_forever)
@@ -330,7 +334,10 @@ def assemble(
     )
     triggers = TriggerService(
         db,
-        {k.name: k for k in (schedule_kind, once_kind, WebhookKind(settings.server.public_url))},
+        {
+            k.name: k
+            for k in (schedule_kind, once_kind, WebhookKind(settings.server.public_url), StreamKind())
+        },
         tz,
         precheck,
         messaging,
@@ -338,6 +345,7 @@ def assemble(
     )
     # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
     due_triggers = DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind, messaging), OnceDue()])
+    streams = StreamRunner(db, triggers, activity, vault, agents.workspace, messaging, EVENT_MAX_BYTES)
     webhooks = Webhooks(db, triggers)
     issues = IssueService(db, messaging, tz, run_now, activity)
     push_subscriptions = PushSubscriptions(db)
@@ -472,6 +480,7 @@ def assemble(
         mcp_tools=mcp_tools,
         triggers=triggers,
         due_triggers=due_triggers,
+        streams=streams,
         webhooks=webhooks,
         push_subscriptions=push_subscriptions,
         vapid=vapid,

@@ -2028,6 +2028,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/WebhookTriggerOut"
+                      },
+                      {
+                        "$ref": "#/components/schemas/StreamTriggerOut"
                       }
                     ],
                     "discriminator": {
@@ -2035,7 +2038,8 @@
                       "mapping": {
                         "schedule": "#/components/schemas/ScheduleTriggerOut",
                         "once": "#/components/schemas/OnceTriggerOut",
-                        "webhook": "#/components/schemas/WebhookTriggerOut"
+                        "webhook": "#/components/schemas/WebhookTriggerOut",
+                        "stream": "#/components/schemas/StreamTriggerOut"
                       }
                     }
                   },
@@ -2084,6 +2088,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/WebhookTriggerOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/StreamTriggerOut"
                     }
                   ],
                   "discriminator": {
@@ -2091,7 +2098,8 @@
                     "mapping": {
                       "schedule": "#/components/schemas/ScheduleTriggerOut",
                       "once": "#/components/schemas/OnceTriggerOut",
-                      "webhook": "#/components/schemas/WebhookTriggerOut"
+                      "webhook": "#/components/schemas/WebhookTriggerOut",
+                      "stream": "#/components/schemas/StreamTriggerOut"
                     }
                   },
                   "title": "Response Create Trigger Api Triggers Post"
@@ -2152,6 +2160,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/WebhookTriggerOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/StreamTriggerOut"
                     }
                   ],
                   "discriminator": {
@@ -2159,7 +2170,8 @@
                     "mapping": {
                       "schedule": "#/components/schemas/ScheduleTriggerOut",
                       "once": "#/components/schemas/OnceTriggerOut",
-                      "webhook": "#/components/schemas/WebhookTriggerOut"
+                      "webhook": "#/components/schemas/WebhookTriggerOut",
+                      "stream": "#/components/schemas/StreamTriggerOut"
                     }
                   },
                   "title": "Response Update Trigger Api Triggers  Trigger Id  Patch"
@@ -6049,6 +6061,213 @@
         ],
         "title": "StartIn"
       },
+      "StreamConfig": {
+        "properties": {
+          "command": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Command"
+          },
+          "secrets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Secrets",
+            "default": []
+          },
+          "debounce_seconds": {
+            "type": "number",
+            "maximum": 3600.0,
+            "minimum": 0.0,
+            "title": "Debounce Seconds",
+            "default": 5.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "command"
+        ],
+        "title": "StreamConfig"
+      },
+      "StreamStatus": {
+        "properties": {
+          "running_since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running Since"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "failures": {
+            "type": "integer",
+            "title": "Failures"
+          },
+          "stderr_log": {
+            "type": "string",
+            "title": "Stderr Log"
+          }
+        },
+        "type": "object",
+        "required": [
+          "running_since",
+          "error",
+          "failures",
+          "stderr_log"
+        ],
+        "title": "StreamStatus"
+      },
+      "StreamTriggerOut": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "precheck": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Precheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_fired_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fired At"
+          },
+          "last_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Session Id"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "precheck_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precheck Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "kind": {
+            "type": "string",
+            "const": "stream",
+            "title": "Kind"
+          },
+          "config": {
+            "$ref": "#/components/schemas/StreamConfig"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StreamStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "agent_id",
+          "prompt",
+          "enabled",
+          "precheck",
+          "last_checked_at",
+          "last_fired_at",
+          "last_session_id",
+          "disabled_reason",
+          "precheck_error",
+          "finished_at",
+          "kind",
+          "config",
+          "status"
+        ],
+        "title": "StreamTriggerOut"
+      },
       "TaskEvent": {
         "properties": {
           "type": {
@@ -6278,7 +6497,8 @@
             "enum": [
               "schedule",
               "once",
-              "webhook"
+              "webhook",
+              "stream"
             ],
             "title": "Kind"
           },
@@ -6319,7 +6539,8 @@
             "enum": [
               "schedule",
               "once",
-              "webhook"
+              "webhook",
+              "stream"
             ],
             "title": "Name"
           },

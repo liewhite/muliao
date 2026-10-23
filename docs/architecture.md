@@ -480,15 +480,18 @@ agent 在任何一次运行里都可以主动 `write_skill`。公共 skill 对�
 - `TriggerKind`（纯逻辑，注册给 `TriggerService`）：校验并规范化 `config`、由配置推导 `state`、给出展示用的运行状态（每种方式一个 pydantic 类型，不含凭证）。推导在创建、修改配置与停用后重新启用时进行，由 `TriggerService` 合并进已有 `state`（实现不负责保留与配置无关的部分，如 token 摘要）；
 - 激活机制：怎么被触发，都只调用 `TriggerService.fire`（唯一出口，先跑前置检查，见下）组装成事件交给统一入口；需要感知触发器变化的激活机制各自 `watch()` 一个通知，互不干扰；某种方式专有的接口放在它自己的 API 模块（如 `api/webhook.py`）。
 
-新增一种方式（例如消息队列）= 一个 `TriggerKind` + 它的激活机制（消费循环），在组合根注册并启动；表、工具、统一入口都不用改；HTTP 接口的 `TriggerOut` 是按 `kind` 区分的联合类型（每种方式的 config 与 status 各有类型，`TriggerKindName` 列出全部方式，测试校验它与注册的方式一致），所以要在 `api/triggers.py` 加一个成员，界面（`pages/Triggers.tsx` 按 kind 的穷举 switch）也要补上这种方式的编辑器与状态展示，漏了编译器会报。现有三种：
+新增一种方式（例如消息队列）= 一个 `TriggerKind` + 它的激活机制（消费循环），在组合根注册并启动；表、工具、统一入口都不用改；HTTP 接口的 `TriggerOut` 是按 `kind` 区分的联合类型（每种方式的 config 与 status 各有类型，`TriggerKindName` 列出全部方式，测试校验它与注册的方式一致），所以要在 `api/triggers.py` 加一个成员，界面（`pages/Triggers.tsx` 按 kind 的穷举 switch）也要补上这种方式的编辑器与状态展示，漏了编译器会报。现有四种：
 
 | kind | config | state | 激活机制 |
 |---|---|---|---|
 | `schedule` | `{"cron": "<5 段表达式>"}`，按配置的时区解释 | `next_run_at`；连续跳过时还有 `skipped`（次数、起始时间、挡路会话的工作状态，以及内部用的挡路会话 id 与本轮是否已通知） | `DueRunner` + `ScheduleDue`：消耗这次到期 = 推进到下次时间；上一次触发的会话不空闲时跳过本次（会话领域的工作状态 `SessionActivity.work_state_in` 不是 idle：在运行、有还没投递的 `Receive`，或在等后台任务、委派、用户回答）。跳过要看得见：连续跳过记在 `state.skipped`，状态里给出 `skipped`（界面显示「已跳过 N 次」）；挡路的会话在等待（可能永远等不到，如没人回答的提问）时 `Notify` 用户，每轮连续跳过只通知一次，在运行的不通知（运行偶尔长过一个周期是常态）；下次真正触发、改配置或重新启用时清除，挡路的会话换了（手动立即运行）算新的一轮；停机期间错过的只补一次，暂停期间错过的不补（重新启用时从当时算起） |
 | `once` | `{"at": "<ISO 8601 时间>"}`，不带时区的按配置的时区解释，创建时必须在将来 | `{}`（到期时间就是配置本身） | `DueRunner` + `OnceDue`：消耗这次到期 = 归档（`finished_at`）。到点只触发一次，之后从列表里消失 |
 | `webhook` | `{}` | `token_hash` | `Webhooks`：`POST /api/hooks/{name}[?session_id=]` 凭 token 鉴权 |
+| `stream` | `{"command": "<bash>", "secrets": [...], "debounce_seconds": 5}` | `running_since`、`error`、`failures`（进程的运行状态，换配置时清零） | `StreamRunner`：见下「流式触发」 |
 
 **按到期时间触发**（`triggers/due.py`，`schedule` 与 `once` 共用）：`DueRunner` 一个循环扫描所有还会到期的触发器，到期的并发触发。每种方式只给出两件事（`DueKind`）：到期时间从哪来（`due_at`），以及**消耗这次到期**时这一行怎么变（`consume_in`：定时推进到下次，一次性归档）。消耗与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）：先提交消耗，再调用 `fire`，所以进程恰好死在两者之间时这一次被跳过，**至多触发一次**；触发前按最新的行重新判断（列出之后被删除、停用、归档或改了配置就跳过）；触发被拒绝时停用并记 `disabled_reason`（经 `TriggerService.disable`，和别的修改一样通知监听者）；存下的配置或状态坏了、算不出到期时间的（`due_at` / `consume_in` 抛 `CorruptState`）同样只停用这一个，扫描循环照常继续。
+
+**流式触发**（`triggers/stream.py`）：平台托管一条常驻命令（如 Slack Socket Mode 监听），stdout 每一行是一个事件。`StreamRunner.run_forever` 在根任务组里 `watch()` 触发器变化并对账：每个启用的流式触发器一个受监督的进程（由 agent、配置决定，变了就取消重起），停用、删除、改配置、关停时取消即 `kill_group` 杀掉整个进程组。命令与前置检查、`run_shell` 共用 `platform/shell.py`（`spawn_bash`，pipefail、最小环境、secret 注入与替换），在 agent 工作目录里运行；stderr 追加到 `trigger-logs/<名称>.stderr.log`（1 MiB 轮换）。退出（任何退出码）或 secret 不可见都算一次失败：原因记在 `state.error`，按 1…2^n 秒（上限 5 分钟）退避重启，稳定运行 60 秒算恢复（清错误、计数归零），连续快速失败达 3 次时 `Notify` 一次。进程状态只写给仍启用、配置未变的行（被取消的旧进程不覆盖新的）；停用时状态里的 `running_since` 按启用推导为空。事件在内存里排队：第一行到后等 `debounce_seconds`，上一次触发的会话不是 idle（与定时触发同一个 `previous_fire_state_in`）就继续排队，空闲后合并成一次 `fire`（新会话，有前置检查时事件作为它的 stdin）；挡路的会话在等待时通知一次；排队超过事件上限就不再等、先按上限分批投递（宁可重叠不丢事件），单行超限丢弃并记日志。排队的事件不持久化，重启会丢：断线重连、去重、游标和轮询兜底由命令自己负责（公共 skill `stream-listener`）。
 
 **归档**（`finished_at`，触发器的公共概念，不属于某一种方式）：这个触发器不会再触发了。一次性触发器在它那次到期被消耗时归档——无论随后是真的投递、前置检查判定没事，还是触发失败（失败另记 `disabled_reason`）。归档之后：不出现在默认列表（`trigger_list`、`GET /triggers`、界面主列表），不能再 `update` / 启用 / 立即运行（`Conflict`），可以删除；名称只在**未归档**的触发器之间唯一（部分唯一索引 `WHERE finished_at IS NULL`），所以同名的可以重新创建，按名称（`get_by_name`、webhook 的鉴权）找到的也只有未归档的那个。行永久保留，`id` 永不复用，它发起过的会话（`origin='trigger'`、`origin_ref` 是它的 id）因此一直查得到是谁发的：`GET /triggers?finished=true` 列出归档的，`GET /sessions?origin=trigger&origin_ref=<id>` 列出某个触发器发起过的会话（走会话领域的查询，触发器领域不碰 `sessions` 表），`trigger_list(finished=true)` 让 agent 查一次性任务的结果（带 `finished_at` 与 `last_session_id`）。
 

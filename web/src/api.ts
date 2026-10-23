@@ -70,7 +70,7 @@ export type TriggerKind = Schemas['TriggerKindOut']
 export type Precheck = Schemas['Precheck']
 /** 按 kind 区分的联合：收窄 kind 后 config 与 status 就是这种方式的类型 */
 export type Trigger = WithAgentId<
-  Schemas['ScheduleTriggerOut'] | Schemas['OnceTriggerOut'] | Schemas['WebhookTriggerOut'],
+  Schemas['ScheduleTriggerOut'] | Schemas['OnceTriggerOut'] | Schemas['WebhookTriggerOut'] | Schemas['StreamTriggerOut'],
   'agent_id'
 >
 export type TriggerKindName = Trigger['kind']

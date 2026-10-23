@@ -53,6 +53,7 @@ const KIND_LABELS: Record<TriggerKindName, { label: string; summary: string }> =
   schedule: { label: '定时', summary: '按 cron 表达式周期运行' },
   once: { label: '一次性', summary: '到指定时间运行一次，之后移入「已完成」' },
   webhook: { label: 'Webhook', summary: '收到 HTTP POST 时运行' },
+  stream: { label: '流式', summary: '托管一条常驻命令，它输出的每一行是一个事件' },
 }
 
 /** 新建时的初始配置。在打开表单、切换方式时才算：一次性触发器的默认时间是那时起一小时后 */
@@ -64,6 +65,8 @@ function emptyConfig(kind: TriggerKindName): KindConfig {
       return { kind, config: { at: inAnHour(new Date()) } }
     case 'webhook':
       return { kind, config: {} }
+    case 'stream':
+      return { kind, config: { command: '', secrets: [], debounce_seconds: 5 } }
   }
 }
 
@@ -99,6 +102,62 @@ function RunAtEditor({ config, onChange }: { config: Schemas['OnceConfig']; onCh
   )
 }
 
+function StreamEditor({ config, onChange }: { config: Schemas['StreamConfig']; onChange: ConfigChange }) {
+  const [command, setCommand] = useState(config.command)
+  const [secrets, setSecrets] = useState((config.secrets ?? []).join(', '))
+  const [debounce, setDebounce] = useState(String(config.debounce_seconds ?? 5))
+
+  function emit(next: { command?: string; secrets?: string; debounce?: string }) {
+    const v = { command, secrets, debounce, ...next }
+    const seconds = Number(v.debounce)
+    onChange(
+      v.command.trim() && v.debounce.trim() !== '' && Number.isFinite(seconds) && seconds >= 0
+        ? {
+            command: v.command,
+            secrets: v.secrets.split(',').map((k) => k.trim()).filter((k) => k !== ''),
+            debounce_seconds: seconds,
+          }
+        : null,
+    )
+  }
+
+  return (
+    <>
+      <TextAreaInput
+        label="常驻命令（bash，在 agent 的工作目录里运行）"
+        hint="stdout 每一行是一个事件；退出后按退避自动重启，停用或删除时被杀掉。stderr 写到工作目录的 trigger-logs/<名称>.stderr.log"
+        value={command}
+        onChange={(value) => {
+          setCommand(value)
+          emit({ command: value })
+        }}
+        rows={3}
+        mono
+      />
+      <TextInput
+        label="合并窗口（秒）"
+        hint="第一行到达后再等这么久，期间的行合并成一次触发；上次的会话还在忙时事件排队，它结束后一起投递"
+        value={debounce}
+        onChange={(value) => {
+          setDebounce(value)
+          emit({ debounce: value })
+        }}
+        mono
+      />
+      <TextInput
+        label="secret（可选）"
+        hint="vault 里的 key，逗号分隔，作为同名环境变量传给命令"
+        value={secrets}
+        onChange={(value) => {
+          setSecrets(value)
+          emit({ secrets: value })
+        }}
+        mono
+      />
+    </>
+  )
+}
+
 /** 按方式选配置编辑器；webhook 没有配置项 */
 function ConfigEditor({ value, onChange }: { value: KindConfig; onChange: ConfigChange }) {
   switch (value.kind) {
@@ -108,6 +167,8 @@ function ConfigEditor({ value, onChange }: { value: KindConfig; onChange: Config
       return <RunAtEditor config={value.config} onChange={onChange} />
     case 'webhook':
       return null
+    case 'stream':
+      return <StreamEditor config={value.config} onChange={onChange} />
   }
 }
 
@@ -282,6 +343,21 @@ function KindStatus({ trigger }: { trigger: Trigger }) {
         <span className="break-all">
           <code className="rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">POST {trigger.status.url}</code>
           {!trigger.status.has_token && <> · 还没有 token，生成后才能接收事件</>}
+        </span>
+      )
+    case 'stream':
+      return (
+        <span className="flex flex-col gap-1">
+          <code className="break-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs">{trigger.config.command}</code>
+          <span>
+            {trigger.status.running_since ? <>运行中，自 {formatTime(trigger.status.running_since)}</> : '未在运行'}
+            {' '}· stderr：<code className="font-mono text-xs">{trigger.status.stderr_log}</code>
+          </span>
+          {trigger.status.error && (
+            <span className="text-warning break-all">
+              连续失败 {trigger.status.failures} 次，最近一次：{trigger.status.error}
+            </span>
+          )}
         </span>
       )
   }

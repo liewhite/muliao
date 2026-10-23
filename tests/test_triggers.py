@@ -11,8 +11,7 @@ from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
-from muliao.triggers.schedule import previous_fire_state_in
-from muliao.triggers.service import set_state, trigger_in
+from muliao.triggers.service import previous_fire_state_in, set_state, trigger_in
 from tests.conftest import login
 from tests.test_flow import drain, history_of, start
 

@@ -41,7 +41,14 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Clock, Commit
 from muliao.platform.values import KEEP, Keep, local_time
-from muliao.sessions.api import Inbound, NewSession, Origin, receive_command_in
+from muliao.sessions.api import (
+    Inbound,
+    NewSession,
+    Origin,
+    SessionActivity,
+    WorkState,
+    receive_command_in,
+)
 from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
 from muliao.triggers.tables import Trigger
 
@@ -113,6 +120,15 @@ async def trigger_in(s: AsyncSession, trigger_id: int) -> Trigger:
 def set_state(trigger: Trigger, **values: Any) -> None:
     """激活机制维护自己的运行状态（触发器领域内部用，在调用方事务里改这一行）。JSON 列只在整体赋值时被追踪。"""
     trigger.state = {**trigger.state, **values}
+
+
+async def previous_fire_state_in(s: AsyncSession, activity: SessionActivity, trigger: Trigger) -> WorkState:
+    """上一次触发的会话的工作状态（会话领域的定义），从没触发过时是 idle。不是 idle 就还有没做完的事：在运行、
+    有还没投递的来信（包括这次的），或在等后台任务、委派、用户回答——等待中的会话结果回来会自动接着做，
+    再开一个会重叠。定时触发据此跳过，流式触发据此让事件排队（触发器领域内部用）。"""
+    if trigger.last_session_id is None:
+        return WorkState.IDLE
+    return await activity.work_state_in(s, trigger.last_session_id)
 
 
 def finish_in(trigger: Trigger, now: datetime) -> None:

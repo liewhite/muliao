@@ -14,6 +14,8 @@ from muliao.triggers.api import (
     Precheck,
     ScheduleConfig,
     ScheduleStatus,
+    StreamConfig,
+    StreamStatus,
     TriggerKind,
     WebhookConfig,
     WebhookStatus,
@@ -24,7 +26,7 @@ router = APIRouter()
 
 
 # 所有触发方式；与 container 里注册的方式一一对应（tests/test_triggers.py 校验）
-TriggerKindName = Literal["schedule", "once", "webhook"]
+TriggerKindName = Literal["schedule", "once", "webhook", "stream"]
 
 
 class TriggerKindOut(BaseModel):
@@ -94,7 +96,15 @@ class WebhookTriggerOut(_TriggerOutBase):
     status: WebhookStatus
 
 
-TriggerOut = Annotated[ScheduleTriggerOut | OnceTriggerOut | WebhookTriggerOut, Field(discriminator="kind")]
+class StreamTriggerOut(_TriggerOutBase):
+    kind: Literal["stream"]
+    config: StreamConfig
+    status: StreamStatus
+
+
+TriggerOut = Annotated[
+    ScheduleTriggerOut | OnceTriggerOut | WebhookTriggerOut | StreamTriggerOut, Field(discriminator="kind")
+]
 _TRIGGER_OUT: TypeAdapter[TriggerOut] = TypeAdapter(TriggerOut)
 
 
