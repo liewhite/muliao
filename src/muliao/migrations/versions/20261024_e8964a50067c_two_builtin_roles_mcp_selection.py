@@ -6,8 +6,8 @@ agent 管理，agent 角色本就没有）。自建角色（roles 表）原样�
 mcp_servers 一律为 []：迁移读不到资源仓库里有哪些公共 server，原来有 mcp 组的 agent 的勾选在部署后补上。
 用 SQLite 原生 ALTER TABLE（ADD / DROP COLUMN），不重建 agents 表。
 
-降级：admin 保持 ["admin"]；其余展开成除 agents、public_skills、mcp 外的旧工具组，勾选过公共 MCP 的再加 mcp
-（含 web：没配置 [web] 时旧代码的启动检查会因此拒绝启动，需手动去掉），删掉 mcp_servers。
+降级：admin 保持 ["admin"]；其余展开成除 agents、public_skills、mcp 外的旧工具组，勾选过公共 MCP 的再加 mcp，
+allow 设为 ["agent:get"]（新的 agent 角色有 get_agent，旧组里它在 agents 组），删掉 mcp_servers。
 
 Revision ID: e8964a50067c
 Revises: cba7dcdfe011
@@ -61,7 +61,7 @@ def downgrade() -> None:
         groups = [*_AGENT_GROUPS, *(["mcp"] if json.loads(servers) else [])]
         expanded = [*groups, *(n for n in names if n != "agent")]
         conn.execute(
-            sa.text("UPDATE agents SET roles = :r WHERE id = :id"),
-            {"r": json.dumps(expanded), "id": agent_id},
+            sa.text("UPDATE agents SET roles = :r, allow = :a WHERE id = :id"),
+            {"r": json.dumps(expanded), "a": json.dumps(["agent:get"]), "id": agent_id},
         )
     op.drop_column("agents", "mcp_servers")

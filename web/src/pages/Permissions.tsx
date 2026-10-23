@@ -150,12 +150,17 @@ export function McpServersInput({ value, onChange }: { value: string[]; onChange
       <div className="text-sm font-medium">公共 MCP</div>
       <div className="text-xs text-muted">勾选的公共 server 的工具给这个 agent；它自己的私有 server 总是可用</div>
       <Loading state={servers}>
-        {(list) =>
-          list.length === 0 ? (
+        {(list) => {
+          // 勾选过、后来被删掉的 server：名字还在（不生效），列出来好取消勾选
+          const rows = [
+            ...list.map((m) => ({ name: m.name, note: m.enabled ? '' : '已停用' })),
+            ...value.filter((n) => !list.some((m) => m.name === n)).map((name) => ({ name, note: '已删除' })),
+          ]
+          return rows.length === 0 ? (
             <span className="text-sm text-muted">没有公共 MCP server</span>
           ) : (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {list.map((m) => (
+              {rows.map((m) => (
                 <label key={m.name} className="flex items-center gap-2 text-sm">
                   <ToggleSwitch
                     label={m.name}
@@ -163,12 +168,12 @@ export function McpServersInput({ value, onChange }: { value: string[]; onChange
                     onChange={(on) => onChange(on ? [...value, m.name] : value.filter((n) => n !== m.name))}
                   />
                   <span className="font-mono">{m.name}</span>
-                  {!m.enabled && <span className="text-xs text-muted">已停用</span>}
+                  {m.note && <span className="text-xs text-muted">{m.note}</span>}
                 </label>
               ))}
             </div>
           )
-        }
+        }}
       </Loading>
     </div>
   )

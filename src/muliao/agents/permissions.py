@@ -189,7 +189,7 @@ class Role:
 ADMIN = "admin"
 AGENT = "agent"
 
-# 写所有 agent 共享的资源（全局写）：agent 角色没有，只有 admin 有
+# 写所有 agent 共享的资源（全局写）与管理 agent：agent 角色没有
 GLOBAL_WRITES: tuple[str, ...] = (
     "skill.public:*",
     "memory.public:*",
@@ -200,12 +200,18 @@ GLOBAL_WRITES: tuple[str, ...] = (
     "agent:delete",
 )
 
+# agent 角色写成纯 allow（从登记表里去掉全局写得出），不用 deny：各来源的 deny 取并集、优先于一切 allow，写成 deny
+# 的话 agent 自己的 allow、别的角色（包括 admin）都放不开全局写
 BUILTIN_ROLES: dict[str, Role] = {
     ADMIN: Role(ADMIN, "全部工具", Rules(allow=("*",)), builtin=True),
     AGENT: Role(
         AGENT,
         "除写全局资源（公共 skill、全局记忆、公共 secret、公共 MCP 配置）和管理 agent 以外的全部工具",
-        Rules(allow=("*",), deny=GLOBAL_WRITES),
+        Rules(
+            allow=tuple(
+                p.id for p in TOOL_PERMISSIONS.values() if not any(fnmatchcase(p.id, g) for g in GLOBAL_WRITES)
+            )
+        ),
         builtin=True,
     ),
 }

@@ -83,6 +83,15 @@ def test_builtin_roles_are_admin_with_everything_and_agent_without_global_writes
         check_patterns([pattern])
 
 
+def test_the_agent_role_does_not_block_other_grants_of_global_writes():
+    """agent 角色是纯 allow：自己的 allow 或别的角色（包括 admin）能放开全局写，不被它压住。"""
+    agent = BUILTIN_ROLES[AGENT].rules
+    assert not agent.deny
+    assert Rules.union([agent, Rules(allow=("skill.public:write",))]).allows("skill.public:write")
+    every = list(TOOL_PERMISSIONS)
+    assert Rules.union([agent, BUILTIN_ROLES[ADMIN].rules]).tools(every) == every
+
+
 async def test_new_agents_default_to_the_agent_role(container):
     agent = await container.agents.create(AgentSpec(name="a", description="d"), author="user")
     assert agent.roles == ("agent",)
