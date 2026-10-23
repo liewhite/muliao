@@ -701,6 +701,61 @@ async def test_read_file_truncates_very_long_lines(container, make_agent, models
     assert "[line truncated]" in outputs[1] and "2\tok" in outputs[1] and len(outputs[1]) < 2100
 
 
+async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_stores_only_a_reference(
+    container, make_agent, models, monkeypatch
+):
+    from pydantic_ai.messages import BinaryContent, ImageUrl
+
+    from muliao.agent_runtime import workspace_tools
+    from muliao.files.api import parse_file_url
+    from tests.test_flow import history_of
+
+    me = await make_agent("alpha", model="tools")
+    png = b"\x89PNG\r\n\x1a\n" + b"chart"
+    workspace = container.agents.workspace(me.id)
+    (workspace / "shot.png").write_bytes(png)
+    (workspace / "big.jpg").write_bytes(b"x" * (len(png) + 1))
+    monkeypatch.setattr(workspace_tools, "_MAX_IMAGE_BYTES", len(png))
+    seen: list[object] = []
+    calls = [
+        ("read_file", {"path": "shot.png"}),
+        ("read_file", {"path": "shot.png", "offset": 3}),
+        ("read_file", {"reads": [{"path": "shot.png"}]}),
+        ("read_file", {"path": "big.jpg"}),
+        ("read_file", {"path": "gone.webp"}),
+    ]
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        last = messages[-1]
+        seen.extend(p.content for p in last.parts if p.part_kind in ("tool-return", "retry-prompt"))
+        step = sum(isinstance(m, ModelResponse) for m in messages)
+        if step < len(calls):
+            name, args = calls[step]
+            return ModelResponse(parts=[ToolCallPart(name, args, tool_call_id=f"c{step}")])
+        return ModelResponse(parts=[TextPart("done")])
+
+    models.models["tools"] = scripted(fn)
+    session = await start(container, me.id, "look", origin=Origin.TRIGGER)
+    await drain(container)
+
+    # 模型在工具结果里看到图片本身
+    caption, image = seen[0]
+    assert caption.endswith("shot.png (image/png, 13 bytes)")
+    assert image == BinaryContent(png, media_type="image/png")
+    assert "offset/limit do not apply to an image file" in str(seen[1])
+    assert "an image file cannot be read in reads" in str(seen[2])
+    assert "image too large to view" in str(seen[3]) and "the limit is 13 bytes" in str(seen[3])
+    assert "file not found" in str(seen[4])
+    # 历史里只存文件引用（ToolImagesToFiles），内容在文件存储里
+    [stored, *_] = [
+        p for m in await history_of(container, session.id) for p in m.parts if p.part_kind == "tool-return"
+    ]
+    [_, ref] = stored.content
+    assert isinstance(ref, ImageUrl)
+    [meta] = await container.files.referenced([parse_file_url(ref.url)[0]])
+    assert (meta.name, container.files.read(meta)) == ("read_file.png", png)
+
+
 async def test_a_temp_agent_started_from_a_tool_shares_the_model_limit_without_deadlock(
     container, make_agent, models
 ):

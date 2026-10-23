@@ -10,11 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic_ai import FunctionToolset, RunContext, ToolReturn
+from pydantic_ai import BinaryContent, FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.conventions import TOOL_ATTACHMENTS, attachment_of
 from muliao.errors import InvalidInput, NotFound
-from muliao.files.api import FileStore
+from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
 from muliao.platform.shell import run_bash
 from muliao.platform.text_edit import truncate
@@ -27,6 +27,8 @@ _MAX_LINE_CHARS = 2000
 # edit_file 成功后展示的改动前后上下文行数：够确认改对了，不必再回读文件
 _EDIT_CONTEXT_LINES = 2
 _DEFAULT_READ_LIMIT = 2000
+# read_file 交给模型看的图片上限：Anthropic API 单张图片 5MB（其他 provider 更宽），超过就拒绝，不在这里缩放
+_MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 
 class TextEdit(BaseModel):
@@ -137,10 +139,12 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         offset: int = 0,
         limit: int = _DEFAULT_READ_LIMIT,
         reads: tuple[FileRange, ...] = (),
-    ) -> str:
+    ) -> str | list[str | BinaryContent]:
         """Read a text file; lines are numbered. Relative paths are resolved against your workspace.
         To read several files or several parts of one file in one call, pass `reads` instead of
         `path`/`offset`/`limit`; each part is shown under a `==> path lines A-B of N <==` header.
+        An image file (PNG, JPEG, GIF, WebP) passed as `path` is returned as an image you can see, e.g. a
+        screenshot or a chart you made.
 
         Args:
             path: File path (omit when using `reads`).
@@ -155,12 +159,18 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             if path is None:
                 raise InvalidInput("path is required (or pass reads)")
             target = resolve(ctx.deps, path)
+            if media_type := _image_type(target):
+                if offset != 0 or limit != _DEFAULT_READ_LIMIT:
+                    raise InvalidInput(f"offset/limit do not apply to an image file: {target}")
+                return _read_image(target, media_type)
             excerpt = _read_range(target, offset, limit)
             return truncate(excerpt.body, limits.max_output_chars) + excerpt.more_note
         sections = []
         for part in reads:
             target = resolve(ctx.deps, part.path)
             try:
+                if _image_type(target):
+                    raise InvalidInput("an image file cannot be read in reads; read it alone with path")
                 excerpt = _read_range(target, part.offset, part.limit)
             except (InvalidInput, NotFound, OSError) as e:
                 # 标题用模型给的路径认出是哪一段（有的错误信息里不带路径）
@@ -271,6 +281,28 @@ class _Excerpt:
     body: str
     # 后面还有行时注明还剩多少，否则为空；与正文分开，正文被截断时它也还在
     more_note: str
+
+
+def _image_type(path: Path) -> str | None:
+    """按扩展名认出能交给模型看的图片（与 share_file 一样按扩展名判断类型），其余当文本读。"""
+    guessed, encoding = mimetypes.guess_type(path.name)
+    return guessed if guessed in INLINE_IMAGE_TYPES and encoding is None else None
+
+
+def _read_image(target: Path, media_type: str) -> list[str | BinaryContent]:
+    """图片以内容交回；attachments.ToolImagesToFiles 把它存进文件存储，历史里只留引用，发请求时再展开给模型。"""
+    if not target.is_file():
+        raise NotFound(f"file not found: {target}")
+    size = target.stat().st_size
+    if size > _MAX_IMAGE_BYTES:
+        raise InvalidInput(
+            f"image too large to view: {target} is {size} bytes, the limit is {_MAX_IMAGE_BYTES} bytes; "
+            "make a smaller copy first (e.g. `sips -Z 1568 big.png --out small.png`) and read that"
+        )
+    return [
+        f"{target} ({media_type}, {size} bytes)",
+        BinaryContent(target.read_bytes(), media_type=media_type),
+    ]
 
 
 def _read_range(target: Path, offset: int, limit: int) -> _Excerpt:

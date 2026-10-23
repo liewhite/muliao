@@ -5,7 +5,7 @@
 - 模型形态：每次模型请求前由 `AttachmentsForModel` 展开成一段说明（名称、类型、大小、在工作目录里的路径），
   能内联的图片再附上内容。展开只改这一次请求，不改持久化的历史，所以数据库里不会出现文件内容的副本。
 
-工具交回的图片（如 MCP 浏览器的截图）走同一套：`ToolImagesToFiles` 在工具执行完、结果写进历史之前把能内联的图片
+工具交回的图片（如 MCP 浏览器的截图、read_file 读的图片文件）走同一套：`ToolImagesToFiles` 在工具执行完、结果写进历史之前把能内联的图片
 存进文件存储，结果里换成 ImageUrl 引用；发请求时 `AttachmentsForModel` 把它换回内容，放在工具结果里交给模型
 （不加说明：它没有复制进工作目录）。
 
@@ -145,8 +145,8 @@ def _is_inline_image(item: object) -> TypeGuard[BinaryContent]:
 
 @dataclass
 class ToolImagesToFiles(AbstractCapability[RunScope]):
-    """工具结果里能内联的图片存进文件存储、换成 ImageUrl 引用（见模块说明）。只处理 MCP 工具的结果形态：单个
-    图片或内容列表；有图片时结果总是列表（conventions.result_image_refs 只在列表里找引用）。包在 ToolReturn 里的
+    """工具结果里能内联的图片存进文件存储、换成 ImageUrl 引用（见模块说明）。只处理 MCP 工具与 read_file 的结果
+    形态：单个图片或内容列表；有图片时结果总是列表（conventions.result_image_refs 只在列表里找引用）。包在 ToolReturn 里的
     结果与其他二进制内容（音频、PDF）原样留着。存不下（如超过 upload_max_bytes）按契约外的失败让这次运行失败。"""
 
     store: FileStore
