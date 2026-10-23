@@ -7,6 +7,13 @@ from muliao.agents.ownership import Scope, owner_of
 from muliao.agents.skills import SkillStore
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
+# 写完 skill 时告诉模型附件怎么放（哪些进历史由 agents.resources.RESOURCE_FILES 决定）：只在写 skill 时用得上，
+# 不放进每次请求都带的工具说明
+_ATTACHMENTS_NOTE = (
+    "; scripts and other text files it needs go in that directory (write them with write_file) and are versioned "
+    "with it; binaries are not versioned: write in the skill how to install them (version and source)"
+)
+
 
 def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
@@ -34,7 +41,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             content: Markdown instructions: steps, commands, pitfalls, examples.
         """
         meta = await store.write(ctx.deps.agent_id, name, description, content, ctx.deps.agent_id)
-        return f"saved private skill {meta.name} at {meta.path}"
+        return f"saved private skill {meta.name} at {meta.path}{_ATTACHMENTS_NOTE}"
 
     @ts.tool
     async def edit_skill(
@@ -86,7 +93,7 @@ def public_skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             content: Markdown instructions: steps, commands, pitfalls, examples.
         """
         meta = await store.write(None, name, description, content, ctx.deps.agent_id)
-        return f"saved public skill {meta.name} at {meta.path}"
+        return f"saved public skill {meta.name} at {meta.path}{_ATTACHMENTS_NOTE}"
 
     @ts.tool
     async def edit_public_skill(

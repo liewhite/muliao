@@ -11,13 +11,15 @@
 写入是原子的：读取—变换—写入—提交在同一把锁里（update），任何一步失败都把涉及的路径在文件系统上还原成写入前
 的样子（不依赖 git），所以「报错」等于「没有生效」，调用方可以放心重试；还原本身失败时记 error 并一起抛出。
 
-资源文件就是上面布局里列出的那些（RESOURCE_FILES，唯一定义），版本管理只管它们。
+资源文件（RESOURCE_FILES，唯一定义）是上面布局里列出的那些，加上 skill 目录里的文本附件（脚本、配置、参考文档，
+按后缀白名单，可在子目录里），版本管理只管它们。附件没有专门的工具：agent 用文件工具或 shell 写，由下面的 reconcile 收进历史。
 
 仓库也会被绕过本模块写入：agent 有 shell 与文件工具，能直接改资源文件（read_skill 会给出 skill 目录）；进程在写入
 中途被杀也会留下写完未提交的变化。两者用同一个机制收敛：每次写入前、以及启动时（recover），把资源文件上不经本模块的
 变化先单独提交为一次 reconcile（作者记为系统，表示「来源不明的外部写入」）。这样外部写入最迟在下一次任何资源写入时
-进入历史，也不会被并进下一个作者的提交里。布局之外的东西（agent 放进目录的脚本、虚拟环境、嵌套的 git 仓库、自己的
-临时文件）不进历史：历史只增不改，进去就删不掉，也不能让一个 agent 目录里的杂物让所有资源写入失败。
+进入历史，也不会被并进下一个作者的提交里。其余的东西（二进制与不在白名单里的文件、隐藏文件、虚拟环境与
+依赖目录、嵌套的 git 仓库、自己的临时文件、超过 MAX_EXTERNAL_FILE_BYTES 的外部写入）不进历史：历史只增不改，
+进去就删不掉；一个 agent 目录里的杂物（包括暂存不了的坏文件）也不能让所有资源写入失败。
 secret 不在这里：它们加密存在数据库的 vault 里，不需要版本管理。
 """
 
@@ -52,9 +54,9 @@ _AGENTS = "agents"
 _FIELD = "\x1f"
 _REV = re.compile(r"^[0-9a-f]{40}$")
 _TMP = ".tmp"
-# 资源文件（相对仓库根目录的 glob，`*` 不跨目录）：见模块说明的布局。reconcile 与 recover 只处理它们。
+# 各 store 写的资源文件（相对仓库根目录的 glob，`*` 不跨目录）：见模块说明的布局。
 # 文件名由各 store 拥有（MEMORY_FILE、SKILL_FILE……），这里是副本，由 test_every_file_the_stores_write_is_in_the_resource_layout 守护
-RESOURCE_FILES = (
+STORE_FILES = (
     "public/MEMORY.md",
     "public/skills/*/SKILL.md",
     "public/mcp/*.json",
@@ -62,9 +64,31 @@ RESOURCE_FILES = (
     "agents/*/skills/*/SKILL.md",
     "agents/*/mcp/*.json",
 )
+# skill 目录里的文本附件（脚本、配置、参考文档，可在子目录里）：没有专门的工具，agent 用文件工具或 shell 写，
+# 由 reconcile 收进历史。按后缀白名单：二进制文件不进 git（skill 里写明版本与来源，由安装脚本获取）
+ATTACHMENT_SUFFIXES = (
+    "md", "txt", "py", "sh", "bash", "js", "mjs", "cjs", "ts", "json", "toml", "yaml", "yml",
+    "sql", "ini", "cfg", "csv", "html", "css", "jq",
+)  # fmt: skip
+_SKILL_DIRS = ("public/skills/*", "agents/*/skills/*")
+# `/**/` 匹配零到多层目录
+ATTACHMENT_FILES = tuple(f"{d}/**/*.{s}" for d in _SKILL_DIRS for s in ATTACHMENT_SUFFIXES)
+# 资源文件 = store 写的 + 附件。reconcile 只处理它们
+RESOURCE_FILES = STORE_FILES + ATTACHMENT_FILES
+# 即使后缀在白名单里也不是资源：隐藏文件与目录（.env、.venv、.cache……）、依赖目录
+EXCLUDED_FILES = ("**/.*", "**/.*/**", "**/node_modules/**", "**/venv/**", "**/__pycache__/**")
+# 外部写入的单个文件上限：超过的不收进历史（历史只增不改，进去就删不掉），记 warning
+MAX_EXTERNAL_FILE_BYTES = 256 * 1024
+
+
+def _pathspec(files: Iterable[str]) -> tuple[str, ...]:
+    return (*(f":(glob){p}" for p in files), *(f":(exclude,glob){p}" for p in EXCLUDED_FILES))
+
 
 # 交给 git 的 pathspec：哪些路径是资源文件只由 git 按它判断，不另写一套匹配
-RESOURCE_PATHSPEC = tuple(f":(glob){p}" for p in RESOURCE_FILES)
+RESOURCE_PATHSPEC = _pathspec(RESOURCE_FILES)
+# 本模块写了一半的临时文件（_write）：只有 store 写的文件会有，附件旁边的 *.tmp 是 agent 自己的
+PARTIAL_WRITE_PATHSPEC = _pathspec(f"{p}{_TMP}" for p in STORE_FILES)
 
 
 _GIT_EXIT_SECONDS = 5.0
@@ -226,6 +250,8 @@ class ResourceRepo:
         self._check_owner = check_owner
         self._lock = asyncio.Lock()
         self._ready = False
+        # 已因超限跳过并记过 warning 的外部写入（路径 → 大小）：每次写入都会 reconcile，同一个文件不重复记
+        self._oversized: dict[str, int] = {}
 
     async def check_owner(self, owner: str | None) -> None:
         """不写入、不加锁地先查一次 owner 还可用（如新增 MCP server 在连接验证之前）；写入时锁里那次才是准的。"""
@@ -350,9 +376,11 @@ class ResourceRepo:
             "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--", *RESOURCE_PATHSPEC
         )
         # 状态码第二位是工作区相对暂存区的变化；已经完整暂存的（如上次留下的删除）不再 add：路径不在工作区时 add 会报错
-        unstaged = [entry[3:] for entry in status.split("\0") if entry and entry[1] != " "]
+        unstaged = self._within_size_limit(
+            [entry[3:] for entry in status.split("\0") if entry and entry[1] != " "]
+        )
         if unstaged:
-            await self._git("add", "-A", "--", *unstaged)
+            await self._add_each_possible(unstaged)
         # 要提交什么由 add 之后的暂存区决定，而不是 add 之前的状态：add 会改变它（暂存过又在工作区删掉的新文件，
         # add 之后既不在 HEAD 也不在暂存区，不能再交给 commit）
         _, staged = await self._git(
@@ -366,11 +394,38 @@ class ResourceRepo:
         )
         log.warning("committed resource changes made outside the resource tools", extra={"paths": paths})
 
+    def _within_size_limit(self, paths: list[str]) -> list[str]:
+        """去掉超过 MAX_EXTERNAL_FILE_BYTES 的文件（删除照常记录），每个超限文件只记一次 warning。"""
+        kept = []
+        for rel in paths:
+            path = self.root / rel
+            size = path.lstat().st_size if path.is_file() and not path.is_symlink() else 0
+            if size <= MAX_EXTERNAL_FILE_BYTES:
+                self._oversized.pop(rel, None)
+                kept.append(rel)
+            elif self._oversized.get(rel) != size:
+                self._oversized[rel] = size
+                log.warning(
+                    "resource file too large to version, left out of history",
+                    extra={"path": rel, "size": size, "limit": MAX_EXTERNAL_FILE_BYTES},
+                )
+        return kept
+
+    async def _add_each_possible(self, paths: list[str]) -> None:
+        """暂存这些路径；一起暂存失败（如某个文件读不了）时逐个暂存，跳过失败的并记 warning：
+        一个目录里的一个坏文件不能让所有资源写入失败。"""
+        try:
+            await self._git("add", "-A", "--", *paths)
+        except RuntimeError:
+            for rel in paths:
+                try:
+                    await self._git("add", "-A", "--", rel)
+                except RuntimeError:
+                    log.warning("cannot stage resource file, left out of history", exc_info=True)
+
     async def _partial_writes(self) -> list[Path]:
         """资源文件写了一半的临时文件（见 _write）。由 git 按同一组 pattern 列出：不跟随符号链接，不进入嵌套仓库。"""
-        _, out = await self._git(
-            "ls-files", "--others", "-z", "--", *(f"{spec}{_TMP}" for spec in RESOURCE_PATHSPEC)
-        )
+        _, out = await self._git("ls-files", "--others", "-z", "--", *PARTIAL_WRITE_PATHSPEC)
         return [self.root / rel for rel in out.split("\0") if rel]
 
     async def apply(

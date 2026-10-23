@@ -7,7 +7,7 @@ import anyio
 import pytest
 
 from muliao.agents.memory import MemoryFull, MemoryStore
-from muliao.agents.resources import RESOURCE_PATHSPEC, SYSTEM, ResourceRepo
+from muliao.agents.resources import MAX_EXTERNAL_FILE_BYTES, RESOURCE_PATHSPEC, SYSTEM, ResourceRepo
 from muliao.agents.skills import SkillStore
 from muliao.errors import CorruptState, InvalidInput, NotFound
 from tests.test_flow import drain
@@ -447,15 +447,23 @@ async def test_editing_a_skill_rejects_invalid_combinations_without_changing_it(
 
 
 async def test_files_outside_the_resource_layout_never_enter_history(repo: ResourceRepo, tmp_path: Path):
-    """agent 在 skill 目录里放的杂物不进历史；一个没有提交的嵌套仓库（git add 会失败）也不影响任何写入。"""
+    """agent 在 skill 目录里放的杂物（不在后缀白名单、隐藏文件、虚拟环境与依赖目录里的脚本、超限文件）不进历史；
+    一个没有提交的嵌套仓库（git add 会失败）也不影响任何写入。"""
     skills = SkillStore(repo)
     await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
     skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
     (skill_dir / "notes.tmp").write_text("agent's own scratch")
+    (skill_dir / "tool.py.tmp").write_text("agent's own scratch")
     (skill_dir / ".env").write_text("TOKEN=x")
+    (skill_dir / "bin").write_bytes(b"\x7fELF")
+    (skill_dir / "big.json").write_text("x" * (MAX_EXTERNAL_FILE_BYTES + 1))
+    for deps in (".venv/lib", "node_modules/pkg", "venv/lib", "__pycache__"):
+        (skill_dir / deps).mkdir(parents=True)
+        (skill_dir / deps / "mod.py").write_text("x = 1\n")
     nested = skill_dir / "clone"
     nested.mkdir()
     await asyncio.to_thread(_git, "init", "-q", str(nested))
+    (nested / "cloned.py").write_text("x = 1\n")
 
     await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA)
     await repo.recover()
@@ -464,6 +472,83 @@ async def test_files_outside_the_resource_layout_never_enter_history(repo: Resou
     assert sorted(tracked) == [f"agents/{ALPHA}/MEMORY.md", f"agents/{ALPHA}/skills/digest/SKILL.md"]
     # recover 只删资源文件写了一半的 .tmp，agent 自己的临时文件不动
     assert (skill_dir / "notes.tmp").exists()
+    assert (skill_dir / "tool.py.tmp").exists()
+
+
+async def test_text_attachments_in_a_skill_directory_are_versioned(repo: ResourceRepo):
+    """skill 目录里的文本附件（含子目录）由 reconcile 收进历史，可以读旧版本写回；删除 skill 连附件一起删。"""
+    skills = SkillStore(repo)
+    for owner in (ALPHA, None):
+        await skills.write(owner, "digest", "When digesting", "steps", ALPHA)
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
+    script = skill_dir / "scripts" / "fetch.py"
+    script.parent.mkdir()
+    script.write_text("print(1)\n")
+    (skill_dir / "run.sh").write_text("echo hi\n")
+    (repo.owner_dir(None) / "skills" / "digest" / "helper.py").write_text("x = 1\n")
+
+    await repo.recover()
+    tracked = set((await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split())
+    assert {
+        f"agents/{ALPHA}/skills/digest/scripts/fetch.py",
+        f"agents/{ALPHA}/skills/digest/run.sh",
+        "public/skills/digest/helper.py",
+    } <= tracked
+
+    first = (await repo.history(script, 10))[0].rev
+    script.write_text("print(2)\n")
+    await repo.recover()
+    assert len(await repo.history(script, 10)) == 2
+    # 回滚：把旧版本写回并作为新的一次提交
+    await repo.apply({script: await repo.read_at(first, script)}, "restore fetch.py", ALPHA)
+    assert script.read_text() == "print(1)\n"
+    assert len(await repo.history(script, 10)) == 3
+
+    await skills.delete(ALPHA, "digest", ALPHA)
+    tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split()
+    assert not [p for p in tracked if p.startswith(f"agents/{ALPHA}/skills/digest/")]
+    assert not skill_dir.exists()
+
+
+async def test_an_oversized_attachment_is_left_out_with_one_warning(repo: ResourceRepo, caplog):
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    big = repo.owner_dir(ALPHA) / "skills" / "digest" / "data.csv"
+    big.write_text("x" * (MAX_EXTERNAL_FILE_BYTES + 1))
+
+    for _ in range(3):
+        await repo.recover()
+    assert not await repo.history(big, 10)
+    warned = [r for r in caplog.records if r.getMessage().startswith("resource file too large")]
+    assert len(warned) == 1
+
+    # 缩到上限以内就照常进历史
+    big.write_text("x\n")
+    await repo.recover()
+    assert len(await repo.history(big, 10)) == 1
+
+
+async def test_an_unreadable_attachment_does_not_block_other_changes(repo: ResourceRepo, monkeypatch):
+    """一起暂存失败时逐个暂存：坏的那个留在历史外，其余照常提交，写入不失败。"""
+    skills = SkillStore(repo)
+    await skills.write(ALPHA, "digest", "When digesting", "steps", ALPHA)
+    skill_dir = repo.owner_dir(ALPHA) / "skills" / "digest"
+    (skill_dir / "bad.py").write_text("x = 1\n")
+    (skill_dir / "good.py").write_text("y = 2\n")
+    real_git = ResourceRepo._git
+
+    async def failing_add(self, *args, check=True):
+        if args[0] == "add" and any(a.endswith("bad.py") for a in args):
+            raise RuntimeError("git add failed: cannot read bad.py")
+        return await real_git(self, *args, check=check)
+
+    monkeypatch.setattr(ResourceRepo, "_git", failing_add)
+    await repo.apply({repo.owner_dir(ALPHA) / "MEMORY.md": "fact\n"}, "memory", ALPHA)
+
+    tracked = (await asyncio.to_thread(_git, "-C", str(repo.root), "ls-files")).split()
+    assert f"agents/{ALPHA}/skills/digest/good.py" in tracked
+    assert f"agents/{ALPHA}/skills/digest/bad.py" not in tracked
+    assert f"agents/{ALPHA}/MEMORY.md" in tracked
 
 
 async def test_every_file_the_stores_write_is_in_the_resource_layout(container, make_agent):
