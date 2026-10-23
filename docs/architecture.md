@@ -303,7 +303,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `thread`，同一父 session 内唯一）。模型只用 thread 名，不接触 session id。同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。thread 的 agent 与种类在创建时确定，用错工具续聊时以可纠正的错误交还模型（`KindPolicy.continued_by`）。
 - **推送按信件、不按 session**：每封信件带「用户是否在等它的回答」（`awaited`，由投信的入口设置，见第 14 节）。一次运行处理过的信件里有用户在等的，就把它的回答推送给用户；否则不推，agent 可以自己 `notify_user`。同一个公开 thread 里，父 agent 委派的任务与用户的追问都推送；`report_back` 的委派不推送，结果交回父 agent。
 - **回答交给谁**（`platform.tooling.Audience`，工具的共同契约，不入库，`KindPolicy.audience`）：运行开始时由会话种类与它处理的信件推导一次，决定 `ask_user` 能否调用与运行上下文里怎么说（它随运行变化，所以在运行上下文里而不是 instructions 里，见第 6 节）：私有 thread 是 `agent`；处理过的和信箱里排着的信件有用户在等就是 `user`；否则 `none`。运行中途才到的、用户在等的消息会被这次运行处理、收尾时推送，但这次运行的工具与指令不随之改变（工具集在 pydantic-ai 运行开始时固定）；提问要等下一次运行。
-- **私有 thread** 有自己的信箱和消费者，可以开后台任务、`report_back`、被停止（发问方那次调用拿到「被停止」）。`ask_user` 在私有 thread 里调用会被拒绝（没有用户在等）；拒绝说明会告诉它这是另一个 agent 在问：自己决定，或把需要对方定的问题写进最终回答交回发起方（对方可在同一个 thread 里回复），不建议去通知用户。
+- **私有 thread** 有自己的信箱和消费者，可以开后台任务、`report_back`、被停止（发问方那次调用拿到「被停止」）。`ask_user` 在私有 thread 里调用会被拒绝（没有用户在等）；拒绝说明会告诉它这是另一个 agent 在问：自己决定，或把需要对方定的问题写进最终回答交回发起方（对方可在同一个 thread 里回复），不提通知用户。
 - **删除**（`deletion.delete_sessions`，删会话与删 agent 唯一的规则）：一个事务删除会话与（逐层）归它所有的私有 thread；公开 thread 保留（`parent_session_id` 置空）。任一被删会话忙时拒绝（判断只看会话自己的数据，无异步窗口）。交给被删会话、还没结清的关联以「被删除」结清并交回发起方；它自己发起的委派（占用）随它删除，之后 thread 的结局没有收件人。发布 `SessionDeleted`，其他领域各自清理引用它的数据（指向它的通知）；job 行保留终态。
 
 ### 占用与结清
