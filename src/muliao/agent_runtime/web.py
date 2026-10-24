@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass
 from typing import Literal, Protocol, assert_never
 
+import anyio
 import httpx
 from pydantic import BaseModel, ValidationError
 
@@ -31,7 +32,7 @@ class SearchHit:
 @dataclass(frozen=True)
 class Page:
     title: str
-    # Markdown 正文
+    # Markdown 正文；直连抓取时是原样的纯文本（见 _direct_fetch）
     content: str
 
 
@@ -180,36 +181,58 @@ _DIRECT_TEXT_TYPES = frozenset(
 
 def _is_plain_text(content_type: str) -> bool:
     media = content_type.split(";", 1)[0].strip().lower()
-    if media == "text/html":
+    if media in ("text/html", "application/xhtml+xml"):
         return False
     return media.startswith("text/") or media in _DIRECT_TEXT_TYPES or media.endswith(("+json", "+xml"))
 
 
+class _DirectFailed(Exception):
+    """直连没拿到可直接返回的纯文本；消息是给模型看的原因。"""
+
+
+async def _direct_get(client: httpx.AsyncClient, url: str) -> tuple[str, str]:
+    """GET 一次，返回 (content-type, 正文)；整段（连接到读完）限时 _DIRECT_TIMEOUT_SECONDS。"""
+    try:
+        with anyio.fail_after(_DIRECT_TIMEOUT_SECONDS):
+            async with client.stream("GET", url, headers=_DIRECT_HEADERS, follow_redirects=True) as resp:
+                if resp.status_code != 200:
+                    raise _DirectFailed(f"a direct GET returned HTTP {resp.status_code}")
+                content_type = resp.headers.get("content-type", "")
+                if not _is_plain_text(content_type):
+                    raise _DirectFailed(
+                        f"a direct GET returned content-type {content_type or '(none)'}, which web_fetch does not "
+                        "convert: try `run_shell` with curl"
+                    )
+                body = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    body += chunk
+                    if len(body) >= _DIRECT_MAX_BYTES:
+                        break
+                # 流式响应的 encoding 没有 charset 时取客户端的默认值（utf-8），不会是 None
+                return content_type, bytes(body[:_DIRECT_MAX_BYTES]).decode(resp.encoding, errors="replace")
+    except TimeoutError as e:
+        raise _DirectFailed(f"a direct GET did not finish within {_DIRECT_TIMEOUT_SECONDS:g}s") from e
+    except httpx.HTTPError as e:
+        raise _DirectFailed(f"a direct GET failed: {type(e).__name__}: {e}") from e
+
+
 async def _direct_fetch(client: httpx.AsyncClient, url: str, service_reason: str) -> Page:
     """抓取服务说拿不到（`service_reason`）时直接 GET 一次：拿到纯文本（源码、Markdown、JSON……）就原样返回并注明是直连；
-    否则把两边的原因一起交还模型（InvalidInput）。直连 404 才说明页面确实不存在，所以服务那句 404 不能单独交还（#189）。"""
-    unresolved = f"{service_reason}. The fetch service could not get this URL, which does not by itself mean the page is missing"
+    否则把两边的原因一起交还模型（InvalidInput）。直连 404 才说明页面确实不存在，所以服务那句 404 不能单独交还（#189）。
+    直连失败不算暂时性失败：抓取服务已经给了确定答复，连不上的是目标站点，与 #134 的目标站点超时同理交还模型。"""
+    # 只记 host：URL 里可能带着对话内容
+    host = httpx.URL(url).host
     try:
-        async with client.stream(
-            "GET", url, headers=_DIRECT_HEADERS, follow_redirects=True, timeout=_DIRECT_TIMEOUT_SECONDS
-        ) as resp:
-            if resp.status_code != 200:
-                raise InvalidInput(f"{unresolved}; a direct GET returned HTTP {resp.status_code}")
-            content_type = resp.headers.get("content-type", "")
-            if not _is_plain_text(content_type):
-                raise InvalidInput(
-                    f"{unresolved}; a direct GET returned content-type {content_type or '(none)'}, which web_fetch does "
-                    "not convert: try `run_shell` with curl"
-                )
-            body = bytearray()
-            async for chunk in resp.aiter_bytes():
-                body += chunk
-                if len(body) >= _DIRECT_MAX_BYTES:
-                    break
-            text = bytes(body[:_DIRECT_MAX_BYTES]).decode(resp.encoding or "utf-8", errors="replace")
-    except httpx.HTTPError as e:
-        raise InvalidInput(f"{unresolved}; a direct GET failed: {type(e).__name__}: {e}") from e
-    log.info("web fetch", extra={"provider": "direct", "host": httpx.URL(url).host, "chars": len(text)})
+        content_type, text = await _direct_get(client, url)
+    except _DirectFailed as e:
+        log.warning(
+            "web request failed", extra={"provider": "direct", "op": "fetch", "host": host, "reason": str(e)}
+        )
+        raise InvalidInput(
+            f"{service_reason}. The fetch service could not get this URL, which does not by itself mean the page is "
+            f"missing; {e}"
+        ) from e
+    log.info("web fetch", extra={"provider": "direct", "host": host, "chars": len(text)})
     note = f"(Fetched directly with a plain GET because the fetch service could not get it; content-type {content_type}.)"
     return Page(title="", content=f"{note}\n\n{text}")
 

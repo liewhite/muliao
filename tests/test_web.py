@@ -2,6 +2,7 @@
 
 import json
 
+import anyio
 import httpx
 import pytest
 from pydantic import ValidationError
@@ -78,6 +79,7 @@ async def test_deepseek_fetch_returns_markdown_page():
         ("search", 400, InvalidInput),
         ("search", 413, InvalidInput),
         ("fetch", 403, InvalidInput),
+        # fetch 404 先直连核实（#189）：这里直连也得到 404，所以还是交还模型
         ("fetch", 404, InvalidInput),
         # 403/404 只在 fetch 的契约里；search 收到是契约之外的响应
         ("search", 403, RuntimeError),
@@ -122,6 +124,58 @@ async def test_fetch_service_404_falls_back_to_a_direct_get_and_returns_plain_te
 
 
 @pytest.mark.parametrize(
+    ("body", "content_type", "expected"),
+    [
+        (b'{"a": 1}', "application/json", '{"a": 1}'),
+        (b"{}", "application/vnd.api+json", "{}"),
+        ("中文".encode("gbk"), "text/plain; charset=gbk", "中文"),
+    ],
+)
+async def test_direct_get_accepts_textual_types_and_decodes_by_charset(body, content_type, expected):
+    web = _not_fetched_then(
+        lambda _r: httpx.Response(200, content=body, headers={"content-type": content_type})
+    )
+    assert (await web.fetch("https://raw.example/a.py")).content.endswith("\n\n" + expected)
+
+
+async def test_direct_get_reads_at_most_the_byte_cap(monkeypatch):
+    monkeypatch.setattr("muliao.agent_runtime.web._DIRECT_MAX_BYTES", 4)
+    web = _not_fetched_then(
+        lambda _r: httpx.Response(200, text="abcdefgh", headers={"content-type": "text/plain"})
+    )
+    assert (await web.fetch("https://raw.example/a.py")).content.endswith("\n\nabcd")
+
+
+async def test_direct_get_is_limited_in_total_time(monkeypatch):
+    monkeypatch.setattr("muliao.agent_runtime.web._DIRECT_TIMEOUT_SECONDS", 0.05)
+
+    class Slow(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                yield b"x"
+                await anyio.sleep(0.01)
+
+    web = _not_fetched_then(
+        lambda _r: httpx.Response(200, stream=Slow(), headers={"content-type": "text/plain"})
+    )
+    with pytest.raises(InvalidInput, match="did not finish within 0.05s"):
+        await web.fetch("https://raw.example/a.py")
+
+
+@pytest.mark.parametrize("status", [403, 408, 400])
+async def test_other_fetch_rejections_do_not_trigger_a_direct_get(status):
+    seen: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url)
+        return httpx.Response(status, json={"error": {"message": "nope"}})
+
+    with pytest.raises(InvalidInput):
+        await _deepseek(handler).fetch("https://example.com/a")
+    assert [u.host for u in seen] == ["ds.example"]
+
+
+@pytest.mark.parametrize(
     ("direct", "says"),
     [
         (lambda _r: httpx.Response(404, text="Not Found"), "a direct GET returned HTTP 404"),
@@ -134,6 +188,10 @@ async def test_fetch_service_404_falls_back_to_a_direct_get_and_returns_plain_te
         (
             lambda _r: httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}),
             "image/png",
+        ),
+        (
+            lambda _r: httpx.Response(200, text="<html/>", headers={"content-type": "application/xhtml+xml"}),
+            "application/xhtml+xml",
         ),
         (
             lambda _r: (_ for _ in ()).throw(httpx.ConnectError("refused")),
