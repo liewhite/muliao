@@ -153,8 +153,10 @@ class WebPushDelivery:
             # requests 的异常都是 OSError 的子类：URL、请求头不合法这类本端问题在这里照常抛出，不落进下面的 OSError
             raise
         except OSError as e:
-            # 请求发出前的本机环境失败，如部署时 uv tool install --force 原地替换安装目录、certifi 的 CA bundle
-            # 暂时不在（#188）：请求还没发出，重试不会重复送达；服务重启后由新进程接着投
+            # 本机文件或环境失败，多半在请求发出前（如部署时 uv tool install --force 原地替换安装目录，cert_verify
+            # 找不到 certifi 的 CA bundle，#188）：按暂时性失败重试，服务重启后由新进程接着投；万一已经发出，最多对
+            # 这一台重推一次（与崩溃后重推同一代价）。连接、收发的错误都被 requests 包成 RequestException，落不到这里，
+            # 所以这里的异常文本只含本机文件路径、没有 endpoint，可以记
             log.warning(
                 "push failed locally before sending: %s",
                 e,
