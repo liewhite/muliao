@@ -96,6 +96,60 @@ async def test_deepseek_errors_are_classified_by_endpoint_and_status_and_carry_t
         await (web.search("q", 1) if op == "search" else web.fetch("https://example.com/a"))
 
 
+def _not_fetched_then(direct) -> DeepSeekWeb:
+    """抓取服务对目标 URL 返回契约 404，目标站点本身由 `direct` 应答（#189）。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "ds.example":
+            return httpx.Response(
+                404, json={"error": {"message": "failed to fetch URL", "type": "not_found_error"}}
+            )
+        assert request.url == "https://raw.example/a.py"
+        assert "muliao" in request.headers["user-agent"]
+        return direct(request)
+
+    return _deepseek(handler)
+
+
+async def test_fetch_service_404_falls_back_to_a_direct_get_and_returns_plain_text_marked_as_direct():
+    web = _not_fetched_then(
+        lambda _r: httpx.Response(200, text="print(1)\n", headers={"content-type": "text/plain"})
+    )
+    page = await web.fetch("https://raw.example/a.py")
+    assert page.title == ""
+    assert page.content.startswith("(Fetched directly")
+    assert page.content.endswith("\n\nprint(1)\n")
+
+
+@pytest.mark.parametrize(
+    ("direct", "says"),
+    [
+        (lambda _r: httpx.Response(404, text="Not Found"), "a direct GET returned HTTP 404"),
+        (
+            lambda _r: httpx.Response(
+                200, text="<html>", headers={"content-type": "text/html; charset=utf-8"}
+            ),
+            "content-type text/html; charset=utf-8, which web_fetch does not convert",
+        ),
+        (
+            lambda _r: httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}),
+            "image/png",
+        ),
+        (
+            lambda _r: (_ for _ in ()).throw(httpx.ConnectError("refused")),
+            "a direct GET failed: ConnectError",
+        ),
+    ],
+)
+async def test_fetch_service_404_with_failing_direct_get_returns_both_reasons_to_the_model(direct, says):
+    with pytest.raises(InvalidInput) as caught:
+        await _not_fetched_then(direct).fetch("https://raw.example/a.py")
+    message = str(caught.value)
+    assert "HTTP 404: failed to fetch URL" in message
+    assert "does not by itself mean the page is missing" in message
+    assert says in message
+
+
 async def test_rejection_status_without_contract_error_body_is_a_config_failure_not_model_input():
     # 例如 base_url 指到了别的服务：404 页面不是 DeepSeek 的错误体，不能被当成「这个网页抓不到」交还模型
     web = _deepseek(lambda _r: httpx.Response(404, text="<html>Not Found"))

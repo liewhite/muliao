@@ -95,6 +95,11 @@ def _error_message(resp: httpx.Response) -> str | None:
         return None
 
 
+class _FetchNotFound(InvalidInput):
+    """fetch 按契约返回 404（"failed to fetch URL"）：服务没拿到可用内容。它既可能是页面不存在，也可能是服务自己
+    抓不到能直连访问的地址（实测 raw.githubusercontent.com 的纯文本文件都是这样，#189），由 `DeepSeekWeb.fetch` 直连核实。"""
+
+
 class DeepSeekWeb:
     def __init__(self, api_key: str, base_url: str, client: httpx.AsyncClient):
         # 共用的出站 HTTP 客户端，由容器创建、在关停时关闭
@@ -126,6 +131,8 @@ class DeepSeekWeb:
         # 只有服务按契约拒绝的输入才交还模型；状态码对上而错误体不对是网关或配置问题（如网关自己的 504 页面、
         # base_url 指错），按下面的暂时性/配置失败处理
         if resp.status_code in _DEEPSEEK_REJECTED_INPUT[op] and message is not None:
+            if op == "fetch" and resp.status_code == 404:
+                raise _FetchNotFound(reason)
             raise InvalidInput(reason)
         if resp.status_code in _DEEPSEEK_TRANSIENT:
             raise TransientError(reason)
@@ -141,12 +148,70 @@ class DeepSeekWeb:
         ]
 
     async def fetch(self, url: str) -> Page:
-        raw = await self._post("fetch", {"url": url})
+        try:
+            raw = await self._post("fetch", {"url": url})
+        except _FetchNotFound as e:
+            return await _direct_fetch(self._client, url, str(e))
         page = _DeepSeekFetchResponse.model_validate(raw)
         # 只记 host：URL 里可能带着对话内容
         host = httpx.URL(url).host
         log.info("web fetch", extra={"provider": "deepseek", "host": host, "chars": len(page.content)})
         return Page(title=page.title, content=page.content)
+
+
+# --- 直连抓取：抓取服务拿不到时核实一次 ---
+
+_DIRECT_TIMEOUT_SECONDS = 20.0
+# 读到这么多就停：正文最终还会按 tool_output_max_chars 截断，这里只防下载大文件
+_DIRECT_MAX_BYTES = 2 * 1024 * 1024
+_DIRECT_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; muliao web_fetch)"}
+# 不经转换就能直接给模型读的非 text/* 类型；HTML 不在内：转成 Markdown 是抓取服务的事，这里不做
+_DIRECT_TEXT_TYPES = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/javascript",
+        "application/yaml",
+        "application/x-yaml",
+        "application/toml",
+    }
+)
+
+
+def _is_plain_text(content_type: str) -> bool:
+    media = content_type.split(";", 1)[0].strip().lower()
+    if media == "text/html":
+        return False
+    return media.startswith("text/") or media in _DIRECT_TEXT_TYPES or media.endswith(("+json", "+xml"))
+
+
+async def _direct_fetch(client: httpx.AsyncClient, url: str, service_reason: str) -> Page:
+    """抓取服务说拿不到（`service_reason`）时直接 GET 一次：拿到纯文本（源码、Markdown、JSON……）就原样返回并注明是直连；
+    否则把两边的原因一起交还模型（InvalidInput）。直连 404 才说明页面确实不存在，所以服务那句 404 不能单独交还（#189）。"""
+    unresolved = f"{service_reason}. The fetch service could not get this URL, which does not by itself mean the page is missing"
+    try:
+        async with client.stream(
+            "GET", url, headers=_DIRECT_HEADERS, follow_redirects=True, timeout=_DIRECT_TIMEOUT_SECONDS
+        ) as resp:
+            if resp.status_code != 200:
+                raise InvalidInput(f"{unresolved}; a direct GET returned HTTP {resp.status_code}")
+            content_type = resp.headers.get("content-type", "")
+            if not _is_plain_text(content_type):
+                raise InvalidInput(
+                    f"{unresolved}; a direct GET returned content-type {content_type or '(none)'}, which web_fetch does "
+                    "not convert: try `run_shell` with curl"
+                )
+            body = bytearray()
+            async for chunk in resp.aiter_bytes():
+                body += chunk
+                if len(body) >= _DIRECT_MAX_BYTES:
+                    break
+            text = bytes(body[:_DIRECT_MAX_BYTES]).decode(resp.encoding or "utf-8", errors="replace")
+    except httpx.HTTPError as e:
+        raise InvalidInput(f"{unresolved}; a direct GET failed: {type(e).__name__}: {e}") from e
+    log.info("web fetch", extra={"provider": "direct", "host": httpx.URL(url).host, "chars": len(text)})
+    note = f"(Fetched directly with a plain GET because the fetch service could not get it; content-type {content_type}.)"
+    return Page(title="", content=f"{note}\n\n{text}")
 
 
 def build_web_provider(cfg: WebConfig, client: httpx.AsyncClient) -> WebProvider:
