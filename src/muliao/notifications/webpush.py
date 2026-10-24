@@ -149,4 +149,16 @@ class WebPushDelivery:
                 extra={"push_host": urlsplit(sub.endpoint).hostname},
             )
             return _NO_RESPONSE
+        except requests.RequestException:
+            # requests 的异常都是 OSError 的子类：URL、请求头不合法这类本端问题在这里照常抛出，不落进下面的 OSError
+            raise
+        except OSError as e:
+            # 请求发出前的本机环境失败，如部署时 uv tool install --force 原地替换安装目录、certifi 的 CA bundle
+            # 暂时不在（#188）：请求还没发出，重试不会重复送达；服务重启后由新进程接着投
+            log.warning(
+                "push failed locally before sending: %s",
+                e,
+                extra={"push_host": urlsplit(sub.endpoint).hostname},
+            )
+            return _NO_RESPONSE
         return None

@@ -213,6 +213,21 @@ async def test_any_transport_failure_is_retried(container, monkeypatch):
         )
 
 
+async def test_a_missing_ca_bundle_while_redeploying_is_retried(container, monkeypatch):
+    """部署时安装目录被原地替换，requests 找不到 certifi 的 CA bundle（抛普通 OSError，#188）：请求还没发出，重试。"""
+
+    def fake_webpush(subscription_info, **_kwargs):  # noqa: ANN001, ANN202
+        raise OSError(
+            "Could not find a suitable TLS CA certificate bundle, invalid path: /x/certifi/cacert.pem"
+        )
+
+    monkeypatch.setattr(webpush_module, "webpush", fake_webpush)
+    with pytest.raises(TransientError):
+        await _webpush(container).send(
+            _sub("a"), Notification(id=1, title="t", body="b", session_id=None), unread=1
+        )
+
+
 async def test_a_local_request_error_is_not_retried_as_transient(container, monkeypatch):
     """URL、请求头不合法这类本端问题重试也不会好，照常抛出，task 失败可见。"""
 
