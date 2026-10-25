@@ -377,7 +377,6 @@ def assemble(
     jobs.subscribe(messaging)
     limits = ShellLimits(
         settings.runtime.shell_default_timeout,
-        settings.runtime.shell_max_timeout,
         settings.runtime.tool_output_max_chars,
     )
     # 总是开放：自我改进、工作历史（每日自进化人人都写），以及向用户提问（工具列表保持稳定以命中缓存；没有用户会回答的运行里调用被拒绝，见 sessions.ask_user）

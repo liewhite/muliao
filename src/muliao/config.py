@@ -141,7 +141,6 @@ class RuntimeConfig(_Section):
     compaction_keep_steps: int = Field(default=10, ge=1)
     memory_max_chars: int = Field(default=4000, ge=100)
     shell_default_timeout: float = Field(default=120.0, gt=0)
-    shell_max_timeout: float = Field(default=600.0, gt=0)
     # 触发器前置检查的时限：webhook 的调用方在同步等它，检查本该便宜，比 shell 的默认时限短得多
     precheck_timeout_seconds: float = Field(default=30.0, gt=0)
     # 运行中检查的节奏（platform.checks）：后台任务与委派还在进行时，每隔这么久给发起它的会话投一封检查信件，由
@@ -150,15 +149,6 @@ class RuntimeConfig(_Section):
     tool_output_max_chars: int = Field(default=20000, ge=1000)
     # 单个文件（用户上传的附件、agent 发出的文件）的字节上限，默认与 Matrix Synapse 一致
     upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
-
-    @model_validator(mode="after")
-    def _consistent(self) -> "RuntimeConfig":
-        # 默认时限超过上限时，每次不带 timeout 的 run_shell 都会被拒绝
-        if self.shell_default_timeout > self.shell_max_timeout:
-            raise ValueError(
-                f"shell_default_timeout ({self.shell_default_timeout}) exceeds shell_max_timeout ({self.shell_max_timeout})"
-            )
-        return self
 
 
 class Settings(_Section):

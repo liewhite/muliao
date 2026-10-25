@@ -93,7 +93,6 @@ api_key = ""
 # compaction_keep_steps = 10      # 压缩时保留最近几步原文（一步是一次模型回复及其工具结果）
 # memory_max_chars = 4000         # agent 记忆长度上限
 # shell_default_timeout = 120.0
-# shell_max_timeout = 600.0
 # precheck_timeout_seconds = 30.0  # 触发器前置检查的时限
 # job_check_seconds = 60.0  # 后台任务与委派进行期间，每隔多久让 agent 检查一次（继续等还是结束它）
 # tool_output_max_chars = 20000

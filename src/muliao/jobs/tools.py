@@ -12,7 +12,7 @@ from muliao.platform.tooling import RunScope
 from muliao.vault.api import Vault
 
 _BACKGROUND_DESCRIPTION = (
-    " For anything longer, or to keep working while it runs, pass `background: true`: it returns a job id at once "
+    " To keep working while a long command runs, pass `background: true`: it returns a job id at once "
     "and has no time limit; its output goes to a log file in your workspace, you get an event when it finishes and "
     "a check-in event about every {check:g} seconds while it runs (decide then whether to keep waiting or call "
     "`job_kill`)."

@@ -62,7 +62,6 @@ class FileRange(BaseModel):
 @dataclass(frozen=True)
 class ShellLimits:
     default_timeout: float
-    max_timeout: float
     max_output_chars: int
 
 
@@ -73,7 +72,7 @@ def resolve(scope: RunScope, path: str) -> Path:
 
 _SHELL_DESCRIPTION = (
     "Run a shell command (bash) in your workspace and return its exit code and combined output. "
-    "Commands are killed after {default:g} seconds unless you pass a longer `timeout` (at most {max:g}). "
+    "Commands are killed after {default:g} seconds unless you pass a different `timeout`. "
     "Only the first {max_output} characters of output are kept, so limit it yourself: pipe through `| head` or `| tail`, "
     "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
     "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
@@ -85,9 +84,7 @@ _SHELL_DESCRIPTION = (
 
 def shell_description(limits: ShellLimits) -> str:
     """时限与输出上限是配置的值，写进说明：模型不知道它们，长命令被杀、长输出被截了才学会。"""
-    return _SHELL_DESCRIPTION.format(
-        default=limits.default_timeout, max=limits.max_timeout, max_output=limits.max_output_chars
-    )
+    return _SHELL_DESCRIPTION.format(default=limits.default_timeout, max_output=limits.max_output_chars)
 
 
 async def run_foreground(
@@ -99,8 +96,8 @@ async def run_foreground(
     secrets: tuple[str, ...],
 ) -> str:
     timeout = limits.default_timeout if timeout is None else timeout
-    if not 0 < timeout <= limits.max_timeout:
-        raise InvalidInput(f"timeout must be in (0, {limits.max_timeout}] seconds")
+    if timeout <= 0:
+        raise InvalidInput("timeout must be greater than 0 seconds")
     secret_values = await vault.resolve_many(scope.agent_id, list(secrets))
     result = await run_bash(
         command, cwd=scope.workspace, secrets=secret_values, timeout=timeout, merge_stderr=True
