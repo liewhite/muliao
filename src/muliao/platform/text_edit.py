@@ -98,7 +98,7 @@ def apply_each[K](
 ) -> tuple[dict[K, str], dict[K, int]]:
     """依次做多处修改，每项作用在它那份文本上（键是文本的名字，如文件路径；同一份文本里后一项作用在前面改过的
     结果上），返回各份的新文本与替换数（只含被改到的键）。任何一项失败都整体失败，报错指出是第几项；调用方只在
-    成功后写盘，所以不会留下改了一半的文件，多个文件也是要么都改、要么都不改。"""
+    成功后写盘，所以不会因为某处对不上而留下改了一半的文件（写盘本身的 IO 失败不归这里管）。"""
     if not edits:
         raise InvalidInput("no edits given")
     current: dict[K, str] = {}
@@ -106,7 +106,8 @@ def apply_each[K](
     earlier: dict[K, int] = {}
     for i, (key, change) in enumerate(edits, 1):
         try:
-            current[key], count = change.apply(current.get(key, texts[key]), str(key))
+            text = current[key] if key in current else texts[key]
+            current[key], count = change.apply(text, str(key))
         except InvalidInput as e:
             if len(edits) == 1:
                 raise

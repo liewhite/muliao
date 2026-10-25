@@ -5,6 +5,7 @@
 
 import logging
 import mimetypes
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -241,8 +242,12 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         located: list[_Located] = []
         for i, e in enumerate(edits, 1):
             given = _edit_target(ctx.deps, path, e, i)
+            where = f"edit {i}: " if len(edits) > 1 else ""
             if not given.is_file():
-                raise NotFound(f"file not found: {given}")
+                raise NotFound(f"{where}file not found: {given}")
+            # 只读文件在任何写盘之前挡住，不留下改了一半的几个文件（写盘时的其他 IO 失败不在此保证内）
+            if not os.access(given, os.W_OK):
+                raise InvalidInput(f"{where}file is not writable: {given}; nothing was written")
             target = same.setdefault(given.resolve(), given)
             if target not in before:
                 before[target] = target.read_text(encoding="utf-8")

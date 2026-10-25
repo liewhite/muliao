@@ -509,6 +509,39 @@ async def test_edit_file_changes_several_files_in_one_call_all_or_nothing(contai
     assert "path is required" in outputs[8]
 
 
+async def test_edit_file_refuses_a_read_only_file_before_writing_any(
+    container, make_agent, models, monkeypatch
+):
+    import muliao.agent_runtime.workspace_tools as wt
+
+    me = await make_agent("alpha", model="tools")
+    real_access = wt.os.access
+    monkeypatch.setattr(
+        wt.os, "access", lambda p, mode: not str(p).endswith("ro.py") and real_access(p, mode)
+    )
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("write_file", {"path": "rw.py", "content": "A = 1\n"}),
+            ("write_file", {"path": "ro.py", "content": "B = 1\n"}),
+            (
+                "edit_file",
+                {
+                    "edits": [
+                        {"path": "rw.py", "old_text": "A = 1", "new_text": "A = 2"},
+                        {"path": "ro.py", "old_text": "B = 1", "new_text": "B = 2"},
+                    ]
+                },
+            ),
+            ("read_file", {"path": "rw.py"}),
+        ],
+    )
+    assert "edit 2: file is not writable" in outputs[2] and "nothing was written" in outputs[2]
+    assert "1\tA = 1" in outputs[3]
+
+
 async def test_edit_file_locates_by_line_range_or_pattern_and_validates_the_locator(
     container, make_agent, models
 ):
