@@ -352,10 +352,14 @@ async def test_run_shell_tells_the_model_its_configured_limits(container):
 
 async def test_run_shell_rejects_a_zero_timeout_instead_of_using_the_default(container, make_agent, models):
     me = await make_agent("alpha", model="tools")
-    [output] = await run_tools(
-        container, models, me.id, [("run_shell", {"command": "echo hi", "timeout": 0})]
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [("run_shell", {"command": "echo hi", "timeout": t}) for t in (0, float("nan"))],
     )
-    assert "timeout must be greater than 0" in output
+    assert len(outputs) == 2
+    assert all("timeout must be greater than 0" in o for o in outputs)
 
 
 async def test_run_shell_accepts_a_timeout_of_any_length(container, make_agent, models):

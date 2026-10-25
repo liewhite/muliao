@@ -96,7 +96,7 @@ async def run_foreground(
     secrets: tuple[str, ...],
 ) -> str:
     timeout = limits.default_timeout if timeout is None else timeout
-    if timeout <= 0:
+    if not timeout > 0:  # 也拒绝 NaN
         raise InvalidInput("timeout must be greater than 0 seconds")
     secret_values = await vault.resolve_many(scope.agent_id, list(secrets))
     result = await run_bash(
