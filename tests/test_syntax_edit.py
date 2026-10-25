@@ -73,15 +73,30 @@ def test_line_range_rejects_bad_ranges(start, end, anchor, error):
 
 
 def test_line_numbers_of_later_edits_count_on_the_text_after_earlier_ones():
-    text = "a\nb\nc\nd\n"
+    text = {"f": "a\nb\nc\nd\n"}
     # 自下而上列出，互不影响
-    assert apply_each(text, [LineRange(4, 4, "d", "D"), LineRange(1, 1, "a", "A\nA2")], "f") == (
-        "A\nA2\nb\nc\nD\n",
-        2,
+    assert apply_each(text, [("f", LineRange(4, 4, "d", "D")), ("f", LineRange(1, 1, "a", "A\nA2"))]) == (
+        {"f": "A\nA2\nb\nc\nD\n"},
+        {"f": 2},
     )
     # 先在上面插入一行，下面的行号就过期了：锚点挡住，整体失败
-    with pytest.raises(InvalidInput, match="edit 2 of 2.*anchor does not match line 4"):
-        apply_each(text, [Replace("a\n", "a\nnew\n"), LineRange(4, 4, "d", "D")], "f")
+    with pytest.raises(InvalidInput, match="edit 2 of 2.*1 earlier edit.*anchor does not match line 4"):
+        apply_each(text, [("f", Replace("a\n", "a\nnew\n")), ("f", LineRange(4, 4, "d", "D"))])
+
+
+def test_edits_to_several_texts_each_see_only_their_own_earlier_edits():
+    texts = {"f": "a\nb\n", "g": "a\nb\n", "untouched": "x\n"}
+    edits = [
+        ("f", Replace("a\n", "a\nnew\n")),
+        ("g", LineRange(2, 2, "b", "B")),
+        ("f", LineRange(3, 3, "b", "B")),
+    ]
+    # 第 1 项在 f 里插了一行，g 的行号不受影响；没改到的文本不在结果里
+    assert apply_each(texts, edits) == ({"f": "a\nnew\nB\n", "g": "a\nB\n"}, {"f": 2, "g": 1})
+    # 失败时报的「之前改过几处」只算同一份文本的
+    with pytest.raises(InvalidInput, match=r"edit 3 of 3: old text must occur exactly once in g") as caught:
+        apply_each(texts, [("f", Replace("a", "z")), ("f", Replace("b", "y")), ("g", Replace("zz", "w"))])
+    assert "earlier" not in str(caught.value)
 
 
 # ---- 语法结构 ----

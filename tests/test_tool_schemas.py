@@ -77,4 +77,4 @@ async def test_edit_file_single_change_parameters_mirror_the_fields_of_one_edit(
     from muliao.agent_runtime.workspace_tools import TextEdit
 
     params = set(session_tools(container)["edit_file"].function_schema.json_schema["properties"])
-    assert params - {"path", "edits"} == set(TextEdit.model_fields)
+    assert params - {"edits"} == set(TextEdit.model_fields)

@@ -446,7 +446,7 @@ async def test_edit_file_applies_several_edits_all_or_nothing(container, make_ag
             ("read_file", {"path": "m.py"}),
         ],
     )
-    assert "edit 2 of 2" in outputs[1] and "1 earlier edit(s) applied" in outputs[1]
+    assert "edit 2 of 2" in outputs[1] and "1 earlier edit(s) to it applied" in outputs[1]
     assert "nothing was written" in outputs[1]
     assert "1\ta = 1\n2\tb = 2\n3\tc = 3" in outputs[2]
     assert "5 replacements" in outputs[3]
@@ -456,6 +456,57 @@ async def test_edit_file_applies_several_edits_all_or_nothing(container, make_ag
     assert "new_text is required" in outputs[7]
     assert "not both" in outputs[8]
     assert "1\ta=10\n2\tbb=2\n3\tc=3" in outputs[9]
+
+
+async def test_edit_file_changes_several_files_in_one_call_all_or_nothing(container, make_agent, models):
+    me = await make_agent("alpha", model="tools")
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("write_file", {"path": "a.py", "content": "A = 1\n"}),
+            ("write_file", {"path": "sub/b.py", "content": "B = 1\n"}),
+            # 第 2 个文件对不上：两个都不写
+            (
+                "edit_file",
+                {
+                    "edits": [
+                        {"path": "a.py", "old_text": "A = 1", "new_text": "A = 2"},
+                        {"path": "sub/b.py", "old_text": "missing", "new_text": "x"},
+                    ]
+                },
+            ),
+            ("read_file", {"reads": [{"path": "a.py"}, {"path": "sub/b.py"}]}),
+            # 顶层 path 是没写 path 的项的文件；同一文件换种写法也认成一份，后一项看得到前一项的结果
+            (
+                "edit_file",
+                {
+                    "path": "a.py",
+                    "edits": [
+                        {"old_text": "A = 1", "new_text": "A = 2"},
+                        {"path": "sub/b.py", "old_text": "B = 1", "new_text": "B = 2"},
+                        {"path": "sub/../a.py", "old_text": "A = 2", "new_text": "A = 3"},
+                    ],
+                },
+            ),
+            ("read_file", {"reads": [{"path": "a.py"}, {"path": "sub/b.py"}]}),
+            ("edit_file", {"edits": [{"old_text": "A", "new_text": "Z"}]}),
+            ("edit_file", {"edits": [{"path": "nope.py", "old_text": "A", "new_text": "Z"}]}),
+            ("edit_file", {"old_text": "A", "new_text": "Z"}),
+        ],
+    )
+    assert "edit 2 of 2" in outputs[2] and "b.py" in outputs[2] and "nothing was written" in outputs[2]
+    assert "1\tA = 1" in outputs[3] and "1\tB = 1" in outputs[3]
+    report = outputs[4]
+    assert (
+        "a.py (2 replacements; now 1 lines)" in report and "sub/b.py (1 replacement; now 1 lines)" in report
+    )
+    assert "sub/../a.py" not in report
+    assert "1\tA = 3" in outputs[5] and "1\tB = 2" in outputs[5]
+    assert "edit 1 has no path" in outputs[6]
+    assert "file not found" in outputs[7] and "nope.py" in outputs[7]
+    assert "path is required" in outputs[8]
 
 
 async def test_edit_file_locates_by_line_range_or_pattern_and_validates_the_locator(

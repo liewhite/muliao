@@ -38,6 +38,7 @@ class TextEdit(BaseModel):
     # edit_file 一次调用里的一处修改（类 docstring 会进 schema 给模型看，所以用注释）；定位方式与 edit_file 的同名参数一致
     model_config = ConfigDict(extra="forbid")
 
+    path: str | None = Field(default=None, description="File to change; defaults to the top-level path.")
     old_text: str | None = Field(default=None, description="Exact text to replace.")
     start_line: int | None = Field(default=None, description="First line to replace (1-based).")
     end_line: int | None = Field(default=None, description="Last line to replace (inclusive).")
@@ -169,7 +170,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
     @ts.tool
     async def edit_file(
         ctx: RunContext[RunScope],
-        path: str,
+        path: str | None = None,
         old_text: str | None = None,
         start_line: int | None = None,
         end_line: int | None = None,
@@ -194,12 +195,14 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
           `$$$VARS` is re-indented to where you put it (e.g. one level deeper inside a new `with`).
           Deleting a match also removes its decorators / `export`, and its lines with the extra blank lines
           left behind.
-        To change several places in the same file in one call, pass `edits` instead: they are applied in order,
-        each seeing the result of the earlier ones (so list line-range edits from the bottom of the file up), and
-        if any of them fails nothing is written. On success the changed lines are shown with their numbers.
+        To change several places in one call, in one file or in several files, pass `edits` instead: each edit
+        changes its own `path` (or the top-level `path` when it has none); they are applied in order, each seeing
+        the result of the earlier ones in the same file (so list line-range edits from the bottom of the file
+        up), and if any of them fails no file is written. On success the changed lines of each file are shown
+        with their numbers.
 
         Args:
-            path: File path.
+            path: File path (with `edits`: the file of the edits that give no path of their own).
             old_text: Exact text to replace (omit when using `edits`).
             start_line: First line to replace (1-based); give with `end_line` and `anchor`.
             end_line: Last line to replace (inclusive).
@@ -208,14 +211,16 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             new_text: Replacement text; empty deletes the located text (omit when using `edits`).
             replace_all: Replace every occurrence of `old_text` or every match of `pattern` (e.g. renaming a
                 variable) instead of exactly one (omit when using `edits`).
-            edits: List of changes to this file, each {new_text} plus one way to locate it (old_text,
-                start_line/end_line/anchor or pattern) and optionally replace_all, applied in order (each sees
-                the result of the earlier ones).
+            edits: List of changes, each {new_text} plus one way to locate it (old_text,
+                start_line/end_line/anchor or pattern), optionally replace_all, and optionally its own path,
+                applied in order (each sees the result of the earlier ones in the same file).
         """
         single = (old_text, start_line, end_line, anchor, pattern, new_text)
         if edits and (any(v is not None for v in single) or replace_all):
             raise InvalidInput("pass either one change (old_text/.../new_text) or edits, not both")
         if not edits:
+            if path is None:
+                raise InvalidInput("path is required")
             if new_text is None:
                 raise InvalidInput("new_text is required (or pass edits)")
             edits = (
@@ -229,24 +234,25 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
                     replace_all=replace_all,
                 ),
             )
-        target = resolve(ctx.deps, path)
-        if not target.is_file():
-            raise NotFound(f"file not found: {target}")
-        before = target.read_text(encoding="utf-8")
-        content, count = text_edit.apply_each(before, [_Located(target, e) for e in edits], str(target))
-        target.write_text(content, encoding="utf-8")
-        lines = content.splitlines()
-        head = f"edited {target} ({count} replacement{'s' if count > 1 else ''}; now {len(lines)} lines)"
-        ranges = text_edit.changed_ranges(before, content, _EDIT_CONTEXT_LINES)
-        if not ranges:
-            # 没有可展示的行：没变、删空了，或只改了行尾（换行符、末尾换行）
-            if before == content:
-                return f"{head}; the text is unchanged"
-            return f"{head}; the file is now empty" if not lines else f"{head}; only line endings changed"
-        excerpts = [f"lines {start + 1}-{end}:\n{numbered(lines, start, end)}" for start, end in ranges]
-        return truncate(
-            "\n".join([f"{head}. Changed lines with context:", *excerpts]), limits.max_output_chars
-        )
+        # 同一个文件可能写成不同路径（相对/绝对、带 ..）：按真实路径认成一份，用第一次出现时的写法展示，
+        # 否则后写的一份会覆盖先写的
+        same: dict[Path, Path] = {}
+        before: dict[Path, str] = {}
+        located: list[_Located] = []
+        for i, e in enumerate(edits, 1):
+            given = _edit_target(ctx.deps, path, e, i)
+            if not given.is_file():
+                raise NotFound(f"file not found: {given}")
+            target = same.setdefault(given.resolve(), given)
+            if target not in before:
+                before[target] = target.read_text(encoding="utf-8")
+            located.append(_Located(target, e))
+        after, counts = text_edit.apply_each(before, [(c.target, c) for c in located])
+        # 全部校验通过才写盘
+        for target, content in after.items():
+            target.write_text(content, encoding="utf-8")
+        reports = [_edit_report(t, before[t], after[t], counts[t]) for t in after]
+        return truncate("\n\n".join(reports), limits.max_output_chars)
 
     @ts.tool
     async def share_file(ctx: RunContext[RunScope], path: str) -> ToolReturn:
@@ -398,6 +404,28 @@ def _read_range(target: Path, offset: int, limit: int, budget: int) -> _Excerpt:
         more_note=note,
         cut=stop < end,
     )
+
+
+def _edit_target(scope: RunScope, path: str | None, e: TextEdit, i: int) -> Path:
+    """一处修改要改的文件：它自己的 path，没有就用顶层的。"""
+    chosen = e.path if e.path is not None else path
+    if chosen is None:
+        raise InvalidInput(f"edit {i} has no path: give it its own path or pass the top-level path")
+    return resolve(scope, chosen)
+
+
+def _edit_report(target: Path, before: str, content: str, count: int) -> str:
+    """一个文件改完后的回显：替换数、行数和改动处的行（带上下文与行号），省掉回读确认。"""
+    lines = content.splitlines()
+    head = f"edited {target} ({count} replacement{'s' if count > 1 else ''}; now {len(lines)} lines)"
+    ranges = text_edit.changed_ranges(before, content, _EDIT_CONTEXT_LINES)
+    if not ranges:
+        # 没有可展示的行：没变、删空了，或只改了行尾（换行符、末尾换行）
+        if before == content:
+            return f"{head}; the text is unchanged"
+        return f"{head}; the file is now empty" if not lines else f"{head}; only line endings changed"
+    excerpts = [f"lines {start + 1}-{end}:\n{numbered(lines, start, end)}" for start, end in ranges]
+    return "\n".join([f"{head}. Changed lines with context:", *excerpts])
 
 
 @dataclass(frozen=True)

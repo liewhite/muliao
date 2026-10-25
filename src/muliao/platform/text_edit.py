@@ -4,7 +4,7 @@
 
 import difflib
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -93,22 +93,29 @@ def as_lines(new: str, replaced: str) -> str:
     return new
 
 
-def apply_each(current: str, edits: Sequence[Edit], what: str) -> tuple[str, int]:
-    """依次做多处修改（后一项作用在前面改过的文本上），返回新文本与总替换数。
-    任何一项失败都整体失败，报错指出是第几项；调用方只在成功后写盘，所以不会留下改了一半的文件。"""
+def apply_each[K](
+    texts: Mapping[K, str], edits: Sequence[tuple[K, Edit]]
+) -> tuple[dict[K, str], dict[K, int]]:
+    """依次做多处修改，每项作用在它那份文本上（键是文本的名字，如文件路径；同一份文本里后一项作用在前面改过的
+    结果上），返回各份的新文本与替换数（只含被改到的键）。任何一项失败都整体失败，报错指出是第几项；调用方只在
+    成功后写盘，所以不会留下改了一半的文件，多个文件也是要么都改、要么都不改。"""
     if not edits:
         raise InvalidInput("no edits given")
-    total = 0
-    for i, change in enumerate(edits, 1):
+    current: dict[K, str] = {}
+    counts: dict[K, int] = {}
+    earlier: dict[K, int] = {}
+    for i, (key, change) in enumerate(edits, 1):
         try:
-            current, count = change.apply(current, what)
+            current[key], count = change.apply(current.get(key, texts[key]), str(key))
         except InvalidInput as e:
             if len(edits) == 1:
                 raise
-            after = f" (checked against the text with the {i - 1} earlier edit(s) applied)" if i > 1 else ""
+            k = earlier.get(key, 0)
+            after = f" (checked against the text with the {k} earlier edit(s) to it applied)" if k else ""
             raise InvalidInput(f"edit {i} of {len(edits)}{after}: {e}; nothing was written") from e
-        total += count
-    return current, total
+        counts[key] = counts.get(key, 0) + count
+        earlier[key] = earlier.get(key, 0) + 1
+    return current, counts
 
 
 def changed_ranges(before: str, after: str, context: int) -> list[tuple[int, int]]:
