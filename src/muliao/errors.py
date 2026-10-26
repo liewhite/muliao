@@ -49,9 +49,10 @@ class TransientError(Exception):
 
 
 class ServiceUnavailable(TransientError):
-    """外部服务（或本机到它的网络）暂时不可用：暂时性状态码、连不上。这类故障常持续几分钟到半小时（relay 503
-    No available accounts、本机到境外 HTTPS 断开十几分钟），任务队列按更长的重试上限重试
-    （runtime.outage_retry_max_attempts），其余暂时性失败（工具、MCP）照常按 task_max_attempts。"""
+    """外部服务（或本机到它的网络）暂时不可用：暂时性状态码、连不上（推送发出前的本机环境失败也归这里，见
+    notifications/webpush）。这类故障常持续几分钟到半小时（relay 503 No available accounts、本机到境外 HTTPS 断开
+    十几分钟），任务队列按更长的重试上限重试（runtime.outage_retry_max_attempts），其余暂时性失败（工具、MCP）照常按
+    task_max_attempts。"""
 
 
 class ModelUnavailable(ServiceUnavailable):

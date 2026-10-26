@@ -322,13 +322,13 @@ def test_default_retry_policies_ride_out_a_model_outage_but_give_up_on_other_fai
     from muliao.platform.tasks import RetryPolicy
 
     retries = retries_of(RuntimeConfig())
-    model, transient = retries.outage, retries.transient
+    outage, transient = retries.outage, retries.transient
 
     def window(p: RetryPolicy) -> float:
         return sum(p.delay(n) for n in range(1, p.max_attempts))
 
-    assert [model.delay(n) for n in range(1, 9)] == [5, 10, 20, 40, 80, 160, 300, 300]
-    assert 25 * 60 <= window(model) <= 35 * 60
+    assert [outage.delay(n) for n in range(1, 9)] == [5, 10, 20, 40, 80, 160, 300, 300]
+    assert 25 * 60 <= window(outage) <= 35 * 60
     assert window(transient) == 5 + 10 + 20 + 40
 
 
@@ -352,8 +352,8 @@ async def test_model_unavailable_retries_past_the_ordinary_limit_up_to_its_own(c
 
     alpha = (await make_agent()).id
     q = container.queue
-    ordinary, model = q.retries.transient.max_attempts, q.retries.outage.max_attempts
-    assert model > ordinary
+    ordinary, outage = q.retries.transient.max_attempts, q.retries.outage.max_attempts
+    assert outage > ordinary
 
     async def exhaust(exc: Exception) -> Task:
         task = await _enqueue(container, f"lane-{type(exc).__name__}", alpha)
@@ -366,7 +366,7 @@ async def test_model_unavailable_retries_past_the_ordinary_limit_up_to_its_own(c
                 return failed
 
     assert (await exhaust(TransientError("tool down"))).attempts == ordinary
-    assert (await exhaust(ModelUnavailable("503 No available accounts"))).attempts == model
+    assert (await exhaust(ModelUnavailable("503 No available accounts"))).attempts == outage
 
 
 async def test_a_run_survives_a_model_outage_longer_than_the_ordinary_retry_limit(

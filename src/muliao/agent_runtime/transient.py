@@ -1,5 +1,5 @@
 """模型提供方与网络层的暂时性失败：哪些算暂时性的是 LLM SDK 与传输层的知识，由 agent_runtime 判断。一次模型运行
-（AgentRuntime 的每个入口）里抛出的暂时性失败在这里换成 ModelUnavailable（TransientError 的一种，重试上限更长），
+（AgentRuntime 的每个入口）里抛出的暂时性失败在这里换成 ModelUnavailable（ServiceUnavailable 的一种，按 outage 策略重试），
 任务队列只认 TransientError 与 TimeoutError，不依赖任何 SDK（docs/architecture.md 第 5 节）。"""
 
 from collections.abc import Iterator

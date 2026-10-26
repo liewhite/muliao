@@ -17,7 +17,8 @@ log = logging.getLogger(__name__)
 
 class Pusher(Protocol):
     """把通知推送到一个订阅（实现：notifications.webpush.WebPushDelivery）。unread 是投递时的未读通知数，用作应用角标。
-    暂时性失败抛 TransientError 交给任务重试；订阅失效由实现删除。"""
+    推送服务暂时不可用（连不上、5xx/429）抛 ServiceUnavailable，交给任务按长窗口重试（普通 TransientError 只有约 100 秒，
+    抓不住十几分钟的断网，#208）；订阅失效由实现删除。"""
 
     async def send(self, subscription: PushSubscription, notification: Notification, unread: int) -> None: ...
 
