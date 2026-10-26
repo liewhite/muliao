@@ -62,4 +62,12 @@ describe('Markdown', () => {
     expect(out).toContain('href="#7"')
     expect(out).toContain('href="https://example.com/x#8"')
   })
+
+  it('routes in-app paths with their link attributes; backend paths stay plain links', () => {
+    const out = html('[a](/issues/3 "提示") [b](/api/files/x.txt) [c](//evil.com)')
+    expect(out).toMatch(/<a [^>]*href="\/issues\/3"[^>]*data-discover/)
+    expect(out).toContain('title="提示"')
+    expect(out).toContain('<a href="/api/files/x.txt">')
+    expect(out).toContain('<a href="//evil.com">')
+  })
 })

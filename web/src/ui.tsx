@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentProps,
   type ReactNode,
   type Ref,
 } from 'react'
@@ -385,16 +386,13 @@ export function InheritedSection({ title, to, children }: { title: string; to: s
 }
 
 const isFileUrl = (src: string) => src.startsWith(`${FILES_PATH}/`)
-// 站内页面（如 issue 引用 #12 生成的 /issues/12）：以单个 / 开头、不是后端接口（含文件存储）
-const isAppPath = (href: string) => /^\/(?!\/|api\/)/.test(href)
+// 站内页面（如 issue 引用 #12 生成的 /issues/12）：以单个 / 开头、不是后端接口（含文件存储）；
+// /\x 会被浏览器当成协议相对地址 //x，不算
+const isAppPath = (href: string) => /^\/(?![/\\]|api\/)/.test(href)
 
 /** 站内页面走前端路由，并带上来源页，目标页左上角的返回回到这里 */
-function AppLink({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <RouterLink to={href} state={useReturnState()}>
-      {children}
-    </RouterLink>
-  )
+function AppLink({ href, ...props }: ComponentProps<'a'> & { href: string }) {
+  return <RouterLink {...props} to={href} state={useReturnState()} />
 }
 
 // 只渲染本站文件存储里的图片：外链图片会在打开会话时由浏览器自动请求，被注入的模型可以借它把对话内容
@@ -419,7 +417,7 @@ const MARKDOWN_COMPONENTS: Components = {
   a: ({ node: _node, ...props }) => {
     const href = props.href ?? ''
     if (/^https?:/i.test(href)) return <a {...props} target="_blank" rel="noreferrer noopener" />
-    if (isAppPath(href)) return <AppLink href={href}>{props.children}</AppLink>
+    if (isAppPath(href)) return <AppLink {...props} href={href} />
     return <a {...props} />
   },
 }
