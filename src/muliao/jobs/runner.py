@@ -1,5 +1,5 @@
 """后台任务：agent 在后台跑的 shell 命令，会话之外进行、结局交回会话的工作（sessions.holds 的占用）的一种。做法同 Claude Code 的后台 bash：
-不占住运行、不设时限，结束时往发起它的会话的信箱投事件信件（sessions.mailbox），运行期间每隔一段时间发一个检查事件，
+不占住运行、不设时限，结束时往发起它的会话的信箱投事件信件（sessions.mailbox），运行期间按发起时给的间隔（heartbeat_seconds）发检查事件，
 由 agent 决定继续等还是结束它。
 
 - 输出（stdout 与 stderr 合并）逐块脱敏后写进 agent 工作目录的 jobs/<id>.log，agent 用 read_file 读完整输出；
@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.process import Recorder
 from muliao.jobs.tables import Job, JobStatus
+from muliao.platform.checks import check_due
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.output import tail, wait_exit_code
@@ -103,7 +104,6 @@ class JobRunner:
         db: Database,
         vault: Vault,
         workspace_of: Callable[[str], Path],
-        check_seconds: float,
         messaging: Messaging,
         sessions: SessionWork,
         clock: Clock = utcnow,
@@ -113,9 +113,10 @@ class JobRunner:
         self._messaging = messaging
         self._vault = vault
         self._workspace_of = workspace_of
-        self.check_seconds = check_seconds
         self._clock = clock
         self._running: dict[int, _Running] = {}
+        # 有人监督的任务上一次发检查的时刻（还没发过的以开始时刻算）：只是节拍，重启后任务已被记为中断，不必落库
+        self._last_check: dict[int, datetime] = {}
         # 正在启动（行已写入、监督者还没接手）的任务
         self._starting: set[int] = set()
         # 监督者所在的任务组：服务运行期间（running）存在
@@ -142,8 +143,11 @@ class JobRunner:
         command: str,
         secrets: list[str],
         awaited: bool,
+        check_seconds: float,
     ) -> Job:
-        """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。"""
+        """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。check_seconds：运行中检查的间隔。"""
+        if not check_seconds > 0:  # 也拒绝 NaN
+            raise ValueError(f"check_seconds must be greater than 0, got {check_seconds}")
         group = self._group
         if group is None:
             raise RuntimeError("background jobs can only start while the job runner is running")
@@ -160,6 +164,7 @@ class JobRunner:
                     command=command,
                     secrets=list(secrets),
                     log_path="",
+                    check_seconds=check_seconds,
                     started_at=self._clock(),
                 )
                 s.add(job)
@@ -421,8 +426,8 @@ class JobRunner:
         )
 
     async def check(self) -> int:
-        """给每个运行中的任务发一条检查命令（会话领域投检查信件；它上一封还在信箱里排着时不投，不堆积）。返回发出的
-        命令数。
+        """给到了自己检查间隔（Job.check_seconds）的运行中任务各发一条检查命令（会话领域投检查信件；它上一封还在
+        信箱里排着时不投，不堆积）。返回发出的命令数。
 
         先对账：记为运行中、却不在本进程监督之下、也不在启动中的任务（记下结局时失败、监督意外结束、启动失败后的
         清理没做完），按 recover 的同一套逻辑记为被中断并告诉 agent。"""
@@ -439,14 +444,21 @@ class JobRunner:
                 "unsupervised background jobs marked interrupted", extra={"job_ids": [j.id for j in orphans]}
             )
         # 只检查有人监督的：登记监督之前占用已经登记（_launch），启动中的任务还没有占用，不检查
+        supervised = list(self._running)
+        for job_id in set(self._last_check) - set(supervised):
+            del self._last_check[job_id]
         async with self._db.transaction() as s:
-            running = list(
-                (
-                    await s.scalars(
-                        select(Job).where(Job.status == JobStatus.RUNNING, Job.id.in_(list(self._running)))
-                    )
-                ).all()
-            )
+            candidates = (
+                await s.scalars(select(Job).where(Job.status == JobStatus.RUNNING, Job.id.in_(supervised)))
+            ).all()
+        now = self._clock()
+        running = [
+            job
+            for job in candidates
+            if check_due(self._last_check.get(job.id, job.started_at), job.check_seconds, now)
+        ]
+        if not running:
+            return 0
         tails = await self._tails(running)
         # 在确认任务仍在运行的同一个事务里发出检查命令：与记下结局（同一事务发出 WorkEnded）互斥，检查要么先于结束
         # 排进同一条 lane，要么任务已经结束、不再发
@@ -460,6 +472,7 @@ class JobRunner:
                 self._messaging.send_in(
                     s, WorkCheckIn(session_id=job.session_id, holder=job_source(job.id), text=text)
                 )
+                self._last_check[job.id] = now
                 sent += 1
         return sent
 

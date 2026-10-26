@@ -1,6 +1,8 @@
 """委派的结局（完成、被停止、最终失败、被删除）只交回一次：delegate_task(report_back) 作为事件，ask_agent 作为它
 的结果（发问方已经不等时作为事件）；运行中检查；随发起方停止。"""
 
+import asyncio
+
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
@@ -17,6 +19,7 @@ from tests.scripted import scripted
 from tests.test_flow import deliver, drain, history_of, start, tasks_of
 from tests.test_mailbox import Recorder
 from tests.test_threads import call, echo, threads_of
+from tests.test_tools import run_tools
 
 
 async def test_a_reported_thread_answer_comes_back_as_an_event_not_a_push(container, make_agent, models):
@@ -136,12 +139,16 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
             call_id=None,
             awaited=True,
             key="call-1",
+            check_seconds=0.001,
         )
     [child] = await threads_of(container, parent.id)
     assert child.id == received.id
     await deliver(container)
 
+    await asyncio.sleep(0.01)
     assert await container.thread_checks.check() == 1
+    await asyncio.sleep(0.01)
+    # 又到期了，但上一封还排着：不堆积
     assert await container.thread_checks.check() == 0
     async with container.db.transaction() as s:
         [event] = (
@@ -151,6 +158,76 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
     assert event.source == f"thread:{child.id}" and "queued" in event.content
     assert not event.awaited
     assert [m.state for m in child_mail] == [MailState.QUEUED]
+
+
+async def test_each_reported_delegation_is_checked_at_its_own_interval(container, make_agent, models):
+    lead = (await make_agent("lead", model="l")).id
+    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
+    models.models["l"] = scripted(Recorder())
+    parent = await start(container, lead, "go")
+    await drain(container)
+    async with container.db.transaction() as s:
+        for thread, interval in (("fast", 0.001), ("slow", 3600.0)):
+            await container.threads.dispatch(
+                s,
+                owner_id=parent.id,
+                agent=reviewer,
+                thread=thread,
+                prompt="check",
+                kind=SessionKind.THREAD,
+                call_id=None,
+                awaited=False,
+                key=thread,
+                check_seconds=interval,
+            )
+    await deliver(container)
+    await asyncio.sleep(0.01)
+
+    assert await container.thread_checks.check() == 1
+    async with container.db.transaction() as s:
+        [event] = (
+            await s.scalars(select(Mail).where(Mail.session_id == parent.id, Mail.state == MailState.QUEUED))
+        ).all()
+    assert "Thread 'fast'" in event.content
+
+
+async def test_delegate_task_takes_a_heartbeat_only_with_report_back(container, make_agent, models):
+    lead = (await make_agent("lead", model="tools")).id
+    await make_agent("reviewer", model="v")
+    outputs = await run_tools(
+        container,
+        models,
+        lead,
+        [
+            ("delegate_task", {"agent": "reviewer", "task": "x", "thread": "a", "heartbeat_seconds": 10}),
+            (
+                "delegate_task",
+                {
+                    "agent": "reviewer",
+                    "task": "x",
+                    "thread": "b",
+                    "report_back": True,
+                    "heartbeat_seconds": 0,
+                },
+            ),
+            (
+                "delegate_task",
+                {
+                    "agent": "reviewer",
+                    "task": "x",
+                    "thread": "c",
+                    "report_back": True,
+                    "heartbeat_seconds": 90,
+                },
+            ),
+        ],
+    )
+    assert "heartbeat_seconds needs `report_back: true`" in outputs[0]
+    assert "heartbeat_seconds must be greater than 0" in outputs[1]
+    assert outputs[2] == "delegated to reviewer in thread 'c'"
+    async with container.db.transaction() as s:
+        holds = (await s.scalars(select(SessionHold))).all()
+    assert [(h.check_seconds, h.deadline) for h in holds] == [(90.0, None)]
 
 
 async def test_nothing_is_reported_once_the_parent_session_is_gone(container, make_agent, models):
@@ -226,7 +303,9 @@ def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
     running = Task(id=4, kind=RUN_TASK, status=TaskStatus.RUNNING, attempts=1, started_at=datetime.now(UTC))
     now = datetime.now(UTC)
     # 排队中的 thread 也能停：停止清空它的信箱，并交回「被停止」
-    assert "stop_thread('review')" in check_text(child, agent, WorkState.RUNNING, queued, now)
+    assert "stop_thread(thread='review', agent='reviewer')" in check_text(
+        child, agent, WorkState.RUNNING, queued, now
+    )
     assert "queued and has not started" in check_text(child, agent, WorkState.RUNNING, None, now)
     assert "waiting to run again" in check_text(child, agent, WorkState.RUNNING, retrying, now)
     assert "still working" in check_text(child, agent, WorkState.RUNNING, running, now)
@@ -466,7 +545,9 @@ async def _asking(container, make_agent, models, helper_model):  # noqa: ANN001,
         calls["n"] += 1
         seen.extend(str(r.content) for r in tool_returns(messages))
         if calls["n"] == 1:
-            return call("ask_agent", {"agent": "helper", "message": "check", "thread": "h"}, "ask1")(messages)
+            return call(
+                "ask_agent", {"agent": "helper", "message": "check", "thread": "h", "timeout": 600}, "ask1"
+            )(messages)
         return ModelResponse(parts=[TextPart("ok")])
 
     models.models["l"] = scripted(lead_fn)
@@ -686,7 +767,9 @@ async def test_a_question_and_an_ask_in_one_reply_wait_for_both(client, containe
             parts=[
                 ToolCallPart("ask_user", {"questions": QUESTIONS[:1]}, tool_call_id="q"),
                 ToolCallPart(
-                    "ask_agent", {"agent": "helper", "message": "x", "thread": "h"}, tool_call_id="a"
+                    "ask_agent",
+                    {"agent": "helper", "message": "x", "thread": "h", "timeout": 600},
+                    tool_call_id="a",
                 ),
             ]
         )

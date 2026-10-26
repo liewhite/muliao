@@ -19,7 +19,10 @@ async def test_a_page_opened_mid_turn_sees_the_turn_from_its_start(client, conta
         if tool_returns(messages):
             return ModelResponse(parts=[TextPart("done")])
         return ModelResponse(
-            parts=[TextPart("checking"), ToolCallPart("run_shell", {"command": "sleep 1"}, tool_call_id="s")]
+            parts=[
+                TextPart("checking"),
+                ToolCallPart("run_shell", {"command": "sleep 1", "timeout": 60}, tool_call_id="s"),
+            ]
         )
 
     models.models["slow"] = scripted(fn)

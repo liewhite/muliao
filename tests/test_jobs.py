@@ -44,7 +44,12 @@ async def start_job(container, make_agent, models, command: str, secrets: tuple[
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         calls["n"] += 1
         if calls["n"] == 1:
-            args = {"command": command, "background": True, "secrets": list(secrets)}
+            args = {
+                "command": command,
+                "background": True,
+                "secrets": list(secrets),
+                "heartbeat_seconds": 0.01,
+            }
             return ModelResponse(parts=[ToolCallPart("run_shell", args, tool_call_id="bg")])
         return recorder(messages, info)
 
@@ -128,6 +133,7 @@ async def test_jobs_left_running_by_a_previous_process_are_reported_interrupted(
             secrets=[],
             log_path="jobs/x.log",
             pid=424242,
+            check_seconds=30,
         )
         s.add(job)
     # 上一个进程启动它时已在会话上登记了占用（会话领域自己的事务），发起它的运行有用户在等
@@ -323,7 +329,12 @@ async def test_a_job_that_fails_before_holding_its_session_leaves_no_row(contain
     monkeypatch.setattr(container.jobs._sessions, "hold", broken_hold)  # noqa: SLF001
     with pytest.raises(RuntimeError, match="database unavailable"):
         await container.jobs.start(
-            session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
+            session_id=session.id,
+            agent_id=agent.id,
+            command="true",
+            secrets=[],
+            awaited=False,
+            check_seconds=30,
         )
     assert await _job_rows(container) == []
 
@@ -347,7 +358,12 @@ async def test_a_job_whose_process_cannot_start_is_reported_interrupted(containe
     monkeypatch.setattr("muliao.jobs.runner.spawn_bash", broken_spawn)
     with pytest.raises(OSError, match="bash missing"):
         await container.jobs.start(
-            session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
+            session_id=session.id,
+            agent_id=agent.id,
+            command="true",
+            secrets=[],
+            awaited=False,
+            check_seconds=30,
         )
 
     row, content = await _held_job_outcome(container, session.id)
@@ -377,7 +393,12 @@ async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_is_repor
     monkeypatch.setattr("muliao.jobs.runner.JobRunner._record_pid", broken_record)
     with pytest.raises(RuntimeError, match="database unavailable"):
         await container.jobs.start(
-            session_id=session.id, agent_id=agent.id, command="sleep 30", secrets=[], awaited=False
+            session_id=session.id,
+            agent_id=agent.id,
+            command="sleep 30",
+            secrets=[],
+            awaited=False,
+            check_seconds=30,
         )
 
     [proc] = spawned
@@ -402,7 +423,12 @@ async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
     monkeypatch.setattr("muliao.jobs.runner._CLEANUP_SECONDS", 0.1)
     with pytest.raises(OSError):
         await container.jobs.start(
-            session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
+            session_id=session.id,
+            agent_id=agent.id,
+            command="true",
+            secrets=[],
+            awaited=False,
+            check_seconds=30,
         )
 
     [row] = await _job_rows(container)
@@ -425,7 +451,12 @@ async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_s
         )
         session = await start(c, agent.id, "hi", origin=Origin.TRIGGER)
         job = await c.jobs.start(
-            session_id=session.id, agent_id=agent.id, command="sleep 30", secrets=[], awaited=False
+            session_id=session.id,
+            agent_id=agent.id,
+            command="sleep 30",
+            secrets=[],
+            awaited=False,
+            check_seconds=30,
         )
 
     async with c.db.transaction() as s:
@@ -435,6 +466,41 @@ async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_s
     await asyncio.sleep(0.2)
     with pytest.raises(ProcessLookupError):
         os.killpg(job.pid, 0)
+
+
+async def test_each_job_is_checked_at_its_own_interval(container, make_agent):
+    session, agent = await _session_for_jobs(container, make_agent)
+    fast = await container.jobs.start(
+        session_id=session.id,
+        agent_id=agent.id,
+        command="sleep 30",
+        secrets=[],
+        awaited=False,
+        check_seconds=0.2,
+    )
+    slow = await container.jobs.start(
+        session_id=session.id,
+        agent_id=agent.id,
+        command="sleep 30",
+        secrets=[],
+        awaited=False,
+        check_seconds=3600,
+    )
+    try:
+        await asyncio.sleep(0.25)
+        assert await container.jobs.check() == 1
+        # 刚检查过：fast 要再过一个间隔，slow 还远
+        assert await container.jobs.check() == 0
+        await asyncio.sleep(0.25)
+        assert await container.jobs.check() == 1
+        await deliver(container)
+        checks = [m.source for m in await queued_events(container, session.id) if m.check_in]
+        assert checks == [f"job:{fast.id}"]
+    finally:
+        for job in (fast, slow):
+            await container.jobs.kill(job.id, agent.id)
+        for job in (fast, slow):
+            await wait_until_done(container, job.id)
 
 
 async def test_a_check_while_a_job_is_starting_skips_it(container, make_agent, monkeypatch):
@@ -454,7 +520,12 @@ async def test_a_check_while_a_job_is_starting_skips_it(container, make_agent, m
     async with anyio.create_task_group() as tg:
         tg.start_soon(
             lambda: container.jobs.start(
-                session_id=session.id, agent_id=agent.id, command="true", secrets=[], awaited=False
+                session_id=session.id,
+                agent_id=agent.id,
+                command="true",
+                secrets=[],
+                awaited=False,
+                check_seconds=30,
             )
         )
         await holding.wait()
@@ -478,6 +549,7 @@ async def test_a_job_whose_session_was_deleted_is_kept_as_interrupted_after_a_cr
             secrets=[],
             log_path="jobs/x.log",
             pid=424242,
+            check_seconds=30,
         )
         s.add(job)
     await drain(container)

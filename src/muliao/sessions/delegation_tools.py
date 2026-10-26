@@ -7,6 +7,7 @@ from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 from muliao.agent_runtime.api import TOOL_THREADS, defer_call
 from muliao.agents.api import AgentService
 from muliao.errors import InvalidInput, NotFound
+from muliao.platform.checks import DEFAULT_CHECK_SECONDS
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -37,24 +38,16 @@ class ThreadInfo(BaseModel):
     answer: str | None
 
 
-_DELEGATE_DESCRIPTION = """\
-Hand a task to an agent and keep going without waiting. It runs in a thread the user can see and reply in. \
-By default the user is notified with its answer and you do NOT get it back. With `report_back: true` the answer \
-(or its failure) comes back to you as an event in this conversation instead, with a check-in event about every \
-{check:g} seconds while it is still working (events reach you like messages, between your tool calls if you are \
-busy), so you can keep going and act on the result when it arrives. If you need the answer before you can continue, use `ask_agent`. \
-The agent can be yourself (your own name): a fresh conversation of you, with your memory, skills and tools, for \
-work to run on the side."""
-
-
 def delegation_toolset(
     db: Database,
     agents: AgentService,
     threads: Threads,
     stop_session: StopSession,
-    check_seconds: float,
 ) -> FunctionToolset[RunScope]:
-    """委派：thread 是这个会话开出的、以名字区分的子会话，同名即续聊（保留对方上下文）。"""
+    """委派：thread 是这个会话开出的、以（agent, 名字）区分的子会话，同名即续聊（保留对方上下文）。
+
+    ask_agent 是阻塞的（调用不返回、一直等）：必须给 timeout，到期停掉 thread；delegate_task(report_back) 与发起方
+    并发：没有 timeout，按 heartbeat_seconds 投运行中检查（sessions.delegation.ThreadChecks）。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool_plain
@@ -62,23 +55,42 @@ def delegation_toolset(
         """List all agents and what each one is for. Use before delegating."""
         return [AgentInfo(name=a.name, description=a.description) for a in await agents.list()]
 
-    # 检查间隔是配置的值（runtime.job_check_seconds），写进说明
-    @ts.tool(name=DELEGATE_TASK, description=_DELEGATE_DESCRIPTION.format(check=check_seconds))
+    @ts.tool(name=DELEGATE_TASK)
     async def delegate_task(
-        ctx: RunContext[RunScope], agent: str, task: str, thread: str, report_back: bool = False
+        ctx: RunContext[RunScope],
+        agent: str,
+        task: str,
+        thread: str,
+        report_back: bool = False,
+        heartbeat_seconds: float | None = None,
     ) -> ToolReturn:
-        """The description is `_DELEGATE_DESCRIPTION` (it carries the configured check-in interval).
+        """Hand a task to an agent and keep going without waiting. It runs in a thread the user can see and reply
+        in. By default the user is notified with its answer and you do NOT get it back. With `report_back: true`
+        the answer (or its failure) comes back to you as an event in this conversation instead, with a check-in
+        event every `heartbeat_seconds` while it is still working (events reach you like messages, between your
+        tool calls if you are busy), so you can keep going and act on the result when it arrives. If you need the
+        answer before you can continue, use `ask_agent`. The agent can be yourself (your own name): a fresh
+        conversation of you, with your memory, skills and tools, for work to run on the side.
 
         Args:
             agent: Target agent name from `list_agents`, or your own name.
             task: Self-contained task description; the agent cannot see this conversation except through
                 earlier messages in the same thread.
-            thread: Short name of the thread, e.g. "weekly-report". Reusing a thread name continues that
-                conversation with its full context; use a new name for an unrelated task.
+            thread: Short name of the thread, e.g. "weekly-report". Reusing a thread name with the same agent
+                continues that conversation with its full context; use a new name for an unrelated task.
             report_back: Get the thread's answer back as an event in this conversation.
+            heartbeat_seconds: With `report_back` only: seconds between check-in events while it works
+                (default 30); set it from how long you expect the task to take.
         """
         parent_id = ctx.deps.session_id
         target = await agents.find_by_name(agent)
+        if heartbeat_seconds is not None and not report_back:
+            raise InvalidInput(
+                "heartbeat_seconds needs `report_back: true`; without it the result goes to the user, not to you"
+            )
+        check = DEFAULT_CHECK_SECONDS if heartbeat_seconds is None else heartbeat_seconds
+        if not check > 0:  # 也拒绝 NaN
+            raise InvalidInput("heartbeat_seconds must be greater than 0")
         async with db.transaction() as s:
             if report_back:
                 if ctx.tool_call_id is None:
@@ -94,6 +106,7 @@ def delegation_toolset(
                     call_id=None,
                     awaited=ctx.deps.user_waits,
                     key=ctx.tool_call_id,
+                    check_seconds=check,
                 )
             else:
                 child = (
@@ -105,7 +118,13 @@ def delegation_toolset(
         )
 
     @ts.tool(name=ASK_AGENT)
-    async def ask_agent(ctx: RunContext[RunScope], agent: str, message: str, thread: str) -> str:
+    async def ask_agent(
+        ctx: RunContext[RunScope],
+        agent: str,
+        message: str,
+        thread: str,
+        timeout: float,  # noqa: ASYNC109  工具参数，面向模型的命名
+    ) -> str:
         """Ask an agent and wait for its answer, which is returned as this tool's result. The thread is private
         to this conversation (the user can read but not reply). Files it shares are shown to the user with your
         reply. Ask again in the same thread to follow up with the agent's context intact, e.g. review -> fix ->
@@ -118,12 +137,17 @@ def delegation_toolset(
         Args:
             agent: Target agent name from `list_agents`, or your own name.
             message: Self-contained request; the agent sees only this thread's history.
-            thread: Short name of the thread, e.g. "code-review". Reuse it to continue the same conversation.
+            thread: Short name of the thread, e.g. "code-review". Reuse it with the same agent to continue the
+                same conversation.
+            timeout: Seconds to wait (required; estimate it yourself, there is no upper limit). If it has not
+                answered by then, the thread is stopped and you get what it said so far.
         """
         parent_id = ctx.deps.session_id
         target = await agents.find_by_name(agent)
         if not message.strip():
             raise InvalidInput("message must not be empty")
+        if not timeout > 0:  # 也拒绝 NaN
+            raise InvalidInput("timeout must be greater than 0 seconds")
         if ctx.tool_call_id is None:
             raise RuntimeError("ask_agent was called without a tool call id")
         async with db.transaction() as s:
@@ -138,28 +162,41 @@ def delegation_toolset(
                 call_id=ctx.tool_call_id,
                 awaited=ctx.deps.user_waits,
                 key=ctx.tool_call_id,
+                timeout_seconds=timeout,
             )
         # 发问方的运行停在这次调用上，不占 worker；对方的结局作为这次调用的结果交回（sessions.pending）
         defer_call()
 
     @ts.tool
-    async def stop_thread(ctx: RunContext[RunScope], thread: str) -> str:
+    async def stop_thread(ctx: RunContext[RunScope], thread: str, agent: str | None = None) -> str:
         """Stop a thread of this conversation, whether it is running or still queued: its current run stops (what it
         already did is kept) and the work queued for it is dropped. If you are waiting for its answer (`ask_agent`,
         or `report_back`), you get its outcome saying it was stopped.
 
         Args:
             thread: The thread name used with `delegate_task` or `ask_agent`.
+            agent: The agent of the thread; needed only when you opened threads with this name for several agents.
         """
         parent_id = ctx.deps.session_id
+        name = validate_thread(thread)
         async with db.transaction() as s:
-            child_id = await threads.thread_id_in(s, parent_id, validate_thread(thread))
-        if child_id is None:
-            raise NotFound(f"this conversation has no thread named {thread!r}; see list_threads")
-        if await stop_session(child_id) == Halted.GONE:
+            named = await threads.named_in(s, parent_id, name)
+        if agent is not None:
+            target = await agents.find_by_name(agent)
+            named = [c for c in named if c.agent_id == target.id]
+        if not named:
+            whose = "" if agent is None else f" with {agent}"
+            raise NotFound(f"this conversation has no thread named {name!r}{whose}; see list_threads")
+        if len(named) > 1:
+            names = await agents.names()
+            raise InvalidInput(
+                f"several threads are named {name!r} (agents: {', '.join(names[c.agent_id] for c in named)}); "
+                "pass `agent` to say which one"
+            )
+        if await stop_session(named[0].id) == Halted.GONE:
             # 查到之后、停止之前被删除了（随所属 agent 删除）
-            return f"thread {thread!r} was deleted meanwhile; nothing to stop"
-        return f"stopped thread {thread!r}"
+            return f"thread {name!r} was deleted meanwhile; nothing to stop"
+        return f"stopped thread {name!r}"
 
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:

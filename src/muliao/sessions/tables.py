@@ -25,7 +25,7 @@ class Session(Base):
     origin: Mapped[Origin] = mapped_column(StrEnumType(Origin))
     # 具体的发送方（sessions.inbound）：触发器 id、issue id、委派方（父）会话 id；用户开的会话为 None
     origin_ref: Mapped[str | None] = mapped_column(String(64))
-    # 委派产生的子会话：父会话与它在父会话内的 thread 名（模型用 thread 名指代子会话）
+    # 委派产生的子会话：父会话与它在父会话内的 thread 名（模型用 agent + thread 名指代子会话）
     parent_session_id: Mapped[str | None] = mapped_column(
         ForeignKey("sessions.id", ondelete="SET NULL", name="fk_sessions_parent_session_id"), index=True
     )
@@ -40,6 +40,7 @@ class Session(Base):
         Index(
             "uq_sessions_thread",
             "parent_session_id",
+            "agent_id",
             "thread",
             unique=True,
             sqlite_where=parent_session_id.isnot(None),
@@ -161,6 +162,11 @@ class SessionHold(Base):
     call_id: Mapped[str | None] = mapped_column(String(100))
     # 用户是否在等这项工作的结局：交回结局的信件随它推送（发起这项工作的运行有用户在等）
     awaited: Mapped[bool]
+    # 运行中检查的间隔（秒）：发起方并发等待的委派（delegate_task(report_back) 的 heartbeat_seconds）。
+    # 阻塞的委派（ask_agent）与后台任务的占用为 None：前者靠 deadline 结束，后者的间隔在任务自己的表里
+    check_seconds: Mapped[float | None]
+    # 阻塞的委派（ask_agent 的 timeout）到期时停掉做它的 thread，结局以「超时被停」交回（sessions.delegation）
+    deadline: Mapped[datetime | None] = mapped_column(UTCDateTime)
     status: Mapped[HoldStatus] = mapped_column(StrEnumType(HoldStatus), default=HoldStatus.ACTIVE)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)

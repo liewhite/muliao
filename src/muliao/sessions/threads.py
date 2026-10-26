@@ -70,28 +70,36 @@ class Threads:
     def __init__(self, queue: TaskQueue):
         self._queue = queue
 
-    async def find(self, s: AsyncSession, parent_id: str, thread: str) -> Session | None:
+    async def find(self, s: AsyncSession, parent_id: str, agent_id: str, thread: str) -> Session | None:
+        """thread 由（父会话, agent, 名字）确定：给不同的 agent 开同名 thread 是两个 thread。"""
         return await s.scalar(
             select(Session).where(
-                Session.parent_session_id == parent_id, Session.thread == validate_thread(thread)
+                Session.parent_session_id == parent_id,
+                Session.agent_id == agent_id,
+                Session.thread == validate_thread(thread),
             )
         )
+
+    async def named_in(self, s: AsyncSession, parent_id: str, thread: str) -> list[Session]:
+        """父会话里叫这个名字的 thread（每个 agent 至多一个），按创建顺序。"""
+        query = (
+            select(Session)
+            .where(Session.parent_session_id == parent_id, Session.thread == validate_thread(thread))
+            .order_by(Session.created_at)
+        )
+        return list((await s.scalars(query)).all())
 
     async def open(
         self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, kind: SessionKind
     ) -> Session:
         """取已有 thread 或新建。
 
-        归属在创建时确定：thread 固定属于一个 agent；私有 thread 只能用 ask_agent 续聊，公开 thread 只能用
+        thread 按（父会话, agent, 名字）区分；私有 thread 只能用 ask_agent 续聊，公开 thread 只能用
         delegate_task（公开 thread 由自己的消费者处理、用户也能插话，不能在调用方那一步里直接跑）。
         """
         thread = validate_thread(thread)
-        existing = await self.find(s, parent_id, thread)
+        existing = await self.find(s, parent_id, agent.id, thread)
         if existing is not None:
-            if existing.agent_id != agent.id:
-                raise InvalidInput(
-                    f"thread {thread!r} already belongs to another agent; use a different thread name"
-                )
             if existing.kind != kind:
                 tool = policy_of(existing.kind).continued_by
                 raise InvalidInput(f"thread {thread!r} was started with {tool}; use {tool} to continue it")
@@ -127,11 +135,14 @@ class Threads:
         call_id: str | None,
         awaited: bool,
         key: str,
+        check_seconds: float | None = None,
+        timeout_seconds: float | None = None,
     ) -> Session:
         """要交回结局的委派（ask_agent、delegate_task(report_back)），在调用方的一个事务里：打开或找到 thread，在发起方
         登记占用（带 call_id 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件（委派的全部状态，
         结局的交回见 sessions.delegation）。thread 不合用时抛 InvalidInput，什么都没写。按 key 幂等：续跑重新执行这次
-        调用时只返回已经投递到的 thread。awaited：用户是否在等发起方的回答。"""
+        调用时只返回已经投递到的 thread。awaited：用户是否在等发起方的回答。check_seconds：并发等待时的运行中
+        检查间隔；timeout_seconds：阻塞等待的超时（到期停掉 thread，ThreadChecks）。"""
         holder = delegation_holder(owner_id, key)
         if await get_hold_in(s, owner_id, holder) is not None:
             existing = (await threads_of_holds_in(s, [holder])).get(holder)
@@ -142,7 +153,15 @@ class Threads:
                 raise RuntimeError(f"delegation {holder} points to a missing thread {existing}")
             return child
         child = await self.open(s, parent_id=owner_id, agent=agent, thread=thread, kind=kind)
-        await hold_in(s, owner_id, holder, call_id=call_id, awaited=awaited)
+        await hold_in(
+            s,
+            owner_id,
+            holder,
+            call_id=call_id,
+            awaited=awaited,
+            check_seconds=check_seconds,
+            timeout_seconds=timeout_seconds,
+        )
         await receive(
             s,
             self._queue,
@@ -166,11 +185,6 @@ class Threads:
             },
         )
         return child
-
-    async def thread_id_in(self, s: AsyncSession, parent_id: str, thread: str) -> str | None:
-        """父会话里名为 thread 的子会话 id；没有这个 thread 时为 None。"""
-        child = await self.find(s, parent_id, thread)
-        return None if child is None else child.id
 
     async def list_in(self, s: AsyncSession, parent_id: str) -> list[ThreadView]:
         """父会话开出的 thread（含私有的），按创建顺序，带各自的状态。"""

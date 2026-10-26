@@ -140,12 +140,8 @@ class RuntimeConfig(_Section):
     # 压缩时保留最近这么多步原文不压缩（一步是一次模型回复及其工具结果）
     compaction_keep_steps: int = Field(default=10, ge=1)
     memory_max_chars: int = Field(default=4000, ge=100)
-    shell_default_timeout: float = Field(default=120.0, gt=0)
-    # 触发器前置检查的时限：webhook 的调用方在同步等它，检查本该便宜，比 shell 的默认时限短得多
+    # 触发器前置检查的时限：webhook 的调用方在同步等它，检查本该便宜
     precheck_timeout_seconds: float = Field(default=30.0, gt=0)
-    # 运行中检查的节奏（platform.checks）：后台任务与委派还在进行时，每隔这么久给发起它的会话投一封检查信件，由
-    # agent 决定继续等还是结束它（job_kill / stop_thread）；委派工具的说明里也写着这个间隔（名字是只有后台任务时起的）
-    job_check_seconds: float = Field(default=60.0, gt=0)
     tool_output_max_chars: int = Field(default=20000, ge=1000)
     # 单个文件（用户上传的附件、agent 发出的文件）的字节上限，默认与 Matrix Synapse 一致
     upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1)

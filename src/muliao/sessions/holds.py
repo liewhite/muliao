@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection
+from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,9 +19,17 @@ from muliao.sessions.tables import HoldStatus, SessionHold
 
 
 async def hold_in(
-    s: AsyncSession, session_id: str, holder: str, *, awaited: bool, call_id: str | None = None
+    s: AsyncSession,
+    session_id: str,
+    holder: str,
+    *,
+    awaited: bool,
+    call_id: str | None = None,
+    check_seconds: float | None = None,
+    timeout_seconds: float | None = None,
 ) -> SessionHold:
-    """登记一个占用；已经登记过（重放）就返回它。awaited：用户是否在等这项工作的结局（交回的信件随它推送）。"""
+    """登记一个占用；已经登记过（重放）就返回它。awaited：用户是否在等这项工作的结局（交回的信件随它推送）。
+    check_seconds：委派的运行中检查间隔；timeout_seconds：从登记起算的超时，记为 deadline（见 SessionHold）。"""
     existing = await get_in(s, session_id, holder)
     if existing is not None:
         if (existing.call_id, existing.awaited) != (call_id, awaited):
@@ -29,7 +38,16 @@ async def hold_in(
                 f"(awaited={existing.awaited}), not {call_id} (awaited={awaited})"
             )
         return existing
-    hold = SessionHold(session_id=session_id, holder=holder, call_id=call_id, awaited=awaited)
+    now = utcnow()
+    hold = SessionHold(
+        session_id=session_id,
+        holder=holder,
+        call_id=call_id,
+        awaited=awaited,
+        check_seconds=check_seconds,
+        deadline=None if timeout_seconds is None else now + timedelta(seconds=timeout_seconds),
+        created_at=now,
+    )
     s.add(hold)
     await s.flush()
     return hold

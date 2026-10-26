@@ -57,7 +57,6 @@ async def test_an_answered_ask_is_not_executed_again_and_its_hold_stays_as_the_r
 async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_agent, models):
     lead = (await make_agent("lead", model="l")).id
     reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
-    other = await container.agents.get((await make_agent("other", model="o")).id)
     models.models["l"] = scripted(Recorder())
     parent = await start(container, lead, "go")
     await drain(container)
@@ -66,15 +65,15 @@ async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_
     before = await _mail_count(container)
     events_before = await _event_count(container)
 
-    with pytest.raises(InvalidInput, match="another agent"):
+    with pytest.raises(InvalidInput, match="was started with delegate_task"):
         async with container.db.transaction() as s:
             await container.threads.dispatch(
                 s,
                 owner_id=parent.id,
-                agent=other,
+                agent=reviewer,
                 thread="review",
                 prompt="y",
-                kind=SessionKind.THREAD,
+                kind=SessionKind.PRIVATE_THREAD,
                 call_id=None,
                 awaited=False,
                 key="k",
@@ -134,14 +133,18 @@ async def test_a_final_failure_settles_delegations_handled_by_an_earlier_run(con
     def lead_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         lead_seen.extend(str(r.content) for r in tool_returns(messages))
         if len(lead_seen) == 0 and sum(isinstance(m, ModelResponse) for m in messages) == 0:
-            return call("ask_agent", {"agent": "middle", "message": "go deeper", "thread": "mid"}, "a1")(
-                messages
-            )
+            return call(
+                "ask_agent",
+                {"agent": "middle", "message": "go deeper", "thread": "mid", "timeout": 600},
+                "a1",
+            )(messages)
         return ModelResponse(parts=[TextPart("ok")])
 
     def middle_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         if sum(isinstance(m, ModelResponse) for m in messages) == 0:
-            return call("ask_agent", {"agent": "leaf", "message": "q", "thread": "leaf"}, "a2")(messages)
+            return call(
+                "ask_agent", {"agent": "leaf", "message": "q", "thread": "leaf", "timeout": 600}, "a2"
+            )(messages)
         raise ModelHTTPError(status_code=400, model_name="m", body="bad request")
 
     models.models["l"] = scripted(lead_fn)

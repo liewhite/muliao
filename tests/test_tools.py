@@ -199,7 +199,7 @@ async def test_list_threads_shows_each_thread_with_its_state(container, make_age
         models,
         me.id,
         [
-            ("ask_agent", {"agent": "worker", "message": "q", "thread": "review"}),
+            ("ask_agent", {"agent": "worker", "message": "q", "thread": "review", "timeout": 600}),
             ("list_threads", {}),
         ],
     )
@@ -295,7 +295,10 @@ async def test_asked_agent_runs_with_its_own_permissions(container, make_agent, 
     models.models["n"] = scripted(narrow)
     me = await make_agent("manager", model="tools", roles=["admin"])
     outputs = await run_tools(
-        container, models, me.id, [("ask_agent", {"agent": "narrow", "message": "q", "thread": "t"})]
+        container,
+        models,
+        me.id,
+        [("ask_agent", {"agent": "narrow", "message": "q", "thread": "t", "timeout": 600})],
     )
 
     assert outputs == ["answer"]
@@ -342,7 +345,8 @@ async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit
 async def test_run_shell_tells_the_model_its_configured_limits(container):
     run_shell = session_tools(container)["run_shell"]
     runtime = container.settings.runtime
-    assert f"after {runtime.shell_default_timeout:g} seconds" in run_shell.description
+    assert "you must pass `timeout`" in run_shell.description and "no upper limit" in run_shell.description
+    assert "every `heartbeat_seconds`" in run_shell.description
     assert "at most" not in run_shell.description
     assert (
         f"Only the first {runtime.tool_output_max_chars} characters of output are kept"
@@ -350,7 +354,26 @@ async def test_run_shell_tells_the_model_its_configured_limits(container):
     )
 
 
-async def test_run_shell_rejects_a_zero_timeout_instead_of_using_the_default(container, make_agent, models):
+async def test_run_shell_requires_a_timeout_in_the_foreground_and_a_heartbeat_only_in_the_background(
+    container, make_agent, models
+):
+    me = await make_agent("alpha", model="tools")
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("run_shell", {"command": "echo hi"}),
+            ("run_shell", {"command": "echo hi", "timeout": 5, "heartbeat_seconds": 10}),
+            ("run_shell", {"command": "true", "background": True, "heartbeat_seconds": 0}),
+        ],
+    )
+    assert "timeout is required for a foreground command" in outputs[0]
+    assert "heartbeat_seconds is only for background jobs" in outputs[1]
+    assert "heartbeat_seconds must be greater than 0" in outputs[2]
+
+
+async def test_run_shell_rejects_a_zero_timeout(container, make_agent, models):
     me = await make_agent("alpha", model="tools")
     outputs = await run_tools(
         container,

@@ -41,13 +41,13 @@ class TwoSteps:
             return ModelResponse(
                 parts=[
                     TextPart("step two"),
-                    ToolCallPart("run_shell", {"command": "sleep 30"}, tool_call_id="slow"),
+                    ToolCallPart("run_shell", {"command": "sleep 30", "timeout": 60}, tool_call_id="slow"),
                 ]
             )
         return ModelResponse(
             parts=[
                 TextPart("step one"),
-                ToolCallPart("run_shell", {"command": "echo quick"}, tool_call_id="fast"),
+                ToolCallPart("run_shell", {"command": "echo quick", "timeout": 60}, tool_call_id="fast"),
             ]
         )
 

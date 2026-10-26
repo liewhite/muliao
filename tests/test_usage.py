@@ -115,7 +115,7 @@ async def test_a_stopped_run_still_records_what_it_spent(client, container, make
 
     def fn(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         return ModelResponse(
-            parts=[ToolCallPart("run_shell", {"command": "sleep 30"}, tool_call_id="slow")],
+            parts=[ToolCallPart("run_shell", {"command": "sleep 30", "timeout": 60}, tool_call_id="slow")],
             usage=REPLY_USAGE,
         )
 

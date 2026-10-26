@@ -594,3 +594,70 @@ def test_roles_become_admin_or_agent_and_downgrade_expands_agent(tmp_path):
     with sqlite3.connect(path) as conn:
         allow = dict(conn.execute("select id, allow from agents").fetchall())
     assert allow == {"a1": "[]", "a2": '["skill.public:write", "agent:get"]'}
+
+
+def test_threads_per_agent_heartbeats_and_timeouts_backfill_and_downgrade(tmp_path):
+    """#217：thread 唯一索引加上 agent；jobs.check_seconds 回填 60；report_back 委派的占用 check_seconds 回填 60，ask_agent
+    的不设 deadline。降级时同一父会话里重名的 thread 改名（保留最早的），旧索引能建起来，新列删掉。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "e8964a50067c")
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "insert into agents (id, name, description, model, roles, created_at, updated_at) "
+            "values (?, ?, 'd', 'p:m', '[\"agent\"]', '2026-01-01', '2026-01-01')",
+            [("a1", "a1"), ("a2", "a2")],
+        )
+        conn.execute(
+            "insert into sessions (id, agent_id, title, origin, kind, created_at, updated_at) "
+            "values ('p', 'a1', 't', 'user', 'conversation', '2026-01-01', '2026-01-01')"
+        )
+        conn.execute(
+            "insert into jobs (session_id, agent_id, command, secrets, status, log_path, started_at) "
+            "values ('p', 'a1', 'true', '[]', 'exited', 'jobs/1.log', '2026-01-01')"
+        )
+        conn.executemany(
+            "insert into session_holds (session_id, holder, call_id, awaited, status, created_at) "
+            "values ('p', ?, ?, 0, 'active', '2026-01-01')",
+            [("delegation:p:k1", None), ("delegation:p:k2", "call"), ("job:1", None)],
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select check_seconds from jobs").fetchall() == [(60.0,)]
+        assert conn.execute(
+            "select holder, check_seconds, deadline from session_holds order by holder"
+        ).fetchall() == [
+            ("delegation:p:k1", 60.0, None),
+            ("delegation:p:k2", None, None),
+            ("job:1", None, None),
+        ]
+        # 同一父会话、同名、不同 agent：现在是两个 thread
+        conn.executemany(
+            "insert into sessions (id, agent_id, title, origin, origin_ref, parent_session_id, thread, kind, "
+            "created_at, updated_at) values (?, ?, 't', 'delegation', 'p', 'p', 'review', 'thread', ?, ?)",
+            [("c1", "a1", "2026-01-02", "2026-01-02"), ("c2", "a2", "2026-01-03", "2026-01-03")],
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "insert into sessions (id, agent_id, title, origin, origin_ref, parent_session_id, thread, kind, "
+                "created_at, updated_at) values "
+                "('c3', 'a1', 't', 'delegation', 'p', 'p', 'review', 'thread', '2026-01-04', '2026-01-04')"
+            )
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "e8964a50067c")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "select id, thread from sessions where thread is not null order by id"
+        ).fetchall() == [
+            ("c1", "review"),
+            ("c2", "review#a2"),
+        ]
+        assert "check_seconds" not in {r[1] for r in conn.execute("pragma table_info(jobs)")}
+        assert not {"check_seconds", "deadline"} & {
+            r[1] for r in conn.execute("pragma table_info(session_holds)")
+        }

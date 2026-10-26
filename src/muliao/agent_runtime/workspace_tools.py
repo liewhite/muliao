@@ -63,7 +63,6 @@ class FileRange(BaseModel):
 
 @dataclass(frozen=True)
 class ShellLimits:
-    default_timeout: float
     max_output_chars: int
 
 
@@ -74,7 +73,8 @@ def resolve(scope: RunScope, path: str) -> Path:
 
 _SHELL_DESCRIPTION = (
     "Run a shell command (bash) in your workspace and return its exit code and combined output. "
-    "Commands are killed after {default:g} seconds unless you pass a different `timeout`. "
+    "Running it in the foreground blocks you until it ends, so you must pass `timeout`: the command is killed after "
+    "that many seconds (estimate it yourself; there is no upper limit). "
     "Only the first {max_output} characters of output are kept, so limit it yourself: pipe through `| head` or `| tail`, "
     "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
     "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
@@ -85,8 +85,8 @@ _SHELL_DESCRIPTION = (
 
 
 def shell_description(limits: ShellLimits) -> str:
-    """时限与输出上限是配置的值，写进说明：模型不知道它们，长命令被杀、长输出被截了才学会。"""
-    return _SHELL_DESCRIPTION.format(default=limits.default_timeout, max_output=limits.max_output_chars)
+    """输出上限是配置的值，写进说明：模型不知道它，长输出被截了才学会。"""
+    return _SHELL_DESCRIPTION.format(max_output=limits.max_output_chars)
 
 
 async def run_foreground(
@@ -94,10 +94,9 @@ async def run_foreground(
     limits: ShellLimits,
     scope: RunScope,
     command: str,
-    timeout: float | None,  # noqa: ASYNC109  run_shell 的参数原样传入
+    timeout: float,  # noqa: ASYNC109  run_shell 的参数原样传入（前台命令必填）
     secrets: tuple[str, ...],
 ) -> str:
-    timeout = limits.default_timeout if timeout is None else timeout
     if not timeout > 0:  # 也拒绝 NaN
         raise InvalidInput("timeout must be greater than 0 seconds")
     secret_values = await vault.resolve_many(scope.agent_id, list(secrets))

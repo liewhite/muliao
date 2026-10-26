@@ -388,7 +388,9 @@ async def test_a_question_in_a_private_thread_is_handed_back_to_the_asking_agent
         return ModelResponse(
             parts=[
                 ToolCallPart(
-                    "ask_agent", {"agent": "helper", "message": "x", "thread": "h"}, tool_call_id="a"
+                    "ask_agent",
+                    {"agent": "helper", "message": "x", "thread": "h", "timeout": 600},
+                    tool_call_id="a",
                 )
             ]
         )

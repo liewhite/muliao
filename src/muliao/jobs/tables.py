@@ -36,6 +36,8 @@ class Job(Base):
     log_path: Mapped[str] = mapped_column(String(255))
     # 进程（组）号；进程还没起来时为 None
     pid: Mapped[int | None]
+    # 运行中检查的间隔（秒，run_shell 的 heartbeat_seconds）
+    check_seconds: Mapped[float]
     started_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 

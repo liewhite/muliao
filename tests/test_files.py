@@ -307,7 +307,7 @@ async def test_files_shared_by_an_asked_agent_reach_the_user_in_the_asking_sessi
         container,
         models,
         me.id,
-        [("ask_agent", {"agent": "painter", "message": "draw", "thread": "chart"})],
+        [("ask_agent", {"agent": "painter", "message": "draw", "thread": "chart", "timeout": 600})],
     )
 
     assert outputs[0].startswith("here it is") and "'chart.png'" in outputs[0]

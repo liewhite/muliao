@@ -367,18 +367,14 @@ def assemble(
         db,
         vault,
         agents.workspace,
-        settings.runtime.job_check_seconds,
         messaging,
         SessionWork(db),
     )
-    thread_checks = ThreadChecks(db, queue)
+    thread_checks = ThreadChecks(db, queue, stopper)
     # 跨领域的反应：会话领域的命令处理者与各领域的订阅
     handle_work_commands(messaging, queue)
     jobs.subscribe(messaging)
-    limits = ShellLimits(
-        settings.runtime.shell_default_timeout,
-        settings.runtime.tool_output_max_chars,
-    )
+    limits = ShellLimits(settings.runtime.tool_output_max_chars)
     # 总是开放：自我改进、工作历史（每日自进化人人都写），以及向用户提问（工具列表保持稳定以命中缓存；没有用户会回答的运行里调用被拒绝，见 sessions.ask_user）
     always_tools = [
         skills_toolset(skills),
@@ -395,7 +391,7 @@ def assemble(
     static_toolsets = [
         *always_tools,
         workspace_toolset(vault, limits, files, jobs),
-        delegation_toolset(db, agents, threads, stopper, settings.runtime.job_check_seconds),
+        delegation_toolset(db, agents, threads, stopper),
         notify_toolset(notifications),
         public_skills_toolset(skills),
         mcp_admin_toolset(mcp, agents),
@@ -482,7 +478,7 @@ def assemble(
         mail=MailReconciler(db, queue),
         jobs=jobs,
         thread_checks=thread_checks,
-        work=WorkWatcher([jobs, thread_checks], settings.runtime.job_check_seconds),
+        work=WorkWatcher([jobs, thread_checks]),
         # 只清理投递类的任务（docs/architecture.md 3.2「保留」）
         retention=TaskRetention(queue, prunable=(EVENT_TASK, DELIVER_TASK)),
         compactor=compactor,
