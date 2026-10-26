@@ -5,14 +5,14 @@ from typing import get_args
 
 import pytest
 
-from muliao.agents.api import AgentPatch, McpTransport, mcp_config
+from muliao.agents.api import AgentPatch, McpTransport, RoleSpec, mcp_config
 from muliao.api.triggers import TriggerKindName, TriggerOut
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
 from muliao.triggers.service import previous_fire_state_in, set_state, trigger_in
-from tests.conftest import login
+from tests.conftest import login, share
 from tests.test_flow import drain, history_of, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
@@ -397,7 +397,7 @@ async def test_manual_run_starts_a_session_with_just_the_prompt(container, make_
 
 async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent):
     alpha = (await make_agent()).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
+    await container.vault.set("ECHO_TOKEN", "tok-123", "", actor="user", owner=alpha)
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
@@ -405,31 +405,30 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
         env={"TOKEN": "${vault:ECHO_TOKEN}"},
     )
 
-    row, tools = await container.mcp.add(alpha, "echo", spec, probe=True, author="user")
+    row, tools = await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=True)
 
     assert sorted(tools) == ["cwd", "echo", "screenshot", "token"]
     assert row.config.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
-    assert [s.name for s in (await container.mcp.index(alpha, ()))] == ["echo"]
-    assert (await container.mcp.index("b2b2b2b2b2b2", ())) == []
+    assert [s.name for s in (await container.mcp.index(alpha))] == ["echo"]
+    other = (await make_agent("other")).id
+    assert (await container.mcp.index(other)) == []
 
 
-async def test_an_agent_uses_its_enabled_servers_and_the_selected_public_ones(container, make_agent):
+async def test_an_agent_uses_its_own_enabled_servers_and_those_its_roles_give_it(container, make_agent):
     alpha = (await make_agent()).id
     spec = mcp_config(transport=McpTransport.HTTP, url="http://example.invalid/mcp")
-    await container.mcp.add(alpha, "mine", spec, probe=False, author="user")
-    await container.mcp.add(None, "echo", spec, probe=False, author="user")
-    await container.mcp.add(None, "other", spec, probe=False, author="user")
+    await container.mcp.add("mine", spec, actor="user", owner=alpha, probe=False)
+    await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
+    await container.mcp.add("other", spec, actor="user", owner=None, probe=False)
 
-    assert [(s.owner, s.name) for s in await container.mcp.view(alpha)] == [
-        (alpha, "mine"),
-        (None, "echo"),
-        (None, "other"),
-    ]
-    assert [s.name for s in await container.mcp.view(None)] == ["echo", "other"]
-    # 公共 server 只有勾选了的生效；停用的不生效
-    assert [s.name for s in await container.mcp.index(alpha, ["other"])] == ["mine", "other"]
-    await container.mcp.set_enabled(alpha, "mine", False, "user")
-    assert [s.name for s in await container.mcp.index(alpha, ["echo", "other"])] == ["echo", "other"]
+    assert [(s.owner, s.name) for s in await container.mcp.usable(alpha)] == [(alpha, "mine")]
+    assert [s.name for s in await container.mcp.list(None)] == ["echo", "other"]
+    # 归平台的只有角色给了的生效；停用的不生效
+    await container.roles.create(RoleSpec("other-user", "d", ["mcp:other"], []))
+    await container.agents.update(alpha, AgentPatch(roles=["other-user"]))
+    assert [s.name for s in await container.mcp.index(alpha)] == ["mine", "other"]
+    await container.mcp.set_enabled("mine", False, "user")
+    assert [s.name for s in await container.mcp.index(alpha)] == ["other"]
 
 
 async def test_mcp_add_failing_probe_saves_nothing(container):
@@ -438,22 +437,22 @@ async def test_mcp_add_failing_probe_saves_nothing(container):
     )
 
     with pytest.raises(InvalidInput, match="could not connect"):
-        await container.mcp.add(None, "broken", spec, probe=True, author="user")
-    assert await container.mcp.view(None) == []
+        await container.mcp.add("broken", spec, actor="user", owner=None, probe=True)
+    assert await container.mcp.list(None) == []
 
 
 async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, models):
     from tests.test_flow import call_then_answer
 
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
+    await container.vault.set("ECHO_TOKEN", "tok-123", "", actor="user", owner=alpha)
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
         args=[ECHO_SERVER],
         env={"TOKEN": "${vault:ECHO_TOKEN}"},
     )
-    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=False)
     models.models["m"] = call_then_answer("echo_token", {}, "got it")
 
     session = await start(container, alpha, "token?")
@@ -476,7 +475,7 @@ async def test_a_stdio_mcp_server_runs_in_the_agents_workspace(container, make_a
 
     alpha = (await make_agent("alpha", model="m")).id
     spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
-    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=False)
     models.models["m"] = call_then_answer("echo_cwd", {}, "done")
 
     session = await start(container, alpha, "where?")
@@ -509,7 +508,7 @@ async def test_an_image_a_tool_returns_is_stored_as_a_file_and_shown_to_the_mode
 
     alpha = (await make_agent("alpha", model="m")).id
     spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
-    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=False)
     seen = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -585,14 +584,14 @@ async def test_an_mcp_tool_call_that_fails_is_handed_back_to_the_model_with_its_
 
     monkeypatch.setattr(MCPToolset, "call_tool", explode)
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
+    await container.vault.set("ECHO_TOKEN", "tok-123", "", actor="user", owner=alpha)
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
         args=[ECHO_SERVER],
         env={"TOKEN": "${vault:ECHO_TOKEN}"},
     )
-    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=False)
     models.models["m"] = call_then_answer("echo_token", {}, "it failed")
 
     session = await start(container, alpha, "token?")
@@ -634,14 +633,14 @@ async def test_an_mcp_server_that_keeps_rejecting_a_call_does_not_fail_the_run(
 
     monkeypatch.setattr(MCPToolset, "call_tool", refuse)
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
+    await container.vault.set("ECHO_TOKEN", "tok-123", "", actor="user", owner=alpha)
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
         args=[ECHO_SERVER],
         env={"TOKEN": "${vault:ECHO_TOKEN}"},
     )
-    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=False)
     seen: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -682,14 +681,14 @@ async def test_an_mcp_server_that_fails_to_disconnect_does_not_fail_the_run(
 
     monkeypatch.setattr(MCPToolset, "__aexit__", fail_after_exit)
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
+    await container.vault.set("ECHO_TOKEN", "tok-123", "", actor="user", owner=alpha)
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
         args=[ECHO_SERVER],
         env={"TOKEN": "${vault:ECHO_TOKEN}"},
     )
-    await container.mcp.add(alpha, "echo", spec, probe=False, author="user")
+    await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=False)
     models.models["m"] = call_then_answer("echo_token", {}, "got it")
 
     await start(container, alpha, "token?")
@@ -740,7 +739,7 @@ async def test_a_failing_probe_does_not_leak_the_secrets_it_was_given(container,
     """连接错误的文本可能带着已代入 secret 的 URL（如 HTTP 错误），它会交还给模型并返回给调用方。"""
     from pydantic_ai.mcp import MCPToolset
 
-    await container.vault.set(None, "API_TOKEN", "tok-secret-9", "", "user")
+    await container.vault.set("API_TOKEN", "tok-secret-9", "", actor="user", owner=None)
 
     async def refuse(self):  # noqa: ANN001, ANN202
         raise RuntimeError("401 for https://mcp.example/sse?token=tok-secret-9")
@@ -748,7 +747,7 @@ async def test_a_failing_probe_does_not_leak_the_secrets_it_was_given(container,
     monkeypatch.setattr(MCPToolset, "__aenter__", refuse)
     spec = mcp_config(transport=McpTransport.HTTP, url="https://mcp.example/sse?token=${vault:API_TOKEN}")
     with pytest.raises(InvalidInput) as raised:
-        await container.mcp.add(None, "remote", spec, probe=True, author="user")
+        await container.mcp.add("remote", spec, actor="user", owner=None, probe=True)
     assert "tok-secret-9" not in str(raised.value) and "[secret:API_TOKEN]" in str(raised.value)
 
 
@@ -786,10 +785,10 @@ async def test_an_mcp_server_with_a_missing_secret_is_skipped_and_the_model_is_t
         args=[ECHO_SERVER],
         env={"TOKEN": "${vault:MISSING}"},
     )
-    await container.mcp.add(alpha, "echo", broken, probe=False, author="user")
+    await container.mcp.add("echo", broken, actor="user", owner=alpha, probe=False)
     good = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
-    await container.mcp.add(None, "good", good, probe=False, author="user")
-    await container.agents.update(alpha, AgentPatch(mcp_servers=["good"]))
+    await container.mcp.add("good", good, actor="user", owner=None, probe=False)
+    await share(container, "mcp:good")
     requests, tools = _recording_model(models, "m")
 
     await start(container, alpha, "token?")
@@ -822,9 +821,9 @@ async def test_an_mcp_server_that_fails_to_list_its_tools_is_skipped_and_the_mod
     monkeypatch.setattr(MCPToolset, "list_tools", fail_for_broken)
     alpha = (await make_agent("alpha", model="m")).id
     spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
-    await container.mcp.add(alpha, "broken", spec, probe=False, author="user")
-    await container.mcp.add(None, "good", spec, probe=False, author="user")
-    await container.agents.update(alpha, AgentPatch(mcp_servers=["good"]))
+    await container.mcp.add("broken", spec, actor="user", owner=alpha, probe=False)
+    await container.mcp.add("good", spec, actor="user", owner=None, probe=False)
+    await share(container, "mcp:good")
     requests, tools = _recording_model(models, "m")
 
     await start(container, alpha, "go")
@@ -989,11 +988,11 @@ async def test_an_unreachable_mcp_server_is_skipped_and_keeps_its_secrets_out_of
         monkeypatch.setattr(logging.getLogger(name), "level", logging.getLogger(name).level)
     quiet_http_clients()
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "MCP_TOKEN", "tok-in-url-123", "", "user")
+    await container.vault.set("MCP_TOKEN", "tok-in-url-123", "", actor="user", owner=alpha)
     spec = mcp_config(
         transport=McpTransport.HTTP, url=f"{rejecting_http_server}/sse?token=${{vault:MCP_TOKEN}}"
     )
-    await container.mcp.add(alpha, "remote", spec, probe=False, author="user")
+    await container.mcp.add("remote", spec, actor="user", owner=alpha, probe=False)
     requests, tools = _recording_model(models, "m")
 
     await start(container, alpha, "go", origin=Origin.TRIGGER)
@@ -1008,6 +1007,6 @@ async def test_an_unreachable_mcp_server_is_skipped_and_keeps_its_secrets_out_of
 
     # 添加时的探测走同一个脱敏入口
     with pytest.raises(InvalidInput, match="could not connect") as probe:
-        await container.mcp.add(alpha, "remote2", spec, probe=True, author="user")
+        await container.mcp.add("remote2", spec, actor="user", owner=alpha, probe=True)
     assert "tok-in-url-123" not in str(probe.value) and "[secret:MCP_TOKEN]" in str(probe.value)
     assert "mcp probe failed" in caplog.text and "tok-in-url-123" not in caplog.text

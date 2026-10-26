@@ -259,7 +259,9 @@ class SkillStore:
                     ItemFile(item_id=row.id, path=rel, content=f.content, executable=f.executable)
                     for rel, f in new_files.items()
                 )
-            record_in(s, Subject.SKILL, name, before, document(skill_md, new_files), actor, f"{verb} skill {name}")
+            record_in(
+                s, Subject.SKILL, name, before, document(skill_md, new_files), actor, f"{verb} skill {name}"
+            )
             await s.flush()
             meta = self._meta(row)
         await self.materialize(name)
@@ -269,7 +271,9 @@ class SkillStore:
         """打成标准 .skill 文件（skill_package）：SKILL.md 与附件。"""
         return skill_package.pack(name, await self.files(name))
 
-    async def import_package(self, data: bytes, *, actor: str, owner: str | None, replace: bool) -> SkillImport:
+    async def import_package(
+        self, data: bytes, *, actor: str, owner: str | None, replace: bool
+    ) -> SkillImport:
         """导入标准 .skill 文件，新建的归 owner，记一版。SKILL.md 原样写入（标准里的 license、metadata 等其他
         frontmatter 键保留），但要满足与 write 相同的规则。同名 skill 已存在时：replace 为假报冲突；为真则覆盖（附件整体
         换掉，owner 不变，actor 要能改它）。"""

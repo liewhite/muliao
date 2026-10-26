@@ -122,11 +122,11 @@
         }
       }
     },
-    "/api/permissions": {
+    "/api/tools": {
       "get": {
-        "summary": "List Permissions",
-        "description": "全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 不归工具权限管，不在其中。",
-        "operationId": "list_permissions_api_permissions_get",
+        "summary": "List Tools",
+        "description": "全部已登记的内置工具，按登记顺序（含 web，即使没配置 [web]）。",
+        "operationId": "list_tools_api_tools_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -134,10 +134,10 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/PermissionOut"
+                    "$ref": "#/components/schemas/ToolOut"
                   },
                   "type": "array",
-                  "title": "Response List Permissions Api Permissions Get"
+                  "title": "Response List Tools Api Tools Get"
                 }
               }
             }
@@ -145,11 +145,11 @@
         }
       }
     },
-    "/api/permissions/resolve": {
+    "/api/tools/resolve": {
       "post": {
-        "summary": "Resolve Permissions",
-        "description": "agent 配置（还没保存的也行）最终能用的工具：角色 + allow / deny，与运行时同一套计算。",
-        "operationId": "resolve_permissions_api_permissions_resolve_post",
+        "summary": "Resolve Tools",
+        "description": "agent 配置（还没保存的也行）最终能用的内置工具：base + 角色 + allow / deny，与运行时同一套计算。",
+        "operationId": "resolve_tools_api_tools_resolve_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -167,6 +167,50 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ResolvedOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agents/{agent_id}/items": {
+      "get": {
+        "summary": "Usable Items",
+        "description": "agent 能用的 skill、MCP server、secret（`kind:name`）：自己的与规则放行的。",
+        "operationId": "usable_items_api_agents__agent_id__items_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response Usable Items Api Agents  Agent Id  Items Get"
                 }
               }
             }
@@ -257,7 +301,7 @@
       },
       "put": {
         "summary": "Update Role",
-        "description": "整体替换自建角色的描述与规则；从引用它的 agent 的下一次运行起生效。",
+        "description": "整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。",
         "operationId": "update_role_api_roles__name__put",
         "parameters": [
           {
@@ -818,7 +862,7 @@
     "/api/skills": {
       "get": {
         "summary": "List Skills",
-        "description": "owner 为空列出公共 skill，否则列出该 agent 的私有 skill。",
+        "description": "owner 名下的 skill（owner 为空是归平台的）。",
         "operationId": "list_skills_api_skills_get",
         "parameters": [
           {
@@ -879,22 +923,6 @@
               "type": "string",
               "title": "Name"
             }
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
           }
         ],
         "responses": {
@@ -922,6 +950,7 @@
       },
       "put": {
         "summary": "Put Skill",
+        "description": "新建的归 owner；已有的整体改写，owner 不变。",
         "operationId": "put_skill_api_skill_put",
         "requestBody": {
           "required": true,
@@ -968,22 +997,6 @@
               "type": "string",
               "title": "Name"
             }
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
           }
         ],
         "responses": {
@@ -1017,22 +1030,6 @@
               "type": "string",
               "title": "Name"
             }
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
           }
         ],
         "responses": {
@@ -1056,7 +1053,7 @@
       },
       "post": {
         "summary": "Import Skill",
-        "description": "请求体是一个标准 .skill 文件，导入为 owner（缺省为公共）的 skill，一次提交、作者 user。同名 skill 已存在时 409，\nreplace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，超限 413。",
+        "description": "请求体是一个标准 .skill 文件，导入为 skill（新建的归 owner，缺省为平台），一次提交、作者 user。同名 skill 已存在时 409，\nreplace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，超限 413。",
         "operationId": "import_skill_api_skill_package_post",
         "parameters": [
           {
@@ -1589,7 +1586,7 @@
     "/api/mcp": {
       "get": {
         "summary": "List Mcp",
-        "description": "owner 视角下的 server：它私有的在前，然后是公共的；owner 缺省时只列公共 server。",
+        "description": "owner（agent 的 id）能用的 server（自己的与分发给它的）；owner 缺省时为归平台的 server。",
         "operationId": "list_mcp_api_mcp_get",
         "parameters": [
           {
@@ -1684,22 +1681,6 @@
               "type": "string",
               "title": "Name"
             }
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
           }
         ],
         "responses": {
@@ -1731,22 +1712,6 @@
             "schema": {
               "type": "string",
               "title": "Name"
-            }
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
             }
           }
         ],
@@ -1791,22 +1756,6 @@
               "type": "string",
               "title": "Name"
             }
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
           }
         ],
         "requestBody": {
@@ -1846,7 +1795,7 @@
     "/api/vault": {
       "get": {
         "summary": "List Secrets",
-        "description": "owner 视角下的 secret（不含值）：它私有的在前，然后是公共的；owner 缺省时只列公共 secret。",
+        "description": "owner（agent 的 id）能用的 secret（不含值，自己的与分发给它的）；owner 缺省时为归平台的 secret。",
         "operationId": "list_secrets_api_vault_get",
         "parameters": [
           {
@@ -1897,7 +1846,7 @@
     "/api/vault/{key}": {
       "put": {
         "summary": "Set Secret",
-        "description": "owner 缺省为公共 secret，否则为该 agent 私有。",
+        "description": "新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。",
         "operationId": "set_secret_api_vault__key__put",
         "parameters": [
           {
@@ -1963,22 +1912,6 @@
             "schema": {
               "type": "string",
               "title": "Key"
-            }
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
             }
           }
         ],
@@ -3523,18 +3456,12 @@
             "title": "Model"
           },
           "roles": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Roles"
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles",
+            "default": []
           },
           "allow": {
             "items": {
@@ -3550,14 +3477,6 @@
             },
             "type": "array",
             "title": "Deny",
-            "default": []
-          },
-          "mcp_servers": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Mcp Servers",
             "default": []
           },
           "thinking": {
@@ -3597,19 +3516,11 @@
           "model": {
             "type": "string",
             "title": "Model"
-          },
-          "roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Roles"
           }
         },
         "type": "object",
         "required": [
-          "model",
-          "roles"
+          "model"
         ],
         "title": "AgentDefaultsOut"
       },
@@ -3651,13 +3562,6 @@
             },
             "type": "array",
             "title": "Deny"
-          },
-          "mcp_servers": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Mcp Servers"
           },
           "thinking": {
             "type": "string",
@@ -3713,7 +3617,6 @@
           "roles",
           "allow",
           "deny",
-          "mcp_servers",
           "thinking",
           "created_at",
           "is_default",
@@ -3757,13 +3660,6 @@
             "type": "array",
             "title": "Deny"
           },
-          "mcp_servers": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Mcp Servers"
-          },
           "thinking": {
             "type": "string",
             "enum": [
@@ -3796,7 +3692,6 @@
           "roles",
           "allow",
           "deny",
-          "mcp_servers",
           "thinking",
           "group"
         ],
@@ -5293,34 +5188,6 @@
         "title": "Origin",
         "description": "会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派、issue 看板唤醒被指派的 agent。"
       },
-      "PermissionOut": {
-        "properties": {
-          "tool": {
-            "type": "string",
-            "title": "Tool"
-          },
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "access": {
-            "type": "string",
-            "enum": [
-              "read",
-              "write"
-            ],
-            "title": "Access"
-          }
-        },
-        "type": "object",
-        "required": [
-          "tool",
-          "id",
-          "access"
-        ],
-        "title": "PermissionOut",
-        "description": "一个工具的权限（agents.permissions.TOOL_PERMISSIONS）。"
-      },
       "Precheck": {
         "properties": {
           "command": {
@@ -5509,7 +5376,7 @@
         "properties": {
           "tools": {
             "items": {
-              "$ref": "#/components/schemas/PermissionOut"
+              "$ref": "#/components/schemas/ToolOut"
             },
             "type": "array",
             "title": "Tools"
@@ -5520,7 +5387,7 @@
           "tools"
         ],
         "title": "ResolvedOut",
-        "description": "按规则最终能用的工具（MCP 不归权限管，不在其中）。"
+        "description": "按规则最终能用的内置工具。"
       },
       "ResourceKind": {
         "type": "string",
@@ -5659,6 +5526,13 @@
             "type": "string",
             "title": "Description"
           },
+          "fixed_allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fixed Allow"
+          },
           "allow": {
             "items": {
               "type": "string"
@@ -5685,6 +5559,7 @@
         "required": [
           "name",
           "description",
+          "fixed_allow",
           "allow",
           "deny",
           "builtin",
@@ -6951,6 +6826,34 @@
           "token"
         ],
         "title": "TokenOut"
+      },
+      "ToolOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ],
+            "title": "Access"
+          },
+          "admin": {
+            "type": "boolean",
+            "title": "Admin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "access",
+          "admin"
+        ],
+        "title": "ToolOut",
+        "description": "一个内置工具（agents.permissions.TOOLS），在规则里写作 `tool:<name>`。"
       },
       "TranscriptOut": {
         "properties": {

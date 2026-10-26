@@ -146,7 +146,7 @@ export function SkillEditor() {
   const existing = params.get('name')
   const back = owner ? agentRoute(owner) : '/skills'
   const [skill, setSkill] = useState<Skill>({ owner, name: existing ?? '', description: '', body: '' })
-  const loaded = useLoad(() => (existing ? api.skill(owner, existing) : Promise.resolve(null)), [owner, existing])
+  const loaded = useLoad(() => (existing ? api.skill(existing) : Promise.resolve(null)), [owner, existing])
   const action = useAction()
   useEffect(() => {
     if (loaded.data) setSkill(loaded.data)
@@ -165,7 +165,7 @@ export function SkillEditor() {
   async function exportPackage() {
     if (!existing) return
     await action.run(async () => {
-      const url = URL.createObjectURL(await api.exportSkill(owner, existing))
+      const url = URL.createObjectURL(await api.exportSkill(existing))
       const link = document.createElement('a')
       link.href = url
       link.download = `${existing}.skill`
@@ -178,7 +178,7 @@ export function SkillEditor() {
   async function remove() {
     if (!existing) return
     const ok = await confirm({ title: `删除 skill「${existing}」？`, confirmLabel: '删除', danger: true })
-    if (ok && (await action.run(() => api.deleteSkill(owner, existing)))) navigate(back)
+    if (ok && (await action.run(() => api.deleteSkill(existing)))) navigate(back)
   }
 
   return (

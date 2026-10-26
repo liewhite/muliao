@@ -32,17 +32,30 @@ async def existing_in(s: AsyncSession, kind: Subject, name: str) -> Item:
 
 
 async def changeable_in(s: AsyncSession, kind: Subject, name: str, actor: str) -> Item:
-    """要改或删的已有条目：存在，且 actor 能改它（规则 2）。"""
+    """要改或删的已有条目：存在，actor 能改它（规则 2），它的 owner（agent）还可用（正在删除的 agent 的条目按不存在处理，
+    由删除流程统一处理）。"""
     row = await existing_in(s, kind, name)
+    await _check_owner_active_in(s, kind, row)
     await check_change_in(s, actor, row)
     return row
 
 
-async def writable_in(s: AsyncSession, kind: Subject, name: str, actor: str, owner: str | None) -> Item | None:
+async def _check_owner_active_in(s: AsyncSession, kind: Subject, row: Item) -> None:
+    if row.owner is not None:
+        try:
+            await active_row_in(s, row.owner)
+        except NotFound:
+            raise NotFound(f"{label(kind)} {row.name!r} not found") from None
+
+
+async def writable_in(
+    s: AsyncSession, kind: Subject, name: str, actor: str, owner: str | None
+) -> Item | None:
     """新建或整体改写之前：已存在就按规则 2 检查并返回它（owner 不变）；不存在时返回 None，新条目将归 owner（agent 时
     检查它还可用）。"""
     row = await item_in(s, kind, name)
     if row is not None:
+        await _check_owner_active_in(s, kind, row)
         await check_change_in(s, actor, row)
         return row
     if owner is not None:

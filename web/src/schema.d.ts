@@ -75,7 +75,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/permissions": {
+    "/api/tools": {
         parameters: {
             query?: never;
             header?: never;
@@ -83,10 +83,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Permissions
-         * @description 全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 不归工具权限管，不在其中。
+         * List Tools
+         * @description 全部已登记的内置工具，按登记顺序（含 web，即使没配置 [web]）。
          */
-        get: operations["list_permissions_api_permissions_get"];
+        get: operations["list_tools_api_tools_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -95,7 +95,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/permissions/resolve": {
+    "/api/tools/resolve": {
         parameters: {
             query?: never;
             header?: never;
@@ -105,10 +105,30 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Resolve Permissions
-         * @description agent 配置（还没保存的也行）最终能用的工具：角色 + allow / deny，与运行时同一套计算。
+         * Resolve Tools
+         * @description agent 配置（还没保存的也行）最终能用的内置工具：base + 角色 + allow / deny，与运行时同一套计算。
          */
-        post: operations["resolve_permissions_api_permissions_resolve_post"];
+        post: operations["resolve_tools_api_tools_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Usable Items
+         * @description agent 能用的 skill、MCP server、secret（`kind:name`）：自己的与规则放行的。
+         */
+        get: operations["usable_items_api_agents__agent_id__items_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -145,7 +165,7 @@ export interface paths {
         get?: never;
         /**
          * Update Role
-         * @description 整体替换自建角色的描述与规则；从引用它的 agent 的下一次运行起生效。
+         * @description 整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。
          */
         put: operations["update_role_api_roles__name__put"];
         /** Create Role */
@@ -315,7 +335,7 @@ export interface paths {
         };
         /**
          * List Skills
-         * @description owner 为空列出公共 skill，否则列出该 agent 的私有 skill。
+         * @description owner 名下的 skill（owner 为空是归平台的）。
          */
         get: operations["list_skills_api_skills_get"];
         put?: never;
@@ -335,7 +355,10 @@ export interface paths {
         };
         /** Get Skill */
         get: operations["get_skill_api_skill_get"];
-        /** Put Skill */
+        /**
+         * Put Skill
+         * @description 新建的归 owner；已有的整体改写，owner 不变。
+         */
         put: operations["put_skill_api_skill_put"];
         post?: never;
         /** Delete Skill */
@@ -360,7 +383,7 @@ export interface paths {
         put?: never;
         /**
          * Import Skill
-         * @description 请求体是一个标准 .skill 文件，导入为 owner（缺省为公共）的 skill，一次提交、作者 user。同名 skill 已存在时 409，
+         * @description 请求体是一个标准 .skill 文件，导入为 skill（新建的归 owner，缺省为平台），一次提交、作者 user。同名 skill 已存在时 409，
          *     replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，超限 413。
          */
         post: operations["import_skill_api_skill_package_post"];
@@ -530,7 +553,7 @@ export interface paths {
         };
         /**
          * List Mcp
-         * @description owner 视角下的 server：它私有的在前，然后是公共的；owner 缺省时只列公共 server。
+         * @description owner（agent 的 id）能用的 server（自己的与分发给它的）；owner 缺省时为归平台的 server。
          */
         get: operations["list_mcp_api_mcp_get"];
         put?: never;
@@ -586,7 +609,7 @@ export interface paths {
         };
         /**
          * List Secrets
-         * @description owner 视角下的 secret（不含值）：它私有的在前，然后是公共的；owner 缺省时只列公共 secret。
+         * @description owner（agent 的 id）能用的 secret（不含值，自己的与分发给它的）；owner 缺省时为归平台的 secret。
          */
         get: operations["list_secrets_api_vault_get"];
         put?: never;
@@ -607,7 +630,7 @@ export interface paths {
         get?: never;
         /**
          * Set Secret
-         * @description owner 缺省为公共 secret，否则为该 agent 私有。
+         * @description 新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。
          */
         put: operations["set_secret_api_vault__key__put"];
         post?: never;
@@ -1183,8 +1206,11 @@ export interface components {
             description: string;
             /** Model */
             model?: string | null;
-            /** Roles */
-            roles?: string[] | null;
+            /**
+             * Roles
+             * @default []
+             */
+            roles: string[];
             /**
              * Allow
              * @default []
@@ -1195,11 +1221,6 @@ export interface components {
              * @default []
              */
             deny: string[];
-            /**
-             * Mcp Servers
-             * @default []
-             */
-            mcp_servers: string[];
             /**
              * Thinking
              * @default default
@@ -1213,8 +1234,6 @@ export interface components {
         AgentDefaultsOut: {
             /** Model */
             model: string;
-            /** Roles */
-            roles: string[];
         };
         /** AgentOut */
         AgentOut: {
@@ -1232,8 +1251,6 @@ export interface components {
             allow: string[];
             /** Deny */
             deny: string[];
-            /** Mcp Servers */
-            mcp_servers: string[];
             /**
              * Thinking
              * @enum {string}
@@ -1268,8 +1285,6 @@ export interface components {
             allow: string[];
             /** Deny */
             deny: string[];
-            /** Mcp Servers */
-            mcp_servers: string[];
             /**
              * Thinking
              * @enum {string}
@@ -1804,21 +1819,6 @@ export interface components {
          * @enum {string}
          */
         Origin: "user" | "trigger" | "delegation" | "issue";
-        /**
-         * PermissionOut
-         * @description 一个工具的权限（agents.permissions.TOOL_PERMISSIONS）。
-         */
-        PermissionOut: {
-            /** Tool */
-            tool: string;
-            /** Id */
-            id: string;
-            /**
-             * Access
-             * @enum {string}
-             */
-            access: "read" | "write";
-        };
         /** Precheck */
         Precheck: {
             /**
@@ -1911,11 +1911,11 @@ export interface components {
         };
         /**
          * ResolvedOut
-         * @description 按规则最终能用的工具（MCP 不归权限管，不在其中）。
+         * @description 按规则最终能用的内置工具。
          */
         ResolvedOut: {
             /** Tools */
-            tools: components["schemas"]["PermissionOut"][];
+            tools: components["schemas"]["ToolOut"][];
         };
         /**
          * ResourceKind
@@ -1964,6 +1964,8 @@ export interface components {
             name: string;
             /** Description */
             description: string;
+            /** Fixed Allow */
+            fixed_allow: string[];
             /** Allow */
             allow: string[];
             /** Deny */
@@ -2415,6 +2417,21 @@ export interface components {
             /** Token */
             token: string;
         };
+        /**
+         * ToolOut
+         * @description 一个内置工具（agents.permissions.TOOLS），在规则里写作 `tool:<name>`。
+         */
+        ToolOut: {
+            /** Name */
+            name: string;
+            /**
+             * Access
+             * @enum {string}
+             */
+            access: "read" | "write";
+            /** Admin */
+            admin: boolean;
+        };
         /** TranscriptOut */
         TranscriptOut: {
             /** Text */
@@ -2693,7 +2710,7 @@ export interface operations {
             };
         };
     };
-    list_permissions_api_permissions_get: {
+    list_tools_api_tools_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -2708,12 +2725,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PermissionOut"][];
+                    "application/json": components["schemas"]["ToolOut"][];
                 };
             };
         };
     };
-    resolve_permissions_api_permissions_resolve_post: {
+    resolve_tools_api_tools_resolve_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -2733,6 +2750,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResolvedOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    usable_items_api_agents__agent_id__items_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
             /** @description Validation Error */
@@ -3287,7 +3335,6 @@ export interface operations {
         parameters: {
             query: {
                 name: string;
-                owner?: string | null;
             };
             header?: never;
             path?: never;
@@ -3352,7 +3399,6 @@ export interface operations {
         parameters: {
             query: {
                 name: string;
-                owner?: string | null;
             };
             header?: never;
             path?: never;
@@ -3382,7 +3428,6 @@ export interface operations {
         parameters: {
             query: {
                 name: string;
-                owner?: string | null;
             };
             header?: never;
             path?: never;
@@ -3826,7 +3871,6 @@ export interface operations {
         parameters: {
             query: {
                 name: string;
-                owner?: string | null;
             };
             header?: never;
             path?: never;
@@ -3856,7 +3900,6 @@ export interface operations {
         parameters: {
             query: {
                 name: string;
-                owner?: string | null;
             };
             header?: never;
             path?: never;
@@ -3888,7 +3931,6 @@ export interface operations {
         parameters: {
             query: {
                 name: string;
-                owner?: string | null;
             };
             header?: never;
             path?: never;
@@ -3988,9 +4030,7 @@ export interface operations {
     };
     delete_secret_api_vault__key__delete: {
         parameters: {
-            query?: {
-                owner?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 key: string;

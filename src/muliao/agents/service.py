@@ -348,7 +348,9 @@ class AgentService:
             await self._ensure_name_free(s, fields.name, agent_id)
             await check_assignable_in(s, fields.roles)
             await check_rules_in(
-                s, Rules(tuple(fields.allow), tuple(fields.deny)), Rules(tuple(agent.allow), tuple(agent.deny))
+                s,
+                Rules(tuple(fields.allow), tuple(fields.deny)),
+                Rules(tuple(agent.allow), tuple(agent.deny)),
             )
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
             agent.thinking = fields.thinking

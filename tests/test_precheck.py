@@ -255,7 +255,7 @@ async def test_manual_run_goes_through_the_precheck(client, container, make_agen
 
 async def test_a_precheck_with_secrets_can_be_changed_and_unknown_secrets_are_refused(container, make_agent):
     alpha = (await make_agent()).id
-    await container.vault.set(alpha, "API_KEY", "k-1", "", "user")
+    await container.vault.set("API_KEY", "k-1", "", actor="user", owner=alpha)
     trigger, _ = await _schedule(container, alpha, Precheck(command="true"))
 
     changed = await container.triggers.update(

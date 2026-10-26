@@ -823,6 +823,7 @@ def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
 
     def built(origin: Origin) -> str:
         return build_instructions(
+            agent_id="a1",
             agent_name="a",
             agent_description="",
             global_memory="",

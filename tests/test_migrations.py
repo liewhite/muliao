@@ -569,7 +569,7 @@ def test_roles_become_admin_or_agent_and_downgrade_expands_agent(tmp_path):
                 ("a2", "a2", '["workspace", "agents", "mcp"]', '["agent:create"]'),
             ],
         )
-    migrate(path)
+    migrate(path, "e8964a50067c")
     with sqlite3.connect(path) as conn:
         assert conn.execute(
             "select id, roles, allow, deny, mcp_servers from agents order by id"
@@ -744,7 +744,7 @@ def test_resources_and_secrets_move_into_items_with_unique_names_and_downgrade(t
     write(f"agents/{a1}/mcp/pw.json", json.dumps({**config, "enabled": True}))
     write(f"agents/{a2}/mcp/pw.json", json.dumps({**config, "enabled": False}))
 
-    migrate(path)
+    migrate(path, "f369adb6b551")
 
     assert not root.exists() and (tmp_path / "resources.imported").is_dir()
     with sqlite3.connect(path) as conn:
@@ -793,3 +793,78 @@ def test_resources_and_secrets_move_into_items_with_unique_names_and_downgrade(t
         assert "items" not in {
             r[0] for r in conn.execute("select name from sqlite_master where type='table'")
         }
+
+
+def test_rules_become_kind_name_base_collects_platform_items_and_mcp_selections_become_roles(tmp_path):
+    """#235：内置 agent 角色去掉（base 隐含）；权限 id 改写成 `tool:<名>`（删掉的工具去掉、匹配全部的成 `tool:*`）；base
+    收录归平台的 skill 与 secret；mcp_servers 勾选成同名角色，删掉列。降级还原。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "f369adb6b551")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "insert into agents (id, name, description, model, roles, allow, deny, mcp_servers, created_at, "
+            "updated_at) values (?, ?, 'd', 'p:m', ?, ?, ?, ?, ?, ?)",
+            [
+                ("a1", "a1", '["admin"]', '["*"]', "[]", "[]", t, t),
+                ("a2", "a2", '["agent", "rev"]', '["issue:*"]', '["shell:*"]', '["pw"]', t, t),
+                ("a3", "a3", '["agent"]', "[]", "[]", '["gone"]', t, t),
+            ],
+        )
+        conn.execute(
+            "insert into roles (name, description, allow, deny, created_at, updated_at) values "
+            "('rev', 'd', '[\"skill.public:*\", \"issue:list\"]', '[]', ?, ?)",
+            (t, t),
+        )
+        conn.executemany(
+            "insert into items (kind, name, owner, description, content, enabled, created_at, updated_at) "
+            "values (?, ?, ?, '', '', 1, ?, ?)",
+            [
+                ("skill", "s1", None, t, t),
+                ("skill", "own", "a1", t, t),
+                ("secret", "K", None, t, t),
+                ("mcp", "pw", None, t, t),
+            ],
+        )
+
+    migrate(path)
+
+    with sqlite3.connect(path) as conn:
+        assert "mcp_servers" not in {r[1] for r in conn.execute("pragma table_info(agents)")}
+        agents = {r[0]: r[1:] for r in conn.execute("select id, roles, allow, deny from agents")}
+        roles = {
+            r[0]: (json.loads(r[1]), json.loads(r[2]))
+            for r in conn.execute("select name, allow, deny from roles")
+        }
+    issue_tools = [f"tool:issue_{n}" for n in ("list", "show", "create", "update", "comment")]
+    assert agents == {
+        "a1": ('["admin"]', '["tool:*"]', "[]"),
+        "a2": ('["rev", "pw"]', json.dumps(issue_tools), '["tool:run_shell"]'),
+        "a3": ("[]", "[]", "[]"),
+    }
+    assert roles == {
+        "rev": (["tool:issue_list"], []),
+        "base": (["secret:K", "skill:s1"], []),
+        "pw": (["mcp:pw"], []),
+    }
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "f369adb6b551")
+    with sqlite3.connect(path) as conn:
+        agents = {r[0]: r[1:] for r in conn.execute("select id, roles, allow, deny, mcp_servers from agents")}
+        roles = {r[0]: r[1] for r in conn.execute("select name, allow from roles")}
+    assert agents == {
+        "a1": ('["admin"]', '["*"]', "[]", "[]"),
+        "a2": (
+            '["agent", "rev"]',
+            '["issue:list", "issue:show", "issue:create", "issue:update", "issue:comment"]',
+            '["shell:run"]',
+            '["pw"]',
+        ),
+        "a3": ('["agent"]', "[]", "[]", "[]"),
+    }
+    assert roles == {"rev": '["issue:list"]'}

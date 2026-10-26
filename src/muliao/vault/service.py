@@ -64,7 +64,9 @@ class Vault:
         validate_key(key)
         if not value:
             raise InvalidInput("secret value must not be empty")
-        await self._items.put(key, self._fernet.encrypt(value.encode()), description, actor=actor, owner=owner)
+        await self._items.put(
+            key, self._fernet.encrypt(value.encode()), description, actor=actor, owner=owner
+        )
         # 别的 agent 可能依赖它：记录谁改了哪个 key（不记值）
         log.info("secret set", extra={"owner": owner, "key": key, "author": actor})
 

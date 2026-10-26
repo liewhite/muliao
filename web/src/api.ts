@@ -80,7 +80,7 @@ export type SecretInfo = WithAgentId<Schemas['SecretOut'], 'owner'>
 /** 角色（内置或自建）与它能用的工具；后端 agents/permissions.py、agents/roles.py */
 export type Role = Schemas['RoleOut']
 export type RoleInput = Schemas['RoleIn']
-export type ToolPermission = Schemas['PermissionOut']
+export type ToolPermission = Schemas['ToolOut']
 export type ResolvedTools = Schemas['ResolvedOut']
 export type IssueStatus = Schemas['IssueStatus']
 export type IssuePriority = Schemas['IssuePriority']
@@ -220,13 +220,13 @@ export const api = {
 
   agents: () => branded<Agent[]>(call('get', '/api/agents')),
   agentDefaults: () => call('get', '/api/agent-defaults'),
-  /** 全部角色：内置在前（public 每个 agent 自动拥有），自建的按名称；各带只按它自己的规则能用的工具 */
+  /** 全部角色：内置在前（base 每个 agent 隐含），自建的按名称；各带只按它自己的规则能用的工具 */
   roles: () => call('get', '/api/roles'),
   createRole: (name: string, body: RoleInput) => call('post', '/api/roles/{name}', { path: { name }, body }),
   updateRole: (name: string, body: RoleInput) => call('put', '/api/roles/{name}', { path: { name }, body }),
   deleteRole: (name: string) => call('delete', '/api/roles/{name}', { path: { name } }),
   /** agent 配置（还没保存的也行）最终能用的工具：与运行时同一套计算 */
-  resolvePermissions: (body: Schemas['RulesIn']) => call('post', '/api/permissions/resolve', { body }),
+  resolvePermissions: (body: Schemas['RulesIn']) => call('post', '/api/tools/resolve', { body }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
   agentHistory: (agent_id: AgentId, query?: string) =>
     branded<HistoryEntry[]>(
@@ -262,12 +262,11 @@ export const api = {
   setMemory: (owner: AgentId | null, content: string) => call('put', '/api/memory', { body: { owner, content } }),
 
   skills: (owner: string | null) => call('get', '/api/skills', { query: { owner } }),
-  skill: (owner: string | null, name: string) => call('get', '/api/skill', { query: { owner, name } }),
+  skill: (name: string) => call('get', '/api/skill', { query: { name } }),
   saveSkill: (body: Schemas['SkillIn']) => call('put', '/api/skill', { body }),
-  deleteSkill: (owner: string | null, name: string) => call('delete', '/api/skill', { query: { owner, name } }),
+  deleteSkill: (name: string) => call('delete', '/api/skill', { query: { name } }),
   /** 标准 .skill 文件（zip）；失败时与其他调用一样抛 ApiError，不会把错误体当成文件存下 */
-  exportSkill: (owner: string | null, name: string) =>
-    send<Blob>('GET', '/api/skill/package', { owner, name }, undefined, true),
+  exportSkill: (name: string) => send<Blob>('GET', '/api/skill/package', { name }, undefined, true),
   /** 导入标准 .skill 文件；同名 skill 已存在时 409，replace 为 true 时覆盖 */
   importSkill: (owner: string | null, file: Blob, replace: boolean) =>
     send<Schemas['SkillImportOut']>('POST', '/api/skill/package', { owner, replace }, { type: 'application/zip', data: file }),
@@ -333,19 +332,19 @@ export const api = {
     call('get', '/api/resources/{kind}/history', { path: { kind }, query: { owner } }),
   restore: (kind: ResourceKind, owner: AgentId | null, rev: number) =>
     call('post', '/api/resources/{kind}/restore', { path: { kind }, body: { owner, rev } }),
-  /** owner 视角：它的私有 server 在前，然后是公共的；owner 为 null 只有公共的 */
+  /** owner（agent）能用的 server；owner 为 null 是归平台的 */
   mcp: (owner: AgentId | null) => branded<McpServer[]>(call('get', '/api/mcp', { query: { owner } })),
   addMcp: (body: McpInput) => branded<McpServer>(call('post', '/api/mcp', { body })),
-  probeMcp: (owner: AgentId | null, name: string) => call('post', '/api/mcp/tools', { query: { owner, name } }),
-  setMcpEnabled: (owner: AgentId | null, name: string, enabled: boolean) =>
-    branded<McpServer>(call('put', '/api/mcp/enabled', { query: { owner, name }, body: { enabled } })),
-  deleteMcp: (owner: AgentId | null, name: string) => call('delete', '/api/mcp', { query: { owner, name } }),
+  probeMcp: (name: string) => call('post', '/api/mcp/tools', { query: { name } }),
+  setMcpEnabled: (name: string, enabled: boolean) =>
+    branded<McpServer>(call('put', '/api/mcp/enabled', { query: { name }, body: { enabled } })),
+  deleteMcp: (name: string) => call('delete', '/api/mcp', { query: { name } }),
 
-  /** owner 视角，同 mcp */
+  /** owner（agent）能用的 secret；owner 为 null 是归平台的。新建的归 owner */
   secrets: (owner: AgentId | null) => branded<SecretInfo[]>(call('get', '/api/vault', { query: { owner } })),
   setSecret: (owner: AgentId | null, key: string, value: string, description: string) =>
     call('put', '/api/vault/{key}', { path: { key }, query: { owner }, body: { value, description } }),
-  deleteSecret: (owner: AgentId | null, key: string) => call('delete', '/api/vault/{key}', { path: { key }, query: { owner } }),
+  deleteSecret: (key: string) => call('delete', '/api/vault/{key}', { path: { key } }),
 
   /** owner 给出时只列这个项目（agent）负责的 issue */
   issues: (owner?: string) => call('get', '/api/issues', { query: { owner } }),

@@ -29,12 +29,12 @@ export function ToolList({ resolved }: { resolved: ResolvedTools }) {
   return (
     <div className="flex flex-col gap-1 text-sm">
       {resolved.tools.map((t) => (
-        <div key={t.tool} className="flex flex-wrap items-center gap-2">
+        <div key={t.name} className="flex flex-wrap items-center gap-2">
           <Chip size="sm" variant="soft" color={ACCESS[t.access].color}>
             {ACCESS[t.access].label}
           </Chip>
-          <span className="font-mono">{t.tool}</span>
-          <span className="font-mono text-xs text-muted">{t.id}</span>
+          <span className="font-mono">{t.name}</span>
+          {t.admin && <span className="text-xs text-muted">管理</span>}
         </div>
       ))}
       {resolved.tools.length === 0 && <span className="text-muted">没有工具</span>}
@@ -72,14 +72,15 @@ export function PermissionsInput({ value, onChange }: { value: PermissionValue; 
   const resolved = useLoad(() => api.resolvePermissions(value), [key])
   return (
     <div className="flex flex-col gap-2">
-      <div className="text-sm font-medium">工具权限</div>
-      <div className="text-xs text-muted">admin 是全部工具；agent 是除写全局资源和管理 agent 以外的全部工具</div>
+      <div className="text-sm font-medium">角色与规则</div>
+      <div className="text-xs text-muted">每个 agent 都有 base（全部非管理工具及它收录的条目）；admin 是全部工具并能改任何条目</div>
       <Loading state={roles}>
         {(list) => {
-          const names = list.map((r) => r.name)
+          const assignable = list.filter((r) => r.name !== 'base')
+          const names = assignable.map((r) => r.name)
           return (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {list.map((r) => (
+              {assignable.map((r) => (
                 <label key={r.name} className="flex items-center gap-2 text-sm">
                   <ToggleSwitch
                     label={r.name}
@@ -104,7 +105,7 @@ export function PermissionsInput({ value, onChange }: { value: PermissionValue; 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <TextInput
           label="额外允许"
-          hint="通配符，空格分隔，如 issue:*"
+          hint="kind:name 通配符，空格分隔，如 tool:issue_* skill:relay-host"
           mono
           value={allowText}
           onChange={(t) => {
@@ -114,7 +115,7 @@ export function PermissionsInput({ value, onChange }: { value: PermissionValue; 
         />
         <TextInput
           label="禁止"
-          hint="优先于所有允许，如 trigger:*"
+          hint="优先于所有允许，如 tool:trigger_*"
           mono
           value={denyText}
           onChange={(t) => {
@@ -128,43 +129,6 @@ export function PermissionsInput({ value, onChange }: { value: PermissionValue; 
       ) : (
         resolved.data && <ToolsDisclosure resolved={resolved.data} />
       )}
-    </div>
-  )
-}
-
-/** 勾选的公共 MCP server（不归工具权限管）：agent 运行时连接它自己的私有 server 与这些 */
-export function McpServersInput({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
-  const servers = useLoad(() => api.mcp(null), [])
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="text-sm font-medium">公共 MCP</div>
-      <div className="text-xs text-muted">勾选的公共 server 的工具给这个 agent；它自己的私有 server 总是可用</div>
-      <Loading state={servers}>
-        {(list) => {
-          // 勾选过、后来被删掉的 server：名字还在（不生效），列出来好取消勾选
-          const rows = [
-            ...list.map((m) => ({ name: m.name, note: m.enabled ? '' : '已停用' })),
-            ...value.filter((n) => !list.some((m) => m.name === n)).map((name) => ({ name, note: '已删除' })),
-          ]
-          return rows.length === 0 ? (
-            <span className="text-sm text-muted">没有公共 MCP server</span>
-          ) : (
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {rows.map((m) => (
-                <label key={m.name} className="flex items-center gap-2 text-sm">
-                  <ToggleSwitch
-                    label={m.name}
-                    isSelected={value.includes(m.name)}
-                    onChange={(on) => onChange(on ? [...value, m.name] : value.filter((n) => n !== m.name))}
-                  />
-                  <span className="font-mono">{m.name}</span>
-                  {m.note && <span className="text-xs text-muted">{m.note}</span>}
-                </label>
-              ))}
-            </div>
-          )
-        }}
-      </Loading>
     </div>
   )
 }
@@ -185,7 +149,7 @@ function RoleForm({ role, onSaved }: { role?: Role; onSaved: () => void }) {
     <div className="flex flex-col gap-3">
       {!role && <TextInput label="名称" hint="小写字母、数字、- 和 _" mono value={name} onChange={setName} isRequired />}
       <TextInput label="描述" value={description} onChange={setDescription} isRequired />
-      <TextInput label="允许" hint="通配符，空格分隔，如 issue:* web:*" mono value={allow} onChange={setAllow} />
+      <TextInput label="允许" hint="kind:name 通配符（kind 为 tool、skill、mcp、secret），空格分隔，如 tool:issue_* secret:RELAY_*" mono value={allow} onChange={setAllow} />
       <TextInput label="禁止" hint="优先于所有允许（包括别的角色给的）" mono value={deny} onChange={setDeny} />
       <ErrorAlert error={action.error} />
       <ActionButton isPending={action.busy} onPress={() => void save()}>
@@ -220,6 +184,7 @@ function RoleCard({ role, onChanged }: { role: Role; onChanged: () => void }) {
       </Card.Header>
       <Card.Content className="flex flex-col gap-2">
         <div className="font-mono text-xs text-muted">
+          {role.fixed_allow.length > 0 && <>固定 {role.fixed_allow.length} 条工具规则 · </>}
           允许 {role.allow.join(' ') || '—'}
           {role.deny.length > 0 && <> · 禁止 {role.deny.join(' ')}</>}
         </div>
@@ -235,30 +200,30 @@ function RoleCard({ role, onChanged }: { role: Role; onChanged: () => void }) {
         )}
         <ErrorAlert error={action.error} />
       </Card.Content>
-      {!role.builtin && (
-        <Card.Footer className="flex gap-2">
-          <Button size="sm" variant="ghost" onPress={() => setEditing(!editing)}>
-            <Pencil className="size-4" />
-            {editing ? '取消' : '编辑'}
-          </Button>
+      <Card.Footer className="flex gap-2">
+        <Button size="sm" variant="ghost" onPress={() => setEditing(!editing)}>
+          <Pencil className="size-4" />
+          {editing ? '取消' : '编辑'}
+        </Button>
+        {!role.builtin && (
           <Button size="sm" variant="ghost" onPress={() => void remove()}>
             <Trash2 className="size-4" />
             删除
           </Button>
-        </Card.Footer>
-      )}
+        )}
+      </Card.Footer>
     </Card>
   )
 }
 
-/** 角色与权限：内置角色只读，自建角色可增删改；每个角色展开列出它能用的工具 */
+/** 角色与权限：内置角色（base、admin）的固定规则只读、可编辑部分可改，不能删；自建角色可增删改；每个角色展开列出它能用的工具 */
 export function Roles() {
   const roles = useLoad(() => api.roles(), [])
   const [formKey, setFormKey] = useState(0)
   return (
     <Page title="角色与权限">
       <p className="text-sm text-muted">
-        每个工具有一个权限 id（资源:动作），角色是一组通配符 allow / deny，deny 优先。agent 的权限 = 它的角色 + 它自己的 allow / deny，在 agent 配置里选。MCP 不归权限管，在 agent 配置里勾选公共 server。
+        角色是一组 kind:name 通配符 allow / deny（kind 为 tool、skill、mcp、secret），deny 优先。agent 能用的 = 它自己的条目 + base + 它的角色 + 它自己的 allow / deny 放行的，在 agent 配置里选。base 每个 agent 都有，收录进 base 的条目人人可用。
       </p>
       <CollapsibleForm title="新建角色">
         <RoleForm

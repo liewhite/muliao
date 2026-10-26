@@ -28,7 +28,7 @@ import { ActionButton,
   useLoad,
 } from '../ui'
 import { McpManager } from './Mcp'
-import { McpServersInput, PermissionsInput } from './Permissions'
+import { PermissionsInput } from './Permissions'
 import { MemoryEditor } from './Memory'
 import { HistoryList } from './History'
 import { SkillList } from './Skills'
@@ -122,17 +122,16 @@ export function AgentList() {
 
 function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
   if (agent) {
-    const { name, description, model, roles, allow, deny, mcp_servers, thinking, group } = agent
-    return { name, description, model, roles, allow, deny, mcp_servers, thinking, group }
+    const { name, description, model, roles, allow, deny, thinking, group } = agent
+    return { name, description, model, roles, allow, deny, thinking, group }
   }
   return {
     name: '',
     description: '',
     model: defaults.model,
-    roles: defaults.roles,
+    roles: [],
     allow: [],
     deny: [],
-    mcp_servers: [],
     thinking: 'default',
     group: null,
   }
@@ -254,7 +253,6 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         value={{ roles: input.roles, allow: input.allow, deny: input.deny }}
         onChange={(p) => set(p)}
       />
-      <McpServersInput value={input.mcp_servers} onChange={(mcp_servers) => set({ mcp_servers })} />
       <ErrorAlert error={action.error} />
       <ActionButton isPending={action.busy} onPress={() => void save()}>
         保存

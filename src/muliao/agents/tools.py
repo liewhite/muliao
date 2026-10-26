@@ -199,7 +199,9 @@ def agents_toolset(
         return f"deleted agent {target.name}"
 
     @ts.tool_plain
-    async def create_role(name: str, description: str, allow: tuple[str, ...] = (), deny: tuple[str, ...] = ()) -> str:
+    async def create_role(
+        name: str, description: str, allow: tuple[str, ...] = (), deny: tuple[str, ...] = ()
+    ) -> str:
         """Create a role: a bundle of `kind:name` rules (kind is tool, skill, mcp or secret; fnmatch wildcards)
         that hands tools and items to every agent given the role (`update_agent` roles), e.g. a role
         `relay-trader` with allow `skill:relay-host`, `secret:RELAY_*`.

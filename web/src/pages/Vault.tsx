@@ -64,7 +64,7 @@ export function SecretManager({ owner }: { owner: AgentId | null }) {
       confirmLabel: '删除',
       danger: true,
     })
-    if (ok) await action.run(() => api.deleteSecret(s.owner, s.key).then(secrets.reload))
+    if (ok) await action.run(() => api.deleteSecret(s.key).then(secrets.reload))
   }
 
   return (

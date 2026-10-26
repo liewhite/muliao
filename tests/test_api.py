@@ -2,7 +2,7 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.profiles import ModelProfile
 
 from muliao.api.auth import Auth
-from tests.conftest import login
+from tests.conftest import login, share
 from tests.scripted import scripted
 
 
@@ -109,17 +109,20 @@ async def test_vault_never_returns_values(client):
     assert (await client.put("/api/vault/X?owner=nope", json={"value": "v"})).status_code == 404
 
 
-async def test_vault_and_mcp_lists_take_the_owners_view(client, make_agent):
+async def test_vault_and_mcp_lists_take_the_owners_view(client, container, make_agent):
     alpha = (await make_agent()).id
     await login(client)
     await client.put(f"/api/vault/MINE?owner={alpha}", json={"value": "v"})
     await client.put("/api/vault/OTHER", json={"value": "v"})
-    # key 全局唯一
-    assert (await client.put(f"/api/vault/OTHER?owner={alpha}", json={"value": "v"})).status_code == 409
+    # key 全局唯一：同名就是改这一个，owner 不变
+    assert (await client.put(f"/api/vault/OTHER?owner={alpha}", json={"value": "v2"})).status_code == 204
 
     def keys(listed):
         return [(s["key"], s["owner"]) for s in listed]
 
+    # agent 能用的：自己的；归平台的要分给它才算
+    assert keys((await client.get("/api/vault", params={"owner": alpha})).json()) == [("MINE", alpha)]
+    await share(container, "secret:OTHER")
     assert keys((await client.get("/api/vault", params={"owner": alpha})).json()) == [
         ("MINE", alpha),
         ("OTHER", None),
@@ -173,7 +176,6 @@ async def test_agent_identified_by_id_and_renamable(client, container):
                 "roles",
                 "allow",
                 "deny",
-                "mcp_servers",
                 "thinking",
                 "group",
             )
@@ -234,7 +236,7 @@ async def test_default_agent_is_at_most_one_and_goes_with_the_agent(client):
 async def test_agent_defaults_endpoint_matches_config(client, container):
     await login(client)
     defaults = (await client.get("/api/agent-defaults")).json()
-    assert defaults == {"model": container.settings.llm.default_model, "roles": ["agent"]}
+    assert defaults == {"model": container.settings.llm.default_model}
 
 
 async def test_marking_notifications_read_stops_at_the_one_the_user_saw(client):
@@ -369,10 +371,7 @@ async def test_agent_thinking_is_set_and_validated_over_http(client, models):
     assert resp.status_code == 201, resp.text
     agent = resp.json()
     assert agent["thinking"] == "high"
-    body = {
-        k: agent[k]
-        for k in ("name", "description", "model", "roles", "allow", "deny", "mcp_servers", "group")
-    }
+    body = {k: agent[k] for k in ("name", "description", "model", "roles", "allow", "deny", "group")}
     resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "off"})
     assert resp.json()["thinking"] == "off"
     # 整体替换：thinking 必填；不在档位里的值拒绝

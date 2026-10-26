@@ -167,7 +167,12 @@ def upgrade() -> None:
                         "INSERT INTO roles (name, description, allow, deny, created_at, updated_at) "
                         "VALUES (:n, :desc, :a, '[]', :t, :t)"
                     ),
-                    {"n": role, "desc": f"MCP server {server}", "a": json.dumps([f"mcp:{server}"]), "t": _now()},
+                    {
+                        "n": role,
+                        "desc": f"MCP server {server}",
+                        "a": json.dumps([f"mcp:{server}"]),
+                        "t": _now(),
+                    },
                 )
     for agent_id, roles, allow, deny, selected in agents:
         new_roles = [r for r in json.loads(roles) if r != "agent"]

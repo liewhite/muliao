@@ -485,7 +485,7 @@ def assemble(
 
 
 def _check_permissions(registered: list[str], *, web_configured: bool) -> None:
-    """注册的工具与当前配置下的权限表（agents.permissions.available_tools）必须一一对应：没登记的工具没有权限 id、谁也
+    """注册的工具与当前配置下的权限表（agents.permissions.available_tools）必须一一对应：没登记的工具谁也
     拿不到，表里多出的说明工具改了名；界面与 get_agent 算最终工具用的也是这张表，一致才说得准。"""
     expected = set(available_tools(web_configured=web_configured))
     duplicated = sorted({n for n in registered if registered.count(n) > 1})

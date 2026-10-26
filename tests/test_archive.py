@@ -187,10 +187,7 @@ async def test_archive_over_http_marks_the_agent_and_conversations_get_409(clien
     assert resp.status_code == 409 and "archived" in resp.text
     assert (await client.delete(path)).json()["archived_at"] is None
     # 整体替换时 null 即不分组
-    body = {
-        k: agent[k]
-        for k in ("name", "description", "model", "roles", "allow", "deny", "mcp_servers", "thinking")
-    }
+    body = {k: agent[k] for k in ("name", "description", "model", "roles", "allow", "deny", "thinking")}
     assert (await client.put(f"/api/agents/{agent['id']}", json={**body, "group": None})).json()[
         "group"
     ] is None

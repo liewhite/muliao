@@ -102,7 +102,7 @@ async def test_the_startup_check_does_not_report_an_agent_still_being_deleted(co
 
 async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(container, make_agent):
     agent = await make_agent("alpha")
-    await container.vault.set(agent.id, "TOKEN", "x", "", "user")
+    await container.vault.set("TOKEN", "x", "", actor="user", owner=agent.id)
     await container.triggers.create(
         name="nightly", agent_id=agent.id, kind="schedule", prompt="p", config={"cron": "0 3 * * *"}
     )
@@ -117,7 +117,7 @@ async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(conta
     await drain(container)
 
     assert await container.triggers.list() == []
-    assert await container.vault.visible_to(agent.id) == []
+    assert await container.vault.owned(agent.id) == []
     with pytest.raises(NotFound):
         await container.sessions.get(session.id)
     async with container.db.transaction() as s:
@@ -162,13 +162,13 @@ async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     with pytest.raises(NotFound):
         await container.agents.get_active(agent.id)
     with pytest.raises(NotFound):
-        await container.vault.set(agent.id, "K", "v", "", "user")
+        await container.vault.set("K", "v", "", actor="user", owner=agent.id)
     # 添加 MCP server 在连接验证之前就拒绝（这个配置一连就失败，报 InvalidInput 说明白跑了一次连接）
     failing = mcp_config(
         transport=McpTransport.STDIO, command=sys.executable, args=["-c", "raise SystemExit(1)"]
     )
     with pytest.raises(NotFound):
-        await container.mcp.add(agent.id, "probe", failing, probe=True, author="user")
+        await container.mcp.add("probe", failing, actor="user", owner=agent.id, probe=True)
     await drain(container)
 
 
@@ -400,27 +400,27 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
     from muliao.agents.api import McpTransport, mcp_config
 
     agent = await make_agent("alpha")
-    await container.skills.write(agent.id, "s", "d", "b", "user")
+    await container.skills.write("s", "d", "b", actor="user", owner=agent.id)
     await container.agent_lifecycle.delete(agent.id, author="user")
 
     writes = [
-        lambda: container.skills.write(agent.id, "t", "d", "b", "user"),
-        lambda: container.skills.edit(agent.id, "s", "user", new="more"),
-        lambda: container.skills.delete(agent.id, "s", "user"),
+        lambda: container.skills.write("t", "d", "b", actor="user", owner=agent.id),
+        lambda: container.skills.edit("s", "user", new="more"),
+        lambda: container.skills.delete("s", "user"),
         lambda: container.memory.edit(agent.id, "", "fact", "user"),
         lambda: container.mcp.add(
-            agent.id,
             "m",
             mcp_config(transport=McpTransport.HTTP, url="http://example.invalid/mcp"),
+            actor="user",
+            owner=agent.id,
             probe=False,
-            author="user",
         ),
     ]
     for write in writes:
         with pytest.raises(NotFound, match="not found"):
             await write()
     assert [m.name for m in await container.skills.list(agent.id)] == ["s"]
-    await container.skills.write(None, "pub", "d", "b", "user")
+    await container.skills.write("pub", "d", "b", actor="user", owner=None)
 
 
 async def test_agent_without_a_memory_row_can_still_be_deleted(container, make_agent):

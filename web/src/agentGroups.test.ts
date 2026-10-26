@@ -11,7 +11,6 @@ function agent(name: string, group: string | null = null, archived = false): Age
     roles: [],
     allow: [],
     deny: [],
-    mcp_servers: [],
     thinking: 'default',
     created_at: '2026-10-26T00:00:00Z',
     is_default: false,

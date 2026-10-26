@@ -149,7 +149,7 @@ function McpItem({ server, onChange }: { server: McpServer; onChange: () => void
 
   async function remove() {
     const ok = await confirm({ title: `删除 MCP server「${server.name}」？`, confirmLabel: '删除', danger: true })
-    if (ok) await action.run(() => api.deleteMcp(server.owner, server.name).then(onChange))
+    if (ok) await action.run(() => api.deleteMcp(server.name).then(onChange))
   }
 
   return (
@@ -167,7 +167,7 @@ function McpItem({ server, onChange }: { server: McpServer; onChange: () => void
           label={`启用 MCP server「${server.name}」`}
           isSelected={server.enabled}
           isDisabled={action.busy}
-          onChange={(enabled) => void action.run(() => api.setMcpEnabled(server.owner, server.name, enabled).then(onChange))}
+          onChange={(enabled) => void action.run(() => api.setMcpEnabled(server.name, enabled).then(onChange))}
         />
       </Card.Header>
       <Card.Content className="flex flex-col gap-2">
@@ -180,7 +180,7 @@ function McpItem({ server, onChange }: { server: McpServer; onChange: () => void
           size="sm"
           variant="secondary"
           isPending={action.busy}
-          onPress={() => void action.run(async () => setTools(await api.probeMcp(server.owner, server.name)))}
+          onPress={() => void action.run(async () => setTools(await api.probeMcp(server.name)))}
         >
           <Plug className="size-4" />
           测试连接

@@ -142,9 +142,7 @@ async def _shared_in(s: AsyncSession, agent_id: str) -> set[tuple[Subject, str]]
     rules = [r.effective for r in (await roles_in(s)).values()]
     rules += [Rules(tuple(a.allow)) for a in await s.scalars(select(Agent).where(Agent.id != agent_id))]
     rows = await s.scalars(select(Item).where(Item.owner == agent_id))
-    return {
-        (Subject(r.kind), r.name) for r in rows if any(x.matches(Kind(r.kind), r.name) for x in rules)
-    }
+    return {(Subject(r.kind), r.name) for r in rows if any(x.matches(Kind(r.kind), r.name) for x in rules)}
 
 
 async def _record_deletions_in(s: AsyncSession, agent_id: str, author: str) -> None:
@@ -155,8 +153,18 @@ async def _record_deletions_in(s: AsyncSession, agent_id: str, author: str) -> N
         doc = await document_in(s, row)
         if (Subject(row.kind), row.name) in shared:
             row.owner = None
-            record_in(s, Subject(row.kind), row.name, doc, doc, author, f"moved to the platform with agent {agent_id} deleted")
-            log.info("item moved to the platform", extra={"agent": agent_id, "kind": row.kind, "item": row.name})
+            record_in(
+                s,
+                Subject(row.kind),
+                row.name,
+                doc,
+                doc,
+                author,
+                f"moved to the platform with agent {agent_id} deleted",
+            )
+            log.info(
+                "item moved to the platform", extra={"agent": agent_id, "kind": row.kind, "item": row.name}
+            )
             continue
         record_in(s, Subject(row.kind), row.name, doc, None, author, message)
     # 转给平台的先写下去，再删 agent 的行（级联只删还归它的）

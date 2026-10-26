@@ -15,6 +15,7 @@ from muliao.sessions.holds import has_active_in, hold_in
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Mail, MailState
 from muliao.sessions.transcript import to_items
+from tests.conftest import share
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, history_of, start
 from tests.test_mailbox import Recorder
@@ -78,7 +79,8 @@ async def test_a_finished_background_job_reports_back_with_its_output(container,
 
 
 async def test_secrets_never_reach_the_log(container, make_agent, models):
-    await container.vault.set(None, "TOKEN", "s3cr3t-value", "", "user")
+    await container.vault.set("TOKEN", "s3cr3t-value", "", actor="user", owner=None)
+    await share(container, "secret:TOKEN")
     _session, job, _recorder, agent = await start_job(
         container, make_agent, models, 'echo "token is $TOKEN"', secrets=("TOKEN",)
     )
