@@ -1,8 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import { Markdown } from './ui'
 
-const html = (text: string) => renderToStaticMarkup(<Markdown text={text} />)
+const html = (text: string) =>
+  renderToStaticMarkup(
+    <MemoryRouter>
+      <Markdown text={text} />
+    </MemoryRouter>,
+  )
 const count = (s: string, needle: string) => s.split(needle).length - 1
 
 describe('Markdown', () => {
@@ -36,5 +42,24 @@ describe('Markdown', () => {
     const out = html('看注释[^1]\n\n[^1]: 注释内容\n\n[外部](https://example.com)')
     expect(out).toMatch(/<a href="https:\/\/example.com" target="_blank"/)
     expect(out).toMatch(/<a href="#user-content-fn-1"(?![^>]*target)[^>]*data-footnote-ref/)
+  })
+
+  it('links standalone issue refs to the issue page', () => {
+    const out = html('见 #12，另见(#3)。\n\n#7 开头')
+    expect(out).toMatch(/<a href="\/issues\/12"[^>]*>#12<\/a>/)
+    expect(out).toMatch(/<a href="\/issues\/3"[^>]*>#3<\/a>/)
+    expect(out).toMatch(/<a href="\/issues\/7"[^>]*>#7<\/a>/)
+    expect(out).not.toContain('target=')
+  })
+
+  it('leaves code, external refs, entities, anchors and URLs alone', () => {
+    const out = html(
+      '`#1` owner/repo#2 &#123; #4a COIN-5 a#6 [锚](#7) https://example.com/x#8\n\n```\n#9\n```',
+    )
+    expect(out).not.toContain('/issues/')
+    expect(out).toContain('<code>#1</code>')
+    expect(out).toContain('owner/repo#2')
+    expect(out).toContain('href="#7"')
+    expect(out).toContain('href="https://example.com/x#8"')
   })
 })
