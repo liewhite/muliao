@@ -116,8 +116,8 @@ async def run_foreground(
 def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
     # 文件工具都是屏障（sequential）：同一次回复里排在它前面的调用先做完、它再执行，排在后面的等它做完。
     # 模型常在一次回复里先 run_shell 生成文件、再 read_file/share_file 它；并行执行时文件还没生成，
-    # 报 file not found（#224）。文件工具都是瞬时的本地操作，串行几乎没有代价；run_shell 等之间照旧并行
-    # （它们由 jobs.tools 加进同一个工具集，所以逐个工具标，不用工具集的默认值）。
+    # 报 file not found（#224）。文件工具都是瞬时的本地操作，串行几乎没有代价；不夹着文件工具时
+    # run_shell 等之间照旧并行（它们由 jobs.tools 加进同一个工具集，所以逐个工具标，不用工具集的默认值）。
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool(sequential=True)
