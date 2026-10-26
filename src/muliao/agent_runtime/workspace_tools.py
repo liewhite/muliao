@@ -43,7 +43,7 @@ class TextEdit(BaseModel):
     old_text: str | None = Field(default=None, description="Exact text to replace.")
     start_line: int | None = Field(default=None, description="First line to replace (1-based).")
     end_line: int | None = Field(default=None, description="Last line to replace (inclusive).")
-    anchor: str | None = Field(default=None, description="The current text of line start_line.")
+    anchor: str | None = Field(default=None, description="The text of line start_line.")
     pattern: str | None = Field(default=None, description="ast-grep pattern matching the code to replace.")
     new_text: str = Field(description="Replacement text.")
     replace_all: bool = Field(
@@ -186,7 +186,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         - `old_text`: exact text that must occur exactly once (unless `replace_all`). Copy it from the file as it
           is now (without read_file's line-number prefix), with enough surrounding lines to be unique.
         - `start_line` + `end_line` + `anchor`: whole lines start_line..end_line as numbered by read_file;
-          `anchor` is the current text of line start_line, checked so that stale line numbers fail instead of
+          `anchor` is the text of line start_line, checked so that stale line numbers fail instead of
           changing the wrong lines. Good for replacing or deleting a long block without copying it.
         - `pattern`: an ast-grep pattern for a source file (language from the extension): code where `$VAR`
           matches one syntax node and `$$$VARS` any number of them, e.g. `def test_x` matches that whole Python
@@ -198,24 +198,25 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
           Deleting a match also removes its decorators / `export`, and its lines with the extra blank lines
           left behind.
         To change several places in one call, in one file or in several files, pass `edits` instead: each edit
-        changes its own `path` (or the top-level `path` when it has none); they are applied in order, each seeing
-        the result of the earlier ones in the same file (so list line-range edits from the bottom of the file
-        up), and if any of them fails no file is written. On success the changed lines of each file are shown
-        with their numbers.
+        changes its own `path` (or the top-level `path` when it has none); they are applied in order: `old_text`
+        and `pattern` are found in the file as the earlier edits left it, while line numbers and anchors always
+        refer to the file before this call (as read_file showed it), in any order; a line range that overlaps an
+        earlier edit to the same file is rejected. If any edit fails no file is written. On success the changed
+        lines of each file are shown with their numbers.
 
         Args:
             path: File path (with `edits`: the file of the edits that give no path of their own).
             old_text: Exact text to replace (omit when using `edits`).
             start_line: First line to replace (1-based); give with `end_line` and `anchor`.
             end_line: Last line to replace (inclusive).
-            anchor: The current text of line start_line (leading/trailing whitespace ignored).
+            anchor: The text of line start_line (leading/trailing whitespace ignored).
             pattern: ast-grep pattern matching the code to replace.
             new_text: Replacement text; empty deletes the located text (omit when using `edits`).
             replace_all: Replace every occurrence of `old_text` or every match of `pattern` (e.g. renaming a
                 variable) instead of exactly one (omit when using `edits`).
             edits: List of changes, each {new_text} plus one way to locate it (old_text,
                 start_line/end_line/anchor or pattern), optionally replace_all, and optionally its own path,
-                applied in order (each sees the result of the earlier ones in the same file).
+                applied in order (line numbers always refer to the file before this call).
         """
         single = (old_text, start_line, end_line, anchor, pattern, new_text)
         if edits and (any(v is not None for v in single) or replace_all):
@@ -441,8 +442,8 @@ class _Located:
     target: Path
     edit: TextEdit
 
-    def apply(self, current: str, what: str) -> tuple[str, int]:
-        return _change_of(self.target, self.edit).apply(current, what)
+    def apply(self, current: str, what: str, origin: text_edit.Origin) -> tuple[str, int]:
+        return _change_of(self.target, self.edit).apply(current, what, origin)
 
 
 def _change_of(target: Path, e: TextEdit) -> text_edit.Edit:

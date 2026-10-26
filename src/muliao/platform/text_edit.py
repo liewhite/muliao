@@ -33,9 +33,10 @@ def replace_all(current: str, old: str, new: str, what: str) -> tuple[str, int]:
 
 
 class Edit(Protocol):
-    """一处修改：按自己的方式定位要改的地方并替换，返回新文本与替换数；定位不到就抛 InvalidInput。"""
+    """一处修改：按自己的方式定位要改的地方并替换，返回新文本与替换数；定位不到就抛 InvalidInput。current 是同一份
+    文本里前面的修改都做完后的样子，origin 是本次调用前的原文及其各行现在的位置（按行号定位的修改用它）。"""
 
-    def apply(self, current: str, what: str) -> tuple[str, int]: ...
+    def apply(self, current: str, what: str, origin: "Origin") -> tuple[str, int]: ...
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ class Replace:
     new: str
     every: bool = False
 
-    def apply(self, current: str, what: str) -> tuple[str, int]:
+    def apply(self, current: str, what: str, origin: "Origin") -> tuple[str, int]:
         if self.every:
             return replace_all(current, self.old, self.new, what)
         return replace_once(current, self.old, self.new, what), 1
@@ -54,36 +55,96 @@ class Replace:
 
 @dataclass(frozen=True)
 class LineRange:
-    """按行号定位：第 start 到 end 行（1 起算、含两端）整行替换为 new。anchor 是第 start 行的原文（两端空白不计），
-    对不上说明行号已过期（文件变了，或前面的修改挪动了行），报错并展示那几行现在的内容，不改错地方。"""
+    """按行号定位：本次调用前（即 read_file 看到的）第 start 到 end 行（1 起算、含两端）整行替换为 new；同一次调用里
+    前面的修改挪动了这些行时按 origin 换算到现在的位置，前面的修改碰过这些行就拒绝。anchor 是第 start 行的原文
+    （两端空白不计），对不上说明行号已过期（读过之后文件又变了），报错并展示那几行的内容，不改错地方。"""
 
     start: int
     end: int
     anchor: str
     new: str
 
-    def apply(self, current: str, what: str) -> tuple[str, int]:
-        lines = current.splitlines(keepends=True)
+    def apply(self, current: str, what: str, origin: "Origin") -> tuple[str, int]:
+        original = origin.text.splitlines(keepends=True)
         if not 1 <= self.start <= self.end:
             raise InvalidInput(
                 f"need 1 <= start_line <= end_line, got start_line={self.start} end_line={self.end}"
             )
-        if self.end > len(lines):
-            raise InvalidInput(f"end_line {self.end} is past the end: {what} has {len(lines)} lines")
+        if self.end > len(original):
+            raise InvalidInput(f"end_line {self.end} is past the end: {what} has {len(original)} lines")
         if "\n" in self.anchor.strip():
             raise InvalidInput("anchor must be the text of the single line start_line, not several lines")
-        line, anchor = lines[self.start - 1].rstrip("\r\n"), self.anchor.strip()
+        line, anchor = original[self.start - 1].rstrip("\r\n"), self.anchor.strip()
         # 超长的行在 read_file 里是截断着展示的，照抄截断后的样子也算对上
         if anchor not in {line.strip(), _clip(line).strip()}:
-            plain = current.splitlines()
+            plain = origin.text.splitlines()
             first, last = max(self.start - 3, 0), min(self.end + 2, len(plain))
             raise InvalidInput(
                 f"anchor does not match line {self.start} of {what}; lines {first + 1}-{last} are now:\n"
                 f"{numbered(plain, first, last)}\ngive the line numbers and anchor of the text as it is now"
             )
-        replaced = "".join(lines[self.start - 1 : self.end])
-        head, tail = "".join(lines[: self.start - 1]), "".join(lines[self.end :])
+        start, end = origin.now(self.start, self.end)
+        lines = current.splitlines(keepends=True)
+        replaced = "".join(lines[start - 1 : end])
+        head, tail = "".join(lines[: start - 1]), "".join(lines[end:])
         return head + as_lines(self.new, replaced) + tail, 1
+
+
+class Origin:
+    """一份文本在本次调用前的原文，及原文各行在当前文本（做完前面几处修改后）里的位置：批量修改里行号一律指原文
+    （模型手里的行号来自 read_file，看不到中间状态），由这里换算。每做完一处修改调用 follow 记下它改了哪些行。"""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        # 当前文本的每一行：(它在原文里是第几行（0 起），不是原文的行为 None；写下它的是第几处修改，原文为 0)
+        self._lines: list[tuple[int | None, int]] = [(i, 0) for i in range(len(text.splitlines()))]
+        # 被改掉或删掉的原文行 -> 改掉它的是第几处修改
+        self._gone: dict[int, int] = {}
+
+    def follow(self, before: str, after: str, by: int) -> None:
+        """第 by 处修改把当前文本从 before 改成了 after：按行比对，没动的行保留来历，其余记为第 by 处改的。
+        先去掉首尾相同的行再比对中间，一处局部修改只比对改动的几行。"""
+        old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
+        limit = min(len(old), len(new))
+        head = 0
+        while head < limit and old[head] == new[head]:
+            head += 1
+        tail = 0
+        while tail < limit - head and old[-1 - tail] == new[-1 - tail]:
+            tail += 1
+        middle: list[tuple[int | None, int]] = []
+        matcher = difflib.SequenceMatcher(
+            None, old[head : len(old) - tail], new[head : len(new) - tail], autojunk=False
+        )
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                middle += self._lines[head + i1 : head + i2]
+                continue
+            for original, _ in self._lines[head + i1 : head + i2]:
+                if original is not None:
+                    self._gone[original] = by
+            middle += [(None, by)] * (j2 - j1)
+        self._lines = self._lines[:head] + middle + self._lines[len(old) - tail :]
+
+    def now(self, start: int, end: int) -> tuple[int, int]:
+        """原文第 start 到 end 行（1 起算、含两端）现在是第几到第几行；其中有行被前面的修改改掉、删掉，或中间被插入了
+        新行，就是两处修改重叠，拒绝。"""
+        for k in range(start - 1, end):
+            if k in self._gone:
+                raise self._overlap(start, end, self._gone[k])
+        at = {original: i for i, (original, _) in enumerate(self._lines) if original is not None}
+        first, last = at[start - 1], at[end - 1]
+        for i in range(first, last + 1):
+            if self._lines[i][0] is None:
+                raise self._overlap(start, end, self._lines[i][1])
+        return first + 1, last + 1
+
+    @staticmethod
+    def _overlap(start: int, end: int, by: int) -> InvalidInput:
+        return InvalidInput(
+            f"lines {start}-{end} (numbered as before this call) overlap edit {by}, which already changed that part; "
+            "merge the two into one edit"
+        )
 
 
 def as_lines(new: str, replaced: str) -> str:
@@ -96,26 +157,35 @@ def as_lines(new: str, replaced: str) -> str:
 def apply_each[K](
     texts: Mapping[K, str], edits: Sequence[tuple[K, Edit]]
 ) -> tuple[dict[K, str], dict[K, int]]:
-    """依次做多处修改，每项作用在它那份文本上（键是文本的名字，如文件路径；同一份文本里后一项作用在前面改过的
-    结果上），返回各份的新文本与替换数（只含被改到的键）。任何一项失败都整体失败，报错指出是第几项；调用方只在
-    成功后写盘，所以不会因为某处对不上而留下改了一半的文件（写盘本身的 IO 失败不归这里管）。"""
+    """依次做多处修改，每项作用在它那份文本上（键是文本的名字，如文件路径）。同一份文本里按内容定位的（原文、语法
+    模式）在前面改过的结果上找；按行号定位的，行号一律指调用前的原文，按 Origin 换算。返回各份的新文本与替换数（只含
+    被改到的键）。任何一项失败都整体失败，报错指出是第几项；调用方只在成功后写盘，所以不会因为某处对不上而留下改了
+    一半的文件（写盘本身的 IO 失败不归这里管）。"""
     if not edits:
         raise InvalidInput("no edits given")
     current: dict[K, str] = {}
+    origins: dict[K, Origin] = {}
     counts: dict[K, int] = {}
-    earlier: dict[K, int] = {}
     for i, (key, change) in enumerate(edits, 1):
         try:
-            text = current[key] if key in current else texts[key]
-            current[key], count = change.apply(text, str(key))
+            if key not in origins:
+                origins[key] = Origin(texts[key])
+            origin = origins[key]
+            text = current.get(key, origin.text)
+            current[key], count = change.apply(text, str(key), origin)
         except InvalidInput as e:
             if len(edits) == 1:
                 raise
-            k = earlier.get(key, 0)
-            after = f" (checked against the text with the {k} earlier edit(s) to it applied)" if k else ""
+            k = sum(1 for earlier, _ in edits[: i - 1] if earlier == key)
+            after = (
+                f" (old_text/pattern are matched against the text with the {k} earlier edit(s) to it applied; "
+                "line numbers refer to the text before this call)"
+                if k
+                else ""
+            )
             raise InvalidInput(f"edit {i} of {len(edits)}{after}: {e}; nothing was written") from e
+        origin.follow(text, current[key], i)
         counts[key] = counts.get(key, 0) + count
-        earlier[key] = earlier.get(key, 0) + 1
     return current, counts
 
 

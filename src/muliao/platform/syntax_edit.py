@@ -9,7 +9,7 @@ from pathlib import PurePath
 from ast_grep_py import SgNode, SgRoot
 
 from muliao.errors import InvalidInput
-from muliao.platform.text_edit import listed
+from muliao.platform.text_edit import Origin, listed
 
 # 扩展名 -> ast-grep 内置语言名（只列 ast-grep-py 自带的语言；不认识的扩展名直接拒绝，不猜）
 LANGUAGES = {
@@ -88,7 +88,7 @@ class PatternEdit:
     new: str
     every: bool = False
 
-    def apply(self, current: str, what: str) -> tuple[str, int]:
+    def apply(self, current: str, what: str, origin: Origin) -> tuple[str, int]:
         root = SgRoot(current, self.language).root()
         try:
             matches = root.find_all(pattern=self.pattern)

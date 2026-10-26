@@ -7,7 +7,7 @@ import pytest
 
 from muliao.errors import InvalidInput
 from muliao.platform.syntax_edit import LANGUAGES, PatternEdit, language_of
-from muliao.platform.text_edit import LineRange, Replace, apply_each
+from muliao.platform.text_edit import LineRange, Origin, Replace, apply_each
 
 PY = '''import pytest
 
@@ -36,23 +36,23 @@ def py(pattern: str, new: str, every: bool = False) -> PatternEdit:
 
 def test_line_range_replaces_whole_lines_and_adds_the_missing_trailing_newline():
     text = "a\nb\nc\nd\n"
-    assert LineRange(2, 3, "b", "X").apply(text, "f") == ("a\nX\nd\n", 1)
-    assert LineRange(2, 3, "  b  ", "X\nY\n").apply(text, "f") == ("a\nX\nY\nd\n", 1)
-    assert LineRange(1, 4, "a", "").apply(text, "f") == ("", 1)
+    assert LineRange(2, 3, "b", "X").apply(text, "f", Origin(text)) == ("a\nX\nd\n", 1)
+    assert LineRange(2, 3, "  b  ", "X\nY\n").apply(text, "f", Origin(text)) == ("a\nX\nY\nd\n", 1)
+    assert LineRange(1, 4, "a", "").apply(text, "f", Origin(text)) == ("", 1)
     # 最后一行没有换行时不补
-    assert LineRange(2, 2, "b", "X").apply("a\nb", "f") == ("a\nX", 1)
+    assert LineRange(2, 2, "b", "X").apply("a\nb", "f", Origin("a\nb")) == ("a\nX", 1)
 
 
 def test_line_range_anchor_may_be_copied_from_a_truncated_long_line():
     long = "x" * 2500
     shown = long[:2000] + "…[line truncated]"
-    assert LineRange(1, 1, shown, "y").apply(f"{long}\nb\n", "f") == ("y\nb\n", 1)
+    assert LineRange(1, 1, shown, "y").apply(f"{long}\nb\n", "f", Origin(f"{long}\nb\n")) == ("y\nb\n", 1)
 
 
 def test_line_range_with_a_stale_anchor_fails_and_shows_the_lines_as_they_are_now():
     text = "".join(f"l{i}\n" for i in range(1, 11))
     with pytest.raises(InvalidInput) as e:
-        LineRange(5, 6, "l4", "X").apply(text, "f.txt")
+        LineRange(5, 6, "l4", "X").apply(text, "f.txt", Origin(text))
     message = str(e.value)
     assert "anchor does not match line 5 of f.txt" in message
     assert "lines 3-8 are now:\n3\tl3\n4\tl4\n5\tl5\n6\tl6\n7\tl7\n8\tl8" in message
@@ -69,19 +69,50 @@ def test_line_range_with_a_stale_anchor_fails_and_shows_the_lines_as_they_are_no
 )
 def test_line_range_rejects_bad_ranges(start, end, anchor, error):
     with pytest.raises(InvalidInput, match=error):
-        LineRange(start, end, anchor, "X").apply("a\nb\nc\n", "f")
+        LineRange(start, end, anchor, "X").apply("a\nb\nc\n", "f", Origin("a\nb\nc\n"))
 
 
-def test_line_numbers_of_later_edits_count_on_the_text_after_earlier_ones():
-    text = {"f": "a\nb\nc\nd\n"}
-    # 自下而上列出，互不影响
-    assert apply_each(text, [("f", LineRange(4, 4, "d", "D")), ("f", LineRange(1, 1, "a", "A\nA2"))]) == (
-        {"f": "A\nA2\nb\nc\nD\n"},
+def test_line_numbers_in_a_batch_always_refer_to_the_text_before_the_call():
+    text = {"f": "a\nb\nc\nd\ne\n"}
+    # 按从上到下列出：第 1 项把一行变两行、第 2 项删一行，后面的行号仍指原文
+    edits = [
+        ("f", LineRange(1, 1, "a", "A\nA2")),
+        ("f", LineRange(2, 2, "b", "")),
+        ("f", LineRange(4, 5, "d", "DE")),
+    ]
+    assert apply_each(text, edits) == ({"f": "A\nA2\nc\nDE\n"}, {"f": 3})
+    # 按内容定位的先插入一行，行号仍指原文
+    assert apply_each(text, [("f", Replace("a\n", "a\nnew\n")), ("f", LineRange(4, 4, "d", "D"))]) == (
+        {"f": "a\nnew\nb\nc\nD\ne\n"},
         {"f": 2},
     )
-    # 先在上面插入一行，下面的行号就过期了：锚点挡住，整体失败
-    with pytest.raises(InvalidInput, match="edit 2 of 2.*1 earlier edit.*anchor does not match line 4"):
-        apply_each(text, [("f", Replace("a\n", "a\nnew\n")), ("f", LineRange(4, 4, "d", "D"))])
+    # anchor 也按原文核对：写成中间状态里那一行的内容就对不上
+    with pytest.raises(
+        InvalidInput, match="edit 2 of 2.*refer to the text before this call.*anchor does not match"
+    ):
+        apply_each(text, [("f", Replace("a\n", "a\nnew\n")), ("f", LineRange(2, 2, "new", "N"))])
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        LineRange(2, 3, "b", "X"),  # 行号区间部分重叠
+        Replace("c\n", "C\n"),  # 按原文改掉了其中一行
+        Replace("c\n", "c\nnew\n"),  # 在区间中间插入了新行
+        Replace("d\n", ""),  # 删掉了其中一行
+    ],
+)
+def test_a_line_range_overlapping_an_earlier_edit_is_rejected(first):
+    text = {"f": "a\nb\nc\nd\ne\n"}
+    with pytest.raises(
+        InvalidInput, match=r"edit 2 of 2.*lines 3-4 \(numbered as before this call\) overlap edit 1"
+    ):
+        apply_each(text, [("f", first), ("f", LineRange(3, 4, "c", "Y"))])
+    # 紧挨着但不重叠的可以
+    assert apply_each(text, [("f", LineRange(1, 2, "a", "X")), ("f", LineRange(3, 4, "c", "Y"))]) == (
+        {"f": "X\nY\ne\n"},
+        {"f": 2},
+    )
 
 
 def test_edits_to_several_texts_each_see_only_their_own_earlier_edits():
@@ -89,9 +120,9 @@ def test_edits_to_several_texts_each_see_only_their_own_earlier_edits():
     edits = [
         ("f", Replace("a\n", "a\nnew\n")),
         ("g", LineRange(2, 2, "b", "B")),
-        ("f", LineRange(3, 3, "b", "B")),
+        ("f", LineRange(2, 2, "b", "B")),
     ]
-    # 第 1 项在 f 里插了一行，g 的行号不受影响；没改到的文本不在结果里
+    # 第 1 项在 f 里插了一行，f 的行号仍指原文，g 不受影响；没改到的文本不在结果里
     assert apply_each(texts, edits) == ({"f": "a\nnew\nB\n", "g": "a\nB\n"}, {"f": 2, "g": 1})
     # 失败时报的「之前改过几处」只算同一份文本的
     with pytest.raises(InvalidInput, match=r"edit 3 of 3: old text must occur exactly once in g") as caught:
@@ -121,93 +152,99 @@ def test_every_mapped_language_is_built_into_ast_grep():
 
 
 def test_deleting_a_function_removes_its_decorators_and_the_extra_blank_lines():
-    out, count = py("def test_b", "").apply(PY, "t.py")
+    out, count = py("def test_b", "").apply(PY, "t.py", Origin(PY))
     assert count == 1
     assert out == "import pytest\n\n\ndef test_a():\n    assert 1\n\n\ndef test_c():\n    assert 3\n"
     # 文件末尾的函数：不留尾随空行
-    out, _ = py("def test_c", "").apply(PY, "t.py")
+    out, _ = py("def test_c", "").apply(PY, "t.py", Origin(PY))
     assert out.endswith("    assert x\n") and "test_c" not in out
     # 文件开头
-    out, _ = py("import pytest", "").apply(PY, "t.py")
+    out, _ = py("import pytest", "").apply(PY, "t.py", Origin(PY))
     assert out.startswith("def test_a():")
 
 
 def test_replacement_keeps_the_indentation_and_indents_later_lines_of_new_text_like_the_match():
     text = "class K:\n    def m(self):\n        return 1\n\n    def n(self):\n        return 2\n"
-    out, _ = py("def m", "def m(self):\n    return 10").apply(text, "k.py")
+    out, _ = py("def m", "def m(self):\n    return 10").apply(text, "k.py", Origin(text))
     assert out == "class K:\n    def m(self):\n        return 10\n\n    def n(self):\n        return 2\n"
     # 元变量捕获的多行原文保持原来的缩进
     text = "class K:\n    def m(self):\n        a = 1\n        return a\n"
-    out, _ = py("def m($$$P): $$$B", "def m2($$$P):\n    $$$B").apply(text, "k.py")
+    out, _ = py("def m($$$P): $$$B", "def m2($$$P):\n    $$$B").apply(text, "k.py", Origin(text))
     assert out == "class K:\n    def m2(self):\n        a = 1\n        return a\n"
 
 
 def test_a_multi_line_capture_moved_one_level_deeper_is_reindented_as_a_block():
     text = "class C:\n    def m(self):\n        a = 1\n\n        b = 2\n"
-    out, _ = py("def m(self): $$$B", "def m(self):\n    with lock:\n        $$$B").apply(text, "c.py")
+    out, _ = py("def m(self): $$$B", "def m(self):\n    with lock:\n        $$$B").apply(
+        text, "c.py", Origin(text)
+    )
     assert out == "class C:\n    def m(self):\n        with lock:\n            a = 1\n\n            b = 2\n"
 
 
 def test_a_multi_line_capture_on_the_first_line_of_new_text_or_one_level_up_keeps_its_relative_indentation():
     text = "def f():\n    print(dict(\n        a=1,\n    ))\n"
     assert (
-        py("print($A)", "log($A)").apply(text, "a.py")[0] == "def f():\n    log(dict(\n        a=1,\n    ))\n"
+        py("print($A)", "log($A)").apply(text, "a.py", Origin(text))[0]
+        == "def f():\n    log(dict(\n        a=1,\n    ))\n"
     )
     text = "def f():\n    x = foo(\n        1,\n        2,\n    )\n"
-    out, _ = py("foo($$$A)", "bar(0, $$$A)").apply(text, "a.py")
+    out, _ = py("foo($$$A)", "bar(0, $$$A)").apply(text, "a.py", Origin(text))
     # 同 ast-grep：后续行相对元变量所在行（x = ... 那行）重排，仍在括号里，合法
     assert out == "def f():\n    x = bar(0, 1,\n    2,)\n"
     text = "def f():\n    with lock:\n        if a:\n            b()\n"
-    assert py("with lock: $$$B", "$$$B").apply(text, "a.py")[0] == "def f():\n    if a:\n        b()\n"
+    assert (
+        py("with lock: $$$B", "$$$B").apply(text, "a.py", Origin(text))[0]
+        == "def f():\n    if a:\n        b()\n"
+    )
     # 比起始行还浅的行（三引号字符串的内容）同层代入时一字不改
     text = "class K:\n    def m(self):\n        s = '''\nraw\n'''\n        return s\n"
-    out, _ = py("def m($$$P): $$$B", "def n($$$P):\n    $$$B").apply(text, "k.py")
+    out, _ = py("def m($$$P): $$$B", "def n($$$P):\n    $$$B").apply(text, "k.py", Origin(text))
     assert out == text.replace("def m", "def n")
 
 
 def test_a_trailing_newline_in_new_text_does_not_add_a_blank_line_at_the_end_of_a_line():
     text = "def f():\n    a = 1\n    b = 2\n"
-    assert py("a = 1", "a = 3\n").apply(text, "a.py")[0] == "def f():\n    a = 3\n    b = 2\n"
+    assert py("a = 1", "a = 3\n").apply(text, "a.py", Origin(text))[0] == "def f():\n    a = 3\n    b = 2\n"
 
 
 def test_replace_all_across_indentation_levels_keeps_each_ones_indentation():
     text = "def f():\n    print(1)\n    if x:\n        print(2)\nprint(3)\n"
-    out, count = py("print($A)", "log($A)", every=True).apply(text, "a.py")
+    out, count = py("print($A)", "log($A)", every=True).apply(text, "a.py", Origin(text))
     assert (out, count) == ("def f():\n    log(1)\n    if x:\n        log(2)\nlog(3)\n", 3)
-    out, _ = py("if $C: $$$B", "while $C:\n    $$$B").apply(text, "a.py")
+    out, _ = py("if $C: $$$B", "while $C:\n    $$$B").apply(text, "a.py", Origin(text))
     assert out == "def f():\n    print(1)\n    while x:\n        print(2)\nprint(3)\n"
     js = "function f() {\n  console.log(1)\n}\n"
-    out, _ = PatternEdit("console.log($A)", "javascript", "logger.info($A)").apply(js, "a.js")
+    out, _ = PatternEdit("console.log($A)", "javascript", "logger.info($A)").apply(js, "a.js", Origin(js))
     assert out == "function f() {\n  logger.info(1)\n}\n"
 
 
 def test_a_match_inside_a_line_replaces_only_the_matched_text_and_metavariables_carry_over():
     text = "x = foo(1, 2) + 3\ny = foo(a)\n"
-    out, count = py("foo($$$ARGS)", "bar($$$ARGS, $HOME)", every=True).apply(text, "a.py")
+    out, count = py("foo($$$ARGS)", "bar($$$ARGS, $HOME)", every=True).apply(text, "a.py", Origin(text))
     # 模式里没声明的 $HOME 原样保留
     assert (out, count) == ("x = bar(1, 2, $HOME) + 3\ny = bar(a, $HOME)\n", 2)
     # $$A 不是元变量引用
-    out, _ = py("foo($A)", "g($$A, $A)").apply("foo(1)\n", "a.py")
+    out, _ = py("foo($A)", "g($$A, $A)").apply("foo(1)\n", "a.py", Origin("foo(1)\n"))
     assert out == "g($$A, 1)\n"
     out, _ = py("def test_a($$$P): $$$BODY", "def test_a2($$$P):\n    $$$BODY\n    assert 2").apply(
-        PY, "t.py"
+        PY, "t.py", Origin(PY)
     )
     assert "def test_a2():\n    assert 1\n    assert 2\n\n\n@pytest" in out
 
 
 def test_pattern_must_match_exactly_one_place_unless_replace_all():
     with pytest.raises(InvalidInput, match=r"matches 3 places in t.py \(at lines 4, 9, 14\).*replace_all"):
-        py("def $F($$$A): $$$B", "").apply(PY, "t.py")
+        py("def $F($$$A): $$$B", "").apply(PY, "t.py", Origin(PY))
     with pytest.raises(InvalidInput, match="matches nothing in t.py"):
-        py("def test_zzz", "").apply(PY, "t.py")
+        py("def test_zzz", "").apply(PY, "t.py", Origin(PY))
     with pytest.raises(InvalidInput, match="invalid python pattern"):
-        py("x = 1\ny = 2", "").apply(PY, "t.py")
+        py("x = 1\ny = 2", "").apply(PY, "t.py", Origin(PY))
     with pytest.raises(InvalidInput, match="overlap"):
-        py("foo($A)", "bar", every=True).apply("foo(foo(1))\n", "a.py")
+        py("foo($A)", "bar", every=True).apply("foo(foo(1))\n", "a.py", Origin("foo(foo(1))\n"))
 
 
 def test_replace_all_deletes_every_match():
-    out, count = py("def $F($$$A): $$$B", "", every=True).apply(PY, "t.py")
+    out, count = py("def $F($$$A): $$$B", "", every=True).apply(PY, "t.py", Origin(PY))
     assert (out, count) == ("import pytest\n", 3)
 
 
@@ -215,23 +252,25 @@ def test_typescript_export_goes_with_the_deleted_node():
     ts = (
         "import x from 'x'\n\nexport function f(a: number) {\n  return a\n}\n\nclass A {\n  m(): void {}\n}\n"
     )
-    out, _ = PatternEdit("function f($$$A) { $$$B }", "typescript", "").apply(ts, "a.ts")
+    out, _ = PatternEdit("function f($$$A) { $$$B }", "typescript", "").apply(ts, "a.ts", Origin(ts))
     assert out == "import x from 'x'\n\nclass A {\n  m(): void {}\n}\n"
-    out, _ = PatternEdit("class A { $$$B }", "typescript", "class B {}").apply(ts, "a.ts")
+    out, _ = PatternEdit("class A { $$$B }", "typescript", "class B {}").apply(ts, "a.ts", Origin(ts))
     assert out.endswith("}\n\nclass B {}\n")
 
 
 def test_tsx_and_javascript_parse():
     tsx = "export const App = () => <div>{x}</div>\n"
-    out, _ = PatternEdit("<div>{$X}</div>", "tsx", "<span>{$X}</span>").apply(tsx, "a.tsx")
+    out, _ = PatternEdit("<div>{$X}</div>", "tsx", "<span>{$X}</span>").apply(tsx, "a.tsx", Origin(tsx))
     assert out == "export const App = () => <span>{x}</span>\n"
-    out, _ = PatternEdit("console.log($A)", "javascript", "").apply("a()\nconsole.log(1)\nb()\n", "a.js")
+    out, _ = PatternEdit("console.log($A)", "javascript", "").apply(
+        "a()\nconsole.log(1)\nb()\n", "a.js", Origin("a()\nconsole.log(1)\nb()\n")
+    )
     assert out == "a()\nb()\n"
 
 
 def test_a_few_thousand_lines_parse_and_match_quickly():
     text = "".join(f"def f{i}(x):\n    return x + {i}\n\n\n" for i in range(2000))
     started = time.perf_counter()
-    out, _ = py("def f1999", "").apply(text, "big.py")
+    out, _ = py("def f1999", "").apply(text, "big.py", Origin(text))
     assert time.perf_counter() - started < 1
     assert "f1999" not in out and out.endswith("return x + 1998\n")
