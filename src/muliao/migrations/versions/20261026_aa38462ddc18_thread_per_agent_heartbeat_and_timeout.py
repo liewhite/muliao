@@ -53,7 +53,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("uq_sessions_thread", table_name="sessions")
     op.execute(
-        "UPDATE sessions SET thread = thread || '#' || substr(agent_id, 1, 8) "
+        # 旧代码的 thread 名最长 100：先截到 91 再加 9 个字符的后缀
+        "UPDATE sessions SET thread = substr(thread, 1, 91) || '#' || substr(agent_id, 1, 8) "
         "WHERE parent_session_id IS NOT NULL AND EXISTS ("
         "SELECT 1 FROM sessions o WHERE o.parent_session_id = sessions.parent_session_id "
         "AND o.thread = sessions.thread AND (o.created_at < sessions.created_at "

@@ -429,7 +429,8 @@ class JobRunner:
         """给到了自己检查间隔（Job.check_seconds）的运行中任务各发一条检查命令（会话领域投检查信件；它上一封还在
         信箱里排着时不投，不堆积）。返回发出的命令数。
 
-        先对账：记为运行中、却不在本进程监督之下、也不在启动中的任务（记下结局时失败、监督意外结束、启动失败后的
+        每个节拍（platform.checks.TICK_SECONDS）都先对账（一次短查询，有意不另设节奏：孤儿越早告诉 agent 越好）：
+        记为运行中、却不在本进程监督之下、也不在启动中的任务（记下结局时失败、监督意外结束、启动失败后的
         清理没做完），按 recover 的同一套逻辑记为被中断并告诉 agent。"""
         orphans = await self._close_each(
             lambda: select(Job).where(

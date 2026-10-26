@@ -328,7 +328,7 @@ async def test_threads_are_told_apart_by_agent_and_name_and_their_kind_is_fixed(
     assert "started with delegate_task; use delegate_task" in errors[1]
     assert "several threads are named 'public' (agents: worker, other); pass `agent`" in errors[2]
     assert "no thread named 'private' with other" in errors[3]
-    assert returns == ["stopped thread 'public'"]
+    assert returns == ["stopped thread 'public' (other)"]
     children = await threads_of(container, parent.id)
     names = await container.agents.names()
     assert sorted((c.thread, names[c.agent_id]) for c in children) == [

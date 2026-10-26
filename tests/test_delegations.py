@@ -191,6 +191,61 @@ async def test_each_reported_delegation_is_checked_at_its_own_interval(container
     assert "Thread 'fast'" in event.content
 
 
+async def test_an_expired_ask_stops_its_thread_once_and_retries_a_failed_stop(container, make_agent, models):
+    from muliao.sessions.delegation import ThreadChecks
+    from muliao.sessions.halt import Halted
+
+    lead = (await make_agent("lead", model="l")).id
+    helper = await container.agents.get((await make_agent("helper", model="h")).id)
+    models.models["l"] = scripted(Recorder())
+    parent = await start(container, lead, "go")
+    await drain(container)
+    async with container.db.transaction() as s:
+        child = await container.threads.dispatch(
+            s,
+            owner_id=parent.id,
+            agent=helper,
+            thread="h",
+            prompt="q",
+            kind=SessionKind.PRIVATE_THREAD,
+            call_id="ask-1",
+            awaited=False,
+            key="ask-1",
+            timeout_seconds=0.001,
+        )
+    stops: list[str] = []
+
+    async def flaky_stop(session_id: str) -> Halted:
+        stops.append(session_id)
+        if len(stops) == 1:
+            raise RuntimeError("database is locked")
+        # 假装停止还在进行（运行退出时才结清）：占用仍是 active
+        return Halted.STOPPED
+
+    checks = ThreadChecks(container.db, container.queue, flaky_stop)
+    await asyncio.sleep(0.01)
+    await checks.check()  # 停止失败：记日志，不记下
+    await checks.check()  # 重试，停成
+    await checks.check()  # 已经停过，不再停
+    assert stops == [child.id, child.id]
+
+
+async def test_ask_agent_and_background_jobs_reject_a_wrong_timeout(container, make_agent, models):
+    lead = (await make_agent("lead", model="tools")).id
+    await make_agent("helper", model="h")
+    outputs = await run_tools(
+        container,
+        models,
+        lead,
+        [
+            ("ask_agent", {"agent": "helper", "message": "q", "thread": "t", "timeout": 0}),
+            ("run_shell", {"command": "true", "background": True, "timeout": 5}),
+        ],
+    )
+    assert "timeout must be greater than 0 seconds" in outputs[0]
+    assert "background jobs have no timeout" in outputs[1]
+
+
 async def test_delegate_task_takes_a_heartbeat_only_with_report_back(container, make_agent, models):
     lead = (await make_agent("lead", model="tools")).id
     await make_agent("reviewer", model="v")

@@ -145,6 +145,7 @@ async def hand_back_in(
 
 def _timed_out_after(hold: SessionHold | None, now: datetime) -> float | None:
     """被停止的委派是不是超时了（到了 ask_agent 的 timeout，ThreadChecks 停掉了 thread）：是就返回那个 timeout（秒）。
+    deadline 与这里的 now 都用真实时钟（holds.hold_in 与 ThreadChecks 在生产里都是 utcnow）。
     由占用上的 deadline 推出，不另存「因何停止」：到期之后才被停止的，不论是谁停的，都已经超时。发起方已删除（占用
     随它删除）时为 None，结局也没有收件人。"""
     if hold is None or hold.deadline is None or hold.deadline > now:
@@ -258,8 +259,16 @@ class ThreadChecks:
                 "delegation timed out; stopping its thread",
                 extra={"holder": holder, "thread_session_id": child_id},
             )
-            # 停止自己开事务（还在运行时在运行退出后结清）；停成了才记下，失败了下一次检查再停
-            await self._stop(child_id)
+            # 停止自己开事务（还在运行时在运行退出后结清）。每项是独立的副作用：一项停不下来（如数据库暂时失败）
+            # 记 error、不记下，下一拍再停，不影响别的到期委派，也不让检查循环退出
+            try:
+                await self._stop(child_id)
+            except Exception:
+                log.exception(
+                    "stopping a timed-out delegation's thread failed; retrying on the next check",
+                    extra={"holder": holder, "thread_session_id": child_id},
+                )
+                continue
             self._timed_out.add(holder)
         return posted
 

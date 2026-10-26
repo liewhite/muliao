@@ -134,8 +134,9 @@ def delegation_toolset(
         so far. The thread is private to this conversation (the user can read but not reply). Files it shares are
         shown to the user with your reply. Ask again in the same thread (same agent and name) to follow up with
         the agent's context intact, e.g. review -> fix -> review again. Several asks in one response run in
-        parallel. If the user writes to you meanwhile, you continue and the outcome (answer or timeout) reaches
-        you later as an event. For long work you want to keep an eye on while doing other things, use
+        parallel; asks to the same thread share it, so the first one to time out stops it for all of them. If the
+        user writes to you meanwhile, you continue and the outcome (answer or timeout) reaches you later as an
+        event. For long work you want to keep an eye on while doing other things, use
         `delegate_task` with `report_back: true` instead.
         The agent can be yourself (your own name): a fresh conversation of you, with your memory, skills and tools,
         for a self-contained side job (e.g. a code review, or several parts of a task in parallel) whose context
@@ -202,10 +203,12 @@ def delegation_toolset(
                 f"several threads are named {name!r} (agents: {', '.join(names[c.agent_id] for c in named)}); "
                 "pass `agent` to say which one"
             )
-        if await stop_session(named[0].id) == Halted.GONE:
+        [child] = named
+        who = f"thread {name!r} ({(await agents.names())[child.agent_id]})"
+        if await stop_session(child.id) == Halted.GONE:
             # 查到之后、停止之前被删除了（随所属 agent 删除）
-            return f"thread {name!r} was deleted meanwhile; nothing to stop"
-        return f"stopped thread {name!r}"
+            return f"{who} was deleted meanwhile; nothing to stop"
+        return f"stopped {who}"
 
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
