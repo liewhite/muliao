@@ -31,7 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from muliao.agents.api import runnable_agent_in
+from muliao.agents.api import AgentArchived, runnable_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 from muliao.notifications.events import Notify
@@ -384,7 +384,7 @@ class TriggerService:
         """所有触发方式的唯一出口，返回交给的会话 id。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
         检查失败记在触发器上并抛出 PrecheckFailed（触发器保持启用：脚本的故障往往是暂时的）。
 
-        这是激活机制的入口，不看是否已归档：按到期时间触发的方式（triggers.due）在调用前就把这次到期消耗掉了，
+        这是激活机制的入口，不看触发器是否已归档（finished_at；不是 agent 的归档）：按到期时间触发的方式（triggers.due）在调用前就把这次到期消耗掉了，
         一次性触发器那时已经归档。管理操作的「立即运行」走 run。
 
         触发记下之后马上执行投信（run_now），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。
@@ -398,6 +398,7 @@ class TriggerService:
     async def fire_activated(self, trigger_id: int, payload: str | None = None) -> None:
         """没有调用方等着结果的激活机制（到期扫描、流式）用的 fire：失败按统一的规则处理，不上抛领域错误。
         - 前置检查失败：已记在触发器上；脚本的故障往往是暂时的，保持启用；
+        - agent 已归档（AgentArchived）：跳过，触发器保持启用；一次性触发器那一次已用掉，推送告诉用户任务没做；
         - 被停用或删除（Conflict / NotFound）：不是触发失败，只记日志，不覆盖失败原因；
         - 其余领域错误（如来信被拒绝）：停用并记 disabled_reason。
         契约之外的异常照常上抛。webhook 的调用方在等结果，直接用 fire。"""
@@ -405,12 +406,33 @@ class TriggerService:
             await self.fire(trigger_id, payload)
         except PrecheckFailed:
             pass
+        except AgentArchived as e:
+            # 定时与流式的只是跳过这一次；一次性触发器已用掉它那一次（到期时已归档），任务没做，agent 也收不到信：告诉用户
+            log.info("activated fire skipped: %s", e, extra={"trigger_id": trigger_id})
+            await self._tell_user_once_skipped(trigger_id)
         except (Conflict, NotFound) as e:
             log.info("activated fire skipped: %s", e, extra={"trigger_id": trigger_id})
         except DomainError as e:
             reason = f"{type(e).__name__}: {e}"
             if await self.disable(trigger_id, reason):
                 log.error("trigger disabled: %s", reason, extra={"trigger_id": trigger_id})
+
+    async def _tell_user_once_skipped(self, trigger_id: int) -> None:
+        async with self._db.transaction() as s:
+            trigger = await s.get(Trigger, trigger_id)
+            if trigger is None or trigger.finished_at is None:
+                return
+            delivery = self._messaging.send_in(
+                s,
+                Notify(
+                    agent_id=None,
+                    title=f"一次性触发器 {trigger.name} 未执行：它的 agent 已归档",
+                    body=trigger.prompt[:500],
+                    session_id=None,
+                    issue_id=None,
+                ),
+            )
+        await self._run_now(delivery.id)
 
     async def _fire(
         self, trigger_id: int, payload: str | None, session_id: str | None, record_failure: bool

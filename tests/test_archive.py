@@ -194,3 +194,41 @@ async def test_archive_over_http_marks_the_agent_and_conversations_get_409(clien
     assert (await client.put(f"/api/agents/{agent['id']}", json={**body, "group": None})).json()[
         "group"
     ] is None
+
+
+async def test_delegating_to_an_archived_agent_new_or_continued_thread_is_refused(container, make_agent):
+    lead, helper = await make_agent("lead"), await make_agent("helper")
+    parent = (await container.sessions.receive(_new_session(lead.id))).session
+    async with container.db.transaction() as s:
+        await container.threads.send(s, parent_id=parent.id, agent=helper, thread="t", prompt="task")
+    await drain(container)
+    await container.agent_lifecycle.set_archived(helper.id, True)
+    for thread in ("t", "new"):
+        with pytest.raises(AgentArchived):
+            async with container.db.transaction() as s:
+                await container.threads.send(
+                    s, parent_id=parent.id, agent=helper, thread=thread, prompt="more"
+                )
+
+
+async def test_a_once_trigger_due_while_its_agent_is_archived_tells_the_user(container, make_agent):
+    from datetime import datetime, timedelta
+
+    from muliao.triggers.service import trigger_in
+
+    alpha = await make_agent("alpha")
+    trigger = await container.triggers.create(
+        name="later",
+        agent_id=alpha.id,
+        kind="once",
+        prompt="Send the weekly report.",
+        config={"at": "2099-01-01T10:00"},
+    )
+    await container.agent_lifecycle.set_archived(alpha.id, True)
+    async with container.db.transaction() as s:
+        due = await trigger_in(s, trigger.id)
+        due.config = {"at": (datetime.now().astimezone() - timedelta(seconds=1)).isoformat()}
+    await container.due_triggers.fire_due()
+    await deliver(container)
+    [note] = await container.notifications.list(10)
+    assert "later" in note.title and "归档" in note.title and "weekly report" in note.body

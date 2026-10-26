@@ -7,7 +7,7 @@ from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.permissions import TOOL_PERMISSIONS, Permission
 from muliao.agents.roles import RoleService
 from muliao.agents.service import AgentPatch, AgentService, AgentSpec, Thinking
-from muliao.errors import InvalidInput
+from muliao.errors import Conflict, InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
@@ -180,7 +180,13 @@ def agents_toolset(
         )
         target = await agents.update(target.id, patch)
         if archived is not None:
-            target = await lifecycle.set_archived(target.id, archived)
+            try:
+                target = await lifecycle.set_archived(target.id, archived)
+            except Conflict as e:
+                if patch == AgentPatch():
+                    raise
+                # 归档要查空闲，与改配置不在一个事务里：说清楚哪部分生效了
+                raise Conflict(f"{e} (the other changes were saved; only archiving failed)") from e
         state = " (archived)" if target.archived else ""
         return f"updated agent {target.name}{state}"
 
