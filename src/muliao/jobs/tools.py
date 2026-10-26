@@ -47,8 +47,8 @@ def workspace_toolset(
             command: The command line to run.
             timeout: Foreground only, and required there: seconds before the command is killed (> 0, no upper
                 limit; estimate it yourself). Leave it out with `background: true`.
-            secrets: Vault keys you can use (your own or handed to you by a role) to expose to the command as
-                environment variables of the same name.
+            secrets: Vault keys you can use (your own, or allowed by your roles or your own allow rules) to
+                expose to the command as environment variables of the same name.
                 Secret values in the output are replaced by `[secret:KEY]`.
             background: Run it as a background job instead of waiting for it.
             heartbeat_seconds: Background only: seconds between check-in events while the job runs (> 0,
