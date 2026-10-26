@@ -419,7 +419,8 @@ async def test_agent_thinking_is_set_and_validated_over_http(client, models):
     agent = resp.json()
     assert agent["thinking"] == "high"
     body = {
-        k: agent[k] for k in ("name", "description", "model", "roles", "allow", "deny", "mcp_servers", "group")
+        k: agent[k]
+        for k in ("name", "description", "model", "roles", "allow", "deny", "mcp_servers", "group")
     }
     resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "off"})
     assert resp.json()["thinking"] == "off"
