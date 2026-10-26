@@ -95,7 +95,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tools/resolve": {
+    "/api/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Items
+         * @description 全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称。
+         */
+        get: operations["list_items_api_items_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agent-preview": {
         parameters: {
             query?: never;
             header?: never;
@@ -105,30 +125,11 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Resolve Tools
-         * @description agent 配置（还没保存的也行）最终能用的内置工具：base + 角色 + allow / deny，与运行时同一套计算。
+         * Preview Agent
+         * @description agent 配置（还没保存的也行）最终能用的：自己的条目 + base + 角色 + allow / deny 放行的，与运行时同一套计算，
+         *     与保存时同样校验（不合法 422）。
          */
-        post: operations["resolve_tools_api_tools_resolve_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/{agent_id}/items": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Usable Items
-         * @description agent 能用的 skill、MCP server、secret（`kind:name`）：自己的与规则放行的。
-         */
-        get: operations["usable_items_api_agents__agent_id__items_get"];
-        put?: never;
-        post?: never;
+        post: operations["preview_agent_api_agent_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -149,6 +150,26 @@ export interface paths {
         get: operations["list_roles_api_roles_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/role-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Role
+         * @description 角色规则（还没保存的也行）能用的，与保存时同样校验（不合法 422）。
+         */
+        post: operations["preview_role_api_role_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -319,26 +340,6 @@ export interface paths {
         get: operations["get_memory_api_memory_get"];
         /** Put Memory */
         put: operations["put_memory_api_memory_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skills": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Skills
-         * @description owner 名下的 skill（owner 为空是归平台的）。
-         */
-        get: operations["list_skills_api_skills_get"];
-        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -553,7 +554,7 @@ export interface paths {
         };
         /**
          * List Mcp
-         * @description owner（agent 的 id）能用的 server（自己的与分发给它的）；owner 缺省时为归平台的 server。
+         * @description 全部 server（含停用的），按名称；谁能用见 /items 的 roles。
          */
         get: operations["list_mcp_api_mcp_get"];
         put?: never;
@@ -600,26 +601,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/vault": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Secrets
-         * @description owner（agent 的 id）能用的 secret（不含值，自己的与分发给它的）；owner 缺省时为归平台的 secret。
-         */
-        get: operations["list_secrets_api_vault_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/vault/{key}": {
         parameters: {
             query?: never;
@@ -630,7 +611,7 @@ export interface paths {
         get?: never;
         /**
          * Set Secret
-         * @description 新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。
+         * @description 新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。列表见 /items（不含值）。
          */
         put: operations["set_secret_api_vault__key__put"];
         post?: never;
@@ -1268,6 +1249,17 @@ export interface components {
             /** Archived At */
             archived_at: string | null;
         };
+        /** AgentPreviewIn */
+        AgentPreviewIn: {
+            /** Agent Id */
+            agent_id: string | null;
+            /** Roles */
+            roles: string[];
+            /** Allow */
+            allow: string[];
+            /** Deny */
+            deny: string[];
+        };
         /**
          * AgentUpdate
          * @description 整体替换：所有字段必填，不会用默认值覆盖已有配置。name 可改（只用于展示）。
@@ -1573,6 +1565,29 @@ export interface components {
             /** At */
             at: string | null;
         };
+        /**
+         * ItemOut
+         * @description 条目池里的一项，在规则里写作 `<kind>:<name>`。
+         */
+        ItemOut: {
+            kind: components["schemas"]["Kind"];
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Updated At */
+            updated_at: string | null;
+            /** Roles */
+            roles: string[];
+        };
+        /**
+         * Kind
+         * @description 条目的种类；items.kind 存后三种。
+         * @enum {string}
+         */
+        Kind: "tool" | "skill" | "mcp" | "secret";
         /** LiveRunOut */
         LiveRunOut: {
             /** Run Id */
@@ -1887,6 +1902,16 @@ export interface components {
             /** Other */
             other?: string | null;
         };
+        /**
+         * ReachOut
+         * @description 一份配置能用的内置工具与条目（skill、MCP server、secret，`kind:name`）。
+         */
+        ReachOut: {
+            /** Tools */
+            tools: components["schemas"]["ToolOut"][];
+            /** Items */
+            items: string[];
+        };
         /** RejectIn */
         RejectIn: {
             /** Reason */
@@ -1908,14 +1933,6 @@ export interface components {
             answers: {
                 [key: string]: components["schemas"]["QuestionAnswer"][];
             };
-        };
-        /**
-         * ResolvedOut
-         * @description 按规则最终能用的内置工具。
-         */
-        ResolvedOut: {
-            /** Tools */
-            tools: components["schemas"]["ToolOut"][];
         };
         /**
          * ResourceKind
@@ -1972,12 +1989,14 @@ export interface components {
             deny: string[];
             /** Builtin */
             builtin: boolean;
-            resolved: components["schemas"]["ResolvedOut"];
+            reach: components["schemas"]["ReachOut"];
+            /** Agents */
+            agents: string[];
         };
-        /** RulesIn */
-        RulesIn: {
-            /** Roles */
-            roles: string[];
+        /** RolePreviewIn */
+        RolePreviewIn: {
+            /** Name */
+            name: string | null;
             /** Allow */
             allow: string[];
             /** Deny */
@@ -2111,20 +2130,6 @@ export interface components {
              * @default
              */
             description: string;
-        };
-        /** SecretOut */
-        SecretOut: {
-            /** Owner */
-            owner: string | null;
-            /** Key */
-            key: string;
-            /** Description */
-            description: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
         };
         /**
          * ServerEvent
@@ -2730,46 +2735,11 @@ export interface operations {
             };
         };
     };
-    resolve_tools_api_tools_resolve_post: {
+    list_items_api_items_get: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RulesIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ResolvedOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    usable_items_api_agents__agent_id__items_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: string;
-            };
             cookie?: never;
         };
         requestBody?: never;
@@ -2780,7 +2750,31 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": string[];
+                    "application/json": components["schemas"]["ItemOut"][];
+                };
+            };
+        };
+    };
+    preview_agent_api_agent_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentPreviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReachOut"];
                 };
             };
             /** @description Validation Error */
@@ -2810,6 +2804,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RoleOut"][];
+                };
+            };
+        };
+    };
+    preview_role_api_role_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RolePreviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReachOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3300,37 +3327,6 @@ export interface operations {
             };
         };
     };
-    list_skills_api_skills_get: {
-        parameters: {
-            query?: {
-                owner?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_skill_api_skill_get: {
         parameters: {
             query: {
@@ -3805,9 +3801,7 @@ export interface operations {
     };
     list_mcp_api_mcp_get: {
         parameters: {
-            query?: {
-                owner?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -3821,15 +3815,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3949,37 +3934,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_secrets_api_vault_get: {
-        parameters: {
-            query?: {
-                owner?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SecretOut"][];
                 };
             };
             /** @description Validation Error */

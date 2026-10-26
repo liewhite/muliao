@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 
-from muliao.agents.items import changeable_in, owned_in, usable_in, writable_in
+from muliao.agents.items import changeable_in, usable_in, writable_in
 from muliao.agents.revisions import Subject, record_in
 from muliao.agents.tables import Item
 from muliao.platform.db import Database, utcnow
@@ -71,11 +71,6 @@ class SecretItems:
                 actor,
                 f"delete secret {key}",
             )
-
-    async def owned(self, owner: str | None) -> list[StoredSecret]:
-        """owner 名下的（None 为平台的），按 key。"""
-        async with self._db.transaction() as s:
-            return [_stored(r) for r in await owned_in(s, Subject.SECRET, owner)]
 
     async def usable(self, user: str) -> list[StoredSecret]:
         """user（agent 的 id，或 USER 即全部）能用的（agents.access），按 key。"""

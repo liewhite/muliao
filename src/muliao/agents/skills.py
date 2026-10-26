@@ -26,7 +26,7 @@ from sqlalchemy import delete, select
 
 from muliao.agents import skill_package
 from muliao.agents.access import grants_in
-from muliao.agents.items import changeable_in, existing_in, item_in, owned_in, usable_in, writable_in
+from muliao.agents.items import changeable_in, existing_in, item_in, usable_in, writable_in
 from muliao.agents.naming import validate_slug
 from muliao.agents.permissions import Kind
 from muliao.agents.revisions import Subject, record_in
@@ -145,11 +145,6 @@ class SkillStore:
 
     def _meta(self, row: Item) -> SkillMeta:
         return SkillMeta(row.name, row.description, row.owner, self.dir(row.name) / SKILL_FILE)
-
-    async def list(self, owner: str | None) -> list[SkillMeta]:
-        """owner 名下的 skill（None 为平台的），按名称。"""
-        async with self._db.transaction() as s:
-            return [self._meta(r) for r in await owned_in(s, Subject.SKILL, owner)]
 
     async def index(self, agent: str) -> list[SkillMeta]:
         """agent 能用的 skill（自己的与分发给它的，agents.access），按名称：它的 skill 索引。"""

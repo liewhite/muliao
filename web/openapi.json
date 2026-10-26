@@ -145,16 +145,39 @@
         }
       }
     },
-    "/api/tools/resolve": {
+    "/api/items": {
+      "get": {
+        "summary": "List Items",
+        "description": "全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称。",
+        "operationId": "list_items_api_items_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ItemOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Items Api Items Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent-preview": {
       "post": {
-        "summary": "Resolve Tools",
-        "description": "agent 配置（还没保存的也行）最终能用的内置工具：base + 角色 + allow / deny，与运行时同一套计算。",
-        "operationId": "resolve_tools_api_tools_resolve_post",
+        "summary": "Preview Agent",
+        "description": "agent 配置（还没保存的也行）最终能用的：自己的条目 + base + 角色 + allow / deny 放行的，与运行时同一套计算，\n与保存时同样校验（不合法 422）。",
+        "operationId": "preview_agent_api_agent_preview_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RulesIn"
+                "$ref": "#/components/schemas/AgentPreviewIn"
               }
             }
           },
@@ -166,51 +189,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResolvedOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/agents/{agent_id}/items": {
-      "get": {
-        "summary": "Usable Items",
-        "description": "agent 能用的 skill、MCP server、secret（`kind:name`）：自己的与规则放行的。",
-        "operationId": "usable_items_api_agents__agent_id__items_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Agent Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "title": "Response Usable Items Api Agents  Agent Id  Items Get"
+                  "$ref": "#/components/schemas/ReachOut"
                 }
               }
             }
@@ -244,6 +223,45 @@
                   },
                   "type": "array",
                   "title": "Response List Roles Api Roles Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/role-preview": {
+      "post": {
+        "summary": "Preview Role",
+        "description": "角色规则（还没保存的也行）能用的，与保存时同样校验（不合法 422）。",
+        "operationId": "preview_role_api_role_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RolePreviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReachOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -842,57 +860,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MemoryOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/skills": {
-      "get": {
-        "summary": "List Skills",
-        "description": "owner 名下的 skill（owner 为空是归平台的）。",
-        "operationId": "list_skills_api_skills_get",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/SkillOut"
-                  },
-                  "title": "Response List Skills Api Skills Get"
                 }
               }
             }
@@ -1586,26 +1553,8 @@
     "/api/mcp": {
       "get": {
         "summary": "List Mcp",
-        "description": "owner（agent 的 id）能用的 server（自己的与分发给它的）；owner 缺省时为归平台的 server。",
+        "description": "全部 server（含停用的），按名称；谁能用见 /items 的 roles。",
         "operationId": "list_mcp_api_mcp_get",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1617,16 +1566,6 @@
                     "$ref": "#/components/schemas/McpOut"
                   },
                   "title": "Response List Mcp Api Mcp Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1792,61 +1731,10 @@
         }
       }
     },
-    "/api/vault": {
-      "get": {
-        "summary": "List Secrets",
-        "description": "owner（agent 的 id）能用的 secret（不含值，自己的与分发给它的）；owner 缺省时为归平台的 secret。",
-        "operationId": "list_secrets_api_vault_get",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/SecretOut"
-                  },
-                  "title": "Response List Secrets Api Vault Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/vault/{key}": {
       "put": {
         "summary": "Set Secret",
-        "description": "新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。",
+        "description": "新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。列表见 /items（不含值）。",
         "operationId": "set_secret_api_vault__key__put",
         "parameters": [
           {
@@ -3625,6 +3513,50 @@
         ],
         "title": "AgentOut"
       },
+      "AgentPreviewIn": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "allow": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allow"
+          },
+          "deny": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deny"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "roles",
+          "allow",
+          "deny"
+        ],
+        "title": "AgentPreviewIn"
+      },
       "AgentUpdate": {
         "properties": {
           "name": {
@@ -4508,6 +4440,73 @@
         ],
         "title": "Item"
       },
+      "ItemOut": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/Kind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "owner",
+          "description",
+          "updated_at",
+          "roles"
+        ],
+        "title": "ItemOut",
+        "description": "条目池里的一项，在规则里写作 `<kind>:<name>`。"
+      },
+      "Kind": {
+        "type": "string",
+        "enum": [
+          "tool",
+          "skill",
+          "mcp",
+          "secret"
+        ],
+        "title": "Kind",
+        "description": "条目的种类；items.kind 存后三种。"
+      },
       "LiveRunOut": {
         "properties": {
           "run_id": {
@@ -5327,6 +5326,31 @@
         "title": "QuestionAnswer",
         "description": "用户对一个问题的回答：选中的选项，和/或「其他」里填的文字。"
       },
+      "ReachOut": {
+        "properties": {
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/ToolOut"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tools",
+          "items"
+        ],
+        "title": "ReachOut",
+        "description": "一份配置能用的内置工具与条目（skill、MCP server、secret，`kind:name`）。"
+      },
       "RejectIn": {
         "properties": {
           "reason": {
@@ -5371,23 +5395,6 @@
           "prompt"
         ],
         "title": "ReplyIn"
-      },
-      "ResolvedOut": {
-        "properties": {
-          "tools": {
-            "items": {
-              "$ref": "#/components/schemas/ToolOut"
-            },
-            "type": "array",
-            "title": "Tools"
-          }
-        },
-        "type": "object",
-        "required": [
-          "tools"
-        ],
-        "title": "ResolvedOut",
-        "description": "按规则最终能用的内置工具。"
       },
       "ResourceKind": {
         "type": "string",
@@ -5551,8 +5558,15 @@
             "type": "boolean",
             "title": "Builtin"
           },
-          "resolved": {
-            "$ref": "#/components/schemas/ResolvedOut"
+          "reach": {
+            "$ref": "#/components/schemas/ReachOut"
+          },
+          "agents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Agents"
           }
         },
         "type": "object",
@@ -5563,18 +5577,23 @@
           "allow",
           "deny",
           "builtin",
-          "resolved"
+          "reach",
+          "agents"
         ],
         "title": "RoleOut"
       },
-      "RulesIn": {
+      "RolePreviewIn": {
         "properties": {
-          "roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Roles"
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           },
           "allow": {
             "items": {
@@ -5593,11 +5612,11 @@
         },
         "type": "object",
         "required": [
-          "roles",
+          "name",
           "allow",
           "deny"
         ],
-        "title": "RulesIn"
+        "title": "RolePreviewIn"
       },
       "RunDeltaEvent": {
         "properties": {
@@ -5908,42 +5927,6 @@
           "value"
         ],
         "title": "SecretIn"
-      },
-      "SecretOut": {
-        "properties": {
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "key": {
-            "type": "string",
-            "title": "Key"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "owner",
-          "key",
-          "description",
-          "updated_at"
-        ],
-        "title": "SecretOut"
       },
       "ServerEvent": {
         "anyOf": [

@@ -13,7 +13,7 @@ from muliao.agents.skill_package import SkillFile
 from muliao.agents.skills import attachments_from, parse_document
 from muliao.errors import Conflict, CorruptState, Forbidden, InvalidInput, NotFound
 from muliao.vault.api import fill
-from tests.conftest import share
+from tests.conftest import owned, share
 from tests.test_flow import drain
 
 
@@ -39,7 +39,7 @@ async def test_an_agent_sees_its_own_skills_and_those_its_rules_give_it(containe
     assert not (await skills.resolve(alpha, "theirs")).usable
     with pytest.raises(NotFound):
         await skills.resolve(alpha, "nope")
-    assert [s.name for s in await skills.list(None)] == ["digest"]
+    assert await owned(container, "skill", None) == ["digest"]
 
 
 async def test_skill_names_are_unique_across_owners(container, make_agent):
@@ -241,7 +241,7 @@ async def test_vault_renders_references_and_fails_on_missing_key(container):
     await vault.set("TOKEN", "s3cret", "api token", actor="user", owner=None)
 
     assert fill("Bearer ${vault:TOKEN}", await vault.resolve_many("user", ["TOKEN"])) == "Bearer s3cret"
-    assert [s.key for s in await vault.owned(None)] == ["TOKEN"]
+    assert await owned(container, "secret", None) == ["TOKEN"]
     with pytest.raises(NotFound):
         await vault.resolve_many("user", ["MISSING"])
     with pytest.raises(InvalidInput):
@@ -295,8 +295,8 @@ async def test_an_agents_items_and_memory_go_with_it_and_their_deletion_is_recor
     # 删除的清理经事件完成
     await drain(container)
 
-    assert await container.vault.owned(alpha) == []
-    assert await container.skills.list(alpha) == []
+    assert await owned(container, "secret", alpha) == []
+    assert await owned(container, "skill", alpha) == []
     assert not meta.path.parent.exists()
     for subject, name in [
         (Subject.SECRET, "TOKEN"),
@@ -346,7 +346,7 @@ async def test_an_edit_whose_skill_changed_or_vanished_after_it_was_read_is_a_co
     if meddle == "rewrite":
         assert (await store.read("digest")).body.strip() == "rewritten"
     else:
-        assert await store.list(alpha) == []
+        assert await owned(container, "skill", alpha) == []
 
 
 async def test_hidden_and_dependency_directories_are_skipped_whole(tmp_path):

@@ -12,7 +12,7 @@ from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, TOOLS, Kind, che
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.sessions.api import Origin
-from tests.conftest import login
+from tests.conftest import login, owned
 from tests.scripted import scripted
 from tests.test_flow import drain, start
 from tests.test_triggers import ECHO_SERVER
@@ -168,7 +168,7 @@ async def test_a_deleted_agents_shared_items_move_to_the_platform(container, mak
     await container.roles.update(RoleSpec(BASE, base.description, ["skill:shared"], []))
     await container.agent_lifecycle.delete(owner.id, author="user")
     await drain(container)
-    assert [(s.name, s.owner) for s in await container.skills.list(None)] == [("shared", None)]
+    assert await owned(container, "skill", None) == ["shared"]
     assert [s.name for s in await container.skills.index(user.id)] == ["shared"]
     assert (container.skills.dir("shared") / "SKILL.md").exists()
     assert not container.skills.dir("alone").exists()
@@ -221,20 +221,36 @@ async def test_tools_and_roles_api(client, container):
     tools = (await client.get("/api/tools")).json()
     assert {"name": "delete_agent", "access": "write", "admin": True} in tools
 
-    resolved = (
-        await client.post("/api/tools/resolve", json={"roles": [], "allow": [], "deny": ["tool:memory_*"]})
-    ).json()
+    def preview(agent_id=None, roles=(), allow=(), deny=()):
+        body = {"agent_id": agent_id, "roles": list(roles), "allow": list(allow), "deny": list(deny)}
+        return client.post("/api/agent-preview", json=body)
+
+    resolved = (await preview(deny=["tool:memory_*"])).json()
     names = [t["name"] for t in resolved["tools"]]
     assert "run_shell" in names and "memory_edit" not in names and "create_agent" not in names
-    bad = await client.post("/api/tools/resolve", json={"roles": ["nope"], "allow": [], "deny": []})
-    assert bad.status_code == 422
+    assert (await preview(roles=["nope"])).status_code == 422
+    assert (await preview(allow=["skill:nope"])).status_code == 422
 
-    body = {"description": "issues only", "allow": ["tool:issue_*"], "deny": []}
+    await container.skills.write("s", "d", "b", actor="user", owner=None)
+    body = {"description": "issues only", "allow": ["tool:issue_*", "skill:s"], "deny": []}
+    role_preview = (
+        await client.post("/api/role-preview", json={"name": None, "allow": body["allow"], "deny": []})
+    ).json()
+    assert role_preview["items"] == ["skill:s"]
+    assert [t["name"] for t in role_preview["tools"]][:2] == ["issue_list", "issue_show"]
+    bad_role = {"name": None, "allow": ["skill:nope"], "deny": []}
+    assert (await client.post("/api/role-preview", json=bad_role)).status_code == 422
     assert (await client.post("/api/roles/triage", json=body)).status_code == 201
     listed = {r["name"]: r for r in (await client.get("/api/roles")).json()}
     assert listed[BASE]["builtin"] and not listed["triage"]["builtin"]
     assert "tool:run_shell" in listed[BASE]["fixed_allow"]
-    assert [t["name"] for t in listed["triage"]["resolved"]["tools"]][:2] == ["issue_list", "issue_show"]
+    assert [t["name"] for t in listed["triage"]["reach"]["tools"]][:2] == ["issue_list", "issue_show"]
+    assert listed["triage"]["reach"]["items"] == ["skill:s"] and listed[BASE]["reach"]["items"] == []
+    # 内置角色的预览含它固定的部分
+    base_preview = (
+        await client.post("/api/role-preview", json={"name": BASE, "allow": [], "deny": []})
+    ).json()
+    assert "run_shell" in [t["name"] for t in base_preview["tools"]]
     # 内置角色可编辑的部分可以改，不能删
     assert (await client.put("/api/roles/admin", json=body)).status_code == 200
     assert (await client.delete("/api/roles/admin")).status_code == 422
@@ -243,7 +259,14 @@ async def test_tools_and_roles_api(client, container):
         await client.post("/api/agents", json={"name": "t", "description": "d", "roles": ["triage"]})
     ).json()
     assert (agent["roles"], agent["allow"], agent["deny"]) == (["triage"], [], [])
-    assert (await client.get(f"/api/agents/{agent['id']}/items")).json() == []
+    listed = {r["name"]: r for r in (await client.get("/api/roles")).json()}
+    assert listed["triage"]["agents"] == [agent["id"]] and agent["id"] in listed[BASE]["agents"]
+    assert listed["admin"]["agents"] == []
+    # 自己的条目总能用，deny 只拦规则分来的
+    await container.skills.write("own", "d", "b", actor="user", owner=agent["id"])
+    reach = (await preview(agent["id"], ["triage"], deny=["skill:*"])).json()
+    assert reach["items"] == ["skill:own"]
+    assert (await preview(None, ["triage"])).json()["items"] == ["skill:s"]
     assert (await client.delete("/api/roles/triage")).status_code == 409
     assert (await client.delete(f"/api/agents/{agent['id']}")).status_code == 204
     # 删除 agent 的清理做完、行删掉之后角色才没人引用

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Button, Card, Chip, Tabs, toast, type Key } from '@heroui/react'
 import { Archive, ArchiveRestore, Copy, MessageSquarePlus, Plus, Star, Trash2 } from 'lucide-react'
-import { NavLink, useNavigate, useParams } from 'react-router-dom'
+import { Link, NavLink, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
   api,
@@ -27,12 +27,9 @@ import { ActionButton,
   useConfirm,
   useLoad,
 } from '../ui'
-import { McpManager } from './Mcp'
 import { PermissionsInput } from './Permissions'
 import { MemoryEditor } from './Memory'
 import { HistoryList } from './History'
-import { SkillList } from './Skills'
-import { SecretManager } from './Vault'
 import { refreshUnreadLogged } from '../unread'
 import { announceChange } from '../events'
 import { groupAgents } from '../agentGroups'
@@ -250,6 +247,7 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         onThinkingChange={(thinking) => set({ thinking })}
       />
       <PermissionsInput
+        agentId={agent?.id ?? null}
         value={{ roles: input.roles, allow: input.allow, deny: input.deny }}
         onChange={(p) => set(p)}
       />
@@ -281,9 +279,6 @@ const DETAIL_TABS = [
   ['config', '配置'],
   ['memory', '记忆'],
   ['history', '历史'],
-  ['skills', 'Skills'],
-  ['mcp', 'MCP'],
-  ['secrets', 'Secrets'],
 ] as const
 
 export function AgentDetail() {
@@ -300,7 +295,7 @@ export function AgentDetail() {
   async function remove() {
     const ok = await confirm({
       title: `删除 agent「${name}」？`,
-      body: '它的会话、记忆、私有 skill 和工作目录都会被删除，无法恢复。',
+      body: '它的会话、记忆、工作目录和它名下的条目都会被删除（被角色收录的条目转给平台），无法恢复。',
       confirmLabel: '删除',
       danger: true,
     })
@@ -375,7 +370,10 @@ export function AgentDetail() {
                     </Button>
                   </div>
                   <div className="text-muted">
-                    创建于 {formatTime(a.created_at)}
+                    创建于 {formatTime(a.created_at)} ·{' '}
+                    <Link to={`/items?owner=${a.id}`} className="text-accent">
+                      它名下的条目
+                    </Link>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-muted">
@@ -429,17 +427,6 @@ export function AgentDetail() {
             </Tabs.Panel>
             <Tabs.Panel id="history" className="pt-3">
               <HistoryList owner={a.id} />
-            </Tabs.Panel>
-            <Tabs.Panel id="skills" className="pt-3">
-              <SkillList owner={a.id} />
-            </Tabs.Panel>
-            <Tabs.Panel id="mcp" className="flex flex-col gap-3 pt-3">
-              <p className="text-sm text-muted">私有 MCP server 只有这个 agent 能用，可以引用它的私有 secret；同名时遮蔽公共的。</p>
-              <McpManager owner={a.id} />
-            </Tabs.Panel>
-            <Tabs.Panel id="secrets" className="flex flex-col gap-3 pt-3">
-              <p className="text-sm text-muted">私有 secret 只有这个 agent 能用；同名时遮蔽公共的。</p>
-              <SecretManager owner={a.id} />
             </Tabs.Panel>
           </Tabs>
         )}

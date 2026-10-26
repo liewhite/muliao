@@ -74,10 +74,6 @@ class Vault:
         await self._items.delete(key, actor)
         log.info("secret deleted", extra={"key": key, "author": actor})
 
-    async def owned(self, owner: str | None) -> list[SecretInfo]:
-        """owner 名下的 secret（不含值，None 为平台的），按 key。"""
-        return [_info(s) for s in await self._items.owned(owner)]
-
     async def usable_by(self, user: str) -> list[SecretInfo]:
         """user（agent 的 id，或 USER）能用的 secret（不含值），按 key。"""
         return [_info(s) for s in await self._items.usable(user)]

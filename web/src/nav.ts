@@ -5,14 +5,12 @@ import {
   BarChart3,
   Bell,
   Bot,
+  Boxes,
   KanbanSquare,
-  KeyRound,
   MessageSquare,
-  Plug,
   ScrollText,
   ShieldCheck,
   Settings,
-  Sparkles,
   Zap,
   type LucideIcon,
 } from 'lucide-react'
@@ -32,19 +30,17 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
     title: '运行',
     items: [
       { to: '/agents', label: 'Agents', Icon: Bot },
-      { to: '/roles', label: '角色与权限', Icon: ShieldCheck },
       { to: '/triggers', label: '触发', Icon: Zap },
       { to: '/tasks', label: '任务与失败记录', Icon: Activity },
       { to: '/usage', label: 'Token 用量', Icon: BarChart3 },
     ],
   },
   {
-    title: '公共资源',
+    title: '资源',
     items: [
+      { to: '/items', label: '条目', Icon: Boxes },
+      { to: '/roles', label: '角色', Icon: ShieldCheck },
       { to: '/memory', label: '全局记忆', Icon: ScrollText },
-      { to: '/skills', label: '公共 Skills', Icon: Sparkles },
-      { to: '/mcp', label: '公共 MCP servers', Icon: Plug },
-      { to: '/vault', label: '公共 Vault', Icon: KeyRound },
     ],
   },
   {

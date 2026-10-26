@@ -68,12 +68,6 @@ async def items_in(s: AsyncSession, kind: Subject) -> list[Item]:
     return list(await s.scalars(select(Item).where(Item.kind == kind.value).order_by(Item.name)))
 
 
-async def owned_in(s: AsyncSession, kind: Subject, owner: str | None) -> list[Item]:
-    """owner 名下的（None 为平台的），按名称。"""
-    where = Item.owner.is_(None) if owner is None else Item.owner == owner
-    return list(await s.scalars(select(Item).where(Item.kind == kind.value, where).order_by(Item.name)))
-
-
 async def usable_in(s: AsyncSession, kind: Subject, user: str) -> list[Item]:
     """user（agent 的 id 或 revisions.USER）能用的（规则 1），按名称。"""
     grants = await grants_in(s, user)

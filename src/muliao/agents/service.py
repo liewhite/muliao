@@ -14,12 +14,12 @@ from typing import Literal, cast, get_args
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.access import grants_in
+from muliao.agents.access import Grants, Keep, granted_by, grants_in
 from muliao.agents.active import active_row_in, runnable_row_in
 from muliao.agents.ids import new_agent_id
 from muliao.agents.memory import create_memory_in
 from muliao.agents.naming import new_agent_name, normalize_agent_name
-from muliao.agents.permissions import BASE, Kind, Rules, check_patterns, pattern_of
+from muliao.agents.permissions import ADMIN, BASE, Kind, Rules, check_patterns, pattern_of
 from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
 from muliao.agents.tables import Agent, Item
 from muliao.errors import Conflict, InvalidInput, NotFound
@@ -119,6 +119,33 @@ class AgentInfo:
     @property
     def archived(self) -> bool:
         return self.archived_at is not None
+
+
+@dataclass(frozen=True)
+class Reach:
+    """一份配置能用的：内置工具（按登记顺序）与 skill、MCP server、secret（`kind:name`，按种类、名称）。"""
+
+    tools: list[str]
+    items: list[str]
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    """条目池里的一项（界面的条目页）。内置工具归平台、没有描述与修改时间。"""
+
+    kind: Kind
+    name: str
+    owner: str | None
+    description: str
+    updated_at: datetime | None
+    # allow 放行它、deny 没拦的角色（含内置的）
+    roles: tuple[str, ...]
+
+
+async def _items_in(s: AsyncSession, keep: Keep) -> list[str]:
+    """keep(kind, name, owner) 为真的条目，`kind:name`，按种类、名称。"""
+    rows = await s.execute(select(Item.kind, Item.name, Item.owner).order_by(Item.kind, Item.name))
+    return [pattern_of(Kind(k), n) for k, n, o in rows if keep(Kind(k), n, o)]
 
 
 def info_of(agent: Agent) -> AgentInfo:
@@ -228,16 +255,64 @@ class AgentService:
     async def usable_items(self, agent_id: str) -> list[str]:
         """agent 能用的 skill、MCP server、secret（`kind:name`，agents.access 的规则 1），按种类、名称。"""
         async with self._db.transaction() as s:
-            grants = await grants_in(s, agent_id)
-            rows = await s.execute(select(Item.kind, Item.name, Item.owner).order_by(Item.kind, Item.name))
-            return [pattern_of(Kind(k), n) for k, n, o in rows if grants.uses(Kind(k), n, o)]
+            return await _items_in(s, (await grants_in(s, agent_id)).uses)
 
-    async def preview(self, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> list[str]:
-        """还没保存的配置会得到的内置工具（界面预览），与写入时同样校验。"""
+    async def preview(
+        self, agent_id: str | None, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]
+    ) -> Reach:
+        """agent（None 为还没建的）按还没保存的配置能用的内置工具与条目（界面预览），与写入时同样校验：已存的规则算作
+        「之前的」，不要求仍匹配现有条目。"""
         async with self._db.transaction() as s:
-            await check_rules_in(s, Rules(tuple(allow), tuple(deny)))
+            row = None if agent_id is None else await active_row_in(s, agent_id)
+            before = Rules() if row is None else Rules(tuple(row.allow), tuple(row.deny))
+            await check_rules_in(s, Rules(tuple(allow), tuple(deny)), before)
             await check_assignable_in(s, roles)
-            return self.resolve(await rules_in(s, roles, allow, deny))
+            rules = await rules_in(s, roles, allow, deny)
+            # 还没建的 agent 没有自己的条目，只看规则；已有的按 agents.access 的规则 1
+            keep = granted_by(rules) if agent_id is None else Grants(agent_id, rules, ADMIN in roles).uses
+            return Reach(self.resolve(rules), await _items_in(s, keep))
+
+    async def role_reach(self, rules: Rules) -> Reach:
+        """只按一组角色规则能用的内置工具与条目（不含任何 agent 自己的条目）。"""
+        async with self._db.transaction() as s:
+            return Reach(self.resolve(rules), await _items_in(s, granted_by(rules)))
+
+    async def preview_role(self, name: str | None, allow: Sequence[str], deny: Sequence[str]) -> Reach:
+        """角色（None 为还没建的）按还没保存的规则能用的（界面预览），与写入时同样校验；内置角色加上它固定的部分。"""
+        async with self._db.transaction() as s:
+            role = None if name is None else (await roles_in(s)).get(name)
+            if name is not None and role is None:
+                raise NotFound(f"role {name!r} not found")
+            rules = Rules(tuple(allow), tuple(deny))
+            await check_rules_in(s, rules, Rules() if role is None else role.rules)
+            effective = rules if role is None else Rules.union([role.fixed, rules])
+            return Reach(self.resolve(effective), await _items_in(s, granted_by(effective)))
+
+    async def catalog(self) -> list[CatalogEntry]:
+        """全部条目：内置工具（按登记顺序）在前，skill、MCP server、secret 按种类、名称；每项带收录它的角色。"""
+        async with self._db.transaction() as s:
+            roles = list((await roles_in(s)).values())
+            items = await s.scalars(select(Item).order_by(Item.kind, Item.name))
+
+            keeps = [(r.name, granted_by(r.effective)) for r in roles]
+
+            def granted(kind: Kind, name: str, owner: str | None) -> tuple[str, ...]:
+                return tuple(n for n, keep in keeps if keep(kind, name, owner))
+
+            tools = [
+                CatalogEntry(Kind.TOOL, n, None, "", None, granted(Kind.TOOL, n, None)) for n in self.tools
+            ]
+            return tools + [
+                CatalogEntry(
+                    Kind(i.kind),
+                    i.name,
+                    i.owner,
+                    i.description,
+                    i.updated_at,
+                    granted(Kind(i.kind), i.name, i.owner),
+                )
+                for i in items
+            ]
 
     async def verify_stored(self) -> None:
         """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、角色必须都在（且不含隐含的 base）、规则（含角色的）

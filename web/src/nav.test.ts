@@ -5,7 +5,7 @@ describe('isAdminPath', () => {
   it('管理菜单里的页面及其子页面属于管理', () => {
     expect(isAdminPath('/agents')).toBe(true)
     expect(isAdminPath('/agents/abc')).toBe(true)
-    expect(isAdminPath('/skills/edit')).toBe(true)
+    expect(isAdminPath('/items/skill')).toBe(true)
     expect(isAdminPath('/settings')).toBe(true)
   })
 

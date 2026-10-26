@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Disclosure, toast } from '@heroui/react'
 import { History, RotateCcw } from 'lucide-react'
-import { USER, api, type AgentId, type ResourceKind } from '../api'
+import { USER, api, type AgentId, type ResourceKind, type ResourceRef } from '../api'
 import {
   ActionButton,
   EmptyHint,
@@ -18,26 +18,30 @@ import {
   useLoad,
 } from '../ui'
 
-/** 文本资源的版本历史（新的在前，第一条即当前生效），可以把旧版恢复为新的一版。current 变化时重新加载 */
+/**
+ * 记忆或条目的版本历史（新的在前，第一条即当前生效），可以把旧版恢复为新的一版（secret 的版本不含值，只能看）。
+ * 记忆按 Markdown 显示，skill（全部文件的 JSON）、MCP 配置、secret 描述按原文显示。current 变化时重新加载
+ */
 export function ResourceHistory({
   kind,
-  owner,
+  target,
   current,
   onRestored,
 }: {
   kind: ResourceKind
-  owner: AgentId | null
+  target: ResourceRef
   current: string
   onRestored: () => void
 }) {
-  const history = useLoad(() => api.history(kind, owner), [kind, owner, current])
+  const key = JSON.stringify(target)
+  const history = useLoad(() => api.history(kind, target), [kind, key, current])
   const agents = useAgents()
   const confirm = useConfirm()
   const action = useAction()
 
   async function restore(rev: number, at: string) {
     const ok = await confirm({ title: `恢复 ${formatTime(at)} 的版本？`, body: '它会作为新的一版生效，现有历史保留。', confirmLabel: '恢复' })
-    if (ok && (await action.run(() => api.restore(kind, owner, rev)))) {
+    if (ok && (await action.run(() => api.restore(kind, target, rev)))) {
       toast.success('已恢复')
       onRestored()
     }
@@ -66,19 +70,33 @@ export function ResourceHistory({
                       <Card.Description className="flex-1">
                         {formatTime(r.created_at)} · {r.author === USER ? '用户' : agentLabel(agents.data, r.author as AgentId)}
                       </Card.Description>
+                      {r.content === null && (
+                        <Chip size="sm" color="danger" variant="soft">
+                          删除
+                        </Chip>
+                      )}
                       {i === 0 ? (
                         <Chip size="sm" color="success" variant="soft">
                           当前
                         </Chip>
                       ) : (
+                        kind !== 'secret' &&
+                        r.content !== null && (
                         <Button size="sm" variant="ghost" isDisabled={action.busy} onPress={() => void restore(r.rev, r.created_at)}>
                           <RotateCcw className="size-4" />
                           恢复
                         </Button>
+                        )
                       )}
                     </Card.Header>
                     <Card.Content className="max-h-60 overflow-auto text-sm">
-                      {r.content?.trim() ? <Markdown text={r.content} /> : <span className="text-muted">（空）</span>}
+                      {!r.content?.trim() ? (
+                        <span className="text-muted">（空）</span>
+                      ) : kind === 'memory' ? (
+                        <Markdown text={r.content} />
+                      ) : (
+                        <pre className="font-mono text-xs whitespace-pre-wrap break-all">{revisionText(kind, r.content)}</pre>
+                      )}
                     </Card.Content>
                   </Card>
                 ))
@@ -89,6 +107,11 @@ export function ResourceHistory({
       </Disclosure.Content>
     </Disclosure>
   )
+}
+
+/** skill（全部文件）与 MCP（配置）的版本是 JSON，缩进后显示；secret 的版本是描述原文 */
+function revisionText(kind: ResourceKind, text: string): string {
+  return kind === 'secret' ? text : JSON.stringify(JSON.parse(text), null, 2)
 }
 
 /** 一份记忆（owner 为 null 即全局记忆）：编辑、保存，以及它的历史版本 */
@@ -126,7 +149,7 @@ export function MemoryEditor({ owner, hint }: { owner: AgentId | null; hint: str
           >
             保存记忆
           </ActionButton>
-          <ResourceHistory kind="memory" owner={owner} current={m.content} onRestored={() => void memory.reload()} />
+          <ResourceHistory kind="memory" target={{ owner }} current={m.content} onRestored={() => void memory.reload()} />
         </div>
       )}
     </Loading>

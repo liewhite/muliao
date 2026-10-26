@@ -10,6 +10,7 @@ from muliao.agents import skill_package
 from muliao.agents.api import SkillMeta, Subject
 from muliao.agents.skill_package import MAX_FILE_BYTES, SkillFile, is_attachment
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound, TooLarge
+from tests.conftest import owned
 
 SKILL_MD = "---\nname: digest\ndescription: When digesting\nlicense: MIT\n---\n\nRun `scripts/fetch.py`.\n"
 
@@ -175,7 +176,7 @@ async def test_malformed_packages_are_rejected_without_writing_anything(
             _zip(entries, symlinks=symlinks), actor="user", owner=alpha, replace=False
         )
 
-    assert await container.skills.list(alpha) == []
+    assert await owned(container, "skill", alpha) == []
 
 
 def test_a_file_that_is_not_a_zip_is_rejected():

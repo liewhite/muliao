@@ -18,7 +18,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from muliao.agents.active import active_row_in
-from muliao.agents.items import changeable_in, existing_in, item_in, owned_in, usable_in
+from muliao.agents.items import changeable_in, existing_in, item_in, usable_in
 from muliao.agents.naming import validate_slug
 from muliao.agents.revisions import Subject, record_in
 from muliao.agents.tables import Item
@@ -119,11 +119,6 @@ class McpRegistry:
     async def probe(self, server: McpServer, user: str) -> list[str]:
         """实际连接 server 并列出工具名（检验配置能否工作；连不上是 InvalidInput），secret 按 user 能用的解析。"""
         return await self._probe(server, user)
-
-    async def list(self, owner: str | None) -> list[McpServer]:
-        """owner 名下的 server（None 为平台的），按名称。"""
-        async with self._db.transaction() as s:
-            return [_server(r) for r in await owned_in(s, Subject.MCP, owner)]
 
     async def usable(self, user: str) -> list[McpServer]:
         """user（agent 的 id，或 USER 即全部）能用的 server（agents.access，含停用的），按名称。"""

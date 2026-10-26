@@ -5,12 +5,16 @@ from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
 from muliao.agents.api import (
+    BASE,
     MAX_PACKAGE_BYTES,
     TOOLS,
     USER,
     AgentInfo,
     AgentPatch,
     AgentSpec,
+    CatalogEntry,
+    Kind,
+    Reach,
     Role,
     RoleSpec,
     SkillImport,
@@ -116,33 +120,61 @@ async def list_tools() -> list[ToolOut]:
     return [ToolOut.of(n) for n in TOOLS]
 
 
-class RulesIn(BaseModel):
+class ItemOut(BaseModel):
+    """条目池里的一项，在规则里写作 `<kind>:<name>`。"""
+
+    kind: Kind
+    name: str
+    # agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共条目）
+    owner: str | None
+    description: str
+    # 内置工具为 null
+    updated_at: datetime | None
+    # 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin）；为空时只有 owner 能用（归平台的就谁也用不了）
+    roles: list[str]
+
+    @classmethod
+    def of(cls, e: CatalogEntry) -> "ItemOut":
+        return cls(
+            kind=e.kind,
+            name=e.name,
+            owner=e.owner,
+            description=e.description,
+            updated_at=e.updated_at,
+            roles=list(e.roles),
+        )
+
+
+@router.get("/items")
+async def list_items(c: C) -> list[ItemOut]:
+    """全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称。"""
+    return [ItemOut.of(e) for e in await c.agents.catalog()]
+
+
+class ReachOut(BaseModel):
+    """一份配置能用的内置工具与条目（skill、MCP server、secret，`kind:name`）。"""
+
+    tools: list[ToolOut]
+    items: list[str]
+
+    @classmethod
+    def of(cls, r: Reach) -> "ReachOut":
+        return cls(tools=[ToolOut.of(t) for t in r.tools], items=r.items)
+
+
+class AgentPreviewIn(BaseModel):
+    # 已有的 agent（它自己的条目总能用）；null 为还没建的
+    agent_id: str | None
     roles: list[str]
     allow: list[str]
     deny: list[str]
 
 
-class ResolvedOut(BaseModel):
-    """按规则最终能用的内置工具。"""
-
-    tools: list[ToolOut]
-
-    @classmethod
-    def of(cls, tools: list[str]) -> "ResolvedOut":
-        return cls(tools=[ToolOut.of(t) for t in tools])
-
-
-@router.post("/tools/resolve")
-async def resolve_tools(c: C, body: RulesIn) -> ResolvedOut:
-    """agent 配置（还没保存的也行）最终能用的内置工具：base + 角色 + allow / deny，与运行时同一套计算。"""
-    return ResolvedOut.of(await c.agents.preview(body.roles, body.allow, body.deny))
-
-
-@router.get("/agents/{agent_id}/items")
-async def usable_items(c: C, agent_id: str) -> list[str]:
-    """agent 能用的 skill、MCP server、secret（`kind:name`）：自己的与规则放行的。"""
-    await c.agents.get_active(agent_id)
-    return await c.agents.usable_items(agent_id)
+@router.post("/agent-preview")
+async def preview_agent(c: C, body: AgentPreviewIn) -> ReachOut:
+    """agent 配置（还没保存的也行）最终能用的：自己的条目 + base + 角色 + allow / deny 放行的，与运行时同一套计算，
+    与保存时同样校验（不合法 422）。"""
+    return ReachOut.of(await c.agents.preview(body.agent_id, body.roles, body.allow, body.deny))
 
 
 class RoleOut(BaseModel):
@@ -155,11 +187,13 @@ class RoleOut(BaseModel):
     deny: list[str]
     # 内置角色不能删；base 每个 agent 隐含
     builtin: bool
-    # 只按这个角色的规则（固定的与可编辑的）能用的内置工具
-    resolved: ResolvedOut
+    # 只按这个角色的规则（固定的与可编辑的）能用的
+    reach: ReachOut
+    # 带这个角色的 agent 的 id（含归档的）；base 是全部 agent
+    agents: list[str]
 
     @classmethod
-    def of(cls, r: Role, resolved: list[str]) -> "RoleOut":
+    async def of(cls, c: C, r: Role, agents: list[AgentInfo]) -> "RoleOut":
         return cls(
             name=r.name,
             description=r.description,
@@ -167,7 +201,8 @@ class RoleOut(BaseModel):
             allow=list(r.rules.allow),
             deny=list(r.rules.deny),
             builtin=r.builtin,
-            resolved=ResolvedOut.of(resolved),
+            reach=ReachOut.of(await c.agents.role_reach(r.effective)),
+            agents=[a.id for a in agents if r.name == BASE or r.name in a.roles],
         )
 
 
@@ -180,20 +215,34 @@ class RoleIn(BaseModel):
 @router.get("/roles")
 async def list_roles(c: C) -> list[RoleOut]:
     """全部角色：内置在前，自建的按名称。"""
-    return [RoleOut.of(r, c.agents.resolve(r.effective)) for r in await c.roles.list()]
+    agents = await c.agents.list()
+    return [await RoleOut.of(c, r, agents) for r in await c.roles.list()]
+
+
+class RolePreviewIn(BaseModel):
+    # 已有的角色（内置的加上固定规则）；null 为还没建的
+    name: str | None
+    allow: list[str]
+    deny: list[str]
+
+
+@router.post("/role-preview")
+async def preview_role(c: C, body: RolePreviewIn) -> ReachOut:
+    """角色规则（还没保存的也行）能用的，与保存时同样校验（不合法 422）。"""
+    return ReachOut.of(await c.agents.preview_role(body.name, body.allow, body.deny))
 
 
 @router.post("/roles/{name}", status_code=201)
 async def create_role(c: C, name: str, body: RoleIn) -> RoleOut:
     role = await c.roles.create(RoleSpec(name, body.description, body.allow, body.deny))
-    return RoleOut.of(role, c.agents.resolve(role.effective))
+    return await RoleOut.of(c, role, await c.agents.list())
 
 
 @router.put("/roles/{name}")
 async def update_role(c: C, name: str, body: RoleIn) -> RoleOut:
     """整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。"""
     role = await c.roles.update(RoleSpec(name, body.description, body.allow, body.deny))
-    return RoleOut.of(role, c.agents.resolve(role.effective))
+    return await RoleOut.of(c, role, await c.agents.list())
 
 
 @router.delete("/roles/{name}", status_code=204)
@@ -330,13 +379,6 @@ class SkillIn(BaseModel):
     name: str
     description: str
     body: str
-
-
-@router.get("/skills")
-async def list_skills(c: C, owner: str | None = None) -> list[SkillOut]:
-    """owner 名下的 skill（owner 为空是归平台的）。"""
-    await check_owner(c, owner)
-    return [SkillOut.of(s) for s in await c.skills.list(owner)]
 
 
 @router.get("/skill")

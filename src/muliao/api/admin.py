@@ -1,13 +1,10 @@
 """MCP、vault、推送订阅的管理接口。"""
 
-from datetime import datetime
-
 from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
 from muliao.agents.api import USER, McpServer, McpTransport, mcp_config
-from muliao.api.deps import C, check_owner
-from muliao.vault.api import SecretInfo
+from muliao.api.deps import C
 
 router = APIRouter()
 
@@ -60,12 +57,10 @@ class EnabledIn(BaseModel):
 
 
 @router.get("/mcp")
-async def list_mcp(c: C, owner: str | None = None) -> list[McpOut]:
-    """owner（agent 的 id）能用的 server（自己的与分发给它的）；owner 缺省时为归平台的 server。"""
+async def list_mcp(c: C) -> list[McpOut]:
+    """全部 server（含停用的），按名称；谁能用见 /items 的 roles。"""
     # env/headers 中的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回
-    await check_owner(c, owner)
-    servers = await (c.mcp.list(None) if owner is None else c.mcp.usable(owner))
-    return [McpOut.of(m) for m in servers]
+    return [McpOut.of(m) for m in await c.mcp.usable(USER)]
 
 
 @router.post("/mcp", status_code=201)
@@ -105,29 +100,9 @@ class SecretIn(BaseModel):
     description: str = ""
 
 
-class SecretOut(BaseModel):
-    # None 为平台的
-    owner: str | None
-    key: str
-    description: str
-    updated_at: datetime
-
-    @classmethod
-    def of(cls, s: SecretInfo) -> "SecretOut":
-        return cls(owner=s.owner, key=s.key, description=s.description, updated_at=s.updated_at)
-
-
-@router.get("/vault")
-async def list_secrets(c: C, owner: str | None = None) -> list[SecretOut]:
-    """owner（agent 的 id）能用的 secret（不含值，自己的与分发给它的）；owner 缺省时为归平台的 secret。"""
-    await check_owner(c, owner)
-    secrets = await (c.vault.owned(None) if owner is None else c.vault.usable_by(owner))
-    return [SecretOut.of(s) for s in secrets]
-
-
 @router.put("/vault/{key}", status_code=204)
 async def set_secret(c: C, key: str, body: SecretIn, owner: str | None = None) -> None:
-    """新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。"""
+    """新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。列表见 /items（不含值）。"""
     await c.vault.set(key, body.value, body.description, actor=USER, owner=owner)
 
 

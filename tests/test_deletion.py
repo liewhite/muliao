@@ -16,6 +16,7 @@ from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.sessions.api import Origin
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.lanes import RUN_TASK, session_lane
+from tests.conftest import owned
 from tests.test_flow import deliver, drain, start
 from tests.test_jobs import start_job, wait_until_done
 
@@ -117,7 +118,7 @@ async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(conta
     await drain(container)
 
     assert await container.triggers.list() == []
-    assert await container.vault.owned(agent.id) == []
+    assert await owned(container, "secret", agent.id) == []
     with pytest.raises(NotFound):
         await container.sessions.get(session.id)
     async with container.db.transaction() as s:
@@ -419,7 +420,7 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
     for write in writes:
         with pytest.raises(NotFound, match="not found"):
             await write()
-    assert [m.name for m in await container.skills.list(agent.id)] == ["s"]
+    assert await owned(container, "skill", agent.id) == ["s"]
     await container.skills.write("pub", "d", "b", actor="user", owner=None)
 
 

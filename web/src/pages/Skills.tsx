@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Card, Chip, toast } from '@heroui/react'
+import { Button, Card, toast } from '@heroui/react'
 import { Download, Plus, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { agentRoute, api, ApiError, asAgentId, type AgentId, type Schemas, type Skill } from '../api'
+import { api, ApiError, asAgentId, type AgentId, type CatalogItem, type Schemas, type Skill } from '../api'
+import { ItemAccess, OwnerSelect } from './itemParts'
+import { ResourceHistory } from './Memory'
 import { ActionButton,
+  CollapsibleForm,
   EmptyHint,
   ErrorAlert,
   LinkButton,
@@ -12,49 +15,52 @@ import { ActionButton,
   TextAreaInput,
   TextInput,
   useAction,
+  agentLabel,
+  useAgents,
   useConfirm,
   useLoad,
 } from '../ui'
 
-function editorPath(owner: AgentId | null, name?: string): string {
-  const params = new URLSearchParams()
-  if (owner) params.set('owner', owner)
-  if (name) params.set('name', name)
-  return `/skills/edit?${params}`
+const SKILLS = '/items?kind=skill'
+
+function editorPath(name?: string): string {
+  return name ? `/items/skill?${new URLSearchParams({ name })}` : '/items/skill'
 }
 
-/** owner 为 null 列出公共 skill，否则列出该 agent 的私有 skill。 */
-export function SkillList({ owner }: { owner: AgentId | null }) {
-  const skills = useLoad(() => api.skills(owner), [owner])
+/** skill 的条目页：items 是条目池里（已筛选的）skill，点进编辑 */
+export function SkillTab({ items, onChange }: { items: CatalogItem[]; onChange: () => void }) {
+  const [owner, setOwner] = useState<AgentId | null>(null)
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2">
-        <LinkButton to={editorPath(owner)} variant="secondary">
+        <LinkButton to={editorPath()} variant="secondary">
           <Plus className="size-4" />
           新建 skill
         </LinkButton>
-        <ImportSkill owner={owner} onImported={() => void skills.reload()} />
       </div>
-      <Loading state={skills}>
-        {(list) =>
-          list.length === 0 ? (
-            <EmptyHint>没有 skill</EmptyHint>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {list.map((s) => (
-                <Link key={s.name} to={editorPath(owner, s.name)}>
-                  <Card className="transition-colors hover:bg-surface-hover">
-                    <Card.Header>
-                      <Card.Title className="font-mono text-base">{s.name}</Card.Title>
-                      <Card.Description>{s.description}</Card.Description>
-                    </Card.Header>
-                  </Card>
+      <CollapsibleForm title="导入 .skill">
+        <OwnerSelect value={owner} onChange={setOwner} />
+        <ImportSkill owner={owner} onImported={onChange} />
+      </CollapsibleForm>
+      {items.length === 0 ? (
+        <EmptyHint>没有 skill</EmptyHint>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {items.map((s) => (
+            <Card key={s.name}>
+              <Card.Header>
+                <Link to={editorPath(s.name)} className="hover:underline">
+                  <Card.Title className="font-mono text-base">{s.name}</Card.Title>
                 </Link>
-              ))}
-            </div>
-          )
-        }
-      </Loading>
+                <Card.Description>{s.description}</Card.Description>
+              </Card.Header>
+              <Card.Content>
+                <ItemAccess item={s} />
+              </Card.Content>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -128,25 +134,15 @@ function ImportSkill({ owner, onImported }: { owner: AgentId | null; onImported:
   )
 }
 
-export function PublicSkills() {
-  return (
-    <Page title="公共 Skills">
-      <p className="text-sm text-muted">所有 agent 都能看到公共 skill；同名私有 skill 会遮蔽它。</p>
-      <SkillList owner={null} />
-    </Page>
-  )
-}
-
 export function SkillEditor() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const confirm = useConfirm()
-  const ownerParam = params.get('owner')
-  const owner = ownerParam === null ? null : asAgentId(ownerParam)
   const existing = params.get('name')
-  const back = owner ? agentRoute(owner) : '/skills'
-  const [skill, setSkill] = useState<Skill>({ owner, name: existing ?? '', description: '', body: '' })
-  const loaded = useLoad(() => (existing ? api.skill(existing) : Promise.resolve(null)), [owner, existing])
+  const back = SKILLS
+  const agents = useAgents()
+  const [skill, setSkill] = useState<Skill>({ owner: null, name: existing ?? '', description: '', body: '' })
+  const loaded = useLoad(() => (existing ? api.skill(existing) : Promise.resolve(null)), [existing])
   const action = useAction()
   useEffect(() => {
     if (loaded.data) setSkill(loaded.data)
@@ -187,11 +183,16 @@ export function SkillEditor() {
         {() => (
           <Card>
             <Card.Content className="flex flex-col gap-4">
-              <div>
-                <Chip size="sm" variant="secondary">
-                  {owner ? '私有 skill' : '公共 skill'}
-                </Chip>
-              </div>
+              {existing ? (
+                <div className="text-sm text-muted">
+                  归属：{skill.owner === null ? '平台' : agentLabel(agents.data, asAgentId(skill.owner))}
+                </div>
+              ) : (
+                <OwnerSelect
+                  value={skill.owner === null ? null : asAgentId(skill.owner)}
+                  onChange={(owner) => set({ owner })}
+                />
+              )}
               {!existing && (
                 <TextInput
                   label="名称"
@@ -228,6 +229,14 @@ export function SkillEditor() {
                   </Button>
                 )}
               </div>
+              {existing && loaded.data && (
+                <ResourceHistory
+                  kind="skill"
+                  target={{ name: existing }}
+                  current={loaded.data.body + loaded.data.description}
+                  onRestored={() => void loaded.reload()}
+                />
+              )}
             </Card.Content>
           </Card>
         )}

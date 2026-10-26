@@ -370,21 +370,6 @@ export function EmptyHint({ children }: { children: ReactNode }) {
   return <p className="py-10 text-center text-sm text-muted">{children}</p>
 }
 
-/** 只读列出继承来的公共资源（见 ownership.ts；是否被遮蔽由后端给出）：私有视角里能看到它们，但只能在设置页管理。 */
-export function InheritedSection({ title, to, children }: { title: string; to: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-medium text-muted">{title}</h2>
-        <RouterLink to={to} className="shrink-0 text-sm text-accent">
-          去设置页管理
-        </RouterLink>
-      </div>
-      {children}
-    </section>
-  )
-}
-
 const isFileUrl = (src: string) => src.startsWith(`${FILES_PATH}/`)
 // 站内页面（如 issue 引用 #12 生成的 /issues/12）：以单个 / 开头、不是后端接口（含文件存储）；
 // /\x 会被浏览器当成协议相对地址 //x，不算

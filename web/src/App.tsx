@@ -11,14 +11,13 @@ import { Roles } from './pages/Permissions'
 import Triggers from './pages/Triggers'
 import Issues from './pages/Issues'
 import IssueView from './pages/IssueView'
-import Mcp from './pages/Mcp'
-import Vault from './pages/Vault'
+import Items from './pages/Items'
 import GlobalMemory from './pages/Memory'
 import NewSession from './pages/NewSession'
 import Notifications from './pages/Notifications'
 import SessionView from './pages/SessionView'
 import Sessions from './pages/Sessions'
-import { PublicSkills, SkillEditor } from './pages/Skills'
+import { SkillEditor } from './pages/Skills'
 import UsagePage from './pages/Usage'
 import { syncPushSubscription } from './push'
 import { handleNavigation } from './swNavigate'
@@ -191,10 +190,12 @@ function Shell() {
               <Route path="/issues/:id" element={<IssueRoute />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/memory" element={<GlobalMemory />} />
-              <Route path="/skills" element={<PublicSkills />} />
-              <Route path="/skills/edit" element={<SkillEditor />} />
-              <Route path="/mcp" element={<Mcp />} />
-              <Route path="/vault" element={<Vault />} />
+              <Route path="/items" element={<Items />} />
+              <Route path="/items/skill" element={<SkillEditor />} />
+              {/* 合并进条目页之前的地址 */}
+              <Route path="/skills" element={<Navigate to="/items?kind=skill" replace />} />
+              <Route path="/mcp" element={<Navigate to="/items?kind=mcp" replace />} />
+              <Route path="/vault" element={<Navigate to="/items?kind=secret" replace />} />
               <Route path="/tasks" element={<Tasks />} />
               <Route path="/usage" element={<UsagePage />} />
               <Route path="/login" element={<Navigate to="/" replace />} />

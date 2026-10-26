@@ -13,7 +13,7 @@ from muliao.agents.active import AgentArchived
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpConfig, McpRegistry, McpServer, McpTransport, mcp_config
 from muliao.agents.memory import MemoryStore
-from muliao.agents.permissions import TOOLS, Access, Kind, Role, Rules, Tool
+from muliao.agents.permissions import BASE, TOOLS, Access, Kind, Role, Rules, Tool
 from muliao.agents.revisions import USER, RevisionInfo, Revisions, Subject
 from muliao.agents.roles import RoleService, RoleSpec
 from muliao.agents.secrets import SecretItems, StoredSecret
@@ -23,6 +23,8 @@ from muliao.agents.service import (
     AgentPatch,
     AgentService,
     AgentSpec,
+    CatalogEntry,
+    Reach,
     Thinking,
     active_agent_in,
     agent_in,
@@ -47,6 +49,8 @@ __all__ = [
     "AgentInfo",
     "AgentNames",
     "AgentService",
+    "CatalogEntry",
+    "Reach",
     "MemoryStore",
     "RevisionInfo",
     "Revisions",
@@ -64,6 +68,7 @@ __all__ = [
     "RoleService",
     "RoleSpec",
     "Rules",
+    "BASE",
     "TOOLS",
     "active_agent_in",
     "agent_in",

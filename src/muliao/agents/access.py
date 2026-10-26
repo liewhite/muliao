@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +41,15 @@ class Grants:
 
 
 USER_GRANTS = Grants(None, Rules(), admin=True)
+
+
+# 「这一项能不能用」：(种类, 名字, owner)；Grants.uses 与 granted_by 都是它
+Keep = Callable[[Kind, str, str | None], bool]
+
+
+def granted_by(rules: Rules) -> Keep:
+    """只按规则、不看 owner 的「能用」（规则 1 的规则那一半）：一个角色本身、还没建的 agent。与 Grants.uses 同签名。"""
+    return lambda kind, name, _owner: rules.allows(kind, name)
 
 
 async def grants_in(s: AsyncSession, actor: str) -> Grants:

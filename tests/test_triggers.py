@@ -12,7 +12,7 @@ from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
 from muliao.triggers.service import previous_fire_state_in, set_state, trigger_in
-from tests.conftest import login, share
+from tests.conftest import login, owned, share
 from tests.test_flow import drain, history_of, start
 
 ECHO_SERVER = str(Path(__file__).parent / "fixtures" / "echo_mcp.py")
@@ -422,7 +422,7 @@ async def test_an_agent_uses_its_own_enabled_servers_and_those_its_roles_give_it
     await container.mcp.add("other", spec, actor="user", owner=None, probe=False)
 
     assert [(s.owner, s.name) for s in await container.mcp.usable(alpha)] == [(alpha, "mine")]
-    assert [s.name for s in await container.mcp.list(None)] == ["echo", "other"]
+    assert await owned(container, "mcp", None) == ["echo", "other"]
     # 归平台的只有角色给了的生效；停用的不生效
     await container.roles.create(RoleSpec("other-user", "d", ["mcp:other"], []))
     await container.agents.update(alpha, AgentPatch(roles=["other-user"]))
@@ -438,7 +438,7 @@ async def test_mcp_add_failing_probe_saves_nothing(container):
 
     with pytest.raises(InvalidInput, match="could not connect"):
         await container.mcp.add("broken", spec, actor="user", owner=None, probe=True)
-    assert await container.mcp.list(None) == []
+    assert await owned(container, "mcp", None) == []
 
 
 async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, models):

@@ -1,6 +1,7 @@
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.profiles import ModelProfile
 
+from muliao.agents.api import BASE
 from muliao.api.auth import Auth
 from tests.conftest import login, share
 from tests.scripted import scripted
@@ -48,8 +49,10 @@ async def test_skill_and_memory_endpoints(client):
         "/api/skill", json={"owner": None, "name": "shared", "description": "for all", "body": "steps"}
     )
     assert resp.status_code == 200
-    assert [s["name"] for s in (await client.get("/api/skills")).json()] == ["shared"]
-    assert (await client.get("/api/skills", params={"owner": agent_id})).json() == []
+    skills = [i for i in (await client.get("/api/items")).json() if i["kind"] == "skill"]
+    assert [(s["name"], s["owner"], s["description"], s["roles"]) for s in skills] == [
+        ("shared", None, "for all", [])
+    ]
 
     resp = await client.put("/api/memory", json={"owner": agent_id, "content": "- fact"})
     assert resp.json()["content"] == "- fact"
@@ -99,37 +102,29 @@ async def test_a_skill_exported_over_http_imports_into_another_owner(client, mak
     assert (await client.get("/api/skill/package", params={"name": "nope"})).status_code == 404
 
 
-async def test_vault_never_returns_values(client):
+async def test_items_list_every_owners_items_with_the_roles_that_give_them(client, container, make_agent):
+    alpha = (await make_agent()).id
     await login(client)
     assert (
         await client.put("/api/vault/SLACK_TOKEN", json={"value": "xoxb-1", "description": "slack"})
     ).status_code == 204
-    listed = (await client.get("/api/vault")).json()
-    assert listed[0]["key"] == "SLACK_TOKEN" and listed[0]["owner"] is None and "xoxb-1" not in str(listed)
-    assert (await client.put("/api/vault/X?owner=nope", json={"value": "v"})).status_code == 404
-
-
-async def test_vault_and_mcp_lists_take_the_owners_view(client, container, make_agent):
-    alpha = (await make_agent()).id
-    await login(client)
     await client.put(f"/api/vault/MINE?owner={alpha}", json={"value": "v"})
-    await client.put("/api/vault/OTHER", json={"value": "v"})
     # key 全局唯一：同名就是改这一个，owner 不变
-    assert (await client.put(f"/api/vault/OTHER?owner={alpha}", json={"value": "v2"})).status_code == 204
+    assert (
+        await client.put(f"/api/vault/SLACK_TOKEN?owner={alpha}", json={"value": "v2"})
+    ).status_code == 204
+    assert (await client.put("/api/vault/X?owner=nope", json={"value": "v"})).status_code == 404
+    await share(container, "secret:SLACK_TOKEN")
 
-    def keys(listed):
-        return [(s["key"], s["owner"]) for s in listed]
-
-    # agent 能用的：自己的；归平台的要分给它才算
-    assert keys((await client.get("/api/vault", params={"owner": alpha})).json()) == [("MINE", alpha)]
-    await share(container, "secret:OTHER")
-    assert keys((await client.get("/api/vault", params={"owner": alpha})).json()) == [
-        ("MINE", alpha),
-        ("OTHER", None),
-    ]
-    assert keys((await client.get("/api/vault")).json()) == [("OTHER", None)]
-    assert (await client.get("/api/vault", params={"owner": "nope"})).status_code == 404
-    assert (await client.get("/api/mcp", params={"owner": "nope"})).status_code == 404
+    items = (await client.get("/api/items")).json()
+    secrets = [(i["name"], i["owner"], i["roles"]) for i in items if i["kind"] == "secret"]
+    assert secrets == [("MINE", alpha, []), ("SLACK_TOKEN", None, [BASE])]
+    assert "xoxb-1" not in str(items) and "v2" not in str(items)
+    tools = {i["name"]: i for i in items if i["kind"] == "tool"}
+    assert tools["run_shell"]["roles"] == [BASE, "admin"] and tools["delete_agent"]["roles"] == ["admin"]
+    assert tools["run_shell"]["owner"] is None and tools["run_shell"]["updated_at"] is None
+    # 内置工具在前
+    assert items[0]["kind"] == "tool"
 
 
 def test_auth_token_expires_and_rejects_tampering():

@@ -135,3 +135,8 @@ async def share(container: Assembly, *rules: str) -> None:
     base = await container.roles.get("base")
     allow = [*base.rules.allow, *rules]
     await container.roles.update(RoleSpec("base", base.description, allow, list(base.rules.deny)))
+
+
+async def owned(container: Assembly, kind: str, owner: str | None) -> list[str]:
+    """owner 名下（None 为平台的）这一种条目的名字，按名称（条目池 AgentService.catalog）。"""
+    return [e.name for e in await container.agents.catalog() if e.kind == kind and e.owner == owner]
