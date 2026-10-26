@@ -122,6 +122,26 @@ def _ends_line(text: str) -> bool:
     return bool(lines) and lines[-1] != lines[-1].splitlines()[0]
 
 
+def _unchanged(old: list[str], new: list[str]) -> dict[int, int]:
+    """一块整行改动里认作没变的行：old 的第 i 行 -> new 的第 j 行。只认首尾相同的行，而且先裁头再裁尾、先裁尾再裁头
+    两种对法都认同一位置的才算：写出的新行里有和原行相同的（如 `}` 变成两个 `}`）时说不清哪一个是原来的，就算改掉了。"""
+
+    def aligned(head_first: bool) -> set[tuple[int, int]]:
+        same = min(len(old), len(new))
+        head = tail = 0
+        for side in ("head", "tail") if head_first else ("tail", "head"):
+            if side == "head":
+                while head < same - tail and old[head] == new[head]:
+                    head += 1
+            else:
+                while tail < same - head and old[-1 - tail] == new[-1 - tail]:
+                    tail += 1
+        pairs = {(i, i) for i in range(head)}
+        return pairs | {(len(old) - 1 - k, len(new) - 1 - k) for k in range(tail)}
+
+    return dict(aligned(True) & aligned(False))
+
+
 @dataclass
 class _Block:
     """Origin.follow 里一块被改动的整行：原来的第 first 到 stop（不含）行；new 是块首到字符位置 at 这段改后的文本，
@@ -150,8 +170,8 @@ class Origin:
 
     def follow(self, before: str, places: Sequence[Splice], by: int) -> None:
         """第 by 处修改在当前文本 before 上做了 places 这些替换：每处替换扩到所在的整行（替换后不以换行结尾时连上下一行，
-        落在同一行的几处合成一块），块外的行原样保留来历；块内只把首尾没变的行认作原来那几行，其余的原文行记为被第
-        by 处改掉，新写出的行记为第 by 处写的。只看替换本身、不比对整份文本，重复的行（空行、`}`）不会对错位置。"""
+        落在同一行的几处合成一块），块外的行原样保留来历；块内只把确定没变的首尾行（_unchanged）认作原来那几行，其余原文行
+        记为被第 by 处改掉，新写出的行记为第 by 处写的。只看替换本身、不比对整份文本，重复的行（空行、`}`）不会对错位置。"""
         starts = _line_starts(before)
         count = len(starts) - 1
         blocks: list[_Block] = []
@@ -179,19 +199,12 @@ class Origin:
             lines += self._lines[kept : block.first]
             old = before[starts[block.first] : starts[block.stop]].splitlines(keepends=True)
             written = block.text(before, starts).splitlines(keepends=True)
-            same = min(len(old), len(written))
-            head = 0
-            while head < same and old[head] == written[head]:
-                head += 1
-            tail = 0
-            while tail < same - head and old[-1 - tail] == written[-1 - tail]:
-                tail += 1
-            for original, _ in self._lines[block.first + head : block.stop - tail]:
-                if original is not None:
+            stays = _unchanged(old, written)
+            for i, (original, _) in enumerate(self._lines[block.first : block.stop]):
+                if original is not None and i not in stays:
                     self._gone[original] = by
-            lines += self._lines[block.first : block.first + head]
-            lines += [(None, by)] * (len(written) - head - tail)
-            lines += self._lines[block.stop - tail : block.stop]
+            moved = {j: block.first + i for i, j in stays.items()}
+            lines += [self._lines[moved[j]] if j in moved else (None, by) for j in range(len(written))]
             kept = block.stop
         lines += self._lines[kept:]
         after = len(splice(before, places).splitlines())

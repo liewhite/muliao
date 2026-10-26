@@ -140,6 +140,13 @@ def test_line_numbers_follow_the_edits_not_a_guess_from_repeated_lines():
     assert apply_each(text, edits)[0] == {"f": "x\n x\n\nbc\nD\n"}
     with pytest.raises(InvalidInput, match="line 3 overlap edit 2"):
         apply_each(text, [*edits[:2], ("f", LineRange(3, 3, "c", "C"))])
+    # 一行改成两行一样的：说不清哪个是原来的那行，算改掉了
+    text = {"f": "}\na x\n}\n"}
+    with pytest.raises(InvalidInput, match="line 1 overlap edit 1"):
+        apply_each(text, [("f", Replace("}", "}\n}", every=True)), ("f", LineRange(1, 1, "}", "Z"))])
+    # old_text 里带上的上下文行没变，之后仍可按行号改
+    edits = [("f", Replace("a x\n", "a x\nnew\n")), ("f", LineRange(2, 2, "a x", "A"))]
+    assert apply_each(text, edits)[0] == {"f": "}\nA\nnew\n}\n"}
 
 
 def test_line_numbers_after_a_pattern_deleting_neighbours_with_their_blank_lines():
