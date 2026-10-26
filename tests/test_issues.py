@@ -645,6 +645,137 @@ async def test_http_dependencies(client, container, make_agent):
     assert resp.json()["depends_on"] == []
 
 
+async def _issue_count(container) -> int:
+    from muliao.issues.tables import Issue
+
+    async with container.db.transaction() as s:
+        return len((await s.scalars(select(Issue.id))).all())
+
+
+async def test_a_batch_refers_to_its_own_keys_and_is_delivered_after_it_is_committed(
+    container, make_agent, monkeypatch
+):
+    """拆分时并行逐个建拿不到彼此的编号（#213）：一批里用 key 互相依赖，也可依赖已有编号；投递在整批提交之后，
+    先开工的子 issue 看得到父 issue。"""
+    from muliao.issues.service import NewIssue
+
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    existing = await container.issues.create(None, owner=alpha, title="existing")
+    seen: list[int] = []
+    run_now = container.issues._run_now  # noqa: SLF001
+
+    async def spy(task_id: int) -> None:
+        seen.append(await _issue_count(container))
+        await run_now(task_id)
+
+    monkeypatch.setattr(container.issues, "_run_now", spy)
+    api, ui, parent = await container.issues.create_many(
+        alpha,
+        [
+            NewIssue(owner=beta, title="api", status=TODO, assignee=beta, key="api"),
+            NewIssue(
+                owner=beta, title="ui", status=TODO, assignee=beta, key="ui", depends_on=("api", existing.id)
+            ),
+            NewIssue(owner=alpha, title="all", status=TODO, assignee=alpha, depends_on=("api", "ui")),
+        ],
+    )
+    assert [api.id, ui.id, parent.id] == [existing.id + 1, existing.id + 2, existing.id + 3]
+    assert seen == [4]  # 只有 api 不等上游；投它的时候整批都已提交
+    work = await container.issues.work([api, ui, parent])
+    assert [d.id for d in work[api.id].blocks] == [ui.id, parent.id]
+    assert (work[ui.id].waiting_on, work[parent.id].waiting_on) == ((existing.id, api.id), (api.id, ui.id))
+    await deliver(container)
+    assert [s.origin_ref for s in await _issue_sessions(container)] == [str(api.id)]
+
+
+@pytest.mark.parametrize(
+    ("items", "error"),
+    [
+        ([{"key": "a"}, {"key": "a"}], "key 'a' is used by issues\\[0\\] and issues\\[1\\]"),
+        (
+            [{"key": "a"}, {"depends_on": ("b",)}],
+            "issues\\[1\\]: depends_on key 'b' is not a key of this batch",
+        ),
+        (
+            [
+                {"key": "a", "depends_on": ("c",)},
+                {"key": "b", "depends_on": ("a",)},
+                {"key": "c", "depends_on": ("b",)},
+            ],
+            "cycle: 'a' -> 'c' -> 'b' -> 'a'",
+        ),
+        ([{"key": "a", "depends_on": ("a",)}], "cycle: 'a' -> 'a'"),
+        (
+            [{"key": "a"}, {"depends_on": ("a", "a")}],
+            "issues\\[1\\]: depends_on lists an issue more than once",
+        ),
+        (
+            [{"key": "a"}, {"key": "b", "depends_on": ("a", 999)}],
+            "issues\\[1\\] \\(key 'b'\\): .*#999: not found",
+        ),
+        ([{}, {"title": " "}], "issues\\[1\\]: issue title must not be empty"),
+    ],
+    ids=["duplicate-key", "unknown-key", "cycle", "self", "repeated", "missing-issue", "bad-title"],
+)
+async def test_an_invalid_item_creates_nothing_of_the_batch(container, make_agent, items, error):
+    from muliao.issues.service import NewIssue
+
+    alpha = (await make_agent()).id
+    new = [NewIssue(**{"owner": alpha, "title": "t", "status": TODO, "assignee": alpha, **i}) for i in items]
+    with pytest.raises(InvalidInput, match=error):
+        await container.issues.create_many(None, new)
+    assert await _issue_count(container) == 0
+    await deliver(container)
+    assert await _issue_sessions(container) == []
+
+
+async def test_an_unknown_owner_in_a_batch_names_the_item(container, make_agent):
+    from muliao.issues.service import NewIssue
+
+    alpha = (await make_agent()).id
+    with pytest.raises(NotFound, match="issues\\[1\\]: "):
+        await container.issues.create_many(
+            None, [NewIssue(owner=alpha, title="a"), NewIssue(owner="nobody", title="b")]
+        )
+    assert await _issue_count(container) == 0
+
+
+async def test_issue_create_tool_creates_a_batch_in_one_call(container, make_agent, models):
+    from tests.test_tools import run_tools
+
+    me = await make_agent("manager", model="tools")
+    await make_agent("worker")
+    batch = {
+        "issues": [
+            {"key": "step", "title": "step", "owner": "worker", "status": "todo", "assignee": "worker"},
+            {
+                "title": "goal",
+                "owner": "manager",
+                "status": "todo",
+                "assignee": "manager",
+                "depends_on": ["step"],
+            },
+        ]
+    }
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("issue_create", batch),
+            ("issue_create", {**batch, "title": "x"}),
+            ("issue_create", {"owner": "manager"}),
+            ("issue_create", {"title": "one", "owner": "manager"}),
+        ],
+    )
+    step, goal = sorted(await container.issues.list(), key=lambda i: i.id)[:2]
+    assert outputs[0] == f"created issues:\n#{step.id} (key step): step\n#{goal.id}: goal"
+    assert "either one issue (title/owner/...) or issues" in outputs[1]
+    assert "title and owner are required" in outputs[2]
+    assert outputs[3] == f"created issue #{goal.id + 1}"
+    assert [d.id for d in (await container.issues.work([goal]))[goal.id].depends_on] == [step.id]
+
+
 async def test_waiting_is_derived_from_the_current_upstream_state(container, make_agent):
     alpha = (await make_agent()).id
     done = await container.issues.create(None, owner=alpha, title="done", status=DONE)

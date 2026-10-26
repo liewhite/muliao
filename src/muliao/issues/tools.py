@@ -2,13 +2,13 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.api import AgentNames, AgentService
 from muliao.errors import InvalidInput
 from muliao.issues.rules import USER, assignee_name
-from muliao.issues.service import IssueService, IssueWork
+from muliao.issues.service import IssueService, IssueWork, NewIssue
 from muliao.issues.tables import Issue, IssuePriority, IssueStatus
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.platform.values import KEEP, Keep
@@ -35,7 +35,26 @@ class IssueSummary(BaseModel):
     updated_at: datetime
 
 
-def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolset[RunScope]:
+class NewIssueItem(BaseModel):
+    # issue_create 一次建多个时的一项（类 docstring 会进 schema，所以用注释）；字段与 issue_create 的单个参数一致，另加 key
+    model_config = ConfigDict(extra="forbid")
+
+    key: str | None = Field(
+        default=None, description="Name for this item that other items list in their depends_on, e.g. `api`."
+    )
+    title: str = Field(description="One-line summary.")
+    owner: str = Field(description="The agent (by name) whose project this is.")
+    description: str = Field(default="", description="Markdown details: context, what done looks like.")
+    status: IssueStatus = Field(default=IssueStatus.BACKLOG, description="Initial status.")
+    priority: IssuePriority = Field(default=IssuePriority.NONE, description="Priority.")
+    assignee: str | None = Field(default=None, description="Agent name, `user`, or omit for unassigned.")
+    depends_on: tuple[int | str, ...] = Field(
+        default=(),
+        description="What this one waits for: keys of other items of this batch and/or existing issue numbers.",
+    )
+
+
+def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     async def assignee_id(name: str) -> str:
@@ -73,12 +92,12 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             owner: Only issues owned by this agent (by name): the whole history of its project.
         """
         names = await agents.names()
-        found = await issues.list(
+        found = await board.list(
             statuses=list(statuses),
             assignee=None if assignee is None else await assignee_id(assignee),
             owner=None if owner is None else (await agents.find_by_name(owner)).id,
         )
-        work = await issues.work(found)
+        work = await board.work(found)
         return [summary(i, names, work[i.id]) for i in found]
 
     @ts.tool_plain
@@ -88,18 +107,31 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         Args:
             issue_id: Issue number.
         """
-        return await issues.render(issue_id)
+        return await board.render(issue_id)
+
+    async def new_issue(item: NewIssueItem) -> NewIssue:
+        return NewIssue(
+            owner=(await agents.find_by_name(item.owner)).id,
+            title=item.title,
+            description=item.description,
+            status=item.status,
+            priority=item.priority,
+            assignee=None if item.assignee is None else await assignee_id(item.assignee),
+            depends_on=item.depends_on,
+            key=item.key,
+        )
 
     @ts.tool
     async def issue_create(
         ctx: RunContext[RunScope],
-        title: str,
-        owner: str,
+        title: str | None = None,
+        owner: str | None = None,
         description: str = "",
         status: IssueStatus = IssueStatus.BACKLOG,
         priority: IssuePriority = IssuePriority.NONE,
         assignee: str | None = None,
         depends_on: tuple[int, ...] = (),
+        issues: tuple[NewIssueItem, ...] = (),
     ) -> str:
         """Create an issue. Each agent works on an issue in one conversation dedicated to it; while the issue is
         `todo` or `in_progress`, its creation and every later change are delivered there to the assigned agent
@@ -107,32 +139,53 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         very conversation. Use `backlog` for later work.
         To run issues in order, give `depends_on`: the issue is delivered only once all of them are `done` or
         `cancelled` (changes before that are only recorded), so a chain can be created as `todo` up front.
-        To break down a larger piece of work: create the steps as `todo` issues (ordered among themselves with
-        `depends_on`), then right away a `todo` parent issue with the overall goal that depends on all of them.
+        To create several issues that depend on each other, pass `issues` instead (one call, not several
+        parallel calls: those cannot refer to each other's numbers): give each item a `key` and list other items'
+        keys in its `depends_on`. The whole batch is created in one go (nothing is created if any item is
+        invalid) and delivered only after all of it exists with its dependencies.
+        To break down a larger piece of work: in one `issues` call, create the steps as `todo` issues (ordered
+        among themselves with `depends_on`) and a `todo` parent issue with the overall goal that depends on all
+        of them.
 
         Args:
-            title: One-line summary.
+            title: One-line summary (omit when using `issues`).
             owner: The agent (by name) whose project this is; it stays the owner when the issue is reassigned,
                 and gets the user's comments while no agent is working on the issue. Usually yourself for your own
-                project's work.
+                project's work (omit when using `issues`).
             description: Markdown details: context, what done looks like.
             status: Initial status.
             priority: Priority.
             assignee: Agent name, `user`, or omit for unassigned.
             depends_on: Issue numbers this one waits for; dependencies must not form a cycle.
+            issues: Several issues to create at once, each with the fields above plus an optional `key`; in
+                their `depends_on`, a string is the key of another item of this batch, a number an existing issue.
         """
-        issue = await issues.create(
-            ctx.deps.agent_id,
-            session_id=ctx.deps.session_id,
-            owner=(await agents.find_by_name(owner)).id,
-            title=title,
-            description=description,
-            status=status,
-            priority=priority,
-            assignee=None if assignee is None else await assignee_id(assignee),
-            depends_on=depends_on,
-        )
-        return f"created issue #{issue.id}"
+        if issues:
+            defaults = (None, None, "", IssueStatus.BACKLOG, IssuePriority.NONE, None, ())
+            if (title, owner, description, status, priority, assignee, depends_on) != defaults:
+                raise InvalidInput("pass either one issue (title/owner/...) or issues, not both")
+            new = [await new_issue(item) for item in issues]
+        else:
+            if title is None or owner is None:
+                raise InvalidInput("title and owner are required (or pass issues)")
+            item = NewIssueItem(
+                title=title,
+                owner=owner,
+                description=description,
+                status=status,
+                priority=priority,
+                assignee=assignee,
+                depends_on=depends_on,
+            )
+            new = [await new_issue(item)]
+        created = await board.create_many(ctx.deps.agent_id, new, session_id=ctx.deps.session_id)
+        if not issues:
+            return f"created issue #{created[0].id}"
+        lines = [
+            f"#{issue.id}" + ("" if item.key is None else f" (key {item.key})") + f": {issue.title}"
+            for item, issue in zip(issues, created, strict=True)
+        ]
+        return "created issues:\n" + "\n".join(lines)
 
     @ts.tool
     async def issue_update(
@@ -170,7 +223,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
         target: str | None | Keep = (
             None if unassign else KEEP if assignee is None else await assignee_id(assignee)
         )
-        issue = await issues.update(
+        issue = await board.update(
             ctx.deps.agent_id,
             issue_id,
             session_id=ctx.deps.session_id,
@@ -193,7 +246,7 @@ def issues_toolset(issues: IssueService, agents: AgentService) -> FunctionToolse
             issue_id: Issue number.
             body: Comment text.
         """
-        await issues.comment(ctx.deps.agent_id, issue_id, body, session_id=ctx.deps.session_id)
+        await board.comment(ctx.deps.agent_id, issue_id, body, session_id=ctx.deps.session_id)
         return f"commented on issue #{issue_id}"
 
     return ts

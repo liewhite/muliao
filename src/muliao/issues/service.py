@@ -17,7 +17,8 @@ Snapshot.waiting_on）。上游进入 done / cancelled 时，在同一事务里�
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -135,6 +136,66 @@ def _check_handed_to_user(issue: Issue) -> None:
             f"issue #{issue.id} is not assigned to you (assignee: {issue.assignee}), nothing to review"
         )
     raise Conflict(f"issue #{issue.id} is already {issue.status}, nothing to review")
+
+
+@dataclass(frozen=True)
+class NewIssue:
+    """create_many 的一项。depends_on 里的整数是已有 issue 的编号，字符串是同批另一项的 key。"""
+
+    owner: str
+    title: str
+    description: str = ""
+    status: IssueStatus = IssueStatus.BACKLOG
+    priority: IssuePriority = IssuePriority.NONE
+    assignee: str | None = None
+    depends_on: tuple[int | str, ...] = ()
+    key: str | None = None
+
+
+def _label(new: Sequence[NewIssue], n: int) -> str:
+    key = new[n].key
+    return f"issues[{n}]" + ("" if key is None else f" (key {key!r})")
+
+
+@contextmanager
+def _about(new: Sequence[NewIssue], n: int) -> Iterator[None]:
+    """一批里某一项的错误带上它是哪一项（只建一个时原样抛出）。"""
+    try:
+        yield
+    except (InvalidInput, NotFound) as e:
+        if len(new) == 1:
+            raise
+        raise type(e)(f"{_label(new, n)}: {e}") from None
+
+
+def _check_batch(new: Sequence[NewIssue]) -> None:
+    """一批新 issue 之间的引用（不查库）：key 唯一、引用的 key 都在本批、同一项不重复列上游、key 之间不成环。
+    已有 issue 不可能依赖新建的，所以环只可能全在本批之内，这里按 key 报出环上的路径。"""
+    index: dict[str, int] = {}
+    for n, item in enumerate(new):
+        if item.key is None:
+            continue
+        if not item.key.strip():
+            raise InvalidInput(f"{_label(new, n)}: key must not be empty")
+        if item.key in index:
+            raise InvalidInput(f"key {item.key!r} is used by issues[{index[item.key]}] and issues[{n}]")
+        index[item.key] = n
+    edges: list[tuple[int, int]] = []
+    for n, item in enumerate(new):
+        if len(set(item.depends_on)) != len(item.depends_on):
+            raise InvalidInput(
+                f"{_label(new, n)}: depends_on lists an issue more than once: {list(item.depends_on)}"
+            )
+        for d in item.depends_on:
+            if isinstance(d, str):
+                if d not in index:
+                    raise InvalidInput(f"{_label(new, n)}: depends_on key {d!r} is not a key of this batch")
+                edges.append((n, index[d]))
+    for n in range(len(new)):
+        cycle = cycle_through(n, [up for down, up in edges if down == n], edges)
+        if cycle is not None:
+            path = " -> ".join(repr(new[i].key) for i in cycle)
+            raise InvalidInput(f"dependencies must not form a cycle: {path} (each depends on the next)")
 
 
 def _ids(found: Sequence[Dependency]) -> list[int]:
@@ -269,29 +330,64 @@ class IssueService:
         depends_on: Sequence[int] = (),
     ) -> Issue:
         """depends_on：它依赖的上游 issue；不能成环。"""
+        new = NewIssue(
+            owner=owner,
+            title=title,
+            description=description,
+            status=status,
+            priority=priority,
+            assignee=assignee,
+            depends_on=tuple(depends_on),
+        )
+        return (await self.create_many(actor, [new], session_id=session_id))[0]
+
+    async def create_many(
+        self, actor: str | None, new: Sequence[NewIssue], *, session_id: str | None = None
+    ) -> list[Issue]:
+        """一次建一批 issue（按给出的顺序编号），可以互相依赖：depends_on 里的字符串是本批另一项的 key。整批一个
+        事务，任何一项不合法整批不建；全部建好、依赖连好之后才算各自的投递，提交后再投：先开工的子 issue 看得到
+        同批的父 issue（blocks），也不会在依赖补上之前就被投递。"""
+        if not new:
+            raise InvalidInput("no issues to create")
+        _check_batch(new)
         now = utcnow()
         async with self._db.transaction() as s:
-            await self._check_assignee_in(s, assignee)
-            await active_agent_in(s, owner)
-            issue = Issue(
-                owner_agent_id=owner,
-                title=_title(title),
-                description=description,
-                status=status,
-                priority=priority,
-                assignee=assignee,
-                creator_agent_id=actor,
-                created_at=now,
-                updated_at=now,
-            )
-            s.add(issue)
+            created: list[Issue] = []
+            for n, item in enumerate(new):
+                with _about(new, n):
+                    await self._check_assignee_in(s, item.assignee)
+                    await active_agent_in(s, item.owner)
+                    issue = Issue(
+                        owner_agent_id=item.owner,
+                        title=_title(item.title),
+                        description=item.description,
+                        status=item.status,
+                        priority=item.priority,
+                        assignee=item.assignee,
+                        creator_agent_id=actor,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                s.add(issue)
+                created.append(issue)
             await s.flush()
-            await self._set_depends_on_in(s, issue, depends_on)
-            created = self._record(s, issue, actor, ActivityKind.CREATED)
-            wake = await self._after_change_in(s, None, issue, actor, session_id, [created])
-        log.info("issue created", extra={"issue_id": issue.id, "actor": actor, "assignee": assignee})
-        await self._deliver(wake)
-        return issue
+            ids = {
+                item.key: issue.id for item, issue in zip(new, created, strict=True) if item.key is not None
+            }
+            for n, (item, issue) in enumerate(zip(new, created, strict=True)):
+                upstream = [ids[d] if isinstance(d, str) else d for d in item.depends_on]
+                with _about(new, n):
+                    await self._set_depends_on_in(s, issue, upstream)
+            wake = []
+            for issue in created:
+                happened = [self._record(s, issue, actor, ActivityKind.CREATED)]
+                wake.append(await self._after_change_in(s, None, issue, actor, session_id, happened))
+        for issue in created:
+            log.info(
+                "issue created", extra={"issue_id": issue.id, "actor": actor, "assignee": issue.assignee}
+            )
+        await self._deliver(*wake)
+        return created
 
     async def update(
         self,

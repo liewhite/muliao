@@ -78,3 +78,11 @@ async def test_edit_file_single_change_parameters_mirror_the_fields_of_one_edit(
 
     params = set(session_tools(container)["edit_file"].function_schema.json_schema["properties"])
     assert params - {"edits"} == set(TextEdit.model_fields)
+
+
+async def test_issue_create_single_parameters_mirror_the_fields_of_one_batch_item(container):
+    """issue_create 的单个参数与 issues 里每一项是同一组字段（批里另有 key）。"""
+    from muliao.issues.tools import NewIssueItem
+
+    params = set(session_tools(container)["issue_create"].function_schema.json_schema["properties"])
+    assert params - {"issues"} == set(NewIssueItem.model_fields) - {"key"}
