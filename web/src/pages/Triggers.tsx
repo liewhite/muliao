@@ -14,6 +14,7 @@ import {
   type TriggerKindName,
   sessionRoute,
 } from '../api'
+import { selectableAgents } from '../agentGroups'
 import { groupTriggersByAgent } from '../triggerGroups'
 import { inAnHour, wallClock } from '../wallClock'
 import {
@@ -22,6 +23,7 @@ import {
   CollapsibleForm,
   EmptyHint,
   ErrorAlert,
+  GroupSection,
   Loading,
   Page,
   SelectInput,
@@ -744,7 +746,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
         value={agentId}
         onChange={setAgentId}
         placeholder="选择 agent"
-        options={(agents ?? []).map((a) => ({ id: a.id, label: a.name }))}
+        options={selectableAgents(agents, agentId).map((a) => ({ id: a.id, label: a.name }))}
       />
       {initial && <ConfigEditor key={initial.kind} value={initial} onChange={setConfig} />}
       <PrecheckEditor precheck={null} onChange={setPrecheck} />
@@ -845,27 +847,6 @@ function FinishedTriggers({ agents }: { agents: Agent[] | undefined }) {
   )
 }
 
-/** 一个 agent 的触发器：可折叠的一组卡片。组头靠左，左侧一道强调色竖条 + 加粗大字，和卡片区分开 */
-function AgentGroup({ name, count, children }: { name: string; count: number; children: ReactNode }) {
-  return (
-    <Disclosure defaultExpanded>
-      <Disclosure.Heading>
-        <Disclosure.Trigger className="flex w-full items-center gap-2 border-l-4 border-accent py-1 pl-2 text-base font-semibold">
-          {/* HeroUI 的指示箭头自带 margin-inline-start:auto（默认放最右），这里要紧跟在左边 */}
-          <Disclosure.Indicator className="ms-0" />
-          <span className="truncate">{name}</span>
-          <Chip size="sm" variant="soft">
-            {count}
-          </Chip>
-        </Disclosure.Trigger>
-      </Disclosure.Heading>
-      <Disclosure.Content>
-        <Disclosure.Body className="pt-2">{children}</Disclosure.Body>
-      </Disclosure.Content>
-    </Disclosure>
-  )
-}
-
 /** 自动发起会话的入口：定时、webhook……方式的差异只在各自的配置与操作。按 agent 分组的卡片网格，点卡片看详情 */
 export default function Triggers() {
   const triggers = useLoad(() => api.triggers(), [])
@@ -887,13 +868,13 @@ export default function Triggers() {
             return (
               <>
                 {groupTriggersByAgent(list, agents.data).map((g) => (
-                  <AgentGroup key={g.agentId} name={agentLabel(agents.data, g.agentId)} count={g.triggers.length}>
+                  <GroupSection key={g.agentId} name={agentLabel(agents.data, g.agentId)} count={g.triggers.length}>
                     <CardGrid>
                       {g.triggers.map((t) => (
                         <TriggerCard key={t.id} trigger={t} onOpen={() => setOpenId(t.id)} onChange={reload} />
                       ))}
                     </CardGrid>
-                  </AgentGroup>
+                  </GroupSection>
                 ))}
                 <DetailModal trigger={open} onClose={() => setOpenId(null)}>
                   {(t) => (

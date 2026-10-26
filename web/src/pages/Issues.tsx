@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type ComponentProps, type CSSProperties } fr
 import { Card, Chip } from '@heroui/react'
 import { DndContext, KeyboardSensor, MouseSensor, TouchSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { Link, useNavigate } from 'react-router-dom'
+import { selectableAgents } from '../agentGroups'
 import { api, type Agent, type Issue, type IssuePriority, type IssueStatus } from '../api'
 import { useRefetch } from '../events'
 import {
@@ -90,13 +91,20 @@ function OwnerChip({ agents, owner }: { agents: Agent[] | undefined; owner: stri
   )
 }
 
-/** 选负责项目的下拉框：每个 agent 前带它的色点；leading 是排在 agent 前面的额外选项（如「所有项目」） */
+/** 选负责项目的下拉框：每个 agent 前带它的色点；leading 是排在 agent 前面的额外选项（如「所有项目」）。
+ * assignable：是在给 issue 定 owner（不是筛选），归档的 agent 不列，当前值除外 */
 export function OwnerSelect({
   agents,
   leading = [],
+  assignable = false,
   ...props
-}: Omit<ComponentProps<typeof SelectInput>, 'options'> & { agents: Agent[] | undefined; leading?: Option[] }) {
-  const options = (agents ?? []).map((a) => ({
+}: Omit<ComponentProps<typeof SelectInput>, 'options'> & {
+  agents: Agent[] | undefined
+  leading?: Option[]
+  assignable?: boolean
+}) {
+  const listed = assignable ? selectableAgents(agents, props.value) : (agents ?? [])
+  const options = listed.map((a) => ({
     id: a.id as string,
     label: a.name,
     prefix: <OwnerDot agents={agents} owner={a.id} />,
@@ -418,6 +426,7 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <OwnerSelect
           agents={agents}
+          assignable
           label="负责项目（owner）"
           hint="转派给别人做也不变"
           value={owner}

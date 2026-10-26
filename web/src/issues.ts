@@ -1,5 +1,6 @@
 // issue 看板的纯逻辑：状态与优先级的展示顺序、按状态分列、时间线文字
 
+import { selectableAgents } from './agentGroups'
 import { USER, type Agent, type Issue, type IssueActivity, type IssuePriority, type IssueStatus } from './api'
 
 /** 状态的标签；键的顺序就是看板的列顺序（也是列表视图的分组顺序）：受阻最不常用，放最后 */
@@ -56,12 +57,12 @@ export function issueIdOf(session: { id: string; origin: string; origin_ref: str
 /** 指派人下拉框里「未指派」的 id（选项 id 必须非空） */
 export const UNASSIGNED = '@none'
 
-/** 指派人选项：未指派、我、各个 agent（id 为 agent id） */
-export function assigneeOptions(agents: Agent[] | undefined) {
+/** 指派人选项：未指派、我、各个 agent（id 为 agent id）。归档的 agent 不能被指派，只在它就是当前指派人（current）时留着以便显示 */
+export function assigneeOptions(agents: Agent[] | undefined, current?: string | null) {
   return [
     { id: UNASSIGNED, label: '未指派' },
     { id: USER, label: '我' },
-    ...(agents ?? []).map((a) => ({ id: a.id as string, label: a.name })),
+    ...selectableAgents(agents, current).map((a) => ({ id: a.id as string, label: a.name })),
   ]
 }
 

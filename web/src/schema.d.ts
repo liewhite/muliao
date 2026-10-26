@@ -261,6 +261,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/{agent_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Archive Agent
+         * @description 归档：不能再对话、委派、指派，它的触发器不触发；它忙或是默认 agent 时 409。
+         */
+        put: operations["archive_agent_api_agents__agent_id__archive_put"];
+        post?: never;
+        /**
+         * Unarchive Agent
+         * @description 取消归档；没归档时不做任何事。
+         */
+        delete: operations["unarchive_agent_api_agents__agent_id__archive_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/memory": {
         parameters: {
             query?: never;
@@ -1222,6 +1246,8 @@ export interface components {
              * @enum {string}
              */
             thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+            /** Group */
+            group?: string | null;
         };
         /** AgentDefaultsOut */
         AgentDefaultsOut: {
@@ -1260,6 +1286,10 @@ export interface components {
             created_at: string;
             /** Is Default */
             is_default: boolean;
+            /** Group */
+            group: string | null;
+            /** Archived At */
+            archived_at: string | null;
         };
         /**
          * AgentUpdate
@@ -1285,6 +1315,8 @@ export interface components {
              * @enum {string}
              */
             thinking: "default" | "off" | "low" | "medium" | "high" | "xhigh";
+            /** Group */
+            group: string | null;
         };
         /** AnsweredQuestion */
         AnsweredQuestion: {
@@ -3114,6 +3146,68 @@ export interface operations {
         };
     };
     unset_default_agent_api_agents__agent_id__default_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_agent_api_agents__agent_id__archive_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unarchive_agent_api_agents__agent_id__archive_delete: {
         parameters: {
             query?: never;
             header?: never;

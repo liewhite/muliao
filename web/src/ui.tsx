@@ -15,6 +15,7 @@ import {
   AlertDialog,
   Button,
   Card,
+  Chip,
   Description,
   Disclosure,
   Input,
@@ -242,6 +243,37 @@ export function ActionButton({ isPending = false, children, ...props }: ButtonPr
       {isPending && <Spinner size="sm" color="current" />}
       {children}
     </Button>
+  )
+}
+
+/** 列表里可折叠的一组（如一个 agent 的触发器、一个分组的 agent）。组头靠左，左侧一道强调色竖条 + 加粗大字，和卡片区分开 */
+export function GroupSection({
+  name,
+  count,
+  defaultExpanded = true,
+  children,
+}: {
+  name: string
+  count: number
+  defaultExpanded?: boolean
+  children: ReactNode
+}) {
+  return (
+    <Disclosure defaultExpanded={defaultExpanded}>
+      <Disclosure.Heading>
+        <Disclosure.Trigger className="flex w-full items-center gap-2 border-l-4 border-accent py-1 pl-2 text-base font-semibold">
+          {/* HeroUI 的指示箭头自带 margin-inline-start:auto（默认放最右），这里要紧跟在左边 */}
+          <Disclosure.Indicator className="ms-0" />
+          <span className="truncate">{name}</span>
+          <Chip size="sm" variant="soft">
+            {count}
+          </Chip>
+        </Disclosure.Trigger>
+      </Disclosure.Heading>
+      <Disclosure.Content>
+        <Disclosure.Body className="pt-2">{children}</Disclosure.Body>
+      </Disclosure.Content>
+    </Disclosure>
   )
 }
 

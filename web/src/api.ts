@@ -251,6 +251,13 @@ export const api = {
         ? call('put', '/api/agents/{agent_id}/default', { path: { agent_id } })
         : call('delete', '/api/agents/{agent_id}/default', { path: { agent_id } }),
     ),
+  /** 归档（true）或取消归档（false）：归档的不能对话、委派、指派，它的触发器不触发；它忙或是默认 agent 时 409 */
+  setAgentArchived: (agent_id: AgentId, on: boolean) =>
+    branded<Agent>(
+      on
+        ? call('put', '/api/agents/{agent_id}/archive', { path: { agent_id } })
+        : call('delete', '/api/agents/{agent_id}/archive', { path: { agent_id } }),
+    ),
   /** owner 为 null 时是全局记忆（所有 agent 共享） */
   memory: (owner: AgentId | null) => call('get', '/api/memory', { query: { owner } }),
   setMemory: (owner: AgentId | null, content: string) => call('put', '/api/memory', { body: { owner, content } }),

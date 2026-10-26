@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button, Card, Chip, Tabs, toast, type Key } from '@heroui/react'
-import { Copy, MessageSquarePlus, Plus, Star, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Copy, MessageSquarePlus, Plus, Star, Trash2 } from 'lucide-react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
@@ -21,6 +21,7 @@ import { ActionButton,
   SelectInput,
   TextInput,
   formatTime,
+  GroupSection,
   useAction,
   useAgents,
   useConfirm,
@@ -34,7 +35,54 @@ import { SkillList } from './Skills'
 import { SecretManager } from './Vault'
 import { refreshUnreadLogged } from '../unread'
 import { announceChange } from '../events'
+import { groupAgents } from '../agentGroups'
 
+function AgentCard({ a }: { a: Agent }) {
+  return (
+    <NavLink to={agentRoute(a.id)}>
+      {({ isActive }) => (
+        <Card className={`transition-colors hover:bg-surface-hover ${isActive ? 'ring-2 ring-accent' : ''}`}>
+          <Card.Header>
+            <Card.Title>{a.name}</Card.Title>
+            <Card.Description>{a.description}</Card.Description>
+          </Card.Header>
+          <Card.Footer className="flex flex-wrap gap-2">
+            {a.is_default && (
+              <Chip size="sm" color="accent" variant="soft">
+                默认
+              </Chip>
+            )}
+            {a.archived_at !== null && (
+              <Chip size="sm" color="warning" variant="soft">
+                已归档
+              </Chip>
+            )}
+            <Chip size="sm" variant="secondary">
+              {a.model}
+            </Chip>
+            {a.thinking !== 'default' && (
+              <Chip size="sm" variant="secondary">
+                思考 {THINKING_LABEL[a.thinking]}
+              </Chip>
+            )}
+          </Card.Footer>
+        </Card>
+      )}
+    </NavLink>
+  )
+}
+
+function AgentCards({ agents }: { agents: Agent[] }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {agents.map((a) => (
+        <AgentCard key={a.id} a={a} />
+      ))}
+    </div>
+  )
+}
+
+/** 不分组的平铺在前，每个分组一段（默认展开），归档的放最后一段（默认折叠） */
 export function AgentList() {
   const agents = useAgents()
   return (
@@ -48,41 +96,25 @@ export function AgentList() {
       }
     >
       <Loading state={agents}>
-        {(list) =>
-          list.length === 0 ? (
-            <EmptyHint>还没有 agent</EmptyHint>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {list.map((a) => (
-                <NavLink key={a.id} to={agentRoute(a.id)}>
-                  {({ isActive }) => (
-                    <Card className={`transition-colors hover:bg-surface-hover ${isActive ? 'ring-2 ring-accent' : ''}`}>
-                      <Card.Header>
-                        <Card.Title>{a.name}</Card.Title>
-                        <Card.Description>{a.description}</Card.Description>
-                      </Card.Header>
-                      <Card.Footer className="flex flex-wrap gap-2">
-                        {a.is_default && (
-                          <Chip size="sm" color="accent" variant="soft">
-                            默认
-                          </Chip>
-                        )}
-                        <Chip size="sm" variant="secondary">
-                          {a.model}
-                        </Chip>
-                        {a.thinking !== 'default' && (
-                          <Chip size="sm" variant="secondary">
-                            思考 {THINKING_LABEL[a.thinking]}
-                          </Chip>
-                        )}
-                      </Card.Footer>
-                    </Card>
-                  )}
-                </NavLink>
+        {(list) => {
+          if (list.length === 0) return <EmptyHint>还没有 agent</EmptyHint>
+          const { ungrouped, groups, archived } = groupAgents(list)
+          return (
+            <div className="flex flex-col gap-4">
+              {ungrouped.length > 0 && <AgentCards agents={ungrouped} />}
+              {groups.map((g) => (
+                <GroupSection key={g.name} name={g.name} count={g.agents.length}>
+                  <AgentCards agents={g.agents} />
+                </GroupSection>
               ))}
+              {archived.length > 0 && (
+                <GroupSection name="已归档" count={archived.length} defaultExpanded={false}>
+                  <AgentCards agents={archived} />
+                </GroupSection>
+              )}
             </div>
           )
-        }
+        }}
       </Loading>
     </Page>
   )
@@ -90,8 +122,8 @@ export function AgentList() {
 
 function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentInput {
   if (agent) {
-    const { name, description, model, roles, allow, deny, mcp_servers, thinking } = agent
-    return { name, description, model, roles, allow, deny, mcp_servers, thinking }
+    const { name, description, model, roles, allow, deny, mcp_servers, thinking, group } = agent
+    return { name, description, model, roles, allow, deny, mcp_servers, thinking, group }
   }
   return {
     name: '',
@@ -102,6 +134,7 @@ function initialInput(agent: Agent | undefined, defaults: AgentDefaults): AgentI
     deny: [],
     mcp_servers: [],
     thinking: 'default',
+    group: null,
   }
 }
 
@@ -205,6 +238,12 @@ function AgentForm({ agent, defaults, onSaved }: { agent?: Agent; defaults: Agen
         onChange={(description) => set({ description })}
         isRequired
       />
+      <TextInput
+        label="分组"
+        hint="可不填；同一类的 agent（如一批接单的）归到一组，列表里按组折叠"
+        value={input.group ?? ''}
+        onChange={(group) => set({ group })}
+      />
       <ModelInput
         value={input.model ?? ''}
         onChange={(model) => set({ model })}
@@ -275,6 +314,22 @@ export function AgentDetail() {
     }
   }
 
+  async function toggleArchived(on: boolean) {
+    if (on) {
+      const ok = await confirm({
+        title: `归档 agent「${name}」？`,
+        body: '归档后不能对话、委派、指派 issue，它的触发器不触发；会话、记忆等数据都保留，取消归档即恢复。',
+        confirmLabel: '归档',
+      })
+      if (!ok) return
+    }
+    if (await action.run(() => api.setAgentArchived(id, on))) {
+      toast.success(on ? '已归档' : '已取消归档')
+      announceChange('agents')
+      void agent.reload()
+    }
+  }
+
   async function toggleDefault(on: boolean) {
     if (await action.run(() => api.setDefaultAgent(id, on))) {
       toast.success(on ? '已设为默认 agent' : '已取消默认')
@@ -289,10 +344,12 @@ export function AgentDetail() {
       title={name}
       back="/agents"
       actions={
-        <LinkButton to={newSessionRoute(id)} variant="secondary">
-          <MessageSquarePlus className="size-4" />
-          对话
-        </LinkButton>
+        agent.data?.archived_at == null && (
+          <LinkButton to={newSessionRoute(id)} variant="secondary">
+            <MessageSquarePlus className="size-4" />
+            对话
+          </LinkButton>
+        )
       }
     >
       <Loading state={agent}>
@@ -329,6 +386,22 @@ export function AgentDetail() {
                     <Button size="sm" variant="ghost" isDisabled={action.busy} onPress={() => void toggleDefault(!a.is_default)}>
                       <Star className="size-4" />
                       {a.is_default ? '取消默认' : '设为默认'}
+                    </Button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-muted">
+                      {a.archived_at === null
+                        ? '未归档'
+                        : `已归档（${formatTime(a.archived_at)}）：不能对话、委派、指派，触发器不触发`}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isDisabled={action.busy}
+                      onPress={() => void toggleArchived(a.archived_at === null)}
+                    >
+                      {a.archived_at === null ? <Archive className="size-4" /> : <ArchiveRestore className="size-4" />}
+                      {a.archived_at === null ? '归档' : '取消归档'}
                     </Button>
                   </div>
                 </Card.Content>

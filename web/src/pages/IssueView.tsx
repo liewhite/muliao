@@ -252,6 +252,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <OwnerSelect
           agents={agents.data}
+          assignable
           label="负责项目（owner）"
           value={issue.owner}
           placeholder="无负责项目"
@@ -276,7 +277,7 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
           label="指派给"
           value={assigneeValue(issue.assignee)}
           onChange={(v) => patch({ assignee: assigneeOf(v) })}
-          options={assigneeOptions(agents.data)}
+          options={assigneeOptions(agents.data, issue.assignee)}
           isDisabled={change.busy}
         />
       </div>
