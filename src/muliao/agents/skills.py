@@ -25,9 +25,10 @@ import yaml
 from sqlalchemy import delete, select
 
 from muliao.agents import skill_package
-from muliao.agents.items import item_in, items_in, owned_item_in, writable_in
+from muliao.agents.access import grants_in
+from muliao.agents.items import changeable_in, existing_in, item_in, owned_in, usable_in, writable_in
 from muliao.agents.naming import validate_slug
-from muliao.agents.ownership import Scope, owned_by, scope_of, sees, visible_owners
+from muliao.agents.permissions import Kind
 from muliao.agents.revisions import Subject, record_in
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped
 from muliao.agents.tables import Item, ItemFile
@@ -51,15 +52,13 @@ class SkillMeta:
     # 生成目录里的 SKILL.md
     path: Path
 
-    @property
-    def scope(self) -> Scope:
-        return scope_of(self.owner)
-
 
 @dataclass(frozen=True)
 class Skill:
     meta: SkillMeta
     body: str
+    # 读的 agent 是否用得到它（自己的或分发给它的，agents.access）；不是也照常读到（软隔离）
+    usable: bool = True
 
 
 @dataclass(frozen=True)
@@ -148,56 +147,55 @@ class SkillStore:
         return SkillMeta(row.name, row.description, row.owner, self.dir(row.name) / SKILL_FILE)
 
     async def list(self, owner: str | None) -> list[SkillMeta]:
-        """owner 名下的 skill（None 为公共），按名称。"""
+        """owner 名下的 skill（None 为平台的），按名称。"""
         async with self._db.transaction() as s:
-            return [self._meta(r) for r in await items_in(s, Subject.SKILL, owned_by(Item.owner, owner))]
+            return [self._meta(r) for r in await owned_in(s, Subject.SKILL, owner)]
 
     async def index(self, agent: str) -> list[SkillMeta]:
-        """agent 看得到的 skill（ownership.sees）：它私有的在前，然后公共的，各按名称。"""
+        """agent 能用的 skill（自己的与分发给它的，agents.access），按名称：它的 skill 索引。"""
         async with self._db.transaction() as s:
-            return [
-                self._meta(r) for r in await items_in(s, Subject.SKILL, visible_owners(Item.owner, agent))
-            ]
+            return [self._meta(r) for r in await usable_in(s, Subject.SKILL, agent)]
 
-    async def read(self, owner: str | None, name: str) -> Skill:
+    async def read(self, name: str) -> Skill:
         async with self._db.transaction() as s:
-            row = await owned_item_in(s, Subject.SKILL, owner, name)
+            row = await existing_in(s, Subject.SKILL, name)
             return Skill(self._meta(row), frontmatter.loads(row.content).content)
 
     async def resolve(self, agent: str, name: str) -> Skill:
-        """agent 视角读取（ownership.sees）。"""
+        """agent 读取：任何存在的 skill 都读得到（软隔离），usable 标明它是否在这个 agent 能用的范围里。"""
         async with self._db.transaction() as s:
             row = await item_in(s, Subject.SKILL, name)
-            if row is None or not sees(agent, row.owner):
-                raise NotFound(f"skill {name!r} not found in private or public skills")
-            return Skill(self._meta(row), frontmatter.loads(row.content).content)
+            if row is None:
+                raise NotFound(f"skill {name!r} not found")
+            usable = (await grants_in(s, agent)).uses(Kind.SKILL, name, row.owner)
+            return Skill(self._meta(row), frontmatter.loads(row.content).content, usable)
 
-    async def files(self, owner: str | None, name: str) -> dict[str, SkillFile]:
+    async def files(self, name: str) -> dict[str, SkillFile]:
         """SKILL.md 与全部附件。"""
         async with self._db.transaction() as s:
-            row = await owned_item_in(s, Subject.SKILL, owner, name)
+            row = await existing_in(s, Subject.SKILL, name)
             return {SKILL_FILE: SkillFile(row.content), **await _attachments_in(s, row)}
 
     async def write(
         self,
-        owner: str | None,
         name: str,
         description: str,
         body: str,
-        author: str,
         *,
+        actor: str,
+        owner: str | None,
         attachments: Mapping[str, SkillFile] | None = None,
     ) -> SkillMeta:
-        """新建或整体改写 SKILL.md；attachments 为 None 时附件不变，否则整体换成它。"""
+        """新建或整体改写 SKILL.md；attachments 为 None 时附件不变，否则整体换成它。actor（agent 的 id 或 USER）是改的人，
+        已有的要它能改（规则 2）；新建的归 owner，已有的 owner 不变。"""
         validate_slug("skill", name)
         description = _valid_description(description)
-        return await self._put(owner, name, _skill_md(name, description, body), attachments, author, "write")
+        return await self._put(name, _skill_md(name, description, body), attachments, actor, owner, "write")
 
     async def edit(
         self,
-        owner: str | None,
         name: str,
-        author: str,
+        actor: str,
         *,
         old: str = "",
         new: str = "",
@@ -216,35 +214,35 @@ class SkillStore:
                 "attachments_dir, or several of them"
             )
         async with self._db.transaction() as s:
-            row = await owned_item_in(s, Subject.SKILL, owner, name)
-            post = frontmatter.loads(row.content)
+            row = await changeable_in(s, Subject.SKILL, name, actor)
+            post, owner = frontmatter.loads(row.content), row.owner
         if edits_body:
             post.content = text_edit.edit(post.content, old, new, f"skill {name}").strip() + "\n"
         if description is not None:
             post["description"] = description
         return await self._put(
-            owner, name, frontmatter.dumps(post) + "\n", attachments, author, "edit", expect=row.content
+            name, frontmatter.dumps(post) + "\n", attachments, actor, owner, "edit", expect=row.content
         )
 
     async def _put(
         self,
-        owner: str | None,
         name: str,
         skill_md: str,
         attachments: Mapping[str, SkillFile] | None,
-        author: str,
+        actor: str,
+        owner: str | None,
         verb: str,
         *,
         expect: str | None = None,
     ) -> SkillMeta:
-        """写入 SKILL.md（已按规则生成或校验）与附件、记一版，再重新生成目录。expect：读出时的 SKILL.md，写入时已被
-        别人改了就冲突（edit 先读后写，不悄悄盖掉并发的修改）。"""
+        """写入 SKILL.md（已按规则生成或校验）与附件、记一版，再重新生成目录。已有的按规则 2 查 actor，owner 不变；新建的
+        归 owner。expect：读出时的 SKILL.md，写入时已被别人改了就冲突（edit 先读后写，不悄悄盖掉并发的修改）。"""
         description, _ = parse_frontmatter(skill_md, name)
         for rel in attachments or {}:
             if not skill_package.is_attachment(rel) or rel == SKILL_FILE:
                 raise InvalidInput(f"{rel!r} cannot be an attachment of a skill")
         async with self._db.transaction() as s:
-            row = await writable_in(s, Subject.SKILL, owner, name)
+            row = await writable_in(s, Subject.SKILL, name, actor, owner)
             if expect is not None and (row is None or row.content != expect):
                 raise Conflict(f"skill {name!r} was changed at the same time; read it again and retry")
             old_files = {} if row is None else await _attachments_in(s, row)
@@ -261,29 +259,20 @@ class SkillStore:
                     ItemFile(item_id=row.id, path=rel, content=f.content, executable=f.executable)
                     for rel, f in new_files.items()
                 )
-            record_in(
-                s,
-                Subject.SKILL,
-                name,
-                before,
-                document(skill_md, new_files),
-                author,
-                f"{verb} {scope_of(owner)} skill {name}",
-            )
+            record_in(s, Subject.SKILL, name, before, document(skill_md, new_files), actor, f"{verb} skill {name}")
             await s.flush()
             meta = self._meta(row)
         await self.materialize(name)
         return meta
 
-    async def export(self, owner: str | None, name: str) -> bytes:
+    async def export(self, name: str) -> bytes:
         """打成标准 .skill 文件（skill_package）：SKILL.md 与附件。"""
-        return skill_package.pack(name, await self.files(owner, name))
+        return skill_package.pack(name, await self.files(name))
 
-    async def import_package(
-        self, owner: str | None, data: bytes, author: str, *, replace: bool
-    ) -> SkillImport:
-        """导入标准 .skill 文件为 owner 的 skill，记一版。SKILL.md 原样写入（标准里的 license、metadata 等其他
-        frontmatter 键保留），但要满足与 write 相同的规则。同名 skill 已存在时：replace 为假报冲突；为真则覆盖（附件整体换掉）。"""
+    async def import_package(self, data: bytes, *, actor: str, owner: str | None, replace: bool) -> SkillImport:
+        """导入标准 .skill 文件，新建的归 owner，记一版。SKILL.md 原样写入（标准里的 license、metadata 等其他
+        frontmatter 键保留），但要满足与 write 相同的规则。同名 skill 已存在时：replace 为假报冲突；为真则覆盖（附件整体
+        换掉，owner 不变，actor 要能改它）。"""
         package = skill_package.unpack(data)
         name = package.name
         skill_md = package.files[SKILL_FILE].content
@@ -291,32 +280,27 @@ class SkillStore:
         attachments = {rel: f for rel, f in package.files.items() if rel != SKILL_FILE}
         if not replace:
             async with self._db.transaction() as s:
-                if owner is not None:
-                    # 正在删除的 agent 报不存在，不报它名下的同名冲突
-                    await writable_in(s, Subject.SKILL, owner, name)
                 existing = await item_in(s, Subject.SKILL, name)
             if existing is not None:
-                raise Conflict(f"{scope_of(existing.owner)} skill {name!r} already exists")
-        meta = await self._put(owner, name, skill_md, attachments, author, "import")
+                raise Conflict(f"skill {name!r} already exists")
+        meta = await self._put(name, skill_md, attachments, actor, owner, "import")
         return SkillImport(meta, package.skipped)
 
     async def restore(self, name: str, doc: str, author: str) -> SkillMeta:
         """把某一版的文档作为新的一版写入（归属不变：恢复的是内容）。"""
         async with self._db.transaction() as s:
-            row = await item_in(s, Subject.SKILL, name)
-            if row is None:
-                raise NotFound(f"skill {name!r} not found; restoring a deleted skill is not supported")
+            row = await existing_in(s, Subject.SKILL, name)
             owner = row.owner
         files = parse_document(doc)
         skill_md = files.pop(SKILL_FILE).content
-        return await self._put(owner, name, skill_md, files, author, "restore")
+        return await self._put(name, skill_md, files, author, owner, "restore")
 
-    async def delete(self, owner: str | None, name: str, author: str) -> None:
+    async def delete(self, name: str, actor: str) -> None:
         async with self._db.transaction() as s:
-            row = await owned_item_in(s, Subject.SKILL, owner, name, write=True)
+            row = await changeable_in(s, Subject.SKILL, name, actor)
             before = document(row.content, await _attachments_in(s, row))
             await s.delete(row)
-            record_in(s, Subject.SKILL, name, before, None, author, f"delete {scope_of(owner)} skill {name}")
+            record_in(s, Subject.SKILL, name, before, None, actor, f"delete skill {name}")
         await self.materialize(name)
 
     async def owned_names(self, owner: str) -> list[str]:

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,8 +31,8 @@ log = logging.getLogger(__name__)
 
 _CONNECT_TIMEOUT = 30.0
 
-# agent 此刻可用的 server（它私有的与勾选了的公共的，agents.mcp.McpRegistry.index）
-McpIndex = Callable[[str, Sequence[str]], Awaitable[list[McpServer]]]
+# agent 此刻要连接的 server（它能用的、已启用的，agents.mcp.McpRegistry.index）
+McpIndex = Callable[[str], Awaitable[list[McpServer]]]
 
 
 class McpFailed(Exception):
@@ -162,13 +162,13 @@ class McpConnector:
     def __init__(self, vault: Vault):
         self._vault = vault
 
-    async def build_toolset(self, server: McpServer, cwd: Path | None) -> AbstractToolset:
-        """解析 vault 引用并构建 toolset；工具名以 `<server名>_` 为前缀避免冲突。cwd：stdio server 进程的工作目录——运行时是
-        这次运行的工作目录，server 写出的文件（如浏览器的截图、页面快照）落在 agent 的文件工具与 shell 读得到的地方；
-        新增时的探测没有运行，为 None（沿用服务进程的）。"""
+    async def build_toolset(self, server: McpServer, user: str, cwd: Path | None) -> AbstractToolset:
+        """按 user（用它的 agent 的 id，或 USER）能用的 secret 解析 vault 引用并构建 toolset；工具名以 `<server名>_` 为前缀
+        避免冲突。cwd：stdio server 进程的工作目录——运行时是这次运行的工作目录，server 写出的文件（如浏览器的截图、页面
+        快照）落在 agent 的文件工具与 shell 读得到的地方；新增时的探测没有运行，为 None（沿用服务进程的）。"""
         c = server.config
         # 只解析一次：代入配置的与脱敏用的是同一份明文
-        secrets = await self._vault.resolve_many(server.owner, _vault_keys(c))
+        secrets = await self._vault.resolve_many(user, _vault_keys(c))
         if c.transport == McpTransport.STDIO:
             assert c.command is not None
             client = StdioTransport(
@@ -191,18 +191,18 @@ class McpConnector:
             )
         return _SecretSafe(toolset, server=server.name, secrets=secrets).prefixed(server.name)
 
-    def toolset(self, index: McpIndex, selected: Sequence[str]) -> DynamicToolset[RunScope]:
-        """使用 MCP：每次运行时按这次运行的 agent（RunScope.agent_id）取可用的 server
-        （index：它私有的与勾选了的公共 server，selected）构建，是一个 toolset，没有可用的 server 时为空。"""
+    def toolset(self, index: McpIndex) -> DynamicToolset[RunScope]:
+        """使用 MCP：每次运行时按这次运行的 agent（RunScope.agent_id）取它要连接的 server（index）构建，是一个 toolset，
+        没有可用的 server 时为空。"""
 
         async def build(ctx: RunContext[RunScope]) -> AbstractToolset[RunScope] | None:
             agent, notices = ctx.deps.agent_id, ctx.deps.notices
-            servers = await index(agent, selected)
+            servers = await index(agent)
             names: list[str] = []
             toolsets: list[AbstractToolset[RunScope]] = []
             for server in servers:
                 try:
-                    toolsets.append(await self.build_toolset(server, ctx.deps.workspace))
+                    toolsets.append(await self.build_toolset(server, agent, ctx.deps.workspace))
                 except NotFound as e:
                     # 配置引用的 secret 不在了（vault.resolve_many）
                     _skip(notices, agent=agent, server=server.name, reason=f"MCP server {server.name!r}: {e}")
@@ -212,14 +212,14 @@ class McpConnector:
 
         return DynamicToolset(build, per_run_step=False)
 
-    async def probe(self, server: McpServer) -> list[str]:
-        """实际连接 server 并列出工具名。
+    async def probe(self, server: McpServer, user: str) -> list[str]:
+        """实际连接 server 并列出工具名，secret 按 user（添加它的 agent 的 id，或 USER）能用的解析。
 
         探测的目的就是检验用户/agent 给出的配置能否工作，连接失败是预期结果之一：
         各种传输层异常（进程退出、HTTP 错误、协议错误）统一转为 InvalidInput，把原因交还给调用方修正。
         vault 引用缺失在构建阶段以 NotFound 报出，不在此转换。
         """
-        safe = _secret_safe(await self.build_toolset(server, None))
+        safe = _secret_safe(await self.build_toolset(server, user, None))
         try:
             # 与运行期同一个连接、列工具与脱敏入口
             async with safe:

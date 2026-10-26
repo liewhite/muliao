@@ -5,8 +5,9 @@
    AgentDeleting。
 2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域删除它的全部会话（标记之后它的会话不会再收到
    来信），然后发布 AgentSessionsCleared；触发器各自删除。
-3. 收到 AgentSessionsCleared：删除工作目录与它的 skill 的生成目录，再删除这一行：它名下的条目（skill、MCP server、secret）与
-   记忆随行级联删除，同一事务里为每一项记一版「随 agent 删除」。
+3. 收到 AgentSessionsCleared：删除工作目录与它的 skill 的生成目录，再删除这一行：它名下的条目（skill、MCP server、secret）
+   里被分发出去的（某个角色或别的 agent 的 allow 匹配到，shared_in）转给平台（owner 置空，别的 agent 还在用），其余与记忆
+   随行级联删除，同一事务里为每一项记一版。
 
 归档（set_archived）是可以来回切换的停用：同样只在它空闲时做（与删除同一组检查），之后给它派新工作的入口都拒绝
 （agents.active.runnable_row_in），数据都留着。
@@ -22,7 +23,9 @@ from muliao.agents.active import active_row_in
 from muliao.agents.documents import document_in
 from muliao.agents.events import AgentDeleting
 from muliao.agents.memory import revision_name
+from muliao.agents.permissions import Kind, Rules
 from muliao.agents.revisions import Subject, record_in
+from muliao.agents.roles import roles_in
 from muliao.agents.service import AgentInfo, AgentService, info_of
 from muliao.agents.skills import SkillStore
 from muliao.agents.tables import Agent, Item, Memory
@@ -117,7 +120,11 @@ class AgentLifecycle:
             author = agent.deleting_by
         # 目录不在数据库事务里：重放时它们已经不在，删除是空操作。skill 的生成目录只是副本，先于行删除
         await self._agents.remove_workspace(event.agent_id)
-        await self._skills.remove_generated(await self._skills.owned_names(event.agent_id))
+        async with self._db.transaction() as s:
+            shared = await _shared_in(s, event.agent_id)
+        await self._skills.remove_generated(
+            [n for n in await self._skills.owned_names(event.agent_id) if (Subject.SKILL, n) not in shared]
+        )
         log.info("files of a deleted agent removed", extra={"agent": event.agent_id})
 
         async def commit(s: AsyncSession) -> None:
@@ -130,11 +137,30 @@ class AgentLifecycle:
         return commit
 
 
+async def _shared_in(s: AsyncSession, agent_id: str) -> set[tuple[Subject, str]]:
+    """agent 名下被分发出去的条目：某个角色的规则或别的 agent 自己的 allow 匹配到它（不看 deny）。"""
+    rules = [r.effective for r in (await roles_in(s)).values()]
+    rules += [Rules(tuple(a.allow)) for a in await s.scalars(select(Agent).where(Agent.id != agent_id))]
+    rows = await s.scalars(select(Item).where(Item.owner == agent_id))
+    return {
+        (Subject(r.kind), r.name) for r in rows if any(x.matches(Kind(r.kind), r.name) for x in rules)
+    }
+
+
 async def _record_deletions_in(s: AsyncSession, agent_id: str, author: str) -> None:
-    """agent 名下的条目与记忆随它的行级联删除：先各记一版删除（版本表不随它删除，留作审计）。"""
+    """agent 名下的条目与记忆随它的行级联删除：被分发出去的先转给平台，其余各记一版删除（版本表不随它删除，留作审计）。"""
     message = f"deleted with agent {agent_id}"
+    shared = await _shared_in(s, agent_id)
     for row in list(await s.scalars(select(Item).where(Item.owner == agent_id))):
-        record_in(s, Subject(row.kind), row.name, await document_in(s, row), None, author, message)
+        doc = await document_in(s, row)
+        if (Subject(row.kind), row.name) in shared:
+            row.owner = None
+            record_in(s, Subject(row.kind), row.name, doc, doc, author, f"moved to the platform with agent {agent_id} deleted")
+            log.info("item moved to the platform", extra={"agent": agent_id, "kind": row.kind, "item": row.name})
+            continue
+        record_in(s, Subject(row.kind), row.name, doc, None, author, message)
+    # 转给平台的先写下去，再删 agent 的行（级联只删还归它的）
+    await s.flush()
     memory = await s.scalar(select(Memory).where(Memory.owner == agent_id))
     if memory is not None:
         record_in(s, Subject.MEMORY, revision_name(agent_id), memory.content, None, author, message)

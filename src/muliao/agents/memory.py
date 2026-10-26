@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.active import active_row_in
-from muliao.agents.ownership import owned_by
 from muliao.agents.revisions import Subject, record_in
 from muliao.agents.tables import Memory
 from muliao.errors import CorruptState, InvalidInput
@@ -29,7 +28,8 @@ def revision_name(owner: str | None) -> str:
 
 
 async def _row_in(s: AsyncSession, owner: str | None) -> Memory | None:
-    row = await s.scalar(select(Memory).where(owned_by(Memory.owner, owner)))
+    where = Memory.owner.is_(None) if owner is None else Memory.owner == owner
+    row = await s.scalar(select(Memory).where(where))
     if row is None and owner is not None:
         raise _missing(owner)
     return row

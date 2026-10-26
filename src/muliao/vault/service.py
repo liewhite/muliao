@@ -1,8 +1,8 @@
-"""加密保存的 secret，分公共与 agent 私有。agent 只能通过 key 引用，没有读取明文的工具。
+"""加密保存的 secret。agent 只能通过 key 引用，没有读取明文的工具。
 
 密文与描述存在 agent 领域的条目里（agents.api.SecretItems，key 按名字全局唯一）；这里管加解密、key 的语法与
-${vault:KEY} 引用的解析。引用按使用者的视角解析（ownership.sees）：agent 运行的命令用该 agent 的视角，MCP server
-的配置用 server 归属者的视角——公共 server 只能引用公共 secret。
+${vault:KEY} 引用的解析。引用按使用者能用的 secret 解析（agents 的规则 1：自己的与分发给它的）：agent 运行的命令与
+它连接的 MCP server 都用该 agent；用户（USER，如界面上新增 MCP 时的探测）能用全部。
 """
 
 from __future__ import annotations
@@ -59,29 +59,36 @@ class Vault:
         self._items = items
         self._fernet = Fernet(fernet_key.encode())
 
-    async def set(self, owner: str | None, key: str, value: str, description: str, author: str) -> None:
+    async def set(self, key: str, value: str, description: str, *, actor: str, owner: str | None) -> None:
+        """新建（归 owner）或改写（actor 要能改它）一个 secret。"""
         validate_key(key)
         if not value:
             raise InvalidInput("secret value must not be empty")
-        await self._items.put(owner, key, self._fernet.encrypt(value.encode()), description, author)
-        # 公共 secret 所有 agent 都依赖：记录谁在什么作用域改了哪个 key（不记值）
-        log.info("secret set", extra={"owner": owner, "key": key, "author": author})
+        await self._items.put(key, self._fernet.encrypt(value.encode()), description, actor=actor, owner=owner)
+        # 别的 agent 可能依赖它：记录谁改了哪个 key（不记值）
+        log.info("secret set", extra={"owner": owner, "key": key, "author": actor})
 
-    async def delete(self, owner: str | None, key: str, author: str) -> None:
-        await self._items.delete(owner, key, author)
-        log.info("secret deleted", extra={"owner": owner, "key": key, "author": author})
+    async def delete(self, key: str, actor: str) -> None:
+        await self._items.delete(key, actor)
+        log.info("secret deleted", extra={"key": key, "author": actor})
 
-    async def visible_to(self, agent_id: str | None) -> list[SecretInfo]:
-        """agent_id 视角下的 secret（不含值），即它私有的与公共的；None 时只有公共的。私有在前，各按 key。"""
-        return [_info(s) for s in await self._items.visible(agent_id)]
+    async def owned(self, owner: str | None) -> list[SecretInfo]:
+        """owner 名下的 secret（不含值，None 为平台的），按 key。"""
+        return [_info(s) for s in await self._items.owned(owner)]
 
-    async def resolve_many(self, agent_id: str | None, keys: list[str]) -> dict[str, str]:
-        """按 agent_id 的视角取明文（None 为只看公共）；任一 key 不可见即报错。"""
+    async def usable_by(self, user: str) -> list[SecretInfo]:
+        """user（agent 的 id，或 USER）能用的 secret（不含值），按 key。"""
+        return [_info(s) for s in await self._items.usable(user)]
+
+    async def resolve_many(self, user: str, keys: list[str]) -> dict[str, str]:
+        """取 user（agent 的 id，或 USER）能用的 secret 的明文；任一 key 不能用即报错。"""
         if not keys:
             return {}
-        rows = {s.key: s for s in await self._items.visible(agent_id)}
+        rows = {s.key: s for s in await self._items.usable(user)}
         missing = [k for k in keys if k not in rows]
         if missing:
-            where = "public secrets" if agent_id is None else "private or public secrets"
-            raise NotFound(f"secret(s) {missing} not found in {where}")
+            raise NotFound(
+                f"secret(s) {missing} not found among the secrets you can use (your own and those given to you "
+                "by your roles)"
+            )
         return {k: self._fernet.decrypt(rows[k].ciphertext).decode() for k in keys}

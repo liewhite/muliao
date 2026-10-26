@@ -1,4 +1,4 @@
-"""MCP server 的管理：agent 根据用户提供的信息自己接入 MCP。"""
+"""MCP server 的管理：agent 根据用户提供的信息自己接入 MCP。启停只在界面上做。"""
 
 from collections.abc import Mapping
 from typing import Literal
@@ -6,41 +6,36 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agents.mcp import McpConfig, McpRegistry, McpTransport, mcp_config
-from muliao.agents.ownership import Scope, scope_of
-from muliao.agents.service import AgentService
+from muliao.agents.mcp import McpRegistry, McpTransport, mcp_config
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
 class McpInfo(BaseModel):
     name: str
-    scope: Scope
+    # 是你自己的（否则是角色分给你的）
+    yours: bool
     transport: str
     command: str | None
     args: list[str]
     url: str | None
     env_keys: list[str]
     header_keys: list[str]
+    # 停用的 server 不连接（在界面上启停）
     enabled: bool
-    # 是否在给你的工具里：已启用，且是你私有的或给你勾选了的公共的
-    active: bool
 
 
-def mcp_admin_toolset(registry: McpRegistry, agents: AgentService) -> FunctionToolset[RunScope]:
-    """MCP 配置：私有的与公共的各用各的工具（公共的是 *_public，权限 mcp.config.public:*）。"""
+def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
     async def mcp_list(ctx: RunContext[RunScope]) -> list[McpInfo]:
-        """List your private MCP servers and the public ones, including disabled ones. `active` tells whether its
-        tools are offered to you (you get your private servers and the public ones selected for you). Values of
-        env/headers are hidden."""
-        agent = await agents.get(ctx.deps.agent_id)
-        # 哪些真正生效由 registry.listing 决定，这里不复述规则
+        """List the MCP servers you can use: your own and those your roles give you, including disabled ones
+        (their tools are not offered; the user enables them in the app). Values of env/headers are hidden."""
+        me = ctx.deps.agent_id
         return [
             McpInfo(
                 name=s.name,
-                scope=scope_of(s.owner),
+                yours=s.owner == me,
                 transport=s.transport,
                 command=s.config.command,
                 args=s.config.args,
@@ -48,14 +43,9 @@ def mcp_admin_toolset(registry: McpRegistry, agents: AgentService) -> FunctionTo
                 env_keys=sorted(s.config.env),
                 header_keys=sorted(s.config.headers),
                 enabled=s.enabled,
-                active=active,
             )
-            for s, active in await registry.listing(agent.id, agent.mcp_servers)
+            for s in await registry.usable(me)
         ]
-
-    async def add(ctx: RunContext[RunScope], owner: str | None, name: str, config: McpConfig) -> str:
-        _, tools = await registry.add(owner, name, config, probe=True, author=ctx.deps.agent_id)
-        return f"registered {scope_of(owner)} MCP server {name} with tools: {', '.join(tools) or '(none)'}"
 
     @ts.tool
     async def mcp_add(
@@ -70,12 +60,11 @@ def mcp_admin_toolset(registry: McpRegistry, agents: AgentService) -> FunctionTo
         env: Mapping[str, str] = {},  # noqa: B006
         headers: Mapping[str, str] = {},  # noqa: B006
     ) -> str:
-        """Register a private MCP server (only you get its tools). The server is connected once to verify it and
-        list its tools; nothing is saved if that fails. Its tools become available from your next run, prefixed
-        `<name>_`. Never put secrets in plain text: keep them in the vault and reference them as `${vault:KEY}`
-        inside args, url, env or headers.
-
-        Names are unique across private and public servers.
+        """Register an MCP server. It is yours and only you get its tools; other agents get it only through a
+        role. The server is connected once to verify it and list its tools; nothing is saved if that fails. Its
+        tools become available from your next run, prefixed `<name>_`. Never put secrets in plain text: keep
+        them in the vault and reference them as `${vault:KEY}` inside args, url, env or headers (resolved with
+        the secrets of the agent using the server). Names are unique.
 
         Args:
             name: Lowercase slug.
@@ -94,84 +83,18 @@ def mcp_admin_toolset(registry: McpRegistry, agents: AgentService) -> FunctionTo
             env=dict(env),
             headers=dict(headers),
         )
-        return await add(ctx, ctx.deps.agent_id, name, config)
-
-    @ts.tool
-    async def mcp_add_public(
-        ctx: RunContext[RunScope],
-        name: str,
-        transport: Literal["stdio", "http"],
-        command: str | None = None,
-        args: tuple[str, ...] = (),
-        url: str | None = None,
-        env: Mapping[str, str] = {},  # noqa: B006
-        headers: Mapping[str, str] = {},  # noqa: B006
-    ) -> str:
-        """Register a public MCP server. Agents get its tools only once it is selected for them (the user does
-        that in the app, or `update_agent`'s `mcp_servers`). Verified, prefixed and configured like `mcp_add`;
-        reference only public secrets in it.
-
-        Args:
-            name: Lowercase slug.
-            transport: `stdio` (local command) or `http` (streamable HTTP / SSE URL).
-            command: Executable for stdio, e.g. `npx`.
-            args: Arguments for stdio.
-            url: Endpoint for http.
-            env: Environment variables for stdio.
-            headers: HTTP headers for http.
-        """
-        config = mcp_config(
-            transport=McpTransport(transport),
-            command=command,
-            args=list(args),
-            url=url,
-            env=dict(env),
-            headers=dict(headers),
-        )
-        return await add(ctx, None, name, config)
+        me = ctx.deps.agent_id
+        _, tools = await registry.add(name, config, actor=me, owner=me, probe=True)
+        return f"registered MCP server {name} with tools: {', '.join(tools) or '(none)'}"
 
     @ts.tool
     async def mcp_remove(ctx: RunContext[RunScope], name: str) -> str:
-        """Remove one of your private MCP servers.
+        """Remove an MCP server you own (or any, if you are an admin).
 
         Args:
             name: Server name.
         """
-        await registry.remove(ctx.deps.agent_id, name, ctx.deps.agent_id)
-        return f"removed private MCP server {name}"
-
-    @ts.tool
-    async def mcp_remove_public(ctx: RunContext[RunScope], name: str) -> str:
-        """Remove a public MCP server.
-
-        Args:
-            name: Server name.
-        """
-        await registry.remove(None, name, ctx.deps.agent_id)
-        return f"removed public MCP server {name}"
-
-    @ts.tool
-    async def mcp_set_enabled(ctx: RunContext[RunScope], name: str, enabled: bool) -> str:
-        """Enable or disable one of your private MCP servers without deleting its configuration. Takes effect from
-        the next turn.
-
-        Args:
-            name: Server name.
-            enabled: Whether its tools are offered.
-        """
-        await registry.set_enabled(ctx.deps.agent_id, name, enabled, ctx.deps.agent_id)
-        return f"{'enabled' if enabled else 'disabled'} private MCP server {name}"
-
-    @ts.tool
-    async def mcp_set_enabled_public(ctx: RunContext[RunScope], name: str, enabled: bool) -> str:
-        """Enable or disable a public MCP server for every agent that has it selected, without deleting its
-        configuration. Takes effect from the next turn.
-
-        Args:
-            name: Server name.
-            enabled: Whether its tools are offered.
-        """
-        await registry.set_enabled(None, name, enabled, ctx.deps.agent_id)
-        return f"{'enabled' if enabled else 'disabled'} public MCP server {name}"
+        await registry.remove(name, ctx.deps.agent_id)
+        return f"removed MCP server {name}"
 
     return ts

@@ -4,14 +4,13 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 import anyio
 import httpx
-from pydantic_ai.toolsets import AbstractToolset
 
 from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
 from muliao.agent_runtime.mcp import McpConnector
@@ -21,7 +20,6 @@ from muliao.agent_runtime.web_tools import web_toolset
 from muliao.agent_runtime.workspace_tools import ShellLimits
 from muliao.agents.evolution_tools import (
     memory_toolset,
-    public_skills_toolset,
     skills_toolset,
 )
 from muliao.agents.lifecycle import AgentLifecycle
@@ -54,7 +52,6 @@ from muliao.platform.messaging import Messaging
 from muliao.platform.retention import TaskRetention
 from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import Commit, Retries, RetryPolicy, TaskAdmin, TaskQueue
-from muliao.platform.tooling import RunScope
 from muliao.platform.worker import RunNow, Worker, register_handlers
 from muliao.sessions.api import SessionActivity
 from muliao.sessions.ask_user import ask_user_toolset
@@ -306,17 +303,12 @@ def assemble(
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接
     mcp_connector = McpConnector(vault)
     mcp = McpRegistry(db, mcp_connector.probe)
-
-    async def public_mcp() -> list[str]:
-        return [s.name for s in await mcp.list(None)]
-
     agents = AgentService(
         db,
         settings.workspaces_dir,
         model_checker or models.check,
         AgentDefaults(settings.llm.default_model),
         available_tools(web_configured=bool(web_tools)),
-        public_mcp=public_mcp,
     )
     roles = RoleService(db)
     activity = SessionActivity(queue)
@@ -386,9 +378,6 @@ def assemble(
         ask_user_toolset(),
     ]
 
-    def mcp_tools(selected: Sequence[str]) -> AbstractToolset[RunScope]:
-        return mcp_connector.toolset(mcp.index, selected)
-
     # 运行可用的全部静态工具集；每个工具的权限在 agents.permissions 登记，一次运行开放哪些按 agent 的权限规则
     # 算（Toolbox.profile）
     static_toolsets = [
@@ -396,8 +385,7 @@ def assemble(
         workspace_toolset(vault, limits, files, jobs),
         delegation_toolset(db, agents, threads, stopper),
         notify_toolset(notifications),
-        public_skills_toolset(skills),
-        mcp_admin_toolset(mcp, agents),
+        mcp_admin_toolset(mcp),
         vault_toolset(vault),
         triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds),
         issues_toolset(issues, agents),
@@ -406,7 +394,7 @@ def assemble(
     static_toolsets.append(agents_toolset(agents, roles, agent_lifecycle))
     toolbox = Toolbox(
         toolsets=static_toolsets,
-        mcp=mcp_tools,
+        mcp=lambda: mcp_connector.toolset(mcp.index),
         rules_of=agents.rules,
     )
     _check_permissions(toolbox.tool_names(), web_configured=bool(web_tools))

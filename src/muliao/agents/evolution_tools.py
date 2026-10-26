@@ -1,4 +1,4 @@
-"""自我进化工具：私有 skill 与记忆（含全局记忆，每个 agent 总是可用），以及写公共 skill（单独的工具组）。"""
+"""自我进化工具：skill 与记忆（自己的与全局记忆）。"""
 
 import asyncio
 from pathlib import Path
@@ -38,10 +38,11 @@ async def _attachments(
 
 def _saved(verb: str, meta: SkillMeta, skipped: list[Skipped]) -> str:
     skipped_note = "".join(f"; skipped {s.path}: {s.reason}" for s in skipped)
-    return f"{verb} {meta.scope} skill {meta.name} at {meta.path.parent}{skipped_note}{_ATTACHMENTS_NOTE}"
+    return f"{verb} skill {meta.name} at {meta.path.parent}{skipped_note}{_ATTACHMENTS_NOTE}"
 
 
 def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
+    """skill：读任何 skill；写、改、删按规则 2（自己的，admin 可改任何的），新建的归自己。分给别的 agent 靠角色。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
@@ -51,11 +52,16 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         Args:
             name: Skill name.
         """
-        skill = await store.resolve(ctx.deps.agent_id, name)
-        return (
-            f"# skill {skill.meta.name} ({skill.meta.scope}, read-only dir: {skill.meta.path.parent})\n\n"
-            f"{skill.body}"
+        me = ctx.deps.agent_id
+        skill = await store.resolve(me, name)
+        yours = "yours, " if skill.meta.owner == me else ""
+        note = (
+            ""
+            if skill.usable
+            else "Note: this skill is not in your skill index (not yours and none of your roles includes it); "
+            "it is shown anyway.\n\n"
         )
+        return f"# skill {skill.meta.name} ({yours}read-only dir: {skill.meta.path.parent})\n\n{note}{skill.body}"
 
     @ts.tool
     async def write_skill(
@@ -65,19 +71,20 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         content: str,
         attachments_dir: str | None = None,
     ) -> str:
-        """Create or replace one of your private skills: a reusable procedure for a recurring kind of task.
-        Skill names are unique across private and public skills.
+        """Create or replace a skill: a reusable procedure for a recurring kind of task. A new skill is yours and
+        only you see it; other agents get it only through a role. Replacing an existing one needs you to own it
+        (or be an admin). Skill names are unique.
 
         Args:
             name: Lowercase slug, e.g. `slack-digest`.
-            description: One sentence on when to use this skill; shown in your skill index.
+            description: One sentence on when to use this skill; shown in the skill index.
             content: Markdown instructions: steps, commands, pitfalls, examples.
             attachments_dir: Directory (workspace-relative or absolute) whose text files replace all the
                 skill's attachments (scripts etc. next to SKILL.md); omit to keep them.
         """
         me = ctx.deps.agent_id
         files, skipped = await _attachments(ctx, attachments_dir)
-        meta = await store.write(me, name, description, content, me, attachments=files)
+        meta = await store.write(name, description, content, actor=me, owner=me, attachments=files)
         return _saved("saved", meta, skipped)
 
     @ts.tool
@@ -89,122 +96,44 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         description: str | None = None,
         attachments_dir: str | None = None,
     ) -> str:
-        """Change one of your private skills without rewriting the whole skill: part of its instructions,
-        its description, its attachments, or several. Instructions: `old_text` must occur exactly once in them
-        and is replaced by `new_text`; an empty `old_text` appends `new_text` at the end; leave both empty to
-        keep the instructions. At least one change must be given.
+        """Change a skill you own (or any skill, if you are an admin) without rewriting it: part of its
+        instructions, its description, its attachments, or several. Instructions: `old_text` must occur exactly
+        once in them and is replaced by `new_text`; an empty `old_text` appends `new_text` at the end; leave both
+        empty to keep the instructions. At least one change must be given.
         The skill directory on disk is a read-only copy: change skills only with this or `write_skill`.
 
         Args:
             name: Skill name.
             old_text: Exact text currently in the skill's instructions, or empty to append.
             new_text: Replacement (or appended) text; empty deletes `old_text`.
-            description: New one-sentence description shown in your skill index; omit to keep the current one.
-            attachments_dir: Directory (workspace-relative or absolute) whose text files replace all the
-                skill's attachments (scripts etc. next to SKILL.md); omit to keep them.
-        """
-        me = ctx.deps.agent_id
-        return await _edit(ctx, store, me, name, old_text, new_text, description, attachments_dir)
-
-    @ts.tool
-    async def delete_skill(ctx: RunContext[RunScope], name: str) -> str:
-        """Delete one of your private skills that is wrong or obsolete.
-
-        Args:
-            name: Skill name.
-        """
-        await store.delete(ctx.deps.agent_id, name, ctx.deps.agent_id)
-        return f"deleted private skill {name}"
-
-    return ts
-
-
-def public_skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
-    """写公共 skill：它的描述进入每个 agent 的 skill 索引，所以单独成组。"""
-    ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
-
-    @ts.tool
-    async def write_public_skill(
-        ctx: RunContext[RunScope],
-        name: str,
-        description: str,
-        content: str,
-        attachments_dir: str | None = None,
-    ) -> str:
-        """Create or replace a public skill that every agent sees in its skill index. Only for procedures any
-        agent can reuse; prefer a private skill (`write_skill`) otherwise.
-
-        Args:
-            name: Lowercase slug, e.g. `slack-digest`.
-            description: One sentence on when to use this skill; shown in every agent's skill index.
-            content: Markdown instructions: steps, commands, pitfalls, examples.
+            description: New one-sentence description shown in the skill index; omit to keep the current one.
             attachments_dir: Directory (workspace-relative or absolute) whose text files replace all the
                 skill's attachments (scripts etc. next to SKILL.md); omit to keep them.
         """
         files, skipped = await _attachments(ctx, attachments_dir)
-        meta = await store.write(None, name, description, content, ctx.deps.agent_id, attachments=files)
-        return _saved("saved", meta, skipped)
+        meta = await store.edit(
+            name, ctx.deps.agent_id, old=old_text, new=new_text, description=description, attachments=files
+        )
+        if files is None:
+            return f"edited skill {meta.name}"
+        return _saved("edited", meta, skipped)
 
     @ts.tool
-    async def edit_public_skill(
-        ctx: RunContext[RunScope],
-        name: str,
-        old_text: str = "",
-        new_text: str = "",
-        description: str | None = None,
-        attachments_dir: str | None = None,
-    ) -> str:
-        """Change a public skill without rewriting the whole skill: part of its instructions, its description,
-        its attachments, or several. Instructions: `old_text` must occur exactly once in them and is replaced by
-        `new_text`; an empty `old_text` appends `new_text` at the end; leave both empty to keep the instructions.
-        At least one change must be given.
-
-        Args:
-            name: Skill name.
-            old_text: Exact text currently in the skill's instructions, or empty to append.
-            new_text: Replacement (or appended) text; empty deletes `old_text`.
-            description: New one-sentence description shown in every agent's skill index; omit to keep the current one.
-            attachments_dir: Directory (workspace-relative or absolute) whose text files replace all the
-                skill's attachments (scripts etc. next to SKILL.md); omit to keep them.
-        """
-        return await _edit(ctx, store, None, name, old_text, new_text, description, attachments_dir)
-
-    @ts.tool
-    async def delete_public_skill(ctx: RunContext[RunScope], name: str) -> str:
-        """Delete a public skill that is wrong or obsolete.
+    async def delete_skill(ctx: RunContext[RunScope], name: str) -> str:
+        """Delete a skill you own (or any skill, if you are an admin) that is wrong or obsolete.
 
         Args:
             name: Skill name.
         """
-        await store.delete(None, name, ctx.deps.agent_id)
-        return f"deleted public skill {name}"
+        await store.delete(name, ctx.deps.agent_id)
+        return f"deleted skill {name}"
 
     return ts
 
 
-async def _edit(
-    ctx: RunContext[RunScope],
-    store: SkillStore,
-    owner: str | None,
-    name: str,
-    old: str,
-    new: str,
-    description: str | None,
-    attachments_dir: str | None,
-) -> str:
-    """edit_skill 与 edit_public_skill 共用：规则在 SkillStore.edit。"""
-    files, skipped = await _attachments(ctx, attachments_dir)
-    meta = await store.edit(
-        owner, name, ctx.deps.agent_id, old=old, new=new, description=description, attachments=files
-    )
-    if files is None:
-        return f"edited {meta.scope} skill {meta.name}"
-    return _saved("edited", meta, skipped)
-
-
 def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
-    """记忆：自己的与所有 agent 共享的全局记忆，各用各的工具（全局记忆的是 *_public，权限 memory.public:*）。全局记忆
-    由有权限的 agent 的自进化维护，每次修改记一版（作者是改的 agent），用户可在界面上回滚。"""
+    """记忆：自己的与所有 agent 共享的全局记忆，各用各的工具（全局记忆的 memory_edit_public 是管理类工具，只经 admin
+    角色给出）。全局记忆由 admin 的自进化维护，每次修改记一版（作者是改的 agent），用户可在界面上回滚。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     def _status(which: str, content: str) -> str:

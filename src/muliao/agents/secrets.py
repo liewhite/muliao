@@ -7,8 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 
-from muliao.agents.items import items_in, owned_item_in, writable_in
-from muliao.agents.ownership import owned_by, scope_of, visible_owners
+from muliao.agents.items import changeable_in, owned_in, usable_in, writable_in
 from muliao.agents.revisions import Subject, record_in
 from muliao.agents.tables import Item
 from muliao.platform.db import Database, utcnow
@@ -38,11 +37,11 @@ class SecretItems:
         self._db = db
 
     async def put(
-        self, owner: str | None, key: str, ciphertext: bytes, description: str, author: str
+        self, key: str, ciphertext: bytes, description: str, *, actor: str, owner: str | None
     ) -> None:
-        """新建或改写 owner 名下的这个 secret（别人名下有同名的即冲突）。"""
+        """新建（归 owner）或改写（actor 要能改它，owner 不变）这个 secret。"""
         async with self._db.transaction() as s:
-            row = await writable_in(s, Subject.SECRET, owner, key)
+            row = await writable_in(s, Subject.SECRET, key, actor, owner)
             before = None if row is None else document(row.description, row.updated_at)
             now = utcnow()
             if row is None:
@@ -55,13 +54,13 @@ class SecretItems:
                 key,
                 before,
                 document(description, now),
-                author,
-                f"set {scope_of(owner)} secret {key}",
+                actor,
+                f"set secret {key}",
             )
 
-    async def delete(self, owner: str | None, key: str, author: str) -> None:
+    async def delete(self, key: str, actor: str) -> None:
         async with self._db.transaction() as s:
-            row = await owned_item_in(s, Subject.SECRET, owner, key, write=True)
+            row = await changeable_in(s, Subject.SECRET, key, actor)
             await s.delete(row)
             record_in(
                 s,
@@ -69,18 +68,16 @@ class SecretItems:
                 key,
                 document(row.description, row.updated_at),
                 None,
-                author,
-                f"delete {scope_of(owner)} secret {key}",
+                actor,
+                f"delete secret {key}",
             )
 
     async def owned(self, owner: str | None) -> list[StoredSecret]:
-        """owner 名下的（None 为公共），按 key。"""
+        """owner 名下的（None 为平台的），按 key。"""
         async with self._db.transaction() as s:
-            return [_stored(r) for r in await items_in(s, Subject.SECRET, owned_by(Item.owner, owner))]
+            return [_stored(r) for r in await owned_in(s, Subject.SECRET, owner)]
 
-    async def visible(self, agent_id: str | None) -> list[StoredSecret]:
-        """agent_id 看得到的（ownership.sees；None 为只看公共）：私有在前，各按 key。"""
+    async def usable(self, user: str) -> list[StoredSecret]:
+        """user（agent 的 id，或 USER 即全部）能用的（agents.access），按 key。"""
         async with self._db.transaction() as s:
-            return [
-                _stored(r) for r in await items_in(s, Subject.SECRET, visible_owners(Item.owner, agent_id))
-            ]
+            return [_stored(r) for r in await usable_in(s, Subject.SECRET, user)]

@@ -101,14 +101,13 @@ class RunProfile:
 
 @dataclass(frozen=True)
 class Toolbox:
-    """运行可用的全部工具：静态的工具集（每个工具的权限见 agents.permissions.TOOL_PERMISSIONS）与按运行构建的
-    MCP。一次运行开放哪些在运行开始时算定（profile），调用时不再判断：静态工具按 agent 的权限规则，MCP 不归权限管，
-    是 agent 的私有 server 与它勾选的公共 server（AgentInfo.mcp_servers）。"""
+    """运行可用的全部工具：静态的内置工具集（登记见 agents.permissions.TOOLS）与按运行构建的 MCP。一次运行开放哪些内置
+    工具在运行开始时按 agent 的规则算定（profile），调用时不再判断；MCP 是它能用的、已启用的 server（McpRegistry.index）。"""
 
     toolsets: Sequence[FunctionToolset[RunScope]]
-    # MCP 工具：按勾选的公共 server 名构建，每次运行按 agent 可用的 server 连接
-    mcp: Callable[[Sequence[str]], AbstractToolset[RunScope]]
-    # agent 现在的权限规则（AgentService.rules：角色按现在的定义展开）
+    # MCP 工具：每次运行新建一个（它带着这次运行的连接状态），按这次运行的 agent 能用的 server 连接
+    mcp: Callable[[], AbstractToolset[RunScope]]
+    # agent 现在的规则（AgentService.rules：base 与角色按现在的定义展开）
     rules_of: Callable[[AgentInfo], Awaitable[Rules]]
 
     def tool_names(self) -> list[str]:
@@ -121,7 +120,7 @@ class Toolbox:
             for ts in self.toolsets
             if allowed & set(ts.tools)
         ]
-        return RunProfile(toolsets=[*static, self.mcp(agent.mcp_servers)])
+        return RunProfile(toolsets=[*static, self.mcp()])
 
 
 class AgentRuntime:
@@ -165,6 +164,7 @@ class AgentRuntime:
         （agent_runtime.instructions 的模块说明）。随运行变化的那几行走 run_context。origin_note 是会话来源的说明
         （会话领域给出）。"""
         return build_instructions(
+            agent_id=agent.id,
             agent_name=agent.name,
             agent_description=agent.description,
             global_memory=await self._memory.read(None),

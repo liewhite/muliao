@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from collections.abc import Awaitable, Callable, Collection, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,13 +14,14 @@ from typing import Literal, cast, get_args
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.access import grants_in
 from muliao.agents.active import active_row_in, runnable_row_in
 from muliao.agents.ids import new_agent_id
 from muliao.agents.memory import create_memory_in
 from muliao.agents.naming import new_agent_name, normalize_agent_name
-from muliao.agents.permissions import DEFAULT_ROLES, Resolved, Rules, check_patterns
-from muliao.agents.roles import check_assignable_in, roles_in, rules_in
-from muliao.agents.tables import Agent
+from muliao.agents.permissions import BASE, Kind, Rules, check_patterns, pattern_of
+from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
+from muliao.agents.tables import Agent, Item
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database
 
@@ -48,20 +49,18 @@ class AgentDefaults:
     """新建 agent 时未指定的字段取这些值（来自服务端配置）；API 与工具共用这一份。"""
 
     model: str
-    roles: tuple[str, ...] = DEFAULT_ROLES
 
 
 @dataclass(frozen=True)
 class AgentSpec:
-    """新建 agent。model / roles 为 None 时取 AgentDefaults。"""
+    """新建 agent。model 为 None 时取 AgentDefaults。roles 不含 base（每个 agent 隐含）。"""
 
     name: str
     description: str
     model: str | None = None
-    roles: Sequence[str] | None = None
+    roles: Sequence[str] = ()
     allow: Sequence[str] = ()
     deny: Sequence[str] = ()
-    mcp_servers: Sequence[str] = ()
     thinking: Thinking = "default"
     # 分组名（normalize_group：空串与 None 都是不分组）
     group: str | None = None
@@ -78,7 +77,6 @@ class AgentPatch:
     roles: Sequence[str] | None = None
     allow: Sequence[str] | None = None
     deny: Sequence[str] | None = None
-    mcp_servers: Sequence[str] | None = None
     thinking: Thinking | None = None
     group: str | None = None
 
@@ -93,7 +91,6 @@ class _AgentFields:
     roles: list[str]
     allow: list[str]
     deny: list[str]
-    mcp_servers: list[str]
     thinking: Thinking
     group: str | None
 
@@ -106,12 +103,10 @@ class AgentInfo:
     name: str
     description: str
     model: str
-    # 工具权限（agents.permissions）：角色与自己的 allow / deny；最终规则用 AgentService.rules 算
+    # 分发规则（agents.permissions）：角色（不含隐含的 base）与自己的 allow / deny；最终规则用 AgentService.rules 算
     roles: tuple[str, ...]
     allow: tuple[str, ...]
     deny: tuple[str, ...]
-    # 勾选的公共 MCP server 名（不归工具权限管）：运行时连接它的私有 server 与这些（McpRegistry.index）
-    mcp_servers: tuple[str, ...]
     thinking: Thinking
     created_at: datetime
     # 系统默认 agent（Web 新对话默认选中它），最多一个
@@ -135,7 +130,6 @@ def info_of(agent: Agent) -> AgentInfo:
         roles=tuple(agent.roles),
         allow=tuple(agent.allow),
         deny=tuple(agent.deny),
-        mcp_servers=tuple(agent.mcp_servers),
         # 写入时与启动时已校验（_check_thinking_level）
         thinking=cast(Thinking, agent.thinking),
         created_at=agent.created_at,
@@ -206,16 +200,12 @@ class AgentService:
         defaults: AgentDefaults,
         # 当前配置下注册的工具（permissions.available_tools）：算最终工具时只在它里面取
         tools: Sequence[str],
-        *,
-        # 现有公共 MCP server 的名字：新勾选的必须在其中（已勾选的 server 被删后留着的名字不生效，也不拦修改）
-        public_mcp: Callable[[], Awaitable[Collection[str]]],
     ):
         self._db = db
         self._workspaces_dir = workspaces_dir
         self._check_model = model_checker
         self.defaults = defaults
         self.tools = tuple(tools)
-        self._public_mcp = public_mcp
 
     def workspace(self, agent_id: str) -> Path:
         return self._workspaces_dir / agent_id
@@ -226,26 +216,33 @@ class AgentService:
         return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
     async def rules(self, agent: AgentInfo) -> Rules:
-        """agent 的最终权限规则（角色 + 自己的 allow / deny），按角色现在的定义算。"""
+        """agent 的最终规则（base + 角色 + 自己的 allow / deny），按角色现在的定义算。"""
         async with self._db.transaction() as s:
             return await rules_in(s, agent.roles, agent.allow, agent.deny)
 
-    def resolve(self, rules: Rules) -> Resolved:
-        """按规则最终能用的工具（界面、get_agent）。运行时（agent_runtime.Toolbox）按实际注册的工具集算，两者一致由组合根
-        启动时核对 available_tools 与注册的工具保证（container._check_permissions）。"""
-        return Resolved.of(rules, self.tools)
+    def resolve(self, rules: Rules) -> list[str]:
+        """按规则最终能用的内置工具（界面、get_agent）。运行时（agent_runtime.Toolbox）按实际注册的工具集算，两者一致由
+        组合根启动时核对 available_tools 与注册的工具保证（container._check_permissions）。"""
+        return rules.tools(self.tools)
 
-    async def preview(self, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> Resolved:
-        """还没保存的配置会得到的工具（界面预览），与写入时同样校验。"""
-        check_patterns(allow)
-        check_patterns(deny)
+    async def usable_items(self, agent_id: str) -> list[str]:
+        """agent 能用的 skill、MCP server、secret（`kind:name`，agents.access 的规则 1），按种类、名称。"""
         async with self._db.transaction() as s:
+            grants = await grants_in(s, agent_id)
+            rows = await s.execute(select(Item.kind, Item.name, Item.owner).order_by(Item.kind, Item.name))
+            return [pattern_of(Kind(k), n) for k, n, o in rows if grants.uses(Kind(k), n, o)]
+
+    async def preview(self, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> list[str]:
+        """还没保存的配置会得到的内置工具（界面预览），与写入时同样校验。"""
+        async with self._db.transaction() as s:
+            await check_rules_in(s, Rules(tuple(allow), tuple(deny)))
             await check_assignable_in(s, roles)
             return self.resolve(await rules_in(s, roles, allow, deny))
 
     async def verify_stored(self) -> None:
-        """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、角色必须都在、权限通配符（含自建角色的）必须仍
-        匹配已登记的权限，与新建、修改时同一套规则。配置或代码改动（删 provider、工具改名）在启动时暴露，而不是散落到
+        """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、角色必须都在（且不含隐含的 base）、规则（含角色的）
+        形式合法且 tool 规则仍匹配登记的工具，与新建、修改时同一套规则（skill / mcp / secret 规则不查是否匹配现有条目：条目
+        可以删了再建）。配置或代码改动（删 provider、工具改名）在启动时暴露，而不是散落到
         每个任务里失败。正在删除的不查。先报出已删除 agent 的残留工作目录（只记录，不阻止启动）。"""
         await self._report_leftovers()
         agents = await self.list()
@@ -265,7 +262,7 @@ class AgentService:
             roles = await roles_in(s)
         broken = []
         for owner, rules in [
-            *((f"role {r.name}", r.rules) for r in roles.values() if not r.builtin),
+            *((f"role {r.name}", r.rules) for r in roles.values()),
             *((f"agent {a.name} ({a.id})", Rules(a.allow, a.deny)) for a in agents),
         ]:
             try:
@@ -276,7 +273,7 @@ class AgentService:
         broken += [
             f"agent {a.name} ({a.id}): unknown roles {unknown}"
             for a in agents
-            if (unknown := [r for r in a.roles if r not in roles])
+            if (unknown := [r for r in a.roles if r not in roles or r == BASE])
         ]
         if broken:
             raise RuntimeError("stored tool permissions are invalid:\n" + "\n".join(broken))
@@ -290,26 +287,14 @@ class AgentService:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
     def _check(self, fields: _AgentFields) -> None:
-        """不依赖数据库的校验；角色是否存在在写事务里查（roles.check_assignable_in）。"""
+        """不依赖数据库的校验；角色是否存在、新规则是否匹配现有条目在写事务里查（roles.check_assignable_in、
+        check_rules_in）。"""
         _check_thinking_level(fields.thinking)
         if not fields.description.strip():
             raise InvalidInput("agent description must not be empty")
         check_patterns(fields.allow)
         check_patterns(fields.deny)
         self._check_model(fields.model, fields.thinking)
-
-    async def _check_mcp_servers(self, selected: Sequence[str], before: Sequence[str]) -> None:
-        """勾选的公共 MCP server：不重复，新勾选的（不在 before 里的）必须是现有的公共 server。"""
-        if len(set(selected)) != len(selected):
-            raise InvalidInput(f"mcp_servers must be distinct, got {list(selected)}")
-        if all(n in before for n in selected):
-            return
-        public = set(await self._public_mcp())
-        unknown = [n for n in selected if n not in before and n not in public]
-        if unknown:
-            raise InvalidInput(
-                f"mcp_servers {unknown} are not public MCP servers; public ones: {sorted(public)}"
-            )
 
     async def _ensure_name_free(self, s: AsyncSession, name: str, agent_id: str | None) -> None:
         holder = await s.scalar(select(Agent.id).where(Agent.name == name))
@@ -323,20 +308,19 @@ class AgentService:
             name=new_agent_name(spec.name),
             description=spec.description,
             model=self.defaults.model if spec.model is None else spec.model,
-            roles=list(self.defaults.roles if spec.roles is None else spec.roles),
+            roles=list(spec.roles),
             allow=list(spec.allow),
             deny=list(spec.deny),
-            mcp_servers=list(spec.mcp_servers),
             thinking=spec.thinking,
             group=None if spec.group is None else normalize_group(spec.group),
         )
         self._check(fields)
-        await self._check_mcp_servers(fields.mcp_servers, [])
         name = fields.name
         agent_id = new_agent_id()
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
             await check_assignable_in(s, fields.roles)
+            await check_rules_in(s, Rules(tuple(fields.allow), tuple(fields.deny)))
             agent = Agent(
                 id=agent_id,
                 name=name,
@@ -345,7 +329,6 @@ class AgentService:
                 roles=fields.roles,
                 allow=fields.allow,
                 deny=fields.deny,
-                mcp_servers=fields.mcp_servers,
                 thinking=fields.thinking,
                 group=fields.group,
             )
@@ -359,20 +342,18 @@ class AgentService:
 
     async def update(self, agent_id: str, patch: AgentPatch) -> AgentInfo:
         """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。"""
-        if patch.mcp_servers is not None:
-            # 新勾选的是不是现有公共 server：在写事务之前查（另一个事务），只用来拒绝
-            before = (await self.get_active(agent_id)).mcp_servers
-            await self._check_mcp_servers(patch.mcp_servers, before)
         async with self._db.transaction() as s:
             agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)
             await self._ensure_name_free(s, fields.name, agent_id)
             await check_assignable_in(s, fields.roles)
+            await check_rules_in(
+                s, Rules(tuple(fields.allow), tuple(fields.deny)), Rules(tuple(agent.allow), tuple(agent.deny))
+            )
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
             agent.thinking = fields.thinking
             # JSON 列只在整体赋值时被追踪
             agent.roles, agent.allow, agent.deny = fields.roles, fields.allow, fields.deny
-            agent.mcp_servers = fields.mcp_servers
             agent.group = fields.group
             await s.flush()
             return info_of(agent)
@@ -399,13 +380,10 @@ class AgentService:
             roles=list(agent.roles if patch.roles is None else patch.roles),
             allow=list(agent.allow if patch.allow is None else patch.allow),
             deny=list(agent.deny if patch.deny is None else patch.deny),
-            mcp_servers=list(agent.mcp_servers if patch.mcp_servers is None else patch.mcp_servers),
             thinking=cast(Thinking, agent.thinking) if patch.thinking is None else patch.thinking,
             group=agent.group if patch.group is None else normalize_group(patch.group),
         )
         self._check(fields)
-        if len(set(fields.mcp_servers)) != len(fields.mcp_servers):
-            raise InvalidInput(f"mcp_servers must be distinct, got {fields.mcp_servers}")
         return fields
 
     async def get_active(self, agent_id: str) -> AgentInfo:

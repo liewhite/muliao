@@ -61,10 +61,11 @@ class EnabledIn(BaseModel):
 
 @router.get("/mcp")
 async def list_mcp(c: C, owner: str | None = None) -> list[McpOut]:
-    """owner 视角下的 server：它私有的在前，然后是公共的；owner 缺省时只列公共 server。"""
+    """owner（agent 的 id）能用的 server（自己的与分发给它的）；owner 缺省时为归平台的 server。"""
     # env/headers 中的 secret 只以 ${vault:KEY} 引用形式存储，可以原样返回
     await check_owner(c, owner)
-    return [McpOut.of(m) for m in await c.mcp.view(owner)]
+    servers = await (c.mcp.list(None) if owner is None else c.mcp.usable(owner))
+    return [McpOut.of(m) for m in servers]
 
 
 @router.post("/mcp", status_code=201)
@@ -77,23 +78,23 @@ async def add_mcp(c: C, body: McpIn) -> McpOut:
         env=dict(body.env),
         headers=dict(body.headers),
     )
-    row, tools = await c.mcp.add(body.owner, body.name, config, probe=body.probe, author=USER)
+    row, tools = await c.mcp.add(body.name, config, actor=USER, owner=body.owner, probe=body.probe)
     return McpOut.of(row, tools)
 
 
 @router.post("/mcp/tools")
-async def probe_mcp(c: C, name: str, owner: str | None = None) -> list[str]:
-    return await c.mcp.probe(await c.mcp.get(owner, name))
+async def probe_mcp(c: C, name: str) -> list[str]:
+    return await c.mcp.probe(await c.mcp.get(name), USER)
 
 
 @router.put("/mcp/enabled")
-async def set_mcp_enabled(c: C, name: str, body: EnabledIn, owner: str | None = None) -> McpOut:
-    return McpOut.of(await c.mcp.set_enabled(owner, name, body.enabled, USER))
+async def set_mcp_enabled(c: C, name: str, body: EnabledIn) -> McpOut:
+    return McpOut.of(await c.mcp.set_enabled(name, body.enabled, USER))
 
 
 @router.delete("/mcp", status_code=204)
-async def delete_mcp(c: C, name: str, owner: str | None = None) -> None:
-    await c.mcp.remove(owner, name, USER)
+async def delete_mcp(c: C, name: str) -> None:
+    await c.mcp.remove(name, USER)
 
 
 # ---- vault ----
@@ -105,7 +106,7 @@ class SecretIn(BaseModel):
 
 
 class SecretOut(BaseModel):
-    # None 为公共
+    # None 为平台的
     owner: str | None
     key: str
     description: str
@@ -118,20 +119,21 @@ class SecretOut(BaseModel):
 
 @router.get("/vault")
 async def list_secrets(c: C, owner: str | None = None) -> list[SecretOut]:
-    """owner 视角下的 secret（不含值）：它私有的在前，然后是公共的；owner 缺省时只列公共 secret。"""
+    """owner（agent 的 id）能用的 secret（不含值，自己的与分发给它的）；owner 缺省时为归平台的 secret。"""
     await check_owner(c, owner)
-    return [SecretOut.of(s) for s in await c.vault.visible_to(owner)]
+    secrets = await (c.vault.owned(None) if owner is None else c.vault.usable_by(owner))
+    return [SecretOut.of(s) for s in secrets]
 
 
 @router.put("/vault/{key}", status_code=204)
 async def set_secret(c: C, key: str, body: SecretIn, owner: str | None = None) -> None:
-    """owner 缺省为公共 secret，否则为该 agent 私有。"""
-    await c.vault.set(owner, key, body.value, body.description, USER)
+    """新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。"""
+    await c.vault.set(key, body.value, body.description, actor=USER, owner=owner)
 
 
 @router.delete("/vault/{key}", status_code=204)
-async def delete_secret(c: C, key: str, owner: str | None = None) -> None:
-    await c.vault.delete(owner, key, USER)
+async def delete_secret(c: C, key: str) -> None:
+    await c.vault.delete(key, USER)
 
 
 # ---- push ----

@@ -1,7 +1,7 @@
 """MCP server 的配置：条目（items，kind=mcp），和 skill、secret 一样按名字全局唯一，每次修改记一版（revisions）。
 
-配置 JSON 存在 items.content（McpConfig），启用与否在 items.enabled。agent 用的 server：它自己的（已启用），加上它勾选了的
-（AgentInfo.mcp_servers）、已启用的公共 server（#235 改为按角色分发之前的过渡规则）。
+配置 JSON 存在 items.content（McpConfig），启用与否在 items.enabled。agent 用的 server：它能用的（自己的与分发给它的，
+agents.access）、已启用的。
 
 把配置连接成工具是运行时的事（agent_runtime.mcp.McpConnector）：新增时的连接验证由组合根注入（probe），
 这里不连接任何 server、不解析 secret。
@@ -11,18 +11,18 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-from muliao.agents.items import item_in, items_in, owned_item_in, writable_in
+from muliao.agents.active import active_row_in
+from muliao.agents.items import changeable_in, existing_in, item_in, owned_in, usable_in
 from muliao.agents.naming import validate_slug
-from muliao.agents.ownership import owned_by, scope_of, visible_owners
 from muliao.agents.revisions import Subject, record_in
 from muliao.agents.tables import Item
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput
 from muliao.platform.db import Database
 
 log = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ def mcp_config(
 
 @dataclass(frozen=True)
 class McpServer:
-    """一个已保存的 MCP server。env / headers / args / url 的值可以包含 ${vault:KEY}，运行时按归属者的视角解析。"""
+    """一个已保存的 MCP server。env / headers / args / url 的值可以包含 ${vault:KEY}，按用它的 agent 能用的 secret 解析。"""
 
     owner: str | None
     name: str
@@ -106,8 +106,9 @@ def _server(row: Item) -> McpServer:
     return McpServer(row.owner, row.name, McpConfig.model_validate_json(row.content), row.enabled)
 
 
-# 实际连接 server 并列出工具名；连不上是 InvalidInput（把原因交还调用方修正），见 agent_runtime.mcp.McpConnector.probe
-McpProbe = Callable[[McpServer], Awaitable[list[str]]]
+# 实际连接 server 并列出工具名，${vault:KEY} 按第二个参数（agent 的 id 或 USER）能用的 secret 解析；连不上是
+# InvalidInput（把原因交还调用方修正），见 agent_runtime.mcp.McpConnector.probe
+McpProbe = Callable[[McpServer, str], Awaitable[list[str]]]
 
 
 class McpRegistry:
@@ -115,70 +116,59 @@ class McpRegistry:
         self._db = db
         self._probe = probe
 
-    async def probe(self, server: McpServer) -> list[str]:
-        """实际连接 server 并列出工具名（检验配置能否工作；连不上是 InvalidInput）。"""
-        return await self._probe(server)
+    async def probe(self, server: McpServer, user: str) -> list[str]:
+        """实际连接 server 并列出工具名（检验配置能否工作；连不上是 InvalidInput），secret 按 user 能用的解析。"""
+        return await self._probe(server, user)
 
     async def list(self, owner: str | None) -> list[McpServer]:
-        """owner 名下的 server（None 为公共），按名称。"""
+        """owner 名下的 server（None 为平台的），按名称。"""
         async with self._db.transaction() as s:
-            return [_server(r) for r in await items_in(s, Subject.MCP, owned_by(Item.owner, owner))]
+            return [_server(r) for r in await owned_in(s, Subject.MCP, owner)]
 
-    async def view(self, owner: str | None) -> list[McpServer]:
-        """管理界面：owner 视角下的 server，即它私有的（在前）与公共的；owner 为 None 时只有公共 server。"""
+    async def usable(self, user: str) -> list[McpServer]:
+        """user（agent 的 id，或 USER 即全部）能用的 server（agents.access，含停用的），按名称。"""
         async with self._db.transaction() as s:
-            return [_server(r) for r in await items_in(s, Subject.MCP, visible_owners(Item.owner, owner))]
+            return [_server(r) for r in await usable_in(s, Subject.MCP, user)]
 
-    async def listing(self, agent_id: str, selected: Collection[str]) -> list[tuple[McpServer, bool]]:
-        """agent 视角下的全部 server（它私有的在前，然后公共的，含停用的与没勾选的），各自标明是否生效：已启用，且是它
-        私有的或它勾选了的公共的（selected，AgentInfo.mcp_servers）。"""
-        servers = await self.view(agent_id)
-        return [(s, s.enabled and (s.owner is not None or s.name in selected)) for s in servers]
-
-    async def index(self, agent_id: str, selected: Collection[str]) -> list[McpServer]:
-        """agent 可用的 server（listing 里生效的）。"""
-        return [s for s, active in await self.listing(agent_id, selected) if active]
-
-    async def get(self, owner: str | None, name: str) -> McpServer:
+    async def index(self, agent_id: str) -> list[McpServer]:
+        """agent 这次运行要连接的 server：它能用的（agents.access）、已启用的，按名称。"""
         async with self._db.transaction() as s:
-            return _server(await owned_item_in(s, Subject.MCP, owner, name))
+            return [_server(r) for r in await usable_in(s, Subject.MCP, agent_id) if r.enabled]
+
+    async def get(self, name: str) -> McpServer:
+        async with self._db.transaction() as s:
+            return _server(await existing_in(s, Subject.MCP, name))
 
     async def add(
-        self, owner: str | None, name: str, config: McpConfig, *, probe: bool, author: str
+        self, name: str, config: McpConfig, *, actor: str, owner: str | None, probe: bool
     ) -> tuple[McpServer, list[str]]:
-        """新增 server（启用的）。probe=True 时先连接验证，验证失败不写入。"""
+        """新增 server（启用的，归 owner）。probe=True 时先按 actor 能用的 secret 连接验证，验证失败不写入。"""
         validate_slug("mcp server", name)
         server = McpServer(owner=owner, name=name, config=config, enabled=True)
         # 连接验证之前先查一次（正在删除的 agent、已有同名的不必白跑一次连接）；写入时事务里的那次才是准的
-        await self._check_new(owner, name)
-        tools = await self.probe(server) if probe else []
+        await self._check_new(name, owner)
+        tools = await self.probe(server, actor) if probe else []
         async with self._db.transaction() as s:
-            await self._check_new_in(s, owner, name)
+            await self._check_new_in(s, name, owner)
             s.add(Item(kind=Subject.MCP.value, name=name, owner=owner, content=config.model_dump_json()))
-            record_in(
-                s,
-                Subject.MCP,
-                name,
-                None,
-                document(config, True),
-                author,
-                f"add {scope_of(owner)} MCP server {name}",
-            )
+            record_in(s, Subject.MCP, name, None, document(config, True), actor, f"add MCP server {name}")
         log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
 
-    async def _check_new(self, owner: str | None, name: str) -> None:
+    async def _check_new(self, name: str, owner: str | None) -> None:
         async with self._db.transaction() as s:
-            await self._check_new_in(s, owner, name)
+            await self._check_new_in(s, name, owner)
 
     @staticmethod
-    async def _check_new_in(s, owner: str | None, name: str) -> None:  # noqa: ANN001
-        if await writable_in(s, Subject.MCP, owner, name) is not None:
-            raise Conflict(f"MCP server {name!r} already exists in {scope_of(owner)} scope")
+    async def _check_new_in(s, name: str, owner: str | None) -> None:  # noqa: ANN001
+        if await item_in(s, Subject.MCP, name) is not None:
+            raise Conflict(f"MCP server {name!r} already exists; names are unique, choose another name")
+        if owner is not None:
+            await active_row_in(s, owner)
 
-    async def remove(self, owner: str | None, name: str, author: str) -> None:
+    async def remove(self, name: str, actor: str) -> None:
         async with self._db.transaction() as s:
-            row = await owned_item_in(s, Subject.MCP, owner, name, write=True)
+            row = await changeable_in(s, Subject.MCP, name, actor)
             server = _server(row)
             await s.delete(row)
             record_in(
@@ -187,13 +177,13 @@ class McpRegistry:
                 name,
                 document(server.config, server.enabled),
                 None,
-                author,
-                f"remove {scope_of(owner)} MCP server {name}",
+                actor,
+                f"remove MCP server {name}",
             )
 
-    async def set_enabled(self, owner: str | None, name: str, enabled: bool, author: str) -> McpServer:
+    async def set_enabled(self, name: str, enabled: bool, actor: str) -> McpServer:
         async with self._db.transaction() as s:
-            row = await owned_item_in(s, Subject.MCP, owner, name, write=True)
+            row = await changeable_in(s, Subject.MCP, name, actor)
             before = _server(row)
             row.enabled = enabled
             record_in(
@@ -202,10 +192,10 @@ class McpRegistry:
                 name,
                 document(before.config, before.enabled),
                 document(before.config, enabled),
-                author,
-                f"{'enable' if enabled else 'disable'} {scope_of(owner)} MCP server {name}",
+                actor,
+                f"{'enable' if enabled else 'disable'} MCP server {name}",
             )
-            return McpServer(owner, name, before.config, enabled)
+            return McpServer(before.owner, name, before.config, enabled)
 
     async def restore(self, name: str, doc: str, author: str) -> McpServer:
         """把某一版的配置与启用状态作为新的一版写入（不连接验证；归属不变）。"""
@@ -217,9 +207,7 @@ class McpRegistry:
         except ValidationError as e:
             raise InvalidInput(f"that revision is not a valid MCP config: {e}") from e
         async with self._db.transaction() as s:
-            row = await item_in(s, Subject.MCP, name)
-            if row is None:
-                raise NotFound(f"MCP server {name!r} not found; restoring a removed server is not supported")
+            row = await changeable_in(s, Subject.MCP, name, author)
             before = _server(row)
             row.content, row.enabled = config.model_dump_json(), enabled
             record_in(

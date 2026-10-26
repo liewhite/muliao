@@ -6,13 +6,11 @@ from pydantic import BaseModel
 
 from muliao.agents.api import (
     MAX_PACKAGE_BYTES,
-    TOOL_PERMISSIONS,
+    TOOLS,
     USER,
     AgentInfo,
     AgentPatch,
     AgentSpec,
-    Permission,
-    Resolved,
     Role,
     RoleSpec,
     SkillImport,
@@ -29,12 +27,10 @@ class AgentCreate(BaseModel):
     description: str
     # 缺省（null）时使用服务端配置的默认值
     model: str | None = None
-    # 缺省（null）时为 AgentDefaults.roles
-    roles: list[str] | None = None
+    # 角色，不含每个 agent 隐含的 base
+    roles: list[str] = []
     allow: list[str] = []
     deny: list[str] = []
-    # 勾选的公共 MCP server（不归工具权限管）
-    mcp_servers: list[str] = []
     # 思考档位："default" 不传，按模型与服务端的默认
     thinking: Thinking = "default"
     # 分组名；null 或空串为不分组
@@ -50,7 +46,6 @@ class AgentUpdate(BaseModel):
     roles: list[str]
     allow: list[str]
     deny: list[str]
-    mcp_servers: list[str]
     thinking: Thinking
     # 分组名；null 或空串为不分组
     group: str | None
@@ -64,7 +59,6 @@ class AgentOut(BaseModel):
     roles: list[str]
     allow: list[str]
     deny: list[str]
-    mcp_servers: list[str]
     thinking: Thinking
     created_at: datetime
     # 系统默认 agent：Web 新对话默认选中它，最多一个
@@ -84,7 +78,6 @@ class AgentOut(BaseModel):
             roles=list(a.roles),
             allow=list(a.allow),
             deny=list(a.deny),
-            mcp_servers=list(a.mcp_servers),
             thinking=a.thinking,
             created_at=a.created_at,
             is_default=a.is_default,
@@ -95,33 +88,32 @@ class AgentOut(BaseModel):
 
 class AgentDefaultsOut(BaseModel):
     model: str
-    # 新建 agent 默认的角色
-    roles: list[str]
 
 
 @router.get("/agent-defaults")
 async def agent_defaults(c: C) -> AgentDefaultsOut:
     """新建 agent 时表单预填的默认值（与创建时套用的是同一份 AgentService.defaults）。"""
-    d = c.agents.defaults
-    return AgentDefaultsOut(model=d.model, roles=list(d.roles))
+    return AgentDefaultsOut(model=c.agents.defaults.model)
 
 
-class PermissionOut(BaseModel):
-    """一个工具的权限（agents.permissions.TOOL_PERMISSIONS）。"""
+class ToolOut(BaseModel):
+    """一个内置工具（agents.permissions.TOOLS），在规则里写作 `tool:<name>`。"""
 
-    tool: str
-    id: str
+    name: str
     access: Literal["read", "write"]
+    # 管理类工具：base 角色没有
+    admin: bool
 
     @classmethod
-    def of(cls, tool: str, p: Permission) -> "PermissionOut":
-        return cls(tool=tool, id=p.id, access=p.access.value)
+    def of(cls, name: str) -> "ToolOut":
+        t = TOOLS[name]
+        return cls(name=name, access=t.access.value, admin=t.admin)
 
 
-@router.get("/permissions")
-async def list_permissions() -> list[PermissionOut]:
-    """全部已登记工具的权限，按登记顺序（含 web，即使没配置 [web]）。MCP 不归工具权限管，不在其中。"""
-    return [PermissionOut.of(t, p) for t, p in TOOL_PERMISSIONS.items()]
+@router.get("/tools")
+async def list_tools() -> list[ToolOut]:
+    """全部已登记的内置工具，按登记顺序（含 web，即使没配置 [web]）。"""
+    return [ToolOut.of(n) for n in TOOLS]
 
 
 class RulesIn(BaseModel):
@@ -131,36 +123,47 @@ class RulesIn(BaseModel):
 
 
 class ResolvedOut(BaseModel):
-    """按规则最终能用的工具（MCP 不归权限管，不在其中）。"""
+    """按规则最终能用的内置工具。"""
 
-    tools: list[PermissionOut]
+    tools: list[ToolOut]
 
     @classmethod
-    def of(cls, r: Resolved) -> "ResolvedOut":
-        return cls(tools=[PermissionOut.of(t, TOOL_PERMISSIONS[t]) for t in r.tools])
+    def of(cls, tools: list[str]) -> "ResolvedOut":
+        return cls(tools=[ToolOut.of(t) for t in tools])
 
 
-@router.post("/permissions/resolve")
-async def resolve_permissions(c: C, body: RulesIn) -> ResolvedOut:
-    """agent 配置（还没保存的也行）最终能用的工具：角色 + allow / deny，与运行时同一套计算。"""
+@router.post("/tools/resolve")
+async def resolve_tools(c: C, body: RulesIn) -> ResolvedOut:
+    """agent 配置（还没保存的也行）最终能用的内置工具：base + 角色 + allow / deny，与运行时同一套计算。"""
     return ResolvedOut.of(await c.agents.preview(body.roles, body.allow, body.deny))
+
+
+@router.get("/agents/{agent_id}/items")
+async def usable_items(c: C, agent_id: str) -> list[str]:
+    """agent 能用的 skill、MCP server、secret（`kind:name`）：自己的与规则放行的。"""
+    await c.agents.get_active(agent_id)
+    return await c.agents.usable_items(agent_id)
 
 
 class RoleOut(BaseModel):
     name: str
     description: str
+    # 内置角色（base、admin）代码里固定的规则，不可改
+    fixed_allow: list[str]
+    # 可编辑的规则
     allow: list[str]
     deny: list[str]
-    # 内置角色（admin、agent）不能改、不能删
+    # 内置角色不能删；base 每个 agent 隐含
     builtin: bool
-    # 只按这个角色自己的规则能用的工具
+    # 只按这个角色的规则（固定的与可编辑的）能用的内置工具
     resolved: ResolvedOut
 
     @classmethod
-    def of(cls, r: Role, resolved: Resolved) -> "RoleOut":
+    def of(cls, r: Role, resolved: list[str]) -> "RoleOut":
         return cls(
             name=r.name,
             description=r.description,
+            fixed_allow=list(r.fixed.allow),
             allow=list(r.rules.allow),
             deny=list(r.rules.deny),
             builtin=r.builtin,
@@ -177,20 +180,20 @@ class RoleIn(BaseModel):
 @router.get("/roles")
 async def list_roles(c: C) -> list[RoleOut]:
     """全部角色：内置在前，自建的按名称。"""
-    return [RoleOut.of(r, c.agents.resolve(r.rules)) for r in await c.roles.list()]
+    return [RoleOut.of(r, c.agents.resolve(r.effective)) for r in await c.roles.list()]
 
 
 @router.post("/roles/{name}", status_code=201)
 async def create_role(c: C, name: str, body: RoleIn) -> RoleOut:
     role = await c.roles.create(RoleSpec(name, body.description, body.allow, body.deny))
-    return RoleOut.of(role, c.agents.resolve(role.rules))
+    return RoleOut.of(role, c.agents.resolve(role.effective))
 
 
 @router.put("/roles/{name}")
 async def update_role(c: C, name: str, body: RoleIn) -> RoleOut:
-    """整体替换自建角色的描述与规则；从引用它的 agent 的下一次运行起生效。"""
+    """整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。"""
     role = await c.roles.update(RoleSpec(name, body.description, body.allow, body.deny))
-    return RoleOut.of(role, c.agents.resolve(role.rules))
+    return RoleOut.of(role, c.agents.resolve(role.effective))
 
 
 @router.delete("/roles/{name}", status_code=204)
@@ -225,7 +228,6 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
         roles=body.roles,
         allow=body.allow,
         deny=body.deny,
-        mcp_servers=body.mcp_servers,
         thinking=body.thinking,
         group=body.group,
     )
@@ -248,7 +250,6 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         roles=body.roles,
         allow=body.allow,
         deny=body.deny,
-        mcp_servers=body.mcp_servers,
         thinking=body.thinking,
         # null 与空串都是不分组（AgentPatch 里 None 是「不变」）
         group=body.group or "",
@@ -333,27 +334,28 @@ class SkillIn(BaseModel):
 
 @router.get("/skills")
 async def list_skills(c: C, owner: str | None = None) -> list[SkillOut]:
-    """owner 为空列出公共 skill，否则列出该 agent 的私有 skill。"""
+    """owner 名下的 skill（owner 为空是归平台的）。"""
     await check_owner(c, owner)
     return [SkillOut.of(s) for s in await c.skills.list(owner)]
 
 
 @router.get("/skill")
-async def get_skill(c: C, name: str, owner: str | None = None) -> SkillDetail:
-    await check_owner(c, owner)
-    skill = await c.skills.read(owner, name)
-    return SkillDetail(name=skill.meta.name, description=skill.meta.description, owner=owner, body=skill.body)
+async def get_skill(c: C, name: str) -> SkillDetail:
+    skill = await c.skills.read(name)
+    meta = skill.meta
+    return SkillDetail(name=meta.name, description=meta.description, owner=meta.owner, body=skill.body)
 
 
 @router.put("/skill")
 async def put_skill(c: C, body: SkillIn) -> SkillOut:
-    meta = await c.skills.write(body.owner, body.name, body.description, body.body, USER)
+    """新建的归 owner；已有的整体改写，owner 不变。"""
+    meta = await c.skills.write(body.name, body.description, body.body, actor=USER, owner=body.owner)
     return SkillOut.of(meta)
 
 
 @router.delete("/skill", status_code=204)
-async def delete_skill(c: C, name: str, owner: str | None = None) -> None:
-    await c.skills.delete(owner, name, USER)
+async def delete_skill(c: C, name: str) -> None:
+    await c.skills.delete(name, USER)
 
 
 SKILL_PACKAGE_TYPE = "application/zip"
@@ -364,10 +366,9 @@ SKILL_PACKAGE_TYPE = "application/zip"
     response_class=Response,
     responses={200: {"content": {SKILL_PACKAGE_TYPE: {}}, "description": "<name>.skill"}},
 )
-async def export_skill(c: C, name: str, owner: str | None = None) -> Response:
+async def export_skill(c: C, name: str) -> Response:
     """下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。"""
-    await check_owner(c, owner)
-    package = await c.skills.export(owner, name)
+    package = await c.skills.export(name)
     return Response(
         package,
         media_type=SKILL_PACKAGE_TYPE,
@@ -398,7 +399,7 @@ class SkillImportOut(BaseModel):
 async def import_skill(
     c: C, request: Request, owner: str | None = None, replace: bool = False
 ) -> SkillImportOut:
-    """请求体是一个标准 .skill 文件，导入为 owner（缺省为公共）的 skill，一次提交、作者 user。同名 skill 已存在时 409，
+    """请求体是一个标准 .skill 文件，导入为 skill（新建的归 owner，缺省为平台），一次提交、作者 user。同名 skill 已存在时 409，
     replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，超限 413。"""
     package = await read_limited(request, MAX_PACKAGE_BYTES)
-    return SkillImportOut.of(await c.skills.import_package(owner, package, USER, replace=replace))
+    return SkillImportOut.of(await c.skills.import_package(package, actor=USER, owner=owner, replace=replace))

@@ -94,12 +94,10 @@ def make_agent(container: Assembly) -> Callable:
         *,
         model: str = "test",
         description: str = "test agent",
-        roles: list[str] | None = None,
-        mcp_servers: tuple[str, ...] = (),
+        roles: tuple[str, ...] = (),
     ):
         return await container.agents.create(
-            AgentSpec(name=name, description=description, model=model, roles=roles, mcp_servers=mcp_servers),
-            author="user",
+            AgentSpec(name=name, description=description, model=model, roles=roles), author="user"
         )
 
     return _make

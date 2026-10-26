@@ -31,12 +31,10 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
-    # 工具权限（agents.permissions）：角色名（内置或 roles 表里的）与它自己的 allow / deny 通配符
+    # 分发规则（agents.permissions）：角色名（不含每个 agent 隐含的 base）与它自己的 allow / deny（`kind:glob`）
     roles: Mapped[list[str]] = mapped_column(JSON)
     allow: Mapped[list[str]] = mapped_column(JSON, server_default=text("'[]'"))
     deny: Mapped[list[str]] = mapped_column(JSON, server_default=text("'[]'"))
-    # 勾选的公共 MCP server 名（agents.mcp）：运行时连接它自己的私有 server 与这些；不归工具权限管
-    mcp_servers: Mapped[list[str]] = mapped_column(JSON, server_default=text("'[]'"))
     # 思考档位（agents.service.Thinking）；"default" 表示不传、按模型与服务端默认
     thinking: Mapped[str] = mapped_column(String(16), default="default", server_default="default")
     # 正在删除时是发起删除的作者（docs/architecture.md 第 10 节）：不出现在列表与名称解析里，各领域清理完它的数据后删除
@@ -53,7 +51,8 @@ class Agent(Base):
 
 
 class Role(Base):
-    """用户自建的角色（内置角色在 agents.permissions 里定义，不入库）。被 agent 引用时不能删。"""
+    """角色可编辑的规则（agents.roles）：用户自建的角色，与内置角色 base、admin 可编辑的部分（它们固定的部分在
+    agents.permissions，行可以不存在）。自建的被 agent 引用时不能删，内置的不能删。"""
 
     __tablename__ = "roles"
 
@@ -71,7 +70,8 @@ def _owner_ref() -> ForeignKey:
 
 
 class Item(Base):
-    """条目（agents.items）：skill、MCP server、secret，按种类名字全局唯一。owner 为 None 是平台（公共）的，否则是该 agent 的。
+    """条目（agents.items）：skill、MCP server、secret，按种类名字全局唯一。owner 为 None 是平台的，否则是该 agent 的；
+    谁能用、谁能改见 agents.access。
 
     content 的含义因种类而异：skill 是 SKILL.md 全文（附件在 item_files），MCP server 是配置 JSON（McpConfig），secret 为空
     （密文在 secret，由 vault 加解密）。description 是 skill 与 secret 的描述（skill 的也在 SKILL.md 的 frontmatter 里，

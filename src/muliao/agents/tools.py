@@ -1,31 +1,33 @@
-"""agent 的目录与管理：查看、创建、修改、删除 agent。给模型看的是名称和描述，不出现 id。"""
+"""agent 与角色的查看与管理：查看、创建、修改、删除 agent 与角色。给模型看的是名称和描述，不出现 id。"""
 
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.lifecycle import AgentLifecycle
-from muliao.agents.permissions import TOOL_PERMISSIONS, Permission
-from muliao.agents.roles import RoleService
+from muliao.agents.permissions import Role
+from muliao.agents.roles import RoleService, RoleSpec
 from muliao.agents.service import AgentPatch, AgentService, AgentSpec, Thinking
 from muliao.errors import Conflict, InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
-class ToolPermission(BaseModel):
-    tool: str
-    permission: str
-    access: str
-
-    @classmethod
-    def of(cls, tool: str, p: Permission) -> "ToolPermission":
-        return cls(tool=tool, permission=p.id, access=p.access)
-
-
 class RoleDetail(BaseModel):
     name: str
     description: str
+    # 内置角色（base、admin）代码里固定的规则，不可改
+    fixed_allow: list[str]
     allow: list[str]
     deny: list[str]
+
+    @classmethod
+    def of(cls, r: Role) -> "RoleDetail":
+        return cls(
+            name=r.name,
+            description=r.description,
+            fixed_allow=list(r.fixed.allow),
+            allow=list(r.rules.allow),
+            deny=list(r.rules.deny),
+        )
 
 
 class AgentDetail(BaseModel):
@@ -37,16 +39,17 @@ class AgentDetail(BaseModel):
     archived: bool
     model: str
     thinking: Thinking
+    # 角色（base 隐含，不列在这里）与它自己的 allow / deny
     roles: list[str]
     allow: list[str]
     deny: list[str]
-    # 按角色 + allow/deny 算出的最终工具（不含 MCP）
+    # 按规则最终能用的内置工具
     tools: list[str]
-    # 勾选的公共 MCP server（不归工具权限管；另有它自己的私有 server）
-    mcp_servers: list[str]
-    # 全部角色与全部工具的权限 id，写 roles / allow / deny 时参照
+    # 能用的 skill、MCP server、secret（`kind:name`）：自己的与规则放行的
+    items: list[str]
+    # 全部角色与全部内置工具，写 roles / allow / deny 时参照
     available_roles: list[RoleDetail]
-    permissions: list[ToolPermission]
+    all_tools: list[str]
 
 
 def agents_toolset(
@@ -58,15 +61,13 @@ def agents_toolset(
 
     @ts.tool_plain
     async def get_agent(agent: str) -> AgentDetail:
-        """Show an agent's configuration, the tools it ends up with, its public MCP servers, every role and every
-        tool permission id.
-        Use your own name to see yours.
+        """Show an agent's configuration, the built-in tools and the skills/MCP servers/secrets it ends up with,
+        every role and every built-in tool. Use your own name to see yours.
 
         Args:
             agent: Agent name.
         """
         target = await agents.find_by_name(agent)
-        resolved = agents.resolve(await agents.rules(target))
         return AgentDetail(
             name=target.name,
             description=target.description,
@@ -77,15 +78,10 @@ def agents_toolset(
             roles=list(target.roles),
             allow=list(target.allow),
             deny=list(target.deny),
-            tools=resolved.tools,
-            mcp_servers=list(target.mcp_servers),
-            available_roles=[
-                RoleDetail(
-                    name=r.name, description=r.description, allow=list(r.rules.allow), deny=list(r.rules.deny)
-                )
-                for r in await roles.list()
-            ],
-            permissions=[ToolPermission.of(t, TOOL_PERMISSIONS[t]) for t in agents.tools],
+            tools=agents.resolve(await agents.rules(target)),
+            items=await agents.usable_items(target.id),
+            available_roles=[RoleDetail.of(r) for r in await roles.list()],
+            all_tools=list(agents.tools),
         )
 
     @ts.tool
@@ -94,10 +90,9 @@ def agents_toolset(
         name: str,
         description: str,
         model: str | None = None,
-        roles: list[str] | None = None,
+        roles: tuple[str, ...] = (),
         allow: tuple[str, ...] = (),
         deny: tuple[str, ...] = (),
-        mcp_servers: tuple[str, ...] = (),
         thinking: Thinking = "default",
         group: str | None = None,
     ) -> str:
@@ -110,11 +105,10 @@ def agents_toolset(
             description: What it is for (its role); it is shown to the agent itself and other agents choose
                 whom to delegate to by it. The agent starts with an empty memory and grows it by itself.
             model: `<provider>:<model>`; defaults to the server's default model.
-            roles: Its roles (`get_agent` lists every role and permission id); defaults to `agent` (every tool
-                except writing what all agents share and managing agents).
-            allow: Extra permission patterns to allow, e.g. `issue:*` (fnmatch wildcards).
-            deny: Permission patterns to deny; deny wins over every allow, e.g. `trigger:*`.
-            mcp_servers: Public MCP servers whose tools it gets (besides its own private ones).
+            roles: Its roles besides `base`, which every agent has (`get_agent` lists them all).
+            allow: Extra rules `kind:name` (kind is tool, skill, mcp or secret; fnmatch wildcards), e.g.
+                `skill:relay-host`, `secret:RELAY_*`.
+            deny: Rules to deny; deny wins over every allow, e.g. `tool:trigger_*`.
             thinking: Thinking/reasoning effort of its model: `default` sends nothing (the model's own default),
                 `off` disables it, the others set the effort level.
             group: Group it belongs to, e.g. a batch of agents doing the same kind of job; `list_agents` lists
@@ -127,7 +121,6 @@ def agents_toolset(
             roles=roles,
             allow=allow,
             deny=deny,
-            mcp_servers=mcp_servers,
             thinking=thinking,
             group=group,
         )
@@ -141,10 +134,9 @@ def agents_toolset(
         new_name: str | None = None,
         description: str | None = None,
         model: str | None = None,
-        roles: list[str] | None = None,
+        roles: tuple[str, ...] | None = None,
         allow: tuple[str, ...] | None = None,
         deny: tuple[str, ...] | None = None,
-        mcp_servers: tuple[str, ...] | None = None,
         thinking: Thinking | None = None,
         group: str | None = None,
         archived: bool | None = None,
@@ -158,10 +150,9 @@ def agents_toolset(
             new_name: New display name.
             description: New description.
             model: New `<provider>:<model>`.
-            roles: New full list of roles.
-            allow: New full list of extra permission patterns to allow.
-            deny: New full list of permission patterns to deny.
-            mcp_servers: New full list of public MCP servers whose tools it gets.
+            roles: New full list of roles (besides `base`, which every agent has).
+            allow: New full list of extra `kind:name` rules to allow.
+            deny: New full list of `kind:name` rules to deny.
             thinking: New thinking/reasoning effort (`default` = the model's own default).
             group: New group; an empty string removes it from its group.
             archived: `true` to archive a finished or inactive agent, `false` to unarchive it.
@@ -174,7 +165,6 @@ def agents_toolset(
             roles=roles,
             allow=allow,
             deny=deny,
-            mcp_servers=mcp_servers,
             thinking=thinking,
             group=group,
         )
@@ -207,5 +197,58 @@ def agents_toolset(
             )
         await lifecycle.delete(target.id, author=ctx.deps.agent_id)
         return f"deleted agent {target.name}"
+
+    @ts.tool_plain
+    async def create_role(name: str, description: str, allow: tuple[str, ...] = (), deny: tuple[str, ...] = ()) -> str:
+        """Create a role: a bundle of `kind:name` rules (kind is tool, skill, mcp or secret; fnmatch wildcards)
+        that hands tools and items to every agent given the role (`update_agent` roles), e.g. a role
+        `relay-trader` with allow `skill:relay-host`, `secret:RELAY_*`.
+
+        Args:
+            name: Lowercase slug.
+            description: What the role is for.
+            allow: Rules to allow.
+            deny: Rules to deny; deny wins over every allow, also over other roles' allows.
+        """
+        role = await roles.create(RoleSpec(name, description, allow, deny))
+        return f"created role {role.name}"
+
+    @ts.tool_plain
+    async def update_role(
+        name: str,
+        description: str | None = None,
+        allow: tuple[str, ...] | None = None,
+        deny: tuple[str, ...] | None = None,
+    ) -> str:
+        """Change a role; only the given fields change. Adding an item to a role (e.g. `skill:<name>` to the
+        built-in `base` role every agent has) shares it with the agents having the role. The fixed rules of the
+        built-in roles cannot change. Takes effect from those agents' next run.
+
+        Args:
+            name: Role name.
+            description: New description.
+            allow: New full list of rules to allow (`get_agent` shows the current ones).
+            deny: New full list of rules to deny.
+        """
+        role = await roles.get(name)
+        await roles.update(
+            RoleSpec(
+                name,
+                role.description if description is None else description,
+                role.rules.allow if allow is None else allow,
+                role.rules.deny if deny is None else deny,
+            )
+        )
+        return f"updated role {name}"
+
+    @ts.tool_plain
+    async def delete_role(name: str) -> str:
+        """Delete a role no agent has. Built-in roles cannot be deleted.
+
+        Args:
+            name: Role name.
+        """
+        await roles.delete(name)
+        return f"deleted role {name}"
 
     return ts

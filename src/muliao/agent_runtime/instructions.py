@@ -37,8 +37,8 @@ learned) with `memory_edit` (empty `old_text` appends); fix or condense entries 
 has its own tool (`memory_edit_public`, if you have it): only for facts and rules that hold for every agent. \
 Never record secrets or one-off details.
 - Skills are reusable procedures. Before a task that matches a skill in the index, call `read_skill`. After \
-working out a non-trivial procedure likely to recur, save it with `write_skill`; when a skill proves wrong or \
-incomplete, fix that part with `edit_skill`. Change skills and memory only through these tools, never with shell \
+working out a non-trivial procedure likely to recur, save it with `write_skill` (a new skill is yours; other \
+agents get it only through a role); when a skill proves wrong or incomplete, fix that part with `edit_skill`. Change skills and memory only through these tools, never with shell \
 commands or file tools, so every change is versioned under your name and the user can roll it back.
 - Secrets belong in the vault, referenced by key; never write secret values into files, memory or skills.
 - Keep state you need across runs (cursors, caches) in files in your workspace."""
@@ -66,6 +66,7 @@ def with_notices(run_context: str, notices: Sequence[str]) -> str:
 
 def build_instructions(
     *,
+    agent_id: str,
     agent_name: str,
     agent_description: str,
     global_memory: str,
@@ -83,7 +84,9 @@ def build_instructions(
         f"- Workspace (base for relative paths and shell cwd): {workspace}",
         f"- {origin_note}",
     ]
-    skill_lines = [f"- `{s.name}` ({s.scope}): {s.description}" for s in skills] or ["(no skills yet)"]
+    skill_lines = [
+        f"- `{s.name}`{' (yours)' if s.owner == agent_id else ''}: {s.description}" for s in skills
+    ] or ["(no skills yet)"]
     # 全局记忆在前、agent 自己的记忆在后：具体的可以细化或覆盖通用规则
     sections = [
         "## Global memory\nShared by every agent.\n"

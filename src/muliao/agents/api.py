@@ -5,23 +5,15 @@
   名称映射 AgentService.names / 事务内的 agent_names_in（AgentNames，已删除的 agent 也有展示名）；
 - 删除与归档 agent（AgentLifecycle）；
 - 条目与记忆：记忆（全局与 agent 的）、skill 的存取与标准 .skill 文件的导入导出（自我改进工具与 instructions 组装用），MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret 的密文存放（SecretItems，加解密在 vault）、版本（Revisions，只读）；
-- 归属规则：公共与 agent 私有的条目按同一套规则可见（ownership）；
-- 工具权限（permissions：每个工具的权限 id 与读写、规则、内置角色 admin / agent）与角色（roles：内置加用户自建）。
+- 条目的两条规则（access：能用 = 自己的 ∪ 规则放行的；能改 = owner 或 admin）；
+- 分发规则（permissions：内置工具的登记、`kind:name` 规则、内置角色 base / admin）与角色（roles：内置加用户自建）。
 """
 
 from muliao.agents.active import AgentArchived
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpConfig, McpRegistry, McpServer, McpTransport, mcp_config
 from muliao.agents.memory import MemoryStore
-from muliao.agents.ownership import Scope, scope_of, sees
-from muliao.agents.permissions import (
-    TOOL_PERMISSIONS,
-    Access,
-    Permission,
-    Resolved,
-    Role,
-    Rules,
-)
+from muliao.agents.permissions import TOOLS, Access, Kind, Role, Rules, Tool
 from muliao.agents.revisions import USER, RevisionInfo, Revisions, Subject
 from muliao.agents.roles import RoleService, RoleSpec
 from muliao.agents.secrets import SecretItems, StoredSecret
@@ -61,23 +53,20 @@ __all__ = [
     "Subject",
     "SecretItems",
     "StoredSecret",
-    "Scope",
     "MAX_PACKAGE_BYTES",
     "SkillImport",
     "SkillMeta",
     "SkillStore",
     "Access",
-    "Permission",
-    "Resolved",
+    "Kind",
+    "Tool",
     "Role",
     "RoleService",
     "RoleSpec",
     "Rules",
-    "TOOL_PERMISSIONS",
+    "TOOLS",
     "active_agent_in",
     "agent_in",
     "agent_names_in",
     "runnable_agent_in",
-    "scope_of",
-    "sees",
 ]
