@@ -438,7 +438,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 全局记忆与 agent 的记忆都在 `memories` 表，同一套规则（`MemoryStore`，owner 为 None 即全局）：有长度上限（`memory_max_chars`），每次运行全文放进 instructions（全局在最前，agent 自己的在运行上下文之后），修改在同一事务里记一版并记录作者（`user` 或做出修改的 agent），恢复即把旧版内容作为新的一版写入。全局记忆从未写过时为空（没有行）；agent 的记忆在创建时写入（空），缺失即数据不一致。读写接口 `GET/PUT /api/memory?owner=`（owner 缺省为全局），历史与恢复 `/api/resources/memory/history|restore`；界面在「全局记忆」页和 agent 的记忆标签里；接口只列最近 50 版，更早的仍在表里。
 
 ### 自我进化
-平台不在运行之间插入强制反思（#116 删掉了每 N 步的 reflection）。agent 改记忆（自己的与全局的）、私有 skill 都在自己的会话里用自我改进工具完成，每次修改都有版本（`revisions`），用户可回滚。定期的整理由 trigger 驱动、按公共 skill 执行（每日 self-evolve → curator 上提 → muliao 审查），不是平台机制。每日 self-evolve 的第一步是把前一天做过的事写进工作历史（第 22 节）。
+平台不在运行之间插入强制反思（#116 删掉了每 N 步的 reflection）。agent 改记忆（自己的与全局的）、自己 own 的 skill 都在自己的会话里用自我改进工具完成，每次修改都有版本（`revisions`），用户可回滚。定期的整理由 trigger 驱动、按 base 角色里的 skill 执行（每日 self-evolve → curator 上提 → muliao 审查），不是平台机制。每日 self-evolve 的第一步是把前一天做过的事写进工作历史（第 22 节）。
 
 ## 14. 触发源与通知
 
@@ -522,7 +522,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 
 能缩小的是**提示注入的影响面**：处理外部事件或网页内容的 agent 用自己的 deny 收窄（如 `tool:trigger_*`），不分给它用不到的 MCP 与 secret，这样即使输入里带有恶意指令，能动的东西也有限；base 本身没有管理类工具（全局记忆、agent 与角色管理），也改不了别人的条目。
 
-注入还可能**持久化**：能写记忆与私有 skill 的 agent 可能把注入的内容写进它们，之后该 agent 的每次运行都会带着它；全局记忆只有 `admin` 能写，但写进去的会带进**每个** agent 的运行。缓解手段是版本历史与作者记录：界面上能看到每一版是谁改的，随时回滚；每日的知识审查也审全局记忆的改动。
+注入还可能**持久化**：能写记忆与 skill 的 agent 可能把注入的内容写进它们（经角色分发出去的 skill 会带进拿到它的每个 agent），之后该 agent 的每次运行都会带着它；全局记忆只有 `admin` 能写，但写进去的会带进**每个** agent 的运行。缓解手段是版本历史与作者记录：界面上能看到每一版是谁改的，随时回滚；每日的知识审查也审全局记忆的改动。
 
 - shell 只继承少量环境变量（`PATH`、`HOME` 等）；
 - `run_shell(secrets=[KEY])` 输出中的 secret 明文被替换为 `[secret:KEY]`（逐字匹配，编码后的输出不会被替换）；

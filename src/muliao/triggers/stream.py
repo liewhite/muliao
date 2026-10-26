@@ -103,7 +103,7 @@ class StreamKind:
         "the first one fire together (one conversation, the lines are the event); while the conversation of the "
         "previous firing is still busy, events queue and are delivered together once it is done. stderr goes to "
         f"{LOG_DIR}/<name>.stderr.log in the workspace. Queued events are lost on a restart, so the command handles "
-        "reconnects, dedup and cursors itself; read public skill stream-listener before writing one."
+        "reconnects, dedup and cursors itself; read skill stream-listener before writing one."
     )
 
     def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:

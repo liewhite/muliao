@@ -182,8 +182,9 @@ def agents_toolset(
 
     @ts.tool
     async def delete_agent(ctx: RunContext[RunScope], agent: str) -> str:
-        """Delete another agent with its sessions, memory, skills, private secrets and MCP servers, triggers
-        and workspace. Irreversible. Threads its conversations opened with other agents that the user
+        """Delete another agent with its sessions, memory, the skills, secrets and MCP servers it owns (those
+        a role or another agent's allow still hands out pass to the platform instead), triggers and workspace.
+        Irreversible. Threads its conversations opened with other agents that the user
         can see are kept as standalone sessions; threads it was working on for others are deleted, and any
         unfinished work in them is reported back to its delegator as deleted. You cannot delete yourself.
 
