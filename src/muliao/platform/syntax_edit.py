@@ -9,7 +9,7 @@ from pathlib import PurePath
 from ast_grep_py import SgNode, SgRoot
 
 from muliao.errors import InvalidInput
-from muliao.platform.text_edit import Origin, listed
+from muliao.platform.text_edit import Origin, Splice, listed
 
 # 扩展名 -> ast-grep 内置语言名（只列 ast-grep-py 自带的语言；不认识的扩展名直接拒绝，不猜）
 LANGUAGES = {
@@ -88,7 +88,7 @@ class PatternEdit:
     new: str
     every: bool = False
 
-    def apply(self, current: str, what: str, origin: Origin) -> tuple[str, int]:
+    def locate(self, current: str, what: str, origin: Origin) -> tuple[list[Splice], int]:
         root = SgRoot(current, self.language).root()
         try:
             matches = root.find_all(pattern=self.pattern)
@@ -115,10 +115,7 @@ class PatternEdit:
                     f"pattern matches overlap in {what} (one is inside another; matches at lines {listed(at)}): "
                     "make it more specific"
                 )
-        # 从后往前改，前面各处的位置不变
-        for start, end, text in reversed(spans):
-            current = _splice(current, start, end, text)
-        return current, len(spans)
+        return _merged(current, spans), len(spans)
 
     def _span(self, text: str, match: SgNode) -> tuple[int, int, str]:
         """这一处要替换的 [起, 止) 字符位置与替换成的文本（ast-grep 的 index 按字符计，与 str 下标一致）。"""
@@ -187,21 +184,48 @@ def _with_wrappers(node: SgNode) -> SgNode:
     return node
 
 
-def _splice(text: str, start: int, end: int, new: str) -> str:
-    """把 text[start:end] 换成 new；整行删除（new 为空且 start、end 都在行首）时合并删除处两侧的空行。"""
-    before, after = text[:start], text[end:]
+def _merged(text: str, spans: list[tuple[int, int, str]]) -> list[Splice]:
+    """各处匹配（按位置排列、互不重叠）实际要做的替换。整行删除会把两侧的空行一并换掉，相邻两处删除之间只隔着空行时
+    换掉的范围相接或重叠，结果取决于先后：这样的几处合成一处，在整份文本上从后往前依次做（前面各处的位置不变），
+    再从结果里取出这一段。"""
+    groups: list[list[tuple[int, int, str]]] = []
+    bounds: list[tuple[int, int]] = []
+    for span in spans:
+        start, end, _ = _extent(text, *span)
+        if groups and start <= bounds[-1][1]:
+            groups[-1].append(span)
+            bounds[-1] = (bounds[-1][0], max(end, bounds[-1][1]))
+        else:
+            groups.append([span])
+            bounds.append((start, end))
+    places = []
+    for group, (start, end) in zip(groups, bounds, strict=True):
+        if len(group) == 1:
+            places.append(_extent(text, *group[0]))
+            continue
+        result = text
+        for span in reversed(group):
+            s, e, new = _extent(result, *span)
+            result = result[:s] + new + result[e:]
+        places.append(Splice(start, end, result[start : len(result) - (len(text) - end)]))
+    return places
+
+
+def _extent(text: str, start: int, end: int, new: str) -> Splice:
+    """把 text[start:end] 换成 new 实际要做的替换：整行删除（new 为空且 start、end 都在行首）时把两侧的空行一并替换掉，
+    只留两侧原有空行数中较多的那一份（在文件开头或末尾则不留）。"""
     whole_lines = (
         not new and (start == 0 or text[start - 1] == "\n") and (end == len(text) or text[end - 1] == "\n")
     )
     if not whole_lines:
-        return before + new + after
-    above, below = before.splitlines(keepends=True), after.splitlines(keepends=True)
-    blank_above = _count_blank(reversed(above))
-    blank_below = _count_blank(below)
-    kept_above, kept_below = above[: len(above) - blank_above], below[blank_below:]
-    blanks = above[len(kept_above) :] + below[:blank_below]
-    keep = max(blank_above, blank_below) if kept_above and kept_below else 0
-    return "".join(kept_above + blanks[:keep] + kept_below)
+        return Splice(start, end, new)
+    above, below = text[:start].splitlines(keepends=True), text[end:].splitlines(keepends=True)
+    blank_above = above[len(above) - _count_blank(reversed(above)) :]
+    blank_below = below[: _count_blank(below)]
+    between = len(blank_above) < len(above) and len(blank_below) < len(below)
+    keep = max(len(blank_above), len(blank_below)) if between else 0
+    blanks = "".join((blank_above + blank_below)[:keep])
+    return Splice(start - len("".join(blank_above)), end + len("".join(blank_below)), blanks)
 
 
 def _count_blank(lines) -> int:

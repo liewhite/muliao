@@ -442,8 +442,8 @@ class _Located:
     target: Path
     edit: TextEdit
 
-    def apply(self, current: str, what: str, origin: text_edit.Origin) -> tuple[str, int]:
-        return _change_of(self.target, self.edit).apply(current, what, origin)
+    def locate(self, current: str, what: str, origin: text_edit.Origin) -> tuple[list[text_edit.Splice], int]:
+        return _change_of(self.target, self.edit).locate(current, what, origin)
 
 
 def _change_of(target: Path, e: TextEdit) -> text_edit.Edit:

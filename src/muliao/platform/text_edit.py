@@ -4,9 +4,10 @@
 
 import difflib
 import re
+from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from muliao.errors import InvalidInput
 
@@ -16,27 +17,38 @@ MAX_LINE_CHARS = 2000
 
 def replace_once(current: str, old: str, new: str, what: str) -> str:
     """把恰好出现一次的 old 替换为 new；new 为空即删除。"""
-    count = current.count(old) if old else 0
-    if count != 1:
-        raise InvalidInput(_miss(current, old, count, f"old text must occur exactly once in {what}"))
-    return current.replace(old, new)
+    return splice(current, Replace(old, new).locate(current, what)[0])
 
 
 def replace_all(current: str, old: str, new: str, what: str) -> tuple[str, int]:
     """把 old 的每一处都替换为 new，返回新文本与替换数；一处都没有是错误。"""
-    if not old:
-        raise InvalidInput("old text must not be empty")
-    count = current.count(old)
-    if not count:
-        raise InvalidInput(_miss(current, old, 0, f"old text must occur in {what}"))
-    return current.replace(old, new), count
+    places, count = Replace(old, new, every=True).locate(current, what)
+    return splice(current, places), count
+
+
+class Splice(NamedTuple):
+    """把文本的 [start, end) 字符换成 new。"""
+
+    start: int
+    end: int
+    new: str
+
+
+def splice(text: str, places: Sequence[Splice]) -> str:
+    """按顺序排列、互不重叠的各处替换做出新文本。"""
+    parts, at = [], 0
+    for start, end, new in places:
+        parts += [text[at:start], new]
+        at = end
+    return "".join([*parts, text[at:]])
 
 
 class Edit(Protocol):
-    """一处修改：按自己的方式定位要改的地方并替换，返回新文本与替换数；定位不到就抛 InvalidInput。current 是同一份
-    文本里前面的修改都做完后的样子，origin 是本次调用前的原文及其各行现在的位置（按行号定位的修改用它）。"""
+    """一处修改：按自己的方式在 current（同一份文本里前面的修改都做完后的样子）里定位，返回要做的各处替换（按位置
+    排列、互不重叠）与替换数；定位不到就抛 InvalidInput。origin 是本次调用前的原文及其各行现在的位置，按行号定位的
+    修改用它换算。只报替换、不自己拼新文本，Origin 才能确知哪些行被改过，不必事后比对猜。"""
 
-    def apply(self, current: str, what: str, origin: "Origin") -> tuple[str, int]: ...
+    def locate(self, current: str, what: str, origin: "Origin") -> tuple[list[Splice], int]: ...
 
 
 @dataclass(frozen=True)
@@ -47,10 +59,17 @@ class Replace:
     new: str
     every: bool = False
 
-    def apply(self, current: str, what: str, origin: "Origin") -> tuple[str, int]:
-        if self.every:
-            return replace_all(current, self.old, self.new, what)
-        return replace_once(current, self.old, self.new, what), 1
+    def locate(self, current: str, what: str, origin: "Origin | None" = None) -> tuple[list[Splice], int]:
+        if self.every and not self.old:
+            raise InvalidInput("old text must not be empty")
+        at = [m.start() for m in re.finditer(re.escape(self.old), current)] if self.old else []
+        if self.every and not at:
+            raise InvalidInput(_miss(current, self.old, 0, f"old text must occur in {what}"))
+        if not self.every and len(at) != 1:
+            raise InvalidInput(
+                _miss(current, self.old, len(at), f"old text must occur exactly once in {what}")
+            )
+        return [Splice(i, i + len(self.old), self.new) for i in at], len(at)
 
 
 @dataclass(frozen=True)
@@ -64,7 +83,7 @@ class LineRange:
     anchor: str
     new: str
 
-    def apply(self, current: str, what: str, origin: "Origin") -> tuple[str, int]:
+    def locate(self, current: str, what: str, origin: "Origin") -> tuple[list[Splice], int]:
         original = origin.text.splitlines(keepends=True)
         if not 1 <= self.start <= self.end:
             raise InvalidInput(
@@ -84,10 +103,38 @@ class LineRange:
                 f"{numbered(plain, first, last)}\ngive the line numbers and anchor of the text as it is now"
             )
         start, end = origin.now(self.start, self.end)
-        lines = current.splitlines(keepends=True)
-        replaced = "".join(lines[start - 1 : end])
-        head, tail = "".join(lines[: start - 1]), "".join(lines[end:])
-        return head + as_lines(self.new, replaced) + tail, 1
+        starts = _line_starts(current)
+        begin, stop = starts[start - 1], starts[end]
+        return [Splice(begin, stop, as_lines(self.new, current[begin:stop]))], 1
+
+
+def _line_starts(text: str) -> list[int]:
+    """各行开头的字符位置，末尾再加上全文长度（第 i 行是 [starts[i], starts[i+1])）；分行规则同 str.splitlines。"""
+    starts = [0]
+    for line in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    return starts
+
+
+def _ends_line(text: str) -> bool:
+    """text 以换行结尾（按 str.splitlines 的分行规则）。"""
+    lines = text.splitlines(keepends=True)
+    return bool(lines) and lines[-1] != lines[-1].splitlines()[0]
+
+
+@dataclass
+class _Block:
+    """Origin.follow 里一块被改动的整行：原来的第 first 到 stop（不含）行；new 是块首到字符位置 at 这段改后的文本，
+    at 之后到块尾是没动的原文。"""
+
+    first: int
+    stop: int
+    new: str
+    at: int
+
+    def text(self, before: str, starts: list[int]) -> str:
+        """这块改后的完整文本。"""
+        return self.new + before[self.at : starts[self.stop]]
 
 
 class Origin:
@@ -101,30 +148,58 @@ class Origin:
         # 被改掉或删掉的原文行 -> 改掉它的是第几处修改
         self._gone: dict[int, int] = {}
 
-    def follow(self, before: str, after: str, by: int) -> None:
-        """第 by 处修改把当前文本从 before 改成了 after：按行比对，没动的行保留来历，其余记为第 by 处改的。
-        先去掉首尾相同的行再比对中间，一处局部修改只比对改动的几行。"""
-        old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
-        limit = min(len(old), len(new))
-        head = 0
-        while head < limit and old[head] == new[head]:
-            head += 1
-        tail = 0
-        while tail < limit - head and old[-1 - tail] == new[-1 - tail]:
-            tail += 1
-        middle: list[tuple[int | None, int]] = []
-        matcher = difflib.SequenceMatcher(
-            None, old[head : len(old) - tail], new[head : len(new) - tail], autojunk=False
-        )
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag == "equal":
-                middle += self._lines[head + i1 : head + i2]
-                continue
-            for original, _ in self._lines[head + i1 : head + i2]:
+    def follow(self, before: str, places: Sequence[Splice], by: int) -> None:
+        """第 by 处修改在当前文本 before 上做了 places 这些替换：每处替换扩到所在的整行（替换后不以换行结尾时连上下一行，
+        落在同一行的几处合成一块），块外的行原样保留来历；块内只把首尾没变的行认作原来那几行，其余的原文行记为被第
+        by 处改掉，新写出的行记为第 by 处写的。只看替换本身、不比对整份文本，重复的行（空行、`}`）不会对错位置。"""
+        starts = _line_starts(before)
+        count = len(starts) - 1
+        blocks: list[_Block] = []
+        for start, end, new in places:
+            first = bisect_right(starts, start) - 1
+            if blocks and first < blocks[-1].stop:
+                block = blocks[-1]
+                block.new += before[block.at : start] + new
+            else:
+                block = _Block(first, first, before[starts[first] : start] + new, end)
+                blocks.append(block)
+            block.at = end
+            if end > start:
+                touched = bisect_right(starts, end - 1)
+            else:
+                # 纯插入：插在行首且自成整行的不碰这一行
+                touched = first if start == starts[first] and (not new or _ends_line(new)) else first + 1
+            block.stop = max(block.stop, min(touched, count))
+            # 块的新文本不以换行结尾时，和后面一行连成了一行
+            while block.stop < count and not _ends_line(text := block.text(before, starts)) and text:
+                block.stop += 1
+        lines: list[tuple[int | None, int]] = []
+        kept = 0
+        for block in blocks:
+            lines += self._lines[kept : block.first]
+            old = before[starts[block.first] : starts[block.stop]].splitlines(keepends=True)
+            written = block.text(before, starts).splitlines(keepends=True)
+            same = min(len(old), len(written))
+            head = 0
+            while head < same and old[head] == written[head]:
+                head += 1
+            tail = 0
+            while tail < same - head and old[-1 - tail] == written[-1 - tail]:
+                tail += 1
+            for original, _ in self._lines[block.first + head : block.stop - tail]:
                 if original is not None:
                     self._gone[original] = by
-            middle += [(None, by)] * (j2 - j1)
-        self._lines = self._lines[:head] + middle + self._lines[len(old) - tail :]
+            lines += self._lines[block.first : block.first + head]
+            lines += [(None, by)] * (len(written) - head - tail)
+            lines += self._lines[block.stop - tail : block.stop]
+            kept = block.stop
+        lines += self._lines[kept:]
+        after = len(splice(before, places).splitlines())
+        if len(lines) != after:
+            # 拼接处生出新的换行（如 "\r" 接上 "\n"）时对不上：不再换算，之后的行号区间一律当作重叠拒绝
+            self._gone.update(dict.fromkeys(range(len(self.text.splitlines())), by))
+            lines = [(None, by)] * after
+        self._lines = lines
 
     def now(self, start: int, end: int) -> tuple[int, int]:
         """原文第 start 到 end 行（1 起算、含两端）现在是第几到第几行；其中有行被前面的修改改掉、删掉，或中间被插入了
@@ -141,9 +216,9 @@ class Origin:
 
     @staticmethod
     def _overlap(start: int, end: int, by: int) -> InvalidInput:
+        lines = f"line {start}" if start == end else f"lines {start}-{end}"
         return InvalidInput(
-            f"lines {start}-{end} (numbered as before this call) overlap edit {by}, which already changed that part; "
-            "merge the two into one edit"
+            f"{lines} overlap edit {by}, which already changed that part; merge the two into one edit"
         )
 
 
@@ -172,7 +247,7 @@ def apply_each[K](
                 origins[key] = Origin(texts[key])
             origin = origins[key]
             text = current.get(key, origin.text)
-            current[key], count = change.apply(text, str(key), origin)
+            places, count = change.locate(text, str(key), origin)
         except InvalidInput as e:
             if len(edits) == 1:
                 raise
@@ -184,7 +259,8 @@ def apply_each[K](
                 else ""
             )
             raise InvalidInput(f"edit {i} of {len(edits)}{after}: {e}; nothing was written") from e
-        origin.follow(text, current[key], i)
+        current[key] = splice(text, places)
+        origin.follow(text, places, i)
         counts[key] = counts.get(key, 0) + count
     return current, counts
 
