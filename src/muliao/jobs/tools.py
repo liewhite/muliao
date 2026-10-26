@@ -16,10 +16,13 @@ from muliao.platform.tooling import RunScope
 from muliao.vault.api import Vault
 
 _BACKGROUND_DESCRIPTION = (
-    " To keep working while a long command runs, pass `background: true` (and no `timeout`): it returns a job id "
-    "at once and runs concurrently with you, with no time limit; its output goes to a log file in your workspace, "
-    "you get an event when it finishes and a check-in event every `heartbeat_seconds` while it runs (decide then "
-    "whether to keep waiting or call `job_kill`; set the interval from how long you expect it to take)."
+    " To keep working while a long command runs, pass `background: true` and no `timeout`: this is non-blocking. "
+    "It returns a job id at once and the job runs alongside you with no time limit; its output goes to "
+    "jobs/<id>.log in your workspace. While it runs you get a check-in event every `heartbeat_seconds` (default "
+    "30; choose it from how long you expect the job to take, e.g. 300 for a half-hour build) with its run time and "
+    "last output lines: then either keep waiting (if nothing needs doing, reply with just '…') or stop it with "
+    "`job_kill`; `job_status` shows it at any time. When it ends you get an event with its exit code and last "
+    "output."
 )
 
 
@@ -42,13 +45,14 @@ def workspace_toolset(
 
         Args:
             command: The command line to run.
-            timeout: Seconds before the command is killed. Required unless `background` is true (then leave it
-                out); estimate it yourself, there is no upper limit.
+            timeout: Foreground only, and required there: seconds before the command is killed (> 0, no upper
+                limit; estimate it yourself). Leave it out with `background: true`.
             secrets: Vault keys (your private ones or public ones) to expose to the command as environment
                 variables of the same name.
                 Secret values in the output are replaced by `[secret:KEY]`.
             background: Run it as a background job instead of waiting for it.
-            heartbeat_seconds: Background only: seconds between check-in events while the job runs (default 30).
+            heartbeat_seconds: Background only: seconds between check-in events while the job runs (> 0,
+                default 30).
         """
         if not background:
             if heartbeat_seconds is not None:
@@ -85,7 +89,9 @@ def workspace_toolset(
 
     @ts.tool
     async def job_status(ctx: RunContext[RunScope], job_id: int) -> str:
-        """Show a background job's status and the last lines of its output (read its log file for all of it).
+        """Show a background job's status (running, exited with its code, killed, interrupted), how long it has
+        run and the last lines of its output (read its log file for all of it). Use it to look at a job between
+        check-ins; it does not change anything.
 
         Args:
             job_id: The id `run_shell(background: true)` returned.
@@ -99,7 +105,8 @@ def workspace_toolset(
 
     @ts.tool
     async def job_kill(ctx: RunContext[RunScope], job_id: int) -> str:
-        """Kill a running background job (its whole process tree). Its final status arrives as an event.
+        """Kill a running background job (its whole process tree), e.g. when a check-in shows it is stuck or no
+        longer needed. Its final status (killed) arrives as an event.
 
         Args:
             job_id: The id `run_shell(background: true)` returned.

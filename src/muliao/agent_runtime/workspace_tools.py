@@ -73,8 +73,10 @@ def resolve(scope: RunScope, path: str) -> Path:
 
 _SHELL_DESCRIPTION = (
     "Run a shell command (bash) in your workspace and return its exit code and combined output. "
-    "Running it in the foreground blocks you until it ends, so you must pass `timeout`: the command is killed after "
-    "that many seconds (estimate it yourself; there is no upper limit). "
+    "By default it runs in the foreground, which is blocking: you wait until it ends, so you must pass `timeout`, "
+    "the seconds it may take (estimate it yourself, there is no upper limit: e.g. 30 for a quick query, 600 for a "
+    "test suite). If it is still running then, it is killed and you get `killed after Ns timeout` with the output "
+    "so far. "
     "Only the first {max_output} characters of output are kept, so limit it yourself: pipe through `| head` or `| tail`, "
     "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
     "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "

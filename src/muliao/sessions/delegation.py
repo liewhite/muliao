@@ -211,7 +211,8 @@ class ThreadChecks:
                 del self._last_check[gone]
             self._timed_out &= active
             threads = await threads_of_holds_in(s, [hold.holder for hold in holds])
-            due: dict[tuple[str, str], SessionHold] = {}
+            # (发起会话, thread) -> 到期的占用与它的间隔
+            due: dict[tuple[str, str], tuple[SessionHold, float]] = {}
             for hold in holds:
                 child_id = threads.get(hold.holder)
                 if child_id is None:
@@ -221,15 +222,16 @@ class ThreadChecks:
                     if hold.deadline <= now and hold.holder not in self._timed_out:
                         expired[hold.holder] = child_id
                     continue
-                if hold.check_seconds is None:
+                interval = hold.check_seconds
+                if interval is None:
                     raise RuntimeError(
                         f"delegation {hold.holder} has neither a deadline nor a check interval"
                     )
-                if not check_due(self._last_check.get(hold.holder, hold.created_at), hold.check_seconds, now):
+                if not check_due(self._last_check.get(hold.holder, hold.created_at), interval, now):
                     continue
                 self._last_check[hold.holder] = now
                 # 同一个发起方对同一个 thread 的几项委派同时到期，检查一次
-                due.setdefault((hold.session_id, child_id), hold)
+                due.setdefault((hold.session_id, child_id), (hold, interval))
             child_ids = {child_id for _, child_id in due}
             works = await work_states_in(s, self._queue, child_ids)
             runs = await latest_runs_among(s, child_ids)
@@ -238,14 +240,16 @@ class ThreadChecks:
                 for x in (await s.scalars(select(Session).where(Session.id.in_(list(child_ids))))).all()
             }
             agents: dict[str, AgentInfo] = {}
-            for (_, child_id), hold in due.items():
+            for (_, child_id), (hold, interval) in due.items():
                 child = children.get(child_id)
                 if child is None:
                     # 不变量断言：信件随会话删除，推导不会给出已删除的 thread
                     raise RuntimeError(f"delegation {hold.holder} has mail in a missing thread {child_id}")
                 if child.agent_id not in agents:
                     agents[child.agent_id] = await agent_in(s, child.agent_id)
-                text = check_text(child, agents[child.agent_id], works[child_id], runs.get(child_id), now)
+                text = check_text(
+                    child, agents[child.agent_id], works[child_id], runs.get(child_id), now, interval
+                )
                 posted += await post_check_in(
                     s, self._queue, hold.session_id, hold.holder, thread_source(child.id), text
                 )
@@ -260,14 +264,17 @@ class ThreadChecks:
         return posted
 
 
-def check_text(child: Session, agent: AgentInfo, work: WorkState, run: Task | None, now: datetime) -> str:
+def check_text(
+    child: Session, agent: AgentInfo, work: WorkState, run: Task | None, now: datetime, check_seconds: float
+) -> str:
     """还没结清的委派的检查信件，按 thread 的工作状态（activity.work_states_in）说；run 是它最近一次运行（还没有
-    运行时为 None），只用来补充细节：在跑多久了、在等重试，还是还没开始处理。"""
+    运行时为 None），只用来补充细节：在跑多久了、在等重试，还是还没开始处理。check_seconds：这项委派的检查间隔。"""
     name = thread_name(child)
     who = f"Thread {name!r} ({agent.name})"
     keep = (
-        "Keep waiting, you will get an event with its answer; if it is no longer needed, call "
-        f"stop_thread(thread={name!r}, agent={agent.name!r})."
+        "Keep waiting (if nothing needs doing, reply with just '…'): you will get another check-in in "
+        f"{check_seconds:g} seconds and an event with its answer; list_threads shows its latest reply. If it is "
+        f"no longer needed, call stop_thread(thread={name!r}, agent={agent.name!r})."
     )
     match work:
         case WorkState.WAITING:

@@ -304,15 +304,15 @@ def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
     now = datetime.now(UTC)
     # 排队中的 thread 也能停：停止清空它的信箱，并交回「被停止」
     assert "stop_thread(thread='review', agent='reviewer')" in check_text(
-        child, agent, WorkState.RUNNING, queued, now
+        child, agent, WorkState.RUNNING, queued, now, 30
     )
-    assert "queued and has not started" in check_text(child, agent, WorkState.RUNNING, None, now)
-    assert "waiting to run again" in check_text(child, agent, WorkState.RUNNING, retrying, now)
-    assert "still working" in check_text(child, agent, WorkState.RUNNING, running, now)
+    assert "queued and has not started" in check_text(child, agent, WorkState.RUNNING, None, now, 30)
+    assert "waiting to run again" in check_text(child, agent, WorkState.RUNNING, retrying, now, 30)
+    assert "still working" in check_text(child, agent, WorkState.RUNNING, running, now, 30)
     # 最近一次运行做完了但在等自己开出的工作：照工作状态说在等，不是还排着
-    assert "waiting for work it started" in check_text(child, agent, WorkState.WAITING, done, now)
+    assert "waiting for work it started" in check_text(child, agent, WorkState.WAITING, done, now, 30)
     # 唤醒没做成（事务失败、重启）的委派信件等定期对账补唤醒：thread 此刻空闲，委派还没开始处理（不是错误）
-    assert "queued and has not started" in check_text(child, agent, WorkState.IDLE, done, now)
+    assert "queued and has not started" in check_text(child, agent, WorkState.IDLE, done, now, 30)
     # 被停止时如实说明，附上停止前说的话
     assert "was stopped" in _event_text("review", agent.name, Ending.STOPPED, "")
 

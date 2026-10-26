@@ -64,13 +64,15 @@ def delegation_toolset(
         report_back: bool = False,
         heartbeat_seconds: float | None = None,
     ) -> ToolReturn:
-        """Hand a task to an agent and keep going without waiting. It runs in a thread the user can see and reply
-        in. By default the user is notified with its answer and you do NOT get it back. With `report_back: true`
-        the answer (or its failure) comes back to you as an event in this conversation instead, with a check-in
-        event every `heartbeat_seconds` while it is still working (events reach you like messages, between your
-        tool calls if you are busy), so you can keep going and act on the result when it arrives. If you need the
-        answer before you can continue, use `ask_agent`. The agent can be yourself (your own name): a fresh
-        conversation of you, with your memory, skills and tools, for work to run on the side.
+        """Hand a task to an agent and keep going without waiting (non-blocking, no timeout). It runs in a thread
+        the user can see and reply in. By default the user is notified with its answer and you do NOT get it back.
+        With `report_back: true` the answer (or its failure) comes back to you as an event in this conversation
+        instead (events reach you like messages, between your tool calls if you are busy), and while it is still
+        working you get a check-in event every `heartbeat_seconds` (default 30) saying what the thread is doing:
+        then either keep waiting (if nothing needs doing, reply with just '…'; `list_threads` shows its latest
+        reply) or stop it with `stop_thread`. If you need the answer before you can continue, use `ask_agent`.
+        The agent can be yourself (your own name): a fresh conversation of you, with your memory, skills and
+        tools, for work to run on the side.
 
         Args:
             agent: Target agent name from `list_agents`, or your own name.
@@ -79,8 +81,9 @@ def delegation_toolset(
             thread: Short name of the thread, e.g. "weekly-report". Reusing a thread name with the same agent
                 continues that conversation with its full context; use a new name for an unrelated task.
             report_back: Get the thread's answer back as an event in this conversation.
-            heartbeat_seconds: With `report_back` only: seconds between check-in events while it works
-                (default 30); set it from how long you expect the task to take.
+            heartbeat_seconds: With `report_back: true` only: seconds between check-in events while it works
+                (> 0, default 30); choose it from how long you expect the task to take, e.g. 600 for an hour-long
+                task.
         """
         parent_id = ctx.deps.session_id
         target = await agents.find_by_name(agent)
@@ -125,11 +128,15 @@ def delegation_toolset(
         thread: str,
         timeout: float,  # noqa: ASYNC109  工具参数，面向模型的命名
     ) -> str:
-        """Ask an agent and wait for its answer, which is returned as this tool's result. The thread is private
-        to this conversation (the user can read but not reply). Files it shares are shown to the user with your
-        reply. Ask again in the same thread to follow up with the agent's context intact, e.g. review -> fix ->
-        review again. Several asks in one response run in parallel. Your reply pauses until the answers arrive; if
-        the user writes to you meanwhile, you continue and the answer reaches you later as an event.
+        """Ask an agent and wait for its answer, which is returned as this tool's result. This is blocking: your
+        reply pauses until the answer arrives, so `timeout` is required: if it has not answered within that many
+        seconds, its thread is stopped (as with `stop_thread`) and the result says it timed out, with what it said
+        so far. The thread is private to this conversation (the user can read but not reply). Files it shares are
+        shown to the user with your reply. Ask again in the same thread (same agent and name) to follow up with
+        the agent's context intact, e.g. review -> fix -> review again. Several asks in one response run in
+        parallel. If the user writes to you meanwhile, you continue and the outcome (answer or timeout) reaches
+        you later as an event. For long work you want to keep an eye on while doing other things, use
+        `delegate_task` with `report_back: true` instead.
         The agent can be yourself (your own name): a fresh conversation of you, with your memory, skills and tools,
         for a self-contained side job (e.g. a code review, or several parts of a task in parallel) whose context
         you do not want in this conversation.
@@ -139,8 +146,8 @@ def delegation_toolset(
             message: Self-contained request; the agent sees only this thread's history.
             thread: Short name of the thread, e.g. "code-review". Reuse it with the same agent to continue the
                 same conversation.
-            timeout: Seconds to wait (required; estimate it yourself, there is no upper limit). If it has not
-                answered by then, the thread is stopped and you get what it said so far.
+            timeout: Required: seconds to wait for the answer (> 0, no upper limit). Estimate it yourself from
+                the work you ask for, with room to spare, e.g. 300 for a short question, 1800 for a code review.
         """
         parent_id = ctx.deps.session_id
         target = await agents.find_by_name(agent)
@@ -170,12 +177,14 @@ def delegation_toolset(
     @ts.tool
     async def stop_thread(ctx: RunContext[RunScope], thread: str, agent: str | None = None) -> str:
         """Stop a thread of this conversation, whether it is running or still queued: its current run stops (what it
-        already did is kept) and the work queued for it is dropped. If you are waiting for its answer (`ask_agent`,
-        or `report_back`), you get its outcome saying it was stopped.
+        already did is kept) and the work queued for it is dropped. Use it when a check-in or `list_threads` shows
+        the work is stuck or no longer needed. If you are waiting for its answer (`ask_agent`, or `report_back`),
+        you get its outcome saying it was stopped, with what it said so far.
 
         Args:
             thread: The thread name used with `delegate_task` or `ask_agent`.
-            agent: The agent of the thread; needed only when you opened threads with this name for several agents.
+            agent: The thread's agent. Threads are told apart by agent and name: you may leave it out unless you
+                opened threads with this name for several agents.
         """
         parent_id = ctx.deps.session_id
         name = validate_thread(thread)
@@ -200,10 +209,11 @@ def delegation_toolset(
 
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
-        """List the threads this conversation has opened. `status`: running (working now), waiting (its run ended \
-but it is waiting for work it started or answers it asked for: not finished yet), idle (nothing in progress). \
-`answer` is its latest reply; while it is not idle that reply is intermediate, not its result. `failure` is set \
-when its latest run failed for good."""
+        """List the threads this conversation has opened (each is one agent + name). Use it to look at delegated \
+work, e.g. after a check-in event, before deciding to keep waiting or `stop_thread`. `status`: running (working \
+now), waiting (its run ended but it is waiting for work it started or answers it asked for: not finished yet), \
+idle (nothing in progress). `answer` is its latest reply; while it is not idle that reply is intermediate, not its \
+result. `failure` is set when its latest run failed for good."""
         parent_id = ctx.deps.session_id
         async with db.transaction() as s:
             views = await threads.list_in(s, parent_id)

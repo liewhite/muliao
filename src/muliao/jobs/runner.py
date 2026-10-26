@@ -552,8 +552,9 @@ def _check_text(job: Job, now: datetime, last: str) -> str:
     return (
         f"Background job {job.id} is still running ({_duration(job.started_at, now)} so far).\n"
         f"Command: {job.command}\n{_output(job, last)}\n"
-        f"If it looks stuck or is no longer needed, call job_kill({job.id}); otherwise just keep waiting, "
-        "you will get an event when it finishes."
+        f"If it looks stuck or is no longer needed, call job_kill({job.id}); otherwise keep waiting (if nothing "
+        f"needs doing, reply with just '…'): you will get another check-in in {job.check_seconds:g} seconds and an "
+        "event when it finishes."
     )
 
 
