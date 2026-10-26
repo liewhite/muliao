@@ -23,7 +23,7 @@ from muliao.agents.active import active_row_in
 from muliao.agents.documents import document_in
 from muliao.agents.events import AgentDeleting
 from muliao.agents.memory import revision_name
-from muliao.agents.permissions import Kind, Rules
+from muliao.agents.permissions import BASE, Kind, Rules
 from muliao.agents.revisions import Subject, record_in
 from muliao.agents.roles import roles_in
 from muliao.agents.service import AgentInfo, AgentService, info_of
@@ -120,6 +120,8 @@ class AgentLifecycle:
             author = agent.deleting_by
         # 目录不在数据库事务里：重放时它们已经不在，删除是空操作。skill 的生成目录只是副本，先于行删除
         await self._agents.remove_workspace(event.agent_id)
+        # 要转给平台的 skill 留着生成目录。这里与 commit 里各算一次：中间改了角色时两边可能不一致（多删或留下目录），
+        # 生成目录只是副本，启动时 materialize_all 按数据库全量对齐，下次写入该 skill 也会重新生成
         async with self._db.transaction() as s:
             shared = await _shared_in(s, event.agent_id)
         await self._skills.remove_generated(
@@ -138,9 +140,13 @@ class AgentLifecycle:
 
 
 async def _shared_in(s: AsyncSession, agent_id: str) -> set[tuple[Subject, str]]:
-    """agent 名下被分发出去的条目：某个角色的规则或别的 agent 自己的 allow 匹配到它（不看 deny）。"""
-    rules = [r.effective for r in (await roles_in(s)).values()]
-    rules += [Rules(tuple(a.allow)) for a in await s.scalars(select(Agent).where(Agent.id != agent_id))]
+    """agent 名下被分发出去、还有别人在用的条目：base、别的 agent 带着的角色、别的 agent 自己的 allow 匹配到它（不看
+    deny）。没分给任何 agent 的自建角色不算。"""
+    roles = await roles_in(s)
+    others = list(await s.scalars(select(Agent).where(Agent.id != agent_id)))
+    used = {BASE, *(r for a in others for r in a.roles)}
+    rules = [roles[n].effective for n in used if n in roles]
+    rules += [Rules(tuple(a.allow)) for a in others]
     rows = await s.scalars(select(Item).where(Item.owner == agent_id))
     return {(Subject(r.kind), r.name) for r in rows if any(x.matches(Kind(r.kind), r.name) for x in rules)}
 

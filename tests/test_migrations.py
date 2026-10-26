@@ -676,7 +676,7 @@ def test_agents_group_and_archived_at_start_empty_and_downgrade(tmp_path):
     with sqlite3.connect(path) as conn:
         conn.execute(
             "insert into agents (id, name, description, model, roles, created_at, updated_at) "
-            "values ('a1', 'a1', 'd', 'p:m', '[]', '2026-01-01', '2026-01-01')"
+            "values ('a1', 'a1', 'd', 'p:m', '[\"agent\"]', '2026-01-01', '2026-01-01')"
         )
     migrate(path)
     with sqlite3.connect(path) as conn:
@@ -868,3 +868,18 @@ def test_rules_become_kind_name_base_collects_platform_items_and_mcp_selections_
         "a3": ('["agent"]', "[]", "[]", "[]"),
     }
     assert roles == {"rev": '["issue:list"]'}
+
+
+def test_converting_rules_refuses_data_it_cannot_keep_unchanged(tmp_path):
+    """#235 换算的前提：每个 agent 带 agent 或 admin 角色（否则隐含 base 会多出工具）；不满足就报错回滚。"""
+    path = tmp_path / "m.db"
+    migrate(path, "f369adb6b551")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, roles, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', '[\"rev\"]', '2026-01-01', '2026-01-01')"
+        )
+    with pytest.raises(RuntimeError, match="neither the agent nor the admin role"):
+        migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert "mcp_servers" in {r[1] for r in conn.execute("pragma table_info(agents)")}

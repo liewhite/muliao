@@ -232,15 +232,7 @@ def agents_toolset(
             allow: New full list of rules to allow (`get_agent` shows the current ones).
             deny: New full list of rules to deny.
         """
-        role = await roles.get(name)
-        await roles.update(
-            RoleSpec(
-                name,
-                role.description if description is None else description,
-                role.rules.allow if allow is None else allow,
-                role.rules.deny if deny is None else deny,
-            )
-        )
+        await roles.patch(name, description=description, allow=allow, deny=deny)
         return f"updated role {name}"
 
     @ts.tool_plain

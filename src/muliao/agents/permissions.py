@@ -6,8 +6,8 @@
   server、secret。名字按种类全局唯一。
 - 规则：allow / deny 两组 `kind:glob`（fnmatch，如 `tool:issue_*`、`skill:relay-host`、`secret:RELAY_*`），deny 优先。
   agent 的规则 = 内置角色 base（每个 agent 隐含）+ 它的各个角色 + 它自己的 allow / deny，allow 与 deny 分别取并集。
-- agent 能用的条目 = 它自己 owner 的 ∪ 规则放行的（agents.grants）。
-- 内置角色 base（全部非管理工具）与 admin（全部工具；admin 还能改任何条目，见 agents.grants）：规则 = 代码里固定的部分
+- agent 能用的条目 = 它自己 owner 的 ∪ 规则放行的（agents.access）。
+- 内置角色 base（全部非管理工具）与 admin（全部工具；admin 还能改任何条目，见 agents.access）：规则 = 代码里固定的部分
   （FIXED_RULES，新加的工具自动归入）∪ 存在 roles 表里可编辑的部分（如 base 收录的 skill）。
 - 运行开始时按规则算出工具列表（agent_runtime.runner.Toolbox），调用时不再判断，工具列表在一次运行里不变。
 """

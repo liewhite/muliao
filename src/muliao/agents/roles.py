@@ -118,19 +118,44 @@ class RoleService:
     async def update(self, spec: RoleSpec) -> Role:
         """整体替换描述与可编辑的规则（名称不改：agent 按名称引用它）；内置角色也可以（固定的部分不变）。改动从带这个角色
         的 agent 的下一次运行起生效。"""
-        _check(spec)
         async with self._db.transaction() as s:
-            row = await s.get(RoleRow, spec.name)
-            if row is None and spec.name not in FIXED_RULES:
-                raise NotFound(f"role {spec.name!r} not found")
-            before = Rules() if row is None else Rules(tuple(row.allow), tuple(row.deny))
-            await check_rules_in(s, Rules(tuple(spec.allow), tuple(spec.deny)), before)
-            if row is None:
-                row = RoleRow(name=spec.name)
-                s.add(row)
-            row.description, row.allow, row.deny = spec.description, list(spec.allow), list(spec.deny)
-            await s.flush()
-            return _of(row.name, row)
+            return await self._update_in(s, spec)
+
+    @staticmethod
+    async def _update_in(s: AsyncSession, spec: RoleSpec) -> Role:
+        _check(spec)
+        row = await s.get(RoleRow, spec.name)
+        if row is None and spec.name not in FIXED_RULES:
+            raise NotFound(f"role {spec.name!r} not found")
+        before = Rules() if row is None else Rules(tuple(row.allow), tuple(row.deny))
+        await check_rules_in(s, Rules(tuple(spec.allow), tuple(spec.deny)), before)
+        if row is None:
+            row = RoleRow(name=spec.name)
+            s.add(row)
+        row.description, row.allow, row.deny = spec.description, list(spec.allow), list(spec.deny)
+        await s.flush()
+        return _of(row.name, row)
+
+    async def patch(
+        self,
+        name: str,
+        *,
+        description: str | None = None,
+        allow: Sequence[str] | None = None,
+        deny: Sequence[str] | None = None,
+    ) -> Role:
+        """只改给出的字段（None 为不改），读与写在同一个事务里：并发的局部修改互不覆盖。规则同 update。"""
+        async with self._db.transaction() as s:
+            role = (await roles_in(s)).get(name)
+            if role is None:
+                raise NotFound(f"role {name!r} not found")
+            spec = RoleSpec(
+                name,
+                role.description if description is None else description,
+                role.rules.allow if allow is None else allow,
+                role.rules.deny if deny is None else deny,
+            )
+            return await self._update_in(s, spec)
 
     async def delete(self, name: str) -> None:
         async with self._db.transaction() as s:

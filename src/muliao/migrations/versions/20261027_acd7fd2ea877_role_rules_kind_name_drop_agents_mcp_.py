@@ -127,9 +127,37 @@ def _to_ids(patterns: list[str]) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _check_preconditions(conn: sa.Connection) -> None:
+    """换算只在这些前提下保持各 agent 能用的不变；不满足就报错（整个迁移回滚），不悄悄改变结果。"""
+    problems = []
+    for name, roles in conn.execute(sa.text("SELECT name, roles FROM agents")):
+        if not {"agent", "admin"} & set(json.loads(roles)):
+            problems.append(
+                f"agent {name!r} has neither the agent nor the admin role; it would gain the base tools"
+            )
+    if conn.execute(sa.text("SELECT 1 FROM roles WHERE name IN ('base', 'admin')")).first():
+        problems.append("a custom role is named 'base' or 'admin'")
+    platform_mcp = {
+        n for (n,) in conn.execute(sa.text("SELECT name FROM items WHERE kind = 'mcp' AND owner IS NULL"))
+    }
+    for name, selected in conn.execute(sa.text("SELECT name, mcp_servers FROM agents")):
+        for server in json.loads(selected):
+            row = conn.execute(
+                sa.text("SELECT owner FROM items WHERE kind = 'mcp' AND name = :n"), {"n": server}
+            )
+            owner = row.first()
+            if owner is not None and server not in platform_mcp:
+                problems.append(
+                    f"agent {name!r} selected MCP server {server!r}, which is now a private server"
+                )
+    if problems:
+        raise RuntimeError("cannot convert role rules safely:\n" + "\n".join(problems))
+
+
 def upgrade() -> None:
     conn = op.get_bind()
-    role_names = {n for (n,) in conn.execute(sa.text("SELECT name FROM roles"))}
+    _check_preconditions(conn)
+    role_names = {"base", "admin", *(n for (n,) in conn.execute(sa.text("SELECT name FROM roles")))}
     for name, allow, deny in conn.execute(sa.text("SELECT name, allow, deny FROM roles")).all():
         conn.execute(
             sa.text("UPDATE roles SET allow = :a, deny = :d WHERE name = :n"),
@@ -154,13 +182,18 @@ def upgrade() -> None:
         ),
         {"desc": _BASE_DESCRIPTION, "a": json.dumps(public), "t": _now()},
     )
-    servers = {n for (n,) in conn.execute(sa.text("SELECT name FROM items WHERE kind = 'mcp'"))}
+    servers = {
+        n for (n,) in conn.execute(sa.text("SELECT name FROM items WHERE kind = 'mcp' AND owner IS NULL"))
+    }
     mcp_roles: dict[str, str] = {}
     agents = conn.execute(sa.text("SELECT id, roles, allow, deny, mcp_servers FROM agents")).all()
     for _, _, _, _, selected in agents:
         for server in json.loads(selected):
             if server in servers and server not in mcp_roles:
-                role = server if server not in role_names | {"base", "admin"} else f"mcp-{server}"
+                role = server if server not in role_names else f"mcp-{server}"
+                if role in role_names:
+                    raise RuntimeError(f"cannot name a role for MCP server {server!r}: {role!r} is taken")
+                role_names.add(role)
                 mcp_roles[server] = role
                 conn.execute(
                     sa.text(
