@@ -152,44 +152,42 @@ class NewIssue:
     key: str | None = None
 
 
-def _label(new: Sequence[NewIssue], n: int) -> str:
-    key = new[n].key
+def _label(n: int, key: str | None) -> str:
     return f"issues[{n}]" + ("" if key is None else f" (key {key!r})")
 
 
 @contextmanager
-def _about(new: Sequence[NewIssue], n: int) -> Iterator[None]:
-    """一批里某一项的错误带上它是哪一项（只建一个时原样抛出）。"""
+def batch_item(size: int, n: int, key: str | None) -> Iterator[None]:
+    """一批（size 项）里第 n 项的错误带上它是哪一项；只建一个时原样抛出。工具层解析 agent 名时也用它。"""
     try:
         yield
     except (InvalidInput, NotFound) as e:
-        if len(new) == 1:
+        if size == 1:
             raise
-        raise type(e)(f"{_label(new, n)}: {e}") from None
+        raise type(e)(f"{_label(n, key)}: {e}") from None
 
 
 def _check_batch(new: Sequence[NewIssue]) -> None:
-    """一批新 issue 之间的引用（不查库）：key 唯一、引用的 key 都在本批、同一项不重复列上游、key 之间不成环。
-    已有 issue 不可能依赖新建的，所以环只可能全在本批之内，这里按 key 报出环上的路径。"""
+    """一批新 issue 之间的 key 引用（不查库）：key 唯一、引用的 key 都在本批、key 之间不成环。本批互相引用应用
+    key（整数按已有编号处理），环在这里按 key 报路径，而不是报会被回滚的编号；其余（编号存在、不重复、涉及已有
+    编号的环）由 _set_depends_on_in 在事务里查。"""
     index: dict[str, int] = {}
     for n, item in enumerate(new):
         if item.key is None:
             continue
         if not item.key.strip():
-            raise InvalidInput(f"{_label(new, n)}: key must not be empty")
+            raise InvalidInput(f"{_label(n, item.key)}: key must not be empty")
         if item.key in index:
             raise InvalidInput(f"key {item.key!r} is used by issues[{index[item.key]}] and issues[{n}]")
         index[item.key] = n
     edges: list[tuple[int, int]] = []
     for n, item in enumerate(new):
-        if len(set(item.depends_on)) != len(item.depends_on):
-            raise InvalidInput(
-                f"{_label(new, n)}: depends_on lists an issue more than once: {list(item.depends_on)}"
-            )
         for d in item.depends_on:
             if isinstance(d, str):
                 if d not in index:
-                    raise InvalidInput(f"{_label(new, n)}: depends_on key {d!r} is not a key of this batch")
+                    raise InvalidInput(
+                        f"{_label(n, item.key)}: depends_on key {d!r} is not a key of this batch"
+                    )
                 edges.append((n, index[d]))
     for n in range(len(new)):
         cycle = cycle_through(n, [up for down, up in edges if down == n], edges)
@@ -354,7 +352,7 @@ class IssueService:
         async with self._db.transaction() as s:
             created: list[Issue] = []
             for n, item in enumerate(new):
-                with _about(new, n):
+                with batch_item(len(new), n, item.key):
                     await self._check_assignee_in(s, item.assignee)
                     await active_agent_in(s, item.owner)
                     issue = Issue(
@@ -376,7 +374,7 @@ class IssueService:
             }
             for n, (item, issue) in enumerate(zip(new, created, strict=True)):
                 upstream = [ids[d] if isinstance(d, str) else d for d in item.depends_on]
-                with _about(new, n):
+                with batch_item(len(new), n, item.key):
                     await self._set_depends_on_in(s, issue, upstream)
             wake = []
             for issue in created:

@@ -738,6 +738,10 @@ async def test_an_unknown_owner_in_a_batch_names_the_item(container, make_agent)
             None, [NewIssue(owner=alpha, title="a"), NewIssue(owner="nobody", title="b")]
         )
     assert await _issue_count(container) == 0
+    # 只建一个时错误原样，不带 issues[n]
+    a = await container.issues.create(None, owner=alpha, title="a")
+    with pytest.raises(InvalidInput, match="^depends_on lists an issue more than once"):
+        await container.issues.create(None, owner=alpha, title="b", depends_on=[a.id, a.id])
 
 
 async def test_issue_create_tool_creates_a_batch_in_one_call(container, make_agent, models):
@@ -766,6 +770,10 @@ async def test_issue_create_tool_creates_a_batch_in_one_call(container, make_age
             ("issue_create", {**batch, "title": "x"}),
             ("issue_create", {"owner": "manager"}),
             ("issue_create", {"title": "one", "owner": "manager"}),
+            (
+                "issue_create",
+                {"issues": [{"title": "a", "owner": "manager"}, {"title": "b", "owner": "nobody"}]},
+            ),
         ],
     )
     step, goal = sorted(await container.issues.list(), key=lambda i: i.id)[:2]
@@ -773,6 +781,7 @@ async def test_issue_create_tool_creates_a_batch_in_one_call(container, make_age
     assert "either one issue (title/owner/...) or issues" in outputs[1]
     assert "title and owner are required" in outputs[2]
     assert outputs[3] == f"created issue #{goal.id + 1}"
+    assert "issues[1]: no agent named 'nobody'" in outputs[4]
     assert [d.id for d in (await container.issues.work([goal]))[goal.id].depends_on] == [step.id]
 
 

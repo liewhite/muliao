@@ -8,7 +8,7 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agents.api import AgentNames, AgentService
 from muliao.errors import InvalidInput
 from muliao.issues.rules import USER, assignee_name
-from muliao.issues.service import IssueService, IssueWork, NewIssue
+from muliao.issues.service import IssueService, IssueWork, NewIssue, batch_item
 from muliao.issues.tables import Issue, IssuePriority, IssueStatus
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.platform.values import KEEP, Keep
@@ -36,18 +36,19 @@ class IssueSummary(BaseModel):
 
 
 class NewIssueItem(BaseModel):
-    # issue_create 一次建多个时的一项（类 docstring 会进 schema，所以用注释）；字段与 issue_create 的单个参数一致，另加 key
+    # issue_create 一次建多个时的一项（类 docstring 会进 schema，所以用注释）；字段与 issue_create 的单个参数一致（含义、
+    # 默认值以这里为准，说明只写在 issue_create 的 Args 里），另加 key
     model_config = ConfigDict(extra="forbid")
 
     key: str | None = Field(
         default=None, description="Name for this item that other items list in their depends_on, e.g. `api`."
     )
-    title: str = Field(description="One-line summary.")
-    owner: str = Field(description="The agent (by name) whose project this is.")
-    description: str = Field(default="", description="Markdown details: context, what done looks like.")
-    status: IssueStatus = Field(default=IssueStatus.BACKLOG, description="Initial status.")
-    priority: IssuePriority = Field(default=IssuePriority.NONE, description="Priority.")
-    assignee: str | None = Field(default=None, description="Agent name, `user`, or omit for unassigned.")
+    title: str
+    owner: str
+    description: str = ""
+    status: IssueStatus = IssueStatus.BACKLOG
+    priority: IssuePriority = IssuePriority.NONE
+    assignee: str | None = None
     depends_on: tuple[int | str, ...] = Field(
         default=(),
         description="What this one waits for: keys of other items of this batch and/or existing issue numbers.",
@@ -109,14 +110,17 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         """
         return await board.render(issue_id)
 
-    async def new_issue(item: NewIssueItem) -> NewIssue:
+    async def new_issue(item: NewIssueItem, size: int, n: int) -> NewIssue:
+        with batch_item(size, n, item.key):
+            owner = (await agents.find_by_name(item.owner)).id
+            assignee = None if item.assignee is None else await assignee_id(item.assignee)
         return NewIssue(
-            owner=(await agents.find_by_name(item.owner)).id,
+            owner=owner,
             title=item.title,
             description=item.description,
             status=item.status,
             priority=item.priority,
-            assignee=None if item.assignee is None else await assignee_id(item.assignee),
+            assignee=assignee,
             depends_on=item.depends_on,
             key=item.key,
         )
@@ -161,10 +165,17 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
                 their `depends_on`, a string is the key of another item of this batch, a number an existing issue.
         """
         if issues:
-            defaults = (None, None, "", IssueStatus.BACKLOG, IssuePriority.NONE, None, ())
-            if (title, owner, description, status, priority, assignee, depends_on) != defaults:
+            optional = {
+                "description": description,
+                "status": status,
+                "priority": priority,
+                "assignee": assignee,
+                "depends_on": depends_on,
+            }
+            defaults = {k: NewIssueItem.model_fields[k].default for k in optional}
+            if title is not None or owner is not None or optional != defaults:
                 raise InvalidInput("pass either one issue (title/owner/...) or issues, not both")
-            new = [await new_issue(item) for item in issues]
+            new = [await new_issue(item, len(issues), n) for n, item in enumerate(issues)]
         else:
             if title is None or owner is None:
                 raise InvalidInput("title and owner are required (or pass issues)")
@@ -177,7 +188,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
                 assignee=assignee,
                 depends_on=depends_on,
             )
-            new = [await new_issue(item)]
+            new = [await new_issue(item, 1, 0)]
         created = await board.create_many(ctx.deps.agent_id, new, session_id=ctx.deps.session_id)
         if not issues:
             return f"created issue #{created[0].id}"
