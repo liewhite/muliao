@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -16,10 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.active import active_row_in, runnable_row_in
 from muliao.agents.ids import new_agent_id
-from muliao.agents.memory import MemoryStore
+from muliao.agents.memory import create_memory_in
 from muliao.agents.naming import new_agent_name, normalize_agent_name
 from muliao.agents.permissions import DEFAULT_ROLES, Resolved, Rules, check_patterns
-from muliao.agents.resources import ResourceRepo
 from muliao.agents.roles import check_assignable_in, roles_in, rules_in
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, InvalidInput, NotFound
@@ -202,8 +201,6 @@ class AgentService:
         self,
         db: Database,
         workspaces_dir: Path,
-        repo: ResourceRepo,
-        memory: MemoryStore,
         # (模型, 思考档位) 在当前配置下不能运行时报 InvalidInput（agent_runtime.llm.ModelRegistry.check）
         model_checker: Callable[[str, Thinking], None],
         defaults: AgentDefaults,
@@ -211,12 +208,10 @@ class AgentService:
         tools: Sequence[str],
         *,
         # 现有公共 MCP server 的名字：新勾选的必须在其中（已勾选的 server 被删后留着的名字不生效，也不拦修改）
-        public_mcp: Callable[[], Collection[str]],
+        public_mcp: Callable[[], Awaitable[Collection[str]]],
     ):
         self._db = db
         self._workspaces_dir = workspaces_dir
-        self._repo = repo
-        self._memory = memory
         self._check_model = model_checker
         self.defaults = defaults
         self.tools = tuple(tools)
@@ -251,7 +246,7 @@ class AgentService:
     async def verify_stored(self) -> None:
         """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、角色必须都在、权限通配符（含自建角色的）必须仍
         匹配已登记的权限，与新建、修改时同一套规则。配置或代码改动（删 provider、工具改名）在启动时暴露，而不是散落到
-        每个任务里失败。正在删除的不查。先报出已删除 agent 的残留目录（只记录，不阻止启动）。"""
+        每个任务里失败。正在删除的不查。先报出已删除 agent 的残留工作目录（只记录，不阻止启动）。"""
         await self._report_leftovers()
         agents = await self.list()
         broken = []
@@ -287,12 +282,9 @@ class AgentService:
             raise RuntimeError("stored tool permissions are invalid:\n" + "\n".join(broken))
 
     async def _report_leftovers(self) -> None:
-        """数据库里已删除、还留着资源目录（删除时提交失败所致）或工作目录（删除时没删干净）的 agent：记录出来，由人决定
-        是否清理。正在删除的不算：它的目录由删除流程删。"""
+        """数据库里已删除、还留着工作目录（删除时没删干净）的 agent：记录出来，由人决定是否清理。正在删除的不算：
+        它的目录由删除流程删。"""
         known = await self._ids()
-        orphans = [o for o in self._repo.agent_owners() if o not in known]
-        if orphans:
-            log.warning("resource directories of deleted agents remain", extra={"agent_ids": orphans})
         leftovers = [o for o in self._workspace_owners() if o not in known]
         if leftovers:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
@@ -306,11 +298,13 @@ class AgentService:
         check_patterns(fields.deny)
         self._check_model(fields.model, fields.thinking)
 
-    def _check_mcp_servers(self, selected: Sequence[str], before: Sequence[str]) -> None:
+    async def _check_mcp_servers(self, selected: Sequence[str], before: Sequence[str]) -> None:
         """勾选的公共 MCP server：不重复，新勾选的（不在 before 里的）必须是现有的公共 server。"""
         if len(set(selected)) != len(selected):
             raise InvalidInput(f"mcp_servers must be distinct, got {list(selected)}")
-        public = set(self._public_mcp())
+        if all(n in before for n in selected):
+            return
+        public = set(await self._public_mcp())
         unknown = [n for n in selected if n not in before and n not in public]
         if unknown:
             raise InvalidInput(
@@ -337,22 +331,9 @@ class AgentService:
             group=None if spec.group is None else normalize_group(spec.group),
         )
         self._check(fields)
-        self._check_mcp_servers(fields.mcp_servers, [])
+        await self._check_mcp_servers(fields.mcp_servers, [])
         name = fields.name
-        async with self._db.transaction() as s:
-            await self._ensure_name_free(s, name, None)
-            await check_assignable_in(s, fields.roles)
-        # 先写资源文件、后插数据库行：agent 一旦存在，它的记忆就必须在（每一轮都要读）。
-        # 资源写入失败时什么都没留下（apply 原子），报错就是没有生效；只有并发创建同名 agent 时下面的检查会冲突，
-        # 留下的资源目录由启动时的孤儿检查报告（与删除 agent 时提交失败同一种情况）
         agent_id = new_agent_id()
-        await self._repo.apply(
-            {self._memory.path(agent_id): ""},
-            f"create agent {agent_id}",
-            author,
-            # 它的行在资源写入之后才插入：此刻还不是可用的 owner
-            unchecked=True,
-        )
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
             await check_assignable_in(s, fields.roles)
@@ -369,13 +350,19 @@ class AgentService:
                 group=fields.group,
             )
             s.add(agent)
+            await s.flush()
+            # 记忆与 agent 的行同一事务：agent 一旦存在，它的记忆就在（每一轮都要读）
+            create_memory_in(s, agent_id, author)
             # 工作目录与数据库行同事务：建不出来则不插行
             self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
-            await s.flush()
             return info_of(agent)
 
     async def update(self, agent_id: str, patch: AgentPatch) -> AgentInfo:
         """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。"""
+        if patch.mcp_servers is not None:
+            # 新勾选的是不是现有公共 server：在写事务之前查（另一个事务），只用来拒绝
+            before = (await self.get_active(agent_id)).mcp_servers
+            await self._check_mcp_servers(patch.mcp_servers, before)
         async with self._db.transaction() as s:
             agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)
@@ -417,12 +404,13 @@ class AgentService:
             group=agent.group if patch.group is None else normalize_group(patch.group),
         )
         self._check(fields)
-        self._check_mcp_servers(fields.mcp_servers, agent.mcp_servers)
+        if len(set(fields.mcp_servers)) != len(fields.mcp_servers):
+            raise InvalidInput(f"mcp_servers must be distinct, got {fields.mcp_servers}")
         return fields
 
     async def get_active(self, agent_id: str) -> AgentInfo:
         """还可用的 agent：正在删除的按不存在处理（例如读它的私有资源时）。为它写数据的检查在写入的地方：数据库数据在
-        同一事务里用 active_agent_in，私有资源由资源仓库在它的锁里检查（agents.active，ResourceRepo）。"""
+        同一事务里用 active_agent_in。"""
         async with self._db.transaction() as s:
             return await active_agent_in(s, agent_id)
 
@@ -462,8 +450,8 @@ class AgentService:
         async with self._db.transaction() as s:
             return set((await s.scalars(select(Agent.id))).all())
 
-    async def remove_files(self, agent_id: str, author: str) -> None:
-        """删除 agent 的工作目录与私有资源（记忆、skill、MCP 配置，删除记入资源仓库）。数据库行由调用方删除。"""
+    async def remove_workspace(self, agent_id: str) -> None:
+        """删除 agent 的工作目录（删除 agent 的流程里；它的条目与记忆随数据库行删除）。"""
         workspace = self.workspace(agent_id)
         if workspace.exists():
             # 工作目录里可能有 venv、clone 的仓库、后台任务日志：放到线程里删，不阻塞事件循环
@@ -476,7 +464,3 @@ class AgentService:
                     "workspace of a deleted agent could not be fully removed",
                     extra={"agent": agent_id, "path": str(workspace), "error": repr(e)},
                 )
-        # 它已是正在删除（不再可用）：在同一把锁里删掉目录，之前检查通过的写入都在它之前（agents.active）
-        await self._repo.apply(
-            {self._repo.owner_dir(agent_id): None}, f"delete agent {agent_id}", author, unchecked=True
-        )

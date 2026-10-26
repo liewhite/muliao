@@ -35,7 +35,7 @@ export function ResourceHistory({
   const confirm = useConfirm()
   const action = useAction()
 
-  async function restore(rev: string, at: string) {
+  async function restore(rev: number, at: string) {
     const ok = await confirm({ title: `恢复 ${formatTime(at)} 的版本？`, body: '它会作为新的一版生效，现有历史保留。', confirmLabel: '恢复' })
     if (ok && (await action.run(() => api.restore(kind, owner, rev)))) {
       toast.success('已恢复')
@@ -78,7 +78,7 @@ export function ResourceHistory({
                       )}
                     </Card.Header>
                     <Card.Content className="max-h-60 overflow-auto text-sm">
-                      {r.content.trim() ? <Markdown text={r.content} /> : <span className="text-muted">（空）</span>}
+                      {r.content?.trim() ? <Markdown text={r.content} /> : <span className="text-muted">（空）</span>}
                     </Card.Content>
                   </Card>
                 ))

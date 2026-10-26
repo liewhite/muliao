@@ -154,7 +154,7 @@ async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_t
 
     assert requests["n"] == 3
     # 工具在失败之前已经执行并保存了结果：续跑时重发那次请求，不再执行一遍
-    assert container.memory.read(agent.id) == "- once\n"
+    assert await container.memory.read(agent.id) == "- once\n"
     history = await history_of(container, session.id)
     assert [type(m).__name__ for m in history] == [
         "ModelRequest",
@@ -354,7 +354,7 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
     await drain(container)
 
     # 工具没有再执行一遍，模型看到的是「被中断、没有重跑」的结果
-    assert "- boom" not in container.memory.read(agent.id)
+    assert "- boom" not in await container.memory.read(agent.id)
     returns = [p for p in seen[-1].parts if isinstance(p, ToolReturnPart)]
     assert [(r.tool_call_id, r.content, r.outcome) for r in returns] == [
         ("m1", INTERRUPTED_TOOL_RESULT, "interrupted")
@@ -465,7 +465,7 @@ async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_agai
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
     await drain(container)
 
-    assert "- boom" not in container.memory.read(agent.id)
+    assert "- boom" not in await container.memory.read(agent.id)
     # 这次请求带着两条结果：补上的「被中断」与用户的回答（pydantic-ai 把相邻的请求并成一条发出）
     returns = [p for p in seen[-1].parts if isinstance(p, ToolReturnPart)]
     assert [r.tool_call_id for r in returns] == ["m1", "q1"]

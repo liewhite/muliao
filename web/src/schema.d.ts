@@ -326,26 +326,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/corrupt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Corrupt Skills
-         * @description owner 名下（缺省为公共）读不出来的 skill，GET /skills 不列它们。
-         */
-        get: operations["list_corrupt_skills_api_skills_corrupt_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/skill": {
         parameters: {
             query?: never;
@@ -374,7 +354,7 @@ export interface paths {
         };
         /**
          * Export Skill
-         * @description 下载标准 .skill 文件（zip：`<name>/SKILL.md` 与版本管理里的附件）。
+         * @description 下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。
          */
         get: operations["export_skill_api_skill_package_get"];
         put?: never;
@@ -550,7 +530,7 @@ export interface paths {
         };
         /**
          * List Mcp
-         * @description owner 视角下的 server：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 server。
+         * @description owner 视角下的 server：它私有的在前，然后是公共的；owner 缺省时只列公共 server。
          */
         get: operations["list_mcp_api_mcp_get"];
         put?: never;
@@ -558,26 +538,6 @@ export interface paths {
         post: operations["add_mcp_api_mcp_post"];
         /** Delete Mcp */
         delete: operations["delete_mcp_api_mcp_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/mcp/corrupt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Corrupt Mcp
-         * @description owner 名下（缺省为公共）配置坏了的 server，GET /mcp 不列它们。
-         */
-        get: operations["list_corrupt_mcp_api_mcp_corrupt_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -626,7 +586,7 @@ export interface paths {
         };
         /**
          * List Secrets
-         * @description owner 视角下的 secret（不含值）：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 secret。
+         * @description owner 视角下的 secret（不含值）：它私有的在前，然后是公共的；owner 缺省时只列公共 secret。
          */
         get: operations["list_secrets_api_vault_get"];
         put?: never;
@@ -718,7 +678,7 @@ export interface paths {
         };
         /**
          * History
-         * @description owner 缺省为公共资源；新的在前，第一条即当前生效的一版。只列最近 50 版，更早的仍保留在仓库里。
+         * @description 记忆按 owner（缺省为全局记忆），条目按 name；新的在前，第一条即当前的一版。只列最近 50 版。
          */
         get: operations["history_api_resources__kind__history_get"];
         put?: never;
@@ -740,7 +700,7 @@ export interface paths {
         put?: never;
         /**
          * Restore
-         * @description 把某一版的内容作为新的一版写入。
+         * @description 把某一版之后的内容作为新的一版写入。
          */
         post: operations["restore_api_resources__kind__restore_post"];
         delete?: never;
@@ -1391,18 +1351,6 @@ export interface components {
              */
             created_at: string;
         };
-        /**
-         * CorruptOut
-         * @description 一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除（skill 也可重写）。
-         */
-        CorruptOut: {
-            /** Owner */
-            owner: string | null;
-            /** Name */
-            name: string;
-            /** Problem */
-            problem: string;
-        };
         /** EnabledIn */
         EnabledIn: {
             /** Enabled */
@@ -1729,8 +1677,6 @@ export interface components {
              * @default []
              */
             tools: string[];
-            /** Shadowed */
-            shadowed: boolean;
         };
         /**
          * McpTransport
@@ -1975,22 +1921,28 @@ export interface components {
          * ResourceKind
          * @enum {string}
          */
-        ResourceKind: "memory";
+        ResourceKind: "memory" | "skill" | "mcp" | "secret";
         /** RestoreIn */
         RestoreIn: {
             /** Owner */
             owner?: string | null;
+            /** Name */
+            name?: string | null;
             /** Rev */
-            rev: string;
+            rev: number;
         };
         /** RevisionOut */
         RevisionOut: {
             /** Rev */
-            rev: string;
+            rev: number;
             /** Content */
-            content: string;
+            content: string | null;
+            /** Before */
+            before: string | null;
             /** Author */
             author: string;
+            /** Message */
+            message: string;
             /**
              * Created At
              * Format: date-time
@@ -2171,8 +2123,6 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
-            /** Shadowed */
-            shadowed: boolean;
         };
         /**
          * ServerEvent
@@ -3333,37 +3283,6 @@ export interface operations {
             };
         };
     };
-    list_corrupt_skills_api_skills_corrupt_get: {
-        parameters: {
-            query?: {
-                owner?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CorruptOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_skill_api_skill_get: {
         parameters: {
             query: {
@@ -3933,37 +3852,6 @@ export interface operations {
             };
         };
     };
-    list_corrupt_mcp_api_mcp_corrupt_get: {
-        parameters: {
-            query?: {
-                owner?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CorruptOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     probe_mcp_api_mcp_tools_post: {
         parameters: {
             query: {
@@ -4202,6 +4090,7 @@ export interface operations {
         parameters: {
             query?: {
                 owner?: string | null;
+                name?: string | null;
             };
             header?: never;
             path: {

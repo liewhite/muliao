@@ -37,7 +37,6 @@ export const FILES_PATH = '/api/files'
 
 export type FileInfo = Schemas['FileOut']
 /** 读不出来的资源文件（skill、MCP 配置）：列表接口不含它们，单独列出供删除 */
-export type CorruptResource = Schemas['CorruptOut']
 export type Attachment = Schemas['Attachment']
 export type Item = Schemas['Item']
 export type CompactionInfo = Schemas['CompactionOut']
@@ -263,7 +262,6 @@ export const api = {
   setMemory: (owner: AgentId | null, content: string) => call('put', '/api/memory', { body: { owner, content } }),
 
   skills: (owner: string | null) => call('get', '/api/skills', { query: { owner } }),
-  corruptSkills: (owner: AgentId | null) => call('get', '/api/skills/corrupt', { query: { owner } }),
   skill: (owner: string | null, name: string) => call('get', '/api/skill', { query: { owner, name } }),
   saveSkill: (body: Schemas['SkillIn']) => call('put', '/api/skill', { body }),
   deleteSkill: (owner: string | null, name: string) => call('delete', '/api/skill', { query: { owner, name } }),
@@ -333,16 +331,15 @@ export const api = {
   /** owner 为空时是公共资源；新的在前，第一条即当前生效 */
   history: (kind: ResourceKind, owner: AgentId | null) =>
     call('get', '/api/resources/{kind}/history', { path: { kind }, query: { owner } }),
-  restore: (kind: ResourceKind, owner: AgentId | null, rev: string) =>
+  restore: (kind: ResourceKind, owner: AgentId | null, rev: number) =>
     call('post', '/api/resources/{kind}/restore', { path: { kind }, body: { owner, rev } }),
-  /** owner 视角：它的私有 server 在前，然后是公共的（shadowed 标明被同名私有项遮蔽）；owner 为 null 只有公共的 */
+  /** owner 视角：它的私有 server 在前，然后是公共的；owner 为 null 只有公共的 */
   mcp: (owner: AgentId | null) => branded<McpServer[]>(call('get', '/api/mcp', { query: { owner } })),
   addMcp: (body: McpInput) => branded<McpServer>(call('post', '/api/mcp', { body })),
   probeMcp: (owner: AgentId | null, name: string) => call('post', '/api/mcp/tools', { query: { owner, name } }),
   setMcpEnabled: (owner: AgentId | null, name: string, enabled: boolean) =>
     branded<McpServer>(call('put', '/api/mcp/enabled', { query: { owner, name }, body: { enabled } })),
   deleteMcp: (owner: AgentId | null, name: string) => call('delete', '/api/mcp', { query: { owner, name } }),
-  corruptMcp: (owner: AgentId | null) => call('get', '/api/mcp/corrupt', { query: { owner } }),
 
   /** owner 视角，同 mcp */
   secrets: (owner: AgentId | null) => branded<SecretInfo[]>(call('get', '/api/vault', { query: { owner } })),

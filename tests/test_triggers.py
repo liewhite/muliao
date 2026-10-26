@@ -397,7 +397,7 @@ async def test_manual_run_starts_a_session_with_just_the_prompt(container, make_
 
 async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent):
     alpha = (await make_agent()).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
@@ -409,31 +409,27 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
 
     assert sorted(tools) == ["cwd", "echo", "screenshot", "token"]
     assert row.config.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
-    assert [s.name for s in container.mcp.index(alpha, ())[0]] == ["echo"]
-    assert container.mcp.index("b2b2b2b2b2b2", ())[0] == []
+    assert [s.name for s in (await container.mcp.index(alpha, ()))] == ["echo"]
+    assert (await container.mcp.index("b2b2b2b2b2b2", ())) == []
 
 
-async def test_mcp_view_marks_public_servers_shadowed_by_enabled_private_ones(container, make_agent):
+async def test_an_agent_uses_its_enabled_servers_and_the_selected_public_ones(container, make_agent):
     alpha = (await make_agent()).id
     spec = mcp_config(transport=McpTransport.HTTP, url="http://example.invalid/mcp")
-    for owner in (None, alpha):
-        await container.mcp.add(owner, "echo", spec, probe=False, author="user")
+    await container.mcp.add(alpha, "mine", spec, probe=False, author="user")
+    await container.mcp.add(None, "echo", spec, probe=False, author="user")
     await container.mcp.add(None, "other", spec, probe=False, author="user")
 
-    def view(owner):
-        return [(s.owner, s.name, shadowed) for s, shadowed in container.mcp.view(owner)]
-
-    assert view(alpha) == [(alpha, "echo", False), (None, "echo", True), (None, "other", False)]
-    assert view(None) == [(None, "echo", False), (None, "other", False)]
-    # 停用的私有 server 不生效，也就不遮蔽公共的：与 index 一致
-    await container.mcp.set_enabled(alpha, "echo", False, "user")
-    assert view(alpha) == [(alpha, "echo", False), (None, "echo", False), (None, "other", False)]
-    assert [(s.owner, s.name) for s in container.mcp.index(alpha, ["echo", "other"])[0]] == [
+    assert [(s.owner, s.name) for s in await container.mcp.view(alpha)] == [
+        (alpha, "mine"),
         (None, "echo"),
         (None, "other"),
     ]
-    # 公共 server 只有勾选了的生效
-    assert [(s.owner, s.name) for s in container.mcp.index(alpha, ["other"])[0]] == [(None, "other")]
+    assert [s.name for s in await container.mcp.view(None)] == ["echo", "other"]
+    # 公共 server 只有勾选了的生效；停用的不生效
+    assert [s.name for s in await container.mcp.index(alpha, ["other"])] == ["mine", "other"]
+    await container.mcp.set_enabled(alpha, "mine", False, "user")
+    assert [s.name for s in await container.mcp.index(alpha, ["echo", "other"])] == ["echo", "other"]
 
 
 async def test_mcp_add_failing_probe_saves_nothing(container):
@@ -443,14 +439,14 @@ async def test_mcp_add_failing_probe_saves_nothing(container):
 
     with pytest.raises(InvalidInput, match="could not connect"):
         await container.mcp.add(None, "broken", spec, probe=True, author="user")
-    assert container.mcp.view(None) == []
+    assert await container.mcp.view(None) == []
 
 
 async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, models):
     from tests.test_flow import call_then_answer
 
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
@@ -589,7 +585,7 @@ async def test_an_mcp_tool_call_that_fails_is_handed_back_to_the_model_with_its_
 
     monkeypatch.setattr(MCPToolset, "call_tool", explode)
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
@@ -638,7 +634,7 @@ async def test_an_mcp_server_that_keeps_rejecting_a_call_does_not_fail_the_run(
 
     monkeypatch.setattr(MCPToolset, "call_tool", refuse)
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
@@ -686,7 +682,7 @@ async def test_an_mcp_server_that_fails_to_disconnect_does_not_fail_the_run(
 
     monkeypatch.setattr(MCPToolset, "__aexit__", fail_after_exit)
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "ECHO_TOKEN", "tok-123")
+    await container.vault.set(None, "ECHO_TOKEN", "tok-123", "", "user")
     spec = mcp_config(
         transport=McpTransport.STDIO,
         command=sys.executable,
@@ -744,7 +740,7 @@ async def test_a_failing_probe_does_not_leak_the_secrets_it_was_given(container,
     """连接错误的文本可能带着已代入 secret 的 URL（如 HTTP 错误），它会交还给模型并返回给调用方。"""
     from pydantic_ai.mcp import MCPToolset
 
-    await container.vault.set(None, "API_TOKEN", "tok-secret-9")
+    await container.vault.set(None, "API_TOKEN", "tok-secret-9", "", "user")
 
     async def refuse(self):  # noqa: ANN001, ANN202
         raise RuntimeError("401 for https://mcp.example/sse?token=tok-secret-9")
@@ -839,32 +835,6 @@ async def test_an_mcp_server_that_fails_to_list_its_tools_is_skipped_and_the_mod
     assert "good_echo" in tools and not any(t.startswith("broken_") for t in tools)
     assert "MCP server 'broken' failed" in requests[0] and "tools/list exploded" in requests[0]
     assert "mcp server unavailable" in caplog.text
-
-
-async def test_a_corrupt_public_mcp_config_is_reported_to_the_run_without_failing_it(
-    container, make_agent, models
-):
-    from muliao.platform.tables import TaskStatus
-    from muliao.sessions.lanes import RUN_TASK
-    from tests.test_flow import tasks_of
-
-    alpha = (await make_agent("alpha", model="m")).id
-    good = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
-    await container.mcp.add(None, "good", good, probe=False, author="user")
-    await container.agents.update(alpha, AgentPatch(mcp_servers=["good"]))
-    (container.resources.owner_dir(None) / "mcp" / "bad.json").write_text("{not json")
-    requests, tools = _recording_model(models, "m")
-
-    await start(container, alpha, "the task")
-    await drain(container)
-
-    [run] = await tasks_of(container, RUN_TASK)
-    assert run.status == TaskStatus.DONE and "good_echo" in tools
-    assert (
-        "public MCP server 'bad' is corrupt and cannot be used until it is removed and added again"
-        in requests[0]
-    )
-    assert "the task" in requests[0]
 
 
 async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_meanwhile(container, make_agent):
@@ -1019,7 +989,7 @@ async def test_an_unreachable_mcp_server_is_skipped_and_keeps_its_secrets_out_of
         monkeypatch.setattr(logging.getLogger(name), "level", logging.getLogger(name).level)
     quiet_http_clients()
     alpha = (await make_agent("alpha", model="m")).id
-    await container.vault.set(None, "MCP_TOKEN", "tok-in-url-123")
+    await container.vault.set(None, "MCP_TOKEN", "tok-in-url-123", "", "user")
     spec = mcp_config(
         transport=McpTransport.HTTP, url=f"{rejecting_http_server}/sse?token=${{vault:MCP_TOKEN}}"
     )

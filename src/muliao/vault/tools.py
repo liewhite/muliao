@@ -27,8 +27,7 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
 
     @ts.tool
     async def vault_list(ctx: RunContext[RunScope]) -> list[SecretKeyInfo]:
-        """List secret keys you can use: your private ones and public ones (a private key hides a public key
-        of the same name). Values are never shown."""
+        """List secret keys you can use: your private ones and public ones. Values are never shown."""
         return [
             SecretKeyInfo(key=s.key, scope=scope_of(s.owner), description=s.description)
             for s in await vault.visible_to(ctx.deps.agent_id)
@@ -37,7 +36,8 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
     @ts.tool
     async def vault_set(ctx: RunContext[RunScope], key: str, value: str, description: str = "") -> str:
         """Store a secret the user gave you, private to you, so it never has to appear in files, skills, memory or
-        MCP configs. The value is redacted from the saved conversation.
+        MCP configs. The value is redacted from the saved conversation. Keys are unique across private and
+        public secrets.
         Reference it later as `${vault:KEY}` in MCP configs, or via `run_shell(secrets=[KEY])`.
 
         Args:
@@ -45,7 +45,8 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
             value: The secret value.
             description: What it is for.
         """
-        await vault.set(ctx.deps.agent_id, key, value, description)
+        me = ctx.deps.agent_id
+        await vault.set(me, key, value, description, me)
         return f"stored private secret {key}"
 
     @ts.tool
@@ -55,7 +56,8 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
         Args:
             key: The secret key.
         """
-        await vault.delete(ctx.deps.agent_id, key)
+        me = ctx.deps.agent_id
+        await vault.delete(me, key, me)
         return f"deleted private secret {key}"
 
     @ts.tool
@@ -68,7 +70,7 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
             value: The secret value.
             description: What it is for.
         """
-        await vault.set(None, key, value, description)
+        await vault.set(None, key, value, description, ctx.deps.agent_id)
         return f"stored public secret {key}"
 
     @ts.tool
@@ -78,7 +80,7 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
         Args:
             key: The secret key.
         """
-        await vault.delete(None, key)
+        await vault.delete(None, key, ctx.deps.agent_id)
         return f"deleted public secret {key}"
 
     return ts

@@ -19,7 +19,6 @@ from muliao.agent_runtime.runner import AgentRuntime, Toolbox
 from muliao.agent_runtime.web import WebProvider, build_web_provider
 from muliao.agent_runtime.web_tools import web_toolset
 from muliao.agent_runtime.workspace_tools import ShellLimits
-from muliao.agents.active import ActiveOwners
 from muliao.agents.evolution_tools import (
     memory_toolset,
     public_skills_toolset,
@@ -30,8 +29,9 @@ from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
 from muliao.agents.permissions import available_tools
-from muliao.agents.resources import ResourceRepo, RevisionHistory
+from muliao.agents.revisions import Revisions
 from muliao.agents.roles import RoleService
+from muliao.agents.secrets import SecretItems
 from muliao.agents.service import AgentDefaults, AgentService, Thinking
 from muliao.agents.skills import SkillStore
 from muliao.agents.tools import agents_toolset
@@ -93,8 +93,8 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Container:
     """HTTP 层看到的组合根：各领域的门面（类型都由领域的 api 模块导出）、平台的展示事件流与「任务」页的操作，以及
-    服务的生命周期。HTTP 层只经这些调用领域，拿不到领域内部的对象（消费者、队列的排任务与领取、资源仓库的直接写入、
-    总线的发布……）：窄接口（TaskAdmin、RevisionHistory、EventFeed）是只转发窄方法的包装对象，运行时
+    服务的生命周期。HTTP 层只经这些调用领域，拿不到领域内部的对象（消费者、队列的排任务与领取、
+    总线的发布……）：窄接口（TaskAdmin、EventFeed）是只转发窄方法的包装对象，运行时
     也拿不到背后的完整对象。tests/test_boundaries 检查字段的声明类型，以及运行时的值恰好是声明的类型。"""
 
     # SSE：进程内的展示事件（只订阅）
@@ -102,8 +102,8 @@ class Container:
     # 「任务」页：列出与人工重试
     tasks: TaskAdmin
     vault: Vault
-    # 资源的版本历史（只读；写入经各 store）
-    resources: RevisionHistory
+    # 条目与记忆的版本（只读；写入与恢复经各 store）
+    revisions: Revisions
     skills: SkillStore
     memory: MemoryStore
     agents: AgentService
@@ -138,7 +138,7 @@ class Assembly:
     live: LiveRuns
     queue: TaskQueue
     vault: Vault
-    resources: ResourceRepo
+    revisions: Revisions
     skills: SkillStore
     memory: MemoryStore
     agents: AgentService
@@ -181,7 +181,7 @@ class Assembly:
             bus=EventFeed(self.bus),
             tasks=TaskAdmin(self.queue),
             vault=self.vault,
-            resources=RevisionHistory(self.resources),
+            revisions=self.revisions,
             skills=self.skills,
             memory=self.memory,
             agents=self.agents,
@@ -229,8 +229,8 @@ class Assembly:
 
     async def _prepare(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path)
-        # git 不可用或仓库损坏时在启动时暴露；上次进程留下的未提交修改与 git 锁在这里收敛（worker 还没开始）
-        await self.resources.recover()
+        # skill 的生成目录按数据库全量重新生成（上次进程留下的临时目录、被改动的副本都在这里收敛）
+        await self.skills.materialize_all()
         await self.agents.verify_stored()
         await self.queue.check_kinds()
         await asyncio.to_thread(self.files.recover)
@@ -298,28 +298,31 @@ def assemble(
     messaging = Messaging(queue)
     # 马上执行已提交的投递（Worker.run_now）：worker 由各领域的处理器组成，在最后构造、绑定
     run_now = RunNow()
-    vault = Vault(db, settings.vault.key.get_secret_value())
+    vault = Vault(SecretItems(db), settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
-    # 写私有资源之前，资源仓库在它的锁里检查 owner 还可用（agents.active）
-    resources = ResourceRepo(settings.resources_dir, ActiveOwners(db))
-    skills = SkillStore(resources)
-    memory = MemoryStore(resources, settings.runtime.memory_max_chars)
+    revisions = Revisions(db)
+    skills = SkillStore(db, settings.skills_dir)
+    memory = MemoryStore(db, settings.runtime.memory_max_chars)
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接
     mcp_connector = McpConnector(vault)
-    mcp = McpRegistry(resources, mcp_connector.probe)
+    mcp = McpRegistry(db, mcp_connector.probe)
+
+    async def public_mcp() -> list[str]:
+        return [s.name for s in await mcp.list(None)]
+
     agents = AgentService(
         db,
         settings.workspaces_dir,
-        resources,
-        memory,
         model_checker or models.check,
         AgentDefaults(settings.llm.default_model),
         available_tools(web_configured=bool(web_tools)),
-        public_mcp=lambda: [s.name for s in mcp.list(None)],
+        public_mcp=public_mcp,
     )
     roles = RoleService(db)
     activity = SessionActivity(queue)
-    agent_lifecycle = AgentLifecycle(db, agents, messaging, {"sessions": activity.blocks_agent_deletion_in})
+    agent_lifecycle = AgentLifecycle(
+        db, agents, skills, messaging, {"sessions": activity.blocks_agent_deletion_in}
+    )
     # 停止会话不依赖消费者：正在进行的运行的登记与 SessionHalt 先构造，消费者用同一份登记运行
     runs: StoppableRuns[Commit] = StoppableRuns(db.exclusive)
     halt = SessionHalt(db, queue, messaging)
@@ -421,7 +424,6 @@ def assemble(
     agent_lifecycle.subscribe(messaging)
     sessions.subscribe(messaging)
     AgentSessionsCleanup(db, queue, messaging, stopper).subscribe(messaging)
-    vault.subscribe(messaging)
     triggers.subscribe(messaging)
     issues.subscribe(messaging)
     consumer = Consumer(
@@ -457,7 +459,7 @@ def assemble(
         live=live,
         queue=queue,
         vault=vault,
-        resources=resources,
+        revisions=revisions,
         skills=skills,
         memory=memory,
         agents=agents,

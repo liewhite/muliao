@@ -164,16 +164,14 @@ class AgentRuntime:
         """这次运行的指令。只由会话级、agent 级的稳定内容组成，同一个会话的两次运行得到同一段文字：它是缓存前缀
         （agent_runtime.instructions 的模块说明）。随运行变化的那几行走 run_context。origin_note 是会话来源的说明
         （会话领域给出）。"""
-        skills, corrupt_skills = self._skills.index(agent.id)
         return build_instructions(
             agent_name=agent.name,
             agent_description=agent.description,
-            global_memory=self._memory.read(None),
+            global_memory=await self._memory.read(None),
             workspace=scope.workspace,
             origin_note=origin_note,
-            memory=self._memory.read(agent.id),
-            skills=skills,
-            corrupt_skills=corrupt_skills,
+            memory=await self._memory.read(agent.id),
+            skills=await self._skills.index(agent.id),
             memory_limit=self._memory.max_chars,
             summary=summary,
         )

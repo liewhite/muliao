@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Card, Chip, toast } from '@heroui/react'
+import { Button, Card, toast } from '@heroui/react'
 import { Trash2 } from 'lucide-react'
 import { api, type AgentId, type SecretInfo } from '../api'
 import { splitView } from '../ownership'
@@ -27,11 +27,6 @@ function InheritedSecretItem({ item }: { item: SecretInfo }) {
             {item.description || '无说明'} · {formatTime(item.updated_at)}
           </div>
         </div>
-        {item.shadowed && (
-          <Chip size="sm" color="warning" variant="soft">
-            已被私有项覆盖
-          </Chip>
-        )}
       </Card.Content>
     </Card>
   )

@@ -4,8 +4,9 @@
    （不再出现在列表与名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in），同一事务发布
    AgentDeleting。
 2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域删除它的全部会话（标记之后它的会话不会再收到
-   来信），然后发布 AgentSessionsCleared；触发器、vault 各自删除。
-3. 收到 AgentSessionsCleared：删除资源目录与这一行。
+   来信），然后发布 AgentSessionsCleared；触发器各自删除。
+3. 收到 AgentSessionsCleared：删除工作目录与它的 skill 的生成目录，再删除这一行：它名下的条目（skill、MCP server、secret）与
+   记忆随行级联删除，同一事务里为每一项记一版「随 agent 删除」。
 
 归档（set_archived）是可以来回切换的停用：同样只在它空闲时做（与删除同一组检查），之后给它派新工作的入口都拒绝
 （agents.active.runnable_row_in），数据都留着。
@@ -14,12 +15,17 @@
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.active import active_row_in
+from muliao.agents.documents import document_in
 from muliao.agents.events import AgentDeleting
+from muliao.agents.memory import revision_name
+from muliao.agents.revisions import Subject, record_in
 from muliao.agents.service import AgentInfo, AgentService, info_of
-from muliao.agents.tables import Agent
+from muliao.agents.skills import SkillStore
+from muliao.agents.tables import Agent, Item, Memory
 from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
@@ -38,11 +44,13 @@ class AgentLifecycle:
         self,
         db: Database,
         agents: AgentService,
+        skills: SkillStore,
         messaging: Messaging,
         blockers: Mapping[str, DeletionBlocker],
     ):
         self._db = db
         self._agents = agents
+        self._skills = skills
         self._messaging = messaging
         self._blockers = blockers
 
@@ -107,17 +115,29 @@ class AgentLifecycle:
                     f"agent {event.agent_id} had its sessions cleared but is not being deleted"
                 )
             author = agent.deleting_by
-        # 资源目录不在数据库事务里：重放时它已经不在，删除是空操作
-        await self._agents.remove_files(event.agent_id, author)
-        log.info("resources of a deleted agent removed", extra={"agent": event.agent_id})
+        # 目录不在数据库事务里：重放时它们已经不在，删除是空操作。skill 的生成目录只是副本，先于行删除
+        await self._agents.remove_workspace(event.agent_id)
+        await self._skills.remove_generated(await self._skills.owned_names(event.agent_id))
+        log.info("files of a deleted agent removed", extra={"agent": event.agent_id})
 
         async def commit(s: AsyncSession) -> None:
             agent = await s.get(Agent, event.agent_id)
             if agent is not None:
+                await _record_deletions_in(s, event.agent_id, author)
                 await s.delete(agent)
                 log.info("agent deleted", extra={"agent": event.agent_id, "author": author})
 
         return commit
+
+
+async def _record_deletions_in(s: AsyncSession, agent_id: str, author: str) -> None:
+    """agent 名下的条目与记忆随它的行级联删除：先各记一版删除（版本表不随它删除，留作审计）。"""
+    message = f"deleted with agent {agent_id}"
+    for row in list(await s.scalars(select(Item).where(Item.owner == agent_id))):
+        record_in(s, Subject(row.kind), row.name, await document_in(s, row), None, author, message)
+    memory = await s.scalar(select(Memory).where(Memory.owner == agent_id))
+    if memory is not None:
+        record_in(s, Subject.MEMORY, revision_name(agent_id), memory.content, None, author, message)
 
 
 def _check_archivable(agent: Agent) -> Agent:

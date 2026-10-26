@@ -149,14 +149,14 @@ async def test_a_transaction_writing_two_domains_tables_fails(container, make_ag
     import pytest
     from sqlalchemy import update
 
+    from muliao.agents.tables import Item
     from muliao.notifications.tables import Notification
-    from muliao.vault.tables import Secret
 
     await make_agent("alpha")
     with pytest.raises(RuntimeError, match="several domains"):
         async with container.db.transaction() as s:
             s.add(Notification(title="t", body="b", session_id=None))
-            await s.execute(update(Secret).values(description="x"))
+            await s.execute(update(Item).values(description="x"))
 
 
 async def test_a_domain_and_the_task_table_may_be_written_together(container):

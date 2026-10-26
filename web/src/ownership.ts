@@ -1,6 +1,5 @@
 // 归属的前端视角：资源（MCP server、secret）归属某个 agent（私有）或公共（owner 为 null）。
-// 列表接口按 owner 视角返回它私有的与公共的资源，公共项是否被同名私有项遮蔽由后端给出（shadowed），
-// 遮蔽规则只在后端（agents/ownership.py）实现；这里只按归属把列表分成两段。
+// 列表接口按 owner 视角返回它私有的与公共的资源（名字全局唯一，没有同名遮蔽）；这里只按归属把列表分成两段。
 
 import type { AgentId } from './api'
 

@@ -1,7 +1,7 @@
 import re
 import unicodedata
 
-from muliao.agents.resources import USER
+from muliao.agents.revisions import USER
 from muliao.errors import InvalidInput
 
 # skill 与 MCP server 名称：会出现在目录名和工具名前缀里（agent 用 id 标识，名称规则见 normalize_agent_name）

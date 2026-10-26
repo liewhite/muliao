@@ -177,7 +177,7 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     await drain(container)
 
     history = await history_of(container, session.id)
-    assert container.memory.read(alpha) == "- user likes tea\n"
+    assert await container.memory.read(alpha) == "- user likes tea\n"
     assert last_user_prompt(history) == "I like tea"
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "Noted!"
     deliver = await tasks_of(container, DELIVER_TASK)
@@ -379,7 +379,7 @@ async def test_tool_that_keeps_failing_does_not_abort_the_run(container, make_ag
     assert (await tasks_of(container, RUN_TASK))[0].status == TaskStatus.DONE
     assert all("free at least" in text for text in seen)
     assert "stop retrying" in seen[3] and "stop retrying" not in seen[2]
-    assert container.memory.read(alpha) == "x" * container.memory.max_chars
+    assert await container.memory.read(alpha) == "x" * container.memory.max_chars
 
 
 async def test_long_run_is_not_capped_by_pydantic_ai_default_request_limit(container, make_agent, models):

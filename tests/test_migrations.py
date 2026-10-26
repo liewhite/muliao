@@ -687,3 +687,109 @@ def test_agents_group_and_archived_at_start_empty_and_downgrade(tmp_path):
     with sqlite3.connect(path) as conn:
         assert not {"group", "archived_at"} & {r[1] for r in conn.execute("pragma table_info(agents)")}
         assert conn.execute("select id from agents").fetchall() == [("a1",)]
+
+
+def test_resources_and_secrets_move_into_items_with_unique_names_and_downgrade(tmp_path):
+    """#230：资源仓库（数据库同目录的 resources/）里的 skill、MCP、记忆与 secrets 表导入 items / memories，每项记一版；
+    重名的私有项改名，被它遮蔽的公共 MCP 勾选去掉；同名 secret 合并成公共的；旧仓库改名留着。降级重建 secrets、改回目录。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "75cc40ae1d3d")
+    a1, a2 = "a1a1a1a1a1a1", "b2b2b2b2b2b2"
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "insert into agents (id, name, description, model, roles, mcp_servers, created_at, updated_at) "
+            "values (?, ?, 'd', 'p:m', '[\"agent\"]', '[\"pw\"]', '2026-01-01', '2026-01-01')",
+            [(a1, "alpha"), (a2, "Beta Bot")],
+        )
+        conn.executemany(
+            "insert into secrets (owner, key, ciphertext, description, updated_at) values (?, ?, ?, '', ?)",
+            [
+                (a1, "SHARED", b"c1", "2026-01-01 00:00:00"),
+                (a2, "SHARED", b"c2", "2026-01-02 00:00:00"),
+                (a1, "OWN", b"c3", "2026-01-01 00:00:00"),
+            ],
+        )
+    root = tmp_path / "resources"
+
+    def write(rel: str, text: str, mode: int = 0o644) -> None:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+        p.chmod(mode)
+
+    def skill(name: str, body: str) -> str:
+        return f"---\nname: {name}\ndescription: {name} skill\n---\n{body}\n"
+
+    write("public/MEMORY.md", "global rule")
+    write(f"agents/{a1}/MEMORY.md", "see ~/.muliao/data/resources/public/skills/shared/run.sh")
+    write("public/skills/shared/SKILL.md", skill("shared", "run resources/public/skills/shared/run.sh"))
+    write("public/skills/shared/run.sh", "echo hi\n", 0o755)
+    write("public/skills/shared/.venv/x.py", "ignored")
+    write(
+        f"agents/{a1}/skills/shared/SKILL.md",
+        skill("shared", f"run resources/agents/{a1}/skills/shared/x.sh"),
+    )
+    # 读不出来的公共 skill 不导入，也不让同名的私有 skill 改名
+    write("public/skills/broken/SKILL.md", "---\nname: [oops\n---\n")
+    write(f"agents/{a2}/skills/broken/SKILL.md", skill("broken", "fine"))
+    write(f"agents/{a2}/skills/solo/SKILL.md", skill("solo", f"see resources/agents/{a2}/skills/solo/"))
+    config = {"transport": "stdio", "command": "x", "args": [], "url": None, "env": {}, "headers": {}}
+    write("public/mcp/pw.json", json.dumps({**config, "enabled": True}))
+    write(f"agents/{a1}/mcp/pw.json", json.dumps({**config, "enabled": True}))
+    write(f"agents/{a2}/mcp/pw.json", json.dumps({**config, "enabled": False}))
+
+    migrate(path)
+
+    assert not root.exists() and (tmp_path / "resources.imported").is_dir()
+    with sqlite3.connect(path) as conn:
+        items = {
+            (k, n): (o, e) for k, n, o, e in conn.execute("select kind, name, owner, enabled from items")
+        }
+        assert items == {
+            ("skill", "shared"): (None, 1),
+            ("skill", "alpha-shared"): (a1, 1),
+            ("skill", "solo"): (a2, 1),
+            ("skill", "broken"): (a2, 1),
+            ("mcp", "pw"): (None, 1),
+            ("mcp", "alpha-pw"): (a1, 1),
+            ("mcp", f"{a2}-pw"): (a2, 0),
+            ("secret", "SHARED"): (None, 1),
+            ("secret", "OWN"): (a1, 1),
+        }
+        renamed = conn.execute("select content from items where name = 'alpha-shared'").fetchone()[0]
+        assert "name: alpha-shared" in renamed and "run skills/alpha-shared/x.sh" in renamed
+        public = conn.execute("select content from items where name = 'shared'").fetchone()[0]
+        assert "run skills/shared/run.sh" in public
+        assert (
+            conn.execute("select content from items where name = 'solo'")
+            .fetchone()[0]
+            .endswith("see skills/solo/\n")
+        )
+        assert conn.execute("select path, executable from item_files").fetchall() == [("run.sh", 1)]
+        assert conn.execute("select secret from items where name = 'SHARED'").fetchone()[0] == b"c2"
+        # alpha 的私有 pw 原本遮蔽公共的：去掉勾选；Beta 的私有 pw 停用着，不遮蔽，勾选保留
+        assert dict(conn.execute("select id, mcp_servers from agents")) == {a1: "[]", a2: '["pw"]'}
+        memories = dict(conn.execute("select owner, content from memories"))
+        assert memories == {None: "global rule", a1: "see ~/.muliao/data/skills/shared/run.sh", a2: ""}
+        revisions = conn.execute("select subject, name, before, author from revisions").fetchall()
+        set_at = json.loads(conn.execute("select after from revisions where name = 'OWN'").fetchone()[0])
+        assert set_at["value_set_at"] == "2026-01-01T00:00:00+00:00"
+        assert len(revisions) == 12 and all(r[2] is None and r[3] == "muliao" for r in revisions)
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "75cc40ae1d3d")
+    assert root.is_dir() and not (tmp_path / "resources.imported").exists()
+    with sqlite3.connect(path) as conn:
+        assert set(conn.execute("select owner, key, ciphertext from secrets")) == {
+            (None, "SHARED", b"c2"),
+            (a1, "OWN", b"c3"),
+        }
+        assert "items" not in {
+            r[0] for r in conn.execute("select name from sqlite_master where type='table'")
+        }

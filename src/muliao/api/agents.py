@@ -20,7 +20,6 @@ from muliao.agents.api import (
     Thinking,
 )
 from muliao.api.deps import C, check_owner, read_limited
-from muliao.api.resources import CorruptOut
 
 router = APIRouter()
 
@@ -301,7 +300,7 @@ class MemoryIn(BaseModel):
 async def get_memory(c: C, owner: str | None = None) -> MemoryOut:
     """owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。"""
     await check_owner(c, owner)
-    return MemoryOut(content=c.memory.read(owner), max_chars=c.memory.max_chars)
+    return MemoryOut(content=await c.memory.read(owner), max_chars=c.memory.max_chars)
 
 
 @router.put("/memory")
@@ -336,20 +335,13 @@ class SkillIn(BaseModel):
 async def list_skills(c: C, owner: str | None = None) -> list[SkillOut]:
     """owner 为空列出公共 skill，否则列出该 agent 的私有 skill。"""
     await check_owner(c, owner)
-    return [SkillOut.of(s) for s in c.skills.list(owner)]
-
-
-@router.get("/skills/corrupt")
-async def list_corrupt_skills(c: C, owner: str | None = None) -> list[CorruptOut]:
-    """owner 名下（缺省为公共）读不出来的 skill，GET /skills 不列它们。"""
-    await check_owner(c, owner)
-    return [CorruptOut.of(x) for x in c.skills.corrupt_in(owner)]
+    return [SkillOut.of(s) for s in await c.skills.list(owner)]
 
 
 @router.get("/skill")
 async def get_skill(c: C, name: str, owner: str | None = None) -> SkillDetail:
     await check_owner(c, owner)
-    skill = c.skills.read(owner, name)
+    skill = await c.skills.read(owner, name)
     return SkillDetail(name=skill.meta.name, description=skill.meta.description, owner=owner, body=skill.body)
 
 
@@ -373,7 +365,7 @@ SKILL_PACKAGE_TYPE = "application/zip"
     responses={200: {"content": {SKILL_PACKAGE_TYPE: {}}, "description": "<name>.skill"}},
 )
 async def export_skill(c: C, name: str, owner: str | None = None) -> Response:
-    """下载标准 .skill 文件（zip：`<name>/SKILL.md` 与版本管理里的附件）。"""
+    """下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。"""
     await check_owner(c, owner)
     package = await c.skills.export(owner, name)
     return Response(

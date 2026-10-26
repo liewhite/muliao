@@ -231,7 +231,7 @@ async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make
     assert isinstance(resumed[0], ModelRequest) and resumed[0].parts[0].content == CONTINUATION
     assert "SUMMARY" in (instructions or "")
     # 工具只执行一次，运行只有一次
-    assert container.memory.read(alpha) == "- once\n"
+    assert await container.memory.read(alpha) == "- once\n"
     runs = [t for t in await _tasks(container, RUN_TASK)]
     assert [r.status for r in runs] == [TaskStatus.DONE]
     history = await history_of(container, session.id)

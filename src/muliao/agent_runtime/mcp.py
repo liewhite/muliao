@@ -1,6 +1,6 @@
 """把 MCP 配置变成一次运行的工具（「使用 MCP」组）与连接验证。配置本身是 agent 领域的资源（agents.mcp.McpRegistry）。
 
-一个 server 出问题只影响它自己：配置文件坏了（CorruptResource）、引用的 secret 不在了、连不上，这次运行就没有它的
+一个 server 出问题只影响它自己：引用的 secret 不在了、连不上，这次运行就没有它的
 工具，其余 server 照常可用（列工具失败同样只跳过它）；原因记日志，并作为 RunScope.notices 放进这次运行开头的运行上下文告诉模型。
 运行中调用工具失败只是这次调用失败（ToolFailed 交还模型），断开失败只记 warning。
 """
@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,12 +21,7 @@ from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset, ToolsetTool, WrapperToolset
 
 from muliao.agent_runtime.transient import is_transient
-from muliao.agents.api import (
-    CorruptResource,
-    McpConfig,
-    McpServer,
-    McpTransport,
-)
+from muliao.agents.api import McpConfig, McpServer, McpTransport
 from muliao.errors import InvalidInput, NotFound, TransientError
 from muliao.platform.shell import redact
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -36,8 +31,8 @@ log = logging.getLogger(__name__)
 
 _CONNECT_TIMEOUT = 30.0
 
-# agent 此刻可用的 server（它私有的与勾选了的公共的），以及配置坏了的（agents.mcp.McpRegistry.index）
-McpIndex = Callable[[str, Sequence[str]], tuple[list[McpServer], list[CorruptResource]]]
+# agent 此刻可用的 server（它私有的与勾选了的公共的，agents.mcp.McpRegistry.index）
+McpIndex = Callable[[str, Sequence[str]], Awaitable[list[McpServer]]]
 
 
 class McpFailed(Exception):
@@ -93,7 +88,6 @@ class _SecretSafe(WrapperToolset[RunScope]):
             with self.guard():
                 return await self.wrapped.__aexit__(*args)
         except (McpFailed, TransientError) as e:
-            # toolset id 带归属（mcp-<范围>:<owner>:<名称>），同名的私有 server 分得开
             log.warning("mcp server disconnect failed", extra={"mcp": self.wrapped.id, "error": str(e)})
             return None
 
@@ -184,13 +178,13 @@ class McpConnector:
                 cwd=None if cwd is None else str(cwd),
             )
             toolset = MCPToolset(
-                client, id=f"mcp-{server.key}", init_timeout=_CONNECT_TIMEOUT, max_retries=TOOL_MAX_RETRIES
+                client, id=f"mcp-{server.name}", init_timeout=_CONNECT_TIMEOUT, max_retries=TOOL_MAX_RETRIES
             )
         else:
             assert c.url is not None
             toolset = MCPToolset(
                 fill(c.url, secrets),
-                id=f"mcp-{server.key}",
+                id=f"mcp-{server.name}",
                 headers={k: fill(v, secrets) for k, v in c.headers.items()} or None,
                 init_timeout=_CONNECT_TIMEOUT,
                 max_retries=TOOL_MAX_RETRIES,
@@ -203,8 +197,7 @@ class McpConnector:
 
         async def build(ctx: RunContext[RunScope]) -> AbstractToolset[RunScope] | None:
             agent, notices = ctx.deps.agent_id, ctx.deps.notices
-            servers, corrupt = index(agent, selected)
-            notices += [c.describe() for c in corrupt]
+            servers = await index(agent, selected)
             names: list[str] = []
             toolsets: list[AbstractToolset[RunScope]] = []
             for server in servers:

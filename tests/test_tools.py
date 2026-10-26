@@ -133,7 +133,7 @@ async def test_agent_pauses_trigger_and_reenables_mcp_server(container, make_age
     assert outputs[0].startswith("updated trigger daily (paused)")
     assert not (await container.triggers.get_by_name("daily")).enabled
     assert "echo" in outputs[1]
-    assert [m.name for m in container.mcp.index(me.id, ())[0]] == ["echo"]
+    assert [m.name for m in (await container.mcp.index(me.id, ()))] == ["echo"]
 
 
 async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
@@ -168,7 +168,7 @@ async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
         "/api/hooks/github", content="opened", headers={"Authorization": f"Bearer {token}"}
     )
     assert resp.status_code == 202
-    assert await container.vault.view(me.id) == []
+    assert await container.vault.visible_to(me.id) == []
 
 
 async def test_agent_manages_private_and_public_secrets(container, make_agent, models):
@@ -329,7 +329,7 @@ async def test_edit_skill_tools_change_description_body_or_both_and_reject_empty
     scope = "public" if public else "private"
     assert outputs[:3] == [f"edited {scope} skill digest"] * 3
     assert "nothing to change" in outputs[3]
-    skill = container.skills.read(owner, "digest")
+    skill = await container.skills.read(owner, "digest")
     assert (skill.meta.description, skill.body) == ("When digesting", "step 1\n\nstep 2")
 
 
@@ -914,14 +914,10 @@ async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_st
     assert (meta.name, container.files.read(meta)) == ("read_file.png", png)
 
 
-async def test_a_corrupt_public_skill_is_listed_as_corrupt_in_the_index_and_the_run_goes_on(
-    container, make_agent, models
-):
+async def test_the_skill_index_lists_own_and_public_skills(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m")).id
     await container.skills.write(None, "good", "a good skill", "x", "user")
-    broken = container.resources.owner_dir(None) / "skills" / "broken"
-    broken.mkdir(parents=True)
-    (broken / "SKILL.md").write_text("---\nname: [oops\n---\nbody")
+    await container.skills.write(alpha, "mine", "my skill", "x", alpha)
     seen: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -933,8 +929,7 @@ async def test_a_corrupt_public_skill_is_listed_as_corrupt_in_the_index_and_the_
     await drain(container)
 
     index = seen[0][seen[0].index("## Skill index") :]
-    assert "- `good` (public): a good skill" in index
-    assert "- public skill 'broken' is corrupt and cannot be used until it is rewritten or deleted:" in index
+    assert "- `mine` (private): my skill\n- `good` (public): a good skill" in index
 
 
 THINKS = ModelProfile(supports_thinking=True)

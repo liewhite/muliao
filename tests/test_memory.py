@@ -4,8 +4,9 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agents.api import Revision
+from muliao.agents.api import RevisionInfo, Subject
 from muliao.agents.memory import MemoryFull
+from muliao.errors import CorruptState
 from tests.conftest import login
 from tests.scripted import scripted
 from tests.test_flow import call_then_answer, drain, start
@@ -29,8 +30,8 @@ async def test_global_memory_precedes_the_agents_own_memory_in_every_run(contain
     assert seen[0].index("## Runtime context") < seen[0].index("- likes tea")
 
 
-async def memory_history(container, owner: str | None) -> list[Revision]:
-    return await container.resources.history(container.memory.path(owner), 10)
+async def memory_history(container, owner: str | None) -> list[RevisionInfo]:
+    return await container.revisions.history(Subject.MEMORY, owner or "", 10)
 
 
 async def test_memory_api_reads_and_writes_global_and_agent_memory_and_restores_versions(
@@ -49,7 +50,7 @@ async def test_memory_api_reads_and_writes_global_and_agent_memory_and_restores_
     assert (
         await client.post("/api/resources/memory/restore", json={"rev": history[1]["rev"]})
     ).status_code == 204
-    assert container.memory.read(None) == "first"
+    assert await container.memory.read(None) == "first"
 
     for content in ("- likes tea\n", "- likes coffee\n"):
         await client.put("/api/memory", json={"owner": agent.id, "content": content})
@@ -59,16 +60,16 @@ async def test_memory_api_reads_and_writes_global_and_agent_memory_and_restores_
     memory = (await client.get(f"/api/resources/memory/history?owner={agent.id}")).json()
     assert [r["content"] for r in memory][:2] == ["- likes coffee\n", "- likes tea\n"]
     await client.post("/api/resources/memory/restore", json={"owner": agent.id, "rev": memory[1]["rev"]})
-    assert container.memory.read(agent.id) == "- likes tea\n"
+    assert await container.memory.read(agent.id) == "- likes tea\n"
     # 全局记忆不受影响
-    assert container.memory.read(None) == "first"
+    assert await container.memory.read(None) == "first"
     assert (await client.get("/api/memory", params={"owner": "nope"})).status_code == 404
     bad = await client.post("/api/resources/memory/restore", json={"owner": agent.id, "rev": "HEAD"})
     assert bad.status_code == 422
 
 
 async def test_empty_global_memory_that_was_never_written_has_no_history(container):
-    assert container.memory.read(None) == ""
+    assert await container.memory.read(None) == ""
     await container.memory.write(None, "", "user")
     assert await memory_history(container, None) == []
 
@@ -76,7 +77,7 @@ async def test_empty_global_memory_that_was_never_written_has_no_history(contain
 async def test_cleared_global_memory_keeps_a_restorable_history(container):
     await container.memory.write(None, "v1", "user")
     await container.memory.write(None, "", "user")
-    assert container.memory.read(None) == ""
+    assert await container.memory.read(None) == ""
     assert [r.author for r in await memory_history(container, None)] == ["user", "user"]
 
 
@@ -97,7 +98,7 @@ async def test_a_cleared_agent_memory_is_a_new_version(container, make_agent):
     agent = await make_agent("alpha")
     await container.memory.write(agent.id, "- fact", "user")
     await container.memory.write(agent.id, "", "user")
-    assert container.memory.read(agent.id) == ""
+    assert await container.memory.read(agent.id) == ""
     assert len(await memory_history(container, agent.id)) == 3
 
 
@@ -110,9 +111,9 @@ async def test_an_agent_edits_the_global_memory_as_a_versioned_change_under_its_
     await start(container, agent.id, "hello")
     await drain(container)
 
-    assert container.memory.read(None) == "- all agents answer in Chinese\n"
+    assert await container.memory.read(None) == "- all agents answer in Chinese\n"
     # 自己的记忆没变
-    assert container.memory.read(agent.id) == ""
+    assert await container.memory.read(agent.id) == ""
     assert (await memory_history(container, None))[0].author == agent.id
 
     models.models["m"] = call_then_answer(
@@ -120,7 +121,7 @@ async def test_an_agent_edits_the_global_memory_as_a_versioned_change_under_its_
     )
     await start(container, agent.id, "again")
     await drain(container)
-    assert container.memory.read(None) == "- all agents answer in English\n"
+    assert await container.memory.read(None) == "- all agents answer in English\n"
 
 
 async def test_deleting_an_agent_keeps_the_global_memory_it_wrote(container, make_agent):
@@ -131,6 +132,7 @@ async def test_deleting_an_agent_keeps_the_global_memory_it_wrote(container, mak
     await drain(container)
 
     assert [r.author for r in await memory_history(container, None)] == [agent.id]
-    assert not container.memory.path(agent.id).exists()
-    # 被删 agent 的历史仍在仓库里，可以审计
+    with pytest.raises(CorruptState):
+        await container.memory.read(agent.id)
+    # 被删 agent 的记忆的历史仍在版本表里，可以审计
     assert len(await memory_history(container, agent.id)) == 2

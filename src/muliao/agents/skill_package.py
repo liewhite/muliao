@@ -3,9 +3,10 @@
 一个 zip 包，里面唯一的顶层目录与 skill 同名，目录里是 `SKILL.md`（YAML frontmatter：name、description）和附件
 （脚本、参考文档……，可在子目录里）。这里只管格式：打包、解包与校验，纯函数；frontmatter 的规则与写入在 SkillStore。
 
-解包只收会进版本管理的文件（resources.is_attachment 的白名单、MAX_EXTERNAL_FILE_BYTES 上限、UTF-8 文本），其余的
-不写入、在结果里逐个列出原因：二进制文件不进历史，skill 里应写明来源由安装脚本获取。包的结构不对（路径越界、
-符号链接、不止一个顶层目录、名字不合法、超出总大小与文件数）整个拒绝。
+skill 的附件规则也在这里（is_attachment、MAX_FILE_BYTES）：解包、从目录收附件（SkillStore.write 的 attachments）都只收
+会存进 skill 的文件（按后缀白名单、不超过上限、UTF-8 文本），其余的不写入、在结果里逐个列出原因：二进制文件不存，
+skill 里应写明来源由安装脚本获取。包的结构不对（路径越界、符号链接、不止一个顶层目录、名字不合法、超出总大小与
+文件数）整个拒绝。
 """
 
 from __future__ import annotations
@@ -15,14 +16,58 @@ import stat
 import unicodedata
 import zipfile
 import zlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from muliao.agents.naming import validate_slug
-from muliao.agents.resources import MAX_EXTERNAL_FILE_BYTES, VersionedFile, is_attachment
 from muliao.errors import InvalidInput, TooLarge
 
 SKILL_FILE = "SKILL.md"
+# skill 的附件（脚本、配置、参考文档，可在子目录里）：按后缀白名单，UTF-8 文本，单个不超过 MAX_FILE_BYTES。二进制文件
+# 不存（skill 里写明版本与来源，由安装脚本获取）
+ATTACHMENT_SUFFIXES = (
+    "md", "txt", "py", "sh", "bash", "js", "mjs", "cjs", "ts", "json", "toml", "yaml", "yml",
+    "sql", "ini", "cfg", "csv", "html", "css", "jq",
+)  # fmt: skip
+MAX_FILE_BYTES = 256 * 1024
+# 即使后缀在白名单里也不是附件的：隐藏文件与目录（.env、.venv、.cache……）、依赖与虚拟环境目录
+_HIDDEN = "."
+NOT_ATTACHMENT_DIRS = ("node_modules", "venv", "site-packages", "__pycache__")
+
+
+def is_attachment(rel: str) -> bool:
+    """skill 目录里的这个相对路径（如 `scripts/run.py`、`SKILL.md`）是不是会存进 skill 的文件类型。"""
+    parts = rel.split("/")
+    *dirs, name = parts
+    if any(p.startswith(_HIDDEN) for p in parts) or any(d in NOT_ATTACHMENT_DIRS for d in dirs):
+        return False
+    stem, dot, suffix = name.rpartition(".")
+    return bool(dot) and bool(stem) and suffix in ATTACHMENT_SUFFIXES
+
+
+@dataclass(frozen=True)
+class SkillFile:
+    """skill 里的一个文件（SKILL.md 或附件）。"""
+
+    content: str
+    executable: bool = False
+
+
+def accept(rel: str, size: int, read: Callable[[], bytes], skipped: list[Skipped]) -> SkillFile | None:
+    """一个候选文件按附件规则收下（返回内容）或跳过（记进 skipped）。size 先于读取判断。"""
+    if not is_attachment(rel):
+        skipped.append(Skipped(rel, "not an attachment file type (text files by suffix only)"))
+        return None
+    if size > MAX_FILE_BYTES:
+        skipped.append(Skipped(rel, f"larger than {MAX_FILE_BYTES} bytes"))
+        return None
+    try:
+        return SkillFile(read().decode("utf-8"))
+    except UnicodeDecodeError:
+        skipped.append(Skipped(rel, "not UTF-8 text"))
+        return None
+
+
 # 上传的包本身的大小上限（HTTP 按它读请求体）
 MAX_PACKAGE_BYTES = 10 * 1024 * 1024
 # 解开后的文件数与总大小上限（按 zip 目录里声明的大小，读之前判断：防压缩炸弹）
@@ -43,23 +88,23 @@ class Skipped:
 @dataclass(frozen=True)
 class Package:
     name: str
-    # 相对 skill 目录的路径 → 文本内容，含 SKILL.md
-    files: dict[str, str]
+    # 相对 skill 目录的路径 → 内容，含 SKILL.md
+    files: dict[str, SkillFile]
     skipped: list[Skipped]
 
 
-def pack(name: str, files: Mapping[str, VersionedFile]) -> bytes:
+def pack(name: str, files: Mapping[str, SkillFile]) -> bytes:
     """files：相对 skill 目录的路径 → 内容，必须含 SKILL.md。可执行位写进条目的权限（同 package_skill.py 的
-    zipfile.write）。导入时不还原权限：附件按文本写入，脚本用解释器运行。"""
+    zipfile.write），导入时还原。"""
     if SKILL_FILE not in files:
-        raise InvalidInput(f"skill {name!r} has no {SKILL_FILE} in its version history")
+        raise InvalidInput(f"skill {name!r} has no {SKILL_FILE}")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for rel in sorted(files):
             info = zipfile.ZipInfo(f"{name}/{rel}")
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (stat.S_IFREG | (0o755 if files[rel].executable else 0o644)) << 16
-            archive.writestr(info, files[rel].data)
+            archive.writestr(info, files[rel].content.encode())
     return buffer.getvalue()
 
 
@@ -104,7 +149,7 @@ def unpack(data: bytes) -> Package:
         total = sum(info.file_size for info, _ in entries)
         if total > MAX_UNPACKED_BYTES:
             raise TooLarge(f"package unpacks to {total} bytes, more than {MAX_UNPACKED_BYTES}")
-        files: dict[str, str] = {}
+        files: dict[str, SkillFile] = {}
         # 按不分大小写、不分 Unicode 规范化形式比较：macOS 默认的文件系统上这样的两个路径是同一个文件
         seen: set[str] = set()
         for info, parts in entries:
@@ -123,20 +168,17 @@ def unpack(data: bytes) -> Package:
                 parent = parent.rpartition("/")[0]
         for info, parts in entries:
             rel = "/".join(parts[1:])
-            if not is_attachment(rel):
-                skipped.append(Skipped(rel, "not a versioned file type (text attachments by suffix only)"))
-                continue
-            if info.file_size > MAX_EXTERNAL_FILE_BYTES:
-                skipped.append(Skipped(rel, f"larger than {MAX_EXTERNAL_FILE_BYTES} bytes"))
-                continue
-            try:
-                content = archive.read(info)
-            except (zipfile.BadZipFile, zlib.error, NotImplementedError) as e:
-                raise InvalidInput(f"cannot read {info.filename!r} from the package: {e}") from e
-            try:
-                files[rel] = content.decode("utf-8")
-            except UnicodeDecodeError:
-                skipped.append(Skipped(rel, "not UTF-8 text"))
+
+            def read(info: zipfile.ZipInfo = info) -> bytes:
+                try:
+                    return archive.read(info)
+                except (zipfile.BadZipFile, zlib.error, NotImplementedError) as e:
+                    raise InvalidInput(f"cannot read {info.filename!r} from the package: {e}") from e
+
+            accepted = accept(rel, info.file_size, read, skipped)
+            if accepted is not None:
+                executable = bool((info.external_attr >> 16) & 0o111)
+                files[rel] = SkillFile(accepted.content, executable)
     if SKILL_FILE not in files:
         why = next((f": {s.reason}" for s in skipped if s.path == SKILL_FILE), "")
         raise InvalidInput(f"package has no usable {name}/{SKILL_FILE}{why}")

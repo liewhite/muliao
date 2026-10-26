@@ -14,7 +14,7 @@ C = Annotated[Container, Depends(_container)]
 
 
 async def check_owner(c: Container, owner: str | None) -> None:
-    """读 owner 的私有资源之前（列出、读历史）：正在删除的 agent 按不存在处理。写入时由资源仓库检查（agents.active）。"""
+    """读 owner 的私有资源之前（列出、读历史）：正在删除的 agent 按不存在处理。写入时在写入的事务里检查（agents.active）。"""
     if owner is not None:
         await c.agents.get_active(owner)
 

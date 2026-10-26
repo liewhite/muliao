@@ -1,4 +1,3 @@
-import pytest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.profiles import ModelProfile
 
@@ -72,6 +71,11 @@ async def test_a_skill_exported_over_http_imports_into_another_owner(client, mak
     assert resp.headers["content-disposition"] == 'attachment; filename="shared.skill"'
     package = resp.content
 
+    # 名字全局唯一：公共的还在时导入不进别的 owner
+    assert (
+        await client.post("/api/skill/package", params={"owner": agent_id}, content=package)
+    ).status_code == 409
+    assert (await client.delete("/api/skill", params={"name": "shared"})).status_code == 204
     resp = await client.post("/api/skill/package", params={"owner": agent_id}, content=package)
     assert resp.status_code == 200, resp.text
     assert resp.json() == {
@@ -105,22 +109,22 @@ async def test_vault_never_returns_values(client):
     assert (await client.put("/api/vault/X?owner=nope", json={"value": "v"})).status_code == 404
 
 
-async def test_vault_and_mcp_lists_take_the_owners_view_with_shadowing(client, make_agent):
+async def test_vault_and_mcp_lists_take_the_owners_view(client, make_agent):
     alpha = (await make_agent()).id
     await login(client)
-    for owner in ("", f"?owner={alpha}"):
-        await client.put(f"/api/vault/TOKEN{owner}", json={"value": "v"})
+    await client.put(f"/api/vault/MINE?owner={alpha}", json={"value": "v"})
     await client.put("/api/vault/OTHER", json={"value": "v"})
+    # key 全局唯一
+    assert (await client.put(f"/api/vault/OTHER?owner={alpha}", json={"value": "v"})).status_code == 409
 
     def keys(listed):
-        return [(s["key"], s["owner"], s["shadowed"]) for s in listed]
+        return [(s["key"], s["owner"]) for s in listed]
 
     assert keys((await client.get("/api/vault", params={"owner": alpha})).json()) == [
-        ("TOKEN", alpha, False),
-        ("OTHER", None, False),
-        ("TOKEN", None, True),
+        ("MINE", alpha),
+        ("OTHER", None),
     ]
-    assert keys((await client.get("/api/vault")).json()) == [("OTHER", None, False), ("TOKEN", None, False)]
+    assert keys((await client.get("/api/vault")).json()) == [("OTHER", None)]
     assert (await client.get("/api/vault", params={"owner": "nope"})).status_code == 404
     assert (await client.get("/api/mcp", params={"owner": "nope"})).status_code == 404
 
@@ -138,27 +142,6 @@ def test_changing_the_password_revokes_issued_cookies():
     assert Auth("secret", "old").verify(token, now=1001)
     assert not Auth("secret", "new").verify(token, now=1001)
     assert not Auth("other", "old").verify(token, now=1001)
-
-
-async def test_corrupt_skills_and_mcp_configs_are_listed_separately_and_can_be_deleted(client, container):
-    await login(client)
-    root = container.resources.owner_dir(None)
-    (root / "skills" / "bad").mkdir(parents=True)
-    (root / "skills" / "bad" / "SKILL.md").write_text("broken")
-    (root / "mcp").mkdir(parents=True, exist_ok=True)
-    (root / "mcp" / "worse.json").write_text("{")
-
-    assert (await client.get("/api/skills")).json() == []
-    [skill] = (await client.get("/api/skills/corrupt")).json()
-    assert (skill["name"], skill["owner"]) == ("bad", None) and "SKILL.md" in skill["problem"]
-    assert (await client.get("/api/mcp")).json() == []
-    [mcp] = (await client.get("/api/mcp/corrupt")).json()
-    assert mcp["name"] == "worse" and "corrupt MCP config" in mcp["problem"]
-
-    assert (await client.delete("/api/skill", params={"name": "bad"})).status_code == 204
-    assert (await client.delete("/api/mcp", params={"name": "worse"})).status_code == 204
-    assert (await client.get("/api/skills/corrupt")).json() == []
-    assert (await client.get("/api/mcp/corrupt")).json() == []
 
 
 async def test_agent_cannot_be_named_user(client):
@@ -269,32 +252,6 @@ async def test_marking_notifications_read_stops_at_the_one_the_user_saw(client):
     assert (await client.get("/api/notifications/unread")).json() == {"count": 1}
 
 
-async def test_a_failed_resource_write_leaves_no_half_created_agent(client, container, monkeypatch):
-    """资源仓库提交失败时，agent 不能只剩数据库行（之后它的每一轮与 agent 列表都会因缺指令文件失败）。"""
-    await login(client)
-
-    # 文件照常写下，只有 git 提交失败（如 index.lock 被占用）：apply 要把写下的东西连同建出来的目录一起撤掉
-    real_git = container.resources._git_bytes  # noqa: SLF001
-
-    async def failing_git(*args, check=True, stdin=None):  # noqa: ANN001, ANN202
-        if args and args[0] == "commit":
-            raise RuntimeError("git index.lock is held")
-        return await real_git(*args, check=check, stdin=stdin)
-
-    from muliao.agents.service import AgentSpec
-
-    await container.resources.ensure()
-    monkeypatch.setattr(container.resources, "_git_bytes", failing_git)
-    with pytest.raises(RuntimeError, match="index.lock"):
-        await container.agents.create(AgentSpec(name="half", description="d"), author="user")
-    monkeypatch.undo()
-
-    # 资源仓库里也没留下这个从未存在的 agent 的目录（否则启动检查会把它报成已删除 agent 的残留）
-    assert container.resources.agent_owners() == []
-    assert (await client.get("/api/agents")).status_code == 200
-    assert (await client.post("/api/agents", json={"name": "half", "description": "d"})).status_code == 201
-
-
 async def test_list_limits_must_be_positive(client):
     await login(client)
     assert (await client.get("/api/sessions", params={"limit": -1})).status_code == 422
@@ -401,12 +358,6 @@ async def test_an_agent_being_deleted_reads_as_missing(client, container, make_a
 
     assert (await client.get(f"/api/agents/{agent.id}")).status_code == 404
     assert (await client.get("/api/memory", params={"owner": agent.id})).status_code == 404
-
-
-async def test_mcp_api_rejects_path_traversal_owners(client, make_agent):
-    await login(client)
-    for owner in ("..", "../public"):
-        assert (await client.post("/api/mcp/tools", params={"name": "x", "owner": owner})).status_code == 422
 
 
 async def test_agent_thinking_is_set_and_validated_over_http(client, models):

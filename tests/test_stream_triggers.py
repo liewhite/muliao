@@ -226,7 +226,7 @@ async def test_stopping_the_runner_kills_the_command(container, make_agent):
 
 async def test_secrets_are_injected_and_redacted_from_events(container, make_agent):
     alpha = (await make_agent()).id
-    await container.vault.set(alpha, "TOKEN", "s3cr3t-value")
+    await container.vault.set(alpha, "TOKEN", "s3cr3t-value", "", "user")
     await _create(container, alpha, 'echo "got $TOKEN"; sleep 30', secrets=["TOKEN"], debounce_seconds=0)
 
     async with _running(_runner(container)):
@@ -361,7 +361,7 @@ async def test_running_stably_clears_the_error(container, make_agent):
 
 async def test_stderr_is_logged_with_secrets_redacted(container, make_agent):
     alpha = (await make_agent()).id
-    await container.vault.set(alpha, "TOKEN", "s3cr3t-value")
+    await container.vault.set(alpha, "TOKEN", "s3cr3t-value", "", "user")
     await _create(container, alpha, 'echo "err $TOKEN" >&2; sleep 30', secrets=["TOKEN"])
     log = container.agents.workspace(alpha) / "trigger-logs" / "feed.stderr.log"
 

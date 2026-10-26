@@ -866,57 +866,6 @@
         }
       }
     },
-    "/api/skills/corrupt": {
-      "get": {
-        "summary": "List Corrupt Skills",
-        "description": "owner 名下（缺省为公共）读不出来的 skill，GET /skills 不列它们。",
-        "operationId": "list_corrupt_skills_api_skills_corrupt_get",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CorruptOut"
-                  },
-                  "title": "Response List Corrupt Skills Api Skills Corrupt Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/skill": {
       "get": {
         "summary": "Get Skill",
@@ -1057,7 +1006,7 @@
     "/api/skill/package": {
       "get": {
         "summary": "Export Skill",
-        "description": "下载标准 .skill 文件（zip：`<name>/SKILL.md` 与版本管理里的附件）。",
+        "description": "下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。",
         "operationId": "export_skill_api_skill_package_get",
         "parameters": [
           {
@@ -1640,7 +1589,7 @@
     "/api/mcp": {
       "get": {
         "summary": "List Mcp",
-        "description": "owner 视角下的 server：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 server。",
+        "description": "owner 视角下的 server：它私有的在前，然后是公共的；owner 缺省时只列公共 server。",
         "operationId": "list_mcp_api_mcp_get",
         "parameters": [
           {
@@ -1756,57 +1705,6 @@
         "responses": {
           "204": {
             "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/mcp/corrupt": {
-      "get": {
-        "summary": "List Corrupt Mcp",
-        "description": "owner 名下（缺省为公共）配置坏了的 server，GET /mcp 不列它们。",
-        "operationId": "list_corrupt_mcp_api_mcp_corrupt_get",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CorruptOut"
-                  },
-                  "title": "Response List Corrupt Mcp Api Mcp Corrupt Get"
-                }
-              }
-            }
           },
           "422": {
             "description": "Validation Error",
@@ -1948,7 +1846,7 @@
     "/api/vault": {
       "get": {
         "summary": "List Secrets",
-        "description": "owner 视角下的 secret（不含值）：它私有的在前，然后是公共的（带 shadowed）；owner 缺省时只列公共 secret。",
+        "description": "owner 视角下的 secret（不含值）：它私有的在前，然后是公共的；owner 缺省时只列公共 secret。",
         "operationId": "list_secrets_api_vault_get",
         "parameters": [
           {
@@ -2164,7 +2062,7 @@
     "/api/resources/{kind}/history": {
       "get": {
         "summary": "History",
-        "description": "owner 缺省为公共资源；新的在前，第一条即当前生效的一版。只列最近 50 版，更早的仍保留在仓库里。",
+        "description": "记忆按 owner（缺省为全局记忆），条目按 name；新的在前，第一条即当前的一版。只列最近 50 版。",
         "operationId": "history_api_resources__kind__history_get",
         "parameters": [
           {
@@ -2189,6 +2087,22 @@
                 }
               ],
               "title": "Owner"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
             }
           }
         ],
@@ -2223,7 +2137,7 @@
     "/api/resources/{kind}/restore": {
       "post": {
         "summary": "Restore",
-        "description": "把某一版的内容作为新的一版写入。",
+        "description": "把某一版之后的内容作为新的一版写入。",
         "operationId": "restore_api_resources__kind__restore_post",
         "parameters": [
           {
@@ -4083,37 +3997,6 @@
         ],
         "title": "CompactionOut"
       },
-      "CorruptOut": {
-        "properties": {
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "problem": {
-            "type": "string",
-            "title": "Problem"
-          }
-        },
-        "type": "object",
-        "required": [
-          "owner",
-          "name",
-          "problem"
-        ],
-        "title": "CorruptOut",
-        "description": "一个读不出来的资源文件（agents.api.CorruptResource）：界面列出来，供删除（skill 也可重写）。"
-      },
       "EnabledIn": {
         "properties": {
           "enabled": {
@@ -5044,10 +4927,6 @@
             "type": "array",
             "title": "Tools",
             "default": []
-          },
-          "shadowed": {
-            "type": "boolean",
-            "title": "Shadowed"
           }
         },
         "type": "object",
@@ -5060,8 +4939,7 @@
           "url",
           "env",
           "headers",
-          "enabled",
-          "shadowed"
+          "enabled"
         ],
         "title": "McpOut"
       },
@@ -5647,7 +5525,10 @@
       "ResourceKind": {
         "type": "string",
         "enum": [
-          "memory"
+          "memory",
+          "skill",
+          "mcp",
+          "secret"
         ],
         "title": "ResourceKind"
       },
@@ -5664,8 +5545,19 @@
             ],
             "title": "Owner"
           },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "rev": {
-            "type": "string",
+            "type": "integer",
             "title": "Rev"
           }
         },
@@ -5678,16 +5570,38 @@
       "RevisionOut": {
         "properties": {
           "rev": {
-            "type": "string",
+            "type": "integer",
             "title": "Rev"
           },
           "content": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Content"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before"
           },
           "author": {
             "type": "string",
             "title": "Author"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
           },
           "created_at": {
             "type": "string",
@@ -5699,7 +5613,9 @@
         "required": [
           "rev",
           "content",
+          "before",
           "author",
+          "message",
           "created_at"
         ],
         "title": "RevisionOut"
@@ -6143,10 +6059,6 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
-          },
-          "shadowed": {
-            "type": "boolean",
-            "title": "Shadowed"
           }
         },
         "type": "object",
@@ -6154,8 +6066,7 @@
           "owner",
           "key",
           "description",
-          "updated_at",
-          "shadowed"
+          "updated_at"
         ],
         "title": "SecretOut"
       },

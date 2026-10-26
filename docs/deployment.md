@@ -77,4 +77,4 @@ VAPID 密钥在首次启动时生成于 `data/vapid_private.pem`，更换它会�
 
 ## 数据
 
-全部在配置的 `data_dir`：`muliao.db`（SQLite）、`resources/`（agent 能改的文本资源：公共与私有的 prompt、记忆、skill、MCP 配置，是一个 git 仓库）、`files/`（对话里的文件）、`workspaces/<agent id>/`（工作目录），布局见 docs/architecture.md「领域概念」。备份整个目录即可；配置文件里的 `vault.key` 需单独妥善保存，丢失后 vault 中的 secret 无法解密。
+全部在配置的 `data_dir`：`muliao.db`（SQLite）、`skills/`（skill 目录的只读副本，由数据库生成，启动时重建；skill、MCP 配置、secret、记忆与它们的版本都在数据库里。#230 之前的 git 资源仓库迁移后改名为 `resources.imported` 留着，可人工删除）、`files/`（对话里的文件）、`workspaces/<agent id>/`（工作目录），布局见 docs/architecture.md「领域概念」。备份整个目录即可；配置文件里的 `vault.key` 需单独妥善保存，丢失后 vault 中的 secret 无法解密。

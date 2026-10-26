@@ -2,7 +2,19 @@
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Index, String, Text, false, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    false,
+    text,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from muliao.platform.db import Base, UTCDateTime, utcnow
@@ -28,7 +40,7 @@ class Agent(Base):
     # 思考档位（agents.service.Thinking）；"default" 表示不传、按模型与服务端默认
     thinking: Mapped[str] = mapped_column(String(16), default="default", server_default="default")
     # 正在删除时是发起删除的作者（docs/architecture.md 第 10 节）：不出现在列表与名称解析里，各领域清理完它的数据后删除
-    # 这一行与资源目录（资源仓库的删除提交记这个作者）
+    # 这一行（它名下的条目与记忆随之删除，删除的版本记这个作者）
     deleting_by: Mapped[str | None] = mapped_column(String(64))
     # 系统默认 agent（AgentService.set_default）；行删除时设置随之消失，正在删除的不出现在列表里
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
@@ -51,3 +63,81 @@ class Role(Base):
     deny: Mapped[list[str]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+def _owner_ref() -> ForeignKey:
+    # 同一领域内的外键：agent 的行删除时它名下的条目与记忆一起删除（AgentLifecycle.on_sessions_cleared）
+    return ForeignKey("agents.id", ondelete="CASCADE")
+
+
+class Item(Base):
+    """条目（agents.items）：skill、MCP server、secret，按种类名字全局唯一。owner 为 None 是平台（公共）的，否则是该 agent 的。
+
+    content 的含义因种类而异：skill 是 SKILL.md 全文（附件在 item_files），MCP server 是配置 JSON（McpConfig），secret 为空
+    （密文在 secret，由 vault 加解密）。description 是 skill 与 secret 的描述（skill 的也在 SKILL.md 的 frontmatter 里，
+    写入时解析出来存一份，列 skill 索引不必解析全文）。"""
+
+    __tablename__ = "items"
+    __table_args__ = (
+        UniqueConstraint("kind", "name", name="uq_items_kind_name"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    name: Mapped[str] = mapped_column(String(100))
+    owner: Mapped[str | None] = mapped_column(String(32), _owner_ref(), index=True)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    content: Mapped[str] = mapped_column(Text, default="", server_default="")
+    secret: Mapped[bytes | None] = mapped_column(LargeBinary)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class ItemFile(Base):
+    """skill 的附件（SKILL.md 之外的文件：脚本、配置、参考文档），UTF-8 文本。"""
+
+    __tablename__ = "item_files"
+
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id", ondelete="CASCADE"), primary_key=True)
+    # 相对 skill 目录的路径（posix）
+    path: Mapped[str] = mapped_column(String(500), primary_key=True)
+    content: Mapped[str] = mapped_column(Text)
+    executable: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class Memory(Base):
+    """记忆（agents.memory）：全局记忆（owner 为 None，至多一行）与每个 agent 的记忆（创建 agent 时写入）。"""
+
+    __tablename__ = "memories"
+    __table_args__ = ({"sqlite_autoincrement": True},)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 唯一（SQLite 里 NULL 互不相等：全局记忆只有一行由 MemoryStore 保证，写入都在串行的写事务里）
+    owner: Mapped[str | None] = mapped_column(String(32), _owner_ref(), unique=True)
+    content: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class Revision(Base):
+    """条目与记忆的一版（agents.revisions）：谁、何时、改前改后、说明。只追加；条目或 agent 删除后仍保留（审计）。
+
+    subject 是条目的种类或 "memory"；name 是条目名，记忆是 agent 的 id、全局记忆为空串。before / after 是这一版前后的
+    文档（revisions.Document：各种类自己的文本形式），新建时 before 为 None、删除时 after 为 None。secret 的文档不含值。"""
+
+    __tablename__ = "revisions"
+    __table_args__ = (
+        Index("ix_revisions_subject", "subject", "name", "id"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    subject: Mapped[str] = mapped_column(String(16))
+    name: Mapped[str] = mapped_column(String(100))
+    before: Mapped[str | None] = mapped_column(Text)
+    after: Mapped[str | None] = mapped_column(Text)
+    # "user"、做出修改的 agent 的 id（可能已删除），或系统（迁移）
+    author: Mapped[str] = mapped_column(String(64))
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

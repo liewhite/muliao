@@ -3,7 +3,6 @@ import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plug, Trash2 } from 'lucide-react'
 import { api, type AgentId, type McpInput, type McpServer } from '../api'
 import { splitView } from '../ownership'
-import { CorruptList } from './CorruptList'
 import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
@@ -210,11 +209,6 @@ function InheritedMcpItem({ item }: { item: McpServer }) {
               已停用
             </Chip>
           )}
-          {item.shadowed && (
-            <Chip size="sm" color="warning" variant="soft">
-              已被私有项覆盖
-            </Chip>
-          )}
         </div>
       </Card.Header>
       <Card.Content className="flex flex-col gap-2">
@@ -255,7 +249,6 @@ export function McpManager({ owner }: { owner: AgentId | null }) {
           )
         }}
       </Loading>
-      <CorruptList kind="mcp" owner={owner} />
     </div>
   )
 }

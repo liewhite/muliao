@@ -102,7 +102,7 @@ async def test_the_startup_check_does_not_report_an_agent_still_being_deleted(co
 
 async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(container, make_agent):
     agent = await make_agent("alpha")
-    await container.vault.set(agent.id, "TOKEN", "x")
+    await container.vault.set(agent.id, "TOKEN", "x", "", "user")
     await container.triggers.create(
         name="nightly", agent_id=agent.id, kind="schedule", prompt="p", config={"cron": "0 3 * * *"}
     )
@@ -117,7 +117,7 @@ async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(conta
     await drain(container)
 
     assert await container.triggers.list() == []
-    assert await container.vault.view(agent.id) == []
+    assert await container.vault.visible_to(agent.id) == []
     with pytest.raises(NotFound):
         await container.sessions.get(session.id)
     async with container.db.transaction() as s:
@@ -162,7 +162,7 @@ async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     with pytest.raises(NotFound):
         await container.agents.get_active(agent.id)
     with pytest.raises(NotFound):
-        await container.vault.set(agent.id, "K", "v")
+        await container.vault.set(agent.id, "K", "v", "", "user")
     # 添加 MCP server 在连接验证之前就拒绝（这个配置一连就失败，报 InvalidInput 说明白跑了一次连接）
     failing = mcp_config(
         transport=McpTransport.STDIO, command=sys.executable, args=["-c", "raise SystemExit(1)"]
@@ -396,7 +396,7 @@ async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(con
 
 
 async def test_a_deleting_agents_private_resources_can_no_longer_be_written(container, make_agent):
-    """写私有资源之前 owner 必须还可用：由资源仓库在它的锁里检查（agents.active，ResourceRepo），不论写入来自 HTTP 还是工具；删除流程之后在同一把锁里删掉资源目录，所以不会留下孤儿目录。公共资源不受影响。"""
+    """写私有条目与记忆之前 owner 必须还可用：在写入的同一事务里检查（agents.active），不论写入来自 HTTP 还是工具；删除流程最后随 agent 的行一起删掉它们，不会留下孤儿。公共条目不受影响。"""
     from muliao.agents.api import McpTransport, mcp_config
 
     agent = await make_agent("alpha")
@@ -419,13 +419,16 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
     for write in writes:
         with pytest.raises(NotFound, match="not found"):
             await write()
-    assert not (container.resources.owner_dir(agent.id) / "skills" / "t").exists()
+    assert [m.name for m in await container.skills.list(agent.id)] == ["s"]
     await container.skills.write(None, "pub", "d", "b", "user")
 
 
-async def test_agent_without_resource_files_can_still_be_deleted(container, make_agent):
+async def test_agent_without_a_memory_row_can_still_be_deleted(container, make_agent):
+    from muliao.agents.tables import Memory
+
     agent = await make_agent("alpha")
-    await container.resources.apply({container.resources.owner_dir(agent.id): None}, "lost", "user")
+    async with container.db.transaction() as s:
+        await s.execute(Memory.__table__.delete().where(Memory.owner == agent.id))
 
     await container.agent_lifecycle.delete(agent.id, author="user")
     # 删除的清理经事件完成
