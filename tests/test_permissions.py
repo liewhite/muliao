@@ -47,8 +47,8 @@ def test_deny_wins_over_every_allow():
     assert not rules.allows("agent:delete")
     assert not rules.allows("skill.public:write")
     # memory: 与 memory.public: 是不同的资源，通配符不会串
-    assert Rules(allow=("memory:*",)).allows("memory:append")
-    assert not Rules(allow=("memory:*",)).allows("memory.public:append")
+    assert Rules(allow=("memory:*",)).allows("memory:edit")
+    assert not Rules(allow=("memory:*",)).allows("memory.public:edit")
 
 
 def test_union_of_roles_and_own_rules_keeps_every_deny():

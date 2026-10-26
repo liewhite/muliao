@@ -326,7 +326,7 @@ def append(current: str, entry: str) -> str:
     """在末尾追加一段，与已有内容之间空一行。"""
     entry = entry.strip()
     if not entry:
-        raise InvalidInput("nothing to append")
+        raise InvalidInput("nothing to append: new_text is empty (give old_text too to replace or delete)")
     return f"{current.rstrip()}\n\n{entry}\n" if current.strip() else f"{entry}\n"
 
 

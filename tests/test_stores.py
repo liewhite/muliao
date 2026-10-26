@@ -832,3 +832,10 @@ async def test_the_owner_check_runs_inside_the_repository_lock(repo: ResourceRep
         release.set()
 
     assert order == ["checked", "deleted"] and not path.exists()
+
+
+async def test_memory_edit_with_nothing_to_append_is_rejected_and_unchanged(memory: MemoryStore):
+    await memory.edit(ALPHA, "", "- kept", ALPHA)
+    with pytest.raises(InvalidInput, match="new_text is empty"):
+        await memory.edit(ALPHA, "", "  ", ALPHA)
+    assert memory.read(ALPHA) == "- kept\n"
