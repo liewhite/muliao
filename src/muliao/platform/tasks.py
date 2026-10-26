@@ -19,7 +19,7 @@ from sqlalchemy import Select, delete, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from muliao.errors import Conflict, InvalidInput, ModelUnavailable, NotFound, TransientError
+from muliao.errors import Conflict, InvalidInput, NotFound, ServiceUnavailable, TransientError
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 
@@ -47,28 +47,28 @@ class RetryPolicy:
 
 @dataclass(frozen=True)
 class Retries:
-    """哪些失败重试、按什么策略。模型不可用（ModelUnavailable）的故障常持续几分钟到半小时，用更长的 model；
-    其余暂时性失败（TransientError、超时）用 transient。别的异常一律按确定性失败记账：平台不认识任何 SDK 的异常类型
-    （模型与网络层的由 agent_runtime 换成 ModelUnavailable）。
+    """哪些失败重试、按什么策略。外部服务不可用（ServiceUnavailable：模型、推送服务）的故障常持续几分钟到半小时，
+    用更长的 outage；其余暂时性失败（TransientError、超时）用 transient。别的异常一律按确定性失败记账：平台不认识
+    任何 SDK 的异常类型（模型与网络层的由 agent_runtime 换成 ModelUnavailable，推送的由 notifications/webpush 换）。
     尝试次数是两类失败共用的一个计数（task.attempts 不记由哪类用掉）：扛过几次模型故障后再遇到一次普通暂时性失败，
     可能已超过 transient 的上限而直接最终失败。"""
 
     transient: RetryPolicy
-    model: RetryPolicy
+    outage: RetryPolicy
 
     def for_failure(self, exc: BaseException) -> RetryPolicy | None:
         """这个失败按哪个策略重试；None 表示不重试。"""
-        if isinstance(exc, ModelUnavailable):
-            return self.model
+        if isinstance(exc, ServiceUnavailable):
+            return self.outage
         if isinstance(exc, (TransientError, TimeoutError)):
             return self.transient
         return None
 
     @property
     def max_attempts(self) -> int:
-        """任一策略允许的最多尝试次数（启动恢复用，Worker.recover）。取最大值：正在按模型策略重试的任务不能因为
+        """任一策略允许的最多尝试次数（启动恢复用，Worker.recover）。取最大值：正在按 outage 策略重试的任务不能因为
         一次重启就被记为最终失败。"""
-        return max(self.transient.max_attempts, self.model.max_attempts)
+        return max(self.transient.max_attempts, self.outage.max_attempts)
 
 
 async def no_commit(_s: AsyncSession) -> None:

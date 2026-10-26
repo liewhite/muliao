@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from py_vapid import Vapid02, b64urlencode
 from pywebpush import WebPushException, webpush
 
-from muliao.errors import InvalidInput, TransientError
+from muliao.errors import InvalidInput, ServiceUnavailable
 from muliao.notifications.tables import Notification, PushSubscription
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
@@ -88,7 +88,8 @@ class WebPushDelivery:
         self._threads = anyio.CapacityLimiter(_PUSH_THREADS)
 
     async def send(self, subscription: PushSubscription, notification: Notification, unread: int) -> None:
-        """投递到一个订阅：失效订阅删除，暂时性失败抛 TransientError 交给任务重试（只重推这一台），其余 4xx 属于本端问题。"""
+        """投递到一个订阅：失效订阅删除，暂时性失败抛 ServiceUnavailable 交给任务按长窗口（约 30 分钟）重试（只重推
+        这一台：本机到推送服务的网络断开常超过十分钟，#208），其余 4xx 属于本端问题。"""
         data = json.dumps(
             {
                 "title": notification.title,
@@ -117,7 +118,7 @@ class WebPushDelivery:
             log.info("push subscription gone, removing it", extra=extra)
             await self._subs.remove(subscription.endpoint)
         elif status in _TRANSIENT:
-            raise TransientError(f"push service temporarily failed with HTTP {status} ({host})")
+            raise ServiceUnavailable(f"push service temporarily failed with HTTP {status} ({host})")
         else:
             # 其余 4xx（400/401/403/413…）多半是本端问题（VAPID 声明、时钟、载荷），不能删用户的订阅；task 失败可见、不重试
             raise RuntimeError(f"push service rejected the subscription with HTTP {status} ({host})")

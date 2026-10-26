@@ -108,7 +108,7 @@ async def test_the_worker_retries_only_transient_errors_and_timeouts_not_sdk_exc
     retries = container.queue.retries
     assert retries.for_failure(TransientError("x")) is retries.transient
     assert retries.for_failure(TimeoutError()) is retries.transient
-    assert retries.for_failure(ModelUnavailable("503")) is retries.model
+    assert retries.for_failure(ModelUnavailable("503")) is retries.outage
     assert retries.for_failure(ModelHTTPError(status_code=503, model_name="m")) is None
     assert retries.for_failure(httpx.ConnectError("refused")) is None
 
@@ -145,7 +145,7 @@ async def test_retried_task_keeps_last_error_while_running(container, make_agent
     await start(container, alpha, "hi", origin=Origin.TRIGGER)
     await drain(container)
     turn = (await container.queue.list(status=TaskStatus.FAILED, limit=5))[0]
-    assert turn.attempts == container.settings.runtime.model_retry_max_attempts and "503" in turn.error
+    assert turn.attempts == container.settings.runtime.outage_retry_max_attempts and "503" in turn.error
 
     models.models["m"] = scripted(lambda _m, _i: ModelResponse(parts=[TextPart("ok")]))
     await container.queue.retry(turn.id)

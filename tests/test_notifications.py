@@ -140,6 +140,62 @@ async def test_retrying_a_temporarily_failed_device_does_not_push_the_others_aga
     assert sorted(reached) == ["busy", "busy", "ok"]
 
 
+async def test_a_device_unreachable_for_over_ten_minutes_still_gets_the_push(container, monkeypatch):
+    """本机到推送服务的 HTTPS 断开十几分钟（#208）：投递按长窗口（约 30 分钟）重试，网络恢复后送达；
+    已送达的设备不重推。超过长窗口才记最终失败。"""
+    from datetime import timedelta
+
+    from muliao.config import RuntimeConfig
+    from muliao.container import retries_of
+    from muliao.platform.db import utcnow
+    from muliao.platform.tables import TaskStatus
+
+    await _subscribe(container, "far", "ok")
+    q = container.queue
+    policy = retries_of(RuntimeConfig()).outage
+    # 线上默认配置下，这么多次失败的等待已超过 10 分钟，也超过一般暂时性失败的上限
+    down_for = next(
+        n for n in range(1, policy.max_attempts) if sum(policy.delay(i) for i in range(1, n + 1)) > 600
+    )
+    assert down_for >= RuntimeConfig().task_max_attempts
+    assert q.retries.outage.max_attempts > down_for
+    reached: list[str] = []
+
+    def fake_push(_self, sub, _data):  # noqa: ANN001, ANN202
+        name = sub.endpoint.rsplit("/", 1)[1]
+        reached.append(name)
+        unreachable = name == "far" and reached.count("far") <= down_for
+        return webpush_module._NO_RESPONSE if unreachable else None
+
+    monkeypatch.setattr(WebPushDelivery, "_push", fake_push)
+    handler = DeliverHandler(container.db, _webpush(container))
+    await container.notifications.notify(None, "t", "b", None)
+
+    async def run_until_settled(task: Task) -> Task:
+        while True:
+            async with container.db.transaction() as s:
+                (await s.get(Task, task.id)).not_before = utcnow() - timedelta(seconds=1)
+            claimed = await q.claim_task(task.id, q.kinds)
+            try:
+                commit = await handler.execute(claimed)
+            except Exception as e:  # noqa: BLE001
+                failed = await q.fail(
+                    claimed.id, str(e), retry=q.retries.for_failure(e), on_final=handler.failed_in
+                )
+                if failed.status == TaskStatus.FAILED:
+                    return failed
+                continue
+            await q.complete(claimed.id, commit)
+            async with container.db.transaction() as s:
+                return await s.get(Task, task.id)
+
+    for task in await tasks_of(container, DELIVER_TASK):
+        settled = await run_until_settled(task)
+        assert settled.status == TaskStatus.DONE
+
+    assert reached.count("far") == down_for + 1 and reached.count("ok") == 1
+
+
 async def test_deliver_counts_the_notification_itself_as_unread(container):
     pusher = RecordingPusher()
     await _subscribe(container, "a")

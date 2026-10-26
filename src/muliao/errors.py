@@ -48,7 +48,11 @@ class TransientError(Exception):
     """外部依赖按其契约可能发生的暂时性失败（5xx、限流、超时）。由任务队列统一重试。"""
 
 
-class ModelUnavailable(TransientError):
-    """模型提供方（或到它的网络）暂时不可用：模型接口的暂时性状态码、连接失败。这类故障常持续几分钟到半小时（如
-    relay 503 No available accounts），任务队列按更长的重试上限重试（runtime.model_retry_max_attempts），其余
-    暂时性失败（工具、推送）照常按 task_max_attempts。"""
+class ServiceUnavailable(TransientError):
+    """外部服务（或本机到它的网络）暂时不可用：暂时性状态码、连不上。这类故障常持续几分钟到半小时（relay 503
+    No available accounts、本机到境外 HTTPS 断开十几分钟），任务队列按更长的重试上限重试
+    （runtime.outage_retry_max_attempts），其余暂时性失败（工具、MCP）照常按 task_max_attempts。"""
+
+
+class ModelUnavailable(ServiceUnavailable):
+    """模型提供方（或到它的网络）暂时不可用：模型接口的暂时性状态码、连接失败（agent_runtime/transient.py 换出）。"""

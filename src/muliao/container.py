@@ -260,8 +260,8 @@ def retries_of(runtime: RuntimeConfig) -> Retries:
         transient=RetryPolicy(
             runtime.task_max_attempts, runtime.task_retry_base_seconds, runtime.task_retry_max_delay_seconds
         ),
-        model=RetryPolicy(
-            runtime.model_retry_max_attempts,
+        outage=RetryPolicy(
+            runtime.outage_retry_max_attempts,
             runtime.task_retry_base_seconds,
             runtime.task_retry_max_delay_seconds,
         ),

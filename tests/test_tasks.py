@@ -322,7 +322,7 @@ def test_default_retry_policies_ride_out_a_model_outage_but_give_up_on_other_fai
     from muliao.platform.tasks import RetryPolicy
 
     retries = retries_of(RuntimeConfig())
-    model, transient = retries.model, retries.transient
+    model, transient = retries.outage, retries.transient
 
     def window(p: RetryPolicy) -> float:
         return sum(p.delay(n) for n in range(1, p.max_attempts))
@@ -352,7 +352,7 @@ async def test_model_unavailable_retries_past_the_ordinary_limit_up_to_its_own(c
 
     alpha = (await make_agent()).id
     q = container.queue
-    ordinary, model = q.retries.transient.max_attempts, q.retries.model.max_attempts
+    ordinary, model = q.retries.transient.max_attempts, q.retries.outage.max_attempts
     assert model > ordinary
 
     async def exhaust(exc: Exception) -> Task:
@@ -381,7 +381,7 @@ async def test_a_run_survives_a_model_outage_longer_than_the_ordinary_retry_limi
     from tests.test_flow import drain, start
 
     alpha = (await make_agent("alpha", model="m")).id
-    outage = container.settings.runtime.model_retry_max_attempts - 1
+    outage = container.settings.runtime.outage_retry_max_attempts - 1
     assert outage > container.settings.runtime.task_max_attempts
     calls = 0
 

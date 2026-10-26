@@ -132,9 +132,9 @@ class RuntimeConfig(_Section):
     task_max_attempts: int = Field(default=5, ge=1)
     task_retry_base_seconds: float = Field(default=5.0, gt=0)
     task_retry_max_delay_seconds: float = Field(default=300.0, gt=0)
-    # 模型不可用（模型接口 5xx/429、连不上）的故障常持续几分钟到半小时（relay 503），重试次数单独设：默认 12 次，
-    # 等待 5+10+…+160 再加 5×300 秒，约 30 分钟
-    model_retry_max_attempts: int = Field(default=12, ge=1)
+    # 外部服务不可用（errors.ServiceUnavailable：模型接口、推送服务 5xx/429、连不上）的故障常持续几分钟到半小时
+    # （relay 503、本机到境外 HTTPS 断开），重试次数单独设：默认 12 次，等待 5+10+…+160 再加 5×300 秒，约 30 分钟
+    outage_retry_max_attempts: int = Field(default=12, ge=1)
     # 发给模型的上下文（上一次请求的输入 token）超过此值，就在步与步之间压缩该 session 的早期上下文
     compaction_threshold_tokens: int = Field(default=100_000, ge=1000)
     # 压缩时保留最近这么多步原文不压缩（一步是一次模型回复及其工具结果）
