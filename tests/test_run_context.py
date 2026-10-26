@@ -80,11 +80,15 @@ async def test_resuming_resends_the_saved_request_unchanged_and_marks_the_next_n
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         calls["n"] += 1
         if calls["n"] == 1:
-            return ModelResponse(parts=[ToolCallPart("memory_append", {"entry": "- one"}, tool_call_id="m1")])
+            return ModelResponse(
+                parts=[ToolCallPart("memory_edit", {"new_text": "- one"}, tool_call_id="m1")]
+            )
         if calls["n"] == 2:
             raise ModelHTTPError(status_code=400, model_name="flaky", body="bad request")
         if calls["n"] == 3:
-            return ModelResponse(parts=[ToolCallPart("memory_append", {"entry": "- two"}, tool_call_id="m2")])
+            return ModelResponse(
+                parts=[ToolCallPart("memory_edit", {"new_text": "- two"}, tool_call_id="m2")]
+            )
         return ModelResponse(parts=[TextPart("done")])
 
     models.models["flaky"] = scripted(fn)

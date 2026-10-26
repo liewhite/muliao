@@ -40,14 +40,9 @@ class MemoryStore:
         """整体替换（用户在界面上编辑、恢复旧版时）。"""
         return await self._update(owner, lambda _current: content, author)
 
-    async def append(self, owner: str | None, entry: str, author: str) -> str:
-        return await self._update(owner, lambda current: text_edit.append(current, entry), author)
-
-    async def replace(self, owner: str | None, old: str, new: str, author: str) -> str:
-        """把恰好出现一次的 old 替换为 new；new 为空即删除。"""
-        return await self._update(
-            owner, lambda current: text_edit.replace_once(current, old, new, "memory"), author
-        )
+    async def edit(self, owner: str | None, old: str, new: str, author: str) -> str:
+        """规则同 skill 正文（text_edit.edit）：old 恰好出现一次时替换为 new（new 为空即删除），old 为空时把 new 追加到末尾。"""
+        return await self._update(owner, lambda current: text_edit.edit(current, old, new, "memory"), author)
 
     async def _update(self, owner: str | None, edit: Callable[[str], str], author: str) -> str:
         """读取、修改、写入、提交在资源仓库的同一把锁里：并发的修改互不覆盖。"""
@@ -64,7 +59,7 @@ class MemoryStore:
                 raise MemoryFull(
                     f"{'global memory' if owner is None else 'your memory'} would be {len(updated)} chars, limit is {self.max_chars} "
                     f"(now {len(current or '')}): free at least {over} chars first by condensing or deleting "
-                    f"existing entries with {'memory_replace_public' if owner is None else 'memory_replace'} "
+                    f"existing entries with {'memory_edit_public' if owner is None else 'memory_edit'} "
                     "(aim for a few hundred chars of headroom), then retry"
                 )
             result.append(updated)

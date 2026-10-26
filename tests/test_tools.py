@@ -84,8 +84,8 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
     assert "roles=['agent']" in detail and "deny=['issue:update']" in detail
     # 最终工具：角色的减去 deny；agent 角色没有写全局资源的工具；没勾选公共 MCP
     tools = detail.split("available_roles")[0]
-    assert "'issue_create'" in tools and "'memory_append'" in tools
-    assert "'issue_update'" not in tools and "'memory_append_public'" not in tools
+    assert "'issue_create'" in tools and "'memory_edit'" in tools
+    assert "'issue_update'" not in tools and "'memory_edit_public'" not in tools
     assert "mcp_servers=[]" in detail
     # 参照：全部角色与每个工具的权限 id、读写（没配置 [web] 时不列 web 工具）
     assert "name='admin'" in detail and "allow=['*']" in detail
@@ -275,8 +275,8 @@ async def test_agent_role_sees_every_tool_but_global_writes_and_no_unselected_mc
     await drain(container)
 
     assert sorted(seen) == sorted(container.agents.resolve(await container.agents.rules(triage)).tools)
-    assert not {"write_public_skill", "memory_append_public", "vault_set_public", "create_agent"} & set(seen)
-    assert {"write_skill", "memory_append", "vault_set", "run_shell", "trigger_create"} <= set(seen)
+    assert not {"write_public_skill", "memory_edit_public", "vault_set_public", "create_agent"} & set(seen)
+    assert {"write_skill", "memory_edit", "vault_set", "run_shell", "trigger_create"} <= set(seen)
     assert not any(name.startswith("echo_") for name in seen)
 
 

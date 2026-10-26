@@ -92,7 +92,7 @@ async def test_a_run_that_fails_still_records_what_it_already_spent(container, m
         if any(isinstance(m, ModelResponse) for m in messages):
             raise ModelHTTPError(500, "m", body="upstream is down")
         return ModelResponse(
-            parts=[ToolCallPart("memory_append", {"entry": "- x"}, tool_call_id="c")], usage=REPLY_USAGE
+            parts=[ToolCallPart("memory_edit", {"new_text": "- x"}, tool_call_id="c")], usage=REPLY_USAGE
         )
 
     models.models["m"] = scripted(fn)

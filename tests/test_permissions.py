@@ -29,8 +29,7 @@ _GLOBAL_WRITE_TOOLS = {
     "write_public_skill",
     "edit_public_skill",
     "delete_public_skill",
-    "memory_append_public",
-    "memory_replace_public",
+    "memory_edit_public",
     "vault_set_public",
     "vault_delete_public",
     "mcp_add_public",
@@ -96,7 +95,7 @@ async def test_new_agents_default_to_the_agent_role(container):
     agent = await container.agents.create(AgentSpec(name="a", description="d"), author="user")
     assert agent.roles == ("agent",)
     tools = container.agents.resolve(await container.agents.rules(agent)).tools
-    assert not set(tools) & _GLOBAL_WRITE_TOOLS and {"run_shell", "memory_append", "vault_set"} <= set(tools)
+    assert not set(tools) & _GLOBAL_WRITE_TOOLS and {"run_shell", "memory_edit", "vault_set"} <= set(tools)
 
 
 async def test_roles_are_created_assigned_updated_and_protected(container):
@@ -198,7 +197,7 @@ async def test_permissions_and_roles_api(client, container):
         )
     ).json()
     names = [t["tool"] for t in resolved["tools"]]
-    assert "run_shell" in names and "memory_append" not in names and "write_public_skill" not in names
+    assert "run_shell" in names and "memory_edit" not in names and "write_public_skill" not in names
     bad = await client.post("/api/permissions/resolve", json={"roles": ["nope"], "allow": [], "deny": []})
     assert bad.status_code == 422
 

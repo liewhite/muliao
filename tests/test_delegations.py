@@ -887,7 +887,7 @@ async def test_an_answer_arriving_mid_run_reaches_the_model_as_late_text(
                     answers={"q": UserAnswered.of(answer).model_dump()},
                     awaited=True,
                 )
-            yield {0: DeltaToolCall(name="memory_append", json_args='{"entry": "- x"}', tool_call_id="m")}
+            yield {0: DeltaToolCall(name="memory_edit", json_args='{"new_text": "- x"}', tool_call_id="m")}
         else:
             yield "ok"
 

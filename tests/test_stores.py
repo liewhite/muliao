@@ -178,24 +178,24 @@ async def memory(repo: ResourceRepo) -> MemoryStore:
     return store
 
 
-async def test_memory_append_and_replace(memory: MemoryStore):
-    await memory.append(ALPHA, "- likes tea", ALPHA)
-    await memory.append(ALPHA, "- lives in Paris", ALPHA)
-    await memory.replace(ALPHA, "Paris", "Berlin", ALPHA)
+async def test_memory_edit_appends_with_empty_old_text_and_replaces_otherwise(memory: MemoryStore):
+    await memory.edit(ALPHA, "", "- likes tea", ALPHA)
+    await memory.edit(ALPHA, "", "- lives in Paris", ALPHA)
+    await memory.edit(ALPHA, "Paris", "Berlin", ALPHA)
 
     assert memory.read(ALPHA) == "- likes tea\n\n- lives in Berlin\n"
 
 
-async def test_memory_replace_requires_exactly_one_occurrence(memory: MemoryStore):
-    await memory.append(ALPHA, "a a", ALPHA)
+async def test_memory_edit_requires_exactly_one_occurrence(memory: MemoryStore):
+    await memory.edit(ALPHA, "", "a a", ALPHA)
     with pytest.raises(InvalidInput, match="found 2"):
-        await memory.replace(ALPHA, "a", "b", ALPHA)
+        await memory.edit(ALPHA, "a", "b", ALPHA)
 
 
 async def test_memory_over_limit_is_rejected_and_unchanged(memory: MemoryStore):
-    await memory.append(ALPHA, "short", ALPHA)
+    await memory.edit(ALPHA, "", "short", ALPHA)
     with pytest.raises(MemoryFull):
-        await memory.append(ALPHA, "x" * 60, ALPHA)
+        await memory.edit(ALPHA, "", "x" * 60, ALPHA)
     assert memory.read(ALPHA) == "short\n"
 
 
@@ -295,7 +295,7 @@ async def test_deleting_an_agent_is_recorded_in_resource_history(container, make
 async def test_concurrent_edits_of_one_file_are_all_kept(memory: MemoryStore):
     import asyncio
 
-    await asyncio.gather(*(memory.append(ALPHA, f"- fact {i}", ALPHA) for i in range(5)))
+    await asyncio.gather(*(memory.edit(ALPHA, "", f"- fact {i}", ALPHA) for i in range(5)))
 
     assert sorted(memory.read(ALPHA).split()) == sorted(
         ["-", "fact", "0", "-", "fact", "1", "-", "fact", "2", "-", "fact", "3", "-", "fact", "4"]
@@ -305,7 +305,7 @@ async def test_concurrent_edits_of_one_file_are_all_kept(memory: MemoryStore):
 async def test_failed_commit_leaves_nothing_behind_and_a_retry_works(
     memory: MemoryStore, repo: ResourceRepo, monkeypatch
 ):
-    await memory.append(ALPHA, "- kept", ALPHA)
+    await memory.edit(ALPHA, "", "- kept", ALPHA)
     real_git = repo._git_bytes
 
     async def failing_commit(*args, check=True, stdin=None):  # noqa: ANN001, ANN202
@@ -315,12 +315,12 @@ async def test_failed_commit_leaves_nothing_behind_and_a_retry_works(
 
     monkeypatch.setattr(repo, "_git_bytes", failing_commit)
     with pytest.raises(RuntimeError, match="disk full"):
-        await memory.append(ALPHA, "- lost", ALPHA)
+        await memory.edit(ALPHA, "", "- lost", ALPHA)
     monkeypatch.undo()
 
     # 报错即没有生效：文件回到上一次提交，重试不会重复
     assert memory.read(ALPHA) == "- kept\n"
-    await memory.append(ALPHA, "- lost", ALPHA)
+    await memory.edit(ALPHA, "", "- lost", ALPHA)
     assert memory.read(ALPHA) == "- kept\n\n- lost\n"
 
 
@@ -360,17 +360,17 @@ async def test_corrupt_mcp_config_is_reported_with_its_path_on_its_own_and_can_b
 
 async def test_write_blocked_by_a_held_git_lock_is_undone_on_disk(memory: MemoryStore, repo: ResourceRepo):
     """最常见的失败是 git 锁被别的进程占着：还原不能依赖 git，必须在文件系统上完成。"""
-    await memory.append(ALPHA, "- kept", ALPHA)
+    await memory.edit(ALPHA, "", "- kept", ALPHA)
     lock = repo.root / ".git" / "index.lock"
     lock.write_text("")
     try:
         with pytest.raises(RuntimeError, match="index.lock"):
-            await memory.append(ALPHA, "- blocked", ALPHA)
+            await memory.edit(ALPHA, "", "- blocked", ALPHA)
         assert memory.read(ALPHA) == "- kept\n"
     finally:
         lock.unlink()
 
-    await memory.append(ALPHA, "- blocked", ALPHA)
+    await memory.edit(ALPHA, "", "- blocked", ALPHA)
     assert memory.read(ALPHA) == "- kept\n\n- blocked\n"
 
 
@@ -639,8 +639,8 @@ async def test_every_file_the_stores_write_is_in_the_resource_layout(container, 
     from muliao.agents.api import McpTransport, mcp_config
 
     agent = (await make_agent(ALPHA)).id
-    await container.memory.append(agent, "fact", agent)
-    await container.memory.append(None, "public rules", "user")
+    await container.memory.edit(agent, "", "fact", agent)
+    await container.memory.edit(None, "", "public rules", "user")
     for owner in (agent, None):
         await container.skills.write(owner, "digest", "When digesting", "steps", "user")
         spec = mcp_config(transport=McpTransport.HTTP, url="http://x")

@@ -148,46 +148,31 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
         return f"{which} updated ({len(content)}/{store.max_chars} chars)"
 
     @ts.tool
-    async def memory_append(ctx: RunContext[RunScope], entry: str) -> str:
-        """Append a durable fact to your private memory (user preferences, environment facts, lessons learned).
+    async def memory_edit(ctx: RunContext[RunScope], new_text: str, old_text: str = "") -> str:
+        """Add to or change your private memory (user preferences, environment facts, lessons learned).
         Your memory and the global memory are both shown to you at the start of every run.
+        `old_text` must occur exactly once in your memory and is replaced by `new_text` (an empty `new_text`
+        deletes it); an empty `old_text` appends `new_text` as a new entry at the end.
 
         Args:
-            entry: One concise markdown line or short block.
+            new_text: Replacement text, or the entry to append (one concise markdown line or short block);
+                empty deletes `old_text`.
+            old_text: Exact text currently in your memory, or empty to append.
         """
         me = ctx.deps.agent_id
-        return _status("memory", await store.append(me, entry, me))
+        return _status("memory", await store.edit(me, old_text, new_text, me))
 
     @ts.tool
-    async def memory_replace(ctx: RunContext[RunScope], old_text: str, new_text: str) -> str:
-        """Correct, condense or delete part of your private memory. `old_text` must occur exactly once; an empty
-        `new_text` deletes it.
+    async def memory_edit_public(ctx: RunContext[RunScope], new_text: str, old_text: str = "") -> str:
+        """Add to or change the global memory every agent sees: only facts and rules that hold for all agents.
+        `old_text` must occur exactly once in it and is replaced by `new_text` (an empty `new_text` deletes it);
+        an empty `old_text` appends `new_text` as a new entry at the end.
 
         Args:
-            old_text: Exact text currently in your memory.
-            new_text: Replacement text.
+            new_text: Replacement text, or the entry to append (one concise markdown line or short block);
+                empty deletes `old_text`.
+            old_text: Exact text currently in the global memory, or empty to append.
         """
-        me = ctx.deps.agent_id
-        return _status("memory", await store.replace(me, old_text, new_text, me))
-
-    @ts.tool
-    async def memory_append_public(ctx: RunContext[RunScope], entry: str) -> str:
-        """Append to the global memory every agent sees: only facts and rules that hold for all agents.
-
-        Args:
-            entry: One concise markdown line or short block.
-        """
-        return _status("global memory", await store.append(None, entry, ctx.deps.agent_id))
-
-    @ts.tool
-    async def memory_replace_public(ctx: RunContext[RunScope], old_text: str, new_text: str) -> str:
-        """Correct, condense or delete part of the global memory. `old_text` must occur exactly once; an empty
-        `new_text` deletes it.
-
-        Args:
-            old_text: Exact text currently in the global memory.
-            new_text: Replacement text.
-        """
-        return _status("global memory", await store.replace(None, old_text, new_text, ctx.deps.agent_id))
+        return _status("global memory", await store.edit(None, old_text, new_text, ctx.deps.agent_id))
 
     return ts

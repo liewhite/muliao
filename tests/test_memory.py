@@ -82,14 +82,14 @@ async def test_cleared_global_memory_keeps_a_restorable_history(container):
 
 async def test_global_memory_has_the_same_length_limit(container):
     with pytest.raises(MemoryFull, match="global memory would be"):
-        await container.memory.append(None, "x" * (container.memory.max_chars + 1), "user")
+        await container.memory.edit(None, "", "x" * (container.memory.max_chars + 1), "user")
     assert await memory_history(container, None) == []
 
 
 async def test_an_agents_memory_limit_error_tells_the_model_without_its_id(container, make_agent):
     agent = await make_agent("alpha")
     with pytest.raises(MemoryFull, match="your memory would be") as e:
-        await container.memory.append(agent.id, "x" * (container.memory.max_chars + 1), agent.id)
+        await container.memory.edit(agent.id, "", "x" * (container.memory.max_chars + 1), agent.id)
     assert agent.id not in str(e.value)
 
 
@@ -105,8 +105,8 @@ async def test_an_agent_edits_the_global_memory_as_a_versioned_change_under_its_
     container, make_agent, models
 ):
     agent = await make_agent("alpha", model="m", roles=["admin"])
-    args = {"entry": "- all agents answer in Chinese"}
-    models.models["m"] = call_then_answer("memory_append_public", args, "Added a rule.")
+    args = {"new_text": "- all agents answer in Chinese"}
+    models.models["m"] = call_then_answer("memory_edit_public", args, "Added a rule.")
     await start(container, agent.id, "hello")
     await drain(container)
 
@@ -116,7 +116,7 @@ async def test_an_agent_edits_the_global_memory_as_a_versioned_change_under_its_
     assert (await memory_history(container, None))[0].author == agent.id
 
     models.models["m"] = call_then_answer(
-        "memory_replace_public", {"old_text": "Chinese", "new_text": "English"}, "Done."
+        "memory_edit_public", {"old_text": "Chinese", "new_text": "English"}, "Done."
     )
     await start(container, agent.id, "again")
     await drain(container)

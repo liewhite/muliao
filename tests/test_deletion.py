@@ -407,7 +407,7 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
         lambda: container.skills.write(agent.id, "t", "d", "b", "user"),
         lambda: container.skills.edit(agent.id, "s", "user", new="more"),
         lambda: container.skills.delete(agent.id, "s", "user"),
-        lambda: container.memory.append(agent.id, "fact", "user"),
+        lambda: container.memory.edit(agent.id, "", "fact", "user"),
         lambda: container.mcp.add(
             agent.id,
             "m",
