@@ -399,6 +399,32 @@ async def test_read_file_rejects_negative_offsets(container, make_agent, models)
     assert "offset must be >= 0" in output
 
 
+async def test_file_tools_wait_for_earlier_calls_of_the_same_reply(container, make_agent, models):
+    """#224：一次回复里先 run_shell 生成文件、再 read_file 它，read_file 要等 shell 做完，不能并行抢先报 file not found。"""
+    me = await make_agent("alpha", model="tools")
+    seen: list[str] = []
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "run_shell", {"command": "sleep 0.5; echo hi > made.txt", "timeout": 30}, "c0"
+                    ),
+                    ToolCallPart("read_file", {"path": "made.txt"}, "c1"),
+                ]
+            )
+        seen.extend(str(p.content) for p in tool_returns(messages))
+        seen.extend(str(p.content) for p in messages[-1].parts if isinstance(p, RetryPromptPart))
+        return ModelResponse(parts=[TextPart("done")])
+
+    models.models["tools"] = scripted(fn)
+    await start(container, me.id, "do it", origin=Origin.TRIGGER)
+    await drain(container)
+
+    assert any("1\thi" in s for s in seen), seen
+
+
 async def test_edit_file_replace_all_and_helpful_misses(container, make_agent, models):
     me = await make_agent("alpha", model="tools")
     content = "def f():\n    x = 1\n    return x\n\nx = 2\n"
