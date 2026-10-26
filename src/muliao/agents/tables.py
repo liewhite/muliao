@@ -32,6 +32,10 @@ class Agent(Base):
     deleting_by: Mapped[str | None] = mapped_column(String(64))
     # 系统默认 agent（AgentService.set_default）；行删除时设置随之消失，正在删除的不出现在列表里
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # 分组（只用于展示与列表的组织，如一批同类的接单 agent）；None 为不分组
+    group: Mapped[str | None] = mapped_column(String(64))
+    # 归档时间（AgentLifecycle.set_archived）：非空时不能运行（agents.active.runnable_row_in），取消归档后恢复
+    archived_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 

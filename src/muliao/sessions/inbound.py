@@ -5,9 +5,10 @@
 - 目标会话三种：续写已有的、新建、按发送方定位（SessionKey：同一发送方给同一个 agent 的来信进同一个会话，没有就建）。
 - 续写规则：用户可以在任何用户能写的会话里继续；其他来源只能续写自己发起的会话。
 - 新建会话只有 create_session 一处实现（来信与 thread 都经过它）。
-- 会话只为还可用的 agent 新建、继续：在本事务里用 agents 的 active_agent_in 检查，正在删除的按不存在处理。agent 只会
-  从可用变为正在删除、再变为不存在，没有先查后写的竞态：删除标记提交之后，它的会话不会再收到来信、变忙，删除流程
-  清理会话时不必等待（docs/architecture.md 第 10 节）。"""
+- 会话只为能运行的 agent 新建、继续：在本事务里用 agents 的 runnable_agent_in 检查，正在删除的按不存在处理（NotFound），
+  归档的拒绝（AgentArchived）。agent 只会从可用变为正在删除、再变为不存在，没有先查后写的竞态：删除标记提交之后，它的
+  会话不会再收到来信、变忙，删除流程清理会话时不必等待（docs/architecture.md 第 10 节）。归档只在 agent 空闲时做，
+  归档之后来信进不来（agents.lifecycle）。"""
 
 import logging
 from collections.abc import Collection, Mapping, Sequence
@@ -17,7 +18,7 @@ from enum import Enum
 from pydantic_ai.messages import ModelMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import active_agent_in
+from muliao.agents.api import runnable_agent_in
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.files.api import FileMeta, load_metas
 from muliao.platform.db import utcnow
@@ -137,7 +138,7 @@ async def create_session(
     """新建会话的唯一实现（receive 与 ask_agent 占用 thread 都经过这里）。"""
     if not isinstance(spec.title, str):
         raise ValueError(f"a new session needs a title by now (receive derives one), got {spec}")
-    await active_agent_in(s, spec.agent_id)
+    await runnable_agent_in(s, spec.agent_id)
     is_thread = origin == Origin.DELEGATION
     if (
         (spec.parent_session_id is not None) != is_thread
@@ -221,26 +222,26 @@ async def _resolve_answers(
 
 
 async def target_in(s: AsyncSession, inbound: Inbound) -> tuple[Session | None, list[FileMeta]]:
-    """来信的校验规则（只读）：内容不为空、附件存在、目标会话存在且发送方可以续写、agent 还可用。返回要续写的会话
+    """来信的校验规则（只读）：内容不为空、附件存在、目标会话存在且发送方可以续写、agent 能运行（没在删除、没归档）。返回要续写的会话
     （新建时为 None）与附件的元数据（推导标题时用，不再读一遍）。"""
     if not inbound.content.strip() and not inbound.attachments and not inbound.answers:
         raise InvalidInput("message must not be empty")
     attachments = await load_metas(s, inbound.attachments)
     if isinstance(inbound.session, NewSession):
-        await active_agent_in(s, inbound.session.agent_id)
+        await runnable_agent_in(s, inbound.session.agent_id)
         return None, attachments
     if isinstance(inbound.session, SessionKey):
         key = inbound.session
         session = await keyed_session_in(s, inbound.origin, _key_ref(inbound), key.agent_id)
         if session is None:
-            await active_agent_in(s, key.agent_id)
+            await runnable_agent_in(s, key.agent_id)
             return None, attachments
     else:
         session = await s.get(Session, inbound.session)
         if session is None:
             raise NotFound(f"session {inbound.session!r} not found")
     _check_may_continue(session, inbound.origin, inbound.origin_ref)
-    await active_agent_in(s, session.agent_id)
+    await runnable_agent_in(s, session.agent_id)
     return session, attachments
 
 

@@ -38,6 +38,8 @@ class AgentCreate(BaseModel):
     mcp_servers: list[str] = []
     # 思考档位："default" 不传，按模型与服务端的默认
     thinking: Thinking = "default"
+    # 分组名；null 或空串为不分组
+    group: str | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -51,6 +53,8 @@ class AgentUpdate(BaseModel):
     deny: list[str]
     mcp_servers: list[str]
     thinking: Thinking
+    # 分组名；null 或空串为不分组
+    group: str | None
 
 
 class AgentOut(BaseModel):
@@ -66,6 +70,10 @@ class AgentOut(BaseModel):
     created_at: datetime
     # 系统默认 agent：Web 新对话默认选中它，最多一个
     is_default: bool
+    # 分组名，null 为不分组
+    group: str | None
+    # 归档时间；非空时不能对话、委派、指派，它的触发器不触发
+    archived_at: datetime | None
 
     @classmethod
     def of(cls, a: AgentInfo) -> "AgentOut":
@@ -81,6 +89,8 @@ class AgentOut(BaseModel):
             thinking=a.thinking,
             created_at=a.created_at,
             is_default=a.is_default,
+            group=a.group,
+            archived_at=a.archived_at,
         )
 
 
@@ -218,6 +228,7 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
         deny=body.deny,
         mcp_servers=body.mcp_servers,
         thinking=body.thinking,
+        group=body.group,
     )
     return AgentOut.of(await c.agents.create(spec, author=USER))
 
@@ -240,6 +251,8 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         deny=body.deny,
         mcp_servers=body.mcp_servers,
         thinking=body.thinking,
+        # null 与空串都是不分组（AgentPatch 里 None 是「不变」）
+        group=body.group or "",
     )
     return AgentOut.of(await c.agents.update(agent_id, patch))
 
@@ -254,6 +267,18 @@ async def set_default_agent(c: C, agent_id: str) -> AgentOut:
 async def unset_default_agent(c: C, agent_id: str) -> AgentOut:
     """取消它的系统默认身份；它不是默认时不做任何事。"""
     return AgentOut.of(await c.agents.set_default(agent_id, False))
+
+
+@router.put("/agents/{agent_id}/archive")
+async def archive_agent(c: C, agent_id: str) -> AgentOut:
+    """归档：不能再对话、委派、指派，它的触发器不触发；它忙或是默认 agent 时 409。"""
+    return AgentOut.of(await c.agent_lifecycle.set_archived(agent_id, True))
+
+
+@router.delete("/agents/{agent_id}/archive")
+async def unarchive_agent(c: C, agent_id: str) -> AgentOut:
+    """取消归档；没归档时不做任何事。"""
+    return AgentOut.of(await c.agent_lifecycle.set_archived(agent_id, False))
 
 
 @router.delete("/agents/{agent_id}", status_code=204)

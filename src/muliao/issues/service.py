@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentNames, active_agent_in, agent_names_in
+from muliao.agents.api import AgentArchived, AgentNames, agent_names_in, runnable_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.issues.rules import (
@@ -354,7 +354,7 @@ class IssueService:
             for n, item in enumerate(new):
                 with batch_item(len(new), n, item.key):
                     await self._check_assignee_in(s, item.assignee)
-                    await active_agent_in(s, item.owner)
+                    await runnable_agent_in(s, item.owner)
                     issue = Issue(
                         owner_agent_id=item.owner,
                         title=_title(item.title),
@@ -455,7 +455,7 @@ class IssueService:
                     f"issue #{issue_id} was not handed to you by an agent: assign it to an agent yourself"
                 )
             try:
-                await active_agent_in(s, agent)
+                await runnable_agent_in(s, agent)
             except NotFound:
                 raise Conflict(
                     f"the agent that handed issue #{issue_id} to you no longer exists: "
@@ -503,7 +503,7 @@ class IssueService:
             record(ActivityKind.STATUS, (issue.status, status))
             issue.status = status
         if owner is not None and owner != issue.owner_agent_id:
-            await active_agent_in(s, owner)
+            await runnable_agent_in(s, owner)
             record(ActivityKind.OWNER, (issue.owner_agent_id, owner))
             issue.owner_agent_id = owner
         if priority is not None and priority != issue.priority:
@@ -644,8 +644,8 @@ class IssueService:
 
     async def _check_assignee_in(self, s: AsyncSession, assignee: str | None) -> None:
         if assignee is not None and assignee != USER:
-            # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又指派给它，没人认领
-            await active_agent_in(s, assignee)
+            # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又指派给它，没人认领；归档的拒绝（它接不到信）
+            await runnable_agent_in(s, assignee)
 
     def _record(
         self,
@@ -733,7 +733,16 @@ class IssueService:
             session=SessionKey(agent_id=agent, title=f"#{issue.id} {issue.title}"),
             awaited=False,
         )
-        delivery = self._messaging.send_in(s, await receive_command_in(s, inbound))
+        try:
+            command = await receive_command_in(s, inbound)
+        except AgentArchived:
+            # 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线，不投递（否则用户在这类 issue 上的评论、改动
+            # 都会报错）；取消归档后由 agent 自己 issue_show 看
+            log.info(
+                "issue activity not delivered: agent archived", extra={"issue_id": issue.id, "agent": agent}
+            )
+            return None
+        delivery = self._messaging.send_in(s, command)
         log.info("issue activity delivered", extra={"issue_id": issue.id, "agent": agent, "actor": actor})
         return delivery
 

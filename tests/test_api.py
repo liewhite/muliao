@@ -183,7 +183,17 @@ async def test_agent_identified_by_id_and_renamable(client, container):
         path,
         json={
             k: renamed[k]
-            for k in ("name", "description", "model", "roles", "allow", "deny", "mcp_servers", "thinking")
+            for k in (
+                "name",
+                "description",
+                "model",
+                "roles",
+                "allow",
+                "deny",
+                "mcp_servers",
+                "thinking",
+                "group",
+            )
         },
     )
     assert resp.status_code == 200 and resp.json()["name"] == "Research Assistant 📚"
@@ -202,6 +212,7 @@ async def test_agent_identified_by_id_and_renamable(client, container):
         "deny": [],
         "mcp_servers": [],
         "thinking": "default",
+        "group": None,
     }
     assert (await client.put(path, json=clash)).status_code == 409
     assert (await client.delete(f"/api/agents/{other['id']}")).status_code == 204
@@ -407,7 +418,9 @@ async def test_agent_thinking_is_set_and_validated_over_http(client, models):
     assert resp.status_code == 201, resp.text
     agent = resp.json()
     assert agent["thinking"] == "high"
-    body = {k: agent[k] for k in ("name", "description", "model", "roles", "allow", "deny", "mcp_servers")}
+    body = {
+        k: agent[k] for k in ("name", "description", "model", "roles", "allow", "deny", "mcp_servers", "group")
+    }
     resp = await client.put(f"/api/agents/{agent['id']}", json={**body, "thinking": "off"})
     assert resp.json()["thinking"] == "off"
     # 整体替换：thinking 必填；不在档位里的值拒绝

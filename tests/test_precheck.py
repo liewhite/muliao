@@ -145,15 +145,23 @@ async def test_a_failing_precheck_is_handed_to_the_agent_once_per_streak_not_to_
 
 
 async def test_a_precheck_alert_the_agent_cannot_receive_falls_back_to_notifying_the_user(
-    container, make_agent
+    container, make_agent, monkeypatch
 ):
     from muliao.agents.tables import Agent
 
     alpha = (await make_agent()).id
     trigger, _ = await _schedule(container, alpha, Precheck(command="echo gone >&2; exit 2"))
-    # 删除窗口里：触发器还在，但 agent 已按不存在处理，告警信投不进去
-    async with container.db.transaction() as s:
-        (await s.get(Agent, alpha)).deleting_by = "user"
+    # 检查运行期间 agent 进入删除窗口：触发器还在，但 agent 已按不存在处理，告警信投不进去
+    # （检查之前就在删除的，不跑检查、不触发）
+    precheck = container.triggers._precheck  # noqa: SLF001
+    run = precheck.run
+
+    async def deleted_meanwhile(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        async with container.db.transaction() as s:
+            (await s.get(Agent, alpha)).deleting_by = "user"
+        return await run(*args, **kwargs)
+
+    monkeypatch.setattr(precheck, "run", deleted_meanwhile)
     await _tick(container, trigger.id)
     assert "exited with 2" in (await container.triggers.get_by_name("watch")).precheck_error
 

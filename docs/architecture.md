@@ -6,7 +6,7 @@
 
 | 概念 | 含义 | 事实存放处（唯一来源） |
 |---|---|---|
-| Agent | 一个助手：描述（角色）、模型、工具权限（角色 + allow/deny）、勾选的公共 MCP server、私有记忆、私有 skill、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符；不能取 `user`，模型按名称指派 issue 时它指用户，`naming.new_agent_name`）。删除进行中时记下发起者（`deleting_by`），不再出现在列表与名称解析里。最多一个是系统默认 agent（`is_default`，部分唯一索引；`AgentService.set_default`，HTTP `PUT/DELETE /api/agents/{id}/default`）：Web 新对话默认选中它，随 agent 行一起删除 | `agents` 表；私有资源在 `data/resources/agents/<id>/`，工作目录 `data/workspaces/<id>/` |
+| Agent | 一个助手：描述（角色）、模型、工具权限（角色 + allow/deny）、勾选的公共 MCP server、私有记忆、私有 skill、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符；不能取 `user`，模型按名称指派 issue 时它指用户，`naming.new_agent_name`）。删除进行中时记下发起者（`deleting_by`），不再出现在列表与名称解析里。可以归到一个分组（`group`），可以归档（`archived_at`，可取消；归档的不能运行，第 10 节）。最多一个是系统默认 agent（`is_default`，部分唯一索引；`AgentService.set_default`，HTTP `PUT/DELETE /api/agents/{id}/default`）：Web 新对话默认选中它，随 agent 行一起删除 | `agents` 表；私有资源在 `data/resources/agents/<id>/`，工作目录 `data/workspaces/<id>/` |
 | Session | 某个 agent 的一段对话，由某个触发源创建。种类（`kind`）决定它的规则：顶层会话、公开 thread、私有 thread（第 7 节） | `sessions` 表 |
 | Message | pydantic-ai `ModelMessage` 原样序列化 | `messages` 表（每行一条 ModelMessage） |
 | Mail | 投进某个会话信箱、交给它的 agent 的一封信件：用户消息（含附件）、对挂起调用的回答、触发器与委派来的任务、后台任务与 thread 的事件、运行中检查。按到达顺序排列，记下用户是否在等它的回答、不透明的关联 id（委派来的信件以委派的 holder 为关联 id，会话据此结清）、幂等键、状态（排队 / 已处理 / 被丢弃）与处理它的那次运行 | `mail` 表 |
@@ -422,6 +422,8 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
    - 会话：删除它的全部会话（连同私有 thread），发布 `AgentSessionsCleared`（没有会话时立即发布）。标记一提交就不再为它新排工作，但仍可能有会话忙：删除前的检查与标记分属两个事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会。处理器先停止这些会话（每个只停一次；它们的工作随 agent 一起放弃），再在时限内（30 秒）等它们空闲——正在执行的运行被取消后，停止事务在它退出之后才执行，正在执行的压缩做完才空闲——然后删除。时限内没有空闲就按暂时失败重试，重试时同样先停止再等；重试用完时投递记为 failed，可见，人工重试。
    - 触发器、vault：删除它的触发器与私有 secret。
 3. agent 领域订阅 `AgentSessionsCleared`：删除工作目录、资源目录与这一行。工作目录删不干净（例如它留在后台的进程还在往里写）只记 warning、照常删除：残留文件只占空间，不能让 agent 卡在正在删除；启动检查把已删除 agent 留下的工作目录与资源目录一起列进日志，由人清理。
+
+**归档（#219）**是可以来回切换的停用，数据都留着：`AgentLifecycle.set_archived`（工具 `update_agent(archived=)`，HTTP `PUT/DELETE /api/agents/{id}/archive`）把 `archived_at` 设上或清掉。归档要求它空闲（与删除同一组阻止查询）且不是系统默认 agent（归档的也不能设为默认）。「可用」因此分两级：`active_agent_in`（没在删除）管配置与资源的写入，归档的照常可改；`runnable_agent_in`（另外没归档，否则 `AgentArchived`，是 Conflict）管给它派新工作的入口：来信与新会话（`sessions.inbound`，一处挡住 Web 消息、委派、触发器与 issue 的投信）、issue 的指派与 owner、触发器的创建与触发（`_fire` 开头就查：不跑前置检查；激活机制只记日志，触发器保持启用）。已有 issue 的动态投给归档 agent 时只记时间线、不投递；已校验、还没投进会话的来信在 `on_receive` 丢弃（同删除）。归档不是单向事实，但只在空闲时发生：检查与标记之间插进的运行照常做完，不影响正确性。`list_agents` 按分组（`group`，只用于展示）列出、不列归档的；`GET /api/agents` 全部返回，界面自己分组、把归档的折叠在最后。
 
 ## 11. 上下文压缩
 

@@ -14,7 +14,7 @@ from typing import Literal, cast, get_args
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.active import active_row_in
+from muliao.agents.active import active_row_in, runnable_row_in
 from muliao.agents.ids import new_agent_id
 from muliao.agents.memory import MemoryStore
 from muliao.agents.naming import new_agent_name, normalize_agent_name
@@ -32,6 +32,16 @@ log = logging.getLogger(__name__)
 # 时怎么处理都由 pydantic_ai 与服务端决定，这里不映射
 Thinking = Literal["default", "off", "low", "medium", "high", "xhigh"]
 THINKING_LEVELS: tuple[Thinking, ...] = get_args(Thinking)
+
+GROUP_MAX = 64
+
+
+def normalize_group(group: str) -> str | None:
+    """分组名去掉首尾空白；空串即不分组（None）。"""
+    group = group.strip()
+    if len(group) > GROUP_MAX:
+        raise InvalidInput(f"agent group must be at most {GROUP_MAX} characters, got {len(group)}")
+    return group or None
 
 
 @dataclass(frozen=True)
@@ -54,11 +64,14 @@ class AgentSpec:
     deny: Sequence[str] = ()
     mcp_servers: Sequence[str] = ()
     thinking: Thinking = "default"
+    # 分组名（normalize_group：空串与 None 都是不分组）
+    group: str | None = None
 
 
 @dataclass(frozen=True)
 class AgentPatch:
-    """修改 agent：为 None 的字段保持不变。整体替换就是所有字段都给出。"""
+    """修改 agent：为 None 的字段保持不变。整体替换就是所有字段都给出（group 的空串是「不分组」）。归档不在这里：
+    它要查 agent 是否空闲，见 AgentLifecycle.set_archived。"""
 
     name: str | None = None
     description: str | None = None
@@ -68,6 +81,7 @@ class AgentPatch:
     deny: Sequence[str] | None = None
     mcp_servers: Sequence[str] | None = None
     thinking: Thinking | None = None
+    group: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +96,7 @@ class _AgentFields:
     deny: list[str]
     mcp_servers: list[str]
     thinking: Thinking
+    group: str | None
 
 
 @dataclass(frozen=True)
@@ -102,6 +117,14 @@ class AgentInfo:
     created_at: datetime
     # 系统默认 agent（Web 新对话默认选中它），最多一个
     is_default: bool
+    # 分组名，None 为不分组
+    group: str | None
+    # 归档时间；非空时不能运行（agents.active.runnable_row_in）
+    archived_at: datetime | None
+
+    @property
+    def archived(self) -> bool:
+        return self.archived_at is not None
 
 
 def info_of(agent: Agent) -> AgentInfo:
@@ -118,6 +141,8 @@ def info_of(agent: Agent) -> AgentInfo:
         thinking=cast(Thinking, agent.thinking),
         created_at=agent.created_at,
         is_default=agent.is_default,
+        group=agent.group,
+        archived_at=agent.archived_at,
     )
 
 
@@ -131,6 +156,13 @@ async def active_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     """还可用的 agent（正在删除的按不存在处理）。别的领域在自己的写事务里为某个 agent 写数据之前用它检查：事务串行，
     agent 只会从可用变为正在删除、再变为不存在，检查与写入之间不会插进删除，删除流程的清理一定看得到这次写入。"""
     return info_of(await active_row_in(s, agent_id))
+
+
+async def runnable_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
+    """能运行的 agent：还可用且没有归档，归档的报 AgentArchived（Conflict）。给它派新工作的入口用它：来信与新会话
+    （sessions.inbound）、指派与 owner（issues）、触发器的创建与触发。管理与资源的写入（改配置、记忆、secret）用 active_agent_in，
+    归档的照常可改。"""
+    return info_of(await runnable_row_in(s, agent_id))
 
 
 @dataclass(frozen=True)
@@ -302,6 +334,7 @@ class AgentService:
             deny=list(spec.deny),
             mcp_servers=list(spec.mcp_servers),
             thinking=spec.thinking,
+            group=None if spec.group is None else normalize_group(spec.group),
         )
         self._check(fields)
         self._check_mcp_servers(fields.mcp_servers, [])
@@ -333,6 +366,7 @@ class AgentService:
                 deny=fields.deny,
                 mcp_servers=fields.mcp_servers,
                 thinking=fields.thinking,
+                group=fields.group,
             )
             s.add(agent)
             # 工作目录与数据库行同事务：建不出来则不插行
@@ -352,13 +386,15 @@ class AgentService:
             # JSON 列只在整体赋值时被追踪
             agent.roles, agent.allow, agent.deny = fields.roles, fields.allow, fields.deny
             agent.mcp_servers = fields.mcp_servers
+            agent.group = fields.group
             await s.flush()
             return info_of(agent)
 
     async def set_default(self, agent_id: str, is_default: bool) -> AgentInfo:
-        """设为（或取消）系统默认 agent。设为默认时同一事务里先清掉旧的，始终最多一个；取消不是默认的 agent 不做任何事。"""
+        """设为（或取消）系统默认 agent。设为默认时同一事务里先清掉旧的，始终最多一个；取消不是默认的 agent 不做任何事。
+        归档的不能设为默认（新对话会默认选中一个不能运行的 agent）。"""
         async with self._db.transaction() as s:
-            agent = await active_row_in(s, agent_id)
+            agent = await (runnable_row_in if is_default else active_row_in)(s, agent_id)
             if is_default:
                 await s.execute(
                     update(Agent).where(Agent.is_default, Agent.id != agent_id).values(is_default=False)
@@ -378,6 +414,7 @@ class AgentService:
             deny=list(agent.deny if patch.deny is None else patch.deny),
             mcp_servers=list(agent.mcp_servers if patch.mcp_servers is None else patch.mcp_servers),
             thinking=cast(Thinking, agent.thinking) if patch.thinking is None else patch.thinking,
+            group=agent.group if patch.group is None else normalize_group(patch.group),
         )
         self._check(fields)
         self._check_mcp_servers(fields.mcp_servers, agent.mcp_servers)

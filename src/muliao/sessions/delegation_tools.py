@@ -1,10 +1,13 @@
 """agent 之间的委派：delegate_task（不等结果）、ask_agent（挂起这次调用，等对方的结局作为结果）、stop_thread、
 list_threads。委派的生命周期见 sessions.delegation。"""
 
+from collections.abc import Iterable
+
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.api import TOOL_THREADS, defer_call
+from muliao.agents.api import AgentInfo as AgentRecord
 from muliao.agents.api import AgentService
 from muliao.errors import InvalidInput, NotFound
 from muliao.platform.checks import DEFAULT_CHECK_SECONDS
@@ -23,6 +26,22 @@ _ANSWER_PREVIEW = 500
 class AgentInfo(BaseModel):
     name: str
     description: str
+
+
+class AgentGroup(BaseModel):
+    # null：不属于任何分组的 agent
+    group: str | None
+    agents: list[AgentInfo]
+
+
+def agent_directory(agents: Iterable[AgentRecord]) -> list[AgentGroup]:
+    """list_agents 的结果：能委派的 agent（不含归档的）按分组列出，不分组的在前，其余按组名；组内保持传入的顺序。"""
+    groups: dict[str | None, list[AgentInfo]] = {}
+    for a in agents:
+        if not a.archived:
+            groups.setdefault(a.group, []).append(AgentInfo(name=a.name, description=a.description))
+    order = sorted(groups, key=lambda g: (g is not None, g or ""))
+    return [AgentGroup(group=g, agents=groups[g]) for g in order]
 
 
 class ThreadInfo(BaseModel):
@@ -51,9 +70,10 @@ def delegation_toolset(
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool_plain
-    async def list_agents() -> list[AgentInfo]:
-        """List all agents and what each one is for. Use before delegating."""
-        return [AgentInfo(name=a.name, description=a.description) for a in await agents.list()]
+    async def list_agents() -> list[AgentGroup]:
+        """List all agents and what each one is for, by group (`group: null` = not in any group). Use before
+        delegating. Archived agents are not listed: they cannot be used until unarchived (`update_agent`)."""
+        return agent_directory(await agents.list())
 
     @ts.tool(name=DELEGATE_TASK)
     async def delegate_task(

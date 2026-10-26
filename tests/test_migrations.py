@@ -661,3 +661,29 @@ def test_threads_per_agent_heartbeats_and_timeouts_backfill_and_downgrade(tmp_pa
         assert not {"check_seconds", "deadline"} & {
             r[1] for r in conn.execute("pragma table_info(session_holds)")
         }
+
+
+def test_agents_group_and_archived_at_start_empty_and_downgrade(tmp_path):
+    """agents.group / archived_at（#219）：已有 agent 升级后不分组、未归档；降级删掉两列，agent 保留。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "aa38462ddc18")
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, roles, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', '[]', '2026-01-01', '2026-01-01')"
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('select id, "group", archived_at from agents').fetchall() == [("a1", None, None)]
+        conn.execute("update agents set \"group\" = 'g', archived_at = '2026-10-26' where id = 'a1'")
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "aa38462ddc18")
+    with sqlite3.connect(path) as conn:
+        assert not {"group", "archived_at"} & {r[1] for r in conn.execute("pragma table_info(agents)")}
+        assert conn.execute("select id from agents").fetchall() == [("a1",)]

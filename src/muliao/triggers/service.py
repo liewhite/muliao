@@ -31,7 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from muliao.agents.api import active_agent_in
+from muliao.agents.api import runnable_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 from muliao.notifications.events import Notify
@@ -221,8 +221,8 @@ class TriggerService:
         )
         try:
             async with self._db.transaction() as s:
-                # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又建的触发器没人认领
-                await active_agent_in(s, agent_id)
+                # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又建的触发器没人认领；归档的拒绝（它不能运行）
+                await runnable_agent_in(s, agent_id)
                 s.add(trigger)
         except IntegrityError as e:
             raise Conflict(f"trigger {name!r} already exists") from e
@@ -419,6 +419,9 @@ class TriggerService:
             trigger = await trigger_in(s, trigger_id)
             if not trigger.enabled:
                 raise Conflict(f"trigger {trigger.name!r} is disabled")
+            # 归档的 agent（AgentArchived，即 Conflict）：不跑前置检查、不触发；激活机制的 fire_activated 只记日志，触发器
+            # 保持启用，取消归档后照常触发
+            await runnable_agent_in(s, trigger.agent_id)
             if trigger.precheck is None:
                 return await self._deliver_in(s, trigger, payload, session_id)
             name, agent_id, stored = trigger.name, trigger.agent_id, trigger.precheck

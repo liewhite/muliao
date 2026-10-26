@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.api import AgentArchived
 from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
@@ -250,10 +251,10 @@ class SessionService:
         async def commit(s: AsyncSession) -> None:
             try:
                 target = await target_in(s, inbound)
-            except NotFound as e:
-                # 发送方校验之后会话或 agent 被删除：契约内的变化，这封信不再有收件人
+            except (NotFound, AgentArchived) as e:
+                # 发送方校验之后会话或 agent 被删除、agent 被归档：契约内的变化，这封信不再有收件人
                 log.info(
-                    "inbound mail dropped: its session or agent is gone",
+                    "inbound mail dropped: its session or agent is gone or archived",
                     extra={"message_id": delivery.message_id, "origin": command.origin, "reason": str(e)},
                 )
                 return

@@ -654,6 +654,84 @@
         }
       }
     },
+    "/api/agents/{agent_id}/archive": {
+      "put": {
+        "summary": "Archive Agent",
+        "description": "归档：不能再对话、委派、指派，它的触发器不触发；它忙或是默认 agent 时 409。",
+        "operationId": "archive_agent_api_agents__agent_id__archive_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Unarchive Agent",
+        "description": "取消归档；没归档时不做任何事。",
+        "operationId": "unarchive_agent_api_agents__agent_id__archive_delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/memory": {
       "get": {
         "summary": "Get Memory",
@@ -3580,6 +3658,17 @@
             ],
             "title": "Thinking",
             "default": "default"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
           }
         },
         "type": "object",
@@ -3676,6 +3765,29 @@
           "is_default": {
             "type": "boolean",
             "title": "Is Default"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
           }
         },
         "type": "object",
@@ -3690,7 +3802,9 @@
           "mcp_servers",
           "thinking",
           "created_at",
-          "is_default"
+          "is_default",
+          "group",
+          "archived_at"
         ],
         "title": "AgentOut"
       },
@@ -3747,6 +3861,17 @@
               "xhigh"
             ],
             "title": "Thinking"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
           }
         },
         "type": "object",
@@ -3758,7 +3883,8 @@
           "allow",
           "deny",
           "mcp_servers",
-          "thinking"
+          "thinking",
+          "group"
         ],
         "title": "AgentUpdate",
         "description": "整体替换：所有字段必填，不会用默认值覆盖已有配置。name 可改（只用于展示）。"

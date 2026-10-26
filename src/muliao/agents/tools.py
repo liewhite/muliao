@@ -31,6 +31,10 @@ class RoleDetail(BaseModel):
 class AgentDetail(BaseModel):
     name: str
     description: str
+    # 分组名，null 为不分组
+    group: str | None
+    # 已归档：不能对话、委派、指派，它的触发器不触发；用 update_agent(archived=false) 取消
+    archived: bool
     model: str
     thinking: Thinking
     roles: list[str]
@@ -66,6 +70,8 @@ def agents_toolset(
         return AgentDetail(
             name=target.name,
             description=target.description,
+            group=target.group,
+            archived=target.archived,
             model=target.model,
             thinking=target.thinking,
             roles=list(target.roles),
@@ -93,6 +99,7 @@ def agents_toolset(
         deny: tuple[str, ...] = (),
         mcp_servers: tuple[str, ...] = (),
         thinking: Thinking = "default",
+        group: str | None = None,
     ) -> str:
         """Create a new long-lived agent with its own memory, skills and workspace, e.g. a specialist you will
         delegate to repeatedly. For a one-off job delegate to yourself instead (`ask_agent` / `delegate_task`
@@ -110,6 +117,8 @@ def agents_toolset(
             mcp_servers: Public MCP servers whose tools it gets (besides its own private ones).
             thinking: Thinking/reasoning effort of its model: `default` sends nothing (the model's own default),
                 `off` disables it, the others set the effort level.
+            group: Group it belongs to, e.g. a batch of agents doing the same kind of job; `list_agents` lists
+                agents by group.
         """
         spec = AgentSpec(
             name=name,
@@ -120,6 +129,7 @@ def agents_toolset(
             deny=deny,
             mcp_servers=mcp_servers,
             thinking=thinking,
+            group=group,
         )
         created = await agents.create(spec, author=ctx.deps.agent_id)
         return f"created agent {created.name}"
@@ -136,8 +146,12 @@ def agents_toolset(
         deny: tuple[str, ...] | None = None,
         mcp_servers: tuple[str, ...] | None = None,
         thinking: Thinking | None = None,
+        group: str | None = None,
+        archived: bool | None = None,
     ) -> str:
         """Change an agent's configuration, including your own (use your own name). Only the given fields change.
+        An archived agent cannot be talked to, delegated to or assigned issues, and its triggers do not fire,
+        until it is unarchived; archiving needs it to be idle.
 
         Args:
             agent: Name of the agent to change.
@@ -149,6 +163,8 @@ def agents_toolset(
             deny: New full list of permission patterns to deny.
             mcp_servers: New full list of public MCP servers whose tools it gets.
             thinking: New thinking/reasoning effort (`default` = the model's own default).
+            group: New group; an empty string removes it from its group.
+            archived: `true` to archive a finished or inactive agent, `false` to unarchive it.
         """
         target = await agents.find_by_name(agent)
         patch = AgentPatch(
@@ -160,9 +176,13 @@ def agents_toolset(
             deny=deny,
             mcp_servers=mcp_servers,
             thinking=thinking,
+            group=group,
         )
-        updated = await agents.update(target.id, patch)
-        return f"updated agent {updated.name}"
+        target = await agents.update(target.id, patch)
+        if archived is not None:
+            target = await lifecycle.set_archived(target.id, archived)
+        state = " (archived)" if target.archived else ""
+        return f"updated agent {target.name}{state}"
 
     @ts.tool
     async def delete_agent(ctx: RunContext[RunScope], agent: str) -> str:
