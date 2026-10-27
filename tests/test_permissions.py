@@ -14,7 +14,7 @@ from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, TOOLS, Kind, che
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.sessions.api import Origin
-from tests.conftest import login, owned
+from tests.conftest import history, login, owned
 from tests.scripted import scripted
 from tests.test_flow import drain, start
 from tests.test_triggers import ECHO_SERVER
@@ -178,7 +178,7 @@ async def test_a_deleted_agents_shared_items_move_to_the_platform(container, mak
     assert (container.skills.dir("shared") / "SKILL.md").exists()
     assert not container.skills.dir("alone").exists()
     # 转给平台记了一版（文档前后相同也记）
-    latest = (await container.revisions.history(Subject.SKILL, "shared", 1))[0]
+    latest = (await history(container, Subject.SKILL, "shared", 1))[0]
     assert latest.message == f"moved to the platform with agent {owner.id} deleted"
     assert latest.before == latest.after is not None
 
@@ -195,7 +195,7 @@ async def test_transferring_an_item_moves_who_owns_and_uses_it(container, make_a
     assert await owned(container, "skill", new.id) == ["s"]
     assert await owned(container, "secret", None) == ["K"]
     # secret 的文档只有描述：换 owner 前后相同，照样记一版
-    secret_rev = (await container.revisions.history(Subject.SECRET, "K", 1))[0]
+    secret_rev = (await history(container, Subject.SECRET, "K", 1))[0]
     assert secret_rev.message == "transfer secret K from agent 'old' to the platform"
     assert secret_rev.before == secret_rev.after == '{"description": ""}'
     assert [s.name for s in await container.skills.index(new.id)] == ["s"]
@@ -204,7 +204,7 @@ async def test_transferring_an_item_moves_who_owns_and_uses_it(container, make_a
     await container.skills.edit("s", new.id, new="more")
     with pytest.raises(Forbidden):
         await container.skills.edit("s", old.id, new="more")
-    revs = await container.revisions.history(Subject.SKILL, "s", 2)
+    revs = await history(container, Subject.SKILL, "s", 2)
     assert revs[1].message == "transfer skill s from agent 'old' to agent 'new'"
     assert revs[1].author == "user" and revs[1].before == revs[1].after
 
@@ -353,14 +353,14 @@ async def test_role_and_agent_rule_changes_are_recorded(container, make_agent):
     await container.agents.update(agent.id, AgentPatch(roles=[]), author="user")
     await roles.delete("triage", actor="user")
 
-    [base_rev] = await container.revisions.history(Subject.ROLE, BASE, 10)
+    [base_rev] = await history(container, Subject.ROLE, BASE, 10)
     assert (base_rev.author, base_rev.message) == ("boss", "update role base")
     assert base_rev.before == (f'{{\n "description": "{base.description}",\n "allow": [],\n "deny": []\n}}')
     assert '"tool:issue_*"' in (base_rev.after or "")
-    [deleted, created] = await container.revisions.history(Subject.ROLE, "triage", 10)
+    [deleted, created] = await history(container, Subject.ROLE, "triage", 10)
     assert created.before is None and deleted.after is None and deleted.before == created.after
 
-    revs = await container.revisions.history(Subject.AGENT, agent.id, 10)
+    revs = await history(container, Subject.AGENT, agent.id, 10)
     assert [r.message for r in revs] == [
         "update rules of agent a",
         "update rules of agent a",
@@ -371,19 +371,23 @@ async def test_role_and_agent_rule_changes_are_recorded(container, make_agent):
 
     await container.agent_lifecycle.delete(agent.id, author="user")
     await drain(container)
-    gone = (await container.revisions.history(Subject.AGENT, agent.id, 1))[0]
+    gone = (await history(container, Subject.AGENT, agent.id, 1))[0]
     assert gone.after is None and gone.before == revs[0].after
 
 
 async def test_an_item_denied_to_every_other_agent_goes_with_its_owner(container, make_agent):
     owner, other = await make_agent("owner"), await make_agent("other")
     await container.skills.write("shared", "d", "b", actor=owner.id, owner=owner.id)
-    await container.agents.update(other.id, AgentPatch(deny=["skill:shared"]), author="user")
+    await container.skills.write("public", "d", "b", actor=owner.id, owner=owner.id)
+    await container.roles.create(RoleSpec("triage", "t", ["skill:shared"], []), actor="user")
+    patch = AgentPatch(roles=["triage"], deny=["skill:shared", "skill:public"])
+    await container.agents.update(other.id, patch, author="user")
     base = await container.roles.get(BASE)
-    await container.roles.update(RoleSpec(BASE, base.description, ["skill:shared"], []), actor="user")
-    # 条目页与删除用同一个「收录」：base 收录它，但唯一的别的 agent 拦了它，没人在用
+    await container.roles.update(RoleSpec(BASE, base.description, ["skill:public"], []), actor="user")
+    # 条目页与删除用同一个「收录」：triage 收录它，但带 triage 的唯一一个 agent 拦了它，没人在用
     [entry] = [e for e in await container.catalog.catalog() if e.name == "shared"]
-    assert entry.roles == (BASE,)
+    assert entry.roles == ("triage",)
     await container.agent_lifecycle.delete(owner.id, author="user")
     await drain(container)
-    assert await owned(container, "skill", None) == []
+    # base 收录的照样转给平台：它也给以后新建的 agent
+    assert await owned(container, "skill", None) == ["public"]

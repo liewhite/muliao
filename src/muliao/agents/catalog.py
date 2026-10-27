@@ -17,7 +17,7 @@ from muliao.agents.items import Reach, changeable_in, reach_in
 from muliao.agents.kinds import Kind, StoredKind, as_subject, label
 from muliao.agents.mcp import McpRegistry, McpServer, server_of
 from muliao.agents.permissions import Rules
-from muliao.agents.revisions import RevisionInfo, Revisions, record_in
+from muliao.agents.revisions import RevisionInfo, history_in, record_in
 from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
 from muliao.agents.skills import SkillStore
 from muliao.agents.tables import Item
@@ -48,13 +48,11 @@ class ItemCatalog:
         db: Database,
         # 当前配置下注册的工具（permissions.available_tools）
         tools: Sequence[str],
-        revisions: Revisions,
         skills: SkillStore,
         mcp: McpRegistry,
     ):
         self._db = db
         self._tools = tuple(tools)
-        self._revisions = revisions
         # 能恢复旧版的种类（secret 的版本不含值，不能恢复）
         self._restore: dict[StoredKind, Callable[[str, int, str], Awaitable[object]]] = {
             StoredKind.SKILL: skills.restore,
@@ -128,7 +126,8 @@ class ItemCatalog:
 
     async def history(self, kind: StoredKind, name: str, limit: int) -> list[RevisionInfo]:
         """新的在前，第一条即当前的一版（已删除时是那次删除）。"""
-        return await self._revisions.history(as_subject(kind), name, limit)
+        async with self._db.transaction() as s:
+            return await history_in(s, as_subject(kind), name, limit)
 
     async def restore(self, kind: StoredKind, name: str, rev: int, author: str) -> None:
         """把第 rev 版的内容作为新的一版写入（归属不变）。secret 的版本不含值，不能恢复。"""

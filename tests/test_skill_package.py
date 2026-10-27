@@ -10,7 +10,7 @@ from muliao.agents import skill_package
 from muliao.agents.api import SkillMeta, Subject
 from muliao.agents.skill_package import MAX_FILE_BYTES, SkillFile, is_attachment
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound, TooLarge
-from tests.conftest import owned
+from tests.conftest import history, owned
 
 SKILL_MD = "---\nname: digest\ndescription: When digesting\nlicense: MIT\n---\n\nRun `scripts/fetch.py`.\n"
 
@@ -61,7 +61,7 @@ async def test_an_imported_skill_exports_the_same_files_and_keeps_extra_frontmat
     with zipfile.ZipFile(io.BytesIO(exported)) as archive:
         modes = {i.filename: (i.external_attr >> 16) & 0o777 for i in archive.infolist()}
     assert (modes["digest/run.sh"], modes["digest/SKILL.md"]) == (0o755, 0o644)
-    [revision] = await container.revisions.history(Subject.SKILL, "digest", 10)
+    [revision] = await history(container, Subject.SKILL, "digest", 10)
     assert (revision.author, revision.message) == ("user", "import skill digest")
 
 

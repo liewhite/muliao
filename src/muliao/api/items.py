@@ -16,6 +16,7 @@ from muliao.agents.api import (
     TOOLS,
     USER,
     CatalogEntry,
+    Kind,
     McpServer,
     McpTransport,
     RevisionInfo,
@@ -108,19 +109,17 @@ def _item_out(e: CatalogEntry) -> ToolItemOut | SkillItemOut | McpItemOut | Secr
         "updated_at": e.updated_at,
         "roles": list(e.roles),
     }
-    match e.kind.value:
-        case "tool":
+    match e.kind:
+        case Kind.TOOL:
             tool = TOOLS[e.name]
             return ToolItemOut(kind="tool", access=tool.access.value, admin=tool.admin, **common)
-        case "skill":
+        case Kind.SKILL:
             return SkillItemOut(kind="skill", **common)
-        case "mcp":
+        case Kind.MCP:
             assert e.mcp is not None
             return McpItemOut(kind="mcp", **common, **McpConfigOut.fields_of(e.mcp))
-        case "secret":
+        case Kind.SECRET:
             return SecretItemOut(kind="secret", **common)
-        case other:
-            raise RuntimeError(f"unknown item kind {other}")
 
 
 @router.get("/items")

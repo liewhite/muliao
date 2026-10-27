@@ -142,3 +142,11 @@ async def share(container: Assembly, *rules: str) -> None:
 async def owned(container: Assembly, kind: str, owner: str | None) -> list[str]:
     """owner 名下（None 为平台的）这一种条目的名字，按名称（条目池 ItemCatalog.catalog）。"""
     return [e.name for e in await container.catalog.catalog() if e.kind == kind and e.owner == owner]
+
+
+async def history(container: Assembly, subject, name: str, limit: int):  # noqa: ANN001, ANN201
+    """一个对象的版本，新的在前（agents.revisions.history_in）。"""
+    from muliao.agents.revisions import history_in
+
+    async with container.db.transaction() as s:
+        return await history_in(s, subject, name, limit)

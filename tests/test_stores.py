@@ -13,7 +13,7 @@ from muliao.agents.skill_package import SKILL_FILE, SkillFile
 from muliao.agents.skills import attachments_from, parse_document
 from muliao.errors import Conflict, CorruptState, Forbidden, InvalidInput, NotFound
 from muliao.vault.api import fill
-from tests.conftest import owned, share
+from tests.conftest import history, owned, share
 from tests.test_flow import drain
 
 
@@ -90,7 +90,7 @@ async def test_editing_a_skill_changes_body_description_or_attachments_in_one_re
     with pytest.raises(InvalidInput):
         await skills.edit("digest", alpha, attachments={"../x.py": SkillFile("x")})
 
-    [attach, edit, create] = await container.revisions.history(Subject.SKILL, "digest", 10)
+    [attach, edit, create] = await history(container, Subject.SKILL, "digest", 10)
     assert (create.before, edit.author, attach.message) == (None, alpha, "edit skill digest")
     assert set(parse_document(attach.after)) == {"SKILL.md", "run.sh"}
     assert parse_document(attach.after)["SKILL.md"].content == parse_document(edit.after)["SKILL.md"].content
@@ -161,7 +161,7 @@ async def test_a_skill_is_restored_from_an_earlier_revision(container, make_agen
     alpha = (await make_agent("alpha")).id
     await skills.write("digest", "d", "first", actor=alpha, owner=alpha, attachments={"a.py": SkillFile("1")})
     await skills.write("digest", "d", "second", actor=alpha, owner=alpha, attachments={})
-    [_, first] = await container.revisions.history(Subject.SKILL, "digest", 10)
+    [_, first] = await history(container, Subject.SKILL, "digest", 10)
 
     await skills.restore("digest", first.id, "user")
 
@@ -185,7 +185,7 @@ async def test_memory_append_replace_limit_and_revisions(container, make_agent):
         await memory.edit(alpha, "-", "+", alpha)
     with pytest.raises(MemoryFull):
         await memory.edit(alpha, "", "x" * 5000, alpha)
-    revisions = await container.revisions.history(Subject.MEMORY, alpha, 10)
+    revisions = await history(container, Subject.MEMORY, alpha, 10)
     assert [r.before for r in revisions][-1] is None
     assert len(revisions) == 4
 
@@ -223,7 +223,7 @@ async def test_mcp_servers_have_unique_names_and_versions(container, make_agent)
     await mcp.set_enabled("own", False, alpha)
     assert [s.name for s in await mcp.index(alpha)] == ["search"]
     assert [s.name for s in await mcp.usable(alpha)] == ["own", "search"]
-    [disabled, added] = await container.revisions.history(Subject.MCP, "own", 10)
+    [disabled, added] = await history(container, Subject.MCP, "own", 10)
     await mcp.restore("own", added.id, "user")
     assert (await mcp.get("own")).enabled
     assert disabled.message == "disable MCP server own"
@@ -267,7 +267,7 @@ async def test_secrets_are_visible_to_their_owner_and_keys_are_unique(container,
 
     # 改值也记一版，版本里没有值
     await vault.set("ALPHA_KEY", "b", "", actor=alpha, owner=alpha)
-    revisions = await container.revisions.history(Subject.SECRET, "ALPHA_KEY", 10)
+    revisions = await history(container, Subject.SECRET, "ALPHA_KEY", 10)
     assert len(revisions) == 2
     assert all("b" not in (r.after or "").replace("description", "") for r in revisions)
 
@@ -302,7 +302,7 @@ async def test_an_agents_items_and_memory_go_with_it_and_their_deletion_is_recor
         (Subject.MCP, "own"),
         (Subject.MEMORY, alpha),
     ]:
-        latest = (await container.revisions.history(subject, name, 1))[0]
+        latest = (await history(container, subject, name, 1))[0]
         assert (latest.after, latest.author, latest.message) == (None, "user", f"deleted with agent {alpha}")
     # 它写过的全局记忆留着
     assert await container.memory.read(None) == "- global fact\n"
@@ -330,7 +330,7 @@ async def test_concurrent_edits_of_one_skill_all_apply(container, make_agent):
 
     assert (await store.read("digest")).body.split() == [f"LINE{i}" for i in range(6)]
     assert (store.dir("digest") / SKILL_FILE).read_text().count("LINE") == 6
-    revs = await container.revisions.history(Subject.SKILL, "digest", 20)
+    revs = await history(container, Subject.SKILL, "digest", 20)
     assert len(revs) == 7
 
 

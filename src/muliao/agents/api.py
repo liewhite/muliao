@@ -17,7 +17,7 @@ from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpConfig, McpRegistry, McpServer, McpTransport, mcp_config
 from muliao.agents.memory import MemoryStore
 from muliao.agents.permissions import BASE, TOOLS, Access, Role, Rules, Tool
-from muliao.agents.revisions import USER, RevisionInfo, Revisions
+from muliao.agents.revisions import USER, RevisionInfo
 from muliao.agents.role_service import RoleService, RoleSpec
 from muliao.agents.secrets import KEY_SYNTAX as SECRET_KEY_SYNTAX
 from muliao.agents.secrets import SecretItems, StoredSecret
@@ -58,7 +58,6 @@ __all__ = [
     "StoredKind",
     "MemoryStore",
     "RevisionInfo",
-    "Revisions",
     "Subject",
     "SecretItems",
     "StoredSecret",

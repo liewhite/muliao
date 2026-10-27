@@ -28,7 +28,6 @@ from muliao.agents.mcp import McpRegistry
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
 from muliao.agents.permissions import available_tools
-from muliao.agents.revisions import Revisions
 from muliao.agents.role_service import RoleService
 from muliao.agents.secrets import SecretItems
 from muliao.agents.service import AgentDefaults, AgentService, Thinking
@@ -100,8 +99,6 @@ class Container:
     # 「任务」页：列出与人工重试
     tasks: TaskAdmin
     vault: Vault
-    # 版本（只读；写入与恢复经各 store）
-    revisions: Revisions
     skills: SkillStore
     memory: MemoryStore
     agents: AgentService
@@ -138,7 +135,6 @@ class Assembly:
     live: LiveRuns
     queue: TaskQueue
     vault: Vault
-    revisions: Revisions
     skills: SkillStore
     memory: MemoryStore
     agents: AgentService
@@ -182,7 +178,6 @@ class Assembly:
             bus=EventFeed(self.bus),
             tasks=TaskAdmin(self.queue),
             vault=self.vault,
-            revisions=self.revisions,
             skills=self.skills,
             memory=self.memory,
             agents=self.agents,
@@ -302,7 +297,6 @@ def assemble(
     run_now = RunNow()
     vault = Vault(SecretItems(db), settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
-    revisions = Revisions(db)
     skills = SkillStore(db, settings.skills_dir)
     memory = MemoryStore(db, settings.runtime.memory_max_chars)
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接
@@ -317,7 +311,7 @@ def assemble(
         tools,
     )
     roles = RoleService(db, tools)
-    catalog = ItemCatalog(db, tools, revisions, skills, mcp)
+    catalog = ItemCatalog(db, tools, skills, mcp)
     activity = SessionActivity(queue)
     agent_lifecycle = AgentLifecycle(
         db, agents, skills, messaging, {"sessions": activity.blocks_agent_deletion_in}
@@ -454,7 +448,6 @@ def assemble(
         live=live,
         queue=queue,
         vault=vault,
-        revisions=revisions,
         skills=skills,
         memory=memory,
         agents=agents,

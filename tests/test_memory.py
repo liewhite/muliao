@@ -7,7 +7,7 @@ from pydantic_ai.models.function import AgentInfo
 from muliao.agents.api import RevisionInfo, Subject
 from muliao.agents.memory import MemoryFull
 from muliao.errors import CorruptState
-from tests.conftest import login
+from tests.conftest import history, login
 from tests.scripted import scripted
 from tests.test_flow import call_then_answer, drain, start
 
@@ -31,7 +31,7 @@ async def test_global_memory_precedes_the_agents_own_memory_in_every_run(contain
 
 
 async def memory_history(container, owner: str | None) -> list[RevisionInfo]:
-    return await container.revisions.history(Subject.MEMORY, owner or "", 10)
+    return await history(container, Subject.MEMORY, owner or "", 10)
 
 
 async def test_memory_api_reads_and_writes_global_and_agent_memory_and_restores_versions(

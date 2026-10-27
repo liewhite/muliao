@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agents.kinds import Subject, label
 from muliao.agents.tables import Revision
 from muliao.errors import InvalidInput, NotFound
-from muliao.platform.db import Database
 
 # 用户在界面上的修改的作者
 USER = "user"
@@ -84,14 +83,3 @@ async def history_in(s: AsyncSession, subject: Subject, name: str, limit: int) -
         .limit(limit)
     )
     return [_info(r) for r in rows]
-
-
-class Revisions:
-    """版本的只读查询（任何对象的历史，按 Subject 与名字）。"""
-
-    def __init__(self, db: Database):
-        self._db = db
-
-    async def history(self, subject: Subject, name: str, limit: int) -> list[RevisionInfo]:
-        async with self._db.transaction() as s:
-            return await history_in(s, subject, name, limit)
