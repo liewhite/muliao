@@ -93,6 +93,8 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 
 会话领域的编排（停止 `halt.py`、删除 `deletion.py`、消费者）只调各子域的接口；会话领域不 import 任务表的 `TaskStatus`，`Task` 只出现在任务处理器的签名里（`tests/test_boundaries.py`）。
 
+其他领域不设子域，内部按模块组织，表只在一个模块里读写（`tests/test_boundaries.py` 的 `test_tables_owned_by_one_module_are_only_queried_there`）：issues 的依赖图 `graph.py`（`issue_dependencies`）、投递 `delivery.py`、文本 `render.py`，`IssueService` 只编排（第 21 节）；notifications 的收件箱 `inbox.py`（`notifications`）与推送 `push.py`（`push_subscriptions`）；triggers 的前置检查状态只在 `precheck.py` 迁移（第 14 节）。
+
 `agent_runtime` 不是业务领域，是会话运行的端口：把 pydantic-ai 的 loop 收在「从这段历史推进一步，告诉我发生了什么」后面（`AgentRuntime.run_steps` 与 `StepHooks`），会话领域只依赖这个端口与消息约定；具体的工具不在这里（文件与 shell 在 `workspace`，web 工具在 `web`，各领域的 `tools.py`），它只按规则把组合根交来的工具集组合进运行（`Toolbox`）；以后自己写 loop 时改动限于这个端口的实现。端口不交出 pydantic-ai 的运行与挂起类型：运行的结局是 `Finished`（回答与新增消息）或 `Paused`（挂起的调用），挂起调用的结果以 `{调用 id: 结果}` 交回，工具用 `defer_call()` 挂起（`agent_runtime/outcome.py`）；消息（`ModelMessage`、`ToolCallPart` 等）是会话历史的存储形态，不在此列。`tests/test_boundaries.py` 检查 agent_runtime 之外不 import 这些运行类型。工具一律通过领域接口做事，不碰表。
 
 ### 2.2 领域之间怎么通信
@@ -123,8 +125,9 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 
 - 领域之间只能 import 对方的 `api` 模块（命令、查询、读模型）与 `events` 模块（它发布的事件、接收的定向命令）；不 import 别的领域的表，也不拿别的领域的 ORM 对象。
 - `platform` 不 import 任何领域；领域不 import HTTP 适配层（`api/`）与组合根。
+- 子域之间（agents、sessions，见 2.1 的表）即使在同一个事务里协作，也只经对方的 `*_in` 接口，不碰对方的表或列；表的归属在 `AGENTS_TABLES` / `SESSIONS_TABLES` 里登记，每张表恰好属于一个子域，表类只能出现在它所属子域的模块的查询与构造里。`*_in` 是领域内部接口，不进 `api.py`；跨子域的流程放在编排模块（agents 的 `lifecycle.py`，sessions 的 `halt.py`、`deletion.py`、消费者），由它依次调用各子域的接口。
 - 每个领域都有 `api.py`（`__all__` 只列公开接口），缺了测试就失败：在调用方事务里执行的公开函数（参数里有调用方的事务）只能是登记过的只读查询，这条检查只看得到 `api` 模块。领域内部在自己事务里的写入（如通知的 `_enqueue_in`）是私有的。平台不认识领域的词汇：任务种类、会话来源、LLM SDK 的异常都在各自的领域里（3.2、第 5 节）。
-- HTTP 适配层经领域的 `api`（与 `events`）调用领域，另外可以 import 领域的 `tables`，把领域交给它的行序列化成响应（它是适配器，不是领域，不另造一套读模型）。它拿到的对象只有 `container.Container` 上的：各领域的门面（字段类型都由领域的 `api` 导出）、平台的展示事件流（`EventFeed`，只订阅）与任务列表（`TaskAdmin`）、服务的生命周期；窄接口（`TaskAdmin`、`EventFeed`）是只转发窄方法的包装对象，不是 Protocol 标注——项目不跑类型检查，标注挡不住 HTTP 层调到完整对象的别的方法。测试检查字段的声明类型，也检查运行时的值恰好是声明的类型；装配出的全部对象在 `container.Assembly`，服务入口只把它的 `container` 交给 HTTP 层，测试夹具直接持有 `Assembly`。业务规则（例如为 agent 写条目与记忆前它必须还可用、只发文件时用文件名作标题、启动时已存 agent 的模型、角色与权限通配符必须可用）都在领域里，HTTP 层与组合根不另写一份。
+- HTTP 适配层按领域（分了子域的按子域）一个文件写路由：`api/agents.py`（目录与分发）、`items.py`（条目与版本）、`memory.py`（记忆）、`models.py`（provider 与模型列表）、`sessions.py`、`tasks.py`（平台的任务列表）、`speech.py`、`features.py`（服务端配置决定的可选能力）等，同一领域的接口不散在别的文件里。HTTP 适配层经领域的 `api`（与 `events`）调用领域，另外可以 import 领域的 `tables`，把领域交给它的行序列化成响应（它是适配器，不是领域，不另造一套读模型）。它拿到的对象只有 `container.Container` 上的：各领域的门面（字段类型都由领域的 `api` 导出）、平台的展示事件流（`EventFeed`，只订阅）与任务列表（`TaskAdmin`）、服务的生命周期；窄接口（`TaskAdmin`、`EventFeed`）是只转发窄方法的包装对象，不是 Protocol 标注——项目不跑类型检查，标注挡不住 HTTP 层调到完整对象的别的方法。测试检查字段的声明类型，也检查运行时的值恰好是声明的类型；装配出的全部对象在 `container.Assembly`，服务入口只把它的 `container` 交给 HTTP 层，测试夹具直接持有 `Assembly`。业务规则（例如为 agent 写条目与记忆前它必须还可用、只发文件时用文件名作标题、启动时已存 agent 的模型、角色与权限通配符必须可用）都在领域里，HTTP 层与组合根不另写一份。
 
 **组合根没有构造环**：会话领域的装配在 `sessions/assembly.py`（`SessionPorts`：先于消费者的端口；`SessionDomain`：门面、压缩、消费者、信箱对账与任务处理器，`subscribe` 一处登记会话领域的全部订阅与命令处理），组合根不拼会话领域的内部对象。用到「停止会话」的领域（会话门面、委派工具、删除 agent 的会话清理）依赖端口 `sessions.halt.StopSession`，组合根交给它们的实现是 `sessions.halt.SessionStopper`，它由正在进行的运行的登记（`StoppableRuns`）与 `SessionHalt` 组成，先于消费者构造，消费者用同一份登记运行；要马上执行自己提交的投递的领域（会话、触发器、issue）拿的是 `platform.worker.RunNow` 端口，worker 由各领域的处理器组成、在最后构造，构造后绑定到端口，绑定之前调用当场报错。
 

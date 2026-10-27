@@ -3,7 +3,7 @@ import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plug, Trash2 } from 'lucide-react'
 import { api, type AgentId, type ItemOf, type McpInput } from '../api'
 import { ItemAccess, OwnerSelect } from './itemParts'
-import { ResourceHistory } from './Memory'
+import { ResourceHistory } from '../ResourceHistory'
 import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,

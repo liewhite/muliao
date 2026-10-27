@@ -3,7 +3,7 @@ import { Button, Card, toast } from '@heroui/react'
 import { Trash2 } from 'lucide-react'
 import { api, type AgentId, type ItemOf } from '../api'
 import { ItemAccess, OwnerSelect } from './itemParts'
-import { ResourceHistory } from './Memory'
+import { ResourceHistory } from '../ResourceHistory'
 import { ActionButton, CollapsibleForm, EmptyHint, ErrorAlert, TextInput, formatTime, useAction, useConfirm } from '../ui'
 
 function SecretForm({ onSaved }: { onSaved: () => void }) {

@@ -4,7 +4,7 @@ import { Download, Plus, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, asAgentId, type AgentId, type ItemOf, type Schemas, type Skill } from '../api'
 import { ItemAccess, OwnerSelect } from './itemParts'
-import { ResourceHistory } from './Memory'
+import { ResourceHistory } from '../ResourceHistory'
 import { ActionButton,
   CollapsibleForm,
   EmptyHint,
