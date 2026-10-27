@@ -70,7 +70,7 @@ class TriggerKind(Protocol):
     def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         """校验并规范化 config，返回 (config, 由配置推导的 state)。
 
-        在创建、修改配置、重新启用时调用；TriggerService 把推导结果合并进已有 state，
+        在创建、修改配置（规范化后与原配置相同的不算）、重新启用时调用；TriggerService 把推导结果合并进已有 state，
         所以实现不必、也不能负责保留与配置无关的部分（如 token 摘要）。
         """
         ...
@@ -258,12 +258,14 @@ class TriggerService:
                 trigger.prompt = prompt
             reenabled = enabled is True and not trigger.enabled
             if config is not None or reenabled:
-                # 配置变了、或停用后重新启用（如定时触发器的下次时间要从现在算起），都重新推导 state
                 derived_config, derived = self.kind(trigger.kind).configure(
                     trigger.config if config is None else config
                 )
-                # JSON 列只在整体赋值时被追踪
-                trigger.config, trigger.state = derived_config, {**trigger.state, **derived}
+                # 配置变了、或停用后重新启用（如定时触发器的下次时间要从现在算起、流式触发重起进程）才重新推导
+                # state；规范化后没变的配置（界面只改说明时也带着原配置）不算改动，运行状态留着
+                if reenabled or derived_config != trigger.config:
+                    # JSON 列只在整体赋值时被追踪
+                    trigger.config, trigger.state = derived_config, {**trigger.state, **derived}
             if enabled is not None:
                 trigger.enabled = enabled
                 # 重新启用只清停用的原因；前置检查的错误留着（界面一直显示它），它恢复之前不会再告警一次

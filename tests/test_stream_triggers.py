@@ -188,6 +188,32 @@ async def test_a_killed_command_is_restarted_and_disabling_kills_it(container, m
         assert status["running_since"] is None
 
 
+async def test_disabling_and_reenabling_restarts_and_never_shows_the_old_process(container, make_agent):
+    """停用再启用就是重启：启用的返回不带旧进程的 running_since；两次修改被合并成一次对账（来不及看到停用）时
+    也一定重起。"""
+    alpha = (await make_agent()).id
+    pid_file = container.agents.workspace(alpha) / "pid"
+    trigger = await _create(container, alpha, "echo $$ > pid; exec sleep 60")
+
+    async def status() -> dict:
+        return container.triggers.status_of(await container.triggers.get_by_name("feed"))
+
+    async def started() -> bool:
+        return pid_file.exists() and pid_file.read_text().strip() != "" and (await status())["running_since"]
+
+    async with _running(_runner(container)):
+        await _until(started)
+        first = int(pid_file.read_text())
+        pid_file.unlink()
+        # 连着改：运行器可能只看到最终的「启用、配置不变」
+        await container.triggers.update(trigger.id, enabled=False)
+        reenabled = await container.triggers.update(trigger.id, enabled=True)
+        assert container.triggers.status_of(reenabled)["running_since"] is None
+        await _until(started)
+        second = int(pid_file.read_text())
+        assert second != first and _alive(second) and not _alive(first)
+
+
 async def test_changing_the_config_restarts_the_command_with_the_new_one(container, make_agent):
     alpha = (await make_agent()).id
     out = container.agents.workspace(alpha) / "which"

@@ -7,8 +7,10 @@
 - 退出（不论退出码：它本该一直运行）或起不来（secret 不可见、日志写不进去等）都算一次失败，按退避时间重启（1、2、
   4……秒，最多 5 分钟）。稳定运行一段时间（_STABLE_SECONDS）算恢复：清除错误、退避从头算。最近一次的原因记在
   state["error"]（含 stderr 日志的结尾），连续快速失败达到 _ALERT_AFTER 次时通知用户一次（偶尔退出重连是常态，
-  不打扰）。进程的运行状态（running_since、error、failures）只由这里维护，每个托管进程开始时清零：服务重启、换配置
-  都从头算。
+  不打扰）。进程的运行状态（running_since、error、failures）由这里维护，每个托管进程开始时清零：服务重启、换配置
+  都从头算。创建、改配置、重新启用时 configure 在同一事务里就清零并换一个新的 generation：托管进程
+  按它重起（停用再启用来不及被对账看到时也一定重起，这就是「重启」），新进程登记之前 running_since 为空，
+  不显示旧进程的。配置没变的保存（界面只改说明）不调 configure（TriggerService.update），不重起。
 - stderr 逐块脱敏后追加进工作目录下的 trigger-logs/<名称>.stderr.log（与后台任务共用 platform.output；每次启动前
   超过 1 MiB 就轮换一份 .1），agent 可以自己读。
 - 事件按 debounce 窗口合并：第一行到达后再等 debounce_seconds，期间到达的一起成为一次触发，事件内容是这些行
@@ -28,6 +30,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -79,7 +82,7 @@ class StreamConfig(BaseModel):
 
 
 class StreamStatus(BaseModel):
-    # 当前这个进程的启动时间；没有在运行（停用，或退出后在等重启）时为 null
+    # 当前这个进程的启动时间；没有在运行（停用、刚启用或改配置后还没起来、退出后在等重启）时为 null
     running_since: datetime | None
     # 最近一次退出或起不来的原因（含 stderr 结尾）；稳定运行一段时间后清除
     error: str | None
@@ -99,7 +102,9 @@ class StreamKind:
         "Runs a long-lived command hosted by the platform; every line it prints to stdout is an event. config: "
         '{"command": "<bash command>", "secrets": ["VAULT_KEY", ...], "debounce_seconds": 5}. The command runs in '
         "the agent's workspace with the secrets as env vars; it is restarted with backoff whenever it exits, and "
-        "killed when the trigger is disabled, deleted or reconfigured. Lines arriving within debounce_seconds of "
+        "killed when the trigger is disabled, deleted or reconfigured. To restart it (e.g. after editing the script "
+        "it runs), disable and re-enable it; status.running_since is null until the new process has started. "
+        "Lines arriving within debounce_seconds of "
         "the first one fire together (one conversation, the lines are the event); while the conversation of the "
         "previous firing is still busy, events queue and are delivered together once it is done. stderr goes to "
         f"{LOG_DIR}/<name>.stderr.log in the workspace. Queued events are lost on a restart, so the command handles "
@@ -107,8 +112,14 @@ class StreamKind:
     )
 
     def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        # 运行状态不由配置推导：它由托管进程维护（StreamRunner），每个托管进程开始时清零
-        return parse_config(KIND, StreamConfig, config).model_dump(), {}
+        # 创建、改配置、重新启用都要重起进程：换一个 generation（托管进程由它决定，见 _Spec），运行状态
+        # 在同一事务里清零，新进程登记之前不显示旧进程的
+        return parse_config(KIND, StreamConfig, config).model_dump(), {
+            "generation": uuid.uuid4().hex,
+            "running_since": None,
+            "error": None,
+            "failures": 0,
+        }
 
     def status(self, trigger: Trigger) -> StreamStatus:
         state = trigger.state
@@ -133,6 +144,8 @@ class _Spec:
     name: str
     agent_id: str
     config_json: str
+    # configure 每次换一个：改配置、重新启用都重起，停用再启用被合并成一次对账时也不漏
+    generation: str | None
 
     @property
     def config(self) -> StreamConfig:
@@ -140,7 +153,7 @@ class _Spec:
 
     @classmethod
     def of(cls, t: Trigger) -> _Spec:
-        return cls(t.id, t.name, t.agent_id, json.dumps(t.config, sort_keys=True))
+        return cls(t.id, t.name, t.agent_id, json.dumps(t.config, sort_keys=True), t.state.get("generation"))
 
 
 @dataclass
