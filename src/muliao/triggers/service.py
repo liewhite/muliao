@@ -219,10 +219,6 @@ class TriggerService:
         """触发器的读模型：行、它的触发方式给出的运行状态（TriggerKind.status）、解析好的前置检查。"""
         return TriggerView(trigger, self.kind(trigger.kind).status(trigger), precheck_of(trigger))
 
-    def status_of(self, trigger: Trigger) -> dict[str, Any]:
-        """运行状态的 JSON 形式（交给模型的工具结果）。"""
-        return self.view(trigger).status.model_dump(mode="json")
-
     async def create(
         self,
         *,

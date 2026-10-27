@@ -99,7 +99,9 @@ async def test_lines_within_the_debounce_window_fire_one_session_with_the_lines_
         await anyio.sleep(0.3)
 
     assert await _contents(container, alpha) == ["handle\n\n<event>\na\nb\n</event>"]
-    status = container.triggers.status_of(await container.triggers.get_by_name("feed"))
+    status = container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+        mode="json"
+    )
     assert status["running_since"] is not None
     assert status["stderr_log"] == "trigger-logs/feed.stderr.log"
 
@@ -148,11 +150,18 @@ async def test_a_command_that_keeps_exiting_is_restarted_recorded_and_alerted_on
     async with _running(_runner(container)):
 
         async def failed_often() -> bool:
-            return container.triggers.status_of(await container.triggers.get_by_name("feed"))["failures"] >= 5
+            return (
+                container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+                    mode="json"
+                )["failures"]
+                >= 5
+            )
 
         await _until(failed_often)
 
-    status = container.triggers.status_of(await container.triggers.get_by_name("feed"))
+    status = container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+        mode="json"
+    )
     assert "exited with 3" in status["error"] and "boom" in status["error"]
     log = container.agents.workspace(alpha) / "trigger-logs" / "feed.stderr.log"
     assert log.read_text().count("boom") >= 5
@@ -184,7 +193,9 @@ async def test_a_killed_command_is_restarted_and_disabling_kills_it(container, m
             return not _alive(second)
 
         await _until(gone)
-        status = container.triggers.status_of(await container.triggers.get_by_name("feed"))
+        status = container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+            mode="json"
+        )
         assert status["running_since"] is None
 
 
@@ -196,7 +207,9 @@ async def test_disabling_and_reenabling_restarts_and_never_shows_the_old_process
     trigger = await _create(container, alpha, "echo $$ > pid; exec sleep 60")
 
     async def status() -> dict:
-        return container.triggers.status_of(await container.triggers.get_by_name("feed"))
+        return container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+            mode="json"
+        )
 
     async def started() -> bool:
         return pid_file.exists() and pid_file.read_text().strip() != "" and (await status())["running_since"]
@@ -208,7 +221,7 @@ async def test_disabling_and_reenabling_restarts_and_never_shows_the_old_process
         # 连着改：运行器可能只看到最终的「启用、配置不变」
         await container.triggers.update(trigger.id, enabled=False)
         reenabled = await container.triggers.update(trigger.id, enabled=True)
-        assert container.triggers.status_of(reenabled)["running_since"] is None
+        assert container.triggers.view(reenabled).status.model_dump(mode="json")["running_since"] is None
         # 合并成一次对账时能重起的根据：重新启用后托管进程的 spec 变了
         assert _Spec.of(reenabled) != _Spec.of(trigger)
         await _until(started)
@@ -270,11 +283,21 @@ async def test_a_missing_secret_is_recorded_as_the_error(container, make_agent):
     async with _running(_runner(container)):
 
         async def failed() -> bool:
-            return container.triggers.status_of(await container.triggers.get_by_name("feed"))["failures"] >= 1
+            return (
+                container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+                    mode="json"
+                )["failures"]
+                >= 1
+            )
 
         await _until(failed)
 
-    assert "NOPE" in container.triggers.status_of(await container.triggers.get_by_name("feed"))["error"]
+    assert (
+        "NOPE"
+        in container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+            mode="json"
+        )["error"]
+    )
 
 
 async def test_a_backlog_over_the_event_limit_waits_in_the_pipe_and_goes_one_session_at_a_time(
@@ -335,7 +358,9 @@ async def test_saving_the_same_config_keeps_the_running_state(container, make_ag
 
     async def running() -> bool:
         return (
-            container.triggers.status_of(await container.triggers.get_by_name("feed"))["running_since"]
+            container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+                mode="json"
+            )["running_since"]
             is not None
         )
 
@@ -356,7 +381,12 @@ async def test_an_exit_is_noticed_even_when_a_child_keeps_the_pipes_and_the_chil
     async with _running(_runner(container)):
 
         async def failed_twice() -> bool:
-            return container.triggers.status_of(await container.triggers.get_by_name("feed"))["failures"] >= 2
+            return (
+                container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+                    mode="json"
+                )["failures"]
+                >= 2
+            )
 
         await _until(failed_twice)
 
@@ -377,11 +407,18 @@ async def test_running_stably_clears_the_error(container, make_agent):
     async with _running(_runner(container, stable_seconds=0.3)):
 
         async def recovered() -> bool:
-            status = container.triggers.status_of(await container.triggers.get_by_name("feed"))
+            status = container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+                mode="json"
+            )
             return status["running_since"] is not None and status["error"] is None and status["failures"] == 0
 
         async def failed() -> bool:
-            return container.triggers.status_of(await container.triggers.get_by_name("feed"))["failures"] == 1
+            return (
+                container.triggers.view(await container.triggers.get_by_name("feed")).status.model_dump(
+                    mode="json"
+                )["failures"]
+                == 1
+            )
 
         await _until(failed)
         await _until(recovered)
@@ -468,7 +505,9 @@ async def test_an_unexpected_failure_of_one_stream_is_a_restart_and_leaves_the_o
 
         await _until(restarted)
 
-    status = container.triggers.status_of(await container.triggers.get_by_name("bad"))
+    status = container.triggers.view(await container.triggers.get_by_name("bad")).status.model_dump(
+        mode="json"
+    )
     assert status["failures"] == 2 and "disk full" in status["error"]
     assert await _contents(container, alpha) == ["handle\n\n<event>\ngood\n</event>"]
 

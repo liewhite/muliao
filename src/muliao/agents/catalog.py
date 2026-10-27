@@ -14,7 +14,7 @@ from muliao.agents.access import Grants, granted_by, grants_in, owner_label_in, 
 from muliao.agents.active import active_row_in
 from muliao.agents.documents import document_in
 from muliao.agents.items import Reach, changeable_in, check_visible_in, reach_in
-from muliao.agents.kinds import Kind, StoredKind, as_subject, label
+from muliao.agents.kinds import Kind, StoredKind, Subject, as_subject, label
 from muliao.agents.mcp import McpRegistry, McpServer, server_of
 from muliao.agents.permissions import Rules, ToolSpec, spec_of
 from muliao.agents.revisions import RESTORABLE, RevisionInfo, history_in, record_in
@@ -62,6 +62,10 @@ class ItemCatalog:
             StoredKind.SKILL: skills.restore,
             StoredKind.MCP: mcp.restore,
         }
+        if {as_subject(k) for k in self._restore} != RESTORABLE - {Subject.MEMORY}:
+            raise RuntimeError(
+                f"restorable item kinds {sorted(self._restore)} do not match revisions.RESTORABLE"
+            )
 
     async def catalog(self) -> list[CatalogEntry]:
         """全部条目：内置工具（按登记顺序）在前，skill、MCP server、secret 按种类、名称；每项带收录它的角色。"""

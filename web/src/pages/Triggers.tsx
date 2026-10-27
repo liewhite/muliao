@@ -46,7 +46,8 @@ type Config = Record<string, unknown>
 /** 某种方式的触发器：收窄后 config 与 status 都是这种方式的类型 */
 type TriggerOf<K extends TriggerKindName> = Extract<Trigger, { kind: K }>
 
-/** 有服务端默认值的配置字段：读到的配置里总有，新建时可以不填（由服务端补上默认值，前端不另写一份） */
+/** 有服务端默认值的配置字段（StreamConfig 的 secrets、debounce_seconds）：读到的配置里总有，新建时可以不填（由服务端补上
+ * 默认值，前端不另写一份值）。生成的类型只有读到的形状（这两个字段必填），所以在这里列出字段名 */
 type Defaulted = 'secrets' | 'debounce_seconds'
 
 /** 编辑中的配置：有默认值的字段可省 */

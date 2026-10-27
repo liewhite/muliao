@@ -435,3 +435,22 @@ async def test_agent_without_a_memory_row_can_still_be_deleted(container, make_a
     await drain(container)
 
     assert await container.agents.list() == []
+
+
+async def test_a_run_that_starts_after_the_mark_does_not_fail_on_its_memory(container, make_agent, models):
+    """删除前的检查与标记分属两个事务：标记之后仍可能有它的运行开始执行（由删除流程停下）。组装指令时读记忆包括正在
+    删除的 agent，运行不因读不到记忆而失败（不产生失败通知、issue 的 run_failed 动态）；用户与工具的读按不存在处理。"""
+    from tests.test_flow import run_only
+
+    agent = await make_agent("alpha")
+    await container.memory.write(agent.id, "- fact", "user")
+    await start(container, agent.id, "hi")
+    async with container.db.transaction() as s:
+        (await s.get(Agent, agent.id)).deleting_by = "user"
+
+    await run_only(container)
+
+    assert await _failed_tasks(container) == []
+    assert await container.memory.for_run(agent.id) == "- fact"
+    with pytest.raises(NotFound):
+        await container.memory.read(agent.id)

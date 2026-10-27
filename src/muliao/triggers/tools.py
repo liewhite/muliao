@@ -126,7 +126,7 @@ def triggers_toolset(
         trigger = await triggers.create(
             name=name, agent_id=agent_id, kind=kind, prompt=prompt, config=config, precheck=precheck
         )
-        return f"created {trigger.kind} trigger {trigger.name}: {triggers.status_of(trigger)}"
+        return f"created {trigger.kind} trigger {trigger.name}: {triggers.view(trigger).status.model_dump(mode='json')}"
 
     @ts.tool_plain
     async def trigger_update(
@@ -157,7 +157,7 @@ def triggers_toolset(
             enabled=enabled,
             precheck=None if remove_precheck else KEEP if precheck is None else precheck,
         )
-        status = triggers.status_of(trigger)
+        status = triggers.view(trigger).status.model_dump(mode="json")
         return f"updated trigger {name} ({'enabled' if trigger.enabled else 'paused'}): {status}"
 
     @ts.tool_plain

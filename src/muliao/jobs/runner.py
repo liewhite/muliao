@@ -39,19 +39,13 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.output import tail, wait_exit_code
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, spawn_bash
 from muliao.platform.tasks import Clock, Commit, no_commit
-from muliao.sessions.api import SessionWork, hold_registered_in, job_source, session_in
+from muliao.sessions.api import SessionWork, hold_registered_in, job_id_of, job_source, session_in
 from muliao.sessions.events import SessionStopped, WorkCheckIn, WorkEnded
 from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 
 JOBS_DIR = "jobs"
-
-
-def _job_id(holder: str) -> int | None:
-    """占用者是后台任务时的任务 id。"""
-    prefix, _, rest = holder.partition(":")
-    return int(rest) if prefix == "job" and rest.isdigit() else None
 
 
 def _start_failure(error: BaseException) -> str:
@@ -390,7 +384,7 @@ class JobRunner:
         占用已经清掉，结局不再投信。没有监督者的（监督意外结束）由 check 的对账收敛。"""
         stopped = []
         for holder in event.cleared:
-            job_id = _job_id(holder)
+            job_id = job_id_of(holder)
             if job_id is None:
                 continue
             handle = self._running.get(job_id)

@@ -24,6 +24,12 @@ def job_source(job_id: int) -> str:
     return f"job:{job_id}"
 
 
+def job_id_of(holder: str) -> int | None:
+    """占用者是后台任务时的任务号（job_source 的逆运算）；别的占用者为 None。"""
+    m = _JOB.match(holder)
+    return None if m is None else int(m["id"])
+
+
 class ThreadSource(BaseModel):
     kind: Literal["thread"]
     # 原文，同一来源的事件按它归在一起
@@ -49,6 +55,6 @@ EventSource = Annotated[ThreadSource | JobSource | OtherSource, Field(discrimina
 def parse_source(raw: str) -> ThreadSource | JobSource | OtherSource:
     if (m := _THREAD.match(raw)) is not None:
         return ThreadSource(kind="thread", raw=raw, session_id=m["id"])
-    if (m := _JOB.match(raw)) is not None:
-        return JobSource(kind="job", raw=raw, job_id=int(m["id"]))
+    if (job_id := job_id_of(raw)) is not None:
+        return JobSource(kind="job", raw=raw, job_id=job_id)
     return OtherSource(kind="other", raw=raw)

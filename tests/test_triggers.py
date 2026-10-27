@@ -84,7 +84,7 @@ async def test_skipped_fires_show_in_status_and_clear_when_it_fires_again(contai
         await _make_due(container, trigger.id)
         await schedules.fire_due()
 
-    skipped = triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
+    skipped = triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"]
     assert (skipped["count"], skipped["previous_state"]) == (2, "running")
     assert datetime.fromisoformat(skipped["since"]) <= datetime.now().astimezone()
     await drain(container)
@@ -92,7 +92,9 @@ async def test_skipped_fires_show_in_status_and_clear_when_it_fires_again(contai
 
     await _make_due(container, trigger.id)
     await schedules.fire_due()
-    assert triggers.status_of(await triggers.get_by_name("slack"))["skipped"] is None
+    assert (
+        triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"] is None
+    )
     assert len(await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0)) == 2
 
 
@@ -125,7 +127,7 @@ async def test_skipping_behind_a_waiting_session_notifies_the_user_once_per_stre
     first = await fire_and_wait("job:1")
     await skip_twice()
 
-    skipped = triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
+    skipped = triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"]
     assert (skipped["count"], skipped["previous_state"]) == (2, "waiting")
     assert set(skipped) == {"count", "since", "previous_state"}
     notes = await container.notifications.list(10)
@@ -163,7 +165,7 @@ async def test_a_streak_that_turns_from_running_to_waiting_notifies_then(contain
         await schedules.fire_due()
     await drain(container)
 
-    skipped = triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
+    skipped = triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"]
     assert (skipped["count"], skipped["previous_state"]) == (3, "waiting")
     assert [n.session_id for n in await container.notifications.list(10)] == [session_id]
 
@@ -186,7 +188,7 @@ async def test_a_new_blocking_session_or_reenabling_starts_a_new_streak(containe
         await _make_due(container, trigger.id)
         await schedules.fire_due()
         await drain(container)
-        return triggers.status_of(await triggers.get_by_name("slack"))["skipped"]
+        return triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"]
 
     first = await triggers.run(trigger.id)
     await drain(container)
@@ -201,7 +203,9 @@ async def test_a_new_blocking_session_or_reenabling_starts_a_new_streak(containe
 
     await triggers.update(trigger.id, enabled=False)
     await triggers.update(trigger.id, enabled=True)
-    assert triggers.status_of(await triggers.get_by_name("slack"))["skipped"] is None
+    assert (
+        triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"] is None
+    )
 
 
 async def test_broken_schedule_trigger_is_disabled_without_blocking_others(container, make_agent):

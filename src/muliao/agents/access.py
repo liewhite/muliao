@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agents.kinds import Kind, StoredKind, label
 from muliao.agents.permissions import ADMIN, BASE, Rules
 from muliao.agents.revisions import USER
-from muliao.agents.roles import roles_in, rules_in
+from muliao.agents.roles import roles_in, rules_in, rules_of
 from muliao.agents.tables import Agent, Item
 from muliao.errors import Forbidden, NotFound
 
@@ -63,9 +63,10 @@ async def shared_in(s: AsyncSession) -> Keep:
     """「分发出去了」：base 收录它（人人可用，也给以后新建的 agent），或某个不是它 owner 的 agent 的规则（base + 角色 +
     它自己的 allow / deny）放行它。只有一个定义：条目页据此说明谁能用（CatalogEntry.shared），删 agent 时据此把它名下
     分发出去的条目转给平台。没分给任何 agent 的自建角色收录它不算。agent 包括正在删除的。"""
-    base = (await roles_in(s))[BASE].effective
+    known = await roles_in(s)
+    base = known[BASE].effective
     others = [
-        (a.id, await rules_in(s, a.roles, a.allow, a.deny))
+        (a.id, rules_of(known, a.roles, a.allow, a.deny))
         for a in await s.scalars(select(Agent).order_by(Agent.id))
     ]
 

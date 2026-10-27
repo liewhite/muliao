@@ -29,7 +29,7 @@ from muliao.sessions.origins import OWN_NOTES, Origin, OriginNotes
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.service import SessionService
-from muliao.sessions.sources import EventSource, job_source, parse_source
+from muliao.sessions.sources import EventSource, job_id_of, job_source, parse_source
 from muliao.sessions.transcript import Item
 from muliao.sessions.work import SessionWork
 
@@ -67,6 +67,7 @@ __all__ = [
     "hold_registered_in",
     "session_in",
     "EventSource",
+    "job_id_of",
     "job_source",
     "parse_source",
 ]

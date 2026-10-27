@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 
 from sqlalchemy import select
@@ -91,7 +91,13 @@ async def check_rules_in(s: AsyncSession, rules: Rules, before: Rules = Rules())
 async def rules_in(s: AsyncSession, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> Rules:
     """agent 的最终规则：base + 它的角色 + 它自己的 allow / deny。读到不存在的角色说明数据与代码不一致（写入时已校验、
     被引用的角色不能删；内置角色从代码里去掉时启动检查会报出）。"""
-    known = await roles_in(s)
+    return rules_of(await roles_in(s), roles, allow, deny)
+
+
+def rules_of(
+    known: Mapping[str, Role], roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]
+) -> Rules:
+    """rules_in 的纯函数部分：known 是 roles_in 读出的全部角色（一次读出、算多个 agent 时共用）。"""
     missing = [r for r in roles if r not in known]
     if missing:
         raise RuntimeError(f"agent references unknown roles {missing}")

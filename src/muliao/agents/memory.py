@@ -29,9 +29,13 @@ def revision_name(owner: str | None) -> str:
 
 
 async def _row_in(s: AsyncSession, owner: str | None) -> Memory | None:
-    """owner 的记忆（读与写都经这里）：正在删除的 agent 按不存在处理（NotFound）。"""
+    """owner 的记忆（用户与工具的读、看历史、写都经这里）：正在删除的 agent 按不存在处理（NotFound）。"""
     if owner is not None:
         await active_row_in(s, owner)
+    return await _stored_in(s, owner)
+
+
+async def _stored_in(s: AsyncSession, owner: str | None) -> Memory | None:
     where = Memory.owner.is_(None) if owner is None else Memory.owner == owner
     row = await s.scalar(select(Memory).where(where))
     if row is None and owner is not None:
@@ -53,6 +57,13 @@ class MemoryStore:
     async def read(self, owner: str | None) -> str:
         async with self._db.transaction() as s:
             row = await _row_in(s, owner)
+            return "" if row is None else row.content
+
+    async def for_run(self, owner: str | None) -> str:
+        """组装一次运行的指令时读：包括正在删除的 agent。删除标记之后仍可能有它的运行开始执行（标记与删除前的检查分属
+        两个事务），它们由删除流程停下，不该因为读不到记忆而失败（与 sessions.loading 读 agent 同一口径）。"""
+        async with self._db.transaction() as s:
+            row = await _stored_in(s, owner)
             return "" if row is None else row.content
 
     async def history(self, owner: str | None, limit: int) -> list[RevisionInfo]:
