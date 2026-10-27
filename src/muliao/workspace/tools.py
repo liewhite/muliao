@@ -26,13 +26,7 @@ _SHELL_DESCRIPTION = (
     "Only the first {max_output} characters of output are kept, so limit it yourself: pipe through `| head` or `| tail`, "
     "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
     "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
-    "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules. "
-    "Read files with read_file (one call can read several files or parts, with line numbers) and change them "
-    "with edit_file / write_file (several places, in one or several files, in one call with `edits`; every "
-    "occurrence with `replace_all`), not with cat, heredocs, sed / perl -i or a python script; edit_file shows "
-    "the changed lines, so no shell check is needed afterwards. The one exception: a change that needs a regex "
-    "(edit_file matches exact text or ast-grep patterns, not regexes) across many files may use "
-    "`perl -pi -e 's/…/…/g'`, then check the result with rg."
+    "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules."
 )
 
 _BACKGROUND_DESCRIPTION = (
