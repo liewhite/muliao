@@ -448,6 +448,7 @@ async def test_http_issue_lifecycle(client, container, make_agent):
     assert resp.status_code == 409
     resp = await client.post(f"/api/issues/{issue_id}/approve")
     assert resp.status_code == 200 and resp.json()["status"] == "done" and not resp.json()["reviewable"]
+    assert resp.json()["finished"]
 
     assert (await client.delete(f"/api/issues/{issue_id}")).status_code == 204
     assert (await client.get(f"/api/issues/{issue_id}")).status_code == 404

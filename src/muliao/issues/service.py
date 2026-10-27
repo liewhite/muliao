@@ -30,7 +30,6 @@ from muliao.agents.api import AgentArchived, AgentNames, agent_names_in, runnabl
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.issues.rules import (
-    FINISHED,
     SYSTEM_ACTOR,
     USER,
     ActivityView,
@@ -38,9 +37,11 @@ from muliao.issues.rules import (
     IssueView,
     Snapshot,
     actor_name,
+    agent_assignee,
     assignee_name,
     cycle_through,
     delivery_message,
+    finished,
     handed_by,
     recipient,
     render_issue,
@@ -106,6 +107,9 @@ class IssueWork:
     depends_on: list[Dependency]
     blocks: list[Dependency]
     waiting_on: tuple[int, ...]
+    # 已结束（rules.finished）、用户能审核（rules.reviewable）
+    finished: bool
+    reviewable: bool
 
 
 def _title(title: str) -> str:
@@ -289,7 +293,9 @@ class IssueService:
         以及它的上游、下游与还在等的上游。查询次数与 issue 数无关。"""
         async with self._db.transaction() as s:
             keyed = await keyed_sessions_among(s, Origin.ISSUE, [str(i.id) for i in issues])
-            keys = {i.id: (str(i.id), i.assignee) for i in issues if i.assignee not in (None, USER)}
+            keys = {
+                i.id: (str(i.id), agent) for i in issues if (agent := agent_assignee(i.assignee)) is not None
+            }
             states = await self._activity.keyed_work_states_in(s, Origin.ISSUE, list(keys.values()))
             links = await self._links_in(s, [i.id for i in issues])
         work = {}
@@ -303,6 +309,8 @@ class IssueService:
                 depends_on=links[i.id].depends_on,
                 blocks=links[i.id].blocks,
                 waiting_on=snapshot.waiting_on,
+                finished=finished(i.status),
+                reviewable=reviewable(i.status, i.assignee),
             )
         return work
 
@@ -528,7 +536,7 @@ class IssueService:
         通知下游。返回要马上执行的投递。"""
         issue.updated_at = utcnow()
         wake = [await self._after_change_in(s, before[1], issue, actor, session_id, happened)]
-        if before[0] not in FINISHED and issue.status in FINISHED:
+        if not finished(before[0]) and finished(issue.status):
             wake += await self._unblock_in(s, issue, before[0], actor, session_id)
         return wake
 
@@ -643,9 +651,10 @@ class IssueService:
         return list((await s.scalars(query)).all())
 
     async def _check_assignee_in(self, s: AsyncSession, assignee: str | None) -> None:
-        if assignee is not None and assignee != USER:
+        agent = agent_assignee(assignee)
+        if agent is not None:
             # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又指派给它，没人认领；归档的拒绝（它接不到信）
-            await runnable_agent_in(s, assignee)
+            await runnable_agent_in(s, agent)
 
     def _record(
         self,

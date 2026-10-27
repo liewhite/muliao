@@ -17,6 +17,7 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   depends_on: [],
   blocks: [],
   waiting_on: [],
+  finished: false,
   reviewable: false,
   created_at: '2026-10-21T00:00:00Z',
   updated_at: '2026-10-21T00:00:00Z',
@@ -38,7 +39,7 @@ describe('issues', () => {
       issue(1, { updated_at: '2026-10-21T01:00:00Z' }),
       issue(2, { updated_at: '2026-10-21T02:00:00Z' }),
       issue(3, { priority: 'urgent' }),
-      issue(4, { status: 'done' }),
+      issue(4, { status: 'done', finished: true }),
     ])
     // 只按最近更新排，不看优先级
     expect(groups.todo.map((i) => i.id)).toEqual([2, 1, 3])

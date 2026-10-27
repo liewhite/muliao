@@ -17,6 +17,7 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   depends_on: [],
   blocks: [],
   waiting_on: [],
+  finished: false,
   reviewable: false,
   created_at: '2026-10-21T00:00:00Z',
   updated_at: '2026-10-21T00:00:00Z',
@@ -26,11 +27,11 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
 describe('issue graph', () => {
   // 1 ← 2 ← 3（3 依赖 2，2 依赖 1）；4 ← 5 全部完成；6 孤立；7 依赖未加载的 99
   const issues = [
-    issue(1, { status: 'done' }),
+    issue(1, { status: 'done', finished: true }),
     issue(2, { depends_on: [1] }),
-    issue(3, { depends_on: [2, 1] }),
-    issue(4, { status: 'done' }),
-    issue(5, { status: 'cancelled', depends_on: [4] }),
+    issue(3, { depends_on: [2, 1], waiting_on: [2] }),
+    issue(4, { status: 'done', finished: true }),
+    issue(5, { status: 'cancelled', finished: true, depends_on: [4] }),
     issue(6),
     issue(7, { depends_on: [99] }),
   ]

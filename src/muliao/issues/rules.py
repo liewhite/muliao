@@ -48,9 +48,14 @@ class Snapshot:
     waiting_on: tuple[int, ...]
 
 
+def finished(status: IssueStatus) -> bool:
+    """已结束（done / cancelled）：不再挡着依赖它的 issue。"""
+    return status in FINISHED
+
+
 def reviewable(status: IssueStatus, assignee: str | None) -> bool:
     """用户能审核（通过或打回）的 issue：当前指派给用户、还没结束。"""
-    return assignee == USER and status not in FINISHED
+    return assignee == USER and not finished(status)
 
 
 def handed_by(creator: str | None, assigners: Sequence[str | None]) -> str | None:
@@ -61,13 +66,14 @@ def handed_by(creator: str | None, assigners: Sequence[str | None]) -> str | Non
     return None if actor in (None, SYSTEM_ACTOR) else actor
 
 
-def _agent_assignee(issue: Snapshot) -> str | None:
-    return None if issue.assignee in (None, USER) else issue.assignee
+def agent_assignee(assignee: str | None) -> str | None:
+    """指派给 agent 时是它的 id；未指派或指派给用户为 None。"""
+    return None if assignee in (None, USER) else assignee
 
 
 def _assignee_recipient(issue: Snapshot) -> str | None:
     """该由被指派的 agent 接手时就是它：todo / in_progress、指派给 agent、不在等上游。"""
-    agent = _agent_assignee(issue)
+    agent = agent_assignee(issue.assignee)
     return None if agent is None or issue.status not in ACTIVE or issue.waiting_on else agent
 
 
@@ -143,7 +149,7 @@ class Dependency:
 
 def waiting_on(depends_on: Iterable[Dependency]) -> tuple[int, ...]:
     """还没完成的上游：它们都完成（FINISHED）之前，这个 issue 还轮不到。"""
-    return tuple(d.id for d in depends_on if d.status not in FINISHED)
+    return tuple(d.id for d in depends_on if not finished(d.status))
 
 
 @dataclass(frozen=True)

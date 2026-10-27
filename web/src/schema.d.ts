@@ -1562,6 +1562,8 @@ export interface components {
             blocks: number[];
             /** Waiting On */
             waiting_on: number[];
+            /** Finished */
+            finished: boolean;
             /** Reviewable */
             reviewable: boolean;
             /**
@@ -1746,6 +1748,8 @@ export interface components {
             description: string;
             /** Roles */
             roles: string[];
+            /** Shared */
+            shared: boolean;
             /**
              * Updated At
              * Format: date-time
@@ -2070,6 +2074,8 @@ export interface components {
             deny: string[];
             /** Builtin */
             builtin: boolean;
+            /** Assignable */
+            assignable: boolean;
             reach: components["schemas"]["ReachOut"];
             /** Agents */
             agents: string[];
@@ -2227,6 +2233,8 @@ export interface components {
             description: string;
             /** Roles */
             roles: string[];
+            /** Shared */
+            shared: boolean;
             /**
              * Updated At
              * Format: date-time
@@ -2389,6 +2397,8 @@ export interface components {
             description: string;
             /** Roles */
             roles: string[];
+            /** Shared */
+            shared: boolean;
             /**
              * Updated At
              * Format: date-time
@@ -2580,6 +2590,8 @@ export interface components {
             description: string;
             /** Roles */
             roles: string[];
+            /** Shared */
+            shared: boolean;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}

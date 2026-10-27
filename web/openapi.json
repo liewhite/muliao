@@ -4360,6 +4360,10 @@
             "type": "array",
             "title": "Waiting On"
           },
+          "finished": {
+            "type": "boolean",
+            "title": "Finished"
+          },
           "reviewable": {
             "type": "boolean",
             "title": "Reviewable"
@@ -4391,6 +4395,7 @@
           "depends_on",
           "blocks",
           "waiting_on",
+          "finished",
           "reviewable",
           "created_at",
           "updated_at"
@@ -4936,6 +4941,10 @@
             "type": "array",
             "title": "Roles"
           },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time",
@@ -4960,6 +4969,7 @@
           "owner",
           "description",
           "roles",
+          "shared",
           "updated_at",
           "kind"
         ],
@@ -5788,6 +5798,10 @@
             "type": "boolean",
             "title": "Builtin"
           },
+          "assignable": {
+            "type": "boolean",
+            "title": "Assignable"
+          },
           "reach": {
             "$ref": "#/components/schemas/ReachOut"
           },
@@ -5807,6 +5821,7 @@
           "allow",
           "deny",
           "builtin",
+          "assignable",
           "reach",
           "agents"
         ],
@@ -6197,6 +6212,10 @@
             "type": "array",
             "title": "Roles"
           },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time",
@@ -6214,6 +6233,7 @@
           "owner",
           "description",
           "roles",
+          "shared",
           "updated_at",
           "kind"
         ],
@@ -6675,6 +6695,10 @@
             "type": "array",
             "title": "Roles"
           },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time",
@@ -6692,6 +6716,7 @@
           "owner",
           "description",
           "roles",
+          "shared",
           "updated_at",
           "kind"
         ],
@@ -7220,6 +7245,10 @@
             "type": "array",
             "title": "Roles"
           },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
           "kind": {
             "type": "string",
             "const": "tool",
@@ -7248,6 +7277,7 @@
           "owner",
           "description",
           "roles",
+          "shared",
           "kind",
           "updated_at",
           "access",

@@ -2,7 +2,6 @@
 
 import { Graph, layout, type Point } from '@dagrejs/dagre'
 import type { Issue } from './api'
-import { isFinished } from './issues'
 
 /** 节点（卡片）的尺寸，渲染与布局共用 */
 export const NODE_WIDTH = 224
@@ -23,7 +22,7 @@ export interface GraphEdge {
   from: number
   /** 依赖它的 issue */
   to: number
-  /** 依赖已完成或取消：不再挡着下游 */
+  /** 依赖已完成或取消（不在下游的 waiting_on 里）：不再挡着下游 */
   settled: boolean
   points: Point[]
 }
@@ -68,7 +67,7 @@ export function graphIssues(issues: Issue[], scope: GraphScope): Issue[] {
   const byId = new Map(issues.map((i) => [i.id, i]))
   const keep = new Set(
     dependencyGroups(issues)
-      .filter((g) => scope === 'all' || g.some((id) => !isFinished(byId.get(id)!.status)))
+      .filter((g) => scope === 'all' || g.some((id) => !byId.get(id)!.finished))
       .flat(),
   )
   return issues.filter((i) => keep.has(i.id))
@@ -85,7 +84,7 @@ export function layoutIssueGraph(issues: Issue[]): GraphLayout {
   const edges = dependencyEdges(sorted)
   for (const [from, to] of edges) g.setEdge(String(from), String(to))
   layout(g)
-  const status = new Map(issues.map((i) => [i.id, i.status]))
+  const byId = new Map(issues.map((i) => [i.id, i]))
   const label = g.graph()
   return {
     nodes: sorted.map((issue) => {
@@ -95,7 +94,7 @@ export function layoutIssueGraph(issues: Issue[]): GraphLayout {
     edges: edges.map(([from, to]) => ({
       from,
       to,
-      settled: isFinished(status.get(from)!),
+      settled: !byId.get(to)!.waiting_on.includes(from),
       points: g.edge(String(from), String(to)).points!,
     })),
     width: label.width!,

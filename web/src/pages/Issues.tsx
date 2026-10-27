@@ -17,7 +17,6 @@ import {
   assigneeOptions,
   FOLD_LIMIT,
   foldIssues,
-  isFinished,
   ownerHue,
   ownerLabel,
   groupByStatus,
@@ -370,7 +369,7 @@ function DependencyGraph({ issues, agents, scope }: { issues: Issue[]; agents: A
               onMouseLeave={() => setHover(null)}
               className={`absolute flex flex-col justify-between gap-1 rounded-lg border border-l-4 border-separator bg-surface px-2.5 py-1.5 text-sm shadow-sm transition-colors hover:bg-surface-hover ${
                 hue === null ? '' : 'owner-color border-l-(--owner-fg)'
-              } ${isFinished(issue.status) ? 'opacity-60' : ''}`}
+              } ${issue.finished ? 'opacity-60' : ''}`}
               style={{ ...ownerStyle(hue), left: x, top: y, width: NODE_WIDTH, height: NODE_HEIGHT }}
               title={`#${issue.id} ${issue.title}`}
             >
