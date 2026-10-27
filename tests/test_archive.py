@@ -32,7 +32,9 @@ async def test_group_is_trimmed_kept_on_other_changes_and_cleared_by_an_empty_st
         AgentSpec(name="a", description="d", model="test", group="  jobs  "), author="user"
     )
     assert agent.group == "jobs"
-    assert (await container.agents.update(agent.id, AgentPatch(description="x"), author="user")).group == "jobs"
+    assert (
+        await container.agents.update(agent.id, AgentPatch(description="x"), author="user")
+    ).group == "jobs"
     assert (await container.agents.update(agent.id, AgentPatch(group="   "), author="user")).group is None
     with pytest.raises(InvalidInput, match="at most 64"):
         await container.agents.update(agent.id, AgentPatch(group="g" * 65), author="user")

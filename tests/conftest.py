@@ -134,7 +134,9 @@ async def share(container: Assembly, *rules: str) -> None:
 
     base = await container.roles.get("base")
     allow = [*base.rules.allow, *rules]
-    await container.roles.update(RoleSpec("base", base.description, allow, list(base.rules.deny)), actor="user")
+    await container.roles.update(
+        RoleSpec("base", base.description, allow, list(base.rules.deny)), actor="user"
+    )
 
 
 async def owned(container: Assembly, kind: str, owner: str | None) -> list[str]:
