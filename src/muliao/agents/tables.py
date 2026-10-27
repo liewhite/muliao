@@ -121,10 +121,12 @@ class Memory(Base):
 
 
 class Revision(Base):
-    """条目与记忆的一版（agents.revisions）：谁、何时、改前改后、说明。只追加；条目或 agent 删除后仍保留（审计）。
+    """条目、记忆、角色与 agent 分发规则的一版（agents.revisions）：谁、何时、改前改后、说明。只追加；对象或 agent
+    删除后仍保留（审计）。
 
-    subject 是条目的种类或 "memory"；name 是条目名，记忆是 agent 的 id、全局记忆为空串。before / after 是这一版前后的
-    文档（revisions.Document：各种类自己的文本形式），新建时 before 为 None、删除时 after 为 None。secret 的文档不含值。"""
+    subject 是 kinds.Subject（skill、mcp、secret、memory、role、agent）；name 是条目名、角色名，记忆与 agent 规则是
+    agent 的 id（全局记忆为空串）。before / after 是这一版前后的文档（各对象自己的文本形式，见 agents.revisions 的
+    模块说明），新建时 before 为 None、删除时 after 为 None。secret 的文档只有描述，不含值。"""
 
     __tablename__ = "revisions"
     __table_args__ = (

@@ -61,6 +61,7 @@ class Issue(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[IssueStatus] = mapped_column(StrEnumType(IssueStatus))
     priority: Mapped[IssuePriority] = mapped_column(StrEnumType(IssuePriority))
+    # agent id 或 rules.USER：列宽同 agent 的引用（agent_ref），但不只存 agent
     assignee: Mapped[str | None] = mapped_column(agent_ref(), index=True)
     # 负责的项目（agent）：创建时必填，不随指派变化，只能显式修改；按它筛选看一个项目的全部来龙去脉。
     # 只在负责的 agent 被删除时变为空

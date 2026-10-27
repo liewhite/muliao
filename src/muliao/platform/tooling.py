@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 class Audience(StrEnum):
-    """一次运行的回答交给谁：运行开始时由会话与它处理的信件推导一次（sessions.consumer），决定开放哪些工具（ask_user）
-    与指令里怎么说。不入库。"""
+    """一次运行的回答交给谁：运行开始时由会话与它处理的信件推导一次（sessions.consumer），决定运行上下文里怎么说、
+    ask_user 调用时接不接受（没有用户会回答就拒绝）。工具列表不随它变（只由分发规则决定，缓存前缀才稳定）。不入库。"""
 
     # 有用户在等：运行结束时推送
     USER = "user"

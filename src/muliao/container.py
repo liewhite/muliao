@@ -359,18 +359,14 @@ def assemble(
         ports.work,
     )
     limits = ShellLimits(settings.runtime.tool_output_max_chars)
-    # 总是开放：自我改进、工作历史（每日自进化人人都写），以及向用户提问（工具列表保持稳定以命中缓存；没有用户会回答的运行里调用被拒绝，见 sessions.ask_user）
-    always_tools = [
+    # 运行可用的全部静态工具集；每个工具的权限在 agents.permissions 登记，一次运行开放哪些只按 agent 的分发规则算
+    # （Toolbox.profile），不随运行状态变（工具列表稳定才命中缓存）：如 ask_user 在没有用户会回答的运行里照样列出，
+    # 调用时被拒绝（sessions.ask_user）
+    static_toolsets = [
         skills_toolset(skills),
         memory_toolset(memory),
         history_toolset(history, agents),
         ask_user_toolset(),
-    ]
-
-    # 运行可用的全部静态工具集；每个工具的权限在 agents.permissions 登记，一次运行开放哪些按 agent 的权限规则
-    # 算（Toolbox.profile）
-    static_toolsets = [
-        *always_tools,
         workspace_toolset(vault, limits, files, jobs),
         ports.delegation_toolset(db, agents),
         notify_toolset(notifications),
