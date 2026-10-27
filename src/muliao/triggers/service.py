@@ -29,7 +29,6 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import undefer
 
 from muliao.agents.api import AgentArchived, runnable_agent_in
 from muliao.agents.events import AgentDeleting
@@ -49,7 +48,17 @@ from muliao.sessions.api import (
     WorkState,
     receive_command_in,
 )
-from muliao.triggers.precheck import Precheck, PrecheckFailed, PrecheckRunner, decide
+from muliao.triggers.precheck import (
+    Precheck,
+    PrecheckFailed,
+    PrecheckRunner,
+    current_in,
+    failed,
+    passed,
+    precheck_alert,
+    precheck_of,
+    set_precheck,
+)
 from muliao.triggers.tables import Trigger
 
 log = logging.getLogger(__name__)
@@ -65,11 +74,6 @@ SESSION_NOTE = (
     "watching. Each firing starts a fresh conversation unless its sender continues this one, so keep anything "
     "later firings need in memory or workspace files."
 )
-
-
-def precheck_of(trigger: Trigger) -> Precheck | None:
-    """存下的前置检查（写入时已按 Precheck 校验）。"""
-    return None if trigger.precheck is None else Precheck.model_validate(trigger.precheck)
 
 
 @dataclass(frozen=True)
@@ -242,8 +246,8 @@ class TriggerService:
             config=config,
             state=state,
             enabled=True,
-            precheck=None if precheck is None else precheck.model_dump(),
         )
+        set_precheck(trigger, precheck)
         try:
             async with self._db.transaction() as s:
                 # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又建的触发器没人认领；归档的拒绝（它不能运行）
@@ -274,11 +278,8 @@ class TriggerService:
             await self._precheck.check(agent_id, precheck)
         async with self._db.transaction() as s:
             trigger = await self._manageable_in(s, trigger_id)
-            if precheck is not KEEP:
-                trigger.precheck = None if precheck is None else precheck.model_dump()
-                # 新的检查从新的基线开始比较；旧命令的失败也不记到新配置上（新命令失败时要能再告警一次）
-                trigger.precheck_output = None
-                trigger.precheck_error = None
+            if not isinstance(precheck, Keep):
+                set_precheck(trigger, precheck)
             if prompt is not None:
                 trigger.prompt = prompt
             reenabled = enabled is True and not trigger.enabled
@@ -484,18 +485,15 @@ class TriggerService:
 
         failure: PrecheckFailed | None = None
         async with self._db.transaction() as s:
-            trigger = await self._current(s, trigger_id, stored)
+            trigger = await current_in(s, trigger_id, stored)
             if trigger is None:
                 return None
             try:
-                decision = decide(precheck, output, trigger.precheck_output, self._precheck.max_bytes)
+                decision = passed(trigger, precheck, output, self._precheck.max_bytes, self._clock())
             except PrecheckFailed as e:
                 # 失败要在这个事务之外记录：异常穿出事务会把在里面写的错误与告警一起回滚
                 failure = e
             else:
-                self._succeed_in(trigger)
-                if precheck.fire_when == "changed":
-                    trigger.precheck_output = output
                 if decision.event is None:
                     log.info(
                         "trigger precheck: nothing to do, not firing",
@@ -507,46 +505,22 @@ class TriggerService:
             await self._record_failure(trigger_id, stored, str(failure))
         raise failure
 
-    async def _current(self, s: AsyncSession, trigger_id: int, checked: dict[str, Any]) -> Trigger | None:
-        """检查结果是否仍然有效：检查期间触发器被删除、停用或改了检查，这次的结果（成功或失败）都作废。
-        比较的是第一次读出的原始配置，而不是重新序列化的结果。"""
-        trigger = await s.get(Trigger, trigger_id, options=[undefer(Trigger.precheck_output)])
-        if trigger is None or not trigger.enabled or trigger.precheck != checked:
-            log.info(
-                "trigger changed during its precheck, result discarded", extra={"trigger_id": trigger_id}
-            )
-            return None
-        return trigger
-
     async def _record_failure(self, trigger_id: int, checked: dict[str, Any], error: str) -> None:
         async with self._db.transaction() as s:
-            trigger = await self._current(s, trigger_id, checked)
+            trigger = await current_in(s, trigger_id, checked)
             if trigger is None:
                 return
             delivery = await self._fail_in(s, trigger, error)
         if delivery is not None:
             await self._run_now(delivery.id)
 
-    def _succeed_in(self, trigger: Trigger) -> None:
-        if trigger.precheck_error is not None:
-            log.info(
-                "trigger precheck recovered",
-                extra={"trigger": trigger.name, "previous_error": trigger.precheck_error},
-            )
-        trigger.last_checked_at, trigger.precheck_error = self._clock(), None
-
     async def _fail_in(self, s: AsyncSession, trigger: Trigger, error: str) -> Task | None:
-        """记下失败原因；从正常变为出错时告警一次（每分钟检查一次的触发器坏了不会每分钟告警一次），返回告警的投递任务。
+        """记下失败原因（precheck.failed）；要告警时返回告警的投递任务。
 
         检查脚本是触发器所属的 agent 写的，告警交给它（新会话，说明出错原因和怎么处理），由它修脚本或在自己解决不了
         时通知用户；这封信投不进去（如 agent 正在删除）时退回给用户发通知，不静默吞掉。
         """
-        healthy_before = trigger.precheck_error is None
-        trigger.last_checked_at, trigger.precheck_error = self._clock(), error
-        log.warning(
-            "trigger precheck failed: %s", error, extra={"trigger": trigger.name, "alert": healthy_before}
-        )
-        if not healthy_before:
+        if not failed(trigger, error, self._clock()):
             return None
         now = self._clock()
         inbound = SenderMail(
@@ -578,56 +552,6 @@ class TriggerService:
                 ),
             )
         return self._messaging.send_in(s, command)
-
-
-def precheck_alert(trigger: Trigger, error: str) -> str:
-    """前置检查从正常变为出错时交给触发器所属 agent 的信件：出错的是哪个检查、原因，以及怎么处理。"""
-    precheck = precheck_of(trigger)
-    if precheck is None:
-        raise RuntimeError(f"trigger {trigger.name} has no precheck to alert about")
-    lines = [
-        f"The precheck of your trigger `{trigger.name}` (kind {trigger.kind}) just started failing, so the "
-        "trigger did not fire this time. You wrote this check, so it is yours to fix; the user has not been told.",
-        "",
-        f"fire_when: {precheck.fire_when}",
-        f"secrets: {', '.join(precheck.secrets) or '(none)'}",
-        "command:",
-        "```bash",
-        precheck.command,
-        "```",
-        "error:",
-        "```",
-        error,
-        "```",
-        "",
-        "What to do:",
-    ]
-    user_only = (
-        "- Something only the user can fix (a missing secret, a permission, an account): `notify_user` with what "
-        "is needed."
-    )
-    if trigger.finished_at is None:
-        lines += [
-            "- A transient fault (network blip, a remote service briefly down): nothing to fix, the next check "
-            "recovers by itself; consider adding retries to the command if this keeps happening.",
-            "- A bug in the command: fix it with `trigger_update` (new precheck) and verify with `trigger_run`.",
-            user_only,
-            "You are told only when the check goes from healthy to failing; while it keeps failing no further "
-            "message comes.",
-        ]
-    else:
-        # 已归档的一次性触发器不能再修改或运行：任务没做，要么自己做，要么重建
-        lines += [
-            "- This was a one-off trigger and it has used up its single firing, so its task was NOT done; it is "
-            "archived and can no longer be updated or run. If the cause was transient or a bug in the command, "
-            "do the task yourself or create a new trigger with a fixed precheck.",
-            user_only,
-            "Its prompt was:",
-            "<prompt>",
-            trigger.prompt,
-            "</prompt>",
-        ]
-    return "\n".join(lines)
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ import pytest
 from muliao.errors import NotFound
 from muliao.sessions.api import Origin
 from muliao.sessions.lanes import RUN_TASK
-from muliao.triggers.precheck import Precheck, PrecheckFailed, decide
+from muliao.triggers.precheck import Precheck, PrecheckFailed, decide, failed, passed, set_precheck
 from muliao.triggers.service import trigger_in
 from tests.conftest import login
 from tests.test_flow import deliver, mail_of, tasks_of
@@ -52,6 +52,31 @@ async def _tick(container, trigger_id: int) -> None:
     await _make_due(container, trigger_id)
     await container.due_triggers.fire_due()
     await deliver(container)
+
+
+def test_precheck_state_alerts_once_per_failure_streak_and_restarts_with_a_new_check():
+    from muliao.triggers.tables import Trigger
+
+    now = datetime(2026, 1, 1)
+    trigger = Trigger(name="t", kind="schedule", prompt="p")
+    p = Precheck(command="x", fire_when="changed")
+    set_precheck(trigger, p)
+
+    # 第一次 changed 检查只记基线
+    assert passed(trigger, p, "a", 100, now).baseline and trigger.precheck_output == "a"
+    # 从正常变为出错才告警，连续出错不再告警；恢复后清掉原因
+    assert failed(trigger, "boom", now) and not failed(trigger, "boom again", now)
+    assert trigger.precheck_error == "boom again"
+    assert passed(trigger, p, "b", 1000, now).event is not None
+    assert trigger.precheck_error is None and trigger.last_checked_at == now
+    # 判定本身失败（差异超出上限）不改状态
+    with pytest.raises(PrecheckFailed):
+        passed(trigger, p, "c" * 200, 100, now)
+    assert trigger.precheck_output == "b"
+    # 换检查：从新基线开始，旧失败不带过去
+    failed(trigger, "old", now)
+    set_precheck(trigger, Precheck(command="y"))
+    assert trigger.precheck_output is None and trigger.precheck_error is None
 
 
 async def test_schedule_runs_the_agent_only_when_the_precheck_has_output(container, make_agent):
