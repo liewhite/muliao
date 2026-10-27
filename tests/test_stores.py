@@ -9,7 +9,7 @@ import pytest
 from muliao.agents.api import Subject
 from muliao.agents.mcp import McpTransport, mcp_config
 from muliao.agents.memory import MemoryFull
-from muliao.agents.skill_package import SkillFile
+from muliao.agents.skill_package import SKILL_FILE, SkillFile
 from muliao.agents.skills import attachments_from, parse_document
 from muliao.errors import Conflict, CorruptState, Forbidden, InvalidInput, NotFound
 from muliao.vault.api import fill
@@ -322,31 +322,27 @@ async def test_writes_for_a_deleting_agent_are_refused(container, make_agent):
         await container.vault.set("LATE", "x", "", actor=alpha, owner=alpha)
 
 
-@pytest.mark.parametrize("meddle", ["rewrite", "delete"])
-async def test_an_edit_whose_skill_changed_or_vanished_after_it_was_read_is_a_conflict(
-    container, make_agent, monkeypatch, meddle
-):
-    """edit 先读后写：读到之后、写入之前别人改了或删了这个 skill，写入报冲突，不悄悄盖掉。"""
+async def test_concurrent_edits_of_one_skill_all_apply(container, make_agent):
+    """同一 skill 并发改不同段落：读改写在一个写事务里串行，全部成功、各记一版，不报冲突（#236）。"""
+    store = container.skills
+    alpha = (await make_agent("alpha")).id
+    await store.write("digest", "d", "\n".join(f"line{i}" for i in range(6)), actor=alpha, owner=alpha)
+
+    await asyncio.gather(*(store.edit("digest", alpha, old=f"line{i}", new=f"LINE{i}") for i in range(6)))
+
+    assert (await store.read("digest")).body.split() == [f"LINE{i}" for i in range(6)]
+    assert (store.dir("digest") / SKILL_FILE).read_text().count("LINE") == 6
+    revs = await container.revisions.history(Subject.SKILL, "digest", 20)
+    assert len(revs) == 7
+
+
+async def test_an_edit_of_a_vanished_skill_is_not_found(container, make_agent):
     store = container.skills
     alpha = (await make_agent("alpha")).id
     await store.write("digest", "d", "body", actor=alpha, owner=alpha)
-    put = store._put  # noqa: SLF001
-
-    async def meddle_then_put(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-        monkeypatch.setattr(store, "_put", put)
-        if meddle == "rewrite":
-            await store.write("digest", "d", "rewritten", actor=alpha, owner=alpha)
-        else:
-            await store.delete("digest", alpha)
-        return await put(*args, **kwargs)
-
-    monkeypatch.setattr(store, "_put", meddle_then_put)
-    with pytest.raises(Conflict, match="changed at the same time"):
+    await store.delete("digest", alpha)
+    with pytest.raises(NotFound):
         await store.edit("digest", alpha, new="more")
-    if meddle == "rewrite":
-        assert (await store.read("digest")).body.strip() == "rewritten"
-    else:
-        assert await owned(container, "skill", alpha) == []
 
 
 async def test_hidden_and_dependency_directories_are_skipped_whole(tmp_path):

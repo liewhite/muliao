@@ -23,6 +23,7 @@ from pathlib import Path
 import frontmatter
 import yaml
 from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents import skill_package
 from muliao.agents.access import grants_in
@@ -208,16 +209,19 @@ class SkillStore:
                 "nothing to change: give old_text/new_text to edit the instructions, description, "
                 "attachments_dir, or several of them"
             )
+        # 读取、修改、写入与记版本在同一个写事务里（同记忆）：并发的编辑依次基于最新正文应用，互不覆盖
         async with self._db.transaction() as s:
             row = await changeable_in(s, Subject.SKILL, name, actor)
-            post, owner = frontmatter.loads(row.content), row.owner
-        if edits_body:
-            post.content = text_edit.edit(post.content, old, new, f"skill {name}").strip() + "\n"
-        if description is not None:
-            post["description"] = description
-        return await self._put(
-            name, frontmatter.dumps(post) + "\n", attachments, actor, owner, "edit", expect=row.content
-        )
+            post = frontmatter.loads(row.content)
+            if edits_body:
+                post.content = text_edit.edit(post.content, old, new, f"skill {name}").strip() + "\n"
+            if description is not None:
+                post["description"] = description
+            meta = await self._store_in(
+                s, row, name, frontmatter.dumps(post) + "\n", attachments, actor, row.owner, "edit"
+            )
+        await self.materialize(name)
+        return meta
 
     async def _put(
         self,
@@ -227,40 +231,50 @@ class SkillStore:
         actor: str,
         owner: str | None,
         verb: str,
-        *,
-        expect: str | None = None,
     ) -> SkillMeta:
-        """写入 SKILL.md（已按规则生成或校验）与附件、记一版，再重新生成目录。已有的按规则 2 查 actor，owner 不变；新建的
-        归 owner。expect：读出时的 SKILL.md，写入时已被别人改了就冲突（edit 先读后写，不悄悄盖掉并发的修改）。"""
+        """新建或整篇写入：已有的按规则 2 查 actor，owner 不变；新建的归 owner。"""
+        async with self._db.transaction() as s:
+            row = await writable_in(s, Subject.SKILL, name, actor, owner)
+            meta = await self._store_in(s, row, name, skill_md, attachments, actor, owner, verb)
+        await self.materialize(name)
+        return meta
+
+    async def _store_in(
+        self,
+        s: AsyncSession,
+        row: Item | None,
+        name: str,
+        skill_md: str,
+        attachments: Mapping[str, SkillFile] | None,
+        actor: str,
+        owner: str | None,
+        verb: str,
+    ) -> SkillMeta:
+        """在调用方的事务里写入 SKILL.md（校验 frontmatter）与附件（None 表示不变）、记一版；row 为 None 时新建，归 owner。
+        生成目录由调用方在事务提交后做。"""
         description, _ = parse_frontmatter(skill_md, name)
         for rel in attachments or {}:
             if not skill_package.is_attachment(rel) or rel == SKILL_FILE:
                 raise InvalidInput(f"{rel!r} cannot be an attachment of a skill")
-        async with self._db.transaction() as s:
-            row = await writable_in(s, Subject.SKILL, name, actor, owner)
-            if expect is not None and (row is None or row.content != expect):
-                raise Conflict(f"skill {name!r} was changed at the same time; read it again and retry")
-            old_files = {} if row is None else await _attachments_in(s, row)
-            before = None if row is None else document(row.content, old_files)
-            if row is None:
-                row = Item(kind=Subject.SKILL.value, name=name, owner=owner)
-                s.add(row)
-            row.content, row.description = skill_md, description
-            new_files = old_files if attachments is None else dict(attachments)
-            if attachments is not None:
-                await s.flush()
-                await s.execute(delete(ItemFile).where(ItemFile.item_id == row.id))
-                s.add_all(
-                    ItemFile(item_id=row.id, path=rel, content=f.content, executable=f.executable)
-                    for rel, f in new_files.items()
-                )
-            record_in(
-                s, Subject.SKILL, name, before, document(skill_md, new_files), actor, f"{verb} skill {name}"
-            )
+        old_files = {} if row is None else await _attachments_in(s, row)
+        before = None if row is None else document(row.content, old_files)
+        if row is None:
+            row = Item(kind=Subject.SKILL.value, name=name, owner=owner)
+            s.add(row)
+        row.content, row.description = skill_md, description
+        new_files = old_files if attachments is None else dict(attachments)
+        if attachments is not None:
             await s.flush()
-            meta = self._meta(row)
-        await self.materialize(name)
-        return meta
+            await s.execute(delete(ItemFile).where(ItemFile.item_id == row.id))
+            s.add_all(
+                ItemFile(item_id=row.id, path=rel, content=f.content, executable=f.executable)
+                for rel, f in new_files.items()
+            )
+        record_in(
+            s, Subject.SKILL, name, before, document(skill_md, new_files), actor, f"{verb} skill {name}"
+        )
+        await s.flush()
+        return self._meta(row)
 
     async def export(self, name: str) -> bytes:
         """打成标准 .skill 文件（skill_package）：SKILL.md 与附件。"""
