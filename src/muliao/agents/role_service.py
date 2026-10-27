@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.access import granted_by
 from muliao.agents.items import Reach, reach_in
-from muliao.agents.kinds import Subject
+from muliao.agents.kinds import Subject, label
 from muliao.agents.naming import validate_slug
 from muliao.agents.permissions import FIXED_RULES, Role, Rules
 from muliao.agents.revisions import record_in
@@ -39,7 +39,7 @@ class RoleView:
 
 
 def _check(spec: RoleSpec) -> None:
-    validate_slug("role", spec.name)
+    validate_slug(label(Subject.ROLE), spec.name)
     if not spec.description.strip():
         raise InvalidInput("role description must not be empty")
 

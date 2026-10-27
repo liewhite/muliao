@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agents import skill_package
 from muliao.agents.access import grants_in
 from muliao.agents.items import changeable_in, creatable_in, existing_in, item_in, usable_in, writable_in
-from muliao.agents.kinds import Kind, StoredKind, Subject
+from muliao.agents.kinds import Kind, StoredKind, Subject, label
 from muliao.agents.naming import validate_slug
 from muliao.agents.revisions import record_in, revision_doc_in
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped
@@ -142,7 +142,7 @@ class SkillStore:
         self._materialize_lock = asyncio.Lock()
 
     def dir(self, name: str) -> Path:
-        return self.skills_dir / validate_slug("skill", name)
+        return self.skills_dir / validate_slug(label(StoredKind.SKILL), name)
 
     def _meta(self, row: Item) -> SkillMeta:
         return SkillMeta(row.name, row.description, row.owner, self.dir(row.name) / SKILL_FILE)
@@ -182,7 +182,7 @@ class SkillStore:
     ) -> SkillMeta:
         """新建或整体改写 SKILL.md；attachments 为 None 时附件不变，否则整体换成它。actor（agent 的 id 或 USER）是改的人，
         已有的要它能改（规则 2）；新建的归 owner，已有的 owner 不变。"""
-        validate_slug("skill", name)
+        validate_slug(label(StoredKind.SKILL), name)
         description = _valid_description(description)
         return await self._put(name, _skill_md(name, description, body), attachments, actor, owner, "write")
 

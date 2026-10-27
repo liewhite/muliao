@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.kinds import Kind
-from muliao.agents.permissions import BASE, FIXED_RULES, Role, Rules, check_patterns, kind_of
+from muliao.agents.permissions import BASE, FIXED_RULES, Role, Rules, check_patterns, kind_of, pattern_of
 from muliao.agents.tables import Agent, Item
 from muliao.agents.tables import Role as RoleRow
 from muliao.errors import InvalidInput
@@ -74,7 +74,7 @@ async def check_new_items_in(s: AsyncSession, patterns: Sequence[str], before: S
     new = [p for p in patterns if p not in before and kind_of(p) != Kind.TOOL]
     if not new:
         return
-    items = [f"{k}:{n}" for k, n in await s.execute(select(Item.kind, Item.name))]
+    items = [pattern_of(Kind(k), n) for k, n in await s.execute(select(Item.kind, Item.name))]
     bad = [p for p in new if not any(fnmatchcase(i, p) for i in items)]
     if bad:
         raise InvalidInput(f"rules {bad} match no existing skill, MCP server or secret; check the names")

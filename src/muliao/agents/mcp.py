@@ -18,7 +18,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from muliao.agents.items import changeable_in, creatable_in, existing_in, usable_in
-from muliao.agents.kinds import StoredKind, Subject
+from muliao.agents.kinds import StoredKind, Subject, label
 from muliao.agents.naming import validate_slug
 from muliao.agents.revisions import record_in, revision_doc_in
 from muliao.agents.tables import Item
@@ -138,7 +138,7 @@ class McpRegistry:
         self, name: str, config: McpConfig, *, actor: str, owner: str | None, probe: bool
     ) -> tuple[McpServer, list[str]]:
         """新增 server（启用的，归 owner）。probe=True 时先按 actor 能用的 secret 连接验证，验证失败不写入。"""
-        validate_slug("mcp server", name)
+        validate_slug(label(StoredKind.MCP), name)
         server = McpServer(owner=owner, name=name, config=config, enabled=True)
         # 连接验证之前先查一次（正在删除的 agent、已有同名的不必白跑一次连接）；写入时事务里的那次才是准的
         async with self._db.transaction() as s:
@@ -147,7 +147,15 @@ class McpRegistry:
         async with self._db.transaction() as s:
             await creatable_in(s, StoredKind.MCP, name, owner)
             s.add(Item(kind=StoredKind.MCP.value, name=name, owner=owner, content=config.model_dump_json()))
-            record_in(s, Subject.MCP, name, None, document(config, True), actor, f"add MCP server {name}")
+            record_in(
+                s,
+                Subject.MCP,
+                name,
+                None,
+                document(config, True),
+                actor,
+                f"add {label(StoredKind.MCP)} {name}",
+            )
         log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
 
@@ -163,7 +171,7 @@ class McpRegistry:
                 document(server.config, server.enabled),
                 None,
                 actor,
-                f"remove MCP server {name}",
+                f"remove {label(StoredKind.MCP)} {name}",
             )
 
     async def set_enabled(self, name: str, enabled: bool, actor: str) -> McpServer:
@@ -178,7 +186,7 @@ class McpRegistry:
                 document(before.config, before.enabled),
                 document(before.config, enabled),
                 actor,
-                f"{'enable' if enabled else 'disable'} MCP server {name}",
+                f"{'enable' if enabled else 'disable'} {label(StoredKind.MCP)} {name}",
             )
             return McpServer(before.owner, name, before.config, enabled)
 

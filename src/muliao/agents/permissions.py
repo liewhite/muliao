@@ -143,7 +143,9 @@ def check_patterns(patterns: Sequence[str]) -> None:
     """不查数据库的规则校验：形式合法、不重复，tool 规则至少匹配一个登记的工具（拼错的在写入时报出，而不是悄悄什么都不
     匹配）。skill / mcp / secret 规则是否匹配现有条目由写入方在事务里查（agents.roles.check_new_items_in）。"""
     bad = [
-        p for p in patterns if kind_of(p) == Kind.TOOL and not any(fnmatchcase(f"tool:{t}", p) for t in TOOLS)
+        p
+        for p in patterns
+        if kind_of(p) == Kind.TOOL and not any(fnmatchcase(pattern_of(Kind.TOOL, t), p) for t in TOOLS)
     ]
     if bad:
         raise InvalidInput(f"rules {bad} match no tool; tools are listed by get_agent, e.g. 'tool:issue_*'")

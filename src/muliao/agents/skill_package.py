@@ -19,6 +19,7 @@ import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
+from muliao.agents.kinds import StoredKind, label
 from muliao.agents.naming import validate_slug
 from muliao.errors import InvalidInput, TooLarge
 
@@ -143,7 +144,7 @@ def unpack(data: bytes) -> Package:
             raise InvalidInput(
                 f"a .skill package must contain exactly one top-level directory holding all files, found {sorted(tops)}"
             )
-        name = validate_slug("skill", tops.pop())
+        name = validate_slug(label(StoredKind.SKILL), tops.pop())
         if len(entries) > MAX_PACKAGE_FILES:
             raise TooLarge(f"package has {len(entries)} files, more than {MAX_PACKAGE_FILES}")
         total = sum(info.file_size for info, _ in entries)
