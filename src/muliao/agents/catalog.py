@@ -16,7 +16,7 @@ from muliao.agents.documents import document_in
 from muliao.agents.items import Reach, changeable_in, check_visible_in, reach_in
 from muliao.agents.kinds import Kind, StoredKind, as_subject, label
 from muliao.agents.mcp import McpRegistry, McpServer, server_of
-from muliao.agents.permissions import Rules
+from muliao.agents.permissions import Rules, ToolSpec, spec_of
 from muliao.agents.revisions import RESTORABLE, RevisionInfo, history_in, record_in
 from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
 from muliao.agents.skills import SkillStore
@@ -40,6 +40,8 @@ class CatalogEntry:
     roles: tuple[str, ...]
     # 分发出去了（agents.access.shared_in）：否则只有 owner 能用（归平台的就没有 agent 能用）
     shared: bool
+    # 内置工具的读写与是否管理类；别的种类为 None
+    tool: ToolSpec | None = None
     # MCP server 的配置与启用状态；别的种类为 None
     mcp: McpServer | None = None
 
@@ -79,7 +81,14 @@ class ItemCatalog:
 
             tools = [
                 CatalogEntry(
-                    Kind.TOOL, n, None, "", None, including(Kind.TOOL, n), shared(Kind.TOOL, n, None)
+                    Kind.TOOL,
+                    n,
+                    None,
+                    "",
+                    None,
+                    including(Kind.TOOL, n),
+                    shared(Kind.TOOL, n, None),
+                    tool=spec_of(n),
                 )
                 for n in self._tools
             ]
@@ -92,7 +101,7 @@ class ItemCatalog:
                     i.updated_at,
                     including(Kind(i.kind), i.name),
                     shared(Kind(i.kind), i.name, i.owner),
-                    server_of(i) if i.kind == StoredKind.MCP else None,
+                    mcp=server_of(i) if i.kind == StoredKind.MCP else None,
                 )
                 for i in items
             ]

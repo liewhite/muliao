@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 
 from muliao.agents.api import (
     MAX_PACKAGE_BYTES,
-    TOOLS,
     USER,
     CatalogEntry,
     Kind,
@@ -115,7 +114,8 @@ def _item_out(e: CatalogEntry) -> ToolItemOut | SkillItemOut | McpItemOut | Secr
     }
     match e.kind:
         case Kind.TOOL:
-            tool = TOOLS[e.name]
+            tool = e.tool
+            assert tool is not None
             return ToolItemOut(kind="tool", access=tool.access.value, admin=tool.admin, **common)
         case Kind.SKILL:
             return SkillItemOut(kind="skill", **common)

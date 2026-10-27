@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agents.access import Keep, check_change_in, grants_in
 from muliao.agents.active import active_row_in
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
-from muliao.agents.permissions import Rules, pattern_of
+from muliao.agents.permissions import Rules, ToolSpec, pattern_of, spec_of
 from muliao.agents.tables import Item
 from muliao.errors import Conflict, NotFound
 
@@ -98,8 +98,12 @@ async def usable_in(s: AsyncSession, kind: StoredKind, user: str) -> list[Item]:
 class Reach:
     """一份配置能用的：内置工具（按登记顺序）与 skill、MCP server、secret（`kind:name`，按种类、名称）。"""
 
-    tools: list[str]
+    tools: list[ToolSpec]
     items: list[str]
+
+    @property
+    def tool_names(self) -> list[str]:
+        return [t.name for t in self.tools]
 
 
 async def reach_in(s: AsyncSession, available: Collection[str], rules: Rules, keep: Keep) -> Reach:
@@ -107,4 +111,4 @@ async def reach_in(s: AsyncSession, available: Collection[str], rules: Rules, ke
     get_agent 共用。"""
     rows = await s.execute(select(Item.kind, Item.name, Item.owner).order_by(Item.kind, Item.name))
     items = [pattern_of(Kind(k), n) for k, n, o in rows if keep(Kind(k), n, o)]
-    return Reach(rules.tools(available), items)
+    return Reach([spec_of(n) for n in rules.tools(available)], items)

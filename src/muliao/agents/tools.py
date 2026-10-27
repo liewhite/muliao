@@ -111,7 +111,7 @@ def agents_toolset(
             roles=list(target.roles),
             allow=list(target.allow),
             deny=list(target.deny),
-            tools=reach.tools,
+            tools=reach.tool_names,
             items=reach.items,
             available_roles=[RoleDetail.of(r) for r in await roles.list()],
             all_tools=list(agents.tools),

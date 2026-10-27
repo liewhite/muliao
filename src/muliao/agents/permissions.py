@@ -37,6 +37,20 @@ class Tool:
     admin: bool = False
 
 
+@dataclass(frozen=True)
+class ToolSpec:
+    """一个内置工具的读模型（界面、get_agent）：名字、读 / 写、是否管理类。"""
+
+    name: str
+    access: Access
+    admin: bool
+
+
+def spec_of(name: str) -> ToolSpec:
+    tool = TOOLS[name]
+    return ToolSpec(name, tool.access, tool.admin)
+
+
 R, W = Tool(Access.READ), Tool(Access.WRITE)
 ADMIN_W = Tool(Access.WRITE, admin=True)
 

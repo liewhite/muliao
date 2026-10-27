@@ -278,7 +278,7 @@ async def test_base_sees_every_tool_but_admin_ones_and_no_undistributed_mcp(cont
     await start(container, triage.id, "event", origin=Origin.TRIGGER)
     await drain(container)
 
-    assert sorted(seen) == sorted((await container.catalog.reach(triage.id)).tools)
+    assert sorted(seen) == sorted((await container.catalog.reach(triage.id)).tool_names)
     assert not {"memory_edit_public", "create_agent", "create_role"} & set(seen)
     assert {"write_skill", "memory_edit", "vault_set", "run_shell", "trigger_create"} <= set(seen)
     assert not any(name.startswith("echo_") for name in seen)

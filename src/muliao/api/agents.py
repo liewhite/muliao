@@ -5,7 +5,6 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from muliao.agents.api import (
-    TOOLS,
     USER,
     AgentInfo,
     AgentPatch,
@@ -14,6 +13,7 @@ from muliao.agents.api import (
     RoleSpec,
     RoleView,
     Thinking,
+    ToolSpec,
 )
 from muliao.api.deps import C
 
@@ -95,7 +95,7 @@ async def agent_defaults(c: C) -> AgentDefaultsOut:
 
 
 class ToolOut(BaseModel):
-    """一个内置工具（agents.permissions.TOOLS），在规则里写作 `tool:<name>`。"""
+    """一个内置工具（agents.permissions.TOOLS 里登记的），在规则里写作 `tool:<name>`。"""
 
     name: str
     access: Literal["read", "write"]
@@ -103,9 +103,8 @@ class ToolOut(BaseModel):
     admin: bool
 
     @classmethod
-    def of(cls, name: str) -> "ToolOut":
-        t = TOOLS[name]
-        return cls(name=name, access=t.access.value, admin=t.admin)
+    def of(cls, t: ToolSpec) -> "ToolOut":
+        return cls(name=t.name, access=t.access.value, admin=t.admin)
 
 
 class ReachOut(BaseModel):

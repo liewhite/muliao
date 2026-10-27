@@ -2647,7 +2647,7 @@ export interface components {
         };
         /**
          * ToolOut
-         * @description 一个内置工具（agents.permissions.TOOLS），在规则里写作 `tool:<name>`。
+         * @description 一个内置工具（agents.permissions.TOOLS 里登记的），在规则里写作 `tool:<name>`。
          */
         ToolOut: {
             /** Name */
