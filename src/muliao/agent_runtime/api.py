@@ -17,7 +17,7 @@ from muliao.agent_runtime.llm import ModelRegistry
 from muliao.agent_runtime.outcome import Finished, Paused, defer_call
 from muliao.agent_runtime.redaction import redact_messages
 from muliao.agent_runtime.runner import AgentRuntime, StepHooks
-from muliao.agent_runtime.toolbox import RunProfile, Toolbox
+from muliao.agent_runtime.toolbox import Toolbox
 
 __all__ = [
     "attachment_of",
@@ -28,7 +28,6 @@ __all__ = [
     "Attachment",
     "Finished",
     "Paused",
-    "RunProfile",
     "StepHooks",
     "Toolbox",
     "copy_to_workspace",

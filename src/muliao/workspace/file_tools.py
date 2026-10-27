@@ -433,7 +433,7 @@ def _change_of(target: Path, e: TextEdit) -> file_edit.Edit:
             "locate the text in exactly one way: old_text, start_line/end_line/anchor, or pattern"
         )
     if e.old_text is not None:
-        return text_edit.Replace(e.old_text, e.new_text, e.replace_all)
+        return file_edit.Replace(e.old_text, e.new_text, e.replace_all)
     if e.pattern is not None:
         return PatternEdit(e.pattern, language_of(target), e.new_text, e.replace_all)
     if e.replace_all:

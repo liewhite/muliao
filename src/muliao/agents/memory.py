@@ -1,4 +1,4 @@
-"""记忆：一份有长度上限的 markdown，每轮全文放进 instructions。存在表 memories，每次修改记一版（revisions，作者是改的人）。
+"""记忆：一份有长度上限的 markdown，每轮全文放进 instructions。存在表 memories，每次修改记一版（revisions，记改的人 actor）。
 
 两种记忆，规则相同（按 agent_id 区分：某个 agent 的 id，或 None 指全局记忆；不叫 owner，owner 只指条目的归属）：
 - 全局记忆（agent_id 为 None）：所有 agent 共享，放在各 agent 自己的记忆之前；从未写过时为空（没有行）。
@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.active import active_row_in
+from muliao.agents.active import check_active_in
 from muliao.agents.kinds import Subject
 from muliao.agents.revisions import RevisionInfo, history_in, record_in, revision_doc_in
 from muliao.agents.tables import Memory
@@ -31,7 +31,7 @@ def revision_name(agent_id: str | None) -> str:
 async def _row_in(s: AsyncSession, agent_id: str | None) -> Memory | None:
     """agent_id 的记忆（用户与工具的读、看历史、写都经这里）：正在删除的 agent 按不存在处理（NotFound）。"""
     if agent_id is not None:
-        await active_row_in(s, agent_id)
+        await check_active_in(s, agent_id)
     return await _stored_in(s, agent_id)
 
 

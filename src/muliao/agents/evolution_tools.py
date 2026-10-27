@@ -133,7 +133,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
 
 def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
     """记忆：自己的与所有 agent 共享的全局记忆，各用各的工具（全局记忆的 memory_edit_public 是管理类工具，只经 admin
-    角色给出）。全局记忆由 admin 的自进化维护，每次修改记一版（作者是改的 agent），用户可在界面上回滚。"""
+    角色给出）。全局记忆由 admin 的自进化维护，每次修改记一版（改的人记为那个 agent），用户可在界面上回滚。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     def _status(which: str, content: str) -> str:

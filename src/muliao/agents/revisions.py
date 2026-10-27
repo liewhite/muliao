@@ -3,7 +3,7 @@
 
 每种对象把自己写成一份文本文档存进 before / after：记忆是正文；skill 是全部文件的 JSON；MCP server 是配置 JSON；
 secret 只有描述（不含值，也不存任何由值推出的东西）；角色是描述与可编辑的 allow / deny；agent 是它的角色与 allow / deny。
-恢复某一版 = 由对象自己的 store 在一个写事务里读出那一版（revision_doc_in）、把它的文档作为新的一版写入（作者记为恢复的
+恢复某一版 = 由对象自己的 store 在一个写事务里读出那一版（revision_doc_in）、把它的文档作为新的一版写入（改的人记为恢复的
 人），历史仍只增不改。
 """
 
@@ -19,7 +19,7 @@ from muliao.agents.kinds import Subject, label
 from muliao.agents.tables import Revision
 from muliao.errors import InvalidInput, NotFound
 
-# 没有作者的系统操作（迁移导入）
+# 没有改的人的系统操作（迁移导入）
 SYSTEM = "muliao"
 
 # 能恢复旧版的对象：secret 的版本不含值，角色与 agent 规则的版本只供查看

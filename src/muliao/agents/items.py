@@ -14,7 +14,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.active import active_row_in, agent_name_in, deleting_ids
+from muliao.agents.active import agent_name_in, check_active_in, deleting_ids
 from muliao.agents.kinds import Kind, StoredKind, label
 from muliao.agents.permissions import pattern_of
 from muliao.agents.tables import Item
@@ -45,7 +45,7 @@ async def check_visible_in(s: AsyncSession, kind: StoredKind, name: str) -> None
 async def check_owner_active_in(s: AsyncSession, kind: StoredKind, row: Item) -> None:
     if row.owner is not None:
         try:
-            await active_row_in(s, row.owner)
+            await check_active_in(s, row.owner)
         except NotFound:
             raise NotFound(f"{label(kind)} {row.name!r} not found") from None
 
@@ -55,7 +55,7 @@ async def creatable_in(s: AsyncSession, kind: StoredKind, name: str, owner: str 
     if await item_in(s, kind, name) is not None:
         raise Conflict(f"{label(kind)} {name!r} already exists; names are unique, choose another name")
     if owner is not None:
-        await active_row_in(s, owner)
+        await check_active_in(s, owner)
 
 
 async def items_in(s: AsyncSession, kind: StoredKind) -> list[Item]:

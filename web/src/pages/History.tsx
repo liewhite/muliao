@@ -14,10 +14,10 @@ function byDay(entries: HistoryEntry[]): [string, HistoryEntry[]][] {
 }
 
 /** agent 的工作历史（只读）：每日自进化时 agent 自己写，一件事一条，写了就不能改 */
-export function HistoryList({ owner }: { owner: AgentId }) {
+export function HistoryList({ agent }: { agent: AgentId }) {
   const [input, setInput] = useState('')
   const [query, setQuery] = useState('')
-  const history = useLoad(() => api.agentHistory(owner, query || undefined), [owner, query])
+  const history = useLoad(() => api.agentHistory(agent, query || undefined), [agent, query])
 
   return (
     <div className="flex flex-col gap-3">

@@ -86,8 +86,8 @@ class AgentOut(BaseModel):
 
 
 async def _out(c: C, a: AgentInfo) -> AgentOut:
-    """agent 的目录字段加上它的分发规则（两个子域各自的读模型）。"""
-    return AgentOut.of(a, await c.distribution.agent_rules(a.id))
+    """操作之后的 agent：只取它的 id，目录字段与分发规则在同一个事务里重新读（两个子域各自的读模型）。"""
+    return AgentOut.of(*await c.agents.get_with_rules(a.id))
 
 
 class AgentDefaultsOut(BaseModel):
@@ -240,7 +240,7 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
 @router.get("/agents/{agent_id}")
 async def get_agent(c: C, agent_id: str) -> AgentOut:
     # 正在删除的按不存在处理
-    return await _out(c, await c.agents.get_active(agent_id))
+    return AgentOut.of(*await c.agents.get_with_rules(agent_id))
 
 
 @router.put("/agents/{agent_id}")

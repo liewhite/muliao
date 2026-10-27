@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from muliao.agents.access import changeable_in, sharing_in
-from muliao.agents.active import active_row_in
+from muliao.agents.active import check_active_in
 from muliao.agents.items import check_visible_in, owner_label_in, visible_in
 from muliao.agents.kinds import Kind, StoredKind, Subject, as_subject, label
 from muliao.agents.mcp import McpRegistry, McpServer, server_of
@@ -107,8 +107,9 @@ class ItemCatalog:
                     f"{label(kind)} {name!r} already belongs to {await owner_label_in(s, owner)}"
                 )
             if owner is not None:
-                await active_row_in(s, owner)
+                await check_active_in(s, owner)
             await transfer_in(s, row, owner, actor)
+        log.info("item transferred", extra={"kind": kind, "item": name, "owner": owner, "actor": actor})
 
     async def history(self, kind: StoredKind, name: str, limit: int) -> list[RevisionInfo]:
         """新的在前，第一条即当前的一版（已删除时是那次删除）。"""

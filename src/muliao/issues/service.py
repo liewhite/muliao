@@ -323,7 +323,9 @@ class IssueService:
             wake = []
             for issue in created:
                 happened = [self._record(s, issue, actor, ActivityKind.CREATED)]
-                wake.append(await self._delivery.changed_in(s, None, issue, actor, session_id, happened))
+                wake.append(
+                    await self._delivery.notify_and_deliver_in(s, None, issue, actor, session_id, happened)
+                )
         for issue in created:
             log.info(
                 "issue created", extra={"issue_id": issue.id, "actor": actor, "assignee": issue.assignee}
@@ -471,7 +473,7 @@ class IssueService:
         """issue 变了（happened 非空）之后：更新时间，投递这些动态；从（改动前的状态, 指派人）进入 done / cancelled 时
         通知下游。返回要马上执行的投递。"""
         issue.updated_at = utcnow()
-        wake = [await self._delivery.changed_in(s, before[1], issue, actor, session_id, happened)]
+        wake = [await self._delivery.notify_and_deliver_in(s, before[1], issue, actor, session_id, happened)]
         if not finished(before[0]) and finished(issue.status):
             wake += await self._unblock_in(s, issue, before[0], actor, session_id)
         return wake

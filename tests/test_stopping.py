@@ -191,13 +191,13 @@ async def _leftover_tasks() -> list[str]:
 async def test_an_anyio_cancellation_waits_for_the_transaction_and_leaves_nothing_behind(
     container, make_agent
 ):
-    from muliao.agents.tables import Agent, AgentRules, Memory
+    from muliao.agents.tables import Agent, AgentRulesRow, Memory
 
     agent = await make_agent("probe")
     async with container.db.transaction() as s:
         # _write_forever 按固定的 id 写：先挪开引用它的记忆与规则行
         await s.execute(Memory.__table__.delete().where(Memory.agent_id == agent.id))
-        await s.execute(AgentRules.__table__.delete().where(AgentRules.agent_id == agent.id))
+        await s.execute(AgentRulesRow.__table__.delete().where(AgentRulesRow.agent_id == agent.id))
         await s.execute(Agent.__table__.update().where(Agent.id == agent.id).values(id="probe"))
     for _ in range(20):
         counter = [0]

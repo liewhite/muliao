@@ -75,7 +75,8 @@ from muliao.triggers.stream import StreamKind, StreamRunner
 from muliao.triggers.tools import triggers_toolset
 from muliao.triggers.webhook import WebhookKind
 from muliao.usage.api import UsageLog
-from muliao.web.api import WebProvider, build_web_provider, web_toolset
+from muliao.web.api import WebProvider, build_web_provider
+from muliao.web.tools import web_toolset
 from muliao.workspace.api import JobRunner, ShellLimits
 from muliao.workspace.tools import workspace_toolset
 

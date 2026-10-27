@@ -16,7 +16,7 @@ from muliao.agents.kinds import Subject
 from muliao.agents.permissions import Role, Rules
 from muliao.agents.revisions import record_in
 from muliao.agents.roles import check_assignable_in, check_rules_in, rules_of
-from muliao.agents.tables import AgentRules as AgentRulesRow
+from muliao.agents.tables import AgentRulesRow
 from muliao.errors import NotFound
 
 
@@ -62,7 +62,7 @@ async def _row_in(s: AsyncSession, agent_id: str) -> AgentRulesRow:
 
 
 async def agent_rules_in(s: AsyncSession, agent_id: str) -> AgentRules:
-    """agent 的规则（包括正在删除的；它的写入另由 active_row_in 拦下）。没有这个 agent 时 NotFound。"""
+    """agent 的规则（包括正在删除的；它的写入另由 check_active_in 拦下）。没有这个 agent 时 NotFound。"""
     return _of(await _row_in(s, agent_id))
 
 

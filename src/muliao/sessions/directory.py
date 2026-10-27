@@ -1,5 +1,6 @@
-"""会话目录：sessions 表的唯一读写处（会话子域）。新建一行、按属性查会话（按发送方定位、按 agent、thread、归属、列表）
-都只在这里；别的模块按 id 取会话（`s.get`）或调这里的函数，不另写查询（tests/test_boundaries.py 核对）。
+"""会话目录（会话子域）：新建一行、按属性查会话（按发送方定位、按 agent、thread、归属、列表）都只在这里；别的模块按 id
+取会话（`s.get`）或调这里的函数，不另写查询（tests/test_boundaries.py 核对）。按 id 取到的行可在领域内改（续写时间
+在 inbound / finish），删除在 deletion（连同私有 thread 的编排）。
 会话的规则（种类、来源、续写）在 kinds / origins / inbound，这里只是查询与写入。"""
 
 from __future__ import annotations

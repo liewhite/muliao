@@ -1,4 +1,4 @@
-"""edit_file 的多处修改（纯函数）：每处修改（Edit）按自己的方式定位——原文（platform.text_edit.Replace）、行号区间
+"""edit_file 的多处修改（纯函数）：每处修改（Edit）按自己的方式定位——原文（Replace）、行号区间
 （LineRange）、语法结构（workspace.syntax_edit.PatternEdit）——只报出要做的替换（Splice），apply_each 依次拼出新文本；
 行号一律指调用前的原文，由 Origin 换算。另有带行号展示（read_file、edit_file 的回显与报错）与改动处的行范围。"""
 
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from muliao.errors import InvalidInput
-from muliao.platform.text_edit import Splice, splice
+from muliao.platform.text_edit import Splice, locate_once, miss, occurrences, splice
 
 # 带行号展示时单行的上限：一行压缩过的 JS/JSON 能吃掉整个输出预算
 MAX_LINE_CHARS = 2000
@@ -21,6 +21,25 @@ class Edit(Protocol):
     修改用它换算。只报替换、不自己拼新文本，Origin 才能确知哪些行被改过，不必事后比对猜。"""
 
     def locate(self, current: str, what: str, origin: "Origin") -> tuple[list[Splice], int]: ...
+
+
+@dataclass(frozen=True)
+class Replace:
+    """按原文定位：old 恰好出现一次（规则同记忆与 skill，platform.text_edit.locate_once）替换为 new；every 时替换每一处
+    （至少一处）。按原文定位用不到 origin。"""
+
+    old: str
+    new: str
+    every: bool = False
+
+    def locate(self, current: str, what: str, origin: "Origin") -> tuple[list[Splice], int]:
+        if not self.every:
+            at = [locate_once(current, self.old, what)]
+        elif not self.old:
+            raise InvalidInput("old text must not be empty")
+        elif not (at := occurrences(current, self.old)):
+            raise InvalidInput(miss(current, self.old, 0, f"old text must occur in {what}"))
+        return [Splice(i, i + len(self.old), self.new) for i in at], len(at)
 
 
 @dataclass(frozen=True)

@@ -6,9 +6,10 @@ import pytest
 from sqlalchemy import select
 
 from muliao.agent_runtime.instructions import build_instructions
+from muliao.agents.api import USER
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.issues.api import SESSION_NOTE, USER, ActivityKind, IssueStatus, WorkState
+from muliao.issues.api import SESSION_NOTE, ActivityKind, IssueStatus, WorkState
 from muliao.issues.graph import cycle_through
 from muliao.issues.rules import SYSTEM_ACTOR, Snapshot, handed_by, recipient, stalled
 from muliao.platform.messaging import Delivery

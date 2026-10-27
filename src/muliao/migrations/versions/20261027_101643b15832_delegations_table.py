@@ -6,7 +6,8 @@ sqlite_sequence 不受影响）。
 数据：每个委派占用（holder 以 delegation: 开头，不论状态）搬一行：发起会话、心跳间隔、超时时刻、登记时刻原样，thread 取
 以它为关联 id 的最早一封信件所在的会话（thread 已被删除、信件随之删除的为 NULL，与原先推不出 thread 一致）。
 
-降级：session_holds 加回两列（可空），按 holder 从 delegations 搬回，删表。
+降级：session_holds 加回两列（可空），按 holder 从 delegations 搬回，删表。降级再升级时 delegations.created_at 取占用的
+created_at（与原值差几微秒，只让 deadline − created_at 算出的超时秒数差同样的量）。
 
 Revision ID: 101643b15832
 Revises: abea1558f93c

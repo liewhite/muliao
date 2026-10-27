@@ -2,7 +2,7 @@
 
 子域的事务内部分各在一处：角色 agents.roles，agent 的规则 agents.agent_rules（建、改随目录子域的 agent 写入），能用 / 能改与
 由此派生的 agents.access。每次修改在同一个写事务里记一版（revisions：角色的文档是描述与可编辑的规则，agent 的是它的
-roles / allow / deny），作者是改的人。"""
+roles / allow / deny），记改的人 actor。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.access import Reach, granted_by, grants_in, grants_of, reach_in
-from muliao.agents.active import active_row_in, agent_names_in
+from muliao.agents.active import agent_names_in, check_active_in
 from muliao.agents.agent_rules import (
     AgentRules,
     agent_rules_in,
@@ -73,11 +73,6 @@ class Distribution:
 
     # ---- agent 的规则 ----
 
-    async def agent_rules(self, agent_id: str) -> AgentRules:
-        """agent 的规则（包括正在删除的）。"""
-        async with self._db.transaction() as s:
-            return await agent_rules_in(s, agent_id)
-
     async def rules(self, agent_id: str) -> Rules:
         """agent 的最终规则（base + 角色 + 自己的 allow / deny），按角色现在的定义算：运行开放哪些工具
         （agent_runtime.Toolbox.profile）。"""
@@ -97,7 +92,7 @@ class Distribution:
         「之前的」，不要求仍匹配现有条目。"""
         async with self._db.transaction() as s:
             if agent_id is not None:
-                await active_row_in(s, agent_id)
+                await check_active_in(s, agent_id)
             before = AgentRules() if agent_id is None else await agent_rules_in(s, agent_id)
             await check_agent_rules_in(s, rules, before)
             known = await roles_in(s)

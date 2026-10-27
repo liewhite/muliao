@@ -12,6 +12,6 @@ def new_agent_id() -> str:
     return uuid.uuid4().hex[:_LENGTH]
 
 
-# 全系统指代用户的那个值（agents 目录定义）：做事的人（actor，如版本作者、issue 时间线）、issue 的指派人等处与 agent
+# 全系统指代用户的那个值（agents 目录定义）：做事的人（actor，如版本的改的人、issue 时间线）、issue 的指派人等处与 agent
 # id 并列出现。不是 12 位十六进制，不会与 agent id 相同；agent 名称也不能取它（agents.naming.new_agent_name）
 USER = "user"

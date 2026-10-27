@@ -3,7 +3,6 @@
 （agents.kinds.StoredKind）一项，交给各 store 自己的写法（skills.document、mcp.document、secrets.document）。新增一种条目在
 DOCUMENTS 加一项（tests/test_permissions.py 核对每种都有）。"""
 
-import logging
 from collections.abc import Awaitable, Callable
 
 from sqlalchemy import select
@@ -16,8 +15,6 @@ from muliao.agents.kinds import Kind, StoredKind, as_subject, label
 from muliao.agents.revisions import record_in
 from muliao.agents.skill_package import SkillFile
 from muliao.agents.tables import Item, ItemFile
-
-log = logging.getLogger(__name__)
 
 
 async def _skill(s: AsyncSession, row: Item) -> str:
@@ -59,7 +56,6 @@ async def transfer_in(
     # 文档不含 owner：前后相同，照样记一版
     record_in(s, as_subject(kind), row.name, doc, doc, actor, message, force=True)
     row.owner = owner
-    log.info("item transferred", extra={"kind": row.kind, "item": row.name, "owner": owner, "actor": actor})
 
 
 async def retire_owned_in(s: AsyncSession, agent_id: str, shared: Keep, actor: str, message: str) -> None:

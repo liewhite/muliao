@@ -9,10 +9,10 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentArchived, agent_names_in
+from muliao.agents.api import USER, AgentArchived, agent_names_in
 from muliao.issues.graph import links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
-from muliao.issues.rules import USER, agent_actor, recipient
+from muliao.issues.rules import agent_actor, recipient
 from muliao.issues.tables import ActivityKind, Issue, IssueActivity
 from muliao.notifications.events import Notify
 from muliao.platform.messaging import Messaging
@@ -29,7 +29,7 @@ class IssueDelivery:
         # 马上执行一个已提交的投递任务（Worker.run_now）
         self._run_now = run_now
 
-    async def changed_in(
+    async def notify_and_deliver_in(
         self,
         s: AsyncSession,
         assignee_before: str | None,

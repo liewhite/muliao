@@ -158,11 +158,11 @@ class TaskAdmin:
     def __init__(self, queue: TaskQueue):
         self._queue = queue
 
-    async def list(self, *, status: TaskStatus | None, limit: int) -> list[Task]:
-        return await self._queue.list(status=status, limit=limit)
+    async def list(self, *, status: TaskStatus | None, limit: int) -> list[TaskView]:
+        return [TaskView.of(t) for t in await self._queue.list(status=status, limit=limit)]
 
-    async def retry(self, task_id: int) -> Task:
-        return await self._queue.retry(task_id)
+    async def retry(self, task_id: int) -> TaskView:
+        return TaskView.of(await self._queue.retry(task_id))
 
 
 class TaskQueue:

@@ -5,9 +5,9 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agents.api import AgentNames, AgentService
+from muliao.agents.api import USER, AgentNames, AgentService
 from muliao.errors import InvalidInput
-from muliao.issues.rules import USER, assignee_name
+from muliao.issues.rules import assignee_name
 from muliao.issues.service import IssueService, IssueWork, NewIssue, batch_item
 from muliao.issues.tables import Issue, IssuePriority, IssueStatus
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope

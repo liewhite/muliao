@@ -104,8 +104,7 @@ def agents_toolset(
         Args:
             agent: Agent name.
         """
-        target = await agents.find_by_name(agent)
-        rules = await distribution.agent_rules(target.id)
+        target, rules = await agents.find_with_rules(agent)
         reach = await distribution.reach(target.id)
         return AgentDetail(
             name=target.name,

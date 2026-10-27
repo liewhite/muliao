@@ -7,6 +7,7 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
+from muliao.agents.agent_rules import agent_rules_in
 from muliao.agents.api import McpTransport, RoleSpec, Rules, StoredKind, Subject, mcp_config
 from muliao.agents.kinds import as_kind, as_subject
 from muliao.agents.ownership import DOCUMENTS
@@ -68,7 +69,7 @@ def test_base_has_every_tool_but_admin_ones_and_admin_has_all():
 
 async def test_new_agents_have_base_implicitly(container):
     agent = await container.agents.create(AgentSpec(name="a", description="d"), actor="user")
-    assert (await container.distribution.agent_rules(agent.id)).roles == ()
+    assert (await container.agents.get_with_rules(agent.id))[1].roles == ()
     tools = (await container.distribution.reach(agent.id)).tool_names
     assert not set(tools) & _ADMIN_TOOLS and {"run_shell", "memory_edit", "vault_set"} <= set(tools)
     with pytest.raises(InvalidInput, match="implicit"):
@@ -378,8 +379,9 @@ async def test_role_and_agent_rule_changes_are_recorded(container, make_agent):
     gone = (await history(container, Subject.AGENT, agent.id, 1))[0]
     assert gone.after is None and gone.before == revs[0].after
     # 规则行随 agent 的行级联删除
-    with pytest.raises(NotFound):
-        await container.distribution.agent_rules(agent.id)
+    async with container.db.transaction() as s:
+        with pytest.raises(NotFound):
+            await agent_rules_in(s, agent.id)
 
 
 async def test_an_item_denied_to_every_other_agent_goes_with_its_owner(container, make_agent):

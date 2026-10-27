@@ -2,7 +2,7 @@
 `/items/{kind}/{name}` 读、写、删一个条目，`/owner`、`/history`、`/restore` 对三种存在库里的条目通用，各种类专有的操作
 在自己的子路径（MCP 的启停与测试连接、skill 包的导入导出）。记忆在 api/memory.py。
 
-写入的作者都是 user；新建的条目归请求给出的 owner（缺省为平台），已有的 owner 不变。secret 的版本不含值，只能看历史。
+写入的人（actor）都是 user；新建的条目归请求给出的 owner（缺省为平台），已有的 owner 不变。secret 的版本不含值，只能看历史。
 """
 
 from datetime import datetime
@@ -244,7 +244,7 @@ class SkillImportOut(BaseModel):
 async def import_skill(
     c: C, request: Request, owner: str | None = None, replace: bool = False
 ) -> SkillImportOut:
-    """请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、作者 user。同名
+    """请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、改的人 user。同名
     skill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，
     超限 413。"""
     package = await read_limited(request, MAX_PACKAGE_BYTES)

@@ -108,15 +108,16 @@ RUN_TYPES = {
 }
 
 
-# agents 的子域各自独占的表（docs/architecture.md 2.1）：表类只能被它的子域的模块 import，别的子域经 `*_in` 接口
+# agents 的子域各自独占的表（docs/architecture.md 2.1）：表类只在它的子域的模块里出现在查询与构造中（`select(X)`、`X.列`、
+# `X(...)`，规则同下面的 sessions），别的子域经 `*_in` 接口；拿交给它的行做类型标注不算
 AGENTS_TABLES: dict[str, set[str]] = {
     # 目录
     "Agent": {"service", "active"},
     # 分发
     "Role": {"roles", "distribution"},
-    "AgentRules": {"agent_rules"},
-    # 条目（access 的能改检查只读交给它的行，不查表）
-    "Item": {"items", "skills", "mcp", "secrets", "ownership", "access"},
+    "AgentRulesRow": {"agent_rules"},
+    # 条目
+    "Item": {"items", "skills", "mcp", "secrets", "ownership"},
     "ItemFile": {"skills", "ownership"},
     # 记忆
     "Memory": {"memory"},
@@ -125,7 +126,7 @@ AGENTS_TABLES: dict[str, set[str]] = {
 }
 
 
-def test_agents_subdomains_only_touch_their_own_tables():
+def test_agents_subdomains_only_query_their_own_tables():
     from muliao.agents import tables
 
     declared = {
@@ -134,11 +135,11 @@ def test_agents_subdomains_only_touch_their_own_tables():
     assert declared == set(AGENTS_TABLES), "every agents table belongs to exactly one subdomain"
     problems = []
     for path in sorted((SRC / "agents").glob("*.py")):
-        for line, name in _imports(path):
-            if name.startswith("muliao.agents.tables."):
-                table = name.rsplit(".", 1)[1]
-                if path.stem not in AGENTS_TABLES[table]:
-                    problems.append(f"agents/{path.name}:{line} imports {table}")
+        if path.stem == "tables":
+            continue
+        for line, name in _table_uses(ast.parse(path.read_text()), declared):
+            if path.stem not in AGENTS_TABLES[name]:
+                problems.append(f"agents/{path.name}:{line} queries {name}")
     assert not problems, "\n".join(problems)
 
 
@@ -206,6 +207,43 @@ def test_tables_owned_by_one_module_are_only_queried_there():
             for line, name in _table_uses(ast.parse(path.read_text()), set(owners), any_call=True):
                 if path.stem != owners[name]:
                     problems.append(f"{domain}/{path.name}:{line} queries {name}")
+    assert not problems, "\n".join(problems)
+
+
+def test_other_agents_subdomains_check_an_agent_without_taking_its_row():
+    """agents 表的行只在目录子域（service、active）手里：别的子域查 agent 还可用用 check_active_in。"""
+    rows = {"muliao.agents.active.active_row_in", "muliao.agents.active.runnable_row_in"}
+    problems = [
+        f"agents/{path.name}:{line} imports {name.rsplit('.', 1)[1]}"
+        for path in sorted((SRC / "agents").glob("*.py"))
+        if path.stem not in ("service", "active")
+        for line, name in _imports(path)
+        if name in rows
+    ]
+    assert not problems, "\n".join(problems)
+
+
+def test_only_precheck_changes_the_precheck_state_of_a_trigger():
+    """前置检查在触发器上的状态只在 triggers/precheck.py 迁移（docs/architecture.md 第 14 节）：别的模块不给这几列赋值，
+    构造触发器时也不带它们（由 precheck.set_precheck 设）。"""
+    state = {"precheck", "precheck_output", "precheck_error", "last_checked_at"}
+    problems = []
+    for path in sorted((SRC / "triggers").glob("*.py")):
+        if path.stem in ("precheck", "tables"):
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            targets = []
+            if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                if isinstance(t, ast.Attribute) and t.attr in state:
+                    problems.append(f"triggers/{path.name}:{node.lineno} sets .{t.attr}")
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Trigger":
+                problems += [
+                    f"triggers/{path.name}:{node.lineno} constructs Trigger with {k.arg}"
+                    for k in node.keywords
+                    if k.arg in state
+                ]
     assert not problems, "\n".join(problems)
 
 

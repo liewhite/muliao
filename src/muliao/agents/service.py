@@ -191,7 +191,7 @@ async def mark_deleting_in(s: AsyncSession, agent_id: str, actor: str) -> None:
 
 
 async def deletion_actor_in(s: AsyncSession, agent_id: str) -> str | None:
-    """正在删除的 agent 的删除作者；行已删除时 None（删除流程重放）。没在删除中说明流程与数据不一致，报错。"""
+    """正在删除的 agent 的发起删除的人（actor）；行已删除时 None（删除流程重放）。没在删除中说明流程与数据不一致，报错。"""
     agent = await s.get(Agent, agent_id)
     if agent is None:
         return None
@@ -367,6 +367,11 @@ class AgentService:
         async with self._db.transaction() as s:
             return await active_agent_in(s, agent_id)
 
+    async def get_with_rules(self, agent_id: str) -> tuple[AgentInfo, AgentRules]:
+        """还可用的 agent 加上它的分发规则，同一个事务里读（两个子域的读模型彼此一致）。"""
+        async with self._db.transaction() as s:
+            return info_of(await active_row_in(s, agent_id)), await agent_rules_in(s, agent_id)
+
     async def get(self, agent_id: str) -> AgentInfo:
         """agent（包括正在删除的）。"""
         async with self._db.transaction() as s:
@@ -374,17 +379,24 @@ class AgentService:
 
     async def find_by_name(self, name: str) -> AgentInfo:
         """模型按名称指代 agent（不接触 id）：在工具层把名称解析为 agent。名称唯一。"""
-        name = normalize_agent_name(name)
         async with self._db.transaction() as s:
-            agent = await s.scalar(select(Agent).where(Agent.name == name, Agent.deleting_by.is_(None)))
-            if agent is None:
-                names = (
-                    await s.scalars(
-                        select(Agent.name).where(Agent.deleting_by.is_(None)).order_by(Agent.name)
-                    )
-                ).all()
-                raise NotFound(f"no agent named {name!r}; available agents: {list(names)}")
-            return info_of(agent)
+            return info_of(await self._named_in(s, name))
+
+    async def find_with_rules(self, name: str) -> tuple[AgentInfo, AgentRules]:
+        """按名称找到的 agent 加上它的分发规则，同一个事务里读（get_agent 工具）。"""
+        async with self._db.transaction() as s:
+            agent = await self._named_in(s, name)
+            return info_of(agent), await agent_rules_in(s, agent.id)
+
+    async def _named_in(self, s: AsyncSession, name: str) -> Agent:
+        name = normalize_agent_name(name)
+        agent = await s.scalar(select(Agent).where(Agent.name == name, Agent.deleting_by.is_(None)))
+        if agent is None:
+            names = (
+                await s.scalars(select(Agent.name).where(Agent.deleting_by.is_(None)).order_by(Agent.name))
+            ).all()
+            raise NotFound(f"no agent named {name!r}; available agents: {list(names)}")
+        return agent
 
     async def names(self) -> AgentNames:
         async with self._db.transaction() as s:

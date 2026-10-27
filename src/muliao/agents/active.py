@@ -1,6 +1,6 @@
 """agent 目录子域给同领域别的子域的事务内查询（agents 表只经目录读写）：
 
-- agent 是否还可用：正在删除的按不存在处理（docs/architecture.md 第 10 节「删除 agent」）；是否能运行：归档的
+- agent 是否还可用（check_active_in，别的子域只用它：不拿到 agents 表的行）：正在删除的按不存在处理（docs/architecture.md 第 10 节「删除 agent」）；是否能运行：归档的
   另外不能运行（runnable_row_in）。
 - 名称：agent_names_in（含正在删除的）、agent_name_in。
 - 正在删除的 agent：deleting_ids（子查询；它们的条目按不存在处理）。
@@ -19,10 +19,16 @@ from muliao.errors import Conflict, NotFound
 
 
 async def active_row_in(s: AsyncSession, agent_id: str) -> Agent:
+    """还可用的 agent 的行：只给目录子域自己（service）用，别的子域用 check_active_in。"""
     agent = await s.get(Agent, agent_id)
     if agent is None or agent.deleting_by is not None:
         raise NotFound(f"agent {agent_id!r} not found")
     return agent
+
+
+async def check_active_in(s: AsyncSession, agent_id: str) -> None:
+    """agent 还可用（正在删除的按不存在处理，NotFound）。为它写条目、记忆、规则之前在同一写事务里查。"""
+    await active_row_in(s, agent_id)
 
 
 class AgentArchived(Conflict):

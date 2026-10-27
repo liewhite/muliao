@@ -47,20 +47,20 @@ def _workspace(container, agent_id: str):  # noqa: ANN202
     return workspace
 
 
-async def test_once_fires_at_its_time_and_is_then_archived_with_its_session(container, make_agent):
+async def test_once_fires_at_its_time_and_is_then_finished_with_its_session(container, make_agent):
     alpha = (await make_agent()).id
     trigger = await _once(container, alpha)
 
     assert await _fire_due(container, trigger.id) == 1
-    assert await container.due_triggers.fire_due() == 0  # 归档之后不再扫描到它
+    assert await container.due_triggers.fire_due() == 0  # 结束之后不再扫描到它
 
     assert await container.triggers.list() == []
-    [archived] = await container.triggers.list(finished=True)
-    assert archived.id == trigger.id and archived.finished_at is not None
+    [finished] = await container.triggers.list(finished=True)
+    assert finished.id == trigger.id and finished.finished_at is not None
     sessions = await container.sessions.list(
         agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
     )
-    assert [s.session.id for s in sessions] == [archived.last_session_id]
+    assert [s.session.id for s in sessions] == [finished.last_session_id]
 
 
 async def test_a_once_trigger_in_the_past_is_refused_at_creation(container, make_agent):
@@ -90,7 +90,7 @@ def test_a_once_time_that_is_not_iso_8601_is_refused(at):
         OnceKind(ZoneInfo("UTC")).configure({"at": at})
 
 
-async def test_an_archived_trigger_leaves_its_name_to_a_new_one(container, make_agent):
+async def test_a_finished_trigger_leaves_its_name_to_a_new_one(container, make_agent):
     alpha = (await make_agent()).id
     first = await _once(container, alpha, name="daily-check")
     await _fire_due(container, first.id)
@@ -104,7 +104,7 @@ async def test_an_archived_trigger_leaves_its_name_to_a_new_one(container, make_
     assert [t.id for t in await container.triggers.list(finished=True)] == [first.id]
 
 
-async def test_an_archived_trigger_cannot_be_changed_enabled_or_run_but_can_be_deleted(container, make_agent):
+async def test_a_finished_trigger_cannot_be_changed_enabled_or_run_but_can_be_deleted(container, make_agent):
     alpha = (await make_agent()).id
     trigger = await _once(container, alpha)
     await _fire_due(container, trigger.id)
@@ -122,18 +122,18 @@ async def test_an_archived_trigger_cannot_be_changed_enabled_or_run_but_can_be_d
     assert await container.triggers.list(finished=True) == []
 
 
-async def test_a_once_trigger_is_archived_even_when_its_precheck_finds_nothing_to_do(container, make_agent):
+async def test_a_once_trigger_is_finished_even_when_its_precheck_finds_nothing_to_do(container, make_agent):
     alpha = (await make_agent()).id
     _workspace(container, alpha)
     trigger = await _once(container, alpha, precheck=Precheck(command="true"))
 
     await _fire_due(container, trigger.id)
 
-    archived = (await container.triggers.list(finished=True))[0]
-    assert archived.finished_at is not None and archived.last_session_id is None
+    finished = (await container.triggers.list(finished=True))[0]
+    assert finished.finished_at is not None and finished.last_session_id is None
 
 
-async def test_a_once_trigger_whose_precheck_fails_is_archived_with_the_error(container, make_agent):
+async def test_a_once_trigger_whose_precheck_fails_is_finished_with_the_error(container, make_agent):
     alpha = (await make_agent()).id
     _workspace(container, alpha)
     trigger = await _once(container, alpha, precheck=Precheck(command="echo boom >&2; exit 3"))
@@ -141,11 +141,11 @@ async def test_a_once_trigger_whose_precheck_fails_is_archived_with_the_error(co
     await _fire_due(container, trigger.id)
     await deliver(container)
 
-    archived = (await container.triggers.list(finished=True))[0]
-    assert archived.finished_at is not None and "exited with 3" in archived.precheck_error
+    finished = (await container.triggers.list(finished=True))[0]
+    assert finished.finished_at is not None and "exited with 3" in finished.precheck_error
 
 
-async def test_a_once_trigger_that_cannot_fire_is_archived_with_the_reason(container, make_agent):
+async def test_a_once_trigger_that_cannot_fire_is_finished_with_the_reason(container, make_agent):
     alpha = (await make_agent()).id
     trigger = await _once(container, alpha)
     async with container.db.transaction() as s:
@@ -153,9 +153,9 @@ async def test_a_once_trigger_that_cannot_fire_is_archived_with_the_reason(conta
 
     await _fire_due(container, trigger.id)
 
-    archived = (await container.triggers.list(finished=True))[0]
-    assert archived.finished_at is not None and not archived.enabled
-    assert "message must not be empty" in archived.disabled_reason
+    finished = (await container.triggers.list(finished=True))[0]
+    assert finished.finished_at is not None and not finished.enabled
+    assert "message must not be empty" in finished.disabled_reason
 
 
 async def test_running_a_once_trigger_by_hand_does_not_use_up_its_firing(container, make_agent):
@@ -167,15 +167,15 @@ async def test_running_a_once_trigger_by_hand_does_not_use_up_its_firing(contain
     assert manual is not None
     assert (await container.triggers.get_by_name("remind")).finished_at is None
     assert await _fire_due(container, trigger.id) == 1
-    archived = (await container.triggers.list(finished=True))[0]
-    assert archived.finished_at is not None and archived.last_session_id != manual
+    finished = (await container.triggers.list(finished=True))[0]
+    assert finished.finished_at is not None and finished.last_session_id != manual
     history = await container.sessions.list(
         agent_id=None, origins=[Origin.TRIGGER], origin_ref=str(trigger.id), limit=10, offset=0
     )
-    assert {s.session.id for s in history} == {manual, archived.last_session_id}
+    assert {s.session.id for s in history} == {manual, finished.last_session_id}
 
 
-async def test_the_api_lists_the_archived_ones_separately_with_the_sessions_they_started(
+async def test_the_api_lists_the_finished_ones_separately_with_the_sessions_they_started(
     client, container, make_agent
 ):
     alpha = (await make_agent()).id
@@ -185,12 +185,12 @@ async def test_the_api_lists_the_archived_ones_separately_with_the_sessions_they
     still_running = await _once(container, alpha, name="later")
 
     listed = (await client.get("/api/triggers")).json()
-    archived = (await client.get("/api/triggers", params={"finished": True})).json()
+    finished = (await client.get("/api/triggers", params={"finished": True})).json()
 
     assert [t["id"] for t in listed] == [still_running.id]
-    assert [(t["id"], t["finished_at"] is not None) for t in archived] == [(trigger.id, True)]
+    assert [(t["id"], t["finished_at"] is not None) for t in finished] == [(trigger.id, True)]
     history = await client.get("/api/sessions", params={"origin": ["trigger"], "origin_ref": str(trigger.id)})
-    assert [s["id"] for s in history.json()] == [archived[0]["last_session_id"]]
+    assert [s["id"] for s in history.json()] == [finished[0]["last_session_id"]]
     assert (await client.post(f"/api/triggers/{trigger.id}/run")).status_code == 409
     assert (await client.patch(f"/api/triggers/{trigger.id}", json={"enabled": True})).status_code == 409
     assert (await client.delete(f"/api/triggers/{trigger.id}")).status_code == 204
@@ -224,11 +224,11 @@ async def test_the_agent_creates_a_once_trigger_and_later_looks_up_what_came_of_
     )
 
     # 同一个步骤遇到 ModelRetry 会再问一次模型，结果重复一遍：按出现顺序去重
-    listed, archived, rerun = list(dict.fromkeys(outputs))
+    listed, finished, rerun = list(dict.fromkeys(outputs))
     assert "run_at" in created[0]
     assert listed == "[]"  # 跑完就不在列表里了
-    assert "remind" in archived and "finished_at" in archived
-    assert str((await container.triggers.list(finished=True))[0].last_session_id) in archived
+    assert "remind" in finished and "finished_at" in finished
+    assert str((await container.triggers.list(finished=True))[0].last_session_id) in finished
     # 归档的按名称指不了，但错误说清楚是跑完归档了，不是找不到
     assert "has finished" in rerun
     # 按名称删除同样指不到归档的；提示不能自相矛盾地说「可以删除」

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.active import active_row_in
+from muliao.agents.active import check_active_in
 from muliao.agents.agent_rules import AgentRules, agent_rules_in, all_agent_rules_in
 from muliao.agents.ids import USER
 from muliao.agents.items import check_owner_active_in, existing_in, item_in, items_in, keys_in, owner_label_in
@@ -70,7 +70,7 @@ def grants_of(agent_id: str, rules: AgentRules, known: dict[str, Role]) -> Grant
 
 async def grants_in(s: AsyncSession, actor: str) -> Grants:
     """actor（agent 的 id，或 ids.USER 即用户）的 Grants，按角色现在的定义算。agent 包括正在删除的（它的写入另由
-    active_row_in 拦下）。"""
+    check_active_in 拦下）。"""
     if actor == USER:
         return USER_GRANTS
     return grants_of(actor, await agent_rules_in(s, actor), await roles_in(s))
@@ -129,7 +129,7 @@ async def writable_in(
         await check_change_in(s, actor, row)
         return row
     if owner is not None:
-        await active_row_in(s, owner)
+        await check_active_in(s, owner)
     return None
 
 

@@ -6,8 +6,9 @@ from typing import Any
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
+from muliao.agents.api import USER
 from muliao.api.deps import C
-from muliao.issues.api import USER, ActivityKind, IssuePriority, IssueStatus, IssueWork, WorkState
+from muliao.issues.api import ActivityKind, IssuePriority, IssueStatus, IssueWork, WorkState
 from muliao.issues.tables import Issue, IssueActivity
 from muliao.platform.values import KEEP, Keep
 

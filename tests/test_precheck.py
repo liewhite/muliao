@@ -195,7 +195,7 @@ async def test_a_precheck_alert_the_agent_cannot_receive_falls_back_to_notifying
     assert "watch" in note.title and "gone" in note.body and note.session_id is None
 
 
-async def test_an_archived_once_trigger_whose_precheck_failed_tells_the_agent_its_task_was_not_done(
+async def test_a_finished_once_trigger_whose_precheck_failed_tells_the_agent_its_task_was_not_done(
     container, make_agent
 ):
     alpha = (await make_agent()).id

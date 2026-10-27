@@ -6,8 +6,7 @@ from pathlib import PurePath
 import pytest
 
 from muliao.errors import InvalidInput
-from muliao.platform.text_edit import Replace
-from muliao.workspace.file_edit import Edit, LineRange, apply_each
+from muliao.workspace.file_edit import Edit, LineRange, Replace, apply_each
 from muliao.workspace.syntax_edit import LANGUAGES, PatternEdit, language_of
 
 PY = '''import pytest

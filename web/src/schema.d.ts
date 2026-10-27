@@ -571,7 +571,7 @@ export interface paths {
         put?: never;
         /**
          * Import Skill
-         * @description 请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、作者 user。同名
+         * @description 请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、改的人 user。同名
          *     skill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，
          *     超限 413。
          */
