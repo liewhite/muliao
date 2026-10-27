@@ -71,7 +71,7 @@ function SecretItem({ item, onChange }: { item: CatalogItem; onChange: () => voi
             <Trash2 className="size-4" />
           </Button>
         </div>
-        <ItemAccess item={item} />
+        <ItemAccess item={item} onTransferred={onChange} />
         <ErrorAlert error={action.error} />
         <ResourceHistory kind="secret" target={{ name: item.name }} current={updatedAt} onRestored={onChange} />
       </Card.Content>

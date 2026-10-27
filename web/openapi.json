@@ -168,6 +168,57 @@
         }
       }
     },
+    "/api/items/{kind}/{name}/owner": {
+      "put": {
+        "summary": "Transfer Item",
+        "description": "把 skill / MCP server / secret 转给另一个 owner（内置工具不能转），记一版；内容与收录它的角色不变。",
+        "operationId": "transfer_item_api_items__kind___name__owner_put",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Kind"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/agent-preview": {
       "post": {
         "summary": "Preview Agent",
@@ -5186,6 +5237,26 @@
         ],
         "title": "Origin",
         "description": "会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派、issue 看板唤醒被指派的 agent。"
+      },
+      "OwnerIn": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner"
+        ],
+        "title": "OwnerIn"
       },
       "Precheck": {
         "properties": {

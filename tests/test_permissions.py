@@ -7,7 +7,7 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agents.api import McpTransport, RoleSpec, Rules, mcp_config
+from muliao.agents.api import McpTransport, RoleSpec, Rules, Subject, mcp_config
 from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, TOOLS, Kind, check_patterns
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
@@ -26,6 +26,7 @@ _ADMIN_TOOLS = {
     "create_role",
     "update_role",
     "delete_role",
+    "transfer_item",
 }
 
 
@@ -172,6 +173,61 @@ async def test_a_deleted_agents_shared_items_move_to_the_platform(container, mak
     assert [s.name for s in await container.skills.index(user.id)] == ["shared"]
     assert (container.skills.dir("shared") / "SKILL.md").exists()
     assert not container.skills.dir("alone").exists()
+    # 转给平台记了一版（文档前后相同也记）
+    latest = (await container.revisions.history(Subject.SKILL, "shared", 1))[0]
+    assert latest.message == f"moved to the platform with agent {owner.id} deleted"
+    assert latest.before == latest.after is not None
+
+
+async def test_transferring_an_item_moves_who_owns_and_uses_it(container, make_agent):
+    old, new, other = await make_agent("old"), await make_agent("new"), await make_agent("other")
+    await container.skills.write("s", "d", "b", actor=old.id, owner=old.id)
+    await container.vault.set("K", "x", "", actor=old.id, owner=old.id)
+    set_at = [e.updated_at for e in await container.agents.catalog() if e.name == "K"]
+    # 只有能改它的人能转：别的 agent 不行
+    with pytest.raises(Forbidden):
+        await container.agents.transfer_item(Kind.SKILL, "s", other.id, other.id)
+    await container.agents.transfer_item(Kind.SKILL, "s", new.id, "user")
+    await container.agents.transfer_item(Kind.SECRET, "K", None, old.id)
+    assert await owned(container, "skill", new.id) == ["s"]
+    assert await owned(container, "secret", None) == ["K"]
+    # 只换 owner：secret 的值设置时间（updated_at，也在版本文档里）不变
+    assert [e.updated_at for e in await container.agents.catalog() if e.name == "K"] == set_at
+    secret_rev = (await container.revisions.history(Subject.SECRET, "K", 1))[0]
+    assert secret_rev.after is not None and set_at[0].isoformat() in secret_rev.after
+    assert [s.name for s in await container.skills.index(new.id)] == ["s"]
+    assert await container.skills.index(old.id) == []
+    # 新 owner 能改，旧的不能了
+    await container.skills.edit("s", new.id, new="more")
+    with pytest.raises(Forbidden):
+        await container.skills.edit("s", old.id, new="more")
+    revs = await container.revisions.history(Subject.SKILL, "s", 2)
+    assert revs[1].message == "transfer skill s from agent 'old' to agent 'new'"
+    assert revs[1].author == "user" and revs[1].before == revs[1].after
+
+
+async def test_transfer_rejects_tools_no_ops_and_unknown_owners(container, make_agent):
+    a = await make_agent("a")
+    await container.skills.write("s", "d", "b", actor=a.id, owner=a.id)
+    with pytest.raises(InvalidInput, match="built-in tools"):
+        await container.agents.transfer_item(Kind.TOOL, "run_shell", a.id, "user")
+    with pytest.raises(InvalidInput, match="already belongs"):
+        await container.agents.transfer_item(Kind.SKILL, "s", a.id, "user")
+    with pytest.raises(NotFound):
+        await container.agents.transfer_item(Kind.SKILL, "s", "nobody", "user")
+    with pytest.raises(NotFound):
+        await container.agents.transfer_item(Kind.MCP, "s", None, "user")
+    assert await owned(container, "skill", a.id) == ["s"]
+
+
+async def test_transfer_item_api(client, container, make_agent):
+    await login(client)
+    a = await make_agent("a")
+    await container.skills.write("s", "d", "b", actor="user", owner=None)
+    resp = await client.put("/api/items/skill/s/owner", json={"owner": a.id})
+    assert resp.status_code == 204
+    assert await owned(container, "skill", a.id) == ["s"]
+    assert (await client.put("/api/items/tool/run_shell/owner", json={"owner": None})).status_code == 422
 
 
 async def test_mcp_is_what_the_agent_owns_or_its_roles_give_it(container, models):

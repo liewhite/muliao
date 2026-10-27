@@ -235,6 +235,9 @@ export const api = {
   previewRole: (body: Schemas['RolePreviewIn']) => call('post', '/api/role-preview', { body }),
   /** 全部条目：内置工具在前，skill、MCP server、secret 按种类、名称 */
   items: () => branded<CatalogItem[]>(call('get', '/api/items')),
+  /** 把 skill / MCP server / secret 转给另一个 owner（null 归平台），记一版；内容与收录它的角色不变 */
+  transferItem: (kind: ItemKind, name: string, owner: AgentId | null) =>
+    call('put', '/api/items/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
   /** 全部已登记的内置工具（读写、是否管理类） */
   tools: () => call('get', '/api/tools'),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */

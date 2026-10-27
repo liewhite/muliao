@@ -151,6 +151,17 @@ async def list_items(c: C) -> list[ItemOut]:
     return [ItemOut.of(e) for e in await c.agents.catalog()]
 
 
+class OwnerIn(BaseModel):
+    # agent 的 id；null 归平台
+    owner: str | None
+
+
+@router.put("/items/{kind}/{name}/owner", status_code=204)
+async def transfer_item(c: C, kind: Kind, name: str, body: OwnerIn) -> None:
+    """把 skill / MCP server / secret 转给另一个 owner（内置工具不能转），记一版；内容与收录它的角色不变。"""
+    await c.agents.transfer_item(kind, name, body.owner, USER)
+
+
 class ReachOut(BaseModel):
     """一份配置能用的内置工具与条目（skill、MCP server、secret，`kind:name`）。"""
 

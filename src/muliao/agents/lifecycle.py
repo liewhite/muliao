@@ -22,9 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agents.active import active_row_in
 from muliao.agents.documents import document_in
 from muliao.agents.events import AgentDeleting
+from muliao.agents.items import set_owner_in
 from muliao.agents.memory import revision_name
 from muliao.agents.permissions import BASE, Kind, Rules
-from muliao.agents.revisions import Subject, record_in
+from muliao.agents.revisions import Subject, record_in, record_owner_in
 from muliao.agents.roles import roles_in
 from muliao.agents.service import AgentInfo, AgentService, info_of
 from muliao.agents.skills import SkillStore
@@ -158,12 +159,11 @@ async def _record_deletions_in(s: AsyncSession, agent_id: str, author: str) -> N
     for row in list(await s.scalars(select(Item).where(Item.owner == agent_id))):
         doc = await document_in(s, row)
         if (Subject(row.kind), row.name) in shared:
-            row.owner = None
-            record_in(
+            await set_owner_in(s, row, None)
+            record_owner_in(
                 s,
                 Subject(row.kind),
                 row.name,
-                doc,
                 doc,
                 author,
                 f"moved to the platform with agent {agent_id} deleted",

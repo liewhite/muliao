@@ -69,6 +69,13 @@ def record_in(
     )
 
 
+def record_owner_in(
+    s: AsyncSession, subject: Subject, name: str, doc: str, author: str, message: str
+) -> None:
+    """条目换了 owner（转移、随 agent 删除转给平台）：文档不含 owner、前后相同，仍记一版，message 写明从谁到谁。"""
+    s.add(Revision(subject=subject.value, name=name, before=doc, after=doc, author=author, message=message))
+
+
 class Revisions:
     """版本的只读查询（界面的历史与恢复）。"""
 

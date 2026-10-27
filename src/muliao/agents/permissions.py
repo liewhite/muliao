@@ -39,7 +39,7 @@ class Access(StrEnum):
 @dataclass(frozen=True)
 class Tool:
     access: Access
-    # 管理类工具（管 agent、角色、全局记忆）：base 没有，只经 admin 角色或显式规则给出
+    # 管理类工具（管 agent、角色、全局记忆、条目归属）：base 没有，只经 admin 角色或显式规则给出
     admin: bool = False
 
 
@@ -75,6 +75,7 @@ TOOLS: dict[str, Tool] = {
     "create_role": ADMIN_W,
     "update_role": ADMIN_W,
     "delete_role": ADMIN_W,
+    "transfer_item": ADMIN_W,
     "delegate_task": W,
     "ask_agent": W,
     "list_threads": R,

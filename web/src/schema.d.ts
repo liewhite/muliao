@@ -115,6 +115,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/items/{kind}/{name}/owner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Transfer Item
+         * @description 把 skill / MCP server / secret 转给另一个 owner（内置工具不能转），记一版；内容与收录它的角色不变。
+         */
+        put: operations["transfer_item_api_items__kind___name__owner_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agent-preview": {
         parameters: {
             query?: never;
@@ -1834,6 +1854,11 @@ export interface components {
          * @enum {string}
          */
         Origin: "user" | "trigger" | "delegation" | "issue";
+        /** OwnerIn */
+        OwnerIn: {
+            /** Owner */
+            owner: string | null;
+        };
         /** Precheck */
         Precheck: {
             /**
@@ -2751,6 +2776,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ItemOut"][];
+                };
+            };
+        };
+    };
+    transfer_item_api_items__kind___name__owner_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: components["schemas"]["Kind"];
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OwnerIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

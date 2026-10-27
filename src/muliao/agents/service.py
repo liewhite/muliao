@@ -14,12 +14,15 @@ from typing import Literal, cast, get_args
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.access import Grants, Keep, granted_by, grants_in
+from muliao.agents.access import Grants, Keep, granted_by, grants_in, owner_label_in
 from muliao.agents.active import active_row_in, runnable_row_in
+from muliao.agents.documents import document_in
 from muliao.agents.ids import new_agent_id
+from muliao.agents.items import changeable_in, label, set_owner_in
 from muliao.agents.memory import create_memory_in
 from muliao.agents.naming import new_agent_name, normalize_agent_name
 from muliao.agents.permissions import ADMIN, BASE, Kind, Rules, check_patterns, pattern_of
+from muliao.agents.revisions import Subject, record_owner_in
 from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
 from muliao.agents.tables import Agent, Item
 from muliao.errors import Conflict, InvalidInput, NotFound
@@ -313,6 +316,28 @@ class AgentService:
                 )
                 for i in items
             ]
+
+    async def transfer_item(self, kind: Kind, name: str, owner: str | None, actor: str) -> None:
+        """把 skill / MCP server / secret 转给 owner（agent 的 id；None 归平台），记一版。actor 要能改它（规则 2），新
+        owner 要还可用（归档的也行：条目照常可改）。内容不变；谁能用随 owner 变（agents.access 的规则 1）。"""
+        if kind == Kind.TOOL:
+            raise InvalidInput("built-in tools belong to the platform and cannot be transferred")
+        subject = Subject(kind.value)
+        async with self._db.transaction() as s:
+            row = await changeable_in(s, subject, name, actor)
+            if row.owner == owner:
+                raise InvalidInput(
+                    f"{label(subject)} {name!r} already belongs to {await owner_label_in(s, owner)}"
+                )
+            if owner is not None:
+                await active_row_in(s, owner)
+            message = (
+                f"transfer {label(subject)} {name} from {await owner_label_in(s, row.owner)} "
+                f"to {await owner_label_in(s, owner)}"
+            )
+            record_owner_in(s, subject, name, await document_in(s, row), actor, message)
+            await set_owner_in(s, row, owner)
+        log.info("item transferred", extra={"kind": kind.value, "item": name, "owner": owner, "actor": actor})
 
     async def verify_stored(self) -> None:
         """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、角色必须都在（且不含隐含的 base）、规则（含角色的）

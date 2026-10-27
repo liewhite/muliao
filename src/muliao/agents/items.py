@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.access import check_change_in, grants_in
@@ -61,6 +61,13 @@ async def writable_in(
     if owner is not None:
         await active_row_in(s, owner)
     return None
+
+
+async def set_owner_in(s: AsyncSession, row: Item, owner: str | None) -> None:
+    """只换 owner：内容没变，`updated_at` 保持原值（它的 onupdate 在只改 owner 时也会刷新，而 secret 把它当作值的设置时间、
+    写进版本文档）。版本由调用方用 revisions.record_owner_in 记。"""
+    await s.execute(update(Item).where(Item.id == row.id).values(owner=owner, updated_at=Item.updated_at))
+    await s.refresh(row)
 
 
 async def items_in(s: AsyncSession, kind: Subject) -> list[Item]:

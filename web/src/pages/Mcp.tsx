@@ -164,7 +164,7 @@ function McpItem({ item, server, onChange }: { item: CatalogItem; server: McpSer
             </Chip>
           </div>
           <div className="mt-1.5">
-            <ItemAccess item={item} />
+            <ItemAccess item={item} onTransferred={onChange} />
           </div>
         </div>
         <ToggleSwitch

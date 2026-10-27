@@ -55,7 +55,7 @@ export function SkillTab({ items, onChange }: { items: CatalogItem[]; onChange: 
                 <Card.Description>{s.description}</Card.Description>
               </Card.Header>
               <Card.Content>
-                <ItemAccess item={s} />
+                <ItemAccess item={s} onTransferred={onChange} />
               </Card.Content>
             </Card>
           ))}
