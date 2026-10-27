@@ -2,21 +2,10 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
-
 from pydantic import BaseModel, ConfigDict
 
 from muliao.platform.messaging import Command, DomainEvent
 from muliao.sessions.origins import Origin
-
-
-class Ending(StrEnum):
-    """关联（委派来的工作）的结局。"""
-
-    FINISHED = "finished"
-    STOPPED = "stopped"
-    FAILED = "failed"
-    DELETED = "deleted"
 
 
 class RunEnded(DomainEvent):

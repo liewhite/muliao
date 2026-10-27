@@ -30,7 +30,7 @@ from muliao.sessions.events import SessionStopped, StopThread
 from muliao.sessions.history import latest_answer, marked_stopped, since_last_response, stopped_results
 from muliao.sessions.holds import clear_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
-from muliao.sessions.mailbox import latest_run
+from muliao.sessions.runs import latest_run
 from muliao.sessions.settlement import settle_stopped_in
 from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.tables import Message, Session

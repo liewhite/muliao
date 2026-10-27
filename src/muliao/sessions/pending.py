@@ -12,6 +12,7 @@ agent_runtime 的 defer_call，这次运行停在这里正常结束，不在 wor
 
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
@@ -160,3 +161,19 @@ def late_text(results: Sequence[CallResult]) -> str:
         if isinstance(r, AgentAnswered)
     ]
     return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class OpenAsks:
+    """还没有结果的提问分成两种：现在能回答的（answerable），与回答已提交、还在信箱里排队的（submitted）。
+    回答在交给模型之前一直排着（运行失败重试时也还在），所以不需要别的条件。界面展示与投信校验都经过 open_asks_of（加载在 mailbox.open_asks_in / open_asks_among）。"""
+
+    answerable: dict[str, list[Question]]
+    submitted: frozenset[str]
+
+
+def open_asks_of(since_last_response: Sequence[ModelMessage], queued: Sequence[Mail]) -> OpenAsks:
+    """挂起的提问只可能在最后一条模型回复里（history.since_last_response）；回答已在信箱里排着的算已提交。"""
+    pending = pending_questions(since_last_response)
+    submitted = frozenset(k for m in queued if m.kind == MailKind.ANSWER for k in m.answers)
+    return OpenAsks(answerable={k: v for k, v in pending.items() if k not in submitted}, submitted=submitted)

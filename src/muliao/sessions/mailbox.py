@@ -17,17 +17,17 @@ import logging
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.errors import CorruptState, NotFound
+from muliao.errors import NotFound
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import TaskQueue
-from muliao.sessions.history import since_last_response
+from muliao.sessions.history import since_last_response, since_last_response_among
 from muliao.sessions.holds import called_in, get_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
-from muliao.sessions.pending import waiting
+from muliao.sessions.pending import OpenAsks, open_asks_of, waiting
+from muliao.sessions.runs import RunPayload, handed_to, latest_run
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
@@ -166,54 +166,6 @@ async def visible_in(s: AsyncSession, session_id: str) -> list[Mail]:
     return list(rows.all())
 
 
-async def latest_run(s: AsyncSession, session_id: str) -> Task | None:
-    """会话最近一次运行。"""
-    return (await latest_runs_among(s, [session_id])).get(session_id)
-
-
-async def latest_runs_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, Task]:
-    """这些会话各自最近一次运行（一次查询）；还没有运行的会话不在结果里。"""
-    lanes = {session_lane(x): x for x in session_ids}
-    latest = (
-        select(func.max(Task.id)).where(Task.lane.in_(list(lanes)), Task.kind == RUN_TASK).group_by(Task.lane)
-    )
-    return {lanes[t.lane]: t for t in (await s.scalars(select(Task).where(Task.id.in_(latest)))).all()}
-
-
-class RunPayload(BaseModel):
-    """一次运行（run task）的 payload，唯一读写处在这里。输入都在信箱里；这里只记交给过它的最新信件 id：投递它时信箱里
-    最新的，运行开头取走了更新的信件时推进到那里（hand_over_in）。"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    through_mail_id: int
-
-    @classmethod
-    def of(cls, run: Task) -> RunPayload:
-        if run.kind != RUN_TASK:
-            raise RuntimeError(f"task {run.id} is a {run.kind}, not a run")
-        try:
-            return cls.model_validate(run.payload)
-        except ValidationError as e:
-            raise CorruptState(f"run {run.id} has a malformed payload {run.payload!r}: {e}") from e
-
-
-def handed_to(mail: Mail, run: Task) -> bool:
-    """这封排队的信件已经交给过这次运行：投递它时就在信箱里了，或它某次尝试开头取走了它（hand_over_in）。唤醒
-    （wake_in 的「之后才到」）与最终失败时了结委派（RunHandler.failed_in）共用这一条规则，按信件 id 比较。"""
-    return mail.id <= RunPayload.of(run).through_mail_id
-
-
-async def hand_over_in(s: AsyncSession, run_id: int, through_mail_id: int) -> None:
-    """运行开头取走了截至这封的排队信件：记进它的 payload（只前进），它们从此算交给过这次运行（handed_to）。"""
-    run = await s.get(Task, run_id)
-    if run is None:
-        raise RuntimeError(f"run {run_id} vanished while it was taking mail")
-    payload = RunPayload.of(run)
-    if through_mail_id > payload.through_mail_id:
-        run.payload = RunPayload(through_mail_id=through_mail_id).model_dump()
-
-
 async def consume_in(s: AsyncSession, ids: Sequence[int], run_id: int) -> None:
     """交给模型的那一步保存时记下处理掉的信件。同一会话只有一个消费者，取走的信件不可能被别人处理掉。"""
     if not ids:
@@ -278,3 +230,15 @@ async def post_check_in(
         check_in=True,
     )
     return True
+
+
+async def open_asks_in(s: AsyncSession, session_id: str) -> OpenAsks:
+    """会话还没有结果的提问（规则在 pending.open_asks_of）。"""
+    return open_asks_of(await since_last_response(s, session_id), await queued_in(s, session_id))
+
+
+async def open_asks_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, OpenAsks]:
+    """open_asks_in 的批量版本（会话列表的工作状态），同一条规则。"""
+    tails = await since_last_response_among(s, session_ids)
+    queued = await queued_among(s, session_ids)
+    return {x: open_asks_of(tails[x], queued[x]) for x in session_ids}

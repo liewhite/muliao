@@ -227,7 +227,7 @@ async def test_retrying_a_failed_run_after_the_session_was_stopped_ends_quietly(
 
 async def test_mail_taken_at_a_runs_start_counts_as_handed_to_it(container, make_agent, models):
     """运行开头取走的信件比投递它时记下的多：记进它的 payload，最终失败时据此了结、不为它们再唤醒一次。"""
-    from muliao.sessions.mailbox import RunPayload
+    from muliao.sessions.runs import RunPayload
     from tests.scripted import scripted
     from tests.test_flow import mail_of, reply, tasks_of
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from datetime import datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -30,10 +31,10 @@ from muliao.platform.db import Database, utcnow
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Clock, TaskQueue
 from muliao.sessions.activity import WorkState, work_states_in
-from muliao.sessions.events import Ending
 from muliao.sessions.holds import calls_in, get_in
-from muliao.sessions.mailbox import latest_runs_among, post_check_in
+from muliao.sessions.mailbox import post_check_in
 from muliao.sessions.pending import AgentAnswer
+from muliao.sessions.runs import latest_runs_among
 from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import HoldStatus, Mail, Session, SessionHold
 from muliao.sessions.work import deliver_in
@@ -43,6 +44,15 @@ if TYPE_CHECKING:
     from muliao.sessions.halt import StopSession
 
 log = logging.getLogger(__name__)
+
+
+class Ending(StrEnum):
+    """关联（委派来的工作）的结局。"""
+
+    FINISHED = "finished"
+    STOPPED = "stopped"
+    FAILED = "failed"
+    DELETED = "deleted"
 
 
 def delegation_holder(owner_id: str, key: str) -> str:

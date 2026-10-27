@@ -345,9 +345,8 @@ def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
     from muliao.agents.tables import Agent
     from muliao.platform.tables import Task
     from muliao.sessions.activity import WorkState
-    from muliao.sessions.delegation import check_text
+    from muliao.sessions.delegation import Ending, check_text
     from muliao.sessions.delegation import event_text as _event_text
-    from muliao.sessions.events import Ending
     from muliao.sessions.tables import Session
 
     child = Session(id="c", agent_id="a", title="t", thread="review")
@@ -946,7 +945,7 @@ async def test_a_thread_waiting_on_its_own_background_job_is_listed_as_waiting_n
     from pydantic_ai.messages import ToolCallPart
 
     from muliao.sessions.activity import WorkState
-    from muliao.sessions.mailbox import latest_run
+    from muliao.sessions.runs import latest_run
     from tests.test_flow import last_user_prompt, tool_returns
 
     def helper_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

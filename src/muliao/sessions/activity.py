@@ -14,10 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.holds import with_active_among
-from muliao.sessions.inbound import open_asks_among
 from muliao.sessions.info import keyed_sessions_among
 from muliao.sessions.kinds import TOP_LEVEL
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
+from muliao.sessions.mailbox import open_asks_among
 from muliao.sessions.origins import Origin
 from muliao.sessions.ownership import owned_threads_in
 from muliao.sessions.tables import Session

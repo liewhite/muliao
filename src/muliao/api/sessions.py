@@ -1,17 +1,13 @@
 from datetime import datetime
-from typing import Literal
 
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.api.files import FileOut
+from muliao.api.tasks import TaskOut
 from muliao.container import Container
-from muliao.notifications.api import DELIVER_TASK
-from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.sessions.api import (
-    COMPACTION_TASK,
-    RUN_TASK,
     CallResult,
     DerivedTitle,
     EventSource,
@@ -84,39 +80,6 @@ async def session_outs(c: Container, sessions: list[Session]) -> list[SessionOut
     """SessionOut 的唯一构造入口：一次取齐这些会话的未读（通知领域）。"""
     unread = await c.notifications.unread_sessions([s.id for s in sessions])
     return [SessionOut.of(s, s.id in unread) for s in sessions]
-
-
-# 任务种类：各领域在自己的 api 导出，这里组成接口契约（tests 检查它恰好是 worker 登记的种类）。进 OpenAPI 后前端
-# 按种类判断时用生成的类型（web/src/events.ts 的 TaskKind），后端改名时前端编译失败，而不是悄悄不再匹配
-TaskKind = Literal[EVENT_TASK, RUN_TASK, COMPACTION_TASK, DELIVER_TASK]
-
-
-class TaskOut(BaseModel):
-    id: int
-    kind: TaskKind
-    agent_id: str | None
-    session_id: str | None
-    status: TaskStatus
-    attempts: int
-    error: str | None
-    not_before: datetime
-    created_at: datetime
-    finished_at: datetime | None
-
-    @classmethod
-    def of(cls, t: Task) -> "TaskOut":
-        return cls(
-            id=t.id,
-            kind=t.kind,
-            agent_id=t.agent_id,
-            session_id=t.session_id,
-            status=t.status,
-            attempts=t.attempts,
-            error=t.error,
-            not_before=t.not_before,
-            created_at=t.created_at,
-            finished_at=t.finished_at,
-        )
 
 
 class MailOut(BaseModel):
@@ -299,15 +262,3 @@ async def mark_read(c: C, session_id: str) -> None:
 @router.delete("/sessions/{session_id}", status_code=204)
 async def delete_session(c: C, session_id: str) -> None:
     await c.sessions.delete(session_id)
-
-
-@router.get("/tasks")
-async def list_tasks(
-    c: C, status: TaskStatus | None = None, limit: int = Query(100, ge=1, le=500)
-) -> list[TaskOut]:
-    return [TaskOut.of(t) for t in await c.tasks.list(status=status, limit=limit)]
-
-
-@router.post("/tasks/{task_id}/retry")
-async def retry_task(c: C, task_id: int) -> TaskOut:
-    return TaskOut.of(await c.tasks.retry(task_id))

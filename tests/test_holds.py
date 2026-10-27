@@ -461,8 +461,7 @@ async def test_a_thread_settling_a_delegation_its_existing_asker_has_no_hold_for
     container, make_agent, models
 ):
     """发起方还在、却没有这个占用：不是「发起方已删除」，交回报错，不悄悄丢掉结局。"""
-    from muliao.sessions.delegation import hand_back_in
-    from muliao.sessions.events import Ending
+    from muliao.sessions.delegation import Ending, hand_back_in
     from muliao.sessions.tables import Session
 
     lead = (await make_agent("lead", model="l")).id

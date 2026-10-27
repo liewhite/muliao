@@ -11,11 +11,10 @@
   归档之后来信进不来（agents.lifecycle）。"""
 
 import logging
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
-from pydantic_ai.messages import ModelMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import runnable_agent_in
@@ -25,14 +24,13 @@ from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
-from muliao.sessions.history import since_last_response, since_last_response_among
 from muliao.sessions.info import keyed_rows_among
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane
-from muliao.sessions.mailbox import post_in, queued_among, queued_in
+from muliao.sessions.mailbox import open_asks_in, post_in
 from muliao.sessions.origins import Origin
-from muliao.sessions.pending import UserAnswered, pending_questions
-from muliao.sessions.questions import AskResult, Question, QuestionAnswer, answer_result
+from muliao.sessions.pending import UserAnswered
+from muliao.sessions.questions import AskResult, QuestionAnswer, answer_result
 from muliao.sessions.tables import TITLE_LENGTH, Mail, MailKind, Session
 
 log = logging.getLogger(__name__)
@@ -181,38 +179,11 @@ def _key_ref(inbound: Inbound) -> str:
     return inbound.origin_ref
 
 
-@dataclass(frozen=True)
-class OpenAsks:
-    """还没有结果的提问分成两种：现在能回答的（answerable），与回答已提交、还在信箱里排队的（submitted）。
-    回答在交给模型之前一直排着（运行失败重试时也还在），所以不需要别的条件。界面展示与投信校验都经过 open_asks。"""
-
-    answerable: dict[str, list[Question]]
-    submitted: frozenset[str]
-
-
-async def open_asks(s: AsyncSession, session_id: str) -> OpenAsks:
-    return _open_asks(await since_last_response(s, session_id), await queued_in(s, session_id))
-
-
-async def open_asks_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, OpenAsks]:
-    """open_asks 的批量版本（会话列表的工作状态），同一条规则。"""
-    tails = await since_last_response_among(s, session_ids)
-    queued = await queued_among(s, session_ids)
-    return {x: _open_asks(tails[x], queued[x]) for x in session_ids}
-
-
-def _open_asks(since_last_response: Sequence[ModelMessage], queued: Sequence[Mail]) -> OpenAsks:
-    """挂起的提问只可能在最后一条模型回复里（history.since_last_response）；回答已在信箱里排着的算已提交。"""
-    pending = pending_questions(since_last_response)
-    submitted = frozenset(k for m in queued if m.kind == MailKind.ANSWER for k in m.answers)
-    return OpenAsks(answerable={k: v for k, v in pending.items() if k not in submitted}, submitted=submitted)
-
-
 async def _resolve_answers(
     s: AsyncSession, session_id: str, answers: Mapping[str, Sequence[QuestionAnswer]]
 ) -> dict[str, AskResult]:
     """用户提交的回答：每个都对应还在等回答的提问。返回交给模型的结果。"""
-    pending = (await open_asks(s, session_id)).answerable
+    pending = (await open_asks_in(s, session_id)).answerable
     resolved = {}
     for call_id, given in answers.items():
         if call_id not in pending:

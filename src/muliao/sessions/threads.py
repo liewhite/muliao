@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentInfo
 from muliao.errors import InvalidInput
-from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.delegation import delegation_holder, thread_name, threads_of_holds_in
@@ -20,9 +19,8 @@ from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.inbound import Inbound, NewSession, Received, create_session, receive
 from muliao.sessions.kinds import SessionKind, policy_of
-from muliao.sessions.mailbox import latest_runs_among
 from muliao.sessions.origins import Origin
-from muliao.sessions.settlement import failure_of
+from muliao.sessions.runs import latest_runs_among, recorded_failure
 from muliao.sessions.tables import Session
 
 log = logging.getLogger(__name__)
@@ -201,14 +199,9 @@ class Threads:
                 kind=child.kind,
                 state=ThreadState(
                     work=works[child.id],
-                    failure=_failure_of(runs.get(child.id)),
+                    failure=recorded_failure(runs.get(child.id)),
                     answer=answers[child.id],
                 ),
             )
             for child in children
         ]
-
-
-def _failure_of(run: Task | None) -> str | None:
-    """最近一次运行最终失败时的错误说明（之后又有运行排上就不再算）。"""
-    return failure_of(run) if run is not None and run.status == TaskStatus.FAILED else None

@@ -300,7 +300,7 @@ async def test_the_task_kinds_in_the_http_contract_are_exactly_the_registered_on
     处理器的那些，后端新增或改名时这里先失败，再重新生成前端类型。"""
     import typing
 
-    from muliao.api.sessions import TaskKind
+    from muliao.api.tasks import TaskKind
 
     assert set(typing.get_args(TaskKind)) == container.queue.kinds
 

@@ -16,9 +16,9 @@ from muliao.agent_runtime.api import Attachment
 from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import TaskQueue
-from muliao.sessions.delegation import hand_back_in
-from muliao.sessions.events import Ending
-from muliao.sessions.mailbox import discard_in, handed_to, latest_run
+from muliao.sessions.delegation import Ending, hand_back_in
+from muliao.sessions.mailbox import discard_in
+from muliao.sessions.runs import failure_of, handed_to, latest_run
 from muliao.sessions.tables import Mail, MailState, Session
 
 log = logging.getLogger(__name__)
@@ -108,15 +108,6 @@ async def settle_deleted_in(s: AsyncSession, queue: TaskQueue, session: Session)
         Ending.DELETED,
         "",
     )
-
-
-def failure_of(run: Task) -> str:
-    """失败的运行的错误说明；队列契约保证 failed 一定带 error。"""
-    if run.status != TaskStatus.FAILED or run.error is None:
-        raise RuntimeError(
-            f"run {run.id} is {run.status} with error {run.error!r}, expected a recorded failure"
-        )
-    return run.error
 
 
 async def settle_failure_in(s: AsyncSession, queue: TaskQueue, session: Session, run: Task) -> list[str]:

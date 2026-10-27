@@ -26,7 +26,6 @@ from muliao.sessions.inbound import (
     Inbound,
     Received,
     inbound_of,
-    open_asks,
     receive,
     receive_into,
     receive_lane_of,
@@ -34,8 +33,9 @@ from muliao.sessions.inbound import (
 )
 from muliao.sessions.kinds import LISTED, policy_of
 from muliao.sessions.live import LiveRun, LiveRuns, RunItemEvent
-from muliao.sessions.mailbox import latest_run, visible_in
+from muliao.sessions.mailbox import open_asks_in, visible_in
 from muliao.sessions.origins import Origin
+from muliao.sessions.runs import latest_run
 from muliao.sessions.tables import Compaction, Mail, Message, Session
 from muliao.sessions.threads import threads_of
 from muliao.sessions.transcript import Item, annotate_asks, annotate_pending_threads, checked_times, to_items
@@ -117,7 +117,7 @@ class SessionService:
                     .order_by(Message.id)
                 )
             ).all()
-            asks = await open_asks(s, session_id)
+            asks = await open_asks_in(s, session_id)
             compactions = list(
                 (
                     await s.scalars(

@@ -23,6 +23,7 @@ from muliao.api import (
     push,
     sessions,
     speech,
+    tasks,
     triggers,
     usage,
     webhook,
@@ -117,6 +118,7 @@ def _private_routes() -> APIRouter:
     router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
     router.include_router(agents.router)
     router.include_router(sessions.router)
+    router.include_router(tasks.router)
     router.include_router(items.router)
     router.include_router(push.router)
     router.include_router(triggers.router)

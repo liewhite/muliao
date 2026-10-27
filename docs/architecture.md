@@ -314,7 +314,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 **关联与结清**（`sessions/settlement.py`）：委派来的信件带关联 id（它的 holder）。会话自己判断关联什么时候结束，在同一个事务里把结局交回发起方（第 8 节），时机只有下面几个，每个时机一个入口（结清哪些信件只在 settlement 里决定，调用方不传状态集合）：
 
 - **完成**：运行结束的事务里（`sessions.finish`），运行正常结束、没有停在挂起的调用上、信箱里没有还要交给模型的信件、没有 active 占用 → 会话内已处理、还未结清的全部关联以 `finished` 结清，带回答与文件（`settle_finished_in`）。占用释放总是伴随一封信件，信件会唤醒下一次运行，结清由那次运行结束时判断。
-- **最终失败**：队列记失败的事务里（`RunHandler.failed_in`），会话内已处理、还未结清的全部关联，加上交给过这次运行、还排着的（运行在第一次保存之前就失败时，开头取走的信件一直排着，它们不会再唤醒运行，`mailbox.handed_to`；它们随之记为被丢弃），以 `failed` 结清（`settle_failure_in`）；同一个事务里接着 `wake_in`：运行开始之后才到的信件（如对同一 thread 的第二项委派）当场唤醒下一次运行，不等对账；并发布 `RunFailed`（带会话来源，订阅方按来源认领，如 issue 看板在时间线记一笔，第 21 节；通知领域据此通知用户）。按会话范围而不是按处理它的运行，所以早先停在 `ask_user` 上的运行处理过的委派、被续跑接管的信件都包括在内。`failed_in` 自己失败时（worker 不带钩子记下失败），由信箱对账（`sessions/reconcile.py` 的 `MailReconciler` 调 `reconcile_failures`）以同一个函数补做，每个会话一个事务。
+- **最终失败**：队列记失败的事务里（`RunHandler.failed_in`），会话内已处理、还未结清的全部关联，加上交给过这次运行、还排着的（运行在第一次保存之前就失败时，开头取走的信件一直排着，它们不会再唤醒运行，`runs.handed_to`；它们随之记为被丢弃），以 `failed` 结清（`settle_failure_in`）；同一个事务里接着 `wake_in`：运行开始之后才到的信件（如对同一 thread 的第二项委派）当场唤醒下一次运行，不等对账；并发布 `RunFailed`（带会话来源，订阅方按来源认领，如 issue 看板在时间线记一笔，第 21 节；通知领域据此通知用户）。按会话范围而不是按处理它的运行，所以早先停在 `ask_user` 上的运行处理过的委派、被续跑接管的信件都包括在内。`failed_in` 自己失败时（worker 不带钩子记下失败），由信箱对账（`sessions/reconcile.py` 的 `MailReconciler` 调 `reconcile_failures`）以同一个函数补做，每个会话一个事务。
 - **停止 / 删除**：未结清的关联（排着的与已处理的）以 `stopped` / `deleted` 结清（`settle_stopped_in` 随后清空信箱 / `settle_deleted_in`）。
 
 `mail.correlation_settled` 保证每个关联只结清一次，交回与结清、占用的释放在同一个事务里，所以每项委派的结局只交回一次（第 8 节）。
@@ -352,7 +352,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 **`ask_user`**：做法同 Claude Code 的 AskUserQuestion、Codex 的提问：一次 1 到 4 个选择题（单选或多选，每题 2 到 6 个选项），界面上每题总能在「其他」里自己写。工具总是列出，只在 `Audience.USER` 时可用，否则抛领域错误交还模型，说明按 Audience 区分（`agent`：另一个 agent 在问，把要对方定的写进回答；`none`：自己决定、必要时 `notify_user`）（`sessions/ask_user.py` 的 `REJECTED`；不用 `prepare` 隐藏，以免工具列表随运行变化破坏 prompt 缓存）。
 
 - 运行停在提问上时通知用户「等你回答：…」。
-- 界面把回答随消息提交（`answers: {tool_call_id: [每题的回答]}`，可以没有文字），`inbound.receive` 校验它针对现在能回答的提问（`inbound.open_asks`：还挂着、也还没有回答在信箱里排着的），选项属于该题、单选至多一个、每题都有选择或「其他」，然后把交给模型的结果（`AskResult`：`answered` 加每题的选择，或没回答时的说明）存在回答信件里。回答交给模型之前一直排着（运行失败重试时也还在），所以不需要别的条件。
+- 界面把回答随消息提交（`answers: {tool_call_id: [每题的回答]}`，可以没有文字），`inbound.receive` 校验它针对现在能回答的提问（`pending.open_asks_of`，加载在 `mailbox.open_asks_in`：还挂着、也还没有回答在信箱里排着的），选项属于该题、单选至多一个、每题都有选择或「其他」，然后把交给模型的结果（`AskResult`：`answered` 加每题的选择，或没回答时的说明）存在回答信件里。回答交给模型之前一直排着（运行失败重试时也还在），所以不需要别的条件。
 - 展示：提问不收进过程组。每个 `ask_user` 条目的状态由后端按唯一规则给出（`transcript.annotate_asks`，会话接口与实时条目共用投影）：`asking`（运行还没停下）、`pending`（显示表单）、`submitted`（回答已提交、还排着，回答显示在信箱里）、`answered`（显示问题与选择）、`not_answered`；被退回的调用（参数被工具 schema 拒绝，或没有用户在等这次运行的回答）不是提问，按普通工具错误展示。前端不解析工具结果文本。
 
 ### 附件与文件
