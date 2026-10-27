@@ -43,7 +43,8 @@ from muliao.issues.api import SESSION_NOTE as ISSUE_SESSION_NOTE
 from muliao.issues.api import IssueService
 from muliao.issues.tools import issues_toolset
 from muliao.notifications.api import DELIVER_TASK, Notifications, PushSubscriptions, VapidKeys
-from muliao.notifications.delivery import DeliverHandler
+from muliao.notifications.inbox import push_message_in
+from muliao.notifications.push import DeliverHandler
 from muliao.notifications.tools import notify_toolset
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.bus import EventBus, EventFeed
@@ -314,6 +315,7 @@ def assemble(
         db, agents, skills, messaging, {"sessions": activity.blocks_agent_deletion_in}
     )
     notifications = Notifications(db, queue, bus)
+    push_subscriptions = PushSubscriptions(db)
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
     precheck = PrecheckRunner(
@@ -335,7 +337,6 @@ def assemble(
     streams = StreamRunner(db, triggers, activity, vault, agents.workspace, messaging, EVENT_MAX_BYTES)
     webhooks = Webhooks(db, triggers)
     issues = IssueService(db, messaging, tz, run_now, activity)
-    push_subscriptions = PushSubscriptions(db)
     vapid = VapidKeys(settings.vapid_key_path)
 
     pusher = WebPushDelivery(push_subscriptions, vapid, settings.push.vapid_subject)
@@ -413,7 +414,7 @@ def assemble(
         register_handlers(
             (EVENT_TASK, messaging),
             *session_domain.handlers(messaging),
-            (DELIVER_TASK, DeliverHandler(db, pusher)),
+            (DELIVER_TASK, DeliverHandler(db, push_message_in, pusher)),
         ),
         bus,
     )

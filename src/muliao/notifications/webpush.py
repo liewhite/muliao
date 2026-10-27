@@ -11,9 +11,8 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from py_vapid import Vapid02, b64urlencode
 from pywebpush import WebPushException, webpush
 
-from muliao.errors import InvalidInput, ServiceUnavailable
-from muliao.notifications.tables import Notification, PushSubscription
-from muliao.platform.db import Database
+from muliao.errors import ServiceUnavailable
+from muliao.notifications.push import Device, PushMessage, PushSubscriptions
 from muliao.platform.text_edit import truncate
 
 log = logging.getLogger(__name__)
@@ -59,27 +58,6 @@ class VapidKeys:
         self.public_key_b64 = b64urlencode(raw)
 
 
-class PushSubscriptions:
-    def __init__(self, db: Database):
-        self._db = db
-
-    async def add(self, endpoint: str, p256dh: str, auth: str) -> None:
-        if not endpoint.startswith("https://"):
-            raise InvalidInput("push endpoint must be an https URL")
-        async with self._db.transaction() as s:
-            row = await s.get(PushSubscription, endpoint)
-            if row is None:
-                s.add(PushSubscription(endpoint=endpoint, p256dh=p256dh, auth=auth))
-            else:
-                row.p256dh, row.auth = p256dh, auth
-
-    async def remove(self, endpoint: str) -> None:
-        async with self._db.transaction() as s:
-            row = await s.get(PushSubscription, endpoint)
-            if row is not None:
-                await s.delete(row)
-
-
 class WebPushDelivery:
     def __init__(self, subscriptions: PushSubscriptions, keys: VapidKeys, subject: str):
         self._subs = subscriptions
@@ -87,28 +65,28 @@ class WebPushDelivery:
         self._subject = subject
         self._threads = anyio.CapacityLimiter(_PUSH_THREADS)
 
-    async def send(self, subscription: PushSubscription, notification: Notification, unread: int) -> None:
+    async def send(self, device: Device, message: PushMessage) -> None:
         """投递到一个订阅：失效订阅删除，暂时性失败抛 ServiceUnavailable 交给任务按长窗口（约 30 分钟）重试（只重推
         这一台：本机到推送服务的网络断开常超过十分钟，#208），其余 4xx 属于本端问题。"""
         data = json.dumps(
             {
-                "title": notification.title,
-                "body": truncate(notification.body, _BODY_MAX_CHARS),
+                "title": message.title,
+                "body": truncate(message.body, _BODY_MAX_CHARS),
                 # 系统通知不指向别处，点开看通知页
-                "url": notification.url or "/notifications",
-                "session_id": notification.session_id,
+                "url": message.url or "/notifications",
+                "session_id": message.session_id,
                 # 有它时 Service Worker 给通知加「通过」「打回」按钮（只有 Chromium 显示）
-                "issue_id": notification.issue_id,
-                "badge": unread,
+                "issue_id": message.issue_id,
+                "badge": message.unread,
             },
             ensure_ascii=False,
         )
-        status = await anyio.to_thread.run_sync(self._push, subscription, data, limiter=self._threads)
+        status = await anyio.to_thread.run_sync(self._push, device, data, limiter=self._threads)
         # 不记 endpoint：它的完整路径即订阅凭据，只记推送服务的主机
-        host = urlsplit(subscription.endpoint).hostname
+        host = urlsplit(device.endpoint).hostname
         extra = {
-            "notification_id": notification.id,
-            "session_id": notification.session_id,
+            "notification_id": message.notification_id,
+            "session_id": message.session_id,
             "push_host": host,
             "status": status,
         }
@@ -116,14 +94,14 @@ class WebPushDelivery:
             log.info("web push sent", extra=extra)
         elif status in _GONE:
             log.info("push subscription gone, removing it", extra=extra)
-            await self._subs.remove(subscription.endpoint)
+            await self._subs.remove(device.endpoint)
         elif status in _TRANSIENT:
             raise ServiceUnavailable(f"push service temporarily failed with HTTP {status} ({host})")
         else:
             # 其余 4xx（400/401/403/413…）多半是本端问题（VAPID 声明、时钟、载荷），不能删用户的订阅；task 失败可见、不重试
             raise RuntimeError(f"push service rejected the subscription with HTTP {status} ({host})")
 
-    def _push(self, sub: PushSubscription, data: str) -> int | None:
+    def _push(self, sub: Device, data: str) -> int | None:
         """返回失败的 HTTP 状态码；成功返回 None。"""
         try:
             webpush(

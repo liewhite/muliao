@@ -1,15 +1,14 @@
-"""通知：发给用户的一条消息（标题、正文、指向的会话、是否未读）。通知页与应用角标的未读数是它的展示；投递
-（Web Push）是 delivery 的事，deliver task 只引用通知与一个推送订阅，内容只存在 notifications 表。
+"""收件箱：发给用户的通知（标题、正文、指向的会话、是否未读），notifications 表只在这里读写。通知页与应用角标的
+未读数是它的展示；推到设备是 notifications.push 的事：写下通知时交给它排推送（schedule_in），推送时经 push_message_in
+取内容，deliver task 只引用通知与一台设备。
 
-Notifications 是这个领域的唯一服务：写下通知并给每个推送订阅（设备）各排一个 deliver task（notify、定向命令 Notify、
-订阅 RunEnded 与 RunFailed），通知页与未读数，随会话已读（订阅 SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在
-同一条 lane 上（session_events_lane）。
+Notifications 写下通知（notify、定向命令 Notify、订阅 RunEnded 与 RunFailed），提供通知页与未读数，随会话已读（订阅
+SessionRead）与删除（订阅 SessionDeleted）。同一会话的事件在同一条 lane 上（session_events_lane）。
 
 会话的未读不另存：有指向它的未读通知就是未读（unread_sessions）。需要用户看的只有这几种：用户在等的回答与提问
 （RunEnded）、agent 主动通知（Notify，如 notify_user、issue 交给用户）、运行最终失败（RunFailed）。
 """
 
-import hashlib
 import logging
 from collections.abc import Sequence
 
@@ -17,7 +16,8 @@ from sqlalchemy import delete, event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.notifications.events import NotificationEvent, Notify
-from muliao.notifications.tables import Notification, PushSubscription
+from muliao.notifications.push import PushMessage, schedule_in
+from muliao.notifications.tables import Notification
 from muliao.platform.bus import EventBus
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
@@ -26,16 +26,6 @@ from muliao.sessions.api import SessionInfo, policy_of, session_in
 from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted, SessionRead
 
 log = logging.getLogger(__name__)
-
-# 推送一条通知到一台设备的任务种类（组合根为它登记 DeliverHandler）
-DELIVER_TASK = "deliver"
-
-
-def deliver_lane(session_id: str | None, agent_id: str | None, endpoint: str) -> str:
-    """投递通知的 lane：同一会话（没有会话时同一 agent、系统通知一条）推给同一台设备的按顺序；设备之间互不阻塞，
-    一台在等重试不耽误别的设备。设备用 endpoint 的摘要表示：lane 会进日志，endpoint 本身是订阅凭据。"""
-    device = hashlib.sha256(endpoint.encode()).hexdigest()[:12]
-    return f"deliver:{session_id or agent_id or 'system'}:{device}"
 
 
 def session_events_lane(event: RunEnded | RunFailed | SessionRead | SessionDeleted) -> str:
@@ -52,26 +42,12 @@ class Notifications:
         self._bus = bus
 
     async def _enqueue_in(self, s: AsyncSession, agent_id: str | None, notification: Notification) -> None:
-        """写下通知，每个设备一个 deliver task：一台设备暂时失败只重试它自己，不会再推给已经送达的设备。"""
+        """写下通知，交给推送给每台设备排一次推送。"""
         s.add(notification)
         await s.flush()
         created = NotificationEvent(notification_id=notification.id, session_id=notification.session_id)
         event.listen(s.sync_session, "after_commit", lambda _s: self._bus.publish(created), once=True)
-        endpoints = (await s.scalars(select(PushSubscription.endpoint))).all()
-        if not endpoints:
-            log.info(
-                "no push subscriptions, notification not pushed",
-                extra={"notification_id": notification.id, "session_id": notification.session_id},
-            )
-        for endpoint in endpoints:
-            self._queue.enqueue(
-                s,
-                kind=DELIVER_TASK,
-                lane=deliver_lane(notification.session_id, agent_id, endpoint),
-                agent_id=agent_id,
-                session_id=notification.session_id,
-                payload={"notification_id": notification.id, "endpoint": endpoint},
-            )
+        await schedule_in(s, self._queue, notification.id, notification.session_id, agent_id)
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(RunEnded, "notifications.run_ended", self.on_run_ended, lane=session_events_lane)
@@ -195,7 +171,7 @@ class Notifications:
 
     async def unread_count(self) -> int:
         async with self._db.transaction() as s:
-            return await unread_count_in(s)
+            return await _unread_count_in(s)
 
     async def mark_read(self, through_id: int) -> None:
         """标记到 through_id 为止的通知已读：之后才到的通知用户还没看到，保持未读。"""
@@ -219,6 +195,22 @@ async def _run_session_in(s: AsyncSession, event: RunEnded | RunFailed) -> Sessi
     return session
 
 
-async def unread_count_in(s: AsyncSession) -> int:
+async def _unread_count_in(s: AsyncSession) -> int:
     query = select(func.count()).select_from(Notification).where(Notification.unread.is_(True))
     return (await s.execute(query)).scalar_one()
+
+
+async def push_message_in(s: AsyncSession, notification_id: int) -> PushMessage | None:
+    """推送时的内容（push.MessageSource）：通知本身与此刻的未读数；通知已被删除时为 None。"""
+    notification = await s.get(Notification, notification_id)
+    if notification is None:
+        return None
+    return PushMessage(
+        notification_id=notification.id,
+        title=notification.title,
+        body=notification.body,
+        url=notification.url,
+        session_id=notification.session_id,
+        issue_id=notification.issue_id,
+        unread=await _unread_count_in(s),
+    )

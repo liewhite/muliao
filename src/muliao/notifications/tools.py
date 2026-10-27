@@ -2,7 +2,7 @@
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.notifications.service import Notifications
+from muliao.notifications.inbox import Notifications
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 

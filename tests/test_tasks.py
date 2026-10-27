@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select, text
 
 from muliao.errors import Conflict
-from muliao.notifications.service import DELIVER_TASK
+from muliao.notifications.push import DELIVER_TASK
 from muliao.platform.db import utcnow
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.tasks import no_commit

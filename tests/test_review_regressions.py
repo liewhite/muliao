@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from muliao.agent_runtime.transient import is_transient, transient_as_retryable
 from muliao.errors import Conflict, ModelUnavailable, TransientError
-from muliao.notifications.service import DELIVER_TASK
+from muliao.notifications.push import DELIVER_TASK
 from muliao.platform.tables import TaskStatus
 from muliao.sessions.api import Origin
 from muliao.sessions.lanes import RUN_TASK

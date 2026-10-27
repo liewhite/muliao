@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
 from sqlalchemy import select
 
-from muliao.notifications.service import DELIVER_TASK
+from muliao.notifications.push import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.worker import Worker
