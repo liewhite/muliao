@@ -59,6 +59,13 @@ _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 # 事件内容原样进入 prompt（webhook 请求体、前置检查的输出），过大的应由来源裁剪或改为传引用
 EVENT_MAX_BYTES = 256 * 1024
 
+# 触发器开出的会话（Origin.TRIGGER）在指令里的说明（会话级、不变）。组合根交给会话领域（sessions.api.OriginNotes）
+SESSION_NOTE = (
+    "This run was started by a trigger (a schedule, or an external event shown inside <event>); nobody is "
+    "watching. Each firing starts a fresh conversation unless its sender continues this one, so keep anything "
+    "later firings need in memory or workspace files."
+)
+
 
 class TriggerKind(Protocol):
     """一种触发方式的纯逻辑部分。"""

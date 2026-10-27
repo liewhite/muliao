@@ -8,11 +8,10 @@ from sqlalchemy import select
 from muliao.agent_runtime.instructions import build_instructions
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.issues.api import USER, ActivityKind, IssueStatus, WorkState
+from muliao.issues.api import SESSION_NOTE, USER, ActivityKind, IssueStatus, WorkState
 from muliao.issues.rules import SYSTEM_ACTOR, Snapshot, cycle_through, handed_by, recipient, stalled
 from muliao.platform.messaging import Delivery
-from muliao.sessions.api import Origin
-from muliao.sessions.origins import origin_note
+from muliao.sessions.api import Origin, OriginNotes
 from muliao.sessions.tables import Mail, Session
 from tests.test_flow import deliver, drain, start
 
@@ -819,8 +818,11 @@ async def test_waiting_is_derived_from_the_current_upstream_state(container, mak
     assert "is it blocked?" in (await _mail(container, session.id))[-1]
 
 
-def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
-    """处理指引在 issue 会话的固定说明里（缓存前缀），信件不重复它：说明里要让 agent 先 issue_show、做完交审。"""
+async def test_issue_sessions_are_told_once_how_to_work_on_the_issue(container):
+    """处理指引在 issue 会话的固定说明里（缓存前缀，issue 领域导出、组合根交给会话领域），信件不重复它：说明里要让
+    agent 先 issue_show、做完交审。"""
+    notes = container.consumer._notes  # noqa: SLF001
+    assert notes[Origin.ISSUE] == SESSION_NOTE
 
     def built(origin: Origin) -> str:
         return build_instructions(
@@ -829,7 +831,7 @@ def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
             agent_description="",
             global_memory="",
             workspace=Path("/w"),
-            origin_note=origin_note(origin),
+            origin_note=notes[origin],
             memory="",
             skills=(),
             memory_limit=100,
@@ -840,6 +842,11 @@ def test_issue_sessions_are_told_once_how_to_work_on_the_issue():
     assert "`issue_show`" in issue and "`in_review` and assignee `user`" in issue
     assert "set it `done` yourself" in issue and "under `blocks`" in issue
     assert "issue_show" not in built(Origin.USER)
+
+
+def test_origin_notes_must_cover_every_origin():
+    with pytest.raises(RuntimeError, match="trigger"):
+        OriginNotes({Origin.USER: "u", Origin.DELEGATION: "d", Origin.ISSUE: "i"})
 
 
 def _failing(status_code: int, times: int):

@@ -29,6 +29,27 @@ def assignee_name(assignee: str, names: AgentNames) -> str:
     return USER if assignee == USER else names[assignee]
 
 
+# issue 会话（Origin.ISSUE）在指令里的说明：怎么处理一个 issue（会话级、不变，进缓存前缀；信件里不重复）。组合根交给
+# 会话领域（sessions.api.OriginNotes）
+SESSION_NOTE = (
+    "This conversation is dedicated to one issue on the muliao issue board that you work on or own, and is "
+    "continued each time the issue needs you again: while it is `todo` or `in_progress`, every change to it "
+    "(comments, status, assignee, edits, a dependency finishing) except those you make here arrives here as a short message "
+    "carrying only that new activity. Read the full issue (description, dependencies, whole timeline) with "
+    "`issue_show` before you start, and again whenever the message is not enough. An issue that depends on "
+    "others is delivered only once all of them are `done` or `cancelled`; a cancelled dependency may mean "
+    "this issue is no longer needed. Work on it here, then record the outcome on the issue with the `issue_*` "
+    "tools: comment with what you did or found (`issue_comment`), and move it on with `issue_update`, e.g. "
+    "status `in_progress` while working, `blocked` with a comment explaining why. When you have finished, check "
+    "`issue_show` again: if other issues depend on this one (listed under `blocks`), it is a step of a larger piece "
+    "of work, so set it `done` yourself and the next steps start; otherwise do not set `done` yourself: set "
+    "status `in_review` and assignee `user`, and the user moves it to `done` after reviewing. Hand it to "
+    "another agent by changing the assignee. A user comment on an issue no agent is working on (not `todo`/"
+    "`in_progress`, not assigned to an agent, or still waiting on dependencies) arrives here when you are "
+    "its owner, even if it is not assigned to you: decide whether to close it, assign it to someone, or reply. "
+    "Nobody is watching this conversation: the user reads the issue, not this conversation."
+)
+
 # 「该有人动手」的状态：处于这两个状态、指派给 agent 的 issue，动态投给它
 ACTIVE = frozenset({IssueStatus.TODO, IssueStatus.IN_PROGRESS})
 
@@ -211,8 +232,8 @@ def render_issue(issue: IssueView) -> str:
 
 def delivery_message(issue: IssueView) -> str:
     """投进 issue 会话的一封信：一行摘要加这次的动态（issue.activities 只含这次的动态），不随时间线变长。
-    完整内容由 agent 自己 issue_show；怎么处理 issue 的说明在会话来源的固定说明里（sessions.origins
-    的 ISSUE），不在信里重复。投递时上游都已完成（rules.recipient），所以摘要列出上游及其状态，不列等待。"""
+    完整内容由 agent 自己 issue_show；怎么处理 issue 的说明在会话来源的固定说明里（SESSION_NOTE），
+    不在信里重复。投递时上游都已完成（rules.recipient），所以摘要列出上游及其状态，不列等待。"""
     summary = [f"#{issue.id}: {issue.title}", f"status: {issue.status}", f"assignee: {issue.assignee}"]
     if issue.depends_on:
         summary.append(f"depends on: {_dependencies(issue.depends_on)}")

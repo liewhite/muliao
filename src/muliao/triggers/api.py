@@ -6,7 +6,7 @@
 from muliao.triggers.once import OnceConfig, OnceStatus
 from muliao.triggers.precheck import Precheck, PrecheckFailed
 from muliao.triggers.schedule import ScheduleConfig, ScheduleStatus
-from muliao.triggers.service import EVENT_MAX_BYTES, TriggerKind, TriggerService
+from muliao.triggers.service import EVENT_MAX_BYTES, SESSION_NOTE, TriggerKind, TriggerService
 from muliao.triggers.stream import StreamConfig, StreamStatus
 from muliao.triggers.webhook import WebhookConfig, Webhooks, WebhookStatus
 
@@ -16,6 +16,7 @@ __all__ = [
     "OnceStatus",
     "Precheck",
     "PrecheckFailed",
+    "SESSION_NOTE",
     "ScheduleConfig",
     "ScheduleStatus",
     "StreamConfig",

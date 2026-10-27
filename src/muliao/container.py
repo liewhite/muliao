@@ -37,6 +37,7 @@ from muliao.config import RuntimeConfig, Settings
 from muliao.files.store import FileStore
 from muliao.history.service import HistoryLog
 from muliao.history.tools import history_toolset
+from muliao.issues.api import SESSION_NOTE as ISSUE_SESSION_NOTE
 from muliao.issues.api import IssueService
 from muliao.issues.tools import issues_toolset
 from muliao.jobs.runner import JobRunner
@@ -53,7 +54,7 @@ from muliao.platform.retention import TaskRetention
 from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import Commit, Retries, RetryPolicy, TaskAdmin, TaskQueue
 from muliao.platform.worker import RunNow, Worker, register_handlers
-from muliao.sessions.api import SessionActivity
+from muliao.sessions.api import OWN_NOTES, Origin, OriginNotes, SessionActivity
 from muliao.sessions.ask_user import ask_user_toolset
 from muliao.sessions.compaction import CompactionHandler, Compactor
 from muliao.sessions.consumer import Consumer, RunHandler
@@ -72,6 +73,7 @@ from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.threads import Threads
 from muliao.sessions.work import SessionWork, handle_work_commands
 from muliao.speech.api import Transcriber, build_transcriber
+from muliao.triggers.api import SESSION_NOTE as TRIGGER_SESSION_NOTE
 from muliao.triggers.due import DueRunner
 from muliao.triggers.once import OnceDue, OnceKind
 from muliao.triggers.precheck import PrecheckRunner
@@ -426,6 +428,7 @@ def assemble(
         runs,
         halt,
         compactor,
+        OriginNotes({**OWN_NOTES, Origin.TRIGGER: TRIGGER_SESSION_NOTE, Origin.ISSUE: ISSUE_SESSION_NOTE}),
     )
     # 各领域的任务种类在这里登记处理器；队列只接受登记过的种类（TaskQueue.accept）
     worker = Worker(

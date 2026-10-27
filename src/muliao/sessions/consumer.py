@@ -46,7 +46,7 @@ from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.loading import load_session
 from muliao.sessions.mailbox import RunPayload, hand_over_in, queued_in, wake_in
-from muliao.sessions.origins import origin_note
+from muliao.sessions.origins import OriginNotes
 from muliao.sessions.pending import (
     Delegated,
     answered_in,
@@ -138,6 +138,7 @@ class Consumer:
         runs: StoppableRuns[Commit],
         halt: SessionHalt,
         compactor: Compactor,
+        notes: OriginNotes,
     ):
         self._db = db
         self._runtime = runtime
@@ -148,6 +149,7 @@ class Consumer:
         self._finisher = finisher
         self._halt = halt
         self._compactor = compactor
+        self._notes = notes
         # 正在进行的运行的登记：停止会话的命令（sessions.halt.SessionStopper）经同一份登记停下运行
         self._runs = runs
         # 正在进行的运行的状态，按会话：被停止时从这里取（运行的协程已被取消）
@@ -261,7 +263,7 @@ class Consumer:
                     history,
                     profile,
                     self._steps.hooks(state),
-                    origin_note=origin_note(session.origin),
+                    origin_note=self._notes[session.origin],
                     summary=context.summary,
                     deferred=deferred,
                 )

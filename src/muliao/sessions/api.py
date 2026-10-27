@@ -17,7 +17,7 @@ from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveRun, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
-from muliao.sessions.origins import Origin
+from muliao.sessions.origins import OWN_NOTES, Origin, OriginNotes
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.service import SessionService
@@ -27,7 +27,9 @@ from muliao.sessions.work import SessionWork
 __all__ = [
     "COMPACTION_TASK",
     "RUN_TASK",
+    "OWN_NOTES",
     "Origin",
+    "OriginNotes",
     "SessionActivity",
     "WorkState",
     "SessionKind",
