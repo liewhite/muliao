@@ -203,7 +203,8 @@ def delegation_toolset(
 
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
-        """List the threads this conversation has opened (each is one agent + name). Use it to look at delegated \
+        """List the threads this conversation has opened (each is one agent + name). Returns a JSON array of \
+threads, each with `thread`, `agent`, `private`, `status`, `failure` and `answer`. Use it to look at delegated \
 work, e.g. after a check-in event, before deciding to keep waiting or `stop_thread`. `status`: running (working \
 now), waiting (its run ended but it is waiting for work it started or answers it asked for: not finished yet), \
 idle (nothing in progress). `answer` is its latest reply; while it is not idle that reply is intermediate, not its \

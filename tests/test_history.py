@@ -1,5 +1,6 @@
 """工作历史：只追加、按时间与关键词检索、工具只写自己的。"""
 
+import json
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
@@ -144,7 +145,7 @@ async def test_tools_append_to_own_history_and_search_by_agent_name(container, m
     mine = await container.history.search(agent_ids=[me.id])
     assert [(r.title, r.refs, r.importance) for r in mine] == [("我做的部署", ("#1",), 2)]
     assert "我做的部署" in outputs[1] and "别人做的部署" not in outputs[1]
-    assert "别人做的部署" in outputs[2] and "agent='other'" in outputs[2]
+    assert [(e["title"], e["agent"]) for e in json.loads(outputs[2])] == [("别人做的部署", "other")]
     assert "我做的部署" in outputs[3] and "别人做的部署" in outputs[3]
     assert "day is after today" in outputs[4]
 

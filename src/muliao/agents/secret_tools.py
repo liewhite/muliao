@@ -27,7 +27,7 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
     @ts.tool
     async def vault_list(ctx: RunContext[RunScope]) -> list[SecretKeyInfo]:
         """List the secret keys you can use: your own and those your roles or your own allow rules give you.
-        Values are never shown."""
+        Returns a JSON array, each item with `key`, `yours` and `description`. Values are never shown."""
         me = ctx.deps.agent_id
         return [
             SecretKeyInfo(key=s.key, yours=s.owner == me, description=s.description)

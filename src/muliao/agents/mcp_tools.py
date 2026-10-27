@@ -30,7 +30,9 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
     @ts.tool
     async def mcp_list(ctx: RunContext[RunScope]) -> list[McpInfo]:
         """List the MCP servers you can use: your own and those your roles or your own allow rules give you,
-        including disabled ones (their tools are not offered; the user enables them in the app). Values of env/headers are hidden."""
+        including disabled ones (their tools are not offered; the user enables them in the app).
+        Returns a JSON array of servers, each with `name`, `yours`, `transport`, `command`, `args`, `url`,
+        `env_keys`, `header_keys` and `enabled`: only the keys of env/headers are shown, never their values."""
         me = ctx.deps.agent_id
         return [
             McpInfo(

@@ -85,12 +85,16 @@ def triggers_toolset(
 
     @ts.tool_plain
     async def trigger_kinds() -> list[TriggerKindInfo]:
-        """List the kinds of triggers and the `config` each one takes."""
+        """List the kinds of triggers and the `config` each one takes. Returns a JSON array, each item with `kind`
+        and `description`."""
         return [TriggerKindInfo(kind=k.name, description=k.description) for k in triggers.kinds.values()]
 
     @ts.tool_plain
     async def trigger_list(finished: bool = False) -> list[TriggerInfo]:
-        """List triggers: things that start a new conversation of an agent (schedules, webhooks, ...).
+        """List triggers: things that start a new conversation of an agent (schedules, webhooks, ...). Returns a
+        JSON array of triggers, each with `name`, `kind`, `agent`, `prompt`, `config`, `status` (kind-specific
+        state such as the next firing time or the webhook URL), `enabled`, `precheck`, `disabled_reason`,
+        `precheck_error`, `last_session_id` and `finished_at` (ISO 8601; set once it will not fire again).
 
         Args:
             finished: List the archived ones instead — `once` triggers that already ran and are gone from

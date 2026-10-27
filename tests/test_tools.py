@@ -1,5 +1,6 @@
 """agent 能用工具完成的系统操作：管理 agent、MCP 启停、cron 修改、事件触发器、vault、thread 列表。"""
 
+import json
 from collections.abc import Callable
 
 import pytest
@@ -81,18 +82,19 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
     narrow = await container.agents.find_by_name("narrow")
     await container.skills.write("notes", "d", "b", actor=narrow.id, owner=narrow.id)
     me = await make_agent("manager", model="tools", roles=["admin"])
-    [detail] = await run_tools(container, models, me.id, [("get_agent", {"agent": "narrow"})])
+    [output] = await run_tools(container, models, me.id, [("get_agent", {"agent": "narrow"})])
 
-    assert "roles=[]" in detail and "deny=['tool:issue_update']" in detail
+    # 模型收到的是一段 JSON 对象（agent_runtime.tool_results），不是 Python repr
+    detail = json.loads(output)
+    assert detail["roles"] == [] and detail["deny"] == ["tool:issue_update"]
     # 最终工具：base 的减去 deny；base 没有管理类工具
-    tools = detail.split("available_roles")[0]
-    assert "'issue_create'" in tools and "'memory_edit'" in tools
-    assert "'issue_update'" not in tools and "'memory_edit_public'" not in tools
-    assert "items=['skill:notes']" in detail
+    assert {"issue_create", "memory_edit"} <= set(detail["tools"])
+    assert not {"issue_update", "memory_edit_public"} & set(detail["tools"])
+    assert detail["items"] == ["skill:notes"]
     # 参照：全部角色（含固定的规则）与全部内置工具（没配置 [web] 时不列 web 工具）
-    assert "name='admin'" in detail and "fixed_allow=['tool:*']" in detail
-    assert "'delete_role'" in detail.split("all_tools")[1]
-    assert "web_search" not in detail.split("all_tools")[1]
+    admin = next(r for r in detail["available_roles"] if r["name"] == "admin")
+    assert admin["fixed_allow"] == ["tool:*"]
+    assert "delete_role" in detail["all_tools"] and "web_search" not in detail["all_tools"]
 
 
 def test_registered_tools_must_match_the_permission_table_both_ways():
@@ -133,7 +135,8 @@ async def test_agent_pauses_trigger_and_lists_its_mcp_servers(container, make_ag
 
     assert outputs[0].startswith("updated trigger daily (paused)")
     assert not (await container.triggers.get_by_name("daily")).enabled
-    assert "name='echo', yours=True" in outputs[1] and "enabled=False" in outputs[1]
+    [echo] = json.loads(outputs[1])
+    assert (echo["name"], echo["yours"], echo["enabled"]) == ("echo", True, False)
     assert await container.mcp.index(me.id) == []
 
 
@@ -190,7 +193,7 @@ async def test_agent_manages_its_secrets_and_shares_them_with_a_role(container, 
     )
 
     assert "private-a" not in "\n".join(outputs) and "shared-b" not in "\n".join(outputs)
-    assert "key='B', yours=True" in outputs[5]
+    assert json.loads(outputs[5]) == [{"key": "B", "yours": True, "description": "shared"}]
     assert await container.vault.resolve_many(other.id, ["B"]) == {"B": "shared-b"}
     assert [(s.key, s.owner) for s in await container.vault.usable_by(me.id)] == [("B", me.id)]
 
@@ -210,7 +213,13 @@ async def test_list_threads_shows_each_thread_with_its_state(container, make_age
 
     assert outputs[0] == "ok"
     # 被问的 agent 已经交回结局：没有进行中的事，附上它的回答
-    assert "review" in outputs[1] and "worker" in outputs[1] and "'idle'" in outputs[1]
+    [thread] = json.loads(outputs[1])
+    assert (thread["thread"], thread["agent"], thread["status"], thread["answer"]) == (
+        "review",
+        "worker",
+        "idle",
+        "ok",
+    )
 
 
 async def test_parallel_partial_updates_of_one_agent_both_survive(container, make_agent, models):
@@ -991,7 +1000,7 @@ async def test_agent_updates_its_thinking_level_and_bad_levels_go_back_to_the_mo
         THINKS,
     )
 
-    assert "thinking='low'" in outputs[1]
+    assert json.loads(outputs[1])["thinking"] == "low"
     assert "'xhigh'" in outputs[2]  # 不在档位里：交还模型重试
     assert (await container.agents.get(me.id)).thinking == "low"
 

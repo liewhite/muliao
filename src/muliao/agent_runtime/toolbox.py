@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pydantic_ai import FunctionToolset
 from pydantic_ai.toolsets import AbstractToolset
 
+from muliao.agent_runtime.tool_results import JsonResults
 from muliao.agents.api import AgentInfo, Rules
 from muliao.platform.tooling import RunScope
 
@@ -33,8 +34,9 @@ class Toolbox:
 
     async def profile(self, agent: AgentInfo) -> RunProfile:
         allowed = set((await self.rules_of(agent.id)).tools(self.tool_names()))
+        # 内置工具的结构化结果交给模型时是一段 JSON 文本（tool_results）；MCP 的结果按 MCP 协议的内容交回，不套
         static: list[AbstractToolset[RunScope]] = [
-            ts.filtered(lambda _ctx, td: td.name in allowed)
+            JsonResults(ts.filtered(lambda _ctx, td: td.name in allowed))
             for ts in self.toolsets
             if allowed & set(ts.tools)
         ]

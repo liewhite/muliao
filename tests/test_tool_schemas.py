@@ -81,6 +81,90 @@ async def test_edit_file_single_change_parameters_mirror_the_fields_of_one_edit(
     assert params - {"edits"} == set(TextEdit.model_fields)
 
 
+def _structured_return(tool) -> tuple[str, type] | None:
+    """工具返回结构化结果时：("array" | "object", 元素/对象的类型)；返回文本等时为 None。"""
+    import dataclasses
+    import typing
+
+    from pydantic import BaseModel
+    from pydantic_ai import ToolReturn
+
+    returned = typing.get_type_hints(tool.function)["return"]
+    if returned is ToolReturn:
+        # 文本结果加元数据（附件、子会话），不是结构化结果
+        return None
+    shape, item = (
+        ("array", typing.get_args(returned)[0])
+        if typing.get_origin(returned) is list
+        else ("object", returned)
+    )
+    if isinstance(item, type) and (issubclass(item, BaseModel) or dataclasses.is_dataclass(item)):
+        return shape, item
+    return None
+
+
+def _field_names(item: type) -> list[str]:
+    import dataclasses
+
+    return (
+        [f.name for f in dataclasses.fields(item)]
+        if dataclasses.is_dataclass(item)
+        else list(item.model_fields)
+    )
+
+
+async def test_tools_returning_structured_results_say_it_is_json_and_name_every_field(container):
+    """结构化结果交给模型时是一段 JSON（agent_runtime.tool_results）：说明里写明是 JSON 数组还是对象，并列出每个字段
+    （`字段名`），模型不用先调一次才知道结果长什么样；加了字段而说明没跟上，这里会拦住。"""
+    missing = {}
+    structured = []
+    for name, tool in session_tools(container).items():
+        if (found := _structured_return(tool)) is None:
+            continue
+        shape, item = found
+        structured.append(name)
+        lacks = [f for f in _field_names(item) if f"`{f}`" not in tool.description]
+        if f"JSON {shape}" not in tool.description:
+            lacks.insert(0, f"JSON {shape}")
+        if lacks:
+            missing[name] = lacks
+    assert {"issue_list", "get_agent", "history_search"} <= set(structured)
+    assert missing == {}
+
+
+async def test_structured_tool_results_reach_the_model_as_one_json_document():
+    """pydantic-ai 把列表结果按元素逐个交给 provider（Anthropic 每个元素一个 text block，模型看到几个对象首尾相接）：
+    内置工具的结构化结果先序列化成一段合法 JSON；文本与带图片的内容列表原样。"""
+    import json
+    from datetime import UTC, datetime
+
+    from pydantic import BaseModel
+    from pydantic_ai import BinaryContent
+
+    from muliao.agent_runtime.tool_results import as_model_text
+
+    class Row(BaseModel):
+        id: int
+        at: datetime
+
+    rows = [
+        Row(id=1, at=datetime(2026, 10, 27, tzinfo=UTC)),
+        Row(id=2, at=datetime(2026, 10, 28, tzinfo=UTC)),
+    ]
+    assert json.loads(as_model_text(rows)) == [
+        {"id": 1, "at": "2026-10-27T00:00:00Z"},
+        {"id": 2, "at": "2026-10-28T00:00:00Z"},
+    ]
+    assert as_model_text([]) == "[]"
+    assert json.loads(as_model_text(Row(id=3, at=datetime(2026, 1, 1, tzinfo=UTC)))) == {
+        "id": 3,
+        "at": "2026-01-01T00:00:00Z",
+    }
+    assert as_model_text("plain") == "plain"
+    image = ["a.png", BinaryContent(b"\x89PNG", media_type="image/png")]
+    assert as_model_text(image) is image
+
+
 async def test_issue_create_single_parameters_mirror_the_fields_of_one_batch_item(container):
     """issue_create 的单个参数与 issues 里每一项是同一组字段（批里另有 key）。"""
     from muliao.issues.tools import NewIssueItem

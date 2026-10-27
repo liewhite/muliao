@@ -87,14 +87,19 @@ def agents_toolset(
 
     @ts.tool_plain
     async def list_agents() -> list[AgentGroup]:
-        """List all agents and what each one is for, by group (`group: null` = not in any group). Use before
-        delegating. Archived agents are not listed: they cannot be used until unarchived (`update_agent`)."""
+        """List all agents and what each one is for. Returns a JSON array of groups, each with `group` (null = not
+        in any group) and `agents` (each with `name` and `description`). Use before delegating. Archived agents
+        are not listed: they cannot be used until unarchived (`update_agent`)."""
         return agent_directory(await agents.list())
 
     @ts.tool_plain
     async def get_agent(agent: str) -> AgentDetail:
         """Show an agent's configuration, the built-in tools and the skills/MCP servers/secrets it ends up with,
-        every role and every built-in tool. Use your own name to see yours.
+        every role and every built-in tool. Use your own name to see yours. Returns a JSON object with `name`,
+        `description`, `group`, `archived`, `model`, `thinking`, `roles` (besides `base`), `allow`, `deny`,
+        `tools` (the built-in tools it ends up with), `items` (`kind:name` of the skills, MCP servers and secrets
+        it can use), `available_roles` (every role: `name`, `description`, `fixed_allow`, `allow`, `deny`) and
+        `all_tools` (every built-in tool).
 
         Args:
             agent: Agent name.

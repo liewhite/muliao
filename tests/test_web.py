@@ -304,7 +304,7 @@ async def test_web_agent_searches_and_fetches_with_truncation_and_rejections_go_
 
     assert web.queries == [("t", 10)]
     assert "about t" in outputs[0]
-    assert outputs[1] == "# Title\n\n" + "x" * 21 + "…[truncated 29 chars]"
+    assert outputs[1] == "# Title\n\n" + "x" * 21 + "…[truncated: 29 more chars]"
     assert "HTTP 404: no content" in outputs[2]
 
 

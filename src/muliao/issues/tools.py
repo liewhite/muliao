@@ -81,7 +81,9 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
     async def issue_list(
         statuses: tuple[IssueStatus, ...] = (), assignee: str | None = None, owner: str | None = None
     ) -> list[IssueSummary]:
-        """List issues on the muliao issue board, most recently updated first. `assignee_session` tells whether
+        """List issues on the muliao issue board. Returns a JSON array of issues, most recently updated first, each
+        with `id`, `title`, `owner`, `status`, `priority`, `assignee`, `assignee_session`, `stalled`, `depends_on`,
+        `waiting_on` and `updated_at` (ISO 8601). `assignee_session` tells whether
         the assigned agent is working on it in the issue's conversation: running, waiting (on a background job,
         delegated work or the user's answer), idle, or null (no agent assignee or no conversation yet). `stalled`
         marks a `todo`/`in_progress` issue assigned to an agent whose issue conversation is idle or missing.

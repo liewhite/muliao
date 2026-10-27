@@ -67,9 +67,11 @@ def history_toolset(history: HistoryLog, agents: AgentService) -> FunctionToolse
         min_importance: int = 1,
         limit: int = 20,
     ) -> list[HistoryFound]:
-        """Search the work history (what was done, when, with which issues/commits). Without `query`, entries are
-        listed newest day first; with `query`, every whitespace-separated word must appear in the title, summary
-        or refs, best matches first. For a vaguer question, list a date range and judge the entries yourself.
+        """Search the work history (what was done, when, with which issues/commits). Returns a JSON array of
+        entries, each with `id`, `day` (YYYY-MM-DD), `agent`, `title`, `summary`, `refs` and `importance`.
+        Without `query`, entries are listed newest day first; with `query`, every whitespace-separated word must
+        appear in the title, summary or refs, best matches first. For a vaguer question, list a date range and
+        judge the entries yourself.
 
         Args:
             query: Keywords, e.g. `trigger precheck` or `#155`.
