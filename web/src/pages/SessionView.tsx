@@ -8,6 +8,7 @@ import {
   type Agent,
   type Attachment,
   type CompactionInfo,
+  type EventSource,
   type Item,
   type QuestionAnswer,
   type Mail,
@@ -18,7 +19,6 @@ import {
 import {
   foldCheckIns,
   groupSteps,
-  parseSource,
   stepAttachments,
   stepThreads,
   unlinkedThreads,
@@ -207,18 +207,17 @@ function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) 
 }
 
 /** 事件来源的可读名称：thread 显示名字与 agent（可点开），后台任务显示编号 */
-function SourceLabel({ source, ctx }: { source: string; ctx: SessionContext }) {
-  const parsed = parseSource(source)
-  switch (parsed.kind) {
+function SourceLabel({ source, ctx }: { source: EventSource; ctx: SessionContext }) {
+  switch (source.kind) {
     case 'job':
-      return <span className="shrink-0 text-foreground">后台任务 #{parsed.id}</span>
+      return <span className="shrink-0 text-foreground">后台任务 #{source.job_id}</span>
     case 'other':
-      return <span className="shrink-0 font-mono text-foreground">{parsed.source}</span>
+      return <span className="shrink-0 font-mono text-foreground">{source.raw}</span>
     case 'thread': {
-      const thread = ctx.threads.get(parsed.id)
+      const thread = ctx.threads.get(source.session_id)
       if (!thread && ctx.view === 'history') return <span className="shrink-0">thread（已删除）</span>
       return (
-        <Link to={sessionRoute(parsed.id)} className="flex min-w-0 shrink items-center gap-1 text-accent hover:underline">
+        <Link to={sessionRoute(source.session_id)} className="flex min-w-0 shrink items-center gap-1 text-accent hover:underline">
           <GitBranch className="size-3.5 shrink-0" />
           <span className="truncate">
             {thread ? `${thread.thread}（${agentLabel(ctx.agents, thread.agent_id)}）` : 'thread'}
@@ -247,7 +246,7 @@ function EventNote({ lead, text }: { lead: ReactNode; text: string }) {
 }
 
 /** 同一来源连续的运行中检查（blocks.foldCheckIns）：一行汇总，展开看每次检查 */
-function CheckInsNote({ source, checks, ctx }: { source: string; checks: CheckIn[]; ctx: SessionContext }) {
+function CheckInsNote({ source, checks, ctx }: { source: EventSource; checks: CheckIn[]; ctx: SessionContext }) {
   const last = checks[checks.length - 1].at
   return (
     <Collapsible
@@ -338,6 +337,12 @@ function History({ items, compactions, ctx }: { items: Item[]; compactions: Comp
   return <>{parts}</>
 }
 
+/** 事件信件的来源：后端保证事件都有来源（sessions.mailbox 校验），没有就是契约被破坏 */
+function sourceOf(mail: Mail): EventSource {
+  if (mail.source === null) throw new Error(`event mail ${mail.id} has no source`)
+  return mail.source
+}
+
 /** 显示在历史之后的信件：排队中的显示为待处理，最近一次停止丢弃的划掉 */
 function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
   const discarded = mail.state === 'discarded'
@@ -345,9 +350,9 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
     <div className={`flex flex-col gap-1.5 ${discarded ? 'line-through opacity-50' : ''}`}>
       {mail.kind === 'event' ? (
         mail.check_in ? (
-          <CheckInsNote source={mail.source ?? '?'} checks={[{ text: mail.content, at: mail.created_at }]} ctx={ctx} />
+          <CheckInsNote source={sourceOf(mail)} checks={[{ text: mail.content, at: mail.created_at }]} ctx={ctx} />
         ) : (
-          <EventNote lead={<SourceLabel source={mail.source ?? '?'} ctx={ctx} />} text={mail.content} />
+          <EventNote lead={<SourceLabel source={sourceOf(mail)} ctx={ctx} />} text={mail.content} />
         )
       ) : mail.kind === 'answer' ? (
         Object.values(mail.answers).map((result, i) =>

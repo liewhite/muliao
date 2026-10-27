@@ -57,6 +57,7 @@ export function liveItems(events: RunEvent[]): Item[] {
         type: e.item_type,
         text: e.text,
         tool_name: null,
+        source: null,
         check_in: false,
         tool_call_id: null,
         message_id: null,

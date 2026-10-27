@@ -80,3 +80,21 @@ def test_the_live_snapshot_points_pending_calls_at_their_threads():
     shown = _with_pending_threads(live, {"ask": "th"})
     assert [e.item.threads for e in shown.events if isinstance(e, RunItemEvent)] == [["th"]]
     assert shown.events[0] == live.events[0] and live.events[1].item.threads == []
+
+
+def test_event_sources_are_parsed_once_for_the_ui():
+    from muliao.sessions.sources import (
+        JobSource,
+        OtherSource,
+        ThreadSource,
+        job_source,
+        parse_source,
+        thread_source,
+    )
+
+    assert parse_source(thread_source("abc-1")) == ThreadSource(
+        kind="thread", raw="thread:abc-1", session_id="abc-1"
+    )
+    assert parse_source(job_source(12)) == JobSource(kind="job", raw="job:12", job_id=12)
+    assert parse_source("job:x") == OtherSource(kind="other", raw="job:x")
+    assert parse_source("webhook") == OtherSource(kind="other", raw="webhook")

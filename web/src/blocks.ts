@@ -1,6 +1,6 @@
 // 会话条目（历史与运行中的事件流共用 Item）到展示块的整理，纯函数，与渲染分开。
 
-import { type AskView, type Attachment, type Item } from './api'
+import { type AskView, type Attachment, type EventSource, type Item } from './api'
 
 export interface ToolView {
   name: string
@@ -28,7 +28,7 @@ export interface AskBlock {
 export type Block =
   | { kind: 'user'; text: string; attachments: Attachment[] }
   /** checkIn：运行中检查（工作还在进行，后端显式标记）；at：交给 agent 的时间 */
-  | { kind: 'event'; source: string; text: string; checkIn: boolean; at: string | null }
+  | { kind: 'event'; source: EventSource; text: string; checkIn: boolean; at: string | null }
   | { kind: 'assistant'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolView }
@@ -45,7 +45,7 @@ export interface CheckIn {
 export type View =
   | Exclude<Block, Step>
   | { kind: 'process'; steps: Step[] }
-  | { kind: 'checks'; source: string; checks: CheckIn[] }
+  | { kind: 'checks'; source: EventSource; checks: CheckIn[] }
 
 /** 把扁平条目整理成展示块：工具调用与其结果（按 tool_call_id）合并为一块。 */
 export function toBlocks(items: Item[]): Block[] {
@@ -66,8 +66,8 @@ export function toBlocks(items: Item[]): Block[] {
         blocks.push({ kind: 'user', text: item.text, attachments: item.attachments })
         break
       case 'event':
-        if (item.tool_name === null) throw new Error('event item without a source')
-        blocks.push({ kind: 'event', source: item.tool_name, text: item.text, checkIn: item.check_in, at: item.at })
+        if (item.source === null) throw new Error('event item without a source')
+        blocks.push({ kind: 'event', source: item.source, text: item.text, checkIn: item.check_in, at: item.at })
         break
       case 'stopped':
         blocks.push({ kind: 'stopped' })
@@ -166,12 +166,12 @@ export function foldCheckIns(views: View[]): View[] {
     if (run !== null && onlyThinking(view) && isFiller(views[i + 1])) continue
     if (view.kind === 'event' && view.checkIn) {
       run ??= new Map()
-      const checks = run.get(view.source)
+      const checks = run.get(view.source.raw)
       const check = { text: view.text, at: view.at }
       if (checks) checks.push(check)
       else {
         const fresh = [check]
-        run.set(view.source, fresh)
+        run.set(view.source.raw, fresh)
         folded.push({ kind: 'checks', source: view.source, checks: fresh })
       }
     } else if (run !== null && isFiller(view)) {
@@ -182,17 +182,6 @@ export function foldCheckIns(views: View[]): View[] {
     }
   }
   return folded
-}
-
-/** 事件来源（信件的 source）的含义：thread:<子会话 id>、job:<后台任务号> */
-export type EventSource = { kind: 'thread'; id: string } | { kind: 'job'; id: number } | { kind: 'other'; source: string }
-
-export function parseSource(source: string): EventSource {
-  const thread = /^thread:(.+)$/.exec(source)
-  if (thread) return { kind: 'thread', id: thread[1] }
-  const job = /^job:(\d+)$/.exec(source)
-  if (job) return { kind: 'job', id: Number(job[1]) }
-  return { kind: 'other', source }
 }
 
 /** 一组步骤里委派开出或续写的 thread（子会话 id），按出现顺序、去重 */

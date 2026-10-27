@@ -14,6 +14,7 @@ from muliao.sessions.api import (
     RUN_TASK,
     CallResult,
     DerivedTitle,
+    EventSource,
     Inbound,
     Item,
     LiveRun,
@@ -24,6 +25,7 @@ from muliao.sessions.api import (
     SessionKind,
     WorkState,
     call_result,
+    parse_source,
     policy_of,
 )
 from muliao.sessions.tables import Compaction, Mail, MailKind, MailState, Session
@@ -122,8 +124,8 @@ class MailOut(BaseModel):
 
     id: int
     kind: MailKind
-    # 事件的发送方（如 job:12）；用户消息与回答为 null
-    source: str | None
+    # 事件的来源（sessions.sources）；用户消息与回答为 null
+    source: EventSource | None
     # 事件是运行中检查（工作还在进行）
     check_in: bool
     content: str
@@ -142,7 +144,7 @@ async def mail_outs(c: Container, mail: list[Mail]) -> list[MailOut]:
         MailOut(
             id=m.id,
             kind=m.kind,
-            source=m.source,
+            source=None if m.source is None else parse_source(m.source),
             check_in=m.check_in,
             content=m.content,
             attachments=[files[i] for i in m.attachments],

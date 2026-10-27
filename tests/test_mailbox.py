@@ -25,6 +25,7 @@ from muliao.sessions.consumer import interrupted_calls
 from muliao.sessions.content import Content, append_content
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import post_in, queued_in
+from muliao.sessions.sources import JobSource
 from muliao.sessions.tables import Mail, MailKind, MailState, Message
 from muliao.sessions.transcript import to_items, to_text
 from tests.conftest import login, restart
@@ -91,7 +92,9 @@ async def test_an_event_to_an_idle_session_is_handled_in_a_run_of_its_own(contai
     # 界面上事件单独成条
     history = await history_of(container, session.id)
     events = [i for i in to_items(history) if i.type == "event"]
-    assert [(i.tool_name, i.text) for i in events] == [("job:1", "job 1 finished: exit 0")]
+    assert [(i.source, i.tool_name, i.text) for i in events] == [
+        (JobSource(kind="job", raw="job:1", job_id=1), None, "job 1 finished: exit 0")
+    ]
 
 
 async def test_mail_arriving_during_a_run_reaches_the_model_between_tool_calls(container, make_agent, models):

@@ -56,6 +56,8 @@ export type AskView = Schemas['AskView']
 export type MailKind = Schemas['MailKind']
 export type MailState = Schemas['MailState']
 export type Mail = Schemas['MailOut']
+/** 事件的来源：后端解析好的 thread、后台任务或其他（raw 是原文，同一来源按它归在一起） */
+export type EventSource = NonNullable<Item['source']>
 export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'run' | 'threads'> & {
   session: Session
   run: Task | null

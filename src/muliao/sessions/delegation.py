@@ -34,6 +34,7 @@ from muliao.sessions.events import Ending
 from muliao.sessions.holds import calls_in, get_in
 from muliao.sessions.mailbox import latest_runs_among, post_check_in
 from muliao.sessions.pending import AgentAnswer
+from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import HoldStatus, Mail, Session, SessionHold
 from muliao.sessions.work import deliver_in
 
@@ -47,11 +48,6 @@ log = logging.getLogger(__name__)
 def delegation_holder(owner_id: str, key: str) -> str:
     """委派在发起方会话上的占用者，也是 thread 信件的关联 id。"""
     return f"delegation:{owner_id}:{key}"
-
-
-def thread_source(child_id: str) -> str:
-    """thread 交回的事件的来源，也用来判断它是否已有信件在发起方的信箱里排着。"""
-    return f"thread:{child_id}"
 
 
 def thread_name(child: Session) -> str:

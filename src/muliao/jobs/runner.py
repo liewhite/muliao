@@ -39,19 +39,13 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.output import tail, wait_exit_code
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, spawn_bash
 from muliao.platform.tasks import Clock, Commit, no_commit
-from muliao.sessions.api import SessionWork, hold_registered_in, session_in
+from muliao.sessions.api import SessionWork, hold_registered_in, job_source, session_in
 from muliao.sessions.events import SessionStopped, WorkCheckIn, WorkEnded
 from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 
 JOBS_DIR = "jobs"
-
-
-def job_source(job_id: int) -> str:
-    """任务在会话上的占用者（sessions.holds）：结束与运行中检查的命令按它找到占用，事件的来源与幂等键由会话领域按它
-    推出。"""
-    return f"job:{job_id}"
 
 
 def _job_id(holder: str) -> int | None:

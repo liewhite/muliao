@@ -39,6 +39,7 @@ from muliao.agent_runtime.api import (
 from muliao.platform.text_edit import truncate
 from muliao.sessions.deferred import asks_user, questions_in
 from muliao.sessions.questions import AnsweredQuestion, AskResult, Question
+from muliao.sessions.sources import EventSource, parse_source
 
 ItemType = Literal[
     "user", "event", "assistant", "thinking", "tool_call", "tool_result", "tool_error", "stopped"
@@ -61,8 +62,10 @@ class AskView(BaseModel):
 class Item(BaseModel):
     type: ItemType
     text: str
-    # 会话事件（type 为 event）：tool_name 是事件的来源（如 job:12），text 是事件内容
+    # 工具调用、结果与错误的工具名；其他条目为 None
     tool_name: str | None
+    # 会话事件（type 为 event）的来源（sessions.sources），text 是事件内容；其他条目为 None
+    source: EventSource | None
     # 事件是运行中检查（RUN_CHECK_INS，工作还在进行）；其他条目为 False
     check_in: bool
     tool_call_id: str | None
@@ -92,11 +95,13 @@ def _item(
     at: datetime | None = None,
     images: list[Attachment] | None = None,
     check_in: bool = False,
+    source: str | None = None,
 ) -> Item:
     return Item(
         type=type_,
         text=text,
         tool_name=tool_name,
+        source=None if source is None else parse_source(source),
         check_in=check_in,
         tool_call_id=tool_call_id,
         message_id=None,
@@ -228,7 +233,7 @@ def _prompt_items(part: UserPromptPart, events: Sequence[int], check_ins: Sequen
                 items.append(_user_item(own))
                 own = []
             source, text = parse_event(c)
-            items.append(_item("event", text, tool_name=source, at=part.timestamp, check_in=i in check_ins))
+            items.append(_item("event", text, source=source, at=part.timestamp, check_in=i in check_ins))
         else:
             own.append(c)
     if own:
@@ -296,7 +301,8 @@ def to_text(items: Sequence[Item], *, max_item_chars: int) -> str:
         label = labels[item.type]
         if label is None:
             continue
-        name = f" {item.tool_name}" if item.tool_name else ""
+        named = item.tool_name if item.source is None else item.source.raw
+        name = f" {named}" if named else ""
         files = "".join(f" [attachment {a['name']!r} ({a['media_type']})]" for a in item.attachments)
         lines.append(f"[{label}{name}] {truncate(item.text, max_item_chars)}{files}")
     return "\n".join(lines)

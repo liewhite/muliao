@@ -4542,6 +4542,35 @@
             ],
             "title": "Tool Name"
           },
+          "source": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ThreadSource"
+                  },
+                  {
+                    "$ref": "#/components/schemas/JobSource"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OtherSource"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "kind",
+                  "mapping": {
+                    "job": "#/components/schemas/JobSource",
+                    "other": "#/components/schemas/OtherSource",
+                    "thread": "#/components/schemas/ThreadSource"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
           "check_in": {
             "type": "boolean",
             "title": "Check In"
@@ -4617,6 +4646,7 @@
           "type",
           "text",
           "tool_name",
+          "source",
           "check_in",
           "tool_call_id",
           "message_id",
@@ -4627,6 +4657,30 @@
           "at"
         ],
         "title": "Item"
+      },
+      "JobSource": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "job",
+            "title": "Kind"
+          },
+          "raw": {
+            "type": "string",
+            "title": "Raw"
+          },
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "raw",
+          "job_id"
+        ],
+        "title": "JobSource"
       },
       "LiveRunOut": {
         "properties": {
@@ -4698,7 +4752,25 @@
           "source": {
             "anyOf": [
               {
-                "type": "string"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ThreadSource"
+                  },
+                  {
+                    "$ref": "#/components/schemas/JobSource"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OtherSource"
+                  }
+                ],
+                "discriminator": {
+                  "propertyName": "kind",
+                  "mapping": {
+                    "job": "#/components/schemas/JobSource",
+                    "other": "#/components/schemas/OtherSource",
+                    "thread": "#/components/schemas/ThreadSource"
+                  }
+                }
               },
               {
                 "type": "null"
@@ -5438,6 +5510,25 @@
         ],
         "title": "Origin",
         "description": "会话来源：用户在网页发起、触发器（定时、外部事件……）、agent 之间委派、issue 看板唤醒被指派的 agent。"
+      },
+      "OtherSource": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "other",
+            "title": "Kind"
+          },
+          "raw": {
+            "type": "string",
+            "title": "Raw"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "raw"
+        ],
+        "title": "OtherSource"
       },
       "OwnerIn": {
         "properties": {
@@ -7208,6 +7299,30 @@
           "failed"
         ],
         "title": "TaskStatus"
+      },
+      "ThreadSource": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "thread",
+            "title": "Kind"
+          },
+          "raw": {
+            "type": "string",
+            "title": "Raw"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "raw",
+          "session_id"
+        ],
+        "title": "ThreadSource"
       },
       "TokenOut": {
         "properties": {

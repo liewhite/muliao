@@ -1616,6 +1616,8 @@ export interface components {
             text: string;
             /** Tool Name */
             tool_name: string | null;
+            /** Source */
+            source: (components["schemas"]["ThreadSource"] | components["schemas"]["JobSource"] | components["schemas"]["OtherSource"]) | null;
             /** Check In */
             check_in: boolean;
             /** Tool Call Id */
@@ -1631,6 +1633,18 @@ export interface components {
             ask: components["schemas"]["AskView"] | null;
             /** At */
             at: string | null;
+        };
+        /** JobSource */
+        JobSource: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "job";
+            /** Raw */
+            raw: string;
+            /** Job Id */
+            job_id: number;
         };
         /** LiveRunOut */
         LiveRunOut: {
@@ -1659,7 +1673,7 @@ export interface components {
             id: number;
             kind: components["schemas"]["MailKind"];
             /** Source */
-            source: string | null;
+            source: (components["schemas"]["ThreadSource"] | components["schemas"]["JobSource"] | components["schemas"]["OtherSource"]) | null;
             /** Check In */
             check_in: boolean;
             /** Content */
@@ -1923,6 +1937,16 @@ export interface components {
          * @enum {string}
          */
         Origin: "user" | "trigger" | "delegation" | "issue";
+        /** OtherSource */
+        OtherSource: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "other";
+            /** Raw */
+            raw: string;
+        };
         /** OwnerIn */
         OwnerIn: {
             /** Owner */
@@ -2574,6 +2598,18 @@ export interface components {
          * @enum {string}
          */
         TaskStatus: "pending" | "running" | "done" | "failed";
+        /** ThreadSource */
+        ThreadSource: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "thread";
+            /** Raw */
+            raw: string;
+            /** Session Id */
+            session_id: string;
+        };
         /** TokenOut */
         TokenOut: {
             /** Token */
