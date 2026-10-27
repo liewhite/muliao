@@ -191,7 +191,7 @@ export function PermissionsInput({
       </div>
       <Loading state={roles}>
         {(list) => {
-          const assignable = list.filter((r) => r.name !== 'base')
+          const assignable = list.filter((r) => r.assignable)
           const names = assignable.map((r) => r.name)
           return (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

@@ -21,7 +21,7 @@ from muliao.agents.ids import new_agent_id
 from muliao.agents.kinds import Subject
 from muliao.agents.memory import create_memory_in
 from muliao.agents.naming import new_agent_name, normalize_agent_name
-from muliao.agents.permissions import BASE, Rules, check_patterns
+from muliao.agents.permissions import Rules, check_patterns
 from muliao.agents.revisions import record_in
 from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
 from muliao.agents.tables import Agent
@@ -269,7 +269,7 @@ class AgentService:
         broken += [
             f"agent {a.name} ({a.id}): unknown roles {unknown}"
             for a in agents
-            if (unknown := [r for r in a.roles if r not in roles or r == BASE])
+            if (unknown := [r for r in a.roles if r not in roles or not roles[r].assignable])
         ]
         if broken:
             raise RuntimeError("stored tool permissions are invalid:\n" + "\n".join(broken))

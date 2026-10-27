@@ -6,7 +6,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.access import granted_by
@@ -15,8 +14,7 @@ from muliao.agents.kinds import Subject
 from muliao.agents.naming import validate_slug
 from muliao.agents.permissions import FIXED_RULES, Role, Rules
 from muliao.agents.revisions import record_in
-from muliao.agents.roles import check_rules_in, document, role_of, roles_in
-from muliao.agents.tables import Agent
+from muliao.agents.roles import check_rules_in, document, holders_in, role_of, roles_in
 from muliao.agents.tables import Role as RoleRow
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database
@@ -28,6 +26,16 @@ class RoleSpec:
     description: str
     allow: Sequence[str]
     deny: Sequence[str]
+
+
+@dataclass(frozen=True)
+class RoleView:
+    """角色页的一项：角色、只按它的规则能用的、带它的 agent。"""
+
+    role: Role
+    reach: Reach
+    # 带这个角色的 agent 的 id（roles.holders_in：base 是全部，含归档的）
+    holders: tuple[str, ...]
 
 
 def _check(spec: RoleSpec) -> None:
@@ -128,17 +136,29 @@ class RoleService:
             row = await s.get(RoleRow, name)
             if row is None:
                 raise NotFound(f"role {name!r} not found")
-            # 包括正在删除的 agent：它的行还在，删除流程完成前不让角色先消失
-            users = [a.name for a in await s.scalars(select(Agent)) if name in a.roles]
+            role = role_of(name, row)
+            users = [a.name for a in await holders_in(s, role)]
             if users:
                 raise Conflict(f"role {name!r} is used by agents {users}")
-            record_in(s, Subject.ROLE, name, document(role_of(name, row)), None, actor, f"delete role {name}")
+            record_in(s, Subject.ROLE, name, document(role), None, actor, f"delete role {name}")
             await s.delete(row)
 
-    async def reach(self, role: Role) -> Reach:
-        """只按这个角色的规则（固定的与可编辑的）能用的内置工具与条目（不含任何 agent 自己的条目）。"""
+    async def views(self) -> list[RoleView]:
+        """全部角色的 RoleView（顺序同 list），一个事务里算完。"""
         async with self._db.transaction() as s:
-            return await reach_in(s, self._tools, role.effective, granted_by(role.effective))
+            return [await self._view_in(s, r) for r in (await roles_in(s)).values()]
+
+    async def view(self, name: str) -> RoleView:
+        async with self._db.transaction() as s:
+            return await self._view_in(s, await _role_in(s, name))
+
+    async def _view_in(self, s: AsyncSession, role: Role) -> RoleView:
+        """reach 只按角色自己的规则（固定的与可编辑的），不含任何 agent 自己的条目。"""
+        return RoleView(
+            role,
+            await reach_in(s, self._tools, role.effective, granted_by(role.effective)),
+            tuple(a.id for a in await holders_in(s, role)),
+        )
 
     async def preview(self, name: str | None, allow: Sequence[str], deny: Sequence[str]) -> Reach:
         """角色（None 为还没建的）按还没保存的规则能用的（界面预览），与写入时同样校验；内置角色加上它固定的部分。"""

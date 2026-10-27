@@ -178,6 +178,15 @@ class Role:
         return self.name in FIXED_RULES
 
     @property
+    def assignable(self) -> bool:
+        """能写进 agent 的 roles：base 每个 agent 隐含，不能写。"""
+        return self.name != BASE
+
+    def held_by(self, roles: Collection[str]) -> bool:
+        """roles 是一个 agent 的 roles 字段：base 每个 agent 都有（隐含），别的要写在里面。"""
+        return not self.assignable or self.name in roles
+
+    @property
     def effective(self) -> Rules:
         return Rules.union([self.fixed, self.rules])
 

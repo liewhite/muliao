@@ -18,7 +18,7 @@ from muliao.agents.mcp import McpConfig, McpRegistry, McpServer, McpTransport, m
 from muliao.agents.memory import MemoryStore
 from muliao.agents.permissions import BASE, TOOLS, Access, Role, Rules, Tool
 from muliao.agents.revisions import USER, RevisionInfo
-from muliao.agents.role_service import RoleService, RoleSpec
+from muliao.agents.role_service import RoleService, RoleSpec, RoleView
 from muliao.agents.secrets import KEY_SYNTAX as SECRET_KEY_SYNTAX
 from muliao.agents.secrets import SecretItems, StoredSecret
 from muliao.agents.service import (
@@ -71,6 +71,7 @@ __all__ = [
     "Role",
     "RoleService",
     "RoleSpec",
+    "RoleView",
     "Rules",
     "BASE",
     "TOOLS",

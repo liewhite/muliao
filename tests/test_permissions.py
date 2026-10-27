@@ -302,6 +302,8 @@ async def test_tools_and_roles_api(client, container):
     assert (await client.post("/api/roles/triage", json=body)).status_code == 201
     listed = {r["name"]: r for r in (await client.get("/api/roles")).json()}
     assert listed[BASE]["builtin"] and not listed["triage"]["builtin"]
+    # base 每个 agent 隐含：界面上不能选（与写入时的校验同一个定义，Role.assignable）
+    assert not listed[BASE]["assignable"] and listed["admin"]["assignable"] and listed["triage"]["assignable"]
     assert "tool:run_shell" in listed[BASE]["fixed_allow"]
     assert [t["name"] for t in listed["triage"]["reach"]["tools"]][:2] == ["issue_list", "issue_show"]
     assert listed["triage"]["reach"]["items"] == ["skill:s"] and listed[BASE]["reach"]["items"] == []

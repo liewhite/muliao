@@ -5,15 +5,14 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from muliao.agents.api import (
-    BASE,
     TOOLS,
     USER,
     AgentInfo,
     AgentPatch,
     AgentSpec,
     Reach,
-    Role,
     RoleSpec,
+    RoleView,
     Thinking,
 )
 from muliao.api.deps import C
@@ -143,15 +142,18 @@ class RoleOut(BaseModel):
     # 可编辑的规则
     allow: list[str]
     deny: list[str]
-    # 内置角色不能删；base 每个 agent 隐含
+    # 内置角色不能删
     builtin: bool
+    # 能写进 agent 的 roles：base 每个 agent 隐含，不能选
+    assignable: bool
     # 只按这个角色的规则（固定的与可编辑的）能用的
     reach: ReachOut
     # 带这个角色的 agent 的 id（含归档的）；base 是全部 agent
     agents: list[str]
 
     @classmethod
-    async def of(cls, c: C, r: Role, agents: list[AgentInfo]) -> "RoleOut":
+    def of(cls, v: RoleView) -> "RoleOut":
+        r = v.role
         return cls(
             name=r.name,
             description=r.description,
@@ -159,8 +161,9 @@ class RoleOut(BaseModel):
             allow=list(r.rules.allow),
             deny=list(r.rules.deny),
             builtin=r.builtin,
-            reach=ReachOut.of(await c.roles.reach(r)),
-            agents=[a.id for a in agents if r.name == BASE or r.name in a.roles],
+            assignable=r.assignable,
+            reach=ReachOut.of(v.reach),
+            agents=list(v.holders),
         )
 
 
@@ -173,8 +176,7 @@ class RoleIn(BaseModel):
 @router.get("/roles")
 async def list_roles(c: C) -> list[RoleOut]:
     """全部角色：内置在前，自建的按名称。"""
-    agents = await c.agents.list()
-    return [await RoleOut.of(c, r, agents) for r in await c.roles.list()]
+    return [RoleOut.of(v) for v in await c.roles.views()]
 
 
 class RolePreviewIn(BaseModel):
@@ -192,15 +194,15 @@ async def preview_role(c: C, body: RolePreviewIn) -> ReachOut:
 
 @router.post("/roles/{name}", status_code=201)
 async def create_role(c: C, name: str, body: RoleIn) -> RoleOut:
-    role = await c.roles.create(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
-    return await RoleOut.of(c, role, await c.agents.list())
+    await c.roles.create(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
+    return RoleOut.of(await c.roles.view(name))
 
 
 @router.put("/roles/{name}")
 async def update_role(c: C, name: str, body: RoleIn) -> RoleOut:
     """整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。"""
-    role = await c.roles.update(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
-    return await RoleOut.of(c, role, await c.agents.list())
+    await c.roles.update(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
+    return RoleOut.of(await c.roles.view(name))
 
 
 @router.delete("/roles/{name}", status_code=204)

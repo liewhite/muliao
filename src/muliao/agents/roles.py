@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.kinds import Kind
 from muliao.agents.permissions import BASE, FIXED_RULES, Role, Rules, check_patterns, kind_of
-from muliao.agents.tables import Item
+from muliao.agents.tables import Agent, Item
 from muliao.agents.tables import Role as RoleRow
 from muliao.errors import InvalidInput
 
@@ -52,13 +52,20 @@ async def roles_in(s: AsyncSession) -> dict[str, Role]:
 
 async def check_assignable_in(s: AsyncSession, names: Sequence[str]) -> None:
     """agent 可以选的角色：存在、不重复，不含 base（每个 agent 隐含）。"""
-    if BASE in names:
-        raise InvalidInput(f"role {BASE!r} is implicit for every agent; do not list it in roles")
     roles = await roles_in(s)
+    implicit = [n for n in names if n in roles and not roles[n].assignable]
+    if implicit:
+        raise InvalidInput(f"roles {implicit} are implicit for every agent; do not list them in roles")
     unknown = [n for n in names if n not in roles]
     if unknown or len(set(names)) != len(names):
-        assignable = [r for r in roles if r != BASE]
+        assignable = [r.name for r in roles.values() if r.assignable]
         raise InvalidInput(f"roles must be distinct names from {assignable}, got {list(names)}")
+
+
+async def holders_in(s: AsyncSession, role: Role) -> list[Agent]:
+    """带这个角色的 agent（Role.held_by：base 是全部），按名称；包括归档与正在删除的（它的行还在，删除流程完成前不让
+    角色先消失）。"""
+    return [a for a in await s.scalars(select(Agent).order_by(Agent.name)) if role.held_by(a.roles)]
 
 
 async def check_new_items_in(s: AsyncSession, patterns: Sequence[str], before: Sequence[str]) -> None:
