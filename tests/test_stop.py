@@ -14,9 +14,9 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agent_runtime.conventions import RUN_STOPPED, STOPPED_TOOL_RESULT
 from muliao.notifications.service import DELIVER_TASK
 from muliao.platform.tables import TaskStatus
+from muliao.sessions.conventions import RUN_STOPPED, STOPPED_TOOL_RESULT
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import post_in
 from muliao.sessions.tables import MailKind, MailState

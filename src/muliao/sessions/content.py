@@ -6,18 +6,16 @@ from dataclasses import dataclass, replace
 
 from pydantic_ai.messages import ModelRequest, UserContent, UserPromptPart
 
-from muliao.agent_runtime.api import (
+from muliao.agent_runtime.api import AgentRuntime, copy_to_workspace, references
+from muliao.files.api import FileStore
+from muliao.sessions.conventions import (
     RUN_CHECK_INS,
     RUN_EVENTS,
-    AgentRuntime,
     check_in_indices,
-    copy_to_workspace,
     event_indices,
     format_event,
-    references,
     run_context_index,
 )
-from muliao.files.api import FileStore
 from muliao.sessions.pending import call_result, late_text
 from muliao.sessions.tables import Mail, MailKind
 

@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 
-from muliao.agent_runtime.api import TOOL_THREADS, defer_call
+from muliao.agent_runtime.api import defer_call
 from muliao.agents.api import AgentInfo as AgentRecord
 from muliao.agents.api import AgentService
 from muliao.errors import InvalidInput, NotFound
@@ -15,6 +15,7 @@ from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.activity import WorkState
+from muliao.sessions.conventions import TOOL_THREADS
 from muliao.sessions.deferred import ASK_AGENT
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.kinds import DELEGATE_TASK, SessionKind, policy_of

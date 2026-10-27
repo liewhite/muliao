@@ -11,13 +11,14 @@ from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
 
-from muliao.agent_runtime.api import StepHooks, attach_run_context, redact_messages, with_notices
+from muliao.agent_runtime.api import StepHooks, redact_messages, with_notices
 from muliao.agents.api import AgentInfo
 from muliao.platform.db import Database, utcnow
 from muliao.platform.text_edit import truncate
 from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import Content, ContentBuilder, append_content, mark_events
+from muliao.sessions.conventions import attach_run_context
 from muliao.sessions.history import marked_stopped, stopped_results
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import consume_in, queued_in

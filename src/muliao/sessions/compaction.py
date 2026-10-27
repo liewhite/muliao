@@ -20,13 +20,14 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.api import AgentRuntime, calls_in, results_in
+from muliao.agent_runtime.api import AgentRuntime
 from muliao.agents.api import AgentInfo, active_agent_in
 from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
+from muliao.sessions.conventions import calls_in, results_in
 from muliao.sessions.history import latest_compaction, rows_after
 from muliao.sessions.lanes import COMPACTION_TASK, session_lane
 from muliao.sessions.loading import load_session

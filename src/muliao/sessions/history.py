@@ -15,14 +15,14 @@ from pydantic_ai.messages import (
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.api import (
+from muliao.sessions.codec import load_messages
+from muliao.sessions.conventions import (
     INTERRUPTED_TOOL_RESULT,
     RUN_STOPPED,
     STOPPED_TOOL_RESULT,
     answer_text,
     unanswered_calls,
 )
-from muliao.sessions.codec import load_messages
 from muliao.sessions.deferred import kept_open_on_stop
 from muliao.sessions.tables import Compaction, Message
 

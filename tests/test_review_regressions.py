@@ -197,7 +197,7 @@ async def test_retrying_a_failed_run_after_the_session_was_stopped_ends_quietly(
 ):
     """最终失败的运行，会话被停止之后再手动重试：历史停在标着停止的请求上，没有要交给模型的，按「没有要交给模型的」
     收尾，不当成「已跑完只差收尾」（那要求历史停在一条回复上）。"""
-    from muliao.agent_runtime.api import is_stopped
+    from muliao.sessions.conventions import is_stopped
     from tests.scripted import scripted
     from tests.test_flow import tasks_of
 

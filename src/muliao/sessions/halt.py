@@ -20,11 +20,11 @@ from pydantic_ai.messages import ModelRequest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.api import is_stopped
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.codec import dump_message, load_messages
+from muliao.sessions.conventions import is_stopped
 from muliao.sessions.delegation import threads_of_holds_in
 from muliao.sessions.events import SessionStopped, StopThread
 from muliao.sessions.history import latest_answer, marked_stopped, since_last_response, stopped_results

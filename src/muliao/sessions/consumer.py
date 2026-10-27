@@ -20,15 +20,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Tool
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.api import (
-    AgentRuntime,
-    Finished,
-    Paused,
-    Toolbox,
-    answer_text,
-    is_stopped,
-    unanswered_calls,
-)
+from muliao.agent_runtime.api import AgentRuntime, Finished, Paused, Toolbox
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
@@ -36,6 +28,7 @@ from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
+from muliao.sessions.conventions import answer_text, is_stopped, unanswered_calls
 from muliao.sessions.deferred import DEFERRED_TOOLS, questions_in, replayable
 from muliao.sessions.events import RunFailed
 from muliao.sessions.finish import RunEnd, RunFinisher

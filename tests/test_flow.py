@@ -16,7 +16,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaThinkingPart, FunctionModel
 from sqlalchemy import select
 
-from muliao.agent_runtime.conventions import run_context_index
 from muliao.notifications.service import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
@@ -24,6 +23,7 @@ from muliao.platform.worker import Worker
 from muliao.sessions.api import Origin
 from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
+from muliao.sessions.conventions import run_context_index
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK

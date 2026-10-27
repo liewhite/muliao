@@ -4,7 +4,7 @@
 原因是缓存前缀——instructions 渲染成提供方的 system，缓存断点就放在它末尾（llm.ANTHROPIC_CACHE_SETTINGS），
 DeepSeek 等自动前缀缓存同样从这里开始匹配。instructions 里只要有一个每次运行都不同的值（最早是「当前时间」），
 整段历史每次运行都要重新写入缓存（写缓存比普通输入还贵），同一个 agent 的不同会话、压缩也只能复用工具定义
-那一段。运行上下文放进这次运行新增的第一条请求（conventions.attach_run_context），它随消息入库、之后原样重放，
+那一段。运行上下文放进这次运行新增的第一条请求（会话领域挂上，sessions.conventions.attach_run_context），它随消息入库、之后原样重放，
 旧消息保持字节不变。
 """
 

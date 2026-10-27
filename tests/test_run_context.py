@@ -8,10 +8,10 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Text
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
-from muliao.agent_runtime.conventions import run_context_index
 from muliao.platform.tables import TaskStatus
 from muliao.platform.tooling import Audience
 from muliao.sessions.api import Origin
+from muliao.sessions.conventions import run_context_index
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Message
 from tests.scripted import scripted

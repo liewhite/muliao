@@ -1,7 +1,7 @@
 """把 pydantic-ai 消息转换为展示条目（Item）：会话页的历史、运行中的实时条目（sessions.steps）、压缩的文字记录
 共用这一份投影，前端只渲染与合并，不再自己投影。
 
-消息上的约定（metadata 键、标记、合成结果）登记在 muliao.agent_runtime.conventions，这里只读它们来展示。
+消息上的约定（metadata 键、标记、合成结果）登记在 sessions.conventions 与 agent_runtime.conventions（工具交回的文件与图片），这里只读它们来展示。
 """
 
 from collections.abc import Collection, Mapping, Sequence
@@ -23,20 +23,17 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from muliao.agent_runtime.api import (
-    Attachment,
-    attachment_of_ref,
+from muliao.agent_runtime.api import Attachment, attachment_of_ref, result_images, tool_attachments
+from muliao.platform.text_edit import truncate
+from muliao.sessions.conventions import (
     check_in_indices,
     event_indices,
     is_stopped,
     made_up_result,
     parse_event,
-    result_images,
     run_context_index,
-    tool_attachments,
     tool_threads,
 )
-from muliao.platform.text_edit import truncate
 from muliao.sessions.deferred import asks_user, questions_in
 from muliao.sessions.questions import AnsweredQuestion, AskResult, Question
 from muliao.sessions.sources import EventSource, parse_source
@@ -76,7 +73,7 @@ class Item(BaseModel):
     # 工具结果关联的子会话 id（TOOL_THREADS）；还没有结果的调用（挂起的 ask_agent）由会话接口填上它交出去的 thread
     # （annotate_pending_threads）；其他条目为空
     threads: list[str]
-    # 工具交回给模型的图片（conventions.result_images，如浏览器截图）：属于这次调用的过程，不是给用户的文件；其他条目为空
+    # 工具交回给模型的图片（agent_runtime 的 result_images，如浏览器截图）：属于这次调用的过程，不是给用户的文件；其他条目为空
     images: list[Attachment]
     # ask_user 的调用（参数合法时）；其他条目为 None
     ask: AskView | None

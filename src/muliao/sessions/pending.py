@@ -19,7 +19,9 @@ from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage, ToolCallPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.api import Answer, Attachment, unanswered_calls
+from muliao.agent_runtime.api import Attachment
+from muliao.sessions.answers import Answer
+from muliao.sessions.conventions import unanswered_calls
 from muliao.sessions.deferred import ASK_AGENT, DEFERRED_TOOLS, deferred_tool, questions_in
 from muliao.sessions.history import since_last_response
 from muliao.sessions.holds import called_in

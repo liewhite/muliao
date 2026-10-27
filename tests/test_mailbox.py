@@ -17,12 +17,12 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
-from muliao.agent_runtime.conventions import INTERRUPTED_TOOL_RESULT, RUN_CHECK_INS, RUN_EVENTS, format_event
 from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.api import Origin
 from muliao.sessions.codec import dump_message
 from muliao.sessions.consumer import interrupted_calls
 from muliao.sessions.content import Content, append_content
+from muliao.sessions.conventions import INTERRUPTED_TOOL_RESULT, RUN_CHECK_INS, RUN_EVENTS, format_event
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import post_in, queued_in
 from muliao.sessions.sources import JobSource
