@@ -258,6 +258,24 @@ async def test_trigger_deleted_or_paused_after_being_listed_is_skipped(container
     assert await container.sessions.list(agent_id=alpha, origins=None, limit=10, offset=0) == []
 
 
+async def test_saving_the_same_cron_keeps_the_schedule_state(container, make_agent):
+    """只改说明时界面带着原配置：不算改配置，下次时间与连续跳过的记录都留着。"""
+    alpha = (await make_agent()).id
+    triggers, _ = _schedule(container)
+    trigger = await triggers.create(
+        name="daily", agent_id=alpha, kind="schedule", prompt="report", config={"cron": "0 9 * * *"}
+    )
+    async with container.db.transaction() as s:
+        set_state(
+            await trigger_in(s, trigger.id), next_run_at="2099-01-01T09:00:00+00:00", skipped={"count": 2}
+        )
+
+    trigger = await triggers.update(trigger.id, prompt="new", config={"cron": "0 9 * * *"})
+
+    assert trigger.prompt == "new"
+    assert trigger.state == {"next_run_at": "2099-01-01T09:00:00+00:00", "skipped": {"count": 2}}
+
+
 async def test_reenabled_schedule_does_not_catch_up_on_the_paused_period(container, make_agent):
     alpha = (await make_agent()).id
     triggers, schedules = _schedule(container)

@@ -260,7 +260,8 @@ class StreamRunner:
     # ---- 进程 ----
 
     async def _process_loop(self, spec: _Spec, config: StreamConfig, pending: _Pending) -> None:
-        # 这份托管进程从头算：上一个（服务重启前、旧配置）留下的运行状态清掉
+        # 这份托管进程从头算：服务重启前的进程留下的运行状态清掉（创建、改配置、重新启用时 configure 已清过，
+        # 服务重启这条路径只靠这里）
         await self._safely(spec, self._record(spec, running_since=None, error=None, failures=0))
         failures = 0
         while True:

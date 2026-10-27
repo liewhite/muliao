@@ -12,7 +12,7 @@ from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin, SessionActivity
 from muliao.sessions.mailbox import queued_in
 from muliao.triggers.service import EVENT_MAX_BYTES
-from muliao.triggers.stream import StreamRunner
+from muliao.triggers.stream import StreamRunner, _Spec
 from tests.test_flow import drain, history_of
 
 
@@ -209,6 +209,8 @@ async def test_disabling_and_reenabling_restarts_and_never_shows_the_old_process
         await container.triggers.update(trigger.id, enabled=False)
         reenabled = await container.triggers.update(trigger.id, enabled=True)
         assert container.triggers.status_of(reenabled)["running_since"] is None
+        # 合并成一次对账时能重起的根据：重新启用后托管进程的 spec 变了
+        assert _Spec.of(reenabled) != _Spec.of(trigger)
         await _until(started)
         second = int(pid_file.read_text())
         assert second != first and _alive(second) and not _alive(first)
