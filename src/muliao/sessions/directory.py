@@ -8,9 +8,10 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import ColumnElement, select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.sessions.history import sessions_mentioning
 from muliao.sessions.kinds import LISTED, OWNED_BY_PARENT, TOP_LEVEL, SessionKind
 from muliao.sessions.origins import Origin
 from muliao.sessions.tables import Session
@@ -141,6 +142,8 @@ class Listing:
     agent_id: str | None = None
     origins: Sequence[Origin] | None = None
     origin_ref: str | None = None
+    # 关键字：标题或任一条消息（pydantic-ai 消息 JSON 原文，含用户消息、回复、工具调用与结果）含有它，不区分 ASCII 大小写
+    keyword: str | None = None
 
 
 def _conditions(listing: Listing) -> list[ColumnElement[bool]]:
@@ -151,6 +154,13 @@ def _conditions(listing: Listing) -> list[ColumnElement[bool]]:
         conditions.append(Session.origin.in_(list(listing.origins)))
     if listing.origin_ref is not None:
         conditions.append(Session.origin_ref == listing.origin_ref)
+    if listing.keyword is not None:
+        conditions.append(
+            or_(
+                Session.title.contains(listing.keyword, autoescape=True),
+                Session.id.in_(sessions_mentioning(listing.keyword)),
+            )
+        )
     return conditions
 
 

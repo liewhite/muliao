@@ -303,8 +303,15 @@ export const api = {
   importSkill: (owner: string | null, file: Blob, replace: boolean) =>
     send<Schemas['SkillImportOut']>('POST', '/api/items/skill', { owner, replace }, { type: 'application/zip', data: file }),
 
-  /** origin_ref 是发起方在它那个 origin 里的身份：触发器的 id，用来列出某个触发器发起过的会话 */
-  sessions: (query: { agent_id?: AgentId; origin?: Origin[]; origin_ref?: string; limit?: number; offset?: number }) =>
+  /** origin_ref 是发起方在它那个 origin 里的身份：触发器的 id，用来列出某个触发器发起过的会话；q 是关键字（标题或消息含有它，不能为空串） */
+  sessions: (query: {
+    agent_id?: AgentId
+    origin?: Origin[]
+    origin_ref?: string
+    q?: string
+    limit?: number
+    offset?: number
+  }) =>
     branded<SessionListItem[]>(call('get', '/api/sessions', { query })),
   session: (session_id: string) =>
     branded<SessionDetail>(call('get', '/api/sessions/{session_id}', { path: { session_id } })),

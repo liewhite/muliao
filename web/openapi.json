@@ -808,6 +808,25 @@
             "description": "发起方在它那个 origin 里的身份，如触发器的 id"
           },
           {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写）",
+              "title": "Q"
+            },
+            "description": "关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写）"
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,

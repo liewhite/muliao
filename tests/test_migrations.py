@@ -493,7 +493,8 @@ def test_dropping_sessions_unread_keeps_sessions_their_messages_and_backfills_on
                 (id_, unread),
             )
         conn.execute(
-            "insert into messages (session_id, task_id, payload, created_at) values ('s1', 1, '{}', '2026-01-01')"
+            "insert into messages (session_id, task_id, payload, created_at) "
+            """values ('s1', 1, '{"parts": [], "kind": "request"}', '2026-01-01')"""
         )
         conn.execute(
             "insert into notifications (title, body, session_id, unread, created_at) "

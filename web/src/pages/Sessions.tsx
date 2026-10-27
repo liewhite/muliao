@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Card, Chip, Spinner } from '@heroui/react'
+import { useEffect, useState } from 'react'
+import { Card, Chip, SearchField, Spinner } from '@heroui/react'
 import { ChevronDown, ChevronRight, Hourglass, Plus } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
 import { api, type AgentId, type SessionListItem, sessionRoute } from '../api'
@@ -103,13 +103,21 @@ export default function Sessions() {
       localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
       return next
     })
+  // 关键字输入停下 300ms 后才查（搜消息全文），空白等于不搜
+  const [text, setText] = useState('')
+  const [keyword, setKeyword] = useState('')
+  useEffect(() => {
+    const timer = setTimeout(() => setKeyword(text.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [text])
   const sessions = useLoad(
     () =>
       api.sessions({
-        origin: FILTERS[filter].origins,
+        origin: FILTERS[filter].origins ?? undefined,
+        q: keyword === '' ? undefined : keyword,
         limit: 200,
       }),
-    [filter],
+    [filter, keyword],
   )
   useRefetch('sessions', sessions.reload)
 
@@ -132,11 +140,18 @@ export default function Sessions() {
           label: f.label,
         }))}
       />
+      <SearchField value={text} onChange={setText} aria-label="搜索会话" fullWidth variant="secondary">
+        <SearchField.Group>
+          <SearchField.SearchIcon />
+          <SearchField.Input placeholder="搜索标题或消息内容" />
+          <SearchField.ClearButton />
+        </SearchField.Group>
+      </SearchField>
       <Loading state={sessions}>
         {(list) => {
           const { active, rest } = splitActive(list)
           return list.length === 0 ? (
-            <EmptyHint>没有会话</EmptyHint>
+            <EmptyHint>{keyword === '' ? '没有会话' : '没有匹配的会话'}</EmptyHint>
           ) : (
             <div className="flex flex-col gap-4">
               {active.length > 0 && (
@@ -152,13 +167,15 @@ export default function Sessions() {
                 </section>
               )}
               {groupByAgent(rest).map((g) => {
-                const open = !collapsed.has(g.agentId)
+                // 搜索时一律展开：命中的会话不被折叠藏起来
+                const open = keyword !== '' || !collapsed.has(g.agentId)
                 return (
                   <section key={g.agentId} className="flex flex-col gap-2">
                     <button
                       type="button"
                       className="flex items-center gap-2 text-left text-sm font-semibold text-muted hover:text-foreground"
                       aria-expanded={open}
+                      disabled={keyword !== ''}
                       onClick={() => toggle(g.agentId)}
                     >
                       {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}

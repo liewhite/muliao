@@ -413,6 +413,36 @@ async def test_session_list_pins_every_session_that_is_not_idle_even_beyond_the_
     assert [s["state"] for s in (await client.get("/api/sessions")).json()] == ["idle"] * 3
 
 
+async def test_session_list_filters_by_keyword_in_title_or_messages(client, container, make_agent):
+    """关键字匹配标题或消息原文（不区分 ASCII 大小写），可与来源筛选组合；% _ 按字面匹配，引号、换行按原文能搜到。"""
+    from muliao.sessions.api import Origin
+    from tests.test_flow import drain, start
+
+    agent = await make_agent("alpha")
+    by_title = await start(container, agent.id, "Deploy plan")
+    # 标题只取前 20 个字，关键字在后面：只能从消息里搜到
+    in_body = await start(container, agent.id, '01234567890123456789 说 "灰度 发布"\n100%_done')
+    auto = await start(container, agent.id, "deploy by trigger", origin=Origin.TRIGGER)
+    await start(container, agent.id, "unrelated")
+    await drain(container)
+    await login(client)
+
+    async def ids(**params) -> set[str]:
+        response = await client.get("/api/sessions", params=params)
+        assert response.status_code == 200, response.text
+        return {s["id"] for s in response.json()}
+
+    assert await ids(q="DEPLOY") == {by_title.id, auto.id}
+    assert await ids(q="deploy", origin="user") == {by_title.id}
+    assert await ids(q='"灰度 发布"\n100') == {in_body.id}
+    assert await ids(q="0%_d") == {in_body.id}
+    assert await ids(q="%") == {in_body.id}
+    assert await ids(q="nothing-like-this") == set()
+    # 只匹配消息的文字，不匹配消息 JSON 的键名与结构
+    assert await ids(q="part_kind") == set()
+    assert (await client.get("/api/sessions", params={"q": ""})).status_code == 422
+
+
 async def test_an_agent_being_deleted_reads_as_missing(client, container, make_agent):
     """删除窗口里它的私有资源（指令、记忆）可能已经删了：读它与它的资源一律 404，不读到一半变成 500。"""
     from muliao.agents.tables import Agent

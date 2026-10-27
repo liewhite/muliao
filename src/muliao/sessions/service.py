@@ -182,15 +182,16 @@ class SessionService:
         limit: int,
         offset: int,
         origin_ref: str | None = None,
+        keyword: str | None = None,
     ) -> list[ListedSession]:
         """会话列表只含列出的种类（KindPolicy.listed）；私有 thread 从父会话进入。工作状态不是 idle 的会话（在运行、
         在等后台任务/委派/用户回答，与 issue 看板、触发器同一条规则）置顶，其余按最近更新排序。
 
         置顶看的是筛选后的全部会话（不只是这一页），所以第一页就含全部进行中的会话：工作状态的查询次数与会话数无关，
         代价是每个会话读一条最后的消息（挂起的提问）。origin_ref 是发起方在它那个 origin 里的身份（触发器的 id），
-        用来列出某个发起方开过的会话。
+        用来列出某个发起方开过的会话。keyword 只留标题或消息含有它的会话（directory.Listing）。
         """
-        listing = Listing(agent_id=agent_id, origins=origins, origin_ref=origin_ref)
+        listing = Listing(agent_id=agent_id, origins=origins, origin_ref=origin_ref, keyword=keyword)
         async with self._db.transaction() as s:
             ids = await listed_ids_in(s, listing)
             states = await work_states_in(s, self._queue, ids)

@@ -1,6 +1,6 @@
 """会话历史：发给模型的上下文（最新摘要 + 压缩切点之后的原始消息）。原始消息不删除，压缩只决定从哪里开始发。
 
-messages 与 compactions 两张表只在这里读写（保存一步、停止时补齐、压缩、会话页的展示都经下面的函数），信箱的 mail 表只在
+messages、message_texts 与 compactions 只在这里读写（保存一步、停止时补齐、压缩、会话页的展示都经下面的函数），信箱的 mail 表只在
 sessions.mailbox；tests/test_boundaries.py 核对。"""
 
 from collections.abc import Collection, Sequence
@@ -12,11 +12,12 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.sessions.codec import dump_message, load_messages
@@ -25,10 +26,11 @@ from muliao.sessions.conventions import (
     RUN_STOPPED,
     STOPPED_TOOL_RESULT,
     answer_text,
+    run_context_index,
     unanswered_calls,
 )
 from muliao.sessions.deferred import kept_open_on_stop
-from muliao.sessions.tables import Compaction, Message
+from muliao.sessions.tables import Compaction, Message, MessageText
 
 
 @dataclass(frozen=True)
@@ -49,7 +51,45 @@ async def append_in(
     rows = [Message(session_id=session_id, task_id=run_id, payload=dump_message(m)) for m in messages]
     s.add_all(rows)
     await s.flush()
+    texts = [(row.id, searchable_text(m)) for row, m in zip(rows, messages, strict=True)]
+    s.add_all(MessageText(message_id=i, text=t) for i, t in texts if t)
+    await s.flush()
     return rows
+
+
+def searchable_text(message: ModelMessage) -> str:
+    """消息里可以按关键字搜到的文字（MessageText）：用户消息（不含每次运行都有的运行上下文 RUN_CONTEXT）、模型的文字回复、
+    工具调用（工具名与参数的各个字符串值，如 run_shell 的命令）。不含工具结果（文件内容、命令输出，占消息文字的大头，
+    搜什么都会命中很多）和思考。各段用换行连接；没有文字时为空串。"""
+    chunks: list[str] = []
+    if isinstance(message, ModelRequest):
+        context = run_context_index(message)
+        for i, part in enumerate(message.parts):
+            if isinstance(part, UserPromptPart) and i != context:
+                chunks += (
+                    [part.content]
+                    if isinstance(part.content, str)
+                    else [x for x in part.content if isinstance(x, str)]
+                )
+    else:
+        for part in message.parts:
+            if isinstance(part, TextPart):
+                chunks.append(part.content)
+            elif isinstance(part, ToolCallPart):
+                # 参数不是合法 JSON 时 args_as_dict 给出 {'INVALID_JSON': 原文}，原文一样能搜到
+                chunks += [part.tool_name, *_strings(part.args_as_dict())]
+    return "\n".join(x for x in chunks if x)
+
+
+def _strings(value: object) -> list[str]:
+    """JSON 值里的全部字符串（不含键名）。"""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
 
 
 async def mark_last_stopped_in(s: AsyncSession, session_id: str) -> None:
@@ -94,6 +134,16 @@ async def transcript_rows_in(s: AsyncSession, session_id: str) -> list[tuple[int
         .order_by(Message.id)
     )
     return [(i, p, t) for i, p, t in rows.all()]
+
+
+def sessions_mentioning(keyword: str) -> Select[tuple[str]]:
+    """可搜索文字（searchable_text）里提到关键字的会话，作子查询供会话列表按关键字筛：原样子串匹配，`%` `_` 按字面，
+    不区分 ASCII 大小写（SQLite LIKE）。"""
+    return (
+        select(Message.session_id)
+        .join(MessageText, MessageText.message_id == Message.id)
+        .where(MessageText.text.contains(keyword, autoescape=True))
+    )
 
 
 async def compactions_in(s: AsyncSession, session_id: str) -> list[Compaction]:

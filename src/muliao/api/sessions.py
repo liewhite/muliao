@@ -175,12 +175,15 @@ async def list_sessions(
     agent_id: str | None = None,
     origin: list[Origin] | None = Query(None),
     origin_ref: str | None = Query(None, description="发起方在它那个 origin 里的身份，如触发器的 id"),
+    q: str | None = Query(
+        None, min_length=1, description="关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写）"
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> list[SessionListItem]:
     """工作状态不是 idle 的会话（在全部符合筛选的会话里，不只是这一页）置顶，其余按最近更新排序。"""
     listed = await c.sessions.list(
-        agent_id=agent_id, origins=origin, origin_ref=origin_ref, limit=limit, offset=offset
+        agent_id=agent_id, origins=origin, origin_ref=origin_ref, keyword=q, limit=limit, offset=offset
     )
     outs = await session_outs(c, [x.session for x in listed])
     return [SessionListItem(**o.model_dump(), state=x.state) for o, x in zip(outs, listed, strict=True)]

@@ -3452,6 +3452,8 @@ export interface operations {
                 origin?: components["schemas"]["Origin"][] | null;
                 /** @description 发起方在它那个 origin 里的身份，如触发器的 id */
                 origin_ref?: string | null;
+                /** @description 关键字：只列标题或消息含有它的会话（不区分 ASCII 大小写） */
+                q?: string | null;
                 limit?: number;
                 offset?: number;
             };

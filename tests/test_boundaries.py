@@ -150,6 +150,7 @@ SESSIONS_TABLES: dict[str, set[str]] = {
     "Session": {"directory"},
     # 运行：历史与信箱
     "Message": {"history"},
+    "MessageText": {"history"},
     "Compaction": {"history"},
     "Mail": {"mailbox"},
     # 外部工作

@@ -63,6 +63,16 @@ class Message(Base):
     __table_args__ = {"sqlite_autoincrement": True}
 
 
+class MessageText(Base):
+    """一条消息里可搜索的文字（history.searchable_text 从消息派生，写消息时同一事务写入；会话列表按关键字筛用）。单独成表：
+    按关键字扫描时不读消息 JSON 的溢出页，也不匹配 JSON 的键名与结构。没有文字的消息没有这一行。"""
+
+    __tablename__ = "message_texts"
+
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+
+
 class Compaction(Base):
     """session 上下文压缩：id <= through_message_id 的消息由 summary 代替发给模型。原始消息仍保留。"""
 
