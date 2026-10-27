@@ -406,7 +406,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 - **运行中检查**（`ThreadChecks`）：report_back 的委派按自己的 `check_seconds` 给发起方投检查信件，内容按 thread 的工作状态说（running：在跑多久了、在等重试或还排着；waiting：在等它自己开出的后台任务、委派或提问的回答）。委派没结清时 thread 也可能是 idle（信件到了，投信或运行结束——含最终失败——时的唤醒没做成，例如事务失败、重启，要等定期对账补唤醒下一次运行），这时与还排着同样说「排着、还没开始」。
 - **`list_threads`**：每个 thread 的工作状态（同一条规则，批量）、最近一次运行最终失败时的错误、它最近的回答。不按最近一次运行判断做没做完：thread 在等自己开出的工作时最近一次运行已经做完，那时的回答只是中间的。
 
-## 9. 后台任务（`workspace/`）
+## 9. 后台任务（`workspace/runner.py`）
 
 做法同 Claude Code 的后台 bash：`run_shell(background: true)` 立即返回任务 id，命令在后台跑，不占住运行、不设时限（同步的 `run_shell` 仍有上限，因为它占着运行）。任务属于发起它的会话，它的消息都作为事件信件（来源 `job:<id>`）投进这个会话的信箱。后台任务属于工作区领域（与文件工具、前台 shell 同一领域，工具集 `workspace.tools.workspace_toolset`），表 `jobs`，执行在 `workspace.runner.JobRunner`。
 
