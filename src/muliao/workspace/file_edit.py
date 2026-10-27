@@ -1,5 +1,5 @@
 """edit_file 的多处修改（纯函数）：每处修改（Edit）按自己的方式定位——原文（platform.text_edit.Replace）、行号区间
-（LineRange）、语法结构（agent_runtime.syntax_edit.PatternEdit）——只报出要做的替换（Splice），apply_each 依次拼出新文本；
+（LineRange）、语法结构（workspace.syntax_edit.PatternEdit）——只报出要做的替换（Splice），apply_each 依次拼出新文本；
 行号一律指调用前的原文，由 Origin 换算。另有带行号展示（read_file、edit_file 的回显与报错）与改动处的行范围。"""
 
 import difflib

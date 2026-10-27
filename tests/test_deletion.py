@@ -11,10 +11,10 @@ import muliao.agents.service
 from muliao.agents.api import McpTransport, mcp_config
 from muliao.agents.tables import Agent, Item
 from muliao.errors import Conflict, NotFound
-from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.sessions.api import NewChat, UserMessage
 from muliao.sessions.lanes import RUN_TASK, session_lane
+from muliao.workspace.tables import Job, JobStatus
 from tests.conftest import owned
 from tests.test_flow import deliver, drain, start
 from tests.test_jobs import start_job, wait_until_done
@@ -236,7 +236,7 @@ async def test_check_ins_do_not_wake_a_stopped_session(container, make_agent, mo
     from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 
     session, job, _recorder, _agent = await start_job(container, make_agent, models, "sleep 30")
-    # 停止已清掉占用，但后台任务领域还没处理 SessionStopped（进程还在跑）
+    # 停止已清掉占用，但工作区领域还没处理 SessionStopped（进程还在跑）
     await container.stopper(session.id)
 
     # 任务还在运行，检查命令照发；会话领域看到占用已清掉，不投检查信件

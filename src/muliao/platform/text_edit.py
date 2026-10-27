@@ -1,6 +1,6 @@
 """文本的唯一规则（纯函数）：修改文本——替换恰好出现一次的片段（Replace），或追加一段（记忆、skill 正文、工作区文件都
 用它）；截断过长的文本（交给模型、展示、通知的长输出都用它）。edit_file 的多处修改（按行号区间、按语法结构、换算原文
-行号）只有工作区工具用，在 agent_runtime.file_edit。"""
+行号）只有工作区工具用，在 workspace.file_edit。"""
 
 import re
 from collections.abc import Sequence
@@ -34,7 +34,7 @@ def splice(text: str, places: Sequence[Splice]) -> str:
 
 @dataclass(frozen=True)
 class Replace:
-    """按原文定位：old 恰好出现一次（every 时每一处）替换为 new。也是 edit_file 的一种修改（agent_runtime.file_edit.Edit）：
+    """按原文定位：old 恰好出现一次（every 时每一处）替换为 new。也是 edit_file 的一种修改（workspace.file_edit.Edit）：
     origin 是那边的原文换算，按原文定位用不到。"""
 
     old: str

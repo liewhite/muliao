@@ -75,7 +75,7 @@ async def test_deferred_tools_and_thread_tools_are_registered_under_their_table_
 async def test_edit_file_single_change_parameters_mirror_the_fields_of_one_edit(container):
     """edit_file 的单处修改参数与 edits 里每一项是同一组定位方式：一边加了另一边没跟上，模型就会在两种写法里看到
     不同的能力。"""
-    from muliao.agent_runtime.workspace_tools import TextEdit
+    from muliao.workspace.file_tools import TextEdit
 
     params = set(session_tools(container)["edit_file"].function_schema.json_schema["properties"])
     assert params - {"edits"} == set(TextEdit.model_fields)

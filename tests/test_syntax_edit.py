@@ -1,14 +1,14 @@
-"""edit_file 的行号区间（agent_runtime.file_edit.LineRange）与语法结构（syntax_edit.PatternEdit）定位：纯函数，直接测规则。"""
+"""edit_file 的行号区间（workspace.file_edit.LineRange）与语法结构（syntax_edit.PatternEdit）定位：纯函数，直接测规则。"""
 
 import time
 from pathlib import PurePath
 
 import pytest
 
-from muliao.agent_runtime.file_edit import Edit, LineRange, apply_each
-from muliao.agent_runtime.syntax_edit import LANGUAGES, PatternEdit, language_of
 from muliao.errors import InvalidInput
 from muliao.platform.text_edit import Replace
+from muliao.workspace.file_edit import Edit, LineRange, apply_each
+from muliao.workspace.syntax_edit import LANGUAGES, PatternEdit, language_of
 
 PY = '''import pytest
 

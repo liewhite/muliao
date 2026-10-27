@@ -11,7 +11,7 @@ from muliao.platform.tables import agent_ref, session_ref
 
 
 class JobStatus(StrEnum):
-    """后台任务（jobs.runner）的状态。结束的三种：自己退出（看 exit_code）、被 job_kill 结束、因服务重启被中断。"""
+    """后台任务（workspace.runner）的状态。结束的三种：自己退出（看 exit_code）、被 job_kill 结束、因服务重启被中断。"""
 
     RUNNING = "running"
     EXITED = "exited"
@@ -20,7 +20,7 @@ class JobStatus(StrEnum):
 
 
 class Job(Base):
-    """agent 在后台跑的一条 shell 命令：不占住运行，结束时、运行中每隔一段时间往发起它的会话的信箱投事件（jobs.runner）。"""
+    """agent 在后台跑的一条 shell 命令：不占住运行，结束时、运行中每隔一段时间往发起它的会话的信箱投事件（workspace.runner）。"""
 
     __tablename__ = "jobs"
 

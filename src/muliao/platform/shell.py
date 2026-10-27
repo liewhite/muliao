@@ -66,7 +66,7 @@ async def spawn_bash(
     pipefail: bool = False,
 ) -> asyncio.subprocess.Process:
     """在 cwd 里启动 bash -c command：只继承少量环境变量、注入 secret、自成进程组（kill_group 能杀掉它的整棵进程树）。
-    run_bash（等它结束）与后台任务（jobs.runner）共用。"""
+    run_bash（等它结束）与后台任务（workspace.runner）共用。"""
     env = {k: os.environ[k] for k in _INHERITED_ENV if k in os.environ} | dict(secrets)
     await asyncio.to_thread(cwd.mkdir, parents=True, exist_ok=True)
     return await asyncio.create_subprocess_exec(

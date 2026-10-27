@@ -17,7 +17,7 @@ LAYERS: list[set[str]] = [
     {"files", "agents", "usage", "speech", "web"},
     {"agent_runtime"},
     {"sessions"},
-    {"jobs", "notifications", "triggers", "issues", "history"},
+    {"workspace", "notifications", "triggers", "issues", "history"},
 ]
 DOMAINS = set().union(*LAYERS)
 RANK = {d: rank for rank, layer in enumerate(LAYERS) for d in layer}
@@ -161,14 +161,14 @@ def test_relative_imports_are_resolved_to_the_module_they_name(tmp_path):
     import pytest
 
     root = tmp_path / "muliao"
-    module = root / "jobs" / "x.py"
+    module = root / "workspace" / "x.py"
     module.parent.mkdir(parents=True)
     module.write_text(
         "from . import api\nfrom .runner import y\nfrom ..sessions.mailbox import z\nimport os\n"
     )
     assert _imports(module, root) == [
-        (1, "muliao.jobs.api"),
-        (2, "muliao.jobs.runner.y"),
+        (1, "muliao.workspace.api"),
+        (2, "muliao.workspace.runner.y"),
         (3, "muliao.sessions.mailbox.z"),
     ]
     module.write_text("from .. import x\n")

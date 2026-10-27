@@ -1,19 +1,35 @@
-"""工作区工具：文件与前台 shell（agent_runtime.workspace_tools）加上后台任务——run_shell 可以 background，
-job_status、job_kill。后台任务属于发起它的会话（结局投回那个会话）。
+"""工作区工具：文件工具（file_tools）加上 run_shell（前台，或 background 作为后台任务）、job_status、job_kill。
+后台任务属于发起它的会话（结局投回那个会话）。
 
 前台命令是阻塞的（调用不返回、一直等）：必须给 timeout；后台任务与 agent 并发：没有 timeout，按 heartbeat_seconds
 投运行中检查，由 agent 决定继续等还是 job_kill。"""
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agent_runtime.api import ShellLimits, file_toolset, run_foreground, shell_description
 from muliao.agents.api import Vault
 from muliao.errors import InvalidInput
 from muliao.files.api import FileStore
-from muliao.jobs.runner import JobRunner
-from muliao.jobs.tables import JobStatus
 from muliao.platform.checks import DEFAULT_CHECK_SECONDS
+from muliao.platform.shell import run_bash
+from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import RunScope
+from muliao.workspace.file_tools import ShellLimits, file_toolset
+from muliao.workspace.runner import JobRunner
+from muliao.workspace.tables import JobStatus
+
+_SHELL_DESCRIPTION = (
+    "Run a shell command (bash) in your workspace and return its exit code and combined output. "
+    "By default it runs in the foreground, which is blocking: you wait until it ends, so you must pass `timeout`, "
+    "the seconds it may take (estimate it yourself, there is no upper limit: e.g. 30 for a quick query, 600 for a "
+    "test suite). If it is still running then, it is killed and you get `killed after Ns timeout` with the output "
+    "so far. "
+    "Only the first {max_output} characters of output are kept, so limit it yourself: pipe through `| head` or `| tail`, "
+    "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
+    "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
+    "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules. "
+    "Read files with read_file (one call can read several files or parts, with line numbers) and change them "
+    "with edit_file / write_file rather than cat, sed or heredocs."
+)
 
 _BACKGROUND_DESCRIPTION = (
     " To keep working while a long command runs, pass `background: true` and no `timeout`: this is non-blocking. "
@@ -31,8 +47,10 @@ def workspace_toolset(
 ) -> FunctionToolset[RunScope]:
     """文件、shell 与后台任务。"""
     ts = file_toolset(limits, files)
+    # 输出上限是配置的值，写进说明：模型不知道它，长输出被截了才学会
+    description = _SHELL_DESCRIPTION.format(max_output=limits.max_output_chars) + _BACKGROUND_DESCRIPTION
 
-    @ts.tool(description=shell_description(limits) + _BACKGROUND_DESCRIPTION)
+    @ts.tool(description=description)
     async def run_shell(
         ctx: RunContext[RunScope],
         command: str,
@@ -64,7 +82,7 @@ def workspace_toolset(
                     "timeout is required for a foreground command: estimate how many seconds it needs "
                     "(no upper limit), or run it with `background: true`"
                 )
-            return await run_foreground(vault, limits, ctx.deps, command, timeout, secrets)
+            return await _run_foreground(vault, limits, ctx.deps, command, timeout, secrets)
         if timeout is not None:
             raise InvalidInput(
                 "background jobs have no timeout; leave `timeout` out (set `heartbeat_seconds` for how often "
@@ -115,3 +133,25 @@ def workspace_toolset(
         return f"kill signal sent to job {job_id}; its final status will arrive as an event"
 
     return ts
+
+
+async def _run_foreground(
+    vault: Vault,
+    limits: ShellLimits,
+    scope: RunScope,
+    command: str,
+    timeout: float,  # noqa: ASYNC109  run_shell 的参数原样传入（前台命令必填）
+    secrets: tuple[str, ...],
+) -> str:
+    if not timeout > 0:  # 也拒绝 NaN
+        raise InvalidInput("timeout must be greater than 0 seconds")
+    secret_values = await vault.resolve_many(scope.agent_id, list(secrets))
+    result = await run_bash(
+        command, cwd=scope.workspace, secrets=secret_values, timeout=timeout, merge_stderr=True
+    )
+    status = (
+        f"exit_code: {result.exit_code}"
+        if result.exit_code is not None
+        else f"killed after {timeout}s timeout"
+    )
+    return f"{status}\n{truncate(result.stdout, limits.max_output_chars)}"

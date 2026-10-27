@@ -1,6 +1,6 @@
-"""文件与 shell 工具。相对路径以 agent 工作目录为基准；不做强隔离（单人本机使用，见架构文档）。
-
-这里是文件工具与前台执行；组合进运行的是 jobs.tools.workspace_toolset，它在此之上加上后台任务。
+"""文件工具：read_file / write_file / edit_file / share_file。相对路径以 agent 工作目录为基准；不做强隔离（单人本机使用，
+见架构文档）。组合进运行的是 tools.workspace_toolset，它在此之上加上 run_shell 与后台任务。edit_file 的定位与拼接规则在
+file_edit / syntax_edit。
 """
 
 import logging
@@ -12,17 +12,15 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import BinaryContent, FunctionToolset, RunContext, ToolReturn
 
-from muliao.agent_runtime import file_edit
-from muliao.agent_runtime.conventions import TOOL_ATTACHMENTS, attachment_of
-from muliao.agent_runtime.file_edit import numbered
-from muliao.agent_runtime.syntax_edit import PatternEdit, language_of
-from muliao.agents.api import Vault
+from muliao.agent_runtime.api import TOOL_ATTACHMENTS, attachment_of
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
-from muliao.platform.shell import run_bash
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.workspace import file_edit
+from muliao.workspace.file_edit import numbered
+from muliao.workspace.syntax_edit import PatternEdit, language_of
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +63,7 @@ class FileRange(BaseModel):
 
 @dataclass(frozen=True)
 class ShellLimits:
+    # 工具输出交给模型的上限（runtime.tool_output_max_chars）：run_shell 与文件工具共用
     max_output_chars: int
 
 
@@ -73,53 +72,11 @@ def resolve(scope: RunScope, path: str) -> Path:
     return p if p.is_absolute() else scope.workspace / p
 
 
-_SHELL_DESCRIPTION = (
-    "Run a shell command (bash) in your workspace and return its exit code and combined output. "
-    "By default it runs in the foreground, which is blocking: you wait until it ends, so you must pass `timeout`, "
-    "the seconds it may take (estimate it yourself, there is no upper limit: e.g. 30 for a quick query, 600 for a "
-    "test suite). If it is still running then, it is killed and you get `killed after Ns timeout` with the output "
-    "so far. "
-    "Only the first {max_output} characters of output are kept, so limit it yourself: pipe through `| head` or `| tail`, "
-    "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
-    "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
-    "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules. "
-    "Read files with read_file (one call can read several files or parts, with line numbers) and change them "
-    "with edit_file / write_file rather than cat, sed or heredocs."
-)
-
-
-def shell_description(limits: ShellLimits) -> str:
-    """输出上限是配置的值，写进说明：模型不知道它，长输出被截了才学会。"""
-    return _SHELL_DESCRIPTION.format(max_output=limits.max_output_chars)
-
-
-async def run_foreground(
-    vault: Vault,
-    limits: ShellLimits,
-    scope: RunScope,
-    command: str,
-    timeout: float,  # noqa: ASYNC109  run_shell 的参数原样传入（前台命令必填）
-    secrets: tuple[str, ...],
-) -> str:
-    if not timeout > 0:  # 也拒绝 NaN
-        raise InvalidInput("timeout must be greater than 0 seconds")
-    secret_values = await vault.resolve_many(scope.agent_id, list(secrets))
-    result = await run_bash(
-        command, cwd=scope.workspace, secrets=secret_values, timeout=timeout, merge_stderr=True
-    )
-    status = (
-        f"exit_code: {result.exit_code}"
-        if result.exit_code is not None
-        else f"killed after {timeout}s timeout"
-    )
-    return f"{status}\n{truncate(result.stdout, limits.max_output_chars)}"
-
-
 def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
     # 文件工具都是屏障（sequential）：同一次回复里排在它前面的调用先做完、它再执行，排在后面的等它做完。
     # 模型常在一次回复里先 run_shell 生成文件、再 read_file/share_file 它；并行执行时文件还没生成，
     # 报 file not found（#224）。文件工具都是瞬时的本地操作，串行几乎没有代价；不夹着文件工具时
-    # run_shell 等之间照旧并行（它们由 jobs.tools 加进同一个工具集，所以逐个工具标，不用工具集的默认值）。
+    # run_shell 等之间照旧并行（它们由 tools.workspace_toolset 加进同一个工具集，所以逐个工具标，不用工具集的默认值）。
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool(sequential=True)

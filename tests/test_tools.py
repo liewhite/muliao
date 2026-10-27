@@ -566,7 +566,7 @@ async def test_edit_file_changes_several_files_in_one_call_all_or_nothing(contai
 async def test_edit_file_refuses_a_read_only_file_before_writing_any(
     container, make_agent, models, monkeypatch
 ):
-    import muliao.agent_runtime.workspace_tools as wt
+    import muliao.workspace.file_tools as wt
 
     me = await make_agent("alpha", model="tools")
     real_access = wt.os.access
@@ -867,18 +867,18 @@ async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_st
 
     from pydantic_ai.messages import BinaryContent, ImageUrl
 
-    from muliao.agent_runtime import workspace_tools
     from muliao.files.api import parse_file_url
+    from muliao.workspace import file_tools
     from tests.test_flow import history_of
 
     # 上限按 provider 的 5MB（base64 编码后）换算
-    assert len(base64.b64encode(b"x" * workspace_tools._MAX_IMAGE_BYTES)) <= 5 * 1024 * 1024
+    assert len(base64.b64encode(b"x" * file_tools._MAX_IMAGE_BYTES)) <= 5 * 1024 * 1024
     me = await make_agent("alpha", model="tools")
     png = b"\x89PNG\r\n\x1a\n" + b"chart"
     workspace = container.agents.workspace(me.id)
     (workspace / "shot.png").write_bytes(png)
     (workspace / "big.jpg").write_bytes(b"x" * (len(png) + 1))
-    monkeypatch.setattr(workspace_tools, "_MAX_IMAGE_BYTES", len(png))
+    monkeypatch.setattr(file_tools, "_MAX_IMAGE_BYTES", len(png))
     seen: list[object] = []
     calls = [
         ("read_file", {"path": "shot.png"}),

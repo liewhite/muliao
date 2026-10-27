@@ -5,13 +5,13 @@ from muliao.agents import tables as agents  # noqa: F401
 from muliao.files import tables as files  # noqa: F401
 from muliao.history import tables as history  # noqa: F401
 from muliao.issues import tables as issues  # noqa: F401
-from muliao.jobs import tables as jobs  # noqa: F401
 from muliao.notifications import tables as notifications  # noqa: F401
 from muliao.platform import tables as platform  # noqa: F401
 from muliao.platform.db import Base  # noqa: E402  先导入全部表定义，映射才完整
 from muliao.sessions import tables as sessions  # noqa: F401
 from muliao.triggers import tables as triggers  # noqa: F401
 from muliao.usage import tables as usage  # noqa: F401
+from muliao.workspace import tables as workspace  # noqa: F401
 
 # 平台的表（任务队列）是每个领域的 outbox，可以和任何一个领域的表在同一个事务里写
 _SHARED = "platform"

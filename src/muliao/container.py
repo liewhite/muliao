@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import anyio
 import httpx
 
-from muliao.agent_runtime.api import AgentRuntime, ModelRegistry, ShellLimits, Toolbox
+from muliao.agent_runtime.api import AgentRuntime, ModelRegistry, Toolbox
 from muliao.agent_runtime.llm import ModelResolver
 from muliao.agent_runtime.mcp import McpConnector
 from muliao.agents.api import (
@@ -42,8 +42,6 @@ from muliao.history.tools import history_toolset
 from muliao.issues.api import SESSION_NOTE as ISSUE_SESSION_NOTE
 from muliao.issues.api import IssueService
 from muliao.issues.tools import issues_toolset
-from muliao.jobs.api import JobRunner
-from muliao.jobs.tools import workspace_toolset
 from muliao.notifications.api import DELIVER_TASK, Notifications, PushSubscriptions, VapidKeys
 from muliao.notifications.delivery import DeliverHandler
 from muliao.notifications.tools import notify_toolset
@@ -77,6 +75,8 @@ from muliao.triggers.tools import triggers_toolset
 from muliao.triggers.webhook import WebhookKind
 from muliao.usage.api import UsageLog
 from muliao.web.api import WebProvider, build_web_provider, web_toolset
+from muliao.workspace.api import JobRunner, ShellLimits
+from muliao.workspace.tools import workspace_toolset
 
 log = logging.getLogger(__name__)
 

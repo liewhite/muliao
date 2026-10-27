@@ -13,7 +13,6 @@ from pydantic_ai import (
     AgentRun,
     DeferredToolRequests,
     DeferredToolResults,
-    FunctionToolset,
     UsageLimits,
     UserPromptNode,
 )
@@ -37,7 +36,6 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 from pydantic_graph import End
 
@@ -47,8 +45,9 @@ from muliao.agent_runtime.llm import ModelResolver, check_thinking, model_settin
 from muliao.agent_runtime.outcome import Finished, Paused, outcome_of
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
+from muliao.agent_runtime.toolbox import RunProfile
 from muliao.agent_runtime.transient import transient_as_retryable
-from muliao.agents.api import AgentInfo, AgentService, MemoryStore, Rules, SkillStore, Thinking
+from muliao.agents.api import AgentInfo, AgentService, MemoryStore, SkillStore, Thinking
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
@@ -89,37 +88,6 @@ class StepHooks:
     on_text: Callable[[TextKind, str], None]
     on_tool_call: Callable[[ToolCallPart], None]
     on_tool_result: Callable[[ToolReturnPart | RetryPromptPart], None]
-
-
-@dataclass(frozen=True)
-class RunProfile:
-    """一次运行开放的工具：从 Toolbox 里按 agent 的权限规则取。"""
-
-    toolsets: Sequence[AbstractToolset[RunScope]]
-
-
-@dataclass(frozen=True)
-class Toolbox:
-    """运行可用的全部工具：静态的内置工具集（登记见 agents.permissions.TOOLS）与按运行构建的 MCP。一次运行开放哪些内置
-    工具在运行开始时按 agent 的规则算定（profile），调用时不再判断；MCP 是它能用的、已启用的 server（McpRegistry.index）。"""
-
-    toolsets: Sequence[FunctionToolset[RunScope]]
-    # MCP 工具：每次运行新建一个（它带着这次运行的连接状态），按这次运行的 agent 能用的 server 连接
-    mcp: Callable[[], AbstractToolset[RunScope]]
-    # agent（按 id）现在的规则（Distribution.rules：base 与角色按现在的定义展开）
-    rules_of: Callable[[str], Awaitable[Rules]]
-
-    def tool_names(self) -> list[str]:
-        return [name for ts in self.toolsets for name in ts.tools]
-
-    async def profile(self, agent: AgentInfo) -> RunProfile:
-        allowed = set((await self.rules_of(agent.id)).tools(self.tool_names()))
-        static: list[AbstractToolset[RunScope]] = [
-            ts.filtered(lambda _ctx, td: td.name in allowed)
-            for ts in self.toolsets
-            if allowed & set(ts.tools)
-        ]
-        return RunProfile(toolsets=[*static, self.mcp()])
 
 
 class AgentRuntime:
