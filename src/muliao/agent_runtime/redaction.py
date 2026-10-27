@@ -13,8 +13,8 @@ from pydantic import ValidationError
 from pydantic_ai.exceptions import ToolRetryError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, RetryPromptPart, ToolCallPart
 
-# SECRET_TOOL_ARGS（工具名 → 需要脱敏的参数名）由定义这些工具的 vault 领域声明
-from muliao.vault.api import SECRET_TOOL_ARGS
+# SECRET_TOOL_ARGS（工具名 → 需要脱敏的参数名）由定义这些工具的 agents 领域声明（agents/secret_tools.py）
+from muliao.agents.api import SECRET_TOOL_ARGS
 
 REDACTED = "[redacted]"
 

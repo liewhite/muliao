@@ -30,6 +30,7 @@ from anyio.abc import TaskGroup
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.api import Vault
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.process import Recorder
 from muliao.jobs.tables import Job, JobStatus
@@ -41,7 +42,6 @@ from muliao.platform.shell import DRAIN_SECONDS, kill_group, spawn_bash
 from muliao.platform.tasks import Clock, Commit, no_commit
 from muliao.sessions.api import SessionWork, hold_registered_in, job_id_of, job_source, session_in
 from muliao.sessions.events import SessionStopped, WorkCheckIn, WorkEnded
-from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 

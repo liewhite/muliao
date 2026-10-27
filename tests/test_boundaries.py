@@ -15,7 +15,6 @@ SRC = Path(__file__).parent.parent / "src" / "muliao"
 # 事件与定向命令不受方向限制（events 模块只放消息的数据形状）。新增领域要在这里定它在哪一层
 LAYERS: list[set[str]] = [
     {"files", "agents", "usage", "speech", "web"},
-    {"vault"},
     {"agent_runtime"},
     {"sessions"},
     {"jobs", "notifications", "triggers", "issues", "history"},

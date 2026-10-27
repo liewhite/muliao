@@ -22,9 +22,9 @@ from muliao.agents.api import (
     McpRegistry,
     MemoryStore,
     RoleService,
-    SecretItems,
     SkillStore,
     Thinking,
+    Vault,
 )
 from muliao.agents.evolution_tools import (
     memory_toolset,
@@ -32,6 +32,7 @@ from muliao.agents.evolution_tools import (
 )
 from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.permissions import available_tools
+from muliao.agents.secret_tools import vault_toolset
 from muliao.agents.service import AgentDefaults
 from muliao.agents.tools import agents_toolset
 from muliao.config import RuntimeConfig, Settings
@@ -75,8 +76,6 @@ from muliao.triggers.stream import StreamKind, StreamRunner
 from muliao.triggers.tools import triggers_toolset
 from muliao.triggers.webhook import WebhookKind
 from muliao.usage.api import UsageLog
-from muliao.vault.api import Vault
-from muliao.vault.tools import vault_toolset
 from muliao.web.api import WebProvider, build_web_provider, web_toolset
 
 log = logging.getLogger(__name__)
@@ -290,7 +289,7 @@ def assemble(
     messaging = Messaging(queue)
     # 马上执行已提交的投递（Worker.run_now）：worker 由各领域的处理器组成，在最后构造、绑定
     run_now = RunNow()
-    vault = Vault(SecretItems(db), settings.vault.key.get_secret_value())
+    vault = Vault(db, settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
     skills = SkillStore(db, settings.skills_dir)
     memory = MemoryStore(db, settings.runtime.memory_max_chars)

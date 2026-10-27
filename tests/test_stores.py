@@ -6,13 +6,12 @@ import stat
 
 import pytest
 
-from muliao.agents.api import Subject
+from muliao.agents.api import Subject, fill
 from muliao.agents.mcp import McpTransport, mcp_config
 from muliao.agents.memory import MemoryFull
 from muliao.agents.skill_package import SKILL_FILE, SkillFile
 from muliao.agents.skills import attachments_from, parse_document
 from muliao.errors import Conflict, CorruptState, Forbidden, InvalidInput, NotFound
-from muliao.vault.api import fill
 from tests.conftest import history, owned, share
 from tests.test_flow import drain
 

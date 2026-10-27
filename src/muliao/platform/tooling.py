@@ -1,4 +1,4 @@
-"""工具的共同契约（各领域的工具集都依赖它，包括 agent_runtime 之下的 agents、vault，所以它在平台里）：一次运行的
+"""工具的共同契约（各领域的工具集都依赖它，包括 agent_runtime 之下的 agents，所以它在平台里）：一次运行的
 上下文 RunScope 与回答交给谁（Audience），以及工具连续失败的容忍次数。会话来源归会话领域（sessions.origins），
 把领域错误交还模型的包装归 agent_runtime（tool_errors）。"""
 

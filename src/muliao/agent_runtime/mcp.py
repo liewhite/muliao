@@ -21,11 +21,10 @@ from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset, ToolsetTool, WrapperToolset
 
 from muliao.agent_runtime.transient import is_transient
-from muliao.agents.api import McpConfig, McpServer, McpTransport
+from muliao.agents.api import VAULT_REF, McpConfig, McpServer, McpTransport, Vault, fill
 from muliao.errors import InvalidInput, NotFound, TransientError
 from muliao.platform.shell import redact
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-from muliao.vault.api import VAULT_REF, Vault, fill
 
 log = logging.getLogger(__name__)
 

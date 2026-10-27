@@ -4,7 +4,7 @@
   AgentArchived），返回 AgentInfo；
   名称映射 AgentService.names / 事务内的 agent_names_in（AgentNames，已删除的 agent 也有展示名）；
 - 删除与归档 agent（AgentLifecycle）；
-- 条目与记忆：种类（kinds：Kind / StoredKind / Subject），记忆（全局与 agent 的）、skill 的存取与标准 .skill 文件的导入导出（自我改进工具与 instructions 组装用），MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret 的密文存放（SecretItems，加解密在 vault）、条目池（ItemCatalog：全部条目、预览、转移、版本历史与恢复）、版本（RevisionInfo：ItemCatalog.history 与 MemoryStore.history 读出，角色与 agent 规则的版本由 knowledge-upkeep 的 revisions.py 只读查询）；
+- 条目与记忆：种类（kinds：Kind / StoredKind / Subject），记忆（全局与 agent 的）、skill 的存取与标准 .skill 文件的导入导出（自我改进工具与 instructions 组装用），MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret（Vault：存取、加解密与 ${vault:KEY} 引用的解析 VAULT_REF / fill，对外不出密文；SECRET_TOOL_ARGS：要脱敏的工具参数）、条目池（ItemCatalog：全部条目、预览、转移、版本历史与恢复）、版本（RevisionInfo：ItemCatalog.history 与 MemoryStore.history 读出，角色与 agent 规则的版本由 knowledge-upkeep 的 revisions.py 只读查询）；
 - 条目的两条规则（access：能用 = 自己的 ∪ 规则放行的；能改 = owner 或 admin）；
 - 分发规则（permissions：内置工具的登记、`kind:name` 规则、内置角色 base / admin）与角色（roles：内置加用户自建）。
 """
@@ -19,8 +19,8 @@ from muliao.agents.memory import MemoryStore
 from muliao.agents.permissions import BASE, TOOLS, Access, Role, Rules, Tool, ToolSpec
 from muliao.agents.revisions import USER, RevisionInfo
 from muliao.agents.role_service import RoleService, RoleSpec, RoleView
-from muliao.agents.secrets import KEY_SYNTAX as SECRET_KEY_SYNTAX
-from muliao.agents.secrets import SecretItems, StoredSecret
+from muliao.agents.secret_tools import SECRET_TOOL_ARGS
+from muliao.agents.secrets import VAULT_REF, SecretInfo, Vault, fill
 from muliao.agents.service import (
     AgentInfo,
     AgentNames,
@@ -54,13 +54,15 @@ __all__ = [
     "CatalogEntry",
     "ItemCatalog",
     "Reach",
-    "SECRET_KEY_SYNTAX",
+    "SECRET_TOOL_ARGS",
+    "VAULT_REF",
+    "fill",
     "StoredKind",
     "MemoryStore",
     "RevisionInfo",
     "Subject",
-    "SecretItems",
-    "StoredSecret",
+    "SecretInfo",
+    "Vault",
     "MAX_PACKAGE_BYTES",
     "SkillImport",
     "SkillMeta",

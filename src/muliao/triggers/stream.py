@@ -40,6 +40,7 @@ from typing import Any
 import anyio
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from muliao.agents.api import Vault
 from muliao.errors import NotFound
 from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
@@ -55,7 +56,6 @@ from muliao.triggers.service import (
     set_state,
 )
 from muliao.triggers.tables import Trigger
-from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 

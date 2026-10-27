@@ -74,7 +74,7 @@ class Item(Base):
     谁能用、谁能改见 agents.access。
 
     content 的含义因种类而异：skill 是 SKILL.md 全文（附件在 item_files），MCP server 是配置 JSON（McpConfig），secret 为空
-    （密文在 secret，由 vault 加解密）。description 是 skill 与 secret 的描述（skill 的也在 SKILL.md 的 frontmatter 里，
+    （密文在 secret，由 agents/secrets.py 的 Vault 加解密）。description 是 skill 与 secret 的描述（skill 的也在 SKILL.md 的 frontmatter 里，
     写入时解析出来存一份，列 skill 索引不必解析全文）。"""
 
     __tablename__ = "items"

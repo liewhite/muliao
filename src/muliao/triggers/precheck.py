@@ -20,9 +20,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from muliao.agents.api import Vault
 from muliao.errors import NotFound, ScriptFailed
 from muliao.platform.shell import run_bash
-from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 

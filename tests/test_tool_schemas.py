@@ -48,7 +48,7 @@ async def test_array_and_object_parameters_are_not_nullable_unless_null_means_so
 
 async def test_redacted_secret_arguments_exist_in_the_registered_tool_schemas(container):
     """脱敏表若与工具定义脱节（改了工具名或参数名），secret 明文会悄悄进入 messages 表和 SSE。"""
-    from muliao.vault.api import SECRET_TOOL_ARGS
+    from muliao.agents.api import SECRET_TOOL_ARGS
 
     params = {
         tool.name: set(tool.function_schema.json_schema.get("properties", {}))

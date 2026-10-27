@@ -1,10 +1,10 @@
-"""vault：保存用户给的 secret，只能按 key 引用，没有读取明文的工具。"""
+"""secret 的工具（vault_*）：保存用户给的 secret，只能按 key 引用，没有读取明文的工具。"""
 
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
+from muliao.agents.secrets import Vault
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-from muliao.vault.service import Vault
 
 
 class SecretKeyInfo(BaseModel):
@@ -14,7 +14,7 @@ class SecretKeyInfo(BaseModel):
     description: str
 
 
-# 工具名 → 明文参数名：agent_runtime 在消息落库、推送前据此脱敏（经 vault.api 导出）。
+# 工具名 → 明文参数名：agent_runtime 在消息落库、推送前据此脱敏（经 agents.api 导出）。
 # 改工具名或参数名时一起改；tests/test_tool_schemas.py 断言它们在注册的工具 schema 里存在。
 SECRET_TOOL_ARGS: dict[str, frozenset[str]] = {
     "vault_set": frozenset({"value"}),

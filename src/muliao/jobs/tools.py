@@ -7,13 +7,13 @@ job_status、job_kill。后台任务属于发起它的会话（结局投回那�
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agent_runtime.api import ShellLimits, file_toolset, run_foreground, shell_description
+from muliao.agents.api import Vault
 from muliao.errors import InvalidInput
 from muliao.files.api import FileStore
 from muliao.jobs.runner import JobRunner
 from muliao.jobs.tables import JobStatus
 from muliao.platform.checks import DEFAULT_CHECK_SECONDS
 from muliao.platform.tooling import RunScope
-from muliao.vault.api import Vault
 
 _BACKGROUND_DESCRIPTION = (
     " To keep working while a long command runs, pass `background: true` and no `timeout`: this is non-blocking. "

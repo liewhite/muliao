@@ -16,13 +16,13 @@ from muliao.agent_runtime import file_edit
 from muliao.agent_runtime.conventions import TOOL_ATTACHMENTS, attachment_of
 from muliao.agent_runtime.file_edit import numbered
 from muliao.agent_runtime.syntax_edit import PatternEdit, language_of
+from muliao.agents.api import Vault
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
 from muliao.platform.shell import run_bash
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-from muliao.vault.api import Vault
 
 log = logging.getLogger(__name__)
 
