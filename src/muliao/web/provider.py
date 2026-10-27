@@ -37,7 +37,7 @@ class Page:
 
 
 class WebProvider(Protocol):
-    async def search(self, query: str, count: int) -> list[SearchHit]: ...
+    async def search(self, query: str, limit: int) -> list[SearchHit]: ...
 
     async def fetch(self, url: str) -> Page: ...
 
@@ -139,8 +139,8 @@ class DeepSeekWeb:
             raise TransientError(reason)
         raise RuntimeError(reason)
 
-    async def search(self, query: str, count: int) -> list[SearchHit]:
-        raw = await self._post("search", {"query": query, "count": count})
+    async def search(self, query: str, limit: int) -> list[SearchHit]:
+        raw = await self._post("search", {"query": query, "count": limit})
         results = _DeepSeekSearchResponse.model_validate(raw).results
         log.info("web search", extra={"provider": "deepseek", "count": len(results)})
         return [

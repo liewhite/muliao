@@ -260,8 +260,8 @@ class FakeWeb:
     def __init__(self) -> None:
         self.queries: list[tuple[str, int]] = []
 
-    async def search(self, query: str, count: int) -> list[SearchHit]:
-        self.queries.append((query, count))
+    async def search(self, query: str, limit: int) -> list[SearchHit]:
+        self.queries.append((query, limit))
         return [SearchHit("T", "https://t.example", "about t", None, None)]
 
     async def fetch(self, url: str) -> Page:
