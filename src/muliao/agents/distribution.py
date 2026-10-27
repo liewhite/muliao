@@ -78,11 +78,6 @@ class Distribution:
         async with self._db.transaction() as s:
             return await agent_rules_in(s, agent_id)
 
-    async def all_agent_rules(self) -> dict[str, AgentRules]:
-        """全部 agent 的规则（包括正在删除的），按 id。"""
-        async with self._db.transaction() as s:
-            return await all_agent_rules_in(s)
-
     async def rules(self, agent_id: str) -> Rules:
         """agent 的最终规则（base + 角色 + 自己的 allow / deny），按角色现在的定义算：运行开放哪些工具
         （agent_runtime.Toolbox.profile）。"""

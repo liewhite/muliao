@@ -17,7 +17,13 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.active import AgentNames, active_row_in, agent_names_in, runnable_row_in
-from muliao.agents.agent_rules import AgentRules, agent_rules_in, create_agent_rules_in, update_agent_rules_in
+from muliao.agents.agent_rules import (
+    AgentRules,
+    agent_rules_in,
+    all_agent_rules_in,
+    create_agent_rules_in,
+    update_agent_rules_in,
+)
 from muliao.agents.ids import new_agent_id
 from muliao.agents.memory import create_memory_in
 from muliao.agents.naming import new_agent_name, normalize_agent_name
@@ -160,6 +166,11 @@ async def _row_in(s: AsyncSession, agent_id: str) -> Agent:
     if agent is None:
         raise NotFound(f"agent {agent_id!r} not found")
     return agent
+
+
+async def _listed_in(s: AsyncSession) -> list[Agent]:
+    """列表里的 agent（正在删除的不列出），按名称。"""
+    return list(await s.scalars(select(Agent).where(Agent.deleting_by.is_(None)).order_by(Agent.name)))
 
 
 # ---- 删除与归档（agents.lifecycle 编排）对 agents 表的写入 ----
@@ -381,11 +392,13 @@ class AgentService:
 
     async def list(self) -> list[AgentInfo]:
         async with self._db.transaction() as s:
-            # 正在删除的不列出
-            rows = (
-                await s.scalars(select(Agent).where(Agent.deleting_by.is_(None)).order_by(Agent.name))
-            ).all()
-            return [info_of(a) for a in rows]
+            return [info_of(a) for a in await _listed_in(s)]
+
+    async def list_with_rules(self) -> list[tuple[AgentInfo, AgentRules]]:
+        """list 加上各自的分发规则（分发子域的 all_agent_rules_in），同一个事务里读：两边一致，缺规则即数据损坏、报错。"""
+        async with self._db.transaction() as s:
+            rules = await all_agent_rules_in(s)
+            return [(info_of(a), rules[a.id]) for a in await _listed_in(s)]
 
     async def _ids(self) -> set[str]:
         """数据库里所有 agent 的 id，正在删除的也算（它的目录还在是正常的，删除流程会删）。"""

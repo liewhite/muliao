@@ -1,5 +1,5 @@
 """agent 的分发规则拆到自己的表 agent_rules（#242）：agents 的 roles / allow / deny 三列搬进 agent_rules（每个 agent 一行，
-外键随 agent 级联删除），然后删掉这三列（SQLite 原生 DROP COLUMN，不重建 agents 表：重建会经级联删掉条目与记忆）。
+外键随 agent 级联删除），然后删掉这三列（SQLite 原生 DROP COLUMN：不重建 agents 表、不拷全表，比 batch 重建简单）。
 
 数据：每个 agent（含正在删除的）的三列原样搬过去，版本表不动（subject agent 的版本本来就只记这三项）。
 

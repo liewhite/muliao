@@ -231,10 +231,7 @@ async def list_provider_models(c: C, name: str) -> list[str]:
 
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
-    agents = await c.agents.list()
-    rules = await c.distribution.all_agent_rules()
-    # 两次读之间删除完成的 agent 已经不在了，不列出
-    return [AgentOut.of(a, rules[a.id]) for a in agents if a.id in rules]
+    return [AgentOut.of(a, rules) for a, rules in await c.agents.list_with_rules()]
 
 
 @router.post("/agents", status_code=201)

@@ -885,8 +885,8 @@ def test_converting_rules_refuses_data_it_cannot_keep_unchanged(tmp_path):
         assert "mcp_servers" in {r[1] for r in conn.execute("pragma table_info(agents)")}
 
 
-def test_agent_rules_move_to_their_own_table_without_touching_items_and_downgrade(tmp_path):
-    """#242：agents 的 roles / allow / deny 搬进 agent_rules 后删列；agents 不重建，条目与记忆（外键级联到 agents）不受影响。
+def test_agent_rules_move_to_their_own_table_and_downgrade(tmp_path):
+    """#242：agents 的 roles / allow / deny 搬进 agent_rules 后删列（原生 DROP COLUMN，agents 不重建），条目与记忆不变。
     降级搬回三列、删表。"""
     from alembic import command
 
@@ -915,6 +915,9 @@ def test_agent_rules_move_to_their_own_table_without_touching_items_and_downgrad
 
     with sqlite3.connect(path) as conn:
         assert not {"roles", "allow", "deny"} & {r[1] for r in conn.execute("pragma table_info(agents)")}
+        # 没有重建：原生 ALTER 加的列还接在原来那一行后面（重建会把每列重新生成在自己的一行）
+        ddl = conn.execute("select sql from sqlite_master where name = 'agents'").fetchone()[0]
+        assert "NOT NULL, is_default BOOLEAN" in ddl
         assert conn.execute(
             "select agent_id, roles, allow, deny from agent_rules order by agent_id"
         ).fetchall() == [
@@ -928,6 +931,7 @@ def test_agent_rules_move_to_their_own_table_without_touching_items_and_downgrad
         command.downgrade(alembic_config(connection), "acd7fd2ea877")
     with sqlite3.connect(path) as conn:
         assert "agent_rules" not in _tables(path)
+        assert conn.execute("select owner, content from memories").fetchall() == [("a2", "remember")]
         assert conn.execute("select id, roles, allow, deny from agents order by id").fetchall() == [
             ("a1", '["admin"]', '["tool:*"]', "[]"),
             ("a2", "[]", '["skill:s"]', '["tool:run_shell"]'),
