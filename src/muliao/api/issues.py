@@ -24,7 +24,7 @@ class IssueOut(BaseModel):
     owner: str | None
     # agent id、"user"，或 null（未指派）
     assignee: str | None
-    # 创建者 agent id；用户创建的为 null
+    # 创建者：agent id；用户创建的为 "user"
     creator: str
     # 每个 agent 在这个 issue 上的会话：agent id -> 会话 id
     sessions: dict[str, str]
@@ -70,7 +70,7 @@ class IssueOut(BaseModel):
 class ActivityOut(BaseModel):
     id: int
     created_at: datetime
-    # 做这件事的 agent id；用户为 null，系统自己的清理（删除 agent）为 "system"
+    # 做这件事的 agent id；用户为 "user"，系统自己的清理（删除 agent）为 "system"
     actor: str
     kind: ActivityKind
     # 评论内容

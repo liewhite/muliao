@@ -1,7 +1,7 @@
 """unified language: actor, memory agent_id, delegation parent
 
 统一语言（#246），只改列名与一处取值：
-- issue 时间线与创建者里用户统一记为 'user'（agents.api.USER）：issue_activities.actor_agent_id → actor、
+- issue 时间线与创建者里用户统一记为 'user'（定义在 agents/ids.py 的 USER）：issue_activities.actor_agent_id → actor、
   issues.creator_agent_id → creator，原来的 NULL（用户）换成 'user'，两列改为 NOT NULL（重建这两张表，保住
   sqlite_sequence：issue 编号与动态 id 永不复用）。
 - memories.owner → agent_id（owner 只指条目归属与 issue 负责项目；NULL 仍是全局记忆）。

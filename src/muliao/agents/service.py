@@ -185,12 +185,12 @@ async def deletable_in(s: AsyncSession, agent_id: str) -> AgentInfo:
 
 
 async def mark_deleting_in(s: AsyncSession, agent_id: str, actor: str) -> None:
-    """标为正在删除（作者 actor）：之后不出现在列表与名称解析里，各领域的写入口按不存在处理。"""
+    """标为正在删除（改的人 actor）：之后不出现在列表与名称解析里，各领域的写入口按不存在处理。"""
     await deletable_in(s, agent_id)
     (await _row_in(s, agent_id)).deleting_by = actor
 
 
-async def deletion_author_in(s: AsyncSession, agent_id: str) -> str | None:
+async def deletion_actor_in(s: AsyncSession, agent_id: str) -> str | None:
     """正在删除的 agent 的删除作者；行已删除时 None（删除流程重放）。没在删除中说明流程与数据不一致，报错。"""
     agent = await s.get(Agent, agent_id)
     if agent is None:
@@ -318,7 +318,7 @@ class AgentService:
             return info_of(agent)
 
     async def update(self, agent_id: str, patch: AgentPatch, *, actor: str) -> AgentInfo:
-        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。分发规则变了就记一版（作者 actor）。"""
+        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。分发规则变了就记一版（改的人 actor）。"""
         async with self._db.transaction() as s:
             agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)

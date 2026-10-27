@@ -1,7 +1,7 @@
 """逐步保存：一次运行的每一步（一次模型请求及其返回的工具调用）各自提交。请求模型之前把新到的信件并进这条请求，请求与
 它带上的信件（记为已处理）同一个事务提交；模型回复之后提交这条回复。失败或重启后从上一步续跑，已经保存的步骤不会
 重放；中断那一步里正在执行的工具也不重新执行，而是补上「被中断」的结果（save_interrupted）。实时展示按步换段
-（sessions.live.LiveRuns.step）。"""
+（sessions.live.LiveSegments.step）。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import Content, ContentBuilder, append_content, mark_events
 from muliao.sessions.conventions import attach_run_context
 from muliao.sessions.history import append_in, marked_stopped, stopped_results
-from muliao.sessions.live import LiveRuns
+from muliao.sessions.live import LiveSegments
 from muliao.sessions.mailbox import consume_in, queued_in
 from muliao.sessions.tables import Mail, Message, Session
 from muliao.sessions.transcript import Item, call_item, result_item
@@ -71,7 +71,7 @@ class RunState:
 
 
 class Steps:
-    def __init__(self, db: Database, live: LiveRuns, content: ContentBuilder, compactor: Compactor):
+    def __init__(self, db: Database, live: LiveSegments, content: ContentBuilder, compactor: Compactor):
         self._db = db
         self._live = live
         self._content = content

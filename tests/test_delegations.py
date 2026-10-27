@@ -1067,11 +1067,11 @@ async def test_stopping_the_asker_stops_its_threads_level_by_level(container, ma
     parent = await start(container, lead, "go")
     await drain(container)
 
-    async def dispatch(owner_id: str, agent, thread: str):  # noqa: ANN001, ANN202
+    async def dispatch(parent_id: str, agent, thread: str):  # noqa: ANN001, ANN202
         async with container.db.transaction() as s:
             return await container.threads.dispatch(
                 s,
-                parent_id=owner_id,
+                parent_id=parent_id,
                 agent=agent,
                 thread=thread,
                 prompt="work",

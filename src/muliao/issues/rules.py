@@ -7,7 +7,7 @@ from muliao.agents.api import USER, AgentNames
 from muliao.issues.tables import IssueStatus
 from muliao.sessions.api import WorkState
 
-# 指派人的取值：agent id，或 USER（agents.api，全系统指代用户的那个值）；None 为未指派。agent id 是 12 位十六进制，
+# 指派人的取值：agent id，或 USER（定义在 agents/ids.py、经 agents.api 导出，全系统指代用户的那个值）；None 为未指派。agent id 是 12 位十六进制，
 # 不会与它相同；agent 名称也不能取它（agents.naming.new_agent_name），工具里按名称指派时不会混淆
 
 

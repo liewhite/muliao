@@ -61,7 +61,7 @@ from muliao.sessions.compaction import Compactor
 from muliao.sessions.consumer import Consumer
 from muliao.sessions.delegation import ThreadChecks
 from muliao.sessions.halt import SessionStopper
-from muliao.sessions.live import LiveRuns
+from muliao.sessions.live import LiveSegments
 from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.threads import Threads
 from muliao.speech.api import Transcriber, build_transcriber
@@ -128,7 +128,7 @@ class Assembly:
     settings: Settings
     db: Database
     bus: EventBus
-    live: LiveRuns
+    live: LiveSegments
     queue: TaskQueue
     vault: Vault
     skills: SkillStore
@@ -286,7 +286,7 @@ def assemble(
     tz = ZoneInfo(settings.timezone)
     db = Database(create_engine(settings.db_path), check_writes=check_writes)
     bus = EventBus()
-    live = LiveRuns(bus)
+    live = LiveSegments(bus)
     queue = TaskQueue(db, retries=retries_of(settings.runtime))
     # 领域事件与定向命令：订阅与命令处理者在下面各领域构造之后登记
     messaging = Messaging(queue)

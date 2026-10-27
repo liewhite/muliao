@@ -47,7 +47,7 @@ async def document_in(s: AsyncSession, row: Item) -> str:
 async def transfer_in(
     s: AsyncSession, row: Item, owner: str | None, actor: str, message: str | None = None
 ) -> None:
-    """把条目转给 owner（agent 的 id；None 归平台），在调用方的写事务里记一版（作者 actor，说明缺省为「从谁转给谁」）。
+    """把条目转给 owner（agent 的 id；None 归平台），在调用方的写事务里记一版（改的人 actor，说明缺省为「从谁转给谁」）。
     内容不变；谁能用随 owner 变（agents.access 的规则 1）。谁能转、新 owner 是否可用由调用方先查。"""
     kind = StoredKind(row.kind)
     if message is None:

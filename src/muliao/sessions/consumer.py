@@ -42,7 +42,7 @@ from muliao.sessions.history import (
 )
 from muliao.sessions.holds import called_in
 from muliao.sessions.kinds import policy_of
-from muliao.sessions.live import LiveRuns
+from muliao.sessions.live import LiveSegments
 from muliao.sessions.loading import load_session
 from muliao.sessions.mailbox import consumed_by_in, queued_in, wake_in
 from muliao.sessions.origins import OriginNotes
@@ -132,7 +132,7 @@ class Consumer:
         queue: TaskQueue,
         runtime: AgentRuntime,
         toolbox: Toolbox,
-        live: LiveRuns,
+        live: LiveSegments,
         content: ContentBuilder,
         steps: Steps,
         finisher: RunFinisher,

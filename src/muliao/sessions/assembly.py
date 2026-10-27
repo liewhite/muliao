@@ -33,7 +33,7 @@ from muliao.sessions.deletion import AgentSessionsCleanup
 from muliao.sessions.finish import RunFinisher
 from muliao.sessions.halt import SessionHalt, SessionStopper
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
-from muliao.sessions.live import LiveRuns
+from muliao.sessions.live import LiveSegments
 from muliao.sessions.origins import OriginNotes
 from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.service import SessionService
@@ -90,7 +90,7 @@ class SessionDomain:
         *,
         db: Database,
         queue: TaskQueue,
-        live: LiveRuns,
+        live: LiveSegments,
         messaging: Messaging,
         run_now: RunNow,
         runtime: AgentRuntime,

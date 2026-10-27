@@ -31,7 +31,7 @@ from muliao.agents.service import (
     active_agent_in,
     check_archivable,
     deletable_in,
-    deletion_author_in,
+    deletion_actor_in,
     mark_deleting_in,
     remove_in,
     set_archived_in,
@@ -110,7 +110,7 @@ class AgentLifecycle:
     async def on_sessions_cleared(self, event: AgentSessionsCleared, _delivery: Delivery) -> Commit:
         agent_id = event.agent_id
         async with self._db.transaction() as s:
-            actor = await deletion_author_in(s, agent_id)
+            actor = await deletion_actor_in(s, agent_id)
         if actor is None:
             return no_commit
         # 目录不在数据库事务里：重放时它们已经不在，删除是空操作。skill 的生成目录只是副本，先于行删除
@@ -129,7 +129,7 @@ class AgentLifecycle:
         log.info("files of a deleted agent removed", extra={"agent": agent_id})
 
         async def commit(s: AsyncSession) -> None:
-            if await deletion_author_in(s, agent_id) is None:
+            if await deletion_actor_in(s, agent_id) is None:
                 return
             # 各子域先记删除的版本（版本表不随它删除，留作审计），被分发出去的条目先转给平台，再删行（级联只删还归它的）
             message = f"deleted with agent {agent_id}"

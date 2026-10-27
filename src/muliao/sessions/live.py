@@ -12,7 +12,7 @@ from muliao.sessions.transcript import Item
 
 
 class SavedEvent(BaseModel):
-    """运行中又保存了一步（LiveRuns.step）：历史有了新内容，实时事件换成新的一段。"""
+    """运行中又保存了一步（LiveSegments.step）：历史有了新内容，实时事件换成新的一段。"""
 
     type: Literal["saved"] = "saved"
     session_id: str
@@ -22,7 +22,7 @@ class _RunEventBase(BaseModel):
     type: Literal["run"] = "run"
     session_id: str
     agent: str
-    # 这一段的编号与事件序号（LiveRuns）：快照与 SSE 事件据此合并、去重、发现缺口
+    # 这一段的编号与事件序号（LiveSegments）：快照与 SSE 事件据此合并、去重、发现缺口
     segment_id: str
     seq: int
 
@@ -53,7 +53,7 @@ class LiveSegment:
     events: list[RunItemEvent | RunDeltaEvent]
 
 
-class LiveRuns:
+class LiveSegments:
     """每个会话正在进行的运行里、当前这一段的运行事件，在内存里留一份，让中途打开会话页的人从这一段的开头看起。
 
     一段从一次模型请求保存之后开始，包括模型的回复与它调用的工具，到下一次请求保存（或运行结束）为止。消费者每保存

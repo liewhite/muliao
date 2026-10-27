@@ -32,7 +32,7 @@ from muliao.sessions.inbound import (
     target_in,
 )
 from muliao.sessions.kinds import policy_of
-from muliao.sessions.live import LiveRuns, LiveSegment, RunItemEvent
+from muliao.sessions.live import LiveSegment, LiveSegments, RunItemEvent
 from muliao.sessions.mailbox import open_asks_in, visible_in
 from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_run
@@ -48,7 +48,7 @@ class SessionView:
 
     session: Session
     # 完整原始历史（不受压缩影响）的展示条目，带来源消息 id 与提问状态；正在进行的那一段已经保存的部分由实时快照
-    # 展示，这里不重复（sessions.live.LiveRuns）
+    # 展示，这里不重复（sessions.live.LiveSegments）
     items: list[Item]
     compactions: list[Compaction]
     # 显示在历史之后的信件：排队中的，以及最近一次停止丢弃的
@@ -86,7 +86,7 @@ class SessionService:
         self,
         db: Database,
         queue: TaskQueue,
-        live: LiveRuns,
+        live: LiveSegments,
         messaging: Messaging,
         stop_session: StopSession,
         compactor: Compactor,
