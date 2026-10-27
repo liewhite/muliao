@@ -1,7 +1,11 @@
-"""会话历史：发给模型的上下文（最新摘要 + 压缩切点之后的原始消息）。原始消息不删除，压缩只决定从哪里开始发。"""
+"""会话历史：发给模型的上下文（最新摘要 + 压缩切点之后的原始消息）。原始消息不删除，压缩只决定从哪里开始发。
+
+messages 与 compactions 两张表只在这里读写（保存一步、停止时补齐、压缩、会话页的展示都经下面的函数），信箱的 mail 表只在
+sessions.mailbox；tests/test_boundaries.py 核对。"""
 
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Literal
 
 from pydantic_ai.messages import (
@@ -15,7 +19,7 @@ from pydantic_ai.messages import (
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.sessions.codec import load_messages
+from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.conventions import (
     INTERRUPTED_TOOL_RESULT,
     RUN_STOPPED,
@@ -36,6 +40,80 @@ class SessionContext:
     # 最近一次压缩写入之前就有的模型回复条数（在 messages 里）：它们报告的 token 数是压缩前的上下文大小，
     # 判断要不要再压缩只看之后的回复（sessions.compaction.Compactor.verdict）；没压缩过为 None
     stale_responses: int | None
+
+
+async def append_in(
+    s: AsyncSession, session_id: str, run_id: int, messages: Sequence[ModelMessage]
+) -> list[Message]:
+    """在调用方事务里把这些消息接在会话历史末尾（run_id：保存它们的运行），返回写下的行（已分配 id）。"""
+    rows = [Message(session_id=session_id, task_id=run_id, payload=dump_message(m)) for m in messages]
+    s.add_all(rows)
+    await s.flush()
+    return rows
+
+
+async def mark_last_stopped_in(s: AsyncSession, session_id: str) -> None:
+    """给历史最后一条消息标上停止（marked_stopped）。停止时补齐历史用（sessions.halt）。"""
+    row = await s.scalar(
+        select(Message).where(Message.session_id == session_id).order_by(Message.id.desc()).limit(1)
+    )
+    if row is None:
+        raise RuntimeError(f"session {session_id} has history but no message rows")
+    (message,) = load_messages([row.payload])
+    row.payload = dump_message(marked_stopped(message))
+
+
+async def last_message_id_in(s: AsyncSession, session_id: str) -> int | None:
+    return await s.scalar(select(func.max(Message.id)).where(Message.session_id == session_id))
+
+
+async def last_saved_by_in(s: AsyncSession, session_id: str) -> int | None:
+    """保存历史最后一条消息的运行（续跑接管时看停下的部分是谁保存的，sessions.consumer）。"""
+    return await s.scalar(
+        select(Message.task_id).where(Message.session_id == session_id).order_by(Message.id.desc()).limit(1)
+    )
+
+
+async def saved_by_in(s: AsyncSession, session_id: str, run_id: int) -> list[Message]:
+    """这次运行（含之前几次尝试）保存的消息行，按顺序。带上会话条件：messages.task_id 没有索引，按会话的索引只扫
+    这个会话的行。"""
+    rows = await s.scalars(
+        select(Message)
+        .where(Message.session_id == session_id, Message.task_id == run_id)
+        .order_by(Message.id)
+    )
+    return list(rows.all())
+
+
+async def transcript_rows_in(s: AsyncSession, session_id: str) -> list[tuple[int, str, datetime]]:
+    """完整原始历史（不受压缩影响）的 (消息 id, payload, 保存时刻)：会话页的展示。只取原始行，反序列化在事务
+    之外做（sessions.service）。"""
+    rows = await s.execute(
+        select(Message.id, Message.payload, Message.created_at)
+        .where(Message.session_id == session_id)
+        .order_by(Message.id)
+    )
+    return [(i, p, t) for i, p, t in rows.all()]
+
+
+async def compactions_in(s: AsyncSession, session_id: str) -> list[Compaction]:
+    rows = await s.scalars(
+        select(Compaction).where(Compaction.session_id == session_id).order_by(Compaction.id)
+    )
+    return list(rows.all())
+
+
+async def add_compaction_in(s: AsyncSession, session_id: str, through_message_id: int, summary: str) -> None:
+    """记下一次压缩：through_message_id 及之前的消息由摘要代替发给模型；写入时会话最后一条消息记为 at_message_id
+    （见 Compaction）。"""
+    at = await last_message_id_in(s, session_id)
+    if at is None:
+        raise RuntimeError(f"compacting session {session_id} without messages")
+    s.add(
+        Compaction(
+            session_id=session_id, through_message_id=through_message_id, at_message_id=at, summary=summary
+        )
+    )
 
 
 async def latest_compaction(s: AsyncSession, session_id: str) -> Compaction | None:

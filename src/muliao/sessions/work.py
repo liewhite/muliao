@@ -2,6 +2,7 @@
 
 - SessionWork.hold：别的领域（后台任务）登记占用，在会话领域自己的事务里执行；结束与运行中检查经定向命令
   WorkEnded / WorkCheckIn（同一条按占用者的 lane）。
+- 运行中检查的间隔规则（DEFAULT_CHECK_SECONDS、check_due）：后台任务与委派共用，节拍在 platform.checks.WorkWatcher。
 - deliver_in：交回结局并释放占用，和一封信件同一个事务；占用已被停止清掉、或会话已删除时不投。唯一出口：后台任务
   经定向命令 WorkEnded，委派由 thread 结清时在同一个事务里调用（sessions.delegation）。
 """
@@ -9,9 +10,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from enum import StrEnum
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.db import Database
@@ -20,11 +21,19 @@ from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.events import WorkCheckIn, WorkEnded
 from muliao.sessions.holds import get_in, hold_in, release
 from muliao.sessions.lanes import work_lane
-from muliao.sessions.mailbox import post_check_in, post_in
+from muliao.sessions.mailbox import post_check_in, post_in, posted_with_key_in
 from muliao.sessions.pending import AgentAnswer, AgentAnswered, pending_in
-from muliao.sessions.tables import HoldStatus, Mail, MailKind, Session
+from muliao.sessions.tables import HoldStatus, MailKind, Session
 
 log = logging.getLogger(__name__)
+
+# 发起并发工作时不给 heartbeat_seconds 的默认间隔（run_shell(background)、delegate_task(report_back) 共用，唯一一处）
+DEFAULT_CHECK_SECONDS = 30.0
+
+
+def check_due(last: datetime, interval_seconds: float, now: datetime) -> bool:
+    """上一次检查（还没检查过时是工作开始的时刻）之后过了一个间隔。"""
+    return now - last >= timedelta(seconds=interval_seconds)
 
 
 class SessionWork:
@@ -77,11 +86,7 @@ async def deliver_in(
     if before == HoldStatus.CLEARED:
         log.info("outcome for a stopped session dropped", extra={"session_id": session_id, "holder": holder})
         return Delivered.DROPPED
-    if (
-        before == HoldStatus.RELEASED
-        and (await s.scalar(select(Mail.id).where(Mail.session_id == session_id, Mail.dedupe_key == key)))
-        is None
-    ):
+    if before == HoldStatus.RELEASED and not await posted_with_key_in(s, session_id, key):
         # 重放带的是同一个 key（按它去重）；换了 key 再交回一次，是同一项工作被交回了两次
         raise RuntimeError(f"hold {holder} of session {session_id} was already released by another delivery")
     if answer is not None and hold.call_id is not None and hold.call_id in await pending_in(s, session_id):

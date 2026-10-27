@@ -142,6 +142,70 @@ def test_agents_subdomains_only_touch_their_own_tables():
     assert not problems, "\n".join(problems)
 
 
+# sessions 的子域各自独占的表（docs/architecture.md 2.1）：表类只在它的模块里出现在查询与构造中（`select(X)`、`X.列`、
+# `X(...)`）；别的模块经它们的 `*_in` 接口。领域内传递行对象、按 id 取会话（`s.get(Session, id)`）不算
+SESSIONS_TABLES: dict[str, set[str]] = {
+    # 会话：按属性查会话、写入新会话只在目录
+    "Session": {"directory"},
+    # 运行：历史与信箱
+    "Message": {"history"},
+    "Compaction": {"history"},
+    "Mail": {"mailbox"},
+    # 外部工作
+    "SessionHold": {"holds"},
+    # 委派
+    "Delegation": {"delegations"},
+}
+
+
+def _table_uses(tree: ast.AST, names: set[str]) -> list[tuple[int, str]]:
+    """查询与构造里用到的表类：`X.属性`、`X(...)`，以及作为 select 参数的 `X`。"""
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in names:
+            found.append((node.lineno, node.value.id))
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in names:
+                found.append((node.lineno, node.func.id))
+            elif isinstance(node.func, ast.Name) and node.func.id == "select":
+                found += [(node.lineno, a.id) for a in node.args if isinstance(a, ast.Name) and a.id in names]
+    return found
+
+
+def test_sessions_subdomains_only_query_their_own_tables():
+    from muliao.sessions import tables
+
+    declared = {
+        n for n, v in vars(tables).items() if isinstance(v, type) and getattr(v, "__tablename__", None)
+    }
+    assert declared == set(SESSIONS_TABLES), "every sessions table belongs to exactly one subdomain"
+    problems = []
+    for path in sorted((SRC / "sessions").glob("*.py")):
+        if path.stem == "tables":
+            continue
+        for line, name in _table_uses(ast.parse(path.read_text()), declared):
+            if path.stem not in SESSIONS_TABLES[name]:
+                problems.append(f"sessions/{path.name}:{line} queries {name}")
+    assert not problems, "\n".join(problems)
+
+
+def test_sessions_read_tasks_through_the_queue():
+    """会话领域经 TaskQueue 的只读查询（TaskView）看运行，不查任务表、不按 TaskStatus 分支；Task 只出现在任务处理器的
+    签名里（队列交给处理器的就是它）。"""
+    problems = []
+    for path in sorted((SRC / "sessions").glob("*.py")):
+        for line, name in _imports(path):
+            if name == "muliao.platform.tables.TaskStatus" or (
+                name == "muliao.platform.tables.Task" and path.stem not in {"consumer", "compaction"}
+            ):
+                problems.append(f"sessions/{path.name}:{line} imports {name}")
+        problems += [
+            f"sessions/{path.name}:{line} queries Task"
+            for line, _ in _table_uses(ast.parse(path.read_text()), {"Task"})
+        ]
+    assert not problems, "\n".join(problems)
+
+
 def test_only_agent_runtime_touches_the_model_librarys_run_types():
     problems = []
     for path in SRC.rglob("*.py"):

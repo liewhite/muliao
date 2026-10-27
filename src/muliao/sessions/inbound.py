@@ -23,8 +23,8 @@ from muliao.files.api import FileMeta, load_metas
 from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
+from muliao.sessions.directory import add_in, keyed_rows_among
 from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
-from muliao.sessions.info import keyed_rows_among
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import open_asks_in, post_in
@@ -228,8 +228,9 @@ async def create_session(
         raise ValueError(
             f"delegated session must be created by its parent {spec.parent_session_id}, not {origin_ref}"
         )
-    session = Session(
-        id=new_id() if spec.id is None else spec.id,
+    return await add_in(
+        s,
+        session_id=new_id() if spec.id is None else spec.id,
         agent_id=spec.agent_id,
         # 发送方给的标题（如 issue 标题）可能比列宽长，在这里统一截断
         title=_shorten(spec.title, TITLE_LENGTH),
@@ -240,13 +241,10 @@ async def create_session(
         thread=spec.thread,
         kind=spec.kind,
     )
-    s.add(session)
-    await s.flush()
-    return session
 
 
 async def keyed_session_in(s: AsyncSession, origin: Origin, origin_ref: str, agent_id: str) -> Session | None:
-    """按发送方定位的会话（SessionKey）：这个发送方给这个 agent 开过的最新一个顶层会话（规则在 info.keyed_rows_among）。"""
+    """按发送方定位的会话（SessionKey）：这个发送方给这个 agent 开过的最新一个顶层会话（规则在 directory.keyed_rows_among）。"""
     return (await keyed_rows_among(s, origin, [origin_ref], agent_id)).get((origin_ref, agent_id))
 
 

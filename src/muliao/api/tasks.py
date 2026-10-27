@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from muliao.api.deps import C
 from muliao.notifications.api import DELIVER_TASK
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
+from muliao.platform.tasks import TaskView
 from muliao.sessions.api import COMPACTION_TASK, RUN_TASK
 
 router = APIRouter()
@@ -32,7 +33,8 @@ class TaskOut(BaseModel):
     finished_at: datetime | None
 
     @classmethod
-    def of(cls, t: Task) -> "TaskOut":
+    def of(cls, t: Task | TaskView) -> "TaskOut":
+        """任务页拿到的是队列的行，会话页的最近一次运行是会话领域经队列查到的 TaskView：同一组字段。"""
         return cls(
             id=t.id,
             kind=t.kind,

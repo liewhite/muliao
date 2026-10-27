@@ -9,34 +9,17 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import Attachment
 from muliao.platform.db import Database
-from muliao.platform.tables import Task, TaskStatus
-from muliao.platform.tasks import TaskQueue
+from muliao.platform.tasks import TaskQueue, TaskView
 from muliao.sessions.delegation import Ending, hand_back_in
-from muliao.sessions.mailbox import discard_in
+from muliao.sessions.mailbox import discard_in, mark_settled, unsettled_in, with_unsettled_in
 from muliao.sessions.runs import failure_of, handed_to, latest_run
 from muliao.sessions.tables import Mail, MailState, Session
 
 log = logging.getLogger(__name__)
-
-
-async def _unsettled_in(s: AsyncSession, session_id: str, states: Sequence[MailState]) -> list[Mail]:
-    """会话里带关联、还没结清的信件。"""
-    rows = await s.scalars(
-        select(Mail)
-        .where(
-            Mail.session_id == session_id,
-            Mail.correlation.is_not(None),
-            Mail.correlation_settled.is_(False),
-            Mail.state.in_(states),
-        )
-        .order_by(Mail.id)
-    )
-    return list(rows.all())
 
 
 async def _settle_in(
@@ -50,12 +33,7 @@ async def _settle_in(
 ) -> list[str]:
     """在调用方事务里结清这些信件带来的关联，并在同一个事务里把结局交回各自的发起方（sessions.delegation），返回
     结清的关联。"""
-    correlations = list(
-        dict.fromkeys(m.correlation for m in mail if m.correlation and not m.correlation_settled)
-    )
-    for m in mail:
-        if m.correlation:
-            m.correlation_settled = True
+    correlations = mark_settled(mail)
     if not correlations:
         return []
     log.info(
@@ -75,7 +53,7 @@ async def settle_finished_in(
         s,
         queue,
         session,
-        await _unsettled_in(s, session.id, [MailState.CONSUMED]),
+        await unsettled_in(s, session.id, [MailState.CONSUMED]),
         Ending.FINISHED,
         answer,
         attachments,
@@ -91,7 +69,7 @@ async def settle_stopped_in(
         s,
         queue,
         session,
-        await _unsettled_in(s, session.id, [MailState.QUEUED, MailState.CONSUMED]),
+        await unsettled_in(s, session.id, [MailState.QUEUED, MailState.CONSUMED]),
         Ending.STOPPED,
         answer,
     )
@@ -104,13 +82,13 @@ async def settle_deleted_in(s: AsyncSession, queue: TaskQueue, session: Session)
         s,
         queue,
         session,
-        await _unsettled_in(s, session.id, [MailState.QUEUED, MailState.CONSUMED]),
+        await unsettled_in(s, session.id, [MailState.QUEUED, MailState.CONSUMED]),
         Ending.DELETED,
         "",
     )
 
 
-async def settle_failure_in(s: AsyncSession, queue: TaskQueue, session: Session, run: Task) -> list[str]:
+async def settle_failure_in(s: AsyncSession, queue: TaskQueue, session: Session, run: TaskView) -> list[str]:
     """运行最终失败：交给这个会话、没能做完的委派以「失败」结清（发起方不会一直等）。按会话范围：已交给模型、还没结清
     的全部（包括早先停在挂起调用上的运行处理过的、被续跑接管的），加上交给过这次运行、还排着的——运行在第一次保存
     之前就失败时，开头取走的信件一直排着，也不会再有运行因为它们被唤醒（mailbox.handed_to）；它们随结清一起退出
@@ -121,12 +99,12 @@ async def settle_failure_in(s: AsyncSession, queue: TaskQueue, session: Session,
 
     两条执行路径共用这一个函数：队列记下最终失败时（RunHandler.failed_in），以及它没做成时信箱对账补做
     （reconcile_failures）。"""
-    stranded = [m for m in await _unsettled_in(s, session.id, [MailState.QUEUED]) if handed_to(m, run)]
+    stranded = [m for m in await unsettled_in(s, session.id, [MailState.QUEUED]) if handed_to(m.id, run)]
     settled = await _settle_in(
         s,
         queue,
         session,
-        [*await _unsettled_in(s, session.id, [MailState.CONSUMED]), *stranded],
+        [*await unsettled_in(s, session.id, [MailState.CONSUMED]), *stranded],
         Ending.FAILED,
         failure_of(run),
     )
@@ -142,25 +120,15 @@ async def reconcile_failures(db: Database, queue: TaskQueue) -> list[str]:
     每个会话一个事务、各自的异常边界：钩子失败多半是确定性的 bug，补做时会再撞上它；它只记 error（带会话与运行），
     不回滚别的会话的补做，也不让对账循环崩溃、把整个服务拖进重启循环。"""
     async with db.transaction() as s:
-        candidates = (
-            await s.scalars(
-                select(Mail.session_id)
-                .where(
-                    Mail.correlation.is_not(None),
-                    Mail.correlation_settled.is_(False),
-                    Mail.state.in_([MailState.CONSUMED, MailState.QUEUED]),
-                )
-                .distinct()
-            )
-        ).all()
+        candidates = await with_unsettled_in(s)
     done = []
     for session_id in candidates:
         run_id = None
         try:
             async with db.transaction() as s:
-                run = await latest_run(s, session_id)
+                run = await latest_run(s, queue, session_id)
                 session = await s.get(Session, session_id)
-                if run is None or run.status != TaskStatus.FAILED or session is None:
+                if run is None or not run.failed or session is None:
                     continue
                 run_id = run.id
                 settled = await settle_failure_in(s, queue, session, run)

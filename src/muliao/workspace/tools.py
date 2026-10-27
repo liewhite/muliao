@@ -9,10 +9,10 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agents.api import Vault
 from muliao.errors import InvalidInput
 from muliao.files.api import FileStore
-from muliao.platform.checks import DEFAULT_CHECK_SECONDS
 from muliao.platform.shell import run_bash
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import RunScope
+from muliao.sessions.api import DEFAULT_CHECK_SECONDS
 from muliao.workspace.file_tools import ShellLimits, file_toolset
 from muliao.workspace.runner import JobRunner
 from muliao.workspace.tables import JobStatus

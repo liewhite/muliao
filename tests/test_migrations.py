@@ -629,12 +629,12 @@ def test_threads_per_agent_heartbeats_and_timeouts_backfill_and_downgrade(tmp_pa
     migrate(path)
     with sqlite3.connect(path) as conn:
         assert conn.execute("select check_seconds from jobs").fetchall() == [(60.0,)]
+        # 委派的参数后来搬进了 delegations（#244）；两项委派都没有 thread 信件
         assert conn.execute(
-            "select holder, check_seconds, deadline from session_holds order by holder"
+            "select holder, thread_session_id, check_seconds, deadline from delegations order by holder"
         ).fetchall() == [
-            ("delegation:p:k1", 60.0, None),
-            ("delegation:p:k2", None, None),
-            ("job:1", None, None),
+            ("delegation:p:k1", None, 60.0, None),
+            ("delegation:p:k2", None, None, None),
         ]
         # 同一父会话、同名、不同 agent：现在是两个 thread
         conn.executemany(
@@ -937,3 +937,70 @@ def test_agent_rules_move_to_their_own_table_and_downgrade(tmp_path):
             ("a2", "[]", '["skill:s"]', '["tool:run_shell"]'),
         ]
         assert conn.execute("select name, owner from items").fetchall() == [("s", "a1")]
+
+
+def test_delegation_parameters_move_to_their_own_table_and_downgrade(tmp_path):
+    """#244：session_holds 上委派的 check_seconds / deadline 搬进 delegations（带由关联信件推出的 thread），后台任务的
+    占用不搬；两列删掉。降级按 holder 搬回、删表。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "abea1558f93c")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', ?, ?)",
+            (t, t),
+        )
+        conn.executemany(
+            "insert into sessions (id, agent_id, title, origin, origin_ref, parent_session_id, thread, kind, "
+            "created_at, updated_at) values (?, 'a1', 't', ?, NULL, ?, ?, ?, ?, ?)",
+            [
+                ("p", "user", None, None, "conversation", t, t),
+                ("c", "delegation", "p", "review", "thread", t, t),
+            ],
+        )
+        conn.executemany(
+            "insert into session_holds (session_id, holder, call_id, awaited, check_seconds, deadline, status, "
+            "created_at) values ('p', ?, ?, 0, ?, ?, ?, ?)",
+            [
+                ("delegation:p:k1", None, 45.0, None, "active", t),
+                ("delegation:p:k2", "call", None, "2026-01-01 00:05:00", "released", t),
+                ("job:1", None, None, None, "active", t),
+            ],
+        )
+        conn.execute(
+            "insert into mail (session_id, kind, content, check_in, attachments, answers, awaited, correlation, "
+            "correlation_settled, state, created_at) "
+            "values ('c', 'message', 'x', 0, '[]', '{}', 0, 'delegation:p:k1', 0, 'queued', ?)",
+            (t,),
+        )
+
+    migrate(path)
+
+    with sqlite3.connect(path) as conn:
+        assert not {"check_seconds", "deadline"} & {
+            r[1] for r in conn.execute("pragma table_info(session_holds)")
+        }
+        assert conn.execute(
+            "select holder, session_id, thread_session_id, check_seconds, deadline, created_at "
+            "from delegations order by holder"
+        ).fetchall() == [
+            ("delegation:p:k1", "p", "c", 45.0, None, t),
+            ("delegation:p:k2", "p", None, None, "2026-01-01 00:05:00", t),
+        ]
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "abea1558f93c")
+    with sqlite3.connect(path) as conn:
+        assert "delegations" not in _tables(path)
+        assert conn.execute(
+            "select holder, check_seconds, deadline from session_holds order by holder"
+        ).fetchall() == [
+            ("delegation:p:k1", 45.0, None),
+            ("delegation:p:k2", None, "2026-01-01 00:05:00"),
+            ("job:1", None, None),
+        ]

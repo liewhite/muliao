@@ -17,21 +17,20 @@ from collections.abc import Sequence
 from enum import StrEnum
 
 from pydantic_ai.messages import ModelMessage, ModelResponse
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import AgentRuntime
 from muliao.agents.api import AgentInfo, active_agent_in
 from muliao.errors import NotFound
 from muliao.platform.db import Database
-from muliao.platform.tables import Task, TaskStatus
+from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.conventions import calls_in, results_in
-from muliao.sessions.history import latest_compaction, rows_after
+from muliao.sessions.history import add_compaction_in, latest_compaction, rows_after
 from muliao.sessions.lanes import COMPACTION_TASK, session_lane
 from muliao.sessions.loading import load_session
-from muliao.sessions.tables import Compaction, Message, Session
+from muliao.sessions.tables import Message, Session
 from muliao.sessions.transcript import to_items, to_text
 
 log = logging.getLogger(__name__)
@@ -170,16 +169,7 @@ class Compactor:
             )
             through = chosen[-1][-1].id
             async with self._db.transaction() as s:
-                s.add(
-                    Compaction(
-                        session_id=session.id,
-                        through_message_id=through,
-                        at_message_id=await s.scalar(
-                            select(func.max(Message.id)).where(Message.session_id == session.id)
-                        ),
-                        summary=summary,
-                    )
-                )
+                await add_compaction_in(s, session.id, through, summary)
             compacted += len(chosen)
             log.info(
                 "session compacted",
@@ -207,12 +197,7 @@ class Compactor:
 
     async def _request_in(self, s: AsyncSession, session: Session) -> bool:
         lane = session_lane(session.id)
-        pending = await s.scalar(
-            select(Task.id)
-            .where(Task.lane == lane, Task.kind == COMPACTION_TASK, Task.status == TaskStatus.PENDING)
-            .limit(1)
-        )
-        if pending is not None:
+        if await self._queue.has_unfinished_in(s, lane, COMPACTION_TASK, pending_only=True):
             return False
         self._queue.enqueue(
             s,

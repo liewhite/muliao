@@ -10,7 +10,8 @@
 - 运行中检查与超时（ThreadChecks）：并发等待的（report_back）按 heartbeat_seconds 给发起方投检查信件；阻塞等待的
   （ask_agent）到了 timeout 停掉 thread，结局以「超时被停」交回。
 
-委派的状态只有发起方的占用（active / released / cleared）一处；thread 是哪个会话由关联信件推出，不另存。
+委派的进行状态只有发起方的占用（active / released / cleared）一处；发起参数（thread、心跳间隔、超时）在委派记录
+（sessions.delegations）。
 """
 
 from __future__ import annotations
@@ -21,23 +22,22 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import Attachment
 from muliao.agents.api import AgentInfo, agent_in
-from muliao.platform.checks import check_due
 from muliao.platform.db import Database, utcnow
-from muliao.platform.tables import Task, TaskStatus
-from muliao.platform.tasks import Clock, TaskQueue
+from muliao.platform.tasks import Clock, TaskQueue, TaskView
 from muliao.sessions.activity import WorkState, work_states_in
-from muliao.sessions.holds import calls_in, get_in
+from muliao.sessions.delegations import DelegationRecord, records_among
+from muliao.sessions.directory import among_in
+from muliao.sessions.holds import active_holders_in, calls_in
 from muliao.sessions.mailbox import post_check_in
 from muliao.sessions.pending import AgentAnswer
 from muliao.sessions.runs import latest_runs_among
 from muliao.sessions.sources import thread_source
-from muliao.sessions.tables import HoldStatus, Mail, Session, SessionHold
-from muliao.sessions.work import deliver_in
+from muliao.sessions.tables import Session
+from muliao.sessions.work import check_due, deliver_in
 
 if TYPE_CHECKING:
     # halt 用到本模块（停止时找委派的 thread），这里只引用停止的端口类型
@@ -118,10 +118,11 @@ async def hand_back_in(
         return
     agent = await agent_in(s, child.agent_id)
     now = utcnow()
+    # 发起方已删除时记录随它删除，结局也没有收件人
+    records = await records_among(s, holders) if ending == Ending.STOPPED else {}
     for holder in holders:
-        timed_out_after = (
-            _timed_out_after(await get_in(s, owner_id, holder), now) if ending == Ending.STOPPED else None
-        )
+        # deadline 与这里的 now 都用真实时钟（delegations.record_in 与 ThreadChecks 在生产里都是 utcnow）
+        timed_out_after = records[holder].timed_out_after(now) if holder in records else None
         # 发起方已删除时 GONE；发起方还在却没有这个占用是 bug，deliver_in 报错
         delivered = await deliver_in(
             s,
@@ -149,28 +150,14 @@ async def hand_back_in(
         )
 
 
-def _timed_out_after(hold: SessionHold | None, now: datetime) -> float | None:
-    """被停止的委派是不是超时了（到了 ask_agent 的 timeout，ThreadChecks 停掉了 thread）：是就返回那个 timeout（秒）。
-    deadline 与这里的 now 都用真实时钟（holds.hold_in 与 ThreadChecks 在生产里都是 utcnow）。
-    由占用上的 deadline 推出，不另存「因何停止」：到期之后才被停止的，不论是谁停的，都已经超时。发起方已删除（占用
-    随它删除）时为 None，结局也没有收件人。"""
-    if hold is None or hold.deadline is None or hold.deadline > now:
-        return None
-    return (hold.deadline - hold.created_at).total_seconds()
-
-
 async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> dict[str, str]:
-    """委派占用者 → 做这项委派的 thread（「委派 holder → thread」的唯一推导：由以 holder 为关联 id 的信件推出，
-    一项委派只投给一个 thread），按信件先后排列。不是委派的占用（后台任务）没有这样的信件，不在结果里。"""
-    if not holders:
-        return {}
-    rows = await s.execute(
-        select(Mail.correlation, Mail.session_id).where(Mail.correlation.in_(list(holders))).order_by(Mail.id)
-    )
-    threads: dict[str, str] = {}
-    for holder, thread_id in rows.all():
-        threads.setdefault(holder, thread_id)
-    return threads
+    """委派占用者 → 做这项委派的 thread（委派的记录，sessions.delegations）。不是委派的占用（后台任务）与 thread 已被
+    删除的委派不在结果里。"""
+    return {
+        holder: record.thread_id
+        for holder, record in (await records_among(s, holders)).items()
+        if record.thread_id is not None
+    }
 
 
 async def call_threads_in(s: AsyncSession, session_id: str) -> dict[str, str]:
@@ -178,14 +165,15 @@ async def call_threads_in(s: AsyncSession, session_id: str) -> dict[str, str]:
     （有了结果之后由结果上的 TOOL_THREADS 关联）。"""
     calls = await calls_in(s, session_id)
     threads = await threads_of_holds_in(s, list(calls.values()))
-    # 不在 threads 里的：thread 已删除，关联信件随它删除
+    # 不在 threads 里的：thread 已删除
     return {call_id: threads[holder] for call_id, holder in calls.items() if holder in threads}
 
 
 class ThreadChecks:
-    """委派的运行中检查与超时（platform.checks.WorkWatcher 的一种工作），按占用上记的发起参数：
-    - 并发等待的委派（delegate_task(report_back)，占用带 check_seconds）：每过一个间隔给发起方投一封检查信件；
-    - 阻塞等待的委派（ask_agent，占用带 deadline）：到期时停掉做它的 thread（同 stop_thread），结局以「超时被停」
+    """委派的运行中检查与超时（WorkWatcher 的一种工作，sessions.work），按委派记录的发起参数（sessions.delegations），
+    只看发起方占用还 active 的：
+    - 并发等待的委派（delegate_task(report_back)，带 check_seconds）：每过一个间隔给发起方投一封检查信件；
+    - 阻塞等待的委派（ask_agent，带 deadline）：到期时停掉做它的 thread（同 stop_thread），结局以「超时被停」
       交回（hand_back_in 按 deadline 推出）。"""
 
     def __init__(self, db: Database, queue: TaskQueue, stop_session: StopSession, clock: Clock = utcnow):
@@ -203,62 +191,54 @@ class ThreadChecks:
         now = self._clock()
         expired: dict[str, str] = {}
         async with self._db.transaction() as s:
-            holds = (
-                await s.scalars(
-                    select(SessionHold)
-                    .where(
-                        SessionHold.status == HoldStatus.ACTIVE,
-                        (SessionHold.check_seconds.is_not(None)) | (SessionHold.deadline.is_not(None)),
-                    )
-                    .order_by(SessionHold.id)
-                )
-            ).all()
-            active = {hold.holder for hold in holds}
-            for gone in set(self._last_check) - active:
+            active = await active_holders_in(s)
+            records = [
+                r
+                for r in (await records_among(s, list(active))).values()
+                if r.check_seconds is not None or r.deadline is not None
+            ]
+            watched = {r.holder for r in records}
+            for gone in set(self._last_check) - watched:
                 del self._last_check[gone]
-            self._timed_out &= active
-            threads = await threads_of_holds_in(s, [hold.holder for hold in holds])
-            # (发起会话, thread) -> 到期的占用与它的间隔
-            due: dict[tuple[str, str], tuple[SessionHold, float]] = {}
-            for hold in holds:
-                child_id = threads.get(hold.holder)
+            self._timed_out &= watched
+            # (发起会话, thread) -> 到期的委派与它的间隔
+            due: dict[tuple[str, str], tuple[DelegationRecord, float]] = {}
+            for record in records:
+                child_id = record.thread_id
                 if child_id is None:
-                    # 只有委派的占用带这两个参数，它的信件随 thread 删除；thread 删除时委派已经结清
-                    raise RuntimeError(f"delegation {hold.holder} has no thread mail")
-                if hold.deadline is not None:
-                    if hold.deadline <= now and hold.holder not in self._timed_out:
-                        expired[hold.holder] = child_id
+                    # thread 删除时委派已经以「被删除」结清，占用随之释放
+                    raise RuntimeError(f"active delegation {record.holder} has a deleted thread")
+                if record.deadline is not None:
+                    if record.deadline <= now and record.holder not in self._timed_out:
+                        expired[record.holder] = child_id
                     continue
-                interval = hold.check_seconds
+                interval = record.check_seconds
                 if interval is None:
                     raise RuntimeError(
-                        f"delegation {hold.holder} has neither a deadline nor a check interval"
+                        f"delegation {record.holder} has neither a deadline nor a check interval"
                     )
-                if not check_due(self._last_check.get(hold.holder, hold.created_at), interval, now):
+                if not check_due(self._last_check.get(record.holder, record.created_at), interval, now):
                     continue
-                self._last_check[hold.holder] = now
+                self._last_check[record.holder] = now
                 # 同一个发起方对同一个 thread 的几项委派同时到期，检查一次
-                due.setdefault((hold.session_id, child_id), (hold, interval))
+                due.setdefault((record.session_id, child_id), (record, interval))
             child_ids = {child_id for _, child_id in due}
             works = await work_states_in(s, self._queue, child_ids)
-            runs = await latest_runs_among(s, child_ids)
-            children = {
-                x.id: x
-                for x in (await s.scalars(select(Session).where(Session.id.in_(list(child_ids))))).all()
-            }
+            runs = await latest_runs_among(s, self._queue, child_ids)
+            children = await among_in(s, child_ids)
             agents: dict[str, AgentInfo] = {}
-            for (_, child_id), (hold, interval) in due.items():
+            for (_, child_id), (record, interval) in due.items():
                 child = children.get(child_id)
                 if child is None:
-                    # 不变量断言：信件随会话删除，推导不会给出已删除的 thread
-                    raise RuntimeError(f"delegation {hold.holder} has mail in a missing thread {child_id}")
+                    # 不变量断言：thread 删除时记录上的引用置空，不会给出已删除的 thread
+                    raise RuntimeError(f"delegation {record.holder} points to a missing thread {child_id}")
                 if child.agent_id not in agents:
                     agents[child.agent_id] = await agent_in(s, child.agent_id)
                 text = check_text(
                     child, agents[child.agent_id], works[child_id], runs.get(child_id), now, interval
                 )
                 posted += await post_check_in(
-                    s, self._queue, hold.session_id, hold.holder, thread_source(child.id), text
+                    s, self._queue, record.session_id, record.holder, thread_source(child.id), text
                 )
         for holder, child_id in expired.items():
             log.info(
@@ -280,7 +260,12 @@ class ThreadChecks:
 
 
 def check_text(
-    child: Session, agent: AgentInfo, work: WorkState, run: Task | None, now: datetime, check_seconds: float
+    child: Session,
+    agent: AgentInfo,
+    work: WorkState,
+    run: TaskView | None,
+    now: datetime,
+    check_seconds: float,
 ) -> str:
     """还没结清的委派的检查信件，按 thread 的工作状态（activity.work_states_in）说；run 是它最近一次运行（还没有
     运行时为 None），只用来补充细节：在跑多久了、在等重试，还是还没开始处理。check_seconds：这项委派的检查间隔。"""
@@ -296,12 +281,12 @@ def check_text(
             doing = (
                 "is waiting for work it started (background jobs, other agents) or for answers it asked for"
             )
-        case WorkState.RUNNING if run is not None and run.status == TaskStatus.RUNNING:
+        case WorkState.RUNNING if run is not None and run.running:
             if run.started_at is None:
                 raise RuntimeError(f"running run {run.id} has no start time")
             minutes, seconds = divmod(int((now - run.started_at).total_seconds()), 60)
             return f"{who} is still working on your task ({minutes}m{seconds:02d}s so far).\n{keep}"
-        case WorkState.RUNNING if run is not None and run.status == TaskStatus.PENDING and run.attempts:
+        case WorkState.RUNNING if run is not None and run.pending and run.attempts:
             doing = f"is waiting to run again (attempt {run.attempts} so far)"
         case WorkState.RUNNING | WorkState.IDLE:
             # idle 也会出现：委派信件到了，投信或运行结束（含最终失败）时的唤醒没做成（事务失败、重启），要等定期对账

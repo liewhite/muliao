@@ -6,7 +6,6 @@ ask_agent 投给私有 thread（用户只读），发问方停在这次调用上
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentInfo
@@ -14,6 +13,8 @@ from muliao.errors import InvalidInput
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.delegation import delegation_holder, thread_name, threads_of_holds_in
+from muliao.sessions.delegations import record_in
+from muliao.sessions.directory import thread_in, threads_named_in, threads_of
 from muliao.sessions.history import latest_answers_among
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import hold_in
@@ -34,12 +35,6 @@ def validate_thread(name: str) -> str:
     if not name or len(name) > THREAD_MAX:
         raise InvalidInput(f"thread name must be 1-{THREAD_MAX} characters")
     return name
-
-
-async def threads_of(s: AsyncSession, parent_id: str) -> list[Session]:
-    """父会话开出的 thread（含私有的），按创建顺序。"""
-    query = select(Session).where(Session.parent_session_id == parent_id).order_by(Session.created_at)
-    return list((await s.scalars(query)).all())
 
 
 @dataclass(frozen=True)
@@ -70,22 +65,11 @@ class Threads:
 
     async def find(self, s: AsyncSession, parent_id: str, agent_id: str, thread: str) -> Session | None:
         """thread 由（父会话, agent, 名字）确定：给不同的 agent 开同名 thread 是两个 thread。"""
-        return await s.scalar(
-            select(Session).where(
-                Session.parent_session_id == parent_id,
-                Session.agent_id == agent_id,
-                Session.thread == validate_thread(thread),
-            )
-        )
+        return await thread_in(s, parent_id, agent_id, validate_thread(thread))
 
     async def named_in(self, s: AsyncSession, parent_id: str, thread: str) -> list[Session]:
         """父会话里叫这个名字的 thread（每个 agent 至多一个），按创建顺序。"""
-        query = (
-            select(Session)
-            .where(Session.parent_session_id == parent_id, Session.thread == validate_thread(thread))
-            .order_by(Session.created_at)
-        )
-        return list((await s.scalars(query)).all())
+        return await threads_named_in(s, parent_id, validate_thread(thread))
 
     async def open(
         self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, kind: SessionKind
@@ -145,18 +129,18 @@ class Threads:
         if await get_hold_in(s, owner_id, holder) is not None:
             existing = (await threads_of_holds_in(s, [holder])).get(holder)
             if existing is None:
-                raise RuntimeError(f"delegation {holder} is held but its thread mail is missing")
+                raise RuntimeError(f"delegation {holder} is held but its thread is gone")
             child = await s.get(Session, existing)
             if child is None:
                 raise RuntimeError(f"delegation {holder} points to a missing thread {existing}")
             return child
         child = await self.open(s, parent_id=owner_id, agent=agent, thread=thread, kind=kind)
-        await hold_in(
+        await hold_in(s, owner_id, holder, call_id=call_id, awaited=awaited)
+        await record_in(
             s,
-            owner_id,
-            holder,
-            call_id=call_id,
-            awaited=awaited,
+            holder=holder,
+            session_id=owner_id,
+            thread_id=child.id,
             check_seconds=check_seconds,
             timeout_seconds=timeout_seconds,
         )
@@ -189,7 +173,7 @@ class Threads:
         children = await threads_of(s, parent_id)
         ids = [c.id for c in children]
         works = await work_states_in(s, self._queue, ids)
-        runs = await latest_runs_among(s, ids)
+        runs = await latest_runs_among(s, self._queue, ids)
         answers = await latest_answers_among(s, ids)
         return [
             ThreadView(

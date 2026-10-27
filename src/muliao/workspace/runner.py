@@ -32,13 +32,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import Vault
 from muliao.errors import Conflict, NotFound
-from muliao.platform.checks import check_due
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.output import tail, wait_exit_code
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, spawn_bash
 from muliao.platform.tasks import Clock, Commit, no_commit
-from muliao.sessions.api import SessionWork, hold_registered_in, job_id_of, job_source, session_in
+from muliao.sessions.api import SessionWork, check_due, hold_registered_in, job_id_of, job_source, session_in
 from muliao.sessions.events import SessionStopped, WorkCheckIn, WorkEnded
 from muliao.workspace.process import Recorder
 from muliao.workspace.tables import Job, JobStatus

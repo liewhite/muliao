@@ -17,14 +17,13 @@ import logging
 from collections.abc import Sequence
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart, UserContent
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import AgentRuntime, Finished, Paused, Toolbox
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
-from muliao.platform.tasks import Commit, TaskQueue, no_commit
+from muliao.platform.tasks import Commit, TaskQueue, TaskView, no_commit
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
@@ -33,12 +32,19 @@ from muliao.sessions.deferred import DEFERRED_TOOLS, questions_in, replayable
 from muliao.sessions.events import RunFailed
 from muliao.sessions.finish import RunEnd, RunFinisher
 from muliao.sessions.halt import Halted, SessionHalt
-from muliao.sessions.history import interrupted_results, latest_compaction, load_context
+from muliao.sessions.history import (
+    interrupted_results,
+    last_message_id_in,
+    last_saved_by_in,
+    latest_compaction,
+    load_context,
+    saved_by_in,
+)
 from muliao.sessions.holds import called_in
 from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.loading import load_session
-from muliao.sessions.mailbox import queued_in, wake_in
+from muliao.sessions.mailbox import consumed_by_in, queued_in, wake_in
 from muliao.sessions.origins import OriginNotes
 from muliao.sessions.pending import (
     Delegated,
@@ -53,7 +59,7 @@ from muliao.sessions.runs import RunPayload, hand_over_in
 from muliao.sessions.settlement import settle_failure_in
 from muliao.sessions.steps import CompactionDue, RunState, Steps
 from muliao.sessions.stopping import StoppableRuns, Stopped
-from muliao.sessions.tables import Mail, Message
+from muliao.sessions.tables import Mail
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +129,7 @@ class Consumer:
     def __init__(
         self,
         db: Database,
+        queue: TaskQueue,
         runtime: AgentRuntime,
         toolbox: Toolbox,
         live: LiveRuns,
@@ -135,6 +142,7 @@ class Consumer:
         notes: OriginNotes,
     ):
         self._db = db
+        self._queue = queue
         self._runtime = runtime
         self._toolbox = toolbox
         self._live = live
@@ -172,28 +180,11 @@ class Consumer:
             if compacted is not None:
                 context = await load_context(s, session.id)
             queued = await queued_in(s, session.id)
-            # 都带上会话条件：messages.task_id 没有索引，按会话的索引只扫这个会话的行
-            earlier = list(
-                (
-                    await s.scalars(
-                        select(Mail).where(Mail.session_id == session_id, Mail.consumed_by == run_id)
-                    )
-                ).all()
-            )
+            earlier = await consumed_by_in(s, session_id, run_id)
             delegated = await called_in(s, session.id)
             adopted = await _adopted(s, session.id, run_id) if resumable(context.messages, delegated) else []
-            saved_rows = list(
-                (
-                    await s.scalars(
-                        select(Message)
-                        .where(Message.session_id == session_id, Message.task_id == run_id)
-                        .order_by(Message.id)
-                    )
-                ).all()
-            )
-            last_message = await s.scalar(
-                select(func.max(Message.id)).where(Message.session_id == session_id)
-            )
+            saved_rows = await saved_by_in(s, session_id, run_id)
+            last_message = await last_message_id_in(s, session_id)
         history = context.messages
         state = RunState(
             run_id=run_id,
@@ -297,7 +288,7 @@ class Consumer:
             # 开头取走的信件都交给了这次运行（mailbox.handed_to），哪怕它在第一次保存之前就最终失败：失败的结清据此
             # 了结它们，也不会为它们再唤醒一次运行
             async with self._db.transaction() as s:
-                await hand_over_in(s, state.run_id, queued[-1].id)
+                await hand_over_in(s, self._queue, state.run_id, queued[-1].id)
         content = await self._content.of(state.agent.id, [m for m in queued if not is_on_time(m, pending)])
         # 开头的内容由 pydantic-ai 放进第一次请求的用户消息（下标从 0 起），事件在那次请求保存前标上
         state.opening = content
@@ -322,16 +313,10 @@ async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
     """从历史中途续跑、而停下的那部分是另一次运行保存的（它失败了，之后有新信件唤醒了这次运行）：这次运行接着做完
     它的工作，也接管它处理过的信件——推送由这次运行做。之后再重试那次运行时什么都不做（Consumer._run 的「没有要
     交给模型的」）。"""
-    tail_run = await s.scalar(
-        select(Message.task_id).where(Message.session_id == session_id).order_by(Message.id.desc()).limit(1)
-    )
+    tail_run = await last_saved_by_in(s, session_id)
     if tail_run is None or tail_run == run_id:
         return []
-    return list(
-        (
-            await s.scalars(select(Mail).where(Mail.session_id == session_id, Mail.consumed_by == tail_run))
-        ).all()
-    )
+    return await consumed_by_in(s, session_id, tail_run)
 
 
 class RunHandler:
@@ -348,7 +333,7 @@ class RunHandler:
     async def execute(self, task: Task) -> Commit:
         if task.session_id is None:
             raise RuntimeError(f"run {task.id} has no session")
-        RunPayload.of(task)  # 在第一现场校验存下的 payload，不等到唤醒或失败收尾时才读到它
+        RunPayload.of(TaskView.of(task))  # 在第一现场校验存下的 payload，不等到唤醒或失败收尾时才读到它
         return await self._consumer.run(task.id, task.session_id)
 
     async def failed_in(self, s: AsyncSession, task: Task) -> None:
@@ -363,7 +348,7 @@ class RunHandler:
         if task.session_id is None or task.error is None:
             raise RuntimeError(f"run {task.id} has no session or no recorded error")
         child, agent = await load_session(s, task.session_id)
-        await settle_failure_in(s, self._queue, child, task)
+        await settle_failure_in(s, self._queue, child, TaskView.of(task))
         await wake_in(s, self._queue, child)
         self._messaging.publish_in(
             s,

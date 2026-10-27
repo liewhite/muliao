@@ -9,17 +9,15 @@
 from collections.abc import Collection, Mapping
 from enum import StrEnum
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tasks import TaskQueue
+from muliao.sessions.directory import keyed_among, of_agent_in, owned_threads_in
 from muliao.sessions.holds import with_active_among
 from muliao.sessions.info import keyed_sessions_among
-from muliao.sessions.kinds import TOP_LEVEL
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
 from muliao.sessions.mailbox import open_asks_among
 from muliao.sessions.origins import Origin
-from muliao.sessions.ownership import owned_threads_in
 from muliao.sessions.tables import Session
 
 
@@ -42,14 +40,7 @@ async def work_states_in(
     的运行、还没投递的来信；waiting 有 active 占用（后台任务、委派）或还能回答的提问；否则 idle。"""
     lanes: dict[str, tuple[str, ...]] = {x: (session_lane(x), receive_lane(x)) for x in session_ids}
     # 按发送方定位（inbound.SessionKey）投给它、还没投递的来信在按 key 命名的 lane 上
-    keyed = await s.execute(
-        select(Session.id, Session.origin, Session.origin_ref, Session.agent_id).where(
-            Session.id.in_(session_ids),
-            Session.origin_ref.is_not(None),
-            Session.kind.in_(TOP_LEVEL),
-        )
-    )
-    for x, origin, origin_ref, agent_id in keyed:
+    for x, (origin, origin_ref, agent_id) in (await keyed_among(s, session_ids)).items():
         lanes[x] = (*lanes[x], keyed_receive_lane(origin, origin_ref, agent_id))
     busy = await queue.busy_lanes(s, [lane for pair in lanes.values() for lane in pair])
     held = await with_active_among(s, session_ids)
@@ -76,7 +67,7 @@ async def blocking_deletion_in(
 
 async def sessions_blocking_agent_deletion_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> list[str]:
     """删除这个 agent 时会被删除、此刻忙着的会话（它的会话与它们的私有 thread）。"""
-    roots = list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())
+    roots = await of_agent_in(s, agent_id)
     return await blocking_deletion_in(s, queue, await owned_threads_in(s, roots))
 
 

@@ -6,22 +6,22 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentArchived
 from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.tables import Task, TaskStatus
-from muliao.platform.tasks import Commit, TaskQueue, no_commit
+from muliao.platform.tasks import Commit, TaskQueue, TaskView, no_commit
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor
 from muliao.sessions.delegation import call_threads_in
 from muliao.sessions.deletion import delete_sessions
+from muliao.sessions.directory import Listing, listed_ids_in, listed_page_in, threads_of
 from muliao.sessions.events import Receive, SessionRead, StopThread
 from muliao.sessions.halt import Halted, StopSession
+from muliao.sessions.history import compactions_in, transcript_rows_in
 from muliao.sessions.inbound import (
     Received,
     UserMessage,
@@ -31,13 +31,12 @@ from muliao.sessions.inbound import (
     receive_lane_of,
     target_in,
 )
-from muliao.sessions.kinds import LISTED, policy_of
+from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveRun, LiveRuns, RunItemEvent
 from muliao.sessions.mailbox import open_asks_in, visible_in
 from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_run
-from muliao.sessions.tables import Compaction, Mail, Message, Session
-from muliao.sessions.threads import threads_of
+from muliao.sessions.tables import Compaction, Mail, Session
 from muliao.sessions.transcript import Item, annotate_asks, annotate_pending_threads, checked_times, to_items
 
 log = logging.getLogger(__name__)
@@ -55,7 +54,7 @@ class SessionView:
     # 显示在历史之后的信件：排队中的，以及最近一次停止丢弃的
     mail: list[Mail]
     # 最近一次运行，还没正常结束时
-    run: Task | None
+    run: TaskView | None
     threads: list[Session]
     live: LiveRun | None
     # 工作状态（与会话列表同一条规则）：不是 idle 就显示停止。只剩挂起的提问时停止不清掉它（提问仍可回答，sessions.halt）
@@ -110,22 +109,10 @@ class SessionService:
         # 不该挡住别的事务
         async with self._db.transaction() as s:
             session = await self._get(s, session_id)
-            rows = (
-                await s.execute(
-                    select(Message.id, Message.payload, Message.created_at)
-                    .where(Message.session_id == session_id)
-                    .order_by(Message.id)
-                )
-            ).all()
+            rows = await transcript_rows_in(s, session_id)
             asks = await open_asks_in(s, session_id)
-            compactions = list(
-                (
-                    await s.scalars(
-                        select(Compaction).where(Compaction.session_id == session_id).order_by(Compaction.id)
-                    )
-                ).all()
-            )
-            latest = await latest_run(s, session_id)
+            compactions = await compactions_in(s, session_id)
+            latest = await latest_run(s, self._queue, session_id)
             mail = await visible_in(s, session_id)
             threads = await threads_of(s, session_id)
             call_threads = await call_threads_in(s, session_id)
@@ -156,7 +143,7 @@ class SessionService:
             items=items,
             compactions=compactions,
             mail=mail,
-            run=None if latest is None or latest.status == TaskStatus.DONE else latest,
+            run=None if latest is None or latest.done else latest,
             threads=threads,
             live=None if live is None else _with_pending_threads(live, call_threads),
             state=state,
@@ -203,25 +190,13 @@ class SessionService:
         代价是每个会话读一条最后的消息（挂起的提问）。origin_ref 是发起方在它那个 origin 里的身份（触发器的 id），
         用来列出某个发起方开过的会话。
         """
-        conditions = [Session.kind.in_(LISTED)]
-        if agent_id is not None:
-            conditions.append(Session.agent_id == agent_id)
-        if origins is not None:
-            conditions.append(Session.origin.in_(list(origins)))
-        if origin_ref is not None:
-            conditions.append(Session.origin_ref == origin_ref)
+        listing = Listing(agent_id=agent_id, origins=origins, origin_ref=origin_ref)
         async with self._db.transaction() as s:
-            ids = list((await s.scalars(select(Session.id).where(*conditions))).all())
+            ids = await listed_ids_in(s, listing)
             states = await work_states_in(s, self._queue, ids)
             active = [x for x in ids if states[x] != WorkState.IDLE]
-            page = await s.scalars(
-                select(Session)
-                .where(*conditions)
-                .order_by(Session.id.in_(active).desc(), Session.updated_at.desc())
-                .limit(limit)
-                .offset(offset)
-            )
-            return [ListedSession(x, states[x.id]) for x in page.all()]
+            page = await listed_page_in(s, listing, active, limit=limit, offset=offset)
+            return [ListedSession(x, states[x.id]) for x in page]
 
     async def mark_read(self, session_id: str) -> None:
         """用户看过了会话：发布 SessionRead（会话的未读就是指向它的未读通知，通知领域据此把它们标为已读；会话不存在时

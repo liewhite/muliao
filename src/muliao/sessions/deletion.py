@@ -3,7 +3,6 @@
 import logging
 
 import anyio
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.events import AgentDeleting
@@ -12,10 +11,10 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.activity import blocking_deletion_in, sessions_blocking_agent_deletion_in
+from muliao.sessions.directory import of_agent_in, owned_threads_in
 from muliao.sessions.events import AgentSessionsCleared, SessionDeleted
 from muliao.sessions.halt import StopSession
 from muliao.sessions.lanes import agent_deleting_lane
-from muliao.sessions.ownership import owned_threads_in
 from muliao.sessions.settlement import settle_deleted_in
 from muliao.sessions.tables import Session
 
@@ -92,9 +91,7 @@ class AgentSessionsCleanup:
         await self._stop_and_wait_idle(event.agent_id)
 
         async def commit(s: AsyncSession) -> None:
-            sessions = list(
-                (await s.scalars(select(Session).where(Session.agent_id == event.agent_id))).all()
-            )
+            sessions = await of_agent_in(s, event.agent_id)
             try:
                 await delete_sessions(s, self._queue, self._messaging, sessions)
             except Conflict as e:

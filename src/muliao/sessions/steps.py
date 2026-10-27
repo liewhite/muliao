@@ -15,11 +15,10 @@ from muliao.agent_runtime.api import StepHooks, redact_messages, with_notices
 from muliao.agents.api import AgentInfo
 from muliao.platform.db import Database, utcnow
 from muliao.platform.text_edit import truncate
-from muliao.sessions.codec import dump_message
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import Content, ContentBuilder, append_content, mark_events
 from muliao.sessions.conventions import attach_run_context
-from muliao.sessions.history import marked_stopped, stopped_results
+from muliao.sessions.history import append_in, marked_stopped, stopped_results
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.mailbox import consume_in, queued_in
 from muliao.sessions.tables import Mail, Message, Session
@@ -190,11 +189,7 @@ class Steps:
         async with self._db.transaction() as s:
             if await s.get(Session, state.session.id) is None:
                 raise RuntimeError(f"session {state.session.id} vanished during its run")
-            rows = [
-                Message(session_id=state.session.id, task_id=state.run_id, payload=dump_message(m))
-                for m in stored
-            ]
-            s.add_all(rows)
+            rows = await append_in(s, state.session.id, state.run_id, stored)
             await consume_in(s, [m.id for m in consumed], state.run_id)
         log.info(
             "step saved",

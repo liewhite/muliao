@@ -7,7 +7,6 @@ from pydantic_ai import FunctionToolset, RunContext, ToolReturn
 from muliao.agent_runtime.api import defer_call
 from muliao.agents.api import AgentService
 from muliao.errors import InvalidInput, NotFound
-from muliao.platform.checks import DEFAULT_CHECK_SECONDS
 from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -17,6 +16,7 @@ from muliao.sessions.deferred import ASK_AGENT
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.kinds import DELEGATE_TASK, SessionKind, policy_of
 from muliao.sessions.threads import Threads, validate_thread
+from muliao.sessions.work import DEFAULT_CHECK_SECONDS
 
 _ANSWER_PREVIEW = 500
 

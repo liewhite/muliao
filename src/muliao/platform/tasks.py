@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -69,6 +69,62 @@ class Retries:
         """任一策略允许的最多尝试次数（启动恢复用，Worker.recover）。取最大值：正在按 outage 策略重试的任务不能因为
         一次重启就被记为最终失败。"""
         return max(self.transient.max_attempts, self.outage.max_attempts)
+
+
+@dataclass(frozen=True)
+class TaskView:
+    """一个任务的只读快照：别的领域经 TaskQueue 的查询看自己 lane 上任务的状态，不查任务表、不按 TaskStatus 分支
+    （状态用下面几个判断读）。"""
+
+    id: int
+    kind: str
+    lane: str
+    agent_id: str | None
+    session_id: str | None
+    payload: Mapping[str, Any]
+    status: TaskStatus
+    attempts: int
+    error: str | None
+    not_before: datetime
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+    @classmethod
+    def of(cls, task: Task) -> TaskView:
+        return cls(
+            id=task.id,
+            kind=task.kind,
+            lane=task.lane,
+            agent_id=task.agent_id,
+            session_id=task.session_id,
+            payload=dict(task.payload),
+            status=task.status,
+            attempts=task.attempts,
+            error=task.error,
+            not_before=task.not_before,
+            created_at=task.created_at,
+            started_at=task.started_at,
+            finished_at=task.finished_at,
+        )
+
+    @property
+    def pending(self) -> bool:
+        """排着（含等重试）。"""
+        return self.status == TaskStatus.PENDING
+
+    @property
+    def running(self) -> bool:
+        return self.status == TaskStatus.RUNNING
+
+    @property
+    def done(self) -> bool:
+        return self.status == TaskStatus.DONE
+
+    @property
+    def failed(self) -> bool:
+        """最终失败（不再重试）。"""
+        return self.status == TaskStatus.FAILED
 
 
 async def no_commit(_s: AsyncSession) -> None:
@@ -319,6 +375,44 @@ class TaskQueue:
             query = query.where(Task.status == status)
         async with self._db.transaction() as s:
             return list((await s.scalars(query)).all())
+
+    # ---- 别的领域看自己 lane 上的任务（只读，在调用方的事务里；返回 TaskView） ----
+
+    async def task_in(self, s: AsyncSession, task_id: int) -> TaskView | None:
+        task = await s.get(Task, task_id)
+        return None if task is None else TaskView.of(task)
+
+    async def latest_in(self, s: AsyncSession, lanes: Collection[str], kind: str) -> dict[str, TaskView]:
+        """这些 lane 上各自最新的一个这种 task（一次查询）；没有的 lane 不在结果里。"""
+        latest = (
+            select(func.max(Task.id)).where(Task.lane.in_(list(lanes)), Task.kind == kind).group_by(Task.lane)
+        )
+        rows = (await s.scalars(select(Task).where(Task.id.in_(latest)))).all()
+        return {t.lane: TaskView.of(t) for t in rows}
+
+    async def has_unfinished_in(
+        self,
+        s: AsyncSession,
+        lane: str,
+        kind: str,
+        *,
+        pending_only: bool = False,
+        excluding: int | None = None,
+    ) -> bool:
+        """这个 lane 上有没有排着或进行中的这种 task；pending_only 只看排着的，excluding 不算这一个（调用方正在收尾
+        的那个，队列稍后才把它记为完成）。"""
+        statuses = [TaskStatus.PENDING] if pending_only else [TaskStatus.PENDING, TaskStatus.RUNNING]
+        query = select(Task.id).where(Task.lane == lane, Task.kind == kind, Task.status.in_(statuses))
+        if excluding is not None:
+            query = query.where(Task.id != excluding)
+        return bool(await s.scalar(select(query.exists())))
+
+    async def update_payload_in(self, s: AsyncSession, task_id: int, payload: Mapping[str, Any]) -> None:
+        """在调用方事务里改写一个 task 的 payload（它的处理器记下执行中途的进展，如运行取走的信件）。"""
+        task = await s.get(Task, task_id)
+        if task is None:
+            raise RuntimeError(f"task {task_id} vanished while updating its payload")
+        task.payload = dict(payload)
 
     async def lane_busy(self, s: AsyncSession, lane: str) -> bool:
         return bool(await self.busy_lanes(s, [lane]))

@@ -50,9 +50,9 @@ data/
 
 ```
 muliao/
-  platform/        数据库、任务队列（actor 调度）、事件与定向命令、实时展示总线、运行中检查的节奏、shell、id
+  platform/        数据库、任务队列（actor 调度；别的领域经它的只读查询 TaskView 看自己 lane 上的任务）、事件与定向命令、实时展示总线、运行中检查的节拍、shell、id
   agent_runtime/   会话运行的端口：模型注册表、指令组装、工具组合（toolbox.py）、pydantic-ai 的逐步驱动、它自己写下的消息约定（工具交回的文件与图片）、MCP 连接
-  sessions/        会话：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、压缩、停止、删除、种类、会话的消息约定
+  sessions/        会话（子域：会话、运行、交互、外部工作、委派、展示，见下表）：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、压缩、停止、删除、种类、会话的消息约定
   workspace/       工作区：文件工具（read/write/edit_file、share_file）与 edit_file 的编辑规则、run_shell（前台与后台）、后台任务（jobs 表）
   agents/          agent 目录、条目（skill、MCP、secret；secret 的加解密与 ${vault:KEY} 引用解析在 agents/secrets.py）与记忆及其版本、自我改进工具、工具权限与角色
   usage/           模型用量：每次运行记一条，按时间范围汇总
@@ -68,7 +68,7 @@ muliao/
 
 每个领域独占自己的表（`<domain>/tables.py`）；领域之间的引用只是不透明的 id，没有跨领域外键。
 
-**子域**：一个领域内部可以再分子域（同一事务协作、同一个统一语言，但各自独占自己的表或列）。子域之间只经对方的 `*_in` 接口（在调用方事务里的查询与写入，领域内部用，不进 `api.py`），不碰对方的表；跨子域的流程由编排模块调各子域的接口。目前分了子域的是 agents：
+**子域**：一个领域内部可以再分子域（同一事务协作、同一个统一语言，但各自独占自己的表或列）。子域之间只经对方的 `*_in` 接口（在调用方事务里的查询与写入，领域内部用，不进 `api.py`），不碰对方的表；跨子域的流程由编排模块调各子域的接口。目前分了子域的是 agents 与 sessions。agents：
 
 | 子域 | 表 | 模块 | 给别的子域的接口 |
 |---|---|---|---|
@@ -79,6 +79,19 @@ muliao/
 | 版本 | `revisions` | `revisions.py`、`kinds.py`（共享内核：每个子域写自己对象的版本） | `record_in`、`history_in`、`revision_doc_in` |
 
 能用、能改、预览、谁持有某角色（含隐含的 base）只在分发子域算；转移 owner 只有 `ownership.transfer_in` 一个实现（界面 / 工具的转移与删 agent 时转给平台共用）；删除 agent 的最后一步（`AgentLifecycle.on_sessions_cleared`）只依次调用条目、记忆、分发的记版本接口与目录的 `remove_in`，各子域名下的行随 agent 的行级联删除（同一领域内的外键）。
+
+sessions（表类只在它的子域模块里出现在查询与构造中；领域内传递行对象、按 id 取会话不算，`tests/test_boundaries.py` 的 `SESSIONS_TABLES` 核对）：
+
+| 子域 | 表 | 模块 | 给别的子域的接口 |
+|---|---|---|---|
+| 会话 | `sessions` | `directory.py`（表的唯一读写处：新建一行、按属性查会话都在这里）、`kinds.py`、`origins.py`、`inbound.py`（来信与新建会话的规则）、`info.py`（读模型）、`deletion.py`、`service.py`（门面） | `add_in`、`among_in`、`of_agent_in`、`keyed_rows_among` / `keyed_among`、`owned_threads_in`、`threads_of` / `thread_in` / `threads_named_in`、`listed_ids_in` / `listed_page_in` |
+| 运行 | `messages`、`compactions`（历史）、`mail`（信箱）；运行本身是平台任务表里的 run task，只经 `TaskQueue` 的只读查询（`TaskView`）看 | `history.py`、`mailbox.py`、`runs.py`（运行与它的 payload）、`consumer.py`、`steps.py`、`finish.py`、`compaction.py`、`halt.py`、`settlement.py`、`conventions.py`、`reconcile.py`、`live.py` | 历史：`append_in`、`mark_last_stopped_in`、`saved_by_in`、`last_message_id_in`、`transcript_rows_in`、`add_compaction_in`、`load_context` 等；信箱：`post_in`、`queued_in`、`consume_in`、`discard_in`、`unsettled_in` / `mark_settled`、`wake_in` 等；运行：`latest_run` / `latest_runs_among`、`run_unfinished_in`、`hand_over_in`、`handed_to` |
+| 交互 | —（由历史与信箱推导） | `pending.py`、`deferred.py`、`ask_user.py`、`questions.py`、`answers.py` | `pending_in`、`open_asks_of`、`waiting` |
+| 外部工作 | `session_holds` | `holds.py`、`work.py`（`SessionWork`、交回结局 `deliver_in`、运行中检查的间隔规则 `DEFAULT_CHECK_SECONDS` / `check_due`）、`activity.py`（工作状态） | `hold_in`、`get_in`、`release`、`clear_in`、`active_holders_in`、`calls_in` / `called_in`、`deliver_in` |
+| 委派 | `delegations`（每项委派的 thread、心跳间隔、超时） | `delegations.py`（记录）、`delegation.py`（交回、检查与超时）、`threads.py`（发出）、`delegation_tools.py` | `record_in`、`records_among`、`threads_of_holds_in`、`hand_back_in` |
+| 展示 | — | `transcript.py`、`live.py`、`sources.py`（结构化的事件来源） | `to_items`、`annotate_*`、`parse_source` |
+
+会话领域的编排（停止 `halt.py`、删除 `deletion.py`、消费者）只调各子域的接口；会话领域不 import 任务表的 `TaskStatus`，`Task` 只出现在任务处理器的签名里（`tests/test_boundaries.py`）。
 
 `agent_runtime` 不是业务领域，是会话运行的端口：把 pydantic-ai 的 loop 收在「从这段历史推进一步，告诉我发生了什么」后面（`AgentRuntime.run_steps` 与 `StepHooks`），会话领域只依赖这个端口与消息约定；具体的工具不在这里（文件与 shell 在 `workspace`，web 工具在 `web`，各领域的 `tools.py`），它只按规则把组合根交来的工具集组合进运行（`Toolbox`）；以后自己写 loop 时改动限于这个端口的实现。端口不交出 pydantic-ai 的运行与挂起类型：运行的结局是 `Finished`（回答与新增消息）或 `Paused`（挂起的调用），挂起调用的结果以 `{调用 id: 结果}` 交回，工具用 `defer_call()` 挂起（`agent_runtime/outcome.py`）；消息（`ModelMessage`、`ToolCallPart` 等）是会话历史的存储形态，不在此列。`tests/test_boundaries.py` 检查 agent_runtime 之外不 import 这些运行类型。工具一律通过领域接口做事，不碰表。
 
@@ -259,7 +272,7 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
   - `memory`：`memory_edit` 改自己的记忆，`memory_edit_public` 改全局记忆（语义同 `edit_skill`：`old_text` 恰好出现一次时替换为 `new_text`，为空时追加；管理类工具，base 没有；作者记为改的 agent），超长时报错（`InvalidInput`）告诉模型至少要腾出多少字。工具的领域错误一律先 `ModelRetry` 交还模型修正；同一工具连续失败用完重试预算（`TOOL_MAX_RETRIES`）后改为 `ToolFailed`，模型看到失败结果、换做法或跳过这步，不终止整轮运行（`DomainErrorsAsRetry`）。所以工具拒绝调用一律抛 `DomainError`（参数矛盾 `InvalidInput`、对象不存在 `NotFound` 等），不自己抛 `ModelRetry`，否则绕过这层、连续 3 次就让整轮失败（tests/test_boundaries.py 静态检查）；MCP server 拒绝调用（`MCPToolset` 报的 `ModelRetry`）也在 `mcp._SecretSafe` 换成 `InvalidInput`，MCP 工具的重试预算同为 `TOOL_MAX_RETRIES`；只有 pydantic 参数校验失败仍按重试上限终止。
   - `skills`：`read_skill`（任何存在的 skill 都读得到：没分给它的照常返回并注明不在它的 skill 索引里——软隔离；结果里给出只读的生成目录）/ `write_skill` / `edit_skill`（两者都可带 `attachments_dir` 整体替换附件，见第 1 节「skill 的生成目录」；edit 改正文的一部分：替换恰好出现一次的片段，或追加；这条规则只在 `platform.text_edit.edit` 写一次，skill 正文与 `edit_file` 共用；可选 `description` 同时或单独改描述，一次提交；什么都不改是错误，规则在 `SkillStore.edit`）/ `delete_skill`。新建的归调用者；改、删已有的按规则 2（owner 或 admin）。
   - `agents`：`list_agents`（能委派的 agent，按分组列 name、description）/ `get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己）/ `delete_agent`（不能删除自己），`create_role` / `update_role`（只改给出的字段；allow / deny 整体替换）/ `delete_role`，`transfer_item`（把 skill / MCP / secret 转给某个 agent 或平台，`ItemCatalog.transfer_item`；kind 参数只接受这三种）。agent 只有名称、描述、模型、思考档位、分发规则（`roles` / `allow` / `deny`）；`get_agent` 给出它最终能用的工具与条目（`kind:name`）、全部角色（含固定规则）与全部内置工具；新建的 agent 记忆为空，角色写在描述里（它出现在 agent 自己的运行上下文里，也是委派时选人的依据）。
-  - `delegation`：`delegate_task` / `ask_agent` / `list_threads` / `stop_thread`（停止一个 thread：结束它正在进行的运行、清空它的信箱）（按名称指定目标 agent、按 agent + thread 名指定子会话，见第 7 节）。阻塞 / 非阻塞的参数语义（#217）：阻塞（调用不返回、一直等：`ask_agent`、`run_shell` 前台）必填 `timeout`，无上限、模型自己估；非阻塞（发起后与 agent 并发：`delegate_task(report_back)`、`run_shell(background)`）没有 timeout，有 `heartbeat_seconds`（默认 30，`platform.checks.DEFAULT_CHECK_SECONDS` 一处）；参数用错场合（后台传 timeout、前台或不 report_back 时传 heartbeat）以告诉正确用法的 `InvalidInput` 交还模型。`ask_user` 等的是用户，不算任务，没有 timeout。 目标可以是自己（#183）：一次性、可并行的杂活（审查、抓取总结、拆开并行的几部分）就 `ask_agent` / `delegate_task` 给自己开新 thread——它是自己的一个新会话，带着自己的记忆、skill 与工具，上下文不进发起的会话。以前的临时 agent（`run_temp_agent`）因此删除：它以发起方身份运行、回答交回发起方，本来就等于给自己开一个新会话，却要另维护一套工具组合、工作目录与无会话的运行路径。
+  - `delegation`：`delegate_task` / `ask_agent` / `list_threads` / `stop_thread`（停止一个 thread：结束它正在进行的运行、清空它的信箱）（按名称指定目标 agent、按 agent + thread 名指定子会话，见第 7 节）。阻塞 / 非阻塞的参数语义（#217）：阻塞（调用不返回、一直等：`ask_agent`、`run_shell` 前台）必填 `timeout`，无上限、模型自己估；非阻塞（发起后与 agent 并发：`delegate_task(report_back)`、`run_shell(background)`）没有 timeout，有 `heartbeat_seconds`（默认 30，`sessions.work.DEFAULT_CHECK_SECONDS` 一处）；参数用错场合（后台传 timeout、前台或不 report_back 时传 heartbeat）以告诉正确用法的 `InvalidInput` 交还模型。`ask_user` 等的是用户，不算任务，没有 timeout。 目标可以是自己（#183）：一次性、可并行的杂活（审查、抓取总结、拆开并行的几部分）就 `ask_agent` / `delegate_task` 给自己开新 thread——它是自己的一个新会话，带着自己的记忆、skill 与工具，上下文不进发起的会话。以前的临时 agent（`run_temp_agent`）因此删除：它以发起方身份运行、回答交回发起方，本来就等于给自己开一个新会话，却要另维护一套工具组合、工作目录与无会话的运行路径。
   - `notify`：`notify_user`（显式 Web Push）。
   - `mcp_admin`：`mcp_list`（它能用的 server，含停用的，标明是否是自己的）/ `mcp_add`（写入前按添加者能用的 secret 实际连接并列出工具，连接失败直接把错误还给 agent；新建的归调用者）/ `mcp_remove`（规则 2）。启停只在界面上。改动从下一次运行起生效。
   - `vault`：`vault_list`（它能用的 key，标明是否是自己的）/ `vault_set`（新建归调用者，改已有的按规则 2）/ `vault_delete`。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`，参数校验失败时交还模型的错误（`RetryPromptPart` 里 pydantic 错误的 `input`，缺字段时就是整个参数）同样替换；重试用完时运行失败的 `UnexpectedModelBehavior` 去掉挂着校验错误的异常链再抛出（`redaction.tool_input_kept_out_of_failures`），日志的 traceback 里也没有参数原文（`agent_runtime/redaction.py`；要脱敏的工具参数由定义这些工具的 agents 声明为 `agents.api.SECRET_TOOL_ARGS`（`agents/secret_tools.py`），tests/test_tool_schemas.py 断言它们在注册的工具 schema 里存在）。
@@ -301,7 +314,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 | `delegate_task(..., report_back=true)` | 立即继续，不等 | 同上 | 不直接推送，作为事件交回父会话（第 8 节） |
 | `ask_agent(agent, message, thread)` | 停在这次调用上等回信（见「挂起的调用」） | 私有 thread：不进会话页「对话」，用户只读 | 作为这次调用的结果交回父 agent |
 
-**界面上 thread 显示在开出或续写它的那次调用处**：两个工具都把 thread 的会话 id 挂在工具结果的 metadata 上（`sessions.conventions.TOOL_THREADS`，与 `TOOL_ATTACHMENTS` 同一约定，不发给模型、随消息持久化、实时条目里也带），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新的对话）。`ask_agent` 挂起期间还没有结果：会话接口（`SessionService.detail`）给还没有结果的调用条目填上它交出去的 thread（`transcript.annotate_pending_threads`，历史与实时快照都填），来源是委派自己的记录——发起方带 `call_id` 的占用与以它为关联 id 的信件（`delegation.call_threads_in`），不另存；有了结果之后以结果上的 metadata 为准，调用条目不再填；没有结果的调用一律挂在调用处（包括对方已回答、发起方续跑前最终失败的：续跑会补上结果）。之后经 SSE 收到的调用条目不填，那时 thread 列表也还没重新拉取，运行一停就重新拉取。没有任何条目（历史与正在进行的这一段）引用的 thread 列在末尾「未关联到调用的 thread」：开出后调用被用户停止的（停止补上的结果不带 thread）、开出后调用失败的（交还模型重试的结果不带 thread）。不为后两种补记 metadata，那会把这个约定散到停止与重试的路径里。历史里引用的 thread 不在会话的 thread 列表中，说明它已被删除，显示为「thread 已删除」。
+**界面上 thread 显示在开出或续写它的那次调用处**：两个工具都把 thread 的会话 id 挂在工具结果的 metadata 上（`sessions.conventions.TOOL_THREADS`，与 `TOOL_ATTACHMENTS` 同一约定，不发给模型、随消息持久化、实时条目里也带），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新的对话）。`ask_agent` 挂起期间还没有结果：会话接口（`SessionService.detail`）给还没有结果的调用条目填上它交出去的 thread（`transcript.annotate_pending_threads`，历史与实时快照都填），来源是委派自己的记录——发起方带 `call_id` 的占用与同一 holder 的委派记录（`delegations` 表，`delegation.call_threads_in`）；有了结果之后以结果上的 metadata 为准，调用条目不再填；没有结果的调用一律挂在调用处（包括对方已回答、发起方续跑前最终失败的：续跑会补上结果）。之后经 SSE 收到的调用条目不填，那时 thread 列表也还没重新拉取，运行一停就重新拉取。没有任何条目（历史与正在进行的这一段）引用的 thread 列在末尾「未关联到调用的 thread」：开出后调用被用户停止的（停止补上的结果不带 thread）、开出后调用失败的（交还模型重试的结果不带 thread）。不为后两种补记 metadata，那会把这个约定散到停止与重试的路径里。历史里引用的 thread 不在会话的 thread 列表中，说明它已被删除，显示为「thread 已删除」。
 
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `agent_id` + `thread`，唯一索引 `uq_sessions_thread`；#217 之前只按父 session + 名字唯一，给不同 agent 用同名会报错）。模型只用 agent 名 + thread 名，不接触 session id。同一个 agent 同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。thread 的种类在创建时确定，用错工具续聊时以可纠正的错误交还模型（`KindPolicy.continued_by`）。`stop_thread` 只给名字时，这个名字只有一个 thread 就停它，有几个（不同 agent）就报错要求带 `agent`。
 - **推送按信件、不按 session**：每封信件带「用户是否在等它的回答」（`awaited`，由投信的入口设置，见第 14 节）。一次运行处理过的信件里有用户在等的，就把它的回答推送给用户；否则不推，agent 可以自己 `notify_user`。同一个公开 thread 里，父 agent 委派的任务与用户的追问都推送；`report_back` 的委派不推送，结果交回父 agent。
@@ -323,7 +336,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 **交回结局**（`work.deliver_in`，唯一出口）：一项占用的结局交回会话（后台任务经 `WorkEnded`，委派由 thread 结清时在同一事务里），和释放占用同一个事务：发起方还停在这项占用对应的挂起调用上 → 一封回答信件，作为调用的结果交回；否则 → 一封事件信件（来源如 `thread:<子会话>`、`job:<id>`）。占用已 `cleared` → 不投（`DROPPED`）；会话已删除 → `GONE`。「迟到的回答改为事件」只在这里。按幂等键去重，重放只投一次。
 
-**运行中检查（心跳）**（`mailbox.post_check_in`）：`platform.checks.WorkWatcher` 每 `TICK_SECONDS`（1 秒）让后台任务与委派各自看哪些到期了：每项并发工作按发起时的 `heartbeat_seconds`（存在 `jobs.check_seconds` / `session_holds.check_seconds`）从开始或上一次检查起计（上一次的时刻只在进程内记，重启后从开始时刻重算），到期就向发起会话投一封检查信件（不推送），信里写明可选的动作（继续等、没事只回「…」、用哪个工具停）与下一次检查的间隔；同一来源已有信件在信箱里排着时不再发，占用已不是 active 时不投，事件不会在等回答时堆积。不需要了就 `job_kill` 或 `stop_thread`。检查信件显式标记（`mail.check_in`，交给模型时记进 `RUN_CHECK_INS`），界面据此把同一来源连续的检查（连同 agent 只回的「…」）合成一行「仍在进行 · 已检查 N 次」，不靠匹配文字。
+**运行中检查（心跳）**（`mailbox.post_check_in`）：`platform.checks.WorkWatcher` 只管节拍，每 `TICK_SECONDS`（1 秒）让后台任务与委派各自看哪些到期了；间隔的规则（默认值 `DEFAULT_CHECK_SECONDS`、到期 `check_due`）在会话领域 `sessions/work.py`，工作区经 `sessions.api` 用。每项并发工作按发起时的 `heartbeat_seconds`（存在 `jobs.check_seconds` / `delegations.check_seconds`）从开始或上一次检查起计（上一次的时刻只在进程内记，重启后从开始时刻重算），到期就向发起会话投一封检查信件（不推送），信里写明可选的动作（继续等、没事只回「…」、用哪个工具停）与下一次检查的间隔；同一来源已有信件在信箱里排着时不再发，占用已不是 active 时不投，事件不会在等回答时堆积。不需要了就 `job_kill` 或 `stop_thread`。检查信件显式标记（`mail.check_in`，交给模型时记进 `RUN_CHECK_INS`），界面据此把同一来源连续的检查（连同 agent 只回的「…」）合成一行「仍在进行 · 已检查 N 次」，不靠匹配文字。
 
 **关联与结清**（`sessions/settlement.py`）：委派来的信件带关联 id（它的 holder）。会话自己判断关联什么时候结束，在同一个事务里把结局交回发起方（第 8 节），时机只有下面几个，每个时机一个入口（结清哪些信件只在 settlement 里决定，调用方不传状态集合）：
 
@@ -396,13 +409,13 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 ## 8. 委派（`sessions/delegation.py`）
 
-做法同 Claude Code 的子 agent：`ask_agent` 与 `delegate_task(report_back: true)` 都是要交回结局的委派。委派完全在会话领域里，由两个对称的事务完成，状态分在两侧、各管一件事：**发起方的占用**（active / released / cleared）记这项委派还要不要交回；**thread 一侧以 holder 为关联 id 的信件**上的 `mail.correlation_settled` 记这个关联有没有结清过，保证只结清一次（第 7 节「关联与结清」）。做这项工作的 thread 由这些信件推出，不另存。普通 `delegate_task`（不交回）不产生委派：`Threads.send` 只往公开 thread 投一封用户在等的信。委派工具（`delegate_task`、`ask_agent`、`list_threads`、`stop_thread`、`list_agents`）在 `sessions/delegation_tools.py`。
+做法同 Claude Code 的子 agent：`ask_agent` 与 `delegate_task(report_back: true)` 都是要交回结局的委派。委派完全在会话领域里，由两个对称的事务完成，状态分在两侧、各管一件事：**发起方的占用**（active / released / cleared）记这项委派还要不要交回；**thread 一侧以 holder 为关联 id 的信件**上的 `mail.correlation_settled` 记这个关联有没有结清过，保证只结清一次（第 7 节「关联与结清」）。委派自己的发起参数记在委派子域的 `delegations` 表（`sessions/delegations.py`，按 holder 唯一）：做它的 thread（`thread_session_id`，thread 删除后置空）、report_back 的心跳间隔 `check_seconds`、ask_agent 的超时时刻 `deadline`；占用只剩各种外部工作共用的列（#244 之前这两个参数寄存在 `session_holds` 上，thread 由关联信件推出）。普通 `delegate_task`（不交回）不产生委派：`Threads.send` 只往公开 thread 投一封用户在等的信。委派工具（`delegate_task`、`ask_agent`、`list_threads`、`stop_thread`、`list_agents`）在 `sessions/delegation_tools.py`。
 
-- **发出**（工具里，`Threads.dispatch`，一个事务）：校验并打开或找到 thread（同一 agent 同名续聊，种类不符抛出可纠正的 `InvalidInput`，事务回滚、什么都没写）；在发起方登记占用（holder 由工具调用 id 确定性派生，带 `call_id`、「用户是否在等发起方」，以及 report_back 的心跳间隔 `check_seconds` 或 ask_agent 的超时时刻 `deadline`）；往 thread 投一封以 holder 为关联 id 的信件。然后 `ask_agent` 调用 `defer_call()` 挂起，`delegate_task(report_back)` 返回。续跑重新执行这次调用时按 holder 幂等，只返回已经投递到的 thread。
+- **发出**（工具里，`Threads.dispatch`，一个事务）：校验并打开或找到 thread（同一 agent 同名续聊，种类不符抛出可纠正的 `InvalidInput`，事务回滚、什么都没写）；在发起方登记占用（holder 由工具调用 id 确定性派生，带 `call_id`、「用户是否在等发起方」），记下委派记录（thread，report_back 的 `check_seconds` 或 ask_agent 的 `deadline`）；往 thread 投一封以 holder 为关联 id 的信件。然后 `ask_agent` 调用 `defer_call()` 挂起，`delegate_task(report_back)` 返回。续跑重新执行这次调用时按 holder 幂等，只返回已经投递到的 thread。
 - **交回**（`hand_back_in`，thread 结清关联的同一个事务里，第 7 节「关联与结清」）：按 holder 找到发起方的占用，经 `deliver_in` 交回结局并释放占用。每个关联只结清一次，所以每项委派只交回一次；占用已 cleared（发起方被停止）不投，占用随发起方删除了就没有收件人（记日志）。没有中间状态，没有事件、没有投递顺序要证明。
 - **交回的形态**：发起方还停在那次 `ask_agent` 调用上时，结局是一封回答信件，作为调用的结果交回（`AgentAnswer`：回答文字、它挂给用户的文件、thread，经 `agent_runtime.answers` 带上 `TOOL_THREADS` 与 `TOOL_ATTACHMENTS`）；否则（`report_back`，或用户已经跳过了那次调用）是一封事件信件（来源 `thread:<子会话 id>`）。thread 的回答不直接推送给用户：交给父 agent 处理，父会话处理它的运行按 `awaited` 推送。
 - **发起方被停止**：停止事务清掉它的委派占用，并给做这些工作的 thread 各发一条定向命令 `StopThread`；thread 的停止再停下它自己委派出去的 thread（逐层）。thread 被停止时的结清看到占用已 cleared，不投。
-- **超时**（`ThreadChecks`）：ask_agent 的占用到了 `deadline` 就停掉做它的 thread（同 `stop_thread`，停成了才记下、失败下一拍再停）；thread 结清为「被停止」时，`hand_back_in` 对已过 deadline 的占用把结局写成「在你的 timeout 内没做完、已被停止，它已说的是…」（由 deadline 推出，不另存停止原因），作为调用结果或（发问方已不等时）事件交回。ask_agent 是阻塞的，没有心跳。
+- **超时**（`ThreadChecks`）：ask_agent 的委派（占用还 active）到了 `deadline` 就停掉做它的 thread（同 `stop_thread`，停成了才记下、失败下一拍再停）；thread 结清为「被停止」时，`hand_back_in` 对已过 deadline 的委派把结局写成「在你的 timeout 内没做完、已被停止，它已说的是…」（由 deadline 推出，不另存停止原因），作为调用结果或（发问方已不等时）事件交回。ask_agent 是阻塞的，没有心跳。
 - **运行中检查**（`ThreadChecks`）：report_back 的委派按自己的 `check_seconds` 给发起方投检查信件，内容按 thread 的工作状态说（running：在跑多久了、在等重试或还排着；waiting：在等它自己开出的后台任务、委派或提问的回答）。委派没结清时 thread 也可能是 idle（信件到了，投信或运行结束——含最终失败——时的唤醒没做成，例如事务失败、重启，要等定期对账补唤醒下一次运行），这时与还排着同样说「排着、还没开始」。
 - **`list_threads`**：每个 thread 的工作状态（同一条规则，批量）、最近一次运行最终失败时的错误、它最近的回答。不按最近一次运行判断做没做完：thread 在等自己开出的工作时最近一次运行已经做完，那时的回答只是中间的。
 

@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,11 +24,8 @@ async def hold_in(
     *,
     awaited: bool,
     call_id: str | None = None,
-    check_seconds: float | None = None,
-    timeout_seconds: float | None = None,
 ) -> SessionHold:
-    """登记一个占用；已经登记过（重放）就返回它。awaited：用户是否在等这项工作的结局（交回的信件随它推送）。
-    check_seconds：委派的运行中检查间隔；timeout_seconds：从登记起算的超时，记为 deadline（见 SessionHold）。"""
+    """登记一个占用；已经登记过（重放）就返回它。awaited：用户是否在等这项工作的结局（交回的信件随它推送）。"""
     existing = await get_in(s, session_id, holder)
     if existing is not None:
         if (existing.call_id, existing.awaited) != (call_id, awaited):
@@ -38,15 +34,8 @@ async def hold_in(
                 f"(awaited={existing.awaited}), not {call_id} (awaited={awaited})"
             )
         return existing
-    now = utcnow()
     hold = SessionHold(
-        session_id=session_id,
-        holder=holder,
-        call_id=call_id,
-        awaited=awaited,
-        check_seconds=check_seconds,
-        deadline=None if timeout_seconds is None else now + timedelta(seconds=timeout_seconds),
-        created_at=now,
+        session_id=session_id, holder=holder, call_id=call_id, awaited=awaited, created_at=utcnow()
     )
     s.add(hold)
     await s.flush()
@@ -87,6 +76,16 @@ async def clear_in(s: AsyncSession, session_id: str) -> list[str]:
     for hold in holds:
         hold.status, hold.ended_at = HoldStatus.CLEARED, now
     return [h.holder for h in holds]
+
+
+async def active_holders_in(s: AsyncSession) -> dict[str, str]:
+    """全部 active 占用：占用者 → 会话（委派的运行中检查按它找还在进行的委派）。"""
+    rows = await s.execute(
+        select(SessionHold.holder, SessionHold.session_id)
+        .where(SessionHold.status == HoldStatus.ACTIVE)
+        .order_by(SessionHold.id)
+    )
+    return {holder: session_id for holder, session_id in rows.all()}
 
 
 async def has_active_in(s: AsyncSession, session_id: str) -> bool:

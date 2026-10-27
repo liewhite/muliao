@@ -17,47 +17,44 @@ from collections.abc import Awaitable, Callable
 from enum import StrEnum
 
 from pydantic_ai.messages import ModelRequest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
-from muliao.sessions.codec import dump_message, load_messages
 from muliao.sessions.conventions import is_stopped
 from muliao.sessions.delegation import threads_of_holds_in
 from muliao.sessions.events import SessionStopped, StopThread
-from muliao.sessions.history import latest_answer, marked_stopped, since_last_response, stopped_results
+from muliao.sessions.history import (
+    append_in,
+    latest_answer,
+    mark_last_stopped_in,
+    marked_stopped,
+    since_last_response,
+    stopped_results,
+)
 from muliao.sessions.holds import clear_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.sessions.runs import latest_run
 from muliao.sessions.settlement import settle_stopped_in
 from muliao.sessions.stopping import StoppableRuns
-from muliao.sessions.tables import Message, Session
+from muliao.sessions.tables import Session
 
 log = logging.getLogger(__name__)
 
 
-async def close_history_in(s: AsyncSession, session_id: str) -> None:
+async def close_history_in(s: AsyncSession, queue: TaskQueue, session_id: str) -> None:
     """停止时让会话历史停在不会被续跑的地方（唯一事实源是库里的历史）。运行中被停止时运行已经保存了这些，这里没事可做。
     只看最后一条模型回复起的那一段（history.since_last_response）：没出结果的调用只可能在那里。"""
     history = await since_last_response(s, session_id)
     if closing := stopped_results(history):
-        run = await latest_run(s, session_id)
+        run = await latest_run(s, queue, session_id)
         if run is None:
             raise RuntimeError(f"session {session_id} has tool calls but no run")
-        s.add(
-            Message(session_id=session_id, task_id=run.id, payload=dump_message(marked_stopped(closing[0])))
-        )
+        await append_in(s, session_id, run.id, [marked_stopped(closing[0])])
         return
     if history and isinstance(history[-1], ModelRequest) and not is_stopped(history[-1]):
-        row = await s.scalar(
-            select(Message).where(Message.session_id == session_id).order_by(Message.id.desc()).limit(1)
-        )
-        if row is None:
-            raise RuntimeError(f"session {session_id} has history but no message rows")
-        (message,) = load_messages([row.payload])
-        row.payload = dump_message(marked_stopped(message))
+        await mark_last_stopped_in(s, session_id)
 
 
 class Halted(StrEnum):
@@ -85,7 +82,7 @@ class SessionHalt:
             if session is None:
                 log.info("stopping a deleted session: nothing to do", extra={"session_id": session_id})
                 return Halted.GONE
-            await close_history_in(s, session_id)
+            await close_history_in(s, self._queue, session_id)
             dropped = [
                 t.id for t in await self._queue.finish_pending_in(s, session_lane(session_id), RUN_TASK)
             ]

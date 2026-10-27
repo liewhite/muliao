@@ -6,13 +6,12 @@ from __future__ import annotations
 import logging
 
 import anyio
-from sqlalchemy import select
 
 from muliao.platform.db import Database
 from muliao.platform.tasks import TaskQueue
-from muliao.sessions.mailbox import wake_in
+from muliao.sessions.directory import among_in
+from muliao.sessions.mailbox import wake_in, with_queued_in
 from muliao.sessions.settlement import reconcile_failures
-from muliao.sessions.tables import Mail, MailState, Session
 
 log = logging.getLogger(__name__)
 
@@ -36,14 +35,9 @@ class MailReconciler:
             # 只有收尾钩子失败时才会走到这里
             log.warning("reconcile settled delegations of failed runs", extra={"session_ids": settled})
         async with self._db.transaction() as s:
-            waiting = (
-                await s.scalars(
-                    select(Session)
-                    .where(Session.id.in_(select(Mail.session_id).where(Mail.state == MailState.QUEUED)))
-                    .order_by(Session.id)
-                )
-            ).all()
-            woken = [session.id for session in waiting if await wake_in(s, self._queue, session)]
+            ids = await with_queued_in(s)
+            sessions = await among_in(s, ids)
+            woken = [x for x in ids if await wake_in(s, self._queue, sessions[x])]
         if woken:
             # 投信时与运行结束（含最终失败）时都已唤醒过；到这里多半是那次没做成（事务失败、重启），补了什么要可查
             log.info("reconcile woke consumers for queued mail", extra={"session_ids": woken})

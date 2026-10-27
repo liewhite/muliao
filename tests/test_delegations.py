@@ -14,7 +14,7 @@ from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.pending import UserAnswered
-from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, SessionHold
+from muliao.sessions.tables import Delegation, HoldStatus, Mail, MailKind, MailState, SessionHold
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, history_of, start, tasks_of
 from tests.test_mailbox import Recorder
@@ -281,8 +281,8 @@ async def test_delegate_task_takes_a_heartbeat_only_with_report_back(container, 
     assert "heartbeat_seconds must be greater than 0" in outputs[1]
     assert outputs[2] == "delegated to reviewer in thread 'c'"
     async with container.db.transaction() as s:
-        holds = (await s.scalars(select(SessionHold))).all()
-    assert [(h.check_seconds, h.deadline) for h in holds] == [(90.0, None)]
+        records = (await s.scalars(select(Delegation))).all()
+    assert [(r.check_seconds, r.deadline) for r in records] == [(90.0, None)]
 
 
 async def test_nothing_is_reported_once_the_parent_session_is_gone(container, make_agent, models):
@@ -343,7 +343,7 @@ def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
     from datetime import UTC, datetime
 
     from muliao.agents.tables import Agent
-    from muliao.platform.tables import Task
+    from muliao.platform.tasks import TaskView
     from muliao.sessions.activity import WorkState
     from muliao.sessions.delegation import Ending, check_text
     from muliao.sessions.delegation import event_text as _event_text
@@ -351,11 +351,29 @@ def test_check_text_follows_the_threads_work_state_and_offers_stop_thread():
 
     child = Session(id="c", agent_id="a", title="t", thread="review")
     agent = Agent(id="a", name="reviewer")
-    queued = Task(id=1, kind=RUN_TASK, status=TaskStatus.PENDING, attempts=0)
-    retrying = Task(id=2, kind=RUN_TASK, status=TaskStatus.PENDING, attempts=2)
-    done = Task(id=3, kind=RUN_TASK, status=TaskStatus.DONE, attempts=1)
-    running = Task(id=4, kind=RUN_TASK, status=TaskStatus.RUNNING, attempts=1, started_at=datetime.now(UTC))
     now = datetime.now(UTC)
+
+    def run(id: int, status: TaskStatus, attempts: int, started_at: datetime | None = None) -> TaskView:
+        return TaskView(
+            id=id,
+            kind=RUN_TASK,
+            lane="session:c",
+            agent_id="a",
+            session_id="c",
+            payload={},
+            status=status,
+            attempts=attempts,
+            error=None,
+            not_before=now,
+            created_at=now,
+            started_at=started_at,
+            finished_at=None,
+        )
+
+    queued = run(1, TaskStatus.PENDING, 0)
+    retrying = run(2, TaskStatus.PENDING, 2)
+    done = run(3, TaskStatus.DONE, 1)
+    running = run(4, TaskStatus.RUNNING, 1, started_at=now)
     # 排队中的 thread 也能停：停止清空它的信箱，并交回「被停止」
     assert "stop_thread(thread='review', agent='reviewer')" in check_text(
         child, agent, WorkState.RUNNING, queued, now, 30
@@ -975,7 +993,7 @@ async def test_a_thread_waiting_on_its_own_background_job_is_listed_as_waiting_n
         # 它最近一次运行已经做完（按最近一次运行判断会把它当成做完、把中间的回答当结局）
         [child] = await threads_of(container, parent.id)
         async with container.db.transaction() as s:
-            assert (await latest_run(s, child.id)).status == TaskStatus.DONE
+            assert (await latest_run(s, container.queue, child.id)).done
         await _until(lambda: _has(seen))
     finally:
         worker.cancel()

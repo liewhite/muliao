@@ -21,13 +21,12 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import NotFound
-from muliao.platform.tables import Task, TaskStatus
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.history import since_last_response, since_last_response_among
 from muliao.sessions.holds import called_in, get_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.sessions.pending import OpenAsks, open_asks_of, waiting
-from muliao.sessions.runs import RunPayload, handed_to, latest_run
+from muliao.sessions.runs import RunPayload, handed_to, latest_run, run_unfinished_in
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
@@ -58,11 +57,7 @@ async def post_in(
     session = await s.get(Session, session_id)
     if session is None:
         raise NotFound(f"session {session_id!r} not found")
-    if dedupe_key is not None and (
-        existing := await s.scalar(
-            select(Mail).where(Mail.session_id == session_id, Mail.dedupe_key == dedupe_key)
-        )
-    ):
+    if dedupe_key is not None and (existing := await _with_key_in(s, session_id, dedupe_key)):
         log.info("duplicate mail ignored", extra={"session_id": session_id, "key": dedupe_key})
         return existing
     mail = Mail(
@@ -84,6 +79,15 @@ async def post_in(
     )
     await wake_in(s, queue, session)
     return mail
+
+
+async def _with_key_in(s: AsyncSession, session_id: str, key: str) -> Mail | None:
+    return await s.scalar(select(Mail).where(Mail.session_id == session_id, Mail.dedupe_key == key))
+
+
+async def posted_with_key_in(s: AsyncSession, session_id: str, key: str) -> bool:
+    """带这个幂等键的信件已经投过。"""
+    return await _with_key_in(s, session_id, key) is not None
 
 
 async def queued_in(s: AsyncSession, session_id: str) -> list[Mail]:
@@ -109,41 +113,90 @@ async def queued_among(s: AsyncSession, session_ids: Collection[str]) -> dict[st
 
 async def wake_in(
     s: AsyncSession, queue: TaskQueue, session: Session, *, finished: int | None = None
-) -> Task | None:
-    """信箱需要消费时投递一次运行（规则见模块说明）；返回投递的运行，不需要时为 None。
+) -> bool:
+    """信箱需要消费时投递一次运行（规则见模块说明）；返回是否投递了。
 
     finished：刚正常结束的那次运行（在它的收尾事务里调用时）。队列在同一个事务里稍后才把它记为完成，此刻它还是
     running，不能因此判定会话忙；它也不是「失败待重试」，剩下的信件（它没取走的，如从历史续跑、只重发了一条请求
     就结束）一定要有下一次运行，所以不做「之后才到」的判断。"""
     queued = await queued_in(s, session.id)
     if not queued:
-        return None
-    lane = session_lane(session.id)
-    runs = select(Task).where(Task.lane == lane, Task.kind == RUN_TASK)
-    busy = runs.where(Task.status.in_([TaskStatus.PENDING, TaskStatus.RUNNING]))
-    if finished is not None:
-        busy = busy.where(Task.id != finished)
-    if await s.scalar(select(busy.exists())):
+        return False
+    if await run_unfinished_in(s, queue, session.id, excluding=finished):
         # 排队的运行开始时、运行中的那次每一步都会取走新信件；它结束时会再来这里
-        return None
-    latest = await latest_run(s, session.id)
-    if finished is None and latest is not None and all(handed_to(m, latest) for m in queued):
+        return False
+    latest = await latest_run(s, queue, session.id)
+    if finished is None and latest is not None and all(handed_to(m.id, latest) for m in queued):
         # 都已经交给过一次运行（它失败了、等重试）：由它或之后新信件唤醒的运行处理，不重复投递
-        return None
+        return False
     if waiting(await since_last_response(s, session.id), queued, await called_in(s, session.id)):
         # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型。挂起的调用只可能在最后一条模型回复里，
         # 不加载整段上下文
-        return None
-    run = queue.enqueue(
+        return False
+    queue.enqueue(
         s,
         kind=RUN_TASK,
-        lane=lane,
+        lane=session_lane(session.id),
         agent_id=session.agent_id,
         session_id=session.id,
         payload=RunPayload(through_mail_id=queued[-1].id).model_dump(),
     )
     log.info("consumer woken", extra={"session_id": session.id, "queued": len(queued)})
-    return run
+    return True
+
+
+async def unsettled_in(s: AsyncSession, session_id: str, states: Sequence[MailState]) -> list[Mail]:
+    """会话里带关联、还没结清的信件（结清的时机与范围在 sessions.settlement）。"""
+    rows = await s.scalars(
+        select(Mail)
+        .where(
+            Mail.session_id == session_id,
+            Mail.correlation.is_not(None),
+            Mail.correlation_settled.is_(False),
+            Mail.state.in_(states),
+        )
+        .order_by(Mail.id)
+    )
+    return list(rows.all())
+
+
+async def with_unsettled_in(s: AsyncSession) -> list[str]:
+    """有带关联、还没结清的信件（排着的或已交给模型的）的会话（信箱对账补做失败的结清）。"""
+    rows = await s.scalars(
+        select(Mail.session_id)
+        .where(
+            Mail.correlation.is_not(None),
+            Mail.correlation_settled.is_(False),
+            Mail.state.in_([MailState.CONSUMED, MailState.QUEUED]),
+        )
+        .distinct()
+    )
+    return list(rows.all())
+
+
+def mark_settled(mail: Sequence[Mail]) -> list[str]:
+    """把这些信件带来的关联记为已结清（随调用方的事务提交），返回这次新结清的关联（去重、按信件顺序）。"""
+    correlations = list(
+        dict.fromkeys(m.correlation for m in mail if m.correlation and not m.correlation_settled)
+    )
+    for m in mail:
+        if m.correlation:
+            m.correlation_settled = True
+    return correlations
+
+
+async def with_queued_in(s: AsyncSession) -> list[str]:
+    """有信件在排队的会话，按 id 排列（信箱对账的唤醒）。"""
+    rows = await s.scalars(
+        select(Mail.session_id).where(Mail.state == MailState.QUEUED).distinct().order_by(Mail.session_id)
+    )
+    return list(rows.all())
+
+
+async def consumed_by_in(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
+    """这次运行处理掉的信件（带上会话条件：按会话的索引只扫这个会话的行）。"""
+    rows = await s.scalars(select(Mail).where(Mail.session_id == session_id, Mail.consumed_by == run_id))
+    return list(rows.all())
 
 
 async def visible_in(s: AsyncSession, session_id: str) -> list[Mail]:

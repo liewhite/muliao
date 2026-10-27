@@ -1,4 +1,4 @@
-"""会话领域的表：会话、消息、信箱、压缩、占用。"""
+"""会话领域的表：会话、消息、信箱、压缩、占用、委派。各子域独占自己的表（docs/architecture.md 2.1）。"""
 
 from datetime import datetime
 from enum import StrEnum
@@ -162,14 +162,33 @@ class SessionHold(Base):
     call_id: Mapped[str | None] = mapped_column(String(100))
     # 用户是否在等这项工作的结局：交回结局的信件随它推送（发起这项工作的运行有用户在等）
     awaited: Mapped[bool]
-    # 运行中检查的间隔（秒）：发起方并发等待的委派（delegate_task(report_back) 的 heartbeat_seconds）。
-    # 阻塞的委派（ask_agent）与后台任务的占用为 None：前者靠 deadline 结束，后者的间隔在任务自己的表里
-    check_seconds: Mapped[float | None]
-    # 阻塞的委派（ask_agent 的 timeout）到期时停掉做它的 thread，结局以「超时被停」交回（sessions.delegation）
-    deadline: Mapped[datetime | None] = mapped_column(UTCDateTime)
     status: Mapped[HoldStatus] = mapped_column(StrEnumType(HoldStatus), default=HoldStatus.ACTIVE)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     # 占用者全局唯一（job:<id>、delegation:<发起会话>:<工具调用 id>）：委派交回时按它找到发起方（sessions.delegation）
     __table_args__ = (Index("uq_session_holds_holder", "holder", unique=True),)
+
+
+class Delegation(Base):
+    """一项要交回结局的委派（ask_agent、delegate_task(report_back)）的发起参数（委派子域，sessions.delegations）。它的进行
+    状态在发起方的占用上（holder 相同），是否结清在 thread 一侧以 holder 为关联 id 的信件上；这里只记委派自己的事：做它的
+    thread、心跳间隔与超时。行永久保留，随发起会话删除。"""
+
+    __tablename__ = "delegations"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 发起方占用的占用者，也是 thread 信件的关联 id：delegation:<发起会话>:<工具调用 id>
+    holder: Mapped[str] = mapped_column(String(200))
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    # 做这项委派的 thread；thread 被删除后为 None（那时委派已经以「被删除」结清）
+    thread_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sessions.id", ondelete="SET NULL", name="fk_delegations_thread_session_id"), index=True
+    )
+    # 运行中检查的间隔（秒）：并发等待的委派（delegate_task(report_back) 的 heartbeat_seconds）；阻塞的为 None
+    check_seconds: Mapped[float | None]
+    # 阻塞的委派（ask_agent 的 timeout）到期时停掉做它的 thread，结局以「超时被停」交回；并发的为 None
+    deadline: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+    __table_args__ = (Index("uq_delegations_holder", "holder", unique=True),)

@@ -107,6 +107,7 @@ class SessionDomain:
         content = ContentBuilder(files, agents.workspace)
         consumer = Consumer(
             db,
+            queue,
             runtime,
             toolbox,
             live,
