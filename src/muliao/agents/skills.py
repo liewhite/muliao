@@ -33,7 +33,7 @@ from muliao.agents.naming import validate_slug
 from muliao.agents.revisions import record_in, revision_doc_in
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped
 from muliao.agents.tables import Item, ItemFile
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import InvalidInput
 from muliao.platform import text_edit
 from muliao.platform.db import Database
 
@@ -160,9 +160,7 @@ class SkillStore:
     async def resolve(self, agent: str, name: str) -> Skill:
         """agent 读取：任何存在的 skill 都读得到（软隔离），usable 标明它是否在这个 agent 能用的范围里。"""
         async with self._db.transaction() as s:
-            row = await item_in(s, StoredKind.SKILL, name)
-            if row is None:
-                raise NotFound(f"skill {name!r} not found")
+            row = await existing_in(s, StoredKind.SKILL, name)
             usable = (await grants_in(s, agent)).uses(Kind.SKILL, name, row.owner)
             return Skill(self._meta(row), frontmatter.loads(row.content).content, usable)
 

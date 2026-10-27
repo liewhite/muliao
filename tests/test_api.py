@@ -418,12 +418,19 @@ async def test_an_agent_being_deleted_reads_as_missing(client, container, make_a
     from muliao.agents.tables import Agent
 
     agent = await make_agent("alpha")
+    await login(client)
+    await client.put("/api/items/skill/mine", json={"owner": agent.id, "description": "d", "body": "b"})
     async with container.db.transaction() as s:
         (await s.get(Agent, agent.id)).deleting_by = "user"
-    await login(client)
 
     assert (await client.get(f"/api/agents/{agent.id}")).status_code == 404
+    assert (await client.get(f"/api/agents/{agent.id}/history")).status_code == 404
+    # 记忆与条目同一条规则，在领域的 store 里查：读、看历史都按不存在处理，列表里也没有
     assert (await client.get("/api/memory", params={"owner": agent.id})).status_code == 404
+    assert (await client.get("/api/memory/history", params={"owner": agent.id})).status_code == 404
+    assert (await client.get("/api/items/skill/mine")).status_code == 404
+    assert (await client.get("/api/items/skill/mine/history")).status_code == 404
+    assert "mine" not in [i["name"] for i in (await client.get("/api/items")).json()]
 
 
 async def test_agent_thinking_is_set_and_validated_over_http(client, models):

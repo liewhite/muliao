@@ -2,6 +2,7 @@
 
 - 名字按种类全局唯一（没有同名遮蔽）。
 - 改、删已有条目按规则 2（agents.access.check_change_in）：用户、owner 或 admin。
+- 正在删除的 agent 的条目按不存在处理：读（existing_in、check_visible_in、条目池的列表）与写一样。
 - 新建条目的 owner 由调用方给出（agent 建的归它自己）；为 agent 新建时在同一个写事务里检查它还可用（正在删除的按不存在
   处理，agents.active）。
 - 每次修改与版本（revisions）在同一个事务里记。
@@ -28,17 +29,25 @@ async def item_in(s: AsyncSession, kind: StoredKind, name: str) -> Item | None:
 
 
 async def existing_in(s: AsyncSession, kind: StoredKind, name: str) -> Item:
+    """要读、改或删的已有条目：存在，它的 owner（agent）还可用——正在删除的 agent 的条目按不存在处理（读与写一样），
+    由删除流程统一处理。"""
     row = await item_in(s, kind, name)
     if row is None:
         raise NotFound(f"{label(kind)} {name!r} not found")
+    await _check_owner_active_in(s, kind, row)
     return row
 
 
+async def check_visible_in(s: AsyncSession, kind: StoredKind, name: str) -> None:
+    """看版本历史之前：条目还在时同 existing_in（正在删除的 agent 的按不存在处理）；已经删掉的照样看得到它的历史。"""
+    row = await item_in(s, kind, name)
+    if row is not None:
+        await _check_owner_active_in(s, kind, row)
+
+
 async def changeable_in(s: AsyncSession, kind: StoredKind, name: str, actor: str) -> Item:
-    """要改或删的已有条目：存在，actor 能改它（规则 2），它的 owner（agent）还可用（正在删除的 agent 的条目按不存在处理，
-    由删除流程统一处理）。"""
+    """要改或删的已有条目：existing_in，且 actor 能改它（规则 2）。"""
     row = await existing_in(s, kind, name)
-    await _check_owner_active_in(s, kind, row)
     await check_change_in(s, actor, row)
     return row
 

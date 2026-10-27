@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 import muliao.agents.service
 from muliao.agents.api import McpTransport, mcp_config
-from muliao.agents.tables import Agent
+from muliao.agents.tables import Agent, Item
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
@@ -420,7 +420,9 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
     for write in writes:
         with pytest.raises(NotFound, match="not found"):
             await write()
-    assert await owned(container, "skill", agent.id) == ["s"]
+    # 行还在（删除流程收尾时才随 agent 删除），只是按不存在处理
+    async with container.db.transaction() as s:
+        assert (await s.scalars(select(Item.name).where(Item.owner == agent.id))).all() == ["s"]
     await container.skills.write("pub", "d", "b", actor="user", owner=None)
 
 

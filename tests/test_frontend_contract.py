@@ -20,7 +20,9 @@ def _const(file: str, name: str) -> str:
 
 def _route(file: str, name: str, arg: str) -> str:
     """前端路由函数 `(id: ...) => `...${id}`` 代入 arg。"""
-    match = re.search(rf"^export const {name} = \(id: \w+\) => `([^`]*)`$", (WEB / file).read_text(), re.MULTILINE)
+    match = re.search(
+        rf"^export const {name} = \(id: \w+\) => `([^`]*)`$", (WEB / file).read_text(), re.MULTILINE
+    )
     assert match is not None, f"{name} not found in web/src/{file}"
     return match[1].replace("${id}", arg)
 

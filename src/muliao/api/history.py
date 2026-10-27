@@ -46,7 +46,8 @@ async def agent_history(
     limit: int = 100,
 ) -> list[HistoryOut]:
     """agent 的工作历史：没给 query 按日期倒序；给了按关键词检索（规则同工具 history_search）。since / until 含两端。"""
-    await c.agents.get(agent_id)
+    # 正在删除的 agent 按不存在处理
+    await c.agents.get_active(agent_id)
     found = await c.history.search(
         agent_ids=[agent_id],
         query=query,

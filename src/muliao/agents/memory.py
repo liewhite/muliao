@@ -2,7 +2,7 @@
 
 两种 owner，规则相同：
 - 全局记忆（owner 为 None）：所有 agent 共享，放在各 agent 自己的记忆之前；从未写过时为空（没有行）。
-- agent 的记忆：创建 agent 时与它的行在同一个事务里写入（create_in），随 agent 的行删除；缺失说明数据不一致。
+- agent 的记忆：读、写、看历史时正在删除的 agent 按不存在处理；创建 agent 时与它的行在同一个事务里写入（create_in），随 agent 的行删除；缺失说明数据不一致。
 """
 
 from collections.abc import Awaitable, Callable
@@ -29,6 +29,9 @@ def revision_name(owner: str | None) -> str:
 
 
 async def _row_in(s: AsyncSession, owner: str | None) -> Memory | None:
+    """owner 的记忆（读与写都经这里）：正在删除的 agent 按不存在处理（NotFound）。"""
+    if owner is not None:
+        await active_row_in(s, owner)
     where = Memory.owner.is_(None) if owner is None else Memory.owner == owner
     row = await s.scalar(select(Memory).where(where))
     if row is None and owner is not None:
@@ -55,6 +58,7 @@ class MemoryStore:
     async def history(self, owner: str | None, limit: int) -> list[RevisionInfo]:
         """新的在前，第一条即当前的一版。"""
         async with self._db.transaction() as s:
+            await _row_in(s, owner)
             return await history_in(s, Subject.MEMORY, revision_name(owner), limit)
 
     async def write(self, owner: str | None, content: str, author: str) -> str:
@@ -86,9 +90,6 @@ class MemoryStore:
     ) -> str:
         """读取、修改、写入与记版本在同一个写事务里：并发的修改互不覆盖。"""
         async with self._db.transaction() as s:
-            if owner is not None:
-                # 正在删除的 agent 按不存在处理
-                await active_row_in(s, owner)
             row = await _row_in(s, owner)
             current = "" if row is None else row.content
             updated = await edit(s, current)

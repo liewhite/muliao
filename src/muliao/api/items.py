@@ -25,7 +25,7 @@ from muliao.agents.api import (
     StoredKind,
     mcp_config,
 )
-from muliao.api.deps import C, check_owner, read_limited
+from muliao.api.deps import C, read_limited
 
 router = APIRouter()
 
@@ -404,7 +404,6 @@ class MemoryRestoreIn(BaseModel):
 @router.get("/memory")
 async def get_memory(c: C, owner: str | None = None) -> MemoryOut:
     """owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。"""
-    await check_owner(c, owner)
     return MemoryOut(content=await c.memory.read(owner), max_chars=c.memory.max_chars)
 
 
@@ -418,7 +417,6 @@ async def put_memory(c: C, body: MemoryIn) -> MemoryOut:
 @router.get("/memory/history")
 async def memory_history(c: C, owner: str | None = None) -> list[RevisionOut]:
     """owner 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。"""
-    await check_owner(c, owner)
     return [RevisionOut.of(r) for r in await c.memory.history(owner, HISTORY_LIMIT)]
 
 

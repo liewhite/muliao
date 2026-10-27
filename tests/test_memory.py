@@ -6,7 +6,7 @@ from pydantic_ai.models.function import AgentInfo
 
 from muliao.agents.api import RevisionInfo, Subject
 from muliao.agents.memory import MemoryFull
-from muliao.errors import CorruptState
+from muliao.errors import NotFound
 from tests.conftest import history, login
 from tests.scripted import scripted
 from tests.test_flow import call_then_answer, drain, start
@@ -130,7 +130,7 @@ async def test_deleting_an_agent_keeps_the_global_memory_it_wrote(container, mak
     await drain(container)
 
     assert [r.author for r in await memory_history(container, None)] == [agent.id]
-    with pytest.raises(CorruptState):
+    with pytest.raises(NotFound):
         await container.memory.read(agent.id)
     # 被删 agent 的记忆的历史仍在版本表里，可以审计
     assert len(await memory_history(container, agent.id)) == 2

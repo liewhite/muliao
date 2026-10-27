@@ -13,14 +13,14 @@ from sqlalchemy import select
 from muliao.agents.access import Grants, granted_by, grants_in, owner_label_in, shared_in
 from muliao.agents.active import active_row_in
 from muliao.agents.documents import document_in
-from muliao.agents.items import Reach, changeable_in, reach_in
+from muliao.agents.items import Reach, changeable_in, check_visible_in, reach_in
 from muliao.agents.kinds import Kind, StoredKind, as_subject, label
 from muliao.agents.mcp import McpRegistry, McpServer, server_of
 from muliao.agents.permissions import Rules
 from muliao.agents.revisions import RESTORABLE, RevisionInfo, history_in, record_in
 from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
 from muliao.agents.skills import SkillStore
-from muliao.agents.tables import Item
+from muliao.agents.tables import Agent, Item
 from muliao.errors import InvalidInput
 from muliao.platform.db import Database
 
@@ -66,7 +66,13 @@ class ItemCatalog:
         async with self._db.transaction() as s:
             roles = list((await roles_in(s)).values())
             shared = await shared_in(s)
-            items = await s.scalars(select(Item).order_by(Item.kind, Item.name))
+            # 正在删除的 agent 的条目按不存在处理（agents.items）
+            deleting = select(Agent.id).where(Agent.deleting_by.is_not(None))
+            items = await s.scalars(
+                select(Item)
+                .where(Item.owner.is_(None) | Item.owner.not_in(deleting))
+                .order_by(Item.kind, Item.name)
+            )
 
             def including(kind: Kind, name: str) -> tuple[str, ...]:
                 return tuple(r.name for r in roles if r.effective.allows(kind, name))
@@ -136,6 +142,7 @@ class ItemCatalog:
     async def history(self, kind: StoredKind, name: str, limit: int) -> list[RevisionInfo]:
         """新的在前，第一条即当前的一版（已删除时是那次删除）。"""
         async with self._db.transaction() as s:
+            await check_visible_in(s, kind, name)
             return await history_in(s, as_subject(kind), name, limit)
 
     async def restore(self, kind: StoredKind, name: str, rev: int, author: str) -> None:

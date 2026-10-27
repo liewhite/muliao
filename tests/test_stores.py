@@ -190,10 +190,19 @@ async def test_memory_append_replace_limit_and_revisions(container, make_agent):
     assert len(revisions) == 4
 
 
-async def test_a_missing_memory_row_is_corrupt_state_and_global_memory_starts_empty(container):
+async def test_a_missing_memory_row_is_corrupt_state_and_global_memory_starts_empty(container, make_agent):
+    from sqlalchemy import delete
+
+    from muliao.agents.tables import Memory
+
     assert await container.memory.read(None) == ""
-    with pytest.raises(CorruptState):
+    with pytest.raises(NotFound):
         await container.memory.read("c3c3c3c3c3c3")
+    alpha = (await make_agent()).id
+    async with container.db.transaction() as s:
+        await s.execute(delete(Memory).where(Memory.owner == alpha))
+    with pytest.raises(CorruptState):
+        await container.memory.read(alpha)
 
 
 async def test_concurrent_memory_edits_are_all_kept(container, make_agent):

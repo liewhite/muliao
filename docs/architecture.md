@@ -405,7 +405,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 ## 10. 删除 agent
 
-1. `AgentLifecycle.delete`：组合根注入的删除阻止查询有一个为真时拒绝（409）——它的会话有忙的（与删除会话同一条规则，会话领域的 `SessionActivity.blocks_agent_deletion_in`）；agent 领域不知道别的领域的 lane；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据库数据（会话来信与手动压缩、委派、条目与记忆、触发器）之前在同一事务里用 `active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。条目与记忆（skill、MCP 配置、secret、记忆）同样在写入的事务里检查（`agents.items.writable_in` / `creatable_in` / `changeable_in`、`MemoryStore`），之后由删除流程随 agent 的行一起删掉。HTTP 层在读 agent 的记忆与它的历史之前按 `get_active` 把正在删除的当作不存在；条目的读与恢复在各 store 的事务里查（`changeable_in`）。
+1. `AgentLifecycle.delete`：组合根注入的删除阻止查询有一个为真时拒绝（409）——它的会话有忙的（与删除会话同一条规则，会话领域的 `SessionActivity.blocks_agent_deletion_in`）；agent 领域不知道别的领域的 lane；否则把 agent 标为正在删除（`deleting_by`，不出现在列表与名称解析里），同一事务发布 `AgentDeleting`。各领域为 agent 写数据库数据（会话来信与手动压缩、委派、条目与记忆、触发器）之前在同一事务里用 `active_agent_in` 检查，正在删除的按不存在处理：事务串行，检查与写入之间插不进删除，删除流程的清理一定看得到这次写入。条目与记忆（skill、MCP 配置、secret、记忆）同样在写入的事务里检查（`agents.items.writable_in` / `creatable_in` / `changeable_in`、`MemoryStore`），之后由删除流程随 agent 的行一起删掉。读也一样，都在领域的 store 里查、HTTP 层不另查：记忆的读与历史（`MemoryStore`），条目的读（`agents.items.existing_in`）、历史（`check_visible_in`：已删掉的条目照样看得到历史）与条目池的列表；工作历史接口按 `get_active`。
 2. 订阅者：
    - 会话：删除它的全部会话（连同私有 thread），发布 `AgentSessionsCleared`（没有会话时立即发布）。标记一提交就不再为它新排工作，但仍可能有会话忙：删除前的检查与标记分属两个事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会。处理器先停止这些会话（每个只停一次；它们的工作随 agent 一起放弃），再在时限内（30 秒）等它们空闲——正在执行的运行被取消后，停止事务在它退出之后才执行，正在执行的压缩做完才空闲——然后删除。时限内没有空闲就按暂时失败重试，重试时同样先停止再等；重试用完时投递记为 failed，可见，人工重试。
    - 触发器：删除它的触发器。
