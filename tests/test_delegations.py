@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from muliao.errors import Conflict
 from muliao.platform.tables import Task, TaskStatus
+from muliao.sessions.conventions import tool_threads
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.pending import UserAnswered
@@ -672,8 +673,6 @@ async def test_a_user_message_while_waiting_on_an_agent_continues_and_the_answer
     # 回答到达时发问方已经不等这次调用了：作为事件交回
     assert [("checked" in e.content, e.kind) for e in events] == [(True, MailKind.EVENT)]
     # 没等到回答的结果也带着做它的 thread：界面把 thread 显示在这次调用处，而不是列为未关联
-    from muliao.sessions.conventions import tool_threads
-
     [skipped] = [
         p
         for m in await history_of(container, parent.id)
