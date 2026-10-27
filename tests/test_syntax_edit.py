@@ -52,7 +52,7 @@ def test_line_range_replaces_whole_lines_and_adds_the_missing_trailing_newline()
 
 def test_line_range_anchor_may_be_copied_from_a_truncated_long_line():
     long = "x" * 2500
-    shown = long[:2000] + "…[line truncated]"
+    shown = long[:2000] + "…[line truncated: 500 more chars]"
     assert run(LineRange(1, 1, shown, "y"), f"{long}\nb\n", "f") == ("y\nb\n", 1)
 
 
@@ -62,7 +62,10 @@ def test_line_range_with_a_stale_anchor_fails_and_shows_the_lines_as_they_are_no
         run(LineRange(5, 6, "l4", "X"), text, "f.txt")
     message = str(e.value)
     assert "anchor does not match line 5 of f.txt" in message
-    assert "lines 3-8 are now:\n3\tl3\n4\tl4\n5\tl5\n6\tl6\n7\tl7\n8\tl8" in message
+    assert (
+        "lines 3-8 are now:\n     3\tl3\n     4\tl4\n     5\tl5\n     6\tl6\n     7\tl7\n     8\tl8"
+        in message
+    )
 
 
 @pytest.mark.parametrize(

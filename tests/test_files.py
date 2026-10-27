@@ -171,8 +171,8 @@ async def test_shared_files_are_shown_to_the_user_without_the_model_repeating_th
 
     # 模型只看到一句说明，不需要也不该再嵌入引用
     assert outputs == [
-        "Shared 'chart.png' with the user; it is shown with your reply.",
-        "Shared 'report.md' with the user; it is shown with your reply.",
+        "shared file chart.png with the user; it is shown with your reply",
+        "shared file report.md with the user; it is shown with your reply",
     ]
     shared = await _shared_attachments(client)
     assert [(a["name"], a["inline"]) for a in shared] == [("chart.png", True), ("report.md", False)]

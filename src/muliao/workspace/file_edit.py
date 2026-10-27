@@ -242,9 +242,12 @@ def changed_ranges(before: str, after: str, context: int) -> list[tuple[int, int
 
 
 def numbered(lines: list[str], start: int, end: int) -> str:
-    """lines[start:end]，每行前加 1 起算的行号和制表符（read_file、edit_file 的回显与报错同一格式），过长的行截断。"""
-    return "\n".join(f"{i + 1}\t{_clip(lines[i])}" for i in range(start, end))
+    """lines[start:end]，按 `cat -n` 的格式：1 起算的行号右对齐占 6 列，后跟一个制表符（read_file、edit_file 的回显与
+    报错同一格式，模型拿来就认得），过长的行截断。"""
+    return "\n".join(f"{i + 1:6}\t{_clip(lines[i])}" for i in range(start, end))
 
 
 def _clip(line: str) -> str:
-    return line if len(line) <= MAX_LINE_CHARS else f"{line[:MAX_LINE_CHARS]}…[line truncated]"
+    if len(line) <= MAX_LINE_CHARS:
+        return line
+    return f"{line[:MAX_LINE_CHARS]}…[line truncated: {len(line) - MAX_LINE_CHARS} more chars]"

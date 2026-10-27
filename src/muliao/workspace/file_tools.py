@@ -57,7 +57,9 @@ class FileRange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(description="File path.")
-    offset: int = Field(default=0, description="First line to return (0-based).")
+    offset: int = Field(
+        default=1, description="Line number to start from (1-based, as numbered in the output)."
+    )
     limit: int = Field(default=_DEFAULT_READ_LIMIT, description="Maximum number of lines to return.")
 
 
@@ -83,33 +85,37 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
     async def read_file(
         ctx: RunContext[RunScope],
         path: str | None = None,
-        offset: int = 0,
+        offset: int = 1,
         limit: int = _DEFAULT_READ_LIMIT,
         reads: tuple[FileRange, ...] = (),
     ) -> str | list[str | BinaryContent]:
-        """Read a text file; lines are numbered. Relative paths are resolved against your workspace.
+        """Read a text file. Output is in `cat -n` format: each line is its 1-based line number right-aligned in 6
+        columns, a tab, then the line as it is in the file. Relative paths are resolved against your workspace.
         To read several files or several parts of one file in one call, pass `reads` instead of
-        `path`/`offset`/`limit`; each part is shown under a `==> path lines A-B of N <==` header.
-        Output is limited in size: when the limit is reached, reading stops after a whole line and says which
-        offset to continue from (parts not read at all are listed).
+        `path`/`offset`/`limit`; like `head` with several files, each part comes under a header
+        `==> <path> lines <first>-<last> of <total> <==` (`==> <path>: <error> <==` for a part that cannot be read).
+        Output is limited in size: reading stops after a whole line, and a note in square brackets on its own
+        line says where to continue, e.g. `[output limit reached at line 812 of 3000; continue with
+        offset=813]` or `[188 more lines; continue with offset=2001]`; parts not read at all are listed in a last
+        `[not read, ...]` note.
         An image file (PNG, JPEG, GIF, WebP) passed as `path` is returned as an image you can see, e.g. a
         screenshot or a chart you made.
 
         Args:
             path: File path (omit when using `reads`).
-            offset: First line to return (0-based).
+            offset: Line number to start from (1-based, as numbered in the output).
             limit: Maximum number of lines to return.
             reads: List of {path, offset, limit} parts to read, shown in this order; a part that cannot be
                 read shows its error and the others are still returned.
         """
-        if reads and (path is not None or offset != 0 or limit != _DEFAULT_READ_LIMIT):
+        if reads and (path is not None or offset != 1 or limit != _DEFAULT_READ_LIMIT):
             raise InvalidInput("pass either path/offset/limit or reads, not both")
         if not reads:
             if path is None:
                 raise InvalidInput("path is required (or pass reads)")
             target = resolve(ctx.deps, path)
             if media_type := _image_type(target):
-                if offset != 0 or limit != _DEFAULT_READ_LIMIT:
+                if offset != 1 or limit != _DEFAULT_READ_LIMIT:
                     raise InvalidInput(f"offset/limit do not apply to an image file: {target}")
                 return _read_image(target, media_type)
             excerpt = _read_range(target, offset, limit, limits.max_output_chars - _PART_OVERHEAD)
@@ -147,7 +153,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
     ) -> str:
         """Change a file: locate a block in exactly one of three ways and replace it with `new_text`.
         - `old_text`: exact text that must occur exactly once (unless `replace_all`). Copy it from the file as it
-          is now (without read_file's line-number prefix), with enough surrounding lines to be unique.
+          is now (without the line-number prefix of read_file's `cat -n` output), with enough surrounding lines to be unique.
         - `start_line` + `end_line` + `anchor`: whole lines start_line..end_line as numbered by read_file;
           `anchor` is the text of line start_line, checked so that stale line numbers fail instead of
           changing the wrong lines. Good for replacing or deleting a long block without copying it.
@@ -164,8 +170,10 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         changes its own `path` (or the top-level `path` when it has none); they are applied in order: `old_text`
         and `pattern` are found in the file as the earlier edits left it, while line numbers and anchors always
         refer to the file before this call (as read_file showed it), in any order; a line range that overlaps an
-        earlier edit to the same file is rejected. If any edit fails no file is written. On success the changed
-        lines of each file are shown with their numbers.
+        earlier edit to the same file is rejected. If any edit fails no file is written. On success each file
+        gets `edited <path> (<n> replacements; now <total> lines); cat -n of the changed lines ...:` followed by
+        the changed lines with context in the same `cat -n` format as read_file (separate blocks split by `--`),
+        so you can check the result and go on editing by line number without reading the file again.
 
         Args:
             path: File path (with `edits`: the file of the edits that give no path of their own).
@@ -243,7 +251,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             extra={"agent": ctx.deps.agent_id, "session_id": ctx.deps.session_id, "file_id": meta.id},
         )
         return ToolReturn(
-            return_value=f"Shared {meta.name!r} with the user; it is shown with your reply.",
+            return_value=f"shared file {meta.name} with the user; it is shown with your reply",
             metadata={TOOL_ATTACHMENTS: [attachment_of(meta)]},
         )
 
@@ -333,43 +341,47 @@ def _not_read_note(skipped: list[FileRange]) -> str:
         f"{p.path} offset={p.offset}" + (f" limit={p.limit}" if p.limit != _DEFAULT_READ_LIMIT else "")
         for p in skipped
     )
-    return f"\n\n==> not read, output limit reached; read in another call: {listed} <=="
+    return f"\n\n[not read, output limit reached; read in another call: {listed}]"
 
 
 def _read_range(target: Path, offset: int, limit: int, budget: int) -> _Excerpt:
-    """读 lines[offset:offset+limit]，带行号的正文不超过 budget 个字符：在最后一整行停下（至少给一行），并在
+    """读第 offset 行（1 起算）起的至多 limit 行，带行号的正文不超过 budget 个字符：在最后一整行停下（至少给一行），并在
     more_note 里写明读到第几行、用什么 offset 接着读。"""
-    if offset < 0 or limit < 1:
-        # 负数在切片里有别的意思（从末尾数），会返回看起来正常、其实不对的内容
-        raise InvalidInput(f"offset must be >= 0 and limit >= 1, got offset={offset} limit={limit}")
+    if offset < 1 or limit < 1:
+        # 0 或负数：0 起算的习惯，或想从末尾数；都不是这里的约定，照着切片会返回看起来正常、其实不对的内容
+        raise InvalidInput(
+            f"offset is a 1-based line number (offset=1 is the first line) and limit must be >= 1, "
+            f"got offset={offset} limit={limit}"
+        )
     if not target.is_file():
         raise NotFound(f"file not found: {target}")
     lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
-    if offset and offset >= len(lines):
+    first = offset - 1
+    if offset > 1 and first >= len(lines):
         raise InvalidInput(f"offset {offset} is past the end: {target} has {len(lines)} lines")
-    end = min(offset + limit, len(lines))
+    end = min(first + limit, len(lines))
     rows: list[str] = []
     used = 0
-    for i in range(offset, end):
+    for i in range(first, end):
         row = numbered(lines, i, i + 1)
         used += len(row) + (1 if rows else 0)
         if rows and used > budget:
             break
         rows.append(row)
-    stop = offset + len(rows)
+    # stop：读到的最后一行的行号（1 起算），即下一行的 0 起下标
+    stop = first + len(rows)
     if stop < end:
         # 给了 limit 且没读到文件末尾时才提 limit；默认 limit 的窗口不是模型要的，照着读会以为文件到那里就完了
         explicit = limit != _DEFAULT_READ_LIMIT and end < len(lines)
         rest = f", limit={end - stop}" if explicit else ""
         note = (
-            f"\n… output limit reached: shown up to line {stop} of {len(lines)}; "
-            f"continue with offset={stop}{rest}"
+            f"\n[output limit reached at line {stop} of {len(lines)}; continue with offset={stop + 1}{rest}]"
         )
     else:
         more = len(lines) - end
-        note = f"\n… {more} more lines" if more > 0 else ""
+        note = f"\n[{more} more lines; continue with offset={end + 1}]" if more > 0 else ""
     return _Excerpt(
-        span=f"lines {offset + 1}-{stop} of {len(lines)}" if lines else "(empty file)",
+        span=f"lines {offset}-{stop} of {len(lines)}" if lines else "(empty file)",
         body="\n".join(rows),
         more_note=note,
         cut=stop < end,
@@ -394,8 +406,9 @@ def _edit_report(target: Path, before: str, content: str, count: int) -> str:
         if before == content:
             return f"{head}; the text is unchanged"
         return f"{head}; the file is now empty" if not lines else f"{head}; only line endings changed"
-    excerpts = [f"lines {start + 1}-{end}:\n{numbered(lines, start, end)}" for start, end in ranges]
-    return "\n".join([f"{head}. Changed lines with context:", *excerpts])
+    # 与 read_file 同为 cat -n 格式（行号在每行里，按它接着按行号改不必推算）；不连续的几块之间用 grep -C 的 `--` 分隔
+    excerpts = "\n--\n".join(numbered(lines, start, end) for start, end in ranges)
+    return f"{head}; cat -n of the changed lines with {_EDIT_CONTEXT_LINES} lines of context:\n{excerpts}"
 
 
 @dataclass(frozen=True)

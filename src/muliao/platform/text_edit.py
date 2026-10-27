@@ -100,4 +100,4 @@ def listed(line_numbers: list[int]) -> str:
 
 
 def truncate(text: str, limit: int) -> str:
-    return text if len(text) <= limit else f"{text[:limit]}…[truncated {len(text) - limit} chars]"
+    return text if len(text) <= limit else f"{text[:limit]}…[truncated: {len(text) - limit} more chars]"

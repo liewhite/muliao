@@ -398,10 +398,22 @@ async def test_run_shell_accepts_a_timeout_of_any_length(container, make_agent, 
     assert output.startswith("exit_code: 0")
 
 
-async def test_read_file_rejects_negative_offsets(container, make_agent, models):
+async def test_read_file_offsets_are_1_based_line_numbers(container, make_agent, models):
+    """offset 与输出的行号同为 1 起算（cat -n）：0 起算的习惯与负数都拒绝并说明，不悄悄返回错位的内容。"""
     me = await make_agent("alpha", model="tools")
-    [output] = await run_tools(container, models, me.id, [("read_file", {"path": "x.txt", "offset": -10})])
-    assert "offset must be >= 0" in output
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("write_file", {"path": "x.txt", "content": "a\nb\nc\n"}),
+            ("read_file", {"path": "x.txt", "offset": 2}),
+            ("read_file", {"path": "x.txt", "offset": 0}),
+            ("read_file", {"path": "x.txt", "offset": -10}),
+        ],
+    )
+    assert outputs[1] == "     2\tb\n     3\tc"
+    assert all("offset is a 1-based line number (offset=1 is the first line)" in o for o in outputs[2:])
 
 
 async def test_file_tools_wait_for_earlier_calls_of_the_same_reply(container, make_agent, models):
@@ -427,7 +439,7 @@ async def test_file_tools_wait_for_earlier_calls_of_the_same_reply(container, ma
     await start(container, me.id, "do it", origin=Origin.TRIGGER)
     await drain(container)
 
-    assert any("1\thi" in s for s in seen), seen
+    assert any("     1\thi" in s for s in seen), seen
 
 
 async def test_edit_file_replace_all_and_helpful_misses(container, make_agent, models):
@@ -502,14 +514,14 @@ async def test_edit_file_applies_several_edits_all_or_nothing(container, make_ag
     )
     assert "edit 2 of 2" in outputs[1] and "1 earlier edit(s) to it applied" in outputs[1]
     assert "nothing was written" in outputs[1]
-    assert "1\ta = 1\n2\tb = 2\n3\tc = 3" in outputs[2]
+    assert "     1\ta = 1\n     2\tb = 2\n     3\tc = 3" in outputs[2]
     assert "5 replacements" in outputs[3]
-    assert "1\ta=10\n2\tbb=2\n3\tc=3" in outputs[4]
+    assert "     1\ta=10\n     2\tbb=2\n     3\tc=3" in outputs[4]
     assert "not both" in outputs[5]
     assert "locate the text in exactly one way" in outputs[6]
     assert "new_text is required" in outputs[7]
     assert "not both" in outputs[8]
-    assert "1\ta=10\n2\tbb=2\n3\tc=3" in outputs[9]
+    assert "     1\ta=10\n     2\tbb=2\n     3\tc=3" in outputs[9]
 
 
 async def test_edit_file_changes_several_files_in_one_call_all_or_nothing(container, make_agent, models):
@@ -551,13 +563,13 @@ async def test_edit_file_changes_several_files_in_one_call_all_or_nothing(contai
         ],
     )
     assert "edit 2 of 2" in outputs[2] and "b.py" in outputs[2] and "nothing was written" in outputs[2]
-    assert "1\tA = 1" in outputs[3] and "1\tB = 1" in outputs[3]
+    assert "     1\tA = 1" in outputs[3] and "     1\tB = 1" in outputs[3]
     report = outputs[4]
     assert (
         "a.py (2 replacements; now 1 lines)" in report and "sub/b.py (1 replacement; now 1 lines)" in report
     )
     assert "sub/../a.py" not in report
-    assert "1\tA = 3" in outputs[5] and "1\tB = 2" in outputs[5]
+    assert "     1\tA = 3" in outputs[5] and "     1\tB = 2" in outputs[5]
     assert "edit 1 has no path" in outputs[6]
     assert "file not found" in outputs[7] and "nope.py" in outputs[7]
     assert "path is required" in outputs[8]
@@ -593,7 +605,7 @@ async def test_edit_file_refuses_a_read_only_file_before_writing_any(
         ],
     )
     assert "edit 2: file is not writable" in outputs[2] and "nothing was written" in outputs[2]
-    assert "1\tA = 1" in outputs[3]
+    assert "     1\tA = 1" in outputs[3]
 
 
 async def test_edit_file_locates_by_line_range_or_pattern_and_validates_the_locator(
@@ -663,8 +675,8 @@ async def test_edit_file_locates_by_line_range_or_pattern_and_validates_the_loca
     # 删掉函数连同它前面多出来的空行
     assert "(1 replacement; now 5 lines)" in outputs[1]
     assert "drop" not in outputs[1]
-    assert "(1 replacement; now 4 lines)" in outputs[2] and "4\tK = 1" in outputs[2]
-    assert "anchor does not match line 4" in outputs[3] and "4\tK = 1" in outputs[3]
+    assert "(1 replacement; now 4 lines)" in outputs[2] and "     4\tK = 1" in outputs[2]
+    assert "anchor does not match line 4" in outputs[3] and "     4\tK = 1" in outputs[3]
     assert "(2 replacements; now 4 lines)" in outputs[4]
     assert "exactly one way" in outputs[5]
     assert "go together" in outputs[6]
@@ -675,7 +687,7 @@ async def test_edit_file_locates_by_line_range_or_pattern_and_validates_the_loca
         and "nothing was written" in outputs[8]
     )
     assert "extension '.toml'" in outputs[10]
-    assert outputs[11] == "1\timport os, sys\n2\t\n3\t\n4\tK = 2"
+    assert outputs[11] == "     1\timport os, sys\n     2\t\n     3\t\n     4\tK = 2"
 
 
 async def test_read_file_reads_several_parts_with_line_numbers_and_reports_bad_parts_inline(
@@ -695,9 +707,9 @@ async def test_read_file_reads_several_parts_with_line_numbers_and_reports_bad_p
                 "read_file",
                 {
                     "reads": [
-                        {"path": "a.txt", "offset": 1, "limit": 2},
+                        {"path": "a.txt", "offset": 2, "limit": 2},
                         {"path": "missing.txt"},
-                        {"path": "a.txt", "offset": 8},
+                        {"path": "a.txt", "offset": 9},
                         {"path": "b.txt"},
                         {"path": "a.txt", "offset": 50},
                         {"path": "empty.txt"},
@@ -710,10 +722,13 @@ async def test_read_file_reads_several_parts_with_line_numbers_and_reports_bad_p
     )
     assert "(0 lines, 0 chars)" in outputs[2]
     out = outputs[3]
-    assert "a.txt lines 2-3 of 10 <==\n2\tline2\n3\tline3\n… 7 more lines" in out
+    assert (
+        "a.txt lines 2-3 of 10 <==\n     2\tline2\n     3\tline3\n[7 more lines; continue with offset=4]"
+        in out
+    )
     assert "missing.txt: file not found" in out
-    assert "a.txt lines 9-10 of 10 <==\n9\tline9\n10\tline10" in out
-    assert "b.txt lines 1-1 of 1 <==\n1\tonly" in out
+    assert "a.txt lines 9-10 of 10 <==\n     9\tline9\n    10\tline10" in out
+    assert "b.txt lines 1-1 of 1 <==\n     1\tonly" in out
     assert "==> a.txt: offset 50 is past the end" in out
     assert "empty.txt (empty file) <==" in out
     # 按给出的次序
@@ -755,11 +770,13 @@ async def test_edit_file_shows_the_changed_lines_with_numbers_so_no_reread_is_ne
     assert outputs[0].startswith("created ") and "(20 lines, " in outputs[0]
     assert outputs[1].startswith("overwrote ")
     edited = outputs[2]
-    assert "(2 replacements; now 20 lines)" in edited
-    # 插入处：前后各 2 行上下文
-    assert "lines 2-6:\n2\tl2\n3\tl3\n4\tnew\n5\tl4\n6\tl5" in edited
-    # 删除处只剩上下文，行号是改后的
-    assert "lines 14-17:\n14\tl13\n15\tl14\n16\tl16\n17\tl17" in edited
+    # 与 read_file 同为 cat -n 格式，不连续的块之间是 `--`；插入处前后各 2 行上下文
+    assert edited.startswith("edited ") and edited.endswith(
+        "(2 replacements; now 20 lines); cat -n of the changed lines with 2 lines of context:\n"
+        "     2\tl2\n     3\tl3\n     4\tnew\n     5\tl4\n     6\tl5\n"
+        # 删除处只剩上下文，行号是改后的
+        "--\n    14\tl13\n    15\tl14\n    16\tl16\n    17\tl17"
+    )
     assert "the text is unchanged" in outputs[3]
     assert "only line endings changed" in outputs[5]
     assert "now 0 lines); the file is now empty" in outputs[6]
@@ -798,7 +815,7 @@ async def test_read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_w
         [
             ("write_file", {"path": "a.txt", "content": content}),
             ("read_file", {"path": "a.txt"}),
-            ("read_file", {"path": "a.txt", "offset": 10, "limit": 200}),
+            ("read_file", {"path": "a.txt", "offset": 11, "limit": 200}),
             ("read_file", {"reads": [{"path": "a.txt", "limit": 5}, {"path": "a.txt"}, {"path": "b.txt"}]}),
             ("write_file", {"path": "wide.txt", "content": "w" * 1500 + "\n"}),
             # wide.txt 第一行就超预算、未读的段很多：都挤进未读列表，列表不被截
@@ -807,9 +824,9 @@ async def test_read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_w
                 {
                     "reads": [
                         {"path": "a.txt", "limit": 3},
-                        {"path": "a.txt", "offset": 10, "limit": 3},
+                        {"path": "a.txt", "offset": 11, "limit": 3},
                         {"path": "wide.txt"},
-                        *({"path": f"d{i:02}.py", "offset": i} for i in range(N_SKIPPED)),
+                        *({"path": f"d{i:02}.py", "offset": i} for i in range(1, N_SKIPPED + 1)),
                     ]
                 },
             ),
@@ -819,31 +836,34 @@ async def test_read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_w
     assert len(single) <= 1000 and "truncated" not in single
     body, note = single.rsplit("\n", 1)
     last = int(body.rsplit("\n", 1)[1].split("\t")[0])
-    # 最后一行完整，续读说明指向下一行（offset 0 起算 = 已读到的 1 起算行号）
-    assert body.endswith(f"{last}\tline{last:03}")
-    assert note == f"… output limit reached: shown up to line {last} of 300; continue with offset={last}"
+    # 最后一行完整，续读说明指向下一行（offset 与输出的行号同为 1 起算）
+    assert body.endswith(f"{last:6}\tline{last:03}")
+    assert note == f"[output limit reached at line {last} of 300; continue with offset={last + 1}]"
     ranged = outputs[2]
-    stop = int(ranged.rsplit("shown up to line ", 1)[1].split(" ")[0])
-    assert ranged.startswith("11\tline011") and ranged.endswith(
-        f"continue with offset={stop}, limit={210 - stop}"
+    stop = int(ranged.rsplit("limit reached at line ", 1)[1].split(" ")[0])
+    assert ranged.startswith("    11\tline011") and ranged.endswith(
+        f"continue with offset={stop + 1}, limit={210 - stop}]"
     )
     multi = outputs[3]
     assert len(multi) <= 1000 and "truncated" not in multi
-    assert "a.txt lines 1-5 of 300 <==" in multi and "\n… 295 more lines" in multi
+    assert "a.txt lines 1-5 of 300 <==" in multi and "\n[295 more lines; continue with offset=6]" in multi
     second = multi.split("\n\n")[1]
-    stop = int(second.rsplit("shown up to line ", 1)[1].split(" ")[0])
-    assert f"a.txt lines 1-{stop} of 300 <==" in second and second.endswith(f"continue with offset={stop}")
-    assert multi.endswith("\n\n==> not read, output limit reached; read in another call: b.txt offset=0 <==")
+    stop = int(second.rsplit("limit reached at line ", 1)[1].split(" ")[0])
+    assert f"a.txt lines 1-{stop} of 300 <==" in second and second.endswith(
+        f"continue with offset={stop + 1}]"
+    )
+    assert multi.endswith("\n\n[not read, output limit reached; read in another call: b.txt offset=1]")
     many = outputs[5]
     assert len(many) <= 1000 and "truncated" not in many
     # 列表放不下时连已读的第二段也挤进列表，只剩第一段；其余按次序列出
-    head, tail = many.split("\n\n==> not read, output limit reached; read in another call: ")
+    head, tail = many.split("\n\n[not read, output limit reached; read in another call: ")
     assert head.startswith("==> ") and head.endswith(
-        "a.txt lines 1-3 of 300 <==\n1\tline001\n2\tline002\n3\tline003\n… 297 more lines"
+        "a.txt lines 1-3 of 300 <==\n     1\tline001\n     2\tline002\n     3\tline003\n"
+        "[297 more lines; continue with offset=4]"
     )
-    listed = tail.removesuffix(" <==").split("; ")
-    assert listed[:2] == ["a.txt offset=10 limit=3", "wide.txt offset=0"]
-    assert listed[2:] == [f"d{i:02}.py offset={i}" for i in range(N_SKIPPED)]
+    listed = tail.removesuffix("]").split("; ")
+    assert listed[:2] == ["a.txt offset=11 limit=3", "wide.txt offset=1"]
+    assert listed[2:] == [f"d{i:02}.py offset={i}" for i in range(1, N_SKIPPED + 1)]
 
 
 async def test_read_file_truncates_very_long_lines(container, make_agent, models):
@@ -857,7 +877,11 @@ async def test_read_file_truncates_very_long_lines(container, make_agent, models
             ("read_file", {"path": "min.js"}),
         ],
     )
-    assert "[line truncated]" in outputs[1] and "2\tok" in outputs[1] and len(outputs[1]) < 2100
+    assert (
+        "…[line truncated: 3000 more chars]" in outputs[1]
+        and "     2\tok" in outputs[1]
+        and len(outputs[1]) < 2100
+    )
 
 
 async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_stores_only_a_reference(
