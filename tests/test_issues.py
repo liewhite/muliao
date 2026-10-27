@@ -528,7 +528,7 @@ async def test_a_run_that_leaves_its_issue_in_progress_is_asked_to_settle_it_onc
     assert "set `waiting` with a comment" in SESSION_NOTE
     assert (await container.issues.work([issue]))[issue.id].stalled
 
-    # 有了新动态又被唤醒，结束时仍是 in_progress：照样再问一次
+    # 有别人（用户）的动态唤醒过它，结束时仍是 in_progress：再问一次
     await container.issues.comment(USER, issue.id, "any update?")
     await drain(container)
     kinds = [a.kind for a in (await container.issues.get(issue.id)).activities]
