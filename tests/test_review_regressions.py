@@ -108,7 +108,9 @@ def test_only_transport_level_model_api_errors_are_transient():
 
 def _stream_error_event(error_type: str) -> BaseException:
     """流以 200 开始后收到的 error 事件，经 anthropic SDK 与 pydantic-ai 的真实映射得到的异常（#255）。"""
-    body = {"type": "error", "error": {"type": error_type, "message": "x"}}
+    body: object = (
+        {"type": "error", "error": {"type": error_type, "message": "x"}} if error_type else "not json"
+    )
     response = httpx2.Response(200, request=httpx2.Request("POST", "https://api.example/v1/messages"))
     client = anthropic.AsyncAnthropic(api_key="k")
     try:
@@ -124,6 +126,7 @@ def test_error_events_mid_stream_are_classified_by_type():
     relay_timeout = _stream_error_event("stream_timeout")
     assert type(relay_timeout) is ModelAPIError and is_transient(relay_timeout)
     # 契约内的类型由 pydantic-ai 换成对应状态码，按状态码判断
+    assert is_transient(_stream_error_event(""))  # data 不是 JSON
     assert is_transient(_stream_error_event("overloaded_error"))
     assert is_transient(_stream_error_event("api_error"))
     assert not is_transient(_stream_error_event("invalid_request_error"))

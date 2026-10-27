@@ -29,7 +29,9 @@ _TRANSPORT_ERRORS = (
 def _broken_off_stream(cause: BaseException | None) -> bool:
     """流已以 200 开始、中途收到类型不在 Anthropic 契约里的 error 事件（如中转站上游空闲超时的 `stream_timeout`）。
     契约内的类型（overloaded_error、invalid_request_error 等）已由 pydantic-ai 按类型换成对应状态码的 ModelHTTPError，
-    走到这里的只剩契约外的：请求已被接受、是流中途断开，与传输层断流同类。"""
+    走到这里的只剩契约外的（含 data 不是 JSON 的）：请求已被接受、是流中途断开，与传输层断流同类。
+    取舍：契约外类型一律当断流，不按中转站的具体类型特判；其中确定性的会在 outage 重试上限后失败，失败仍可见。
+    OpenAI 的流内错误没有状态码（基类 APIError 或无 cause），不在此覆盖。"""
     return isinstance(cause, anthropic.APIStatusError) and cause.status_code < 400
 
 
