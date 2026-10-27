@@ -4,7 +4,6 @@ import logging
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
-from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -149,12 +148,12 @@ class AgentRuntime:
             capabilities=[AttachmentsForModel(files), ToolImagesToFiles(files)],
         )
 
-    def workspace(self, agent_id: str) -> Path:
-        return self._agents.workspace(agent_id)
-
     def scope(self, agent: AgentInfo, *, session_id: str, audience: Audience) -> RunScope:
         return RunScope(
-            agent_id=agent.id, workspace=self.workspace(agent.id), session_id=session_id, audience=audience
+            agent_id=agent.id,
+            workspace=self._agents.workspace(agent.id),
+            session_id=session_id,
+            audience=audience,
         )
 
     async def instructions(

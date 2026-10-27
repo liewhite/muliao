@@ -1,12 +1,13 @@
 """信件交给模型的样子：消息是原文加附件引用，事件套上来源（conventions.format_event），迟到的回答写成文字。一次请求里
 的信件都并进同一段用户消息，哪些段是事件在构造时就记下（RUN_EVENTS），界面据此单独显示，不从文字反推。"""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from pydantic_ai.messages import ModelRequest, UserContent, UserPromptPart
 
-from muliao.agent_runtime.api import AgentRuntime, copy_to_workspace, references
+from muliao.agent_runtime.api import copy_to_workspace, references
 from muliao.files.api import FileStore
 from muliao.sessions.conventions import (
     RUN_CHECK_INS,
@@ -30,9 +31,10 @@ class Content:
 
 
 class ContentBuilder:
-    def __init__(self, files: FileStore, runtime: AgentRuntime):
+    def __init__(self, files: FileStore, workspace: Callable[[str], Path]):
         self._files = files
-        self._runtime = runtime
+        # agent 的工作目录（agents.api 的 AgentService.workspace）：附件复制到这里
+        self._workspace = workspace
 
     async def of(self, agent_id: str, mail: Sequence[Mail]) -> Content:
         """回答信件在这里只会是迟到的：按时的回答作为挂起调用的结果交回（sessions.pending）。消息的附件复制到 agent 的
@@ -53,7 +55,7 @@ class ContentBuilder:
                 items.append(format_event(m.source, m.content))
             else:
                 files = await self._files.referenced(m.attachments)
-                await copy_to_workspace(self._files, files, self._runtime.workspace(agent_id))
+                await copy_to_workspace(self._files, files, self._workspace(agent_id))
                 items += [*([m.content] if m.content.strip() else []), *references(files)]
         return Content(items, events, check_ins)
 

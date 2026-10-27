@@ -96,6 +96,7 @@ class SessionDomain:
         runtime: AgentRuntime,
         toolbox: Toolbox,
         files: FileStore,
+        agents: AgentService,
         notes: OriginNotes,
         compaction_threshold_tokens: int,
         compaction_keep_steps: int,
@@ -103,7 +104,7 @@ class SessionDomain:
         compactor = Compactor(
             db, runtime, queue, threshold_tokens=compaction_threshold_tokens, keep_steps=compaction_keep_steps
         )
-        content = ContentBuilder(files, runtime)
+        content = ContentBuilder(files, agents.workspace)
         consumer = Consumer(
             db,
             runtime,

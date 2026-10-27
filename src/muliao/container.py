@@ -397,6 +397,7 @@ def assemble(
         runtime=runtime,
         toolbox=toolbox,
         files=files,
+        agents=agents,
         notes=OriginNotes(
             {**OWN_NOTES, Origin.TRIGGER: TRIGGER_SESSION_NOTE, Origin.ISSUE: ISSUE_SESSION_NOTE}
         ),
