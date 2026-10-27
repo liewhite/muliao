@@ -1,6 +1,6 @@
 """记忆（agents·记忆子域）的接口：全局记忆与各 agent 的记忆，读写、版本历史与恢复。写入的人记为 "user"。
 
-版本的输出格式与条目共用（`RevisionOut`：版本是 agents 的共享内核）。
+版本的输出格式与条目共用（api/revisions.py）。
 """
 
 from fastapi import APIRouter
@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from muliao.agents.api import USER
 from muliao.api.deps import C
-from muliao.api.items import HISTORY_LIMIT, RevisionOut
+from muliao.api.revisions import HISTORY_LIMIT, RevisionOut
 
 router = APIRouter()
 
