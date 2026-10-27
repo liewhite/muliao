@@ -18,6 +18,7 @@ from muliao.agent_runtime.runner import AgentRuntime, Toolbox
 from muliao.agent_runtime.web import WebProvider, build_web_provider
 from muliao.agent_runtime.web_tools import web_toolset
 from muliao.agent_runtime.workspace_tools import ShellLimits
+from muliao.agents.catalog import ItemCatalog
 from muliao.agents.evolution_tools import (
     memory_toolset,
     skills_toolset,
@@ -28,7 +29,7 @@ from muliao.agents.mcp_tools import mcp_admin_toolset
 from muliao.agents.memory import MemoryStore
 from muliao.agents.permissions import available_tools
 from muliao.agents.revisions import Revisions
-from muliao.agents.roles import RoleService
+from muliao.agents.role_service import RoleService
 from muliao.agents.secrets import SecretItems
 from muliao.agents.service import AgentDefaults, AgentService, Thinking
 from muliao.agents.skills import SkillStore
@@ -99,12 +100,14 @@ class Container:
     # 「任务」页：列出与人工重试
     tasks: TaskAdmin
     vault: Vault
-    # 条目与记忆的版本（只读；写入与恢复经各 store）
+    # 版本（只读；写入与恢复经各 store）
     revisions: Revisions
     skills: SkillStore
     memory: MemoryStore
     agents: AgentService
     roles: RoleService
+    # 条目池：全部条目、预览、转移、条目的版本历史与恢复
+    catalog: ItemCatalog
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
     notifications: Notifications
@@ -140,6 +143,7 @@ class Assembly:
     memory: MemoryStore
     agents: AgentService
     roles: RoleService
+    catalog: ItemCatalog
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
     notifications: Notifications
@@ -183,6 +187,7 @@ class Assembly:
             memory=self.memory,
             agents=self.agents,
             roles=self.roles,
+            catalog=self.catalog,
             agent_lifecycle=self.agent_lifecycle,
             sessions=self.sessions,
             notifications=self.notifications,
@@ -303,14 +308,16 @@ def assemble(
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接
     mcp_connector = McpConnector(vault)
     mcp = McpRegistry(db, mcp_connector.probe)
+    tools = available_tools(web_configured=bool(web_tools))
     agents = AgentService(
         db,
         settings.workspaces_dir,
         model_checker or models.check,
         AgentDefaults(settings.llm.default_model),
-        available_tools(web_configured=bool(web_tools)),
+        tools,
     )
-    roles = RoleService(db)
+    roles = RoleService(db, tools)
+    catalog = ItemCatalog(db, tools, revisions, skills, mcp)
     activity = SessionActivity(queue)
     agent_lifecycle = AgentLifecycle(
         db, agents, skills, messaging, {"sessions": activity.blocks_agent_deletion_in}
@@ -391,7 +398,7 @@ def assemble(
         issues_toolset(issues, agents),
         *web_tools,
     ]
-    static_toolsets.append(agents_toolset(agents, roles, agent_lifecycle))
+    static_toolsets.append(agents_toolset(agents, roles, agent_lifecycle, catalog))
     toolbox = Toolbox(
         toolsets=static_toolsets,
         mcp=lambda: mcp_connector.toolset(mcp.index),
@@ -452,6 +459,7 @@ def assemble(
         memory=memory,
         agents=agents,
         roles=roles,
+        catalog=catalog,
         agent_lifecycle=agent_lifecycle,
         sessions=sessions,
         notifications=notifications,

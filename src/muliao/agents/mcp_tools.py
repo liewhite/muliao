@@ -12,7 +12,7 @@ from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 class McpInfo(BaseModel):
     name: str
-    # 是你自己的（否则是角色分给你的）
+    # 是你自己的（否则是角色或你自己的 allow 分给你的）
     yours: bool
     transport: str
     command: str | None
@@ -29,8 +29,8 @@ def mcp_admin_toolset(registry: McpRegistry) -> FunctionToolset[RunScope]:
 
     @ts.tool
     async def mcp_list(ctx: RunContext[RunScope]) -> list[McpInfo]:
-        """List the MCP servers you can use: your own and those your roles give you, including disabled ones
-        (their tools are not offered; the user enables them in the app). Values of env/headers are hidden."""
+        """List the MCP servers you can use: your own and those your roles or your own allow rules give you,
+        including disabled ones (their tools are not offered; the user enables them in the app). Values of env/headers are hidden."""
         me = ctx.deps.agent_id
         return [
             McpInfo(

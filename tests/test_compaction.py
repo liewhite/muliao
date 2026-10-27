@@ -417,7 +417,7 @@ async def _rows(container, session_id: str) -> list[tuple[int, ModelMessage]]:
 async def test_compaction_uses_the_agents_thinking_level(container, make_agent, models):
     models.models["m"] = scripted(Recorder(), ModelProfile(supports_thinking=True))
     alpha = (await make_agent("alpha", model="m")).id
-    await container.agents.update(alpha, AgentPatch(thinking="low"))
+    await container.agents.update(alpha, AgentPatch(thinking="low"), author="user")
     n = container.settings.runtime.compaction_keep_steps // 2 + 2
     session, recorder = await _session_with_exchanges(
         container, models, alpha, n, ModelProfile(supports_thinking=True)

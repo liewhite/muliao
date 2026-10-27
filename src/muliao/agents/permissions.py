@@ -2,9 +2,11 @@
 
 用途是防误操作、减少无关工具与条目占用上下文，不是安全隔离。
 
-- 条目分四种（Kind）：内置工具（tool，登记在 TOOLS，内容在代码里、归平台、不可改）与存在 items 表里的 skill、MCP
-  server、secret。名字按种类全局唯一。
+- 条目分四种（agents.kinds.Kind）：内置工具（tool，登记在 TOOLS，内容在代码里、归平台、不可改）与存在 items 表里的
+  skill、MCP server、secret。名字按种类全局唯一。
 - 规则：allow / deny 两组 `kind:glob`（fnmatch，如 `tool:issue_*`、`skill:relay-host`、`secret:RELAY_*`），deny 优先。
+  一组规则「收录」一个条目即 Rules.allows（allow 匹配、deny 没拦）：条目页列出的收录角色、删 agent 时判断条目是否分发
+  出去，都是这一个定义。
   agent 的规则 = 内置角色 base（每个 agent 隐含）+ 它的各个角色 + 它自己的 allow / deny，allow 与 deny 分别取并集。
 - agent 能用的条目 = 它自己 owner 的 ∪ 规则放行的（agents.access）。
 - 内置角色 base（全部非管理工具）与 admin（全部工具；admin 还能改任何条目，见 agents.access）：规则 = 代码里固定的部分
@@ -19,16 +21,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from fnmatch import fnmatchcase
 
+from muliao.agents.kinds import Kind
 from muliao.errors import InvalidInput
-
-
-class Kind(StrEnum):
-    """条目的种类；items.kind 存后三种。"""
-
-    TOOL = "tool"
-    SKILL = "skill"
-    MCP = "mcp"
-    SECRET = "secret"
 
 
 class Access(StrEnum):
@@ -159,15 +153,11 @@ class Rules:
         )
 
     def allows(self, kind: Kind, name: str) -> bool:
+        """这组规则收录它：allow 匹配、deny 没拦。"""
         item = pattern_of(kind, name)
         return any(fnmatchcase(item, p) for p in self.allow) and not any(
             fnmatchcase(item, p) for p in self.deny
         )
-
-    def matches(self, kind: Kind, name: str) -> bool:
-        """allow 里有规则匹配它（不看 deny）：删 agent 时判断它的条目是否被某个角色收录。"""
-        item = pattern_of(kind, name)
-        return any(fnmatchcase(item, p) for p in self.allow)
 
     def tools(self, available: Collection[str]) -> list[str]:
         """available（当前配置下注册的工具，available_tools）里放行的，按登记顺序。"""

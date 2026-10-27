@@ -1,27 +1,22 @@
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter
 from pydantic import BaseModel
 
 from muliao.agents.api import (
     BASE,
-    MAX_PACKAGE_BYTES,
     TOOLS,
     USER,
     AgentInfo,
     AgentPatch,
     AgentSpec,
-    CatalogEntry,
-    Kind,
     Reach,
     Role,
     RoleSpec,
-    SkillImport,
-    SkillMeta,
     Thinking,
 )
-from muliao.api.deps import C, check_owner, read_limited
+from muliao.api.deps import C
 
 router = APIRouter()
 
@@ -114,54 +109,6 @@ class ToolOut(BaseModel):
         return cls(name=name, access=t.access.value, admin=t.admin)
 
 
-@router.get("/tools")
-async def list_tools() -> list[ToolOut]:
-    """全部已登记的内置工具，按登记顺序（含 web，即使没配置 [web]）。"""
-    return [ToolOut.of(n) for n in TOOLS]
-
-
-class ItemOut(BaseModel):
-    """条目池里的一项，在规则里写作 `<kind>:<name>`。"""
-
-    kind: Kind
-    name: str
-    # agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共条目）
-    owner: str | None
-    description: str
-    # 内置工具为 null
-    updated_at: datetime | None
-    # 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin）；为空时只有 owner 能用（归平台的就谁也用不了）
-    roles: list[str]
-
-    @classmethod
-    def of(cls, e: CatalogEntry) -> "ItemOut":
-        return cls(
-            kind=e.kind,
-            name=e.name,
-            owner=e.owner,
-            description=e.description,
-            updated_at=e.updated_at,
-            roles=list(e.roles),
-        )
-
-
-@router.get("/items")
-async def list_items(c: C) -> list[ItemOut]:
-    """全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称。"""
-    return [ItemOut.of(e) for e in await c.agents.catalog()]
-
-
-class OwnerIn(BaseModel):
-    # agent 的 id；null 归平台
-    owner: str | None
-
-
-@router.put("/items/{kind}/{name}/owner", status_code=204)
-async def transfer_item(c: C, kind: Kind, name: str, body: OwnerIn) -> None:
-    """把 skill / MCP server / secret 转给另一个 owner（内置工具不能转），记一版；内容与收录它的角色不变。"""
-    await c.agents.transfer_item(kind, name, body.owner, USER)
-
-
 class ReachOut(BaseModel):
     """一份配置能用的内置工具与条目（skill、MCP server、secret，`kind:name`）。"""
 
@@ -185,7 +132,7 @@ class AgentPreviewIn(BaseModel):
 async def preview_agent(c: C, body: AgentPreviewIn) -> ReachOut:
     """agent 配置（还没保存的也行）最终能用的：自己的条目 + base + 角色 + allow / deny 放行的，与运行时同一套计算，
     与保存时同样校验（不合法 422）。"""
-    return ReachOut.of(await c.agents.preview(body.agent_id, body.roles, body.allow, body.deny))
+    return ReachOut.of(await c.catalog.preview(body.agent_id, body.roles, body.allow, body.deny))
 
 
 class RoleOut(BaseModel):
@@ -212,7 +159,7 @@ class RoleOut(BaseModel):
             allow=list(r.rules.allow),
             deny=list(r.rules.deny),
             builtin=r.builtin,
-            reach=ReachOut.of(await c.agents.role_reach(r.effective)),
+            reach=ReachOut.of(await c.roles.reach(r)),
             agents=[a.id for a in agents if r.name == BASE or r.name in a.roles],
         )
 
@@ -240,26 +187,26 @@ class RolePreviewIn(BaseModel):
 @router.post("/role-preview")
 async def preview_role(c: C, body: RolePreviewIn) -> ReachOut:
     """角色规则（还没保存的也行）能用的，与保存时同样校验（不合法 422）。"""
-    return ReachOut.of(await c.agents.preview_role(body.name, body.allow, body.deny))
+    return ReachOut.of(await c.roles.preview(body.name, body.allow, body.deny))
 
 
 @router.post("/roles/{name}", status_code=201)
 async def create_role(c: C, name: str, body: RoleIn) -> RoleOut:
-    role = await c.roles.create(RoleSpec(name, body.description, body.allow, body.deny))
+    role = await c.roles.create(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
     return await RoleOut.of(c, role, await c.agents.list())
 
 
 @router.put("/roles/{name}")
 async def update_role(c: C, name: str, body: RoleIn) -> RoleOut:
     """整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。"""
-    role = await c.roles.update(RoleSpec(name, body.description, body.allow, body.deny))
+    role = await c.roles.update(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
     return await RoleOut.of(c, role, await c.agents.list())
 
 
 @router.delete("/roles/{name}", status_code=204)
 async def delete_role(c: C, name: str) -> None:
     """有 agent 引用时 409。"""
-    await c.roles.delete(name)
+    await c.roles.delete(name, actor=USER)
 
 
 @router.get("/providers")
@@ -314,7 +261,7 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         # null 与空串都是不分组（AgentPatch 里 None 是「不变」）
         group=body.group or "",
     )
-    return AgentOut.of(await c.agents.update(agent_id, patch))
+    return AgentOut.of(await c.agents.update(agent_id, patch, author=USER))
 
 
 @router.put("/agents/{agent_id}/default")
@@ -344,115 +291,3 @@ async def unarchive_agent(c: C, agent_id: str) -> AgentOut:
 @router.delete("/agents/{agent_id}", status_code=204)
 async def delete_agent(c: C, agent_id: str) -> None:
     await c.agent_lifecycle.delete(agent_id, author=USER)
-
-
-class MemoryOut(BaseModel):
-    content: str
-    max_chars: int
-
-
-class MemoryIn(BaseModel):
-    # 为空即全局记忆
-    owner: str | None
-    content: str
-
-
-@router.get("/memory")
-async def get_memory(c: C, owner: str | None = None) -> MemoryOut:
-    """owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。"""
-    await check_owner(c, owner)
-    return MemoryOut(content=await c.memory.read(owner), max_chars=c.memory.max_chars)
-
-
-@router.put("/memory")
-async def put_memory(c: C, body: MemoryIn) -> MemoryOut:
-    return MemoryOut(
-        content=await c.memory.write(body.owner, body.content, USER), max_chars=c.memory.max_chars
-    )
-
-
-class SkillOut(BaseModel):
-    name: str
-    description: str
-    owner: str | None
-
-    @classmethod
-    def of(cls, m: SkillMeta) -> "SkillOut":
-        return cls(name=m.name, description=m.description, owner=m.owner)
-
-
-class SkillDetail(SkillOut):
-    body: str
-
-
-class SkillIn(BaseModel):
-    owner: str | None
-    name: str
-    description: str
-    body: str
-
-
-@router.get("/skill")
-async def get_skill(c: C, name: str) -> SkillDetail:
-    skill = await c.skills.read(name)
-    meta = skill.meta
-    return SkillDetail(name=meta.name, description=meta.description, owner=meta.owner, body=skill.body)
-
-
-@router.put("/skill")
-async def put_skill(c: C, body: SkillIn) -> SkillOut:
-    """新建的归 owner；已有的整体改写，owner 不变。"""
-    meta = await c.skills.write(body.name, body.description, body.body, actor=USER, owner=body.owner)
-    return SkillOut.of(meta)
-
-
-@router.delete("/skill", status_code=204)
-async def delete_skill(c: C, name: str) -> None:
-    await c.skills.delete(name, USER)
-
-
-SKILL_PACKAGE_TYPE = "application/zip"
-
-
-@router.get(
-    "/skill/package",
-    response_class=Response,
-    responses={200: {"content": {SKILL_PACKAGE_TYPE: {}}, "description": "<name>.skill"}},
-)
-async def export_skill(c: C, name: str) -> Response:
-    """下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。"""
-    package = await c.skills.export(name)
-    return Response(
-        package,
-        media_type=SKILL_PACKAGE_TYPE,
-        headers={"Content-Disposition": f'attachment; filename="{name}.skill"'},
-    )
-
-
-class SkippedOut(BaseModel):
-    # 包里的路径（相对 skill 目录；macOS 元数据是包里的完整路径）
-    path: str
-    reason: str
-
-
-class SkillImportOut(BaseModel):
-    skill: SkillOut
-    # 没有导入的文件（二进制、不在后缀白名单里、超过单文件上限、不是 UTF-8 文本……）
-    skipped: list[SkippedOut]
-
-    @classmethod
-    def of(cls, result: SkillImport) -> "SkillImportOut":
-        return cls(
-            skill=SkillOut.of(result.meta),
-            skipped=[SkippedOut(path=s.path, reason=s.reason) for s in result.skipped],
-        )
-
-
-@router.post("/skill/package")
-async def import_skill(
-    c: C, request: Request, owner: str | None = None, replace: bool = False
-) -> SkillImportOut:
-    """请求体是一个标准 .skill 文件，导入为 skill（新建的归 owner，缺省为平台），一次提交、作者 user。同名 skill 已存在时 409，
-    replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，超限 413。"""
-    package = await read_limited(request, MAX_PACKAGE_BYTES)
-    return SkillImportOut.of(await c.skills.import_package(package, actor=USER, owner=owner, replace=replace))

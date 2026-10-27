@@ -2,24 +2,23 @@
 （内置角色的行可以不存在，即可编辑部分为空）。agent 按名称引用角色，base 每个 agent 隐含、不写进 agents.roles。
 
 引用的一致性在写事务里保证：agent 写入角色名时在同一事务里检查角色存在，删除角色时在同一事务里检查没有 agent 引用它
-（事务串行，两者不会交错）。
+（事务串行，两者不会交错）。这里是事务内的查询与校验，增删改在 agents.role_service.RoleService。
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
-from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.naming import validate_slug
-from muliao.agents.permissions import BASE, FIXED_RULES, Kind, Role, Rules, check_patterns, kind_of
-from muliao.agents.tables import Agent, Item
+from muliao.agents.kinds import Kind
+from muliao.agents.permissions import BASE, FIXED_RULES, Role, Rules, check_patterns, kind_of
+from muliao.agents.tables import Item
 from muliao.agents.tables import Role as RoleRow
-from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.platform.db import Database
+from muliao.errors import InvalidInput
 
 # 内置角色在表里没有行时的描述
 BUILTIN_DESCRIPTIONS: dict[str, str] = {
@@ -28,15 +27,16 @@ BUILTIN_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-@dataclass(frozen=True)
-class RoleSpec:
-    name: str
-    description: str
-    allow: Sequence[str]
-    deny: Sequence[str]
+def document(role: Role) -> str:
+    """角色在版本表里的文档：描述与可编辑的规则（固定的部分在代码里，不记）。"""
+    return json.dumps(
+        {"description": role.description, "allow": list(role.rules.allow), "deny": list(role.rules.deny)},
+        ensure_ascii=False,
+        indent=1,
+    )
 
 
-def _of(name: str, row: RoleRow | None) -> Role:
+def role_of(name: str, row: RoleRow | None) -> Role:
     fixed = FIXED_RULES.get(name, Rules())
     if row is None:
         return Role(name, BUILTIN_DESCRIPTIONS[name], Rules(), fixed)
@@ -46,8 +46,8 @@ def _of(name: str, row: RoleRow | None) -> Role:
 async def roles_in(s: AsyncSession) -> dict[str, Role]:
     """全部角色：内置在前（按定义顺序），自建的按名称。"""
     rows = {r.name: r for r in await s.scalars(select(RoleRow).order_by(RoleRow.name))}
-    builtin = {n: _of(n, rows.get(n)) for n in FIXED_RULES}
-    return {**builtin, **{n: _of(n, r) for n, r in rows.items() if n not in FIXED_RULES}}
+    builtin = {n: role_of(n, rows.get(n)) for n in FIXED_RULES}
+    return {**builtin, **{n: role_of(n, r) for n, r in rows.items() if n not in FIXED_RULES}}
 
 
 async def check_assignable_in(s: AsyncSession, names: Sequence[str]) -> None:
@@ -79,96 +79,6 @@ async def check_rules_in(s: AsyncSession, rules: Rules, before: Rules = Rules())
     check_patterns(rules.deny)
     await check_new_items_in(s, rules.allow, before.allow)
     await check_new_items_in(s, rules.deny, before.deny)
-
-
-def _check(spec: RoleSpec) -> None:
-    validate_slug("role", spec.name)
-    if not spec.description.strip():
-        raise InvalidInput("role description must not be empty")
-
-
-class RoleService:
-    def __init__(self, db: Database):
-        self._db = db
-
-    async def list(self) -> list[Role]:
-        async with self._db.transaction() as s:
-            return list((await roles_in(s)).values())
-
-    async def get(self, name: str) -> Role:
-        async with self._db.transaction() as s:
-            role = (await roles_in(s)).get(name)
-            if role is None:
-                raise NotFound(f"role {name!r} not found")
-            return role
-
-    async def create(self, spec: RoleSpec) -> Role:
-        _check(spec)
-        async with self._db.transaction() as s:
-            if spec.name in await roles_in(s):
-                raise Conflict(f"role {spec.name!r} already exists")
-            await check_rules_in(s, Rules(tuple(spec.allow), tuple(spec.deny)))
-            row = RoleRow(
-                name=spec.name, description=spec.description, allow=list(spec.allow), deny=list(spec.deny)
-            )
-            s.add(row)
-            await s.flush()
-            return _of(row.name, row)
-
-    async def update(self, spec: RoleSpec) -> Role:
-        """整体替换描述与可编辑的规则（名称不改：agent 按名称引用它）；内置角色也可以（固定的部分不变）。改动从带这个角色
-        的 agent 的下一次运行起生效。"""
-        async with self._db.transaction() as s:
-            return await self._update_in(s, spec)
-
-    @staticmethod
-    async def _update_in(s: AsyncSession, spec: RoleSpec) -> Role:
-        _check(spec)
-        row = await s.get(RoleRow, spec.name)
-        if row is None and spec.name not in FIXED_RULES:
-            raise NotFound(f"role {spec.name!r} not found")
-        before = Rules() if row is None else Rules(tuple(row.allow), tuple(row.deny))
-        await check_rules_in(s, Rules(tuple(spec.allow), tuple(spec.deny)), before)
-        if row is None:
-            row = RoleRow(name=spec.name)
-            s.add(row)
-        row.description, row.allow, row.deny = spec.description, list(spec.allow), list(spec.deny)
-        await s.flush()
-        return _of(row.name, row)
-
-    async def patch(
-        self,
-        name: str,
-        *,
-        description: str | None = None,
-        allow: Sequence[str] | None = None,
-        deny: Sequence[str] | None = None,
-    ) -> Role:
-        """只改给出的字段（None 为不改），读与写在同一个事务里：并发的局部修改互不覆盖。规则同 update。"""
-        async with self._db.transaction() as s:
-            role = (await roles_in(s)).get(name)
-            if role is None:
-                raise NotFound(f"role {name!r} not found")
-            spec = RoleSpec(
-                name,
-                role.description if description is None else description,
-                role.rules.allow if allow is None else allow,
-                role.rules.deny if deny is None else deny,
-            )
-            return await self._update_in(s, spec)
-
-    async def delete(self, name: str) -> None:
-        async with self._db.transaction() as s:
-            if name in FIXED_RULES:
-                raise InvalidInput(f"role {name!r} is built in and cannot be deleted")
-            row = await s.get(RoleRow, name)
-            if row is None:
-                raise NotFound(f"role {name!r} not found")
-            # 包括正在删除的 agent：它的行还在，删除流程完成前不让角色先消失
-            users = [a.name for a in await s.scalars(select(Agent)) if name in a.roles]
-            if users:
-                raise Conflict(f"role {name!r} is used by agents {users}")
-            await s.delete(row)
 
 
 async def rules_in(s: AsyncSession, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> Rules:

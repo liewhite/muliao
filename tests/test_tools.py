@@ -977,7 +977,7 @@ async def test_agent_run_sends_its_thinking_level(container, make_agent, models)
     models.models["m"] = scripted(_thinking_seen(seen), THINKS)
     default = await make_agent("plain", model="m")
     thinker = await make_agent("thinker", model="m")
-    await container.agents.update(thinker.id, AgentPatch(thinking="xhigh"))
+    await container.agents.update(thinker.id, AgentPatch(thinking="xhigh"), author="user")
     for agent in (default, thinker):
         await start(container, agent.id, "q", origin=Origin.TRIGGER)
         await drain(container)
@@ -992,8 +992,8 @@ async def test_thinking_the_model_would_silently_drop_is_rejected(container, mak
     )
     me = await make_agent("a", model="always")
     with pytest.raises(InvalidInput, match="always thinks"):
-        await container.agents.update(me.id, AgentPatch(thinking="off"))
-    await container.agents.update(me.id, AgentPatch(thinking="medium"))
+        await container.agents.update(me.id, AgentPatch(thinking="off"), author="user")
+    await container.agents.update(me.id, AgentPatch(thinking="medium"), author="user")
     with pytest.raises(InvalidInput, match="does not take a thinking setting"):
-        await container.agents.update(me.id, AgentPatch(model="no-thinking"))
+        await container.agents.update(me.id, AgentPatch(model="no-thinking"), author="user")
     assert (await container.agents.get(me.id)).model == "always"

@@ -1,19 +1,16 @@
 """agent 与角色的查看与管理：查看、创建、修改、删除 agent 与角色，转移条目的 owner。给模型看的是名称和描述，不出现 id。"""
 
-from typing import Literal
-
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
+from muliao.agents.catalog import ItemCatalog
+from muliao.agents.kinds import StoredKind, label
 from muliao.agents.lifecycle import AgentLifecycle
-from muliao.agents.permissions import Kind, Role
-from muliao.agents.roles import RoleService, RoleSpec
+from muliao.agents.permissions import Role
+from muliao.agents.role_service import RoleService, RoleSpec
 from muliao.agents.service import AgentPatch, AgentService, AgentSpec, Thinking
 from muliao.errors import Conflict, InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-
-# 能转移的条目种类（内置工具归平台、不能转）
-ItemKind = Literal["skill", "mcp", "secret"]
 
 
 class RoleDetail(BaseModel):
@@ -61,6 +58,7 @@ def agents_toolset(
     agents: AgentService,
     roles: RoleService,
     lifecycle: AgentLifecycle,
+    catalog: ItemCatalog,
 ) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
@@ -84,7 +82,7 @@ def agents_toolset(
             allow=list(target.allow),
             deny=list(target.deny),
             tools=agents.resolve(await agents.rules(target)),
-            items=await agents.usable_items(target.id),
+            items=await catalog.usable_items(target.id),
             available_roles=[RoleDetail.of(r) for r in await roles.list()],
             all_tools=list(agents.tools),
         )
@@ -173,7 +171,7 @@ def agents_toolset(
             thinking=thinking,
             group=group,
         )
-        target = await agents.update(target.id, patch)
+        target = await agents.update(target.id, patch, author=ctx.deps.agent_id)
         if archived is not None:
             try:
                 target = await lifecycle.set_archived(target.id, archived)
@@ -205,7 +203,7 @@ def agents_toolset(
         return f"deleted agent {target.name}"
 
     @ts.tool
-    async def transfer_item(ctx: RunContext[RunScope], kind: ItemKind, name: str, owner: str | None) -> str:
+    async def transfer_item(ctx: RunContext[RunScope], kind: StoredKind, name: str, owner: str | None) -> str:
         """Give a skill, MCP server or secret to another owner, e.g. before deleting or archiving its current
         owner. Its content and the roles that hand it out stay; the new owner can always use and change it, the
         old one only through roles. Recorded in the item's version history.
@@ -216,12 +214,16 @@ def agents_toolset(
             owner: Agent name of the new owner, or null for the platform (then only roles hand it out).
         """
         target = None if owner is None else await agents.find_by_name(owner)
-        await agents.transfer_item(Kind(kind), name, None if target is None else target.id, ctx.deps.agent_id)
-        return f"{kind} {name} now belongs to {'the platform' if target is None else f'agent {target.name}'}"
+        await catalog.transfer_item(kind, name, None if target is None else target.id, ctx.deps.agent_id)
+        return f"{label(kind)} {name} now belongs to {'the platform' if target is None else f'agent {target.name}'}"
 
-    @ts.tool_plain
+    @ts.tool
     async def create_role(
-        name: str, description: str, allow: tuple[str, ...] = (), deny: tuple[str, ...] = ()
+        ctx: RunContext[RunScope],
+        name: str,
+        description: str,
+        allow: tuple[str, ...] = (),
+        deny: tuple[str, ...] = (),
     ) -> str:
         """Create a role: a bundle of `kind:name` rules (kind is tool, skill, mcp or secret; fnmatch wildcards)
         that hands tools and items to every agent given the role (`update_agent` roles), e.g. a role
@@ -233,11 +235,12 @@ def agents_toolset(
             allow: Rules to allow.
             deny: Rules to deny; deny wins over every allow, also over other roles' allows.
         """
-        role = await roles.create(RoleSpec(name, description, allow, deny))
+        role = await roles.create(RoleSpec(name, description, allow, deny), actor=ctx.deps.agent_id)
         return f"created role {role.name}"
 
-    @ts.tool_plain
+    @ts.tool
     async def update_role(
+        ctx: RunContext[RunScope],
         name: str,
         description: str | None = None,
         allow: tuple[str, ...] | None = None,
@@ -253,17 +256,17 @@ def agents_toolset(
             allow: New full list of rules to allow (`get_agent` shows the current ones).
             deny: New full list of rules to deny.
         """
-        await roles.patch(name, description=description, allow=allow, deny=deny)
+        await roles.patch(name, actor=ctx.deps.agent_id, description=description, allow=allow, deny=deny)
         return f"updated role {name}"
 
-    @ts.tool_plain
-    async def delete_role(name: str) -> str:
+    @ts.tool
+    async def delete_role(ctx: RunContext[RunScope], name: str) -> str:
         """Delete a role no agent has. Built-in roles cannot be deleted.
 
         Args:
             name: Role name.
         """
-        await roles.delete(name)
+        await roles.delete(name, actor=ctx.deps.agent_id)
         return f"deleted role {name}"
 
     return ts

@@ -1,6 +1,6 @@
 """加密保存的 secret。agent 只能通过 key 引用，没有读取明文的工具。
 
-密文与描述存在 agent 领域的条目里（agents.api.SecretItems，key 按名字全局唯一）；这里管加解密、key 的语法与
+密文与描述存在 agent 领域的条目里（agents.api.SecretItems，key 按名字全局唯一，key 的语法也在那里）；这里管加解密与
 ${vault:KEY} 引用的解析。引用按使用者能用的 secret 解析（agents 的规则 1：自己的与分发给它的）：agent 运行的命令与
 它连接的 MCP server 都用该 agent；用户（USER，如界面上新增 MCP 时的探测）能用全部。
 """
@@ -15,18 +15,13 @@ from datetime import datetime
 
 from cryptography.fernet import Fernet
 
-from muliao.agents.api import SecretItems, StoredSecret
+from muliao.agents.api import SECRET_KEY_SYNTAX, SecretItems, StoredSecret
 from muliao.errors import InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
 
-# secret key 的语法：存储时校验与模板里的引用共用这一份。长度上限只在存储时检查：引用了超长 key 的模板照样认作引用，
-# 解析时按「不存在」报错，而不是当成字面文本原样代入
-_KEY_SYNTAX = r"[A-Za-z_][A-Za-z0-9_]*"
-_KEY_MAX = 100
-_KEY = re.compile(rf"^{_KEY_SYNTAX}$")
 # 配置模板中的引用语法：${vault:KEY}
-VAULT_REF = re.compile(rf"\$\{{vault:({_KEY_SYNTAX})\}}")
+VAULT_REF = re.compile(rf"\$\{{vault:({SECRET_KEY_SYNTAX})\}}")
 
 
 def fill(template: str, values: Mapping[str, str]) -> str:
@@ -42,14 +37,6 @@ class SecretInfo:
     updated_at: datetime
 
 
-def validate_key(key: str) -> str:
-    if not _KEY.fullmatch(key) or len(key) > _KEY_MAX:
-        raise InvalidInput(
-            f"invalid secret key {key!r}: must match {_KEY.pattern} and be at most {_KEY_MAX} characters"
-        )
-    return key
-
-
 def _info(s: StoredSecret) -> SecretInfo:
     return SecretInfo(s.owner, s.key, s.description, s.updated_at)
 
@@ -61,7 +48,6 @@ class Vault:
 
     async def set(self, key: str, value: str, description: str, *, actor: str, owner: str | None) -> None:
         """新建（归 owner）或改写（actor 要能改它）一个 secret。"""
-        validate_key(key)
         if not value:
             raise InvalidInput("secret value must not be empty")
         await self._items.put(
@@ -73,6 +59,10 @@ class Vault:
     async def delete(self, key: str, actor: str) -> None:
         await self._items.delete(key, actor)
         log.info("secret deleted", extra={"key": key, "author": actor})
+
+    async def get(self, key: str) -> SecretInfo:
+        """一个 secret 的信息（不含值）。"""
+        return _info(await self._items.get(key))
 
     async def usable_by(self, user: str) -> list[SecretInfo]:
         """user（agent 的 id，或 USER）能用的 secret（不含值），按 key。"""
@@ -87,6 +77,6 @@ class Vault:
         if missing:
             raise NotFound(
                 f"secret(s) {missing} not found among the secrets you can use (your own and those given to you "
-                "by your roles)"
+                "by your roles or your own allow rules)"
             )
         return {k: self._fernet.decrypt(rows[k].ciphertext).decode() for k in keys}

@@ -27,13 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents import skill_package
 from muliao.agents.access import grants_in
-from muliao.agents.items import changeable_in, existing_in, item_in, usable_in, writable_in
+from muliao.agents.items import changeable_in, creatable_in, existing_in, item_in, usable_in, writable_in
+from muliao.agents.kinds import Kind, StoredKind, Subject
 from muliao.agents.naming import validate_slug
-from muliao.agents.permissions import Kind
-from muliao.agents.revisions import Subject, record_in
+from muliao.agents.revisions import record_in, revision_doc_in
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped
 from muliao.agents.tables import Item, ItemFile
-from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.errors import InvalidInput, NotFound
 from muliao.platform import text_edit
 from muliao.platform.db import Database
 
@@ -150,17 +150,17 @@ class SkillStore:
     async def index(self, agent: str) -> list[SkillMeta]:
         """agent 能用的 skill（自己的与分发给它的，agents.access），按名称：它的 skill 索引。"""
         async with self._db.transaction() as s:
-            return [self._meta(r) for r in await usable_in(s, Subject.SKILL, agent)]
+            return [self._meta(r) for r in await usable_in(s, StoredKind.SKILL, agent)]
 
     async def read(self, name: str) -> Skill:
         async with self._db.transaction() as s:
-            row = await existing_in(s, Subject.SKILL, name)
+            row = await existing_in(s, StoredKind.SKILL, name)
             return Skill(self._meta(row), frontmatter.loads(row.content).content)
 
     async def resolve(self, agent: str, name: str) -> Skill:
         """agent 读取：任何存在的 skill 都读得到（软隔离），usable 标明它是否在这个 agent 能用的范围里。"""
         async with self._db.transaction() as s:
-            row = await item_in(s, Subject.SKILL, name)
+            row = await item_in(s, StoredKind.SKILL, name)
             if row is None:
                 raise NotFound(f"skill {name!r} not found")
             usable = (await grants_in(s, agent)).uses(Kind.SKILL, name, row.owner)
@@ -169,7 +169,7 @@ class SkillStore:
     async def files(self, name: str) -> dict[str, SkillFile]:
         """SKILL.md 与全部附件。"""
         async with self._db.transaction() as s:
-            row = await existing_in(s, Subject.SKILL, name)
+            row = await existing_in(s, StoredKind.SKILL, name)
             return {SKILL_FILE: SkillFile(row.content), **await _attachments_in(s, row)}
 
     async def write(
@@ -211,7 +211,7 @@ class SkillStore:
             )
         # 读取、修改、写入与记版本在同一个写事务里（同记忆）：并发的编辑依次基于最新正文应用，互不覆盖
         async with self._db.transaction() as s:
-            row = await changeable_in(s, Subject.SKILL, name, actor)
+            row = await changeable_in(s, StoredKind.SKILL, name, actor)
             post = frontmatter.loads(row.content)
             if edits_body:
                 post.content = text_edit.edit(post.content, old, new, f"skill {name}").strip() + "\n"
@@ -231,10 +231,17 @@ class SkillStore:
         actor: str,
         owner: str | None,
         verb: str,
+        *,
+        replace: bool = True,
     ) -> SkillMeta:
-        """新建或整篇写入：已有的按规则 2 查 actor，owner 不变；新建的归 owner。"""
+        """新建或整篇写入：已有的按规则 2 查 actor，owner 不变；新建的归 owner。replace 为假时只新建：同名的已存在
+        Conflict（在写入的事务里查，并发的新建不会互相覆盖）。"""
         async with self._db.transaction() as s:
-            row = await writable_in(s, Subject.SKILL, name, actor, owner)
+            if replace:
+                row = await writable_in(s, StoredKind.SKILL, name, actor, owner)
+            else:
+                await creatable_in(s, StoredKind.SKILL, name, owner)
+                row = None
             meta = await self._store_in(s, row, name, skill_md, attachments, actor, owner, verb)
         await self.materialize(name)
         return meta
@@ -259,7 +266,7 @@ class SkillStore:
         old_files = {} if row is None else await _attachments_in(s, row)
         before = None if row is None else document(row.content, old_files)
         if row is None:
-            row = Item(kind=Subject.SKILL.value, name=name, owner=owner)
+            row = Item(kind=StoredKind.SKILL.value, name=name, owner=owner)
             s.add(row)
         row.content, row.description = skill_md, description
         new_files = old_files if attachments is None else dict(attachments)
@@ -291,26 +298,22 @@ class SkillStore:
         skill_md = package.files[SKILL_FILE].content
         parse_frontmatter(skill_md, name)
         attachments = {rel: f for rel, f in package.files.items() if rel != SKILL_FILE}
-        if not replace:
-            async with self._db.transaction() as s:
-                existing = await item_in(s, Subject.SKILL, name)
-            if existing is not None:
-                raise Conflict(f"skill {name!r} already exists")
-        meta = await self._put(name, skill_md, attachments, actor, owner, "import")
+        meta = await self._put(name, skill_md, attachments, actor, owner, "import", replace=replace)
         return SkillImport(meta, package.skipped)
 
-    async def restore(self, name: str, doc: str, author: str) -> SkillMeta:
-        """把某一版的文档作为新的一版写入（归属不变：恢复的是内容）。"""
+    async def restore(self, name: str, rev: int, author: str) -> SkillMeta:
+        """把第 rev 版的文档作为新的一版写入（归属不变：恢复的是内容），读版本与写入在同一个事务里。"""
         async with self._db.transaction() as s:
-            row = await existing_in(s, Subject.SKILL, name)
-            owner = row.owner
-        files = parse_document(doc)
-        skill_md = files.pop(SKILL_FILE).content
-        return await self._put(name, skill_md, files, author, owner, "restore")
+            row = await changeable_in(s, StoredKind.SKILL, name, author)
+            files = parse_document(await revision_doc_in(s, Subject.SKILL, name, rev))
+            skill_md = files.pop(SKILL_FILE).content
+            meta = await self._store_in(s, row, name, skill_md, files, author, row.owner, "restore")
+        await self.materialize(name)
+        return meta
 
     async def delete(self, name: str, actor: str) -> None:
         async with self._db.transaction() as s:
-            row = await changeable_in(s, Subject.SKILL, name, actor)
+            row = await changeable_in(s, StoredKind.SKILL, name, actor)
             before = document(row.content, await _attachments_in(s, row))
             await s.delete(row)
             record_in(s, Subject.SKILL, name, before, None, actor, f"delete skill {name}")
@@ -319,7 +322,7 @@ class SkillStore:
     async def owned_names(self, owner: str) -> list[str]:
         async with self._db.transaction() as s:
             rows = await s.scalars(
-                select(Item.name).where(Item.kind == Subject.SKILL.value, Item.owner == owner)
+                select(Item.name).where(Item.kind == StoredKind.SKILL.value, Item.owner == owner)
             )
             return list(rows)
 
@@ -329,7 +332,7 @@ class SkillStore:
         """按数据库里现在的状态重新生成这个 skill 的目录（已删除就删掉目录）。"""
         async with self._materialize_lock:
             async with self._db.transaction() as s:
-                row = await item_in(s, Subject.SKILL, name)
+                row = await item_in(s, StoredKind.SKILL, name)
                 files = (
                     None
                     if row is None
@@ -347,7 +350,7 @@ class SkillStore:
         """启动时：按数据库全量重新生成，删掉数据库里没有的目录与上次留下的临时目录。"""
         async with self._materialize_lock:
             async with self._db.transaction() as s:
-                rows = list(await s.scalars(select(Item).where(Item.kind == Subject.SKILL.value)))
+                rows = list(await s.scalars(select(Item).where(Item.kind == StoredKind.SKILL.value)))
                 skills = {
                     r.name: {SKILL_FILE: SkillFile(r.content), **await _attachments_in(s, r)} for r in rows
                 }

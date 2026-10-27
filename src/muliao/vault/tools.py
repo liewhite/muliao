@@ -9,7 +9,7 @@ from muliao.vault.service import Vault
 
 class SecretKeyInfo(BaseModel):
     key: str
-    # 是你自己的（否则是角色分给你的）
+    # 是你自己的（否则是角色或你自己的 allow 分给你的）
     yours: bool
     description: str
 
@@ -26,7 +26,8 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
 
     @ts.tool
     async def vault_list(ctx: RunContext[RunScope]) -> list[SecretKeyInfo]:
-        """List the secret keys you can use: your own and those your roles give you. Values are never shown."""
+        """List the secret keys you can use: your own and those your roles or your own allow rules give you.
+        Values are never shown."""
         me = ctx.deps.agent_id
         return [
             SecretKeyInfo(key=s.key, yours=s.owner == me, description=s.description)

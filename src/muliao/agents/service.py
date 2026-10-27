@@ -1,8 +1,10 @@
-"""Agent 定义的增删改查及其文件目录。"""
+"""Agent 定义的增删改查及其文件目录。分发规则（角色与自己的 allow / deny）每次修改在同一个写事务里记一版（revisions，
+subject agent，name 是 agent 的 id）；其余字段（名称、描述、模型……）不记。条目池、预览与转移在 agents.catalog。"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 from collections.abc import Callable, Sequence
@@ -14,17 +16,15 @@ from typing import Literal, cast, get_args
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.access import Grants, Keep, granted_by, grants_in, owner_label_in
 from muliao.agents.active import active_row_in, runnable_row_in
-from muliao.agents.documents import document_in
 from muliao.agents.ids import new_agent_id
-from muliao.agents.items import changeable_in, label, set_owner_in
+from muliao.agents.kinds import Subject
 from muliao.agents.memory import create_memory_in
 from muliao.agents.naming import new_agent_name, normalize_agent_name
-from muliao.agents.permissions import ADMIN, BASE, Kind, Rules, check_patterns, pattern_of
-from muliao.agents.revisions import Subject, record_owner_in
+from muliao.agents.permissions import BASE, Rules, check_patterns
+from muliao.agents.revisions import record_in
 from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
-from muliao.agents.tables import Agent, Item
+from muliao.agents.tables import Agent
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database
 
@@ -124,31 +124,11 @@ class AgentInfo:
         return self.archived_at is not None
 
 
-@dataclass(frozen=True)
-class Reach:
-    """一份配置能用的：内置工具（按登记顺序）与 skill、MCP server、secret（`kind:name`，按种类、名称）。"""
-
-    tools: list[str]
-    items: list[str]
-
-
-@dataclass(frozen=True)
-class CatalogEntry:
-    """条目池里的一项（界面的条目页）。内置工具归平台、没有描述与修改时间。"""
-
-    kind: Kind
-    name: str
-    owner: str | None
-    description: str
-    updated_at: datetime | None
-    # allow 放行它、deny 没拦的角色（含内置的）
-    roles: tuple[str, ...]
-
-
-async def _items_in(s: AsyncSession, keep: Keep) -> list[str]:
-    """keep(kind, name, owner) 为真的条目，`kind:name`，按种类、名称。"""
-    rows = await s.execute(select(Item.kind, Item.name, Item.owner).order_by(Item.kind, Item.name))
-    return [pattern_of(Kind(k), n) for k, n, o in rows if keep(Kind(k), n, o)]
+def rules_document(roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> str:
+    """agent 的分发规则在版本表里的文档：角色（不含隐含的 base）与自己的 allow / deny。"""
+    return json.dumps(
+        {"roles": list(roles), "allow": list(allow), "deny": list(deny)}, ensure_ascii=False, indent=1
+    )
 
 
 def info_of(agent: Agent) -> AgentInfo:
@@ -255,90 +235,6 @@ class AgentService:
         组合根启动时核对 available_tools 与注册的工具保证（container._check_permissions）。"""
         return rules.tools(self.tools)
 
-    async def usable_items(self, agent_id: str) -> list[str]:
-        """agent 能用的 skill、MCP server、secret（`kind:name`，agents.access 的规则 1），按种类、名称。"""
-        async with self._db.transaction() as s:
-            return await _items_in(s, (await grants_in(s, agent_id)).uses)
-
-    async def preview(
-        self, agent_id: str | None, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]
-    ) -> Reach:
-        """agent（None 为还没建的）按还没保存的配置能用的内置工具与条目（界面预览），与写入时同样校验：已存的规则算作
-        「之前的」，不要求仍匹配现有条目。"""
-        async with self._db.transaction() as s:
-            row = None if agent_id is None else await active_row_in(s, agent_id)
-            before = Rules() if row is None else Rules(tuple(row.allow), tuple(row.deny))
-            await check_rules_in(s, Rules(tuple(allow), tuple(deny)), before)
-            await check_assignable_in(s, roles)
-            rules = await rules_in(s, roles, allow, deny)
-            # 还没建的 agent 没有自己的条目，只看规则；已有的按 agents.access 的规则 1
-            keep = granted_by(rules) if agent_id is None else Grants(agent_id, rules, ADMIN in roles).uses
-            return Reach(self.resolve(rules), await _items_in(s, keep))
-
-    async def role_reach(self, rules: Rules) -> Reach:
-        """只按一组角色规则能用的内置工具与条目（不含任何 agent 自己的条目）。"""
-        async with self._db.transaction() as s:
-            return Reach(self.resolve(rules), await _items_in(s, granted_by(rules)))
-
-    async def preview_role(self, name: str | None, allow: Sequence[str], deny: Sequence[str]) -> Reach:
-        """角色（None 为还没建的）按还没保存的规则能用的（界面预览），与写入时同样校验；内置角色加上它固定的部分。"""
-        async with self._db.transaction() as s:
-            role = None if name is None else (await roles_in(s)).get(name)
-            if name is not None and role is None:
-                raise NotFound(f"role {name!r} not found")
-            rules = Rules(tuple(allow), tuple(deny))
-            await check_rules_in(s, rules, Rules() if role is None else role.rules)
-            effective = rules if role is None else Rules.union([role.fixed, rules])
-            return Reach(self.resolve(effective), await _items_in(s, granted_by(effective)))
-
-    async def catalog(self) -> list[CatalogEntry]:
-        """全部条目：内置工具（按登记顺序）在前，skill、MCP server、secret 按种类、名称；每项带收录它的角色。"""
-        async with self._db.transaction() as s:
-            roles = list((await roles_in(s)).values())
-            items = await s.scalars(select(Item).order_by(Item.kind, Item.name))
-
-            keeps = [(r.name, granted_by(r.effective)) for r in roles]
-
-            def granted(kind: Kind, name: str, owner: str | None) -> tuple[str, ...]:
-                return tuple(n for n, keep in keeps if keep(kind, name, owner))
-
-            tools = [
-                CatalogEntry(Kind.TOOL, n, None, "", None, granted(Kind.TOOL, n, None)) for n in self.tools
-            ]
-            return tools + [
-                CatalogEntry(
-                    Kind(i.kind),
-                    i.name,
-                    i.owner,
-                    i.description,
-                    i.updated_at,
-                    granted(Kind(i.kind), i.name, i.owner),
-                )
-                for i in items
-            ]
-
-    async def transfer_item(self, kind: Kind, name: str, owner: str | None, actor: str) -> None:
-        """把 skill / MCP server / secret 转给 owner（agent 的 id；None 归平台），记一版。actor 要能改它（规则 2），新
-        owner 要还可用（归档的也行：条目照常可改）。内容不变；谁能用随 owner 变（agents.access 的规则 1）。"""
-        if kind == Kind.TOOL:
-            raise InvalidInput("built-in tools belong to the platform and cannot be transferred")
-        subject = Subject(kind.value)
-        async with self._db.transaction() as s:
-            row = await changeable_in(s, subject, name, actor)
-            if row.owner == owner:
-                raise InvalidInput(
-                    f"{label(subject)} {name!r} already belongs to {await owner_label_in(s, owner)}"
-                )
-            if owner is not None:
-                await active_row_in(s, owner)
-            message = (
-                f"transfer {label(subject)} {name} from {await owner_label_in(s, row.owner)} "
-                f"to {await owner_label_in(s, owner)}"
-            )
-            record_owner_in(s, subject, name, await document_in(s, row), actor, message)
-            await set_owner_in(s, row, owner)
-        log.info("item transferred", extra={"kind": kind.value, "item": name, "owner": owner, "actor": actor})
-
     async def verify_stored(self) -> None:
         """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、角色必须都在（且不含隐含的 base）、规则（含角色的）
         形式合法且 tool 规则仍匹配登记的工具，与新建、修改时同一套规则（skill / mcp / secret 规则不查是否匹配现有条目：条目
@@ -436,12 +332,21 @@ class AgentService:
             await s.flush()
             # 记忆与 agent 的行同一事务：agent 一旦存在，它的记忆就在（每一轮都要读）
             create_memory_in(s, agent_id, author)
+            record_in(
+                s,
+                Subject.AGENT,
+                agent_id,
+                None,
+                rules_document(fields.roles, fields.allow, fields.deny),
+                author,
+                f"create agent {name}",
+            )
             # 工作目录与数据库行同事务：建不出来则不插行
             self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
             return info_of(agent)
 
-    async def update(self, agent_id: str, patch: AgentPatch) -> AgentInfo:
-        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。"""
+    async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> AgentInfo:
+        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。分发规则变了就记一版（作者 author）。"""
         async with self._db.transaction() as s:
             agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)
@@ -451,6 +356,11 @@ class AgentService:
                 s,
                 Rules(tuple(fields.allow), tuple(fields.deny)),
                 Rules(tuple(agent.allow), tuple(agent.deny)),
+            )
+            before = rules_document(agent.roles, agent.allow, agent.deny)
+            after = rules_document(fields.roles, fields.allow, fields.deny)
+            record_in(
+                s, Subject.AGENT, agent_id, before, after, author, f"update rules of agent {fields.name}"
             )
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
             agent.thinking = fields.thinking

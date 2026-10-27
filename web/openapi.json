@@ -122,103 +122,6 @@
         }
       }
     },
-    "/api/tools": {
-      "get": {
-        "summary": "List Tools",
-        "description": "全部已登记的内置工具，按登记顺序（含 web，即使没配置 [web]）。",
-        "operationId": "list_tools_api_tools_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ToolOut"
-                  },
-                  "type": "array",
-                  "title": "Response List Tools Api Tools Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/items": {
-      "get": {
-        "summary": "List Items",
-        "description": "全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称。",
-        "operationId": "list_items_api_items_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ItemOut"
-                  },
-                  "type": "array",
-                  "title": "Response List Items Api Items Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/items/{kind}/{name}/owner": {
-      "put": {
-        "summary": "Transfer Item",
-        "description": "把 skill / MCP server / secret 转给另一个 owner（内置工具不能转），记一版；内容与收录它的角色不变。",
-        "operationId": "transfer_item_api_items__kind___name__owner_put",
-        "parameters": [
-          {
-            "name": "kind",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/Kind"
-            }
-          },
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OwnerIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/agent-preview": {
       "post": {
         "summary": "Preview Agent",
@@ -845,286 +748,6 @@
         }
       }
     },
-    "/api/memory": {
-      "get": {
-        "summary": "Get Memory",
-        "description": "owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。",
-        "operationId": "get_memory_api_memory_get",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "summary": "Put Memory",
-        "operationId": "put_memory_api_memory_put",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/skill": {
-      "get": {
-        "summary": "Get Skill",
-        "operationId": "get_skill_api_skill_get",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SkillDetail"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "summary": "Put Skill",
-        "description": "新建的归 owner；已有的整体改写，owner 不变。",
-        "operationId": "put_skill_api_skill_put",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SkillIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SkillOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "summary": "Delete Skill",
-        "operationId": "delete_skill_api_skill_delete",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/skill/package": {
-      "get": {
-        "summary": "Export Skill",
-        "description": "下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。",
-        "operationId": "export_skill_api_skill_package_get",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "<name>.skill",
-            "content": {
-              "application/zip": {}
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "summary": "Import Skill",
-        "description": "请求体是一个标准 .skill 文件，导入为 skill（新建的归 owner，缺省为平台），一次提交、作者 user。同名 skill 已存在时 409，\nreplace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，超限 413。",
-        "operationId": "import_skill_api_skill_package_post",
-        "parameters": [
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
-          },
-          {
-            "name": "replace",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false,
-              "title": "Replace"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SkillImportOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/sessions": {
       "get": {
         "summary": "List Sessions",
@@ -1601,11 +1224,126 @@
         }
       }
     },
-    "/api/mcp": {
+    "/api/items": {
       "get": {
-        "summary": "List Mcp",
-        "description": "全部 server（含停用的），按名称；谁能用见 /items 的 roles。",
-        "operationId": "list_mcp_api_mcp_get",
+        "summary": "List Items",
+        "description": "全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称；每种带自己的\n详情（工具的读写与管理类、MCP 的配置与启停）。",
+        "operationId": "list_items_api_items_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/ToolItemOut"
+                      },
+                      {
+                        "$ref": "#/components/schemas/SkillItemOut"
+                      },
+                      {
+                        "$ref": "#/components/schemas/McpItemOut"
+                      },
+                      {
+                        "$ref": "#/components/schemas/SecretItemOut"
+                      }
+                    ],
+                    "discriminator": {
+                      "propertyName": "kind",
+                      "mapping": {
+                        "tool": "#/components/schemas/ToolItemOut",
+                        "skill": "#/components/schemas/SkillItemOut",
+                        "mcp": "#/components/schemas/McpItemOut",
+                        "secret": "#/components/schemas/SecretItemOut"
+                      }
+                    }
+                  },
+                  "type": "array",
+                  "title": "Response List Items Api Items Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/{kind}/{name}/owner": {
+      "put": {
+        "summary": "Transfer Item",
+        "description": "转给另一个 owner，记一版；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。",
+        "operationId": "transfer_item_api_items__kind___name__owner_put",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/StoredKind"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/{kind}/{name}/history": {
+      "get": {
+        "summary": "Item History",
+        "description": "新的在前，第一条即当前的一版（已删除的是那次删除）；只列最近 50 版。",
+        "operationId": "item_history_api_items__kind___name__history_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/StoredKind"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1614,18 +1352,340 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/McpOut"
+                    "$ref": "#/components/schemas/RevisionOut"
                   },
-                  "title": "Response List Mcp Api Mcp Get"
+                  "title": "Response Item History Api Items  Kind   Name  History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/{kind}/{name}/restore": {
+      "post": {
+        "summary": "Restore Item",
+        "description": "把某一版之后的内容作为新的一版写入（secret 不能恢复：422）。",
+        "operationId": "restore_item_api_items__kind___name__restore_post",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/StoredKind"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/skill/{name}": {
+      "get": {
+        "summary": "Get Skill",
+        "operationId": "get_skill_api_items_skill__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
           }
         }
       },
+      "put": {
+        "summary": "Put Skill",
+        "description": "新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。",
+        "operationId": "put_skill_api_items_skill__name__put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Skill",
+        "operationId": "delete_skill_api_items_skill__name__delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/skill/{name}/package": {
+      "get": {
+        "summary": "Export Skill",
+        "description": "下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。",
+        "operationId": "export_skill_api_items_skill__name__package_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "<name>.skill",
+            "content": {
+              "application/zip": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/skill": {
       "post": {
+        "summary": "Import Skill",
+        "description": "请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、作者 user。同名\nskill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，\n超限 413。",
+        "operationId": "import_skill_api_items_skill_post",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          },
+          {
+            "name": "replace",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Replace"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillImportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/mcp/{name}": {
+      "get": {
+        "summary": "Get Mcp",
+        "operationId": "get_mcp_api_items_mcp__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
         "summary": "Add Mcp",
-        "operationId": "add_mcp_api_mcp_post",
+        "description": "新增（启用的）server；同名的已存在 409（名字全局唯一，配置不能原地改写：删了再建）。",
+        "operationId": "add_mcp_api_items_mcp__name__put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -1661,11 +1721,11 @@
       },
       "delete": {
         "summary": "Delete Mcp",
-        "operationId": "delete_mcp_api_mcp_delete",
+        "operationId": "delete_mcp_api_items_mcp__name__delete",
         "parameters": [
           {
             "name": "name",
-            "in": "query",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string",
@@ -1690,57 +1750,14 @@
         }
       }
     },
-    "/api/mcp/tools": {
-      "post": {
-        "summary": "Probe Mcp",
-        "operationId": "probe_mcp_api_mcp_tools_post",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "title": "Response Probe Mcp Api Mcp Tools Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/mcp/enabled": {
+    "/api/items/mcp/{name}/enabled": {
       "put": {
         "summary": "Set Mcp Enabled",
-        "operationId": "set_mcp_enabled_api_mcp_enabled_put",
+        "operationId": "set_mcp_enabled_api_items_mcp__name__enabled_put",
         "parameters": [
           {
             "name": "name",
-            "in": "query",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string",
@@ -1782,35 +1799,101 @@
         }
       }
     },
-    "/api/vault/{key}": {
-      "put": {
-        "summary": "Set Secret",
-        "description": "新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。列表见 /items（不含值）。",
-        "operationId": "set_secret_api_vault__key__put",
+    "/api/items/mcp/{name}/tools": {
+      "post": {
+        "summary": "Probe Mcp",
+        "description": "连接一次，列出它的工具（测试连接）。",
+        "operationId": "probe_mcp_api_items_mcp__name__tools_post",
         "parameters": [
           {
-            "name": "key",
+            "name": "name",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Key"
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response Probe Mcp Api Items Mcp  Name  Tools Post"
+                }
+              }
             }
           },
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
-              ],
-              "title": "Owner"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/secret/{name}": {
+      "get": {
+        "summary": "Get Secret",
+        "description": "不含值。",
+        "operationId": "get_secret_api_items_secret__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Set Secret",
+        "description": "新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。",
+        "operationId": "set_secret_api_items_secret__name__put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
             }
           }
         ],
@@ -1842,18 +1925,184 @@
       },
       "delete": {
         "summary": "Delete Secret",
-        "operationId": "delete_secret_api_vault__key__delete",
+        "operationId": "delete_secret_api_items_secret__name__delete",
         "parameters": [
           {
-            "name": "key",
+            "name": "name",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Key"
+              "title": "Name"
             }
           }
         ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory": {
+      "get": {
+        "summary": "Get Memory",
+        "description": "owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。",
+        "operationId": "get_memory_api_memory_get",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Memory",
+        "operationId": "put_memory_api_memory_put",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/history": {
+      "get": {
+        "summary": "Memory History",
+        "description": "owner 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。",
+        "operationId": "memory_history_api_memory_history_get",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RevisionOut"
+                  },
+                  "title": "Response Memory History Api Memory History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/memory/restore": {
+      "post": {
+        "summary": "Restore Memory",
+        "description": "把某一版的正文作为新的一版写入。",
+        "operationId": "restore_memory_api_memory_restore_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryRestoreIn"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -1927,123 +2176,6 @@
         "responses": {
           "202": {
             "description": "Successful Response"
-          }
-        }
-      }
-    },
-    "/api/resources/{kind}/history": {
-      "get": {
-        "summary": "History",
-        "description": "记忆按 owner（缺省为全局记忆），条目按 name；新的在前，第一条即当前的一版。只列最近 50 版。",
-        "operationId": "history_api_resources__kind__history_get",
-        "parameters": [
-          {
-            "name": "kind",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/ResourceKind"
-            }
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Owner"
-            }
-          },
-          {
-            "name": "name",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RevisionOut"
-                  },
-                  "title": "Response History Api Resources  Kind  History Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/resources/{kind}/restore": {
-      "post": {
-        "summary": "Restore",
-        "description": "把某一版之后的内容作为新的一版写入。",
-        "operationId": "restore_api_resources__kind__restore_post",
-        "parameters": [
-          {
-            "name": "kind",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/ResourceKind"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RestoreIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
           }
         }
       }
@@ -4491,73 +4623,6 @@
         ],
         "title": "Item"
       },
-      "ItemOut": {
-        "properties": {
-          "kind": {
-            "$ref": "#/components/schemas/Kind"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          },
-          "roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Roles"
-          }
-        },
-        "type": "object",
-        "required": [
-          "kind",
-          "name",
-          "owner",
-          "description",
-          "updated_at",
-          "roles"
-        ],
-        "title": "ItemOut",
-        "description": "条目池里的一项，在规则里写作 `<kind>:<name>`。"
-      },
-      "Kind": {
-        "type": "string",
-        "enum": [
-          "tool",
-          "skill",
-          "mcp",
-          "secret"
-        ],
-        "title": "Kind",
-        "description": "条目的种类；items.kind 存后三种。"
-      },
       "LiveRunOut": {
         "properties": {
           "run_id": {
@@ -4731,10 +4796,6 @@
             ],
             "title": "Owner"
           },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
           "transport": {
             "$ref": "#/components/schemas/McpTransport"
           },
@@ -4793,28 +4854,12 @@
         "type": "object",
         "required": [
           "owner",
-          "name",
           "transport"
         ],
         "title": "McpIn"
       },
-      "McpOut": {
+      "McpItemOut": {
         "properties": {
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
           "transport": {
             "$ref": "#/components/schemas/McpTransport"
           },
@@ -4865,6 +4910,135 @@
             "type": "boolean",
             "title": "Enabled"
           },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "kind": {
+            "type": "string",
+            "const": "mcp",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "transport",
+          "command",
+          "args",
+          "url",
+          "env",
+          "headers",
+          "enabled",
+          "name",
+          "owner",
+          "description",
+          "updated_at",
+          "roles",
+          "kind"
+        ],
+        "title": "McpItemOut"
+      },
+      "McpOut": {
+        "properties": {
+          "transport": {
+            "$ref": "#/components/schemas/McpTransport"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Args"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Env"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
           "tools": {
             "items": {
               "type": "string"
@@ -4876,15 +5050,15 @@
         },
         "type": "object",
         "required": [
-          "owner",
-          "name",
           "transport",
           "command",
           "args",
           "url",
           "env",
           "headers",
-          "enabled"
+          "enabled",
+          "owner",
+          "name"
         ],
         "title": "McpOut"
       },
@@ -4938,6 +5112,30 @@
           "max_chars"
         ],
         "title": "MemoryOut"
+      },
+      "MemoryRestoreIn": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "rev": {
+            "type": "integer",
+            "title": "Rev"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rev"
+        ],
+        "title": "MemoryRestoreIn"
       },
       "NotificationEvent": {
         "properties": {
@@ -5467,40 +5665,8 @@
         ],
         "title": "ReplyIn"
       },
-      "ResourceKind": {
-        "type": "string",
-        "enum": [
-          "memory",
-          "skill",
-          "mcp",
-          "secret"
-        ],
-        "title": "ResourceKind"
-      },
       "RestoreIn": {
         "properties": {
-          "owner": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Owner"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
-          },
           "rev": {
             "type": "integer",
             "title": "Rev"
@@ -5983,6 +6149,17 @@
       },
       "SecretIn": {
         "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
           "value": {
             "type": "string",
             "title": "Value"
@@ -5998,6 +6175,100 @@
           "value"
         ],
         "title": "SecretIn"
+      },
+      "SecretItemOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "kind": {
+            "type": "string",
+            "const": "secret",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "updated_at",
+          "roles",
+          "kind"
+        ],
+        "title": "SecretItemOut",
+        "description": "值不返回；updated_at 是最后一次修改（设值、改说明、转移）的时间。"
+      },
+      "SecretOut": {
+        "properties": {
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner",
+          "name",
+          "description",
+          "updated_at"
+        ],
+        "title": "SecretOut"
       },
       "ServerEvent": {
         "anyOf": [
@@ -6373,10 +6644,6 @@
             ],
             "title": "Owner"
           },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
           "description": {
             "type": "string",
             "title": "Description"
@@ -6389,11 +6656,67 @@
         "type": "object",
         "required": [
           "owner",
-          "name",
           "description",
           "body"
         ],
         "title": "SkillIn"
+      },
+      "SkillItemOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "kind": {
+            "type": "string",
+            "const": "skill",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "updated_at",
+          "roles",
+          "kind"
+        ],
+        "title": "SkillItemOut"
       },
       "SkillOut": {
         "properties": {
@@ -6491,6 +6814,15 @@
           "prompt"
         ],
         "title": "StartIn"
+      },
+      "StoredKind": {
+        "type": "string",
+        "enum": [
+          "skill",
+          "mcp",
+          "secret"
+        ],
+        "title": "StoredKind"
       },
       "StreamConfig": {
         "properties": {
@@ -6880,6 +7212,78 @@
           "token"
         ],
         "title": "TokenOut"
+      },
+      "ToolItemOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "kind": {
+            "type": "string",
+            "const": "tool",
+            "title": "Kind"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write"
+            ],
+            "title": "Access"
+          },
+          "admin": {
+            "type": "boolean",
+            "title": "Admin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "updated_at",
+          "roles",
+          "kind",
+          "access",
+          "admin"
+        ],
+        "title": "ToolItemOut",
+        "description": "内置工具：归平台、代码里定义，不能改。"
       },
       "ToolOut": {
         "properties": {

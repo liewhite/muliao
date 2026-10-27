@@ -163,7 +163,7 @@ async def test_a_skill_is_restored_from_an_earlier_revision(container, make_agen
     await skills.write("digest", "d", "second", actor=alpha, owner=alpha, attachments={})
     [_, first] = await container.revisions.history(Subject.SKILL, "digest", 10)
 
-    await skills.restore("digest", first.after, "user")
+    await skills.restore("digest", first.id, "user")
 
     skill = await skills.read("digest")
     assert skill.body.strip() == "first"
@@ -224,7 +224,7 @@ async def test_mcp_servers_have_unique_names_and_versions(container, make_agent)
     assert [s.name for s in await mcp.index(alpha)] == ["search"]
     assert [s.name for s in await mcp.usable(alpha)] == ["own", "search"]
     [disabled, added] = await container.revisions.history(Subject.MCP, "own", 10)
-    await mcp.restore("own", added.after, "user")
+    await mcp.restore("own", added.id, "user")
     assert (await mcp.get("own")).enabled
     assert disabled.message == "disable MCP server own"
 
@@ -269,9 +269,7 @@ async def test_secrets_are_visible_to_their_owner_and_keys_are_unique(container,
     await vault.set("ALPHA_KEY", "b", "", actor=alpha, owner=alpha)
     revisions = await container.revisions.history(Subject.SECRET, "ALPHA_KEY", 10)
     assert len(revisions) == 2
-    assert all(
-        "b" not in (r.after or "").replace("description", "").replace("value_set_at", "") for r in revisions
-    )
+    assert all("b" not in (r.after or "").replace("description", "") for r in revisions)
 
     await vault.delete("ALPHA_KEY", alpha)
     with pytest.raises(NotFound):

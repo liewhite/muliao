@@ -9,29 +9,32 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select, update
+from collections.abc import Collection
+from dataclasses import dataclass
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.access import check_change_in, grants_in
+from muliao.agents.access import Keep, check_change_in, grants_in
 from muliao.agents.active import active_row_in
-from muliao.agents.permissions import Kind
-from muliao.agents.revisions import Subject
+from muliao.agents.kinds import Kind, StoredKind, as_kind, label
+from muliao.agents.permissions import Rules, pattern_of
 from muliao.agents.tables import Item
-from muliao.errors import NotFound
+from muliao.errors import Conflict, NotFound
 
 
-async def item_in(s: AsyncSession, kind: Subject, name: str) -> Item | None:
+async def item_in(s: AsyncSession, kind: StoredKind, name: str) -> Item | None:
     return await s.scalar(select(Item).where(Item.kind == kind.value, Item.name == name))
 
 
-async def existing_in(s: AsyncSession, kind: Subject, name: str) -> Item:
+async def existing_in(s: AsyncSession, kind: StoredKind, name: str) -> Item:
     row = await item_in(s, kind, name)
     if row is None:
         raise NotFound(f"{label(kind)} {name!r} not found")
     return row
 
 
-async def changeable_in(s: AsyncSession, kind: Subject, name: str, actor: str) -> Item:
+async def changeable_in(s: AsyncSession, kind: StoredKind, name: str, actor: str) -> Item:
     """要改或删的已有条目：存在，actor 能改它（规则 2），它的 owner（agent）还可用（正在删除的 agent 的条目按不存在处理，
     由删除流程统一处理）。"""
     row = await existing_in(s, kind, name)
@@ -40,7 +43,7 @@ async def changeable_in(s: AsyncSession, kind: Subject, name: str, actor: str) -
     return row
 
 
-async def _check_owner_active_in(s: AsyncSession, kind: Subject, row: Item) -> None:
+async def _check_owner_active_in(s: AsyncSession, kind: StoredKind, row: Item) -> None:
     if row.owner is not None:
         try:
             await active_row_in(s, row.owner)
@@ -48,8 +51,16 @@ async def _check_owner_active_in(s: AsyncSession, kind: Subject, row: Item) -> N
             raise NotFound(f"{label(kind)} {row.name!r} not found") from None
 
 
+async def creatable_in(s: AsyncSession, kind: StoredKind, name: str, owner: str | None) -> None:
+    """只新建、不覆盖之前（在写入的同一个事务里查）：同名的已存在 Conflict；新条目将归 owner（agent 时检查它还可用）。"""
+    if await item_in(s, kind, name) is not None:
+        raise Conflict(f"{label(kind)} {name!r} already exists; names are unique, choose another name")
+    if owner is not None:
+        await active_row_in(s, owner)
+
+
 async def writable_in(
-    s: AsyncSession, kind: Subject, name: str, actor: str, owner: str | None
+    s: AsyncSession, kind: StoredKind, name: str, actor: str, owner: str | None
 ) -> Item | None:
     """新建或整体改写之前：已存在就按规则 2 检查并返回它（owner 不变）；不存在时返回 None，新条目将归 owner（agent 时
     检查它还可用）。"""
@@ -63,23 +74,28 @@ async def writable_in(
     return None
 
 
-async def set_owner_in(s: AsyncSession, row: Item, owner: str | None) -> None:
-    """只换 owner：内容没变，`updated_at` 保持原值（它的 onupdate 在只改 owner 时也会刷新，而 secret 把它当作值的设置时间、
-    写进版本文档）。版本由调用方用 revisions.record_owner_in 记。"""
-    await s.execute(update(Item).where(Item.id == row.id).values(owner=owner, updated_at=Item.updated_at))
-    await s.refresh(row)
-
-
-async def items_in(s: AsyncSession, kind: Subject) -> list[Item]:
+async def items_in(s: AsyncSession, kind: StoredKind) -> list[Item]:
     """这一种的全部条目，按名称。"""
     return list(await s.scalars(select(Item).where(Item.kind == kind.value).order_by(Item.name)))
 
 
-async def usable_in(s: AsyncSession, kind: Subject, user: str) -> list[Item]:
+async def usable_in(s: AsyncSession, kind: StoredKind, user: str) -> list[Item]:
     """user（agent 的 id 或 revisions.USER）能用的（规则 1），按名称。"""
     grants = await grants_in(s, user)
-    return [r for r in await items_in(s, kind) if grants.uses(Kind(r.kind), r.name, r.owner)]
+    return [r for r in await items_in(s, kind) if grants.uses(as_kind(kind), r.name, r.owner)]
 
 
-def label(kind: Subject) -> str:
-    return {Subject.SKILL: "skill", Subject.MCP: "MCP server", Subject.SECRET: "secret"}[kind]
+@dataclass(frozen=True)
+class Reach:
+    """一份配置能用的：内置工具（按登记顺序）与 skill、MCP server、secret（`kind:name`，按种类、名称）。"""
+
+    tools: list[str]
+    items: list[str]
+
+
+async def reach_in(s: AsyncSession, available: Collection[str], rules: Rules, keep: Keep) -> Reach:
+    """工具按 rules 在 available（当前配置下注册的工具）里取；条目是 keep(kind, name, owner) 为真的。界面预览、角色的覆盖范围、
+    get_agent 共用。"""
+    rows = await s.execute(select(Item.kind, Item.name, Item.owner).order_by(Item.kind, Item.name))
+    items = [pattern_of(Kind(k), n) for k, n, o in rows if keep(Kind(k), n, o)]
+    return Reach(rules.tools(available), items)

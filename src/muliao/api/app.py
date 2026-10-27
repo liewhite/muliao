@@ -14,13 +14,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from muliao.api import (
-    admin,
     agents,
     files,
     history,
     issues,
+    items,
     notifications,
-    resources,
+    push,
     sessions,
     speech,
     triggers,
@@ -117,8 +117,8 @@ def _private_routes() -> APIRouter:
     router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
     router.include_router(agents.router)
     router.include_router(sessions.router)
-    router.include_router(admin.router)
-    router.include_router(resources.router)
+    router.include_router(items.router)
+    router.include_router(push.router)
     router.include_router(triggers.router)
     router.include_router(webhook.router)
     router.include_router(files.router)

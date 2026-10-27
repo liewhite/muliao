@@ -6,8 +6,8 @@
 2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域删除它的全部会话（标记之后它的会话不会再收到
    来信），然后发布 AgentSessionsCleared；触发器各自删除。
 3. 收到 AgentSessionsCleared：删除工作目录与它的 skill 的生成目录，再删除这一行：它名下的条目（skill、MCP server、secret）
-   里被分发出去的（某个角色或别的 agent 的 allow 匹配到，shared_in）转给平台（owner 置空，别的 agent 还在用），其余与记忆
-   随行级联删除，同一事务里为每一项记一版。
+   里分发出去的（别的 agent 的规则收录它，_shared_in）转给平台（owner 置空，别的 agent 还在用），其余与记忆随行
+   级联删除，同一事务里为每一项（含它的分发规则）记一版。
 
 归档（set_archived）是可以来回切换的停用：同样只在它空闲时做（与删除同一组检查），之后给它派新工作的入口都拒绝
 （agents.active.runnable_row_in），数据都留着。
@@ -19,15 +19,14 @@ from collections.abc import Awaitable, Callable, Mapping
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.access import grants_in
 from muliao.agents.active import active_row_in
 from muliao.agents.documents import document_in
 from muliao.agents.events import AgentDeleting
-from muliao.agents.items import set_owner_in
+from muliao.agents.kinds import Kind, StoredKind, Subject, as_subject
 from muliao.agents.memory import revision_name
-from muliao.agents.permissions import BASE, Kind, Rules
-from muliao.agents.revisions import Subject, record_in, record_owner_in
-from muliao.agents.roles import roles_in
-from muliao.agents.service import AgentInfo, AgentService, info_of
+from muliao.agents.revisions import record_in
+from muliao.agents.service import AgentInfo, AgentService, info_of, rules_document
 from muliao.agents.skills import SkillStore
 from muliao.agents.tables import Agent, Item, Memory
 from muliao.errors import Conflict, NotFound
@@ -126,7 +125,7 @@ class AgentLifecycle:
         async with self._db.transaction() as s:
             shared = await _shared_in(s, event.agent_id)
         await self._skills.remove_generated(
-            [n for n in await self._skills.owned_names(event.agent_id) if (Subject.SKILL, n) not in shared]
+            [n for n in await self._skills.owned_names(event.agent_id) if (StoredKind.SKILL, n) not in shared]
         )
         log.info("files of a deleted agent removed", extra={"agent": event.agent_id})
 
@@ -140,16 +139,16 @@ class AgentLifecycle:
         return commit
 
 
-async def _shared_in(s: AsyncSession, agent_id: str) -> set[tuple[Subject, str]]:
-    """agent 名下被分发出去、还有别人在用的条目：base、别的 agent 带着的角色、别的 agent 自己的 allow 匹配到它（不看
-    deny）。没分给任何 agent 的自建角色不算。"""
-    roles = await roles_in(s)
-    others = list(await s.scalars(select(Agent).where(Agent.id != agent_id)))
-    used = {BASE, *(r for a in others for r in a.roles)}
-    rules = [roles[n].effective for n in used if n in roles]
-    rules += [Rules(tuple(a.allow)) for a in others]
+async def _shared_in(s: AsyncSession, agent_id: str) -> set[tuple[StoredKind, str]]:
+    """agent 名下分发出去、还有别人在用的条目：某个别的 agent 的规则（base + 它的角色 + 它自己的 allow / deny）收录它，
+    与条目页的「收录」同一个定义（permissions.Rules.allows）。没分给任何 agent 的自建角色不算。"""
+    others = [await grants_in(s, a) for a in await s.scalars(select(Agent.id).where(Agent.id != agent_id))]
     rows = await s.scalars(select(Item).where(Item.owner == agent_id))
-    return {(Subject(r.kind), r.name) for r in rows if any(x.matches(Kind(r.kind), r.name) for x in rules)}
+    return {
+        (StoredKind(r.kind), r.name)
+        for r in rows
+        if any(g.rules.allows(Kind(r.kind), r.name) for g in others)
+    }
 
 
 async def _record_deletions_in(s: AsyncSession, agent_id: str, author: str) -> None:
@@ -158,26 +157,41 @@ async def _record_deletions_in(s: AsyncSession, agent_id: str, author: str) -> N
     shared = await _shared_in(s, agent_id)
     for row in list(await s.scalars(select(Item).where(Item.owner == agent_id))):
         doc = await document_in(s, row)
-        if (Subject(row.kind), row.name) in shared:
-            await set_owner_in(s, row, None)
-            record_owner_in(
+        kind = StoredKind(row.kind)
+        if (kind, row.name) in shared:
+            row.owner = None
+            # 文档不含 owner：前后相同，照样记一版
+            record_in(
                 s,
-                Subject(row.kind),
+                as_subject(kind),
                 row.name,
+                doc,
                 doc,
                 author,
                 f"moved to the platform with agent {agent_id} deleted",
+                force=True,
             )
             log.info(
                 "item moved to the platform", extra={"agent": agent_id, "kind": row.kind, "item": row.name}
             )
             continue
-        record_in(s, Subject(row.kind), row.name, doc, None, author, message)
+        record_in(s, as_subject(kind), row.name, doc, None, author, message)
     # 转给平台的先写下去，再删 agent 的行（级联只删还归它的）
     await s.flush()
     memory = await s.scalar(select(Memory).where(Memory.owner == agent_id))
     if memory is not None:
         record_in(s, Subject.MEMORY, revision_name(agent_id), memory.content, None, author, message)
+    agent = await s.get(Agent, agent_id)
+    if agent is not None:
+        record_in(
+            s,
+            Subject.AGENT,
+            agent_id,
+            rules_document(agent.roles, agent.allow, agent.deny),
+            None,
+            author,
+            message,
+        )
 
 
 def _check_archivable(agent: Agent) -> Agent:

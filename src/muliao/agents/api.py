@@ -4,18 +4,22 @@
   AgentArchived），返回 AgentInfo；
   名称映射 AgentService.names / 事务内的 agent_names_in（AgentNames，已删除的 agent 也有展示名）；
 - 删除与归档 agent（AgentLifecycle）；
-- 条目与记忆：记忆（全局与 agent 的）、skill 的存取与标准 .skill 文件的导入导出（自我改进工具与 instructions 组装用），MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret 的密文存放（SecretItems，加解密在 vault）、版本（Revisions，只读）；
+- 条目与记忆：种类（kinds：Kind / StoredKind / Subject），记忆（全局与 agent 的）、skill 的存取与标准 .skill 文件的导入导出（自我改进工具与 instructions 组装用），MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret 的密文存放（SecretItems，加解密在 vault）、条目池（ItemCatalog：全部条目、预览、转移、版本历史与恢复）、版本（Revisions，只读）；
 - 条目的两条规则（access：能用 = 自己的 ∪ 规则放行的；能改 = owner 或 admin）；
 - 分发规则（permissions：内置工具的登记、`kind:name` 规则、内置角色 base / admin）与角色（roles：内置加用户自建）。
 """
 
 from muliao.agents.active import AgentArchived
+from muliao.agents.catalog import CatalogEntry, ItemCatalog
+from muliao.agents.items import Reach
+from muliao.agents.kinds import Kind, StoredKind, Subject
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.mcp import McpConfig, McpRegistry, McpServer, McpTransport, mcp_config
 from muliao.agents.memory import MemoryStore
-from muliao.agents.permissions import BASE, TOOLS, Access, Kind, Role, Rules, Tool
-from muliao.agents.revisions import USER, RevisionInfo, Revisions, Subject
-from muliao.agents.roles import RoleService, RoleSpec
+from muliao.agents.permissions import BASE, TOOLS, Access, Role, Rules, Tool
+from muliao.agents.revisions import USER, RevisionInfo, Revisions
+from muliao.agents.role_service import RoleService, RoleSpec
+from muliao.agents.secrets import KEY_SYNTAX as SECRET_KEY_SYNTAX
 from muliao.agents.secrets import SecretItems, StoredSecret
 from muliao.agents.service import (
     AgentInfo,
@@ -23,8 +27,6 @@ from muliao.agents.service import (
     AgentPatch,
     AgentService,
     AgentSpec,
-    CatalogEntry,
-    Reach,
     Thinking,
     active_agent_in,
     agent_in,
@@ -50,7 +52,10 @@ __all__ = [
     "AgentNames",
     "AgentService",
     "CatalogEntry",
+    "ItemCatalog",
     "Reach",
+    "SECRET_KEY_SYNTAX",
+    "StoredKind",
     "MemoryStore",
     "RevisionInfo",
     "Revisions",

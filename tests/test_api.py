@@ -46,13 +46,14 @@ async def test_skill_and_memory_endpoints(client):
     ).json()["id"]
 
     resp = await client.put(
-        "/api/skill", json={"owner": None, "name": "shared", "description": "for all", "body": "steps"}
+        "/api/items/skill/shared", json={"owner": None, "description": "for all", "body": "steps"}
     )
     assert resp.status_code == 200
     skills = [i for i in (await client.get("/api/items")).json() if i["kind"] == "skill"]
     assert [(s["name"], s["owner"], s["description"], s["roles"]) for s in skills] == [
         ("shared", None, "for all", [])
     ]
+    assert (await client.get("/api/items/skill/shared")).json()["body"].strip() == "steps"
 
     resp = await client.put("/api/memory", json={"owner": agent_id, "content": "- fact"})
     assert resp.json()["content"] == "- fact"
@@ -61,60 +62,68 @@ async def test_skill_and_memory_endpoints(client):
         assert (await client.put("/api/memory", json=too_long)).status_code == 422
 
 
+async def test_the_old_per_kind_endpoints_are_gone(client):
+    await login(client)
+    for path in ("/api/tools", "/api/mcp", "/api/skill?name=x", "/api/resources/memory/history"):
+        assert (await client.get(path)).status_code == 404, path
+    assert (await client.put("/api/vault/K", json={"value": "v"})).status_code == 404
+
+
 async def test_a_skill_exported_over_http_imports_into_another_owner(client, make_agent):
     agent_id = (await make_agent()).id
     await login(client)
     await client.put(
-        "/api/skill", json={"owner": None, "name": "shared", "description": "for all", "body": "steps"}
+        "/api/items/skill/shared", json={"owner": None, "description": "for all", "body": "steps"}
     )
 
-    resp = await client.get("/api/skill/package", params={"name": "shared"})
+    resp = await client.get("/api/items/skill/shared/package")
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"] == "application/zip"
     assert resp.headers["content-disposition"] == 'attachment; filename="shared.skill"'
     package = resp.content
 
-    # 名字全局唯一：公共的还在时导入不进别的 owner
+    # 名字全局唯一：平台的还在时导入不进别的 owner
     assert (
-        await client.post("/api/skill/package", params={"owner": agent_id}, content=package)
+        await client.post("/api/items/skill", params={"owner": agent_id}, content=package)
     ).status_code == 409
-    assert (await client.delete("/api/skill", params={"name": "shared"})).status_code == 204
-    resp = await client.post("/api/skill/package", params={"owner": agent_id}, content=package)
+    assert (await client.delete("/api/items/skill/shared")).status_code == 204
+    resp = await client.post("/api/items/skill", params={"owner": agent_id}, content=package)
     assert resp.status_code == 200, resp.text
     assert resp.json() == {
         "skill": {"name": "shared", "description": "for all", "owner": agent_id},
         "skipped": [],
     }
-    exported = await client.get("/api/skill/package", params={"name": "shared", "owner": agent_id})
-    assert exported.status_code == 200
-    assert (await client.get("/api/skill", params={"name": "shared", "owner": agent_id})).json()[
-        "body"
-    ].strip() == "steps"
+    assert (await client.get("/api/items/skill/shared/package")).status_code == 200
+    assert (await client.get("/api/items/skill/shared")).json()["body"].strip() == "steps"
 
     assert (
-        await client.post("/api/skill/package", params={"owner": agent_id}, content=package)
+        await client.post("/api/items/skill", params={"owner": agent_id}, content=package)
     ).status_code == 409
     replaced = await client.post(
-        "/api/skill/package", params={"owner": agent_id, "replace": True}, content=package
+        "/api/items/skill", params={"owner": agent_id, "replace": True}, content=package
     )
     assert replaced.status_code == 200
-    assert (await client.post("/api/skill/package", content=b"not a zip")).status_code == 422
-    assert (await client.get("/api/skill/package", params={"name": "nope"})).status_code == 404
+    assert (await client.post("/api/items/skill", content=b"not a zip")).status_code == 422
+    assert (await client.get("/api/items/skill/nope/package")).status_code == 404
 
 
 async def test_items_list_every_owners_items_with_the_roles_that_give_them(client, container, make_agent):
     alpha = (await make_agent()).id
     await login(client)
     assert (
-        await client.put("/api/vault/SLACK_TOKEN", json={"value": "xoxb-1", "description": "slack"})
+        await client.put("/api/items/secret/SLACK_TOKEN", json={"value": "xoxb-1", "description": "slack"})
     ).status_code == 204
-    await client.put(f"/api/vault/MINE?owner={alpha}", json={"value": "v"})
+    await client.put("/api/items/secret/MINE", json={"owner": alpha, "value": "v"})
     # key 全局唯一：同名就是改这一个，owner 不变
     assert (
-        await client.put(f"/api/vault/SLACK_TOKEN?owner={alpha}", json={"value": "v2"})
+        await client.put("/api/items/secret/SLACK_TOKEN", json={"owner": alpha, "value": "v2"})
     ).status_code == 204
-    assert (await client.put("/api/vault/X?owner=nope", json={"value": "v"})).status_code == 404
+    assert (await client.put("/api/items/secret/X", json={"owner": "nope", "value": "v"})).status_code == 404
+    assert (await client.put("/api/items/secret/bad-key", json={"value": "v"})).status_code == 422
     await share(container, "secret:SLACK_TOKEN")
+    secret = (await client.get("/api/items/secret/SLACK_TOKEN")).json()
+    # 改值时没给说明：说明换成空的
+    assert (secret["owner"], secret["description"]) == (None, "") and "value" not in secret
 
     items = (await client.get("/api/items")).json()
     secrets = [(i["name"], i["owner"], i["roles"]) for i in items if i["kind"] == "secret"]
@@ -125,6 +134,45 @@ async def test_items_list_every_owners_items_with_the_roles_that_give_them(clien
     assert tools["run_shell"]["owner"] is None and tools["run_shell"]["updated_at"] is None
     # 内置工具在前
     assert items[0]["kind"] == "tool"
+
+
+async def test_mcp_items_carry_their_config_and_have_history_and_restore(client):
+    await login(client)
+    body = {"owner": None, "transport": "http", "url": "https://example.com/mcp", "probe": False}
+    assert (await client.put("/api/items/mcp/remote", json=body)).status_code == 201
+    assert (await client.put("/api/items/mcp/remote", json=body)).status_code == 409
+    assert (await client.put("/api/items/mcp/remote/enabled", json={"enabled": False})).json()[
+        "enabled"
+    ] is False
+    [item] = [i for i in (await client.get("/api/items")).json() if i["kind"] == "mcp"]
+    assert (item["name"], item["url"], item["transport"], item["enabled"]) == (
+        "remote",
+        "https://example.com/mcp",
+        "http",
+        False,
+    )
+    assert (await client.get("/api/items/mcp/remote")).json()["enabled"] is False
+
+    history = (await client.get("/api/items/mcp/remote/history")).json()
+    assert [r["message"] for r in history] == ["disable MCP server remote", "add MCP server remote"]
+    restored = await client.post("/api/items/mcp/remote/restore", json={"rev": history[1]["rev"]})
+    assert restored.status_code == 204
+    assert (await client.get("/api/items/mcp/remote")).json()["enabled"] is True
+    # 不是它的版本不认
+    await client.put("/api/items/skill/other", json={"owner": None, "description": "d", "body": "b"})
+    [skill_rev] = (await client.get("/api/items/skill/other/history")).json()
+    assert (
+        await client.post("/api/items/mcp/remote/restore", json={"rev": skill_rev["rev"]})
+    ).status_code == 404
+    assert (await client.delete("/api/items/mcp/remote")).status_code == 204
+    deletion = (await client.get("/api/items/mcp/remote/history")).json()[0]
+    assert deletion["content"] is None
+
+    await client.put("/api/items/secret/K", json={"value": "v"})
+    [secret_rev] = (await client.get("/api/items/secret/K/history")).json()
+    resp = await client.post("/api/items/secret/K/restore", json={"rev": secret_rev["rev"]})
+    assert resp.status_code == 422 and "cannot be restored" in resp.text
+    assert (await client.get("/api/items/tool/run_shell/history")).status_code == 422
 
 
 def test_auth_token_expires_and_rejects_tampering():

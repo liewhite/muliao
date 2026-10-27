@@ -32,10 +32,10 @@ async def test_group_is_trimmed_kept_on_other_changes_and_cleared_by_an_empty_st
         AgentSpec(name="a", description="d", model="test", group="  jobs  "), author="user"
     )
     assert agent.group == "jobs"
-    assert (await container.agents.update(agent.id, AgentPatch(description="x"))).group == "jobs"
-    assert (await container.agents.update(agent.id, AgentPatch(group="   "))).group is None
+    assert (await container.agents.update(agent.id, AgentPatch(description="x"), author="user")).group == "jobs"
+    assert (await container.agents.update(agent.id, AgentPatch(group="   "), author="user")).group is None
     with pytest.raises(InvalidInput, match="at most 64"):
-        await container.agents.update(agent.id, AgentPatch(group="g" * 65))
+        await container.agents.update(agent.id, AgentPatch(group="g" * 65), author="user")
 
 
 async def test_list_agents_groups_ungrouped_first_and_leaves_out_archived(container, make_agent):
@@ -68,7 +68,7 @@ async def test_an_archived_agent_takes_no_mail_until_unarchived(container, make_
     with pytest.raises(AgentArchived, match="archived; unarchive it first"):
         await container.sessions.receive(_new_session(alpha.id))
     # 配置照常可改（取消归档、改名都要能找到它）
-    assert (await container.agents.update(alpha.id, AgentPatch(group="old"))).group == "old"
+    assert (await container.agents.update(alpha.id, AgentPatch(group="old"), author="user")).group == "old"
     assert (await container.agents.find_by_name("alpha")).archived
 
     assert not (await container.agent_lifecycle.set_archived(alpha.id, False)).archived

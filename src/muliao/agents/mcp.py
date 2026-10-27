@@ -17,12 +17,12 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-from muliao.agents.active import active_row_in
-from muliao.agents.items import changeable_in, existing_in, item_in, usable_in
+from muliao.agents.items import changeable_in, creatable_in, existing_in, usable_in
+from muliao.agents.kinds import StoredKind, Subject
 from muliao.agents.naming import validate_slug
-from muliao.agents.revisions import Subject, record_in
+from muliao.agents.revisions import record_in, revision_doc_in
 from muliao.agents.tables import Item
-from muliao.errors import Conflict, InvalidInput
+from muliao.errors import InvalidInput
 from muliao.platform.db import Database
 
 log = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def document(config: McpConfig, enabled: bool) -> str:
     return json.dumps({**config.model_dump(mode="json"), "enabled": enabled}, indent=1)
 
 
-def _server(row: Item) -> McpServer:
+def server_of(row: Item) -> McpServer:
     # 写入时已按 McpConfig 校验；读回仍按同一条规则解析，不合规则是数据被绕过本模块改坏了
     return McpServer(row.owner, row.name, McpConfig.model_validate_json(row.content), row.enabled)
 
@@ -123,16 +123,16 @@ class McpRegistry:
     async def usable(self, user: str) -> list[McpServer]:
         """user（agent 的 id，或 USER 即全部）能用的 server（agents.access，含停用的），按名称。"""
         async with self._db.transaction() as s:
-            return [_server(r) for r in await usable_in(s, Subject.MCP, user)]
+            return [server_of(r) for r in await usable_in(s, StoredKind.MCP, user)]
 
     async def index(self, agent_id: str) -> list[McpServer]:
         """agent 这次运行要连接的 server：它能用的（agents.access）、已启用的，按名称。"""
         async with self._db.transaction() as s:
-            return [_server(r) for r in await usable_in(s, Subject.MCP, agent_id) if r.enabled]
+            return [server_of(r) for r in await usable_in(s, StoredKind.MCP, agent_id) if r.enabled]
 
     async def get(self, name: str) -> McpServer:
         async with self._db.transaction() as s:
-            return _server(await existing_in(s, Subject.MCP, name))
+            return server_of(await existing_in(s, StoredKind.MCP, name))
 
     async def add(
         self, name: str, config: McpConfig, *, actor: str, owner: str | None, probe: bool
@@ -141,30 +141,20 @@ class McpRegistry:
         validate_slug("mcp server", name)
         server = McpServer(owner=owner, name=name, config=config, enabled=True)
         # 连接验证之前先查一次（正在删除的 agent、已有同名的不必白跑一次连接）；写入时事务里的那次才是准的
-        await self._check_new(name, owner)
+        async with self._db.transaction() as s:
+            await creatable_in(s, StoredKind.MCP, name, owner)
         tools = await self.probe(server, actor) if probe else []
         async with self._db.transaction() as s:
-            await self._check_new_in(s, name, owner)
-            s.add(Item(kind=Subject.MCP.value, name=name, owner=owner, content=config.model_dump_json()))
+            await creatable_in(s, StoredKind.MCP, name, owner)
+            s.add(Item(kind=StoredKind.MCP.value, name=name, owner=owner, content=config.model_dump_json()))
             record_in(s, Subject.MCP, name, None, document(config, True), actor, f"add MCP server {name}")
         log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
 
-    async def _check_new(self, name: str, owner: str | None) -> None:
-        async with self._db.transaction() as s:
-            await self._check_new_in(s, name, owner)
-
-    @staticmethod
-    async def _check_new_in(s, name: str, owner: str | None) -> None:  # noqa: ANN001
-        if await item_in(s, Subject.MCP, name) is not None:
-            raise Conflict(f"MCP server {name!r} already exists; names are unique, choose another name")
-        if owner is not None:
-            await active_row_in(s, owner)
-
     async def remove(self, name: str, actor: str) -> None:
         async with self._db.transaction() as s:
-            row = await changeable_in(s, Subject.MCP, name, actor)
-            server = _server(row)
+            row = await changeable_in(s, StoredKind.MCP, name, actor)
+            server = server_of(row)
             await s.delete(row)
             record_in(
                 s,
@@ -178,8 +168,8 @@ class McpRegistry:
 
     async def set_enabled(self, name: str, enabled: bool, actor: str) -> McpServer:
         async with self._db.transaction() as s:
-            row = await changeable_in(s, Subject.MCP, name, actor)
-            before = _server(row)
+            row = await changeable_in(s, StoredKind.MCP, name, actor)
+            before = server_of(row)
             row.enabled = enabled
             record_in(
                 s,
@@ -192,18 +182,18 @@ class McpRegistry:
             )
             return McpServer(before.owner, name, before.config, enabled)
 
-    async def restore(self, name: str, doc: str, author: str) -> McpServer:
-        """把某一版的配置与启用状态作为新的一版写入（不连接验证；归属不变）。"""
-        data = json.loads(doc)
-        enabled = data.pop("enabled")
-        try:
-            # JSON 模式：strict 下枚举只从 JSON 文本按值解析
-            config = McpConfig.model_validate_json(json.dumps(data))
-        except ValidationError as e:
-            raise InvalidInput(f"that revision is not a valid MCP config: {e}") from e
+    async def restore(self, name: str, rev: int, author: str) -> McpServer:
+        """把第 rev 版的配置与启用状态作为新的一版写入（不连接验证；归属不变），读版本与写入在同一个事务里。"""
         async with self._db.transaction() as s:
-            row = await changeable_in(s, Subject.MCP, name, author)
-            before = _server(row)
+            row = await changeable_in(s, StoredKind.MCP, name, author)
+            data = json.loads(await revision_doc_in(s, Subject.MCP, name, rev))
+            enabled = data.pop("enabled")
+            try:
+                # JSON 模式：strict 下枚举只从 JSON 文本按值解析
+                config = McpConfig.model_validate_json(json.dumps(data))
+            except ValidationError as e:
+                raise InvalidInput(f"that revision is not a valid MCP config: {e}") from e
+            before = server_of(row)
             row.content, row.enabled = config.model_dump_json(), enabled
             record_in(
                 s,

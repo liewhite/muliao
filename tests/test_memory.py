@@ -40,16 +40,14 @@ async def test_memory_api_reads_and_writes_global_and_agent_memory_and_restores_
     agent = await make_agent("alpha")
     await login(client)
     assert (await client.get("/api/memory")).json() == {"content": "", "max_chars": 4000}
-    assert (await client.get("/api/resources/memory/history")).json() == []
+    assert (await client.get("/api/memory/history")).json() == []
 
     for content in ("first", "second"):
         resp = await client.put("/api/memory", json={"owner": None, "content": content})
         assert resp.json()["content"] == content
-    history = (await client.get("/api/resources/memory/history")).json()
+    history = (await client.get("/api/memory/history")).json()
     assert [(r["content"], r["author"]) for r in history] == [("second", "user"), ("first", "user")]
-    assert (
-        await client.post("/api/resources/memory/restore", json={"rev": history[1]["rev"]})
-    ).status_code == 204
+    assert (await client.post("/api/memory/restore", json={"rev": history[1]["rev"]})).status_code == 204
     assert await container.memory.read(None) == "first"
 
     for content in ("- likes tea\n", "- likes coffee\n"):
@@ -57,14 +55,14 @@ async def test_memory_api_reads_and_writes_global_and_agent_memory_and_restores_
     assert (await client.get("/api/memory", params={"owner": agent.id})).json()[
         "content"
     ] == "- likes coffee\n"
-    memory = (await client.get(f"/api/resources/memory/history?owner={agent.id}")).json()
+    memory = (await client.get(f"/api/memory/history?owner={agent.id}")).json()
     assert [r["content"] for r in memory][:2] == ["- likes coffee\n", "- likes tea\n"]
-    await client.post("/api/resources/memory/restore", json={"owner": agent.id, "rev": memory[1]["rev"]})
+    await client.post("/api/memory/restore", json={"owner": agent.id, "rev": memory[1]["rev"]})
     assert await container.memory.read(agent.id) == "- likes tea\n"
     # 全局记忆不受影响
     assert await container.memory.read(None) == "first"
     assert (await client.get("/api/memory", params={"owner": "nope"})).status_code == 404
-    bad = await client.post("/api/resources/memory/restore", json={"owner": agent.id, "rev": "HEAD"})
+    bad = await client.post("/api/memory/restore", json={"owner": agent.id, "rev": "HEAD"})
     assert bad.status_code == 422
 
 

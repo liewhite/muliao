@@ -11,12 +11,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.permissions import ADMIN, Kind, Rules
+from muliao.agents.kinds import Kind, StoredKind, label
+from muliao.agents.permissions import ADMIN, Rules
 from muliao.agents.revisions import USER
 from muliao.agents.roles import rules_in
 from muliao.agents.tables import Agent, Item
@@ -30,6 +31,11 @@ class Grants:
     agent_id: str | None
     rules: Rules
     admin: bool
+
+    @classmethod
+    def of(cls, agent_id: str, roles: Collection[str], rules: Rules) -> Grants:
+        """agent 的 Grants：rules 是它的最终规则（roles.rules_in），带 admin 角色就能改任何条目。"""
+        return cls(agent_id, rules, ADMIN in roles)
 
     def uses(self, kind: Kind, name: str, owner: str | None) -> bool:
         if self.agent_id is None:
@@ -60,7 +66,7 @@ async def grants_in(s: AsyncSession, actor: str) -> Grants:
     agent = await s.get(Agent, actor)
     if agent is None:
         raise NotFound(f"agent {actor!r} not found")
-    return Grants(actor, await rules_in(s, agent.roles, agent.allow, agent.deny), ADMIN in agent.roles)
+    return Grants.of(actor, agent.roles, await rules_in(s, agent.roles, agent.allow, agent.deny))
 
 
 async def owner_label_in(s: AsyncSession, owner: str | None) -> str:
@@ -75,6 +81,6 @@ async def check_change_in(s: AsyncSession, actor: str, row: Item) -> None:
     """规则 2：actor 能改这一项，否则 Forbidden。"""
     if not (await grants_in(s, actor)).changes(row.owner):
         raise Forbidden(
-            f"{row.kind} {row.name!r} belongs to {await owner_label_in(s, row.owner)}; only its owner or an "
+            f"{label(StoredKind(row.kind))} {row.name!r} belongs to {await owner_label_in(s, row.owner)}; only its owner or an "
             "admin can change it"
         )

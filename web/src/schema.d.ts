@@ -75,66 +75,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tools": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Tools
-         * @description 全部已登记的内置工具，按登记顺序（含 web，即使没配置 [web]）。
-         */
-        get: operations["list_tools_api_tools_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/items": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Items
-         * @description 全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称。
-         */
-        get: operations["list_items_api_items_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/items/{kind}/{name}/owner": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Transfer Item
-         * @description 把 skill / MCP server / secret 转给另一个 owner（内置工具不能转），记一版；内容与收录它的角色不变。
-         */
-        put: operations["transfer_item_api_items__kind___name__owner_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agent-preview": {
         parameters: {
             query?: never;
@@ -346,74 +286,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/memory": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Memory
-         * @description owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。
-         */
-        get: operations["get_memory_api_memory_get"];
-        /** Put Memory */
-        put: operations["put_memory_api_memory_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skill": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Skill */
-        get: operations["get_skill_api_skill_get"];
-        /**
-         * Put Skill
-         * @description 新建的归 owner；已有的整体改写，owner 不变。
-         */
-        put: operations["put_skill_api_skill_put"];
-        post?: never;
-        /** Delete Skill */
-        delete: operations["delete_skill_api_skill_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skill/package": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Export Skill
-         * @description 下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。
-         */
-        get: operations["export_skill_api_skill_package_get"];
-        put?: never;
-        /**
-         * Import Skill
-         * @description 请求体是一个标准 .skill 文件，导入为 skill（新建的归 owner，缺省为平台），一次提交、作者 user。同名 skill 已存在时 409，
-         *     replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，超限 413。
-         */
-        post: operations["import_skill_api_skill_package_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/sessions": {
         parameters: {
             query?: never;
@@ -565,7 +437,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/mcp": {
+    "/api/items": {
         parameters: {
             query?: never;
             header?: never;
@@ -573,21 +445,60 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Mcp
-         * @description 全部 server（含停用的），按名称；谁能用见 /items 的 roles。
+         * List Items
+         * @description 全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称；每种带自己的
+         *     详情（工具的读写与管理类、MCP 的配置与启停）。
          */
-        get: operations["list_mcp_api_mcp_get"];
+        get: operations["list_items_api_items_get"];
         put?: never;
-        /** Add Mcp */
-        post: operations["add_mcp_api_mcp_post"];
-        /** Delete Mcp */
-        delete: operations["delete_mcp_api_mcp_delete"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/mcp/tools": {
+    "/api/items/{kind}/{name}/owner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Transfer Item
+         * @description 转给另一个 owner，记一版；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。
+         */
+        put: operations["transfer_item_api_items__kind___name__owner_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/items/{kind}/{name}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Item History
+         * @description 新的在前，第一条即当前的一版（已删除的是那次删除）；只列最近 50 版。
+         */
+        get: operations["item_history_api_items__kind___name__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/items/{kind}/{name}/restore": {
         parameters: {
             query?: never;
             header?: never;
@@ -596,15 +507,104 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Probe Mcp */
-        post: operations["probe_mcp_api_mcp_tools_post"];
+        /**
+         * Restore Item
+         * @description 把某一版之后的内容作为新的一版写入（secret 不能恢复：422）。
+         */
+        post: operations["restore_item_api_items__kind___name__restore_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/mcp/enabled": {
+    "/api/items/skill/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Skill */
+        get: operations["get_skill_api_items_skill__name__get"];
+        /**
+         * Put Skill
+         * @description 新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。
+         */
+        put: operations["put_skill_api_items_skill__name__put"];
+        post?: never;
+        /** Delete Skill */
+        delete: operations["delete_skill_api_items_skill__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/items/skill/{name}/package": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Skill
+         * @description 下载标准 .skill 文件（zip：`<name>/SKILL.md` 与附件）。
+         */
+        get: operations["export_skill_api_items_skill__name__package_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/items/skill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Skill
+         * @description 请求体是一个标准 .skill 文件，导入为 skill（名字取自包；新建的归 owner，缺省为平台），一次提交、作者 user。同名
+         *     skill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，
+         *     超限 413。
+         */
+        post: operations["import_skill_api_items_skill_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/items/mcp/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Mcp */
+        get: operations["get_mcp_api_items_mcp__name__get"];
+        /**
+         * Add Mcp
+         * @description 新增（启用的）server；同名的已存在 409（名字全局唯一，配置不能原地改写：删了再建）。
+         */
+        put: operations["add_mcp_api_items_mcp__name__put"];
+        post?: never;
+        /** Delete Mcp */
+        delete: operations["delete_mcp_api_items_mcp__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/items/mcp/{name}/enabled": {
         parameters: {
             query?: never;
             header?: never;
@@ -613,7 +613,7 @@ export interface paths {
         };
         get?: never;
         /** Set Mcp Enabled */
-        put: operations["set_mcp_enabled_api_mcp_enabled_put"];
+        put: operations["set_mcp_enabled_api_items_mcp__name__enabled_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -621,7 +621,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/vault/{key}": {
+    "/api/items/mcp/{name}/tools": {
         parameters: {
             query?: never;
             header?: never;
@@ -629,14 +629,99 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
+        put?: never;
+        /**
+         * Probe Mcp
+         * @description 连接一次，列出它的工具（测试连接）。
+         */
+        post: operations["probe_mcp_api_items_mcp__name__tools_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/items/secret/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Secret
+         * @description 不含值。
+         */
+        get: operations["get_secret_api_items_secret__name__get"];
         /**
          * Set Secret
-         * @description 新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。列表见 /items（不含值）。
+         * @description 新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。
          */
-        put: operations["set_secret_api_vault__key__put"];
+        put: operations["set_secret_api_items_secret__name__put"];
         post?: never;
         /** Delete Secret */
-        delete: operations["delete_secret_api_vault__key__delete"];
+        delete: operations["delete_secret_api_items_secret__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Memory
+         * @description owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。
+         */
+        get: operations["get_memory_api_memory_get"];
+        /** Put Memory */
+        put: operations["put_memory_api_memory_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memory/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Memory History
+         * @description owner 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。
+         */
+        get: operations["memory_history_api_memory_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/memory/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Memory
+         * @description 把某一版的正文作为新的一版写入。
+         */
+        post: operations["restore_memory_api_memory_restore_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -687,46 +772,6 @@ export interface paths {
         put?: never;
         /** Test Push */
         post: operations["test_push_api_push_test_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/resources/{kind}/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * History
-         * @description 记忆按 owner（缺省为全局记忆），条目按 name；新的在前，第一条即当前的一版。只列最近 50 版。
-         */
-        get: operations["history_api_resources__kind__history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/resources/{kind}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Restore
-         * @description 把某一版之后的内容作为新的一版写入。
-         */
-        post: operations["restore_api_resources__kind__restore_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1585,29 +1630,6 @@ export interface components {
             /** At */
             at: string | null;
         };
-        /**
-         * ItemOut
-         * @description 条目池里的一项，在规则里写作 `<kind>:<name>`。
-         */
-        ItemOut: {
-            kind: components["schemas"]["Kind"];
-            /** Name */
-            name: string;
-            /** Owner */
-            owner: string | null;
-            /** Description */
-            description: string;
-            /** Updated At */
-            updated_at: string | null;
-            /** Roles */
-            roles: string[];
-        };
-        /**
-         * Kind
-         * @description 条目的种类；items.kind 存后三种。
-         * @enum {string}
-         */
-        Kind: "tool" | "skill" | "mcp" | "secret";
         /** LiveRunOut */
         LiveRunOut: {
             /** Run Id */
@@ -1667,8 +1689,6 @@ export interface components {
         McpIn: {
             /** Owner */
             owner: string | null;
-            /** Name */
-            name: string;
             transport: components["schemas"]["McpTransport"];
             /** Command */
             command?: string | null;
@@ -1699,12 +1719,8 @@ export interface components {
              */
             probe: boolean;
         };
-        /** McpOut */
-        McpOut: {
-            /** Owner */
-            owner: string | null;
-            /** Name */
-            name: string;
+        /** McpItemOut */
+        McpItemOut: {
             transport: components["schemas"]["McpTransport"];
             /** Command */
             command: string | null;
@@ -1722,6 +1738,45 @@ export interface components {
             };
             /** Enabled */
             enabled: boolean;
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Updated At */
+            updated_at: string | null;
+            /** Roles */
+            roles: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "mcp";
+        };
+        /** McpOut */
+        McpOut: {
+            transport: components["schemas"]["McpTransport"];
+            /** Command */
+            command: string | null;
+            /** Args */
+            args: string[];
+            /** Url */
+            url: string | null;
+            /** Env */
+            env: {
+                [key: string]: string;
+            };
+            /** Headers */
+            headers: {
+                [key: string]: string;
+            };
+            /** Enabled */
+            enabled: boolean;
+            /** Owner */
+            owner: string | null;
+            /** Name */
+            name: string;
             /**
              * Tools
              * @default []
@@ -1746,6 +1801,13 @@ export interface components {
             content: string;
             /** Max Chars */
             max_chars: number;
+        };
+        /** MemoryRestoreIn */
+        MemoryRestoreIn: {
+            /** Owner */
+            owner?: string | null;
+            /** Rev */
+            rev: number;
         };
         /**
          * NotificationEvent
@@ -1959,17 +2021,8 @@ export interface components {
                 [key: string]: components["schemas"]["QuestionAnswer"][];
             };
         };
-        /**
-         * ResourceKind
-         * @enum {string}
-         */
-        ResourceKind: "memory" | "skill" | "mcp" | "secret";
         /** RestoreIn */
         RestoreIn: {
-            /** Owner */
-            owner?: string | null;
-            /** Name */
-            name?: string | null;
             /** Rev */
             rev: number;
         };
@@ -2148,6 +2201,8 @@ export interface components {
         };
         /** SecretIn */
         SecretIn: {
+            /** Owner */
+            owner?: string | null;
             /** Value */
             value: string;
             /**
@@ -2155,6 +2210,41 @@ export interface components {
              * @default
              */
             description: string;
+        };
+        /**
+         * SecretItemOut
+         * @description 值不返回；updated_at 是最后一次修改（设值、改说明、转移）的时间。
+         */
+        SecretItemOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Updated At */
+            updated_at: string | null;
+            /** Roles */
+            roles: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "secret";
+        };
+        /** SecretOut */
+        SecretOut: {
+            /** Owner */
+            owner: string | null;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /**
          * ServerEvent
@@ -2278,12 +2368,28 @@ export interface components {
         SkillIn: {
             /** Owner */
             owner: string | null;
-            /** Name */
-            name: string;
             /** Description */
             description: string;
             /** Body */
             body: string;
+        };
+        /** SkillItemOut */
+        SkillItemOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Updated At */
+            updated_at: string | null;
+            /** Roles */
+            roles: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "skill";
         };
         /** SkillOut */
         SkillOut: {
@@ -2324,6 +2430,11 @@ export interface components {
              */
             attachments: string[];
         };
+        /**
+         * StoredKind
+         * @enum {string}
+         */
+        StoredKind: "skill" | "mcp" | "secret";
         /** StreamConfig */
         StreamConfig: {
             /** Command */
@@ -2446,6 +2557,34 @@ export interface components {
         TokenOut: {
             /** Token */
             token: string;
+        };
+        /**
+         * ToolItemOut
+         * @description 内置工具：归平台、代码里定义，不能改。
+         */
+        ToolItemOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Updated At */
+            updated_at: string | null;
+            /** Roles */
+            roles: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "tool";
+            /**
+             * Access
+             * @enum {string}
+             */
+            access: "read" | "write";
+            /** Admin */
+            admin: boolean;
         };
         /**
          * ToolOut
@@ -2736,80 +2875,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentDefaultsOut"];
-                };
-            };
-        };
-    };
-    list_tools_api_tools_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ToolOut"][];
-                };
-            };
-        };
-    };
-    list_items_api_items_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ItemOut"][];
-                };
-            };
-        };
-    };
-    transfer_item_api_items__kind___name__owner_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                kind: components["schemas"]["Kind"];
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OwnerIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3322,226 +3387,6 @@ export interface operations {
             };
         };
     };
-    get_memory_api_memory_get: {
-        parameters: {
-            query?: {
-                owner?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_memory_api_memory_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MemoryIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_skill_api_skill_get: {
-        parameters: {
-            query: {
-                name: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_skill_api_skill_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SkillIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_skill_api_skill_delete: {
-        parameters: {
-            query: {
-                name: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    export_skill_api_skill_package_get: {
-        parameters: {
-            query: {
-                name: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description <name>.skill */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/zip": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    import_skill_api_skill_package_post: {
-        parameters: {
-            query?: {
-                owner?: string | null;
-                replace?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillImportOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_sessions_api_sessions_get: {
         parameters: {
             query?: {
@@ -3858,7 +3703,7 @@ export interface operations {
             };
         };
     };
-    list_mcp_api_mcp_get: {
+    list_items_api_items_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -3873,16 +3718,307 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["McpOut"][];
+                    "application/json": (components["schemas"]["ToolItemOut"] | components["schemas"]["SkillItemOut"] | components["schemas"]["McpItemOut"] | components["schemas"]["SecretItemOut"])[];
                 };
             };
         };
     };
-    add_mcp_api_mcp_post: {
+    transfer_item_api_items__kind___name__owner_put: {
         parameters: {
             query?: never;
             header?: never;
+            path: {
+                kind: components["schemas"]["StoredKind"];
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OwnerIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    item_history_api_items__kind___name__history_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: components["schemas"]["StoredKind"];
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_item_api_items__kind___name__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: components["schemas"]["StoredKind"];
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_api_items_skill__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_skill_api_items_skill__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_skill_api_items_skill__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_skill_api_items_skill__name__package_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description <name>.skill */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_skill_api_items_skill_post: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+                replace?: boolean;
+            };
+            header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillImportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_mcp_api_items_mcp__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_mcp_api_items_mcp__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
             cookie?: never;
         };
         requestBody: {
@@ -3911,13 +4047,13 @@ export interface operations {
             };
         };
     };
-    delete_mcp_api_mcp_delete: {
+    delete_mcp_api_items_mcp__name__delete: {
         parameters: {
-            query: {
+            query?: never;
+            header?: never;
+            path: {
                 name: string;
             };
-            header?: never;
-            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -3940,44 +4076,13 @@ export interface operations {
             };
         };
     };
-    probe_mcp_api_mcp_tools_post: {
+    set_mcp_enabled_api_items_mcp__name__enabled_put: {
         parameters: {
-            query: {
+            query?: never;
+            header?: never;
+            path: {
                 name: string;
             };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": string[];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_mcp_enabled_api_mcp_enabled_put: {
-        parameters: {
-            query: {
-                name: string;
-            };
-            header?: never;
-            path?: never;
             cookie?: never;
         };
         requestBody: {
@@ -4006,14 +4111,74 @@ export interface operations {
             };
         };
     };
-    set_secret_api_vault__key__put: {
+    probe_mcp_api_items_mcp__name__tools_post: {
         parameters: {
-            query?: {
-                owner?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
-                key: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_secret_api_items_secret__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_secret_api_items_secret__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
             };
             cookie?: never;
         };
@@ -4041,16 +4206,142 @@ export interface operations {
             };
         };
     };
-    delete_secret_api_vault__key__delete: {
+    delete_secret_api_items_secret__name__delete: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                key: string;
+                name: string;
             };
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_memory_api_memory_get: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_memory_api_memory_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    memory_history_api_memory_history_get: {
+        parameters: {
+            query?: {
+                owner?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_memory_api_memory_restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryRestoreIn"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             204: {
@@ -4136,73 +4427,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-        };
-    };
-    history_api_resources__kind__history_get: {
-        parameters: {
-            query?: {
-                owner?: string | null;
-                name?: string | null;
-            };
-            header?: never;
-            path: {
-                kind: components["schemas"]["ResourceKind"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RevisionOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    restore_api_resources__kind__restore_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                kind: components["schemas"]["ResourceKind"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RestoreIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
             };
         };
     };

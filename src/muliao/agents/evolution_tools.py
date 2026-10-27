@@ -72,8 +72,8 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         attachments_dir: str | None = None,
     ) -> str:
         """Create or replace a skill: a reusable procedure for a recurring kind of task. A new skill is yours and
-        only you see it; other agents get it only through a role. Replacing an existing one needs you to own it
-        (or be an admin). Skill names are unique.
+        only you have it in your skill index; other agents get it only through a role. Replacing an existing one
+        needs you to own it (or be an admin). Skill names are unique.
 
         Args:
             name: Lowercase slug, e.g. `slack-digest`.

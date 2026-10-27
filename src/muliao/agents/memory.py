@@ -5,13 +5,14 @@
 - agent 的记忆：创建 agent 时与它的行在同一个事务里写入（create_in），随 agent 的行删除；缺失说明数据不一致。
 """
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.active import active_row_in
-from muliao.agents.revisions import Subject, record_in
+from muliao.agents.kinds import Subject
+from muliao.agents.revisions import RevisionInfo, history_in, record_in, revision_doc_in
 from muliao.agents.tables import Memory
 from muliao.errors import CorruptState, InvalidInput
 from muliao.platform import text_edit
@@ -51,15 +52,38 @@ class MemoryStore:
             row = await _row_in(s, owner)
             return "" if row is None else row.content
 
+    async def history(self, owner: str | None, limit: int) -> list[RevisionInfo]:
+        """新的在前，第一条即当前的一版。"""
+        async with self._db.transaction() as s:
+            return await history_in(s, Subject.MEMORY, revision_name(owner), limit)
+
     async def write(self, owner: str | None, content: str, author: str) -> str:
-        """整体替换（用户在界面上编辑、恢复旧版时）。"""
-        return await self._update(owner, lambda _current: content, author)
+        """整体替换（用户在界面上编辑）。"""
+
+        async def replace(_s: AsyncSession, _current: str) -> str:
+            return content
+
+        return await self._update(owner, replace, author)
 
     async def edit(self, owner: str | None, old: str, new: str, author: str) -> str:
         """规则同 skill 正文（text_edit.edit）：old 恰好出现一次时替换为 new（new 为空即删除），old 为空时把 new 追加到末尾。"""
-        return await self._update(owner, lambda current: text_edit.edit(current, old, new, "memory"), author)
 
-    async def _update(self, owner: str | None, edit: Callable[[str], str], author: str) -> str:
+        async def apply(_s: AsyncSession, current: str) -> str:
+            return text_edit.edit(current, old, new, "memory")
+
+        return await self._update(owner, apply, author)
+
+    async def restore(self, owner: str | None, rev: int, author: str) -> str:
+        """把第 rev 版的正文作为新的一版写入，读版本与写入在同一个事务里。"""
+
+        async def revision(s: AsyncSession, _current: str) -> str:
+            return await revision_doc_in(s, Subject.MEMORY, revision_name(owner), rev)
+
+        return await self._update(owner, revision, author)
+
+    async def _update(
+        self, owner: str | None, edit: Callable[[AsyncSession, str], Awaitable[str]], author: str
+    ) -> str:
         """读取、修改、写入与记版本在同一个写事务里：并发的修改互不覆盖。"""
         async with self._db.transaction() as s:
             if owner is not None:
@@ -67,7 +91,7 @@ class MemoryStore:
                 await active_row_in(s, owner)
             row = await _row_in(s, owner)
             current = "" if row is None else row.content
-            updated = edit(current)
+            updated = await edit(s, current)
             if len(updated) > self.max_chars:
                 # 给出要腾出的确切字数：只说「超了」时模型往往一次只缩短新条目几个字，反复撞墙
                 over = len(updated) - self.max_chars

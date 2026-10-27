@@ -442,8 +442,8 @@ async def test_an_agent_uses_its_own_enabled_servers_and_those_its_roles_give_it
     assert [(s.owner, s.name) for s in await container.mcp.usable(alpha)] == [(alpha, "mine")]
     assert await owned(container, "mcp", None) == ["echo", "other"]
     # 归平台的只有角色给了的生效；停用的不生效
-    await container.roles.create(RoleSpec("other-user", "d", ["mcp:other"], []))
-    await container.agents.update(alpha, AgentPatch(roles=["other-user"]))
+    await container.roles.create(RoleSpec("other-user", "d", ["mcp:other"], []), actor="user")
+    await container.agents.update(alpha, AgentPatch(roles=["other-user"]), author="user")
     assert [s.name for s in await container.mcp.index(alpha)] == ["mine", "other"]
     await container.mcp.set_enabled("mine", False, "user")
     assert [s.name for s in await container.mcp.index(alpha)] == ["other"]
