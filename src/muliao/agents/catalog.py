@@ -1,4 +1,4 @@
-"""条目池（ItemCatalog）：跨种类看条目——全部条目与收录它们的角色（界面的条目页）、一个 agent 能用的、agent 配置的预览、
+"""条目池（ItemCatalog）：跨种类看条目——全部条目与收录它们的角色（界面的条目页）、一个 agent 能用的（reach）、agent 配置的预览、
 转移 owner、版本历史与恢复。各种类自己的内容与写入在各 store（skills、mcp、secrets）；能用、能改的规则在 agents.access。"""
 
 from __future__ import annotations
@@ -97,11 +97,13 @@ class ItemCatalog:
                 for i in items
             ]
 
-    async def usable_items(self, agent_id: str) -> list[str]:
-        """agent 能用的 skill、MCP server、secret（`kind:name`，agents.access 的规则 1），按种类、名称。"""
+    async def reach(self, agent_id: str) -> Reach:
+        """agent 最终能用的内置工具与 skill、MCP server、secret（agents.access 的规则 1），一个事务里按角色现在的定义算：
+        get_agent 与界面同一套计算；运行时（agent_runtime.Toolbox）按实际注册的工具集算，两者一致由组合根启动时核对
+        available_tools 与注册的工具保证（container._check_permissions）。"""
         async with self._db.transaction() as s:
             grants = await grants_in(s, agent_id)
-            return (await reach_in(s, self._tools, grants.rules, grants.uses)).items
+            return await reach_in(s, self._tools, grants.rules, grants.uses)
 
     async def preview(
         self, agent_id: str | None, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]

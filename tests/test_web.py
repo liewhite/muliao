@@ -319,8 +319,8 @@ async def test_without_web_config_web_permissions_grant_no_tools_and_does_not_bl
     toolbox = without_web.consumer._toolbox  # noqa: SLF001
     assert "web_search" not in toolbox.tool_names()
     # 界面与 get_agent 也不列出这次配置没有的工具（与运行时取同一份注册的工具）
-    assert "web_search" not in without_web.agents.resolve(await without_web.agents.rules(reader))
-    assert "web_search" in with_web.agents.resolve(await with_web.agents.rules(reader))
+    assert "web_search" not in (await without_web.catalog.reach(reader.id)).tools
+    assert "web_search" in (await with_web.catalog.reach(reader.id)).tools
     await without_web.db.engine.dispose()
 
 

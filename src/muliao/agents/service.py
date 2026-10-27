@@ -230,11 +230,6 @@ class AgentService:
         async with self._db.transaction() as s:
             return await rules_in(s, agent.roles, agent.allow, agent.deny)
 
-    def resolve(self, rules: Rules) -> list[str]:
-        """按规则最终能用的内置工具（界面、get_agent）。运行时（agent_runtime.Toolbox）按实际注册的工具集算，两者一致由
-        组合根启动时核对 available_tools 与注册的工具保证（container._check_permissions）。"""
-        return rules.tools(self.tools)
-
     async def verify_stored(self) -> None:
         """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、角色必须都在（且不含隐含的 base）、规则（含角色的）
         形式合法且 tool 规则仍匹配登记的工具，与新建、修改时同一套规则（skill / mcp / secret 规则不查是否匹配现有条目：条目

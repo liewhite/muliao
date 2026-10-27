@@ -69,12 +69,12 @@ def test_base_has_every_tool_but_admin_ones_and_admin_has_all():
 async def test_new_agents_have_base_implicitly(container):
     agent = await container.agents.create(AgentSpec(name="a", description="d"), author="user")
     assert agent.roles == ()
-    tools = container.agents.resolve(await container.agents.rules(agent))
+    tools = (await container.catalog.reach(agent.id)).tools
     assert not set(tools) & _ADMIN_TOOLS and {"run_shell", "memory_edit", "vault_set"} <= set(tools)
     with pytest.raises(InvalidInput, match="implicit"):
         await container.agents.create(AgentSpec(name="b", description="d", roles=[BASE]), author="user")
     admin = await container.agents.create(AgentSpec(name="c", description="d", roles=[ADMIN]), author="user")
-    assert container.agents.resolve(await container.agents.rules(admin)) == list(container.agents.tools)
+    assert (await container.catalog.reach(admin.id)).tools == list(container.agents.tools)
 
 
 async def test_roles_are_created_assigned_updated_and_protected(container):
@@ -99,9 +99,9 @@ async def test_roles_are_created_assigned_updated_and_protected(container):
         AgentSpec(name="r", description="d", deny=["tool:*"], roles=["reviewer"]), author="user"
     )
     # 自己的 deny 盖过 base 与角色
-    assert container.agents.resolve(await container.agents.rules(agent)) == []
+    assert (await container.catalog.reach(agent.id)).tools == []
     agent = await container.agents.update(agent.id, AgentPatch(deny=["tool:run_shell"]), author="user")
-    assert "issue_update" not in container.agents.resolve(await container.agents.rules(agent))
+    assert "issue_update" not in (await container.catalog.reach(agent.id)).tools
 
     with pytest.raises(Conflict, match="used by agents"):
         await roles.delete("reviewer", actor="user")
@@ -125,7 +125,7 @@ async def test_a_role_hands_out_skills_and_secrets_and_an_items_owner_always_has
     await container.agents.update(trader.id, AgentPatch(roles=["relay-trader"]), author="user")
     assert [s.name for s in await container.skills.index(trader.id)] == ["relay-host"]
     assert await container.vault.resolve_many(trader.id, ["RELAY_KEY"]) == {"RELAY_KEY": "v"}
-    assert await container.catalog.usable_items(trader.id) == ["secret:RELAY_KEY", "skill:relay-host"]
+    assert (await container.catalog.reach(trader.id)).items == ["secret:RELAY_KEY", "skill:relay-host"]
     with pytest.raises(NotFound):
         await container.vault.resolve_many(other.id, ["RELAY_KEY"])
 
