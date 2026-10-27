@@ -27,6 +27,7 @@ export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
 export type AppNotification = Schemas['NotificationOut']
 
+// 下面三个值与两个路由（sessionRoute、issues.ts 的 issueRoute）前后端各写一份，tests/test_frontend_contract.py 核对
 /** 指代用户的那个值（与后端 agents.api.USER 一致）：issue 的指派人、资源修改的作者等 */
 export const USER = 'user'
 /** issue 时间线上系统自己的动作（删除 agent 时的清理）的 actor（与后端 issues.rules.SYSTEM_ACTOR 一致） */
@@ -220,9 +221,9 @@ type Unbranded<T> = T extends AgentId
  * 入参必须是 T 去掉品牌后的类型，所以 call 推出的响应类型仍然被检查，这里只收窄 agent id */
 export const branded = <T>(p: Promise<Unbranded<T>>) => p as Promise<unknown> as Promise<T>
 
-/** 前端路由：agent 名称可含中文，必须编码 */
+/** 前端路由：agent 页按 id（名称可改） */
 export const agentRoute = (id: AgentId) => `/agents/${id}`
-/** 会话页；推送通知点开的地址由后端 delivery/webpush.py 生成，与它保持一致 */
+/** 会话页；通知点开的地址由后端 notifications.tables.Notification.url 生成，与它一致 */
 export const sessionRoute = (id: string) => `/sessions/${id}`
 export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
 

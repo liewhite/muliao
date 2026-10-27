@@ -40,6 +40,7 @@ export const PRIORITY_LABEL: Record<IssuePriority, string> = {
 /** 优先级的展示顺序：从 PRIORITY_LABEL 的键推导 */
 export const PRIORITIES = Object.keys(PRIORITY_LABEL) as readonly IssuePriority[]
 
+/** issue 页；通知点开的地址由后端 Notification.url 生成，与它一致（tests/test_frontend_contract.py） */
 export const issueRoute = (id: number) => `/issues/${id}`
 
 /** issue 会话（origin=issue）的 issue 编号：后端契约是 origin_ref 为 issue id，不符合就报错而不是去请求一个不存在的 issue */
