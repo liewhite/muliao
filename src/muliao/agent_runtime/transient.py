@@ -26,12 +26,19 @@ _TRANSPORT_ERRORS = (
 )
 
 
+def _broken_off_stream(cause: BaseException | None) -> bool:
+    """流已以 200 开始、中途收到类型不在 Anthropic 契约里的 error 事件（如中转站上游空闲超时的 `stream_timeout`）。
+    契约内的类型（overloaded_error、invalid_request_error 等）已由 pydantic-ai 按类型换成对应状态码的 ModelHTTPError，
+    走到这里的只剩契约外的：请求已被接受、是流中途断开，与传输层断流同类。"""
+    return isinstance(cause, anthropic.APIStatusError) and cause.status_code < 400
+
+
 def is_transient(exc: BaseException) -> bool:
     """契约内的暂时性失败才重试。ModelAPIError 还包括请求超限、响应解码失败等确定性错误，不能整类重试。"""
     if isinstance(exc, ModelHTTPError):
         return exc.status_code in _TRANSIENT_HTTP
     if isinstance(exc, ModelAPIError):
-        return isinstance(exc.__cause__, _TRANSPORT_ERRORS)
+        return isinstance(exc.__cause__, _TRANSPORT_ERRORS) or _broken_off_stream(exc.__cause__)
     return isinstance(exc, (TransientError, *_TRANSPORT_ERRORS))
 
 

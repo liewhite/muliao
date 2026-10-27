@@ -1,10 +1,13 @@
 """代码审查发现的问题的回归测试。"""
 
+import anthropic
 import httpx
+import httpx2
 import pytest
 from anthropic import APIConnectionError
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.models.anthropic import _map_api_errors
 from sqlalchemy import select
 
 from muliao.agent_runtime.transient import is_transient, transient_as_retryable
@@ -101,6 +104,29 @@ def test_only_transport_level_model_api_errors_are_transient():
     assert is_transient(ModelHTTPError(status_code=529, model_name="m"))
     assert not is_transient(ModelHTTPError(status_code=400, model_name="m"))
     assert is_transient(TransientError("x"))
+
+
+def _stream_error_event(error_type: str) -> BaseException:
+    """流以 200 开始后收到的 error 事件，经 anthropic SDK 与 pydantic-ai 的真实映射得到的异常（#255）。"""
+    body = {"type": "error", "error": {"type": error_type, "message": "x"}}
+    response = httpx2.Response(200, request=httpx2.Request("POST", "https://api.example/v1/messages"))
+    client = anthropic.AsyncAnthropic(api_key="k")
+    try:
+        with _map_api_errors("m"):
+            raise client._make_status_error(str(body), body=body, response=response)
+    except Exception as e:
+        return e
+    raise AssertionError("unreachable")
+
+
+def test_error_events_mid_stream_are_classified_by_type():
+    # 中转站的上游空闲超时不在 Anthropic 契约里：ModelAPIError（cause 为 200 的 APIStatusError），流中途断开，重试
+    relay_timeout = _stream_error_event("stream_timeout")
+    assert type(relay_timeout) is ModelAPIError and is_transient(relay_timeout)
+    # 契约内的类型由 pydantic-ai 换成对应状态码，按状态码判断
+    assert is_transient(_stream_error_event("overloaded_error"))
+    assert is_transient(_stream_error_event("api_error"))
+    assert not is_transient(_stream_error_event("invalid_request_error"))
 
 
 async def test_the_worker_retries_only_transient_errors_and_timeouts_not_sdk_exceptions(container):
