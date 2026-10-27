@@ -15,10 +15,13 @@ from pydantic import BaseModel
 
 from muliao.api import (
     agents,
+    features,
     files,
     history,
     issues,
     items,
+    memory,
+    models,
     notifications,
     push,
     sessions,
@@ -117,9 +120,11 @@ def _public_routes() -> APIRouter:
 def _private_routes() -> APIRouter:
     router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
     router.include_router(agents.router)
+    router.include_router(models.router)
     router.include_router(sessions.router)
     router.include_router(tasks.router)
     router.include_router(items.router)
+    router.include_router(memory.router)
     router.include_router(push.router)
     router.include_router(triggers.router)
     router.include_router(webhook.router)
@@ -129,6 +134,7 @@ def _private_routes() -> APIRouter:
     router.include_router(issues.router)
     router.include_router(history.router)
     router.include_router(speech.router)
+    router.include_router(features.router)
 
     @router.get("/auth/me", status_code=204)
     async def me() -> None:

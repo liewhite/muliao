@@ -1,6 +1,6 @@
-"""条目（内置工具、skill、MCP server、secret）与记忆的接口，按统一模型：`/items` 列出全部条目（每种带自己的详情），
+"""条目（内置工具、skill、MCP server、secret）的接口，按统一模型：`/items` 列出全部条目（每种带自己的详情），
 `/items/{kind}/{name}` 读、写、删一个条目，`/owner`、`/history`、`/restore` 对三种存在库里的条目通用，各种类专有的操作
-在自己的子路径（MCP 的启停与测试连接、skill 包的导入导出）。记忆在 `/memory`（全局与 agent 的）。
+在自己的子路径（MCP 的启停与测试连接、skill 包的导入导出）。记忆在 api/memory.py。
 
 写入的作者都是 user；新建的条目归请求给出的 owner（缺省为平台），已有的 owner 不变。secret 的版本不含值，只能看历史。
 """
@@ -379,48 +379,3 @@ async def set_secret(c: C, name: str, body: SecretIn) -> None:
 @router.delete("/items/secret/{name}", status_code=204)
 async def delete_secret(c: C, name: str) -> None:
     await c.vault.delete(name, USER)
-
-
-# ---- 记忆 ----
-
-
-class MemoryOut(BaseModel):
-    content: str
-    max_chars: int
-
-
-class MemoryIn(BaseModel):
-    # 为空即全局记忆
-    agent: str | None
-    content: str
-
-
-class MemoryRestoreIn(BaseModel):
-    # 为空即全局记忆
-    agent: str | None = None
-    rev: int
-
-
-@router.get("/memory")
-async def get_memory(c: C, agent: str | None = None) -> MemoryOut:
-    """agent 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。"""
-    return MemoryOut(content=await c.memory.read(agent), max_chars=c.memory.max_chars)
-
-
-@router.put("/memory")
-async def put_memory(c: C, body: MemoryIn) -> MemoryOut:
-    return MemoryOut(
-        content=await c.memory.write(body.agent, body.content, USER), max_chars=c.memory.max_chars
-    )
-
-
-@router.get("/memory/history")
-async def memory_history(c: C, agent: str | None = None) -> list[RevisionOut]:
-    """agent 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。"""
-    return [RevisionOut.of(r) for r in await c.memory.history(agent, HISTORY_LIMIT)]
-
-
-@router.post("/memory/restore", status_code=204)
-async def restore_memory(c: C, body: MemoryRestoreIn) -> None:
-    """把某一版的正文作为新的一版写入。"""
-    await c.memory.restore(body.agent, body.rev, USER)

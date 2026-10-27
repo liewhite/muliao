@@ -217,18 +217,6 @@ async def delete_role(c: C, name: str) -> None:
     await c.distribution.delete(name, actor=USER)
 
 
-@router.get("/providers")
-async def list_providers(c: C) -> list[str]:
-    """配置里的 LLM provider 名，即 agent 模型 "<provider 名>:<模型名>" 的前半部分。"""
-    return c.models.provider_names()
-
-
-@router.get("/providers/{name}/models")
-async def list_provider_models(c: C, name: str) -> list[str]:
-    """向该 provider 实时查询的模型名；provider 出错时为 502 并带上原因。"""
-    return await c.models.list_models(name)
-
-
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
     return [AgentOut.of(a, rules) for a, rules in await c.agents.list_with_rules()]

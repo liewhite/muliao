@@ -351,73 +351,6 @@
         }
       }
     },
-    "/api/providers": {
-      "get": {
-        "summary": "List Providers",
-        "description": "配置里的 LLM provider 名，即 agent 模型 \"<provider 名>:<模型名>\" 的前半部分。",
-        "operationId": "list_providers_api_providers_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array",
-                  "title": "Response List Providers Api Providers Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/providers/{name}/models": {
-      "get": {
-        "summary": "List Provider Models",
-        "description": "向该 provider 实时查询的模型名；provider 出错时为 502 并带上原因。",
-        "operationId": "list_provider_models_api_providers__name__models_get",
-        "parameters": [
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "title": "Response List Provider Models Api Providers  Name  Models Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/agents": {
       "get": {
         "summary": "List Agents",
@@ -731,6 +664,73 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AgentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers": {
+      "get": {
+        "summary": "List Providers",
+        "description": "配置里的 LLM provider 名，即 agent 模型 \"<provider 名>:<模型名>\" 的前半部分。",
+        "operationId": "list_providers_api_providers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "title": "Response List Providers Api Providers Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{name}/models": {
+      "get": {
+        "summary": "List Provider Models",
+        "description": "向该 provider 实时查询的模型名；provider 出错时为 502 并带上原因。",
+        "operationId": "list_provider_models_api_providers__name__models_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response List Provider Models Api Providers  Name  Models Get"
                 }
               }
             }
@@ -3290,25 +3290,6 @@
         }
       }
     },
-    "/api/features": {
-      "get": {
-        "summary": "Features",
-        "description": "服务端配置决定的可选能力，界面据此显示或隐藏对应入口。",
-        "operationId": "features_api_features_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FeaturesOut"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/transcriptions": {
       "post": {
         "summary": "Transcribe",
@@ -3321,6 +3302,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TranscriptOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/features": {
+      "get": {
+        "summary": "Features",
+        "description": "服务端配置决定的可选能力，界面据此显示或隐藏对应入口。",
+        "operationId": "features_api_features_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturesOut"
                 }
               }
             }
