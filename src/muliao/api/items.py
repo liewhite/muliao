@@ -42,8 +42,11 @@ class _ItemBase(BaseModel):
     # agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共条目）
     owner: str | None
     description: str
-    # 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin）；为空时只有 owner 能用（归平台的就谁也用不了）
+    # 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin）
     roles: list[str]
+    # 分发出去了：base 收录它，或某个不是 owner 的 agent 的规则（角色或自己的 allow）放行它；否则只有 owner 能用
+    # （归平台的就谁也用不了）。与删除 agent 时把条目转给平台同一个定义
+    shared: bool
 
 
 class ToolItemOut(_ItemBase):
@@ -108,6 +111,7 @@ def _item_out(e: CatalogEntry) -> ToolItemOut | SkillItemOut | McpItemOut | Secr
         "description": e.description,
         "updated_at": e.updated_at,
         "roles": list(e.roles),
+        "shared": e.shared,
     }
     match e.kind:
         case Kind.TOOL:

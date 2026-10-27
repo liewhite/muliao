@@ -14,12 +14,13 @@ from __future__ import annotations
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.kinds import Kind, StoredKind, label
-from muliao.agents.permissions import ADMIN, Rules
+from muliao.agents.permissions import ADMIN, BASE, Rules
 from muliao.agents.revisions import USER
-from muliao.agents.roles import rules_in
+from muliao.agents.roles import roles_in, rules_in
 from muliao.agents.tables import Agent, Item
 from muliao.errors import Forbidden, NotFound
 
@@ -56,6 +57,22 @@ Keep = Callable[[Kind, str, str | None], bool]
 def granted_by(rules: Rules) -> Keep:
     """只按规则、不看 owner 的「能用」（规则 1 的规则那一半）：一个角色本身、还没建的 agent。与 Grants.uses 同签名。"""
     return lambda kind, name, _owner: rules.allows(kind, name)
+
+
+async def shared_in(s: AsyncSession) -> Keep:
+    """「分发出去了」：base 收录它（人人可用，也给以后新建的 agent），或某个不是它 owner 的 agent 的规则（base + 角色 +
+    它自己的 allow / deny）放行它。只有一个定义：条目页据此说明谁能用（CatalogEntry.shared），删 agent 时据此把它名下
+    分发出去的条目转给平台。没分给任何 agent 的自建角色收录它不算。agent 包括正在删除的。"""
+    base = (await roles_in(s))[BASE].effective
+    others = [
+        (a.id, await rules_in(s, a.roles, a.allow, a.deny))
+        for a in await s.scalars(select(Agent).order_by(Agent.id))
+    ]
+
+    def shared(kind: Kind, name: str, owner: str | None) -> bool:
+        return base.allows(kind, name) or any(r.allows(kind, name) for a, r in others if a != owner)
+
+    return shared
 
 
 async def grants_in(s: AsyncSession, actor: str) -> Grants:

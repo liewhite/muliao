@@ -77,11 +77,7 @@ export function ItemAccess({ item, onTransferred }: { item: CatalogItem; onTrans
             </Chip>
           </Link>
         )}
-        {item.roles.length === 0 ? (
-          <Chip size="sm" color="warning" variant="soft">
-            {item.owner === null ? '未收录进角色：没有 agent 能用' : '未收录进角色：只有 owner 能用'}
-          </Chip>
-        ) : (
+        {item.roles.length > 0 && (
           <>
             <span className="text-muted">收录于</span>
             {item.roles.map((r) => (
@@ -93,6 +89,12 @@ export function ItemAccess({ item, onTransferred }: { item: CatalogItem; onTrans
             ))}
           </>
         )}
+        {!item.shared && (
+          <Chip size="sm" color="warning" variant="soft">
+            {item.owner === null ? '没分给任何 agent：没有 agent 能用' : '没分给别的 agent：只有 owner 能用'}
+          </Chip>
+        )}
+        {item.shared && item.roles.length === 0 && <span className="text-muted">经 agent 自己的 allow 分发</span>}
         {onTransferred && item.kind !== 'tool' && (
           <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-accent" onPress={() => setTransferring(!transferring)}>
             {transferring ? '取消转移' : '转移 owner'}

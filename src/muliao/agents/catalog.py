@@ -10,7 +10,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from muliao.agents.access import Grants, granted_by, grants_in, owner_label_in
+from muliao.agents.access import Grants, granted_by, grants_in, owner_label_in, shared_in
 from muliao.agents.active import active_row_in
 from muliao.agents.documents import document_in
 from muliao.agents.items import Reach, changeable_in, reach_in
@@ -38,6 +38,8 @@ class CatalogEntry:
     updated_at: datetime | None
     # 收录它的角色（含内置的，permissions.Rules.allows）
     roles: tuple[str, ...]
+    # 分发出去了（agents.access.shared_in）：否则只有 owner 能用（归平台的就没有 agent 能用）
+    shared: bool
     # MCP server 的配置与启用状态；别的种类为 None
     mcp: McpServer | None = None
 
@@ -63,12 +65,18 @@ class ItemCatalog:
         """全部条目：内置工具（按登记顺序）在前，skill、MCP server、secret 按种类、名称；每项带收录它的角色。"""
         async with self._db.transaction() as s:
             roles = list((await roles_in(s)).values())
+            shared = await shared_in(s)
             items = await s.scalars(select(Item).order_by(Item.kind, Item.name))
 
             def including(kind: Kind, name: str) -> tuple[str, ...]:
                 return tuple(r.name for r in roles if r.effective.allows(kind, name))
 
-            tools = [CatalogEntry(Kind.TOOL, n, None, "", None, including(Kind.TOOL, n)) for n in self._tools]
+            tools = [
+                CatalogEntry(
+                    Kind.TOOL, n, None, "", None, including(Kind.TOOL, n), shared(Kind.TOOL, n, None)
+                )
+                for n in self._tools
+            ]
             return tools + [
                 CatalogEntry(
                     Kind(i.kind),
@@ -77,6 +85,7 @@ class ItemCatalog:
                     i.description,
                     i.updated_at,
                     including(Kind(i.kind), i.name),
+                    shared(Kind(i.kind), i.name, i.owner),
                     server_of(i) if i.kind == StoredKind.MCP else None,
                 )
                 for i in items

@@ -134,6 +134,26 @@ async def test_items_list_every_owners_items_with_the_roles_that_give_them(clien
     assert tools["run_shell"]["owner"] is None and tools["run_shell"]["updated_at"] is None
     # 内置工具在前
     assert items[0]["kind"] == "tool"
+    shared = {i["name"]: i["shared"] for i in items if i["kind"] == "secret"}
+    assert shared == {"MINE": False, "SLACK_TOKEN": True}
+
+
+async def test_an_item_given_by_another_agents_allow_is_shared_without_a_role(client, container, make_agent):
+    from muliao.agents.service import AgentPatch
+
+    alpha = (await make_agent()).id
+    beta = (await make_agent("beta")).id
+    await login(client)
+    await client.put("/api/items/secret/MINE", json={"owner": alpha, "value": "v"})
+    await client.put("/api/items/secret/LONELY", json={"value": "v"})
+    await container.agents.update(beta, AgentPatch(allow=("secret:MINE",)), author="user")
+    secrets = {
+        i["name"]: (i["roles"], i["shared"])
+        for i in (await client.get("/api/items")).json()
+        if i["kind"] == "secret"
+    }
+    # 没有角色收录，但 beta 自己的 allow 放行它：分发出去了（删 alpha 时会转给平台，同一个定义）
+    assert secrets == {"MINE": ([], True), "LONELY": ([], False)}
 
 
 async def test_mcp_items_carry_their_config_and_have_history_and_restore(client):
