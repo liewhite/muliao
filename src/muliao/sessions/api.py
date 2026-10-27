@@ -11,6 +11,7 @@
 """
 
 from muliao.sessions.activity import SessionActivity, WorkState
+from muliao.sessions.assembly import SessionDomain, SessionPorts
 from muliao.sessions.holds import registered_in as hold_registered_in
 from muliao.sessions.inbound import (
     NewChat,
@@ -39,6 +40,8 @@ __all__ = [
     "Origin",
     "OriginNotes",
     "SessionActivity",
+    "SessionDomain",
+    "SessionPorts",
     "WorkState",
     "SessionKind",
     "policy_of",

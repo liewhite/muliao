@@ -50,26 +50,18 @@ from muliao.platform.db import Database, WriteCheck, create_engine, migrate
 from muliao.platform.messaging import Messaging
 from muliao.platform.retention import TaskRetention
 from muliao.platform.tables import EVENT_TASK
-from muliao.platform.tasks import Commit, Retries, RetryPolicy, TaskAdmin, TaskQueue
+from muliao.platform.tasks import Retries, RetryPolicy, TaskAdmin, TaskQueue
 from muliao.platform.worker import RunNow, Worker, register_handlers
-from muliao.sessions.api import OWN_NOTES, Origin, OriginNotes, SessionActivity
+from muliao.sessions.api import OWN_NOTES, Origin, OriginNotes, SessionDomain, SessionPorts
 from muliao.sessions.ask_user import ask_user_toolset
-from muliao.sessions.compaction import CompactionHandler, Compactor
-from muliao.sessions.consumer import Consumer, RunHandler
-from muliao.sessions.content import ContentBuilder
+from muliao.sessions.compaction import Compactor
+from muliao.sessions.consumer import Consumer
 from muliao.sessions.delegation import ThreadChecks
-from muliao.sessions.delegation_tools import delegation_toolset
-from muliao.sessions.deletion import AgentSessionsCleanup
-from muliao.sessions.finish import RunFinisher
-from muliao.sessions.halt import SessionHalt, SessionStopper
-from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
+from muliao.sessions.halt import SessionStopper
 from muliao.sessions.live import LiveRuns
 from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.service import SessionService
-from muliao.sessions.steps import Steps
-from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.threads import Threads
-from muliao.sessions.work import SessionWork, handle_work_commands
 from muliao.speech.api import Transcriber, build_transcriber
 from muliao.triggers.api import SESSION_NOTE as TRIGGER_SESSION_NOTE
 from muliao.triggers.due import DueRunner
@@ -313,15 +305,12 @@ def assemble(
     )
     roles = RoleService(db, tools)
     catalog = ItemCatalog(db, tools, skills, mcp)
-    activity = SessionActivity(queue)
+    # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
+    ports = SessionPorts.build(db, queue, messaging)
+    activity = ports.activity
     agent_lifecycle = AgentLifecycle(
         db, agents, skills, messaging, {"sessions": activity.blocks_agent_deletion_in}
     )
-    # 停止会话不依赖消费者：正在进行的运行的登记与 SessionHalt 先构造，消费者用同一份登记运行
-    runs: StoppableRuns[Commit] = StoppableRuns(db.exclusive)
-    halt = SessionHalt(db, queue, messaging)
-    stopper = SessionStopper(runs, halt)
-    threads = Threads(queue)
     notifications = Notifications(db, queue, bus)
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
@@ -365,12 +354,8 @@ def assemble(
         vault,
         agents.workspace,
         messaging,
-        SessionWork(db),
+        ports.work,
     )
-    thread_checks = ThreadChecks(db, queue, stopper)
-    # 跨领域的反应：会话领域的命令处理者与各领域的订阅
-    handle_work_commands(messaging, queue)
-    jobs.subscribe(messaging)
     limits = ShellLimits(settings.runtime.tool_output_max_chars)
     # 总是开放：自我改进、工作历史（每日自进化人人都写），以及向用户提问（工具列表保持稳定以命中缓存；没有用户会回答的运行里调用被拒绝，见 sessions.ask_user）
     always_tools = [
@@ -385,7 +370,7 @@ def assemble(
     static_toolsets = [
         *always_tools,
         workspace_toolset(vault, limits, files, jobs),
-        delegation_toolset(db, agents, threads, stopper),
+        ports.delegation_toolset(db, agents),
         notify_toolset(notifications),
         mcp_admin_toolset(mcp),
         vault_toolset(vault),
@@ -400,42 +385,35 @@ def assemble(
         rules_of=agents.rules,
     )
     _check_permissions(toolbox.tool_names(), web_configured=bool(web_tools))
-    compactor = Compactor(
-        db,
-        runtime,
-        queue,
-        threshold_tokens=settings.runtime.compaction_threshold_tokens,
-        keep_steps=settings.runtime.compaction_keep_steps,
+    session_domain = SessionDomain.build(
+        ports,
+        db=db,
+        queue=queue,
+        live=live,
+        messaging=messaging,
+        run_now=run_now,
+        runtime=runtime,
+        toolbox=toolbox,
+        files=files,
+        notes=OriginNotes(
+            {**OWN_NOTES, Origin.TRIGGER: TRIGGER_SESSION_NOTE, Origin.ISSUE: ISSUE_SESSION_NOTE}
+        ),
+        compaction_threshold_tokens=settings.runtime.compaction_threshold_tokens,
+        compaction_keep_steps=settings.runtime.compaction_keep_steps,
     )
-    content = ContentBuilder(files, runtime)
-    sessions = SessionService(db, queue, live, messaging, stopper, compactor, run_now)
-    # 删除 agent 与会话时各领域清理自己的数据
+    # 跨领域的反应：各领域的订阅与命令处理者（删除 agent 与会话时各领域清理自己的数据）
+    session_domain.subscribe(messaging)
+    jobs.subscribe(messaging)
     notifications.subscribe(messaging)
     agent_lifecycle.subscribe(messaging)
-    sessions.subscribe(messaging)
-    AgentSessionsCleanup(db, queue, messaging, stopper).subscribe(messaging)
     triggers.subscribe(messaging)
     issues.subscribe(messaging)
-    consumer = Consumer(
-        db,
-        runtime,
-        toolbox,
-        live,
-        content,
-        Steps(db, live, content, compactor),
-        RunFinisher(queue, messaging),
-        runs,
-        halt,
-        compactor,
-        OriginNotes({**OWN_NOTES, Origin.TRIGGER: TRIGGER_SESSION_NOTE, Origin.ISSUE: ISSUE_SESSION_NOTE}),
-    )
     # 各领域的任务种类在这里登记处理器；队列只接受登记过的种类（TaskQueue.accept）
     worker = Worker(
         queue,
         register_handlers(
             (EVENT_TASK, messaging),
-            (RUN_TASK, RunHandler(consumer, queue, messaging)),
-            (COMPACTION_TASK, CompactionHandler(db, compactor)),
+            *session_domain.handlers(messaging),
             (DELIVER_TASK, DeliverHandler(db, pusher)),
         ),
         bus,
@@ -456,7 +434,7 @@ def assemble(
         roles=roles,
         catalog=catalog,
         agent_lifecycle=agent_lifecycle,
-        sessions=sessions,
+        sessions=session_domain.sessions,
         notifications=notifications,
         mcp=mcp,
         triggers=triggers,
@@ -467,16 +445,16 @@ def assemble(
         vapid=vapid,
         worker=worker,
         messaging=messaging,
-        threads=threads,
-        mail=MailReconciler(db, queue),
+        threads=ports.threads,
+        mail=session_domain.mail,
         jobs=jobs,
-        thread_checks=thread_checks,
-        work=WorkWatcher([jobs, thread_checks]),
+        thread_checks=ports.thread_checks,
+        work=WorkWatcher([jobs, ports.thread_checks]),
         # 只清理投递类的任务（docs/architecture.md 3.2「保留」）
         retention=TaskRetention(queue, prunable=(EVENT_TASK, DELIVER_TASK)),
-        compactor=compactor,
-        consumer=consumer,
-        stopper=stopper,
+        compactor=session_domain.compactor,
+        consumer=session_domain.consumer,
+        stopper=ports.stopper,
         models=models,
         files=files,
         usage=usage,
