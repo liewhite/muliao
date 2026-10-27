@@ -1244,7 +1244,14 @@ def test_todo_issues_become_in_progress_or_waiting_run_ended_gets_origin_and_dow
         conn.executemany(
             "insert into tasks (kind, lane, payload, status, attempts, not_before, created_at) "
             "values ('event', 'l', ?, ?, 0, ?, ?)",
-            [(json.dumps(payload), "pending", t, t), (json.dumps(payload), "done", t, t)],
+            [(json.dumps(payload), s, t, t) for s in ("pending", "failed", "done")],
+        )
+        # 会话已删除的不补
+        gone = {**payload, "data": {"session_id": "gone"}}
+        conn.execute(
+            "insert into tasks (kind, lane, payload, status, attempts, not_before, created_at) "
+            "values ('event', 'l', ?, 'pending', 0, ?, ?)",
+            (json.dumps(gone), t, t),
         )
 
     migrate(path)
@@ -1257,7 +1264,12 @@ def test_todo_issues_become_in_progress_or_waiting_run_ended_gets_origin_and_dow
             (5, "backlog"),
         ]
         data = [json.loads(p)["data"] for (p,) in conn.execute("select payload from tasks order by id")]
-        assert data == [{"session_id": "s", "origin": "issue", "origin_ref": "1"}, {"session_id": "s"}]
+        filled = {"session_id": "s", "origin": "issue", "origin_ref": "1"}
+        assert data == [filled, filled, {"session_id": "s"}, {"session_id": "gone"}]
+        conn.execute(
+            "insert into issue_activities (issue_id, created_at, actor, kind) values (1, ?, 'a1', 'unsettled')",
+            (t,),
+        )
 
     with _migration_engine(path).begin() as connection:
         command.downgrade(alembic_config(connection), "20676599edfd")
@@ -1270,4 +1282,7 @@ def test_todo_issues_become_in_progress_or_waiting_run_ended_gets_origin_and_dow
             "backlog",
         ]
         data = [json.loads(p)["data"] for (p,) in conn.execute("select payload from tasks order by id")]
-        assert data == [{"session_id": "s"}, {"session_id": "s"}]
+        assert data == [{"session_id": "s"}] * 3 + [{"session_id": "gone"}]
+        assert (
+            conn.execute("select count(*) from issue_activities where kind = 'unsettled'").fetchone()[0] == 0
+        )

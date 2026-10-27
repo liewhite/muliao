@@ -483,16 +483,24 @@ async def test_work_of_the_assignee_session(container, make_agent):
 
 def test_ask_to_settle_once_when_a_run_leaves_its_issue_stalled():
     progress = Snapshot(PROGRESS, "a", None, ())
-    assert ask_to_settle(progress, "a", WorkState.IDLE, ActivityKind.COMMENT)
-    # 已经问过、它什么都没做：不再问，留给看板的停滞提醒
-    assert not ask_to_settle(progress, "a", WorkState.IDLE, ActivityKind.UNSETTLED)
+    created = [(USER, ActivityKind.CREATED)]
+    asked = [*created, ("a", ActivityKind.UNSETTLED)]
+    assert ask_to_settle(progress, "a", WorkState.IDLE, created)
+    # 已经问过：它什么都没做，或只有它自己的评论、改动（「继续处理中」），都不再问，留给看板的停滞提醒
+    assert not ask_to_settle(progress, "a", WorkState.IDLE, asked)
+    assert not ask_to_settle(progress, "a", WorkState.IDLE, [*asked, ("a", ActivityKind.COMMENT)])
+    # 问过之后有别人的动态唤醒过它：结束时再问
+    assert ask_to_settle(progress, "a", WorkState.IDLE, [*asked, (USER, ActivityKind.COMMENT)])
+    assert ask_to_settle(
+        progress, "a", WorkState.IDLE, [*asked, ("b", ActivityKind.DEPENDENCY), ("a", ActivityKind.COMMENT)]
+    )
     # 会话还有事（信箱里还有信、在等后台任务）、issue 不归它、不是 in_progress、还在等上游：不问
-    assert not ask_to_settle(progress, "a", WorkState.RUNNING, ActivityKind.COMMENT)
-    assert not ask_to_settle(progress, "a", WorkState.WAITING, ActivityKind.COMMENT)
-    assert not ask_to_settle(progress, "b", WorkState.IDLE, ActivityKind.COMMENT)
+    assert not ask_to_settle(progress, "a", WorkState.RUNNING, created)
+    assert not ask_to_settle(progress, "a", WorkState.WAITING, created)
+    assert not ask_to_settle(progress, "b", WorkState.IDLE, created)
     for status in (WAITING, REVIEW, DONE, BACKLOG):
-        assert not ask_to_settle(Snapshot(status, "a", None, ()), "a", WorkState.IDLE, ActivityKind.COMMENT)
-    assert not ask_to_settle(Snapshot(PROGRESS, "a", None, (3,)), "a", WorkState.IDLE, ActivityKind.COMMENT)
+        assert not ask_to_settle(Snapshot(status, "a", None, ()), "a", WorkState.IDLE, created)
+    assert not ask_to_settle(Snapshot(PROGRESS, "a", None, (3,)), "a", WorkState.IDLE, created)
 
 
 def test_a_waiting_issue_resumes_only_when_it_stops_waiting_on_dependencies():
@@ -516,7 +524,8 @@ async def test_a_run_that_leaves_its_issue_in_progress_is_asked_to_settle_it_onc
     ]
     [session] = await _issue_sessions(container)
     mails = await _mail(container, session.id)
-    assert len(mails) == 2 and "Settle it now" in mails[1] and "status `waiting`" in mails[1]
+    assert len(mails) == 2 and "settle it now as the note on this conversation says" in mails[1]
+    assert "set `waiting` with a comment" in SESSION_NOTE
     assert (await container.issues.work([issue]))[issue.id].stalled
 
     # 有了新动态又被唤醒，结束时仍是 in_progress：照样再问一次

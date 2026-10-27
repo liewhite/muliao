@@ -131,11 +131,21 @@ def stalled(issue: Snapshot, assignee_state: WorkState | None) -> bool:
     )
 
 
-def ask_to_settle(issue: Snapshot, agent: str, state: WorkState | None, last: ActivityKind) -> bool:
+# 时间线上的一条（ask_to_settle 只看谁做的、什么动态）：(actor, kind)
+type ActorKind = tuple[str, ActivityKind]
+
+
+def ask_to_settle(
+    issue: Snapshot, agent: str, state: WorkState | None, timeline: Sequence[ActorKind]
+) -> bool:
     """agent 在它这个 issue 会话里的一次运行结束后，要不要请它表态（记一条 UNSETTLED 并投给它）：issue 指派给它且因此
-    停滞——它停下来时既没做完也没说在等什么。最近一条动态 last 已经是 UNSETTLED（问过一次，它什么都没做）时不再问：
-    留给看板的停滞提醒，不自动重跑（#107）。它在那次运行里评论或改了什么、但仍留在 in_progress，下次结束时照样再问。"""
-    return issue.assignee == agent and stalled(issue, state) and last != ActivityKind.UNSETTLED
+    停滞——它停下来时既没做完也没说在等什么。同一段停顿只问一次：问过之后（最近一条 UNSETTLED 之后）只有它自己的
+    动态（评论、改字段）时不再问，留给看板的停滞提醒，不由系统反复驱动它重跑（#107）；有了别人的动态（用户评论、改派、
+    上游完成）唤醒过它，结束时才再问。timeline 是整条时间线（按时间排序的 (actor, kind)）。"""
+    if issue.assignee != agent or not stalled(issue, state):
+        return False
+    asked = [n for n, (_, kind) in enumerate(timeline) if kind == ActivityKind.UNSETTLED]
+    return not asked or any(actor != agent for actor, _ in timeline[asked[-1] + 1 :])
 
 
 def resumes(issue: Snapshot, was_waiting: bool) -> bool:

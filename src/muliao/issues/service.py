@@ -174,16 +174,16 @@ class IssueService:
             issue = await s.get(Issue, issue_id)
             if issue is None:
                 return
-            key = (str(issue_id), event.agent_id)
+            ref = str(issue_id)
+            current = (await keyed_sessions_among(s, Origin.ISSUE, [ref]))[ref].get(event.agent_id)
+            if current is None or current.id != event.session_id:
+                # 事件迟到（人工重试）时会话已被删除或换了新的：那次运行已不是它在这个 issue 上的会话，不问
+                return
+            key = (ref, event.agent_id)
             state = (await self._activity.keyed_work_states_in(s, Origin.ISSUE, [key]))[key]
             snap = snapshot(issue, (await links_in(s, [issue_id]))[issue_id])
-            last = await s.scalar(
-                select(IssueActivity.kind)
-                .where(IssueActivity.issue_id == issue_id)
-                .order_by(IssueActivity.id.desc())
-                .limit(1)
-            )
-            if last is None or not ask_to_settle(snap, event.agent_id, state, last):
+            timeline = [(a.actor, a.kind) for a in await self._activities_in(s, issue_id)]
+            if not ask_to_settle(snap, event.agent_id, state, timeline):
                 return
             activity = self._record(s, issue, event.agent_id, ActivityKind.UNSETTLED)
             issue.updated_at = utcnow()

@@ -101,12 +101,10 @@ def render_activity(a: ActivityView) -> str:
     if a.kind == ActivityKind.RUN_FAILED:
         return f"- [{a.at}] {a.actor}'s run in its issue session failed: {a.body}"
     if a.kind == ActivityKind.UNSETTLED:
+        # 怎么表态的指引只在 SESSION_NOTE（缓存前缀），这里只记事实
         return (
             f"- [{a.at}] {a.actor}'s run in its issue session ended with the issue still `in_progress` and nothing "
-            "said about what comes next. Settle it now: finished -> `in_review` (assignee `user`), or `done` if "
-            "other issues depend on it; more to do -> carry on now; waiting for something (a background job, "
-            "delegated work, a scheduled trigger, an external event) -> status `waiting` and a comment saying what; "
-            "only the user can unblock it -> status `blocked`, assignee `user`, and a comment saying why"
+            "said about what comes next: settle it now as the note on this conversation says"
         )
     return f"- [{a.at}] {a.actor} changed {a.kind}: {a.before} -> {a.after}"
 

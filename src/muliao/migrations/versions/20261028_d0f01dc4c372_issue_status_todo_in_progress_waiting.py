@@ -6,7 +6,7 @@
 - 还没投递完的 session.run_ended 事件（tasks 里 kind=event 的投递任务）补上会话的 origin / origin_ref：RunEnded 新加了这两个
   必填字段，升级前已入队的投递按新模型解析会失败。
 
-降级：waiting 改回 todo（in_progress 保持不变，分不出原来是不是 todo）；补上的事件字段删掉。
+降级：waiting 改回 todo（in_progress 保持不变，分不出原来是不是 todo）；删掉 unsettled 动态；补上的事件字段删掉。
 
 Revision ID: d0f01dc4c372
 Revises: 20676599edfd
@@ -27,8 +27,13 @@ _UNFINISHED_UPSTREAM = (
     "WHERE d.issue_id = issues.id AND u.status NOT IN ('done', 'cancelled'))"
 )
 
-# 关停时还在执行的（running）启动后由 worker 复位重做，一并补
-_RUN_ENDED = "kind = 'event' AND status IN ('pending', 'running') AND json_extract(payload, '$.type') = 'session.run_ended'"
+# 没成功的都补：关停时还在执行的（running）启动后由 worker 复位重做，failed 的可以在任务页人工重试。会话已删除的不补
+# （解析失败、投递记为失败，在任务页可见；不替它编造来源）
+_RUN_ENDED = (
+    "kind = 'event' AND status IN ('pending', 'running', 'failed') "
+    "AND json_extract(payload, '$.type') = 'session.run_ended' "
+    "AND EXISTS (SELECT 1 FROM sessions WHERE id = json_extract(tasks.payload, '$.data.session_id'))"
+)
 
 
 def upgrade() -> None:
@@ -44,6 +49,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("UPDATE issues SET status = 'todo' WHERE status = 'waiting'")
+    # 旧代码不认识 unsettled（StrEnumType 遇到未知取值报错）：它只是请 agent 表态的提示，删掉不丢业务事实
+    op.execute("DELETE FROM issue_activities WHERE kind = 'unsettled'")
     op.execute(
         f"UPDATE tasks SET payload = json_remove(payload, '$.data.origin', '$.data.origin_ref') WHERE {_RUN_ENDED}"
     )
