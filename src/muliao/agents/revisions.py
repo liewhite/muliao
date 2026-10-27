@@ -24,6 +24,9 @@ USER = "user"
 # 没有作者的系统操作（迁移导入）
 SYSTEM = "muliao"
 
+# 能恢复旧版的对象：secret 的版本不含值，角色与 agent 规则的版本只供查看
+RESTORABLE = frozenset({Subject.MEMORY, Subject.SKILL, Subject.MCP})
+
 
 @dataclass(frozen=True)
 class RevisionInfo:
@@ -36,6 +39,11 @@ class RevisionInfo:
     author: str
     message: str
     at: datetime
+
+    @property
+    def restorable(self) -> bool:
+        """能恢复到这一版：对象的种类能恢复，而且这一版不是删除（revision_doc_in 同一条规则）。"""
+        return self.subject in RESTORABLE and self.after is not None
 
 
 def _info(row: Revision) -> RevisionInfo:
@@ -69,6 +77,8 @@ async def revision_doc_in(s: AsyncSession, subject: Subject, name: str, rev: int
     row = await s.get(Revision, rev)
     if row is None or row.subject != subject.value or row.name != name:
         raise NotFound(f"revision {rev} of {label(subject)} {name!r} not found")
+    if subject not in RESTORABLE:
+        raise InvalidInput(f"{label(subject)} revisions cannot be restored")
     if row.after is None:
         raise InvalidInput(f"revision {rev} is a deletion; there is nothing to restore")
     return row.after

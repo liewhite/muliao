@@ -5721,6 +5721,10 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "restorable": {
+            "type": "boolean",
+            "title": "Restorable"
           }
         },
         "type": "object",
@@ -5730,7 +5734,8 @@
           "before",
           "author",
           "message",
-          "created_at"
+          "created_at",
+          "restorable"
         ],
         "title": "RevisionOut"
       },

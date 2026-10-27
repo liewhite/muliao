@@ -2050,6 +2050,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Restorable */
+            restorable: boolean;
         };
         /** RoleIn */
         RoleIn: {

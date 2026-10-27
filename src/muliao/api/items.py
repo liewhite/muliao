@@ -157,11 +157,19 @@ class RevisionOut(BaseModel):
     author: str
     message: str
     created_at: datetime
+    # 能恢复到这一版（secret 的版本不含值，删除那一版没有内容）
+    restorable: bool
 
     @classmethod
     def of(cls, r: RevisionInfo) -> "RevisionOut":
         return cls(
-            rev=r.id, content=r.after, before=r.before, author=r.author, message=r.message, created_at=r.at
+            rev=r.id,
+            content=r.after,
+            before=r.before,
+            author=r.author,
+            message=r.message,
+            created_at=r.at,
+            restorable=r.restorable,
         )
 
 

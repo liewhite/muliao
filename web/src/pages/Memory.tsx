@@ -97,8 +97,7 @@ function RevisionList({
                       当前
                     </Chip>
                   ) : (
-                    target.kind !== 'secret' &&
-                    r.content !== null && (
+                    r.restorable && (
                       <Button size="sm" variant="ghost" isDisabled={action.busy} onPress={() => void restore(r.rev, r.created_at)}>
                         <RotateCcw className="size-4" />
                         恢复

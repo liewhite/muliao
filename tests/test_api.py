@@ -186,10 +186,11 @@ async def test_mcp_items_carry_their_config_and_have_history_and_restore(client)
     ).status_code == 404
     assert (await client.delete("/api/items/mcp/remote")).status_code == 204
     deletion = (await client.get("/api/items/mcp/remote/history")).json()[0]
-    assert deletion["content"] is None
+    assert deletion["content"] is None and not deletion["restorable"] and history[1]["restorable"]
 
     await client.put("/api/items/secret/K", json={"value": "v"})
     [secret_rev] = (await client.get("/api/items/secret/K/history")).json()
+    assert not secret_rev["restorable"]
     resp = await client.post("/api/items/secret/K/restore", json={"rev": secret_rev["rev"]})
     assert resp.status_code == 422 and "cannot be restored" in resp.text
     assert (await client.get("/api/items/tool/run_shell/history")).status_code == 422

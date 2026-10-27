@@ -17,7 +17,7 @@ from muliao.agents.items import Reach, changeable_in, reach_in
 from muliao.agents.kinds import Kind, StoredKind, as_subject, label
 from muliao.agents.mcp import McpRegistry, McpServer, server_of
 from muliao.agents.permissions import Rules
-from muliao.agents.revisions import RevisionInfo, history_in, record_in
+from muliao.agents.revisions import RESTORABLE, RevisionInfo, history_in, record_in
 from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
 from muliao.agents.skills import SkillStore
 from muliao.agents.tables import Item
@@ -55,7 +55,7 @@ class ItemCatalog:
     ):
         self._db = db
         self._tools = tuple(tools)
-        # 能恢复旧版的种类（secret 的版本不含值，不能恢复）
+        # 能恢复旧版的种类（revisions.RESTORABLE）各自的恢复
         self._restore: dict[StoredKind, Callable[[str, int, str], Awaitable[object]]] = {
             StoredKind.SKILL: skills.restore,
             StoredKind.MCP: mcp.restore,
@@ -140,7 +140,6 @@ class ItemCatalog:
 
     async def restore(self, kind: StoredKind, name: str, rev: int, author: str) -> None:
         """把第 rev 版的内容作为新的一版写入（归属不变）。secret 的版本不含值，不能恢复。"""
-        restore = self._restore.get(kind)
-        if restore is None:
-            raise InvalidInput(f"{label(kind)} revisions have no values and cannot be restored")
-        await restore(name, rev, author)
+        if as_subject(kind) not in RESTORABLE:
+            raise InvalidInput(f"{label(kind)} revisions cannot be restored")
+        await self._restore[kind](name, rev, author)
