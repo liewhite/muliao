@@ -158,8 +158,9 @@ SESSIONS_TABLES: dict[str, set[str]] = {
 }
 
 
-def _table_uses(tree: ast.AST, names: set[str]) -> list[tuple[int, str]]:
-    """查询与构造里用到的表类：`X.属性`、`X(...)`，以及作为 select 参数的 `X`。"""
+def _table_uses(tree: ast.AST, names: set[str], *, any_call: bool = False) -> list[tuple[int, str]]:
+    """查询与构造里用到的表类：`X.属性`、`X(...)`，以及作为 select 参数的 `X`。any_call 时作为任何调用的位置参数都算
+    （`s.get(X, id)`、`update(X)`、`delete(X)`……）：独占到连按 id 取行都不允许的表用它。"""
     found = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in names:
@@ -167,7 +168,7 @@ def _table_uses(tree: ast.AST, names: set[str]) -> list[tuple[int, str]]:
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id in names:
                 found.append((node.lineno, node.func.id))
-            elif isinstance(node.func, ast.Name) and node.func.id == "select":
+            elif any_call or (isinstance(node.func, ast.Name) and node.func.id == "select"):
                 found += [(node.lineno, a.id) for a in node.args if isinstance(a, ast.Name) and a.id in names]
     return found
 
@@ -189,7 +190,7 @@ def test_sessions_subdomains_only_query_their_own_tables():
     assert not problems, "\n".join(problems)
 
 
-# 模块化（不设子域）的领域里由一个模块独占的表（docs/architecture.md 第 14、21 节）：别的模块经它的函数
+# 模块化（不设子域）的领域里由一个模块独占的表（docs/architecture.md 第 14、21 节）：别的模块经它的函数，连按 id 取行都不行
 MODULE_TABLES: dict[str, dict[str, str]] = {
     "issues": {"IssueDependency": "graph"},
     "notifications": {"Notification": "inbox", "PushSubscription": "push"},
@@ -202,7 +203,7 @@ def test_tables_owned_by_one_module_are_only_queried_there():
         for path in sorted((SRC / domain).glob("*.py")):
             if path.stem == "tables":
                 continue
-            for line, name in _table_uses(ast.parse(path.read_text()), set(owners)):
+            for line, name in _table_uses(ast.parse(path.read_text()), set(owners), any_call=True):
                 if path.stem != owners[name]:
                     problems.append(f"{domain}/{path.name}:{line} queries {name}")
     assert not problems, "\n".join(problems)
