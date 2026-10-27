@@ -42,13 +42,13 @@ class Trigger(Base):
     disabled_reason: Mapped[str | None] = mapped_column(Text)
     # 最近一次前置检查失败的原因；检查成功、或换了前置检查时清除
     precheck_error: Mapped[str | None] = mapped_column(Text)
-    # 归档的时间：这个触发器不会再触发了（一次性触发器用掉了它那一次）。已完成的不出现在默认列表，不能再修改、
+    # 结束的时间：这个触发器不会再触发了（一次性触发器用掉了它那一次）。已结束的不出现在默认列表，不能再修改、
     # 启用或立即运行；行保留着，它发起过的会话（origin_ref 是它的 id）因此仍查得到是谁发的
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     __table_args__ = (
-        # 名称只在未完成的触发器之间唯一：归档之后同名可以再建，历史里的同名触发器各自保留
+        # 名称只在未结束的触发器之间唯一：结束之后同名可以再建，历史里的同名触发器各自保留
         Index("uq_triggers_name_unfinished", "name", unique=True, sqlite_where=finished_at.is_(None)),
         # id 是会话的发送方身份（sessions.origin_ref），必须永不复用
         {"sqlite_autoincrement": True},

@@ -196,7 +196,7 @@ async def test_an_anyio_cancellation_waits_for_the_transaction_and_leaves_nothin
     agent = await make_agent("probe")
     async with container.db.transaction() as s:
         # _write_forever 按固定的 id 写：先挪开引用它的记忆与规则行
-        await s.execute(Memory.__table__.delete().where(Memory.owner == agent.id))
+        await s.execute(Memory.__table__.delete().where(Memory.agent_id == agent.id))
         await s.execute(AgentRules.__table__.delete().where(AgentRules.agent_id == agent.id))
         await s.execute(Agent.__table__.update().where(Agent.id == agent.id).values(id="probe"))
     for _ in range(20):

@@ -85,7 +85,7 @@ function RevisionList({
               <Card key={r.rev} variant="secondary">
                 <Card.Header className="flex flex-row items-center gap-2">
                   <Card.Description className="flex-1">
-                    {formatTime(r.created_at)} · {r.author === USER ? '用户' : agentLabel(agents.data, r.author as AgentId)}
+                    {formatTime(r.created_at)} · {r.actor === USER ? '用户' : agentLabel(agents.data, r.actor as AgentId)}
                   </Card.Description>
                   {r.content === null && (
                     <Chip size="sm" color="danger" variant="soft">
@@ -125,9 +125,9 @@ function RevisionList({
   )
 }
 
-/** 一份记忆（owner 为 null 即全局记忆）：编辑、保存，以及它的历史版本 */
-export function MemoryEditor({ owner, hint }: { owner: AgentId | null; hint: string }) {
-  const memory = useLoad(() => api.memory(owner), [owner])
+/** 一份记忆（agent 为 null 即全局记忆）：编辑、保存，以及它的历史版本 */
+export function MemoryEditor({ agent, hint }: { agent: AgentId | null; hint: string }) {
+  const memory = useLoad(() => api.memory(agent), [agent])
   const [content, setContent] = useState('')
   const action = useAction()
   useEffect(() => {
@@ -152,7 +152,7 @@ export function MemoryEditor({ owner, hint }: { owner: AgentId | null; hint: str
             isPending={action.busy}
             onPress={() =>
               void action.run(async () => {
-                await api.setMemory(owner, content)
+                await api.setMemory(agent, content)
                 toast.success('记忆已保存')
                 await memory.reload()
               })
@@ -160,7 +160,7 @@ export function MemoryEditor({ owner, hint }: { owner: AgentId | null; hint: str
           >
             保存记忆
           </ActionButton>
-          <ResourceHistory target={{ kind: 'memory', owner }} current={m.content} onRestored={() => void memory.reload()} />
+          <ResourceHistory target={{ kind: 'memory', agent }} current={m.content} onRestored={() => void memory.reload()} />
         </div>
       )}
     </Loading>
@@ -171,7 +171,7 @@ export function MemoryEditor({ owner, hint }: { owner: AgentId | null; hint: str
 export default function GlobalMemory() {
   return (
     <Page title="全局记忆">
-      <MemoryEditor owner={null} hint="所有 agent 每次运行都会看到，放在各自的记忆之前；agent 也会用工具修改它。每次保存都会留下一个版本" />
+      <MemoryEditor agent={null} hint="所有 agent 每次运行都会看到，放在各自的记忆之前；agent 也会用工具修改它。每次保存都会留下一个版本" />
     </Page>
   )
 }

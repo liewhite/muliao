@@ -102,7 +102,7 @@ async def test_listing_threads_gives_each_its_own_answer_and_failure(container, 
         async with container.db.transaction() as s:
             await container.threads.dispatch(
                 s,
-                owner_id=parent.id,
+                parent_id=parent.id,
                 agent=agent,
                 thread=name,
                 prompt="task",
@@ -114,7 +114,7 @@ async def test_listing_threads_gives_each_its_own_answer_and_failure(container, 
     await drain(container)
 
     async with container.db.transaction() as s:
-        views = {v.thread: v.state for v in await container.threads.list_in(s, parent.id)}
+        views = {v.thread: v.progress for v in await container.threads.list_in(s, parent.id)}
     assert views["good"].failure is None and "answered" in views["good"].answer
     assert views["bad"].failure is not None and "bad request" in views["bad"].failure
     assert views["bad"].answer == ""
@@ -131,7 +131,7 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
     async with container.db.transaction() as s:
         received = await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=target,
             thread="review",
             prompt="check",
@@ -170,7 +170,7 @@ async def test_each_reported_delegation_is_checked_at_its_own_interval(container
         for thread, interval in (("fast", 0.001), ("slow", 3600.0)):
             await container.threads.dispatch(
                 s,
-                owner_id=parent.id,
+                parent_id=parent.id,
                 agent=reviewer,
                 thread=thread,
                 prompt="check",
@@ -203,7 +203,7 @@ async def test_an_expired_ask_stops_its_thread_once_and_retries_a_failed_stop(co
     async with container.db.transaction() as s:
         child = await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=helper,
             thread="h",
             prompt="q",
@@ -296,7 +296,7 @@ async def test_nothing_is_reported_once_the_parent_session_is_gone(container, ma
     async with container.db.transaction() as s:
         await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=target,
             thread="review",
             prompt="check",
@@ -520,7 +520,7 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
     async with container.db.transaction() as s:
         await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=target,
             thread="review",
             prompt="check",
@@ -541,7 +541,7 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
         [view] = await container.threads.list_in(s, parent.id)
     assert event.source == f"thread:{child.id}" and "was stopped" in event.content
     # 排着的运行记为完成、没有任何消息：thread 的状态照样能读
-    assert (view.state.work, view.state.failure, view.state.answer) == ("idle", None, "")
+    assert (view.progress.state, view.progress.failure, view.progress.answer) == ("idle", None, "")
     assert await container.thread_checks.check() == 0
 
 
@@ -565,7 +565,7 @@ async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_r
         async with container.db.transaction() as s:
             await container.threads.dispatch(
                 s,
-                owner_id=parent.id,
+                parent_id=parent.id,
                 agent=target,
                 thread="review",
                 prompt=prompt,
@@ -715,7 +715,7 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
     async with container.db.transaction() as s:
         received = await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=target,
             thread="review",
             prompt="check",
@@ -987,11 +987,11 @@ async def test_a_thread_waiting_on_its_own_background_job_is_listed_as_waiting_n
 
     async def states():  # noqa: ANN202
         async with container.db.transaction() as s:
-            return [v.state for v in await container.threads.list_in(s, parent.id)]
+            return [v.progress for v in await container.threads.list_in(s, parent.id)]
 
     async def waiting_with_its_first_answer() -> bool:
         # 回答先于运行的收尾提交：等收尾之后再看
-        return [(x.work, x.answer) for x in await states()] == [(WorkState.WAITING, "started, will report")]
+        return [(x.state, x.answer) for x in await states()] == [(WorkState.WAITING, "started, will report")]
 
     worker = asyncio.create_task(container.worker.run_forever())
     try:
@@ -1007,7 +1007,7 @@ async def test_a_thread_waiting_on_its_own_background_job_is_listed_as_waiting_n
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
     [state] = await states()
-    assert (state.work, state.answer) == (WorkState.IDLE, "job finished: all good")
+    assert (state.state, state.answer) == (WorkState.IDLE, "job finished: all good")
 
 
 async def _has(items: list) -> bool:  # noqa: ANN001
@@ -1071,7 +1071,7 @@ async def test_stopping_the_asker_stops_its_threads_level_by_level(container, ma
         async with container.db.transaction() as s:
             return await container.threads.dispatch(
                 s,
-                owner_id=owner_id,
+                parent_id=owner_id,
                 agent=agent,
                 thread=thread,
                 prompt="work",

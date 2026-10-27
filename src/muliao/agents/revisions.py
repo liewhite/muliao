@@ -19,8 +19,6 @@ from muliao.agents.kinds import Subject, label
 from muliao.agents.tables import Revision
 from muliao.errors import InvalidInput, NotFound
 
-# 用户在界面上的修改的作者
-USER = "user"
 # 没有作者的系统操作（迁移导入）
 SYSTEM = "muliao"
 
@@ -36,7 +34,7 @@ class RevisionInfo:
     name: str
     before: str | None
     after: str | None
-    author: str
+    actor: str
     message: str
     at: datetime
 
@@ -48,7 +46,7 @@ class RevisionInfo:
 
 def _info(row: Revision) -> RevisionInfo:
     return RevisionInfo(
-        row.id, Subject(row.subject), row.name, row.before, row.after, row.author, row.message, row.created_at
+        row.id, Subject(row.subject), row.name, row.before, row.after, row.actor, row.message, row.created_at
     )
 
 
@@ -58,7 +56,7 @@ def record_in(
     name: str,
     before: str | None,
     after: str | None,
-    author: str,
+    actor: str,
     message: str,
     *,
     force: bool = False,
@@ -68,7 +66,7 @@ def record_in(
     if before == after and not force:
         return
     s.add(
-        Revision(subject=subject.value, name=name, before=before, after=after, author=author, message=message)
+        Revision(subject=subject.value, name=name, before=before, after=after, actor=actor, message=message)
     )
 
 

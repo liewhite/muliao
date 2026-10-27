@@ -36,7 +36,7 @@ class TriggerInfo(BaseModel):
     # 被自动停用的原因；最近一次前置检查失败的原因
     disabled_reason: str | None
     precheck_error: str | None
-    # 最近一次触发开出的会话；已归档的（跑完的一次性触发器）在这里能看到它的结果去了哪
+    # 最近一次触发开出的会话；已结束的（跑完的一次性触发器）在这里能看到它的结果去了哪
     last_session_id: str | None
     # 不为空表示它已经跑完、不会再触发了
     finished_at: datetime | None
@@ -97,7 +97,7 @@ def triggers_toolset(
         `precheck_error`, `last_session_id` and `finished_at` (ISO 8601; set once it will not fire again).
 
         Args:
-            finished: List the archived ones instead — `once` triggers that already ran and are gone from
+            finished: List the finished ones instead — `once` triggers that already ran and are gone from
                 the list above. Their `last_session_id` is the conversation they started, so this is how you
                 look up what came of a one-off task.
         """

@@ -38,13 +38,13 @@ def validate_thread(name: str) -> str:
 
 
 @dataclass(frozen=True)
-class ThreadState:
+class ThreadProgress:
     # 工作状态（activity.work_states_in，唯一规则）：waiting 是 thread 在等它自己开出的后台任务、委派或提问的回答，
     # 工作还没做完
-    work: WorkState
-    # 最近一次运行最终失败时的错误说明，否则为 None；与 work 无关（失败后它开出的后台任务可能还在跑：waiting）
+    state: WorkState
+    # 最近一次运行最终失败时的错误说明，否则为 None；与 state 无关（失败后它开出的后台任务可能还在跑：waiting）
     failure: str | None
-    # 会话最近的回答（还没有回复时为空）；work 不是 idle 时它是中间的回答
+    # 会话最近的回答（还没有回复时为空）；state 不是 idle 时它是中间的回答
     answer: str
 
 
@@ -56,7 +56,7 @@ class ThreadView:
     thread: str
     agent_id: str
     kind: SessionKind
-    state: ThreadState
+    progress: ThreadProgress
 
 
 class Threads:
@@ -109,7 +109,7 @@ class Threads:
         self,
         s: AsyncSession,
         *,
-        owner_id: str,
+        parent_id: str,
         agent: AgentInfo,
         thread: str,
         prompt: str,
@@ -125,8 +125,8 @@ class Threads:
         结局的交回见 sessions.delegation）。thread 不合用时抛 InvalidInput，什么都没写。按 key 幂等：续跑重新执行这次
         调用时只返回已经投递到的 thread。awaited：用户是否在等发起方的回答。check_seconds：并发等待时的运行中
         检查间隔；timeout_seconds：阻塞等待的超时（到期停掉 thread，ThreadChecks）。"""
-        holder = delegation_holder(owner_id, key)
-        if await get_hold_in(s, owner_id, holder) is not None:
+        holder = delegation_holder(parent_id, key)
+        if await get_hold_in(s, parent_id, holder) is not None:
             existing = (await threads_of_holds_in(s, [holder])).get(holder)
             if existing is None:
                 raise RuntimeError(f"delegation {holder} is held but its thread is gone")
@@ -134,12 +134,12 @@ class Threads:
             if child is None:
                 raise RuntimeError(f"delegation {holder} points to a missing thread {existing}")
             return child
-        child = await self.open(s, parent_id=owner_id, agent=agent, thread=thread, kind=kind)
-        await hold_in(s, owner_id, holder, call_id=call_id, awaited=awaited)
+        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, kind=kind)
+        await hold_in(s, parent_id, holder, call_id=call_id, awaited=awaited)
         await record_in(
             s,
             holder=holder,
-            session_id=owner_id,
+            parent_id=parent_id,
             thread_id=child.id,
             check_seconds=check_seconds,
             timeout_seconds=timeout_seconds,
@@ -149,7 +149,7 @@ class Threads:
             self._queue,
             Inbound(
                 origin=Origin.DELEGATION,
-                origin_ref=owner_id,
+                origin_ref=parent_id,
                 content=prompt,
                 session=child.id,
                 # 没有人等 thread 的回答：结局交回发起方，由它处理
@@ -160,7 +160,7 @@ class Threads:
         log.info(
             "delegation dispatched",
             extra={
-                "session_id": owner_id,
+                "session_id": parent_id,
                 "thread_session_id": child.id,
                 "holder": holder,
                 "call_id": call_id,
@@ -172,7 +172,7 @@ class Threads:
         """父会话开出的 thread（含私有的），按创建顺序，带各自的状态。"""
         children = await threads_of(s, parent_id)
         ids = [c.id for c in children]
-        works = await work_states_in(s, self._queue, ids)
+        states = await work_states_in(s, self._queue, ids)
         runs = await latest_runs_among(s, self._queue, ids)
         answers = await latest_answers_among(s, ids)
         return [
@@ -181,8 +181,8 @@ class Threads:
                 thread=thread_name(child),
                 agent_id=child.agent_id,
                 kind=child.kind,
-                state=ThreadState(
-                    work=works[child.id],
+                progress=ThreadProgress(
+                    state=states[child.id],
                     failure=recorded_failure(runs.get(child.id)),
                     answer=answers[child.id],
                 ),

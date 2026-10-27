@@ -1,7 +1,7 @@
 """按到期时间触发的方式共用的激活机制：扫描到期的触发器，到点各触发一次。
 
 定时（schedule）与一次性（once）的差别只有两件事：到期时间从哪来，以及这次到期被用掉之后这一行怎么变（推进到
-下次 / 归档）。两件事由各方式的 DueKind 给出；扫描、并发触发、失败停用与下次唤醒时间在这里实现一次。
+下次 / 结束）。两件事由各方式的 DueKind 给出；扫描、并发触发、失败停用与下次唤醒时间在这里实现一次。
 
 用最终正确性换简化：消耗这次到期与触发不在一个事务里（触发可能先跑前置检查，不能占着事务）。进程恰好死在两者
 之间时这一次被跳过（至多一次），换来的是检查失败或很慢都不会让同一个时刻反复触发。
@@ -39,7 +39,7 @@ class DueKind(Protocol):
         ...
 
     async def consume_in(self, s: AsyncSession, trigger: Trigger, now: datetime) -> str | None:
-        """在到期的事务里消耗这次到期：改这一行，使它不再在 now 到期（定时推进到下次，一次性归档）。
+        """在到期的事务里消耗这次到期：改这一行，使它不再在 now 到期（定时推进到下次，一次性的结束）。
 
         返回非 None 表示这次不触发（原因记日志）；这次到期无论如何都已经被消耗掉。
         """
@@ -71,7 +71,7 @@ class DueRunner:
         self._changed = triggers.watch()
 
     async def _pending(self) -> list[tuple[Trigger, datetime]]:
-        """还会到期的触发器与它们的到期时间（已归档与停用的不在列表里）。
+        """还会到期的触发器与它们的到期时间（已结束与停用的不在列表里）。
 
         存下的数据坏了、算不出到期时间的停用（记 disabled_reason），不让一行坏数据拖垮整个扫描循环。
         """
@@ -110,7 +110,7 @@ class DueRunner:
         """按最新的行消耗这次到期；返回是否应当触发。"""
         async with self._db.transaction() as s:
             trigger = await s.get(Trigger, trigger_id)
-            # 列出之后可能已被删除、停用、归档或改了配置：按最新的行重新判断
+            # 列出之后可能已被删除、停用、结束或改了配置：按最新的行重新判断
             skip = self._skip_reason(trigger, now)
             if trigger is None or skip is not None:
                 log.info(

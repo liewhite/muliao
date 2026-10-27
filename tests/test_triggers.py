@@ -448,7 +448,7 @@ async def test_an_agent_uses_its_own_enabled_servers_and_those_its_roles_give_it
     assert await owned(container, "mcp", None) == ["echo", "other"]
     # 归平台的只有角色给了的生效；停用的不生效
     await container.distribution.create(RoleSpec("other-user", "d", ["mcp:other"], []), actor="user")
-    await container.agents.update(alpha, AgentPatch(roles=["other-user"]), author="user")
+    await container.agents.update(alpha, AgentPatch(roles=["other-user"]), actor="user")
     assert [s.name for s in await container.mcp.index(alpha)] == ["mine", "other"]
     await container.mcp.set_enabled("mine", False, "user")
     assert [s.name for s in await container.mcp.index(alpha)] == ["other"]
@@ -876,7 +876,7 @@ async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_mean
 
     container.triggers._run_now = later  # noqa: SLF001  模拟投递没能马上执行
     session_id = await container.triggers.fire(trigger.id)
-    await container.agent_lifecycle.delete(alpha, author="user")
+    await container.agent_lifecycle.delete(alpha, actor="user")
     await drain(container)
 
     async with container.db.transaction() as s:

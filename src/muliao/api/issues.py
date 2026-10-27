@@ -1,4 +1,4 @@
-"""issue 看板接口：界面上的操作都以用户的身份（actor 为 None）进行。"""
+"""issue 看板接口：界面上的操作都以用户的身份（actor 为 USER）进行。"""
 
 from datetime import datetime
 from typing import Any
@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from muliao.api.deps import C
-from muliao.issues.api import ActivityKind, IssuePriority, IssueStatus, IssueWork, WorkState
+from muliao.issues.api import USER, ActivityKind, IssuePriority, IssueStatus, IssueWork, WorkState
 from muliao.issues.tables import Issue, IssueActivity
 from muliao.platform.values import KEEP, Keep
 
@@ -25,11 +25,11 @@ class IssueOut(BaseModel):
     # agent id、"user"，或 null（未指派）
     assignee: str | None
     # 创建者 agent id；用户创建的为 null
-    creator_agent_id: str | None
+    creator: str
     # 每个 agent 在这个 issue 上的会话：agent id -> 会话 id
     sessions: dict[str, str]
     # 被指派 agent 在这个 issue 会话里的状态；没指派给 agent 或还没有会话时为 null
-    assignee_session: WorkState | None
+    assignee_state: WorkState | None
     # todo / in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
     stalled: bool
     # 它依赖的上游 issue id、依赖它的下游 issue id、还没完成（不是 done / cancelled）的上游：非空时还轮不到它
@@ -53,9 +53,9 @@ class IssueOut(BaseModel):
             priority=i.priority,
             owner=i.owner_agent_id,
             assignee=i.assignee,
-            creator_agent_id=i.creator_agent_id,
+            creator=i.creator,
             sessions=work.sessions,
-            assignee_session=work.assignee_session,
+            assignee_state=work.assignee_state,
             stalled=work.stalled,
             depends_on=[d.id for d in work.depends_on],
             blocks=[d.id for d in work.blocks],
@@ -71,7 +71,7 @@ class ActivityOut(BaseModel):
     id: int
     created_at: datetime
     # 做这件事的 agent id；用户为 null，系统自己的清理（删除 agent）为 "system"
-    actor_agent_id: str | None
+    actor: str
     kind: ActivityKind
     # 评论内容
     body: str | None
@@ -83,7 +83,7 @@ class ActivityOut(BaseModel):
         return cls(
             id=a.id,
             created_at=a.created_at,
-            actor_agent_id=a.actor_agent_id,
+            actor=a.actor,
             kind=a.kind,
             body=a.body,
             change=a.change,
@@ -149,7 +149,7 @@ async def list_issues(
 @router.post("/issues", status_code=201)
 async def create_issue(c: C, body: IssueCreate) -> IssueOut:
     issue = await c.issues.create(
-        None,
+        USER,
         owner=body.owner,
         title=body.title,
         description=body.description,
@@ -173,7 +173,7 @@ async def get_issue(c: C, issue_id: int) -> IssueDetailOut:
 async def update_issue(c: C, issue_id: int, body: IssuePatch) -> IssueOut:
     assignee: str | None | Keep = body.assignee if "assignee" in body.model_fields_set else KEEP
     issue = await c.issues.update(
-        None,
+        USER,
         issue_id,
         owner=body.owner,
         title=body.title,
@@ -188,7 +188,7 @@ async def update_issue(c: C, issue_id: int, body: IssuePatch) -> IssueOut:
 
 @router.post("/issues/{issue_id}/comments", status_code=201)
 async def comment_issue(c: C, issue_id: int, body: CommentIn) -> ActivityOut:
-    return ActivityOut.of(await c.issues.comment(None, issue_id, body.body))
+    return ActivityOut.of(await c.issues.comment(USER, issue_id, body.body))
 
 
 @router.post("/issues/{issue_id}/approve")

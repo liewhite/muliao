@@ -463,7 +463,7 @@ async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_
         with pytest.raises(Conflict, match="busy"):
             await container.sessions.delete(parent.id)
         with pytest.raises(Conflict):
-            await container.agent_lifecycle.delete(slow, author="user")
+            await container.agent_lifecycle.delete(slow, actor="user")
     finally:
         gate.set()
         await idle(container)
@@ -471,7 +471,7 @@ async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_
         await asyncio.gather(worker, return_exceptions=True)
 
     assert await last_answer(container, parent.id) == "a: done"
-    await container.agent_lifecycle.delete(slow, author="user")  # 跑完之后可以删
+    await container.agent_lifecycle.delete(slow, actor="user")  # 跑完之后可以删
 
 
 async def test_an_ask_that_times_out_stops_its_thread_and_returns_what_it_said(container, make_agent, models):
@@ -514,7 +514,7 @@ async def test_an_ask_that_times_out_stops_its_thread_and_returns_what_it_said(c
     )
     [child] = await threads_of(container, parent.id)
     async with container.db.transaction() as s:
-        assert (await container.threads.list_in(s, parent.id))[0].state.work.value == "idle"
+        assert (await container.threads.list_in(s, parent.id))[0].progress.state.value == "idle"
     assert child.thread == "t"
 
 

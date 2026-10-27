@@ -21,10 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.active import active_row_in
 from muliao.agents.agent_rules import AgentRules, agent_rules_in, all_agent_rules_in
+from muliao.agents.ids import USER
 from muliao.agents.items import check_owner_active_in, existing_in, item_in, items_in, keys_in, owner_label_in
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
 from muliao.agents.permissions import ADMIN, BASE, Role, Rules, ToolSpec, pattern_of, spec_of
-from muliao.agents.revisions import USER
 from muliao.agents.roles import roles_in
 from muliao.agents.tables import Item
 from muliao.errors import Forbidden
@@ -69,7 +69,7 @@ def grants_of(agent_id: str, rules: AgentRules, known: dict[str, Role]) -> Grant
 
 
 async def grants_in(s: AsyncSession, actor: str) -> Grants:
-    """actor（agent 的 id，或 revisions.USER 即用户）的 Grants，按角色现在的定义算。agent 包括正在删除的（它的写入另由
+    """actor（agent 的 id，或 ids.USER 即用户）的 Grants，按角色现在的定义算。agent 包括正在删除的（它的写入另由
     active_row_in 拦下）。"""
     if actor == USER:
         return USER_GRANTS
@@ -134,7 +134,7 @@ async def writable_in(
 
 
 async def usable_in(s: AsyncSession, kind: StoredKind, user: str) -> list[Item]:
-    """user（agent 的 id 或 revisions.USER）能用的（规则 1），按名称。"""
+    """user（agent 的 id 或 ids.USER）能用的（规则 1），按名称。"""
     grants = await grants_in(s, user)
     return [r for r in await items_in(s, kind) if grants.uses(as_kind(kind), r.name, r.owner)]
 

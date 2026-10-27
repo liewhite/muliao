@@ -72,7 +72,7 @@ class _TriggerOutBase(BaseModel):
     # 被自动停用的原因；最近一次前置检查失败的原因
     disabled_reason: str | None
     precheck_error: str | None
-    # 归档的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
+    # 结束的时间：不为空表示它不会再触发了（一次性触发器跑完），只能查看与删除
     finished_at: datetime | None
 
 
@@ -145,7 +145,7 @@ async def trigger_kinds(c: C) -> list[TriggerKindOut]:
 
 @router.get("/triggers")
 async def list_triggers(
-    c: C, finished: bool = Query(False, description="列已归档的（跑完的一次性触发器）而不是还会触发的")
+    c: C, finished: bool = Query(False, description="列已结束的（跑完的一次性触发器）而不是还会触发的")
 ) -> list[TriggerOut]:
     return [_out(c, t) for t in await c.triggers.list(finished=finished)]
 
@@ -184,6 +184,6 @@ async def delete_trigger(c: C, trigger_id: int) -> None:
 async def run_trigger(c: C, trigger_id: int) -> FiredOut:
     """立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。
 
-    不消耗一次性触发器预定的那一次；已归档的触发器不能再运行。
+    不消耗一次性触发器预定的那一次；已结束的触发器不能再运行。
     """
     return FiredOut(session_id=await c.triggers.run(trigger_id))

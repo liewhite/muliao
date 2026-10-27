@@ -77,12 +77,12 @@ async def _mail(container, session_id: str) -> list[str]:
 async def test_every_change_lands_in_the_one_session_of_the_issue_and_agent(container, make_agent):
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
     issue = await container.issues.create(
-        None, owner=alpha, title="Fix the build", description="CI is red", assignee=alpha
+        USER, owner=alpha, title="Fix the build", description="CI is red", assignee=alpha
     )
     await deliver(container)
     assert await _issue_sessions(container) == []  # backlog：不投
 
-    await container.issues.update(None, issue.id, status=TODO)
+    await container.issues.update(USER, issue.id, status=TODO)
     await deliver(container)
     [session] = await _issue_sessions(container)
     assert (session.agent_id, session.origin_ref) == (alpha, str(issue.id))
@@ -95,11 +95,11 @@ async def test_every_change_lands_in_the_one_session_of_the_issue_and_agent(cont
     assert f"`issue_show({issue.id})`" in mail
 
     # 评论、改派走又改派回来、改状态、改标题：同一个 agent 始终在同一个会话里接着做
-    await container.issues.comment(None, issue.id, "any update?")
-    await container.issues.update(None, issue.id, assignee=beta)
-    await container.issues.update(None, issue.id, assignee=alpha, status=PROGRESS)
+    await container.issues.comment(USER, issue.id, "any update?")
+    await container.issues.update(USER, issue.id, assignee=beta)
+    await container.issues.update(USER, issue.id, assignee=alpha, status=PROGRESS)
     await container.issues.comment(beta, issue.id, "handing it back")
-    await container.issues.update(None, issue.id, title="Fix the build now")
+    await container.issues.update(USER, issue.id, title="Fix the build now")
     await deliver(container)
     sessions = await _issue_sessions(container)
     assert [(s.agent_id, s.origin_ref) for s in sessions] == [(alpha, str(issue.id)), (beta, str(issue.id))]
@@ -122,9 +122,9 @@ async def test_every_change_lands_in_the_one_session_of_the_issue_and_agent(cont
 
 async def test_changes_before_delivery_still_create_only_one_session(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
-    await container.issues.comment(None, issue.id, "first")
-    await container.issues.comment(None, issue.id, "second")
+    issue = await container.issues.create(USER, owner=alpha, title="t", status=TODO, assignee=alpha)
+    await container.issues.comment(USER, issue.id, "first")
+    await container.issues.comment(USER, issue.id, "second")
     await deliver(container)
     [session] = await _issue_sessions(container)
     mails = await _mail(container, session.id)
@@ -136,7 +136,7 @@ async def test_a_long_issue_title_is_shortened_to_fit_the_session_title(containe
     from muliao.sessions.tables import TITLE_LENGTH
 
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, owner=alpha, title="x" * 300, status=TODO, assignee=alpha)
+    issue = await container.issues.create(USER, owner=alpha, title="x" * 300, status=TODO, assignee=alpha)
     await deliver(container)
     [session] = await _issue_sessions(container)
     assert len(session.title) == TITLE_LENGTH
@@ -146,7 +146,7 @@ async def test_a_long_issue_title_is_shortened_to_fit_the_session_title(containe
 
 async def test_an_agent_acting_in_its_issue_session_does_not_deliver_to_itself(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
+    issue = await container.issues.create(USER, owner=alpha, title="t", status=TODO, assignee=alpha)
     await drain(container)
     [session] = await _issue_sessions(container)
     await container.issues.update(alpha, issue.id, session_id=session.id, status=PROGRESS)
@@ -176,11 +176,11 @@ async def test_an_agent_assigning_itself_from_a_chat_starts_the_issue_session(co
 async def test_backlog_review_and_done_are_not_delivered(container, make_agent):
     """不在 todo / in_progress 时，字段修改与 agent 的评论都不投（用户的评论投给 owner，见下一个测试）。"""
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
-    issue = await container.issues.create(None, owner=alpha, title="t", assignee=alpha)
+    issue = await container.issues.create(USER, owner=alpha, title="t", assignee=alpha)
     await container.issues.comment(beta, issue.id, "later")
-    await container.issues.update(None, issue.id, status=REVIEW)
+    await container.issues.update(USER, issue.id, status=REVIEW)
     await container.issues.comment(beta, issue.id, "looks good")
-    await container.issues.update(None, issue.id, status=DONE)
+    await container.issues.update(USER, issue.id, status=DONE)
     await deliver(container)
     assert await _issue_sessions(container) == []
 
@@ -212,21 +212,21 @@ def test_a_user_comment_nobody_takes_goes_to_the_owner(issue, user_comment, to):
 
 async def test_a_user_comment_on_a_backlog_issue_wakes_its_owner(container, make_agent):
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
-    issue = await container.issues.create(None, owner=alpha, title="t", assignee=beta)
-    await container.issues.update(None, issue.id, title="t2")
+    issue = await container.issues.create(USER, owner=alpha, title="t", assignee=beta)
+    await container.issues.update(USER, issue.id, title="t2")
     await container.issues.comment(beta, issue.id, "agent note")
     await deliver(container)
     assert await _issue_sessions(container) == []  # 字段修改、agent 评论不唤起 owner
 
-    await container.issues.comment(None, issue.id, "still needed?")
+    await container.issues.comment(USER, issue.id, "still needed?")
     await deliver(container)
     [session] = await _issue_sessions(container)
     assert session.agent_id == alpha  # 指派给 beta 但没开工：投给 owner
     assert "user commented:\n  still needed?" in (await _mail(container, session.id))[0]
 
     # todo 指派给 beta：用户评论只投给 beta，owner 不再收到
-    await container.issues.update(None, issue.id, status=TODO)
-    await container.issues.comment(None, issue.id, "go")
+    await container.issues.update(USER, issue.id, status=TODO)
+    await container.issues.comment(USER, issue.id, "go")
     await deliver(container)
     sessions = await _issue_sessions(container)
     assert [s.agent_id for s in sessions] == [alpha, beta]
@@ -254,7 +254,7 @@ async def test_an_agent_handing_an_issue_to_the_user_notifies_them(container, ma
 
     alpha = (await make_agent()).id
     chat = await start(container, alpha, "work")
-    issue = await container.issues.create(None, owner=alpha, title="Review me", status=TODO)
+    issue = await container.issues.create(USER, owner=alpha, title="Review me", status=TODO)
     await container.issues.update(alpha, issue.id, session_id=chat.id, status=REVIEW, assignee=USER)
     await deliver(container)
     async with container.db.transaction() as s:
@@ -276,7 +276,7 @@ def test_the_agent_that_handed_an_issue_to_the_user_is_the_last_assigner():
 
 async def _handed_to_user(container, agent: str):
     """agent 在它的 issue 会话里做完，交给用户审核。"""
-    issue = await container.issues.create(None, owner=agent, title="Ship it", status=TODO, assignee=agent)
+    issue = await container.issues.create(USER, owner=agent, title="Ship it", status=TODO, assignee=agent)
     await drain(container)
     [session] = await _issue_sessions(container)
     await container.issues.update(agent, issue.id, session_id=session.id, status=REVIEW, assignee=USER)
@@ -290,7 +290,7 @@ async def test_approving_an_issue_handed_to_the_user_finishes_it_and_unblocks_do
     alpha = (await make_agent("alpha")).id
     issue, _ = await _handed_to_user(container, alpha)
     downstream = await container.issues.create(
-        None, owner=alpha, title="next", status=TODO, assignee=alpha, depends_on=[issue.id]
+        USER, owner=alpha, title="next", status=TODO, assignee=alpha, depends_on=[issue.id]
     )
 
     approved = await container.issues.approve(issue.id)
@@ -298,8 +298,8 @@ async def test_approving_an_issue_handed_to_the_user_finishes_it_and_unblocks_do
     assert (approved.status, approved.assignee) == (DONE, USER)
     last = (await container.issues.get(issue.id)).activities[-1]
     # 以用户的身份记在时间线上
-    assert (last.actor_agent_id, last.kind, last.change) == (
-        None,
+    assert (last.actor, last.kind, last.change) == (
+        USER,
         ActivityKind.STATUS,
         {"from": REVIEW, "to": DONE},
     )
@@ -326,10 +326,10 @@ async def test_sending_an_issue_back_comments_and_returns_it_to_the_agent_that_h
 
     assert (rejected.status, rejected.assignee) == (TODO, alpha)
     activities = (await container.issues.get(issue.id)).activities[-3:]
-    assert [(a.actor_agent_id, a.kind) for a in activities] == [
-        (None, ActivityKind.COMMENT),
-        (None, ActivityKind.STATUS),
-        (None, ActivityKind.ASSIGNEE),
+    assert [(a.actor, a.kind) for a in activities] == [
+        (USER, ActivityKind.COMMENT),
+        (USER, ActivityKind.STATUS),
+        (USER, ActivityKind.ASSIGNEE),
     ]
     assert activities[0].body == "the button is misaligned"
     # 三条动态一封信，投进 agent 原来的 issue 会话
@@ -347,7 +347,7 @@ async def test_sending_an_issue_back_comments_and_returns_it_to_the_agent_that_h
 async def test_a_cancelled_issue_is_not_reviewed(container, make_agent):
     alpha = (await make_agent("alpha")).id
     issue, _ = await _handed_to_user(container, alpha)
-    await container.issues.update(None, issue.id, status=IssueStatus.CANCELLED)
+    await container.issues.update(USER, issue.id, status=IssueStatus.CANCELLED)
 
     with pytest.raises(Conflict, match="already cancelled"):
         await container.issues.approve(issue.id)
@@ -358,7 +358,7 @@ async def test_a_cancelled_issue_is_not_reviewed(container, make_agent):
 async def test_an_issue_handed_over_by_a_deleted_agent_cannot_be_sent_back(container, make_agent):
     alpha = (await make_agent("alpha")).id
     issue, _ = await _handed_to_user(container, alpha)
-    await container.agent_lifecycle.delete(alpha, author="user")
+    await container.agent_lifecycle.delete(alpha, actor="user")
     await drain(container)
 
     with pytest.raises(Conflict, match="no longer exists"):
@@ -367,7 +367,7 @@ async def test_an_issue_handed_over_by_a_deleted_agent_cannot_be_sent_back(conta
 
 async def test_an_issue_the_user_assigned_to_themselves_cannot_be_sent_back(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    issue = await container.issues.create(None, owner=alpha, title="mine", status=REVIEW, assignee=USER)
+    issue = await container.issues.create(USER, owner=alpha, title="mine", status=REVIEW, assignee=USER)
 
     with pytest.raises(Conflict, match="not handed to you by an agent"):
         await container.issues.reject(issue.id, "why")
@@ -376,13 +376,13 @@ async def test_an_issue_the_user_assigned_to_themselves_cannot_be_sent_back(cont
 
 async def test_a_deleted_issue_session_is_replaced_on_the_next_delivery(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
+    issue = await container.issues.create(USER, owner=alpha, title="t", status=TODO, assignee=alpha)
     await drain(container)  # 跑完这次运行，会话才能删除
     [first] = await _issue_sessions(container)
     await container.sessions.delete(first.id)
     await deliver(container)
 
-    await container.issues.comment(None, issue.id, "again")
+    await container.issues.comment(USER, issue.id, "again")
     await deliver(container)
     [second] = await _issue_sessions(container)
     assert second.id != first.id
@@ -390,7 +390,7 @@ async def test_a_deleted_issue_session_is_replaced_on_the_next_delivery(containe
 
 async def test_deleting_an_agent_unassigns_its_issues(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
+    issue = await container.issues.create(USER, owner=alpha, title="t", status=TODO, assignee=alpha)
     await deliver(container)
     before = (await container.issues.get(issue.id)).issue.updated_at
     commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m"))
@@ -400,7 +400,7 @@ async def test_deleting_an_agent_unassigns_its_issues(container, make_agent):
     assert detail.issue.assignee is None
     assert detail.activities[-1].change == {"from": alpha, "to": None}
     # 清理是系统做的，不是用户
-    assert detail.activities[-1].actor_agent_id == SYSTEM_ACTOR
+    assert detail.activities[-1].actor == SYSTEM_ACTOR
     assert detail.issue.updated_at > before
     assert "system changed assignee: alpha -> unassigned" in await container.issues.render(issue.id)
 
@@ -408,7 +408,7 @@ async def test_deleting_an_agent_unassigns_its_issues(container, make_agent):
 async def test_assigning_to_an_unknown_agent_is_refused(container, make_agent):
     alpha = (await make_agent()).id
     with pytest.raises(NotFound):
-        await container.issues.create(None, owner=alpha, title="t", assignee="nobody")
+        await container.issues.create(USER, owner=alpha, title="t", assignee="nobody")
 
 
 async def test_http_issue_lifecycle(client, container, make_agent):
@@ -426,12 +426,12 @@ async def test_http_issue_lifecycle(client, container, make_agent):
     await deliver(container)
     detail = (await client.get(f"/api/issues/{issue_id}")).json()
     assert alpha in detail["issue"]["sessions"]
-    assert detail["issue"]["assignee_session"] == "running" and detail["issue"]["stalled"] is False
+    assert detail["issue"]["assignee_state"] == "running" and detail["issue"]["stalled"] is False
     assert [a["kind"] for a in detail["activities"]] == ["created", "status"]
 
     await drain(container)
     listed = (await client.get("/api/issues", params={"status": ["todo"]})).json()
-    assert [(i["id"], i["assignee_session"], i["stalled"]) for i in listed] == [(issue_id, "idle", True)]
+    assert [(i["id"], i["assignee_state"], i["stalled"]) for i in listed] == [(issue_id, "idle", True)]
 
     # 只给出的字段改变；assignee 为 null 取消指派
     resp = await client.patch(f"/api/issues/{issue_id}", json={"assignee": None})
@@ -456,43 +456,43 @@ async def test_http_issue_lifecycle(client, container, make_agent):
 
 async def test_work_of_the_assignee_session(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
-    unassigned = await container.issues.create(None, owner=alpha, title="u", status=TODO)
+    issue = await container.issues.create(USER, owner=alpha, title="t", status=TODO, assignee=alpha)
+    unassigned = await container.issues.create(USER, owner=alpha, title="u", status=TODO)
     await deliver(container)
     work = await container.issues.work(await container.issues.list())
-    assert (work[issue.id].assignee_session, work[issue.id].stalled) == (WorkState.RUNNING, False)
-    assert (work[unassigned.id].assignee_session, work[unassigned.id].stalled) == (None, False)
+    assert (work[issue.id].assignee_state, work[issue.id].stalled) == (WorkState.RUNNING, False)
+    assert (work[unassigned.id].assignee_state, work[unassigned.id].stalled) == (None, False)
     await drain(container)
     work = await container.issues.work(await container.issues.list())
-    assert (work[issue.id].assignee_session, work[issue.id].stalled) == (WorkState.IDLE, True)
+    assert (work[issue.id].assignee_state, work[issue.id].stalled) == (WorkState.IDLE, True)
 
 
 async def test_the_owner_stays_when_the_issue_is_reassigned_and_filters_a_project(container, make_agent):
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
     issue = await container.issues.create(alpha, owner=alpha, title="t", assignee=alpha)
-    other = await container.issues.create(None, owner=beta, title="u")
+    other = await container.issues.create(USER, owner=beta, title="u")
     await container.issues.update(alpha, issue.id, assignee=beta)
     assert [i.id for i in await container.issues.list(owner=alpha)] == [issue.id]
     assert [i.id for i in await container.issues.list(owner=beta)] == [other.id]
 
-    await container.issues.update(None, issue.id, owner=beta)
+    await container.issues.update(USER, issue.id, owner=beta)
     detail = await container.issues.get(issue.id)
     assert detail.activities[-1].kind == ActivityKind.OWNER
     assert "user changed owner: alpha -> beta" in await container.issues.render(issue.id)
 
     with pytest.raises(NotFound):
-        await container.issues.create(None, owner="nobody", title="x")
+        await container.issues.create(USER, owner="nobody", title="x")
 
 
 async def test_deleting_the_owner_agent_clears_ownership(container, make_agent):
     alpha = (await make_agent()).id
-    issue = await container.issues.create(None, owner=alpha, title="t")
+    issue = await container.issues.create(USER, owner=alpha, title="t")
     commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m"))
     async with container.db.transaction() as s:
         await commit(s)
     detail = await container.issues.get(issue.id)
     assert detail.issue.owner_agent_id is None
-    assert (detail.activities[-1].kind, detail.activities[-1].actor_agent_id) == (
+    assert (detail.activities[-1].kind, detail.activities[-1].actor) == (
         ActivityKind.OWNER,
         SYSTEM_ACTOR,
     )
@@ -500,8 +500,8 @@ async def test_deleting_the_owner_agent_clears_ownership(container, make_agent):
 
 async def test_acting_from_the_session_of_another_issue_is_delivered(container, make_agent):
     alpha = (await make_agent()).id
-    x = await container.issues.create(None, owner=alpha, title="x", status=TODO, assignee=alpha)
-    y = await container.issues.create(None, owner=alpha, title="y", status=TODO, assignee=alpha)
+    x = await container.issues.create(USER, owner=alpha, title="x", status=TODO, assignee=alpha)
+    y = await container.issues.create(USER, owner=alpha, title="y", status=TODO, assignee=alpha)
     await drain(container)
     sessions = {s.origin_ref: s.id for s in await _issue_sessions(container)}
     # 在 x 的会话里评论 y：不是 y 自己的会话，投进 y 的会话
@@ -539,10 +539,10 @@ def test_cycle_through(issue_id, depends_on, edges, cycle):
 
 async def test_a_downstream_issue_is_delivered_when_its_last_upstream_finishes(container, make_agent):
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
-    up1 = await container.issues.create(None, owner=alpha, title="up1", status=TODO, assignee=alpha)
-    up2 = await container.issues.create(None, owner=alpha, title="up2", status=TODO)
+    up1 = await container.issues.create(USER, owner=alpha, title="up1", status=TODO, assignee=alpha)
+    up2 = await container.issues.create(USER, owner=alpha, title="up2", status=TODO)
     down = await container.issues.create(
-        None, owner=beta, title="down", status=TODO, assignee=beta, depends_on=[up1.id, up2.id]
+        USER, owner=beta, title="down", status=TODO, assignee=beta, depends_on=[up1.id, up2.id]
     )
     await container.issues.comment(alpha, down.id, "wait for them")  # agent 的评论：不唤起 owner
     await drain(container)
@@ -561,7 +561,7 @@ async def test_a_downstream_issue_is_delivered_when_its_last_upstream_finishes(c
     assert detail.activities[-1].change == {"issue": up1.id, "from": "todo", "to": "done"}
 
     # 最后一个上游取消也算完成：投给下游，信里是摘要（含上游及其状态）与这次的动态；等待期间的评论靠 issue_show 看
-    await container.issues.update(None, up2.id, status=IssueStatus.CANCELLED)
+    await container.issues.update(USER, up2.id, status=IssueStatus.CANCELLED)
     await deliver(container)
     [session] = [s for s in await _issue_sessions(container) if s.origin_ref == str(down.id)]
     [mail] = await _mail(container, session.id)
@@ -571,29 +571,29 @@ async def test_a_downstream_issue_is_delivered_when_its_last_upstream_finishes(c
     assert (await container.issues.work([down]))[down.id].waiting_on == ()
 
     # 已完成的上游再改到另一个完成状态不再通知
-    await container.issues.update(None, up2.id, status=DONE)
+    await container.issues.update(USER, up2.id, status=DONE)
     await deliver(container)
     assert len(await _mail(container, session.id)) == 1
 
 
 async def test_dependencies_must_exist_and_not_form_a_cycle(container, make_agent):
     alpha = (await make_agent()).id
-    a = await container.issues.create(None, owner=alpha, title="a")
-    b = await container.issues.create(None, owner=alpha, title="b", depends_on=[a.id])
-    c = await container.issues.create(None, owner=alpha, title="c", depends_on=[b.id])
+    a = await container.issues.create(USER, owner=alpha, title="a")
+    b = await container.issues.create(USER, owner=alpha, title="b", depends_on=[a.id])
+    c = await container.issues.create(USER, owner=alpha, title="c", depends_on=[b.id])
     with pytest.raises(InvalidInput, match=f"#{a.id} -> #{c.id} -> #{b.id} -> #{a.id}"):
-        await container.issues.update(None, a.id, depends_on=[c.id])
+        await container.issues.update(USER, a.id, depends_on=[c.id])
     with pytest.raises(InvalidInput, match="cycle"):
-        await container.issues.update(None, a.id, depends_on=[a.id])
+        await container.issues.update(USER, a.id, depends_on=[a.id])
     with pytest.raises(InvalidInput, match="not found"):
-        await container.issues.update(None, a.id, depends_on=[999])
+        await container.issues.update(USER, a.id, depends_on=[999])
     with pytest.raises(InvalidInput, match="more than once"):
-        await container.issues.update(None, c.id, depends_on=[a.id, a.id])
+        await container.issues.update(USER, c.id, depends_on=[a.id, a.id])
     assert (await container.issues.work([a]))[a.id].depends_on == []
 
     # 整体替换，记一条时间线；没变不记
-    await container.issues.update(None, c.id, depends_on=[a.id, b.id])
-    await container.issues.update(None, c.id, depends_on=[b.id, a.id])
+    await container.issues.update(USER, c.id, depends_on=[a.id, b.id])
+    await container.issues.update(USER, c.id, depends_on=[b.id, a.id])
     detail = await container.issues.get(c.id)
     assert [x.kind for x in detail.activities] == [ActivityKind.CREATED, ActivityKind.DEPENDS_ON]
     assert detail.activities[-1].change == {"from": [b.id], "to": [a.id, b.id]}
@@ -602,13 +602,13 @@ async def test_dependencies_must_exist_and_not_form_a_cycle(container, make_agen
 
 async def test_dropping_the_last_waiting_upstream_delivers(container, make_agent):
     alpha = (await make_agent()).id
-    up = await container.issues.create(None, owner=alpha, title="up")
+    up = await container.issues.create(USER, owner=alpha, title="up")
     down = await container.issues.create(
-        None, owner=alpha, title="down", status=TODO, assignee=alpha, depends_on=[up.id]
+        USER, owner=alpha, title="down", status=TODO, assignee=alpha, depends_on=[up.id]
     )
     await deliver(container)
     assert await _issue_sessions(container) == []
-    await container.issues.update(None, down.id, depends_on=[])
+    await container.issues.update(USER, down.id, depends_on=[])
     await deliver(container)
     [session] = await _issue_sessions(container)
     assert f"changed depends_on: #{up.id} -> none" in (await _mail(container, session.id))[0]
@@ -616,9 +616,9 @@ async def test_dropping_the_last_waiting_upstream_delivers(container, make_agent
 
 async def test_deleting_an_upstream_frees_its_downstream(container, make_agent):
     alpha = (await make_agent()).id
-    up = await container.issues.create(None, owner=alpha, title="up")
+    up = await container.issues.create(USER, owner=alpha, title="up")
     down = await container.issues.create(
-        None, owner=alpha, title="down", status=TODO, assignee=alpha, depends_on=[up.id]
+        USER, owner=alpha, title="down", status=TODO, assignee=alpha, depends_on=[up.id]
     )
     await container.issues.delete(up.id)
     await deliver(container)
@@ -661,7 +661,7 @@ async def test_a_batch_refers_to_its_own_keys_and_is_delivered_after_it_is_commi
     from muliao.issues.service import NewIssue
 
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
-    existing = await container.issues.create(None, owner=alpha, title="existing")
+    existing = await container.issues.create(USER, owner=alpha, title="existing")
     seen: list[int] = []
     run_now = container.issues._delivery._run_now  # noqa: SLF001
 
@@ -724,7 +724,7 @@ async def test_an_invalid_item_creates_nothing_of_the_batch(container, make_agen
     alpha = (await make_agent()).id
     new = [NewIssue(**{"owner": alpha, "title": "t", "status": TODO, "assignee": alpha, **i}) for i in items]
     with pytest.raises(InvalidInput, match=error):
-        await container.issues.create_many(None, new)
+        await container.issues.create_many(USER, new)
     assert await _issue_count(container) == 0
     await deliver(container)
     assert await _issue_sessions(container) == []
@@ -736,13 +736,13 @@ async def test_an_unknown_owner_in_a_batch_names_the_item(container, make_agent)
     alpha = (await make_agent()).id
     with pytest.raises(NotFound, match="issues\\[1\\]: "):
         await container.issues.create_many(
-            None, [NewIssue(owner=alpha, title="a"), NewIssue(owner="nobody", title="b")]
+            USER, [NewIssue(owner=alpha, title="a"), NewIssue(owner="nobody", title="b")]
         )
     assert await _issue_count(container) == 0
     # 只建一个时错误原样，不带 issues[n]
-    a = await container.issues.create(None, owner=alpha, title="a")
+    a = await container.issues.create(USER, owner=alpha, title="a")
     with pytest.raises(InvalidInput, match="^depends_on lists an issue more than once"):
-        await container.issues.create(None, owner=alpha, title="b", depends_on=[a.id, a.id])
+        await container.issues.create(USER, owner=alpha, title="b", depends_on=[a.id, a.id])
 
 
 async def test_issue_create_tool_creates_a_batch_in_one_call(container, make_agent, models):
@@ -788,23 +788,23 @@ async def test_issue_create_tool_creates_a_batch_in_one_call(container, make_age
 
 async def test_waiting_is_derived_from_the_current_upstream_state(container, make_agent):
     alpha = (await make_agent()).id
-    done = await container.issues.create(None, owner=alpha, title="done", status=DONE)
-    up = await container.issues.create(None, owner=alpha, title="up")
-    other = await container.issues.create(None, owner=alpha, title="other")
+    done = await container.issues.create(USER, owner=alpha, title="done", status=DONE)
+    up = await container.issues.create(USER, owner=alpha, title="up")
+    other = await container.issues.create(USER, owner=alpha, title="other")
     # 上游创建时已经完成：立即投递
     ready = await container.issues.create(
-        None, owner=alpha, title="ready", status=TODO, assignee=alpha, depends_on=[done.id]
+        USER, owner=alpha, title="ready", status=TODO, assignee=alpha, depends_on=[done.id]
     )
-    down = await container.issues.create(None, owner=alpha, title="down", depends_on=[up.id, other.id])
+    down = await container.issues.create(USER, owner=alpha, title="down", depends_on=[up.id, other.id])
     # 等待期间改状态、改指派：只记时间线
-    await container.issues.update(None, down.id, status=TODO, assignee=alpha)
+    await container.issues.update(USER, down.id, status=TODO, assignee=alpha)
     await container.issues.delete(other.id)  # 还在等 up
     await deliver(container)
     assert [s.origin_ref for s in await _issue_sessions(container)] == [str(ready.id)]
     assert (await container.issues.get(down.id)).activities[-1].kind == ActivityKind.DEPENDS_ON
 
-    await container.issues.update(None, up.id, status=DONE)
-    await container.issues.update(None, up.id, status=TODO)  # 重新打开：下游回到等待
+    await container.issues.update(USER, up.id, status=DONE)
+    await container.issues.update(USER, up.id, status=TODO)  # 重新打开：下游回到等待
     await drain(container)
     [_, session] = await _issue_sessions(container)
     assert session.origin_ref == str(down.id)
@@ -814,7 +814,7 @@ async def test_waiting_is_derived_from_the_current_upstream_state(container, mak
     await deliver(container)
     assert len(await _mail(container, session.id)) == 1
     # 用户的评论在等上游时投给 owner（这里 owner 就是被指派的 alpha，同一个会话）
-    await container.issues.comment(None, down.id, "is it blocked?")
+    await container.issues.comment(USER, down.id, "is it blocked?")
     await deliver(container)
     assert "is it blocked?" in (await _mail(container, session.id))[-1]
 
@@ -880,12 +880,12 @@ async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(conta
 
     alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = _failing(400, times=1)
-    issue = await container.issues.create(None, owner=alpha, title="Fix it", status=TODO, assignee=alpha)
+    issue = await container.issues.create(USER, owner=alpha, title="Fix it", status=TODO, assignee=alpha)
     await drain(container)
 
     detail = await container.issues.get(issue.id)
     failed = detail.activities[-1]
-    assert failed.kind == ActivityKind.RUN_FAILED and failed.actor_agent_id == alpha
+    assert failed.kind == ActivityKind.RUN_FAILED and failed.actor == alpha
     assert failed.body.startswith("ModelHTTPError") and "400" in failed.body
     assert len(failed.body) == FAILURE_SUMMARY_MAX and failed.body.endswith("…")
     # 状态不变、不自动重试：失败的动态不投进会话
@@ -901,7 +901,7 @@ async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(conta
     )
 
     # 之后的动态照常投递、唤醒 agent
-    await container.issues.comment(None, issue.id, "try again")
+    await container.issues.comment(USER, issue.id, "try again")
     await drain(container)
     assert (await container.issues.get(issue.id)).activities[-1].kind == ActivityKind.COMMENT
     assert len(await _mail(container, session.id)) == 2
@@ -919,7 +919,7 @@ async def test_failed_runs_outside_issue_sessions_and_retried_ones_are_not_recor
     assert [n.session_id for n in await _notifications(container)] == [triggered.id]
     # 暂时性失败、重试后成功的不记
     models.models["m"] = _failing(503, times=1)
-    issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
+    issue = await container.issues.create(USER, owner=alpha, title="t", status=TODO, assignee=alpha)
     await drain(container)
 
     assert [a.kind for a in (await container.issues.get(issue.id)).activities] == [ActivityKind.CREATED]
@@ -952,7 +952,7 @@ async def test_a_run_failure_on_a_deleted_issue_is_ignored(container, make_agent
 async def test_a_transient_failure_is_recorded_once_its_retries_are_used_up(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m")).id
     models.models["m"] = _failing(503, times=1000)
-    issue = await container.issues.create(None, owner=alpha, title="t", status=TODO, assignee=alpha)
+    issue = await container.issues.create(USER, owner=alpha, title="t", status=TODO, assignee=alpha)
     await drain(container)
 
     failed = [

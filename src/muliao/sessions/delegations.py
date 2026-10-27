@@ -19,7 +19,7 @@ from muliao.sessions.tables import Delegation
 class DelegationRecord:
     holder: str
     # 发起会话
-    session_id: str
+    parent_id: str
     # 做它的 thread；已删除为 None
     thread_id: str | None
     check_seconds: float | None
@@ -37,7 +37,7 @@ class DelegationRecord:
 def _record(row: Delegation) -> DelegationRecord:
     return DelegationRecord(
         holder=row.holder,
-        session_id=row.session_id,
+        parent_id=row.parent_session_id,
         thread_id=row.thread_session_id,
         check_seconds=row.check_seconds,
         deadline=row.deadline,
@@ -49,7 +49,7 @@ async def record_in(
     s: AsyncSession,
     *,
     holder: str,
-    session_id: str,
+    parent_id: str,
     thread_id: str,
     check_seconds: float | None,
     timeout_seconds: float | None,
@@ -62,7 +62,7 @@ async def record_in(
     now = utcnow()
     row = Delegation(
         holder=holder,
-        session_id=session_id,
+        parent_session_id=parent_id,
         thread_session_id=thread_id,
         check_seconds=check_seconds,
         deadline=None if timeout_seconds is None else now + timedelta(seconds=timeout_seconds),

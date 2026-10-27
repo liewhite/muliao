@@ -288,7 +288,7 @@ async def test_web_agent_searches_and_fetches_with_truncation_and_rejections_go_
     container, web = web_container
     agent = await container.agents.create(
         AgentSpec(name="reader", description="d", model="tools", allow=["tool:web_*"], roles=[]),
-        author="user",
+        actor="user",
     )
 
     outputs = await run_tools(
@@ -312,7 +312,7 @@ async def test_without_web_config_web_permissions_grant_no_tools_and_does_not_bl
     # 同一份数据先在配置了 web 时选上它，再换成没配置的进程：角色只是规则，没注册的工具就没有
     with_web, _ = web_container
     reader = await with_web.agents.create(
-        AgentSpec(name="reader", description="d", allow=["tool:web_*"], roles=[]), author="user"
+        AgentSpec(name="reader", description="d", allow=["tool:web_*"], roles=[]), actor="user"
     )
     without_web = assemble(with_web.settings, model_checker=lambda _m, _t: None)
     await without_web.agents.verify_stored()

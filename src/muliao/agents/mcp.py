@@ -191,10 +191,10 @@ class McpRegistry:
             )
             return McpServer(before.owner, name, before.config, enabled)
 
-    async def restore(self, name: str, rev: int, author: str) -> McpServer:
+    async def restore(self, name: str, rev: int, actor: str) -> McpServer:
         """把第 rev 版的配置与启用状态作为新的一版写入（不连接验证；归属不变），读版本与写入在同一个事务里。"""
         async with self._db.transaction() as s:
-            row = await changeable_in(s, StoredKind.MCP, name, author)
+            row = await changeable_in(s, StoredKind.MCP, name, actor)
             data = json.loads(await revision_doc_in(s, Subject.MCP, name, rev))
             enabled = data.pop("enabled")
             try:
@@ -210,7 +210,7 @@ class McpRegistry:
                 name,
                 document(before.config, before.enabled),
                 document(config, enabled),
-                author,
+                actor,
                 f"restore MCP server {name}",
             )
             return McpServer(row.owner, name, config, enabled)

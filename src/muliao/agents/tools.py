@@ -163,7 +163,7 @@ def agents_toolset(
             thinking=thinking,
             group=group,
         )
-        created = await agents.create(spec, author=ctx.deps.agent_id)
+        created = await agents.create(spec, actor=ctx.deps.agent_id)
         return f"created agent {created.name}"
 
     @ts.tool
@@ -207,7 +207,7 @@ def agents_toolset(
             thinking=thinking,
             group=group,
         )
-        target = await agents.update(target.id, patch, author=ctx.deps.agent_id)
+        target = await agents.update(target.id, patch, actor=ctx.deps.agent_id)
         if archived is not None:
             try:
                 target = await lifecycle.set_archived(target.id, archived)
@@ -235,7 +235,7 @@ def agents_toolset(
             raise InvalidInput(
                 "you cannot delete yourself while you are running; ask the user to do it in the app"
             )
-        await lifecycle.delete(target.id, author=ctx.deps.agent_id)
+        await lifecycle.delete(target.id, actor=ctx.deps.agent_id)
         return f"deleted agent {target.name}"
 
     @ts.tool

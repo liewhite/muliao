@@ -55,7 +55,7 @@ async def test_skill_and_memory_endpoints(client):
     ]
     assert (await client.get("/api/items/skill/shared")).json()["body"].strip() == "steps"
 
-    resp = await client.put("/api/memory", json={"owner": agent_id, "content": "- fact"})
+    resp = await client.put("/api/memory", json={"agent": agent_id, "content": "- fact"})
     assert resp.json()["content"] == "- fact"
     for owner in (agent_id, None):
         too_long = {"owner": owner, "content": "x" * 10_000}
@@ -146,7 +146,7 @@ async def test_an_item_given_by_another_agents_allow_is_shared_without_a_role(cl
     await login(client)
     await client.put("/api/items/secret/MINE", json={"owner": alpha, "value": "v"})
     await client.put("/api/items/secret/LONELY", json={"value": "v"})
-    await container.agents.update(beta, AgentPatch(allow=("secret:MINE",)), author="user")
+    await container.agents.update(beta, AgentPatch(allow=("secret:MINE",)), actor="user")
     secrets = {
         i["name"]: (i["roles"], i["shared"])
         for i in (await client.get("/api/items")).json()
@@ -426,8 +426,8 @@ async def test_an_agent_being_deleted_reads_as_missing(client, container, make_a
     assert (await client.get(f"/api/agents/{agent.id}")).status_code == 404
     assert (await client.get(f"/api/agents/{agent.id}/history")).status_code == 404
     # 记忆与条目同一条规则，在领域的 store 里查：读、看历史都按不存在处理，列表里也没有
-    assert (await client.get("/api/memory", params={"owner": agent.id})).status_code == 404
-    assert (await client.get("/api/memory/history", params={"owner": agent.id})).status_code == 404
+    assert (await client.get("/api/memory", params={"agent": agent.id})).status_code == 404
+    assert (await client.get("/api/memory/history", params={"agent": agent.id})).status_code == 404
     assert (await client.get("/api/items/skill/mine")).status_code == 404
     assert (await client.get("/api/items/skill/mine/history")).status_code == 404
     assert "mine" not in [i["name"] for i in (await client.get("/api/items")).json()]

@@ -26,7 +26,7 @@ class IssueSummary(BaseModel):
     assignee: str | None
     # 被指派 agent 在这个 issue 会话里的状态：running（在跑）、waiting（等后台任务、委派或用户回答）、idle（空闲）；
     # 没指派给 agent 或它还没有这个 issue 的会话时为 null
-    assignee_session: WorkState | None
+    assignee_state: WorkState | None
     # todo / in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
     stalled: bool
     # 它依赖的上游 issue，与其中还没完成（不是 done / cancelled）的：waiting_on 非空时它还轮不到，动态不投、不算停滞
@@ -70,7 +70,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             status=issue.status,
             priority=issue.priority,
             assignee=None if assignee is None else assignee_name(assignee, names),
-            assignee_session=work.assignee_session,
+            assignee_state=work.assignee_state,
             stalled=work.stalled,
             depends_on=[d.id for d in work.depends_on],
             waiting_on=list(work.waiting_on),
@@ -82,8 +82,8 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         statuses: tuple[IssueStatus, ...] = (), assignee: str | None = None, owner: str | None = None
     ) -> list[IssueSummary]:
         """List issues on the muliao issue board. Returns a JSON array of issues, most recently updated first, each
-        with `id`, `title`, `owner`, `status`, `priority`, `assignee`, `assignee_session`, `stalled`, `depends_on`,
-        `waiting_on` and `updated_at` (ISO 8601). `assignee_session` tells whether
+        with `id`, `title`, `owner`, `status`, `priority`, `assignee`, `assignee_state`, `stalled`, `depends_on`,
+        `waiting_on` and `updated_at` (ISO 8601). `assignee_state` tells whether
         the assigned agent is working on it in the issue's conversation: running, waiting (on a background job,
         delegated work or the user's answer), idle, or null (no agent assignee or no conversation yet). `stalled`
         marks a `todo`/`in_progress` issue assigned to an agent whose issue conversation is idle or missing.

@@ -3,7 +3,7 @@
 每次修改在一个事务里写 issue、记时间线，并交给 delivery 在同一事务里投递这次的动态（投给谁见 rules.recipient），
 提交后马上执行。依赖图在 graph，给模型看的文本在 render，这里编排它们。
 
-actor 是做这件事的 agent id，用户为 None，系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR；session_id 是 agent 动手时所在的会话。它在自己这个 issue 会话里的动作
+actor 是做这件事的 agent id，用户为 USER，系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR；session_id 是 agent 动手时所在的会话。它在自己这个 issue 会话里的动作
 不投回那个会话（避免自激）；issue 只在它自己的会话里做，普通对话只建、派 issue。
 
 用户的评论在按上述规则没有 agent 接手时投给负责项目的 agent（owner），见 rules.recipient。
@@ -82,7 +82,7 @@ class IssueWork:
     # 每个 agent 在这个 issue 上的会话：agent id -> 会话 id
     sessions: dict[str, str]
     # 被指派 agent 的 issue 会话的工作状态；没指派给 agent 或它还没有这个会话时为 None
-    assignee_session: WorkState | None
+    assignee_state: WorkState | None
     # 该有人做却没人在做（rules.stalled）
     stalled: bool
     # 上游、下游，与还没完成的上游（graph.waiting_on）
@@ -238,7 +238,7 @@ class IssueService:
             snap = snapshot(i, links[i.id])
             work[i.id] = IssueWork(
                 sessions={agent: info.id for agent, info in keyed[str(i.id)].items()},
-                assignee_session=state,
+                assignee_state=state,
                 stalled=stalled(snap, state),
                 depends_on=links[i.id].depends_on,
                 blocks=links[i.id].blocks,
@@ -260,7 +260,7 @@ class IssueService:
 
     async def create(
         self,
-        actor: str | None,
+        actor: str,
         *,
         session_id: str | None = None,
         owner: str,
@@ -284,7 +284,7 @@ class IssueService:
         return (await self.create_many(actor, [new], session_id=session_id))[0]
 
     async def create_many(
-        self, actor: str | None, new: Sequence[NewIssue], *, session_id: str | None = None
+        self, actor: str, new: Sequence[NewIssue], *, session_id: str | None = None
     ) -> list[Issue]:
         """一次建一批 issue（按给出的顺序编号），可以互相依赖：depends_on 里的字符串是本批另一项的 key。整批一个
         事务，任何一项不合法整批不建；全部建好、依赖连好之后才算各自的投递，提交后再投：先开工的子 issue 看得到
@@ -306,7 +306,7 @@ class IssueService:
                         status=item.status,
                         priority=item.priority,
                         assignee=item.assignee,
-                        creator_agent_id=actor,
+                        creator=actor,
                         created_at=now,
                         updated_at=now,
                     )
@@ -333,7 +333,7 @@ class IssueService:
 
     async def update(
         self,
-        actor: str | None,
+        actor: str,
         issue_id: int,
         *,
         session_id: str | None = None,
@@ -375,10 +375,10 @@ class IssueService:
             issue = await self._get_in(s, issue_id)
             _check_handed_to_user(issue)
             before = issue.status, issue.assignee
-            happened = await self._apply_in(s, issue, None, status=IssueStatus.DONE)
+            happened = await self._apply_in(s, issue, USER, status=IssueStatus.DONE)
             if not happened:
                 return issue
-            wake = await self._changed_in(s, issue, before, None, None, happened)
+            wake = await self._changed_in(s, issue, before, USER, None, happened)
         log.info("issue approved", extra={"issue_id": issue_id})
         await self._delivery.run(*wake)
         return issue
@@ -392,8 +392,8 @@ class IssueService:
             issue = await self._get_in(s, issue_id)
             _check_handed_to_user(issue)
             activities = await self._activities_in(s, issue_id)
-            assigners = [a.actor_agent_id for a in activities if a.kind == ActivityKind.ASSIGNEE]
-            agent = handed_by(issue.creator_agent_id, assigners)
+            assigners = [a.actor for a in activities if a.kind == ActivityKind.ASSIGNEE]
+            agent = handed_by(issue.creator, assigners)
             if agent is None:
                 raise Conflict(
                     f"issue #{issue_id} was not handed to you by an agent: assign it to an agent yourself"
@@ -406,9 +406,9 @@ class IssueService:
                     "assign it to an agent yourself"
                 ) from None
             before = issue.status, issue.assignee
-            happened = [self._record(s, issue, None, ActivityKind.COMMENT, body=reason)]
-            happened += await self._apply_in(s, issue, None, status=IssueStatus.TODO, assignee=agent)
-            wake = await self._changed_in(s, issue, before, None, None, happened)
+            happened = [self._record(s, issue, USER, ActivityKind.COMMENT, body=reason)]
+            happened += await self._apply_in(s, issue, USER, status=IssueStatus.TODO, assignee=agent)
+            wake = await self._changed_in(s, issue, before, USER, None, happened)
         log.info("issue sent back", extra={"issue_id": issue_id, "assignee": agent})
         await self._delivery.run(*wake)
         return issue
@@ -417,7 +417,7 @@ class IssueService:
         self,
         s: AsyncSession,
         issue: Issue,
-        actor: str | None,
+        actor: str,
         *,
         owner: str | None = None,
         title: str | None = None,
@@ -464,7 +464,7 @@ class IssueService:
         s: AsyncSession,
         issue: Issue,
         before: tuple[IssueStatus, str | None],
-        actor: str | None,
+        actor: str,
         session_id: str | None,
         happened: list[IssueActivity],
     ) -> list[Task | None]:
@@ -477,7 +477,7 @@ class IssueService:
         return wake
 
     async def comment(
-        self, actor: str | None, issue_id: int, body: str, *, session_id: str | None = None
+        self, actor: str, issue_id: int, body: str, *, session_id: str | None = None
     ) -> IssueActivity:
         if not body.strip():
             raise InvalidInput("comment must not be empty")
@@ -503,9 +503,9 @@ class IssueService:
                 down = await self._get_in(s, down_id)
                 old = ids_of(before[down_id].depends_on)
                 change = (old, [i for i in old if i != issue_id])
-                activity = self._record(s, down, None, ActivityKind.DEPENDS_ON, change=change)
+                activity = self._record(s, down, USER, ActivityKind.DEPENDS_ON, change=change)
                 down.updated_at = utcnow()
-                wake.append(await self._delivery.deliver_in(s, down, None, None, [activity]))
+                wake.append(await self._delivery.deliver_in(s, down, USER, None, [activity]))
         log.info("issue deleted", extra={"issue_id": issue_id, "downstream": downstream})
         await self._delivery.run(*wake)
 
@@ -518,7 +518,7 @@ class IssueService:
         return issue
 
     async def _unblock_in(
-        self, s: AsyncSession, issue: Issue, was: IssueStatus, actor: str | None, session_id: str | None
+        self, s: AsyncSession, issue: Issue, was: IssueStatus, actor: str, session_id: str | None
     ) -> list[Task | None]:
         """issue 进入 done / cancelled：每个下游记一条 DEPENDENCY 动态，按 rules.recipient 投递——不再等别的上游时，
         这就是让它开工的那封信。"""
@@ -548,7 +548,7 @@ class IssueService:
         self,
         s: AsyncSession,
         issue: Issue,
-        actor: str | None,
+        actor: str,
         kind: ActivityKind,
         *,
         body: str | None = None,
@@ -561,7 +561,7 @@ class IssueService:
         activity = IssueActivity(
             issue_id=issue.id,
             created_at=utcnow(),
-            actor_agent_id=actor,
+            actor=actor,
             kind=kind,
             body=body,
             change=recorded,

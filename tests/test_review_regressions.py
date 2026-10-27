@@ -55,7 +55,7 @@ async def test_deleting_session_or_agent_with_running_task_is_rejected(container
     with pytest.raises(Conflict):
         await container.sessions.delete(session.id)
     with pytest.raises(Conflict):
-        await container.agent_lifecycle.delete(alpha, author="user")
+        await container.agent_lifecycle.delete(alpha, actor="user")
 
 
 async def test_agent_api_rejects_partial_update(container, tmp_path):

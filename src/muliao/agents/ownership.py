@@ -45,9 +45,9 @@ async def document_in(s: AsyncSession, row: Item) -> str:
 
 
 async def transfer_in(
-    s: AsyncSession, row: Item, owner: str | None, author: str, message: str | None = None
+    s: AsyncSession, row: Item, owner: str | None, actor: str, message: str | None = None
 ) -> None:
-    """把条目转给 owner（agent 的 id；None 归平台），在调用方的写事务里记一版（作者 author，说明缺省为「从谁转给谁」）。
+    """把条目转给 owner（agent 的 id；None 归平台），在调用方的写事务里记一版（作者 actor，说明缺省为「从谁转给谁」）。
     内容不变；谁能用随 owner 变（agents.access 的规则 1）。谁能转、新 owner 是否可用由调用方先查。"""
     kind = StoredKind(row.kind)
     if message is None:
@@ -57,19 +57,19 @@ async def transfer_in(
         )
     doc = await document_in(s, row)
     # 文档不含 owner：前后相同，照样记一版
-    record_in(s, as_subject(kind), row.name, doc, doc, author, message, force=True)
+    record_in(s, as_subject(kind), row.name, doc, doc, actor, message, force=True)
     row.owner = owner
-    log.info("item transferred", extra={"kind": row.kind, "item": row.name, "owner": owner, "actor": author})
+    log.info("item transferred", extra={"kind": row.kind, "item": row.name, "owner": owner, "actor": actor})
 
 
-async def retire_owned_in(s: AsyncSession, agent_id: str, shared: Keep, author: str, message: str) -> None:
+async def retire_owned_in(s: AsyncSession, agent_id: str, shared: Keep, actor: str, message: str) -> None:
     """agent 删除前处理它名下的条目：分发出去的（shared，agents.access.Sharing.shared）转给平台（别的 agent 还在用），其余
     记一版删除（行随 agent 的行级联删除，版本表留作审计）。转移先写下去，调用方随后删 agent 的行时级联只删还归它的。"""
     for row in await owned_in(s, agent_id):
         if shared(Kind(row.kind), row.name, agent_id):
-            await transfer_in(s, row, None, author, f"moved to the platform with agent {agent_id} deleted")
+            await transfer_in(s, row, None, actor, f"moved to the platform with agent {agent_id} deleted")
             continue
         record_in(
-            s, as_subject(StoredKind(row.kind)), row.name, await document_in(s, row), None, author, message
+            s, as_subject(StoredKind(row.kind)), row.name, await document_in(s, row), None, actor, message
         )
     await s.flush()

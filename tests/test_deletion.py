@@ -55,7 +55,7 @@ async def test_stopping_then_deleting_right_away_leaves_no_failed_delivery(conta
 
 async def test_deleting_an_agent_without_sessions_completes(container, make_agent):
     agent = await make_agent("alpha")
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     await drain(container)
 
     async with container.db.transaction() as s:
@@ -75,7 +75,7 @@ async def test_a_workspace_that_cannot_be_fully_removed_does_not_block_deleting_
     agent = await make_agent("alpha")
     container.agents.workspace(agent.id).mkdir(parents=True, exist_ok=True)
 
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     await drain(container)
 
     async with container.db.transaction() as s:
@@ -93,7 +93,7 @@ async def test_the_startup_check_does_not_report_an_agent_still_being_deleted(co
     agent = await make_agent("alpha")
     container.agents.workspace(agent.id).mkdir(parents=True, exist_ok=True)
     # 只标记、不投递：它的目录还在是正常的，删除流程会删
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
 
     await container.agents.verify_stored()
 
@@ -109,7 +109,7 @@ async def test_deleting_an_agent_removes_its_sessions_triggers_and_secrets(conta
     session = await start(container, agent.id, "hi")
     await drain(container)
 
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     # 删除进行中：不再出现在列表与名称解析里
     assert agent.id not in [a.id for a in await container.agents.list()]
     with pytest.raises(NotFound):
@@ -131,7 +131,7 @@ async def test_an_agent_marked_for_deletion_receives_no_new_mail(container, make
     await drain(container)
 
     # 删除标记一提交就拒绝来信，不等删除流程的事件投递：它的会话不会再变忙
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     for target in (NewChat(agent.id), session.id):
         with pytest.raises(NotFound, match="not found"):
             await container.sessions.receive(UserMessage(content="hello", session=target))
@@ -145,7 +145,7 @@ async def test_an_agent_marked_for_deletion_receives_no_new_mail(container, make
 async def test_an_agent_with_a_busy_session_is_not_deleted(container, make_agent, models):
     session, job, _recorder, agent = await start_job(container, make_agent, models, "sleep 30")
     with pytest.raises(Conflict, match="working"):
-        await container.agent_lifecycle.delete(agent.id, author="user")
+        await container.agent_lifecycle.delete(agent.id, actor="user")
     await container.stopper(session.id)
     await drain(container)
     await wait_until_done(container, job.id)
@@ -153,9 +153,9 @@ async def test_an_agent_with_a_busy_session_is_not_deleted(container, make_agent
 
 async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     agent = await make_agent("alpha")
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     with pytest.raises(Conflict, match="already being deleted"):
-        await container.agent_lifecycle.delete(agent.id, author="user")
+        await container.agent_lifecycle.delete(agent.id, actor="user")
     # 正在删除的 agent 不能再改，也不能再为它写资源或 secret
     with pytest.raises(NotFound):
         await container.agents.get_active(agent.id)
@@ -176,7 +176,7 @@ async def test_a_run_rerun_after_the_mark_is_stopped_and_the_agent_deleted(conta
     agent = await make_agent("alpha")
     session = await start(container, agent.id, "hi")
     await drain(container)
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     # 模拟人为重跑：会话的 lane 上又有一个运行在排队
     async with container.db.transaction() as s:
         rerun = container.queue.enqueue(
@@ -212,7 +212,7 @@ async def test_a_deleted_agents_thread_takes_no_new_delegation(container, make_a
     async with container.db.transaction() as s:
         await container.threads.send(s, parent_id=parent.id, agent=reviewer, thread="review", prompt="x")
     await drain(container)
-    await container.agent_lifecycle.delete(reviewer.id, author="user")
+    await container.agent_lifecycle.delete(reviewer.id, actor="user")
     await drain(container)
 
     with pytest.raises(Missing, match="not found"):
@@ -226,7 +226,7 @@ async def test_notifications_of_a_deleted_agents_sessions_go_with_them(container
     await drain(container)
     assert len(await container.notifications.list(10)) == 1
 
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     await drain(container)
 
     assert await container.notifications.list(10) == []
@@ -282,7 +282,7 @@ async def test_a_session_turned_busy_between_the_check_and_the_mark_is_stopped_a
         return False
 
     monkeypatch.setattr(container.agent_lifecycle, "_blockers", {"sessions": not_busy})
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     await drain(container)
     ended = await wait_until_done(container, job.id)
     await drain(container)
@@ -299,7 +299,7 @@ async def test_a_session_of_an_agent_marked_for_deletion_cannot_be_compacted(con
     agent = await make_agent("alpha")
     session = await start(container, agent.id, "hi")
     await drain(container)
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
 
     with pytest.raises(NotFound):
         await container.compactor.request(session.id)
@@ -361,7 +361,7 @@ async def test_deleting_an_agent_whose_run_is_executing_stops_it_and_completes(
     worker = asyncio.create_task(container.worker.run_forever())
     try:
         await asyncio.wait_for(started.wait(), 5)
-        await container.agent_lifecycle.delete(agent.id, author="user")
+        await container.agent_lifecycle.delete(agent.id, actor="user")
         from tests.test_flow import idle
 
         await idle(container)
@@ -385,7 +385,7 @@ async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(con
     await start(container, agent.id, "hi")
     await drain(container)
 
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     assert [a.id for a in await container.agents.list()].count(agent.id) == 0
     assert (await container.agents.names())[agent.id] == "alpha"
 
@@ -399,7 +399,7 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
 
     agent = await make_agent("alpha")
     await container.skills.write("s", "d", "b", actor="user", owner=agent.id)
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
 
     writes = [
         lambda: container.skills.write("t", "d", "b", actor="user", owner=agent.id),
@@ -428,9 +428,9 @@ async def test_agent_without_a_memory_row_can_still_be_deleted(container, make_a
 
     agent = await make_agent("alpha")
     async with container.db.transaction() as s:
-        await s.execute(Memory.__table__.delete().where(Memory.owner == agent.id))
+        await s.execute(Memory.__table__.delete().where(Memory.agent_id == agent.id))
 
-    await container.agent_lifecycle.delete(agent.id, author="user")
+    await container.agent_lifecycle.delete(agent.id, actor="user")
     # 删除的清理经事件完成
     await drain(container)
 

@@ -23,7 +23,7 @@ class _RunEventBase(BaseModel):
     session_id: str
     agent: str
     # 这一段的编号与事件序号（LiveRuns）：快照与 SSE 事件据此合并、去重、发现缺口
-    run_id: str
+    segment_id: str
     seq: int
 
 
@@ -46,8 +46,8 @@ RunEvent = Annotated[RunItemEvent | RunDeltaEvent, Field(discriminator="event")]
 
 
 @dataclass(frozen=True)
-class LiveRun:
-    run_id: str
+class LiveSegment:
+    segment_id: str
     # 这一段开始时会话最后一条已保存消息的 id：这之后保存的消息（这一段的回复）由这一段的事件展示，历史里先不显示
     after_message_id: int | None
     events: list[RunItemEvent | RunDeltaEvent]
@@ -59,67 +59,75 @@ class LiveRuns:
     一段从一次模型请求保存之后开始，包括模型的回复与它调用的工具，到下一次请求保存（或运行结束）为止。消费者每保存
     一次请求就换一段（step），发 saved 事件让前端重新拉取历史；回复在工具执行前就已保存，但这一段的事件已经在展示它，
     会话接口不在历史里重复显示（after_message_id）。和事件总线一样只是展示加速：进程重启时没保存的部分本来也会
-    重跑，缓存丢了无妨。事件带上这一段的 run_id 与递增的 seq，前端用它们把快照与之后经 SSE 收到的事件合并，并发现
+    重跑，缓存丢了无妨。事件带上这一段的 segment_id 与递增的 seq，前端用它们把快照与之后经 SSE 收到的事件合并，并发现
     两者之间的缺口。生命周期只由消费者管
     （sessions.consumer，begin / step / end）。
     """
 
     def __init__(self, bus: EventBus):
         self._bus = bus
-        self._runs: dict[str, LiveRun] = {}
+        self._segments: dict[str, LiveSegment] = {}
 
     def begin(self, session_id: str, after_message_id: int | None) -> None:
-        if session_id in self._runs:
+        if session_id in self._segments:
             # 同一会话同时只有一次运行（会话的 lane 串行）；已有记录说明上一次漏了 end 或这个前提被打破
             raise RuntimeError(f"session {session_id} already has a live run")
-        self._runs[session_id] = LiveRun(uuid.uuid4().hex, after_message_id, [])
+        self._segments[session_id] = LiveSegment(uuid.uuid4().hex, after_message_id, [])
 
     def step(self, session_id: str, after_message_id: int) -> None:
         """一次请求已经保存（事务已提交）：之后的事件属于新的一段。"""
-        if session_id not in self._runs:
+        if session_id not in self._segments:
             raise RuntimeError(f"step saved for session {session_id} outside a begun run")
-        self._runs[session_id] = LiveRun(uuid.uuid4().hex, after_message_id, [])
+        self._segments[session_id] = LiveSegment(uuid.uuid4().hex, after_message_id, [])
         self._bus.publish(SavedEvent(session_id=session_id))
 
     def end(self, session_id: str) -> None:
-        self._runs.pop(session_id, None)
+        self._segments.pop(session_id, None)
 
     def publish_item(self, session_id: str, agent: str, item: Item) -> None:
-        run = self._current(session_id)
+        segment = self._current(session_id)
         self._publish(
-            run,
+            segment,
             RunItemEvent(
-                session_id=session_id, agent=agent, run_id=run.run_id, seq=len(run.events), item=item
+                session_id=session_id,
+                agent=agent,
+                segment_id=segment.segment_id,
+                seq=len(segment.events),
+                item=item,
             ),
         )
 
     def publish_delta(
         self, session_id: str, agent: str, item_type: Literal["assistant", "thinking"], text: str
     ) -> None:
-        run = self._current(session_id)
+        segment = self._current(session_id)
         self._publish(
-            run,
+            segment,
             RunDeltaEvent(
                 session_id=session_id,
                 agent=agent,
-                run_id=run.run_id,
-                seq=len(run.events),
+                segment_id=segment.segment_id,
+                seq=len(segment.events),
                 item_type=item_type,
                 text=text,
             ),
         )
 
-    def _current(self, session_id: str) -> LiveRun:
-        run = self._runs.get(session_id)
-        if run is None:
+    def _current(self, session_id: str) -> LiveSegment:
+        segment = self._segments.get(session_id)
+        if segment is None:
             # 会话的每次运行都由消费者先 begin；没有说明调用方漏了这一步
             raise RuntimeError(f"run event for session {session_id} outside a begun run")
-        return run
+        return segment
 
-    def _publish(self, run: LiveRun, event: RunItemEvent | RunDeltaEvent) -> None:
-        run.events.append(event)
+    def _publish(self, segment: LiveSegment, event: RunItemEvent | RunDeltaEvent) -> None:
+        segment.events.append(event)
         self._bus.publish(event)
 
-    def snapshot(self, session_id: str) -> LiveRun | None:
-        run = self._runs.get(session_id)
-        return None if run is None else LiveRun(run.run_id, run.after_message_id, list(run.events))
+    def snapshot(self, session_id: str) -> LiveSegment | None:
+        segment = self._segments.get(session_id)
+        return (
+            None
+            if segment is None
+            else LiveSegment(segment.segment_id, segment.after_message_id, list(segment.events))
+        )

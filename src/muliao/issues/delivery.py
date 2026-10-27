@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agents.api import AgentArchived, agent_names_in
 from muliao.issues.graph import links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
-from muliao.issues.rules import USER, recipient
+from muliao.issues.rules import USER, agent_actor, recipient
 from muliao.issues.tables import ActivityKind, Issue, IssueActivity
 from muliao.notifications.events import Notify
 from muliao.platform.messaging import Messaging
@@ -34,18 +34,18 @@ class IssueDelivery:
         s: AsyncSession,
         assignee_before: str | None,
         issue: Issue,
-        actor: str | None,
+        actor: str,
         session_id: str | None,
         happened: Sequence[IssueActivity],
     ) -> Task | None:
         """issue 的字段变了（或刚建）：agent 把它交给用户时推送通知，再投递这些动态。"""
-        if actor is not None and issue.assignee == USER and assignee_before != USER:
+        if (agent := agent_actor(actor)) is not None and issue.assignee == USER and assignee_before != USER:
             # agent 把 issue 交给用户：推送通知，点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话
             # （打开会话即已读，会话删除时通知随之删除）
             self._messaging.send_in(
                 s,
                 Notify(
-                    agent_id=actor,
+                    agent_id=agent,
                     title=f"#{issue.id} 指派给你：{issue.title}",
                     body=f"状态 {issue.status}",
                     session_id=session_id,
@@ -58,14 +58,14 @@ class IssueDelivery:
         self,
         s: AsyncSession,
         issue: Issue,
-        actor: str | None,
+        actor: str,
         session_id: str | None,
         happened: Sequence[IssueActivity],
     ) -> Task | None:
         """在调用方的事务里把这次的动态投给该收到的 agent（rules.recipient），进它在这个 issue 上唯一的会话。返回要
         提交后马上执行的投递（run）。"""
         links = (await links_in(s, [issue.id]))[issue.id]
-        user_comment = actor is None and any(a.kind == ActivityKind.COMMENT for a in happened)
+        user_comment = actor == USER and any(a.kind == ActivityKind.COMMENT for a in happened)
         agent = recipient(
             snapshot(issue, links),
             user_comment=user_comment,
@@ -102,10 +102,10 @@ class IssueDelivery:
 
 
 async def _from_its_session_in(
-    s: AsyncSession, issue: Issue, actor: str | None, session_id: str | None
+    s: AsyncSession, issue: Issue, actor: str, session_id: str | None
 ) -> str | None:
     """动作是不是 agent 在它自己这个 issue 会话里做的：是则返回它（这次动态不投回那里）。"""
-    if actor is None or session_id is None:
+    if agent_actor(actor) is None or session_id is None:
         return None
     ref = str(issue.id)
     its_session = (await keyed_sessions_among(s, Origin.ISSUE, [ref]))[ref].get(actor)

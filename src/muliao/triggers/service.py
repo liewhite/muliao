@@ -8,7 +8,7 @@
 fire 先跑触发器的前置检查（若有，见 triggers.precheck）：没有事件就不调用 agent。检查在数据库事务之外执行。
 用户与 agent 的「立即运行一次」走 run：那是管理操作（见它的说明），不消耗一次性触发器预定的那一次。
 
-归档（finished_at）是所有触发方式共用的概念：这个触发器不会再触发了（一次性触发器用掉了它那一次）。归档的
+结束（finished_at）是所有触发方式共用的概念：这个触发器不会再触发了（一次性触发器用掉了它那一次）。已结束的
 不出现在默认列表、不能再修改启用或立即运行，但行与 id 保留，它发起过的会话因此仍查得到是谁发的。
 
 触发投的信件都没有用户在等（awaited = False），处理它的运行不推送，需要通知时由 agent 调用 notify_user。
@@ -161,9 +161,9 @@ async def previous_fire_state_in(s: AsyncSession, activity: SessionActivity, tri
 
 
 def finish_in(trigger: Trigger, now: datetime) -> None:
-    """归档：这个触发器不会再触发了（一次性触发器用掉了它那一次），在调用方的事务里改这一行（触发器领域内部用）。
+    """结束：这个触发器不会再触发了（一次性触发器用掉了它那一次），在调用方的事务里改这一行（触发器领域内部用）。
 
-    归档之后它不出现在默认列表里，也不能再修改、启用或立即运行；行保留着，它发起过的会话因此仍查得到
+    结束之后它不出现在默认列表里，也不能再修改、启用或立即运行；行保留着，它发起过的会话因此仍查得到
     是谁发的，同名的触发器也可以重新创建。
     """
     trigger.finished_at = now
@@ -323,7 +323,7 @@ class TriggerService:
     async def list(
         self, *, kind: str | None = None, enabled_only: bool = False, finished: bool = False
     ) -> list[Trigger]:
-        """默认只列还会触发的（按名称）；finished 为真时只列已归档的历史（按归档时间倒序）。"""
+        """默认只列还会触发的（按名称）；finished 为真时只列已结束的历史（按结束时间倒序）。"""
         query = (
             select(Trigger).where(Trigger.finished_at.isnot(None)).order_by(Trigger.finished_at.desc())
             if finished
@@ -337,16 +337,16 @@ class TriggerService:
             return list((await s.scalars(query)).all())
 
     async def _manageable_in(self, s: AsyncSession, trigger_id: int) -> Trigger:
-        """管理操作（修改、启用、立即运行）的前提：这个触发器还会触发。已归档的只能查看和删除。"""
+        """管理操作（修改、启用、立即运行）的前提：这个触发器还会触发。已结束的只能查看和删除。"""
         trigger = await trigger_in(s, trigger_id)
         if trigger.finished_at is not None:
             raise _finished(trigger.name)
         return trigger
 
     async def get_by_name(self, name: str) -> Trigger:
-        """按名称找还会触发的那个：名称只在未归档的触发器之间唯一，归档的只能按 id 指。
+        """按名称找还会触发的那个：名称只在未结束的触发器之间唯一，已结束的只能按 id 指。
 
-        这个名字只剩归档的触发器时说清楚是归档了，而不是「找不到」：它在归档列表里按名字看得见。
+        这个名字只剩已结束的触发器时说清楚它已结束，而不是「找不到」：它在已结束列表里按名字看得见。
         """
         async with self._db.transaction() as s:
             same_name = (await s.scalars(select(Trigger).where(Trigger.name == name))).all()
@@ -354,9 +354,9 @@ class TriggerService:
             if live:
                 return live[0]
             if same_name:
-                # 按名称的操作（含删除）都指不到归档的：别提示「可以删除」，说清楚它已是历史、无需清理
+                # 按名称的操作（含删除）都指不到已结束的：别提示「可以删除」，说清楚它已是历史、无需清理
                 raise Conflict(
-                    f"trigger {name!r} has finished and will not fire again; it is archived as history "
+                    f"trigger {name!r} has finished and will not fire again; it is kept as history "
                     "(see trigger_list(finished=true)), so there is nothing to change, run or delete"
                 )
             raise NotFound(f"trigger {name!r} not found")
@@ -411,8 +411,8 @@ class TriggerService:
         """所有触发方式的唯一出口，返回交给的会话 id。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
         检查失败记在触发器上并抛出 PrecheckFailed（触发器保持启用：脚本的故障往往是暂时的）。
 
-        这是激活机制的入口，不看触发器是否已归档（finished_at；不是 agent 的归档）：按到期时间触发的方式（triggers.due）在调用前就把这次到期消耗掉了，
-        一次性触发器那时已经归档。管理操作的「立即运行」走 run。
+        这是激活机制的入口，不看触发器是否已结束（finished_at）：按到期时间触发的方式（triggers.due）在调用前就把这次到期消耗掉了，
+        一次性触发器那时已经结束。管理操作的「立即运行」走 run。
 
         触发记下之后马上执行投信（run_now），通常返回时会话已经存在，调用方可以立即续写；做不到时由 worker 稍后投递。
         record_failure 为假时检查失败只上抛、不记在触发器上也不告警（见 run）。"""
@@ -434,7 +434,7 @@ class TriggerService:
         except PrecheckFailed:
             pass
         except AgentArchived as e:
-            # 定时与流式的只是跳过这一次；一次性触发器已用掉它那一次（到期时已归档），任务没做，agent 也收不到信：告诉用户
+            # 定时与流式的只是跳过这一次；一次性触发器已用掉它那一次（到期时已结束），任务没做，agent 也收不到信：告诉用户
             log.info("activated fire skipped: %s", e, extra={"trigger_id": trigger_id})
             await self._tell_user_once_skipped(trigger_id)
         except (Conflict, NotFound) as e:

@@ -64,12 +64,12 @@ def test_a_stopped_call_does_not_point_at_its_thread():
 
 
 def test_the_live_snapshot_points_pending_calls_at_their_threads():
-    from muliao.sessions.live import LiveRun, RunDeltaEvent, RunItemEvent
+    from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunItemEvent
     from muliao.sessions.service import _with_pending_threads
 
     [call_item] = to_items([ModelResponse(parts=[ASK])])
-    base = {"session_id": "s", "agent": "x", "run_id": "r"}
-    live = LiveRun(
+    base = {"session_id": "s", "agent": "x", "segment_id": "r"}
+    live = LiveSegment(
         "r",
         1,
         [
@@ -87,7 +87,7 @@ def test_event_sources_are_parsed_once_for_the_ui():
         JobSource,
         OtherSource,
         ThreadSource,
-        job_source,
+        job_holder,
         parse_source,
         thread_source,
     )
@@ -95,6 +95,6 @@ def test_event_sources_are_parsed_once_for_the_ui():
     assert parse_source(thread_source("abc-1")) == ThreadSource(
         kind="thread", raw="thread:abc-1", session_id="abc-1"
     )
-    assert parse_source(job_source(12)) == JobSource(kind="job", raw="job:12", job_id=12)
+    assert parse_source(job_holder(12)) == JobSource(kind="job", raw="job:12", job_id=12)
     assert parse_source("job:x") == OtherSource(kind="other", raw="job:x")
     assert parse_source("webhook") == OtherSource(kind="other", raw="webhook")

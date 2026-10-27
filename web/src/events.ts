@@ -1,13 +1,13 @@
 // 全局 SSE 连接。事件只用于实时展示；收到 task 状态变化或重连时，页面应从 API 重新拉取（数据库是唯一事实源）。
 
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { api, type Item, type LiveRun, type Schemas } from './api'
+import { api, type Item, type LiveSegment, type Schemas } from './api'
 
 /** 一条完整的会话条目（工具调用、工具结果），与历史同一个投影（后端 transcript）；文字可能截断过 */
 export type RunItemEvent = Schemas['RunItemEvent']
 /** 流式文字：接在同类的最后一条后面（或开始新的一条） */
 export type RunDeltaEvent = Schemas['RunDeltaEvent']
-/** run_id 与 seq：这一段的编号与事件序号（后端 sessions.live.LiveRuns），快照与 SSE 事件据此合并、去重 */
+/** segment_id 与 seq：这一段的编号与事件序号（后端 sessions.live.LiveRuns），快照与 SSE 事件据此合并、去重 */
 export type RunEvent = RunItemEvent | RunDeltaEvent
 
 export interface MergedLive {
@@ -24,10 +24,10 @@ export interface MergedLive {
  * （上一段已保存，在历史里）。没有快照（运行已结束或还没开始）时保留已收到的事件，由随后的任务状态事件清空；
  * 收到的事件不是从这一段的开头起（快照生成时这一段还没开始、SSE 连上时已经开始了），同样是缺口。
  */
-export function mergeLive(snapshot: LiveRun | null, current: RunEvent[]): MergedLive {
+export function mergeLive(snapshot: LiveSegment | null, current: RunEvent[]): MergedLive {
   if (snapshot === null) return { events: current, gap: current.length > 0 && current[0].seq !== 0 }
   const last = snapshot.events.at(-1)?.seq ?? -1
-  const after = current.filter((e) => e.run_id === snapshot.run_id && e.seq > last)
+  const after = current.filter((e) => e.segment_id === snapshot.segment_id && e.seq > last)
   return { events: [...snapshot.events, ...after], gap: after.length > 0 && after[0].seq !== last + 1 }
 }
 
@@ -36,10 +36,10 @@ export function mergeLive(snapshot: LiveRun | null, current: RunEvent[]): Merged
  * 更早的段的都可以删（SSE 按顺序到达，之前收到的不会比 next 新）。next 是快照之后的新一段（保存了一步、新快照还没
  * 拉回来）或还没有快照时全部留着：新快照可能生成得比这些事件早，要靠它们接上。
  */
-export function withoutCovered(snapshot: LiveRun | null, current: RunEvent[], next: RunEvent): RunEvent[] {
-  if (snapshot === null || next.run_id !== snapshot.run_id) return current
+export function withoutCovered(snapshot: LiveSegment | null, current: RunEvent[], next: RunEvent): RunEvent[] {
+  if (snapshot === null || next.segment_id !== snapshot.segment_id) return current
   const last = snapshot.events.at(-1)?.seq ?? -1
-  return current.filter((e) => e.run_id === snapshot.run_id && e.seq > last)
+  return current.filter((e) => e.segment_id === snapshot.segment_id && e.seq > last)
 }
 
 /** 这一段的条目：完整条目原样接上，文字增量接在同类的最后一条后面（思考与回答交替时各自成条） */

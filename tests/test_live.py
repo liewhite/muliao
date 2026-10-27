@@ -40,7 +40,7 @@ async def test_a_page_opened_mid_turn_sees_the_turn_from_its_start(client, conta
     assert live is not None
     kinds = [(_label(e), e["seq"]) for e in live["events"]]
     assert kinds[0] == ("assistant", 0) and ("tool_call", len(kinds) - 1) in kinds
-    assert all(e["run_id"] == live["run_id"] for e in live["events"])
+    assert all(e["segment_id"] == live["segment_id"] for e in live["events"])
 
     await worker
     detail = (await client.get(f"/api/sessions/{session_id}")).json()

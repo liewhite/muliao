@@ -37,7 +37,14 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.output import tail, wait_exit_code
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, spawn_bash
 from muliao.platform.tasks import Clock, Commit, no_commit
-from muliao.sessions.api import SessionWork, check_due, hold_registered_in, job_id_of, job_source, session_in
+from muliao.sessions.api import (
+    SessionWork,
+    check_due,
+    hold_registered_in,
+    job_holder,
+    job_id_of_holder,
+    session_in,
+)
 from muliao.sessions.events import SessionStopped, WorkCheckIn, WorkEnded
 from muliao.workspace.process import Recorder
 from muliao.workspace.tables import Job, JobStatus
@@ -178,7 +185,7 @@ class JobRunner:
         log_file = workspace / job.log_path
         try:
             # 先在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上），再起进程
-            await self._sessions.hold(job.session_id, job_source(job.id), awaited=awaited)
+            await self._sessions.hold(job.session_id, job_holder(job.id), awaited=awaited)
             await asyncio.to_thread(log_file.parent.mkdir, parents=True, exist_ok=True)
             proc = await spawn_bash(job.command, cwd=workspace, secrets=values, merge_stderr=True)
         except BaseException as e:
@@ -249,7 +256,7 @@ class JobRunner:
         删掉这一行；否则记为被中断，交回会话并释放占用（会话已删除时交回得到「会话已不在」，行照样保留终态）。占用行
         随会话删除，所以「没登记过」只在会话还在时成立；会话与占用的存在都只会单向变化，在本事务里读没有竞态。"""
         if await session_in(s, job.session_id) is not None and not await hold_registered_in(
-            s, job.session_id, job_source(job.id)
+            s, job.session_id, job_holder(job.id)
         ):
             await s.delete(job)
             log.info("background job that never started discarded", extra={"job_id": job.id})
@@ -359,7 +366,7 @@ class JobRunner:
     def _report_in(self, s: AsyncSession, job: Job, text: str) -> None:
         """结局与「一定交回会话」同一个事务（定向命令）：会话投一封事件信件并释放占用；会话已被停止（占用已清掉）
         或已删除时不投。"""
-        self._messaging.send_in(s, WorkEnded(session_id=job.session_id, holder=job_source(job.id), text=text))
+        self._messaging.send_in(s, WorkEnded(session_id=job.session_id, holder=job_holder(job.id), text=text))
 
     async def kill(self, job_id: int, agent_id: str) -> None:
         """结束这个 agent 的一个运行中的任务；结果（KILLED）随后作为事件到达。"""
@@ -383,7 +390,7 @@ class JobRunner:
         占用已经清掉，结局不再投信。没有监督者的（监督意外结束）由 check 的对账收敛。"""
         stopped = []
         for holder in event.cleared:
-            job_id = job_id_of(holder)
+            job_id = job_id_of_holder(holder)
             if job_id is None:
                 continue
             handle = self._running.get(job_id)
@@ -458,7 +465,7 @@ class JobRunner:
                     continue
                 text = _check_text(job, self._clock(), tails[job.id])
                 self._messaging.send_in(
-                    s, WorkCheckIn(session_id=job.session_id, holder=job_source(job.id), text=text)
+                    s, WorkCheckIn(session_id=job.session_id, holder=job_holder(job.id), text=text)
                 )
                 self._last_check[job.id] = now
                 sent += 1

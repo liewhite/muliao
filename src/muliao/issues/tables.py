@@ -66,8 +66,8 @@ class Issue(Base):
     # 负责的项目（agent）：创建时必填，不随指派变化，只能显式修改；按它筛选看一个项目的全部来龙去脉。
     # 只在负责的 agent 被删除时变为空
     owner_agent_id: Mapped[str | None] = mapped_column(agent_ref(), index=True)
-    # 创建者：agent id，用户创建的为 None
-    creator_agent_id: Mapped[str | None] = mapped_column(agent_ref())
+    # 创建者：agent id，用户创建的为 USER（agents.api）
+    creator: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
@@ -77,7 +77,7 @@ class Issue(Base):
 class IssueActivity(Base):
     """issue 时间线上的一条：评论（body），或一次属性变化（change 为 {"from": ..., "to": ...}）。只增不改。
 
-    actor_agent_id 为做这件事的 agent，用户做的为 None，系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR。
+    actor 为做这件事的 agent 的 id，用户做的为 USER（agents.api），系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR。
     RUN_FAILED 由平台记下，actor 是运行失败的那个 agent（这件事的主体）。
     """
 
@@ -86,7 +86,7 @@ class IssueActivity(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     issue_id: Mapped[int] = mapped_column(ForeignKey("issues.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-    actor_agent_id: Mapped[str | None] = mapped_column(agent_ref())
+    actor: Mapped[str] = mapped_column(String(32))
     kind: Mapped[ActivityKind] = mapped_column(StrEnumType(ActivityKind))
     body: Mapped[str | None] = mapped_column(Text)
     change: Mapped[dict[str, Any] | None] = mapped_column(JSON)

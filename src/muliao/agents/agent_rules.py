@@ -79,7 +79,7 @@ async def check_agent_rules_in(s: AsyncSession, rules: AgentRules, before: Agent
 
 
 async def create_agent_rules_in(
-    s: AsyncSession, agent_id: str, rules: AgentRules, author: str, message: str
+    s: AsyncSession, agent_id: str, rules: AgentRules, actor: str, message: str
 ) -> None:
     """新建 agent 的规则，在插入它的行的同一事务里（目录子域 AgentService.create）。"""
     await check_agent_rules_in(s, rules)
@@ -88,25 +88,25 @@ async def create_agent_rules_in(
             agent_id=agent_id, roles=list(rules.roles), allow=list(rules.allow), deny=list(rules.deny)
         )
     )
-    record_in(s, Subject.AGENT, agent_id, None, rules.document(), author, message)
+    record_in(s, Subject.AGENT, agent_id, None, rules.document(), actor, message)
 
 
 async def update_agent_rules_in(
-    s: AsyncSession, agent_id: str, rules: AgentRules, author: str, message: str
+    s: AsyncSession, agent_id: str, rules: AgentRules, actor: str, message: str
 ) -> None:
     """整体替换 agent 的规则（AgentService.update 与它别的字段同一事务），记一版（没变时 record_in 不记）。"""
     row = await _row_in(s, agent_id)
     before = _of(row)
     await check_agent_rules_in(s, rules, before)
-    record_in(s, Subject.AGENT, agent_id, before.document(), rules.document(), author, message)
+    record_in(s, Subject.AGENT, agent_id, before.document(), rules.document(), actor, message)
     # JSON 列只在整体赋值时被追踪
     row.roles, row.allow, row.deny = list(rules.roles), list(rules.allow), list(rules.deny)
 
 
-async def record_rules_deleted_in(s: AsyncSession, agent_id: str, author: str, message: str) -> None:
+async def record_rules_deleted_in(s: AsyncSession, agent_id: str, actor: str, message: str) -> None:
     """agent 删除时为它的规则记一版删除（行随 agent 的行级联删除；版本表留作审计）。"""
     record_in(
-        s, Subject.AGENT, agent_id, (await agent_rules_in(s, agent_id)).document(), None, author, message
+        s, Subject.AGENT, agent_id, (await agent_rules_in(s, agent_id)).document(), None, actor, message
     )
 
 

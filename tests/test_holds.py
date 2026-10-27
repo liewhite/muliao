@@ -69,7 +69,7 @@ async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_
         async with container.db.transaction() as s:
             await container.threads.dispatch(
                 s,
-                owner_id=parent.id,
+                parent_id=parent.id,
                 agent=reviewer,
                 thread="review",
                 prompt="y",
@@ -178,7 +178,7 @@ async def test_a_thread_hands_its_outcome_back_in_the_transaction_that_settles_i
     async with container.db.transaction() as s:
         child = await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=reviewer,
             thread="review",
             prompt="check",
@@ -276,7 +276,7 @@ async def test_reconcile_settles_delegations_whose_failure_hook_failed(
     async with container.db.transaction() as s:
         await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=reviewer,
             thread="review",
             prompt="check",
@@ -331,7 +331,7 @@ async def test_stopping_a_thread_hands_back_at_once_and_deleting_its_agent_later
     async with container.db.transaction() as s:
         await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=reviewer,
             thread="review",
             prompt="check",
@@ -343,7 +343,7 @@ async def test_stopping_a_thread_hands_back_at_once_and_deleting_its_agent_later
     [child] = await threads_of(container, parent.id)
     # thread 被停止：同一个事务里结清并交回
     await container.stopper(child.id)
-    await container.agent_lifecycle.delete(reviewer_id, author="user")
+    await container.agent_lifecycle.delete(reviewer_id, actor="user")
 
     await drain(container)
 
@@ -370,7 +370,7 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
     async with container.db.transaction() as s:
         child = await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=reviewer,
             thread="review",
             prompt="look",
@@ -421,7 +421,7 @@ async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_fail
         async with container.db.transaction() as s:
             return await container.threads.dispatch(
                 s,
-                owner_id=parent.id,
+                parent_id=parent.id,
                 agent=reviewer,
                 thread="review",
                 prompt=key,
@@ -472,7 +472,7 @@ async def test_a_thread_settling_a_delegation_its_existing_asker_has_no_hold_for
     async with container.db.transaction() as s:
         child = await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=reviewer,
             thread="review",
             prompt="check",
@@ -506,7 +506,7 @@ async def test_deleting_an_asker_together_with_its_private_thread_drops_the_thre
     async with container.db.transaction() as s:
         child = await container.threads.dispatch(
             s,
-            owner_id=parent.id,
+            parent_id=parent.id,
             agent=reviewer,
             thread="ask",
             prompt="check",

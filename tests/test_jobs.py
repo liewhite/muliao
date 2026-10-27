@@ -451,7 +451,7 @@ async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_s
     async with c.running():
         agent = await c.agents.create(
             AgentSpec(name="alpha", description="d", model="m"),
-            author="user",
+            actor="user",
         )
         session = await start(c, agent.id, "hi", origin=Origin.TRIGGER)
         job = await c.jobs.start(

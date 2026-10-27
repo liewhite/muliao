@@ -423,7 +423,7 @@ export function AgentDetail() {
               </Button>
             </Tabs.Panel>
             <Tabs.Panel id="memory" className="pt-3">
-              <MemoryEditor owner={a.id} hint="agent 每次运行都会看到全部记忆，也会自行修改" />
+              <MemoryEditor agent={a.id} hint="agent 每次运行都会看到全部记忆，也会自行修改" />
             </Tabs.Panel>
             <Tabs.Panel id="history" className="pt-3">
               <HistoryList owner={a.id} />

@@ -62,7 +62,7 @@ async def test_an_imported_skill_exports_the_same_files_and_keeps_extra_frontmat
         modes = {i.filename: (i.external_attr >> 16) & 0o777 for i in archive.infolist()}
     assert (modes["digest/run.sh"], modes["digest/SKILL.md"]) == (0o755, 0o644)
     [revision] = await history(container, Subject.SKILL, "digest", 10)
-    assert (revision.author, revision.message) == ("user", "import skill digest")
+    assert (revision.actor, revision.message) == ("user", "import skill digest")
 
 
 async def test_importing_over_an_existing_skill_needs_replace_and_then_swaps_its_files(container, make_agent):
@@ -122,7 +122,7 @@ async def test_files_that_would_not_be_kept_are_skipped_and_listed(container, ma
 
 async def test_importing_for_an_unavailable_owner_is_refused(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await container.agent_lifecycle.delete(alpha, author="user")
+    await container.agent_lifecycle.delete(alpha, actor="user")
     with pytest.raises(NotFound):
         await container.skills.import_package(
             _zip({"digest/SKILL.md": SKILL_MD}), actor="user", owner=alpha, replace=False

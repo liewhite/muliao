@@ -27,10 +27,10 @@ class ThreadInfo(BaseModel):
     # true：ask_agent 开出的、只有你能继续的 thread；false：用户也能看到并回复
     private: bool
     # running：在处理；waiting：在等它自己开出的后台任务、委派或提问的回答，还没做完；idle：没有进行中的事
-    status: WorkState
+    state: WorkState
     # 最近一次运行最终失败时的错误说明
     failure: str | None
-    # 它最近的回答摘录（还没有回答时为 None）；status 不是 idle 时是中间的回答，不是结局
+    # 它最近的回答摘录（还没有回答时为 None）；state 不是 idle 时是中间的回答，不是结局
     answer: str | None
 
 
@@ -92,7 +92,7 @@ def delegation_toolset(
                 # 续跑重新执行这次调用时按调用 id 去重
                 child = await threads.dispatch(
                     s,
-                    owner_id=parent_id,
+                    parent_id=parent_id,
                     agent=target,
                     thread=thread,
                     prompt=task,
@@ -153,7 +153,7 @@ def delegation_toolset(
             # 续跑时重新执行这次调用：已经投过就只再挂起（Threads.dispatch 按调用 id 幂等）
             await threads.dispatch(
                 s,
-                owner_id=parent_id,
+                parent_id=parent_id,
                 agent=target,
                 thread=thread,
                 prompt=message,
@@ -204,8 +204,8 @@ def delegation_toolset(
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
         """List the threads this conversation has opened (each is one agent + name). Returns a JSON array of \
-threads, each with `thread`, `agent`, `private`, `status`, `failure` and `answer`. Use it to look at delegated \
-work, e.g. after a check-in event, before deciding to keep waiting or `stop_thread`. `status`: running (working \
+threads, each with `thread`, `agent`, `private`, `state`, `failure` and `answer`. Use it to look at delegated \
+work, e.g. after a check-in event, before deciding to keep waiting or `stop_thread`. `state`: running (working \
 now), waiting (its run ended but it is waiting for work it started or answers it asked for: not finished yet), \
 idle (nothing in progress). `answer` is its latest reply; while it is not idle that reply is intermediate, not its \
 result. `failure` is set when its latest run failed for good."""
@@ -219,9 +219,9 @@ result. `failure` is set when its latest run failed for good."""
                 thread=v.thread,
                 agent=names[v.agent_id],
                 private=policy_of(v.kind).private,
-                status=v.state.work,
-                failure=v.state.failure,
-                answer=truncate(v.state.answer, _ANSWER_PREVIEW) if v.state.answer else None,
+                state=v.progress.state,
+                failure=v.progress.failure,
+                answer=truncate(v.progress.answer, _ANSWER_PREVIEW) if v.progress.answer else None,
             )
             for v in views
         ]

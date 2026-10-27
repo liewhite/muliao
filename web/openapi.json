@@ -1957,11 +1957,11 @@
     "/api/memory": {
       "get": {
         "summary": "Get Memory",
-        "description": "owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。",
+        "description": "agent 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。",
         "operationId": "get_memory_api_memory_get",
         "parameters": [
           {
-            "name": "owner",
+            "name": "agent",
             "in": "query",
             "required": false,
             "schema": {
@@ -1973,7 +1973,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Owner"
+              "title": "Agent"
             }
           }
         ],
@@ -2040,11 +2040,11 @@
     "/api/memory/history": {
       "get": {
         "summary": "Memory History",
-        "description": "owner 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。",
+        "description": "agent 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。",
         "operationId": "memory_history_api_memory_history_get",
         "parameters": [
           {
-            "name": "owner",
+            "name": "agent",
             "in": "query",
             "required": false,
             "schema": {
@@ -2056,7 +2056,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Owner"
+              "title": "Agent"
             }
           }
         ],
@@ -2213,11 +2213,11 @@
             "required": false,
             "schema": {
               "type": "boolean",
-              "description": "列已归档的（跑完的一次性触发器）而不是还会触发的",
+              "description": "列已结束的（跑完的一次性触发器）而不是还会触发的",
               "default": false,
               "title": "Finished"
             },
-            "description": "列已归档的（跑完的一次性触发器）而不是还会触发的"
+            "description": "列已结束的（跑完的一次性触发器）而不是还会触发的"
           }
         ],
         "responses": {
@@ -2434,7 +2434,7 @@
     "/api/triggers/{trigger_id}/run": {
       "post": {
         "summary": "Run Trigger",
-        "description": "立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。\n\n不消耗一次性触发器预定的那一次；已归档的触发器不能再运行。",
+        "description": "立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。\n\n不消耗一次性触发器预定的那一次；已结束的触发器不能再运行。",
         "operationId": "run_trigger_api_triggers__trigger_id__run_post",
         "parameters": [
           {
@@ -3410,16 +3410,9 @@
             "format": "date-time",
             "title": "Created At"
           },
-          "actor_agent_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Actor Agent Id"
+          "actor": {
+            "type": "string",
+            "title": "Actor"
           },
           "kind": {
             "$ref": "#/components/schemas/ActivityKind"
@@ -3452,7 +3445,7 @@
         "required": [
           "id",
           "created_at",
-          "actor_agent_id",
+          "actor",
           "kind",
           "body",
           "change"
@@ -4307,16 +4300,9 @@
             ],
             "title": "Assignee"
           },
-          "creator_agent_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Creator Agent Id"
+          "creator": {
+            "type": "string",
+            "title": "Creator"
           },
           "sessions": {
             "additionalProperties": {
@@ -4325,7 +4311,7 @@
             "type": "object",
             "title": "Sessions"
           },
-          "assignee_session": {
+          "assignee_state": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/WorkState"
@@ -4388,9 +4374,9 @@
           "priority",
           "owner",
           "assignee",
-          "creator_agent_id",
+          "creator",
           "sessions",
-          "assignee_session",
+          "assignee_state",
           "stalled",
           "depends_on",
           "blocks",
@@ -4682,11 +4668,11 @@
         ],
         "title": "JobSource"
       },
-      "LiveRunOut": {
+      "LiveSegmentOut": {
         "properties": {
-          "run_id": {
+          "segment_id": {
             "type": "string",
-            "title": "Run Id"
+            "title": "Segment Id"
           },
           "events": {
             "items": {
@@ -4712,10 +4698,10 @@
         },
         "type": "object",
         "required": [
-          "run_id",
+          "segment_id",
           "events"
         ],
-        "title": "LiveRunOut"
+        "title": "LiveSegmentOut"
       },
       "LoginIn": {
         "properties": {
@@ -5147,7 +5133,7 @@
       },
       "MemoryIn": {
         "properties": {
-          "owner": {
+          "agent": {
             "anyOf": [
               {
                 "type": "string"
@@ -5156,7 +5142,7 @@
                 "type": "null"
               }
             ],
-            "title": "Owner"
+            "title": "Agent"
           },
           "content": {
             "type": "string",
@@ -5165,7 +5151,7 @@
         },
         "type": "object",
         "required": [
-          "owner",
+          "agent",
           "content"
         ],
         "title": "MemoryIn"
@@ -5190,7 +5176,7 @@
       },
       "MemoryRestoreIn": {
         "properties": {
-          "owner": {
+          "agent": {
             "anyOf": [
               {
                 "type": "string"
@@ -5199,7 +5185,7 @@
                 "type": "null"
               }
             ],
-            "title": "Owner"
+            "title": "Agent"
           },
           "rev": {
             "type": "integer",
@@ -5800,9 +5786,9 @@
             ],
             "title": "Before"
           },
-          "author": {
+          "actor": {
             "type": "string",
-            "title": "Author"
+            "title": "Actor"
           },
           "message": {
             "type": "string",
@@ -5823,7 +5809,7 @@
           "rev",
           "content",
           "before",
-          "author",
+          "actor",
           "message",
           "created_at",
           "restorable"
@@ -5975,9 +5961,9 @@
             "type": "string",
             "title": "Agent"
           },
-          "run_id": {
+          "segment_id": {
             "type": "string",
-            "title": "Run Id"
+            "title": "Segment Id"
           },
           "seq": {
             "type": "integer",
@@ -6006,7 +5992,7 @@
         "required": [
           "session_id",
           "agent",
-          "run_id",
+          "segment_id",
           "seq",
           "item_type",
           "text"
@@ -6030,9 +6016,9 @@
             "type": "string",
             "title": "Agent"
           },
-          "run_id": {
+          "segment_id": {
             "type": "string",
-            "title": "Run Id"
+            "title": "Segment Id"
           },
           "seq": {
             "type": "integer",
@@ -6052,7 +6038,7 @@
         "required": [
           "session_id",
           "agent",
-          "run_id",
+          "segment_id",
           "seq",
           "item"
         ],
@@ -6442,7 +6428,7 @@
           "live": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/LiveRunOut"
+                "$ref": "#/components/schemas/LiveSegmentOut"
               },
               {
                 "type": "null"

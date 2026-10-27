@@ -10,6 +10,9 @@ from sqlalchemy import text
 import muliao.platform.db
 from muliao.platform.db import Base, Database, alembic_config, create_engine, include_name, migrate
 
+# 统一语言（#246）改列名之前的最后一版：测更早迁移的用例停在这里，再从这里降级
+BEFORE_UNIFIED_LANGUAGE = "101643b15832"
+
 
 def _tables(path) -> set[str]:  # noqa: ANN001
     with sqlite3.connect(path) as conn:
@@ -170,7 +173,7 @@ def test_issue_assignees_merge_into_one_column_and_back(tmp_path):
             )
         conn.execute("delete from issues where id = 3")
 
-    migrate(path)
+    migrate(path, BEFORE_UNIFIED_LANGUAGE)
     with sqlite3.connect(path) as conn:
         assert conn.execute("select id, assignee from issues order by id").fetchall() == [
             (1, "a1a1a1a1a1a1"),
@@ -200,7 +203,7 @@ def test_issue_dependencies_downgrade_drops_the_table_and_its_activities(tmp_pat
     from muliao.platform.db import _migration_engine
 
     path = tmp_path / "m.db"
-    migrate(path)
+    migrate(path, BEFORE_UNIFIED_LANGUAGE)
     with sqlite3.connect(path) as conn:
         for id_ in (1, 2):
             conn.execute(
@@ -911,7 +914,7 @@ def test_agent_rules_move_to_their_own_table_and_downgrade(tmp_path):
         )
         conn.execute("insert into memories (owner, content, updated_at) values ('a2', 'remember', ?)", (t,))
 
-    migrate(path)
+    migrate(path, BEFORE_UNIFIED_LANGUAGE)
 
     with sqlite3.connect(path) as conn:
         assert not {"roles", "allow", "deny"} & {r[1] for r in conn.execute("pragma table_info(agents)")}
@@ -979,7 +982,7 @@ def test_delegation_parameters_move_to_their_own_table_and_downgrade(tmp_path):
             (t,),
         )
 
-    migrate(path)
+    migrate(path, BEFORE_UNIFIED_LANGUAGE)
 
     with sqlite3.connect(path) as conn:
         assert not {"check_seconds", "deadline"} & {
@@ -1004,3 +1007,123 @@ def test_delegation_parameters_move_to_their_own_table_and_downgrade(tmp_path):
             ("delegation:p:k2", None, "2026-01-01 00:05:00"),
             ("job:1", None, None),
         ]
+
+
+def test_unified_language_renames_columns_marks_the_user_and_downgrades(tmp_path):
+    """#246：issue 的创建者与时间线 actor 里用户由 NULL 换成 'user'（两列 NOT NULL、编号不复用），记忆的 owner、
+    版本的 author、委派的 session_id 改名，数据不变。降级换回 NULL 与原列名。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, BEFORE_UNIFIED_LANGUAGE)
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', ?, ?)",
+            (t, t),
+        )
+        conn.executemany(
+            "insert into issues (id, title, description, status, priority, creator_agent_id, created_at, "
+            "updated_at) values (?, 't', '', 'todo', 'none', ?, ?, ?)",
+            [(1, None, t, t), (2, "a1", t, t), (3, None, t, t)],
+        )
+        conn.executemany(
+            "insert into issue_activities (id, issue_id, created_at, actor_agent_id, kind) values (?, 1, ?, ?, ?)",
+            [
+                (1, t, None, "created"),
+                (2, t, "a1", "comment"),
+                (3, t, "system", "assignee"),
+                (4, t, None, "x"),
+            ],
+        )
+        conn.execute("delete from issues where id = 3")
+        conn.execute("delete from issue_activities where id = 4")
+        conn.executemany(
+            "insert into memories (owner, content, updated_at) values (?, ?, ?)",
+            [(None, "g", t), ("a1", "m", t)],
+        )
+        conn.execute(
+            "insert into revisions (subject, name, before, after, author, message, created_at) "
+            "values ('memory', 'a1', NULL, 'm', 'user', 'x', ?)",
+            (t,),
+        )
+        conn.executemany(
+            "insert into sessions (id, agent_id, title, origin, origin_ref, parent_session_id, thread, kind, "
+            "created_at, updated_at) values (?, 'a1', 't', ?, NULL, ?, ?, ?, ?, ?)",
+            [("p", "user", None, None, "conversation", t, t), ("c", "delegation", "p", "r", "thread", t, t)],
+        )
+        conn.execute(
+            "insert into delegations (holder, session_id, thread_session_id, created_at) "
+            "values ('delegation:p:k', 'p', 'c', ?)",
+            (t,),
+        )
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, creator from issues order by id").fetchall() == [
+            (1, "user"),
+            (2, "a1"),
+        ]
+        assert conn.execute("select id, actor from issue_activities order by id").fetchall() == [
+            (1, "user"),
+            (2, "a1"),
+            (3, "system"),
+        ]
+        assert {r[1]: r[3] for r in conn.execute("pragma table_info(issues)")}["creator"] == 1
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "insert into issue_activities (issue_id, created_at, actor, kind) values (1, ?, NULL, 'x')",
+                (t,),
+            )
+        # 删掉的编号不复用
+        conn.execute(
+            "insert into issues (title, description, status, priority, creator, created_at, updated_at) "
+            "values ('t', '', 'todo', 'none', 'user', ?, ?)",
+            (t, t),
+        )
+        conn.execute(
+            "insert into issue_activities (issue_id, created_at, actor, kind) values (1, ?, 'user', 'x')",
+            (t,),
+        )
+        assert conn.execute("select max(id) from issues").fetchone()[0] == 4
+        assert conn.execute("select max(id) from issue_activities").fetchone()[0] == 5
+        assert sorted(conn.execute("select agent_id, content from memories"), key=str) == [
+            ("a1", "m"),
+            (None, "g"),
+        ]
+        assert conn.execute("select actor from revisions").fetchall() == [("user",)]
+        assert conn.execute("select holder, parent_session_id from delegations").fetchall() == [
+            ("delegation:p:k", "p")
+        ]
+
+    # 外键随列改名：删发起会话时委派随之删除（foreign_keys 只在事务外打开才生效）
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.execute("pragma foreign_keys = on")
+    conn.execute("insert into delegations (holder, parent_session_id, created_at) values ('d', 'c', ?)", (t,))
+    conn.execute("delete from sessions where id = 'c'")
+    assert conn.execute("select holder from delegations").fetchall() == [("delegation:p:k",)]
+    conn.close()
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), BEFORE_UNIFIED_LANGUAGE)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, creator_agent_id from issues order by id").fetchall() == [
+            (1, None),
+            (2, "a1"),
+            (4, None),
+        ]
+        assert conn.execute("select actor_agent_id from issue_activities order by id").fetchall() == [
+            (None,),
+            ("a1",),
+            ("system",),
+            (None,),
+        ]
+        assert sorted(conn.execute("select owner, content from memories"), key=str) == [
+            ("a1", "m"),
+            (None, "g"),
+        ]
+        assert conn.execute("select author from revisions").fetchall() == [("user",)]
+        assert "session_id" in {r[1] for r in conn.execute("pragma table_info(delegations)")}

@@ -62,7 +62,7 @@ type ConfigChange = (c: Config | null) => void
 /** 各触发方式在界面上的名字；summary 是选择方式时的一句话说明（后端的 description 是写给 agent 的，太长） */
 const KIND_LABELS: Record<TriggerKindName, { label: string; summary: string }> = {
   schedule: { label: '定时', summary: '按 cron 表达式周期运行' },
-  once: { label: '一次性', summary: '到指定时间运行一次，之后移入「已完成」' },
+  once: { label: '一次性', summary: '到指定时间运行一次，之后移入「已结束」' },
   webhook: { label: 'Webhook', summary: '收到 HTTP POST 时运行' },
   stream: { label: '流式', summary: '托管一条常驻命令，它输出的每一行是一个事件' },
 }
@@ -102,7 +102,7 @@ function RunAtEditor({ config, onChange }: { config: Schemas['OnceConfig']; onCh
   return (
     <TextInput
       label="触发时间"
-      hint="按服务端配置文件中的 timezone 解释；必须是将来的时间。触发一次之后它就从列表里消失，在「已完成」里还能看到结果"
+      hint="按服务端配置文件中的 timezone 解释；必须是将来的时间。触发一次之后它就从列表里消失，在「已结束」里还能看到结果"
       type="datetime-local"
       value={at}
       onChange={(value) => {
@@ -484,10 +484,10 @@ function TriggerCard({
   onChange,
 }: {
   trigger: Trigger
-  /** 不按 agent 分组的列表（已完成）在卡片上标出 agent；分组里组头已经写了 */
+  /** 不按 agent 分组的列表（已结束）在卡片上标出 agent；分组里组头已经写了 */
   agentName?: string
   onOpen: () => void
-  /** 已归档的触发器不能启停，不传 */
+  /** 已结束的触发器不能启停，不传 */
   onChange?: () => void
 }) {
   const warning = triggerWarning(trigger)
@@ -777,7 +777,7 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   )
 }
 
-/** 已归档的触发器（跑完的一次性触发器）的详情：只能看结果与删除，不能再改、启用或运行 */
+/** 已结束的触发器（跑完的一次性触发器）的详情：只能看结果与删除，不能再改、启用或运行 */
 function FinishedTrigger({ trigger, agents, onChange }: { trigger: Trigger; agents: Agent[] | undefined; onChange: () => void }) {
   const from = useReturnState()
   const confirm = useConfirm()
@@ -862,7 +862,7 @@ export default function Triggers() {
   const agents = useAgents()
   // 详情跟着列表走：重新加载后显示最新内容，删掉后自动关闭
   const [openId, setOpenId] = useState<number | null>(null)
-  // 展开时才取已完成的列表，顺便每次展开都是最新的
+  // 展开时才取已结束的列表，顺便每次展开都是最新的
   const [showFinished, setShowFinished] = useState(false)
   const reload = () => void triggers.reload()
   return (
@@ -903,7 +903,7 @@ export default function Triggers() {
             <Disclosure.Heading>
               <Disclosure.Trigger className="flex w-full items-center gap-2 px-1 font-medium">
                 <Archive className="size-4" />
-                已完成
+                已结束
                 <Disclosure.Indicator className="ml-auto" />
               </Disclosure.Trigger>
             </Disclosure.Heading>

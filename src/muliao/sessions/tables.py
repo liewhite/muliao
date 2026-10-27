@@ -180,7 +180,7 @@ class Delegation(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     # 发起方占用的占用者，也是 thread 信件的关联 id：delegation:<发起会话>:<工具调用 id>
     holder: Mapped[str] = mapped_column(String(200))
-    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    parent_session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
     # 做这项委派的 thread；thread 被删除后为 None（那时委派已经以「被删除」结清）
     thread_session_id: Mapped[str | None] = mapped_column(
         ForeignKey("sessions.id", ondelete="SET NULL", name="fk_delegations_thread_session_id"), index=True

@@ -77,7 +77,7 @@ class Webhooks:
     async def authenticate(self, name: str, token: str) -> int:
         """校验 token，返回触发器 id。失败的各种原因返回同一个错误，且都要计算一次摘要。
 
-        名称只在未归档的触发器之间唯一，所以按名称找的也只有未归档的那个。
+        名称只在未结束的触发器之间唯一，所以按名称找的也只有未结束的那个。
         """
         digest = _hash(token)
         async with self._db.transaction() as s:

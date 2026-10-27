@@ -24,12 +24,12 @@ from muliao.sessions.inbound import (
 from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
-from muliao.sessions.live import LiveRun, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
+from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 from muliao.sessions.origins import OWN_NOTES, Origin, OriginNotes
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.service import SessionService
-from muliao.sessions.sources import EventSource, job_id_of, job_source, parse_source
+from muliao.sessions.sources import EventSource, job_holder, job_id_of_holder, parse_source
 from muliao.sessions.transcript import Item
 from muliao.sessions.work import DEFAULT_CHECK_SECONDS, SessionWork, check_due
 
@@ -45,7 +45,7 @@ __all__ = [
     "WorkState",
     "SessionKind",
     "policy_of",
-    "LiveRun",
+    "LiveSegment",
     "RunDeltaEvent",
     "RunEvent",
     "RunItemEvent",
@@ -69,7 +69,7 @@ __all__ = [
     "hold_registered_in",
     "session_in",
     "EventSource",
-    "job_id_of",
-    "job_source",
+    "job_id_of_holder",
+    "job_holder",
     "parse_source",
 ]

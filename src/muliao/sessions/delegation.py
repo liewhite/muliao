@@ -55,9 +55,9 @@ class Ending(StrEnum):
     DELETED = "deleted"
 
 
-def delegation_holder(owner_id: str, key: str) -> str:
+def delegation_holder(parent_id: str, key: str) -> str:
     """委派在发起方会话上的占用者，也是 thread 信件的关联 id。"""
-    return f"delegation:{owner_id}:{key}"
+    return f"delegation:{parent_id}:{key}"
 
 
 def thread_name(child: Session) -> str:
@@ -108,8 +108,8 @@ async def hand_back_in(
     if not holders:
         return
     name = thread_name(child)
-    owner_id = child.parent_session_id
-    if owner_id is None:
+    parent_id = child.parent_session_id
+    if parent_id is None:
         # 发起方的唯一来源是 thread 的父会话（Threads.dispatch 总在发起方下开 thread）；holder 对这里是不透明的键。
         # 父会话置空说明发起方已被删除，结局没有收件人
         log.info(
@@ -127,7 +127,7 @@ async def hand_back_in(
         delivered = await deliver_in(
             s,
             queue,
-            owner_id,
+            parent_id,
             holder,
             key=f"{holder}:settled",
             source=thread_source(child.id),
@@ -142,7 +142,7 @@ async def hand_back_in(
             "delegation handed back",
             extra={
                 "holder": holder,
-                "session_id": owner_id,
+                "session_id": parent_id,
                 "thread_session_id": child.id,
                 "ending": ending,
                 "delivered_as": delivered,
@@ -221,9 +221,9 @@ class ThreadChecks:
                     continue
                 self._last_check[record.holder] = now
                 # 同一个发起方对同一个 thread 的几项委派同时到期，检查一次
-                due.setdefault((record.session_id, child_id), (record, interval))
+                due.setdefault((record.parent_id, child_id), (record, interval))
             child_ids = {child_id for _, child_id in due}
-            works = await work_states_in(s, self._queue, child_ids)
+            states = await work_states_in(s, self._queue, child_ids)
             runs = await latest_runs_among(s, self._queue, child_ids)
             children = await among_in(s, child_ids)
             agents: dict[str, AgentInfo] = {}
@@ -235,10 +235,10 @@ class ThreadChecks:
                 if child.agent_id not in agents:
                     agents[child.agent_id] = await agent_in(s, child.agent_id)
                 text = check_text(
-                    child, agents[child.agent_id], works[child_id], runs.get(child_id), now, interval
+                    child, agents[child.agent_id], states[child_id], runs.get(child_id), now, interval
                 )
                 posted += await post_check_in(
-                    s, self._queue, record.session_id, record.holder, thread_source(child.id), text
+                    s, self._queue, record.parent_id, record.holder, thread_source(child.id), text
                 )
         for holder, child_id in expired.items():
             log.info(
@@ -262,7 +262,7 @@ class ThreadChecks:
 def check_text(
     child: Session,
     agent: AgentInfo,
-    work: WorkState,
+    state: WorkState,
     run: TaskView | None,
     now: datetime,
     check_seconds: float,
@@ -276,7 +276,7 @@ def check_text(
         f"{check_seconds:g} seconds and an event with its answer; list_threads shows its latest reply. If it is "
         f"no longer needed, call stop_thread(thread={name!r}, agent={agent.name!r})."
     )
-    match work:
+    match state:
         case WorkState.WAITING:
             doing = (
                 "is waiting for work it started (background jobs, other agents) or for answers it asked for"

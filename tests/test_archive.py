@@ -3,7 +3,7 @@
 import pytest
 from sqlalchemy import select
 
-from muliao.agents.api import AgentArchived, AgentPatch, AgentSpec
+from muliao.agents.api import USER, AgentArchived, AgentPatch, AgentSpec
 from muliao.agents.tools import AgentEntry, AgentGroup, agent_directory
 from muliao.errors import Conflict, InvalidInput
 from muliao.issues.api import IssueStatus
@@ -22,22 +22,22 @@ def _new_session(agent_id: str) -> UserMessage:
 
 async def test_group_is_trimmed_kept_on_other_changes_and_cleared_by_an_empty_string(container):
     agent = await container.agents.create(
-        AgentSpec(name="a", description="d", model="test", group="  jobs  "), author="user"
+        AgentSpec(name="a", description="d", model="test", group="  jobs  "), actor="user"
     )
     assert agent.group == "jobs"
     assert (
-        await container.agents.update(agent.id, AgentPatch(description="x"), author="user")
+        await container.agents.update(agent.id, AgentPatch(description="x"), actor="user")
     ).group == "jobs"
-    assert (await container.agents.update(agent.id, AgentPatch(group="   "), author="user")).group is None
+    assert (await container.agents.update(agent.id, AgentPatch(group="   "), actor="user")).group is None
     with pytest.raises(InvalidInput, match="at most 64"):
-        await container.agents.update(agent.id, AgentPatch(group="g" * 65), author="user")
+        await container.agents.update(agent.id, AgentPatch(group="g" * 65), actor="user")
 
 
 async def test_list_agents_groups_ungrouped_first_and_leaves_out_archived(container, make_agent):
     plain = await make_agent("plain")
     for name, group in (("z1", "zhu"), ("b1", "biz"), ("z2", "zhu")):
         await container.agents.create(
-            AgentSpec(name=name, description=name, model="test", group=group), author="user"
+            AgentSpec(name=name, description=name, model="test", group=group), actor="user"
         )
     gone = await make_agent("gone")
     await container.agent_lifecycle.set_archived(gone.id, True)
@@ -63,7 +63,7 @@ async def test_an_archived_agent_takes_no_mail_until_unarchived(container, make_
     with pytest.raises(AgentArchived, match="archived; unarchive it first"):
         await container.sessions.receive(_new_session(alpha.id))
     # 配置照常可改（取消归档、改名都要能找到它）
-    assert (await container.agents.update(alpha.id, AgentPatch(group="old"), author="user")).group == "old"
+    assert (await container.agents.update(alpha.id, AgentPatch(group="old"), actor="user")).group == "old"
     assert (await container.agents.find_by_name("alpha")).archived
 
     assert not (await container.agent_lifecycle.set_archived(alpha.id, False)).archived
@@ -147,19 +147,19 @@ async def test_triggers_of_an_archived_agent_neither_run_their_precheck_nor_fire
 
 async def test_issues_cannot_go_to_an_archived_agent_and_its_old_ones_stay_quiet(container, make_agent):
     alpha, beta = await make_agent("alpha"), await make_agent("beta")
-    issue = await container.issues.create(None, owner=alpha.id, title="t", description="", assignee=alpha.id)
+    issue = await container.issues.create(USER, owner=alpha.id, title="t", description="", assignee=alpha.id)
     await container.agent_lifecycle.set_archived(beta.id, True)
     with pytest.raises(AgentArchived):
-        await container.issues.update(None, issue.id, assignee=beta.id)
+        await container.issues.update(USER, issue.id, assignee=beta.id)
     with pytest.raises(AgentArchived):
-        await container.issues.update(None, issue.id, owner=beta.id)
+        await container.issues.update(USER, issue.id, owner=beta.id)
     with pytest.raises(AgentArchived):
-        await container.issues.create(None, owner=beta.id, title="t2", description="")
+        await container.issues.create(USER, owner=beta.id, title="t2", description="")
 
     # 已指派给它的 issue：它归档后，用户的改动与评论照常记下，只是不投递
     await container.agent_lifecycle.set_archived(alpha.id, True)
-    await container.issues.update(None, issue.id, status=TODO)
-    await container.issues.comment(None, issue.id, "still there?")
+    await container.issues.update(USER, issue.id, status=TODO)
+    await container.issues.comment(USER, issue.id, "still there?")
     await deliver(container)
     async with container.db.transaction() as s:
         assert (await s.scalars(select(Session).where(Session.origin == Origin.ISSUE))).all() == []

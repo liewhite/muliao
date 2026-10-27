@@ -116,8 +116,8 @@ class ItemCatalog:
             await check_visible_in(s, kind, name)
             return await history_in(s, as_subject(kind), name, limit)
 
-    async def restore(self, kind: StoredKind, name: str, rev: int, author: str) -> None:
+    async def restore(self, kind: StoredKind, name: str, rev: int, actor: str) -> None:
         """把第 rev 版的内容作为新的一版写入（归属不变）。secret 的版本不含值，不能恢复。"""
         if as_subject(kind) not in RESTORABLE:
             raise InvalidInput(f"{label(kind)} revisions cannot be restored")
-        await self._restore[kind](name, rev, author)
+        await self._restore[kind](name, rev, actor)

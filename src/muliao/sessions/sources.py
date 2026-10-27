@@ -18,14 +18,14 @@ def thread_source(child_id: str) -> str:
     return f"thread:{child_id}"
 
 
-def job_source(job_id: int) -> str:
+def job_holder(job_id: int) -> str:
     """后台任务在会话上的占用者（sessions.holds）：结束与运行中检查的命令按它找到占用，事件的来源与幂等键由会话领域
     按它推出。"""
     return f"job:{job_id}"
 
 
-def job_id_of(holder: str) -> int | None:
-    """占用者是后台任务时的任务号（job_source 的逆运算）；别的占用者为 None。"""
+def job_id_of_holder(holder: str) -> int | None:
+    """占用者是后台任务时的任务号（job_holder 的逆运算）；别的占用者为 None。"""
     m = _JOB.match(holder)
     return None if m is None else int(m["id"])
 
@@ -55,6 +55,6 @@ EventSource = Annotated[ThreadSource | JobSource | OtherSource, Field(discrimina
 def parse_source(raw: str) -> ThreadSource | JobSource | OtherSource:
     if (m := _THREAD.match(raw)) is not None:
         return ThreadSource(kind="thread", raw=raw, session_id=m["id"])
-    if (job_id := job_id_of(raw)) is not None:
+    if (job_id := job_id_of_holder(raw)) is not None:
         return JobSource(kind="job", raw=raw, job_id=job_id)
     return OtherSource(kind="other", raw=raw)

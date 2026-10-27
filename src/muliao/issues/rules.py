@@ -11,17 +11,20 @@ from muliao.sessions.api import WorkState
 # 不会与它相同；agent 名称也不能取它（agents.naming.new_agent_name），工具里按名称指派时不会混淆
 
 
-# 时间线上「系统」做的动作的 actor（例如删除 agent 时清理指派人、负责人）：既不是用户（None）也不是某个 agent。
+# 时间线上「系统」做的动作的 actor（例如删除 agent 时清理指派人、负责人）：既不是用户（USER）也不是某个 agent。
 # 不是 12 位十六进制，不会与 agent id 相同。名为 "system" 的 agent 在展示上会与它同名，只影响展示（没有按 actor
 # 名称做的操作），所以不像 USER 那样保留这个名称
 SYSTEM_ACTOR = "system"
 
 
-def actor_name(actor: str | None, names: AgentNames) -> str:
-    """时间线 actor 的展示名：用户（None）是 USER，系统是 SYSTEM_ACTOR，agent 按 id 换成名字。"""
-    if actor is None:
-        return USER
-    return SYSTEM_ACTOR if actor == SYSTEM_ACTOR else names[actor]
+def agent_actor(actor: str) -> str | None:
+    """做这件事的是 agent 时是它的 id；用户（USER）或系统（SYSTEM_ACTOR）做的为 None。"""
+    return None if actor in (USER, SYSTEM_ACTOR) else actor
+
+
+def actor_name(actor: str, names: AgentNames) -> str:
+    """时间线 actor 的展示名：用户是 USER，系统是 SYSTEM_ACTOR，agent 按 id 换成名字。"""
+    return actor if agent_actor(actor) is None else names[actor]
 
 
 def assignee_name(assignee: str, names: AgentNames) -> str:
@@ -79,12 +82,11 @@ def reviewable(status: IssueStatus, assignee: str | None) -> bool:
     return assignee == USER and not finished(status)
 
 
-def handed_by(creator: str | None, assigners: Sequence[str | None]) -> str | None:
+def handed_by(creator: str, assigners: Sequence[str]) -> str | None:
     """把当前指派给用户的 issue 交给用户的 agent（用户打回时指派回给它）：最近一条指派动态的 actor（它把指派人
     改成了用户）；从未改过指派人时是创建者（创建时就指派给了用户）。assigners 是按时间排序的各条指派动态的 actor。
     这次交接是用户自己或系统做的时为 None。"""
-    actor = assigners[-1] if assigners else creator
-    return None if actor in (None, SYSTEM_ACTOR) else actor
+    return agent_actor(assigners[-1] if assigners else creator)
 
 
 def agent_assignee(assignee: str | None) -> str | None:
@@ -116,7 +118,7 @@ def recipient(issue: Snapshot, *, user_comment: bool, from_its_session: str | No
     return issue.owner if user_comment else None
 
 
-def stalled(issue: Snapshot, assignee_session: WorkState | None) -> bool:
+def stalled(issue: Snapshot, assignee_state: WorkState | None) -> bool:
     """该有人做却没人在做：todo / in_progress、不在等上游、指派给 agent，它在这个 issue 上的会话空闲或不存在。
     界面与巡检共用。"""
-    return _assignee_recipient(issue) is not None and assignee_session in (None, WorkState.IDLE)
+    return _assignee_recipient(issue) is not None and assignee_state in (None, WorkState.IDLE)

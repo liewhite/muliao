@@ -99,14 +99,14 @@ class Vault:
                 s, Subject.SECRET, key, before, document(description), actor, f"set secret {key}", force=True
             )
         # 别的 agent 可能依赖它：记录谁改了哪个 key（不记值）
-        log.info("secret set", extra={"owner": owner, "key": key, "author": actor})
+        log.info("secret set", extra={"owner": owner, "key": key, "actor": actor})
 
     async def delete(self, key: str, actor: str) -> None:
         async with self._db.transaction() as s:
             row = await changeable_in(s, StoredKind.SECRET, key, actor)
             await s.delete(row)
             record_in(s, Subject.SECRET, key, document(row.description), None, actor, f"delete secret {key}")
-        log.info("secret deleted", extra={"key": key, "author": actor})
+        log.info("secret deleted", extra={"key": key, "actor": actor})
 
     async def get(self, key: str) -> SecretInfo:
         """一个 secret 的信息（不含值）。"""

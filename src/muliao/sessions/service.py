@@ -32,7 +32,7 @@ from muliao.sessions.inbound import (
     target_in,
 )
 from muliao.sessions.kinds import policy_of
-from muliao.sessions.live import LiveRun, LiveRuns, RunItemEvent
+from muliao.sessions.live import LiveRuns, LiveSegment, RunItemEvent
 from muliao.sessions.mailbox import open_asks_in, visible_in
 from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_run
@@ -56,12 +56,12 @@ class SessionView:
     # 最近一次运行，还没正常结束时
     run: TaskView | None
     threads: list[Session]
-    live: LiveRun | None
+    live: LiveSegment | None
     # 工作状态（与会话列表同一条规则）：不是 idle 就显示停止。只剩挂起的提问时停止不清掉它（提问仍可回答，sessions.halt）
     state: WorkState
 
 
-def _with_pending_threads(live: LiveRun, call_threads: Mapping[str, str]) -> LiveRun:
+def _with_pending_threads(live: LiveSegment, call_threads: Mapping[str, str]) -> LiveSegment:
     """实时快照里还挂着的调用同样挂上它交出去的 thread（transcript.annotate_pending_threads）：中途打开会话页时
     这一段的调用也显示它开出的 thread。之后经 SSE 收到的调用不带：那时 thread 列表也还没重新拉取。"""
     items = [e.item for e in live.events if isinstance(e, RunItemEvent)]
@@ -70,7 +70,7 @@ def _with_pending_threads(live: LiveRun, call_threads: Mapping[str, str]) -> Liv
         e.model_copy(update={"item": next(annotated)}) if isinstance(e, RunItemEvent) else e
         for e in live.events
     ]
-    return LiveRun(live.run_id, live.after_message_id, events)
+    return LiveSegment(live.segment_id, live.after_message_id, events)
 
 
 @dataclass(frozen=True)

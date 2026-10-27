@@ -116,14 +116,14 @@ class ItemFile(Base):
 
 
 class Memory(Base):
-    """记忆（agents.memory）：全局记忆（owner 为 None，至多一行）与每个 agent 的记忆（创建 agent 时写入）。"""
+    """记忆（agents.memory）：全局记忆（agent_id 为 None，至多一行）与每个 agent 的记忆（创建 agent 时写入）。"""
 
     __tablename__ = "memories"
     __table_args__ = ({"sqlite_autoincrement": True},)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     # 唯一（SQLite 里 NULL 互不相等：全局记忆只有一行由 MemoryStore 保证，写入都在串行的写事务里）
-    owner: Mapped[str | None] = mapped_column(String(32), _owner_ref(), unique=True)
+    agent_id: Mapped[str | None] = mapped_column(String(32), _owner_ref(), unique=True)
     content: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -148,6 +148,6 @@ class Revision(Base):
     before: Mapped[str | None] = mapped_column(Text)
     after: Mapped[str | None] = mapped_column(Text)
     # "user"、做出修改的 agent 的 id（可能已删除），或系统（迁移）
-    author: Mapped[str] = mapped_column(String(64))
+    actor: Mapped[str] = mapped_column(String(64))
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

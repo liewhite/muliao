@@ -97,7 +97,7 @@ def make_agent(container: Assembly) -> Callable:
         roles: tuple[str, ...] = (),
     ):
         return await container.agents.create(
-            AgentSpec(name=name, description=description, model=model, roles=roles), author="user"
+            AgentSpec(name=name, description=description, model=model, roles=roles), actor="user"
         )
 
     return _make

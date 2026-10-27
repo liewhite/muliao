@@ -675,7 +675,7 @@ export interface paths {
         };
         /**
          * Get Memory
-         * @description owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。
+         * @description agent 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。
          */
         get: operations["get_memory_api_memory_get"];
         /** Put Memory */
@@ -696,7 +696,7 @@ export interface paths {
         };
         /**
          * Memory History
-         * @description owner 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。
+         * @description agent 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。
          */
         get: operations["memory_history_api_memory_history_get"];
         put?: never;
@@ -844,7 +844,7 @@ export interface paths {
          * Run Trigger
          * @description 立即触发一次（不带事件内容）。有前置检查时同样先跑检查，可以用来测试整条链路。
          *
-         *     不消耗一次性触发器预定的那一次；已归档的触发器不能再运行。
+         *     不消耗一次性触发器预定的那一次；已结束的触发器不能再运行。
          */
         post: operations["run_trigger_api_triggers__trigger_id__run_post"];
         delete?: never;
@@ -1210,8 +1210,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
-            /** Actor Agent Id */
-            actor_agent_id: string | null;
+            /** Actor */
+            actor: string;
             kind: components["schemas"]["ActivityKind"];
             /** Body */
             body: string | null;
@@ -1547,13 +1547,13 @@ export interface components {
             owner: string | null;
             /** Assignee */
             assignee: string | null;
-            /** Creator Agent Id */
-            creator_agent_id: string | null;
+            /** Creator */
+            creator: string;
             /** Sessions */
             sessions: {
                 [key: string]: string;
             };
-            assignee_session: components["schemas"]["WorkState"] | null;
+            assignee_state: components["schemas"]["WorkState"] | null;
             /** Stalled */
             stalled: boolean;
             /** Depends On */
@@ -1646,10 +1646,10 @@ export interface components {
             /** Job Id */
             job_id: number;
         };
-        /** LiveRunOut */
-        LiveRunOut: {
-            /** Run Id */
-            run_id: string;
+        /** LiveSegmentOut */
+        LiveSegmentOut: {
+            /** Segment Id */
+            segment_id: string;
             /** Events */
             events: (components["schemas"]["RunItemEvent"] | components["schemas"]["RunDeltaEvent"])[];
         };
@@ -1811,8 +1811,8 @@ export interface components {
         McpTransport: "stdio" | "http";
         /** MemoryIn */
         MemoryIn: {
-            /** Owner */
-            owner: string | null;
+            /** Agent */
+            agent: string | null;
             /** Content */
             content: string;
         };
@@ -1825,8 +1825,8 @@ export interface components {
         };
         /** MemoryRestoreIn */
         MemoryRestoreIn: {
-            /** Owner */
-            owner?: string | null;
+            /** Agent */
+            agent?: string | null;
             /** Rev */
             rev: number;
         };
@@ -2065,8 +2065,8 @@ export interface components {
             content: string | null;
             /** Before */
             before: string | null;
-            /** Author */
-            author: string;
+            /** Actor */
+            actor: string;
             /** Message */
             message: string;
             /**
@@ -2130,8 +2130,8 @@ export interface components {
             session_id: string;
             /** Agent */
             agent: string;
-            /** Run Id */
-            run_id: string;
+            /** Segment Id */
+            segment_id: string;
             /** Seq */
             seq: number;
             /**
@@ -2162,8 +2162,8 @@ export interface components {
             session_id: string;
             /** Agent */
             agent: string;
-            /** Run Id */
-            run_id: string;
+            /** Segment Id */
+            segment_id: string;
             /** Seq */
             seq: number;
             /**
@@ -2304,7 +2304,7 @@ export interface components {
             run: components["schemas"]["TaskOut"] | null;
             /** Threads */
             threads: components["schemas"]["SessionOut"][];
-            live: components["schemas"]["LiveRunOut"] | null;
+            live: components["schemas"]["LiveSegmentOut"] | null;
             state: components["schemas"]["WorkState"];
         };
         /**
@@ -4297,7 +4297,7 @@ export interface operations {
     get_memory_api_memory_get: {
         parameters: {
             query?: {
-                owner?: string | null;
+                agent?: string | null;
             };
             header?: never;
             path?: never;
@@ -4361,7 +4361,7 @@ export interface operations {
     memory_history_api_memory_history_get: {
         parameters: {
             query?: {
-                owner?: string | null;
+                agent?: string | null;
             };
             header?: never;
             path?: never;
@@ -4512,7 +4512,7 @@ export interface operations {
     list_triggers_api_triggers_get: {
         parameters: {
             query?: {
-                /** @description 列已归档的（跑完的一次性触发器）而不是还会触发的 */
+                /** @description 列已结束的（跑完的一次性触发器）而不是还会触发的 */
                 finished?: boolean;
             };
             header?: never;

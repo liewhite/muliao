@@ -184,10 +184,10 @@ async def deletable_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     return info_of(agent)
 
 
-async def mark_deleting_in(s: AsyncSession, agent_id: str, author: str) -> None:
-    """标为正在删除（作者 author）：之后不出现在列表与名称解析里，各领域的写入口按不存在处理。"""
+async def mark_deleting_in(s: AsyncSession, agent_id: str, actor: str) -> None:
+    """标为正在删除（作者 actor）：之后不出现在列表与名称解析里，各领域的写入口按不存在处理。"""
     await deletable_in(s, agent_id)
-    (await _row_in(s, agent_id)).deleting_by = author
+    (await _row_in(s, agent_id)).deleting_by = actor
 
 
 async def deletion_author_in(s: AsyncSession, agent_id: str) -> str | None:
@@ -284,8 +284,8 @@ class AgentService:
             # 只给名称：这条错误也会交还给模型，模型不接触 id
             raise Conflict(f"agent name {name!r} is already taken by another agent")
 
-    async def create(self, spec: AgentSpec, *, author: str) -> AgentInfo:
-        """author：创建者，"user" 或创建它的 agent 的 id（记在记忆与规则的第一版上）。新 agent 的记忆是空的。"""
+    async def create(self, spec: AgentSpec, *, actor: str) -> AgentInfo:
+        """actor：创建者，"user" 或创建它的 agent 的 id（记在记忆与规则的第一版上）。新 agent 的记忆是空的。"""
         fields = _AgentFields(
             name=new_agent_name(spec.name),
             description=spec.description,
@@ -310,15 +310,15 @@ class AgentService:
             await s.flush()
             # 规则与记忆和 agent 的行同一事务：agent 一旦存在，它的规则与记忆就在（每一轮都要读）
             await create_agent_rules_in(
-                s, agent_id, AgentRules.of(spec.roles, spec.allow, spec.deny), author, f"create agent {name}"
+                s, agent_id, AgentRules.of(spec.roles, spec.allow, spec.deny), actor, f"create agent {name}"
             )
-            create_memory_in(s, agent_id, author)
+            create_memory_in(s, agent_id, actor)
             # 工作目录与数据库行同事务：建不出来则不插行
             self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
             return info_of(agent)
 
-    async def update(self, agent_id: str, patch: AgentPatch, *, author: str) -> AgentInfo:
-        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。分发规则变了就记一版（作者 author）。"""
+    async def update(self, agent_id: str, patch: AgentPatch, *, actor: str) -> AgentInfo:
+        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。分发规则变了就记一版（作者 actor）。"""
         async with self._db.transaction() as s:
             agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)
@@ -329,7 +329,7 @@ class AgentService:
                 before.allow if patch.allow is None else patch.allow,
                 before.deny if patch.deny is None else patch.deny,
             )
-            await update_agent_rules_in(s, agent_id, rules, author, f"update rules of agent {fields.name}")
+            await update_agent_rules_in(s, agent_id, rules, actor, f"update rules of agent {fields.name}")
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
             agent.thinking = fields.thinking
             agent.group = fields.group

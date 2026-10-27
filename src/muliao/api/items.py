@@ -154,7 +154,7 @@ class RevisionOut(BaseModel):
     # 这一版之前的文档；新建那一版为 null
     before: str | None
     # "user"，或做出修改的 agent 的 id
-    author: str
+    actor: str
     message: str
     created_at: datetime
     # 能恢复到这一版（secret 的版本不含值，删除那一版没有内容）
@@ -166,7 +166,7 @@ class RevisionOut(BaseModel):
             rev=r.id,
             content=r.after,
             before=r.before,
-            author=r.author,
+            actor=r.actor,
             message=r.message,
             created_at=r.at,
             restorable=r.restorable,
@@ -391,36 +391,36 @@ class MemoryOut(BaseModel):
 
 class MemoryIn(BaseModel):
     # 为空即全局记忆
-    owner: str | None
+    agent: str | None
     content: str
 
 
 class MemoryRestoreIn(BaseModel):
     # 为空即全局记忆
-    owner: str | None = None
+    agent: str | None = None
     rev: int
 
 
 @router.get("/memory")
-async def get_memory(c: C, owner: str | None = None) -> MemoryOut:
-    """owner 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。"""
-    return MemoryOut(content=await c.memory.read(owner), max_chars=c.memory.max_chars)
+async def get_memory(c: C, agent: str | None = None) -> MemoryOut:
+    """agent 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。"""
+    return MemoryOut(content=await c.memory.read(agent), max_chars=c.memory.max_chars)
 
 
 @router.put("/memory")
 async def put_memory(c: C, body: MemoryIn) -> MemoryOut:
     return MemoryOut(
-        content=await c.memory.write(body.owner, body.content, USER), max_chars=c.memory.max_chars
+        content=await c.memory.write(body.agent, body.content, USER), max_chars=c.memory.max_chars
     )
 
 
 @router.get("/memory/history")
-async def memory_history(c: C, owner: str | None = None) -> list[RevisionOut]:
-    """owner 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。"""
-    return [RevisionOut.of(r) for r in await c.memory.history(owner, HISTORY_LIMIT)]
+async def memory_history(c: C, agent: str | None = None) -> list[RevisionOut]:
+    """agent 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。"""
+    return [RevisionOut.of(r) for r in await c.memory.history(agent, HISTORY_LIMIT)]
 
 
 @router.post("/memory/restore", status_code=204)
 async def restore_memory(c: C, body: MemoryRestoreIn) -> None:
     """把某一版的正文作为新的一版写入。"""
-    await c.memory.restore(body.owner, body.rev, USER)
+    await c.memory.restore(body.agent, body.rev, USER)

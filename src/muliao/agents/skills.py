@@ -299,13 +299,13 @@ class SkillStore:
         meta = await self._put(name, skill_md, attachments, actor, owner, "import", replace=replace)
         return SkillImport(meta, package.skipped)
 
-    async def restore(self, name: str, rev: int, author: str) -> SkillMeta:
+    async def restore(self, name: str, rev: int, actor: str) -> SkillMeta:
         """把第 rev 版的文档作为新的一版写入（归属不变：恢复的是内容），读版本与写入在同一个事务里。"""
         async with self._db.transaction() as s:
-            row = await changeable_in(s, StoredKind.SKILL, name, author)
+            row = await changeable_in(s, StoredKind.SKILL, name, actor)
             files = parse_document(await revision_doc_in(s, Subject.SKILL, name, rev))
             skill_md = files.pop(SKILL_FILE).content
-            meta = await self._store_in(s, row, name, skill_md, files, author, row.owner, "restore")
+            meta = await self._store_in(s, row, name, skill_md, files, actor, row.owner, "restore")
         await self.materialize(name)
         return meta
 

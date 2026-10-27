@@ -90,7 +90,7 @@ async def test_editing_a_skill_changes_body_description_or_attachments_in_one_re
         await skills.edit("digest", alpha, attachments={"../x.py": SkillFile("x")})
 
     [attach, edit, create] = await history(container, Subject.SKILL, "digest", 10)
-    assert (create.before, edit.author, attach.message) == (None, alpha, "edit skill digest")
+    assert (create.before, edit.actor, attach.message) == (None, alpha, "edit skill digest")
     assert set(parse_document(attach.after)) == {"SKILL.md", "run.sh"}
     assert parse_document(attach.after)["SKILL.md"].content == parse_document(edit.after)["SKILL.md"].content
 
@@ -199,7 +199,7 @@ async def test_a_missing_memory_row_is_corrupt_state_and_global_memory_starts_em
         await container.memory.read("c3c3c3c3c3c3")
     alpha = (await make_agent()).id
     async with container.db.transaction() as s:
-        await s.execute(delete(Memory).where(Memory.owner == alpha))
+        await s.execute(delete(Memory).where(Memory.agent_id == alpha))
     with pytest.raises(CorruptState):
         await container.memory.read(alpha)
 
@@ -297,7 +297,7 @@ async def test_an_agents_items_and_memory_go_with_it_and_their_deletion_is_recor
     )
     await container.memory.edit(None, "", "- global fact", alpha)
 
-    await container.agent_lifecycle.delete(alpha, author="user")
+    await container.agent_lifecycle.delete(alpha, actor="user")
     # 删除的清理经事件完成
     await drain(container)
 
@@ -311,14 +311,14 @@ async def test_an_agents_items_and_memory_go_with_it_and_their_deletion_is_recor
         (Subject.MEMORY, alpha),
     ]:
         latest = (await history(container, subject, name, 1))[0]
-        assert (latest.after, latest.author, latest.message) == (None, "user", f"deleted with agent {alpha}")
+        assert (latest.after, latest.actor, latest.message) == (None, "user", f"deleted with agent {alpha}")
     # 它写过的全局记忆留着
     assert await container.memory.read(None) == "- global fact\n"
 
 
 async def test_writes_for_a_deleting_agent_are_refused(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await container.agent_lifecycle.delete(alpha, author="user")
+    await container.agent_lifecycle.delete(alpha, actor="user")
 
     with pytest.raises(NotFound):
         await container.skills.write("late", "d", "b", actor=alpha, owner=alpha)

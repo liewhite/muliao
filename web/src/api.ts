@@ -64,7 +64,7 @@ export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'run' | '
   run: Task | null
   threads: Session[]
 }
-export type LiveRun = Schemas['LiveRunOut']
+export type LiveSegment = Schemas['LiveSegmentOut']
 
 export type Skill = Schemas['SkillDetail']
 export type Memory = Schemas['MemoryOut']
@@ -88,8 +88,8 @@ export type ItemKind = CatalogItem['kind']
 export type ItemOf<K extends ItemKind> = Extract<CatalogItem, { kind: K }>
 /** 存在库里的条目种类（能改、能转移、有版本）：内置工具之外的三种 */
 export type StoredKind = Schemas['StoredKind']
-/** 版本历史的对象：记忆按 owner（null 为全局记忆），条目按种类与名字 */
-export type RevisionTarget = { kind: 'memory'; owner: AgentId | null } | { kind: StoredKind; name: string }
+/** 版本历史的对象：记忆按 agent（null 为全局记忆），条目按种类与名字 */
+export type RevisionTarget = { kind: 'memory'; agent: AgentId | null } | { kind: StoredKind; name: string }
 export type Revision = Schemas['RevisionOut']
 /** 角色（内置或自建）、它能用的工具与条目、带它的 agent；后端 agents/permissions.py、agents/roles.py */
 export type Role = Omit<Schemas['RoleOut'], 'agents'> & { agents: AgentId[] }
@@ -251,12 +251,12 @@ export const api = {
   /** 版本历史：新的在前，第一条即当前生效 */
   history: (target: RevisionTarget): Promise<Revision[]> =>
     target.kind === 'memory'
-      ? call('get', '/api/memory/history', { query: { owner: target.owner } })
+      ? call('get', '/api/memory/history', { query: { agent: target.agent } })
       : call('get', '/api/items/{kind}/{name}/history', { path: { kind: target.kind, name: target.name } }),
   /** 把某一版恢复为新的一版（secret 的版本不含值，不能恢复） */
   restore: (target: RevisionTarget, rev: number) =>
     target.kind === 'memory'
-      ? call('post', '/api/memory/restore', { body: { owner: target.owner, rev } })
+      ? call('post', '/api/memory/restore', { body: { agent: target.agent, rev } })
       : call('post', '/api/items/{kind}/{name}/restore', { path: { kind: target.kind, name: target.name }, body: { rev } }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
   agentHistory: (agent_id: AgentId, query?: string) =>
@@ -288,9 +288,9 @@ export const api = {
         ? call('put', '/api/agents/{agent_id}/archive', { path: { agent_id } })
         : call('delete', '/api/agents/{agent_id}/archive', { path: { agent_id } }),
     ),
-  /** owner 为 null 时是全局记忆（所有 agent 共享） */
-  memory: (owner: AgentId | null) => call('get', '/api/memory', { query: { owner } }),
-  setMemory: (owner: AgentId | null, content: string) => call('put', '/api/memory', { body: { owner, content } }),
+  /** agent 为 null 时是全局记忆（所有 agent 共享） */
+  memory: (agent: AgentId | null) => call('get', '/api/memory', { query: { agent } }),
+  setMemory: (agent: AgentId | null, content: string) => call('put', '/api/memory', { body: { agent, content } }),
 
   skill: (name: string) => call('get', '/api/items/skill/{name}', { path: { name } }),
   /** 新建的归 owner；已有的整体改写正文与描述，owner 不变 */
@@ -347,7 +347,7 @@ export const api = {
   retryTask: (task_id: number) => branded<Task>(call('post', '/api/tasks/{task_id}/retry', { path: { task_id } })),
 
   triggerKinds: () => call('get', '/api/trigger-kinds'),
-  /** finished 为 true 时列已归档的（跑完的一次性触发器），它们只能查看与删除 */
+  /** finished 为 true 时列已结束的（跑完的一次性触发器），它们只能查看与删除 */
   triggers: (finished = false) => branded<Trigger[]>(call('get', '/api/triggers', { query: { finished } })),
   createTrigger: (body: Schemas['TriggerCreate'] & { agent_id: AgentId }) => branded<Trigger>(call('post', '/api/triggers', { body })),
   /** 只修改给出的字段；precheck 不给表示不变，给 null 表示去掉 */

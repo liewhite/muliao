@@ -1,8 +1,8 @@
 """一次性定时触发：config = {"at": "<ISO 8601 时间>"}，不带时区的按服务端配置的时区解释。
 
-到点触发一次，这一次用掉之后就归档（service.finish_in）：不再出现在触发器列表里，也不能再修改、启用或
+到点触发一次，这一次用掉之后就结束（service.finish_in）：不再出现在触发器列表里，也不能再修改、启用或
 立即运行，但行保留着，它发起过的会话仍查得到是谁发的。「用掉」与触发的结果无关——真的投递、前置检查判定没事、
-触发失败（原因记在 disabled_reason 上）都算用掉，归档与触发的先后由 triggers.due 保证（至多触发一次）。
+触发失败（原因记在 disabled_reason 上）都算用掉，结束与触发的先后由 triggers.due 保证（至多触发一次）。
 
 用户或 agent 的「立即运行」（TriggerService.run）不消耗它预定的那一次：那是管理操作，用来试跑。
 
@@ -53,10 +53,10 @@ class OnceStatus(BaseModel):
 class OnceKind:
     name = KIND
     description = (
-        'Fires once at a given time and is then archived: config {"at": "<ISO 8601 time>"}, e.g. '
+        'Fires once at a given time and then finishes: config {"at": "<ISO 8601 time>"}, e.g. '
         '{"at": "2026-10-22T10:30"}; without an offset it is read in the server timezone, and it must be in '
         "the future. Use this for anything that should happen once — a cron expression with a date would "
-        "fire again every year and stay in the trigger list. Archived triggers leave the list; the "
+        "fire again every year and stay in the trigger list. Finished triggers leave the list; the "
         "conversations they started stay and can be listed with trigger_list(finished=true)."
     )
 
@@ -83,7 +83,7 @@ def run_at(trigger: Trigger) -> datetime:
 
 
 class OnceDue:
-    """一次性触发的到期规则：到点把它归档，这一次就算用掉了。"""
+    """一次性触发的到期规则：到点让它结束，这一次就算用掉了。"""
 
     kind = KIND
 

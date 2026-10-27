@@ -66,7 +66,7 @@ def issue_view(
         views.append(
             ActivityView(
                 at=local_time(a.created_at, tz),
-                actor=actor_name(a.actor_agent_id, names),
+                actor=actor_name(a.actor, names),
                 kind=a.kind,
                 body=a.body,
                 before=before,
@@ -82,7 +82,7 @@ def issue_view(
         priority=issue.priority,
         assignee=assignee(issue.assignee),
         owner="none" if issue.owner_agent_id is None else names[issue.owner_agent_id],
-        creator=actor_name(issue.creator_agent_id, names),
+        creator=actor_name(issue.creator, names),
         depends_on=links.depends_on,
         blocks=links.blocks,
         activities=views,

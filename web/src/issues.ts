@@ -173,7 +173,7 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
 }
 
 /** 被指派 agent 在 issue 会话里的状态；该有人做却没人在做（issue.stalled，后端判定）时要提醒 */
-export const WORK_LABEL: Record<NonNullable<Issue['assignee_session']>, string> = {
+export const WORK_LABEL: Record<NonNullable<Issue['assignee_state']>, string> = {
   running: '处理中',
   waiting: '等待中',
   idle: '空闲',

@@ -77,7 +77,7 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
 
     await container.agents.create(
         AgentSpec(name="narrow", description="d", model="n", deny=["tool:issue_update"]),
-        author="user",
+        actor="user",
     )
     narrow = await container.agents.find_by_name("narrow")
     await container.skills.write("notes", "d", "b", actor=narrow.id, owner=narrow.id)
@@ -214,7 +214,7 @@ async def test_list_threads_shows_each_thread_with_its_state(container, make_age
     assert outputs[0] == "ok"
     # 被问的 agent 已经交回结局：没有进行中的事，附上它的回答
     [thread] = json.loads(outputs[1])
-    assert (thread["thread"], thread["agent"], thread["status"], thread["answer"]) == (
+    assert (thread["thread"], thread["agent"], thread["state"], thread["answer"]) == (
         "review",
         "worker",
         "idle",
@@ -274,9 +274,7 @@ async def test_base_sees_every_tool_but_admin_ones_and_no_undistributed_mcp(cont
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     # 归平台的 MCP：没分给它就看不到它的工具
     await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
-    triage = await container.agents.create(
-        AgentSpec(name="triage", description="d", model="m"), author="user"
-    )
+    triage = await container.agents.create(AgentSpec(name="triage", description="d", model="m"), actor="user")
     seen: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -297,7 +295,7 @@ async def test_asked_agent_runs_with_its_own_permissions(container, make_agent, 
     from muliao.agents.service import AgentSpec
 
     await container.agents.create(
-        AgentSpec(name="narrow", description="d", model="n", deny=["tool:run_shell"]), author="user"
+        AgentSpec(name="narrow", description="d", model="n", deny=["tool:run_shell"]), actor="user"
     )
     seen: list[str] = []
 
@@ -815,7 +813,7 @@ async def test_read_file_stops_at_a_line_boundary_at_the_output_limit_and_says_w
     from muliao.agents.service import AgentSpec
 
     container = small_output_container
-    me = await container.agents.create(AgentSpec(name="alpha", description="d", model="tools"), author="user")
+    me = await container.agents.create(AgentSpec(name="alpha", description="d", model="tools"), actor="user")
     content = "".join(f"line{i:03}\n" for i in range(1, 301))
     outputs = await run_tools(
         container,
@@ -1010,7 +1008,7 @@ async def test_agent_run_sends_its_thinking_level(container, make_agent, models)
     models.models["m"] = scripted(_thinking_seen(seen), THINKS)
     default = await make_agent("plain", model="m")
     thinker = await make_agent("thinker", model="m")
-    await container.agents.update(thinker.id, AgentPatch(thinking="xhigh"), author="user")
+    await container.agents.update(thinker.id, AgentPatch(thinking="xhigh"), actor="user")
     for agent in (default, thinker):
         await start(container, agent.id, "q", origin=Origin.TRIGGER)
         await drain(container)
@@ -1025,8 +1023,8 @@ async def test_thinking_the_model_would_silently_drop_is_rejected(container, mak
     )
     me = await make_agent("a", model="always")
     with pytest.raises(InvalidInput, match="always thinks"):
-        await container.agents.update(me.id, AgentPatch(thinking="off"), author="user")
-    await container.agents.update(me.id, AgentPatch(thinking="medium"), author="user")
+        await container.agents.update(me.id, AgentPatch(thinking="off"), actor="user")
+    await container.agents.update(me.id, AgentPatch(thinking="medium"), actor="user")
     with pytest.raises(InvalidInput, match="does not take a thinking setting"):
-        await container.agents.update(me.id, AgentPatch(model="no-thinking"), author="user")
+        await container.agents.update(me.id, AgentPatch(model="no-thinking"), actor="user")
     assert (await container.agents.get(me.id)).model == "always"

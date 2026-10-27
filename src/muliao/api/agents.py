@@ -246,7 +246,7 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
         thinking=body.thinking,
         group=body.group,
     )
-    return await _out(c, await c.agents.create(spec, author=USER))
+    return await _out(c, await c.agents.create(spec, actor=USER))
 
 
 @router.get("/agents/{agent_id}")
@@ -269,7 +269,7 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         # null 与空串都是不分组（AgentPatch 里 None 是「不变」）
         group=body.group or "",
     )
-    return await _out(c, await c.agents.update(agent_id, patch, author=USER))
+    return await _out(c, await c.agents.update(agent_id, patch, actor=USER))
 
 
 @router.put("/agents/{agent_id}/default")
@@ -298,4 +298,4 @@ async def unarchive_agent(c: C, agent_id: str) -> AgentOut:
 
 @router.delete("/agents/{agent_id}", status_code=204)
 async def delete_agent(c: C, agent_id: str) -> None:
-    await c.agent_lifecycle.delete(agent_id, author=USER)
+    await c.agent_lifecycle.delete(agent_id, actor=USER)

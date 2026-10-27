@@ -11,7 +11,7 @@ from muliao.sessions.api import (
     CallResult,
     EventSource,
     Item,
-    LiveRun,
+    LiveSegment,
     NewChat,
     Origin,
     QuestionAnswer,
@@ -128,13 +128,13 @@ class CompactionOut(BaseModel):
         return cls(through_message_id=x.through_message_id, summary=x.summary, created_at=x.created_at)
 
 
-class LiveRunOut(BaseModel):
-    run_id: str
+class LiveSegmentOut(BaseModel):
+    segment_id: str
     events: list[RunEvent]
 
     @classmethod
-    def of(cls, run: LiveRun) -> "LiveRunOut":
-        return cls(run_id=run.run_id, events=run.events)
+    def of(cls, segment: LiveSegment) -> "LiveSegmentOut":
+        return cls(segment_id=segment.segment_id, events=segment.events)
 
 
 class SessionDetail(BaseModel):
@@ -150,7 +150,7 @@ class SessionDetail(BaseModel):
     threads: list[SessionOut]
     # 正在进行的运行当前这一段的事件（与 SSE 的 run 事件同一形状，见 sessions.live.LiveRuns），让中途打开页面也能从这一段
     # 的开头看起；没有则为 null
-    live: LiveRunOut | None
+    live: LiveSegmentOut | None
     # 工作状态（与会话列表同一条规则）：不是 idle 前端就显示停止。只剩挂起的提问时停止不清掉它（提问仍可回答）
     state: WorkState
 
@@ -206,7 +206,7 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         mail=await mail_outs(c, view.mail),
         run=None if view.run is None else TaskOut.of(view.run),
         threads=threads,
-        live=None if view.live is None else LiveRunOut.of(view.live),
+        live=None if view.live is None else LiveSegmentOut.of(view.live),
         state=view.state,
     )
 

@@ -4,6 +4,7 @@ import { MessageSquare, Pencil, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   SYSTEM_ACTOR,
+  USER,
   api,
   asAgentId,
   sessionRoute,
@@ -46,8 +47,8 @@ import {
 } from '../ui'
 import { OwnerSelect, StatusDot } from './Issues'
 
-function actorName(agents: Agent[] | undefined, actor: string | null) {
-  if (actor === null) return '我'
+function actorName(agents: Agent[] | undefined, actor: string) {
+  if (actor === USER) return '我'
   return actor === SYSTEM_ACTOR ? '系统' : agentLabel(agents, asAgentId(actor))
 }
 
@@ -60,7 +61,7 @@ function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | u
             <Card>
               <Card.Content className="flex flex-col gap-1 p-3">
                 <div className="flex items-center gap-2 text-xs text-muted">
-                  <span className="font-medium text-foreground">{actorName(agents, a.actor_agent_id)}</span>
+                  <span className="font-medium text-foreground">{actorName(agents, a.actor)}</span>
                   <span>{formatTime(a.created_at)}</span>
                 </div>
                 <Markdown text={a.body ?? ''} />
@@ -70,7 +71,7 @@ function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | u
         ) : (
           <li key={a.id} className="flex items-center gap-2 px-1 text-xs text-muted">
             <span className="size-1.5 shrink-0 rounded-full bg-muted" aria-hidden />
-            <span className="font-medium text-foreground">{actorName(agents, a.actor_agent_id)}</span>
+            <span className="font-medium text-foreground">{actorName(agents, a.actor)}</span>
             <span className="min-w-0 break-words">{activityText(agents, a)}</span>
             <span className="ml-auto shrink-0">{formatTime(a.created_at)}</span>
           </li>

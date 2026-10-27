@@ -68,7 +68,7 @@ class AgentLifecycle:
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(AgentSessionsCleared, "agents.sessions_cleared", self.on_sessions_cleared)
 
-    async def delete(self, agent_id: str, *, author: str) -> None:
+    async def delete(self, agent_id: str, *, actor: str) -> None:
         # 会话的状态是别的领域的数据：在自己的只读事务里查（docs/architecture.md 2.2）。检查与标记之间排上的工作
         # 由会话领域的订阅者先停止再删除（4.4）
         async with self._db.transaction() as s:
@@ -78,9 +78,9 @@ class AgentLifecycle:
             log.info("agent deletion refused: busy", extra={"agent": agent_id, "blocked_by": blocking})
             raise Conflict(f"agent {agent.name!r} is working right now; stop its sessions first, then delete")
         async with self._db.transaction() as s:
-            await mark_deleting_in(s, agent_id, author)
+            await mark_deleting_in(s, agent_id, actor)
             self._messaging.publish_in(s, AgentDeleting(agent_id=agent_id))
-        log.info("agent deletion started", extra={"agent": agent_id, "author": author})
+        log.info("agent deletion started", extra={"agent": agent_id, "actor": actor})
 
     async def set_archived(self, agent_id: str, archived: bool) -> AgentInfo:
         """归档（或取消归档）；已是目标状态时不做任何事。归档要求它不是系统默认 agent、且空闲（与删除同一组检查，忙时
@@ -110,8 +110,8 @@ class AgentLifecycle:
     async def on_sessions_cleared(self, event: AgentSessionsCleared, _delivery: Delivery) -> Commit:
         agent_id = event.agent_id
         async with self._db.transaction() as s:
-            author = await deletion_author_in(s, agent_id)
-        if author is None:
+            actor = await deletion_author_in(s, agent_id)
+        if actor is None:
             return no_commit
         # 目录不在数据库事务里：重放时它们已经不在，删除是空操作。skill 的生成目录只是副本，先于行删除
         await self._agents.remove_workspace(agent_id)
@@ -133,10 +133,10 @@ class AgentLifecycle:
                 return
             # 各子域先记删除的版本（版本表不随它删除，留作审计），被分发出去的条目先转给平台，再删行（级联只删还归它的）
             message = f"deleted with agent {agent_id}"
-            await retire_owned_in(s, agent_id, (await sharing_in(s)).shared, author, message)
-            await record_memory_deleted_in(s, agent_id, author, message)
-            await record_rules_deleted_in(s, agent_id, author, message)
+            await retire_owned_in(s, agent_id, (await sharing_in(s)).shared, actor, message)
+            await record_memory_deleted_in(s, agent_id, actor, message)
+            await record_rules_deleted_in(s, agent_id, actor, message)
             await remove_in(s, agent_id)
-            log.info("agent deleted", extra={"agent": agent_id, "author": author})
+            log.info("agent deleted", extra={"agent": agent_id, "actor": actor})
 
         return commit
