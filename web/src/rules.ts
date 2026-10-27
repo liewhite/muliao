@@ -2,9 +2,11 @@
 
 import type { AgentId, CatalogItem, ItemKind, ItemOf } from './api'
 
-export const KINDS: readonly ItemKind[] = ['tool', 'skill', 'mcp', 'secret']
-
+/** 种类的标签；键的顺序就是展示顺序，Record 保证每种都在 */
 export const KIND_LABEL: Record<ItemKind, string> = { tool: '工具', skill: 'Skill', mcp: 'MCP', secret: 'Secret' }
+
+/** 全部种类：从 KIND_LABEL 的键推导 */
+export const KINDS = Object.keys(KIND_LABEL) as readonly ItemKind[]
 
 export function isKind(value: string | null): value is ItemKind {
   return (KINDS as readonly string[]).includes(value ?? '')
