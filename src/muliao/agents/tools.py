@@ -1,4 +1,6 @@
-"""agent 与角色的查看与管理：查看、创建、修改、删除 agent 与角色，转移条目的 owner。给模型看的是名称和描述，不出现 id。"""
+"""agent 与角色的查看与管理：列出能委派的 agent（list_agents），查看、创建、修改、删除 agent 与角色，转移条目的 owner。给模型看的是名称和描述，不出现 id。"""
+
+from collections.abc import Iterable
 
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
@@ -8,7 +10,7 @@ from muliao.agents.kinds import StoredKind, label
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.permissions import Role
 from muliao.agents.role_service import RoleService, RoleSpec
-from muliao.agents.service import AgentPatch, AgentService, AgentSpec, Thinking
+from muliao.agents.service import AgentInfo, AgentPatch, AgentService, AgentSpec, Thinking
 from muliao.errors import Conflict, InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
@@ -54,6 +56,27 @@ class AgentDetail(BaseModel):
     all_tools: list[str]
 
 
+class AgentEntry(BaseModel):
+    name: str
+    description: str
+
+
+class AgentGroup(BaseModel):
+    # null：不属于任何分组的 agent
+    group: str | None
+    agents: list[AgentEntry]
+
+
+def agent_directory(agents: Iterable[AgentInfo]) -> list[AgentGroup]:
+    """list_agents 的结果：能委派的 agent（不含归档的）按分组列出，不分组的在前，其余按组名；组内保持传入的顺序。"""
+    groups: dict[str | None, list[AgentEntry]] = {}
+    for a in agents:
+        if not a.archived:
+            groups.setdefault(a.group, []).append(AgentEntry(name=a.name, description=a.description))
+    order = sorted(groups, key=lambda g: (g is not None, g or ""))
+    return [AgentGroup(group=g, agents=groups[g]) for g in order]
+
+
 def agents_toolset(
     agents: AgentService,
     roles: RoleService,
@@ -61,6 +84,12 @@ def agents_toolset(
     catalog: ItemCatalog,
 ) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
+
+    @ts.tool_plain
+    async def list_agents() -> list[AgentGroup]:
+        """List all agents and what each one is for, by group (`group: null` = not in any group). Use before
+        delegating. Archived agents are not listed: they cannot be used until unarchived (`update_agent`)."""
+        return agent_directory(await agents.list())
 
     @ts.tool_plain
     async def get_agent(agent: str) -> AgentDetail:

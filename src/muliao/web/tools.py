@@ -2,9 +2,9 @@
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.web.provider import SearchHit, WebProvider
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.web.provider import SearchHit, WebProvider
 
 
 def web_toolset(web: WebProvider, max_output_chars: int) -> FunctionToolset[RunScope]:

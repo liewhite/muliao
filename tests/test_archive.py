@@ -4,10 +4,10 @@ import pytest
 from sqlalchemy import select
 
 from muliao.agents.api import AgentArchived, AgentPatch, AgentSpec
+from muliao.agents.tools import AgentEntry, AgentGroup, agent_directory
 from muliao.errors import Conflict, InvalidInput
 from muliao.issues.api import IssueStatus
 from muliao.sessions.api import Origin
-from muliao.sessions.delegation_tools import AgentGroup, AgentInfo, agent_directory
 from muliao.sessions.inbound import Inbound, NewSession
 from muliao.sessions.tables import Session
 from muliao.triggers.api import Precheck
@@ -51,11 +51,11 @@ async def test_list_agents_groups_ungrouped_first_and_leaves_out_archived(contai
 
     directory = agent_directory(await container.agents.list())
     assert directory == [
-        AgentGroup(group=None, agents=[AgentInfo(name="plain", description=plain.description)]),
-        AgentGroup(group="biz", agents=[AgentInfo(name="b1", description="b1")]),
+        AgentGroup(group=None, agents=[AgentEntry(name="plain", description=plain.description)]),
+        AgentGroup(group="biz", agents=[AgentEntry(name="b1", description="b1")]),
         AgentGroup(
             group="zhu",
-            agents=[AgentInfo(name="z1", description="z1"), AgentInfo(name="z2", description="z2")],
+            agents=[AgentEntry(name="z1", description="z1"), AgentEntry(name="z2", description="z2")],
         ),
     ]
 

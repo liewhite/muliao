@@ -7,11 +7,11 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from muliao.web.provider import DeepSeekWeb, Page, SearchHit
 from muliao.agents.service import AgentSpec
 from muliao.container import assemble
 from muliao.errors import InvalidInput, TransientError
 from muliao.platform.db import migrate
+from muliao.web.provider import DeepSeekWeb, Page, SearchHit
 from tests.test_tools import run_tools
 
 
@@ -244,8 +244,8 @@ async def test_deepseek_unreachable_is_its_own_transient_error_not_a_model_outag
 def test_deepseek_without_base_url_uses_the_official_address():
     from pydantic import SecretStr
 
-    from muliao.web.provider import build_web_provider
     from muliao.config import WebConfig
+    from muliao.web.provider import build_web_provider
 
     web = build_web_provider(WebConfig(type="deepseek", api_key=SecretStr("k")), httpx.AsyncClient())
     assert isinstance(web, DeepSeekWeb) and web._base_url == "https://api.deepseek.com"
