@@ -6,7 +6,7 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   id,
   title: `t${id}`,
   description: '',
-  status: 'todo',
+  status: 'in_progress',
   priority: 'none',
   owner: null,
   assignee: null,
@@ -42,7 +42,7 @@ describe('issues', () => {
       issue(4, { status: 'done', finished: true }),
     ])
     // 只按最近更新排，不看优先级
-    expect(groups.todo.map((i) => i.id)).toEqual([2, 1, 3])
+    expect(groups.in_progress.map((i) => i.id)).toEqual([2, 1, 3])
     expect(groups.done.map((i) => i.id)).toEqual([4])
     expect(groups.backlog).toEqual([])
   })
@@ -53,7 +53,7 @@ describe('issues', () => {
       [3, { status: 'blocked' as const, at: '2026-10-21T09:00:01Z' }],
     ])
     const moved = moveIssues([issue(1), issue(2), issue(3)], moves)
-    expect(moved.map((i) => i.status)).toEqual(['todo', 'done', 'blocked'])
+    expect(moved.map((i) => i.status)).toEqual(['in_progress', 'done', 'blocked'])
     expect(moved[1].updated_at).toBe('2026-10-21T09:00:00Z')
     expect(moved[2].updated_at).toBe('2026-10-21T09:00:01Z')
   })
@@ -73,15 +73,18 @@ describe('issues', () => {
       body: null,
       change: { from, to },
     })
-    expect(activityText(agents, change('status', 'todo', 'done'))).toBe('把状态从「Todo」改为「完成」')
+    expect(activityText(agents, change('status', 'waiting', 'done'))).toBe('把状态从「等待中」改为「完成」')
+    // 已去掉的状态（时间线里的旧记录）原样显示
+    expect(activityText(agents, change('status', 'todo', 'in_progress'))).toBe('把状态从「todo」改为「进行中」')
     expect(activityText(agents, change('assignee', null, 'a1'))).toBe('把指派从「未指派」改为「alpha」')
     expect(activityText(agents, change('depends_on', [1, 2], []))).toBe('把依赖从「#1, #2」改为「无」')
-    expect(activityText(agents, { ...change('dependency', 'todo', 'done'), change: { issue: 3, from: 'todo', to: 'done' } })).toBe(
-      '把依赖 #3 的状态从「Todo」改为「完成」',
+    expect(activityText(agents, { ...change('dependency', 'waiting', 'done'), change: { issue: 3, from: 'waiting', to: 'done' } })).toBe(
+      '把依赖 #3 的状态从「等待中」改为「完成」',
     )
     expect(activityText(agents, { ...change('run_failed', null, null), change: null, body: 'Boom: bad' })).toBe(
       '在 issue 会话里的运行失败了：Boom: bad',
     )
+    expect(activityText(agents, { ...change('unsettled', null, null), change: null })).toContain('已请它表态')
   })
 })
 

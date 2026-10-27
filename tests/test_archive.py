@@ -13,7 +13,7 @@ from muliao.triggers.api import Precheck
 from tests.conftest import login
 from tests.test_flow import deliver, drain
 
-TODO = IssueStatus.IN_PROGRESS
+PROGRESS = IssueStatus.IN_PROGRESS
 
 
 def _new_session(agent_id: str) -> UserMessage:
@@ -158,7 +158,7 @@ async def test_issues_cannot_go_to_an_archived_agent_and_its_old_ones_stay_quiet
 
     # 已指派给它的 issue：它归档后，用户的改动与评论照常记下，只是不投递
     await container.agent_lifecycle.set_archived(alpha.id, True)
-    await container.issues.update(USER, issue.id, status=TODO)
+    await container.issues.update(USER, issue.id, status=PROGRESS)
     await container.issues.comment(USER, issue.id, "still there?")
     await deliver(container)
     async with container.db.transaction() as s:

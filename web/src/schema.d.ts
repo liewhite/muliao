@@ -1089,7 +1089,7 @@ export interface paths {
         put?: never;
         /**
          * Reject Issue
-         * @description 打回指派给用户的 issue：理由记成评论，回到 todo，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。
+         * @description 打回指派给用户的 issue：理由记成评论，回到 in_progress，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。
          */
         post: operations["reject_issue_api_issues__issue_id__reject_post"];
         delete?: never;
@@ -1200,7 +1200,7 @@ export interface components {
          * ActivityKind
          * @enum {string}
          */
-        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "depends_on" | "dependency" | "run_failed";
+        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "depends_on" | "dependency" | "run_failed" | "unsettled";
         /** ActivityOut */
         ActivityOut: {
             /** Id */
@@ -1603,7 +1603,7 @@ export interface components {
          * IssueStatus
          * @enum {string}
          */
-        IssueStatus: "backlog" | "todo" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
+        IssueStatus: "backlog" | "in_progress" | "waiting" | "in_review" | "blocked" | "done" | "cancelled";
         /** Item */
         Item: {
             /**

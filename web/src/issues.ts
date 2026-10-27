@@ -6,8 +6,8 @@ import { USER, type Agent, type Issue, type IssueActivity, type IssuePriority, t
 /** 状态的标签；键的顺序就是看板的列顺序（也是列表视图的分组顺序）：受阻最不常用，放最后 */
 export const STATUS_LABEL: Record<IssueStatus, string> = {
   backlog: 'Backlog',
-  todo: 'Todo',
   in_progress: '进行中',
+  waiting: '等待中',
   in_review: '待审核',
   done: '完成',
   cancelled: '已取消',
@@ -20,8 +20,8 @@ export const STATUSES = Object.keys(STATUS_LABEL) as readonly IssueStatus[]
 /** 状态圆点的颜色（Tailwind 类） */
 export const STATUS_COLOR: Record<IssueStatus, string> = {
   backlog: 'border-muted',
-  todo: 'border-foreground',
   in_progress: 'border-warning',
+  waiting: 'border-foreground',
   in_review: 'border-accent',
   blocked: 'border-danger',
   done: 'border-success bg-success',
@@ -165,6 +165,8 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
       return `把依赖 #${a.change?.issue} 的状态从「${statusLabel(a.change?.from)}」改为「${statusLabel(a.change?.to)}」`
     case 'run_failed':
       return `在 issue 会话里的运行失败了：${a.body}`
+    case 'unsettled':
+      return '在 issue 会话里的运行结束时 issue 仍是进行中、没说下一步：已请它表态'
     default: {
       const what = { status: '状态', assignee: '指派', owner: '负责项目', priority: '优先级', title: '标题' }[a.kind]
       return `把${what}从「${valueLabel(agents, a, a.change?.from)}」改为「${valueLabel(agents, a, a.change?.to)}」`

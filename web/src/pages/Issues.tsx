@@ -392,7 +392,7 @@ function DependencyGraph({ issues, agents, scope }: { issues: Issue[]; agents: A
 function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCreated: () => void }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [status, setStatus] = useState<IssueStatus>('todo')
+  const [status, setStatus] = useState<IssueStatus>('in_progress')
   const [priority, setPriority] = useState<IssuePriority>('none')
   const [assignee, setAssignee] = useState(UNASSIGNED)
   // 负责的项目必填：不猜
@@ -447,7 +447,7 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
       </div>
       <TextInput label="依赖的 issue（编号，逗号分隔，可不填）" value={dependsOn} onChange={setDependsOn} />
       <p className="text-xs text-muted">
-        指派给 agent 且状态为 Todo / 进行中时，会唤醒它来处理；有依赖的要等依赖全部完成或取消后才唤醒。
+        指派给 agent 且状态为进行中 / 等待中时，会唤醒它来处理；有依赖的要等依赖全部完成或取消后才唤醒（等待中的随之转为进行中）。
       </p>
       <ErrorAlert error={action.error} />
       <ActionButton
