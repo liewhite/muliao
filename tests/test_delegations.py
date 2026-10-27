@@ -738,6 +738,14 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
         ).all()
     assert "was stopped" in event.content
     assert await container.thread_checks.check() == 0
+    # 委派记录留着，它的 thread 引用随 thread 删除置空；之后推不出这个 thread
+    from muliao.sessions.delegation import delegation_holder, threads_of_holds_in
+    from muliao.sessions.delegations import records_among
+
+    holder = delegation_holder(parent.id, "call-5")
+    async with container.db.transaction() as s:
+        assert (await records_among(s, [holder]))[holder].thread_id is None
+        assert await threads_of_holds_in(s, [holder]) == {}
 
 
 async def test_no_check_ins_while_the_delegator_waits_on_the_ask(container, make_agent, models):

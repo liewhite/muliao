@@ -78,14 +78,12 @@ async def clear_in(s: AsyncSession, session_id: str) -> list[str]:
     return [h.holder for h in holds]
 
 
-async def active_holders_in(s: AsyncSession) -> dict[str, str]:
-    """全部 active 占用：占用者 → 会话（委派的运行中检查按它找还在进行的委派）。"""
-    rows = await s.execute(
-        select(SessionHold.holder, SessionHold.session_id)
-        .where(SessionHold.status == HoldStatus.ACTIVE)
-        .order_by(SessionHold.id)
+async def active_holders_in(s: AsyncSession) -> list[str]:
+    """全部 active 占用的占用者，按登记先后（委派的运行中检查按它找还在进行的委派）。"""
+    rows = await s.scalars(
+        select(SessionHold.holder).where(SessionHold.status == HoldStatus.ACTIVE).order_by(SessionHold.id)
     )
-    return {holder: session_id for holder, session_id in rows.all()}
+    return list(rows.all())
 
 
 async def has_active_in(s: AsyncSession, session_id: str) -> bool:

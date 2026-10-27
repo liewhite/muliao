@@ -194,7 +194,7 @@ class ThreadChecks:
             active = await active_holders_in(s)
             records = [
                 r
-                for r in (await records_among(s, list(active))).values()
+                for r in (await records_among(s, active)).values()
                 if r.check_seconds is not None or r.deadline is not None
             ]
             watched = {r.holder for r in records}
