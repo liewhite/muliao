@@ -9,7 +9,8 @@ from muliao.agent_runtime.instructions import build_instructions
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.issues.api import SESSION_NOTE, USER, ActivityKind, IssueStatus, WorkState
-from muliao.issues.rules import SYSTEM_ACTOR, Snapshot, cycle_through, handed_by, recipient, stalled
+from muliao.issues.graph import cycle_through
+from muliao.issues.rules import SYSTEM_ACTOR, Snapshot, handed_by, recipient, stalled
 from muliao.platform.messaging import Delivery
 from muliao.sessions.api import Origin, OriginNotes
 from muliao.sessions.tables import Mail, Session
@@ -662,13 +663,13 @@ async def test_a_batch_refers_to_its_own_keys_and_is_delivered_after_it_is_commi
     alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
     existing = await container.issues.create(None, owner=alpha, title="existing")
     seen: list[int] = []
-    run_now = container.issues._run_now  # noqa: SLF001
+    run_now = container.issues._delivery._run_now  # noqa: SLF001
 
     async def spy(task_id: int) -> None:
         seen.append(await _issue_count(container))
         await run_now(task_id)
 
-    monkeypatch.setattr(container.issues, "_run_now", spy)
+    monkeypatch.setattr(container.issues._delivery, "_run_now", spy)  # noqa: SLF001
     api, ui, parent = await container.issues.create_many(
         alpha,
         [

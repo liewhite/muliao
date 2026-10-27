@@ -1,17 +1,16 @@
 """issue 看板：人与 agent 协作的事项（docs/architecture.md「issue 看板」一节）。
 
-每次修改在一个事务里写 issue、记时间线，并按 rules.recipient 判定这次的动态投给谁：投给被指派的 agent 时，同一事务
-发出定向命令 Receive，提交后马上投递（run_now）。信投进这个 agent 在这个 issue 上唯一的会话：会话领域按发送方
-（Origin.ISSUE，origin_ref 为 issue id）与 agent 定位，没有就新建（sessions.api.SessionKey）；这里不存会话 id。
+每次修改在一个事务里写 issue、记时间线，并交给 delivery 在同一事务里投递这次的动态（投给谁见 rules.recipient），
+提交后马上执行。依赖图在 graph，给模型看的文本在 render，这里编排它们。
 
 actor 是做这件事的 agent id，用户为 None，系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR；session_id 是 agent 动手时所在的会话。它在自己这个 issue 会话里的动作
 不投回那个会话（避免自激）；issue 只在它自己的会话里做，普通对话只建、派 issue。
 
 用户的评论在按上述规则没有 agent 接手时投给负责项目的 agent（owner），见 rules.recipient。
 
-依赖（issue_dependencies，有向无环）：还在等上游的 issue 不投、不算停滞（rules.recipient / rules.stalled 看
-Snapshot.waiting_on）。上游进入 done / cancelled 时，在同一事务里给每个下游记一条 DEPENDENCY 动态并按同一条规则
-投递：下游因此不再等待，那封信就投出去；还在等别的上游就只记时间线。
+依赖（graph）：还在等上游的 issue 不投、不算停滞（rules.recipient / rules.stalled 看 Snapshot.waiting_on）。上游进入
+done / cancelled 时，在同一事务里给每个下游记一条 DEPENDENCY 动态并按同一条规则投递：下游因此不再等待，那封信
+就投出去；还在等别的上游就只记时间线。
 """
 
 from __future__ import annotations
@@ -23,55 +22,45 @@ from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentArchived, AgentNames, agent_names_in, runnable_agent_in
+from muliao.agents.api import agent_names_in, runnable_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
+from muliao.issues.delivery import IssueDelivery, snapshot
+from muliao.issues.graph import (
+    Dependency,
+    batch_label,
+    check_batch,
+    downstream_in,
+    ids,
+    links_in,
+    set_depends_on_in,
+)
+from muliao.issues.render import issue_view, render_issue
 from muliao.issues.rules import (
     SYSTEM_ACTOR,
     USER,
-    ActivityView,
-    Dependency,
-    IssueView,
-    Snapshot,
-    actor_name,
     agent_assignee,
-    assignee_name,
-    cycle_through,
-    delivery_message,
     finished,
     handed_by,
-    recipient,
-    render_issue,
     reviewable,
     stalled,
-    waiting_on,
 )
 from muliao.issues.tables import (
     ActivityKind,
     Issue,
     IssueActivity,
-    IssueDependency,
     IssuePriority,
     IssueStatus,
 )
-from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, no_commit
-from muliao.platform.values import KEEP, Keep, local_time
-from muliao.sessions.api import (
-    Origin,
-    SenderMail,
-    SessionActivity,
-    SessionKey,
-    WorkState,
-    keyed_sessions_among,
-    receive_command_in,
-)
+from muliao.platform.values import KEEP, Keep
+from muliao.sessions.api import Origin, SessionActivity, WorkState, keyed_sessions_among
 from muliao.sessions.events import RunFailed
 
 log = logging.getLogger(__name__)
@@ -86,14 +75,6 @@ class IssueDetail:
 
 
 @dataclass(frozen=True)
-class Links:
-    """issue 在依赖图里的位置：它依赖的上游、依赖它的下游（都按 id 排序）。"""
-
-    depends_on: list[Dependency]
-    blocks: list[Dependency]
-
-
-@dataclass(frozen=True)
 class IssueWork:
     """谁在这个 issue 上做事、它在等谁（从会话领域与依赖图派生，不存）。"""
 
@@ -103,7 +84,7 @@ class IssueWork:
     assignee_session: WorkState | None
     # 该有人做却没人在做（rules.stalled）
     stalled: bool
-    # 上游、下游，与还没完成的上游（rules.waiting_on）
+    # 上游、下游，与还没完成的上游（graph.waiting_on）
     depends_on: list[Dependency]
     blocks: list[Dependency]
     waiting_on: tuple[int, ...]
@@ -119,15 +100,6 @@ def _title(title: str) -> str:
     if len(title) > TITLE_MAX:
         raise InvalidInput(f"issue title is longer than {TITLE_MAX} characters")
     return title
-
-
-def _snapshot(issue: Issue, links: Links) -> Snapshot:
-    return Snapshot(
-        status=issue.status,
-        assignee=issue.assignee,
-        owner=issue.owner_agent_id,
-        waiting_on=waiting_on(links.depends_on),
-    )
 
 
 def _check_handed_to_user(issue: Issue) -> None:
@@ -156,10 +128,6 @@ class NewIssue:
     key: str | None = None
 
 
-def _label(n: int, key: str | None) -> str:
-    return f"issues[{n}]" + ("" if key is None else f" (key {key!r})")
-
-
 @contextmanager
 def batch_item(size: int, n: int, key: str | None) -> Iterator[None]:
     """一批（size 项）里第 n 项的错误带上它是哪一项；只建一个时原样抛出。工具层解析 agent 名时也用它。"""
@@ -168,40 +136,7 @@ def batch_item(size: int, n: int, key: str | None) -> Iterator[None]:
     except (InvalidInput, NotFound) as e:
         if size == 1:
             raise
-        raise type(e)(f"{_label(n, key)}: {e}") from None
-
-
-def _check_batch(new: Sequence[NewIssue]) -> None:
-    """一批新 issue 之间的 key 引用（不查库）：key 唯一、引用的 key 都在本批、key 之间不成环。本批互相引用应用
-    key（整数按已有编号处理），环在这里按 key 报路径，而不是报会被回滚的编号；其余（编号存在、不重复、涉及已有
-    编号的环）由 _set_depends_on_in 在事务里查。"""
-    index: dict[str, int] = {}
-    for n, item in enumerate(new):
-        if item.key is None:
-            continue
-        if not item.key.strip():
-            raise InvalidInput(f"{_label(n, item.key)}: key must not be empty")
-        if item.key in index:
-            raise InvalidInput(f"key {item.key!r} is used by issues[{index[item.key]}] and issues[{n}]")
-        index[item.key] = n
-    edges: list[tuple[int, int]] = []
-    for n, item in enumerate(new):
-        for d in item.depends_on:
-            if isinstance(d, str):
-                if d not in index:
-                    raise InvalidInput(
-                        f"{_label(n, item.key)}: depends_on key {d!r} is not a key of this batch"
-                    )
-                edges.append((n, index[d]))
-    for n in range(len(new)):
-        cycle = cycle_through(n, [up for down, up in edges if down == n], edges)
-        if cycle is not None:
-            path = " -> ".join(repr(new[i].key) for i in cycle)
-            raise InvalidInput(f"dependencies must not form a cycle: {path} (each depends on the next)")
-
-
-def _ids(found: Sequence[Dependency]) -> list[int]:
-    return [d.id for d in found]
+        raise type(e)(f"{batch_label(n, key)}: {e}") from None
 
 
 class IssueService:
@@ -215,10 +150,8 @@ class IssueService:
     ):
         self._activity = activity
         self._db = db
-        self._messaging = messaging
         self._tz = tz
-        # 马上执行一个已提交的投递任务（Worker.run_now）
-        self._run_now = run_now
+        self._delivery = IssueDelivery(messaging, tz, run_now)
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
@@ -297,18 +230,18 @@ class IssueService:
                 i.id: (str(i.id), agent) for i in issues if (agent := agent_assignee(i.assignee)) is not None
             }
             states = await self._activity.keyed_work_states_in(s, Origin.ISSUE, list(keys.values()))
-            links = await self._links_in(s, [i.id for i in issues])
+            links = await links_in(s, [i.id for i in issues])
         work = {}
         for i in issues:
             state = states[keys[i.id]] if i.id in keys else None
-            snapshot = _snapshot(i, links[i.id])
+            snap = snapshot(i, links[i.id])
             work[i.id] = IssueWork(
                 sessions={agent: info.id for agent, info in keyed[str(i.id)].items()},
                 assignee_session=state,
-                stalled=stalled(snapshot, state),
+                stalled=stalled(snap, state),
                 depends_on=links[i.id].depends_on,
                 blocks=links[i.id].blocks,
-                waiting_on=snapshot.waiting_on,
+                waiting_on=snap.waiting_on,
                 finished=finished(i.status),
                 reviewable=reviewable(i.status, i.assignee),
             )
@@ -317,7 +250,9 @@ class IssueService:
     async def render(self, issue_id: int) -> str:
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
-            view = await self._view_in(s, issue, (await self._links_in(s, [issue_id]))[issue_id])
+            activities = await self._activities_in(s, issue_id)
+            links = (await links_in(s, [issue_id]))[issue_id]
+            view = issue_view(issue, activities, links, await agent_names_in(s), self._tz)
         return render_issue(view)
 
     # ---- 修改 ----
@@ -355,7 +290,7 @@ class IssueService:
         同批的父 issue（blocks），也不会在依赖补上之前就被投递。"""
         if not new:
             raise InvalidInput("no issues to create")
-        _check_batch(new)
+        check_batch([(item.key, item.depends_on) for item in new])
         now = utcnow()
         async with self._db.transaction() as s:
             created: list[Issue] = []
@@ -383,16 +318,16 @@ class IssueService:
             for n, (item, issue) in enumerate(zip(new, created, strict=True)):
                 upstream = [ids[d] if isinstance(d, str) else d for d in item.depends_on]
                 with batch_item(len(new), n, item.key):
-                    await self._set_depends_on_in(s, issue, upstream)
+                    await set_depends_on_in(s, issue, upstream)
             wake = []
             for issue in created:
                 happened = [self._record(s, issue, actor, ActivityKind.CREATED)]
-                wake.append(await self._after_change_in(s, None, issue, actor, session_id, happened))
+                wake.append(await self._delivery.changed_in(s, None, issue, actor, session_id, happened))
         for issue in created:
             log.info(
                 "issue created", extra={"issue_id": issue.id, "actor": actor, "assignee": issue.assignee}
             )
-        await self._deliver(*wake)
+        await self._delivery.run(*wake)
         return created
 
     async def update(
@@ -430,7 +365,7 @@ class IssueService:
                 return issue
             wake = await self._changed_in(s, issue, before, actor, session_id, happened)
         log.info("issue updated", extra={"issue_id": issue_id, "actor": actor, "status": issue.status})
-        await self._deliver(*wake)
+        await self._delivery.run(*wake)
         return issue
 
     async def approve(self, issue_id: int) -> Issue:
@@ -444,7 +379,7 @@ class IssueService:
                 return issue
             wake = await self._changed_in(s, issue, before, None, None, happened)
         log.info("issue approved", extra={"issue_id": issue_id})
-        await self._deliver(*wake)
+        await self._delivery.run(*wake)
         return issue
 
     async def reject(self, issue_id: int, reason: str) -> Issue:
@@ -474,7 +409,7 @@ class IssueService:
             happened += await self._apply_in(s, issue, None, status=IssueStatus.TODO, assignee=agent)
             wake = await self._changed_in(s, issue, before, None, None, happened)
         log.info("issue sent back", extra={"issue_id": issue_id, "assignee": agent})
-        await self._deliver(*wake)
+        await self._delivery.run(*wake)
         return issue
 
     async def _apply_in(
@@ -504,7 +439,7 @@ class IssueService:
             record(ActivityKind.DESCRIPTION)
             issue.description = description
         if depends_on is not None:
-            replaced = await self._set_depends_on_in(s, issue, depends_on)
+            replaced = await set_depends_on_in(s, issue, depends_on)
             if replaced is not None:
                 record(ActivityKind.DEPENDS_ON, replaced)
         if status is not None and status != issue.status:
@@ -535,7 +470,7 @@ class IssueService:
         """issue 变了（happened 非空）之后：更新时间，投递这些动态；从（改动前的状态, 指派人）进入 done / cancelled 时
         通知下游。返回要马上执行的投递。"""
         issue.updated_at = utcnow()
-        wake = [await self._after_change_in(s, before[1], issue, actor, session_id, happened)]
+        wake = [await self._delivery.changed_in(s, before[1], issue, actor, session_id, happened)]
         if not finished(before[0]) and finished(issue.status):
             wake += await self._unblock_in(s, issue, before[0], actor, session_id)
         return wake
@@ -549,29 +484,29 @@ class IssueService:
             issue = await self._get_in(s, issue_id)
             activity = self._record(s, issue, actor, ActivityKind.COMMENT, body=body)
             issue.updated_at = utcnow()
-            wake = await self._deliver_in(s, issue, actor, session_id, [activity])
+            wake = await self._delivery.deliver_in(s, issue, actor, session_id, [activity])
         log.info("issue commented", extra={"issue_id": issue_id, "actor": actor})
-        await self._deliver(wake)
+        await self._delivery.run(wake)
         return activity
 
     async def delete(self, issue_id: int) -> None:
         """删除 issue（用户的操作）。依赖它的下游少了这个上游：各记一条 DEPENDS_ON 动态，按规则投递（可能因此不再等待）。"""
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
-            downstream = _ids((await self._links_in(s, [issue_id]))[issue_id].blocks)
-            before = await self._links_in(s, downstream)
+            downstream = await downstream_in(s, issue_id)
+            before = await links_in(s, downstream)
             await s.delete(issue)
             await s.flush()
             wake = []
             for down_id in downstream:
                 down = await self._get_in(s, down_id)
-                old = _ids(before[down_id].depends_on)
+                old = ids(before[down_id].depends_on)
                 change = (old, [i for i in old if i != issue_id])
                 activity = self._record(s, down, None, ActivityKind.DEPENDS_ON, change=change)
                 down.updated_at = utcnow()
-                wake.append(await self._deliver_in(s, down, None, None, [activity]))
+                wake.append(await self._delivery.deliver_in(s, down, None, None, [activity]))
         log.info("issue deleted", extra={"issue_id": issue_id, "downstream": downstream})
-        await self._deliver(*wake)
+        await self._delivery.run(*wake)
 
     # ---- 内部 ----
 
@@ -581,67 +516,19 @@ class IssueService:
             raise NotFound(f"issue #{issue_id} not found")
         return issue
 
-    async def _links_in(self, s: AsyncSession, issue_ids: list[int]) -> dict[int, Links]:
-        """一批 issue 的上游与下游（带对方的当前状态）：两次查询，与 issue 数无关。"""
-        links = {i: Links(depends_on=[], blocks=[]) for i in issue_ids}
-        upstream = (
-            select(IssueDependency.issue_id, Issue.id, Issue.status)
-            .join(Issue, Issue.id == IssueDependency.depends_on_id)
-            .where(IssueDependency.issue_id.in_(issue_ids))
-            .order_by(Issue.id)
-        )
-        for down, up, status in (await s.execute(upstream)).all():
-            links[down].depends_on.append(Dependency(id=up, status=status))
-        downstream = (
-            select(IssueDependency.depends_on_id, Issue.id, Issue.status)
-            .join(Issue, Issue.id == IssueDependency.issue_id)
-            .where(IssueDependency.depends_on_id.in_(issue_ids))
-            .order_by(Issue.id)
-        )
-        for up, down, status in (await s.execute(downstream)).all():
-            links[up].blocks.append(Dependency(id=down, status=status))
-        return links
-
-    async def _set_depends_on_in(
-        self, s: AsyncSession, issue: Issue, depends_on: Sequence[int]
-    ) -> tuple[list[int], list[int]] | None:
-        """把 issue 的上游整体换成 depends_on：上游必须存在、不能重复、不能成环。返回（原来的, 现在的），没变为 None。"""
-        wanted = sorted(set(depends_on))
-        if len(wanted) != len(depends_on):
-            raise InvalidInput(f"depends_on lists an issue more than once: {list(depends_on)}")
-        existing = set(await s.scalars(select(Issue.id).where(Issue.id.in_(wanted))))
-        missing = [f"#{up}" for up in wanted if up not in existing]
-        if missing:
-            raise InvalidInput(f"issue #{issue.id} cannot depend on {', '.join(missing)}: not found")
-        edges = [
-            (down, up)
-            for down, up in await s.execute(select(IssueDependency.issue_id, IssueDependency.depends_on_id))
-        ]
-        current = sorted(up for down, up in edges if down == issue.id)
-        if current == wanted:
-            return None
-        cycle = cycle_through(issue.id, wanted, edges)
-        if cycle is not None:
-            path = " -> ".join(f"#{i}" for i in cycle)
-            raise InvalidInput(f"dependencies must not form a cycle: {path} (each depends on the next)")
-        await s.execute(delete(IssueDependency).where(IssueDependency.issue_id == issue.id))
-        s.add_all(IssueDependency(issue_id=issue.id, depends_on_id=up) for up in wanted)
-        await s.flush()
-        return current, wanted
-
     async def _unblock_in(
         self, s: AsyncSession, issue: Issue, was: IssueStatus, actor: str | None, session_id: str | None
     ) -> list[Task | None]:
         """issue 进入 done / cancelled：每个下游记一条 DEPENDENCY 动态，按 rules.recipient 投递——不再等别的上游时，
         这就是让它开工的那封信。"""
         wake = []
-        for down in _ids((await self._links_in(s, [issue.id]))[issue.id].blocks):
+        for down in await downstream_in(s, issue.id):
             downstream = await self._get_in(s, down)
             activity = self._record(
                 s, downstream, actor, ActivityKind.DEPENDENCY, change=(was, issue.status), upstream=issue.id
             )
             downstream.updated_at = utcnow()
-            wake.append(await self._deliver_in(s, downstream, actor, session_id, [activity]))
+            wake.append(await self._delivery.deliver_in(s, downstream, actor, session_id, [activity]))
         if wake:
             log.info("issue unblocked downstream", extra={"issue_id": issue.id, "status": issue.status})
         return wake
@@ -680,129 +567,3 @@ class IssueService:
         )
         s.add(activity)
         return activity
-
-    async def _after_change_in(
-        self,
-        s: AsyncSession,
-        assignee_before: str | None,
-        issue: Issue,
-        actor: str | None,
-        session_id: str | None,
-        happened: list[IssueActivity],
-    ) -> Task | None:
-        if actor is not None and issue.assignee == USER and assignee_before != USER:
-            # agent 把 issue 交给用户：推送通知，点开是 issue（在那里通过或打回）；也带上它交出 issue 的那个会话
-            # （打开会话即已读，会话删除时通知随之删除）
-            self._messaging.send_in(
-                s,
-                Notify(
-                    agent_id=actor,
-                    title=f"#{issue.id} 指派给你：{issue.title}",
-                    body=f"状态 {issue.status}",
-                    session_id=session_id,
-                    issue_id=issue.id,
-                ),
-            )
-        return await self._deliver_in(s, issue, actor, session_id, happened)
-
-    async def _from_its_session_in(
-        self, s: AsyncSession, issue: Issue, actor: str | None, session_id: str | None
-    ) -> str | None:
-        """动作是不是 agent 在它自己这个 issue 会话里做的：是则返回它（这次动态不投回那里）。"""
-        if actor is None or session_id is None:
-            return None
-        ref = str(issue.id)
-        its_session = (await keyed_sessions_among(s, Origin.ISSUE, [ref]))[ref].get(actor)
-        return actor if its_session is not None and its_session.id == session_id else None
-
-    async def _deliver_in(
-        self,
-        s: AsyncSession,
-        issue: Issue,
-        actor: str | None,
-        session_id: str | None,
-        happened: list[IssueActivity],
-    ) -> Task | None:
-        """在调用方的事务里把这次的动态投给该收到的 agent（rules.recipient），进它在这个 issue 上唯一的会话。"""
-        links = (await self._links_in(s, [issue.id]))[issue.id]
-        user_comment = actor is None and any(a.kind == ActivityKind.COMMENT for a in happened)
-        agent = recipient(
-            _snapshot(issue, links),
-            user_comment=user_comment,
-            from_its_session=await self._from_its_session_in(s, issue, actor, session_id),
-        )
-        if agent is None:
-            return None
-        # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线
-        letter = self._view_with(issue, happened, links, await agent_names_in(s))
-        inbound = SenderMail(
-            origin=Origin.ISSUE,
-            origin_ref=str(issue.id),
-            content=delivery_message(letter),
-            session=SessionKey(agent_id=agent, title=f"#{issue.id} {issue.title}"),
-        )
-        try:
-            command = await receive_command_in(s, inbound)
-        except AgentArchived:
-            # 已有 issue 的指派人或 owner 后来被归档：动态照常记进时间线，不投递（否则用户在这类 issue 上的评论、改动
-            # 都会报错）；取消归档后由 agent 自己 issue_show 看
-            log.info(
-                "issue activity not delivered: agent archived", extra={"issue_id": issue.id, "agent": agent}
-            )
-            return None
-        delivery = self._messaging.send_in(s, command)
-        log.info("issue activity delivered", extra={"issue_id": issue.id, "agent": agent, "actor": actor})
-        return delivery
-
-    async def _deliver(self, *wake: Task | None) -> None:
-        for task in wake:
-            if task is not None:
-                await self._run_now(task.id)
-
-    async def _view_in(self, s: AsyncSession, issue: Issue, links: Links) -> IssueView:
-        await s.flush()
-        return self._view_with(issue, await self._activities_in(s, issue.id), links, await agent_names_in(s))
-
-    def _view_with(
-        self, issue: Issue, activities: list[IssueActivity], links: Links, names: AgentNames
-    ) -> IssueView:
-        def assignee(value: Any) -> str:
-            return "unassigned" if value is None else assignee_name(value, names)
-
-        def issues(ids: list[int]) -> str:
-            return ", ".join(f"#{i}" for i in ids) or "none"
-
-        views = []
-        for a in activities:
-            before = after = None
-            if a.change is not None:
-                if a.kind in (ActivityKind.ASSIGNEE, ActivityKind.OWNER):
-                    before, after = assignee(a.change["from"]), assignee(a.change["to"])
-                elif a.kind == ActivityKind.DEPENDS_ON:
-                    before, after = issues(a.change["from"]), issues(a.change["to"])
-                else:
-                    before, after = str(a.change["from"]), str(a.change["to"])
-            views.append(
-                ActivityView(
-                    at=local_time(a.created_at, self._tz),
-                    actor=actor_name(a.actor_agent_id, names),
-                    kind=a.kind,
-                    body=a.body,
-                    before=before,
-                    after=after,
-                    upstream=a.change["issue"] if a.kind == ActivityKind.DEPENDENCY else None,
-                )
-            )
-        return IssueView(
-            id=issue.id,
-            title=issue.title,
-            description=issue.description,
-            status=issue.status,
-            priority=issue.priority,
-            assignee=assignee(issue.assignee),
-            owner="none" if issue.owner_agent_id is None else names[issue.owner_agent_id],
-            creator=actor_name(issue.creator_agent_id, names),
-            depends_on=links.depends_on,
-            blocks=links.blocks,
-            activities=views,
-        )
