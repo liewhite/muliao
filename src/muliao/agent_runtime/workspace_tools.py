@@ -12,13 +12,15 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import BinaryContent, FunctionToolset, RunContext, ToolReturn
 
+from muliao.agent_runtime import file_edit
 from muliao.agent_runtime.conventions import TOOL_ATTACHMENTS, attachment_of
+from muliao.agent_runtime.file_edit import numbered
+from muliao.agent_runtime.syntax_edit import PatternEdit, language_of
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
 from muliao.platform.shell import run_bash
-from muliao.platform.syntax_edit import PatternEdit, language_of
-from muliao.platform.text_edit import numbered, truncate
+from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.vault.api import Vault
 
@@ -258,7 +260,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             if target not in before:
                 before[target] = target.read_text(encoding="utf-8")
             located.append(_Located(target, e))
-        after, counts = text_edit.apply_each(before, [(c.target, c) for c in located])
+        after, counts = file_edit.apply_each(before, [(c.target, c) for c in located])
         # 全部校验通过才写盘
         for target, content in after.items():
             target.write_text(content, encoding="utf-8")
@@ -429,7 +431,7 @@ def _edit_report(target: Path, before: str, content: str, count: int) -> str:
     """一个文件改完后的回显：替换数、行数和改动处的行（带上下文与行号），省掉回读确认。"""
     lines = content.splitlines()
     head = f"edited {target} ({count} replacement{'s' if count > 1 else ''}; now {len(lines)} lines)"
-    ranges = text_edit.changed_ranges(before, content, _EDIT_CONTEXT_LINES)
+    ranges = file_edit.changed_ranges(before, content, _EDIT_CONTEXT_LINES)
     if not ranges:
         # 没有可展示的行：没变、删空了，或只改了行尾（换行符、末尾换行）
         if before == content:
@@ -446,11 +448,11 @@ class _Located:
     target: Path
     edit: TextEdit
 
-    def locate(self, current: str, what: str, origin: text_edit.Origin) -> tuple[list[text_edit.Splice], int]:
+    def locate(self, current: str, what: str, origin: file_edit.Origin) -> tuple[list[text_edit.Splice], int]:
         return _change_of(self.target, self.edit).locate(current, what, origin)
 
 
-def _change_of(target: Path, e: TextEdit) -> text_edit.Edit:
+def _change_of(target: Path, e: TextEdit) -> file_edit.Edit:
     """一处修改按它给的定位方式（恰好一种）换成对应的 Edit。"""
     lines = (e.start_line, e.end_line, e.anchor)
     if any(v is not None for v in lines) and None in lines:
@@ -467,4 +469,4 @@ def _change_of(target: Path, e: TextEdit) -> text_edit.Edit:
     if e.replace_all:
         raise InvalidInput("replace_all does not apply to a line range")
     assert e.start_line is not None and e.end_line is not None and e.anchor is not None
-    return text_edit.LineRange(e.start_line, e.end_line, e.anchor, e.new_text)
+    return file_edit.LineRange(e.start_line, e.end_line, e.anchor, e.new_text)

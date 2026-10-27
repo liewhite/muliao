@@ -8,8 +8,9 @@ from pathlib import PurePath
 
 from ast_grep_py import SgNode, SgRoot
 
+from muliao.agent_runtime.file_edit import Origin
 from muliao.errors import InvalidInput
-from muliao.platform.text_edit import Origin, Splice, listed
+from muliao.platform.text_edit import Splice, listed
 
 # 扩展名 -> ast-grep 内置语言名（只列 ast-grep-py 自带的语言；不认识的扩展名直接拒绝，不猜）
 LANGUAGES = {
