@@ -28,7 +28,7 @@ from muliao.sessions.info import keyed_rows_among
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import open_asks_in, post_in
-from muliao.sessions.origins import Origin
+from muliao.sessions.origins import RULES, Origin
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.questions import AskResult, QuestionAnswer, answer_result
 from muliao.sessions.tables import TITLE_LENGTH, Mail, MailKind, Session
@@ -122,7 +122,7 @@ class SenderMail:
     session: str | NewConversation | SessionKey
 
     def __post_init__(self) -> None:
-        if self.origin in (Origin.USER, Origin.DELEGATION):
+        if not RULES[self.origin].identified:
             raise ValueError(f"{self.origin} mail is received directly, not sent by another domain")
 
     def inbound(self) -> Inbound:
@@ -186,14 +186,14 @@ class Received:
 
 def _sender_of(session: Session) -> tuple[Origin, str | None]:
     """会话的发起方。委派会话的发起方就是它的父会话（存在 parent_session_id，不另存副本）。"""
-    if session.origin == Origin.DELEGATION:
+    if RULES[session.origin].from_parent:
         return session.origin, session.parent_session_id
     return session.origin, session.origin_ref
 
 
 def _check_may_continue(session: Session, origin: Origin, origin_ref: str | None) -> None:
     """续写规则：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话。"""
-    if origin == Origin.USER:
+    if RULES[origin].writes_anywhere:
         if not policy_of(session.kind).user_writable:
             raise Conflict(f"session {session.id} is a {session.kind} of another agent and is read-only")
         return
@@ -214,7 +214,7 @@ async def create_session(
     if not isinstance(spec.title, str):
         raise ValueError(f"a new session needs a title by now (receive derives one), got {spec}")
     await runnable_agent_in(s, spec.agent_id)
-    is_thread = origin == Origin.DELEGATION
+    is_thread = RULES[origin].from_parent
     if (
         (spec.parent_session_id is not None) != is_thread
         or policy_of(spec.kind).opened_by_delegation != is_thread
@@ -224,7 +224,7 @@ async def create_session(
             f"only delegation creates threads, each with a parent and a name; got {origin} creating a "
             f"{spec.kind} with parent {spec.parent_session_id} and name {spec.thread!r}"
         )
-    if origin == Origin.DELEGATION and spec.parent_session_id != origin_ref:
+    if is_thread and spec.parent_session_id != origin_ref:
         raise ValueError(
             f"delegated session must be created by its parent {spec.parent_session_id}, not {origin_ref}"
         )
@@ -235,7 +235,7 @@ async def create_session(
         title=_shorten(spec.title, TITLE_LENGTH),
         origin=origin,
         # 委派的发起方即 parent_session_id
-        origin_ref=None if origin == Origin.DELEGATION else origin_ref,
+        origin_ref=None if is_thread else origin_ref,
         parent_session_id=spec.parent_session_id,
         thread=spec.thread,
         kind=spec.kind,
@@ -251,7 +251,7 @@ async def keyed_session_in(s: AsyncSession, origin: Origin, origin_ref: str, age
 
 
 def _key_ref(inbound: Inbound) -> str:
-    if inbound.origin in (Origin.USER, Origin.DELEGATION) or inbound.origin_ref is None:
+    if not RULES[inbound.origin].identified or inbound.origin_ref is None:
         raise ValueError(f"only a sender with an identity can address a session by key, got {inbound.origin}")
     return inbound.origin_ref
 

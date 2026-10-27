@@ -91,3 +91,9 @@ async def test_a_key_with_undelivered_mail_and_no_session_yet_is_running(contain
     async with container.db.transaction() as s:
         states = await activity.keyed_work_states_in(s, Origin.ISSUE, [("1", alpha)])
     assert states == {("1", alpha): WorkState.IDLE}
+
+
+def test_every_origin_has_its_rules():
+    from muliao.sessions.origins import RULES
+
+    assert set(RULES) == set(Origin)
