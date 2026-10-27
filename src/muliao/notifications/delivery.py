@@ -24,6 +24,9 @@ class Pusher(Protocol):
 
 
 class DeliverHandler:
+    # 推送完成后没有别的数据引用它
+    prunable = True
+
     def __init__(self, db: Database, pusher: Pusher):
         self._db = db
         self._pusher = pusher

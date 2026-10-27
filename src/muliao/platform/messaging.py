@@ -63,6 +63,9 @@ class _Receiver:
 
 
 class Messaging:
+    # 事件与定向命令的投递完成后没有别的数据引用它
+    prunable = True
+
     def __init__(self, queue: TaskQueue):
         self._queue = queue
         self._subscribers: dict[str, list[_Receiver]] = {}

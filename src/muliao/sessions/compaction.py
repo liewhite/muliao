@@ -228,6 +228,9 @@ class Compactor:
 class CompactionHandler:
     """用户手动触发的压缩（同一个 Compactor.compact）。"""
 
+    # 量小，留着
+    prunable = False
+
     def __init__(self, db: Database, compactor: Compactor):
         self._db = db
         self._compactor = compactor

@@ -337,6 +337,9 @@ async def _adopted(s: AsyncSession, session_id: str, run_id: int) -> list[Mail]:
 class RunHandler:
     """队列里的运行（run task）。"""
 
+    # mail.consumed_by 指向运行（ON DELETE CASCADE）：删了会连带删掉它处理过的信件与幂等键
+    prunable = False
+
     def __init__(self, consumer: Consumer, queue: TaskQueue, messaging: Messaging):
         self._consumer = consumer
         self._queue = queue

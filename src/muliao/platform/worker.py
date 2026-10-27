@@ -16,6 +16,9 @@ _IDLE_POLL_SECONDS = 30.0
 
 
 class TaskHandler(Protocol):
+    # 这种任务完成后没有别的数据引用它，过了保留期可以删掉（platform.retention）；由处理它的领域声明
+    prunable: bool
+
     async def execute(self, task: Task) -> Commit: ...
 
     async def failed_in(self, s: AsyncSession, task: Task) -> None:
@@ -55,6 +58,11 @@ class Worker:
         self._queue = queue
         self._handlers = handlers
         self._bus = bus
+
+    @property
+    def prunable_kinds(self) -> frozenset[str]:
+        """完成后可以按保留期删掉的种类（各处理器的 prunable）。"""
+        return frozenset(k for k, h in self._handlers.items() if h.prunable)
 
     @property
     def kinds(self) -> frozenset[str]:

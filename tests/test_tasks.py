@@ -147,6 +147,8 @@ async def test_a_task_interrupted_past_its_attempts_is_failed_instead_of_recover
 
 async def test_retention_prunes_only_old_done_event_and_deliver_tasks(container, make_agent):
     """保留策略：7 天前完成的 event/deliver 删掉；failed、run、排队中的与较新的保留（为什么见 docs/architecture.md 3.2「保留」）。"""
+    # 可删的种类由处理它的领域声明（TaskHandler.prunable）
+    assert container.worker.prunable_kinds == {EVENT_TASK, DELIVER_TASK}
     alpha = (await make_agent()).id
     old, recent = utcnow() - timedelta(days=8), utcnow() - timedelta(days=6)
     rows = {

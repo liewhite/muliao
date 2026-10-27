@@ -452,8 +452,8 @@ def assemble(
         jobs=jobs,
         thread_checks=ports.thread_checks,
         work=WorkWatcher([jobs, ports.thread_checks]),
-        # 只清理投递类的任务（docs/architecture.md 3.2「保留」）
-        retention=TaskRetention(queue, prunable=(EVENT_TASK, DELIVER_TASK)),
+        # 只清理处理它的领域声明了可删的任务（docs/architecture.md 3.2「保留」）
+        retention=TaskRetention(queue, prunable=worker.prunable_kinds),
         compactor=session_domain.compactor,
         consumer=session_domain.consumer,
         stopper=ports.stopper,
