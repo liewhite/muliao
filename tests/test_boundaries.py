@@ -108,6 +108,40 @@ RUN_TYPES = {
 }
 
 
+# agents 的子域各自独占的表（docs/architecture.md 2.1）：表类只能被它的子域的模块 import，别的子域经 `*_in` 接口
+AGENTS_TABLES: dict[str, set[str]] = {
+    # 目录
+    "Agent": {"service", "active"},
+    # 分发
+    "Role": {"roles", "distribution"},
+    "AgentRules": {"agent_rules"},
+    # 条目（access 的能改检查只读交给它的行，不查表）
+    "Item": {"items", "skills", "mcp", "secrets", "ownership", "access"},
+    "ItemFile": {"skills", "ownership"},
+    # 记忆
+    "Memory": {"memory"},
+    # 版本
+    "Revision": {"revisions"},
+}
+
+
+def test_agents_subdomains_only_touch_their_own_tables():
+    from muliao.agents import tables
+
+    declared = {
+        n for n, v in vars(tables).items() if isinstance(v, type) and getattr(v, "__tablename__", None)
+    }
+    assert declared == set(AGENTS_TABLES), "every agents table belongs to exactly one subdomain"
+    problems = []
+    for path in sorted((SRC / "agents").glob("*.py")):
+        for line, name in _imports(path):
+            if name.startswith("muliao.agents.tables."):
+                table = name.rsplit(".", 1)[1]
+                if path.stem not in AGENTS_TABLES[table]:
+                    problems.append(f"agents/{path.name}:{line} imports {table}")
+    assert not problems, "\n".join(problems)
+
+
 def test_only_agent_runtime_touches_the_model_librarys_run_types():
     problems = []
     for path in SRC.rglob("*.py"):

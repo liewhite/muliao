@@ -132,9 +132,9 @@ async def share(container: Assembly, *rules: str) -> None:
     """把条目加进 base 角色（每个 agent 都能用），即原来的「公共」条目。"""
     from muliao.agents.api import RoleSpec
 
-    base = await container.roles.get("base")
+    base = await container.distribution.get("base")
     allow = [*base.rules.allow, *rules]
-    await container.roles.update(
+    await container.distribution.update(
         RoleSpec("base", base.description, allow, list(base.rules.deny)), actor="user"
     )
 

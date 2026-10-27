@@ -49,6 +49,14 @@ def create_memory_in(s: AsyncSession, agent_id: str, author: str) -> None:
     record_in(s, Subject.MEMORY, agent_id, None, "", author, "create memory")
 
 
+async def record_memory_deleted_in(s: AsyncSession, agent_id: str, author: str, message: str) -> None:
+    """agent 删除时为它的记忆记一版删除（行随 agent 的行级联删除；版本表留作审计），在删除流程的写事务里。"""
+    row = await s.scalar(select(Memory).where(Memory.owner == agent_id))
+    if row is None:
+        raise _missing(agent_id)
+    record_in(s, Subject.MEMORY, revision_name(agent_id), row.content, None, author, message)
+
+
 class MemoryStore:
     def __init__(self, db: Database, max_chars: int):
         self._db = db

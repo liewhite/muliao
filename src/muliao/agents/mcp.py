@@ -17,7 +17,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-from muliao.agents.items import changeable_in, creatable_in, existing_in, usable_in
+from muliao.agents.access import changeable_in, usable_in
+from muliao.agents.items import creatable_in, existing_in
 from muliao.agents.kinds import StoredKind, Subject, label
 from muliao.agents.naming import validate_slug
 from muliao.agents.revisions import record_in, revision_doc_in

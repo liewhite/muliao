@@ -1,10 +1,10 @@
-"""Agent 定义的增删改查及其文件目录。分发规则（角色与自己的 allow / deny）每次修改在同一个写事务里记一版（revisions，
-subject agent，name 是 agent 的 id）；其余字段（名称、描述、模型……）不记。条目池、预览与转移在 agents.catalog。"""
+"""agent 目录（子域）：agent 定义的增删改查及其工作目录，agents 表只在这里与 agents.active 读写。新建与修改带着它的分发规则时，
+在同一个写事务里经分发子域的接口写入（agents.agent_rules，记一版），新建时经记忆子域建空记忆；其余字段（名称、描述、模型……）
+不记版本。删除与归档的流程在 agents.lifecycle，它对 agents 表的写入用这里的 `*_in`。"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import shutil
 from collections.abc import Callable, Sequence
@@ -16,17 +16,14 @@ from typing import Literal, cast, get_args
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.active import active_row_in, runnable_row_in
+from muliao.agents.active import AgentNames, active_row_in, agent_names_in, runnable_row_in
+from muliao.agents.agent_rules import AgentRules, agent_rules_in, create_agent_rules_in, update_agent_rules_in
 from muliao.agents.ids import new_agent_id
-from muliao.agents.kinds import Subject
 from muliao.agents.memory import create_memory_in
 from muliao.agents.naming import new_agent_name, normalize_agent_name
-from muliao.agents.permissions import Rules, check_patterns
-from muliao.agents.revisions import record_in
-from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.platform.db import Database
+from muliao.platform.db import Database, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -91,9 +88,6 @@ class _AgentFields:
     name: str
     description: str
     model: str
-    roles: list[str]
-    allow: list[str]
-    deny: list[str]
     thinking: Thinking
     group: str | None
 
@@ -106,10 +100,6 @@ class AgentInfo:
     name: str
     description: str
     model: str
-    # 分发规则（agents.permissions）：角色（不含隐含的 base）与自己的 allow / deny；最终规则用 AgentService.rules 算
-    roles: tuple[str, ...]
-    allow: tuple[str, ...]
-    deny: tuple[str, ...]
     thinking: Thinking
     created_at: datetime
     # 系统默认 agent（Web 新对话默认选中它），最多一个
@@ -124,22 +114,12 @@ class AgentInfo:
         return self.archived_at is not None
 
 
-def rules_document(roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]) -> str:
-    """agent 的分发规则在版本表里的文档：角色（不含隐含的 base）与自己的 allow / deny。"""
-    return json.dumps(
-        {"roles": list(roles), "allow": list(allow), "deny": list(deny)}, ensure_ascii=False, indent=1
-    )
-
-
 def info_of(agent: Agent) -> AgentInfo:
     return AgentInfo(
         id=agent.id,
         name=agent.name,
         description=agent.description,
         model=agent.model,
-        roles=tuple(agent.roles),
-        allow=tuple(agent.allow),
-        deny=tuple(agent.deny),
         # 写入时与启动时已校验（_check_thinking_level）
         thinking=cast(Thinking, agent.thinking),
         created_at=agent.created_at,
@@ -168,22 +148,6 @@ async def runnable_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     return info_of(await runnable_row_in(s, agent_id))
 
 
-@dataclass(frozen=True)
-class AgentNames:
-    """agent id → 展示名称（包括正在删除的）。别的领域里留着的 id 可能属于已删除的 agent，显示为
-    「(deleted agent <id>)」，而不是报错或露出裸 id。"""
-
-    by_id: dict[str, str]
-
-    def __getitem__(self, agent_id: str) -> str:
-        return self.by_id.get(agent_id, f"(deleted agent {agent_id})")
-
-
-async def agent_names_in(s: AsyncSession) -> AgentNames:
-    """在调用方的事务里取全部 agent 的名称（AgentNames）。"""
-    return AgentNames({agent_id: name for agent_id, name in await s.execute(select(Agent.id, Agent.name))})
-
-
 async def agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     """agent（包括正在删除的）。在调用方的事务里读它的展示信息（名称、模型）：这些字段的修改与调用方的写入之间没有
     先后要求。"""
@@ -198,6 +162,54 @@ async def _row_in(s: AsyncSession, agent_id: str) -> Agent:
     return agent
 
 
+# ---- 删除与归档（agents.lifecycle 编排）对 agents 表的写入 ----
+
+
+async def deletable_in(s: AsyncSession, agent_id: str) -> AgentInfo:
+    """可以开始删除的 agent：存在且不在删除中（否则 NotFound / Conflict）。"""
+    agent = await _row_in(s, agent_id)
+    if agent.deleting_by is not None:
+        raise Conflict(f"agent {agent.name!r} is already being deleted")
+    return info_of(agent)
+
+
+async def mark_deleting_in(s: AsyncSession, agent_id: str, author: str) -> None:
+    """标为正在删除（作者 author）：之后不出现在列表与名称解析里，各领域的写入口按不存在处理。"""
+    await deletable_in(s, agent_id)
+    (await _row_in(s, agent_id)).deleting_by = author
+
+
+async def deletion_author_in(s: AsyncSession, agent_id: str) -> str | None:
+    """正在删除的 agent 的删除作者；行已删除时 None（删除流程重放）。没在删除中说明流程与数据不一致，报错。"""
+    agent = await s.get(Agent, agent_id)
+    if agent is None:
+        return None
+    if agent.deleting_by is None:
+        raise RuntimeError(f"agent {agent_id} had its sessions cleared but is not being deleted")
+    return agent.deleting_by
+
+
+async def remove_in(s: AsyncSession, agent_id: str) -> None:
+    """删除 agent 的行：它名下还归它的条目、记忆与分发规则随之级联删除（各子域先在同一事务里记好删除的版本）。"""
+    await s.delete(await _row_in(s, agent_id))
+
+
+def check_archivable(agent: AgentInfo) -> None:
+    if agent.is_default:
+        raise Conflict(f"agent {agent.name!r} is the default agent; unset it as default first, then archive")
+
+
+async def set_archived_in(s: AsyncSession, agent_id: str, archived: bool) -> AgentInfo:
+    """归档或取消归档还可用的 agent；已是目标状态时不改。归档要求它不是系统默认 agent（check_archivable）。"""
+    agent = await active_row_in(s, agent_id)
+    if (agent.archived_at is not None) != archived:
+        if archived:
+            check_archivable(info_of(agent))
+        agent.archived_at = utcnow() if archived else None
+        await s.flush()
+    return info_of(agent)
+
+
 class AgentService:
     """agent 以系统生成的 id 标识（主键、目录名、外键）；名称只用于展示，可改、唯一。"""
 
@@ -208,14 +220,11 @@ class AgentService:
         # (模型, 思考档位) 在当前配置下不能运行时报 InvalidInput（agent_runtime.llm.ModelRegistry.check）
         model_checker: Callable[[str, Thinking], None],
         defaults: AgentDefaults,
-        # 当前配置下注册的工具（permissions.available_tools）：算最终工具时只在它里面取
-        tools: Sequence[str],
     ):
         self._db = db
         self._workspaces_dir = workspaces_dir
         self._check_model = model_checker
         self.defaults = defaults
-        self.tools = tuple(tools)
 
     def workspace(self, agent_id: str) -> Path:
         return self._workspaces_dir / agent_id
@@ -225,20 +234,13 @@ class AgentService:
         root = self._workspaces_dir
         return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
-    async def rules(self, agent: AgentInfo) -> Rules:
-        """agent 的最终规则（base + 角色 + 自己的 allow / deny），按角色现在的定义算。"""
-        async with self._db.transaction() as s:
-            return await rules_in(s, agent.roles, agent.allow, agent.deny)
-
     async def verify_stored(self) -> None:
-        """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行、角色必须都在（且不含隐含的 base）、规则（含角色的）
-        形式合法且 tool 规则仍匹配登记的工具，与新建、修改时同一套规则（skill / mcp / secret 规则不查是否匹配现有条目：条目
-        可以删了再建）。配置或代码改动（删 provider、工具改名）在启动时暴露，而不是散落到
-        每个任务里失败。正在删除的不查。先报出已删除 agent 的残留工作目录（只记录，不阻止启动）。"""
+        """启动检查：已存 agent 的模型与思考档位必须能按当前配置运行，与新建、修改时同一套规则。配置改动（删 provider）
+        在启动时暴露，而不是散落到每个任务里失败。正在删除的不查。先报出已删除 agent 的残留工作目录（只记录，不阻止启动）。
+        分发规则的检查在 Distribution.verify_stored。"""
         await self._report_leftovers()
-        agents = await self.list()
         broken = []
-        for agent in agents:
+        for agent in await self.list():
             try:
                 _check_thinking_level(agent.thinking)
                 self._check_model(agent.model, agent.thinking)
@@ -249,25 +251,6 @@ class AgentService:
                 "agents reference models or thinking levels not runnable with current config:\n"
                 + "\n".join(broken)
             )
-        async with self._db.transaction() as s:
-            roles = await roles_in(s)
-        broken = []
-        for owner, rules in [
-            *((f"role {r.name}", r.rules) for r in roles.values()),
-            *((f"agent {a.name} ({a.id})", Rules(a.allow, a.deny)) for a in agents),
-        ]:
-            try:
-                check_patterns(rules.allow)
-                check_patterns(rules.deny)
-            except InvalidInput as e:
-                broken.append(f"{owner}: {e}")
-        broken += [
-            f"agent {a.name} ({a.id}): unknown roles {unknown}"
-            for a in agents
-            if (unknown := [r for r in a.roles if r not in roles or not roles[r].assignable])
-        ]
-        if broken:
-            raise RuntimeError("stored tool permissions are invalid:\n" + "\n".join(broken))
 
     async def _report_leftovers(self) -> None:
         """数据库里已删除、还留着工作目录（删除时没删干净）的 agent：记录出来，由人决定是否清理。正在删除的不算：
@@ -278,13 +261,10 @@ class AgentService:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
     def _check(self, fields: _AgentFields) -> None:
-        """不依赖数据库的校验；角色是否存在、新规则是否匹配现有条目在写事务里查（roles.check_assignable_in、
-        check_rules_in）。"""
+        """不依赖数据库的校验；分发规则在写事务里由分发子域校验（agent_rules.check_agent_rules_in）。"""
         _check_thinking_level(fields.thinking)
         if not fields.description.strip():
             raise InvalidInput("agent description must not be empty")
-        check_patterns(fields.allow)
-        check_patterns(fields.deny)
         self._check_model(fields.model, fields.thinking)
 
     async def _ensure_name_free(self, s: AsyncSession, name: str, agent_id: str | None) -> None:
@@ -294,14 +274,11 @@ class AgentService:
             raise Conflict(f"agent name {name!r} is already taken by another agent")
 
     async def create(self, spec: AgentSpec, *, author: str) -> AgentInfo:
-        """author：创建者，"user" 或创建它的 agent 的 id（记在记忆的第一版上）。新 agent 的记忆是空的。"""
+        """author：创建者，"user" 或创建它的 agent 的 id（记在记忆与规则的第一版上）。新 agent 的记忆是空的。"""
         fields = _AgentFields(
             name=new_agent_name(spec.name),
             description=spec.description,
             model=self.defaults.model if spec.model is None else spec.model,
-            roles=list(spec.roles),
-            allow=list(spec.allow),
-            deny=list(spec.deny),
             thinking=spec.thinking,
             group=None if spec.group is None else normalize_group(spec.group),
         )
@@ -310,32 +287,21 @@ class AgentService:
         agent_id = new_agent_id()
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
-            await check_assignable_in(s, fields.roles)
-            await check_rules_in(s, Rules(tuple(fields.allow), tuple(fields.deny)))
             agent = Agent(
                 id=agent_id,
                 name=name,
                 description=fields.description,
                 model=fields.model,
-                roles=fields.roles,
-                allow=fields.allow,
-                deny=fields.deny,
                 thinking=fields.thinking,
                 group=fields.group,
             )
             s.add(agent)
             await s.flush()
-            # 记忆与 agent 的行同一事务：agent 一旦存在，它的记忆就在（每一轮都要读）
-            create_memory_in(s, agent_id, author)
-            record_in(
-                s,
-                Subject.AGENT,
-                agent_id,
-                None,
-                rules_document(fields.roles, fields.allow, fields.deny),
-                author,
-                f"create agent {name}",
+            # 规则与记忆和 agent 的行同一事务：agent 一旦存在，它的规则与记忆就在（每一轮都要读）
+            await create_agent_rules_in(
+                s, agent_id, AgentRules.of(spec.roles, spec.allow, spec.deny), author, f"create agent {name}"
             )
+            create_memory_in(s, agent_id, author)
             # 工作目录与数据库行同事务：建不出来则不插行
             self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
             return info_of(agent)
@@ -346,21 +312,15 @@ class AgentService:
             agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)
             await self._ensure_name_free(s, fields.name, agent_id)
-            await check_assignable_in(s, fields.roles)
-            await check_rules_in(
-                s,
-                Rules(tuple(fields.allow), tuple(fields.deny)),
-                Rules(tuple(agent.allow), tuple(agent.deny)),
+            before = await agent_rules_in(s, agent_id)
+            rules = AgentRules.of(
+                before.roles if patch.roles is None else patch.roles,
+                before.allow if patch.allow is None else patch.allow,
+                before.deny if patch.deny is None else patch.deny,
             )
-            before = rules_document(agent.roles, agent.allow, agent.deny)
-            after = rules_document(fields.roles, fields.allow, fields.deny)
-            record_in(
-                s, Subject.AGENT, agent_id, before, after, author, f"update rules of agent {fields.name}"
-            )
+            await update_agent_rules_in(s, agent_id, rules, author, f"update rules of agent {fields.name}")
             agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
             agent.thinking = fields.thinking
-            # JSON 列只在整体赋值时被追踪
-            agent.roles, agent.allow, agent.deny = fields.roles, fields.allow, fields.deny
             agent.group = fields.group
             await s.flush()
             return info_of(agent)
@@ -379,14 +339,11 @@ class AgentService:
             return info_of(agent)
 
     def _validated(self, agent: Agent, patch: AgentPatch) -> _AgentFields:
-        """patch 合并到 agent 当前值之后的字段，校验过（不合法时报 InvalidInput）。"""
+        """patch 合并到 agent 当前值之后的字段（分发规则之外），校验过（不合法时报 InvalidInput）。"""
         fields = _AgentFields(
             name=agent.name if patch.name is None else new_agent_name(patch.name),
             description=agent.description if patch.description is None else patch.description,
             model=agent.model if patch.model is None else patch.model,
-            roles=list(agent.roles if patch.roles is None else patch.roles),
-            allow=list(agent.allow if patch.allow is None else patch.allow),
-            deny=list(agent.deny if patch.deny is None else patch.deny),
             thinking=cast(Thinking, agent.thinking) if patch.thinking is None else patch.thinking,
             group=agent.group if patch.group is None else normalize_group(patch.group),
         )

@@ -1,9 +1,12 @@
-"""条目的两条规则，只在这里写一次：
+"""条目的两条规则（分发子域），只在这里写一次：
 
 1. 能用（Grants.uses）：agent 能用的条目 = 它自己 owner 的 ∪ 它的规则（agents.permissions，base + 角色 + 自己的 allow /
    deny）放行的。deny 只作用于规则分来的，不作用于自己的条目。用户（界面）能用全部。
 2. 能改（check_change_in）：用户、条目的 owner、带 admin 角色的 agent；否则 Forbidden，并说出 owner 是谁。owner 为 None
    的条目归平台（迁移前的公共条目、用户在界面上建的、内置工具）。
+
+由此派生的也都在这里：一份配置能用哪些（reach_in）、条目分发出去了没有与收录它的角色（sharing_in），以及条目子域的查询加上
+规则的 changeable_in / writable_in / usable_in。
 
 规则按读出时角色的定义算：运行开始时算一次工具列表（Toolbox.profile），条目在用到时（skill 索引、MCP 连接、secret
 解析）按当时的定义算。
@@ -14,15 +17,17 @@ from __future__ import annotations
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.kinds import Kind, StoredKind, label
-from muliao.agents.permissions import ADMIN, BASE, Rules
+from muliao.agents.active import active_row_in
+from muliao.agents.agent_rules import AgentRules, agent_rules_in, all_agent_rules_in
+from muliao.agents.items import check_owner_active_in, existing_in, item_in, items_in, keys_in, owner_label_in
+from muliao.agents.kinds import Kind, StoredKind, as_kind, label
+from muliao.agents.permissions import ADMIN, BASE, Role, Rules, ToolSpec, pattern_of, spec_of
 from muliao.agents.revisions import USER
-from muliao.agents.roles import roles_in, rules_in, rules_of
-from muliao.agents.tables import Agent, Item
-from muliao.errors import Forbidden, NotFound
+from muliao.agents.roles import roles_in
+from muliao.agents.tables import Item
+from muliao.errors import Forbidden
 
 
 @dataclass(frozen=True)
@@ -35,7 +40,7 @@ class Grants:
 
     @classmethod
     def of(cls, agent_id: str, roles: Collection[str], rules: Rules) -> Grants:
-        """agent 的 Grants：rules 是它的最终规则（roles.rules_in），带 admin 角色就能改任何条目。"""
+        """agent 的 Grants：rules 是它的最终规则（AgentRules.effective），带 admin 角色就能改任何条目。"""
         return cls(agent_id, rules, ADMIN in roles)
 
     def uses(self, kind: Kind, name: str, owner: str | None) -> bool:
@@ -59,21 +64,8 @@ def granted_by(rules: Rules) -> Keep:
     return lambda kind, name, _owner: rules.allows(kind, name)
 
 
-async def shared_in(s: AsyncSession) -> Keep:
-    """「分发出去了」：base 收录它（人人可用，也给以后新建的 agent），或某个不是它 owner 的 agent 的规则（base + 角色 +
-    它自己的 allow / deny）放行它。只有一个定义：条目页据此说明谁能用（CatalogEntry.shared），删 agent 时据此把它名下
-    分发出去的条目转给平台。没分给任何 agent 的自建角色收录它不算。agent 包括正在删除的。"""
-    known = await roles_in(s)
-    base = known[BASE].effective
-    others = [
-        (a.id, rules_of(known, a.roles, a.allow, a.deny))
-        for a in await s.scalars(select(Agent).order_by(Agent.id))
-    ]
-
-    def shared(kind: Kind, name: str, owner: str | None) -> bool:
-        return base.allows(kind, name) or any(r.allows(kind, name) for a, r in others if a != owner)
-
-    return shared
+def grants_of(agent_id: str, rules: AgentRules, known: dict[str, Role]) -> Grants:
+    return Grants.of(agent_id, rules.roles, rules.effective(known))
 
 
 async def grants_in(s: AsyncSession, actor: str) -> Grants:
@@ -81,18 +73,33 @@ async def grants_in(s: AsyncSession, actor: str) -> Grants:
     active_row_in 拦下）。"""
     if actor == USER:
         return USER_GRANTS
-    agent = await s.get(Agent, actor)
-    if agent is None:
-        raise NotFound(f"agent {actor!r} not found")
-    return Grants.of(actor, agent.roles, await rules_in(s, agent.roles, agent.allow, agent.deny))
+    return grants_of(actor, await agent_rules_in(s, actor), await roles_in(s))
 
 
-async def owner_label_in(s: AsyncSession, owner: str | None) -> str:
-    """给模型与用户看的 owner：agent 名，或 platform。"""
-    if owner is None:
-        return "the platform"
-    agent = await s.get(Agent, owner)
-    return f"agent {agent.name if agent is not None else owner!r}"
+@dataclass(frozen=True)
+class Sharing:
+    """条目的分发情况，一次读出角色与全部 agent 的规则后算多项。"""
+
+    roles: tuple[Role, ...]
+    base: Rules
+    # 每个 agent（包括正在删除的）的最终规则
+    agents: tuple[tuple[str, Rules], ...]
+
+    def shared(self, kind: Kind, name: str, owner: str | None) -> bool:
+        """「分发出去了」：base 收录它（人人可用，也给以后新建的 agent），或某个不是它 owner 的 agent 的规则放行它。只有一个
+        定义：条目页据此说明谁能用（CatalogEntry.shared），删 agent 时据此把它名下分发出去的条目转给平台。没分给任何 agent
+        的自建角色收录它不算。"""
+        return self.base.allows(kind, name) or any(r.allows(kind, name) for a, r in self.agents if a != owner)
+
+    def including(self, kind: Kind, name: str) -> tuple[str, ...]:
+        """收录它的角色（含内置的）。"""
+        return tuple(r.name for r in self.roles if r.effective.allows(kind, name))
+
+
+async def sharing_in(s: AsyncSession) -> Sharing:
+    known = await roles_in(s)
+    agents = tuple((a, r.effective(known)) for a, r in (await all_agent_rules_in(s)).items())
+    return Sharing(tuple(known.values()), known[BASE].effective, agents)
 
 
 async def check_change_in(s: AsyncSession, actor: str, row: Item) -> None:
@@ -102,3 +109,50 @@ async def check_change_in(s: AsyncSession, actor: str, row: Item) -> None:
             f"{label(StoredKind(row.kind))} {row.name!r} belongs to {await owner_label_in(s, row.owner)}; only its owner or an "
             "admin can change it"
         )
+
+
+async def changeable_in(s: AsyncSession, kind: StoredKind, name: str, actor: str) -> Item:
+    """要改或删的已有条目：existing_in，且 actor 能改它（规则 2）。"""
+    row = await existing_in(s, kind, name)
+    await check_change_in(s, actor, row)
+    return row
+
+
+async def writable_in(
+    s: AsyncSession, kind: StoredKind, name: str, actor: str, owner: str | None
+) -> Item | None:
+    """新建或整体改写之前：已存在就按规则 2 检查并返回它（owner 不变）；不存在时返回 None，新条目将归 owner（agent 时
+    检查它还可用）。"""
+    row = await item_in(s, kind, name)
+    if row is not None:
+        await check_owner_active_in(s, kind, row)
+        await check_change_in(s, actor, row)
+        return row
+    if owner is not None:
+        await active_row_in(s, owner)
+    return None
+
+
+async def usable_in(s: AsyncSession, kind: StoredKind, user: str) -> list[Item]:
+    """user（agent 的 id 或 revisions.USER）能用的（规则 1），按名称。"""
+    grants = await grants_in(s, user)
+    return [r for r in await items_in(s, kind) if grants.uses(as_kind(kind), r.name, r.owner)]
+
+
+@dataclass(frozen=True)
+class Reach:
+    """一份配置能用的：内置工具（按登记顺序）与 skill、MCP server、secret（`kind:name`，按种类、名称）。"""
+
+    tools: list[ToolSpec]
+    items: list[str]
+
+    @property
+    def tool_names(self) -> list[str]:
+        return [t.name for t in self.tools]
+
+
+async def reach_in(s: AsyncSession, available: Collection[str], rules: Rules, keep: Keep) -> Reach:
+    """工具按 rules 在 available（当前配置下注册的工具）里取；条目是 keep(kind, name, owner) 为真的。界面预览、角色的覆盖范围、
+    get_agent 共用。"""
+    items = [pattern_of(k, n) for k, n, o in await keys_in(s) if keep(k, n, o)]
+    return Reach([spec_of(n) for n in rules.tools(available)], items)

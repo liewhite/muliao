@@ -1,8 +1,9 @@
-"""条目（表 items）：skill、MCP server、secret 共用的存取规则。各种类的 store（skills、mcp、secrets）只给出自己的内容。
+"""条目（表 items，条目子域）：skill、MCP server、secret 共用的存取规则。各种类的 store（skills、mcp、secrets）只给出自己的内容；
+owner 的变更（转移、随 agent 删除）在 agents.ownership；谁能用、谁能改是分发子域的规则（agents.access 的 changeable_in、
+writable_in、usable_in 在这里的查询上加上规则）。
 
 - 名字按种类全局唯一（没有同名遮蔽）。
-- 改、删已有条目按规则 2（agents.access.check_change_in）：用户、owner 或 admin。
-- 正在删除的 agent 的条目按不存在处理：读（existing_in、check_visible_in、条目池的列表）与写一样。
+- 正在删除的 agent 的条目按不存在处理：读（existing_in、check_visible_in、visible_in）与写一样。
 - 新建条目的 owner 由调用方给出（agent 建的归它自己）；为 agent 新建时在同一个写事务里检查它还可用（正在删除的按不存在
   处理，agents.active）。
 - 每次修改与版本（revisions）在同一个事务里记。
@@ -10,16 +11,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
-from dataclasses import dataclass
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.access import Keep, check_change_in, grants_in
-from muliao.agents.active import active_row_in
-from muliao.agents.kinds import Kind, StoredKind, as_kind, label
-from muliao.agents.permissions import Rules, ToolSpec, pattern_of, spec_of
+from muliao.agents.active import active_row_in, agent_name_in, deleting_ids
+from muliao.agents.kinds import Kind, StoredKind, label
+from muliao.agents.permissions import pattern_of
 from muliao.agents.tables import Item
 from muliao.errors import Conflict, NotFound
 
@@ -34,7 +31,7 @@ async def existing_in(s: AsyncSession, kind: StoredKind, name: str) -> Item:
     row = await item_in(s, kind, name)
     if row is None:
         raise NotFound(f"{label(kind)} {name!r} not found")
-    await _check_owner_active_in(s, kind, row)
+    await check_owner_active_in(s, kind, row)
     return row
 
 
@@ -42,17 +39,10 @@ async def check_visible_in(s: AsyncSession, kind: StoredKind, name: str) -> None
     """看版本历史之前：条目还在时同 existing_in（正在删除的 agent 的按不存在处理）；已经删掉的照样看得到它的历史。"""
     row = await item_in(s, kind, name)
     if row is not None:
-        await _check_owner_active_in(s, kind, row)
+        await check_owner_active_in(s, kind, row)
 
 
-async def changeable_in(s: AsyncSession, kind: StoredKind, name: str, actor: str) -> Item:
-    """要改或删的已有条目：existing_in，且 actor 能改它（规则 2）。"""
-    row = await existing_in(s, kind, name)
-    await check_change_in(s, actor, row)
-    return row
-
-
-async def _check_owner_active_in(s: AsyncSession, kind: StoredKind, row: Item) -> None:
+async def check_owner_active_in(s: AsyncSession, kind: StoredKind, row: Item) -> None:
     if row.owner is not None:
         try:
             await active_row_in(s, row.owner)
@@ -68,47 +58,41 @@ async def creatable_in(s: AsyncSession, kind: StoredKind, name: str, owner: str 
         await active_row_in(s, owner)
 
 
-async def writable_in(
-    s: AsyncSession, kind: StoredKind, name: str, actor: str, owner: str | None
-) -> Item | None:
-    """新建或整体改写之前：已存在就按规则 2 检查并返回它（owner 不变）；不存在时返回 None，新条目将归 owner（agent 时
-    检查它还可用）。"""
-    row = await item_in(s, kind, name)
-    if row is not None:
-        await _check_owner_active_in(s, kind, row)
-        await check_change_in(s, actor, row)
-        return row
-    if owner is not None:
-        await active_row_in(s, owner)
-    return None
-
-
 async def items_in(s: AsyncSession, kind: StoredKind) -> list[Item]:
     """这一种的全部条目，按名称。"""
     return list(await s.scalars(select(Item).where(Item.kind == kind.value).order_by(Item.name)))
 
 
-async def usable_in(s: AsyncSession, kind: StoredKind, user: str) -> list[Item]:
-    """user（agent 的 id 或 revisions.USER）能用的（规则 1），按名称。"""
-    grants = await grants_in(s, user)
-    return [r for r in await items_in(s, kind) if grants.uses(as_kind(kind), r.name, r.owner)]
+async def visible_in(s: AsyncSession) -> list[Item]:
+    """全部条目（正在删除的 agent 的除外），按种类、名称：条目页。"""
+    return list(
+        await s.scalars(
+            select(Item)
+            .where(Item.owner.is_(None) | Item.owner.not_in(deleting_ids()))
+            .order_by(Item.kind, Item.name)
+        )
+    )
 
 
-@dataclass(frozen=True)
-class Reach:
-    """一份配置能用的：内置工具（按登记顺序）与 skill、MCP server、secret（`kind:name`，按种类、名称）。"""
-
-    tools: list[ToolSpec]
-    items: list[str]
-
-    @property
-    def tool_names(self) -> list[str]:
-        return [t.name for t in self.tools]
-
-
-async def reach_in(s: AsyncSession, available: Collection[str], rules: Rules, keep: Keep) -> Reach:
-    """工具按 rules 在 available（当前配置下注册的工具）里取；条目是 keep(kind, name, owner) 为真的。界面预览、角色的覆盖范围、
-    get_agent 共用。"""
+async def keys_in(s: AsyncSession) -> list[tuple[Kind, str, str | None]]:
+    """全部条目的 (种类, 名字, owner)，按种类、名称：算一份配置能用哪些（agents.access.reach_in）。"""
     rows = await s.execute(select(Item.kind, Item.name, Item.owner).order_by(Item.kind, Item.name))
-    items = [pattern_of(Kind(k), n) for k, n, o in rows if keep(Kind(k), n, o)]
-    return Reach([spec_of(n) for n in rules.tools(available)], items)
+    return [(Kind(k), n, o) for k, n, o in rows]
+
+
+async def patterns_in(s: AsyncSession) -> list[str]:
+    """全部条目的 `kind:name`：新写的分发规则要至少匹配一个（agents.roles.check_new_items_in）。"""
+    return [pattern_of(Kind(k), n) for k, n in await s.execute(select(Item.kind, Item.name))]
+
+
+async def owned_in(s: AsyncSession, owner: str) -> list[Item]:
+    """owner 名下的全部条目（删除 agent 时，agents.ownership.retire_owned_in）。"""
+    return list(await s.scalars(select(Item).where(Item.owner == owner).order_by(Item.kind, Item.name)))
+
+
+async def owner_label_in(s: AsyncSession, owner: str | None) -> str:
+    """给模型与用户看的 owner：agent 名，或 platform。"""
+    if owner is None:
+        return "the platform"
+    name = await agent_name_in(s, owner)
+    return f"agent {name if name is not None else owner!r}"

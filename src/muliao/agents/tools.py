@@ -6,10 +6,10 @@ from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.catalog import ItemCatalog
+from muliao.agents.distribution import Distribution, RoleSpec
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.permissions import Role
-from muliao.agents.role_service import RoleService, RoleSpec
 from muliao.agents.service import AgentInfo, AgentPatch, AgentService, AgentSpec, Thinking
 from muliao.errors import Conflict, InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -79,7 +79,7 @@ def agent_directory(agents: Iterable[AgentInfo]) -> list[AgentGroup]:
 
 def agents_toolset(
     agents: AgentService,
-    roles: RoleService,
+    distribution: Distribution,
     lifecycle: AgentLifecycle,
     catalog: ItemCatalog,
 ) -> FunctionToolset[RunScope]:
@@ -100,7 +100,8 @@ def agents_toolset(
             agent: Agent name.
         """
         target = await agents.find_by_name(agent)
-        reach = await catalog.reach(target.id)
+        rules = await distribution.agent_rules(target.id)
+        reach = await distribution.reach(target.id)
         return AgentDetail(
             name=target.name,
             description=target.description,
@@ -108,13 +109,13 @@ def agents_toolset(
             archived=target.archived,
             model=target.model,
             thinking=target.thinking,
-            roles=list(target.roles),
-            allow=list(target.allow),
-            deny=list(target.deny),
+            roles=list(rules.roles),
+            allow=list(rules.allow),
+            deny=list(rules.deny),
             tools=reach.tool_names,
             items=reach.items,
-            available_roles=[RoleDetail.of(r) for r in await roles.list()],
-            all_tools=list(agents.tools),
+            available_roles=[RoleDetail.of(r) for r in await distribution.list()],
+            all_tools=list(distribution.tools),
         )
 
     @ts.tool
@@ -265,7 +266,7 @@ def agents_toolset(
             allow: Rules to allow.
             deny: Rules to deny; deny wins over every allow, also over other roles' allows.
         """
-        role = await roles.create(RoleSpec(name, description, allow, deny), actor=ctx.deps.agent_id)
+        role = await distribution.create(RoleSpec(name, description, allow, deny), actor=ctx.deps.agent_id)
         return f"created role {role.name}"
 
     @ts.tool
@@ -286,7 +287,9 @@ def agents_toolset(
             allow: New full list of rules to allow (`get_agent` shows the current ones).
             deny: New full list of rules to deny.
         """
-        await roles.patch(name, actor=ctx.deps.agent_id, description=description, allow=allow, deny=deny)
+        await distribution.patch(
+            name, actor=ctx.deps.agent_id, description=description, allow=allow, deny=deny
+        )
         return f"updated role {name}"
 
     @ts.tool
@@ -296,7 +299,7 @@ def agents_toolset(
         Args:
             name: Role name.
         """
-        await roles.delete(name, actor=ctx.deps.agent_id)
+        await distribution.delete(name, actor=ctx.deps.agent_id)
         return f"deleted role {name}"
 
     return ts

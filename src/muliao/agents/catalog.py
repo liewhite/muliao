@@ -1,5 +1,6 @@
-"""条目池（ItemCatalog）：跨种类看条目——全部条目与收录它们的角色（界面的条目页）、一个 agent 能用的（reach）、agent 配置的预览、
-转移 owner、版本历史与恢复。各种类自己的内容与写入在各 store（skills、mcp、secrets）；能用、能改的规则在 agents.access。"""
+"""条目池（ItemCatalog，条目子域的门面）：跨种类看条目——全部条目与收录它们的角色（界面的条目页）、转移 owner、版本历史与恢复。
+各种类自己的内容与写入在各 store（skills、mcp、secrets）；owner 的变更在 agents.ownership；能用、能改的规则与一个 agent 能用的
+（reach）是分发子域的（agents.access、agents.distribution）。"""
 
 from __future__ import annotations
 
@@ -8,19 +9,15 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
-
-from muliao.agents.access import Grants, granted_by, grants_in, owner_label_in, shared_in
+from muliao.agents.access import changeable_in, sharing_in
 from muliao.agents.active import active_row_in
-from muliao.agents.documents import document_in
-from muliao.agents.items import Reach, changeable_in, check_visible_in, reach_in
+from muliao.agents.items import check_visible_in, owner_label_in, visible_in
 from muliao.agents.kinds import Kind, StoredKind, Subject, as_subject, label
 from muliao.agents.mcp import McpRegistry, McpServer, server_of
-from muliao.agents.permissions import Rules, ToolSpec, spec_of
-from muliao.agents.revisions import RESTORABLE, RevisionInfo, history_in, record_in
-from muliao.agents.roles import check_assignable_in, check_rules_in, roles_in, rules_in
+from muliao.agents.ownership import transfer_in
+from muliao.agents.permissions import ToolSpec, spec_of
+from muliao.agents.revisions import RESTORABLE, RevisionInfo, history_in
 from muliao.agents.skills import SkillStore
-from muliao.agents.tables import Agent, Item
 from muliao.errors import InvalidInput
 from muliao.platform.db import Database
 
@@ -38,7 +35,7 @@ class CatalogEntry:
     updated_at: datetime | None
     # 收录它的角色（含内置的，permissions.Rules.allows）
     roles: tuple[str, ...]
-    # 分发出去了（agents.access.shared_in）：否则只有 owner 能用（归平台的就没有 agent 能用）
+    # 分发出去了（agents.access.Sharing.shared）：否则只有 owner 能用（归平台的就没有 agent 能用）
     shared: bool
     # 内置工具的读写与是否管理类；别的种类为 None
     tool: ToolSpec | None = None
@@ -70,19 +67,9 @@ class ItemCatalog:
     async def catalog(self) -> list[CatalogEntry]:
         """全部条目：内置工具（按登记顺序）在前，skill、MCP server、secret 按种类、名称；每项带收录它的角色。"""
         async with self._db.transaction() as s:
-            roles = list((await roles_in(s)).values())
-            shared = await shared_in(s)
+            sharing = await sharing_in(s)
             # 正在删除的 agent 的条目按不存在处理（agents.items）
-            deleting = select(Agent.id).where(Agent.deleting_by.is_not(None))
-            items = await s.scalars(
-                select(Item)
-                .where(Item.owner.is_(None) | Item.owner.not_in(deleting))
-                .order_by(Item.kind, Item.name)
-            )
-
-            def including(kind: Kind, name: str) -> tuple[str, ...]:
-                return tuple(r.name for r in roles if r.effective.allows(kind, name))
-
+            items = await visible_in(s)
             tools = [
                 CatalogEntry(
                     Kind.TOOL,
@@ -90,8 +77,8 @@ class ItemCatalog:
                     None,
                     "",
                     None,
-                    including(Kind.TOOL, n),
-                    shared(Kind.TOOL, n, None),
+                    sharing.including(Kind.TOOL, n),
+                    sharing.shared(Kind.TOOL, n, None),
                     tool=spec_of(n),
                 )
                 for n in self._tools
@@ -103,35 +90,12 @@ class ItemCatalog:
                     i.owner,
                     i.description,
                     i.updated_at,
-                    including(Kind(i.kind), i.name),
-                    shared(Kind(i.kind), i.name, i.owner),
+                    sharing.including(Kind(i.kind), i.name),
+                    sharing.shared(Kind(i.kind), i.name, i.owner),
                     mcp=server_of(i) if i.kind == StoredKind.MCP else None,
                 )
                 for i in items
             ]
-
-    async def reach(self, agent_id: str) -> Reach:
-        """agent 最终能用的内置工具与 skill、MCP server、secret（agents.access 的规则 1），一个事务里按角色现在的定义算：
-        get_agent 与界面同一套计算；运行时（agent_runtime.Toolbox）按实际注册的工具集算，两者一致由组合根启动时核对
-        available_tools 与注册的工具保证（container._check_permissions）。"""
-        async with self._db.transaction() as s:
-            grants = await grants_in(s, agent_id)
-            return await reach_in(s, self._tools, grants.rules, grants.uses)
-
-    async def preview(
-        self, agent_id: str | None, roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]
-    ) -> Reach:
-        """agent（None 为还没建的）按还没保存的配置能用的内置工具与条目（界面预览），与写入时同样校验：已存的规则算作
-        「之前的」，不要求仍匹配现有条目。"""
-        async with self._db.transaction() as s:
-            row = None if agent_id is None else await active_row_in(s, agent_id)
-            before = Rules() if row is None else Rules(tuple(row.allow), tuple(row.deny))
-            await check_rules_in(s, Rules(tuple(allow), tuple(deny)), before)
-            await check_assignable_in(s, roles)
-            rules = await rules_in(s, roles, allow, deny)
-            # 还没建的 agent 没有自己的条目，只看规则；已有的按 agents.access 的规则 1
-            keep = granted_by(rules) if agent_id is None else Grants.of(agent_id, roles, rules).uses
-            return await reach_in(s, self._tools, rules, keep)
 
     async def transfer_item(self, kind: StoredKind, name: str, owner: str | None, actor: str) -> None:
         """把条目转给 owner（agent 的 id；None 归平台），记一版。actor 要能改它（规则 2），新 owner 要还可用（归档的也行：
@@ -144,15 +108,7 @@ class ItemCatalog:
                 )
             if owner is not None:
                 await active_row_in(s, owner)
-            message = (
-                f"transfer {label(kind)} {name} from {await owner_label_in(s, row.owner)} "
-                f"to {await owner_label_in(s, owner)}"
-            )
-            doc = await document_in(s, row)
-            # 文档不含 owner：前后相同，照样记一版
-            record_in(s, as_subject(kind), name, doc, doc, actor, message, force=True)
-            row.owner = owner
-        log.info("item transferred", extra={"kind": kind.value, "item": name, "owner": owner, "actor": actor})
+            await transfer_in(s, row, owner, actor)
 
     async def history(self, kind: StoredKind, name: str, limit: int) -> list[RevisionInfo]:
         """新的在前，第一条即当前的一版（已删除时是那次删除）。"""

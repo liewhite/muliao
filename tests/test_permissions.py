@@ -8,8 +8,8 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
 from muliao.agents.api import McpTransport, RoleSpec, Rules, StoredKind, Subject, mcp_config
-from muliao.agents.documents import DOCUMENTS
 from muliao.agents.kinds import as_kind, as_subject
+from muliao.agents.ownership import DOCUMENTS
 from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, TOOLS, Kind, check_patterns
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
@@ -68,17 +68,17 @@ def test_base_has_every_tool_but_admin_ones_and_admin_has_all():
 
 async def test_new_agents_have_base_implicitly(container):
     agent = await container.agents.create(AgentSpec(name="a", description="d"), author="user")
-    assert agent.roles == ()
-    tools = (await container.catalog.reach(agent.id)).tool_names
+    assert (await container.distribution.agent_rules(agent.id)).roles == ()
+    tools = (await container.distribution.reach(agent.id)).tool_names
     assert not set(tools) & _ADMIN_TOOLS and {"run_shell", "memory_edit", "vault_set"} <= set(tools)
     with pytest.raises(InvalidInput, match="implicit"):
         await container.agents.create(AgentSpec(name="b", description="d", roles=[BASE]), author="user")
     admin = await container.agents.create(AgentSpec(name="c", description="d", roles=[ADMIN]), author="user")
-    assert (await container.catalog.reach(admin.id)).tool_names == list(container.agents.tools)
+    assert (await container.distribution.reach(admin.id)).tool_names == list(container.distribution.tools)
 
 
 async def test_roles_are_created_assigned_updated_and_protected(container):
-    roles = container.roles
+    roles = container.distribution
     await roles.create(
         RoleSpec("reviewer", "reads issues", ["tool:issue_*"], ["tool:issue_update"]), actor="user"
     )
@@ -99,9 +99,9 @@ async def test_roles_are_created_assigned_updated_and_protected(container):
         AgentSpec(name="r", description="d", deny=["tool:*"], roles=["reviewer"]), author="user"
     )
     # 自己的 deny 盖过 base 与角色
-    assert (await container.catalog.reach(agent.id)).tool_names == []
+    assert (await container.distribution.reach(agent.id)).tool_names == []
     agent = await container.agents.update(agent.id, AgentPatch(deny=["tool:run_shell"]), author="user")
-    assert "issue_update" not in (await container.catalog.reach(agent.id)).tool_names
+    assert "issue_update" not in (await container.distribution.reach(agent.id)).tool_names
 
     with pytest.raises(Conflict, match="used by agents"):
         await roles.delete("reviewer", actor="user")
@@ -119,13 +119,13 @@ async def test_a_role_hands_out_skills_and_secrets_and_an_items_owner_always_has
     assert [s.name for s in await container.skills.index(owner.id)] == ["relay-host"]
     assert await container.skills.index(trader.id) == []
 
-    await container.roles.create(
+    await container.distribution.create(
         RoleSpec("relay-trader", "relay", ["skill:relay-host", "secret:RELAY_*"], []), actor="user"
     )
     await container.agents.update(trader.id, AgentPatch(roles=["relay-trader"]), author="user")
     assert [s.name for s in await container.skills.index(trader.id)] == ["relay-host"]
     assert await container.vault.resolve_many(trader.id, ["RELAY_KEY"]) == {"RELAY_KEY": "v"}
-    assert (await container.catalog.reach(trader.id)).items == ["secret:RELAY_KEY", "skill:relay-host"]
+    assert (await container.distribution.reach(trader.id)).items == ["secret:RELAY_KEY", "skill:relay-host"]
     with pytest.raises(NotFound):
         await container.vault.resolve_many(other.id, ["RELAY_KEY"])
 
@@ -169,8 +169,8 @@ async def test_a_deleted_agents_shared_items_move_to_the_platform(container, mak
     owner, user = await make_agent("owner"), await make_agent("user1")
     await container.skills.write("shared", "d", "b", actor=owner.id, owner=owner.id)
     await container.skills.write("alone", "d", "b", actor=owner.id, owner=owner.id)
-    base = await container.roles.get(BASE)
-    await container.roles.update(RoleSpec(BASE, base.description, ["skill:shared"], []), actor="user")
+    base = await container.distribution.get(BASE)
+    await container.distribution.update(RoleSpec(BASE, base.description, ["skill:shared"], []), actor="user")
     await container.agent_lifecycle.delete(owner.id, author="user")
     await drain(container)
     assert await owned(container, "skill", None) == ["shared"]
@@ -235,7 +235,7 @@ async def test_mcp_is_what_the_agent_owns_or_its_roles_give_it(container, models
     spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
     await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
     await container.mcp.add("other", spec, actor="user", owner=None, probe=False)
-    await container.roles.create(RoleSpec("echoer", "echo", ["mcp:echo"], []), actor="user")
+    await container.distribution.create(RoleSpec("echoer", "echo", ["mcp:echo"], []), actor="user")
     picky = await container.agents.create(
         AgentSpec(name="picky", description="d", model="m1", roles=["echoer"]), author="user"
     )
@@ -265,12 +265,14 @@ async def test_mcp_is_what_the_agent_owns_or_its_roles_give_it(container, models
 async def test_an_item_rule_survives_its_item_being_removed(container):
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
-    await container.roles.create(RoleSpec("echoer", "echo", ["mcp:echo"], []), actor="user")
+    await container.distribution.create(RoleSpec("echoer", "echo", ["mcp:echo"], []), actor="user")
     await container.mcp.remove("echo", "user")
     # 已有的规则不查是否匹配现有条目：改描述照常
-    await container.roles.update(RoleSpec("echoer", "new", ["mcp:echo"], []), actor="user")
+    await container.distribution.update(RoleSpec("echoer", "new", ["mcp:echo"], []), actor="user")
     with pytest.raises(InvalidInput, match="no existing"):
-        await container.roles.update(RoleSpec("echoer", "new", ["mcp:echo", "mcp:gone"], []), actor="user")
+        await container.distribution.update(
+            RoleSpec("echoer", "new", ["mcp:echo", "mcp:gone"], []), actor="user"
+        )
 
 
 async def test_tools_and_roles_api(client, container):
@@ -342,7 +344,7 @@ def test_every_stored_kind_is_a_kind_and_a_subject_with_a_document():
 
 
 async def test_role_and_agent_rule_changes_are_recorded(container, make_agent):
-    roles = container.roles
+    roles = container.distribution
     await roles.create(RoleSpec("triage", "issues", ["tool:issue_*"], []), actor="user")
     base = await roles.get(BASE)
     await roles.patch(BASE, actor="boss", allow=["tool:issue_*"])
@@ -375,17 +377,20 @@ async def test_role_and_agent_rule_changes_are_recorded(container, make_agent):
     await drain(container)
     gone = (await history(container, Subject.AGENT, agent.id, 1))[0]
     assert gone.after is None and gone.before == revs[0].after
+    # 规则行随 agent 的行级联删除
+    with pytest.raises(NotFound):
+        await container.distribution.agent_rules(agent.id)
 
 
 async def test_an_item_denied_to_every_other_agent_goes_with_its_owner(container, make_agent):
     owner, other = await make_agent("owner"), await make_agent("other")
     await container.skills.write("shared", "d", "b", actor=owner.id, owner=owner.id)
     await container.skills.write("public", "d", "b", actor=owner.id, owner=owner.id)
-    await container.roles.create(RoleSpec("triage", "t", ["skill:shared"], []), actor="user")
+    await container.distribution.create(RoleSpec("triage", "t", ["skill:shared"], []), actor="user")
     patch = AgentPatch(roles=["triage"], deny=["skill:shared", "skill:public"])
     await container.agents.update(other.id, patch, author="user")
-    base = await container.roles.get(BASE)
-    await container.roles.update(RoleSpec(BASE, base.description, ["skill:public"], []), actor="user")
+    base = await container.distribution.get(BASE)
+    await container.distribution.update(RoleSpec(BASE, base.description, ["skill:public"], []), actor="user")
     # 条目页与删除用同一个「收录」：triage 收录它，但带 triage 的唯一一个 agent 拦了它，没人在用
     [entry] = [e for e in await container.catalog.catalog() if e.name == "shared"]
     assert entry.roles == ("triage",)

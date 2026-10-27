@@ -31,14 +31,10 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
-    # 分发规则（agents.permissions）：角色名（不含每个 agent 隐含的 base）与它自己的 allow / deny（`kind:glob`）
-    roles: Mapped[list[str]] = mapped_column(JSON)
-    allow: Mapped[list[str]] = mapped_column(JSON, server_default=text("'[]'"))
-    deny: Mapped[list[str]] = mapped_column(JSON, server_default=text("'[]'"))
     # 思考档位（agents.service.Thinking）；"default" 表示不传、按模型与服务端默认
     thinking: Mapped[str] = mapped_column(String(16), default="default", server_default="default")
     # 正在删除时是发起删除的作者（docs/architecture.md 第 10 节）：不出现在列表与名称解析里，各领域清理完它的数据后删除
-    # 这一行（它名下的条目与记忆随之删除，删除的版本记这个作者）
+    # 这一行（它名下的条目、记忆与分发规则随之删除，删除的版本记这个作者）
     deleting_by: Mapped[str | None] = mapped_column(String(64))
     # 系统默认 agent（AgentService.set_default）；行删除时设置随之消失，正在删除的不出现在列表里
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
@@ -48,6 +44,23 @@ class Agent(Base):
     archived_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+def _owner_ref() -> ForeignKey:
+    # 同一领域内的外键：agent 的行删除时它名下的条目、记忆与分发规则一起删除（AgentLifecycle.on_sessions_cleared）
+    return ForeignKey("agents.id", ondelete="CASCADE")
+
+
+class AgentRules(Base):
+    """agent 的分发规则（agents.agent_rules，分发子域）：角色名（不含每个 agent 隐含的 base）与它自己的 allow / deny
+    （`kind:glob`）。每个 agent 一行，与 agent 的行同一事务创建、随它级联删除。"""
+
+    __tablename__ = "agent_rules"
+
+    agent_id: Mapped[str] = mapped_column(String(32), _owner_ref(), primary_key=True)
+    roles: Mapped[list[str]] = mapped_column(JSON)
+    allow: Mapped[list[str]] = mapped_column(JSON)
+    deny: Mapped[list[str]] = mapped_column(JSON)
 
 
 class Role(Base):
@@ -62,11 +75,6 @@ class Role(Base):
     deny: Mapped[list[str]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
-
-
-def _owner_ref() -> ForeignKey:
-    # 同一领域内的外键：agent 的行删除时它名下的条目与记忆一起删除（AgentLifecycle.on_sessions_cleared）
-    return ForeignKey("agents.id", ondelete="CASCADE")
 
 
 class Item(Base):

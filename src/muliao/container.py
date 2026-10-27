@@ -18,10 +18,10 @@ from muliao.agent_runtime.mcp import McpConnector
 from muliao.agents.api import (
     AgentLifecycle,
     AgentService,
+    Distribution,
     ItemCatalog,
     McpRegistry,
     MemoryStore,
-    RoleService,
     SkillStore,
     Thinking,
     Vault,
@@ -96,8 +96,9 @@ class Container:
     skills: SkillStore
     memory: MemoryStore
     agents: AgentService
-    roles: RoleService
-    # 条目池：全部条目、预览、转移、条目的版本历史与恢复
+    # 分发：角色、agent 的规则与能用的、预览
+    distribution: Distribution
+    # 条目池：全部条目、转移、条目的版本历史与恢复
     catalog: ItemCatalog
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
@@ -132,7 +133,7 @@ class Assembly:
     skills: SkillStore
     memory: MemoryStore
     agents: AgentService
-    roles: RoleService
+    distribution: Distribution
     catalog: ItemCatalog
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
@@ -175,7 +176,7 @@ class Assembly:
             skills=self.skills,
             memory=self.memory,
             agents=self.agents,
-            roles=self.roles,
+            distribution=self.distribution,
             catalog=self.catalog,
             agent_lifecycle=self.agent_lifecycle,
             sessions=self.sessions,
@@ -223,6 +224,7 @@ class Assembly:
         # skill 的生成目录按数据库全量重新生成（上次进程留下的临时目录、被改动的副本都在这里收敛）
         await self.skills.materialize_all()
         await self.agents.verify_stored()
+        await self.distribution.verify_stored()
         await self.queue.check_kinds()
         await asyncio.to_thread(self.files.recover)
         # 上次运行留下的「运行中」后台任务：进程已随服务结束，记为被中断并通知 agent（worker 处理这些事件之前）
@@ -302,9 +304,8 @@ def assemble(
         settings.workspaces_dir,
         model_checker or models.check,
         AgentDefaults(settings.llm.default_model),
-        tools,
     )
-    roles = RoleService(db, tools)
+    distribution = Distribution(db, tools)
     catalog = ItemCatalog(db, tools, skills, mcp)
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
     ports = SessionPorts.build(db, queue, messaging)
@@ -375,11 +376,11 @@ def assemble(
         issues_toolset(issues, agents),
         *web_tools,
     ]
-    static_toolsets.append(agents_toolset(agents, roles, agent_lifecycle, catalog))
+    static_toolsets.append(agents_toolset(agents, distribution, agent_lifecycle, catalog))
     toolbox = Toolbox(
         toolsets=static_toolsets,
         mcp=lambda: mcp_connector.toolset(mcp.index),
-        rules_of=agents.rules,
+        rules_of=distribution.rules,
     )
     _check_permissions(toolbox.tool_names(), web_configured=bool(web_tools))
     session_domain = SessionDomain.build(
@@ -429,7 +430,7 @@ def assemble(
         skills=skills,
         memory=memory,
         agents=agents,
-        roles=roles,
+        distribution=distribution,
         catalog=catalog,
         agent_lifecycle=agent_lifecycle,
         sessions=session_domain.sessions,

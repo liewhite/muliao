@@ -8,6 +8,7 @@ from muliao.agents.api import (
     USER,
     AgentInfo,
     AgentPatch,
+    AgentRules,
     AgentSpec,
     Reach,
     RoleSpec,
@@ -67,21 +68,26 @@ class AgentOut(BaseModel):
     archived_at: datetime | None
 
     @classmethod
-    def of(cls, a: AgentInfo) -> "AgentOut":
+    def of(cls, a: AgentInfo, rules: AgentRules) -> "AgentOut":
         return cls(
             id=a.id,
             name=a.name,
             description=a.description,
             model=a.model,
-            roles=list(a.roles),
-            allow=list(a.allow),
-            deny=list(a.deny),
+            roles=list(rules.roles),
+            allow=list(rules.allow),
+            deny=list(rules.deny),
             thinking=a.thinking,
             created_at=a.created_at,
             is_default=a.is_default,
             group=a.group,
             archived_at=a.archived_at,
         )
+
+
+async def _out(c: C, a: AgentInfo) -> AgentOut:
+    """agent 的目录字段加上它的分发规则（两个子域各自的读模型）。"""
+    return AgentOut.of(a, await c.distribution.agent_rules(a.id))
 
 
 class AgentDefaultsOut(BaseModel):
@@ -130,7 +136,8 @@ class AgentPreviewIn(BaseModel):
 async def preview_agent(c: C, body: AgentPreviewIn) -> ReachOut:
     """agent 配置（还没保存的也行）最终能用的：自己的条目 + base + 角色 + allow / deny 放行的，与运行时同一套计算，
     与保存时同样校验（不合法 422）。"""
-    return ReachOut.of(await c.catalog.preview(body.agent_id, body.roles, body.allow, body.deny))
+    rules = AgentRules.of(body.roles, body.allow, body.deny)
+    return ReachOut.of(await c.distribution.preview_agent(body.agent_id, rules))
 
 
 class RoleOut(BaseModel):
@@ -175,7 +182,7 @@ class RoleIn(BaseModel):
 @router.get("/roles")
 async def list_roles(c: C) -> list[RoleOut]:
     """全部角色：内置在前，自建的按名称。"""
-    return [RoleOut.of(v) for v in await c.roles.views()]
+    return [RoleOut.of(v) for v in await c.distribution.views()]
 
 
 class RolePreviewIn(BaseModel):
@@ -188,26 +195,26 @@ class RolePreviewIn(BaseModel):
 @router.post("/role-preview")
 async def preview_role(c: C, body: RolePreviewIn) -> ReachOut:
     """角色规则（还没保存的也行）能用的，与保存时同样校验（不合法 422）。"""
-    return ReachOut.of(await c.roles.preview(body.name, body.allow, body.deny))
+    return ReachOut.of(await c.distribution.preview_role(body.name, body.allow, body.deny))
 
 
 @router.post("/roles/{name}", status_code=201)
 async def create_role(c: C, name: str, body: RoleIn) -> RoleOut:
-    await c.roles.create(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
-    return RoleOut.of(await c.roles.view(name))
+    await c.distribution.create(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
+    return RoleOut.of(await c.distribution.view(name))
 
 
 @router.put("/roles/{name}")
 async def update_role(c: C, name: str, body: RoleIn) -> RoleOut:
     """整体替换角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。"""
-    await c.roles.update(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
-    return RoleOut.of(await c.roles.view(name))
+    await c.distribution.update(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
+    return RoleOut.of(await c.distribution.view(name))
 
 
 @router.delete("/roles/{name}", status_code=204)
 async def delete_role(c: C, name: str) -> None:
     """有 agent 引用时 409。"""
-    await c.roles.delete(name, actor=USER)
+    await c.distribution.delete(name, actor=USER)
 
 
 @router.get("/providers")
@@ -224,7 +231,10 @@ async def list_provider_models(c: C, name: str) -> list[str]:
 
 @router.get("/agents")
 async def list_agents(c: C) -> list[AgentOut]:
-    return [AgentOut.of(a) for a in await c.agents.list()]
+    agents = await c.agents.list()
+    rules = await c.distribution.all_agent_rules()
+    # 两次读之间删除完成的 agent 已经不在了，不列出
+    return [AgentOut.of(a, rules[a.id]) for a in agents if a.id in rules]
 
 
 @router.post("/agents", status_code=201)
@@ -239,13 +249,13 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
         thinking=body.thinking,
         group=body.group,
     )
-    return AgentOut.of(await c.agents.create(spec, author=USER))
+    return await _out(c, await c.agents.create(spec, author=USER))
 
 
 @router.get("/agents/{agent_id}")
 async def get_agent(c: C, agent_id: str) -> AgentOut:
     # 正在删除的按不存在处理
-    return AgentOut.of(await c.agents.get_active(agent_id))
+    return await _out(c, await c.agents.get_active(agent_id))
 
 
 @router.put("/agents/{agent_id}")
@@ -262,31 +272,31 @@ async def update_agent(c: C, agent_id: str, body: AgentUpdate) -> AgentOut:
         # null 与空串都是不分组（AgentPatch 里 None 是「不变」）
         group=body.group or "",
     )
-    return AgentOut.of(await c.agents.update(agent_id, patch, author=USER))
+    return await _out(c, await c.agents.update(agent_id, patch, author=USER))
 
 
 @router.put("/agents/{agent_id}/default")
 async def set_default_agent(c: C, agent_id: str) -> AgentOut:
     """设为系统默认 agent（取代原来的默认）。"""
-    return AgentOut.of(await c.agents.set_default(agent_id, True))
+    return await _out(c, await c.agents.set_default(agent_id, True))
 
 
 @router.delete("/agents/{agent_id}/default")
 async def unset_default_agent(c: C, agent_id: str) -> AgentOut:
     """取消它的系统默认身份；它不是默认时不做任何事。"""
-    return AgentOut.of(await c.agents.set_default(agent_id, False))
+    return await _out(c, await c.agents.set_default(agent_id, False))
 
 
 @router.put("/agents/{agent_id}/archive")
 async def archive_agent(c: C, agent_id: str) -> AgentOut:
     """归档：不能再对话、委派、指派，它的触发器不触发；它忙或是默认 agent 时 409。"""
-    return AgentOut.of(await c.agent_lifecycle.set_archived(agent_id, True))
+    return await _out(c, await c.agent_lifecycle.set_archived(agent_id, True))
 
 
 @router.delete("/agents/{agent_id}/archive")
 async def unarchive_agent(c: C, agent_id: str) -> AgentOut:
     """取消归档；没归档时不做任何事。"""
-    return AgentOut.of(await c.agent_lifecycle.set_archived(agent_id, False))
+    return await _out(c, await c.agent_lifecycle.set_archived(agent_id, False))
 
 
 @router.delete("/agents/{agent_id}", status_code=204)

@@ -106,14 +106,14 @@ class Toolbox:
     toolsets: Sequence[FunctionToolset[RunScope]]
     # MCP 工具：每次运行新建一个（它带着这次运行的连接状态），按这次运行的 agent 能用的 server 连接
     mcp: Callable[[], AbstractToolset[RunScope]]
-    # agent 现在的规则（AgentService.rules：base 与角色按现在的定义展开）
-    rules_of: Callable[[AgentInfo], Awaitable[Rules]]
+    # agent（按 id）现在的规则（Distribution.rules：base 与角色按现在的定义展开）
+    rules_of: Callable[[str], Awaitable[Rules]]
 
     def tool_names(self) -> list[str]:
         return [name for ts in self.toolsets for name in ts.tools]
 
     async def profile(self, agent: AgentInfo) -> RunProfile:
-        allowed = set((await self.rules_of(agent)).tools(self.tool_names()))
+        allowed = set((await self.rules_of(agent.id)).tools(self.tool_names()))
         static: list[AbstractToolset[RunScope]] = [
             ts.filtered(lambda _ctx, td: td.name in allowed)
             for ts in self.toolsets

@@ -19,7 +19,8 @@ from datetime import datetime
 
 from cryptography.fernet import Fernet
 
-from muliao.agents.items import changeable_in, existing_in, usable_in, writable_in
+from muliao.agents.access import changeable_in, usable_in, writable_in
+from muliao.agents.items import existing_in
 from muliao.agents.kinds import StoredKind, Subject
 from muliao.agents.revisions import record_in
 from muliao.agents.tables import Item

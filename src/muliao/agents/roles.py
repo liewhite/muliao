@@ -1,8 +1,9 @@
-"""角色：内置的 base、admin（规则的固定部分在 agents.permissions.FIXED_RULES）与用户自建的；可编辑的规则都存在 roles 表
-（内置角色的行可以不存在，即可编辑部分为空）。agent 按名称引用角色，base 每个 agent 隐含、不写进 agents.roles。
+"""角色（分发子域）：内置的 base、admin（规则的固定部分在 agents.permissions.FIXED_RULES）与用户自建的；可编辑的规则都存在
+roles 表（内置角色的行可以不存在，即可编辑部分为空）。agent 按名称引用角色（agents.agent_rules），base 每个 agent 隐含、不写进
+它的 roles。
 
 引用的一致性在写事务里保证：agent 写入角色名时在同一事务里检查角色存在，删除角色时在同一事务里检查没有 agent 引用它
-（事务串行，两者不会交错）。这里是事务内的查询与校验，增删改在 agents.role_service.RoleService。
+（事务串行，两者不会交错）。这里是事务内的查询与校验，增删改在 agents.distribution.Distribution。
 """
 
 from __future__ import annotations
@@ -14,9 +15,9 @@ from fnmatch import fnmatchcase
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.items import patterns_in
 from muliao.agents.kinds import Kind
-from muliao.agents.permissions import BASE, FIXED_RULES, Role, Rules, check_patterns, kind_of, pattern_of
-from muliao.agents.tables import Agent, Item
+from muliao.agents.permissions import BASE, FIXED_RULES, Role, Rules, check_patterns, kind_of
 from muliao.agents.tables import Role as RoleRow
 from muliao.errors import InvalidInput
 
@@ -62,19 +63,13 @@ async def check_assignable_in(s: AsyncSession, names: Sequence[str]) -> None:
         raise InvalidInput(f"roles must be distinct names from {assignable}, got {list(names)}")
 
 
-async def holders_in(s: AsyncSession, role: Role) -> list[Agent]:
-    """带这个角色的 agent（Role.held_by：base 是全部），按名称；包括归档与正在删除的（它的行还在，删除流程完成前不让
-    角色先消失）。"""
-    return [a for a in await s.scalars(select(Agent).order_by(Agent.name)) if role.held_by(a.roles)]
-
-
 async def check_new_items_in(s: AsyncSession, patterns: Sequence[str], before: Sequence[str]) -> None:
     """新加的 skill / mcp / secret 规则（不在 before 里的）至少匹配一个现有条目：拼错的在写入时报出。已有的规则不查——
     条目删掉再建（如 MCP 重新接入）时分发不丢，也不让改别的字段的写入失败。"""
     new = [p for p in patterns if p not in before and kind_of(p) != Kind.TOOL]
     if not new:
         return
-    items = [pattern_of(Kind(k), n) for k, n in await s.execute(select(Item.kind, Item.name))]
+    items = await patterns_in(s)
     bad = [p for p in new if not any(fnmatchcase(i, p) for i in items)]
     if bad:
         raise InvalidInput(f"rules {bad} match no existing skill, MCP server or secret; check the names")

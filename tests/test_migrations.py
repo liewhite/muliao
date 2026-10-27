@@ -831,7 +831,7 @@ def test_rules_become_kind_name_base_collects_platform_items_and_mcp_selections_
             ],
         )
 
-    migrate(path)
+    migrate(path, "acd7fd2ea877")
 
     with sqlite3.connect(path) as conn:
         assert "mcp_servers" not in {r[1] for r in conn.execute("pragma table_info(agents)")}
@@ -883,3 +883,53 @@ def test_converting_rules_refuses_data_it_cannot_keep_unchanged(tmp_path):
         migrate(path)
     with sqlite3.connect(path) as conn:
         assert "mcp_servers" in {r[1] for r in conn.execute("pragma table_info(agents)")}
+
+
+def test_agent_rules_move_to_their_own_table_without_touching_items_and_downgrade(tmp_path):
+    """#242：agents 的 roles / allow / deny 搬进 agent_rules 后删列；agents 不重建，条目与记忆（外键级联到 agents）不受影响。
+    降级搬回三列、删表。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "acd7fd2ea877")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "insert into agents (id, name, description, model, roles, allow, deny, created_at, updated_at) "
+            "values (?, ?, 'd', 'p:m', ?, ?, ?, ?, ?)",
+            [
+                ("a1", "a1", '["admin"]', '["tool:*"]', "[]", t, t),
+                ("a2", "a2", "[]", '["skill:s"]', '["tool:run_shell"]', t, t),
+            ],
+        )
+        conn.execute(
+            "insert into items (kind, name, owner, description, content, enabled, created_at, updated_at) "
+            "values ('skill', 's', 'a1', '', 'body', 1, ?, ?)",
+            (t, t),
+        )
+        conn.execute("insert into memories (owner, content, updated_at) values ('a2', 'remember', ?)", (t,))
+
+    migrate(path)
+
+    with sqlite3.connect(path) as conn:
+        assert not {"roles", "allow", "deny"} & {r[1] for r in conn.execute("pragma table_info(agents)")}
+        assert conn.execute(
+            "select agent_id, roles, allow, deny from agent_rules order by agent_id"
+        ).fetchall() == [
+            ("a1", '["admin"]', '["tool:*"]', "[]"),
+            ("a2", "[]", '["skill:s"]', '["tool:run_shell"]'),
+        ]
+        assert conn.execute("select name, owner from items").fetchall() == [("s", "a1")]
+        assert conn.execute("select owner, content from memories").fetchall() == [("a2", "remember")]
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "acd7fd2ea877")
+    with sqlite3.connect(path) as conn:
+        assert "agent_rules" not in _tables(path)
+        assert conn.execute("select id, roles, allow, deny from agents order by id").fetchall() == [
+            ("a1", '["admin"]', '["tool:*"]', "[]"),
+            ("a2", "[]", '["skill:s"]', '["tool:run_shell"]'),
+        ]
+        assert conn.execute("select name, owner from items").fetchall() == [("s", "a1")]
