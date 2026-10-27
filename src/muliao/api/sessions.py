@@ -9,16 +9,15 @@ from muliao.api.tasks import TaskOut
 from muliao.container import Container
 from muliao.sessions.api import (
     CallResult,
-    DerivedTitle,
     EventSource,
-    Inbound,
     Item,
     LiveRun,
-    NewSession,
+    NewChat,
     Origin,
     QuestionAnswer,
     RunEvent,
     SessionKind,
+    UserMessage,
     WorkState,
     call_result,
     parse_source,
@@ -190,14 +189,7 @@ async def list_sessions(
 @router.post("/sessions", status_code=201)
 async def start_session(c: C, body: StartIn) -> SessionOut:
     received = await c.sessions.receive(
-        Inbound(
-            origin=Origin.USER,
-            origin_ref=None,
-            content=body.prompt,
-            session=NewSession(agent_id=body.agent_id, title=DerivedTitle.FROM_MESSAGE),
-            awaited=True,
-            attachments=tuple(body.attachments),
-        )
+        UserMessage(content=body.prompt, session=NewChat(body.agent_id), attachments=tuple(body.attachments))
     )
     [out] = await session_outs(c, [received.session])
     return out
@@ -222,14 +214,8 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
 @router.post("/sessions/{session_id}/messages", status_code=202)
 async def reply(c: C, session_id: str, body: ReplyIn) -> list[MailOut]:
     received = await c.sessions.receive(
-        Inbound(
-            origin=Origin.USER,
-            origin_ref=None,
-            content=body.prompt,
-            session=session_id,
-            awaited=True,
-            attachments=tuple(body.attachments),
-            answers=body.answers,
+        UserMessage(
+            content=body.prompt, session=session_id, attachments=tuple(body.attachments), answers=body.answers
         )
     )
     return await mail_outs(c, received.mail)

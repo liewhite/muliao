@@ -13,8 +13,7 @@ from muliao.agents.tables import Agent, Item
 from muliao.errors import Conflict, NotFound
 from muliao.jobs.tables import Job, JobStatus
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
-from muliao.sessions.api import Origin
-from muliao.sessions.inbound import Inbound, NewSession
+from muliao.sessions.api import NewChat, UserMessage
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from tests.conftest import owned
 from tests.test_flow import deliver, drain, start
@@ -133,11 +132,9 @@ async def test_an_agent_marked_for_deletion_receives_no_new_mail(container, make
 
     # 删除标记一提交就拒绝来信，不等删除流程的事件投递：它的会话不会再变忙
     await container.agent_lifecycle.delete(agent.id, author="user")
-    for target in (NewSession(agent_id=agent.id, title="t"), session.id):
+    for target in (NewChat(agent.id), session.id):
         with pytest.raises(NotFound, match="not found"):
-            await container.sessions.receive(
-                Inbound(origin=Origin.USER, origin_ref=None, content="hello", session=target, awaited=True)
-            )
+            await container.sessions.receive(UserMessage(content="hello", session=target))
     await drain(container)
 
     async with container.db.transaction() as s:

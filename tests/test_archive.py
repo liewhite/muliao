@@ -7,8 +7,7 @@ from muliao.agents.api import AgentArchived, AgentPatch, AgentSpec
 from muliao.agents.tools import AgentEntry, AgentGroup, agent_directory
 from muliao.errors import Conflict, InvalidInput
 from muliao.issues.api import IssueStatus
-from muliao.sessions.api import Origin
-from muliao.sessions.inbound import Inbound, NewSession
+from muliao.sessions.api import NewChat, Origin, UserMessage
 from muliao.sessions.tables import Session
 from muliao.triggers.api import Precheck
 from tests.conftest import login
@@ -17,14 +16,8 @@ from tests.test_flow import deliver, drain
 TODO = IssueStatus.TODO
 
 
-def _new_session(agent_id: str) -> Inbound:
-    return Inbound(
-        origin=Origin.USER,
-        origin_ref=None,
-        content="hi",
-        session=NewSession(agent_id=agent_id, title="t"),
-        awaited=False,
-    )
+def _new_session(agent_id: str) -> UserMessage:
+    return UserMessage(content="hi", session=NewChat(agent_id))
 
 
 async def test_group_is_trimmed_kept_on_other_changes_and_cleared_by_an_empty_string(container):
@@ -83,9 +76,7 @@ async def test_existing_sessions_of_an_archived_agent_refuse_new_messages(contai
     session = (await container.sessions.receive(_new_session(alpha.id))).session
     await drain(container)
     await container.agent_lifecycle.set_archived(alpha.id, True)
-    follow_up = Inbound(
-        origin=Origin.USER, origin_ref=None, content="more", session=session.id, awaited=False
-    )
+    follow_up = UserMessage(content="more", session=session.id)
     with pytest.raises(AgentArchived):
         await container.sessions.receive(follow_up)
 

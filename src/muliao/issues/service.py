@@ -64,8 +64,8 @@ from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, no_commit
 from muliao.platform.values import KEEP, Keep, local_time
 from muliao.sessions.api import (
-    Inbound,
     Origin,
+    SenderMail,
     SessionActivity,
     SessionKey,
     WorkState,
@@ -735,12 +735,11 @@ class IssueService:
             return None
         # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线
         letter = self._view_with(issue, happened, links, await agent_names_in(s))
-        inbound = Inbound(
+        inbound = SenderMail(
             origin=Origin.ISSUE,
             origin_ref=str(issue.id),
             content=delivery_message(letter),
             session=SessionKey(agent_id=agent, title=f"#{issue.id} {issue.title}"),
-            awaited=False,
         )
         try:
             command = await receive_command_in(s, inbound)

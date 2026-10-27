@@ -3,8 +3,8 @@
 import pytest
 
 from muliao.sessions.api import (
-    Inbound,
     Origin,
+    SenderMail,
     SessionActivity,
     SessionKey,
     WorkState,
@@ -15,17 +15,16 @@ from muliao.sessions.inbound import inbound_of
 from tests.test_flow import deliver, drain
 
 
-def _keyed(agent_id: str, ref: str, text: str, origin: Origin = Origin.ISSUE) -> Inbound:
-    return Inbound(
+def _keyed(agent_id: str, ref: str, text: str, origin: Origin = Origin.ISSUE) -> SenderMail:
+    return SenderMail(
         origin=origin,
         origin_ref=ref,
         content=text,
         session=SessionKey(agent_id=agent_id, title=f"#{ref}"),
-        awaited=False,
     )
 
 
-async def _send(container, inbound: Inbound) -> None:
+async def _send(container, inbound: SenderMail) -> None:
     async with container.db.transaction() as s:
         container.messaging.send_in(s, await receive_command_in(s, inbound))
 
@@ -64,9 +63,10 @@ async def test_undelivered_keyed_mail_keeps_the_session_running(container, make_
 
 async def test_a_key_needs_a_sender_identity(container, make_agent):
     alpha = (await make_agent()).id
-    async with container.db.transaction() as s:
+    # 只有别的领域（有身份的发送方）发 SenderMail：用户、委派的来信在构造时就拒绝
+    for origin in (Origin.USER, Origin.DELEGATION):
         with pytest.raises(ValueError):
-            await receive_command_in(s, _keyed(alpha, "1", "a", origin=Origin.USER))
+            _keyed(alpha, "1", "a", origin=origin)
 
 
 async def test_a_keyed_receive_command_round_trips(container, make_agent):
@@ -74,7 +74,7 @@ async def test_a_keyed_receive_command_round_trips(container, make_agent):
     inbound = _keyed(alpha, "7", "hello")
     async with container.db.transaction() as s:
         command = await receive_command_in(s, inbound)
-    assert inbound_of(command) == inbound
+    assert inbound_of(command) == inbound.inbound()
 
 
 async def test_a_key_with_undelivered_mail_and_no_session_yet_is_running(container, make_agent):

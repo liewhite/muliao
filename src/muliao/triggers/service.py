@@ -42,9 +42,9 @@ from muliao.platform.tables import Task
 from muliao.platform.tasks import Clock, Commit
 from muliao.platform.values import KEEP, Keep, local_time
 from muliao.sessions.api import (
-    Inbound,
-    NewSession,
+    NewConversation,
     Origin,
+    SenderMail,
     SessionActivity,
     WorkState,
     receive_command_in,
@@ -354,16 +354,15 @@ class TriggerService:
         """
         now = self._clock()
         target = new_id() if session_id is None else session_id
-        inbound = Inbound(
+        inbound = SenderMail(
             origin=Origin.TRIGGER,
             origin_ref=str(trigger.id),
             content=event_prompt(trigger.prompt, payload),
-            session=NewSession(
-                agent_id=trigger.agent_id, title=f"{trigger.name} · {local_time(now, self._tz)}", id=target
+            session=NewConversation(
+                id=target, agent_id=trigger.agent_id, title=f"{trigger.name} · {local_time(now, self._tz)}"
             )
             if session_id is None
             else session_id,
-            awaited=False,
         )
         delivery = self._messaging.send_in(s, await receive_command_in(s, inbound))
         trigger.last_fired_at = now
@@ -532,16 +531,15 @@ class TriggerService:
         if not healthy_before:
             return None
         now = self._clock()
-        inbound = Inbound(
+        inbound = SenderMail(
             origin=Origin.TRIGGER,
             origin_ref=str(trigger.id),
             content=precheck_alert(trigger, error),
-            session=NewSession(
+            session=NewConversation(
+                id=new_id(),
                 agent_id=trigger.agent_id,
                 title=f"{trigger.name} 前置检查出错 · {local_time(now, self._tz)}",
-                id=new_id(),
             ),
-            awaited=False,
         )
         try:
             command = await receive_command_in(s, inbound)

@@ -1,6 +1,6 @@
 """会话领域的公开接口：别的领域只经这里（与 sessions.events）使用会话领域（docs/architecture.md 第 7 节、2.3）。
 
-- 来信：发送方在自己的事务里 receive_command_in（校验来信、得到定向命令 Receive，在同一事务 send_in，sessions.events）；目标会话可以按发送方
+- 来信：界面的 UserMessage 经 SessionService.receive；别的领域的 SenderMail 由发送方在自己的事务里 receive_command_in（校验来信、得到定向命令 Receive，在同一事务 send_in，sessions.events）；目标会话可以按发送方
   定位（SessionKey），keyed_sessions_among 查这样的会话；
 - 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；结局与运行中检查经定向命令
   WorkEnded / WorkCheckIn（sessions.events）；
@@ -12,7 +12,14 @@
 
 from muliao.sessions.activity import SessionActivity, WorkState
 from muliao.sessions.holds import registered_in as hold_registered_in
-from muliao.sessions.inbound import DerivedTitle, Inbound, NewSession, SessionKey, receive_command_in
+from muliao.sessions.inbound import (
+    NewChat,
+    NewConversation,
+    SenderMail,
+    SessionKey,
+    UserMessage,
+    receive_command_in,
+)
 from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
@@ -45,9 +52,10 @@ __all__ = [
     "QuestionAnswer",
     "SessionService",
     "Item",
-    "DerivedTitle",
-    "Inbound",
-    "NewSession",
+    "NewChat",
+    "NewConversation",
+    "SenderMail",
+    "UserMessage",
     "SessionInfo",
     "SessionKey",
     "keyed_sessions_among",

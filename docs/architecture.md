@@ -445,14 +445,14 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 
 触发点有两类：用户在网页发起对话，以及触发器。agent 之间的委派是 agent 内部能力，在父会话下开 thread（第 7 节）。
 
-**统一入口**：用户消息、触发器、agent 委派都是同一件事——把一段内容投进某个 agent 的某个会话的信箱。各来源只做适配（鉴权、触发时机、组装内容），然后构造一个 `Inbound` 交给 `inbound.receive`（用户消息与委派同步调用；触发器与 issue 经定向命令 `Receive`，见下文「投信」）：
+**统一入口**：用户消息、触发器、agent 委派都是同一件事——把一段内容投进某个 agent 的某个会话的信箱。各来源只做适配（鉴权、触发时机、组装内容），三种入口各有自己的类型，字段只有这个入口用得上的，不合用的组合构造不出来（不到运行时才拒绝）：界面的 `UserMessage`（续写的会话 id 或 `NewChat(agent)`——标题由消息推导，可带附件与回答，用户在等；`SessionService.receive`），别的领域的 `SenderMail`（只有文字、没人在等，origin 只能是有身份的发送方，目标是会话 id、`NewConversation`（预先分配的 id、agent、标题）或 `SessionKey`；`receive_command_in` 校验后经定向命令 `Receive` 投递，见下文「投信」），委派由会话领域的 `Threads` 在内部构造。三者都转成内部的 `Inbound` 交给 `inbound.receive`：
 
 | 字段 | 含义 |
 |---|---|
 | `origin` / `origin_ref` | 来源与具体发送方：用户（无）、触发器 id、issue id、委派方（父）会话 id；与会话上的同名字段是同一个概念（会话记的是发起它的那一个事件的来源） |
 | `content` | 交给 agent 的内容 |
 | `session` | 已有会话的 id（在其中继续）；`NewSession`（新建：agent、标题，委派时还有父会话、thread 名与种类；触发器经 `Receive` 投递时带预先分配的会话 id，好立即告诉调用方）；或 `SessionKey`（按发送方定位：这个发送方给这个 agent 开过的最新一个顶层会话，没有就以给定标题新建——发送方不用存会话 id，issue 用它让每个（issue, agent）对应唯一一个会话） |
-| `awaited` | 用户是否在等它的回答（处理它的运行结束时推送） |
+| `awaited` | 用户是否在等它的回答（处理它的运行结束时推送；UserMessage 为真，SenderMail 为假，委派由 Threads 定） |
 | `attachments` / `answers` | 用户随消息发送的文件、对挂起提问的回答（只有用户会带） |
 
 `receive` 是外部来信投进信箱的唯一入口（委派的 `Threads.send` / `dispatch` 也经过它；代码里的生产者——占用的结局 `deliver_in`、运行中检查 `post_check_in`——直接 `mailbox.post_in`），校验规则与别的领域投信用的 `receive_command_in` 是同一个函数；新建会话也只有 `create_session` 一处实现。**续写规则**：用户可以在任何用户能写的会话里继续（`KindPolicy.user_writable`）；其他来源只能续写自己发起的会话（会话的来源与发送方都一致，委派会话的发送方就是它的父会话），否则 403。发送方身份是触发器 id（AUTOINCREMENT，删除后不复用）或父会话 id。

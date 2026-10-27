@@ -50,7 +50,7 @@ def _shorten(text: str, limit: int) -> str:
 
 class DerivedTitle(Enum):
     """新会话的标题不由发送方给出，而由 receive 按这封来信推导（default_title：文字的第一行，只有附件时用文件名）。
-    只有同步投信（receive）接受它：用户在界面上新建会话时没有标题；别的入口（定向命令 Receive、thread）必须给出。"""
+    只有用户在界面上新建会话（UserMessage 的 NewChat）用它；别的入口（SenderMail、thread）都给出标题。"""
 
     FROM_MESSAGE = "from_message"
 
@@ -80,7 +80,8 @@ class SessionKey:
 
 @dataclass(frozen=True)
 class Inbound:
-    """一封来信：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 投进某个会话的信箱」（sessions.mailbox）。
+    """一封来信的内部形式：用户消息、cron 到点、外部事件、agent 委派，都是「把 content 投进某个会话的信箱」（sessions.mailbox）。
+    会话领域之外只用三种入口各自的类型：别的领域的 SenderMail、界面的 UserMessage；委派由 Threads 在领域内部构造。
 
     session 为已有会话的 id 时在其中继续，为 NewSession 时新建会话，为 SessionKey 时按发送方定位（没有就新建）。
     origin_ref 标识具体的发送方：触发器 id、issue id、委派方（父）会话 id；用户为 None。
@@ -98,6 +99,82 @@ class Inbound:
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
     # 委派来的信件：关联 id（发起方的占用者），结局按它交回；只有 Threads.dispatch 会带
     correlation: str | None = None
+
+
+@dataclass(frozen=True)
+class NewConversation:
+    """别的领域的来信要新建的顶层会话：id 由发送方预先分配（投递是异步的，发送方要立即告诉它的调用方会话 id，
+    见 Receive），标题由发送方给出。"""
+
+    id: str
+    agent_id: str
+    title: str
+
+
+@dataclass(frozen=True)
+class SenderMail:
+    """别的领域（触发器、issue）的来信，经 receive_command_in 校验、定向命令 Receive 投递：只有文字，没有人在等
+    （处理它的运行不推送）。origin_ref 是具体的发送方（触发器 id、issue id）。"""
+
+    origin: Origin
+    origin_ref: str
+    content: str
+    session: str | NewConversation | SessionKey
+
+    def __post_init__(self) -> None:
+        if self.origin in (Origin.USER, Origin.DELEGATION):
+            raise ValueError(f"{self.origin} mail is received directly, not sent by another domain")
+
+    def inbound(self) -> Inbound:
+        target = self.session
+        session = (
+            NewSession(agent_id=target.agent_id, title=target.title, id=target.id)
+            if isinstance(target, NewConversation)
+            else target
+        )
+        return Inbound(
+            origin=self.origin,
+            origin_ref=self.origin_ref,
+            content=self.content,
+            session=session,
+            awaited=False,
+        )
+
+
+@dataclass(frozen=True)
+class NewChat:
+    """用户在界面上新建会话：标题由这条消息推导（文字的第一行，只发了文件时用文件名）。"""
+
+    agent_id: str
+
+
+@dataclass(frozen=True)
+class UserMessage:
+    """用户在界面上发的一条消息：续写会话或新建会话，可以带附件与对挂起提问的回答；用户在等它的回答。"""
+
+    content: str
+    session: str | NewChat
+    # 随消息发送的文件 id（muliao.files.store）
+    attachments: tuple[str, ...] = ()
+    # 对这个会话里挂起提问的回答：tool_call_id -> 每题的回答（sessions.questions）
+    answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
+
+    def inbound(self) -> Inbound:
+        target = self.session
+        session = (
+            NewSession(agent_id=target.agent_id, title=DerivedTitle.FROM_MESSAGE)
+            if isinstance(target, NewChat)
+            else target
+        )
+        return Inbound(
+            origin=Origin.USER,
+            origin_ref=None,
+            content=self.content,
+            session=session,
+            awaited=True,
+            attachments=self.attachments,
+            answers=self.answers,
+        )
 
 
 @dataclass(frozen=True)
@@ -229,46 +306,34 @@ def receive_lane_of(command: Receive) -> str:
     return receive_lane(command.session_id)
 
 
-def _receive_command(inbound: Inbound) -> Receive:
-    """一封要经定向命令投递的来信。新建会话必须带预先分配的 id；只有文字内容的来信才能这样投（附件、回答、关联只来自
-    同步的入口）。"""
-    if inbound.attachments or inbound.answers or inbound.correlation is not None:
-        raise ValueError("only plain text inbound mail can be sent as a Receive command")
-    target = inbound.session
+def _receive_command(mail: SenderMail) -> Receive:
+    """一封要经定向命令投递的来信。"""
+    target = mail.session
     session_id = new_session = key = None
     if isinstance(target, str):
         session_id = target
     elif isinstance(target, SessionKey):
-        _key_ref(inbound)
         key = ReceiveKey(agent_id=target.agent_id, title=target.title)
     else:
-        if target.id is None or policy_of(target.kind).opened_by_delegation:
-            raise ValueError(
-                f"a Receive command creates a top-level session with a preassigned id, got {target}"
-            )
-        if not isinstance(target.title, str):
-            raise ValueError(
-                f"a Receive command creates a session with a title given by its sender, got {target}"
-            )
         new_session = ReceiveNewSession(id=target.id, agent_id=target.agent_id, title=target.title)
     return Receive(
-        origin=inbound.origin,
-        origin_ref=inbound.origin_ref,
-        content=inbound.content,
-        awaited=inbound.awaited,
+        origin=mail.origin,
+        origin_ref=mail.origin_ref,
+        content=mail.content,
+        awaited=False,
         session_id=session_id,
         new_session=new_session,
         key=key,
     )
 
 
-async def receive_command_in(s: AsyncSession, inbound: Inbound) -> Receive:
+async def receive_command_in(s: AsyncSession, mail: SenderMail) -> Receive:
     """别的领域投信的唯一入口（只读）：在发送方的事务里校验这封来信（不合规的当场报错给发送方），返回定向命令
     Receive。发送方在同一事务里 send_in 它，由会话领域在自己的事务里投进信箱——发送方记下的状态与投信一起提交，
     投递恰好一次；提交后可以让投递任务马上执行（run_now）。校验读的都是只会单向变化或不变的事实（会话与 agent
     是否还在、会话的发起方、文件），投递时只剩「期间被删除」这一种契约内的变化（docs/architecture.md 2.2）。"""
-    await target_in(s, inbound)
-    return _receive_command(inbound)
+    await target_in(s, mail.inbound())
+    return _receive_command(mail)
 
 
 def inbound_of(command: Receive) -> Inbound:

@@ -20,11 +20,11 @@ from muliao.notifications.service import DELIVER_TASK
 from muliao.notifications.webpush import WebPushDelivery
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.platform.worker import Worker
-from muliao.sessions.api import Origin
+from muliao.sessions.api import Origin, UserMessage
 from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
 from muliao.sessions.conventions import run_context_index
-from muliao.sessions.inbound import Inbound, NewSession
+from muliao.sessions.inbound import Inbound, NewSession, receive
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Mail, Message
@@ -123,23 +123,22 @@ def call_then_answer(tool: str, args: dict, answer: str) -> FunctionModel:
 
 
 async def start(container, agent: str, prompt: str, origin: Origin = Origin.USER):
-    received = await container.sessions.receive(
-        Inbound(
-            origin=origin,
-            origin_ref=None,
-            content=prompt,
-            session=NewSession(agent_id=agent, title=prompt[:20]),
-            awaited=origin == Origin.USER,
-        )
+    """以 origin 的身份新建会话并投信。走会话领域内部的 receive（不经各入口的类型），测试可以任选来源。"""
+    inbound = Inbound(
+        origin=origin,
+        origin_ref=None,
+        content=prompt,
+        session=NewSession(agent_id=agent, title=prompt[:20]),
+        awaited=origin == Origin.USER,
     )
+    async with container.db.transaction() as s:
+        received = await receive(s, container.queue, inbound)
     return received.session
 
 
 async def reply(container, session_id: str, prompt: str) -> Mail:
     """用户在会话里追问，返回投进信箱的信件。"""
-    received = await container.sessions.receive(
-        Inbound(origin=Origin.USER, origin_ref=None, content=prompt, session=session_id, awaited=True)
-    )
+    received = await container.sessions.receive(UserMessage(content=prompt, session=session_id))
     [mail] = received.mail
     return mail
 

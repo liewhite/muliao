@@ -23,8 +23,8 @@ from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.events import Receive, SessionRead, StopThread
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.inbound import (
-    Inbound,
     Received,
+    UserMessage,
     inbound_of,
     receive,
     receive_into,
@@ -162,10 +162,10 @@ class SessionService:
             state=state,
         )
 
-    async def receive(self, inbound: Inbound) -> Received:
-        """在独立事务里接收一个事件（规则见 inbound.receive）。"""
+    async def receive(self, message: UserMessage) -> Received:
+        """在独立事务里接收用户在界面上发的消息（规则见 inbound.receive）。"""
         async with self._db.transaction() as s:
-            return await receive(s, self._queue, inbound)
+            return await receive(s, self._queue, message.inbound())
 
     async def _get(self, s: AsyncSession, session_id: str) -> Session:
         session = await s.get(Session, session_id)

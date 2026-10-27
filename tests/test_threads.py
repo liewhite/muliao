@@ -10,7 +10,7 @@ from sqlalchemy import select
 from muliao.errors import Conflict, Forbidden
 from muliao.platform.tables import TaskStatus
 from muliao.sessions.api import Origin
-from muliao.sessions.inbound import Inbound, NewSession
+from muliao.sessions.inbound import Inbound, NewSession, receive
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import queued_in
@@ -396,26 +396,35 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
     # 用户可以在 cron 会话里追问
     await reply(container, cron_session.id, "follow up")
     # 某个会话不能冒充父会话去续写不属于它的会话
+    # 委派与新建 thread 只在会话领域内部构造（Threads），这里直接走内部的 receive
     with pytest.raises(Forbidden):
-        await container.sessions.receive(
-            Inbound(
-                origin=Origin.DELEGATION,
-                origin_ref="someone-else",
-                content="x",
-                session=cron_session.id,
-                awaited=False,
+        async with container.db.transaction() as s:
+            await receive(
+                s,
+                container.queue,
+                Inbound(
+                    origin=Origin.DELEGATION,
+                    origin_ref="someone-else",
+                    content="x",
+                    session=cron_session.id,
+                    awaited=False,
+                ),
             )
-        )
     with pytest.raises(ValueError, match="only delegation creates threads"):
-        await container.sessions.receive(
-            Inbound(
-                origin=Origin.USER,
-                origin_ref=None,
-                content="x",
-                session=NewSession(agent_id=alpha, title="t", parent_session_id=cron_session.id, thread="t"),
-                awaited=True,
+        async with container.db.transaction() as s:
+            await receive(
+                s,
+                container.queue,
+                Inbound(
+                    origin=Origin.USER,
+                    origin_ref=None,
+                    content="x",
+                    session=NewSession(
+                        agent_id=alpha, title="t", parent_session_id=cron_session.id, thread="t"
+                    ),
+                    awaited=True,
+                ),
             )
-        )
 
 
 async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_its_agent(
