@@ -46,8 +46,14 @@ type Config = Record<string, unknown>
 /** 某种方式的触发器：收窄后 config 与 status 都是这种方式的类型 */
 type TriggerOf<K extends TriggerKindName> = Extract<Trigger, { kind: K }>
 
+/** 有服务端默认值的配置字段：读到的配置里总有，新建时可以不填（由服务端补上默认值，前端不另写一份） */
+type Defaulted = 'secrets' | 'debounce_seconds'
+
+/** 编辑中的配置：有默认值的字段可省 */
+type EditableConfig<C> = Omit<C, Defaulted> & Partial<Pick<C, Extract<keyof C, Defaulted>>>
+
 /** kind 与它的配置成对出现，编辑器按 kind 收窄 */
-type KindConfig = { [K in TriggerKindName]: { kind: K; config: TriggerOf<K>['config'] } }[TriggerKindName]
+type KindConfig = { [K in TriggerKindName]: { kind: K; config: EditableConfig<TriggerOf<K>['config']> } }[TriggerKindName]
 
 /** 配置编辑器以 config 为初始值、自己保存编辑中的内容；内容不合法时回调 null：保存按钮随之禁用，不会提交上一次的合法值 */
 type ConfigChange = (c: Config | null) => void
@@ -70,7 +76,7 @@ function emptyConfig(kind: TriggerKindName): KindConfig {
     case 'webhook':
       return { kind, config: {} }
     case 'stream':
-      return { kind, config: { command: '', secrets: [], debounce_seconds: 5 } }
+      return { kind, config: { command: '' } }
   }
 }
 
@@ -106,20 +112,21 @@ function RunAtEditor({ config, onChange }: { config: Schemas['OnceConfig']; onCh
   )
 }
 
-function StreamEditor({ config, onChange }: { config: Schemas['StreamConfig']; onChange: ConfigChange }) {
+function StreamEditor({ config, onChange }: { config: EditableConfig<Schemas['StreamConfig']>; onChange: ConfigChange }) {
   const [command, setCommand] = useState(config.command)
   const [secrets, setSecrets] = useState((config.secrets ?? []).join(', '))
-  const [debounce, setDebounce] = useState(String(config.debounce_seconds ?? 5))
+  const [debounce, setDebounce] = useState(config.debounce_seconds === undefined ? '' : String(config.debounce_seconds))
 
   function emit(next: { command?: string; secrets?: string; debounce?: string }) {
     const v = { command, secrets, debounce, ...next }
-    const seconds = Number(v.debounce)
+    // 合并窗口留空用服务端的默认值；范围由服务端校验（不合法时保存报 422），这里只挡不是数字的输入
+    const seconds = v.debounce.trim() === '' ? undefined : Number(v.debounce)
     onChange(
-      v.command.trim() && v.debounce.trim() !== '' && Number.isFinite(seconds) && seconds >= 0
+      v.command.trim() && (seconds === undefined || Number.isFinite(seconds))
         ? {
             command: v.command,
             secrets: v.secrets.split(',').map((k) => k.trim()).filter((k) => k !== ''),
-            debounce_seconds: seconds,
+            ...(seconds === undefined ? {} : { debounce_seconds: seconds }),
           }
         : null,
     )
@@ -140,7 +147,7 @@ function StreamEditor({ config, onChange }: { config: Schemas['StreamConfig']; o
       />
       <TextInput
         label="合并窗口（秒）"
-        hint="第一行到达后再等这么久，期间的行合并成一次触发；上次的会话还在忙时事件排队，它结束后一起投递"
+        hint="第一行到达后再等这么久，期间的行合并成一次触发；上次的会话还在忙时事件排队，它结束后一起投递。留空用默认值"
         value={debounce}
         onChange={(value) => {
           setDebounce(value)
