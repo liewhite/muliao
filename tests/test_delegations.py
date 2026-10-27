@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from muliao.errors import Conflict
 from muliao.platform.tables import Task, TaskStatus
-from muliao.sessions.conventions import tool_threads
+from muliao.sessions.conventions import STOPPED_TOOL_RESULT
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.pending import UserAnswered
@@ -108,9 +108,9 @@ async def test_listing_threads_gives_each_its_own_answer_and_failure(container, 
                 thread=name,
                 prompt="task",
                 kind=SessionKind.THREAD,
-                call_id=None,
+                call_id=name,
+                suspends=False,
                 awaited=False,
-                key=name,
             )
     await drain(container)
 
@@ -137,9 +137,9 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
             thread="review",
             prompt="check",
             kind=SessionKind.THREAD,
-            call_id=None,
+            call_id="call-1",
+            suspends=False,
             awaited=True,
-            key="call-1",
             check_seconds=0.001,
         )
     [child] = await threads_of(container, parent.id)
@@ -176,9 +176,9 @@ async def test_each_reported_delegation_is_checked_at_its_own_interval(container
                 thread=thread,
                 prompt="check",
                 kind=SessionKind.THREAD,
-                call_id=None,
+                call_id=thread,
+                suspends=False,
                 awaited=False,
-                key=thread,
                 check_seconds=interval,
             )
     await deliver(container)
@@ -210,8 +210,8 @@ async def test_an_expired_ask_stops_its_thread_once_and_retries_a_failed_stop(co
             prompt="q",
             kind=SessionKind.PRIVATE_THREAD,
             call_id="ask-1",
+            suspends=True,
             awaited=False,
-            key="ask-1",
             timeout_seconds=0.001,
         )
     stops: list[str] = []
@@ -302,9 +302,9 @@ async def test_nothing_is_reported_once_the_parent_session_is_gone(container, ma
             thread="review",
             prompt="check",
             kind=SessionKind.THREAD,
-            call_id=None,
+            call_id="call-2",
+            suspends=False,
             awaited=True,
-            key="call-2",
         )
     # 父会话在等这个 thread（占用还在）：先停止它（委派放弃、thread 一起停下），才能删除。公开 thread 在父会话
     # 删除后作为独立会话保留，它之后的结局不再交回任何地方：委派的状态就是发起方的占用，随发起方删除
@@ -526,9 +526,9 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
             thread="review",
             prompt="check",
             kind=SessionKind.THREAD,
-            call_id=None,
+            call_id="call-3",
+            suspends=False,
             awaited=True,
-            key="call-3",
         )
     [child] = await threads_of(container, parent.id)
 
@@ -571,9 +571,9 @@ async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_r
                 thread="review",
                 prompt=prompt,
                 kind=SessionKind.THREAD,
-                call_id=None,
+                call_id=prompt,
+                suspends=False,
                 awaited=False,
-                key=prompt,
             )
 
     async def stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
@@ -672,15 +672,53 @@ async def test_a_user_message_while_waiting_on_an_agent_continues_and_the_answer
         ).all()
     # 回答到达时发问方已经不等这次调用了：作为事件交回
     assert [("checked" in e.content, e.kind) for e in events] == [(True, MailKind.EVENT)]
-    # 没等到回答的结果也带着做它的 thread：界面把 thread 显示在这次调用处，而不是列为未关联
-    [skipped] = [
+    # 没等到回答就继续的调用，thread 照样显示在这次调用处，而不是列为未关联
+    assert await _call_threads(container, parent.id) == {"ask1": [child.id]}
+
+
+async def _call_threads(container, session_id: str) -> dict[str, list[str]]:  # noqa: ANN001
+    """会话页上各个工具调用挂的 thread（只列挂了的）；结果条目不挂 thread。"""
+    items = (await container.sessions.detail(session_id)).items
+    assert all(not i.threads for i in items if i.type != "tool_call")
+    return {i.tool_call_id: i.threads for i in items if i.type == "tool_call" and i.threads}
+
+
+async def test_a_stopped_ask_still_points_at_its_thread(container, make_agent, models):
+    """发问方在 ask_agent 挂着时被停止：停止补上的结果不是工具产出的，thread 仍显示在这次调用处。"""
+    import asyncio
+    from collections.abc import AsyncIterator
+
+    from pydantic_ai.models.function import FunctionModel
+
+    from tests.test_flow import idle
+
+    running = asyncio.Event()
+
+    async def blocked(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        running.set()
+        await asyncio.Event().wait()
+        yield "never"
+
+    parent, _ = await _asking(container, make_agent, models, FunctionModel(stream_function=blocked))
+    worker = asyncio.create_task(container.worker.run_forever())
+    try:
+        async with asyncio.timeout(5):
+            await running.wait()
+        await container.stopper(parent.id)
+        await idle(container)
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    [child] = await threads_of(container, parent.id)
+    [result] = [
         p
         for m in await history_of(container, parent.id)
         for p in m.parts
         if isinstance(p, ToolReturnPart) and p.tool_call_id == "ask1"
     ]
-    assert "will reach you as an event" in str(skipped.content)
-    assert tool_threads(skipped) == [child.id]
+    assert result.content == STOPPED_TOOL_RESULT
+    assert await _call_threads(container, parent.id) == {"ask1": [child.id]}
 
 
 async def test_stopping_a_private_thread_answers_the_waiting_ask_with_stopped(container, make_agent, models):
@@ -730,9 +768,9 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
             thread="review",
             prompt="check",
             kind=SessionKind.THREAD,
-            call_id=None,
+            call_id="call-5",
+            suspends=False,
             awaited=False,
-            key="call-5",
         )
     await deliver(container)
     # 排着运行的 thread 忙：先停止才能删除；停止时委派结清为「被停止」，删除不再重复交回
@@ -1086,9 +1124,9 @@ async def test_stopping_the_asker_stops_its_threads_level_by_level(container, ma
                 thread=thread,
                 prompt="work",
                 kind=SessionKind.THREAD,
-                call_id=None,
+                call_id=f"k-{thread}",
+                suspends=False,
                 awaited=False,
-                key=f"k-{thread}",
             )
 
     first = await dispatch(parent.id, middle, "first")

@@ -1,4 +1,4 @@
-"""会话领域的表：会话、消息、信箱、压缩、占用、委派。各子域独占自己的表（docs/architecture.md 2.1）。"""
+"""会话领域的表：会话、消息、信箱、压缩、占用、委派、调用开出的 thread。各子域独占自己的表（docs/architecture.md 2.1）。"""
 
 from datetime import datetime
 from enum import StrEnum
@@ -192,3 +192,21 @@ class Delegation(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     __table_args__ = (Index("uq_delegations_holder", "holder", unique=True),)
+
+
+class ThreadCall(Base):
+    """哪次工具调用开出或续写了哪个 thread（sessions.thread_calls）：在开出/续写 thread 的同一个事务里记下，是界面把
+    thread 显示在调用处的唯一来源，与调用有没有结果、结果是谁补的无关。续写同一个 thread 时每次调用各一行；随发起会话
+    或 thread 删除。"""
+
+    __tablename__ = "thread_calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 发起调用的会话（thread 的父会话）；按它与调用 id 唯一（复合唯一索引以它开头，也是它的外键索引）
+    parent_session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
+    call_id: Mapped[str] = mapped_column(String(100))
+    thread_session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE", name="fk_thread_calls_thread_session_id"), index=True
+    )
+
+    __table_args__ = (Index("uq_thread_calls_call", "parent_session_id", "call_id", unique=True),)

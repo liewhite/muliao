@@ -1222,15 +1222,14 @@ export interface components {
         };
         /**
          * AgentAnswer
-         * @description 被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件，所在的 thread。
+         * @description 被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件。做它的 thread 不在这里：
+         *     调用开出了哪个 thread 记在 sessions.thread_calls。更早投出的回答信件里的 thread 键忽略。
          */
         AgentAnswer: {
             /** Text */
             text: string;
             /** Attachments */
             attachments: components["schemas"]["Attachment"][];
-            /** Thread */
-            thread: string;
         };
         /**
          * AgentAnswered

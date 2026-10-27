@@ -210,14 +210,18 @@ async def test_a_deleted_agents_thread_takes_no_new_delegation(container, make_a
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        await container.threads.send(s, parent_id=parent.id, agent=reviewer, thread="review", prompt="x")
+        await container.threads.send(
+            s, parent_id=parent.id, agent=reviewer, thread="review", prompt="x", call_id="c1"
+        )
     await drain(container)
     await container.agent_lifecycle.delete(reviewer.id, actor="user")
     await drain(container)
 
     with pytest.raises(Missing, match="not found"):
         async with container.db.transaction() as s:
-            await container.threads.send(s, parent_id=parent.id, agent=reviewer, thread="review2", prompt="y")
+            await container.threads.send(
+                s, parent_id=parent.id, agent=reviewer, thread="review2", prompt="y", call_id="c2"
+            )
 
 
 async def test_notifications_of_a_deleted_agents_sessions_go_with_them(container, make_agent, models):

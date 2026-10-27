@@ -156,6 +156,7 @@ SESSIONS_TABLES: dict[str, set[str]] = {
     "SessionHold": {"holds"},
     # 委派
     "Delegation": {"delegations"},
+    "ThreadCall": {"thread_calls"},
 }
 
 

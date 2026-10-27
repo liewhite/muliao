@@ -553,6 +553,16 @@ def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():
     from muliao.sessions.pending import AgentAnswer, AgentAnswered, deferred_results
 
     call = ToolCallPart("ask_user", {"questions": []}, tool_call_id="c")
-    wrong = AgentAnswered.of(AgentAnswer(text="hi", attachments=[], thread="t"))
+    wrong = AgentAnswered.of(AgentAnswer(text="hi", attachments=[]))
     with pytest.raises(RuntimeError, match="got an answer for ask_agent"):
-        deferred_results({"c": call}, {"c": wrong}, {})
+        deferred_results({"c": call}, {"c": wrong})
+
+
+def test_an_answer_mailed_before_thread_calls_still_parses():
+    # #251 之前的回答信件里带 thread 键：现在 thread 记在 thread_calls，旧键忽略
+    from muliao.sessions.pending import AgentAnswer, AgentAnswered
+
+    parsed = AgentAnswered.model_validate(
+        {"tool": "ask_agent", "result": {"text": "hi", "attachments": [], "thread": "t"}}
+    )
+    assert parsed.result == AgentAnswer(text="hi", attachments=[])

@@ -31,7 +31,7 @@ from muliao.platform.tasks import Clock, TaskQueue, TaskView
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.delegations import DelegationRecord, records_among
 from muliao.sessions.directory import among_in
-from muliao.sessions.holds import active_holders_in, calls_in
+from muliao.sessions.holds import active_holders_in
 from muliao.sessions.mailbox import post_check_in
 from muliao.sessions.pending import AgentAnswer
 from muliao.sessions.runs import latest_runs_among
@@ -135,7 +135,6 @@ async def hand_back_in(
             answer=AgentAnswer(
                 text=_result_text(name, agent.name, ending, text, timed_out_after),
                 attachments=list(attachments),
-                thread=child.id,
             ),
         )
         log.info(
@@ -158,15 +157,6 @@ async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> dict[s
         for holder, record in (await records_among(s, holders)).items()
         if record.thread_id is not None
     }
-
-
-async def call_threads_in(s: AsyncSession, session_id: str) -> dict[str, str]:
-    """这个会话里交出去的挂起调用（ask_agent）→ 做它的 thread。调用还挂着、没有结果时，界面靠它把 thread 显示在调用处
-    （有了结果之后由结果上的 TOOL_THREADS 关联）。"""
-    calls = await calls_in(s, session_id)
-    threads = await threads_of_holds_in(s, list(calls.values()))
-    # 不在 threads 里的：thread 已删除
-    return {call_id: threads[holder] for call_id, holder in calls.items() if holder in threads}
 
 
 class ThreadChecks:

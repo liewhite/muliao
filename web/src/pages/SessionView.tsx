@@ -425,18 +425,9 @@ function ThreadLinks({ ids, ctx }: { ids: string[]; ctx: SessionContext }) {
     <div className="flex w-full max-w-[88%] flex-col self-start rounded-xl border border-separator px-1.5 py-1 text-sm">
       {ids.map((id) => {
         const thread = ctx.threads.get(id)
-        if (thread) return <ThreadRow key={id} thread={thread} agents={ctx.agents} />
-        return ctx.view === 'history' ? (
-          <div key={id} className="flex items-center gap-2 px-2 py-1 text-muted">
-            <GitBranch className="size-3.5" />
-            thread 已删除
-          </div>
-        ) : (
-          <Link key={id} to={sessionRoute(id)} className="flex items-center gap-2 rounded-lg px-2 py-1 text-accent hover:bg-surface-hover">
-            <GitBranch className="size-3.5" />
-            打开 thread
-          </Link>
-        )
+        // 调用条目上的 thread 与 thread 列表在同一次读取里给出，关联随 thread 删除：拿不到是前后端不一致
+        if (!thread) throw new Error(`thread ${id} linked to a call is not among the session's threads`)
+        return <ThreadRow key={id} thread={thread} agents={ctx.agents} />
       })}
     </div>
   )

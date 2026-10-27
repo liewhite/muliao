@@ -3464,20 +3464,15 @@
             },
             "type": "array",
             "title": "Attachments"
-          },
-          "thread": {
-            "type": "string",
-            "title": "Thread"
           }
         },
         "type": "object",
         "required": [
           "text",
-          "attachments",
-          "thread"
+          "attachments"
         ],
         "title": "AgentAnswer",
-        "description": "被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件，所在的 thread。"
+        "description": "被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件。做它的 thread 不在这里：\n调用开出了哪个 thread 记在 sessions.thread_calls。更早投出的回答信件里的 thread 键忽略。"
       },
       "AgentAnswered": {
         "properties": {

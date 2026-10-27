@@ -2,7 +2,7 @@
 list_threads。委派的生命周期见 sessions.delegation。"""
 
 from pydantic import BaseModel
-from pydantic_ai import FunctionToolset, RunContext, ToolReturn
+from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agent_runtime.api import defer_call
 from muliao.agents.api import AgentService
@@ -11,7 +11,6 @@ from muliao.platform.db import Database
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.activity import WorkState
-from muliao.sessions.conventions import TOOL_THREADS
 from muliao.sessions.deferred import ASK_AGENT
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.kinds import DELEGATE_TASK, SessionKind, policy_of
@@ -54,7 +53,7 @@ def delegation_toolset(
         thread: str,
         report_back: bool = False,
         heartbeat_seconds: float | None = None,
-    ) -> ToolReturn:
+    ) -> str:
         """Hand a task to an agent and keep going without waiting (non-blocking, no timeout). It runs in a thread
         the user can see and reply in. By default the user is notified with its answer and you do NOT get it back.
         With `report_back: true` the answer (or its failure) comes back to you as an event in this conversation
@@ -85,31 +84,28 @@ def delegation_toolset(
         check = DEFAULT_CHECK_SECONDS if heartbeat_seconds is None else heartbeat_seconds
         if not check > 0:  # 也拒绝 NaN
             raise InvalidInput("heartbeat_seconds must be greater than 0")
+        if ctx.tool_call_id is None:
+            raise RuntimeError("delegate_task was called without a tool call id")
         async with db.transaction() as s:
             if report_back:
-                if ctx.tool_call_id is None:
-                    raise RuntimeError("delegate_task was called without a tool call id")
                 # 续跑重新执行这次调用时按调用 id 去重
-                child = await threads.dispatch(
+                await threads.dispatch(
                     s,
                     parent_id=parent_id,
                     agent=target,
                     thread=thread,
                     prompt=task,
                     kind=SessionKind.THREAD,
-                    call_id=None,
+                    call_id=ctx.tool_call_id,
+                    suspends=False,
                     awaited=ctx.deps.user_waits,
-                    key=ctx.tool_call_id,
                     check_seconds=check,
                 )
             else:
-                child = (
-                    await threads.send(s, parent_id=parent_id, agent=target, thread=thread, prompt=task)
-                ).session
-        return ToolReturn(
-            return_value=f"delegated to {target.name} in thread {validate_thread(thread)!r}",
-            metadata={TOOL_THREADS: [child.id]},
-        )
+                await threads.send(
+                    s, parent_id=parent_id, agent=target, thread=thread, prompt=task, call_id=ctx.tool_call_id
+                )
+        return f"delegated to {target.name} in thread {validate_thread(thread)!r}"
 
     @ts.tool(name=ASK_AGENT)
     async def ask_agent(
@@ -159,8 +155,8 @@ def delegation_toolset(
                 prompt=message,
                 kind=SessionKind.PRIVATE_THREAD,
                 call_id=ctx.tool_call_id,
+                suspends=True,
                 awaited=ctx.deps.user_waits,
-                key=ctx.tool_call_id,
                 timeout_seconds=timeout,
             )
         # 发问方的运行停在这次调用上，不占 worker；对方的结局作为这次调用的结果交回（sessions.pending）

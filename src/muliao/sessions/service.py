@@ -16,7 +16,6 @@ from muliao.platform.tasks import Commit, TaskQueue, TaskView, no_commit
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor
-from muliao.sessions.delegation import call_threads_in
 from muliao.sessions.deletion import delete_sessions
 from muliao.sessions.directory import Listing, listed_ids_in, listed_page_in, threads_of
 from muliao.sessions.events import Receive, SessionRead, StopThread
@@ -37,7 +36,8 @@ from muliao.sessions.mailbox import open_asks_in, visible_in
 from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_run
 from muliao.sessions.tables import Compaction, Mail, Session
-from muliao.sessions.transcript import Item, annotate_asks, annotate_pending_threads, checked_times, to_items
+from muliao.sessions.thread_calls import call_threads_in
+from muliao.sessions.transcript import Item, annotate_asks, annotate_threads, checked_times, to_items
 
 log = logging.getLogger(__name__)
 
@@ -61,11 +61,11 @@ class SessionView:
     state: WorkState
 
 
-def _with_pending_threads(live: LiveSegment, call_threads: Mapping[str, str]) -> LiveSegment:
-    """实时快照里还挂着的调用同样挂上它交出去的 thread（transcript.annotate_pending_threads）：中途打开会话页时
-    这一段的调用也显示它开出的 thread。之后经 SSE 收到的调用不带：那时 thread 列表也还没重新拉取。"""
+def _with_threads(live: LiveSegment, call_threads: Mapping[str, str]) -> LiveSegment:
+    """实时快照里的调用同样挂上它开出或续写的 thread（transcript.annotate_threads）：中途打开会话页时这一段的调用也
+    显示它开出的 thread。之后经 SSE 收到的条目不带：那时 thread 列表也还没重新拉取，下一步保存时（saved 事件）重新拉取。"""
     items = [e.item for e in live.events if isinstance(e, RunItemEvent)]
-    annotated = iter(annotate_pending_threads(items, call_threads))
+    annotated = iter(annotate_threads(items, call_threads))
     events = [
         e.model_copy(update={"item": next(annotated)}) if isinstance(e, RunItemEvent) else e
         for e in live.events
@@ -123,7 +123,7 @@ class SessionService:
             if live is None or live.after_message_id is None or message_id <= live.after_message_id
         ]
         items = annotate_asks(
-            annotate_pending_threads(
+            annotate_threads(
                 checked_times(
                     [
                         item.model_copy(update={"message_id": message_id})
@@ -145,7 +145,7 @@ class SessionService:
             mail=mail,
             run=None if latest is None or latest.done else latest,
             threads=threads,
-            live=None if live is None else _with_pending_threads(live, call_threads),
+            live=None if live is None else _with_threads(live, call_threads),
             state=state,
         )
 

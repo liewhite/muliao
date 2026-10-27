@@ -35,7 +35,7 @@ async def test_an_answered_ask_is_not_executed_again_and_its_hold_stays_as_the_r
     original = Threads.dispatch
 
     async def counting(self, s, **kwargs):  # noqa: ANN001, ANN003, ANN202
-        dispatched.append(kwargs["key"])
+        dispatched.append(kwargs["call_id"])
         return await original(self, s, **kwargs)
 
     monkeypatch.setattr(Threads, "dispatch", counting)
@@ -61,7 +61,9 @@ async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        await container.threads.send(s, parent_id=parent.id, agent=reviewer, thread="review", prompt="x")
+        await container.threads.send(
+            s, parent_id=parent.id, agent=reviewer, thread="review", prompt="x", call_id="c1"
+        )
     before = await _mail_count(container)
     events_before = await _event_count(container)
 
@@ -74,9 +76,9 @@ async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_
                 thread="review",
                 prompt="y",
                 kind=SessionKind.PRIVATE_THREAD,
-                call_id=None,
+                call_id="k",
+                suspends=False,
                 awaited=False,
-                key="k",
             )
 
     assert await _holds(container, parent.id) == []
@@ -183,9 +185,9 @@ async def test_a_thread_hands_its_outcome_back_in_the_transaction_that_settles_i
             thread="review",
             prompt="check",
             kind=SessionKind.THREAD,
-            call_id=None,
+            call_id="k",
+            suspends=False,
             awaited=False,
-            key="k",
         )
     # 只跑运行、不投递任何事件：thread 做完、结清，发起方的运行接着处理交回的事件
     await run_only(container)
@@ -281,9 +283,9 @@ async def test_reconcile_settles_delegations_whose_failure_hook_failed(
             thread="review",
             prompt="check",
             kind=SessionKind.THREAD,
-            call_id=None,
+            call_id="k",
+            suspends=False,
             awaited=False,
-            key="k",
         )
 
     async def failing_settle(self, s, task):  # noqa: ANN001, ANN202
@@ -336,9 +338,9 @@ async def test_stopping_a_thread_hands_back_at_once_and_deleting_its_agent_later
             thread="review",
             prompt="check",
             kind=SessionKind.THREAD,
-            call_id=None,
+            call_id="k",
+            suspends=False,
             awaited=False,
-            key="k",
         )
     [child] = await threads_of(container, parent.id)
     # thread 被停止：同一个事务里结清并交回
@@ -375,9 +377,9 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
             thread="review",
             prompt="look",
             kind=SessionKind.THREAD,
-            call_id=None,
+            call_id="k",
+            suspends=False,
             awaited=False,
-            key="k",
         )
     from tests.test_flow import deliver
 
@@ -426,9 +428,9 @@ async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_fail
                 thread="review",
                 prompt=key,
                 kind=SessionKind.THREAD,
-                call_id=None,
+                call_id=key,
+                suspends=False,
                 awaited=False,
-                key=key,
             )
 
     child = await dispatch("first")
@@ -477,9 +479,9 @@ async def test_a_thread_settling_a_delegation_its_existing_asker_has_no_hold_for
             thread="review",
             prompt="check",
             kind=SessionKind.THREAD,
-            call_id=None,
+            call_id="k",
+            suspends=False,
             awaited=False,
-            key="k",
         )
     with pytest.raises(RuntimeError, match="has no hold"):
         async with container.db.transaction() as s:
@@ -512,8 +514,8 @@ async def test_deleting_an_asker_together_with_its_private_thread_drops_the_thre
             prompt="check",
             kind=SessionKind.PRIVATE_THREAD,
             call_id="c1",
+            suspends=True,
             awaited=False,
-            key="k",
         )
     await container.stopper(parent.id)
     await drain(container)

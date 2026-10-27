@@ -172,26 +172,29 @@ describe('stepThreads', () => {
   it('collects the threads opened by delegation calls in a group, once each, in order', () => {
     const views = groupSteps(
       toBlocks([
-        item('tool_call', '{}', 'a'),
-        { ...item('tool_result', 'delegated', 'a'), threads: ['t1'] },
-        item('tool_call', '{}', 'b'),
-        { ...item('tool_result', 'answer', 'b'), threads: ['t2'] },
-        item('tool_call', '{}', 'c'),
-        { ...item('tool_result', 'again', 'c'), threads: ['t1'] },
+        { ...item('tool_call', '{}', 'a'), threads: ['t1'] },
+        item('tool_result', 'delegated', 'a'),
+        { ...item('tool_call', '{}', 'b'), threads: ['t2'] },
+        item('tool_result', 'answer', 'b'),
+        { ...item('tool_call', '{}', 'c'), threads: ['t1'] },
+        item('tool_result', 'again', 'c'),
       ]),
     )
     expect(views[0].kind === 'process' && stepThreads(views[0].steps)).toEqual(['t1', 't2'])
   })
 
-  it('includes the thread of a call still waiting for its answer', () => {
-    const views = groupSteps(toBlocks([{ ...item('tool_call', '{}', 'a'), threads: ['t1'] }]))
-    expect(views[0].kind === 'process' && stepThreads(views[0].steps)).toEqual(['t1'])
+  it('includes the thread of a call still waiting for its answer, and keeps it once the result arrives', () => {
+    const call = { ...item('tool_call', '{}', 'a'), threads: ['t1'] }
+    for (const items of [[call], [call, item('tool_result', 'stopped', 'a')]]) {
+      const views = groupSteps(toBlocks(items))
+      expect(views[0].kind === 'process' && stepThreads(views[0].steps)).toEqual(['t1'])
+    }
   })
 })
 
 describe('unlinkedThreads', () => {
   it('lists only threads no item points at', () => {
-    const items = [{ ...item('tool_result', 'x', 'a'), threads: ['t1'] }]
+    const items = [{ ...item('tool_call', '{}', 'a'), threads: ['t1'] }]
     expect(unlinkedThreads(items, [{ id: 't1' }, { id: 't2' }])).toEqual([{ id: 't2' }])
   })
 })

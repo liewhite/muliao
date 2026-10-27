@@ -23,6 +23,7 @@ from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_runs_among, recorded_failure
 from muliao.sessions.tables import Session
+from muliao.sessions.thread_calls import record_call_in
 
 log = logging.getLogger(__name__)
 
@@ -96,10 +97,12 @@ class Threads:
         )
 
     async def send(
-        self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, prompt: str
+        self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, prompt: str, call_id: str
     ) -> Received:
-        """不交回结局的委派（delegate_task）：往公开 thread 的信箱投一封用户在等的信（thread 不存在则新建）。"""
+        """不交回结局的委派（delegate_task）：往公开 thread 的信箱投一封用户在等的信（thread 不存在则新建），记下是这次
+        调用（call_id）开出或续写了它（sessions.thread_calls）。"""
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, kind=SessionKind.THREAD)
+        await record_call_in(s, parent_id, call_id, child.id)
         inbound = Inbound(
             origin=Origin.DELEGATION, origin_ref=parent_id, content=prompt, session=child.id, awaited=True
         )
@@ -114,18 +117,20 @@ class Threads:
         thread: str,
         prompt: str,
         kind: SessionKind,
-        call_id: str | None,
+        call_id: str,
+        suspends: bool,
         awaited: bool,
-        key: str,
         check_seconds: float | None = None,
         timeout_seconds: float | None = None,
     ) -> Session:
         """要交回结局的委派（ask_agent、delegate_task(report_back)），在调用方的一个事务里：打开或找到 thread，在发起方
-        登记占用（带 call_id 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件（委派的全部状态，
-        结局的交回见 sessions.delegation）。thread 不合用时抛 InvalidInput，什么都没写。按 key 幂等：续跑重新执行这次
-        调用时只返回已经投递到的 thread。awaited：用户是否在等发起方的回答。check_seconds：并发等待时的运行中
-        检查间隔；timeout_seconds：阻塞等待的超时（到期停掉 thread，ThreadChecks）。"""
-        holder = delegation_holder(parent_id, key)
+        登记占用（suspends 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件（委派的全部状态，结局的
+        交回见 sessions.delegation），并记下这次调用开出或续写了这个 thread（sessions.thread_calls）。thread 不合用时抛
+        InvalidInput，什么都没写。call_id：发出它的工具调用，按它幂等：续跑重新执行这次调用时只返回已经投递到的
+        thread。suspends：这次调用挂起、等结局作为它的结果（ask_agent），占用带上 call_id。awaited：用户是否在等发起方
+        的回答。check_seconds：并发等待时的运行中检查间隔；timeout_seconds：阻塞等待的超时（到期停掉 thread，
+        ThreadChecks）。"""
+        holder = delegation_holder(parent_id, call_id)
         if await get_hold_in(s, parent_id, holder) is not None:
             existing = (await threads_of_holds_in(s, [holder])).get(holder)
             if existing is None:
@@ -135,7 +140,8 @@ class Threads:
                 raise RuntimeError(f"delegation {holder} points to a missing thread {existing}")
             return child
         child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, kind=kind)
-        await hold_in(s, parent_id, holder, call_id=call_id, awaited=awaited)
+        await hold_in(s, parent_id, holder, call_id=call_id if suspends else None, awaited=awaited)
+        await record_call_in(s, parent_id, call_id, child.id)
         await record_in(
             s,
             holder=holder,

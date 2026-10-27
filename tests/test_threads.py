@@ -519,7 +519,7 @@ async def test_an_ask_that_times_out_stops_its_thread_and_returns_what_it_said(c
 
 
 async def test_a_pending_ask_points_at_its_thread_before_the_answer(container, make_agent, models):
-    """ask_agent 还挂着（对方没回答）时，调用条目就带上它开出的 thread；回答之后关联在结果上，调用条目不再带。"""
+    """ask_agent 还挂着（对方没回答）时，调用条目就带上它开出的 thread；回答之后仍在调用条目上（关联只看调用 id）。"""
     import asyncio
     from collections.abc import AsyncIterator
 
@@ -549,7 +549,7 @@ async def test_a_pending_ask_points_at_its_thread_before_the_answer(container, m
         async with asyncio.timeout(5):
             await running.wait()
         [child] = await threads_of(container, parent.id)
-        # 发问方的运行停在这次调用上之后，调用在历史里（运行中它在实时快照里，见 test_transcript.py 的 test_the_live_snapshot_points_pending_calls_at_their_threads）
+        # 发问方的运行停在这次调用上之后，调用在历史里（运行中它在实时快照里，见 test_transcript.py 的 test_the_live_snapshot_points_calls_at_their_threads）
         async with asyncio.timeout(5):
             while (view := await container.sessions.detail(parent.id)).live is not None:  # noqa: ASYNC110  轮询会话状态，没有可等的事件
                 await asyncio.sleep(0.01)
@@ -561,7 +561,7 @@ async def test_a_pending_ask_points_at_its_thread_before_the_answer(container, m
         await asyncio.gather(worker, return_exceptions=True)
 
     view = await container.sessions.detail(parent.id)
-    assert ask_items(view.items) == [("tool_call", []), ("tool_result", [child.id])]
+    assert ask_items(view.items) == [("tool_call", [child.id]), ("tool_result", [])]
 
 
 async def test_delegation_results_point_at_the_thread_they_opened(client, container, make_agent, models):
@@ -577,14 +577,21 @@ async def test_delegation_results_point_at_the_thread_they_opened(client, contai
         [
             ("delegate_task", {"agent": "helper", "task": "report", "thread": "weekly"}),
             ("ask_agent", {"agent": "helper", "message": "status?", "thread": "check", "timeout": 600}),
+            # 续写同一个 thread：这次调用也挂着它
+            ("delegate_task", {"agent": "helper", "task": "again", "thread": "weekly"}),
         ],
     )
     await login(client)
     parent = next(s for s in (await client.get("/api/sessions")).json() if s["parent_session_id"] is None)
     detail = (await client.get(f"/api/sessions/{parent['id']}")).json()
     by_name = {t["thread"]: t["id"] for t in detail["threads"]}
-    linked = [(i["tool_name"], i["threads"]) for i in detail["items"] if i["type"] == "tool_result"]
-    assert linked == [("delegate_task", [by_name["weekly"]]), ("ask_agent", [by_name["check"]])]
+    linked = [(i["tool_name"], i["threads"]) for i in detail["items"] if i["type"] == "tool_call"]
+    assert linked == [
+        ("delegate_task", [by_name["weekly"]]),
+        ("ask_agent", [by_name["check"]]),
+        ("delegate_task", [by_name["weekly"]]),
+    ]
+    assert all(not i["threads"] for i in detail["items"] if i["type"] != "tool_call")
 
 
 async def test_a_question_after_a_failed_ask_gets_its_own_answer(container, make_agent, models):

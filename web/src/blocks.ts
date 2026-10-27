@@ -100,7 +100,6 @@ export function toBlocks(items: Item[]): Block[] {
           tool.rejected = item.type === 'tool_error'
           tool.attachments = item.attachments
           tool.images = item.images
-          tool.threads = item.threads
           tool.finishedAt = item.at
         } else {
           // 没有对应调用的错误（如输出校验重试）单独展示
@@ -190,8 +189,8 @@ export function stepThreads(steps: Step[]): string[] {
 }
 
 /**
- * 没有被任何条目引用的 thread：在 thread 随调用记录之前开出的、开出后调用被停止或失败的。
- * 引用来自完整历史（被压缩的部分也算）与正在进行的这一段；还挂着的调用（ask_agent）在调用条目上带着它的 thread。
+ * 没有被任何调用条目引用的 thread（后端按调用 id 给调用条目挂 thread，结果条目不带）。引用来自完整历史（被压缩的
+ * 部分也算）与正在进行的这一段；经 SSE 刚收到、还没重新拉取的调用暂时不带。
  */
 export function unlinkedThreads<T extends { id: string }>(items: Item[], threads: T[]): T[] {
   const linked = new Set(items.flatMap((i) => i.threads))

@@ -1127,3 +1127,86 @@ def test_unified_language_renames_columns_marks_the_user_and_downgrades(tmp_path
         ]
         assert conn.execute("select author from revisions").fetchall() == [("user",)]
         assert "session_id" in {r[1] for r in conn.execute("pragma table_info(delegations)")}
+
+
+def test_thread_calls_are_backfilled_from_result_metadata_and_delegations_and_downgrade(tmp_path):
+    """#251：调用 → thread 的关联从工具结果 metadata 的 muliao_threads 与委派记录回填，按（父会话, 调用 id）去重，
+    thread 已删除的不收；降级删表。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "c2d9e4b7a1f0")
+    t = "2026-01-01 00:00:00"
+
+    def result(call_id: str, threads: list[str] | None) -> dict:
+        metadata = None if threads is None else {"muliao_attachments": [], "muliao_threads": threads}
+        return {
+            "part_kind": "tool-return",
+            "tool_name": "x",
+            "tool_call_id": call_id,
+            "content": "ok",
+            "metadata": metadata,
+        }
+
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', ?, ?)",
+            (t, t),
+        )
+        conn.executemany(
+            "insert into sessions (id, agent_id, title, origin, origin_ref, parent_session_id, thread, kind, "
+            "created_at, updated_at) values (?, 'a1', 't', ?, NULL, ?, ?, ?, ?, ?)",
+            [
+                ("p", "user", None, None, "conversation", t, t),
+                ("c1", "delegation", "p", "r1", "thread", t, t),
+                ("c2", "delegation", "p", "r2", "private_thread", t, t),
+            ],
+        )
+        # delegate_task 的结果带 thread；同一 thread 续写一次；指向已删除 thread 的不收；停止补的结果不带 metadata
+        parts = [
+            result("d1", ["c1"]),
+            result("d2", ["c1"]),
+            result("gone", ["deleted"]),
+            result("ask2", None),
+        ]
+        conn.execute(
+            "insert into messages (session_id, task_id, payload, created_at) values ('p', 1, ?, ?)",
+            (json.dumps({"kind": "request", "parts": parts}), t),
+        )
+        # 正常回答的 ask 两处都有；被停止的 ask 只在委派记录里；thread 已删除的委派不收
+        conn.execute(
+            "insert into messages (session_id, task_id, payload, created_at) values ('p', 1, ?, ?)",
+            (json.dumps({"kind": "request", "parts": [result("ask1", ["c2"])]}), t),
+        )
+        conn.executemany(
+            "insert into delegations (holder, parent_session_id, thread_session_id, created_at) values (?, 'p', ?, ?)",
+            [("delegation:p:ask1", "c2", t), ("delegation:p:ask2", "c2", t), ("delegation:p:ask3", None, t)],
+        )
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert sorted(
+            conn.execute("select parent_session_id, call_id, thread_session_id from thread_calls")
+        ) == [
+            ("p", "ask1", "c2"),
+            ("p", "ask2", "c2"),
+            ("p", "d1", "c1"),
+            ("p", "d2", "c1"),
+        ]
+
+    # 删 thread 时它的关联随之删除（foreign_keys 只在事务外打开才生效）
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.execute("pragma foreign_keys = on")
+    conn.execute("delete from sessions where id = 'c1'")
+    assert conn.execute("select call_id from thread_calls order by call_id").fetchall() == [
+        ("ask1",),
+        ("ask2",),
+    ]
+    conn.close()
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "c2d9e4b7a1f0")
+    assert "thread_calls" not in _tables(path)

@@ -32,7 +32,6 @@ from muliao.sessions.conventions import (
     made_up_result,
     parse_event,
     run_context_index,
-    tool_threads,
 )
 from muliao.sessions.deferred import asks_user, questions_in
 from muliao.sessions.questions import AnsweredQuestion, AskResult, Question
@@ -70,8 +69,7 @@ class Item(BaseModel):
     message_id: int | None
     # 用户消息的附件（见 agent_runtime.attachments 的存储形态），或工具结果挂上的文件（TOOL_ATTACHMENTS）；其他条目为空
     attachments: list[Attachment]
-    # 工具结果关联的子会话 id（TOOL_THREADS）；还没有结果的调用（挂起的 ask_agent）由会话接口填上它交出去的 thread
-    # （annotate_pending_threads）；其他条目为空
+    # 工具调用开出或续写的 thread（子会话 id），由会话接口按调用 id 填（annotate_threads）；其他条目（含工具结果）为空
     threads: list[str]
     # 工具交回给模型的图片（agent_runtime 的 result_images，如浏览器截图）：属于这次调用的过程，不是给用户的文件；其他条目为空
     images: list[Attachment]
@@ -160,17 +158,12 @@ def _annotated(
     return item.model_copy(update={"ask": item.ask.model_copy(update=update)})
 
 
-def annotate_pending_threads(items: list[Item], call_threads: Mapping[str, str]) -> list[Item]:
-    """还没有结果的调用（挂起的 ask_agent）挂上它交出去的 thread（call_threads：调用 id → thread，见
-    sessions.delegation.call_threads_in），界面据此把 thread 显示在这次调用处。有结果的调用不填：关联以结果上的
-    TOOL_THREADS 为准（没等到回答就继续的结果也带；被停止、失败的结果不带 thread，那个 thread 就列为未关联）。"""
-    resolved = {i.tool_call_id for i in items if i.type in ("tool_result", "tool_error")}
+def annotate_threads(items: list[Item], call_threads: Mapping[str, str]) -> list[Item]:
+    """工具调用挂上它开出或续写的 thread（call_threads：调用 id → thread，见 sessions.thread_calls），界面据此把
+    thread 显示在这次调用处。只看调用 id，不看调用有没有结果、结果是谁补的。"""
     return [
         item.model_copy(update={"threads": [call_threads[item.tool_call_id]]})
-        if item.type == "tool_call"
-        and item.tool_call_id is not None
-        and item.tool_call_id not in resolved
-        and item.tool_call_id in call_threads
+        if item.type == "tool_call" and item.tool_call_id in call_threads
         else item
         for item in items
     ]
@@ -205,7 +198,6 @@ def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
             part.tool_name,
             part.tool_call_id,
             tool_attachments(part),
-            tool_threads(part),
             images=result_images(part),
             at=None if made_up_result(part) else part.timestamp,
         )

@@ -190,14 +190,16 @@ async def test_delegating_to_an_archived_agent_new_or_continued_thread_is_refuse
     lead, helper = await make_agent("lead"), await make_agent("helper")
     parent = (await container.sessions.receive(_new_session(lead.id))).session
     async with container.db.transaction() as s:
-        await container.threads.send(s, parent_id=parent.id, agent=helper, thread="t", prompt="task")
+        await container.threads.send(
+            s, parent_id=parent.id, agent=helper, thread="t", prompt="task", call_id="c1"
+        )
     await drain(container)
     await container.agent_lifecycle.set_archived(helper.id, True)
     for thread in ("t", "new"):
         with pytest.raises(AgentArchived):
             async with container.db.transaction() as s:
                 await container.threads.send(
-                    s, parent_id=parent.id, agent=helper, thread=thread, prompt="more"
+                    s, parent_id=parent.id, agent=helper, thread=thread, prompt="more", call_id=f"c-{thread}"
                 )
 
 

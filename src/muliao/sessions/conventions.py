@@ -6,7 +6,6 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 
 | 约定 | 记在哪里 | 谁写 | 谁读 |
 |---|---|---|---|
-| `TOOL_THREADS`：工具开出或续写的子会话 | ToolReturnPart.metadata | delegate_task、ask_agent（sessions.answers；没等到回答的 sessions.deferred） | 会话条目、实时事件 |
 | `RUN_STOPPED`：运行被用户停止 | 停止时最后保存的那条消息的 metadata | sessions.history | 会话条目（「已停止」）、续跑（不重发标了它的请求） |
 | `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | sessions.history | 模型（之后的运行）；会话条目（made_up_result：没有结束时间） |
 | `INTERRUPTED_TOOL_RESULT`：进程退出时没出结果的调用 | 合成的 ToolReturnPart 内容（`outcome='interrupted'`） | sessions.history | 模型（续跑的那次请求）；会话条目（同上） |
@@ -23,7 +22,6 @@ metadata 的键都带 `muliao_` 前缀：metadata 是 pydantic-ai 开放给所�
 import re
 from collections.abc import Sequence
 
-from pydantic import TypeAdapter
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -114,21 +112,9 @@ def check_in_indices(message: ModelMessage) -> list[int]:
     return list((message.metadata or {}).get(RUN_CHECK_INS, []))
 
 
-# ToolReturn(metadata={TOOL_THREADS: [session_id, ...]})：界面把 thread 显示在开出或续写它的那次调用处
-TOOL_THREADS = "muliao_threads"
-_THREADS = TypeAdapter(list[str])
-
-
 def made_up_result(part: ToolReturnPart) -> bool:
     """这个结果是事后补上的（停止、中断时没出结果的调用），不是工具交回的：它产生的时间不是调用结束的时间。"""
     return part.outcome == "interrupted" or part.content == STOPPED_TOOL_RESULT
-
-
-def tool_threads(part: ToolReturnPart | RetryPromptPart) -> list[str]:
-    """工具结果关联的子会话 id（历史条目与实时事件共用这一处解析）。"""
-    if not isinstance(part, ToolReturnPart) or not isinstance(part.metadata, dict):
-        return []
-    return _THREADS.validate_python(part.metadata.get(TOOL_THREADS, []))
 
 
 def calls_in(message: ModelMessage) -> list[ToolCallPart]:

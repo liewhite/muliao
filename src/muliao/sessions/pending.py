@@ -31,14 +31,14 @@ from muliao.sessions.tables import Mail, MailKind
 
 
 class AgentAnswer(BaseModel):
-    """被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件，所在的 thread。"""
+    """被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件。做它的 thread 不在这里：
+    调用开出了哪个 thread 记在 sessions.thread_calls。更早投出的回答信件里的 thread 键忽略。"""
 
     text: str
     attachments: list[Attachment]
-    thread: str
 
     def to_tool_return(self) -> ToolReturn:
-        return Answer(self.text, list(self.attachments)).to_tool_return(thread_id=self.thread)
+        return Answer(self.text, list(self.attachments)).to_tool_return()
 
 
 class UserAnswered(BaseModel):
@@ -131,11 +131,11 @@ def waiting(history: Sequence[ModelMessage], queued: Sequence[Mail], delegated: 
 
 
 def deferred_results(
-    pending: Mapping[str, ToolCallPart], answers: Mapping[str, CallResult], threads: Mapping[str, str]
+    pending: Mapping[str, ToolCallPart], answers: Mapping[str, CallResult]
 ) -> dict[str, object]:
     """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（来了新消息，或这次只回答了一部分）用工具的
     DeferredTool.skipped_result：ask_user 记为没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后
-    作为事件送达，并带上它交出去的 thread。threads：调用 id → 做它的 thread（sessions.delegation.call_threads_in）。"""
+    作为事件送达。"""
     any_answered = any(isinstance(r, UserAnswered) for r in answers.values())
     results: dict[str, object] = {}
     for call_id, call in pending.items():
@@ -145,9 +145,7 @@ def deferred_results(
                 raise RuntimeError(f"call {call_id} of {call.tool_name} got an answer for {result.tool}")
             results[call_id] = result.tool_return()
         else:
-            results[call_id] = DEFERRED_TOOLS[call.tool_name].skipped_result(
-                any_answered, threads.get(call_id)
-            )
+            results[call_id] = DEFERRED_TOOLS[call.tool_name].skipped_result(any_answered)
     return results
 
 
