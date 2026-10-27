@@ -137,7 +137,7 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     def _status(which: str, content: str) -> str:
-        return f"{which} updated ({len(content)}/{store.max_chars} chars)"
+        return f"updated {which} ({len(content)}/{store.max_chars} chars)"
 
     @ts.tool
     async def memory_edit(ctx: RunContext[RunScope], new_text: str, old_text: str = "") -> str:

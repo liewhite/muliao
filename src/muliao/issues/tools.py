@@ -248,7 +248,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             assignee=target,
             depends_on=depends_on,
         )
-        return f"issue #{issue.id} is now {issue.status}"
+        return f"updated issue #{issue.id} (status: {issue.status})"
 
     @ts.tool
     async def issue_comment(ctx: RunContext[RunScope], issue_id: int, body: str) -> str:

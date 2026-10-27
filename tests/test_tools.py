@@ -159,7 +159,7 @@ async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
     )
 
     assert "schedule" in outputs[0] and "webhook" in outputs[0]
-    assert "http://test/api/hooks/github" in outputs[1] and "'has_token': False" in outputs[1]
+    assert "http://test/api/hooks/github" in outputs[1] and '"has_token":false' in outputs[1]
     assert "invalid cron expression" in outputs[2]
     # 没有 token 时收不到事件；用户在界面上生成后才能用，token 不经过 agent 与 vault
     await login(client)

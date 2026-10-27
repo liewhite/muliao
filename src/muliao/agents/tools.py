@@ -251,7 +251,7 @@ def agents_toolset(
         """
         target = None if owner is None else await agents.find_by_name(owner)
         await catalog.transfer_item(kind, name, None if target is None else target.id, ctx.deps.agent_id)
-        return f"{label(kind)} {name} now belongs to {'the platform' if target is None else f'agent {target.name}'}"
+        return f"transferred {label(kind)} {name} to {'the platform' if target is None else f'agent {target.name}'}"
 
     @ts.tool
     async def create_role(

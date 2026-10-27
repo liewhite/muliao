@@ -18,6 +18,6 @@ def notify_toolset(notifications: Notifications) -> FunctionToolset[RunScope]:
             body: Notification text, a few sentences at most.
         """
         await notifications.notify(ctx.deps.agent_id, title, body, ctx.deps.session_id)
-        return "notification queued"
+        return "queued notification to the user"
 
     return ts

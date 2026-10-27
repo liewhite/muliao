@@ -128,7 +128,7 @@ def workspace_toolset(
             job_id: The id `run_shell(background: true)` returned.
         """
         await jobs.kill(job_id, ctx.deps.agent_id)
-        return f"kill signal sent to job {job_id}; its final status will arrive as an event"
+        return f"sent kill signal to job {job_id}; its final status will arrive as an event"
 
     return ts
 
