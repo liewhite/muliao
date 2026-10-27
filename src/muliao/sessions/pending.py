@@ -131,11 +131,11 @@ def waiting(history: Sequence[ModelMessage], queued: Sequence[Mail], delegated: 
 
 
 def deferred_results(
-    pending: Mapping[str, ToolCallPart], answers: Mapping[str, CallResult]
+    pending: Mapping[str, ToolCallPart], answers: Mapping[str, CallResult], threads: Mapping[str, str]
 ) -> dict[str, object]:
     """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（来了新消息，或这次只回答了一部分）用工具的
     DeferredTool.skipped_result：ask_user 记为没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后
-    作为事件送达。"""
+    作为事件送达，并带上它交出去的 thread。threads：调用 id → 做它的 thread（sessions.delegation.call_threads_in）。"""
     any_answered = any(isinstance(r, UserAnswered) for r in answers.values())
     results: dict[str, object] = {}
     for call_id, call in pending.items():
@@ -145,7 +145,9 @@ def deferred_results(
                 raise RuntimeError(f"call {call_id} of {call.tool_name} got an answer for {result.tool}")
             results[call_id] = result.tool_return()
         else:
-            results[call_id] = DEFERRED_TOOLS[call.tool_name].skipped_result(any_answered)
+            results[call_id] = DEFERRED_TOOLS[call.tool_name].skipped_result(
+                any_answered, threads.get(call_id)
+            )
     return results
 
 

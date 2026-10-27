@@ -6,8 +6,10 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
+from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ToolCallPart
 
+from muliao.sessions.conventions import TOOL_THREADS
 from muliao.sessions.questions import ASK_USER, NOT_ANSWERED, SKIPPED, Question, questions_of
 
 ASK_AGENT: Final = "ask_agent"
@@ -32,16 +34,24 @@ class DeferredTool:
     # 调用里是给用户的提问时，从调用参数取出问题（停下时告诉用户，界面按提问展示）；参数不合法时抛出
     # ValidationError / KeyError。不是提问为 None
     questions: Callable[[ToolCallPart], list[Question]] | None
-    # 没等到回答就继续时（来了新消息，或这次只回答了别的调用）交给模型的结果；参数：这次是否回答了某个提问
-    skipped_result: Callable[[bool], object]
+    # 没等到回答就继续时（来了新消息，或这次只回答了别的调用）交给模型的结果；参数：这次是否回答了某个提问，
+    # 这次调用交出去的 thread（没有交出去或 thread 已删除为 None）
+    skipped_result: Callable[[bool, str | None], object]
 
     def __post_init__(self) -> None:
         if self.replayable and not self.needs_hold:
             raise ValueError(f"{self.name}: only tools that need a hold can have calls that are not pending")
 
 
-def _user_skipped(answered_other: bool) -> object:
+def _user_skipped(answered_other: bool, _thread: str | None) -> object:
     return (SKIPPED if answered_other else NOT_ANSWERED).model_dump()
+
+
+def _agent_skipped(_answered_other: bool, thread: str | None) -> object:
+    # 结果带上做它的 thread（TOOL_THREADS），界面照样把 thread 显示在这次调用处
+    if thread is None:
+        return STILL_WORKING
+    return ToolReturn(return_value=STILL_WORKING, metadata={TOOL_THREADS: [thread]})
 
 
 DEFERRED_TOOLS: Final[Mapping[str, DeferredTool]] = {
@@ -61,7 +71,7 @@ DEFERRED_TOOLS: Final[Mapping[str, DeferredTool]] = {
             replayable=True,
             kept_open_on_stop=False,
             questions=None,
-            skipped_result=lambda _: STILL_WORKING,
+            skipped_result=_agent_skipped,
         ),
     )
 }

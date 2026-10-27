@@ -29,6 +29,7 @@ from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
 from muliao.sessions.conventions import answer_text, is_stopped, unanswered_calls
 from muliao.sessions.deferred import DEFERRED_TOOLS, questions_in, replayable
+from muliao.sessions.delegation import call_threads_in
 from muliao.sessions.events import RunFailed
 from muliao.sessions.finish import RunEnd, RunFinisher
 from muliao.sessions.halt import Halted, SessionHalt
@@ -282,7 +283,11 @@ class Consumer:
             return None, None
         pending = pending_calls(history, delegated)
         answers = answered_in(queued, pending)
-        deferred = deferred_results(pending, answers) if pending else None
+        deferred = None
+        if pending:
+            async with self._db.transaction() as s:
+                threads = await call_threads_in(s, state.session.id)
+            deferred = deferred_results(pending, answers, threads)
         state.taken = list(queued)
         if queued:
             # 开头取走的信件都交给了这次运行（mailbox.handed_to），哪怕它在第一次保存之前就最终失败：失败的结清据此

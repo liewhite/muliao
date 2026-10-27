@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
@@ -671,6 +671,17 @@ async def test_a_user_message_while_waiting_on_an_agent_continues_and_the_answer
         ).all()
     # 回答到达时发问方已经不等这次调用了：作为事件交回
     assert [("checked" in e.content, e.kind) for e in events] == [(True, MailKind.EVENT)]
+    # 没等到回答的结果也带着做它的 thread：界面把 thread 显示在这次调用处，而不是列为未关联
+    from muliao.sessions.conventions import tool_threads
+
+    [skipped] = [
+        p
+        for m in await history_of(container, parent.id)
+        for p in m.parts
+        if isinstance(p, ToolReturnPart) and p.tool_call_id == "ask1"
+    ]
+    assert "will reach you as an event" in str(skipped.content)
+    assert tool_threads(skipped) == [child.id]
 
 
 async def test_stopping_a_private_thread_answers_the_waiting_ask_with_stopped(container, make_agent, models):
