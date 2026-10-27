@@ -1,6 +1,6 @@
 import { Card, Tabs, type Key } from '@heroui/react'
 import { useSearchParams } from 'react-router-dom'
-import { api, asAgentId, type CatalogItem, type ItemKind } from '../api'
+import { api, asAgentId, type CatalogItem, type ItemKind, type ItemOf } from '../api'
 import { KIND_LABEL, KINDS, filterItems, isKind, type OwnerFilter } from '../rules'
 import { ItemAccess } from './itemParts'
 import { McpTab } from './Mcp'
@@ -10,45 +10,43 @@ import { SkillTab } from './Skills'
 import { EmptyHint, Loading, Page, SelectInput, useAgents, useLoad } from '../ui'
 
 /** 内置工具：归平台、代码里定义，不能改；只看它被哪些角色收录 */
-function ToolTab({ items }: { items: CatalogItem[] }) {
-  const tools = useLoad(() => api.tools(), [])
-  return (
-    <Loading state={tools}>
-      {(all) => {
-        const byName = new Map(all.map((t) => [t.name, t]))
-        return items.length === 0 ? (
-          <EmptyHint>没有工具</EmptyHint>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {items.map((i) => {
-              const tool = byName.get(i.name)
-              if (!tool) throw new Error(`tool ${i.name} is in /items but not in /tools`)
-              return (
-                <Card key={i.name}>
-                  <Card.Content className="flex flex-col gap-1.5 text-sm">
-                    <ToolLine tool={tool} />
-                    <ItemAccess item={i} />
-                  </Card.Content>
-                </Card>
-              )
-            })}
-          </div>
-        )
-      }}
-    </Loading>
+function ToolTab({ items }: { items: ItemOf<'tool'>[] }) {
+  return items.length === 0 ? (
+    <EmptyHint>没有工具</EmptyHint>
+  ) : (
+    <div className="flex flex-col gap-2">
+      {items.map((i) => (
+        <Card key={i.name}>
+          <Card.Content className="flex flex-col gap-1.5 text-sm">
+            <ToolLine tool={i} />
+            <ItemAccess item={i} />
+          </Card.Content>
+        </Card>
+      ))}
+    </div>
   )
 }
 
-function KindTab({ kind, items, onChange }: { kind: ItemKind; items: CatalogItem[]; onChange: () => void }) {
+function KindTab({
+  kind,
+  items,
+  owner,
+  onChange,
+}: {
+  kind: ItemKind
+  items: CatalogItem[]
+  owner: OwnerFilter
+  onChange: () => void
+}) {
   switch (kind) {
     case 'tool':
-      return <ToolTab items={items} />
+      return <ToolTab items={filterItems(items, 'tool', owner)} />
     case 'skill':
-      return <SkillTab items={items} onChange={onChange} />
+      return <SkillTab items={filterItems(items, 'skill', owner)} onChange={onChange} />
     case 'mcp':
-      return <McpTab items={items} onChange={onChange} />
+      return <McpTab items={filterItems(items, 'mcp', owner)} onChange={onChange} />
     case 'secret':
-      return <SecretTab items={items} onChange={onChange} />
+      return <SecretTab items={filterItems(items, 'secret', owner)} onChange={onChange} />
   }
 }
 
@@ -103,7 +101,7 @@ export default function Items() {
         {KINDS.map((k) => (
           <Tabs.Panel key={k} id={k} className="pt-3">
             <Loading state={items}>
-              {(all) => <KindTab kind={k} items={filterItems(all, k, owner)} onChange={() => void items.reload()} />}
+              {(all) => <KindTab kind={k} items={all} owner={owner} onChange={() => void items.reload()} />}
             </Loading>
           </Tabs.Panel>
         ))}

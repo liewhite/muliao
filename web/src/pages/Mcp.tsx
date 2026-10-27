@@ -1,19 +1,17 @@
 import { useState } from 'react'
 import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plug, Trash2 } from 'lucide-react'
-import { api, type AgentId, type CatalogItem, type McpInput, type McpServer } from '../api'
+import { api, type AgentId, type ItemOf, type McpInput } from '../api'
 import { ItemAccess, OwnerSelect } from './itemParts'
 import { ResourceHistory } from './Memory'
 import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
-  Loading,
   Segmented,
   TextAreaInput,
   TextInput,
   useAction,
   useConfirm,
-  useLoad,
 } from '../ui'
 
 
@@ -60,7 +58,6 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
       const kv = parsePairs(pairs)
       const input: McpInput = {
         owner,
-        name,
         transport,
         command: transport === 'stdio' ? command : null,
         args:
@@ -75,7 +72,7 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
         headers: transport === 'http' ? kv : {},
         probe: true,
       }
-      const created = await api.addMcp(input)
+      const created = await api.addMcp(name, input)
       setTools(created.tools)
       toast.success(`已连接并保存 ${created.name}`)
     })
@@ -124,8 +121,8 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
   )
 }
 
-/** 连接地址与环境变量 / 请求头：管理与只读展示共用。 */
-function McpTarget({ server }: { server: McpServer }) {
+/** 连接地址与环境变量 / 请求头 */
+function McpTarget({ server }: { server: ItemOf<'mcp'> }) {
   const pairs = { ...server.env, ...server.headers }
   return (
     <>
@@ -143,7 +140,7 @@ function McpTarget({ server }: { server: McpServer }) {
   )
 }
 
-function McpItem({ item, server, onChange }: { item: CatalogItem; server: McpServer; onChange: () => void }) {
+function McpItem({ server, onChange }: { server: ItemOf<'mcp'>; onChange: () => void }) {
   const confirm = useConfirm()
   const [tools, setTools] = useState<string[] | null>(null)
   const action = useAction()
@@ -164,7 +161,7 @@ function McpItem({ item, server, onChange }: { item: CatalogItem; server: McpSer
             </Chip>
           </div>
           <div className="mt-1.5">
-            <ItemAccess item={item} onTransferred={onChange} />
+            <ItemAccess item={server} onTransferred={onChange} />
           </div>
         </div>
         <ToggleSwitch
@@ -178,7 +175,7 @@ function McpItem({ item, server, onChange }: { item: CatalogItem; server: McpSer
         <McpTarget server={server} />
         {tools && <ToolChips tools={tools} />}
         <ErrorAlert error={action.error} />
-        <ResourceHistory kind="mcp" target={{ name: server.name }} current={JSON.stringify(server)} onRestored={onChange} />
+        <ResourceHistory target={{ kind: 'mcp', name: server.name }} current={JSON.stringify(server)} onRestored={onChange} />
       </Card.Content>
       <Card.Footer className="flex gap-2">
         <ActionButton
@@ -199,36 +196,20 @@ function McpItem({ item, server, onChange }: { item: CatalogItem; server: McpSer
   )
 }
 
-/** MCP server 的条目页：items 是条目池里（已筛选的）MCP 条目，配置另从 /mcp 取 */
-export function McpTab({ items, onChange }: { items: CatalogItem[]; onChange: () => void }) {
-  const servers = useLoad(() => api.mcp(), [])
-  // 增删、启停之后条目池与配置都重读
-  const changed = () => {
-    onChange()
-    void servers.reload()
-  }
+/** MCP server 的条目页：items 是条目池里（已筛选的）MCP 条目，带各自的配置与启停 */
+export function McpTab({ items, onChange }: { items: ItemOf<'mcp'>[]; onChange: () => void }) {
   return (
     <div className="flex flex-col gap-3">
-      <McpForm onCreated={changed} />
-      <Loading state={servers}>
-        {(all) => {
-          const byName = new Map(all.map((s) => [s.name, s]))
-          // 条目池与配置分两次读：只显示两边都有的，两次读之间增删的 server 下次重读时补齐
-          const shown = items.flatMap((item) => {
-            const server = byName.get(item.name)
-            return server ? [{ item, server }] : []
-          })
-          return shown.length === 0 ? (
-            <EmptyHint>没有 MCP server</EmptyHint>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {shown.map(({ item, server }) => (
-                <McpItem key={`${server.name}-${server.enabled}`} item={item} server={server} onChange={changed} />
-              ))}
-            </div>
-          )
-        }}
-      </Loading>
+      <McpForm onCreated={onChange} />
+      {items.length === 0 ? (
+        <EmptyHint>没有 MCP server</EmptyHint>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {items.map((server) => (
+            <McpItem key={`${server.name}-${server.enabled}`} server={server} onChange={onChange} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

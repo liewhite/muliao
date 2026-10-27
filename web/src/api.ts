@@ -73,14 +73,21 @@ export type Trigger = WithAgentId<
   'agent_id'
 >
 export type TriggerKindName = Trigger['kind']
-export type ResourceKind = Schemas['ResourceKind']
-/** 版本历史的对象：记忆按 owner（null 为全局记忆），条目按名字 */
-export type ResourceRef = { owner: AgentId | null } | { name: string }
 export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
 export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
-/** 条目池里的一项（内置工具、skill、MCP server、secret），带收录它的角色；后端 agents/service.py catalog */
-export type CatalogItem = WithAgentId<Schemas['ItemOut'], 'owner'>
-export type ItemKind = Schemas['Kind']
+/** 条目池里的一项（内置工具、skill、MCP server、secret），带收录它的角色与这一种自己的详情（按 kind 收窄）；
+ * 后端 agents/catalog.py、api/items.py */
+export type CatalogItem = WithAgentId<
+  Schemas['ToolItemOut'] | Schemas['SkillItemOut'] | Schemas['McpItemOut'] | Schemas['SecretItemOut'],
+  'owner'
+>
+export type ItemKind = CatalogItem['kind']
+export type ItemOf<K extends ItemKind> = Extract<CatalogItem, { kind: K }>
+/** 存在库里的条目种类（能改、能转移、有版本）：内置工具之外的三种 */
+export type StoredKind = Schemas['StoredKind']
+/** 版本历史的对象：记忆按 owner（null 为全局记忆），条目按种类与名字 */
+export type RevisionTarget = { kind: 'memory'; owner: AgentId | null } | { kind: StoredKind; name: string }
+export type Revision = Schemas['RevisionOut']
 /** 角色（内置或自建）、它能用的工具与条目、带它的 agent；后端 agents/permissions.py、agents/roles.py */
 export type Role = Omit<Schemas['RoleOut'], 'agents'> & { agents: AgentId[] }
 export type RoleInput = Schemas['RoleIn']
@@ -236,10 +243,18 @@ export const api = {
   /** 全部条目：内置工具在前，skill、MCP server、secret 按种类、名称 */
   items: () => branded<CatalogItem[]>(call('get', '/api/items')),
   /** 把 skill / MCP server / secret 转给另一个 owner（null 归平台），记一版；内容与收录它的角色不变 */
-  transferItem: (kind: ItemKind, name: string, owner: AgentId | null) =>
+  transferItem: (kind: StoredKind, name: string, owner: AgentId | null) =>
     call('put', '/api/items/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
-  /** 全部已登记的内置工具（读写、是否管理类） */
-  tools: () => call('get', '/api/tools'),
+  /** 版本历史：新的在前，第一条即当前生效 */
+  history: (target: RevisionTarget): Promise<Revision[]> =>
+    target.kind === 'memory'
+      ? call('get', '/api/memory/history', { query: { owner: target.owner } })
+      : call('get', '/api/items/{kind}/{name}/history', { path: { kind: target.kind, name: target.name } }),
+  /** 把某一版恢复为新的一版（secret 的版本不含值，不能恢复） */
+  restore: (target: RevisionTarget, rev: number) =>
+    target.kind === 'memory'
+      ? call('post', '/api/memory/restore', { body: { owner: target.owner, rev } })
+      : call('post', '/api/items/{kind}/{name}/restore', { path: { kind: target.kind, name: target.name }, body: { rev } }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
   agentHistory: (agent_id: AgentId, query?: string) =>
     branded<HistoryEntry[]>(
@@ -274,14 +289,16 @@ export const api = {
   memory: (owner: AgentId | null) => call('get', '/api/memory', { query: { owner } }),
   setMemory: (owner: AgentId | null, content: string) => call('put', '/api/memory', { body: { owner, content } }),
 
-  skill: (name: string) => call('get', '/api/skill', { query: { name } }),
-  saveSkill: (body: Schemas['SkillIn']) => call('put', '/api/skill', { body }),
-  deleteSkill: (name: string) => call('delete', '/api/skill', { query: { name } }),
+  skill: (name: string) => call('get', '/api/items/skill/{name}', { path: { name } }),
+  /** 新建的归 owner；已有的整体改写正文与描述，owner 不变 */
+  saveSkill: (name: string, body: Schemas['SkillIn']) => call('put', '/api/items/skill/{name}', { path: { name }, body }),
+  deleteSkill: (name: string) => call('delete', '/api/items/skill/{name}', { path: { name } }),
   /** 标准 .skill 文件（zip）；失败时与其他调用一样抛 ApiError，不会把错误体当成文件存下 */
-  exportSkill: (name: string) => send<Blob>('GET', '/api/skill/package', { name }, undefined, true),
-  /** 导入标准 .skill 文件；同名 skill 已存在时 409，replace 为 true 时覆盖 */
+  exportSkill: (name: string) =>
+    send<Blob>('GET', `/api/items/skill/${encodeURIComponent(name)}/package`, undefined, undefined, true),
+  /** 导入标准 .skill 文件（名字取自包）；同名 skill 已存在时 409，replace 为 true 时覆盖 */
   importSkill: (owner: string | null, file: Blob, replace: boolean) =>
-    send<Schemas['SkillImportOut']>('POST', '/api/skill/package', { owner, replace }, { type: 'application/zip', data: file }),
+    send<Schemas['SkillImportOut']>('POST', '/api/items/skill', { owner, replace }, { type: 'application/zip', data: file }),
 
   /** origin_ref 是发起方在它那个 origin 里的身份：触发器的 id，用来列出某个触发器发起过的会话 */
   sessions: (query: { agent_id?: AgentId; origin?: Origin[]; origin_ref?: string; limit?: number; offset?: number }) =>
@@ -339,23 +356,18 @@ export const api = {
   generateTriggerToken: (trigger_id: number) =>
     call('post', '/api/triggers/{trigger_id}/webhook/token', { path: { trigger_id } }),
   deleteTrigger: (trigger_id: number) => call('delete', '/api/triggers/{trigger_id}', { path: { trigger_id } }),
-  /** 版本历史：记忆按 owner（null 为全局记忆），条目按 name；新的在前，第一条即当前生效 */
-  history: (kind: ResourceKind, ref: ResourceRef) =>
-    call('get', '/api/resources/{kind}/history', { path: { kind }, query: ref }),
-  restore: (kind: ResourceKind, ref: ResourceRef, rev: number) =>
-    call('post', '/api/resources/{kind}/restore', { path: { kind }, body: { ...ref, rev } }),
-  /** 全部 MCP server（含停用的） */
-  mcp: () => branded<McpServer[]>(call('get', '/api/mcp')),
-  addMcp: (body: McpInput) => branded<McpServer>(call('post', '/api/mcp', { body })),
-  probeMcp: (name: string) => call('post', '/api/mcp/tools', { query: { name } }),
+  /** 新增（启用的）MCP server；同名已存在 409 */
+  addMcp: (name: string, body: McpInput) =>
+    branded<McpServer>(call('put', '/api/items/mcp/{name}', { path: { name }, body })),
+  probeMcp: (name: string) => call('post', '/api/items/mcp/{name}/tools', { path: { name } }),
   setMcpEnabled: (name: string, enabled: boolean) =>
-    branded<McpServer>(call('put', '/api/mcp/enabled', { query: { name }, body: { enabled } })),
-  deleteMcp: (name: string) => call('delete', '/api/mcp', { query: { name } }),
+    branded<McpServer>(call('put', '/api/items/mcp/{name}/enabled', { path: { name }, body: { enabled } })),
+  deleteMcp: (name: string) => call('delete', '/api/items/mcp/{name}', { path: { name } }),
 
   /** 新建的归 owner（null 为平台）；已有的改值与描述，owner 不变 */
   setSecret: (owner: AgentId | null, key: string, value: string, description: string) =>
-    call('put', '/api/vault/{key}', { path: { key }, query: { owner }, body: { value, description } }),
-  deleteSecret: (key: string) => call('delete', '/api/vault/{key}', { path: { key } }),
+    call('put', '/api/items/secret/{name}', { path: { name: key }, body: { owner, value, description } }),
+  deleteSecret: (key: string) => call('delete', '/api/items/secret/{name}', { path: { name: key } }),
 
   /** owner 给出时只列这个项目（agent）负责的 issue */
   issues: (owner?: string) => call('get', '/api/issues', { query: { owner } }),

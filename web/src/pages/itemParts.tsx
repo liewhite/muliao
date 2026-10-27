@@ -38,7 +38,7 @@ export function OwnerSelect({
 }
 
 /** 把条目转给另一个 owner：内容与收录它的角色不变，记一版 */
-function TransferOwner({ item, onDone }: { item: CatalogItem; onDone: () => void }) {
+function TransferOwner({ item, onDone }: { item: Exclude<CatalogItem, { kind: 'tool' }>; onDone: () => void }) {
   const [owner, setOwner] = useState<AgentId | null>(item.owner)
   const action = useAction()
   return (
@@ -59,7 +59,7 @@ function TransferOwner({ item, onDone }: { item: CatalogItem; onDone: () => void
   )
 }
 
-/** 条目归谁、被哪些角色收录；没被收录时说明谁能用。给了 onTransferred 的可以转移 owner（内置工具不给） */
+/** 条目归谁、被哪些角色收录；没被收录时说明谁能用。给了 onTransferred 的可以转移 owner（内置工具归平台，不能转） */
 export function ItemAccess({ item, onTransferred }: { item: CatalogItem; onTransferred?: () => void }) {
   const agents = useAgents()
   const [transferring, setTransferring] = useState(false)
@@ -93,13 +93,13 @@ export function ItemAccess({ item, onTransferred }: { item: CatalogItem; onTrans
             ))}
           </>
         )}
-        {onTransferred && (
+        {onTransferred && item.kind !== 'tool' && (
           <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-accent" onPress={() => setTransferring(!transferring)}>
             {transferring ? '取消转移' : '转移 owner'}
           </Button>
         )}
       </div>
-      {onTransferred && transferring && (
+      {onTransferred && item.kind !== 'tool' && transferring && (
         <TransferOwner
           item={item}
           onDone={() => {

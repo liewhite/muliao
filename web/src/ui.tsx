@@ -198,14 +198,13 @@ export function Page({
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-2 border-b border-separator bg-surface px-3 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2">
-        {back !== undefined ? (
+        {/* 手机上每个页面的左上角都有管理菜单（二级页面也是，在返回按钮前）；桌面端左侧栏已有同一个按钮 */}
+        <Button isIconOnly variant="ghost" size="sm" aria-label="管理菜单" className="md:hidden" onPress={openAdminMenu}>
+          <Menu className="size-5" />
+        </Button>
+        {back !== undefined && (
           <Button isIconOnly variant="ghost" size="sm" aria-label="返回" onPress={() => navigate(backTarget(state, back))}>
             <ChevronLeft className="size-5" />
-          </Button>
-        ) : (
-          // 一级页面的左上角是管理菜单；桌面端左侧栏已有同一个按钮
-          <Button isIconOnly variant="ghost" size="sm" aria-label="管理菜单" className="md:hidden" onPress={openAdminMenu}>
-            <Menu className="size-5" />
           </Button>
         )}
         <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h1>

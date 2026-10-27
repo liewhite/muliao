@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { Download, Plus, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, ApiError, asAgentId, type AgentId, type CatalogItem, type Schemas, type Skill } from '../api'
+import { api, ApiError, asAgentId, type AgentId, type ItemOf, type Schemas, type Skill } from '../api'
 import { ItemAccess, OwnerSelect } from './itemParts'
 import { ResourceHistory } from './Memory'
 import { ActionButton,
@@ -28,7 +28,7 @@ function editorPath(name?: string): string {
 }
 
 /** skill 的条目页：items 是条目池里（已筛选的）skill，点进编辑 */
-export function SkillTab({ items, onChange }: { items: CatalogItem[]; onChange: () => void }) {
+export function SkillTab({ items, onChange }: { items: ItemOf<'skill'>[]; onChange: () => void }) {
   const [owner, setOwner] = useState<AgentId | null>(null)
   return (
     <div className="flex flex-col gap-3">
@@ -152,7 +152,7 @@ export function SkillEditor() {
 
   async function save() {
     const ok = await action.run(async () => {
-      await api.saveSkill(skill)
+      await api.saveSkill(skill.name, { owner: skill.owner, description: skill.description, body: skill.body })
       toast.success('skill 已保存')
     })
     if (ok) navigate(back)
@@ -231,8 +231,7 @@ export function SkillEditor() {
               </div>
               {existing && loaded.data && (
                 <ResourceHistory
-                  kind="skill"
-                  target={{ name: existing }}
+                  target={{ kind: 'skill', name: existing }}
                   current={loaded.data.body + loaded.data.description}
                   onRestored={() => void loaded.reload()}
                 />

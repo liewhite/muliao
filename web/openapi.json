@@ -4929,24 +4929,17 @@
             "type": "string",
             "title": "Description"
           },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          },
           "roles": {
             "items": {
               "type": "string"
             },
             "type": "array",
             "title": "Roles"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
           },
           "kind": {
             "type": "string",
@@ -4966,8 +4959,8 @@
           "name",
           "owner",
           "description",
-          "updated_at",
           "roles",
+          "updated_at",
           "kind"
         ],
         "title": "McpItemOut"
@@ -6197,24 +6190,17 @@
             "type": "string",
             "title": "Description"
           },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          },
           "roles": {
             "items": {
               "type": "string"
             },
             "type": "array",
             "title": "Roles"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
           },
           "kind": {
             "type": "string",
@@ -6227,8 +6213,8 @@
           "name",
           "owner",
           "description",
-          "updated_at",
           "roles",
+          "updated_at",
           "kind"
         ],
         "title": "SecretItemOut",
@@ -6682,24 +6668,17 @@
             "type": "string",
             "title": "Description"
           },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          },
           "roles": {
             "items": {
               "type": "string"
             },
             "type": "array",
             "title": "Roles"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
           },
           "kind": {
             "type": "string",
@@ -6712,8 +6691,8 @@
           "name",
           "owner",
           "description",
-          "updated_at",
           "roles",
+          "updated_at",
           "kind"
         ],
         "title": "SkillItemOut"
@@ -7234,18 +7213,6 @@
             "type": "string",
             "title": "Description"
           },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          },
           "roles": {
             "items": {
               "type": "string"
@@ -7257,6 +7224,10 @@
             "type": "string",
             "const": "tool",
             "title": "Kind"
+          },
+          "updated_at": {
+            "type": "null",
+            "title": "Updated At"
           },
           "access": {
             "type": "string",
@@ -7276,9 +7247,9 @@
           "name",
           "owner",
           "description",
-          "updated_at",
           "roles",
           "kind",
+          "updated_at",
           "access",
           "admin"
         ],

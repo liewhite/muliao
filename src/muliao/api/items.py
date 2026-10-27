@@ -41,8 +41,6 @@ class _ItemBase(BaseModel):
     # agent 的 id；null 归平台（内置工具、界面上建的、迁移前的公共条目）
     owner: str | None
     description: str
-    # 内置工具为 null
-    updated_at: datetime | None
     # 收录它的角色（allow 放行、deny 没拦，含内置的 base、admin）；为空时只有 owner 能用（归平台的就谁也用不了）
     roles: list[str]
 
@@ -51,12 +49,18 @@ class ToolItemOut(_ItemBase):
     """内置工具：归平台、代码里定义，不能改。"""
 
     kind: Literal["tool"]
+    # 代码里定义，没有修改时间
+    updated_at: None
     access: Literal["read", "write"]
     # 管理类工具：base 角色没有
     admin: bool
 
 
-class SkillItemOut(_ItemBase):
+class _StoredItemBase(_ItemBase):
+    updated_at: datetime
+
+
+class SkillItemOut(_StoredItemBase):
     kind: Literal["skill"]
 
 
@@ -83,11 +87,11 @@ class McpConfigOut(BaseModel):
         }
 
 
-class McpItemOut(_ItemBase, McpConfigOut):
+class McpItemOut(_StoredItemBase, McpConfigOut):
     kind: Literal["mcp"]
 
 
-class SecretItemOut(_ItemBase):
+class SecretItemOut(_StoredItemBase):
     """值不返回；updated_at 是最后一次修改（设值、改说明、转移）的时间。"""
 
     kind: Literal["secret"]

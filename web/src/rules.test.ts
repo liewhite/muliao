@@ -3,15 +3,13 @@ import { asAgentId, type CatalogItem } from './api'
 import { filterItems, ruleCandidates, splitRule } from './rules'
 
 const a = asAgentId('agent-a')
-const item = (kind: CatalogItem['kind'], name: string, owner: CatalogItem['owner']): CatalogItem => ({
-  kind,
-  name,
-  owner,
-  description: '',
-  updated_at: null,
-  roles: [],
-})
-const ITEMS = [item('tool', 'run_shell', null), item('skill', 'relay-host', null), item('skill', 'mine', a)]
+const common = (name: string, owner: CatalogItem['owner']) => ({ name, owner, description: '', roles: [] })
+const AT = '2026-10-27T00:00:00Z'
+const ITEMS: CatalogItem[] = [
+  { kind: 'tool', access: 'write', admin: false, updated_at: null, ...common('run_shell', null) },
+  { kind: 'skill', updated_at: AT, ...common('relay-host', null) },
+  { kind: 'skill', updated_at: AT, ...common('mine', a) },
+]
 
 describe('splitRule', () => {
   it('名字里的冒号属于名字', () => {

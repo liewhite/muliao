@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Button, Card, toast } from '@heroui/react'
 import { Trash2 } from 'lucide-react'
-import { api, type AgentId, type CatalogItem } from '../api'
+import { api, type AgentId, type ItemOf } from '../api'
 import { ItemAccess, OwnerSelect } from './itemParts'
 import { ResourceHistory } from './Memory'
 import { ActionButton, CollapsibleForm, EmptyHint, ErrorAlert, TextInput, formatTime, useAction, useConfirm } from '../ui'
@@ -40,10 +40,7 @@ function SecretForm({ onSaved }: { onSaved: () => void }) {
   )
 }
 
-function SecretItem({ item, onChange }: { item: CatalogItem; onChange: () => void }) {
-  // 只有内置工具没有修改时间
-  const updatedAt = item.updated_at
-  if (updatedAt === null) throw new Error(`secret ${item.name} has no updated_at`)
+function SecretItem({ item, onChange }: { item: ItemOf<'secret'>; onChange: () => void }) {
   const confirm = useConfirm()
   const action = useAction()
 
@@ -64,7 +61,7 @@ function SecretItem({ item, onChange }: { item: CatalogItem; onChange: () => voi
           <div className="min-w-0 flex-1">
             <div className="font-mono font-medium">{item.name}</div>
             <div className="truncate text-xs text-muted">
-              {item.description || '无说明'} · {formatTime(updatedAt)}
+              {item.description || '无说明'} · {formatTime(item.updated_at)}
             </div>
           </div>
           <Button isIconOnly size="sm" variant="ghost" aria-label={`删除 ${item.name}`} onPress={() => void remove()}>
@@ -73,14 +70,14 @@ function SecretItem({ item, onChange }: { item: CatalogItem; onChange: () => voi
         </div>
         <ItemAccess item={item} onTransferred={onChange} />
         <ErrorAlert error={action.error} />
-        <ResourceHistory kind="secret" target={{ name: item.name }} current={updatedAt} onRestored={onChange} />
+        <ResourceHistory target={{ kind: 'secret', name: item.name }} current={item.updated_at} onRestored={onChange} />
       </Card.Content>
     </Card>
   )
 }
 
 /** secret 的条目页：值加密保存、不再显示；items 是条目池里（已筛选的）secret */
-export function SecretTab({ items, onChange }: { items: CatalogItem[]; onChange: () => void }) {
+export function SecretTab({ items, onChange }: { items: ItemOf<'secret'>[]; onChange: () => void }) {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted">

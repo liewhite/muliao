@@ -23,6 +23,7 @@ import { syncPushSubscription } from './push'
 import { handleNavigation } from './swNavigate'
 import { ErrorAlert, errorMessage } from './ui'
 import { AdminDrawer, AdminNav } from './AdminMenu'
+import { ErrorBoundary } from './ErrorBoundary'
 import { ListDetail } from './ListDetail'
 import { ACTIVITY_TABS, AdminMenuContext, isAdminPath } from './nav'
 
@@ -145,8 +146,10 @@ function Shell() {
   const unread = useUnreadCount()
   const outdated = useUiOutdated()
   const { pathname } = useLocation()
-  const [menuOpen, setMenuOpen] = useState(false)
-  const openMenu = useCallback(() => setMenuOpen(true), [])
+  // 菜单打开时所在的页面：换了页面（点菜单项、返回、点通知跳转）菜单就算关了，不用在 effect 里另外关
+  const [menuOpenAt, setMenuOpenAt] = useState<string | null>(null)
+  const menuOpen = menuOpenAt === pathname
+  const openMenu = useCallback(() => setMenuOpenAt(pathname), [pathname])
   return (
     <AdminMenuContext value={openMenu}>
       <div className="flex h-full flex-col md:flex-row">
@@ -174,33 +177,36 @@ function Shell() {
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1">
-            <Routes>
-              <Route path="/" element={<ListDetail list={<Sessions />} empty="选择一个会话" />}>
-                <Route path="new" element={<NewSession />} />
-                <Route path="sessions/:id" element={<SessionRoute />} />
-              </Route>
-              <Route path="/notifications" element={<Notifications />} />
-              <Route path="/agents" element={<ListDetail list={<AgentList />} empty="选择一个 agent" />}>
-                <Route path="new" element={<AgentCreate />} />
-                <Route path=":id" element={<AgentRoute />} />
-              </Route>
-              <Route path="/roles" element={<Roles />} />
-              <Route path="/triggers" element={<Triggers />} />
-              <Route path="/issues" element={<Issues />} />
-              <Route path="/issues/:id" element={<IssueRoute />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/memory" element={<GlobalMemory />} />
-              <Route path="/items" element={<Items />} />
-              <Route path="/items/skill" element={<SkillEditor />} />
-              {/* 合并进条目页之前的地址 */}
-              <Route path="/skills" element={<Navigate to="/items?kind=skill" replace />} />
-              <Route path="/mcp" element={<Navigate to="/items?kind=mcp" replace />} />
-              <Route path="/vault" element={<Navigate to="/items?kind=secret" replace />} />
-              <Route path="/tasks" element={<Tasks />} />
-              <Route path="/usage" element={<UsagePage />} />
-              <Route path="/login" element={<Navigate to="/" replace />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            {/* 页面出错只替换页面这一块，导航和管理菜单照常可用；换了页面就重新渲染 */}
+            <ErrorBoundary resetKey={pathname}>
+              <Routes>
+                <Route path="/" element={<ListDetail list={<Sessions />} empty="选择一个会话" />}>
+                  <Route path="new" element={<NewSession />} />
+                  <Route path="sessions/:id" element={<SessionRoute />} />
+                </Route>
+                <Route path="/notifications" element={<Notifications />} />
+                <Route path="/agents" element={<ListDetail list={<AgentList />} empty="选择一个 agent" />}>
+                  <Route path="new" element={<AgentCreate />} />
+                  <Route path=":id" element={<AgentRoute />} />
+                </Route>
+                <Route path="/roles" element={<Roles />} />
+                <Route path="/triggers" element={<Triggers />} />
+                <Route path="/issues" element={<Issues />} />
+                <Route path="/issues/:id" element={<IssueRoute />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/memory" element={<GlobalMemory />} />
+                <Route path="/items" element={<Items />} />
+                <Route path="/items/skill" element={<SkillEditor />} />
+                {/* 合并进条目页之前的地址 */}
+                <Route path="/skills" element={<Navigate to="/items?kind=skill" replace />} />
+                <Route path="/mcp" element={<Navigate to="/items?kind=mcp" replace />} />
+                <Route path="/vault" element={<Navigate to="/items?kind=secret" replace />} />
+                <Route path="/tasks" element={<Tasks />} />
+                <Route path="/usage" element={<UsagePage />} />
+                <Route path="/login" element={<Navigate to="/" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </ErrorBoundary>
           </div>
           {/* 放在底部导航上方：不占顶部安全区（页面头部已经留了），也不挡头部的按钮 */}
           {outdated && (
@@ -222,7 +228,7 @@ function Shell() {
           </nav>
         </div>
       </div>
-      <AdminDrawer isOpen={menuOpen} onOpenChange={setMenuOpen} />
+      <AdminDrawer isOpen={menuOpen} onOpenChange={(open) => setMenuOpenAt(open ? pathname : null)} />
     </AdminMenuContext>
   )
 }

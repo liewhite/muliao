@@ -1744,10 +1744,13 @@ export interface components {
             owner: string | null;
             /** Description */
             description: string;
-            /** Updated At */
-            updated_at: string | null;
             /** Roles */
             roles: string[];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -2222,10 +2225,13 @@ export interface components {
             owner: string | null;
             /** Description */
             description: string;
-            /** Updated At */
-            updated_at: string | null;
             /** Roles */
             roles: string[];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -2381,10 +2387,13 @@ export interface components {
             owner: string | null;
             /** Description */
             description: string;
-            /** Updated At */
-            updated_at: string | null;
             /** Roles */
             roles: string[];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -2569,8 +2578,6 @@ export interface components {
             owner: string | null;
             /** Description */
             description: string;
-            /** Updated At */
-            updated_at: string | null;
             /** Roles */
             roles: string[];
             /**
@@ -2578,6 +2585,8 @@ export interface components {
              * @enum {string}
              */
             kind: "tool";
+            /** Updated At */
+            updated_at: null;
             /**
              * Access
              * @enum {string}

@@ -1,6 +1,6 @@
 // 分发规则 `kind:glob` 的前端辅助：拆分、补全候选、条目按种类与 owner 筛选。匹配本身只在服务端算（agents/permissions.py）
 
-import type { AgentId, CatalogItem, ItemKind } from './api'
+import type { AgentId, CatalogItem, ItemKind, ItemOf } from './api'
 
 export const KINDS: readonly ItemKind[] = ['tool', 'skill', 'mcp', 'secret']
 
@@ -26,8 +26,9 @@ export function ruleCandidates(items: CatalogItem[]): string[] {
 /** 条目页的 owner 筛选：all 全部，platform 归平台的，其余为 agent 的 id */
 export type OwnerFilter = 'all' | 'platform' | AgentId
 
-export function filterItems(items: CatalogItem[], kind: ItemKind, owner: OwnerFilter): CatalogItem[] {
+export function filterItems<K extends ItemKind>(items: CatalogItem[], kind: K, owner: OwnerFilter): ItemOf<K>[] {
   return items.filter(
-    (i) => i.kind === kind && (owner === 'all' || (owner === 'platform' ? i.owner === null : i.owner === owner)),
+    (i): i is ItemOf<K> =>
+      i.kind === kind && (owner === 'all' || (owner === 'platform' ? i.owner === null : i.owner === owner)),
   )
 }
