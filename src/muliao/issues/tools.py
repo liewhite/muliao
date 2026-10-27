@@ -27,7 +27,7 @@ class IssueSummary(BaseModel):
     # 被指派 agent 在这个 issue 会话里的状态：running（在跑）、waiting（等后台任务、委派或用户回答）、idle（空闲）；
     # 没指派给 agent 或它还没有这个 issue 的会话时为 null
     assignee_state: WorkState | None
-    # todo / in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
+    # in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做（rules.stalled）
     stalled: bool
     # 它依赖的上游 issue，与其中还没完成（不是 done / cancelled）的：waiting_on 非空时它还轮不到，动态不投、不算停滞
     depends_on: list[int]
@@ -86,7 +86,8 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         `waiting_on` and `updated_at` (ISO 8601). `assignee_state` tells whether
         the assigned agent is working on it in the issue's conversation: running, waiting (on a background job,
         delegated work or the user's answer), idle, or null (no agent assignee or no conversation yet). `stalled`
-        marks a `todo`/`in_progress` issue assigned to an agent whose issue conversation is idle or missing.
+        marks an `in_progress` issue assigned to an agent whose issue conversation is idle or missing (a `waiting`
+        issue has said what it waits for, so it is not stalled).
         `waiting_on` lists dependencies not yet `done`/`cancelled`; such an issue is not delivered or stalled.
 
         Args:
@@ -140,18 +141,19 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         issues: tuple[NewIssueItem, ...] = (),
     ) -> str:
         """Create an issue. Each agent works on an issue in one conversation dedicated to it; while the issue is
-        `todo` or `in_progress`, its creation and every later change are delivered there to the assigned agent
+        `in_progress` or `waiting`, its creation and every later change are delivered there to the assigned agent
         (also when the assignee is you: create it here, it is worked on there), except changes made from that
-        very conversation. Use `backlog` for later work.
+        very conversation. Use `in_progress` for work to start now, `backlog` for later work.
         To run issues in order, give `depends_on`: the issue is delivered only once all of them are `done` or
-        `cancelled` (changes before that are only recorded), so a chain can be created as `todo` up front.
+        `cancelled` (changes before that are only recorded), so a chain can be created up front; create the ones
+        that have to wait as `waiting`: they become `in_progress` by themselves when their last dependency finishes.
         To create several issues that depend on each other, pass `issues` instead (one call, not several
         parallel calls: those cannot refer to each other's numbers): give each item a `key` and list other items'
         keys in its `depends_on`. The whole batch is created in one go (nothing is created if any item is
         invalid) and delivered only after all of it exists with its dependencies.
-        To break down a larger piece of work: in one `issues` call, create the steps as `todo` issues (ordered
-        among themselves with `depends_on`) and a `todo` parent issue with the overall goal that depends on all
-        of them.
+        To break down a larger piece of work: in one `issues` call, create the steps (`in_progress`, or `waiting`
+        for those ordered after others with `depends_on`) and a `waiting` parent issue with the overall goal that
+        depends on all of them.
 
         Args:
             title: One-line summary (omit when using `issues`).
@@ -213,9 +215,11 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         unassign: bool = False,
         depends_on: tuple[int, ...] | None = None,
     ) -> str:
-        """Change an issue; only the given fields change. When the issue is (or now becomes) `todo`/`in_progress`
+        """Change an issue; only the given fields change. When the issue is (or now becomes) `in_progress`/`waiting`
         and assigned to an agent, the change is delivered to that agent in its conversation for the issue, except
-        when the agent makes it from that very conversation. Finished work goes to `in_review` with assignee
+        when the agent makes it from that very conversation. Set `waiting` (with a comment saying what for) when
+        you stop to wait for a background job, delegated work, a scheduled trigger or an external event; `blocked`
+        with assignee `user` when only the user can unblock it. Finished work goes to `in_review` with assignee
         `user`, and the user moves it to `done` after reviewing; but when other issues depend on it (`issue_show`
         lists them under `blocks`), set it `done` yourself when finished, so the issues waiting for it can start.
 
@@ -224,7 +228,8 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             owner: New owner agent (by name): the project this issue belongs to.
             title: New title.
             description: New description (replaces the old one).
-            status: New status; when you have finished, `in_review`, or `done` if other issues depend on it.
+            status: New status; `waiting` while waiting for something; when you have finished, `in_review`, or
+                `done` if other issues depend on it.
             priority: New priority.
             assignee: Agent name, or `user` to hand it to the user (they get a notification).
             unassign: Remove the assignee.

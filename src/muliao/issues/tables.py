@@ -13,8 +13,9 @@ from muliao.platform.tables import agent_ref
 
 class IssueStatus(StrEnum):
     BACKLOG = "backlog"
-    TODO = "todo"
     IN_PROGRESS = "in_progress"
+    # 在等某件事（上游、后台任务、委派、定时继续、外部事件）：动态照常投递，不算停滞（rules）
+    WAITING = "waiting"
     IN_REVIEW = "in_review"
     BLOCKED = "blocked"
     DONE = "done"
@@ -44,6 +45,9 @@ class ActivityKind(StrEnum):
     DEPENDENCY = "dependency"
     # 某个 agent 在它这个 issue 的会话里的运行最终失败了：actor 是该 agent，body 是错误摘要（RunFailed.summary）
     RUN_FAILED = "run_failed"
+    # 某个 agent 在它这个 issue 的会话里的一次运行结束了，issue 却还是 in_progress、没人在做（rules.stalled）：平台记下并投进
+    # 那个会话，请它表态（做完、继续、waiting 写明等什么、blocked）。actor 是该 agent
+    UNSETTLED = "unsettled"
 
 
 class Issue(Base):

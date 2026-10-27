@@ -100,6 +100,14 @@ def render_activity(a: ActivityView) -> str:
         return f"- [{a.at}] {a.actor} changed status of dependency #{a.upstream}: {a.before} -> {a.after}"
     if a.kind == ActivityKind.RUN_FAILED:
         return f"- [{a.at}] {a.actor}'s run in its issue session failed: {a.body}"
+    if a.kind == ActivityKind.UNSETTLED:
+        return (
+            f"- [{a.at}] {a.actor}'s run in its issue session ended with the issue still `in_progress` and nothing "
+            "said about what comes next. Settle it now: finished -> `in_review` (assignee `user`), or `done` if "
+            "other issues depend on it; more to do -> carry on now; waiting for something (a background job, "
+            "delegated work, a scheduled trigger, an external event) -> status `waiting` and a comment saying what; "
+            "only the user can unblock it -> status `blocked`, assignee `user`, and a comment saying why"
+        )
     return f"- [{a.at}] {a.actor} changed {a.kind}: {a.before} -> {a.after}"
 
 

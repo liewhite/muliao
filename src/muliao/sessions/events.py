@@ -9,11 +9,14 @@ from muliao.sessions.origins import Origin
 
 
 class RunEnded(DomainEvent):
-    """一次运行结束了（完成、停在挂起的调用上、被停止）；没有可交给模型的空闲收尾不发。通知领域订阅。"""
+    """一次运行结束了（完成、停在挂起的调用上、被停止）；没有可交给模型的空闲收尾不发。通知领域订阅；带上会话的来源，
+    订阅方按来源认领自己的会话（如 issue 看板请停下的 agent 表态）。"""
 
     TYPE = "session.run_ended"
     session_id: str
     session_title: str
+    origin: Origin
+    origin_ref: str | None
     agent_id: str
     agent_name: str
     run_id: int

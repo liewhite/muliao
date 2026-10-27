@@ -13,7 +13,7 @@ from muliao.triggers.api import Precheck
 from tests.conftest import login
 from tests.test_flow import deliver, drain
 
-TODO = IssueStatus.TODO
+TODO = IssueStatus.IN_PROGRESS
 
 
 def _new_session(agent_id: str) -> UserMessage:

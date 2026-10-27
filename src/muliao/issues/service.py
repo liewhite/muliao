@@ -38,14 +38,17 @@ from muliao.issues.graph import (
     links_in,
     set_depends_on_in,
     snapshot,
+    waiting_on,
 )
 from muliao.issues.render import issue_view, render_issue
 from muliao.issues.rules import (
     SYSTEM_ACTOR,
     USER,
     agent_assignee,
+    ask_to_settle,
     finished,
     handed_by,
+    resumes,
     reviewable,
     stalled,
 )
@@ -62,7 +65,7 @@ from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, no_commit
 from muliao.platform.values import KEEP, Keep
 from muliao.sessions.api import Origin, SessionActivity, WorkState, keyed_sessions_among
-from muliao.sessions.events import RunFailed
+from muliao.sessions.events import RunEnded, RunFailed
 
 log = logging.getLogger(__name__)
 
@@ -157,6 +160,38 @@ class IssueService:
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
         messaging.subscribe(RunFailed, "issues.run_failed", self.on_run_failed)
+        messaging.subscribe(RunEnded, "issues.run_ended", self.on_run_ended)
+
+    async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
+        """issue 会话里的一次运行结束了：issue 指派给这个 agent、却因此停滞（还是 in_progress，会话空闲）时，以它的名义记一条
+        UNSETTLED 并投进那个会话，请它表态（rules.ask_to_settle）。停在挂起的调用上、被用户停止的不问；会话已经又有事要做
+        （信箱里还有信、在等后台任务）时不算停滞，不问。其他来源的会话、已被删除的 issue 不处理。"""
+        if event.origin != Origin.ISSUE or event.origin_ref is None or event.stopped or event.paused:
+            return no_commit
+        issue_id = int(event.origin_ref)
+
+        async def commit(s: AsyncSession) -> None:
+            issue = await s.get(Issue, issue_id)
+            if issue is None:
+                return
+            key = (str(issue_id), event.agent_id)
+            state = (await self._activity.keyed_work_states_in(s, Origin.ISSUE, [key]))[key]
+            snap = snapshot(issue, (await links_in(s, [issue_id]))[issue_id])
+            last = await s.scalar(
+                select(IssueActivity.kind)
+                .where(IssueActivity.issue_id == issue_id)
+                .order_by(IssueActivity.id.desc())
+                .limit(1)
+            )
+            if last is None or not ask_to_settle(snap, event.agent_id, state, last):
+                return
+            activity = self._record(s, issue, event.agent_id, ActivityKind.UNSETTLED)
+            issue.updated_at = utcnow()
+            # 投递任务随这个事务提交，由 worker 照常执行（订阅方的事务里没有「提交后马上执行」）
+            await self._delivery.deliver_in(s, issue, event.agent_id, None, [activity])
+            log.info("issue left unsettled, asked", extra={"issue_id": issue_id, "run_id": event.run_id})
+
+        return commit
 
     async def on_run_failed(self, event: RunFailed, _delivery: Delivery) -> Commit:
         """issue 会话里的运行最终失败：在 issue 时间线上以该 agent 的名义记一笔（失败的是它的运行）。通知用户由通知领域
@@ -386,7 +421,7 @@ class IssueService:
         return issue
 
     async def reject(self, issue_id: int, reason: str) -> Issue:
-        """用户打回交给自己的 issue：理由记成评论，回到 todo，指派给把它交给用户的那个 agent（rules.handed_by）。
+        """用户打回交给自己的 issue：理由记成评论，回到 in_progress，指派给把它交给用户的那个 agent（rules.handed_by）。
         三条动态一起投进那个 agent 的 issue 会话（一封信）。"""
         if not reason.strip():
             raise InvalidInput("the reason for sending an issue back must not be empty")
@@ -409,7 +444,7 @@ class IssueService:
                 ) from None
             before = issue.status, issue.assignee
             happened = [self._record(s, issue, USER, ActivityKind.COMMENT, body=reason)]
-            happened += await self._apply_in(s, issue, USER, status=IssueStatus.TODO, assignee=agent)
+            happened += await self._apply_in(s, issue, USER, status=IssueStatus.IN_PROGRESS, assignee=agent)
             wake = await self._changed_in(s, issue, before, USER, None, happened)
         log.info("issue sent back", extra={"issue_id": issue_id, "assignee": agent})
         await self._delivery.run(*wake)
@@ -505,9 +540,10 @@ class IssueService:
                 down = await self._get_in(s, down_id)
                 old = ids_of(before[down_id].depends_on)
                 change = (old, [i for i in old if i != issue_id])
-                activity = self._record(s, down, USER, ActivityKind.DEPENDS_ON, change=change)
+                happened = [self._record(s, down, USER, ActivityKind.DEPENDS_ON, change=change)]
+                happened += await self._resume_in(s, down, bool(waiting_on(before[down_id].depends_on)))
                 down.updated_at = utcnow()
-                wake.append(await self._delivery.deliver_in(s, down, USER, None, [activity]))
+                wake.append(await self._delivery.deliver_in(s, down, USER, None, happened))
         log.info("issue deleted", extra={"issue_id": issue_id, "downstream": downstream})
         await self._delivery.run(*wake)
 
@@ -527,14 +563,30 @@ class IssueService:
         wake = []
         for down in await downstream_in(s, issue.id):
             downstream = await self._get_in(s, down)
-            activity = self._record(
-                s, downstream, actor, ActivityKind.DEPENDENCY, change=(was, issue.status), upstream=issue.id
-            )
+            happened = [
+                self._record(
+                    s,
+                    downstream,
+                    actor,
+                    ActivityKind.DEPENDENCY,
+                    change=(was, issue.status),
+                    upstream=issue.id,
+                )
+            ]
+            # 这个上游刚从未完成进入完成：之前下游至少在等它
+            happened += await self._resume_in(s, downstream, True)
             downstream.updated_at = utcnow()
-            wake.append(await self._delivery.deliver_in(s, downstream, actor, session_id, [activity]))
+            wake.append(await self._delivery.deliver_in(s, downstream, actor, session_id, happened))
         if wake:
             log.info("issue unblocked downstream", extra={"issue_id": issue.id, "status": issue.status})
         return wake
+
+    async def _resume_in(self, s: AsyncSession, issue: Issue, was_waiting: bool) -> list[IssueActivity]:
+        """上游完成或被删除之后：处于 waiting 的下游不再等任何上游时由系统转为 in_progress（rules.resumes），返回这条动态，
+        与上游的那条一封信投出。"""
+        if not resumes(snapshot(issue, (await links_in(s, [issue.id]))[issue.id]), was_waiting):
+            return []
+        return await self._apply_in(s, issue, SYSTEM_ACTOR, status=IssueStatus.IN_PROGRESS)
 
     async def _activities_in(self, s: AsyncSession, issue_id: int) -> list[IssueActivity]:
         query = select(IssueActivity).where(IssueActivity.issue_id == issue_id).order_by(IssueActivity.id)

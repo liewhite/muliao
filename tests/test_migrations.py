@@ -1211,3 +1211,63 @@ def test_thread_calls_are_backfilled_from_result_metadata_and_delegations_and_do
     with _migration_engine(path).begin() as connection:
         command.downgrade(alembic_config(connection), "c2d9e4b7a1f0")
     assert "thread_calls" not in _tables(path)
+
+
+def test_todo_issues_become_in_progress_or_waiting_run_ended_gets_origin_and_downgrade(tmp_path):
+    """#258：todo 有没完成上游的变 waiting、其余变 in_progress；未投递完的 run_ended 事件补上会话来源；降级 waiting 回 todo。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "20676599edfd")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "insert into issues (id, title, description, status, priority, creator, created_at, updated_at) "
+            "values (?, 't', '', ?, 'none', 'user', ?, ?)",
+            [(i, s, t, t) for i, s in [(1, "todo"), (2, "todo"), (3, "todo"), (4, "done"), (5, "backlog")]],
+        )
+        # 2 在等没完成的 5；3 的上游 4 已完成
+        conn.executemany("insert into issue_dependencies values (?, ?)", [(2, 5), (3, 4)])
+        conn.execute(
+            "insert into agents (id, name, description, model, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', ?, ?)",
+            (t, t),
+        )
+        conn.execute(
+            "insert into sessions (id, agent_id, title, origin, origin_ref, kind, created_at, updated_at) "
+            "values ('s', 'a1', 't', 'issue', '1', 'conversation', ?, ?)",
+            (t, t),
+        )
+        payload = {"type": "session.run_ended", "receiver": "r", "id": "m", "data": {"session_id": "s"}}
+        conn.executemany(
+            "insert into tasks (kind, lane, payload, status, attempts, not_before, created_at) "
+            "values ('event', 'l', ?, ?, 0, ?, ?)",
+            [(json.dumps(payload), "pending", t, t), (json.dumps(payload), "done", t, t)],
+        )
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, status from issues order by id").fetchall() == [
+            (1, "in_progress"),
+            (2, "waiting"),
+            (3, "in_progress"),
+            (4, "done"),
+            (5, "backlog"),
+        ]
+        data = [json.loads(p)["data"] for (p,) in conn.execute("select payload from tasks order by id")]
+        assert data == [{"session_id": "s", "origin": "issue", "origin_ref": "1"}, {"session_id": "s"}]
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "20676599edfd")
+    with sqlite3.connect(path) as conn:
+        assert [s for (s,) in conn.execute("select status from issues order by id")] == [
+            "in_progress",
+            "todo",
+            "in_progress",
+            "done",
+            "backlog",
+        ]
+        data = [json.loads(p)["data"] for (p,) in conn.execute("select payload from tasks order by id")]
+        assert data == [{"session_id": "s"}, {"session_id": "s"}]

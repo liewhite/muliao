@@ -1,5 +1,5 @@
 """一次运行的收尾（与运行记为完成在同一个事务里），只写会话自己的数据：更新时间、委派的结清、唤醒下一次运行，并发布
-RunEnded（通知领域订阅它做推送）。
+RunEnded（通知领域订阅它做推送，issue 看板订阅它请 agent 表态）。
 运行被用户停止时的委派结局与信箱由停止处理（sessions.halt），这里只做其余部分。"""
 
 from __future__ import annotations
@@ -67,6 +67,8 @@ class RunFinisher:
                     RunEndedEvent(
                         session_id=session.id,
                         session_title=session.title,
+                        origin=session.origin,
+                        origin_ref=session.origin_ref,
                         agent_id=agent.id,
                         agent_name=agent.name,
                         run_id=state.run_id,

@@ -3148,7 +3148,7 @@
     "/api/issues/{issue_id}/reject": {
       "post": {
         "summary": "Reject Issue",
-        "description": "打回指派给用户的 issue：理由记成评论，回到 todo，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。",
+        "description": "打回指派给用户的 issue：理由记成评论，回到 in_progress，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。",
         "operationId": "reject_issue_api_issues__issue_id__reject_post",
         "parameters": [
           {
@@ -3414,7 +3414,8 @@
           "description",
           "depends_on",
           "dependency",
-          "run_failed"
+          "run_failed",
+          "unsettled"
         ],
         "title": "ActivityKind"
       },
@@ -4502,8 +4503,8 @@
         "type": "string",
         "enum": [
           "backlog",
-          "todo",
           "in_progress",
+          "waiting",
           "in_review",
           "blocked",
           "done",

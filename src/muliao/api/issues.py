@@ -31,7 +31,7 @@ class IssueOut(BaseModel):
     sessions: dict[str, str]
     # 被指派 agent 在这个 issue 会话里的状态；没指派给 agent 或还没有会话时为 null
     assignee_state: WorkState | None
-    # todo / in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
+    # in_progress、指派给 agent，它的 issue 会话却空闲或不存在：该有人做却没人在做
     stalled: bool
     # 它依赖的上游 issue id、依赖它的下游 issue id、还没完成（不是 done / cancelled）的上游：非空时还轮不到它
     depends_on: list[int]
@@ -200,7 +200,7 @@ async def approve_issue(c: C, issue_id: int) -> IssueOut:
 
 @router.post("/issues/{issue_id}/reject")
 async def reject_issue(c: C, issue_id: int, body: RejectIn) -> IssueOut:
-    """打回指派给用户的 issue：理由记成评论，回到 todo，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。"""
+    """打回指派给用户的 issue：理由记成评论，回到 in_progress，指派给把它交给用户的 agent。没有指派给用户、或不是 agent 交来的时 409。"""
     return await _out(c, await c.issues.reject(issue_id, body.reason))
 
 

@@ -389,7 +389,7 @@ export const api = {
   commentIssue: (issue_id: number, body: string) =>
     call('post', '/api/issues/{issue_id}/comments', { path: { issue_id }, body: { body } }),
   deleteIssue: (issue_id: number) => call('delete', '/api/issues/{issue_id}', { path: { issue_id } }),
-  /** 审核指派给用户的 issue：通过 → done；打回 → 理由记成评论、回到 todo、指派回交给用户的 agent */
+  /** 审核指派给用户的 issue：通过 → done；打回 → 理由记成评论、回到 in_progress、指派回交给用户的 agent */
   approveIssue: (issue_id: number) => call('post', '/api/issues/{issue_id}/approve', { path: { issue_id } }),
   rejectIssue: (issue_id: number, reason: string) =>
     call('post', '/api/issues/{issue_id}/reject', { path: { issue_id }, body: { reason } }),
