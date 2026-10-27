@@ -7,7 +7,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from muliao.agent_runtime.web import DeepSeekWeb, Page, SearchHit
+from muliao.web.provider import DeepSeekWeb, Page, SearchHit
 from muliao.agents.service import AgentSpec
 from muliao.container import assemble
 from muliao.errors import InvalidInput, TransientError
@@ -139,7 +139,7 @@ async def test_direct_get_accepts_textual_types_and_decodes_by_charset(body, con
 
 
 async def test_direct_get_reads_at_most_the_byte_cap(monkeypatch):
-    monkeypatch.setattr("muliao.agent_runtime.web._DIRECT_MAX_BYTES", 4)
+    monkeypatch.setattr("muliao.web.provider._DIRECT_MAX_BYTES", 4)
     web = _not_fetched_then(
         lambda _r: httpx.Response(200, text="abcdefgh", headers={"content-type": "text/plain"})
     )
@@ -147,7 +147,7 @@ async def test_direct_get_reads_at_most_the_byte_cap(monkeypatch):
 
 
 async def test_direct_get_is_limited_in_total_time(monkeypatch):
-    monkeypatch.setattr("muliao.agent_runtime.web._DIRECT_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr("muliao.web.provider._DIRECT_TIMEOUT_SECONDS", 0.05)
 
     class Slow(httpx.AsyncByteStream):
         async def __aiter__(self):
@@ -244,7 +244,7 @@ async def test_deepseek_unreachable_is_its_own_transient_error_not_a_model_outag
 def test_deepseek_without_base_url_uses_the_official_address():
     from pydantic import SecretStr
 
-    from muliao.agent_runtime.web import build_web_provider
+    from muliao.web.provider import build_web_provider
     from muliao.config import WebConfig
 
     web = build_web_provider(WebConfig(type="deepseek", api_key=SecretStr("k")), httpx.AsyncClient())

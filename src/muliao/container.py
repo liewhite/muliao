@@ -15,8 +15,6 @@ import httpx
 from muliao.agent_runtime.llm import ModelRegistry, ModelResolver
 from muliao.agent_runtime.mcp import McpConnector
 from muliao.agent_runtime.runner import AgentRuntime, Toolbox
-from muliao.agent_runtime.web import WebProvider, build_web_provider
-from muliao.agent_runtime.web_tools import web_toolset
 from muliao.agent_runtime.workspace_tools import ShellLimits
 from muliao.agents.catalog import ItemCatalog
 from muliao.agents.evolution_tools import (
@@ -85,6 +83,7 @@ from muliao.triggers.webhook import WebhookKind, Webhooks
 from muliao.usage.service import UsageLog
 from muliao.vault.service import Vault
 from muliao.vault.tools import vault_toolset
+from muliao.web.api import WebProvider, build_web_provider, web_toolset
 
 log = logging.getLogger(__name__)
 

@@ -14,7 +14,7 @@ SRC = Path(__file__).parent.parent / "src" / "muliao"
 # 经 api 的依赖方向（docs/architecture.md 2.3）：领域只能 import 更早一层的领域的 api，同层与反向都不行，所以依赖无环。
 # 事件与定向命令不受方向限制（events 模块只放消息的数据形状）。新增领域要在这里定它在哪一层
 LAYERS: list[set[str]] = [
-    {"files", "agents", "usage", "speech"},
+    {"files", "agents", "usage", "speech", "web"},
     {"vault"},
     {"agent_runtime"},
     {"sessions"},

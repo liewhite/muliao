@@ -2,7 +2,7 @@
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agent_runtime.web import SearchHit, WebProvider
+from muliao.web.provider import SearchHit, WebProvider
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 

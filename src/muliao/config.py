@@ -96,7 +96,7 @@ WebProviderType = Literal["deepseek"]
 
 
 class WebConfig(_Section):
-    """网页搜索与抓取服务（muliao.agent_runtime.web）。不配置时没有 web 工具组。"""
+    """网页搜索与抓取服务（muliao.web.provider）。不配置时没有 web 工具组。"""
 
     type: WebProviderType
     api_key: SecretStr = Field(min_length=1)
