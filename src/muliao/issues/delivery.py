@@ -10,9 +10,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentArchived, agent_names_in
-from muliao.issues.graph import Links, links_in, waiting_on
+from muliao.issues.graph import links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
-from muliao.issues.rules import USER, Snapshot, recipient
+from muliao.issues.rules import USER, recipient
 from muliao.issues.tables import ActivityKind, Issue, IssueActivity
 from muliao.notifications.events import Notify
 from muliao.platform.messaging import Messaging
@@ -20,16 +20,6 @@ from muliao.platform.tables import Task
 from muliao.sessions.api import Origin, SenderMail, SessionKey, keyed_sessions_among, receive_command_in
 
 log = logging.getLogger(__name__)
-
-
-def snapshot(issue: Issue, links: Links) -> Snapshot:
-    """投递与停滞判定看的那部分状态。"""
-    return Snapshot(
-        status=issue.status,
-        assignee=issue.assignee,
-        owner=issue.owner_agent_id,
-        waiting_on=waiting_on(links.depends_on),
-    )
 
 
 class IssueDelivery:

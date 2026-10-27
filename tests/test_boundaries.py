@@ -189,6 +189,25 @@ def test_sessions_subdomains_only_query_their_own_tables():
     assert not problems, "\n".join(problems)
 
 
+# 模块化（不设子域）的领域里由一个模块独占的表（docs/architecture.md 第 14、21 节）：别的模块经它的函数
+MODULE_TABLES: dict[str, dict[str, str]] = {
+    "issues": {"IssueDependency": "graph"},
+    "notifications": {"Notification": "inbox", "PushSubscription": "push"},
+}
+
+
+def test_tables_owned_by_one_module_are_only_queried_there():
+    problems = []
+    for domain, owners in MODULE_TABLES.items():
+        for path in sorted((SRC / domain).glob("*.py")):
+            if path.stem == "tables":
+                continue
+            for line, name in _table_uses(ast.parse(path.read_text()), set(owners)):
+                if path.stem != owners[name]:
+                    problems.append(f"{domain}/{path.name}:{line} queries {name}")
+    assert not problems, "\n".join(problems)
+
+
 def test_sessions_read_tasks_through_the_queue():
     """会话领域经 TaskQueue 的只读查询（TaskView）看运行，不查任务表、不按 TaskStatus 分支；Task 只出现在任务处理器的
     签名里（队列交给处理器的就是它）。"""

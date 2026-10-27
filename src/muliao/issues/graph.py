@@ -8,7 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import InvalidInput
-from muliao.issues.rules import finished
+from muliao.issues.rules import Snapshot, finished
 from muliao.issues.tables import Issue, IssueDependency, IssueStatus
 
 
@@ -33,7 +33,17 @@ def waiting_on(depends_on: Iterable[Dependency]) -> tuple[int, ...]:
     return tuple(d.id for d in depends_on if not finished(d.status))
 
 
-def ids(found: Sequence[Dependency]) -> list[int]:
+def snapshot(issue: Issue, links: Links) -> Snapshot:
+    """投递与停滞判定看的那部分状态（rules.recipient、rules.stalled）：issue 本身加它在依赖图里还在等的上游。"""
+    return Snapshot(
+        status=issue.status,
+        assignee=issue.assignee,
+        owner=issue.owner_agent_id,
+        waiting_on=waiting_on(links.depends_on),
+    )
+
+
+def ids_of(found: Sequence[Dependency]) -> list[int]:
     return [d.id for d in found]
 
 
@@ -119,7 +129,7 @@ async def links_in(s: AsyncSession, issue_ids: list[int]) -> dict[int, Links]:
 
 async def downstream_in(s: AsyncSession, issue_id: int) -> list[int]:
     """依赖这个 issue 的下游（按 id 排序）。"""
-    return ids((await links_in(s, [issue_id]))[issue_id].blocks)
+    return ids_of((await links_in(s, [issue_id]))[issue_id].blocks)
 
 
 async def set_depends_on_in(

@@ -28,15 +28,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.agents.api import agent_names_in, runnable_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.issues.delivery import IssueDelivery, snapshot
+from muliao.issues.delivery import IssueDelivery
 from muliao.issues.graph import (
     Dependency,
     batch_label,
     check_batch,
     downstream_in,
-    ids,
+    ids_of,
     links_in,
     set_depends_on_in,
+    snapshot,
 )
 from muliao.issues.render import issue_view, render_issue
 from muliao.issues.rules import (
@@ -500,7 +501,7 @@ class IssueService:
             wake = []
             for down_id in downstream:
                 down = await self._get_in(s, down_id)
-                old = ids(before[down_id].depends_on)
+                old = ids_of(before[down_id].depends_on)
                 change = (old, [i for i in old if i != issue_id])
                 activity = self._record(s, down, None, ActivityKind.DEPENDS_ON, change=change)
                 down.updated_at = utcnow()
