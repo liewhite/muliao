@@ -22,7 +22,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ValidationError
@@ -65,6 +65,24 @@ SESSION_NOTE = (
     "watching. Each firing starts a fresh conversation unless its sender continues this one, so keep anything "
     "later firings need in memory or workspace files."
 )
+
+
+def precheck_of(trigger: Trigger) -> Precheck | None:
+    """存下的前置检查（写入时已按 Precheck 校验）。"""
+    return None if trigger.precheck is None else Precheck.model_validate(trigger.precheck)
+
+
+@dataclass(frozen=True)
+class TriggerView:
+    """触发器的读模型（HTTP 层与工具共用）：行、运行状态（这种方式自己的类型）、前置检查。"""
+
+    trigger: Trigger
+    status: BaseModel
+    precheck: Precheck | None
+
+
+# 全部触发方式的名字（各方式模块的 KIND）；接口契约里的种类就是它，与组合根注册的方式一一对应（tests/test_triggers.py）
+TriggerKindName = Literal["schedule", "once", "webhook", "stream"]
 
 
 class TriggerKind(Protocol):
@@ -197,9 +215,13 @@ class TriggerService:
             raise InvalidInput(f"unknown trigger kind {name!r}; available: {sorted(self.kinds)}")
         return self.kinds[name]
 
+    def view(self, trigger: Trigger) -> TriggerView:
+        """触发器的读模型：行、它的触发方式给出的运行状态（TriggerKind.status）、解析好的前置检查。"""
+        return TriggerView(trigger, self.kind(trigger.kind).status(trigger), precheck_of(trigger))
+
     def status_of(self, trigger: Trigger) -> dict[str, Any]:
-        """这个触发器的运行状态（由它的触发方式给出，见 TriggerKind.status），JSON 形式。"""
-        return self.kind(trigger.kind).status(trigger).model_dump(mode="json")
+        """运行状态的 JSON 形式（交给模型的工具结果）。"""
+        return self.view(trigger).status.model_dump(mode="json")
 
     async def create(
         self,
@@ -564,7 +586,9 @@ class TriggerService:
 
 def precheck_alert(trigger: Trigger, error: str) -> str:
     """前置检查从正常变为出错时交给触发器所属 agent 的信件：出错的是哪个检查、原因，以及怎么处理。"""
-    precheck = Precheck.model_validate(trigger.precheck)
+    precheck = precheck_of(trigger)
+    if precheck is None:
+        raise RuntimeError(f"trigger {trigger.name} has no precheck to alert about")
     lines = [
         f"The precheck of your trigger `{trigger.name}` (kind {trigger.kind}) just started failing, so the "
         "trigger did not fire this time. You wrote this check, so it is yours to fix; the user has not been told.",

@@ -6,11 +6,12 @@ from typing import get_args
 import pytest
 
 from muliao.agents.api import AgentPatch, McpTransport, RoleSpec, mcp_config
-from muliao.api.triggers import TriggerKindName, TriggerOut
+from muliao.api.triggers import TriggerOut
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin, SessionActivity, WorkState
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import MailKind
+from muliao.triggers.api import TriggerKindName
 from muliao.triggers.service import previous_fire_state_in, set_state, trigger_in
 from tests.conftest import login, owned, share
 from tests.test_flow import drain, history_of, start

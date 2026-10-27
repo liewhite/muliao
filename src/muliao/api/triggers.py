@@ -17,16 +17,14 @@ from muliao.triggers.api import (
     StreamConfig,
     StreamStatus,
     TriggerKind,
+    TriggerKindName,
+    TriggerView,
     WebhookConfig,
     WebhookStatus,
 )
 from muliao.triggers.tables import Trigger
 
 router = APIRouter()
-
-
-# 所有触发方式；与 container 里注册的方式一一对应（tests/test_triggers.py 校验）
-TriggerKindName = Literal["schedule", "once", "webhook", "stream"]
 
 
 class TriggerKindOut(BaseModel):
@@ -114,6 +112,11 @@ class FiredOut(BaseModel):
 
 
 def _out(c: C, t: Trigger) -> TriggerOut:
+    return _out_of(c.triggers.view(t))
+
+
+def _out_of(view: TriggerView) -> TriggerOut:
+    t = view.trigger
     return _TRIGGER_OUT.validate_python(
         dict(
             id=t.id,
@@ -122,9 +125,9 @@ def _out(c: C, t: Trigger) -> TriggerOut:
             kind=t.kind,
             prompt=t.prompt,
             config=t.config,
-            status=c.triggers.status_of(t),
+            status=view.status,
             enabled=t.enabled,
-            precheck=None if t.precheck is None else Precheck.model_validate(t.precheck),
+            precheck=view.precheck,
             last_checked_at=t.last_checked_at,
             last_fired_at=t.last_fired_at,
             last_session_id=t.last_session_id,

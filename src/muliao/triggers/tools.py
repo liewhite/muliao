@@ -67,15 +67,16 @@ def triggers_toolset(
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     async def info(t: Trigger, names: AgentNames) -> TriggerInfo:
+        view = triggers.view(t)
         return TriggerInfo(
             name=t.name,
             kind=t.kind,
             agent=names[t.agent_id],
             prompt=t.prompt,
             config=t.config,
-            status=triggers.status_of(t),
+            status=view.status.model_dump(mode="json"),
             enabled=t.enabled,
-            precheck=None if t.precheck is None else Precheck.model_validate(t.precheck),
+            precheck=view.precheck,
             disabled_reason=t.disabled_reason,
             precheck_error=t.precheck_error,
             last_session_id=t.last_session_id,
