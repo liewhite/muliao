@@ -22,6 +22,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import Attachment
@@ -44,6 +45,9 @@ if TYPE_CHECKING:
     from muliao.sessions.halt import StopSession
 
 log = logging.getLogger(__name__)
+
+# 委派检查停一个超时 thread 时最多等它收尾多久（之后放手，见 ThreadChecks.check）
+_STOP_WAIT_SECONDS = 5.0
 
 
 class Ending(StrEnum):
@@ -235,7 +239,10 @@ class ThreadChecks:
             # 停止自己开事务，返回时已经结清（委派以「超时被停」交回、占用释放，下一拍不会再停）。每项是独立的副作用：一项停不下来（如数据库暂时失败）
             # 记 error、不记下，下一拍再停，不影响别的到期委派，也不让检查循环退出
             try:
-                await self._stop(child_id)
+                # 停止等 thread 的运行收尾做完才返回；检查循环还要照看别的心跳与唤醒，不跟着一直等：等不完就放手，
+                # 运行照常自己收尾（取消已经发出），下一拍还到期就再等一次（不会重复取消）
+                with anyio.move_on_after(_STOP_WAIT_SECONDS):
+                    await self._stop(child_id)
             except Exception:
                 log.exception(
                     "stopping a timed-out delegation's thread failed; retrying on the next check",

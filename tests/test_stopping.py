@@ -176,6 +176,31 @@ async def test_stop_returns_only_after_the_stopped_wind_up_is_done():
     assert log == ["halted", "stop returned"]
 
 
+async def test_giving_up_waiting_for_a_stop_leaves_the_wind_up_to_the_run():
+    """不想一直等的停止者在外面套时限：放手后运行照常自己收尾一次，停止事务不会被停止者再执行一次。"""
+    runs: StoppableRuns[str] = StoppableRuns(_no_gate)
+    tool = Tool()
+    wound_up: list[str] = []
+
+    async def slow_wind_up() -> str:
+        await anyio.sleep(0.2)
+        wound_up.append("halted")
+        return "stopped"
+
+    async def impatient_stop() -> None:
+        await tool.started.wait()
+        with anyio.move_on_after(0.05):
+            await runs.stop("s")
+            raise AssertionError("the wind-up is slower than the wait")
+        assert wound_up == []
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(impatient_stop)
+        assert await runs.run("s", tool.run, slow_wind_up) == "stopped"
+
+    assert wound_up == ["halted"] and tool.outcome == "cancelled"
+
+
 async def test_a_shutdown_during_a_stopped_runs_cleanup_does_not_interrupt_it():
     runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = CleaningTool()

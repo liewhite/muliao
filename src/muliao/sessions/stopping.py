@@ -123,16 +123,13 @@ class StoppableRuns[T]:
 
     async def stop(self, session_id: str) -> bool:
         """停止这个会话正在进行的运行，等它连同停止后的收尾结束：返回它是否以用户停止结束、收尾做完了。没有在运行的、
-        取消没赶上（运行已经正常结束、还没撤销登记）的、收尾被外层取消打断的、收尾超过 _WIND_DOWN_SECONDS 的，返回 False，由调用方自己执行停止事务。"""
+        取消没赶上（运行已经正常结束、还没撤销登记）的、收尾被外层取消打断的，返回 False，由调用方自己执行停止事务。
+        不设时限：运行中被停止时停止事务只由运行自己执行（唯一的执行者），调用方不能等烦了自己再执行一次——那会与
+        还在收尾的运行并发，补出重复的工具结果、清掉之后投来的信。不想一直等的调用方自己在外面套时限（取消等待是
+        安全的：取消已经发出，运行照常自己收尾）。"""
         entry = self._running.get(session_id)
         if entry is None:
             return False
         await self._cancel(entry.task)
-        with anyio.move_on_after(_WIND_DOWN_SECONDS) as waited:
-            await entry.ended.wait()
-        if waited.cancelled_caught:
-            # 运行收尾卡住（吞掉取消是 bug，见 run）：不让停止者（如委派检查的循环）跟着一直等，由它自己执行停止事务；
-            # 运行最终退出时它的收尾再执行一次，停止事务重复执行没有新的效果
-            log.error("stopped run did not wind down in time", extra={"session_id": session_id})
-            return False
+        await entry.ended.wait()
         return entry.stopped
