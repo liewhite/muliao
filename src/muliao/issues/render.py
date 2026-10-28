@@ -101,7 +101,7 @@ def render_activity(a: ActivityView) -> str:
     if a.kind == ActivityKind.RUN_FAILED:
         return f"- [{a.at}] {a.actor}'s run in its issue session failed: {a.body}"
     if a.kind == ActivityKind.UNSETTLED:
-        # 怎么表态的指引只在 SESSION_NOTE（缓存前缀），这里只记事实
+        # 怎么表态的指引在 SESSION_NOTE（缓存前缀）；这里只多一句「只写评论不算」作提醒
         return (
             f"- [{a.at}] {a.actor}'s run in its issue session ended with the issue still `in_progress` and nothing "
             "said about what comes next: settle it now as the note on this conversation says (a comment alone does "
