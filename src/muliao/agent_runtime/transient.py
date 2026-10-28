@@ -40,11 +40,19 @@ _TRANSIENT_RESPONSE_CODES = {"server_error", "rate_limit_exceeded"}
 
 
 def _openai_response_error(exc: ModelAPIError) -> bool:
-    """OpenAI Responses 在 200 的响应体或流里报的失败（error / response.failed 事件）没有状态码：pydantic-ai 的
-    `_response_error` 把它构造成无 cause 的 ModelAPIError，消息为 `<code>: <message>`，这是唯一带着错误码的地方。
+    """OpenAI 在 200 的响应体或流里报的失败没有状态码，错误码按两条路径取：
+    - Responses 规范的 error / response.failed 事件（及响应体里的 error）：pydantic-ai 的 `_response_error` 构造成无
+      cause 的 ModelAPIError，消息为 `<code>: <message>`，这是唯一带着错误码的地方；
+    - 流里 data 顶层带 `error` 对象（OpenAI 兼容网关、Chat 流的形状）：openai SDK 抛基类 APIError（错误码在 `.code`），
+      pydantic-ai 包成 ModelAPIError 挂在 cause 上。
     只认契约里的暂时性错误码；其余（invalid_prompt、图片错误等确定性的）与无错误码的不重试。"""
-    code, sep, _ = exc.message.partition(": ")
-    return exc.__cause__ is None and bool(sep) and code in _TRANSIENT_RESPONSE_CODES
+    cause = exc.__cause__
+    if cause is None:
+        code, sep, _ = exc.message.partition(": ")
+        return bool(sep) and code in _TRANSIENT_RESPONSE_CODES
+    if isinstance(cause, openai.APIError) and not isinstance(cause, openai.APIStatusError):
+        return cause.code in _TRANSIENT_RESPONSE_CODES
+    return False
 
 
 def is_transient(exc: BaseException) -> bool:

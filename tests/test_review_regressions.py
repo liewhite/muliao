@@ -132,9 +132,10 @@ def test_error_events_mid_stream_are_classified_by_type():
     assert not is_transient(_stream_error_event("invalid_request_error"))
 
 
-async def _openai_stream_error(code: str) -> BaseException:
-    """OpenAI Responses 流以 200 开始、收到 response.created 后来了 error 事件，经 openai SDK 与 pydantic-ai 真实处理得到的
-    异常（#280）。"""
+async def _openai_stream_error(code: str, shape: str = "error") -> BaseException:
+    """OpenAI Responses 流以 200 开始后报错，经 openai SDK 与 pydantic-ai 真实处理得到的异常（#280）。shape：
+    error＝response.created 之后来 error 事件；first＝第一个事件就是 error；failed＝response.failed；
+    wrapped＝data 顶层带 error 对象（OpenAI 兼容网关的形状）。"""
     import json
 
     import openai
@@ -142,16 +143,28 @@ async def _openai_stream_error(code: str) -> BaseException:
     from pydantic_ai.models.openai import OpenAIResponsesModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
-    created = {
-        "type": "response.created",
-        "sequence_number": 0,
-        "response": {
-            "id": "r1", "object": "response", "created_at": 0, "model": "m", "status": "in_progress",
+    def response(status: str, error: object = None) -> dict:
+        return {
+            "id": "r1", "object": "response", "created_at": 0, "model": "m", "status": status, "error": error,
             "output": [], "parallel_tool_calls": True, "tool_choice": "auto", "tools": [],
-        },
-    }  # fmt: skip
+        }  # fmt: skip
+
+    created = {"type": "response.created", "sequence_number": 0, "response": response("in_progress")}
     error = {"type": "error", "sequence_number": 1, "code": code, "message": "x", "param": None}
-    sse = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in (created, error))
+    events = {
+        "error": [created, error],
+        "first": [error],
+        "failed": [
+            created,
+            {
+                "type": "response.failed",
+                "sequence_number": 1,
+                "response": response("failed", {"code": code, "message": "x"}),
+            },
+        ],
+        "wrapped": [created, {"error": {"code": code, "message": "x"}}],
+    }[shape]
+    sse = "".join(f"data: {json.dumps(e)}\n\n" for e in events)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
@@ -170,13 +183,16 @@ async def _openai_stream_error(code: str) -> BaseException:
     raise AssertionError("unreachable")
 
 
-async def test_openai_stream_error_events_are_classified_by_code():
-    # 网关的 503 也会以流内 server_error 出现：无状态码、无 cause 的 ModelAPIError，按错误码判断
-    server_error = await _openai_stream_error("server_error")
-    assert type(server_error) is ModelAPIError and server_error.__cause__ is None
-    assert is_transient(server_error)
-    assert is_transient(await _openai_stream_error("rate_limit_exceeded"))
-    assert not is_transient(await _openai_stream_error("invalid_prompt"))
+@pytest.mark.parametrize("shape", ["error", "first", "failed", "wrapped"])
+async def test_openai_stream_errors_are_classified_by_code(shape):
+    # 网关的 503 也会以 200 开流后的 server_error 出现：没有状态码的 ModelAPIError，按错误码判断
+    server_error = await _openai_stream_error("server_error", shape)
+    assert type(server_error) is ModelAPIError and is_transient(server_error)
+    assert is_transient(await _openai_stream_error("rate_limit_exceeded", shape))
+    assert not is_transient(await _openai_stream_error("invalid_prompt", shape))
+
+
+def test_openai_error_code_comes_only_from_the_code_prefix():
     assert not is_transient(ModelAPIError(model_name="m", message="server_error"))  # 没有 `<code>: ` 前缀
 
 
