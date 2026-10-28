@@ -107,7 +107,11 @@ async def test_mail_arriving_during_a_run_reaches_the_model_between_tool_calls(c
         if not any(isinstance(m, ModelResponse) for m in messages):
             # 模型还在第一次回复时，后台任务完成了
             await post(container, session.id, "job 7 finished: exit 0", source="job:7")
-            yield {0: DeltaToolCall(name="memory_edit", json_args='{"new_text": "- x"}', tool_call_id="m1")}
+            yield {
+                0: DeltaToolCall(
+                    name="memory_edit", json_args='{"reason": "r", "new_text": "- x"}', tool_call_id="m1"
+                )
+            }
         else:
             last = messages[-1]
             assert isinstance(last, ModelRequest)
@@ -140,7 +144,7 @@ async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_t
         requests["n"] += 1
         if requests["n"] == 1:
             return ModelResponse(
-                parts=[ToolCallPart("memory_edit", {"new_text": "- once"}, tool_call_id="m1")]
+                parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": "- once"}, tool_call_id="m1")]
             )
         if requests["n"] == 2:
             raise ModelHTTPError(status_code=400, model_name="flaky", body="bad request")
@@ -343,7 +347,7 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
 
     # 回复在执行工具之前就已保存，结果没有；那条 run task 留在 running，由下次启动恢复（platform.worker）
     async with container.db.transaction() as s:
-        call = ToolCallPart("memory_edit", {"new_text": "- boom"}, tool_call_id="m1")
+        call = ToolCallPart("memory_edit", {"reason": "r", "new_text": "- boom"}, tool_call_id="m1")
         s.add(
             Message(
                 session_id=session.id,
@@ -449,7 +453,9 @@ async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_agai
                     ModelResponse(
                         parts=[
                             ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="q1"),
-                            ToolCallPart("memory_edit", {"new_text": "- boom"}, tool_call_id="m1"),
+                            ToolCallPart(
+                                "memory_edit", {"reason": "r", "new_text": "- boom"}, tool_call_id="m1"
+                            ),
                         ]
                     )
                 ),

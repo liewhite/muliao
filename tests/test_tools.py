@@ -15,7 +15,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.profiles import ModelProfile
 
-from muliao.agents.api import AgentPatch, McpTransport, mcp_config
+from muliao.agents.api import AgentPatch, McpTransport, StoredKind, mcp_config
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
 from tests.conftest import login, session_tools, share
@@ -332,17 +332,22 @@ async def test_edit_skill_changes_description_body_or_both_and_rejects_empty_edi
         models,
         me.id,
         [
-            (tool, {"name": "digest", "description": "When summarizing"}),
-            (tool, {"name": "digest", "old_text": "step one", "new_text": "step 1"}),
-            (tool, {"name": "digest", "new_text": "step 2", "description": "When digesting"}),
-            (tool, {"name": "digest"}),
+            (tool, {"name": "digest", "reason": "r1", "description": "When summarizing"}),
+            (tool, {"name": "digest", "reason": "r2", "old_text": "step one", "new_text": "step 1"}),
+            (tool, {"name": "digest", "reason": "r3", "new_text": "step 2", "description": "When digesting"}),
+            (tool, {"name": "digest", "reason": "r4"}),
+            (tool, {"name": "digest", "reason": "  ", "new_text": "step 3"}),
         ],
     )
 
     assert outputs[:3] == ["edited skill digest"] * 3
     assert "nothing to change" in outputs[3]
+    assert "reason must not be blank" in outputs[4]
     skill = await container.skills.read("digest")
     assert (skill.meta.description, skill.body) == ("When digesting", "step 1\n\nstep 2")
+    # 每一版记下改的原因，按新到旧；用户在界面上写的那一版仍是默认的动作描述
+    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
+    assert [r.message for r in history] == ["r3", "r2", "r1", "write skill digest"]
 
 
 async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):

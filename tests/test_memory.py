@@ -104,7 +104,10 @@ async def test_an_agent_edits_the_global_memory_as_a_versioned_change_under_its_
     container, make_agent, models
 ):
     agent = await make_agent("alpha", model="m", roles=["admin"])
-    args = {"new_text": "- all agents answer in Chinese"}
+    args = {
+        "new_text": "- all agents answer in Chinese",
+        "reason": "user asked twice for Chinese (session s1)",
+    }
     models.models["m"] = call_then_answer("memory_edit_public", args, "Added a rule.")
     await start(container, agent.id, "hello")
     await drain(container)
@@ -112,10 +115,12 @@ async def test_an_agent_edits_the_global_memory_as_a_versioned_change_under_its_
     assert await container.memory.read(None) == "- all agents answer in Chinese\n"
     # 自己的记忆没变
     assert await container.memory.read(agent.id) == ""
-    assert (await memory_history(container, None))[0].actor == agent.id
+    latest = (await memory_history(container, None))[0]
+    # 为什么改记进这一版：自进化的时间线
+    assert (latest.actor, latest.message) == (agent.id, "user asked twice for Chinese (session s1)")
 
     models.models["m"] = call_then_answer(
-        "memory_edit_public", {"old_text": "Chinese", "new_text": "English"}, "Done."
+        "memory_edit_public", {"reason": "r", "old_text": "Chinese", "new_text": "English"}, "Done."
     )
     await start(container, agent.id, "again")
     await drain(container)

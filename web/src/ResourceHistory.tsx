@@ -88,6 +88,7 @@ function RevisionList({
                   <Card.Description className="flex-1">
                     {formatTime(r.created_at)} ·{' '}
                     {r.actor === USER ? '用户' : agentLabel(agents.data, r.actor as AgentId)}
+                    <span className="block whitespace-pre-wrap text-foreground">{r.message}</span>
                   </Card.Description>
                   {r.content === null && (
                     <Chip size="sm" color="danger" variant="soft">

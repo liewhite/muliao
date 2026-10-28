@@ -170,7 +170,9 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     await container.push_subscriptions.add("https://push.example/phone", "k", "a")
     pushed: list[str] = []
     monkeypatch.setattr(WebPushDelivery, "_push", lambda _self, sub, _data: pushed.append(sub.endpoint))
-    models.models["m"] = call_then_answer("memory_edit", {"new_text": "- user likes tea"}, "Noted!")
+    models.models["m"] = call_then_answer(
+        "memory_edit", {"reason": "r", "new_text": "- user likes tea"}, "Noted!"
+    )
 
     session = await start(container, alpha, "I like tea")
     await drain(container)
@@ -369,7 +371,9 @@ async def test_tool_that_keeps_failing_does_not_abort_the_run(container, make_ag
         seen.extend(str(p.content) for p in parts if isinstance(p, RetryPromptPart | ToolReturnPart))
         if len(seen) >= 6:
             return ModelResponse(parts=[TextPart("gave up on memory")])
-        return ModelResponse(parts=[ToolCallPart("memory_edit", {"new_text": f"- fact {len(seen)}"})])
+        return ModelResponse(
+            parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": f"- fact {len(seen)}"})]
+        )
 
     models.models["m"] = scripted(fn)
     await start(container, alpha, "remember", origin=Origin.TRIGGER)

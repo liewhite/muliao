@@ -50,6 +50,16 @@ def _info(row: Revision) -> RevisionInfo:
     )
 
 
+def described(reason: str | None, default: str) -> str:
+    """一版的说明：改的人给了原因（agent 用工具改记忆、skill 时必给：它针对的缺陷或重复模式、来源、与同一条以前改动的
+    关系，构成自进化的时间线）就记原因，否则（界面、系统操作）记默认的动作描述。给了却是空白是错误。"""
+    if reason is None:
+        return default
+    if not reason.strip():
+        raise InvalidInput("reason must not be blank: say why you make this change")
+    return reason.strip()
+
+
 def record_in(
     s: AsyncSession,
     subject: Subject,

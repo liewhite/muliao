@@ -516,7 +516,7 @@ async def test_a_question_asked_alongside_another_tool_is_answered_as_its_result
             return ModelResponse(
                 parts=[
                     ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="q1"),
-                    ToolCallPart("memory_edit", {"new_text": "- asked"}, tool_call_id="m1"),
+                    ToolCallPart("memory_edit", {"reason": "r", "new_text": "- asked"}, tool_call_id="m1"),
                 ]
             )
         last = messages[-1]

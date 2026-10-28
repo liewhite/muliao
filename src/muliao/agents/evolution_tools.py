@@ -69,6 +69,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         name: str,
         description: str,
         content: str,
+        reason: str,
         attachments_dir: str | None = None,
     ) -> str:
         """Create or replace a skill: a reusable procedure for a recurring kind of task. A new skill is yours and
@@ -79,18 +80,24 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             name: Lowercase slug, e.g. `slack-digest`.
             description: One sentence on when to use this skill; shown in the skill index.
             content: Markdown instructions: steps, commands, pitfalls, examples.
+            reason: Why, kept in the version history as this skill's timeline: the defect it fixes (user
+                correction, error, detour) or the recurring pattern it captures, the source (session id, the
+                user's words), and how it relates to earlier changes (new / rewrites / overturns what).
             attachments_dir: Directory (workspace-relative or absolute) whose text files replace all the
                 skill's attachments (scripts etc. next to SKILL.md); omit to keep them.
         """
         me = ctx.deps.agent_id
         files, skipped = await _attachments(ctx, attachments_dir)
-        meta = await store.write(name, description, content, actor=me, owner=me, attachments=files)
+        meta = await store.write(
+            name, description, content, actor=me, owner=me, attachments=files, reason=reason
+        )
         return _saved("saved", meta, skipped)
 
     @ts.tool
     async def edit_skill(
         ctx: RunContext[RunScope],
         name: str,
+        reason: str,
         old_text: str = "",
         new_text: str = "",
         description: str | None = None,
@@ -104,6 +111,9 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
 
         Args:
             name: Skill name.
+            reason: Why, kept in the version history as this skill's timeline: the defect it fixes (user
+                correction, error, detour) or the recurring pattern it captures, the source (session id, the
+                user's words), and how it relates to earlier changes (new / rewrites / overturns what).
             old_text: Exact text currently in the skill's instructions, or empty to append.
             new_text: Replacement (or appended) text; empty deletes `old_text`.
             description: New one-sentence description shown in the skill index; omit to keep the current one.
@@ -112,20 +122,28 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         """
         files, skipped = await _attachments(ctx, attachments_dir)
         meta = await store.edit(
-            name, ctx.deps.agent_id, old=old_text, new=new_text, description=description, attachments=files
+            name,
+            ctx.deps.agent_id,
+            old=old_text,
+            new=new_text,
+            description=description,
+            attachments=files,
+            reason=reason,
         )
         if files is None:
             return f"edited skill {meta.name}"
         return _saved("edited", meta, skipped)
 
     @ts.tool
-    async def delete_skill(ctx: RunContext[RunScope], name: str) -> str:
+    async def delete_skill(ctx: RunContext[RunScope], name: str, reason: str) -> str:
         """Delete a skill you own (or any skill, if you are an admin) that is wrong or obsolete.
 
         Args:
             name: Skill name.
+            reason: Why it is wrong or obsolete (and where its content went, if merged elsewhere); kept in
+                the version history.
         """
-        await store.delete(name, ctx.deps.agent_id)
+        await store.delete(name, ctx.deps.agent_id, reason=reason)
         return f"deleted skill {name}"
 
     return ts
@@ -140,7 +158,7 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
         return f"updated {which} ({len(content)}/{store.max_chars} chars)"
 
     @ts.tool
-    async def memory_edit(ctx: RunContext[RunScope], new_text: str, old_text: str = "") -> str:
+    async def memory_edit(ctx: RunContext[RunScope], new_text: str, reason: str, old_text: str = "") -> str:
         """Add to or change your private memory (user preferences, environment facts, lessons learned).
         Your memory and the global memory are both shown to you at the start of every run.
         `old_text` must occur exactly once in your memory and is replaced by `new_text` (an empty `new_text`
@@ -149,13 +167,18 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
         Args:
             new_text: Replacement text, or the entry to append (one concise markdown line or short block);
                 empty deletes `old_text`.
+            reason: Why, kept in the version history as your memory's timeline: the defect it fixes (user
+                correction, error, detour) or the fact it records, the source (session id, the user's words),
+                and how it relates to earlier changes (new / rewrites / overturns what).
             old_text: Exact text currently in your memory, or empty to append.
         """
         me = ctx.deps.agent_id
-        return _status("memory", await store.edit(me, old_text, new_text, me))
+        return _status("memory", await store.edit(me, old_text, new_text, me, reason=reason))
 
     @ts.tool
-    async def memory_edit_public(ctx: RunContext[RunScope], new_text: str, old_text: str = "") -> str:
+    async def memory_edit_public(
+        ctx: RunContext[RunScope], new_text: str, reason: str, old_text: str = ""
+    ) -> str:
         """Add to or change the global memory every agent sees: only facts and rules that hold for all agents.
         `old_text` must occur exactly once in it and is replaced by `new_text` (an empty `new_text` deletes it);
         an empty `old_text` appends `new_text` as a new entry at the end.
@@ -163,8 +186,11 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
         Args:
             new_text: Replacement text, or the entry to append (one concise markdown line or short block);
                 empty deletes `old_text`.
+            reason: Why, kept in the version history: what it fixes or lifts (from which agents), the source,
+                and how it relates to earlier changes (new / rewrites / overturns what).
             old_text: Exact text currently in the global memory, or empty to append.
         """
-        return _status("global memory", await store.edit(None, old_text, new_text, ctx.deps.agent_id))
+        actor = ctx.deps.agent_id
+        return _status("global memory", await store.edit(None, old_text, new_text, actor, reason=reason))
 
     return ts

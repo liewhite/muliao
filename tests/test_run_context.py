@@ -81,13 +81,13 @@ async def test_resuming_resends_the_saved_request_unchanged_and_marks_the_next_n
         calls["n"] += 1
         if calls["n"] == 1:
             return ModelResponse(
-                parts=[ToolCallPart("memory_edit", {"new_text": "- one"}, tool_call_id="m1")]
+                parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": "- one"}, tool_call_id="m1")]
             )
         if calls["n"] == 2:
             raise ModelHTTPError(status_code=400, model_name="flaky", body="bad request")
         if calls["n"] == 3:
             return ModelResponse(
-                parts=[ToolCallPart("memory_edit", {"new_text": "- two"}, tool_call_id="m2")]
+                parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": "- two"}, tool_call_id="m2")]
             )
         return ModelResponse(parts=[TextPart("done")])
 

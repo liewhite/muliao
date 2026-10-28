@@ -76,7 +76,9 @@ def _row(i: int, message: ModelMessage) -> Message:
 
 
 def test_steps_split_where_no_call_is_left_dangling():
-    call = ModelResponse(parts=[ToolCallPart("memory_edit", {"new_text": "x"}, tool_call_id="c")])
+    call = ModelResponse(
+        parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": "x"}, tool_call_id="c")]
+    )
     result = ModelRequest(parts=[ToolReturnPart("memory_edit", "ok", tool_call_id="c")])
     rows = [
         _row(1, ModelRequest(parts=[UserPromptPart("go")])),
@@ -218,7 +220,7 @@ async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make
         seen.append((list(messages), info.instructions))
         if len(seen) == 1:
             return ModelResponse(
-                parts=[ToolCallPart("memory_edit", {"new_text": "- once"}, tool_call_id="c")]
+                parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": "- once"}, tool_call_id="c")]
             )
         return ModelResponse(parts=[TextPart("done")])
 
@@ -284,7 +286,9 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
     alpha = (await make_agent("alpha", model="m")).id
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        return ModelResponse(parts=[ToolCallPart("memory_edit", {"new_text": "- x"}, tool_call_id="c")])
+        return ModelResponse(
+            parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": "- x"}, tool_call_id="c")]
+        )
 
     models.models["m"] = scripted(fn)
     session = await start(container, alpha, "go", origin=Origin.TRIGGER)
@@ -346,11 +350,13 @@ async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
         done = sum(1 for m in messages if isinstance(m, ModelResponse) and "c-" in str(m.parts))
         if done == 0:
             return ModelResponse(
-                parts=[ToolCallPart("memory_edit", {"new_text": "- a"}, tool_call_id="c-small")]
+                parts=[
+                    ToolCallPart("memory_edit", {"reason": "r", "new_text": "- a"}, tool_call_id="c-small")
+                ]
             )
         if done == 1:
             return ModelResponse(
-                parts=[ToolCallPart("memory_edit", {"new_text": "- b"}, tool_call_id="c-big")]
+                parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": "- b"}, tool_call_id="c-big")]
             )
         return ModelResponse(parts=[TextPart("done")])
 
@@ -385,7 +391,11 @@ async def test_a_run_compacted_past_its_own_start_gets_its_run_context_again(
         if len(seen) <= 2:
             entry = f"- step {len(seen)}"
             return ModelResponse(
-                parts=[ToolCallPart("memory_edit", {"new_text": entry}, tool_call_id=f"c{len(seen)}")]
+                parts=[
+                    ToolCallPart(
+                        "memory_edit", {"reason": "r", "new_text": entry}, tool_call_id=f"c{len(seen)}"
+                    )
+                ]
             )
         return ModelResponse(parts=[TextPart("done")])
 

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.active import check_active_in
 from muliao.agents.kinds import Subject
-from muliao.agents.revisions import RevisionInfo, history_in, record_in, revision_doc_in
+from muliao.agents.revisions import RevisionInfo, described, history_in, record_in, revision_doc_in
 from muliao.agents.tables import Memory
 from muliao.errors import CorruptState, InvalidInput
 from muliao.platform import text_edit
@@ -88,13 +88,16 @@ class MemoryStore:
 
         return await self._update(agent_id, replace, actor)
 
-    async def edit(self, agent_id: str | None, old: str, new: str, actor: str) -> str:
-        """规则同 skill 正文（text_edit.edit）：old 恰好出现一次时替换为 new（new 为空即删除），old 为空时把 new 追加到末尾。"""
+    async def edit(
+        self, agent_id: str | None, old: str, new: str, actor: str, *, reason: str | None = None
+    ) -> str:
+        """规则同 skill 正文（text_edit.edit）：old 恰好出现一次时替换为 new（new 为空即删除），old 为空时把 new 追加到末尾。
+        reason 是这一版的说明（revisions.described）。"""
 
         async def apply(_s: AsyncSession, current: str) -> str:
             return text_edit.edit(current, old, new, "memory")
 
-        return await self._update(agent_id, apply, actor)
+        return await self._update(agent_id, apply, actor, reason)
 
     async def restore(self, agent_id: str | None, rev: int, actor: str) -> str:
         """把第 rev 版的正文作为新的一版写入，读版本与写入在同一个事务里。"""
@@ -105,7 +108,11 @@ class MemoryStore:
         return await self._update(agent_id, revision, actor)
 
     async def _update(
-        self, agent_id: str | None, edit: Callable[[AsyncSession, str], Awaitable[str]], actor: str
+        self,
+        agent_id: str | None,
+        edit: Callable[[AsyncSession, str], Awaitable[str]],
+        actor: str,
+        reason: str | None = None,
     ) -> str:
         """读取、修改、写入与记版本在同一个写事务里：并发的修改互不覆盖。"""
         async with self._db.transaction() as s:
@@ -129,7 +136,8 @@ class MemoryStore:
             else:
                 row.content = updated
             before = None if row is None else current
-            record_in(s, Subject.MEMORY, revision_name(agent_id), before, updated, actor, _label(agent_id))
+            message = described(reason, _label(agent_id))
+            record_in(s, Subject.MEMORY, revision_name(agent_id), before, updated, actor, message)
             return updated
 
 
