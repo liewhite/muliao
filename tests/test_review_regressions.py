@@ -132,6 +132,54 @@ def test_error_events_mid_stream_are_classified_by_type():
     assert not is_transient(_stream_error_event("invalid_request_error"))
 
 
+async def _openai_stream_error(code: str) -> BaseException:
+    """OpenAI Responses 流以 200 开始、收到 response.created 后来了 error 事件，经 openai SDK 与 pydantic-ai 真实处理得到的
+    异常（#280）。"""
+    import json
+
+    import openai
+    from pydantic_ai import Agent
+    from pydantic_ai.models.openai import OpenAIResponsesModel
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    created = {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {
+            "id": "r1", "object": "response", "created_at": 0, "model": "m", "status": "in_progress",
+            "output": [], "parallel_tool_calls": True, "tool_choice": "auto", "tools": [],
+        },
+    }  # fmt: skip
+    error = {"type": "error", "sequence_number": 1, "code": code, "message": "x", "param": None}
+    sse = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in (created, error))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+    client = openai.AsyncOpenAI(
+        api_key="k",
+        base_url="https://api.example/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    agent = Agent(OpenAIResponsesModel("m", provider=OpenAIProvider(openai_client=client)))
+    try:
+        async with agent.run_stream("hi") as run:
+            await run.get_output()
+    except Exception as e:
+        return e
+    raise AssertionError("unreachable")
+
+
+async def test_openai_stream_error_events_are_classified_by_code():
+    # 网关的 503 也会以流内 server_error 出现：无状态码、无 cause 的 ModelAPIError，按错误码判断
+    server_error = await _openai_stream_error("server_error")
+    assert type(server_error) is ModelAPIError and server_error.__cause__ is None
+    assert is_transient(server_error)
+    assert is_transient(await _openai_stream_error("rate_limit_exceeded"))
+    assert not is_transient(await _openai_stream_error("invalid_prompt"))
+    assert not is_transient(ModelAPIError(model_name="m", message="server_error"))  # 没有 `<code>: ` 前缀
+
+
 async def test_the_worker_retries_only_transient_errors_and_timeouts_not_sdk_exceptions(container):
     # 平台不认识 SDK 的异常：暂时性的由 agent_runtime 换成 ModelUnavailable 之后才会重试
     retries = container.queue.retries
