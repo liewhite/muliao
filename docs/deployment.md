@@ -29,6 +29,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.muliao.plist
 launchctl kickstart -k gui/$(id -u)/com.muliao    # 重启（升级后）
 ```
 
+重启或停止时服务收到 SIGTERM：先最多等 3 秒让 HTTP 连接（界面的 SSE 长连接不会自己关）结束，再取消剩下的连接，进入关停——取消正在进行的运行、结束后台任务的进程组并通知 agent（重启后处理）。这一步最多约 20 秒，所以示例 plist 设了 `ExitTimeOut` 60：launchd 不设时 `kickstart -k` 约 5 秒就 SIGKILL，后台任务的进程会脱离服务继续运行、无人监督。改了 plist 要 `launchctl bootout` 再 `bootstrap` 才生效，`kickstart` 不重读。
+
 agent 的 shell 与 stdio MCP 只继承服务的 `PATH`（示例 plist 里的那一串），不读 shell 配置：nvm 装的 node 在服务里找不到。agent 常用、要放进这些目录的命令用 Homebrew 装（落在 `/opt/homebrew/bin`）：`brew install ripgrep node@24 coreutils && brew link node@24`——`rg` 是工具说明里指定的搜索方式；`node`/`npm`/`npx` 给前端构建和 `npx` 起的 MCP（node@24 是 keg-only，要 `brew link` 才进 `/opt/homebrew/bin`）；coreutils 补上 macOS 没有的 `timeout`（它只把 macOS 没有的命令不加 `g` 前缀地装进去，`ls`/`sed` 等仍是系统自带的版本）。
 
 ## 开发
