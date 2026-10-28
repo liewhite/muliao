@@ -80,10 +80,19 @@ async def clear_in(s: AsyncSession, session_id: str) -> list[str]:
             )
         ).all()
     )
-    now = utcnow()
     for hold in holds:
-        hold.status, hold.ended_at = HoldStatus.CLEARED, now
+        abandon(hold)
     return [h.holder for h in holds]
+
+
+async def active_holders_of_in(s: AsyncSession, session_id: str) -> list[str]:
+    """这个会话的 active 占用的占用者。"""
+    rows = await s.scalars(
+        select(SessionHold.holder).where(
+            SessionHold.session_id == session_id, SessionHold.status == HoldStatus.ACTIVE
+        )
+    )
+    return list(rows.all())
 
 
 async def active_holders_in(s: AsyncSession) -> list[str]:

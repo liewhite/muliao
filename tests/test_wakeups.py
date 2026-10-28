@@ -162,3 +162,11 @@ async def test_wrong_arguments_are_handed_back(container, make_agent, models):
     assert "takes no other arguments" in outputs[6]
     async with container.db.transaction() as s:
         assert (await s.scalars(select(WakeUp))).all() == []
+
+
+async def test_a_wake_up_too_far_away_is_handed_back(container, make_agent, models):
+    agent = await make_agent("alpha", model="tools")
+    outputs = await run_tools(
+        container, models, agent.id, [("wake_me", {"note": "n", "after_seconds": 1e20})]
+    )
+    assert "too far in the future" in outputs[0]

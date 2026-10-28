@@ -153,7 +153,7 @@ def set_state(trigger: Trigger, **values: Any) -> None:
 
 async def previous_fire_state_in(s: AsyncSession, activity: SessionActivity, trigger: Trigger) -> WorkState:
     """上一次触发的会话的工作状态（会话领域的定义），从没触发过时是 idle。不是 idle 就还有没做完的事：在运行、
-    有还没投递的来信（包括这次的），或在等后台任务、委派、用户回答——等待中的会话结果回来会自动接着做，
+    有还没投递的来信（包括这次的），或在等后台任务、委派、到点唤醒、用户回答——等待中的会话结果回来会自动接着做，
     再开一个会重叠。定时触发据此跳过，流式触发据此让事件排队（触发器领域内部用）。"""
     if trigger.last_session_id is None:
         return WorkState.IDLE

@@ -23,7 +23,7 @@
 | Notification | 发给用户的一条通知：标题、正文、指向的会话（系统通知如前置检查告警投不到 agent 时的兜底没有）、是否未读。通知页列出它们，未读数就是导航与应用图标的角标；Web Push 是它的投递方式，每台设备（推送订阅）一个 deliver task，只引用通知与订阅，内容不另存一份 | `notifications` 表 |
 | History（工作历史）| agent 做过的一件事：哪天（配置时区的日历日）、标题、2–5 行摘要、引用（issue、会话、commit）、重要程度 1–3。只追加：agent 用 `history_append` 写自己的，库里的触发器拒绝 UPDATE / DELETE；不随 agent 删除而消失 | `agent_history` 表 + FTS5 虚表 `agent_history_fts` |
 | ModelUsage（用量） | 一次模型运行报告的 token 用量：时间、agent、会话（没有就为空）、运行类型（对话 / 压缩；历史行里还有已删除的强制反思 `reflection` 与临时 agent `temp_agent`）、模型、请求数与各项 token。只增不改，也不随 agent 与会话的删除而消失——它是账目 | `model_usage` 表 |
-| Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、负责项目（owner agent，必填、不随指派变）、指派人（agent / 用户 / 无）、依赖的上游 issue（有向无环）、时间线（评论与属性变化）。处于 in_progress / waiting 且上游都已完成时，每条动态投进被指派 agent 在这个 issue 上唯一的会话；没有 agent 接手时，用户的评论投给 owner | `issues`、`issue_activities`、`issue_dependencies` 表 |
+| Issue（issue） | 人与 agent 协作的一件事：标题、描述、状态、优先级、负责项目（owner agent，必填、不随指派变）、指派人（agent / 用户 / 无）、依赖的上游 issue（有向无环）、时间线（评论与属性变化）。处于 in_progress 且上游都已完成时，每条动态投进被指派 agent 在这个 issue 上唯一的会话；没有 agent 接手时，用户的评论投给 owner | `issues`、`issue_activities`、`issue_dependencies` 表 |
 | Trigger | 具名、持久的事件来源，把外部刺激变成投进某个会话信箱的一封信件；触发方式（定时、一次性、webhook……）多态实现。跑完不会再触发的标为已结束（`finished_at`），离开列表但留下历史 | `triggers` 表 |
 
 目录：
@@ -346,7 +346,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 **运行中检查（心跳）**（`mailbox.post_check_in`）：`platform.checks.WorkWatcher` 只管节拍，每 `TICK_SECONDS`（1 秒）让后台任务与委派各自看哪些到期了；间隔的规则（默认值 `DEFAULT_CHECK_SECONDS`、到期 `check_due`）在会话领域 `sessions/work.py`，工作区经 `sessions.api` 用。每项并发工作按发起时的 `heartbeat_seconds`（存在 `jobs.check_seconds` / `delegations.check_seconds`）从开始或上一次检查起计（上一次的时刻只在进程内记，重启后从开始时刻重算），到期就向发起会话投一封检查信件（不推送），信里写明可选的动作（继续等、没事只回「…」、用哪个工具停）与下一次检查的间隔；同一来源已有信件在信箱里排着时不再发，占用已不是 active 时不投，事件不会在等回答时堆积。不需要了就 `job_kill` 或 `stop_thread`。检查信件显式标记（`mail.check_in`，交给模型时记进 `RUN_CHECK_INS`），界面据此把同一来源连续的检查（连同 agent 只回的「…」）合成一行「仍在进行 · 已检查 N 次」，不靠匹配文字。
 
-**到点唤醒**（`wake_me`，`sessions/wakeups.py` 与 `sessions/wakeup_tools.py`，表 `wakeups`，#261）：会话等待的一种，与后台任务、委派同类。会话约一个时刻（`at` 本地时间或 `after_seconds`）和一句给到点的自己的说明（`note`），登记一个占用（`wake:<会话>:<调用 id>`，按调用 id 幂等）：之后会话的工作状态是 waiting——issue 不算停滞、运行结束不被请表态，委派来的工作也不结清（它还没做完）。`WakeUps` 是 `WorkWatcher` 的又一种工作，每拍查占用还 active、`due_at` 已到的唤醒，经 `deliver_in` 投一封事件信件（来源 `wake_me`，带约的时刻与说明）并释放占用，会话接着做。到没到点只看库里的 `due_at` 与占用状态，重启不丢。一个会话至多一个还在等的唤醒：再约就取代（旧占用 `abandon` 为 cleared），`cancel` 取消；用户停止会话时占用随别的一起被清掉，到点不投。它和别的 active 占用一样挡删除（先停止再删）。外部事件不另做工具：能用脚本轮询的，用后台任务跑检查循环、满足即退出；只能隔段时间看一眼的用 `wake_me`（取代原来「约一个 once 触发器到点回 issue 留言」的用法）。
+**到点唤醒**（`wake_me`，`sessions/wakeups.py` 与 `sessions/wakeup_tools.py`，表 `wakeups`，#261）：会话等待的一种，与后台任务、委派同类。会话约一个时刻（`at` 本地时间或 `after_seconds`）和一句给到点的自己的说明（`note`），登记一个占用（`wake:<会话>:<调用 id>`，按调用 id 幂等）：之后会话的工作状态是 waiting——issue 不算停滞、运行结束不被请表态，委派来的工作也不结清（它还没做完）。`WakeUps` 是 `WorkWatcher` 的又一种工作，每拍查占用还 active、`due_at` 已到的唤醒，经 `deliver_in` 投一封事件信件（来源 `wake_me`，带约的时刻与说明）并释放占用，会话接着做。到没到点只看库里的 `due_at` 与占用状态，重启不丢。一个会话至多一个还在等的唤醒：再约就取代（旧占用 `abandon` 为 cleared），`cancel` 取消；用户停止会话时占用随别的一起被清掉，到点不投。它和别的 active 占用一样挡删除：约了将来要做的事，删除前先停止，表示确认放弃（占用不透明，删除检查不分辨种类）。外部事件不另做工具：能用脚本轮询的，用后台任务跑检查循环、满足即退出；只能隔段时间看一眼的用 `wake_me`（取代原来「约一个 once 触发器到点回 issue 留言」的用法）。
 
 **关联与结清**（`sessions/settlement.py`）：委派来的信件带关联 id（它的 holder）。会话自己判断关联什么时候结束，在同一个事务里把结局交回发起方（第 8 节），时机只有下面几个，每个时机一个入口（结清哪些信件只在 settlement 里决定，调用方不传状态集合）：
 

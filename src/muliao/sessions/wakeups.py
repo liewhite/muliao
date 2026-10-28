@@ -19,8 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock, TaskQueue
-from muliao.sessions.holds import abandon, active_holders_in, get_in, hold_in
-from muliao.sessions.tables import HoldStatus, WakeUp
+from muliao.sessions.holds import abandon, active_holders_in, active_holders_of_in, get_in, hold_in
+from muliao.sessions.tables import WakeUp
 from muliao.sessions.work import deliver_in
 
 log = logging.getLogger(__name__)
@@ -43,14 +43,13 @@ class Scheduled:
 
 async def cancel_in(s: AsyncSession, session_id: str) -> datetime | None:
     """取消会话还在等的唤醒（占用还 active 的，至多一个），返回它原定的时刻；没有在等的为 None。"""
+    active = await active_holders_of_in(s, session_id)
     cancelled = None
-    for row in (await s.scalars(select(WakeUp).where(WakeUp.session_id == session_id))).all():
+    for row in (await s.scalars(select(WakeUp).where(WakeUp.holder.in_(active)))).all():
         hold = await get_in(s, session_id, row.holder)
-        if hold is None:
-            raise RuntimeError(f"wake-up {row.holder} has no hold on session {session_id}")
-        if hold.status == HoldStatus.ACTIVE:
-            abandon(hold)
-            cancelled = row.due_at
+        assert hold is not None  # 刚按 active 占用者查出
+        abandon(hold)
+        cancelled = row.due_at
     return cancelled
 
 

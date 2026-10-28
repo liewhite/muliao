@@ -18,7 +18,10 @@ def _due(at: str | None, after_seconds: float | None, tz: ZoneInfo, now: datetim
     if after_seconds is not None:
         if not after_seconds > 0:  # 也拒绝 NaN
             raise InvalidInput("after_seconds must be greater than 0")
-        return now + timedelta(seconds=after_seconds)
+        try:
+            return now + timedelta(seconds=after_seconds)
+        except OverflowError:
+            raise InvalidInput(f"after_seconds {after_seconds} is too far in the future") from None
     assert at is not None
     try:
         due = datetime.fromisoformat(at.strip())

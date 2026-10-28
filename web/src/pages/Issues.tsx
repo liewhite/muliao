@@ -447,7 +447,7 @@ function NewIssueForm({ agents, onCreated }: { agents: Agent[] | undefined; onCr
       </div>
       <TextInput label="依赖的 issue（编号，逗号分隔，可不填）" value={dependsOn} onChange={setDependsOn} />
       <p className="text-xs text-muted">
-        指派给 agent 且状态为进行中 / 等待中时，会唤醒它来处理；有依赖的要等依赖全部完成或取消后才唤醒（等待中的随之转为进行中）。
+        指派给 agent 且状态为进行中时，会唤醒它来处理；有依赖的要等依赖全部完成或取消后才唤醒。
       </p>
       <ErrorAlert error={action.error} />
       <ActionButton
