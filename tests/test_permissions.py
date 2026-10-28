@@ -1,12 +1,14 @@
 """分发与归属（#235）：`kind:name` 规则、内置角色 base / admin、自建角色；能用 = 自己的 ∪ 规则放行的（skill 索引、MCP、
 secret）；能改 = owner 或 admin；read_skill 的软隔离。"""
 
+import dataclasses
 import sys
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
+from muliao.agents.access import SELF_UPDATABLE
 from muliao.agents.agent_rules import agent_rules_in
 from muliao.agents.api import McpTransport, RoleSpec, Rules, StoredKind, Subject, mcp_config
 from muliao.agents.kinds import as_kind, as_subject
@@ -43,6 +45,11 @@ def test_rules_match_kind_and_name_and_deny_wins():
         [Rules(allow=("tool:issue_*",)), Rules(allow=("tool:*",), deny=("tool:issue_update",))]
     )
     assert union.allows(Kind.TOOL, "issue_create") and not union.allows(Kind.TOOL, "issue_update")
+
+
+def test_self_updatable_fields_are_agent_patch_fields():
+    # 白名单里写错字段名不会多放，只会让非 admin 再也改不了自己
+    assert SELF_UPDATABLE <= {f.name for f in dataclasses.fields(AgentPatch)}
 
 
 def test_patterns_need_a_kind_and_tool_patterns_a_tool():
