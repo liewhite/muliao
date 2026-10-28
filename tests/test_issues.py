@@ -15,7 +15,7 @@ from muliao.issues.rules import SYSTEM_ACTOR, Snapshot, ask_to_settle, handed_by
 from muliao.platform.messaging import Delivery
 from muliao.sessions.api import Origin, OriginNotes
 from muliao.sessions.tables import Mail, Session
-from tests.test_flow import deliver, drain, start
+from tests.test_flow import deliver, drain, run_only, start
 
 WAITING, BACKLOG, PROGRESS, REVIEW, DONE = (
     IssueStatus.WAITING,
@@ -439,7 +439,7 @@ async def test_http_issue_lifecycle(client, container, make_agent):
     assert detail["issue"]["assignee_state"] == "running" and detail["issue"]["stalled"] is False
     assert [a["kind"] for a in detail["activities"]] == ["created", "status"]
 
-    await drain(container)
+    await run_only(container)  # 只跑这次运行：结束事件不投递，否则平台会请它表态
     listed = (await client.get("/api/issues", params={"status": ["in_progress"]})).json()
     assert [(i["id"], i["assignee_state"], i["stalled"]) for i in listed] == [(issue_id, "idle", True)]
 
@@ -476,31 +476,22 @@ async def test_work_of_the_assignee_session(container, make_agent):
     work = await container.issues.work(await container.issues.list())
     assert (work[issue.id].assignee_state, work[issue.id].stalled) == (WorkState.RUNNING, False)
     assert (work[unassigned.id].assignee_state, work[unassigned.id].stalled) == (None, False)
-    await drain(container)
+    await run_only(container)  # 只跑这次运行：结束事件不投递，否则平台会请它表态
     work = await container.issues.work(await container.issues.list())
     assert (work[issue.id].assignee_state, work[issue.id].stalled) == (WorkState.IDLE, True)
 
 
-def test_ask_to_settle_once_when_a_run_leaves_its_issue_stalled():
+def test_ask_to_settle_every_time_a_run_leaves_its_issue_stalled():
     progress = Snapshot(PROGRESS, "a", None, ())
-    created = [(USER, ActivityKind.CREATED)]
-    asked = [*created, ("a", ActivityKind.UNSETTLED)]
-    assert ask_to_settle(progress, "a", WorkState.IDLE, created)
-    # 已经问过：它什么都没做，或只有它自己的评论、改动（「继续处理中」），都不再问，留给看板的停滞提醒
-    assert not ask_to_settle(progress, "a", WorkState.IDLE, asked)
-    assert not ask_to_settle(progress, "a", WorkState.IDLE, [*asked, ("a", ActivityKind.COMMENT)])
-    # 问过之后有别人的动态唤醒过它：结束时再问
-    assert ask_to_settle(progress, "a", WorkState.IDLE, [*asked, (USER, ActivityKind.COMMENT)])
-    assert ask_to_settle(
-        progress, "a", WorkState.IDLE, [*asked, ("b", ActivityKind.DEPENDENCY), ("a", ActivityKind.COMMENT)]
-    )
+    assert ask_to_settle(progress, "a", WorkState.IDLE)
+    assert ask_to_settle(progress, "a", None)
     # 会话还有事（信箱里还有信、在等后台任务）、issue 不归它、不是 in_progress、还在等上游：不问
-    assert not ask_to_settle(progress, "a", WorkState.RUNNING, created)
-    assert not ask_to_settle(progress, "a", WorkState.WAITING, created)
-    assert not ask_to_settle(progress, "b", WorkState.IDLE, created)
+    assert not ask_to_settle(progress, "a", WorkState.RUNNING)
+    assert not ask_to_settle(progress, "a", WorkState.WAITING)
+    assert not ask_to_settle(progress, "b", WorkState.IDLE)
     for status in (WAITING, REVIEW, DONE, BACKLOG):
-        assert not ask_to_settle(Snapshot(status, "a", None, ()), "a", WorkState.IDLE, created)
-    assert not ask_to_settle(Snapshot(PROGRESS, "a", None, (3,)), "a", WorkState.IDLE, created)
+        assert not ask_to_settle(Snapshot(status, "a", None, ()), "a", WorkState.IDLE)
+    assert not ask_to_settle(Snapshot(PROGRESS, "a", None, (3,)), "a", WorkState.IDLE)
 
 
 def test_a_waiting_issue_resumes_only_when_it_stops_waiting_on_dependencies():
@@ -511,28 +502,28 @@ def test_a_waiting_issue_resumes_only_when_it_stops_waiting_on_dependencies():
     assert not resumes(Snapshot(BACKLOG, "a", None, ()), was_waiting=True)
 
 
-async def test_a_run_that_leaves_its_issue_in_progress_is_asked_to_settle_it_once(container, make_agent):
+async def test_a_run_that_leaves_its_issue_in_progress_is_asked_until_it_settles(container, make_agent):
     alpha = (await make_agent("alpha")).id
     issue = await container.issues.create(USER, owner=alpha, title="t", status=PROGRESS, assignee=alpha)
-    await drain(container)
 
-    # 第一次运行结束时还是 in_progress：记一条 UNSETTLED 投进它的 issue 会话；回应那封信的运行仍然什么都没做，不再问
-    activities = (await container.issues.get(issue.id)).activities
-    assert [(a.actor, a.kind) for a in activities] == [
-        (USER, ActivityKind.CREATED),
-        (alpha, ActivityKind.UNSETTLED),
-    ]
+    async def one_round() -> list[ActivityKind]:
+        """投递、跑一次运行、再投递它结束的事件：返回时间线上的动态种类。"""
+        await deliver(container)
+        await run_only(container)
+        await deliver(container)
+        return [a.kind for a in (await container.issues.get(issue.id)).activities]
+
+    # 运行结束时还是 in_progress：记一条 UNSETTLED 投进它的 issue 会话
+    assert await one_round() == [ActivityKind.CREATED, ActivityKind.UNSETTLED]
     [session] = await _issue_sessions(container)
     mails = await _mail(container, session.id)
-    assert len(mails) == 2 and "settle it now as the note on this conversation says" in mails[1]
+    assert len(mails) == 2 and "a comment alone does not settle it" in mails[1]
     assert "set `waiting` with a comment" in SESSION_NOTE
-    assert (await container.issues.work([issue]))[issue.id].stalled
-
-    # 有别人（用户）的动态唤醒过它，结束时仍是 in_progress：再问一次
-    await container.issues.comment(USER, issue.id, "any update?")
-    await drain(container)
-    kinds = [a.kind for a in (await container.issues.get(issue.id)).activities]
-    assert kinds[-2:] == [ActivityKind.COMMENT, ActivityKind.UNSETTLED]
+    # 回应那封信的运行仍然没改状态：再问（强制表态）
+    assert (await one_round())[-2:] == [ActivityKind.UNSETTLED, ActivityKind.UNSETTLED]
+    # 改成 waiting 即表态：结束时不再问
+    await container.issues.update(USER, issue.id, status=WAITING)
+    assert (await one_round())[-1] == ActivityKind.STATUS
 
 
 async def test_a_run_that_leaves_its_issue_waiting_is_not_asked(container, make_agent):

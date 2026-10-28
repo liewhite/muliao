@@ -182,8 +182,7 @@ class IssueService:
             key = (ref, event.agent_id)
             state = (await self._activity.keyed_work_states_in(s, Origin.ISSUE, [key]))[key]
             snap = snapshot(issue, (await links_in(s, [issue_id]))[issue_id])
-            timeline = [(a.actor, a.kind) for a in await self._activities_in(s, issue_id)]
-            if not ask_to_settle(snap, event.agent_id, state, timeline):
+            if not ask_to_settle(snap, event.agent_id, state):
                 return
             activity = self._record(s, issue, event.agent_id, ActivityKind.UNSETTLED)
             issue.updated_at = utcnow()

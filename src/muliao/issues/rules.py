@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from muliao.agents.api import USER, AgentNames
-from muliao.issues.tables import ActivityKind, IssueStatus
+from muliao.issues.tables import IssueStatus
 from muliao.sessions.api import WorkState
 
 # 指派人的取值：agent id，或 USER（定义在 agents/ids.py、经 agents.api 导出，全系统指代用户的那个值）；None 为未指派。agent id 是 12 位十六进制，
@@ -46,7 +46,8 @@ SESSION_NOTE = (
     "Never end your turn with the issue left `in_progress` and nothing said about what comes next: before you "
     "stop, either finish it, or set `waiting` with a comment saying what you are waiting for (a background job, "
     "delegated work, a scheduled trigger, an external event; it still wakes you up here when something happens), "
-    "or set `blocked`, assignee `user`, with a comment on what only the user can do. When you have finished, check "
+    "or set `blocked`, assignee `user`, with a comment on what only the user can do; a comment alone does not "
+    "count, and the platform asks you again each time you stop while it is `in_progress`. When you have finished, check "
     "`issue_show` again: if other issues depend on this one (listed under `blocks`), it is a step of a larger piece "
     "of work, so set it `done` yourself and the next steps start; otherwise do not set `done` yourself: set "
     "status `in_review` and assignee `user`, and the user moves it to `done` after reviewing. Hand it to "
@@ -131,21 +132,11 @@ def stalled(issue: Snapshot, assignee_state: WorkState | None) -> bool:
     )
 
 
-# 时间线上的一条（ask_to_settle 只看谁做的、什么动态）：(actor, kind)
-type ActorKind = tuple[str, ActivityKind]
-
-
-def ask_to_settle(
-    issue: Snapshot, agent: str, state: WorkState | None, timeline: Sequence[ActorKind]
-) -> bool:
+def ask_to_settle(issue: Snapshot, agent: str, state: WorkState | None) -> bool:
     """agent 在它这个 issue 会话里的一次运行结束后，要不要请它表态（记一条 UNSETTLED 并投给它）：issue 指派给它且因此
-    停滞——它停下来时既没做完也没说在等什么。同一段停顿只问一次：问过之后（最近一条 UNSETTLED 之后）只有它自己的
-    动态（评论、改字段）时不再问，留给看板的停滞提醒，不由系统反复驱动它重跑（#107）；有了别人的动态（用户评论、改派、
-    上游完成）唤醒过它，结束时才再问。timeline 是整条时间线（按时间排序的 (actor, kind)）。"""
-    if issue.assignee != agent or not stalled(issue, state):
-        return False
-    asked = [n for n, (_, kind) in enumerate(timeline) if kind == ActivityKind.UNSETTLED]
-    return not asked or any(actor != agent for actor, _ in timeline[asked[-1] + 1 :])
+    停滞——它停下来时既没做完也没说在等什么。强制表态（用户定）：每次这样停下都问，直到它把状态改离 in_progress（做完、
+    waiting、blocked）；只写评论不算表态。与 #107 的续跑不同：不重跑原任务，每次只投一封要它改状态的信。"""
+    return issue.assignee == agent and stalled(issue, state)
 
 
 def resumes(issue: Snapshot, was_waiting: bool) -> bool:
