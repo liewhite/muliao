@@ -150,7 +150,7 @@ function IssueCard({ issue, agents }: { issue: Issue; agents: Agent[] | undefine
               </Chip>
             ) : (
               issue.assignee_state && (
-                <Chip size="sm" variant="soft" color={issue.assignee_state === 'running' ? 'success' : 'default'}>
+                <Chip size="sm" variant="soft" color={issue.assignee_state === 'idle' ? 'default' : 'success'}>
                   {WORK_LABEL[issue.assignee_state]}
                 </Chip>
               )
