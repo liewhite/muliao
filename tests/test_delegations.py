@@ -220,8 +220,8 @@ async def test_an_expired_ask_stops_its_thread_once_and_retries_a_failed_stop(co
         stops.append(session_id)
         if len(stops) == 1:
             raise RuntimeError("database is locked")
-        # 假装停止还在进行（运行退出时才结清）：占用仍是 active
-        return Halted.STOPPED
+        # 停止返回时已经结清：占用释放，下一拍不再停
+        return await container.stopper(session_id)
 
     checks = ThreadChecks(container.db, container.queue, flaky_stop)
     await asyncio.sleep(0.01)

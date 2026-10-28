@@ -380,8 +380,14 @@ async def test_stopping_a_run_before_it_reads_its_state_still_stops_the_session(
     assert not stopping.done()
     gate.set()
     await stopping
+    # 停止返回时停止已生效：马上投的信不会被清掉，运行记为完成时唤醒下一次运行（#272）
+    async with container.db.transaction() as s:
+        await post_in(
+            s, container.queue, session.id, kind=MailKind.EVENT, source="x", content="after", awaited=False
+        )
     await worker
+    await drain(container)
 
-    assert called == []
-    assert [t.status for t in await tasks_of(container, RUN_TASK)] == [TaskStatus.DONE]
-    assert [m.state for m in await mail_of(container)] == [MailState.DISCARDED]
+    assert called == [True]
+    assert [t.status for t in await tasks_of(container, RUN_TASK)] == [TaskStatus.DONE, TaskStatus.DONE]
+    assert [m.state for m in await mail_of(container)] == [MailState.DISCARDED, MailState.CONSUMED]

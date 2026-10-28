@@ -485,7 +485,10 @@ class IssueService:
         没有 agent 指派人时报 Conflict（没有会话可停，改状态用 update）；在要停的那个会话里调用报 InvalidInput。指派人还没有
         这个会话（或它刚被删除）时没有可停的：只改状态、记评论，按 rules.recipient 投递，不为收尾新建会话。
 
-        先停后改：停止返回时停止事务已提交（sessions.api.StopSession），之后投的信不会被它清掉。"""
+        先停后改：停止返回时停止事务已提交（sessions.api.StopSession），之后投的信不会被它清掉。两个事务之间指派人
+        被改了也不改目标：STOPPED 记的、收尾消息投的都是被停下的那个 agent。从被停会话开出去的 thread 里调用时，
+        那个 thread 随停止被逐层停掉，可能在第二个事务之前就被取消：会话停了而状态没改，调用方看不到结果（契约之外的
+        用法，不另拦）。"""
         if status not in STOP_STATUSES:
             allowed = ", ".join(sorted(STOP_STATUSES))
             raise InvalidInput(f"status must be one of {allowed}: stopping is not finishing")

@@ -173,8 +173,6 @@ class ThreadChecks:
         self._clock = clock
         # 并发委派上一次投检查的时刻（还没投过的以登记时刻算）：只是节拍，重启后从登记时刻重新算，不落库
         self._last_check: dict[str, datetime] = {}
-        # 已经因超时停掉 thread 的阻塞委派：停止是异步的（运行退出时才结清），停下来之前的检查不再停一次
-        self._timed_out: set[str] = set()
 
     async def check(self) -> int:
         posted = 0
@@ -190,7 +188,6 @@ class ThreadChecks:
             watched = {r.holder for r in records}
             for gone in set(self._last_check) - watched:
                 del self._last_check[gone]
-            self._timed_out &= watched
             # (发起会话, thread) -> 到期的委派与它的间隔
             due: dict[tuple[str, str], tuple[DelegationRecord, float]] = {}
             for record in records:
@@ -199,7 +196,7 @@ class ThreadChecks:
                     # thread 删除时委派已经以「被删除」结清，占用随之释放
                     raise RuntimeError(f"active delegation {record.holder} has a deleted thread")
                 if record.deadline is not None:
-                    if record.deadline <= now and record.holder not in self._timed_out:
+                    if record.deadline <= now:
                         expired[record.holder] = child_id
                     continue
                 interval = record.check_seconds
@@ -235,7 +232,7 @@ class ThreadChecks:
                 "delegation timed out; stopping its thread",
                 extra={"holder": holder, "thread_session_id": child_id},
             )
-            # 停止自己开事务（还在运行时在运行退出后结清）。每项是独立的副作用：一项停不下来（如数据库暂时失败）
+            # 停止自己开事务，返回时已经结清（委派以「超时被停」交回、占用释放，下一拍不会再停）。每项是独立的副作用：一项停不下来（如数据库暂时失败）
             # 记 error、不记下，下一拍再停，不影响别的到期委派，也不让检查循环退出
             try:
                 await self._stop(child_id)
@@ -244,8 +241,6 @@ class ThreadChecks:
                     "stopping a timed-out delegation's thread failed; retrying on the next check",
                     extra={"holder": holder, "thread_session_id": child_id},
                 )
-                continue
-            self._timed_out.add(holder)
         return posted
 
 
