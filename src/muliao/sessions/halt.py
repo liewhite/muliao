@@ -111,7 +111,8 @@ class SessionHalt:
 
 class SessionStopper:
     """停止会话的命令（用户停止、逐层停止 thread、删除 agent 的会话）：停下正在进行的运行（运行在退出时自己执行
-    SessionHalt，见 sessions.consumer），没有在运行时直接执行 SessionHalt。会话已删除时返回 GONE。
+    SessionHalt，见 sessions.consumer），没有在运行时直接执行 SessionHalt。会话已删除时返回 GONE。返回时停止已经生效
+    （停止事务已提交，StoppableRuns.stop 等运行做完它）：之后投进来的信照常唤醒会话，不会被清掉。
 
     由正在进行的运行的登记（StoppableRuns）与 SessionHalt 组成，二者都不依赖消费者：在组合根里先于消费者与所有
     用到停止的领域构造，消费者用同一份登记运行。"""

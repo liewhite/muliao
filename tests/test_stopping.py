@@ -1,4 +1,4 @@
-"""三种取消各自的语义（sessions.stopping，docs/architecture.md「并发模型」）：用户停止只停这次运行并返回 Stopped；
+"""三种取消各自的语义（sessions.stopping，docs/architecture.md「并发模型」）：用户停止只停这次运行、执行停止后的收尾，stop 等收尾做完才返回；
 关停等外层取消照常向外抛出；无论哪种，运行里工具的子任务（pydantic-ai 的工具在原生任务里执行）都如实收到取消，
 不会被工具内部的 anyio 作用域吞掉、当成正常结束。"""
 
@@ -9,12 +9,16 @@ import anyio
 import anyio.lowlevel
 import pytest
 
-from muliao.sessions.stopping import StoppableRuns, Stopped
+from muliao.sessions.stopping import StoppableRuns
 
 
 @asynccontextmanager
 async def _no_gate():
     yield
+
+
+async def _stopped() -> str:
+    return "stopped"
 
 
 class Tool:
@@ -54,9 +58,9 @@ async def test_a_user_stop_returns_stopped_and_cancels_the_tool_for_real():
 
     async with anyio.create_task_group() as group:
         group.start_soon(stop_when_started)
-        result = await runs.run("s", tool.run)
+        result = await runs.run("s", tool.run, _stopped)
 
-    assert isinstance(result, Stopped)
+    assert result == "stopped"
     assert tool.outcome == "cancelled"
     assert not await runs.stop("s")
 
@@ -67,7 +71,7 @@ async def test_a_shutdown_propagates_out_of_the_run_and_cancels_the_tool():
     results: list[object] = []
 
     async def run() -> None:
-        results.append(await runs.run("s", tool.run))
+        results.append(await runs.run("s", tool.run, _stopped))
 
     async with anyio.create_task_group() as group:
         group.start_soon(run)
@@ -84,7 +88,7 @@ async def test_an_outer_timeout_raises_timeout_and_cancels_the_tool():
     tool = Tool()
 
     with pytest.raises(TimeoutError), anyio.fail_after(0.3):
-        await runs.run("s", tool.run)
+        await runs.run("s", tool.run, _stopped)
 
     assert tool.outcome == "cancelled"
 
@@ -94,10 +98,10 @@ async def test_two_runs_of_one_session_at_once_is_a_bug():
     tool = Tool()
 
     async with anyio.create_task_group() as group:
-        group.start_soon(runs.run, "s", tool.run)
+        group.start_soon(runs.run, "s", tool.run, _stopped)
         await tool.started.wait()
         with pytest.raises(RuntimeError, match="already has a running run"):
-            await runs.run("s", tool.run)
+            await runs.run("s", tool.run, _stopped)
         await runs.stop("s")
 
 
@@ -130,17 +134,46 @@ async def test_stopping_twice_does_not_interrupt_the_runs_shielded_cleanup():
     runs: StoppableRuns[str] = StoppableRuns(_no_gate)
     tool = CleaningTool()
 
+    answers: list[bool] = []
+
+    async def stop() -> None:
+        answers.append(await runs.stop("s"))
+
     async def stop_twice() -> None:
         await tool.started.wait()
-        await runs.stop("s")
-        await tool.cleaning.wait()
-        assert await runs.stop("s")
+        async with anyio.create_task_group() as stops:
+            stops.start_soon(stop)
+            await tool.cleaning.wait()
+            stops.start_soon(stop)
 
     async with anyio.create_task_group() as group:
         group.start_soon(stop_twice)
-        result = await runs.run("s", tool.run)
+        result = await runs.run("s", tool.run, _stopped)
 
-    assert isinstance(result, Stopped) and tool.cleaned
+    # 两次停止都等到运行连同收尾结束才返回
+    assert result == "stopped" and tool.cleaned and answers == [True, True]
+
+
+async def test_stop_returns_only_after_the_stopped_wind_up_is_done():
+    runs: StoppableRuns[str] = StoppableRuns(_no_gate)
+    tool = Tool()
+    log: list[str] = []
+
+    async def wind_up() -> str:
+        await anyio.sleep(0.1)
+        log.append("halted")
+        return "stopped"
+
+    async def stop_when_started() -> None:
+        await tool.started.wait()
+        assert await runs.stop("s")
+        log.append("stop returned")
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(stop_when_started)
+        assert await runs.run("s", tool.run, wind_up) == "stopped"
+
+    assert log == ["halted", "stop returned"]
 
 
 async def test_a_shutdown_during_a_stopped_runs_cleanup_does_not_interrupt_it():
@@ -148,9 +181,9 @@ async def test_a_shutdown_during_a_stopped_runs_cleanup_does_not_interrupt_it():
     tool = CleaningTool()
 
     async with anyio.create_task_group() as group:
-        group.start_soon(runs.run, "s", tool.run)
+        group.start_soon(runs.run, "s", tool.run, _stopped)
         await tool.started.wait()
-        await runs.stop("s")
+        group.start_soon(runs.stop, "s")
         await tool.cleaning.wait()
         group.cancel_scope.cancel()
 
@@ -163,11 +196,11 @@ async def test_a_run_that_swallows_its_cancellation_stays_registered(monkeypatch
     tool = CleaningTool(cleanup_seconds=1.0)
 
     with pytest.raises(TimeoutError), anyio.fail_after(0.2):
-        await runs.run("s", tool.run)
+        await runs.run("s", tool.run, _stopped)
 
     # 收尾还没结束：同一会话的下一次运行报错，不会和它同时操作会话
     with pytest.raises(RuntimeError, match="already has a running run"):
-        await runs.run("s", tool.run)
+        await runs.run("s", tool.run, _stopped)
 
 
 async def _write_forever(container, counter: list[int]) -> None:
@@ -233,7 +266,7 @@ async def test_a_user_stop_never_cancels_a_statement_in_flight(tmp_path, caplog)
 
         async with anyio.create_task_group() as group:
             group.start_soon(stop_soon)
-            assert isinstance(await runs.run("s", write_back_to_back), Stopped)
+            assert await runs.run("s", write_back_to_back, _stopped) == "stopped"
 
     async with db.transaction() as s:
         assert (await s.execute(text("select count(*) from t"))).scalar() > 0

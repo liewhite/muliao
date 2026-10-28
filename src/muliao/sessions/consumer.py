@@ -23,7 +23,7 @@ from muliao.agent_runtime.api import AgentRuntime, Finished, Paused, Toolbox
 from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
-from muliao.platform.tasks import Commit, TaskQueue, TaskView, no_commit
+from muliao.platform.tasks import Commit, TaskQueue, TaskView
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import ContentBuilder
@@ -58,7 +58,7 @@ from muliao.sessions.questions import waiting_text
 from muliao.sessions.runs import RunPayload, hand_over_in
 from muliao.sessions.settlement import settle_failure_in
 from muliao.sessions.steps import CompactionDue, RunState, Steps
-from muliao.sessions.stopping import StoppableRuns, Stopped
+from muliao.sessions.stopping import StoppableRuns
 from muliao.sessions.tables import Mail
 
 log = logging.getLogger(__name__)
@@ -160,10 +160,9 @@ class Consumer:
     async def run(self, run_id: int, session_id: str) -> Commit:
         """执行一次运行直到模型不再调用工具（或停在挂起的调用上、被用户停止），返回它的收尾。"""
         try:
-            result = await self._runs.run(session_id, lambda: self._run(run_id, session_id))
-            if isinstance(result, Stopped):
-                return await self._stopped(run_id, session_id)
-            return result
+            return await self._runs.run(
+                session_id, lambda: self._run(run_id, session_id), lambda: self._stopped(run_id, session_id)
+            )
         finally:
             self._active.pop(session_id, None)
             self._live.end(session_id)
@@ -304,8 +303,9 @@ class Consumer:
             # 正在运行的会话忙，不能被删除：走到这里是 bug
             raise RuntimeError(f"session {session_id} was deleted while its run was being stopped")
         if state is None:
-            # 停在这次运行读出状态之前：它什么都没做
-            return no_commit
+            # 停在这次运行读出状态之前：它什么都没做。停止之后、它记为完成之前到的信没能唤醒运行（它还占着），
+            # 由这里唤醒（停止后马上投信，如 issue_stop 的收尾消息）
+            return self._finisher.wake(session_id, run_id)
         return self._finisher.commit(state, RunEnd("", paused=False, asked_user=False, stopped=True))
 
 

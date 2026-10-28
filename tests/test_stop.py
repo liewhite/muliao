@@ -215,7 +215,7 @@ async def test_stopping_mid_stream_keeps_the_partial_answer_and_never_stores_a_t
 async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation(container):
     import pytest
 
-    from muliao.sessions.stopping import StoppableRuns, Stopped
+    from muliao.sessions.stopping import StoppableRuns
 
     runs: StoppableRuns[str] = StoppableRuns(container.db.exclusive)
     started = asyncio.Event()
@@ -230,16 +230,19 @@ async def test_stoppable_runs_tell_a_user_stop_from_an_outer_cancellation(contai
             raise
         return "never"
 
-    # 用户停止：只取消运行本身，结果是 Stopped
-    stopped = asyncio.create_task(runs.run("s", forever))
+    async def wind_up() -> str:
+        return "stopped"
+
+    # 用户停止：只取消运行本身，结果是停止后收尾的结果
+    stopped = asyncio.create_task(runs.run("s", forever, wind_up))
     await started.wait()
     assert await runs.stop("s")
-    assert isinstance(await stopped, Stopped)
+    assert await stopped == "stopped"
     assert cancelled == [True] and not await runs.stop("s")
 
     # 外层被取消（关停）：运行一起取消，取消照常抛出
     started.clear()
-    outer = asyncio.create_task(runs.run("s", forever))
+    outer = asyncio.create_task(runs.run("s", forever, wind_up))
     await started.wait()
     outer.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -259,10 +262,10 @@ async def test_a_second_run_in_the_same_session_is_refused(container):
         await gate.wait()
         return "done"
 
-    first = asyncio.create_task(runs.run("s", wait))
+    first = asyncio.create_task(runs.run("s", wait, wait))
     await asyncio.sleep(0)
     with pytest.raises(RuntimeError, match="already has a running"):
-        await runs.run("s", wait)
+        await runs.run("s", wait, wait)
     gate.set()
     assert await first == "done"
 
