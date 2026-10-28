@@ -4504,7 +4504,6 @@
         "enum": [
           "backlog",
           "in_progress",
-          "waiting",
           "in_review",
           "blocked",
           "done",

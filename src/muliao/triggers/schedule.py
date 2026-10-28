@@ -66,7 +66,8 @@ class ScheduleKind:
     description = (
         'Fires on a schedule. config: {"cron": "<5-field cron expression>"} in the server timezone, '
         'e.g. {"cron": "*/5 * * * *"}. Skips a firing while the conversation the previous firing started is '
-        "still busy: running, or waiting on background jobs, delegated work or the user's answer; status.skipped "
+        "still busy: running, or waiting on background jobs, delegated work, a wake-up or the user's answer; "
+        "status.skipped "
         "then counts the consecutive skips, and the user is notified once when that conversation is waiting. "
         "For a task that should happen once, use the `once` kind: a cron expression with a date would fire "
         "again every year."

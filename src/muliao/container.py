@@ -64,6 +64,7 @@ from muliao.sessions.halt import SessionStopper
 from muliao.sessions.live import LiveSegments
 from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.threads import Threads
+from muliao.sessions.wakeups import WakeUps
 from muliao.speech.api import Transcriber, build_transcriber
 from muliao.triggers.api import EVENT_MAX_BYTES, TriggerService, Webhooks
 from muliao.triggers.api import SESSION_NOTE as TRIGGER_SESSION_NOTE
@@ -154,6 +155,7 @@ class Assembly:
     mail: MailReconciler
     jobs: JobRunner
     thread_checks: ThreadChecks
+    wakeups: WakeUps
     work: WorkWatcher
     retention: TaskRetention
     compactor: Compactor
@@ -310,7 +312,7 @@ def assemble(
     distribution = Distribution(db, tools)
     catalog = ItemCatalog(db, tools, skills, mcp)
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
-    ports = SessionPorts.build(db, queue, messaging)
+    ports = SessionPorts.build(db, queue, messaging, tz)
     activity = ports.activity
     agent_lifecycle = AgentLifecycle(
         db, agents, skills, messaging, {"sessions": activity.blocks_agent_deletion_in}
@@ -370,7 +372,8 @@ def assemble(
         history_toolset(history, agents),
         ask_user_toolset(),
         workspace_toolset(vault, limits, files, jobs),
-        ports.delegation_toolset(db, agents),
+        ports.delegation_toolset(agents),
+        ports.wakeup_toolset(),
         notify_toolset(notifications),
         mcp_admin_toolset(mcp),
         vault_toolset(vault),
@@ -450,7 +453,8 @@ def assemble(
         mail=session_domain.mail,
         jobs=jobs,
         thread_checks=ports.thread_checks,
-        work=WorkWatcher([jobs, ports.thread_checks]),
+        wakeups=ports.wakeups,
+        work=WorkWatcher([jobs, ports.thread_checks, ports.wakeups]),
         # 只清理处理它的领域声明了可删的任务（docs/architecture.md 3.2「保留」）
         retention=TaskRetention(queue, prunable=worker.prunable_kinds),
         compactor=session_domain.compactor,

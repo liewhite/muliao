@@ -25,7 +25,7 @@ class ThreadInfo(BaseModel):
     agent: str
     # true：ask_agent 开出的、只有你能继续的 thread；false：用户也能看到并回复
     private: bool
-    # running：在处理；waiting：在等它自己开出的后台任务、委派或提问的回答，还没做完；idle：没有进行中的事
+    # running：在处理；waiting：在等它自己开出的后台任务、委派、到点唤醒或提问的回答，还没做完；idle：没有进行中的事
     state: WorkState
     # 最近一次运行最终失败时的错误说明
     failure: str | None
@@ -202,7 +202,8 @@ def delegation_toolset(
         """List the threads this conversation has opened (each is one agent + name). Returns a JSON array of \
 threads, each with `thread`, `agent`, `private`, `state`, `failure` and `answer`. Use it to look at delegated \
 work, e.g. after a check-in event, before deciding to keep waiting or `stop_thread`. `state`: running (working \
-now), waiting (its run ended but it is waiting for work it started or answers it asked for: not finished yet), \
+now), waiting (its run ended but it is waiting for work it started, a wake-up or answers it asked for: not \
+finished yet), \
 idle (nothing in progress). `answer` is its latest reply; while it is not idle that reply is intermediate, not its \
 result. `failure` is set when its latest run failed for good."""
         parent_id = ctx.deps.session_id

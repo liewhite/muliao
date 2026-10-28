@@ -1,9 +1,10 @@
-"""占用：别的领域替一个会话在外面做的一项异步工作（后台任务 job:<id>、委派 delegation:<会话>:<键>）。会话只知道
-「有人替我在外面做事」，不知道是什么事。设计见 docs/architecture.md 第 7 节。
+"""占用：别的领域（或会话自己约的到点唤醒）替一个会话在外面做的一项异步工作（后台任务 job:<id>、委派
+delegation:<会话>:<键>、到点唤醒 wake:<会话>:<键>）。会话只知道「有人替我在外面做事」，不知道是什么事。设计见
+docs/architecture.md 第 7 节。
 
 - 有 active 占用：会话的工作还没做完，交给它的委派不结清（sessions.finish、sessions.settlement）。
 - 带 call_id 的占用：这次挂起调用（ask_agent）已经交出去了。不论状态都算，是永久事实（sessions.pending）。
-- 结局交回时释放（和一封信件同一事务）；会话被停止时清掉（之后的结局不再投）。行永久保留。
+- 结局交回时释放（和一封信件同一事务）；会话被停止、或自己放弃（abandon）时清掉（之后的结局不再投）。行永久保留。
 """
 
 from __future__ import annotations
@@ -59,6 +60,13 @@ def release(hold: SessionHold) -> HoldStatus:
     if before == HoldStatus.ACTIVE:
         hold.status, hold.ended_at = HoldStatus.RELEASED, utcnow()
     return before
+
+
+def abandon(hold: SessionHold) -> None:
+    """会话自己放弃一项还在进行的工作（改期、取消到点唤醒）：记为 cleared，同停止，之后的结局不再投。"""
+    if hold.status != HoldStatus.ACTIVE:
+        raise RuntimeError(f"hold {hold.holder} of session {hold.session_id} is {hold.status}, not active")
+    hold.status, hold.ended_at = HoldStatus.CLEARED, utcnow()
 
 
 async def clear_in(s: AsyncSession, session_id: str) -> list[str]:

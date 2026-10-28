@@ -73,13 +73,14 @@ describe('issues', () => {
       body: null,
       change: { from, to },
     })
-    expect(activityText(agents, change('status', 'waiting', 'done'))).toBe('把状态从「等待中」改为「完成」')
+    expect(activityText(agents, change('status', 'in_review', 'done'))).toBe('把状态从「待审核」改为「完成」')
     // 已去掉的状态（时间线里的旧记录）原样显示
     expect(activityText(agents, change('status', 'todo', 'in_progress'))).toBe('把状态从「todo」改为「进行中」')
+    expect(activityText(agents, change('status', 'waiting', 'in_progress'))).toBe('把状态从「waiting」改为「进行中」')
     expect(activityText(agents, change('assignee', null, 'a1'))).toBe('把指派从「未指派」改为「alpha」')
     expect(activityText(agents, change('depends_on', [1, 2], []))).toBe('把依赖从「#1, #2」改为「无」')
-    expect(activityText(agents, { ...change('dependency', 'waiting', 'done'), change: { issue: 3, from: 'waiting', to: 'done' } })).toBe(
-      '把依赖 #3 的状态从「等待中」改为「完成」',
+    expect(activityText(agents, { ...change('dependency', 'in_progress', 'done'), change: { issue: 3, from: 'in_progress', to: 'done' } })).toBe(
+      '把依赖 #3 的状态从「进行中」改为「完成」',
     )
     expect(activityText(agents, { ...change('run_failed', null, null), change: null, body: 'Boom: bad' })).toBe(
       '在 issue 会话里的运行失败了：Boom: bad',

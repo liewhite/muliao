@@ -38,7 +38,6 @@ from muliao.issues.graph import (
     links_in,
     set_depends_on_in,
     snapshot,
-    waiting_on,
 )
 from muliao.issues.render import issue_view, render_issue
 from muliao.issues.rules import (
@@ -48,7 +47,6 @@ from muliao.issues.rules import (
     ask_to_settle,
     finished,
     handed_by,
-    resumes,
     reviewable,
     stalled,
 )
@@ -540,7 +538,6 @@ class IssueService:
                 old = ids_of(before[down_id].depends_on)
                 change = (old, [i for i in old if i != issue_id])
                 happened = [self._record(s, down, USER, ActivityKind.DEPENDS_ON, change=change)]
-                happened += await self._resume_in(s, down, bool(waiting_on(before[down_id].depends_on)))
                 down.updated_at = utcnow()
                 wake.append(await self._delivery.deliver_in(s, down, USER, None, happened))
         log.info("issue deleted", extra={"issue_id": issue_id, "downstream": downstream})
@@ -572,20 +569,11 @@ class IssueService:
                     upstream=issue.id,
                 )
             ]
-            # 这个上游刚从未完成进入完成：之前下游至少在等它
-            happened += await self._resume_in(s, downstream, True)
             downstream.updated_at = utcnow()
             wake.append(await self._delivery.deliver_in(s, downstream, actor, session_id, happened))
         if wake:
             log.info("issue unblocked downstream", extra={"issue_id": issue.id, "status": issue.status})
         return wake
-
-    async def _resume_in(self, s: AsyncSession, issue: Issue, was_waiting: bool) -> list[IssueActivity]:
-        """上游完成或被删除之后：处于 waiting 的下游不再等任何上游时由系统转为 in_progress（rules.resumes），返回这条动态，
-        与上游的那条一封信投出。"""
-        if not resumes(snapshot(issue, (await links_in(s, [issue.id]))[issue.id]), was_waiting):
-            return []
-        return await self._apply_in(s, issue, SYSTEM_ACTOR, status=IssueStatus.IN_PROGRESS)
 
     async def _activities_in(self, s: AsyncSession, issue_id: int) -> list[IssueActivity]:
         query = select(IssueActivity).where(IssueActivity.issue_id == issue_id).order_by(IssueActivity.id)

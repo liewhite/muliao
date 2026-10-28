@@ -1254,7 +1254,7 @@ def test_todo_issues_become_in_progress_or_waiting_run_ended_gets_origin_and_dow
             (json.dumps(gone), t, t),
         )
 
-    migrate(path)
+    migrate(path, "d0f01dc4c372")
     with sqlite3.connect(path) as conn:
         assert conn.execute("select id, status from issues order by id").fetchall() == [
             (1, "in_progress"),
@@ -1286,3 +1286,60 @@ def test_todo_issues_become_in_progress_or_waiting_run_ended_gets_origin_and_dow
         assert (
             conn.execute("select count(*) from issue_activities where kind = 'unsettled'").fetchone()[0] == 0
         )
+
+
+def test_waiting_issues_become_in_progress_and_downgrade_drops_waiting_wake_ups(tmp_path):
+    """#261：issue 的 waiting 改成 in_progress（降级不改回）；降级删 wakeups 表前把还在等的唤醒的占用记为 cleared。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "d0f01dc4c372")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "insert into issues (id, title, description, status, priority, creator, created_at, updated_at) "
+            "values (?, 't', '', ?, 'none', 'user', ?, ?)",
+            [(i, s, t, t) for i, s in [(1, "waiting"), (2, "in_progress"), (3, "blocked")]],
+        )
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, status from issues order by id").fetchall() == [
+            (1, "in_progress"),
+            (2, "in_progress"),
+            (3, "blocked"),
+        ]
+        conn.execute(
+            "insert into agents (id, name, description, model, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', ?, ?)",
+            (t, t),
+        )
+        conn.execute(
+            "insert into sessions (id, agent_id, title, origin, kind, created_at, updated_at) "
+            "values ('s', 'a1', 't', 'user', 'conversation', ?, ?)",
+            (t, t),
+        )
+        conn.executemany(
+            "insert into session_holds (session_id, holder, awaited, status, created_at) values ('s', ?, 0, ?, ?)",
+            [("wake:s:c1", "active", t), ("wake:s:c0", "released", t), ("job:7", "active", t)],
+        )
+        conn.execute(
+            "insert into wakeups (holder, session_id, due_at, note, created_at) values ('wake:s:c1', 's', ?, 'n', ?)",
+            (t, t),
+        )
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "d0f01dc4c372")
+    with sqlite3.connect(path) as conn:
+        assert [s for (s,) in conn.execute("select status from issues order by id")] == [
+            "in_progress",
+            "in_progress",
+            "blocked",
+        ]
+        holds = conn.execute(
+            "select holder, status, ended_at is not null from session_holds order by id"
+        ).fetchall()
+        assert holds == [("wake:s:c1", "cleared", 1), ("wake:s:c0", "released", 0), ("job:7", "active", 0)]
+        assert conn.execute("select name from sqlite_master where name = 'wakeups'").fetchone() is None

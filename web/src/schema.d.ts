@@ -1603,7 +1603,7 @@ export interface components {
          * IssueStatus
          * @enum {string}
          */
-        IssueStatus: "backlog" | "in_progress" | "waiting" | "in_review" | "blocked" | "done" | "cancelled";
+        IssueStatus: "backlog" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
         /** Item */
         Item: {
             /**

@@ -104,8 +104,8 @@ def render_activity(a: ActivityView) -> str:
         # 怎么表态的指引在 SESSION_NOTE（缓存前缀）；这里只多一句「只写评论不算」作提醒
         return (
             f"- [{a.at}] {a.actor}'s run in its issue session ended with the issue still `in_progress` and nothing "
-            "said about what comes next: settle it now as the note on this conversation says (a comment alone does "
-            "not settle it; you are asked again every time you stop while it is `in_progress`)"
+            "pending to wake it up: settle it now as the note on this conversation says (a comment alone does "
+            "not settle it; you are asked again every time you stop like this)"
         )
     return f"- [{a.at}] {a.actor} changed {a.kind}: {a.before} -> {a.after}"
 

@@ -88,6 +88,7 @@ TOOLS: dict[str, Tool] = {
     "ask_agent": W,
     "list_threads": R,
     "stop_thread": W,
+    "wake_me": W,
     "notify_user": W,
     # MCP 配置
     "mcp_list": R,

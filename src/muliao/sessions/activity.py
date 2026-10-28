@@ -27,7 +27,7 @@ class WorkState(StrEnum):
 
     # 有排着或正在进行的运行，或有投给它、还没投递的来信
     RUNNING = "running"
-    # 运行停了，但在等外面的结果：后台任务、委派出去的工作，或挂起的提问等用户回答
+    # 运行停了，但在等外面的结果：后台任务、委派出去的工作、到点唤醒，或挂起的提问等用户回答
     WAITING = "waiting"
     # 没有任何进行中的事
     IDLE = "idle"
@@ -37,7 +37,7 @@ async def work_states_in(
     s: AsyncSession, queue: TaskQueue, session_ids: Collection[str]
 ) -> dict[str, WorkState]:
     """一批会话的工作状态，查询次数与会话数无关（会话列表一次要几百个，事务持有全局写锁）：running 有排队或进行中
-    的运行、还没投递的来信；waiting 有 active 占用（后台任务、委派）或还能回答的提问；否则 idle。"""
+    的运行、还没投递的来信；waiting 有 active 占用（后台任务、委派、到点唤醒）或还能回答的提问；否则 idle。"""
     lanes: dict[str, tuple[str, ...]] = {x: (session_lane(x), receive_lane(x)) for x in session_ids}
     # 按发送方定位（inbound.SessionKey）投给它、还没投递的来信在按 key 命名的 lane 上
     for x, (origin, origin_ref, agent_id) in (await keyed_among(s, session_ids)).items():

@@ -7,7 +7,6 @@ import { USER, type Agent, type Issue, type IssueActivity, type IssuePriority, t
 export const STATUS_LABEL: Record<IssueStatus, string> = {
   backlog: 'Backlog',
   in_progress: '进行中',
-  waiting: '等待中',
   in_review: '待审核',
   done: '完成',
   cancelled: '已取消',
@@ -21,7 +20,6 @@ export const STATUSES = Object.keys(STATUS_LABEL) as readonly IssueStatus[]
 export const STATUS_COLOR: Record<IssueStatus, string> = {
   backlog: 'border-muted',
   in_progress: 'border-warning',
-  waiting: 'border-foreground',
   in_review: 'border-accent',
   blocked: 'border-danger',
   done: 'border-success bg-success',
@@ -166,7 +164,7 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
     case 'run_failed':
       return `在 issue 会话里的运行失败了：${a.body}`
     case 'unsettled':
-      return '在 issue 会话里的运行结束时 issue 仍是进行中、没说下一步：已请它表态'
+      return '在 issue 会话里的运行结束时 issue 仍是进行中、会话也没在等什么：已请它表态'
     default: {
       const what = { status: '状态', assignee: '指派', owner: '负责项目', priority: '优先级', title: '标题' }[a.kind]
       return `把${what}从「${valueLabel(agents, a, a.change?.from)}」改为「${valueLabel(agents, a, a.change?.to)}」`
@@ -175,8 +173,8 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
 }
 
 /**
- * 被指派 agent 在 issue 会话里的状态；该有人做却没人在做（issue.stalled，后端判定）时要提醒。会话在等后台任务、委派
- * 或用户回答（waiting）对看板来说也是有人在处理，同样显示「处理中」：「等待中」只指 issue 的 waiting 状态（#258）
+ * 被指派 agent 在 issue 会话里的状态；该有人做却没人在做（issue.stalled，后端判定）时要提醒。会话在等后台任务、委派、
+ * 到点唤醒或用户回答（waiting）对看板来说也是有人在处理，同样显示「处理中」（#258、#261）
  */
 export const WORK_LABEL: Record<NonNullable<Issue['assignee_state']>, string> = {
   running: '处理中',

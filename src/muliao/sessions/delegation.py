@@ -269,7 +269,8 @@ def check_text(
     match state:
         case WorkState.WAITING:
             doing = (
-                "is waiting for work it started (background jobs, other agents) or for answers it asked for"
+                "is waiting for work it started (background jobs, other agents), a wake-up it scheduled, or "
+                "answers it asked for"
             )
         case WorkState.RUNNING if run is not None and run.running:
             if run.started_at is None:

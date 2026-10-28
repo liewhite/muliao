@@ -1,4 +1,4 @@
-"""会话领域的表：会话、消息、信箱、压缩、占用、委派、调用开出的 thread。各子域独占自己的表（docs/architecture.md 2.1）。"""
+"""会话领域的表：会话、消息、信箱、压缩、占用、委派、到点唤醒、调用开出的 thread。各子域独占自己的表（docs/architecture.md 2.1）。"""
 
 from datetime import datetime
 from enum import StrEnum
@@ -154,7 +154,7 @@ class HoldStatus(StrEnum):
     ACTIVE = "active"
     # 结局已经交回（和一封信件同一事务）
     RELEASED = "released"
-    # 会话被停止，工作被放弃，之后的结局不再投
+    # 工作被放弃（会话被停止，或会话自己放弃，如改期、取消到点唤醒），之后的结局不再投
     CLEARED = "cleared"
 
 
@@ -202,6 +202,24 @@ class Delegation(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     __table_args__ = (Index("uq_delegations_holder", "holder", unique=True),)
+
+
+class WakeUp(Base):
+    """会话自己约的一次到点唤醒（wake_me，到点唤醒子域 sessions.wakeups）：到点时向会话投一封事件信件，它接着做。还在不在
+    等看会话上同 holder 的占用（active）；改期、取消、会话被停止都让占用不再 active。行永久保留，随会话删除。"""
+
+    __tablename__ = "wakeups"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 在会话上的占用者：wake:<会话>:<工具调用 id>
+    holder: Mapped[str] = mapped_column(String(200))
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    due_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    # 约的时候写给到点的自己的说明，随唤醒的信件交回
+    note: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+    __table_args__ = (Index("uq_wakeups_holder", "holder", unique=True),)
 
 
 class ThreadCall(Base):
