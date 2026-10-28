@@ -10,7 +10,7 @@ from muliao.container import assemble
 from muliao.logging_setup import setup_logging
 
 # 关停时等 HTTP 连接自己结束的时长；进程管理器给的退出时限（launchd 的 ExitTimeOut）要大于它加上 lifespan
-# 关停的时长（后台任务清理最多约 20 秒），见 docs/deployment.md
+# 关停的时长，见 docs/deployment.md
 GRACEFUL_SHUTDOWN_SECONDS = 3
 
 

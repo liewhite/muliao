@@ -24,7 +24,7 @@
   <key>KeepAlive</key>
   <true/>
   <!-- 关停（SIGTERM）后等进程自己退出的秒数，超时才 SIGKILL。不设时 kickstart -k 约 5 秒就强杀，
-       来不及结束后台任务的进程组并通知 agent；要大于 HTTP 连接排空（3 秒）加 lifespan 关停（最多约 20 秒）。 -->
+       来不及结束后台任务的进程组并通知 agent；要大于连接排空加 lifespan 关停，见 docs/deployment.md。 -->
   <key>ExitTimeOut</key>
   <integer>60</integer>
   <key>ThrottleInterval</key>
