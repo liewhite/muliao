@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import shutil
 from collections.abc import Callable, Sequence
@@ -16,6 +17,7 @@ from typing import Literal, cast, get_args
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from muliao.agents.access import grants_in
 from muliao.agents.active import AgentNames, active_row_in, agent_names_in, runnable_row_in
 from muliao.agents.agent_rules import (
     AgentRules,
@@ -85,6 +87,10 @@ class AgentPatch:
     deny: Sequence[str] | None = None
     thinking: Thinking | None = None
     group: str | None = None
+
+    def given(self) -> frozenset[str]:
+        """给出了（要改）的字段名。"""
+        return frozenset(f.name for f in dataclasses.fields(self) if getattr(self, f.name) is not None)
 
 
 @dataclass(frozen=True)
@@ -317,9 +323,17 @@ class AgentService:
             self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
             return info_of(agent)
 
-    async def update(self, agent_id: str, patch: AgentPatch, *, actor: str) -> AgentInfo:
-        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。分发规则变了就记一版（改的人 actor）。"""
+    async def check_update(self, agent_id: str, fields: frozenset[str], *, actor: str) -> None:
+        """actor 能不能改这个 agent 的这些字段（access.Grants.check_agent_update，不能时 Forbidden）。update 自己会查；
+        一次操作还要归档时（工具 update_agent），调用方先用它把归档一起查过，免得改了一半才被拒。"""
         async with self._db.transaction() as s:
+            (await grants_in(s, actor)).check_agent_update(agent_id, fields)
+
+    async def update(self, agent_id: str, patch: AgentPatch, *, actor: str) -> AgentInfo:
+        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。分发规则变了就记一版（改的人 actor）。
+        actor 不是用户也不是 admin 时只能改自己的一部分字段（access.Grants.check_agent_update）。"""
+        async with self._db.transaction() as s:
+            (await grants_in(s, actor)).check_agent_update(agent_id, patch.given())
             agent = await active_row_in(s, agent_id)
             fields = self._validated(agent, patch)
             await self._ensure_name_free(s, fields.name, agent_id)

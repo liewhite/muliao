@@ -78,7 +78,8 @@ TOOLS: dict[str, Tool] = {
     "list_agents": R,
     "get_agent": R,
     "create_agent": ADMIN_W,
-    "update_agent": ADMIN_W,
+    # 人人有：非 admin 只能改自己的一部分字段，调用时查（agents.access.Grants.check_agent_update，#289）
+    "update_agent": W,
     "delete_agent": ADMIN_W,
     "create_role": ADMIN_W,
     "update_role": ADMIN_W,

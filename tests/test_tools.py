@@ -248,6 +248,40 @@ async def test_parallel_partial_updates_of_one_agent_both_survive(container, mak
     assert (updated.description, updated.name) == ("new desc", "worker2")
 
 
+async def test_agent_without_admin_can_only_change_its_own_description_model_and_thinking(
+    container, make_agent, models
+):
+    me = await make_agent("worker", model="tools")
+    other = await make_agent("other")
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            (
+                "update_agent",
+                {"agent": "worker", "description": "new desc", "model": "tools", "thinking": "default"},
+            ),
+            ("update_agent", {"agent": "other", "description": "hijacked"}),
+            ("update_agent", {"agent": "worker", "roles": ["admin"]}),
+            ("update_agent", {"agent": "worker", "allow": ["tool:*"], "description": "x"}),
+            ("update_agent", {"agent": "worker", "description": "y", "archived": True}),
+            ("update_agent", {"agent": "worker", "new_name": "boss"}),
+        ],
+    )
+
+    assert outputs[0] == "updated agent worker"
+    assert "only an admin can change another agent" in outputs[1]
+    assert "not roles" in outputs[2] and "not allow" in outputs[3] and "not archived" in outputs[4]
+    assert "not name" in outputs[5]
+    # 被拒的调用什么都没改：没提权、没归档，描述停在第一次成功的修改
+    mine = await container.agents.get(me.id)
+    assert (mine.name, mine.description, mine.archived) == ("worker", "new desc", False)
+    assert (await container.agents.get(other.id)).description != "hijacked"
+    _, rules = await container.agents.find_with_rules("worker")
+    assert (rules.roles, rules.allow) == ((), ())
+
+
 async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agent, models):
     me = await make_agent("manager", model="tools", roles=["admin"])
     other = await make_agent("worker")

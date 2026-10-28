@@ -4,6 +4,7 @@
    deny）放行的。deny 只作用于规则分来的，不作用于自己的条目。用户（界面）能用全部。
 2. 能改（check_change_in）：用户、条目的 owner、带 admin 角色的 agent；否则 Forbidden，并说出 owner 是谁。owner 为 None
    的条目归平台（迁移前的公共条目、用户在界面上建的、内置工具）。
+3. 改 agent 配置（Grants.check_agent_update）：用户、admin 能改任何 agent；别的 agent 只能改自己的描述、模型、思考强度。
 
 由此派生的也都在这里：一份配置能用哪些（reach_in）、条目分发出去了没有与收录它的角色（sharing_in），以及条目子域的查询加上
 规则的 changeable_in / writable_in / usable_in。
@@ -50,6 +51,26 @@ class Grants:
 
     def changes(self, owner: str | None) -> bool:
         return self.agent_id is None or self.admin or owner == self.agent_id
+
+    def check_agent_update(self, target: str, fields: Collection[str]) -> None:
+        """规则 3：改 agent 的配置（fields 是要改的字段名，归档是 `archived`）。用户与 admin 能改任何 agent 的任何字段；
+        别的 agent 只能改自己的 SELF_UPDATABLE（不能借此给自己加角色、规则，也不能改名、换组、归档），否则 Forbidden。"""
+        if self.agent_id is None or self.admin:
+            return
+        if target != self.agent_id:
+            raise Forbidden(
+                "only an admin can change another agent; ask the user or an agent with the admin role"
+            )
+        refused = sorted(set(fields) - SELF_UPDATABLE)
+        if refused:
+            raise Forbidden(
+                f"without the admin role you can only change your own {', '.join(sorted(SELF_UPDATABLE))}, "
+                f"not {', '.join(refused)}; ask the user or an agent with the admin role"
+            )
+
+
+# 非 admin 的 agent 能改自己的哪些配置（#289）：角色、规则、名称、分组、归档只有用户与 admin 能改
+SELF_UPDATABLE = frozenset({"description", "model", "thinking"})
 
 
 USER_GRANTS = Grants(None, Rules(), admin=True)

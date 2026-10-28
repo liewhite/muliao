@@ -24,7 +24,6 @@ from tests.test_triggers import ECHO_SERVER
 _ADMIN_TOOLS = {
     "memory_edit_public",
     "create_agent",
-    "update_agent",
     "delete_agent",
     "create_role",
     "update_role",

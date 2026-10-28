@@ -180,6 +180,8 @@ def agents_toolset(
         archived: bool | None = None,
     ) -> str:
         """Change an agent's configuration, including your own (use your own name). Only the given fields change.
+        Without the admin role you can only change your own `description`, `model` and `thinking`; changing
+        another agent or your own name, roles, rules, group or archived state needs the user or an admin.
         An archived agent cannot be talked to, delegated to or assigned issues, and its triggers do not fire,
         until it is unarchived; archiving needs it to be idle.
 
@@ -206,6 +208,9 @@ def agents_toolset(
             thinking=thinking,
             group=group,
         )
+        if archived is not None:
+            # 归档不在 update 里：先把它一起查过，没权限时什么都不改
+            await agents.check_update(target.id, patch.given() | {"archived"}, actor=ctx.deps.agent_id)
         target = await agents.update(target.id, patch, actor=ctx.deps.agent_id)
         if archived is not None:
             try:
