@@ -185,9 +185,8 @@ class SkillStore:
         已有的要它能改（规则 2）；新建的归 owner，已有的 owner 不变。reason 是这一版的说明（revisions.described）。"""
         validate_slug(label(StoredKind.SKILL), name)
         description = _valid_description(description)
-        return await self._put(
-            name, _skill_md(name, description, body), attachments, actor, owner, "write", reason=reason
-        )
+        message = described(reason, f"write skill {name}")
+        return await self._put(name, _skill_md(name, description, body), attachments, actor, owner, message)
 
     async def edit(
         self,
@@ -203,6 +202,7 @@ class SkillStore:
         """改一个 skill，不整篇重写：正文的一部分、描述、附件（整体换成 attachments），可以同时改（同一版）。
         正文规则同记忆（见 text_edit.edit）：old 恰好出现一次时替换为 new，old 为空时把 new 追加到末尾；
         old、new 都为空表示不改正文。description / attachments 为 None 表示不改。什么都不改是错误。名称不变。"""
+        message = described(reason, f"edit skill {name}")
         edits_body = bool(old or new)
         if description is not None:
             description = _valid_description(description)
@@ -220,7 +220,7 @@ class SkillStore:
             if description is not None:
                 post["description"] = description
             meta = await self._store_in(
-                s, row, name, frontmatter.dumps(post) + "\n", attachments, actor, row.owner, "edit", reason
+                s, row, name, frontmatter.dumps(post) + "\n", attachments, actor, row.owner, message
             )
         await self.materialize(name)
         return meta
@@ -232,10 +232,9 @@ class SkillStore:
         attachments: Mapping[str, SkillFile] | None,
         actor: str,
         owner: str | None,
-        verb: str,
+        message: str,
         *,
         replace: bool = True,
-        reason: str | None = None,
     ) -> SkillMeta:
         """新建或整篇写入：已有的按规则 2 查 actor，owner 不变；新建的归 owner。replace 为假时只新建：同名的已存在
         Conflict（在写入的事务里查，并发的新建不会互相覆盖）。"""
@@ -245,7 +244,7 @@ class SkillStore:
             else:
                 await creatable_in(s, StoredKind.SKILL, name, owner)
                 row = None
-            meta = await self._store_in(s, row, name, skill_md, attachments, actor, owner, verb, reason)
+            meta = await self._store_in(s, row, name, skill_md, attachments, actor, owner, message)
         await self.materialize(name)
         return meta
 
@@ -258,10 +257,9 @@ class SkillStore:
         attachments: Mapping[str, SkillFile] | None,
         actor: str,
         owner: str | None,
-        verb: str,
-        reason: str | None = None,
+        message: str,
     ) -> SkillMeta:
-        """在调用方的事务里写入 SKILL.md（校验 frontmatter）与附件（None 表示不变）、记一版（说明见 revisions.described）；row 为 None 时新建，归 owner。
+        """在调用方的事务里写入 SKILL.md（校验 frontmatter）与附件（None 表示不变）、记一版（说明 message 由公开方法入口定）；row 为 None 时新建，归 owner。
         生成目录由调用方在事务提交后做。"""
         description, _ = parse_frontmatter(skill_md, name)
         for rel in attachments or {}:
@@ -281,15 +279,7 @@ class SkillStore:
                 ItemFile(item_id=row.id, path=rel, content=f.content, executable=f.executable)
                 for rel, f in new_files.items()
             )
-        record_in(
-            s,
-            Subject.SKILL,
-            name,
-            before,
-            document(skill_md, new_files),
-            actor,
-            described(reason, f"{verb} skill {name}"),
-        )
+        record_in(s, Subject.SKILL, name, before, document(skill_md, new_files), actor, message)
         await s.flush()
         return self._meta(row)
 
@@ -308,7 +298,9 @@ class SkillStore:
         skill_md = package.files[SKILL_FILE].content
         parse_frontmatter(skill_md, name)
         attachments = {rel: f for rel, f in package.files.items() if rel != SKILL_FILE}
-        meta = await self._put(name, skill_md, attachments, actor, owner, "import", replace=replace)
+        meta = await self._put(
+            name, skill_md, attachments, actor, owner, f"import skill {name}", replace=replace
+        )
         return SkillImport(meta, package.skipped)
 
     async def restore(self, name: str, rev: int, actor: str) -> SkillMeta:
@@ -317,17 +309,19 @@ class SkillStore:
             row = await changeable_in(s, StoredKind.SKILL, name, actor)
             files = parse_document(await revision_doc_in(s, Subject.SKILL, name, rev))
             skill_md = files.pop(SKILL_FILE).content
-            meta = await self._store_in(s, row, name, skill_md, files, actor, row.owner, "restore")
+            meta = await self._store_in(
+                s, row, name, skill_md, files, actor, row.owner, f"restore skill {name}"
+            )
         await self.materialize(name)
         return meta
 
     async def delete(self, name: str, actor: str, *, reason: str | None = None) -> None:
         """reason 是这一版的说明（revisions.described）。"""
+        message = described(reason, f"delete skill {name}")
         async with self._db.transaction() as s:
             row = await changeable_in(s, StoredKind.SKILL, name, actor)
             before = document(row.content, await _attachments_in(s, row))
             await s.delete(row)
-            message = described(reason, f"delete skill {name}")
             record_in(s, Subject.SKILL, name, before, None, actor, message)
         await self.materialize(name)
 

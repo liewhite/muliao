@@ -350,6 +350,32 @@ async def test_edit_skill_changes_description_body_or_both_and_rejects_empty_edi
     assert [r.message for r in history] == ["r3", "r2", "r1", "write skill digest"]
 
 
+async def test_skill_and_memory_tools_record_the_reason_and_reject_a_blank_one(container, make_agent, models):
+    me = await make_agent("alpha", model="tools")
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            (
+                "write_skill",
+                {"name": "digest", "description": "d", "content": "b", "reason": "done it twice"},
+            ),
+            ("delete_skill", {"name": "digest", "reason": "merged into report"}),
+            ("memory_edit", {"new_text": "- fact", "reason": " "}),
+        ],
+    )
+
+    assert "reason must not be blank" in outputs[2]
+    assert await container.memory.read(me.id) == ""
+    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
+    # 删除那一版（content 为空）也带着原因
+    assert [(r.message, r.after is None) for r in history] == [
+        ("merged into report", True),
+        ("done it twice", False),
+    ]
+
+
 async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):
     """agent 写检查脚本时要知道时限：生产上一个「正常 15 秒、网络抖动时重试 30~60 秒」的脚本反复超时。"""
     create = session_tools(container)["trigger_create"]

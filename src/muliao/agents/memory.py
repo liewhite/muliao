@@ -86,7 +86,7 @@ class MemoryStore:
         async def replace(_s: AsyncSession, _current: str) -> str:
             return content
 
-        return await self._update(agent_id, replace, actor)
+        return await self._update(agent_id, replace, actor, _label(agent_id))
 
     async def edit(
         self, agent_id: str | None, old: str, new: str, actor: str, *, reason: str | None = None
@@ -97,7 +97,7 @@ class MemoryStore:
         async def apply(_s: AsyncSession, current: str) -> str:
             return text_edit.edit(current, old, new, "memory")
 
-        return await self._update(agent_id, apply, actor, reason)
+        return await self._update(agent_id, apply, actor, described(reason, _label(agent_id)))
 
     async def restore(self, agent_id: str | None, rev: int, actor: str) -> str:
         """把第 rev 版的正文作为新的一版写入，读版本与写入在同一个事务里。"""
@@ -105,16 +105,16 @@ class MemoryStore:
         async def revision(s: AsyncSession, _current: str) -> str:
             return await revision_doc_in(s, Subject.MEMORY, revision_name(agent_id), rev)
 
-        return await self._update(agent_id, revision, actor)
+        return await self._update(agent_id, revision, actor, _label(agent_id))
 
     async def _update(
         self,
         agent_id: str | None,
         edit: Callable[[AsyncSession, str], Awaitable[str]],
         actor: str,
-        reason: str | None = None,
+        message: str,
     ) -> str:
-        """读取、修改、写入与记版本在同一个写事务里：并发的修改互不覆盖。"""
+        """读取、修改、写入与记版本在同一个写事务里：并发的修改互不覆盖。message 是这一版的说明。"""
         async with self._db.transaction() as s:
             row = await _row_in(s, agent_id)
             current = "" if row is None else row.content
@@ -136,7 +136,6 @@ class MemoryStore:
             else:
                 row.content = updated
             before = None if row is None else current
-            message = described(reason, _label(agent_id))
             record_in(s, Subject.MEMORY, revision_name(agent_id), before, updated, actor, message)
             return updated
 
