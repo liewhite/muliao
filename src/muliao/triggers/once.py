@@ -56,8 +56,9 @@ class OnceKind:
         'Fires once at a given time and then finishes: config {"at": "<ISO 8601 time>"}, e.g. '
         '{"at": "2026-10-22T10:30"}; without an offset it is read in the server timezone, and it must be in '
         "the future. Use this for anything that should happen once — a cron expression with a date would "
-        "fire again every year and stay in the trigger list. Finished triggers leave the list; the "
-        "conversations they started stay and can be listed with trigger_list(finished=true)."
+        "fire again every year and stay in the trigger list. It starts a new conversation: to continue the "
+        "current one later (e.g. an issue you are working on), use `wake_me` instead. Finished triggers leave "
+        "the list; the conversations they started stay and can be listed with trigger_list(finished=true)."
     )
 
     def __init__(self, tz: ZoneInfo, clock: Clock = utcnow):
