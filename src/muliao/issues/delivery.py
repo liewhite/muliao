@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import USER, AgentArchived, agent_names_in
-from muliao.issues.graph import links_in, snapshot
+from muliao.issues.graph import Links, links_in, snapshot
 from muliao.issues.render import delivery_message, issue_view
 from muliao.issues.rules import agent_actor, recipient
 from muliao.issues.tables import ActivityKind, Issue, IssueActivity
@@ -73,6 +73,26 @@ class IssueDelivery:
         )
         if agent is None:
             return None
+        return await self._send_in(s, issue, agent, actor, happened, links)
+
+    async def deliver_to_in(
+        self, s: AsyncSession, issue: Issue, agent: str, actor: str, happened: Sequence[IssueActivity]
+    ) -> Task | None:
+        """把这次的动态投进 agent 在这个 issue 上唯一的会话，不按 rules.recipient 判定收件人：issue_stop 带收尾消息时
+        直接投给被停下的 agent（不论 issue 的新状态）。"""
+        return await self._send_in(
+            s, issue, agent, actor, happened, (await links_in(s, [issue.id]))[issue.id]
+        )
+
+    async def _send_in(
+        self,
+        s: AsyncSession,
+        issue: Issue,
+        agent: str,
+        actor: str,
+        happened: Sequence[IssueActivity],
+        links: Links,
+    ) -> Task | None:
         # 信里只有摘要和这次的动态：只渲染 happened，不读整条时间线
         letter = issue_view(issue, happened, links, await agent_names_in(s), self._tz)
         inbound = SenderMail(

@@ -41,6 +41,7 @@ from muliao.issues.graph import (
 )
 from muliao.issues.render import issue_view, render_issue
 from muliao.issues.rules import (
+    STOP_STATUSES,
     SYSTEM_ACTOR,
     USER,
     agent_assignee,
@@ -62,7 +63,14 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, no_commit
 from muliao.platform.values import KEEP, Keep
-from muliao.sessions.api import Origin, SessionActivity, WorkState, keyed_sessions_among
+from muliao.sessions.api import (
+    Halted,
+    Origin,
+    SessionActivity,
+    StopSession,
+    WorkState,
+    keyed_sessions_among,
+)
 from muliao.sessions.events import RunEnded, RunFailed
 
 log = logging.getLogger(__name__)
@@ -130,6 +138,17 @@ class NewIssue:
     key: str | None = None
 
 
+@dataclass(frozen=True)
+class Stopping:
+    """IssueService.stop 的结果。"""
+
+    issue: Issue
+    # 被指派的 agent（停的是它的会话）
+    agent: str
+    # 真的停了一个会话；它还没有这个 issue 的会话时为 False
+    stopped: bool
+
+
 @contextmanager
 def batch_item(size: int, n: int, key: str | None) -> Iterator[None]:
     """一批（size 项）里第 n 项的错误带上它是哪一项；只建一个时原样抛出。工具层解析 agent 名时也用它。"""
@@ -149,8 +168,10 @@ class IssueService:
         tz: ZoneInfo,
         run_now: Callable[[int], Awaitable[None]],
         activity: SessionActivity,
+        stop_session: StopSession,
     ):
         self._activity = activity
+        self._stop_session = stop_session
         self._db = db
         self._tz = tz
         self._delivery = IssueDelivery(messaging, tz, run_now)
@@ -447,6 +468,83 @@ class IssueService:
         await self._delivery.run(*wake)
         return issue
 
+    async def stop(
+        self,
+        actor: str,
+        issue_id: int,
+        *,
+        session_id: str | None,
+        status: IssueStatus,
+        message: str | None,
+    ) -> Stopping:
+        """叫停被指派 agent 在这个 issue 上的会话（issue_stop，#272）：停掉它（同用户点停止，连同它开出去的 thread），把 issue
+        改成 status，时间线记 STOPPED 与状态变更。有 message 时记成评论，连同这次的动态投进被停下的会话跑一轮（收尾或改方向），
+        不论新状态是什么。
+
+        规则：status 只能是 rules.STOP_STATUSES（停下不是做完，不能交审或完成）；in_progress（打断后改方向）必须带 message。
+        没有 agent 指派人时报 Conflict（没有会话可停，改状态用 update）；在要停的那个会话里调用报 InvalidInput。指派人还没有
+        这个会话（或它刚被删除）时没有可停的：只改状态、记评论，按 rules.recipient 投递，不为收尾新建会话。
+
+        先停后改：停止返回时停止事务已提交（sessions.api.StopSession），之后投的信不会被它清掉。"""
+        if status not in STOP_STATUSES:
+            allowed = ", ".join(sorted(STOP_STATUSES))
+            raise InvalidInput(f"status must be one of {allowed}: stopping is not finishing")
+        if message is not None and not message.strip():
+            raise InvalidInput("message must not be empty")
+        if status == IssueStatus.IN_PROGRESS and message is None:
+            raise InvalidInput(
+                "give a message when the issue stays in_progress: it tells the agent what to do now"
+            )
+        ref = str(issue_id)
+        async with self._db.transaction() as s:
+            issue = await self._get_in(s, issue_id)
+            agent = agent_assignee(issue.assignee)
+            if agent is None:
+                raise Conflict(
+                    f"issue #{issue_id} is not assigned to an agent: there is no conversation to stop "
+                    "(use issue_update to change it)"
+                )
+            target = (await keyed_sessions_among(s, Origin.ISSUE, [ref]))[ref].get(agent)
+        if target is not None and target.id == session_id:
+            raise InvalidInput(
+                f"this is the conversation of issue #{issue_id} itself: change the issue with issue_update instead"
+            )
+        stopped = target is not None and await self._stop_session(target.id) == Halted.STOPPED
+        async with self._db.transaction() as s:
+            issue = await self._get_in(s, issue_id)
+            before = issue.status, issue.assignee
+            happened = []
+            if stopped:
+                happened.append(self._record(s, issue, actor, ActivityKind.STOPPED, change=(None, agent)))
+            happened += await self._apply_in(s, issue, actor, status=status)
+            if message is not None:
+                happened.append(self._record(s, issue, actor, ActivityKind.COMMENT, body=message))
+            wake = (
+                await self._changed_in(
+                    s,
+                    issue,
+                    before,
+                    actor,
+                    session_id,
+                    happened,
+                    deliver_to=agent if stopped and message is not None else None,
+                )
+                if happened
+                else []
+            )
+        log.info(
+            "issue conversation stopped",
+            extra={
+                "issue_id": issue_id,
+                "actor": actor,
+                "agent": agent,
+                "stopped": stopped,
+                "status": status,
+            },
+        )
+        await self._delivery.run(*wake)
+        return Stopping(issue=issue, agent=agent, stopped=stopped)
+
     async def _apply_in(
         self,
         s: AsyncSession,
@@ -501,11 +599,18 @@ class IssueService:
         actor: str,
         session_id: str | None,
         happened: list[IssueActivity],
+        *,
+        deliver_to: str | None = None,
     ) -> list[Task | None]:
         """issue 变了（happened 非空）之后：更新时间，投递这些动态；从（改动前的状态, 指派人）进入 done / cancelled 时
-        通知下游。返回要马上执行的投递。"""
+        通知下游。返回要马上执行的投递。deliver_to：直接投给这个 agent，不按 rules.recipient 判定（stop 的收尾消息）。"""
         issue.updated_at = utcnow()
-        wake = [await self._delivery.notify_and_deliver_in(s, before[1], issue, actor, session_id, happened)]
+        if deliver_to is not None:
+            wake = [await self._delivery.deliver_to_in(s, issue, deliver_to, actor, happened)]
+        else:
+            wake = [
+                await self._delivery.notify_and_deliver_in(s, before[1], issue, actor, session_id, happened)
+            ]
         if not finished(before[0]) and finished(issue.status):
             wake += await self._unblock_in(s, issue, before[0], actor, session_id)
         return wake

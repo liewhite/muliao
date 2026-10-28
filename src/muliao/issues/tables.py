@@ -48,6 +48,8 @@ class ActivityKind(StrEnum):
     # 某个 agent 在它这个 issue 的会话里的一次运行结束了，issue 却还是 in_progress、没人在做（rules.stalled）：平台记下并投进
     # 那个会话，请它表态（做完、blocked，或用会话的等待手段挂起）。actor 是该 agent
     UNSETTLED = "unsettled"
+    # actor 用 issue_stop 停掉了被指派 agent 在这个 issue 上的会话：change 为 {"from": null, "to": 那个 agent 的 id}
+    STOPPED = "stopped"
 
 
 class Issue(Base):

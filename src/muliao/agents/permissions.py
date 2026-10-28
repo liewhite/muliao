@@ -111,6 +111,7 @@ TOOLS: dict[str, Tool] = {
     "issue_create": W,
     "issue_update": W,
     "issue_comment": W,
+    "issue_stop": W,
     # 网页（只在配置了 [web] 时注册）
     "web_search": R,
     "web_fetch": R,

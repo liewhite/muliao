@@ -222,6 +222,8 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         job, delegated work, or `wake_me`). Finished work goes to `in_review` with assignee
         `user`, and the user moves it to `done` after reviewing; but when other issues depend on it (`issue_show`
         lists them under `blocks`), set it `done` yourself when finished, so the issues waiting for it can start.
+        Changing the status does not stop a conversation working on the issue: to call off work under way, use
+        `issue_stop`.
 
         Args:
             issue_id: Issue number.
@@ -253,6 +255,36 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             depends_on=depends_on,
         )
         return f"updated issue #{issue.id} (status: {issue.status})"
+
+    @ts.tool
+    async def issue_stop(
+        ctx: RunContext[RunScope], issue_id: int, status: IssueStatus, message: str | None = None
+    ) -> str:
+        """Stop the assigned agent's conversation on an issue, like the user's stop button: its current run ends,
+        its queued messages are dropped and the threads it opened are stopped too. Then the issue is set to
+        `status`. Use it to call off work that is under way (e.g. sub-issues no longer needed): changing the status
+        alone does not stop a conversation that is running. Not from the issue's own conversation (use
+        `issue_update` there). When the assigned agent has no conversation on the issue yet, only the status
+        changes.
+
+        Args:
+            issue_id: Issue number.
+            status: New status: `backlog`, `blocked`, `cancelled`, or `in_progress` to redirect the work (then
+                `message` is required); not `in_review` or `done`.
+            message: Recorded as your comment and delivered to the stopped conversation, which then runs once more
+                to act on it (wrap up, or what to do instead), whatever the new status.
+        """
+        result = await board.stop(
+            ctx.deps.agent_id, issue_id, session_id=ctx.deps.session_id, status=status, message=message
+        )
+        name = (await agents.names())[result.agent]
+        if not result.stopped:
+            return (
+                f"{name} has no conversation on issue #{issue_id} yet, nothing to stop; "
+                f"issue #{issue_id} is {result.issue.status}"
+            )
+        done = f"stopped {name}'s conversation on issue #{issue_id}; it is {result.issue.status}"
+        return done + ("; your message was delivered there" if message is not None else "")
 
     @ts.tool
     async def issue_comment(ctx: RunContext[RunScope], issue_id: int, body: str) -> str:

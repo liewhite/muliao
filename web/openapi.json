@@ -3415,7 +3415,8 @@
           "depends_on",
           "dependency",
           "run_failed",
-          "unsettled"
+          "unsettled",
+          "stopped"
         ],
         "title": "ActivityKind"
       },

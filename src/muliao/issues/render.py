@@ -57,7 +57,7 @@ def issue_view(
     for a in activities:
         before = after = None
         if a.change is not None:
-            if a.kind in (ActivityKind.ASSIGNEE, ActivityKind.OWNER):
+            if a.kind in (ActivityKind.ASSIGNEE, ActivityKind.OWNER, ActivityKind.STOPPED):
                 before, after = assignee(a.change["from"]), assignee(a.change["to"])
             elif a.kind == ActivityKind.DEPENDS_ON:
                 before, after = issues(a.change["from"]), issues(a.change["to"])
@@ -100,6 +100,8 @@ def render_activity(a: ActivityView) -> str:
         return f"- [{a.at}] {a.actor} changed status of dependency #{a.upstream}: {a.before} -> {a.after}"
     if a.kind == ActivityKind.RUN_FAILED:
         return f"- [{a.at}] {a.actor}'s run in its issue session failed: {a.body}"
+    if a.kind == ActivityKind.STOPPED:
+        return f"- [{a.at}] {a.actor} stopped {a.after}'s conversation on this issue"
     if a.kind == ActivityKind.UNSETTLED:
         # 怎么表态的指引在 SESSION_NOTE（缓存前缀）；这里只多一句「只写评论不算」作提醒
         return (

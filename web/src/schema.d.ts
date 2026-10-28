@@ -1200,7 +1200,7 @@ export interface components {
          * ActivityKind
          * @enum {string}
          */
-        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "depends_on" | "dependency" | "run_failed" | "unsettled";
+        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "depends_on" | "dependency" | "run_failed" | "unsettled" | "stopped";
         /** ActivityOut */
         ActivityOut: {
             /** Id */

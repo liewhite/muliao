@@ -339,7 +339,7 @@ def assemble(
     due_triggers = DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind, messaging), OnceDue()])
     streams = StreamRunner(db, triggers, activity, vault, agents.workspace, messaging, EVENT_MAX_BYTES)
     webhooks = Webhooks(db, triggers)
-    issues = IssueService(db, messaging, tz, run_now, activity)
+    issues = IssueService(db, messaging, tz, run_now, activity, ports.stopper)
     vapid = VapidKeys(settings.vapid_key_path)
 
     pusher = WebPushDelivery(push_subscriptions, vapid, settings.push.vapid_subject)

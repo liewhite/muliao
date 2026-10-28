@@ -163,6 +163,8 @@ export function activityText(agents: Agent[] | undefined, a: IssueActivity): str
       return `把依赖 #${a.change?.issue} 的状态从「${statusLabel(a.change?.from)}」改为「${statusLabel(a.change?.to)}」`
     case 'run_failed':
       return `在 issue 会话里的运行失败了：${a.body}`
+    case 'stopped':
+      return `停止了 ${assigneeLabel(agents, (a.change?.to as string | null) ?? null)} 在这个 issue 上的会话`
     case 'unsettled':
       return '在 issue 会话里的运行结束时 issue 仍是进行中、会话也没在等什么：已请它表态'
     default: {

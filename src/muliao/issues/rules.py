@@ -61,6 +61,11 @@ SESSION_NOTE = (
 # 上游处于这两个状态就不再挡下游：cancelled 也解除，由下游自己判断还做不做
 FINISHED = frozenset({IssueStatus.DONE, IssueStatus.CANCELLED})
 
+# issue_stop 叫停之后 issue 可以进入的状态：停下不是做完，不能交审（in_review）或完成（done）；in_progress 是打断后改方向
+STOP_STATUSES = frozenset(
+    {IssueStatus.BACKLOG, IssueStatus.BLOCKED, IssueStatus.CANCELLED, IssueStatus.IN_PROGRESS}
+)
+
 
 @dataclass(frozen=True)
 class Snapshot:

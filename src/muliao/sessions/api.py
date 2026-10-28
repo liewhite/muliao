@@ -4,7 +4,8 @@
   定位（SessionKey），keyed_sessions_among 查这样的会话；
 - 后台任务：SessionWork.hold（在会话领域自己的事务里登记占用），hold_registered_in；运行中检查的间隔规则 DEFAULT_CHECK_SECONDS / check_due；结局与运行中检查经定向命令
   WorkEnded / WorkCheckIn（sessions.events）；
-- HTTP 层用的会话门面（SessionService：会话的读写、停止、手动压缩）；
+- HTTP 层用的会话门面（SessionService：会话的读写、停止、手动压缩）；别的领域停止会话经端口 StopSession（结果 Halted），返回时
+  停止已生效；
 - 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙）；
 - 会话来源（Origin：发送方新建会话时给出）、会话种类与 HTTP 层用的读模型、展示事件；
 - 会话 lane 上的任务种类（RUN_TASK、COMPACTION_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
@@ -12,6 +13,7 @@
 
 from muliao.sessions.activity import SessionActivity, WorkState
 from muliao.sessions.assembly import SessionDomain, SessionPorts
+from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.holds import registered_in as hold_registered_in
 from muliao.sessions.inbound import (
     NewChat,
@@ -40,6 +42,8 @@ __all__ = [
     "Origin",
     "OriginNotes",
     "SessionActivity",
+    "Halted",
+    "StopSession",
     "SessionDomain",
     "SessionPorts",
     "WorkState",

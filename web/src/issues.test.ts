@@ -86,6 +86,7 @@ describe('issues', () => {
       '在 issue 会话里的运行失败了：Boom: bad',
     )
     expect(activityText(agents, { ...change('unsettled', null, null), change: null })).toContain('已请它表态')
+    expect(activityText(agents, change('stopped', null, 'a1'))).toBe('停止了 alpha 在这个 issue 上的会话')
   })
 })
 
