@@ -138,13 +138,14 @@ export function toolStatus(tool: ToolView, live: boolean): ToolStatus {
 
 const isStep = (b: Block): b is Step => b.kind === 'thinking' || b.kind === 'tool'
 
-/** 这一步有没有不随过程折叠的成果（挂给用户的文件、委派开出的 thread）：它们显示在组下方 */
-const hasOutputs = (s: Step) => s.kind === 'tool' && (s.tool.attachments.length > 0 || s.tool.threads.length > 0)
+/** 这一步有没有不随过程折叠的成果：与组下方显示的同一来源（stepAttachments、stepThreads） */
+const hasOutputs = (s: Step) => stepAttachments([s]).length > 0 || stepThreads([s]).length > 0
 
 /**
  * 连续的思考与工具调用合成一个过程组；其余块原样保留。成果（文件、thread）显示在组下方，所以有成果的组到此为止：
  * 之后不带成果的步骤另起一组，否则成果之后才做的调用会折进成果上面的组里，看起来像发生在它之前。紧挨着的带成果
- * 步骤（如一次并行开出几个 thread）仍在一组
+ * 步骤（如一次并行开出几个 thread）仍在一组。文件随结果到达，切出的新组总在末尾；实时调用条目不带 thread，保存一步
+ * 重新拉取后才挂上，那时实时段里 thread 之后的步骤会从组中间切开（已知，下一步保存即与历史一致）
  */
 export function groupSteps(blocks: Block[]): View[] {
   const views: View[] = []

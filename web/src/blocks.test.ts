@@ -113,6 +113,21 @@ describe('streaming stability', () => {
       const before = shape(n)
       expect(shape(n + 1).slice(0, before.length)).toEqual(before)
     }
+    // #299：结果带来的文件把组切开，新组也只出现在末尾
+    const report = { url: '/api/files/2/r.md', name: 'r.md', media_type: 'text/markdown', inline: false }
+    const withFiles = [
+      item('tool_call', '{}', 'f1'),
+      item('tool_call', '{}', 'f2'),
+      { ...item('tool_result', 'shared', 'f1'), attachments: [report] },
+      item('tool_result', 'ok', 'f2'),
+      item('thinking', 'b'),
+      item('tool_call', '{}', 'f3'),
+    ]
+    const fileShape = (n: number) => groupSteps(toBlocks(withFiles.slice(0, n))).map((v) => (v.kind === 'process' ? 'process' : v.kind))
+    for (let n = 1; n < withFiles.length; n++) {
+      const before = fileShape(n)
+      expect(fileShape(n + 1).slice(0, before.length)).toEqual(before)
+    }
     // 找不到对应调用的错误单独成步，并进所在的组
     const last = groupSteps(toBlocks(items))
     expect(last.map((v) => (v.kind === 'process' ? `process:${v.steps.length}` : v.kind))).toEqual([
