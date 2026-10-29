@@ -7,18 +7,20 @@
 """
 
 from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.directory import keyed_among, of_agent_in
-from muliao.sessions.holds import with_active_among
+from muliao.sessions.holds import active_among, with_active_among
 from muliao.sessions.info import keyed_sessions_among
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
 from muliao.sessions.mailbox import open_asks_among
 from muliao.sessions.origins import Origin
-from muliao.sessions.tables import Session
+from muliao.sessions.questions import Question
+from muliao.sessions.tables import Session, SessionHold
 
 
 class WorkState(StrEnum):
@@ -33,6 +35,27 @@ class WorkState(StrEnum):
     IDLE = "idle"
 
 
+@dataclass(frozen=True)
+class Waiting:
+    """会话在等的东西（waiting 的唯一定义）：active 占用（后台任务、委派出去的工作、到点唤醒），与还能回答的提问。
+    会话页据此列出等待项（sessions.waits）。"""
+
+    # 按登记先后
+    holds: tuple[SessionHold, ...]
+    # 提问的工具调用 id -> 问题
+    asks: Mapping[str, list[Question]]
+
+    def __bool__(self) -> bool:
+        return bool(self.holds or self.asks)
+
+
+async def waiting_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, Waiting]:
+    """一批会话各自在等的东西，查询次数与会话数无关。"""
+    held = await active_among(s, session_ids)
+    asks = await open_asks_among(s, session_ids)
+    return {x: Waiting(tuple(held.get(x, ())), asks[x].answerable) for x in session_ids}
+
+
 async def work_states_in(
     s: AsyncSession, queue: TaskQueue, session_ids: Collection[str]
 ) -> dict[str, WorkState]:
@@ -43,13 +66,12 @@ async def work_states_in(
     for x, (origin, origin_ref, agent_id) in (await keyed_among(s, session_ids)).items():
         lanes[x] = (*lanes[x], keyed_receive_lane(origin, origin_ref, agent_id))
     busy = await queue.busy_lanes(s, [lane for pair in lanes.values() for lane in pair])
-    held = await with_active_among(s, session_ids)
-    asks = await open_asks_among(s, session_ids)
+    waiting = await waiting_among(s, session_ids)
     return {
         x: WorkState.RUNNING
         if busy.intersection(lanes[x])
         else WorkState.WAITING
-        if x in held or asks[x].answerable
+        if waiting[x]
         else WorkState.IDLE
         for x in session_ids
     }

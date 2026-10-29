@@ -13,7 +13,7 @@ from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, TaskView, no_commit
-from muliao.sessions.activity import WorkState, work_states_in
+from muliao.sessions.activity import WorkState, waiting_among, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor
 from muliao.sessions.deletion import delete_sessions
@@ -37,6 +37,7 @@ from muliao.sessions.runs import latest_run
 from muliao.sessions.tables import Compaction, Mail, Session
 from muliao.sessions.thread_calls import call_threads_in
 from muliao.sessions.transcript import Item, annotate_asks, annotate_threads, checked_times, to_items
+from muliao.sessions.waits import Wait, waits_of_in
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ class SessionView:
     live: LiveSegment | None
     # 工作状态（与会话列表同一条规则）：不是 idle 就显示停止。只剩挂起的提问时停止不清掉它（提问仍可回答，sessions.halt）
     state: WorkState
+    # 在等的东西（sessions.waits，与 state 同一事务、同一条规则）：非空且没有在运行时 state 就是 waiting
+    waits: list[Wait]
 
 
 def _with_threads(live: LiveSegment, call_threads: Mapping[str, str]) -> LiveSegment:
@@ -116,6 +119,7 @@ class SessionService:
             threads = await threads_of(s, session_id)
             call_threads = await call_threads_in(s, session_id)
             state = (await work_states_in(s, self._queue, [session_id]))[session_id]
+            waits = await waits_of_in(s, (await waiting_among(s, [session_id]))[session_id])
         shown = [
             (message_id, payload, created_at)
             for message_id, payload, created_at in rows
@@ -146,6 +150,7 @@ class SessionService:
             threads=threads,
             live=None if live is None else _with_threads(live, call_threads),
             state=state,
+            waits=waits,
         )
 
     async def receive(self, message: UserMessage) -> Received:

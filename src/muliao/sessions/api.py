@@ -7,6 +7,7 @@
 - HTTP 层用的会话门面（SessionService：会话的读写、停止、手动压缩）；别的领域停止会话经端口 StopSession（结果 Halted），返回时
   停止已生效；
 - 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙）；
+- 会话在等的东西（Wait：后台任务、委派、到点唤醒、提问，随会话详情给出）；
 - 会话来源（Origin：发送方新建会话时给出）、会话种类与 HTTP 层用的读模型、展示事件；
 - 会话 lane 上的任务种类（RUN_TASK、COMPACTION_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
 """
@@ -33,6 +34,7 @@ from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.service import SessionService
 from muliao.sessions.sources import EventSource, job_holder, job_id_of_holder, parse_source
 from muliao.sessions.transcript import Item
+from muliao.sessions.waits import AskWait, DelegationWait, JobWait, Wait, WakeWait
 from muliao.sessions.work import DEFAULT_CHECK_SECONDS, SessionWork, check_due
 
 __all__ = [
@@ -58,6 +60,11 @@ __all__ = [
     "QuestionAnswer",
     "SessionService",
     "Item",
+    "Wait",
+    "JobWait",
+    "DelegationWait",
+    "WakeWait",
+    "AskWait",
     "NewChat",
     "NewConversation",
     "SenderMail",

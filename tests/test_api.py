@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.profiles import ModelProfile
 
@@ -388,8 +390,9 @@ async def test_session_list_pins_running_sessions_and_marks_them(client, contain
 async def test_session_list_pins_every_session_that_is_not_idle_even_beyond_the_first_page(
     client, container, make_agent
 ):
-    """置顶与标记是同一条规则（工作状态）：在等后台任务的会话（没有运行）也置顶，且看的是全部会话，不只这一页。"""
-    from muliao.sessions.holds import hold_in
+    """置顶与标记是同一条规则（工作状态）：在等到点唤醒的会话（没有运行）也置顶，且看的是全部会话，不只这一页。"""
+    from muliao.platform.db import utcnow
+    from muliao.sessions.wakeups import schedule_in
     from tests.test_flow import drain, start
 
     agent = await make_agent("alpha")
@@ -399,7 +402,7 @@ async def test_session_list_pins_every_session_that_is_not_idle_even_beyond_the_
         await start(container, agent.id, prompt)
         await drain(container)
     async with container.db.transaction() as s:
-        await hold_in(s, oldest.id, "job:1", awaited=False)
+        await schedule_in(s, oldest.id, "w1", utcnow() + timedelta(hours=1), "later", awaited=False)
     await login(client)
 
     [first] = (await client.get("/api/sessions", params={"limit": 1})).json()

@@ -123,6 +123,19 @@ async def with_active_among(s: AsyncSession, session_ids: Collection[str]) -> se
     return set(rows.all())
 
 
+async def active_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, list[SessionHold]]:
+    """其中每个会话的 active 占用，按登记先后（一次查询）；没有的会话不在结果里。"""
+    rows = await s.scalars(
+        select(SessionHold)
+        .where(SessionHold.session_id.in_(list(session_ids)), SessionHold.status == HoldStatus.ACTIVE)
+        .order_by(SessionHold.id)
+    )
+    held: dict[str, list[SessionHold]] = {}
+    for hold in rows.all():
+        held.setdefault(hold.session_id, []).append(hold)
+    return held
+
+
 async def called_in(s: AsyncSession, session_id: str) -> set[str]:
     """这个会话里已经交出去的挂起调用 id（带 call_id 的占用，不论状态）。"""
     rows = await s.scalars(

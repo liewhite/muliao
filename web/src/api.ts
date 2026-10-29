@@ -65,6 +65,8 @@ export type SessionDetail = Omit<Schemas['SessionDetail'], 'session' | 'run' | '
   threads: Session[]
 }
 export type LiveSegment = Schemas['LiveSegmentOut']
+/** 会话在等的东西（按 kind 区分）：后台任务、委派、到点唤醒、提问 */
+export type Wait = SessionDetail['waits'][number]
 
 export type Skill = Schemas['SkillDetail']
 export type Memory = Schemas['MemoryOut']
@@ -344,6 +346,9 @@ export const api = {
   stop: (session_id: string) => call('post', '/api/sessions/{session_id}/stop', { path: { session_id } }),
   compact: (session_id: string) => call('post', '/api/sessions/{session_id}/compact', { path: { session_id } }),
   deleteSession: (session_id: string) => call('delete', '/api/sessions/{session_id}', { path: { session_id } }),
+  /** 结束 agent 的一个后台任务（同 job_kill）；结局照常作为事件回到发起它的会话 */
+  killJob: (agent_id: string, job_id: number) =>
+    call('post', '/api/agents/{agent_id}/jobs/{job_id}/kill', { path: { agent_id, job_id } }),
 
   tasks: (status?: TaskStatus) => branded<Task[]>(call('get', '/api/tasks', { query: { status } })),
   /** [since, until) 之间的 token 用量，按给出的维度分组；天按服务端配置的时区划分 */

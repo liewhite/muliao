@@ -1,16 +1,20 @@
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.api.tasks import TaskOut
 from muliao.container import Container
 from muliao.sessions.api import (
+    AskWait,
     CallResult,
+    DelegationWait,
     EventSource,
     Item,
+    JobWait,
     LiveSegment,
     NewChat,
     Origin,
@@ -18,11 +22,15 @@ from muliao.sessions.api import (
     RunEvent,
     SessionKind,
     UserMessage,
+    Wait,
+    WakeWait,
     WorkState,
     call_result,
     parse_source,
 )
 from muliao.sessions.tables import Compaction, Mail, MailKind, MailState, Session
+from muliao.workspace.api import JobInfo
+from muliao.workspace.tables import JobStatus
 
 router = APIRouter()
 
@@ -128,6 +136,39 @@ class LiveSegmentOut(BaseModel):
         return cls(segment_id=segment.segment_id, events=segment.events)
 
 
+class JobWaitOut(JobWait):
+    """在等的后台任务，补上工作区领域的任务信息（与 job_status 同一份）。"""
+
+    command: str
+    # 取等待项与取任务信息不在同一事务：之间任务可能已经结束（结局还没交回），那时不是 running
+    status: JobStatus
+    # 日志，相对 agent 工作目录
+    log_path: str
+    # 日志最后几行
+    tail: str
+
+    @classmethod
+    def of(cls, wait: JobWait, info: JobInfo) -> "JobWaitOut":
+        return cls(
+            **wait.model_dump(),
+            command=info.command,
+            status=info.status,
+            log_path=info.log_path,
+            tail=info.tail,
+        )
+
+
+WaitOut = Annotated[JobWaitOut | DelegationWait | WakeWait | AskWait, Field(discriminator="kind")]
+
+
+async def wait_outs(c: Container, agent_id: str, waits: list[Wait]) -> list[WaitOut]:
+    """WaitOut 的唯一构造入口：后台任务向工作区领域取命令与日志。"""
+    return [
+        JobWaitOut.of(w, await c.jobs.info(w.job_id, agent_id)) if isinstance(w, JobWait) else w
+        for w in waits
+    ]
+
+
 class SessionDetail(BaseModel):
     session: SessionOut
     items: list[Item]
@@ -144,6 +185,8 @@ class SessionDetail(BaseModel):
     live: LiveSegmentOut | None
     # 工作状态（与会话列表同一条规则）：不是 idle 前端就显示停止。只剩挂起的提问时停止不清掉它（提问仍可回答）
     state: WorkState
+    # 在等的东西：后台任务、委派、到点唤醒、提问（与 state 同一条规则，没在运行、这里非空时 state 就是 waiting）
+    waits: list[WaitOut]
 
 
 class StartIn(BaseModel):
@@ -202,6 +245,7 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
         threads=threads,
         live=None if view.live is None else LiveSegmentOut.of(view.live),
         state=view.state,
+        waits=await wait_outs(c, view.session.agent_id, view.waits),
     )
 
 

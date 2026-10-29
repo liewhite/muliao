@@ -78,7 +78,7 @@ from muliao.triggers.webhook import WebhookKind
 from muliao.usage.api import UsageLog
 from muliao.web.api import WebProvider, build_web_provider
 from muliao.web.tools import web_toolset
-from muliao.workspace.api import JobRunner, ShellLimits
+from muliao.workspace.api import JobAdmin, JobRunner, ShellLimits
 from muliao.workspace.tools import workspace_toolset
 
 log = logging.getLogger(__name__)
@@ -95,6 +95,8 @@ class Container:
     bus: EventFeed
     # 「任务」页：列出与人工重试
     tasks: TaskAdmin
+    # 会话页等待项里的后台任务：查看与结束
+    jobs: JobAdmin
     vault: Vault
     skills: SkillStore
     memory: MemoryStore
@@ -176,6 +178,7 @@ class Assembly:
         return Container(
             bus=EventFeed(self.bus),
             tasks=TaskAdmin(self.queue),
+            jobs=JobAdmin(self.jobs),
             vault=self.vault,
             skills=self.skills,
             memory=self.memory,

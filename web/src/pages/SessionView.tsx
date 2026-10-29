@@ -1,6 +1,21 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
-import { Archive, ArrowDown, BellDot, CircleStop, CornerLeftUp, GitBranch, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
+import {
+  AlarmClock,
+  Archive,
+  ArrowDown,
+  BellDot,
+  CircleStop,
+  CornerLeftUp,
+  GitBranch,
+  Hourglass,
+  MessageCircleQuestion,
+  RotateCcw,
+  SendHorizontal,
+  Square,
+  SquareTerminal,
+  Trash2,
+} from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
@@ -14,8 +29,10 @@ import {
   type Mail,
   type Task,
   type Session,
+  type Wait,
   sessionRoute,
 } from '../api'
+import { askAnchor, waitDetail, waitKey } from '../waits'
 import {
   foldCheckIns,
   groupSteps,
@@ -193,7 +210,12 @@ function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) 
   const { ask } = block
   switch (ask.status) {
     case 'pending':
-      return <QuestionForm questions={ask.questions} onSubmit={(answers) => ctx.answer(block.callId, answers)} />
+      return (
+        // 等待项里的「跳到提问」滚到这里
+        <div id={askAnchor(block.callId)} className="flex scroll-mt-4 flex-col">
+          <QuestionForm questions={ask.questions} onSubmit={(answers) => ctx.answer(block.callId, answers)} />
+        </div>
+      )
     case 'asking':
       return <QuestionNote text="提问中…" />
     // 回答显示在信箱里
@@ -435,6 +457,127 @@ function UnlinkedThreads({ threads, agents }: { threads: Session[]; agents: Agen
       <div className="text-muted">未关联到调用的 thread</div>
       {threads.map((t) => (
         <ThreadRow key={t.id} thread={t} agents={agents} />
+      ))}
+    </div>
+  )
+}
+
+/** 等待项上的操作：结束后台任务、停止 thread（经页面的 action，出错显示在输入框上方） */
+interface WaitActions {
+  agentId: string
+  run: (fn: () => Promise<unknown>) => void
+  busy: boolean
+}
+
+function WaitRow({ wait, now, ctx, actions }: { wait: Wait; now: number; ctx: SessionContext; actions: WaitActions }) {
+  const detail = <span className="text-muted">{waitDetail(wait, now)}</span>
+  switch (wait.kind) {
+    case 'job':
+      return (
+        <Collapsible
+          lead={
+            <>
+              <SquareTerminal className="size-3.5 shrink-0" />
+              <span className="shrink-0 text-foreground">后台任务 #{wait.job_id}</span>
+            </>
+          }
+          title={
+            <span className="flex min-w-0 gap-2">
+              <span className="truncate font-mono">{wait.command.split('\n', 1)[0]}</span>
+              <span className="shrink-0">{waitDetail(wait, now)}</span>
+            </span>
+          }
+        >
+          <div className="flex flex-col gap-2">
+            <pre className={CODE_BLOCK}>{wait.command}</pre>
+            <div className="text-xs text-muted">日志 {wait.log_path}（在 agent 工作目录里）最后几行：</div>
+            <pre className={CODE_BLOCK}>{wait.tail || '（还没有输出）'}</pre>
+            {wait.status !== 'running' ? (
+              <div className="text-xs text-muted">已结束，等结局交回会话</div>
+            ) : (
+              <Button
+                size="sm"
+                variant="danger-soft"
+                className="self-start"
+                isDisabled={actions.busy}
+                onPress={() => actions.run(() => api.killJob(actions.agentId, wait.job_id))}
+              >
+                <Square className="size-3.5" />
+                结束任务
+              </Button>
+            )}
+          </div>
+        </Collapsible>
+      )
+    case 'delegation': {
+      const id = wait.thread_session_id
+      const thread = id === null ? undefined : ctx.threads.get(id)
+      return (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+          <GitBranch className="size-3.5 shrink-0 text-muted" />
+          {id === null ? (
+            <span className="shrink-0">thread（已删除）</span>
+          ) : (
+            <Link to={sessionRoute(id)} className="max-w-full truncate text-accent hover:underline">
+              {thread ? `${thread.thread}（${agentLabel(ctx.agents, thread.agent_id)}）` : 'thread'}
+            </Link>
+          )}
+          {detail}
+          {id !== null && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto shrink-0"
+              isDisabled={actions.busy}
+              onPress={() => actions.run(() => api.stop(id))}
+              aria-description="停止做这项委派的 thread，结局以「被停止」交回"
+            >
+              <Square className="size-3.5" />
+              停止 thread
+            </Button>
+          )}
+        </div>
+      )
+    }
+    case 'wake':
+      return (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5" title={wait.note}>
+          <AlarmClock className="size-3.5 shrink-0 text-muted" />
+          <span className="shrink-0">到点唤醒 {detail}</span>
+          <span className="max-w-full truncate text-muted">{wait.note}</span>
+        </div>
+      )
+    case 'ask':
+      return (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+          <MessageCircleQuestion className="size-3.5 shrink-0 text-muted" />
+          <span className="shrink-0">等你回答</span>
+          {detail}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto shrink-0"
+            onPress={() => document.getElementById(askAnchor(wait.call_id))?.scrollIntoView({ behavior: 'smooth' })}
+          >
+            跳到提问
+          </Button>
+        </div>
+      )
+  }
+}
+
+/** 会话在等的东西（与工作状态同一条规则）：让人看得出它为什么挂起、在等谁 */
+function WaitsPanel({ waits, ctx, actions }: { waits: Wait[]; ctx: SessionContext; actions: WaitActions }) {
+  const now = useNow(waits.length > 0)
+  if (waits.length === 0) return null
+  return (
+    <div className="flex flex-col gap-1.5 rounded-xl border border-dashed border-separator p-3 text-sm">
+      <div className="flex items-center gap-1.5 text-muted">
+        <Hourglass className="size-3.5" />
+        等待中
+      </div>
+      {waits.map((w) => (
+        <WaitRow key={waitKey(w)} wait={w} now={now} ctx={ctx} actions={actions} />
       ))}
     </div>
   )
@@ -777,6 +920,16 @@ export default function SessionView() {
                   <Blocks items={liveItems(shownLive)} ctx={{ ...ctx, view: 'live' }} />
                 </div>
               )}
+              <WaitsPanel
+                waits={d.waits}
+                ctx={ctx}
+                actions={{
+                  agentId: d.session.agent_id,
+                  busy: action.busy,
+                  // 结束、停止之后占用要等结局交回才释放，那时的运行会让页面重新拉取；这里先拉一次显示即时的状态
+                  run: (fn) => void action.run(() => fn().then(() => detail.reload())),
+                }}
+              />
               <UnlinkedThreads threads={unlinkedThreads([...d.items, ...liveItems(shownLive)], d.threads)} agents={agents.data} />
               <div ref={bottom.contentEndRef} aria-hidden />
             </div>

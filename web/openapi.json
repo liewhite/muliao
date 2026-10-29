@@ -1243,6 +1243,48 @@
         }
       }
     },
+    "/api/agents/{agent_id}/jobs/{job_id}/kill": {
+      "post": {
+        "summary": "Kill Job",
+        "description": "结束这个 agent 的一个运行中的后台任务；结局（被结束）照常作为事件回到发起它的会话。已经结束的 409。",
+        "operationId": "kill_job_api_agents__agent_id__jobs__job_id__kill_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/items": {
       "get": {
         "summary": "List Items",
@@ -3938,6 +3980,34 @@
         "title": "AskView",
         "description": "ask_user 调用的状态，由后端按唯一规则给出（annotate_asks），前端只渲染：\nasking 运行还没停下（还不能回答）；pending 现在能回答（显示表单）；submitted 回答已提交、还排着；answered 已回答；\nnot_answered 用户没回答（发了新消息或只回答了别的提问）。"
       },
+      "AskWait": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "ask",
+            "title": "Kind",
+            "default": "ask"
+          },
+          "call_id": {
+            "type": "string",
+            "title": "Call Id"
+          },
+          "headers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Headers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_id",
+          "headers"
+        ],
+        "title": "AskWait",
+        "description": "在等用户回答提问（ask_user）。"
+      },
       "Attachment": {
         "properties": {
           "url": {
@@ -4015,6 +4085,64 @@
           "created_at"
         ],
         "title": "CompactionOut"
+      },
+      "DelegationWait": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "delegation",
+            "title": "Kind",
+            "default": "delegation"
+          },
+          "thread_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Session Id"
+          },
+          "check_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Seconds"
+          },
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_session_id",
+          "check_seconds",
+          "deadline",
+          "since"
+        ],
+        "title": "DelegationWait",
+        "description": "在等委派出去的工作交回结局（ask_agent，或 delegate_task 带 report_back）。"
       },
       "EnabledIn": {
         "properties": {
@@ -4682,6 +4810,62 @@
           "job_id"
         ],
         "title": "JobSource"
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "exited",
+          "killed",
+          "interrupted"
+        ],
+        "title": "JobStatus",
+        "description": "后台任务（workspace.runner）的状态。结束的三种：自己退出（看 exit_code）、被 job_kill 结束、因服务重启被中断。"
+      },
+      "JobWaitOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "job",
+            "title": "Kind",
+            "default": "job"
+          },
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "log_path": {
+            "type": "string",
+            "title": "Log Path"
+          },
+          "tail": {
+            "type": "string",
+            "title": "Tail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "since",
+          "command",
+          "status",
+          "log_path",
+          "tail"
+        ],
+        "title": "JobWaitOut",
+        "description": "在等的后台任务，补上工作区领域的任务信息（与 job_status 同一份）。"
       },
       "LiveSegmentOut": {
         "properties": {
@@ -6452,6 +6636,35 @@
           },
           "state": {
             "$ref": "#/components/schemas/WorkState"
+          },
+          "waits": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/JobWaitOut"
+                },
+                {
+                  "$ref": "#/components/schemas/DelegationWait"
+                },
+                {
+                  "$ref": "#/components/schemas/WakeWait"
+                },
+                {
+                  "$ref": "#/components/schemas/AskWait"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "kind",
+                "mapping": {
+                  "ask": "#/components/schemas/AskWait",
+                  "delegation": "#/components/schemas/DelegationWait",
+                  "job": "#/components/schemas/JobWaitOut",
+                  "wake": "#/components/schemas/WakeWait"
+                }
+              }
+            },
+            "type": "array",
+            "title": "Waits"
           }
         },
         "type": "object",
@@ -6463,7 +6676,8 @@
           "run",
           "threads",
           "live",
-          "state"
+          "state",
+          "waits"
         ],
         "title": "SessionDetail"
       },
@@ -7707,6 +7921,38 @@
           "public_key"
         ],
         "title": "VapidOut"
+      },
+      "WakeWait": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "wake",
+            "title": "Kind",
+            "default": "wake"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Due At"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          }
+        },
+        "type": "object",
+        "required": [
+          "due_at",
+          "note",
+          "since"
+        ],
+        "title": "WakeWait",
+        "description": "在等自己约的到点唤醒（wake_me）。"
       },
       "WebhookConfig": {
         "properties": {},

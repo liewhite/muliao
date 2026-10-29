@@ -4,6 +4,6 @@ tools 由组合根装配），以及后台任务（jobs 表；JobRunner：启动
 WorkCheckIn（sessions.events）得知后台任务的结局，不调用这里。"""
 
 from muliao.workspace.file_tools import ShellLimits
-from muliao.workspace.runner import JobInfo, JobRunner
+from muliao.workspace.runner import JobAdmin, JobInfo, JobRunner
 
-__all__ = ["JobInfo", "JobRunner", "ShellLimits"]
+__all__ = ["JobAdmin", "JobInfo", "JobRunner", "ShellLimits"]

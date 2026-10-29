@@ -306,6 +306,8 @@ thread 种类只由委派创建（`origin` 为 delegation，带父会话，`Kind
 
 **工作状态**（`activity.work_states_in`，唯一规则；会话列表、issue 看板、定时触发避免重叠、`list_threads` 与委派的运行中检查都用它）：`running` 会话的 lane 上有排队或进行中的任务，或有投给它、还没投递的 `Receive`；`waiting` 运行停了但在等外面的结果——有 active 占用（后台任务、委派出去的工作、到点唤醒）或还能回答的 ask_user 提问；否则 `idle`。running 与 waiting 都是「事情还没做完」：等待中的会话结果回来会自动接着做，所以除了展示，各处只区分 idle 与否。批量计算，查询次数与会话数无关（列表一次几百个，事务持有全局写锁）；挂起的提问只可能在最后一条模型回复里（之前每条回复的调用在下一条回复前都已有结果），所以只读最后一条回复起的消息（`history.since_last_response`），不加载整段上下文。它与删除检查回答不同的问题：挂起的提问没有人在外面做事，不挡删除；删除检查同样批量查（lane 与 active 占用各一次）。挂起的调用（`pending.pending_in`、唤醒的 `wake_in`）也同理只读最后一条回复起的消息；需要整段上下文的只有消费者与停止。
 
+**等待项**（`activity.Waiting` / `sessions/waits.py`，#298）：会话为什么在 waiting。`waiting_among` 取 active 占用与还能回答的提问，就是工作状态里 waiting 的唯一定义（`work_states_in` 用它判断）；`waits_of_in` 把不透明的占用者认成具体的工作：后台任务（`job:<id>`，只给任务号）、委派（委派子域的记录：thread、report_back 的心跳或 ask_agent 的 deadline）、到点唤醒（`wakeups.records_among`：时刻与说明），再加上提问（各问题的短标题）。认不出的占用者是缺陷，直接报错。会话详情（`SessionView.waits`）与 `state` 在同一事务里算，所以界面显示「等待中」时一定列得出原因；HTTP 层再向工作区领域（`Container.jobs`，只转发查看与结束的 `JobAdmin`）补上后台任务的命令、日志路径与最后几行。会话页在输入框上方列出它们：后台任务可看日志尾部、可结束（`POST /api/agents/{agent}/jobs/{id}/kill`，同 `job_kill`）；委派可打开、停止 thread；提问可跳到提问处；到点唤醒只显示（要放弃就停止会话）。
+
 ### thread 与结果路由
 
 agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一封信」，thread 由自己的消费者经 worker 运行：
@@ -429,6 +431,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 - **发起**：插入 job 行（running），同一事务把它记为「启动中」（进程内）→ 在会话上登记占用 `job:<id>`（会话领域自己的事务）→ 启动进程 → 登记监督者、记下 pid。启动失败或被取消时在屏蔽作用域里清理（第 4 节），**没有监督者的任务行只有一条收敛规则**（`_close_unsupervised_in`，启动失败、监督意外结束、崩溃后启动共用）：会话还在而上面从没登记过占用，说明任务没开始过，删掉这一行；否则记为被中断，交回会话并释放占用（会话已删除时交回得到 `GONE`，行保留终态）。运行中检查前先对账：记为运行中、却既不在监督之下、也不在启动中的任务按这条规则收敛。
 - **结束**：进程退出（或被 `job_kill` 结束）时，在一个事务里记下状态与退出码，同一事务发出定向命令 `WorkEnded`：会话投一封完成事件（退出码、运行时长、命令、最后几行输出、日志路径）并释放占用。用户是否在等完成事件随发起任务的那次运行，登记占用时记在占用上。
 - **运行中检查**：到了任务自己的间隔（`jobs.check_seconds`，run_shell 的 heartbeat_seconds）时，在确认任务仍在运行（在监督之下、状态 running）的事务里发出 `WorkCheckIn`（已运行多久、最后几行输出），不推送；agent 据此决定继续等还是 `job_kill`。不限制频率与任务数（按用户决定）。
+- **从界面结束**：会话页的等待项列出在等的后台任务（第 7 节「等待项」），用户可以结束它，同 `job_kill`（HTTP 层只拿到转发查看与结束的 `JobAdmin`）。
 - **输出**：stdout 与 stderr 合并，逐块脱敏（注入的 secret 替换为 `[secret:KEY]`，`platform.shell.redact` 一遍正则、同一位置最长优先；每块末尾只留下恰好是某个 secret 开头的一段等下一块，切口避开 secret，多行 secret 跨块也不漏）后写进 agent 工作目录的 `jobs/<id>.log`，agent 用 `read_file` 读完整输出，`job_status` 看状态与最后几行。以进程退出为准（不是输出管道关闭）。
 - **进程**：自成进程组（`platform.shell.spawn_bash`，与同步 shell 共用环境与 secret 注入），`job_kill` 与关停杀掉整棵进程树。
 - **重启**：正常关停时杀掉所有后台任务并记为被中断；启动时（worker 开始之前）把还记为运行中的任务记为被中断并告诉 agent，进程可能还活着（pid 可能已被复用），如实告知怎么核实，不盲杀。

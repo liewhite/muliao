@@ -437,6 +437,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/{agent_id}/jobs/{job_id}/kill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Kill Job
+         * @description 结束这个 agent 的一个运行中的后台任务；结局（被结束）照常作为事件回到发起它的会话。已经结束的 409。
+         */
+        post: operations["kill_job_api_agents__agent_id__jobs__job_id__kill_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/items": {
         parameters: {
             query?: never;
@@ -1389,6 +1409,21 @@ export interface components {
             /** Note */
             note: string | null;
         };
+        /**
+         * AskWait
+         * @description 在等用户回答提问（ask_user）。
+         */
+        AskWait: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "ask";
+            /** Call Id */
+            call_id: string;
+            /** Headers */
+            headers: string[];
+        };
         /** Attachment */
         Attachment: {
             /** Url */
@@ -1421,6 +1456,28 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * DelegationWait
+         * @description 在等委派出去的工作交回结局（ask_agent，或 delegate_task 带 report_back）。
+         */
+        DelegationWait: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "delegation";
+            /** Thread Session Id */
+            thread_session_id: string | null;
+            /** Check Seconds */
+            check_seconds: number | null;
+            /** Deadline */
+            deadline: string | null;
+            /**
+             * Since
+             * Format: date-time
+             */
+            since: string;
         };
         /** EnabledIn */
         EnabledIn: {
@@ -1644,6 +1701,37 @@ export interface components {
             raw: string;
             /** Job Id */
             job_id: number;
+        };
+        /**
+         * JobStatus
+         * @description 后台任务（workspace.runner）的状态。结束的三种：自己退出（看 exit_code）、被 job_kill 结束、因服务重启被中断。
+         * @enum {string}
+         */
+        JobStatus: "running" | "exited" | "killed" | "interrupted";
+        /**
+         * JobWaitOut
+         * @description 在等的后台任务，补上工作区领域的任务信息（与 job_status 同一份）。
+         */
+        JobWaitOut: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "job";
+            /** Job Id */
+            job_id: number;
+            /**
+             * Since
+             * Format: date-time
+             */
+            since: string;
+            /** Command */
+            command: string;
+            status: components["schemas"]["JobStatus"];
+            /** Log Path */
+            log_path: string;
+            /** Tail */
+            tail: string;
         };
         /** LiveSegmentOut */
         LiveSegmentOut: {
@@ -2305,6 +2393,8 @@ export interface components {
             threads: components["schemas"]["SessionOut"][];
             live: components["schemas"]["LiveSegmentOut"] | null;
             state: components["schemas"]["WorkState"];
+            /** Waits */
+            waits: (components["schemas"]["JobWaitOut"] | components["schemas"]["DelegationWait"] | components["schemas"]["WakeWait"] | components["schemas"]["AskWait"])[];
         };
         /**
          * SessionKind
@@ -2761,6 +2851,29 @@ export interface components {
         VapidOut: {
             /** Public Key */
             public_key: string;
+        };
+        /**
+         * WakeWait
+         * @description 在等自己约的到点唤醒（wake_me）。
+         */
+        WakeWait: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "wake";
+            /**
+             * Due At
+             * Format: date-time
+             */
+            due_at: string;
+            /** Note */
+            note: string;
+            /**
+             * Since
+             * Format: date-time
+             */
+            since: string;
         };
         /**
          * WebhookConfig
@@ -3739,6 +3852,36 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TaskOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    kill_job_api_agents__agent_id__jobs__job_id__kill_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

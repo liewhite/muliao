@@ -10,6 +10,7 @@ deliver_in 交回并释放，和别的占用走同一个出口。
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -39,6 +40,20 @@ class Scheduled:
     due_at: datetime
     # 被这次取代的那个唤醒的时刻；原来没有在等的为 None
     replaced: datetime | None
+
+
+@dataclass(frozen=True)
+class WakeRecord:
+    due_at: datetime
+    note: str
+
+
+async def records_among(s: AsyncSession, holders: Collection[str]) -> dict[str, WakeRecord]:
+    """这些占用者里是到点唤醒的那些约的时刻与说明（别的占用不在结果里），一次查询。"""
+    if not holders:
+        return {}
+    rows = await s.scalars(select(WakeUp).where(WakeUp.holder.in_(list(holders))))
+    return {row.holder: WakeRecord(row.due_at, row.note) for row in rows.all()}
 
 
 async def cancel_in(s: AsyncSession, session_id: str) -> datetime | None:

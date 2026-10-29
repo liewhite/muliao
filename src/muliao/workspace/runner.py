@@ -522,6 +522,19 @@ class JobRunner:
         log.info("background jobs stopped with the service", extra={"job_ids": list(handles)})
 
 
+class JobAdmin:
+    """HTTP 层看到的后台任务（会话页的等待项）：查看与结束，只转发这两个方法，拿不到启动、检查与监督。"""
+
+    def __init__(self, runner: JobRunner):
+        self._runner = runner
+
+    async def info(self, job_id: int, agent_id: str) -> JobInfo:
+        return await self._runner.info(job_id, agent_id)
+
+    async def kill(self, job_id: int, agent_id: str) -> None:
+        await self._runner.kill(job_id, agent_id)
+
+
 async def _own(s, job_id: int, agent_id: str) -> Job:  # noqa: ANN001
     job = await s.get(Job, job_id)
     if job is None or job.agent_id != agent_id:

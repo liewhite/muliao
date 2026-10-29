@@ -20,6 +20,7 @@ from muliao.api import (
     history,
     issues,
     items,
+    jobs,
     memory,
     models,
     notifications,
@@ -123,6 +124,7 @@ def _private_routes() -> APIRouter:
     router.include_router(models.router)
     router.include_router(sessions.router)
     router.include_router(tasks.router)
+    router.include_router(jobs.router)
     router.include_router(items.router)
     router.include_router(memory.router)
     router.include_router(push.router)
