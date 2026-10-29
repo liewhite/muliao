@@ -58,16 +58,19 @@ async def _schedule(container, make_agent, models, args: dict):
 
 async def test_a_due_wake_up_wakes_the_session_with_its_note(container, make_agent, models):
     session, recorder = await _schedule(
-        container, make_agent, models, {"after_seconds": 0.2, "note": "check the deploy"}
+        container, make_agent, models, {"after_seconds": 3600, "note": "check the deploy"}
     )
     # 约好之后：会话在等（不是 idle），没到点不投
     assert await _state(container, session.id) == WorkState.WAITING
     assert await container.wakeups.check() == 0
 
-    await asyncio.sleep(0.25)
-    assert await container.wakeups.check() == 1
+    # 用注入的时钟到点（真实 sleep 的短间隔在并行跑测试时会被 drain 的耗时超过，没到点的检查就投了）
+    later = WakeUps(
+        container.db, container.queue, container.wakeups._tz, clock=lambda: utcnow() + timedelta(hours=2)
+    )  # noqa: SLF001
+    assert await later.check() == 1
     # 已投过：不再投
-    assert await container.wakeups.check() == 0
+    assert await later.check() == 0
     await drain(container)
 
     [event_text] = recorder.prompts[-1]
