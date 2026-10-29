@@ -18,8 +18,14 @@ from muliao.agents.api import AgentPatch
 from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.api import Origin
 from muliao.sessions.codec import dump_message, load_messages
-from muliao.sessions.compaction import COMPACTION_INSTRUCTIONS, select_steps, steps_of
-from muliao.sessions.conventions import run_context_index
+from muliao.sessions.compaction import (
+    COMPACTION_INSTRUCTIONS,
+    Verdict,
+    context_tokens,
+    select_steps,
+    steps_of,
+)
+from muliao.sessions.conventions import RUN_STOPPED, run_context_index
 from muliao.sessions.history import CONTINUATION
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, session_lane
 from muliao.sessions.tables import Compaction, Message
@@ -171,6 +177,28 @@ async def test_threshold_is_the_size_of_the_last_request(container):
 async def test_zero_usage_warns_instead_of_silently_never_compacting(container, caplog):
     assert not container.compactor.over_threshold("s", _response(0))
     assert "no input token usage" in caplog.text
+
+
+def _stopped_placeholder() -> ModelResponse:
+    # 停止时保存的占位回复（线上实例：parts 空、用量全 0、state=interrupted、标着已停止）
+    return ModelResponse(parts=[], state="interrupted", metadata={RUN_STOPPED: True})
+
+
+async def test_a_stopped_placeholder_reply_is_not_taken_as_the_context_size(container, caplog):
+    """停止占位回复没有用量：取它之前那条真实回复的大小，不误报 no input token usage、也不因此跳过压缩。"""
+    threshold = container.settings.runtime.compaction_threshold_tokens
+    history = [*_response(threshold + 1), ModelRequest(parts=[UserPromptPart("go")]), _stopped_placeholder()]
+    assert context_tokens(history) == threshold + 1
+    assert container.compactor.over_threshold("s", history)
+    assert "no input token usage" not in caplog.text
+    assert context_tokens([_stopped_placeholder()]) is None
+
+
+async def test_a_stopped_placeholder_right_after_compacting_does_not_count_as_the_first_new_reply(container):
+    """压缩后只有一条停止占位回复：还没有压缩后的测量，不压缩，也不拿压缩前的大小判「压不下去」。"""
+    threshold = container.settings.runtime.compaction_threshold_tokens
+    history = [*_response(threshold + 1), ModelRequest(parts=[UserPromptPart("go")]), _stopped_placeholder()]
+    assert container.compactor.verdict("s", history, stale_responses=1) == Verdict.NOT_DUE
 
 
 def test_select_steps_bounds_batch_without_truncating():

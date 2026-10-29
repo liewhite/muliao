@@ -26,6 +26,7 @@ from muliao.sessions.conventions import (
     RUN_STOPPED,
     STOPPED_TOOL_RESULT,
     answer_text,
+    measured_responses,
     run_context_index,
     unanswered_calls,
 )
@@ -39,8 +40,8 @@ class SessionContext:
 
     summary: str | None
     messages: list[ModelMessage]
-    # 最近一次压缩写入之前就有的模型回复条数（在 messages 里）：它们报告的 token 数是压缩前的上下文大小，
-    # 判断要不要再压缩只看之后的回复（sessions.compaction.Compactor.verdict）；没压缩过为 None
+    # 最近一次压缩写入之前就有的、报告了用量的模型回复条数（在 messages 里，conventions.measured_responses）：
+    # 它们报告的 token 数是压缩前的上下文大小，判断要不要再压缩只看之后的回复（sessions.compaction.Compactor.verdict）；没压缩过为 None
     stale_responses: int | None
 
 
@@ -239,10 +240,10 @@ async def load_context(s: AsyncSession, session_id: str) -> SessionContext:
     stale = (
         None
         if compaction is None
-        else sum(
-            1
-            for r, m in zip(rows, messages, strict=True)
-            if r.id <= compaction.at_message_id and isinstance(m, ModelResponse)
+        else len(
+            measured_responses(
+                [m for r, m in zip(rows, messages, strict=True) if r.id <= compaction.at_message_id]
+            )
         )
     )
     if messages and isinstance(messages[0], ModelResponse):

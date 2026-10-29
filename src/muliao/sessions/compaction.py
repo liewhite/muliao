@@ -16,7 +16,7 @@ import logging
 from collections.abc import Sequence
 from enum import StrEnum
 
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.messages import ModelMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import AgentRuntime
@@ -26,7 +26,7 @@ from muliao.platform.db import Database
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
 from muliao.sessions.codec import load_messages
-from muliao.sessions.conventions import calls_in, results_in
+from muliao.sessions.conventions import calls_in, measured_responses, results_in
 from muliao.sessions.history import add_compaction_in, latest_compaction, rows_after
 from muliao.sessions.lanes import COMPACTION_TASK, session_lane
 from muliao.sessions.loading import load_session
@@ -47,11 +47,9 @@ Output only the summary."""
 
 
 def context_tokens(history: Sequence[ModelMessage]) -> int | None:
-    """上一次模型请求的输入 token 数，即发给模型的上下文的实际大小；还没有回复时为 None。"""
-    for message in reversed(history):
-        if isinstance(message, ModelResponse):
-            return message.usage.input_tokens
-    return None
+    """上一次模型请求的输入 token 数，即发给模型的上下文的实际大小；还没有报告了用量的回复时为 None。"""
+    measured = measured_responses(history)
+    return measured[-1].usage.input_tokens if measured else None
 
 
 def steps_of(rows: Sequence[Message]) -> list[list[Message]]:
@@ -137,7 +135,7 @@ class Compactor:
         """该不该压缩，唯一规则。只认最近一次压缩之后的回复报告的 token 数（stale_responses 之前的反映的是压缩前的
         上下文）。压缩后的第一次回复就超阈值，说明保留窗口本身就超了，再压也压不下去（HOPELESS）：这次运行不再压缩，
         上下文继续变大直到超出模型的上限时运行失败可见，重试时重新判断（用最终正确性换掉「保留窗口也要切」的复杂度）。"""
-        responses = sum(isinstance(m, ModelResponse) for m in history)
+        responses = len(measured_responses(history))
         if (stale_responses is not None and responses <= stale_responses) or not self.over_threshold(
             session_id, history
         ):

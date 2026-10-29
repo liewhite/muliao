@@ -10,6 +10,7 @@ pydantic-ai 的消息是存储与回放的唯一形式（数据库里一行一�
 | `STOPPED_TOOL_RESULT`：停止时没出结果的调用 | 合成的 ToolReturnPart 内容 | sessions.history | 模型（之后的运行）；会话条目（made_up_result：没有结束时间） |
 | `INTERRUPTED_TOOL_RESULT`：进程退出时没出结果的调用 | 合成的 ToolReturnPart 内容（`outcome='interrupted'`） | sessions.history | 模型（续跑的那次请求）；会话条目（同上） |
 | `questions.NOT_ANSWERED`：挂起提问没被回答 | 合成的 ask_user 结果（AskResult，属于提问领域） | sessions.questions 定义、sessions.deferred 填入 | 模型、会话条目 |
+| 「回复是否报告了上下文大小」 | ModelResponse.state 不是 'interrupted'（pydantic-ai） | — | measured_responses：压缩判断 |
 | 「调用是否已有结果」 | ToolReturnPart 或 RetryPromptPart | — | unanswered_calls：挂起的提问、压缩切点、停止时补结果 |
 | `RUN_EVENTS`：这一步交给模型的事件信件 | 事件各占用户消息内容的一段（format_event，来源见 sessions.sources），metadata 记下是第几段 | sessions.content | 模型、会话条目 |
 | `RUN_CHECK_INS`：其中哪些是运行中检查（信件的 check_in） | 同上，metadata 记下是第几段（RUN_EVENTS 的子集） | sessions.content | 会话条目（界面合并连续的检查） |
@@ -95,6 +96,12 @@ def run_context_index(message: ModelMessage) -> int | None:
 def is_stopped(message: ModelMessage) -> bool:
     """这条消息标着「已停止」（RUN_STOPPED）。"""
     return bool((message.metadata or {}).get(RUN_STOPPED))
+
+
+def measured_responses(history: Sequence[ModelMessage]) -> list[ModelResponse]:
+    """报告了上下文大小（输入 token）的模型回复，按时间顺序。被停止截断的回复（pydantic-ai state='interrupted'，
+    如停止时保存的占位回复）可能还没收到用量，不算一次测量：压缩判断（sessions.compaction）只认这些回复。"""
+    return [m for m in history if isinstance(m, ModelResponse) and m.state != "interrupted"]
 
 
 def answer_text(response: ModelResponse) -> str:
