@@ -81,7 +81,7 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
 
   return (
     <CollapsibleForm title="添加 MCP server">
-            <p className="text-sm text-muted">也可以直接在对话里把 MCP 信息告诉 agent，让它自己调用 mcp_add 创建。</p>
+            <p className="text-sm text-muted">也可以直接在对话里把 MCP 信息告诉 agent，让它自己调用 mcp_add 创建（MCP 配置工具不在 base 里，先在权限页给它加 tool:mcp_*）。</p>
             <TextInput label="名称" hint="工具名会以「名称_」为前缀" value={name} onChange={setName} mono isRequired />
             <OwnerSelect value={owner} onChange={setOwner} />
             <div>

@@ -36,6 +36,13 @@ async def _holds(container, session_id: str) -> list[SessionHold]:
         )
 
 
+def _wakeups_later(container) -> WakeUps:
+    """时钟拨快 2 小时的 WakeUps（同一个库，等于重启后的新实例）。"""
+    return WakeUps(
+        container.db, container.queue, container.wakeups._tz, clock=lambda: utcnow() + timedelta(hours=2)
+    )
+
+
 async def _schedule(container, make_agent, models, args: dict):
     """agent 在一次运行里调一次 wake_me 然后停下；返回会话与记录之后模型输入的 Recorder。"""
     agent = await make_agent("alpha", model="w")
@@ -65,9 +72,7 @@ async def test_a_due_wake_up_wakes_the_session_with_its_note(container, make_age
     assert await container.wakeups.check() == 0
 
     # 用注入的时钟到点（真实 sleep 的短间隔在并行跑测试时会被 drain 的耗时超过，没到点的检查就投了）
-    later = WakeUps(
-        container.db, container.queue, container.wakeups._tz, clock=lambda: utcnow() + timedelta(hours=2)
-    )  # noqa: SLF001
+    later = _wakeups_later(container)
     assert await later.check() == 1
     # 已投过：不再投
     assert await later.check() == 0
@@ -105,9 +110,7 @@ async def test_a_wake_up_survives_a_restart(container, make_agent, models):
     session, recorder = await _schedule(
         container, make_agent, models, {"after_seconds": 3600, "note": "later"}
     )
-    restarted = WakeUps(
-        container.db, container.queue, container.wakeups._tz, clock=lambda: utcnow() + timedelta(hours=2)
-    )  # noqa: SLF001
+    restarted = _wakeups_later(container)
     assert await restarted.check() == 1
     await drain(container)
     assert "Your note: later" in recorder.prompts[-1][0]
