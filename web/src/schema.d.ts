@@ -457,6 +457,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/{agent_id}/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Workspace
+         * @description 列出工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称排序。
+         */
+        get: operations["list_workspace_api_agents__agent_id__workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/{agent_id}/workspace/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Workspace File
+         * @description 工作目录里一个文件的内容。
+         */
+        get: operations["read_workspace_file_api_agents__agent_id__workspace_file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/items": {
         parameters: {
             query?: never;
@@ -1511,6 +1551,20 @@ export interface components {
         EnabledIn: {
             /** Enabled */
             enabled: boolean;
+        };
+        /** EntryOut */
+        EntryOut: {
+            /** Name */
+            name: string;
+            /** Is Dir */
+            is_dir: boolean;
+            /** Size */
+            size: number | null;
+            /**
+             * Modified
+             * Format: date-time
+             */
+            modified: string;
         };
         /** FeaturesOut */
         FeaturesOut: {
@@ -3995,6 +4049,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_workspace_api_agents__agent_id__workspace_get: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_workspace_file_api_agents__agent_id__workspace_file_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {

@@ -107,6 +107,8 @@ export type Issue = Schemas['IssueOut']
 export type IssueActivity = Schemas['ActivityOut']
 export type IssueDetail = Schemas['IssueDetailOut']
 export type AgentDefaults = Schemas['AgentDefaultsOut']
+/** agent 工作目录里的一项；目录的 size 为 null */
+export type WorkspaceEntry = Schemas['EntryOut']
 
 export class ApiError extends Error {
   readonly status: number
@@ -230,6 +232,9 @@ export const agentRoute = (id: AgentId) => `/agents/${id}`
 /** 会话页；通知点开的地址由后端 notifications.tables.Notification.url 生成，与它一致 */
 export const sessionRoute = (id: string) => `/sessions/${id}`
 export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
+/** agent 工作目录里一个文件的内容（path 相对工作目录）：图片可直接内联，其余作为附件下载 */
+export const workspaceFileUrl = (agentId: AgentId, path: string) =>
+  `/api/agents/${encodeURIComponent(agentId)}/workspace/file?${new URLSearchParams({ path })}`
 
 export const api = {
   login: (password: string) => call('post', '/api/auth/login', { body: { password } }),
@@ -267,6 +272,12 @@ export const api = {
     branded<HistoryEntry[]>(
       call('get', '/api/agents/{agent_id}/history', { path: { agent_id }, query: { query, limit: 200 } }),
     ),
+  /** agent 工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称 */
+  workspace: (agent_id: AgentId, path: string) =>
+    call('get', '/api/agents/{agent_id}/workspace', { path: { agent_id }, query: { path } }),
+  /** 工作目录里一个文件的内容（响应体是文件本身，接口描述里没有 JSON 响应体） */
+  workspaceFile: (agent_id: AgentId, path: string) =>
+    send<Blob>('GET', workspaceFileUrl(agent_id, path), undefined, undefined, true),
   /** 服务端配置决定的可选能力（如语音输入） */
   features: () => call('get', '/api/features'),
   /** 服务端配置的 LLM provider 名 */

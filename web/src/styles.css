@@ -41,3 +41,86 @@ select {
   --owner-fg: oklch(0.8 0.12 var(--owner-hue));
   --owner-bg: oklch(0.3 0.06 var(--owner-hue));
 }
+
+/* 文件预览的代码高亮（highlight.js 的类名，pages/Workspace.tsx）：配色取 GitHub 亮/暗主题，跟随界面主题 */
+.hljs-comment,
+.hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-type,
+.hljs-meta .hljs-keyword {
+  color: #cf222e;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta .hljs-string {
+  color: #0a3069;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-symbol,
+.hljs-selector-attr {
+  color: #0550ae;
+}
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: #8250df;
+}
+.hljs-built_in,
+.hljs-params,
+.hljs-meta {
+  color: #953800;
+}
+.hljs-deletion {
+  color: #82071e;
+}
+.dark .hljs-comment,
+.dark .hljs-quote {
+  color: #8b949e;
+}
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-type,
+.dark .hljs-meta .hljs-keyword {
+  color: #ff7b72;
+}
+.dark .hljs-string,
+.dark .hljs-regexp,
+.dark .hljs-addition,
+.dark .hljs-meta .hljs-string {
+  color: #a5d6ff;
+}
+.dark .hljs-number,
+.dark .hljs-literal,
+.dark .hljs-variable,
+.dark .hljs-attr,
+.dark .hljs-attribute,
+.dark .hljs-symbol,
+.dark .hljs-selector-attr {
+  color: #79c0ff;
+}
+.dark .hljs-title,
+.dark .hljs-section,
+.dark .hljs-name,
+.dark .hljs-selector-id,
+.dark .hljs-selector-class {
+  color: #d2a8ff;
+}
+.dark .hljs-built_in,
+.dark .hljs-params,
+.dark .hljs-meta {
+  color: #ffa657;
+}
+.dark .hljs-deletion {
+  color: #ffdcd7;
+}

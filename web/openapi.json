@@ -1285,6 +1285,107 @@
         }
       }
     },
+    "/api/agents/{agent_id}/workspace": {
+      "get": {
+        "summary": "List Workspace",
+        "description": "列出工作目录里 path（相对工作目录，空为根）这一层：目录在前，各自按名称排序。",
+        "operationId": "list_workspace_api_agents__agent_id__workspace_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EntryOut"
+                  },
+                  "title": "Response List Workspace Api Agents  Agent Id  Workspace Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agents/{agent_id}/workspace/file": {
+      "get": {
+        "summary": "Read Workspace File",
+        "description": "工作目录里一个文件的内容。",
+        "operationId": "read_workspace_file_api_agents__agent_id__workspace_file_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/items": {
       "get": {
         "summary": "List Items",
@@ -4207,6 +4308,42 @@
           "enabled"
         ],
         "title": "EnabledIn"
+      },
+      "EntryOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "is_dir": {
+            "type": "boolean",
+            "title": "Is Dir"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "modified": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Modified"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "is_dir",
+          "size",
+          "modified"
+        ],
+        "title": "EntryOut"
       },
       "FeaturesOut": {
         "properties": {

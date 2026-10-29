@@ -31,6 +31,7 @@ from muliao.api import (
     triggers,
     usage,
     webhook,
+    workspace,
 )
 from muliao.api.auth import COOKIE_NAME, MAX_AGE_SECONDS, Auth, require_auth
 from muliao.api.deps import C
@@ -125,6 +126,7 @@ def _private_routes() -> APIRouter:
     router.include_router(sessions.router)
     router.include_router(tasks.router)
     router.include_router(jobs.router)
+    router.include_router(workspace.router)
     router.include_router(items.router)
     router.include_router(memory.router)
     router.include_router(push.router)
