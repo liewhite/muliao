@@ -197,8 +197,6 @@ class Delegation(Base):
     )
     # 运行中检查的间隔（秒）：并发等待的委派（delegate_task(report_back) 的 heartbeat_seconds）；阻塞的为 None
     check_seconds: Mapped[float | None]
-    # 阻塞的委派（ask_agent 的 timeout）到期时停掉做它的 thread，结局以「超时被停」交回；并发的为 None
-    deadline: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     __table_args__ = (Index("uq_delegations_holder", "holder", unique=True),)

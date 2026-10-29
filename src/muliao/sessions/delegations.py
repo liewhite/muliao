@@ -1,12 +1,12 @@
 """委派的记录（委派子域，delegations 表的唯一读写处）：每项要交回结局的委派的发起参数——做它的 thread、并发等待的
-心跳间隔、阻塞等待的超时。委派还在不在进行看发起方的占用（sessions.holds），结清没有看 thread 的信件
+心跳间隔。委派还在不在进行看发起方的占用（sessions.holds），结清没有看 thread 的信件
 （sessions.settlement）；流程在 sessions.delegation / sessions.threads。"""
 
 from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,16 +22,9 @@ class DelegationRecord:
     parent_id: str
     # 做它的 thread；已删除为 None
     thread_id: str | None
+    # 并发等待（report_back）的心跳间隔；阻塞等待（ask_agent）为 None
     check_seconds: float | None
-    deadline: datetime | None
     created_at: datetime
-
-    def timed_out_after(self, now: datetime) -> float | None:
-        """到了 deadline（阻塞委派的 timeout）就返回那个 timeout（秒），否则 None。由 deadline 推出，不另存停止原因：
-        到期之后才被停止的，不论是谁停的，都已经超时。"""
-        if self.deadline is None or self.deadline > now:
-            return None
-        return (self.deadline - self.created_at).total_seconds()
 
 
 def _record(row: Delegation) -> DelegationRecord:
@@ -40,7 +33,6 @@ def _record(row: Delegation) -> DelegationRecord:
         parent_id=row.parent_session_id,
         thread_id=row.thread_session_id,
         check_seconds=row.check_seconds,
-        deadline=row.deadline,
         created_at=row.created_at,
     )
 
@@ -52,21 +44,14 @@ async def record_in(
     parent_id: str,
     thread_id: str,
     check_seconds: float | None,
-    timeout_seconds: float | None,
 ) -> DelegationRecord:
-    """记下一项委派（发出它的事务里，Threads.dispatch）。timeout_seconds 从现在起算，记为 deadline。"""
-    if check_seconds is not None and timeout_seconds is not None:
-        raise ValueError(
-            f"delegation {holder} is either concurrent (check_seconds) or blocking (timeout), not both"
-        )
-    now = utcnow()
+    """记下一项委派（发出它的事务里，Threads.dispatch）。"""
     row = Delegation(
         holder=holder,
         parent_session_id=parent_id,
         thread_session_id=thread_id,
         check_seconds=check_seconds,
-        deadline=None if timeout_seconds is None else now + timedelta(seconds=timeout_seconds),
-        created_at=now,
+        created_at=utcnow(),
     )
     s.add(row)
     await s.flush()

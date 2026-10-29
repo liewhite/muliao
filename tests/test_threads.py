@@ -70,7 +70,7 @@ async def test_ask_agent_returns_answer_and_follow_up_keeps_thread_context(conta
     await make_agent("reviewer", model="v")
     child_seen: list[int] = []
     models.models["v"] = echo("reviewed", child_seen)
-    ask = {"agent": "reviewer", "thread": "review", "timeout": 600}
+    ask = {"agent": "reviewer", "thread": "review"}
     models.models["l"] = steps(
         call("ask_agent", {**ask, "message": "v1"}, "c1"),
         answer_with_tool_results("verdict"),
@@ -116,17 +116,17 @@ async def test_parallel_asks_run_concurrently_and_asks_to_one_thread_are_answere
             parts=[
                 ToolCallPart(
                     "ask_agent",
-                    {"agent": "a", "message": "x", "thread": "ta", "timeout": 600},
+                    {"agent": "a", "message": "x", "thread": "ta"},
                     tool_call_id="c1",
                 ),
                 ToolCallPart(
                     "ask_agent",
-                    {"agent": "a", "message": "y", "thread": "ta", "timeout": 600},
+                    {"agent": "a", "message": "y", "thread": "ta"},
                     tool_call_id="c2",
                 ),
                 ToolCallPart(
                     "ask_agent",
-                    {"agent": "b", "message": "z", "thread": "tb", "timeout": 600},
+                    {"agent": "b", "message": "z", "thread": "tb"},
                     tool_call_id="c3",
                 ),
             ]
@@ -155,12 +155,12 @@ async def test_an_agent_asks_itself_in_parallel_threads(container, make_agent, m
                 parts=[
                     ToolCallPart(
                         "ask_agent",
-                        {"agent": "me", "message": "x", "thread": "me-x", "timeout": 600},
+                        {"agent": "me", "message": "x", "thread": "me-x"},
                         tool_call_id="c1",
                     ),
                     ToolCallPart(
                         "ask_agent",
-                        {"agent": "me", "message": "y", "thread": "me-y", "timeout": 600},
+                        {"agent": "me", "message": "y", "thread": "me-y"},
                         tool_call_id="c2",
                     ),
                 ]
@@ -192,9 +192,7 @@ async def test_asking_itself_under_a_provider_limit_of_one_does_not_deadlock(con
         if last_user_prompt(messages[:1]) != "go":
             return ModelResponse(parts=[TextPart("helped")])
         if len(messages) == 1:
-            return call("ask_agent", {"agent": "me", "message": "x", "thread": "me-x", "timeout": 600})(
-                messages
-            )
+            return call("ask_agent", {"agent": "me", "message": "x", "thread": "me-x"})(messages)
         return answer_with_tool_results("got")(messages)
 
     models.models["m"] = ConcurrencyLimitedModel(scripted(fn), _ProviderLimiter("p", 1))
@@ -215,7 +213,7 @@ async def test_nested_ask_returns_the_final_answer_of_the_whole_chain(container,
                 TextPart("let me ask leaf first"),
                 ToolCallPart(
                     "ask_agent",
-                    {"agent": "leaf", "message": "fact?", "thread": "leaf", "timeout": 600},
+                    {"agent": "leaf", "message": "fact?", "thread": "leaf"},
                     tool_call_id="m1",
                 ),
             ]
@@ -223,7 +221,7 @@ async def test_nested_ask_returns_the_final_answer_of_the_whole_chain(container,
         answer_with_tool_results("mid says"),
     )
     models.models["l"] = steps(
-        call("ask_agent", {"agent": "mid", "message": "research", "thread": "m", "timeout": 600}),
+        call("ask_agent", {"agent": "mid", "message": "research", "thread": "m"}),
         answer_with_tool_results("lead got"),
     )
 
@@ -265,7 +263,7 @@ async def test_a_failed_ask_comes_back_as_its_result_and_the_asker_goes_on(conta
 
     models.models["x"] = scripted(fail)
     models.models["l"] = steps(
-        call("ask_agent", {"agent": "broken", "message": "do", "thread": "t", "timeout": 600}),
+        call("ask_agent", {"agent": "broken", "message": "do", "thread": "t"}),
         answer_with_tool_results("x"),
     )
 
@@ -293,10 +291,10 @@ async def test_threads_are_told_apart_by_agent_and_name_and_either_tool_continue
     await make_agent("other", model="o")
     errors: list[str] = []
     script = [
-        ("ask_agent", {"agent": "worker", "message": "q", "thread": "private", "timeout": 600}),
+        ("ask_agent", {"agent": "worker", "message": "q", "thread": "private"}),
         ("delegate_task", {"agent": "worker", "task": "q", "thread": "public"}),
         ("delegate_task", {"agent": "worker", "task": "q", "thread": "private"}),
-        ("ask_agent", {"agent": "worker", "message": "q", "thread": "public", "timeout": 600}),
+        ("ask_agent", {"agent": "worker", "message": "q", "thread": "public"}),
         ("delegate_task", {"agent": "other", "task": "q", "thread": "public"}),
         ("stop_thread", {"thread": "public"}),
         ("stop_thread", {"thread": "public", "agent": "other"}),
@@ -354,7 +352,7 @@ async def test_deleting_parent_keeps_its_threads(container, make_agent, models):
                 ),
                 ToolCallPart(
                     "ask_agent",
-                    {"agent": "worker", "message": "b", "thread": "priv", "timeout": 600},
+                    {"agent": "worker", "message": "b", "thread": "priv"},
                     tool_call_id="c2",
                 ),
             ]
@@ -378,7 +376,7 @@ async def test_an_ask_thread_is_listed_and_the_user_may_reply_in_it(container, m
     lead = (await make_agent("lead", model="l")).id
     await make_agent("worker", model="w")
     models.models["l"] = steps(
-        call("ask_agent", {"agent": "worker", "message": "q", "thread": "t", "timeout": 600}),
+        call("ask_agent", {"agent": "worker", "message": "q", "thread": "t"}),
         answer_with_tool_results("a"),
     )
     parent = await start(container, lead, "go")
@@ -453,7 +451,7 @@ async def test_a_running_ask_thread_is_not_deleted_nor_its_asker_nor_its_agent(c
 
     models.models["s"] = FunctionModel(stream_function=blocked)
     models.models["l"] = steps(
-        call("ask_agent", {"agent": "slow", "message": "q", "thread": "t", "timeout": 600}),
+        call("ask_agent", {"agent": "slow", "message": "q", "thread": "t"}),
         answer_with_tool_results("a"),
     )
     parent = await start(container, lead, "go")
@@ -481,50 +479,6 @@ async def test_a_running_ask_thread_is_not_deleted_nor_its_asker_nor_its_agent(c
     await container.agent_lifecycle.delete(slow, actor="user")  # 跑完之后可以删
 
 
-async def test_an_ask_that_times_out_stops_its_thread_and_returns_what_it_said(container, make_agent, models):
-    """ask_agent 是阻塞的：到了 timeout 停掉 thread（同 stop_thread），「超时被停」作为这次调用的结果交回。"""
-    import asyncio
-    from collections.abc import AsyncIterator
-
-    from pydantic_ai.models.function import FunctionModel
-
-    lead = (await make_agent("lead", model="l")).id
-    await make_agent("slow", model="s")
-    gate, running = asyncio.Event(), asyncio.Event()
-
-    async def blocked(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
-        running.set()
-        await gate.wait()
-        yield "done"
-
-    models.models["s"] = FunctionModel(stream_function=blocked)
-    models.models["l"] = steps(
-        call("ask_agent", {"agent": "slow", "message": "q", "thread": "t", "timeout": 0.2}),
-        answer_with_tool_results("a"),
-    )
-    parent = await start(container, lead, "go")
-    worker = asyncio.create_task(container.worker.run_forever())
-    try:
-        async with asyncio.timeout(5):
-            await running.wait()
-        await asyncio.sleep(0.25)
-        await container.thread_checks.check()
-        await idle(container)
-    finally:
-        gate.set()
-        worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
-
-    answer = await last_answer(container, parent.id)
-    assert answer.startswith(
-        "a: Thread 't' (slow) did not finish within your timeout of 0.2 seconds and was stopped"
-    )
-    [child] = await threads_of(container, parent.id)
-    async with container.db.transaction() as s:
-        assert (await container.threads.list_in(s, parent.id))[0].progress.state.value == "idle"
-    assert child.thread == "t"
-
-
 async def test_a_pending_ask_points_at_its_thread_before_the_answer(container, make_agent, models):
     """ask_agent 还挂着（对方没回答）时，调用条目就带上它开出的 thread；回答之后仍在调用条目上（关联只看调用 id）。"""
     import asyncio
@@ -543,7 +497,7 @@ async def test_a_pending_ask_points_at_its_thread_before_the_answer(container, m
 
     models.models["s"] = FunctionModel(stream_function=blocked)
     models.models["l"] = steps(
-        call("ask_agent", {"agent": "slow", "message": "q", "thread": "t", "timeout": 600}),
+        call("ask_agent", {"agent": "slow", "message": "q", "thread": "t"}),
         answer_with_tool_results("a"),
     )
     parent = await start(container, lead, "go")
@@ -583,7 +537,7 @@ async def test_delegation_results_point_at_the_thread_they_opened(client, contai
         boss.id,
         [
             ("delegate_task", {"agent": "helper", "task": "report", "thread": "weekly"}),
-            ("ask_agent", {"agent": "helper", "message": "status?", "thread": "check", "timeout": 600}),
+            ("ask_agent", {"agent": "helper", "message": "status?", "thread": "check"}),
             # 续写同一个 thread：这次调用也挂着它
             ("delegate_task", {"agent": "helper", "task": "again", "thread": "weekly"}),
         ],
@@ -615,7 +569,7 @@ async def test_a_question_after_a_failed_ask_gets_its_own_answer(container, make
         question = last_user_prompt(messages)
         return call(
             "ask_agent",
-            {"agent": "helper", "message": question, "thread": "t", "timeout": 600},
+            {"agent": "helper", "message": question, "thread": "t"},
             f"c{asks['n']}",
         )(messages)
 
@@ -667,11 +621,11 @@ async def test_every_run_of_a_thread_with_unsettled_delegated_work_answers_to_th
     await make_agent("leaf", model="f")
     models.models["f"] = echo("leaf says")
     models.models["m"] = steps(
-        call("ask_agent", {"agent": "leaf", "message": "fact?", "thread": "leaf", "timeout": 600}),
+        call("ask_agent", {"agent": "leaf", "message": "fact?", "thread": "leaf"}),
         answer_with_tool_results("mid says"),
     )
     models.models["l"] = steps(
-        call("ask_agent", {"agent": "mid", "message": "research", "thread": "m", "timeout": 600}),
+        call("ask_agent", {"agent": "mid", "message": "research", "thread": "m"}),
         answer_with_tool_results("lead got"),
     )
     parent = await start(container, lead, "go")

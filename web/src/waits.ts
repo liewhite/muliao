@@ -28,12 +28,8 @@ export function waitDetail(w: Wait, now: number): string {
       return `已运行 ${elapsed(w.since, now)}`
     case 'delegation': {
       const waited = `已等 ${elapsed(w.since, now)}`
-      if (w.deadline !== null) {
-        const left = Date.parse(w.deadline) - now
-        return `ask_agent · ${left > 0 ? `超时还剩 ${formatDuration(left, true)}` : '已到超时，正在停止'} · ${waited}`
-      }
-      // 委派要么阻塞（deadline）要么并发（心跳），后端保证二者有其一
-      if (w.check_seconds === null) throw new Error('delegation wait has neither a deadline nor a heartbeat')
+      // ask_agent 是阻塞的，没有心跳也没有超时；report_back 有心跳
+      if (w.check_seconds === null) return `ask_agent · ${waited}`
       return `report_back · 每 ${formatDuration(w.check_seconds * 1000, true)} 检查 · ${waited}`
     }
     case 'wake': {

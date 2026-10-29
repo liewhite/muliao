@@ -635,10 +635,10 @@ def test_threads_per_agent_heartbeats_and_timeouts_backfill_and_downgrade(tmp_pa
         assert conn.execute("select check_seconds from jobs").fetchall() == [(60.0,)]
         # 委派的参数后来搬进了 delegations（#244）；两项委派都没有 thread 信件
         assert conn.execute(
-            "select holder, thread_session_id, check_seconds, deadline from delegations order by holder"
+            "select holder, thread_session_id, check_seconds from delegations order by holder"
         ).fetchall() == [
-            ("delegation:p:k1", None, 60.0, None),
-            ("delegation:p:k2", None, None, None),
+            ("delegation:p:k1", None, 60.0),
+            ("delegation:p:k2", None, None),
         ]
         # 同一父会话、同名、不同 agent：现在是两个 thread
         conn.executemany(
@@ -1379,3 +1379,47 @@ def test_private_threads_become_threads_and_downgrade_keeps_them(tmp_path):
         command.downgrade(alembic_config(connection), "5387928cff43")
     with sqlite3.connect(path) as conn:
         assert conn.execute("select id, kind from sessions order by id").fetchall() == expected
+
+
+def test_delegation_deadline_is_dropped_keeping_the_delegations_and_downgrade(tmp_path):
+    """#307：ask_agent 没有 timeout 了，delegations.deadline 删掉，委派行原样保留；降级加回可空列。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "9e3b1c7a5d20")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', ?, ?)",
+            (t, t),
+        )
+        conn.execute(
+            "insert into sessions (id, agent_id, title, origin, kind, created_at, updated_at) "
+            "values ('p', 'a1', 't', 'user', 'conversation', ?, ?)",
+            (t, t),
+        )
+        conn.executemany(
+            "insert into delegations (holder, parent_session_id, check_seconds, deadline, created_at) "
+            "values (?, 'p', ?, ?, ?)",
+            [("ask", None, "2026-01-01 00:10:00", t), ("report", 30.0, None, t)],
+        )
+
+    migrate(path)
+    expected = [("ask", None), ("report", 30.0)]
+    with sqlite3.connect(path) as conn:
+        assert "deadline" not in {r[1] for r in conn.execute("pragma table_info(delegations)")}
+        assert (
+            conn.execute("select holder, check_seconds from delegations order by holder").fetchall()
+            == expected
+        )
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "9e3b1c7a5d20")
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "select holder, check_seconds, deadline from delegations order by holder"
+        ).fetchall()
+        assert rows == [("ask", None, None), ("report", 30.0, None)]

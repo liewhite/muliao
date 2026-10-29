@@ -206,7 +206,7 @@ async def test_list_threads_shows_each_thread_with_its_state(container, make_age
         models,
         me.id,
         [
-            ("ask_agent", {"agent": "worker", "message": "q", "thread": "review", "timeout": 600}),
+            ("ask_agent", {"agent": "worker", "message": "q", "thread": "review"}),
             ("list_threads", {}),
         ],
     )
@@ -343,7 +343,7 @@ async def test_asked_agent_runs_with_its_own_permissions(container, make_agent, 
         container,
         models,
         me.id,
-        [("ask_agent", {"agent": "narrow", "message": "q", "thread": "t", "timeout": 600})],
+        [("ask_agent", {"agent": "narrow", "message": "q", "thread": "t"})],
     )
 
     assert outputs == ["answer"]

@@ -12,20 +12,14 @@ describe('waitDetail', () => {
     expect(waitDetail(w, now)).toBe('已运行 1m15s')
   })
 
-  it('shows the time left before an ask_agent times out, and when it has run out', () => {
-    const w: Wait = { kind: 'delegation', thread_session_id: 't', check_seconds: null, deadline: later(90), since: ago(30) }
-    expect(waitDetail(w, now)).toBe('ask_agent · 超时还剩 1m30s · 已等 30s')
-    expect(waitDetail({ ...w, deadline: ago(1) }, now)).toBe('ask_agent · 已到超时，正在停止 · 已等 30s')
+  it('shows how long an ask_agent has been waiting', () => {
+    const w: Wait = { kind: 'delegation', thread_session_id: 't', check_seconds: null, since: ago(30) }
+    expect(waitDetail(w, now)).toBe('ask_agent · 已等 30s')
   })
 
   it('shows the heartbeat of a report_back delegation', () => {
-    const w: Wait = { kind: 'delegation', thread_session_id: 't', check_seconds: 300, deadline: null, since: ago(5) }
+    const w: Wait = { kind: 'delegation', thread_session_id: 't', check_seconds: 300, since: ago(5) }
     expect(waitDetail(w, now)).toBe('report_back · 每 5m00s 检查 · 已等 5s')
-  })
-
-  it('rejects a delegation that is neither blocking nor concurrent', () => {
-    const w: Wait = { kind: 'delegation', thread_session_id: 't', check_seconds: null, deadline: null, since: ago(5) }
-    expect(() => waitDetail(w, now)).toThrow('neither')
   })
 
   it('shows when a wake-up is due and how far away it is', () => {

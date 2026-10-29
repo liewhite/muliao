@@ -71,7 +71,7 @@ class SessionPorts:
             halt=halt,
             stopper=stopper,
             threads=Threads(queue),
-            thread_checks=ThreadChecks(db, queue, stopper),
+            thread_checks=ThreadChecks(db, queue),
             wakeups=WakeUps(db, queue, tz),
             work=SessionWork(db),
             _db=db,

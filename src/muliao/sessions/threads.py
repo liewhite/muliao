@@ -114,15 +114,13 @@ class Threads:
         suspends: bool,
         awaited: bool,
         check_seconds: float | None = None,
-        timeout_seconds: float | None = None,
     ) -> Session:
         """要交回结局的委派（ask_agent、delegate_task(report_back)），在调用方的一个事务里：打开或找到 thread，在发起方
         登记占用（suspends 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件（委派的全部状态，结局的
         交回见 sessions.delegation），并记下这次调用开出或续写了这个 thread（sessions.thread_calls）。thread 名不合法时抛
         InvalidInput，什么都没写。call_id：发出它的工具调用，按它幂等：续跑重新执行这次调用时只返回已经投递到的
         thread。suspends：这次调用挂起、等结局作为它的结果（ask_agent），占用带上 call_id。awaited：用户是否在等发起方
-        的回答。check_seconds：并发等待时的运行中检查间隔；timeout_seconds：阻塞等待的超时（到期停掉 thread，
-        ThreadChecks）。"""
+        的回答。check_seconds：并发等待时的运行中检查间隔（阻塞等待的为 None，不设超时）。"""
         holder = delegation_holder(parent_id, call_id)
         if await get_hold_in(s, parent_id, holder) is not None:
             existing = (await threads_of_holds_in(s, [holder])).get(holder)
@@ -141,7 +139,6 @@ class Threads:
             parent_id=parent_id,
             thread_id=child.id,
             check_seconds=check_seconds,
-            timeout_seconds=timeout_seconds,
         )
         await receive(
             s,

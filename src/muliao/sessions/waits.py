@@ -32,8 +32,6 @@ class DelegationWait(BaseModel):
     thread_session_id: str | None
     # report_back 的心跳间隔（秒）；ask_agent 为 null
     check_seconds: float | None
-    # ask_agent 的超时时刻；report_back 为 null
-    deadline: datetime | None
     since: datetime
 
 
@@ -74,7 +72,6 @@ async def waits_of_in(s: AsyncSession, waiting: Waiting) -> list[Wait]:
                 DelegationWait(
                     thread_session_id=d.thread_id,
                     check_seconds=d.check_seconds,
-                    deadline=d.deadline,
                     since=hold.created_at,
                 )
             )

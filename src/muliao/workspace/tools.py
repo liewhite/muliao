@@ -37,7 +37,7 @@ _BACKGROUND_DESCRIPTION = (
     " To keep working while a long command runs, pass `background: true` and no `timeout`: this is non-blocking. "
     "It returns a job id at once and the job runs alongside you with no time limit; its output goes to "
     "jobs/<id>.log in your workspace. While it runs you get a check-in event every `heartbeat_seconds` (default "
-    "30; choose it from how long you expect the job to take, e.g. 300 for a half-hour build) with its run time and "
+    "60; choose it from how long you expect the job to take, e.g. 300 for a half-hour build) with its run time and "
     "last output lines: then either keep waiting (if nothing needs doing, reply with just '…') or stop it with "
     "`job_kill`; `job_status` shows it at any time. When it ends you get an event with its exit code and last "
     "output."
@@ -72,7 +72,7 @@ def workspace_toolset(
                 Secret values in the output are replaced by `[secret:KEY]`.
             background: Run it as a background job instead of waiting for it.
             heartbeat_seconds: Background only: seconds between check-in events while the job runs (> 0,
-                default 30).
+                default 60).
         """
         if not background:
             if heartbeat_seconds is not None:

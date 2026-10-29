@@ -28,7 +28,7 @@ from muliao.sessions.tables import HoldStatus, MailKind, Session
 log = logging.getLogger(__name__)
 
 # 发起并发工作时不给 heartbeat_seconds 的默认间隔（run_shell(background)、delegate_task(report_back) 共用，唯一一处）
-DEFAULT_CHECK_SECONDS = 30.0
+DEFAULT_CHECK_SECONDS = 60.0
 
 
 def check_due(last: datetime, interval_seconds: float, now: datetime) -> bool:

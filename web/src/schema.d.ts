@@ -1486,8 +1486,6 @@ export interface components {
             thread_session_id: string | null;
             /** Check Seconds */
             check_seconds: number | null;
-            /** Deadline */
-            deadline: string | null;
             /**
              * Since
              * Format: date-time

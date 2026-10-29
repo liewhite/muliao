@@ -45,7 +45,6 @@ async def test_each_kind_of_wait_is_named_in_the_order_it_began(container, make_
             parent_id=session.id,
             thread_id=thread.id,
             check_seconds=30,
-            timeout_seconds=None,
         )
         await hold_in(s, session.id, "delegation:x:a", awaited=False, call_id="a")
         await record_in(
@@ -54,7 +53,6 @@ async def test_each_kind_of_wait_is_named_in_the_order_it_began(container, make_
             parent_id=session.id,
             thread_id=thread.id,
             check_seconds=None,
-            timeout_seconds=600,
         )
         await schedule_in(s, session.id, "w1", due, "check the deploy", awaited=False)
         [waiting] = (await waiting_among(s, [session.id])).values()
@@ -63,8 +61,8 @@ async def test_each_kind_of_wait_is_named_in_the_order_it_began(container, make_
     job, report, ask, wake, question = waits
     assert isinstance(job, JobWait) and job.job_id == 7
     assert isinstance(report, DelegationWait)
-    assert (report.thread_session_id, report.check_seconds, report.deadline) == (thread.id, 30, None)
-    assert isinstance(ask, DelegationWait) and ask.check_seconds is None and ask.deadline is not None
+    assert (report.thread_session_id, report.check_seconds) == (thread.id, 30)
+    assert isinstance(ask, DelegationWait) and ask.check_seconds is None
     assert isinstance(wake, WakeWait) and (wake.due_at, wake.note) == (due, "check the deploy")
     assert question == AskWait(call_id="q1", headers=["Scope", "When"])
     assert all(w.since is not None for w in (job, report, ask, wake))

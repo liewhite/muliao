@@ -103,16 +103,14 @@ async def test_a_final_failure_settles_delegations_handled_by_an_earlier_run(con
         if len(lead_seen) == 0 and sum(isinstance(m, ModelResponse) for m in messages) == 0:
             return call(
                 "ask_agent",
-                {"agent": "middle", "message": "go deeper", "thread": "mid", "timeout": 600},
+                {"agent": "middle", "message": "go deeper", "thread": "mid"},
                 "a1",
             )(messages)
         return ModelResponse(parts=[TextPart("ok")])
 
     def middle_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         if sum(isinstance(m, ModelResponse) for m in messages) == 0:
-            return call(
-                "ask_agent", {"agent": "leaf", "message": "q", "thread": "leaf", "timeout": 600}, "a2"
-            )(messages)
+            return call("ask_agent", {"agent": "leaf", "message": "q", "thread": "leaf"}, "a2")(messages)
         raise ModelHTTPError(status_code=400, model_name="m", body="bad request")
 
     models.models["l"] = scripted(lead_fn)

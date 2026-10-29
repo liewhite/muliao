@@ -389,7 +389,7 @@ async def test_a_question_in_an_ask_thread_is_handed_back_to_the_asking_agent(
             parts=[
                 ToolCallPart(
                     "ask_agent",
-                    {"agent": "helper", "message": "x", "thread": "h", "timeout": 600},
+                    {"agent": "helper", "message": "x", "thread": "h"},
                     tool_call_id="a",
                 )
             ]

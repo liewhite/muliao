@@ -39,8 +39,8 @@ def delegation_toolset(
     """委派：thread 是这个会话开出的、以（agent, 名字）区分的子会话，同名即续聊（保留对方上下文），用 delegate_task
     还是 ask_agent 续聊都行。
 
-    ask_agent 是阻塞的（调用不返回、一直等）：必须给 timeout，到期停掉 thread；delegate_task(report_back) 与发起方
-    并发：没有 timeout，按 heartbeat_seconds 投运行中检查（sessions.delegation.ThreadChecks）。"""
+    ask_agent 是阻塞的（调用不返回、一直等到结局），不设超时：agent 的运行本身有界；delegate_task(report_back)
+    与发起方并发，按 heartbeat_seconds 投运行中检查（sessions.delegation.ThreadChecks）。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
@@ -56,7 +56,7 @@ def delegation_toolset(
         the user can see and reply in. By default the user is notified with its answer and you do NOT get it back.
         With `report_back: true` the answer (or its failure) comes back to you as an event in this conversation
         instead (events reach you like messages, between your tool calls if you are busy), and while it is still
-        working you get a check-in event every `heartbeat_seconds` (default 30) saying what the thread is doing:
+        working you get a check-in event every `heartbeat_seconds` (default 60) saying what the thread is doing:
         then either keep waiting (if nothing needs doing, reply with just '…'; `list_threads` shows its latest
         reply) or stop it with `stop_thread`. If you need the answer before you can continue, use `ask_agent`.
         The agent can be yourself (your own name): a fresh conversation of you, with your memory, skills and
@@ -71,7 +71,7 @@ def delegation_toolset(
                 `ask_agent`; use a new name for an unrelated task.
             report_back: Get the thread's answer back as an event in this conversation.
             heartbeat_seconds: With `report_back: true` only: seconds between check-in events while it works
-                (> 0, default 30); choose it from how long you expect the task to take, e.g. 600 for an hour-long
+                (> 0, default 60); choose it from how long you expect the task to take, e.g. 600 for an hour-long
                 task.
         """
         parent_id = ctx.deps.session_id
@@ -111,17 +111,14 @@ def delegation_toolset(
         agent: str,
         message: str,
         thread: str,
-        timeout: float,  # noqa: ASYNC109  工具参数，面向模型的命名
     ) -> str:
         """Ask an agent and wait for its answer, which is returned as this tool's result. This is blocking: your
-        reply pauses until the answer arrives, so `timeout` is required: if it has not answered within that many
-        seconds, its thread is stopped (as with `stop_thread`) and the result says it timed out, with what it said
-        so far. The user can see the thread and reply in it. Files it shares are shown to the user with your reply.
+        reply pauses until the answer arrives (there is no timeout; the agent's run always ends with an answer, a
+        failure or a stop). The user can see the thread and reply in it. Files it shares are shown to the user with your reply.
         Ask again in the same thread (same agent and name) to follow up with the agent's context intact, e.g.
         review -> fix -> review again; this also continues a thread opened with `delegate_task`. Several asks in one response run in
-        parallel; asks to the same thread share it, so the first one to time out stops it for all of them. If the
-        user writes to you meanwhile, you continue and the outcome (answer or timeout) reaches you later as an
-        event. For long work you want to keep an eye on while doing other things, use
+        parallel; asks to the same thread share it. If the user writes to you meanwhile, you continue and the
+        outcome reaches you later as an event. For long work you want to keep an eye on while doing other things, use
         `delegate_task` with `report_back: true` instead.
         The agent can be yourself (your own name): a fresh conversation of you, with your memory, skills and tools,
         for a self-contained side job (e.g. a code review, or several parts of a task in parallel) whose context
@@ -132,15 +129,11 @@ def delegation_toolset(
             message: Self-contained request; the agent sees only this thread's history.
             thread: Short name of the thread, e.g. "code-review". Reuse it with the same agent to continue the
                 same conversation (also one opened with `delegate_task`).
-            timeout: Required: seconds to wait for the answer (> 0, no upper limit). Estimate it yourself from
-                the work you ask for, with room to spare, e.g. 300 for a short question, 1800 for a code review.
         """
         parent_id = ctx.deps.session_id
         target = await agents.find_by_name(agent)
         if not message.strip():
             raise InvalidInput("message must not be empty")
-        if not timeout > 0:  # 也拒绝 NaN
-            raise InvalidInput("timeout must be greater than 0 seconds")
         if ctx.tool_call_id is None:
             raise RuntimeError("ask_agent was called without a tool call id")
         async with db.transaction() as s:
@@ -154,7 +147,6 @@ def delegation_toolset(
                 call_id=ctx.tool_call_id,
                 suspends=True,
                 awaited=ctx.deps.user_waits,
-                timeout_seconds=timeout,
             )
         # 发问方的运行停在这次调用上，不占 worker；对方的结局作为这次调用的结果交回（sessions.pending）
         defer_call()

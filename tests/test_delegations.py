@@ -12,6 +12,7 @@ from sqlalchemy import select
 from muliao.errors import Conflict
 from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.conventions import STOPPED_TOOL_RESULT
+from muliao.sessions.holds import active_holders_in
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import Delegation, HoldStatus, Mail, MailKind, MailState, SessionHold
@@ -188,17 +189,15 @@ async def test_each_reported_delegation_is_checked_at_its_own_interval(container
     assert "Thread 'fast'" in event.content
 
 
-async def test_an_expired_ask_stops_its_thread_once_and_retries_a_failed_stop(container, make_agent, models):
-    from muliao.sessions.delegation import ThreadChecks
-    from muliao.sessions.halt import Halted
-
+async def test_an_ask_has_no_check_in_and_no_timeout(container, make_agent, models):
+    """#307：ask_agent 是阻塞的、不设超时：委派记录没有心跳，检查既不给发问方投信，也不停 thread。"""
     lead = (await make_agent("lead", model="l")).id
     helper = await container.agents.get((await make_agent("helper", model="h")).id)
     models.models["l"] = scripted(Recorder())
     parent = await start(container, lead, "go")
     await drain(container)
     async with container.db.transaction() as s:
-        child = await container.threads.dispatch(
+        await container.threads.dispatch(
             s,
             parent_id=parent.id,
             agent=helper,
@@ -207,39 +206,22 @@ async def test_an_expired_ask_stops_its_thread_once_and_retries_a_failed_stop(co
             call_id="ask-1",
             suspends=True,
             awaited=False,
-            timeout_seconds=0.001,
         )
-    stops: list[str] = []
-
-    async def flaky_stop(session_id: str) -> Halted:
-        stops.append(session_id)
-        if len(stops) == 1:
-            raise RuntimeError("database is locked")
-        # 停止返回时已经结清：占用释放，下一拍不再停
-        return await container.stopper(session_id)
-
-    checks = ThreadChecks(container.db, container.queue, flaky_stop)
     await asyncio.sleep(0.01)
-    await checks.check()  # 停止失败：记日志，不记下
-    await checks.check()  # 重试，停成
-    await checks.check()  # 已经停过，不再停
-    assert stops == [child.id, child.id]
+
+    assert await container.thread_checks.check() == 0
+    async with container.db.transaction() as s:
+        [record] = (await s.scalars(select(Delegation))).all()
+        assert list(await active_holders_in(s)) == [record.holder]
+    assert record.check_seconds is None
 
 
-async def test_ask_agent_and_background_jobs_reject_a_wrong_timeout(container, make_agent, models):
+async def test_background_jobs_reject_a_timeout(container, make_agent, models):
     lead = (await make_agent("lead", model="tools")).id
-    await make_agent("helper", model="h")
-    outputs = await run_tools(
-        container,
-        models,
-        lead,
-        [
-            ("ask_agent", {"agent": "helper", "message": "q", "thread": "t", "timeout": 0}),
-            ("run_shell", {"command": "true", "background": True, "timeout": 5}),
-        ],
+    [output] = await run_tools(
+        container, models, lead, [("run_shell", {"command": "true", "background": True, "timeout": 5})]
     )
-    assert "timeout must be greater than 0 seconds" in outputs[0]
-    assert "background jobs have no timeout" in outputs[1]
+    assert "background jobs have no timeout" in output
 
 
 async def test_delegate_task_takes_a_heartbeat_only_with_report_back(container, make_agent, models):
@@ -278,7 +260,7 @@ async def test_delegate_task_takes_a_heartbeat_only_with_report_back(container, 
     assert outputs[2] == "delegated to reviewer in thread 'c'"
     async with container.db.transaction() as s:
         records = (await s.scalars(select(Delegation))).all()
-    assert [(r.check_seconds, r.deadline) for r in records] == [(90.0, None)]
+    assert [r.check_seconds for r in records] == [90.0]
 
 
 async def test_nothing_is_reported_once_the_parent_session_is_gone(container, make_agent, models):
@@ -610,9 +592,7 @@ async def _asking(container, make_agent, models, helper_model):  # noqa: ANN001,
         calls["n"] += 1
         seen.extend(str(r.content) for r in tool_returns(messages))
         if calls["n"] == 1:
-            return call(
-                "ask_agent", {"agent": "helper", "message": "check", "thread": "h", "timeout": 600}, "ask1"
-            )(messages)
+            return call("ask_agent", {"agent": "helper", "message": "check", "thread": "h"}, "ask1")(messages)
         return ModelResponse(parts=[TextPart("ok")])
 
     models.models["l"] = scripted(lead_fn)
@@ -887,7 +867,7 @@ async def test_a_question_and_an_ask_in_one_reply_wait_for_both(client, containe
                 ToolCallPart("ask_user", {"questions": QUESTIONS[:1]}, tool_call_id="q"),
                 ToolCallPart(
                     "ask_agent",
-                    {"agent": "helper", "message": "x", "thread": "h", "timeout": 600},
+                    {"agent": "helper", "message": "x", "thread": "h"},
                     tool_call_id="a",
                 ),
             ]

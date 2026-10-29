@@ -4148,18 +4148,6 @@
             ],
             "title": "Check Seconds"
           },
-          "deadline": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Deadline"
-          },
           "since": {
             "type": "string",
             "format": "date-time",
@@ -4170,7 +4158,6 @@
         "required": [
           "thread_session_id",
           "check_seconds",
-          "deadline",
           "since"
         ],
         "title": "DelegationWait",

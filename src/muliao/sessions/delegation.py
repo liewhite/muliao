@@ -7,10 +7,10 @@
   结局交给发起方并释放占用——发起方还停在那次 ask_agent 调用上时作为调用的结果，否则作为事件；发起方已被停止
   （占用 cleared）不投，已删除（占用随它删除）不投。
 - 发起方被停止：停止事务清掉占用，并给做这些工作的 thread 各发一条定向命令 StopThread（逐层由它们自己的停止继续）。
-- 运行中检查与超时（ThreadChecks）：并发等待的（report_back）按 heartbeat_seconds 给发起方投检查信件；阻塞等待的
-  （ask_agent）到了 timeout 停掉 thread，结局以「超时被停」交回。
+- 运行中检查（ThreadChecks）：并发等待的（report_back）按 heartbeat_seconds 给发起方投检查信件；阻塞等待的
+  （ask_agent）不设超时，运行本身有界。
 
-委派的进行状态只有发起方的占用（active / released / cleared）一处；发起参数（thread、心跳间隔、超时）在委派记录
+委派的进行状态只有发起方的占用（active / released / cleared）一处；发起参数（thread、心跳间隔）在委派记录
 （sessions.delegations）。
 """
 
@@ -20,9 +20,7 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
-import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agent_runtime.api import Attachment
@@ -40,14 +38,7 @@ from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import Session
 from muliao.sessions.work import check_due, deliver_in
 
-if TYPE_CHECKING:
-    # halt 用到本模块（停止时找委派的 thread），这里只引用停止的端口类型
-    from muliao.sessions.halt import StopSession
-
 log = logging.getLogger(__name__)
-
-# 委派检查停一个超时 thread 时最多等它收尾多久（之后放手，见 ThreadChecks.check）
-_STOP_WAIT_SECONDS = 5.0
 
 
 class Ending(StrEnum):
@@ -70,26 +61,18 @@ def thread_name(child: Session) -> str:
     return child.thread
 
 
-def _result_text(thread: str, agent: str, ending: Ending, text: str, timed_out_after: float | None) -> str:
+def _result_text(thread: str, agent: str, ending: Ending, text: str) -> str:
     """作为 ask_agent 调用的结果：完成时就是回答本身（发问方问的就是它）。"""
     if ending == Ending.FINISHED:
         return text
-    return event_text(thread, agent, ending, text, timed_out_after)
+    return event_text(thread, agent, ending, text)
 
 
-def event_text(
-    thread: str, agent: str, ending: Ending, text: str, timed_out_after: float | None = None
-) -> str:
-    """timed_out_after：这项委派到了发起方给的 timeout（秒）、thread 因此被停掉。"""
+def event_text(thread: str, agent: str, ending: Ending, text: str) -> str:
     who = f"Thread {thread!r} ({agent})"
     match ending:
         case Ending.FINISHED:
             return f"{who} finished your task. Its answer:\n{text}"
-        case Ending.STOPPED if timed_out_after is not None:
-            return (
-                f"{who} did not finish within your timeout of {timed_out_after:g} seconds and was stopped. "
-                f"What it said so far:\n{text or '(nothing)'}"
-            )
         case Ending.STOPPED:
             return f"{who} was stopped before it finished. What it said so far:\n{text or '(nothing)'}"
         case Ending.FAILED:
@@ -121,12 +104,7 @@ async def hand_back_in(
         )
         return
     agent = await agent_in(s, child.agent_id)
-    now = utcnow()
-    # 发起方已删除时记录随它删除，结局也没有收件人
-    records = await records_among(s, holders) if ending == Ending.STOPPED else {}
     for holder in holders:
-        # deadline 与这里的 now 都用真实时钟（delegations.record_in 与 ThreadChecks 在生产里都是 utcnow）
-        timed_out_after = records[holder].timed_out_after(now) if holder in records else None
         # 发起方已删除时 GONE；发起方还在却没有这个占用是 bug，deliver_in 报错
         delivered = await deliver_in(
             s,
@@ -135,9 +113,9 @@ async def hand_back_in(
             holder,
             key=f"{holder}:settled",
             source=thread_source(child.id),
-            event_text=event_text(name, agent.name, ending, text, timed_out_after),
+            event_text=event_text(name, agent.name, ending, text),
             answer=AgentAnswer(
-                text=_result_text(name, agent.name, ending, text, timed_out_after),
+                text=_result_text(name, agent.name, ending, text),
                 attachments=list(attachments),
             ),
         )
@@ -164,16 +142,13 @@ async def threads_of_holds_in(s: AsyncSession, holders: Sequence[str]) -> dict[s
 
 
 class ThreadChecks:
-    """委派的运行中检查与超时（WorkWatcher 的一种工作，sessions.work），按委派记录的发起参数（sessions.delegations），
-    只看发起方占用还 active 的：
-    - 并发等待的委派（delegate_task(report_back)，带 check_seconds）：每过一个间隔给发起方投一封检查信件；
-    - 阻塞等待的委派（ask_agent，带 deadline）：到期时停掉做它的 thread（同 stop_thread），结局以「超时被停」
-      交回（hand_back_in 按 deadline 推出）。"""
+    """委派的运行中检查（WorkWatcher 的一种工作，sessions.work），按委派记录的发起参数（sessions.delegations），只看
+    发起方占用还 active、并发等待的委派（delegate_task(report_back)，带 check_seconds）：每过一个间隔给发起方投一封
+    检查信件。阻塞等待的（ask_agent）没有检查也没有超时：发问方停在调用上一直等到结局（运行本身有界）。"""
 
-    def __init__(self, db: Database, queue: TaskQueue, stop_session: StopSession, clock: Clock = utcnow):
+    def __init__(self, db: Database, queue: TaskQueue, clock: Clock = utcnow):
         self._db = db
         self._queue = queue
-        self._stop = stop_session
         self._clock = clock
         # 并发委派上一次投检查的时刻（还没投过的以登记时刻算）：只是节拍，重启后从登记时刻重新算，不落库
         self._last_check: dict[str, datetime] = {}
@@ -181,33 +156,23 @@ class ThreadChecks:
     async def check(self) -> int:
         posted = 0
         now = self._clock()
-        expired: dict[str, str] = {}
         async with self._db.transaction() as s:
             active = await active_holders_in(s)
             records = [
-                r
+                (r, r.check_seconds)
                 for r in (await records_among(s, active)).values()
-                if r.check_seconds is not None or r.deadline is not None
+                if r.check_seconds is not None
             ]
-            watched = {r.holder for r in records}
+            watched = {r.holder for r, _ in records}
             for gone in set(self._last_check) - watched:
                 del self._last_check[gone]
             # (发起会话, thread) -> 到期的委派与它的间隔
             due: dict[tuple[str, str], tuple[DelegationRecord, float]] = {}
-            for record in records:
+            for record, interval in records:
                 child_id = record.thread_id
                 if child_id is None:
                     # thread 删除时委派已经以「被删除」结清，占用随之释放
                     raise RuntimeError(f"active delegation {record.holder} has a deleted thread")
-                if record.deadline is not None:
-                    if record.deadline <= now:
-                        expired[record.holder] = child_id
-                    continue
-                interval = record.check_seconds
-                if interval is None:
-                    raise RuntimeError(
-                        f"delegation {record.holder} has neither a deadline nor a check interval"
-                    )
                 if not check_due(self._last_check.get(record.holder, record.created_at), interval, now):
                     continue
                 self._last_check[record.holder] = now
@@ -230,28 +195,6 @@ class ThreadChecks:
                 )
                 posted += await post_check_in(
                     s, self._queue, record.parent_id, record.holder, thread_source(child.id), text
-                )
-        for holder, child_id in expired.items():
-            log.info(
-                "delegation timed out; stopping its thread",
-                extra={"holder": holder, "thread_session_id": child_id},
-            )
-            # 停止自己开事务，返回时已经结清（委派以「超时被停」交回、占用释放，下一拍不会再停）。它等 thread 的运行
-            # 收尾做完才返回；检查循环还要照看别的心跳与唤醒，不跟着一直等：等不完就放手，运行照常自己收尾（取消已经
-            # 发出），下一拍还到期就再等一次（不会重复取消）。每项是独立的副作用：一项停不下来（如数据库暂时失败）
-            # 记 error、不记下，下一拍再停，不影响别的到期委派，也不让检查循环退出
-            try:
-                with anyio.move_on_after(_STOP_WAIT_SECONDS) as waited:
-                    await self._stop(child_id)
-                if waited.cancelled_caught:
-                    log.warning(
-                        "timed-out delegation's thread is still winding down; waiting again on the next check",
-                        extra={"holder": holder, "thread_session_id": child_id},
-                    )
-            except Exception:
-                log.exception(
-                    "stopping a timed-out delegation's thread failed; retrying on the next check",
-                    extra={"holder": holder, "thread_session_id": child_id},
                 )
         return posted
 
