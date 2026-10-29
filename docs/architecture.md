@@ -312,14 +312,14 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 | 工具 | 父 agent | 子 session | 处理它的运行的回答 |
 |---|---|---|---|
-| `delegate_task(agent, task, thread)` | 立即继续，不等 | 公开 thread：进会话页「对话」，用户可追问 | 推送给用户；父 agent 拿不到 |
+| `delegate_task(agent, task, thread)` | 立即继续，不等 | thread：进会话页「对话」，用户可追问 | 推送给用户；父 agent 拿不到 |
 | `delegate_task(..., report_back=true)` | 立即继续，不等 | 同上 | 不直接推送，作为事件交回父会话（第 8 节） |
 | `ask_agent(agent, message, thread)` | 停在这次调用上等回信（见「挂起的调用」） | 同上 | 作为这次调用的结果交回父 agent；用户插话那次的回答推送给用户 |
 
 **界面上 thread 显示在开出或续写它的那次调用处**：哪次调用开出或续写了哪个 thread 是会话领域自己的一份记录（`thread_calls` 表，`sessions/thread_calls.py`，按「父会话 + 调用 id」唯一，随父会话或 thread 删除），在开出/续写 thread 的同一个事务里写下（`Threads.send` / `Threads.dispatch`，调用 id 取 `ctx.tool_call_id`；续写同一个 thread 时每次调用各一行，续跑重新执行同一次调用不重复记）。会话接口（`SessionService.detail`）按调用 id 给调用条目挂上 thread（`transcript.annotate_threads`，历史与实时快照都挂），父会话页把 thread 显示在那次调用的过程组下方，而不是统一列在会话末尾（那会让早先的 thread 看起来属于最新的对话）。关联只看调用 id，不看调用有没有结果、结果是谁产出的：工具自己的结果、停止补的、中断补的、没等到回答就继续的（STILL_WORKING）都一样，以后新增的结果路径也不用补记。工具结果上不再带 thread（#251 之前记在结果 metadata 的 `muliao_threads` 上，非工具产出的结果都没有，要逐条路径补；迁移已从它与委派记录回填，旧消息里的这项不再读）。之后经 SSE 收到的调用条目不挂：那时 thread 列表也还没重新拉取，下一步保存（`saved` 事件）或运行一停就重新拉取。thread 只由这两处开出（`create_session` 只许委派建 thread），所以没有任何调用条目引用的 thread 只剩 #251 回填也找不到调用的早期数据，列在末尾「未关联到调用的 thread」。调用条目上的 thread 与 thread 列表在同一次读取里给出，关联又随 thread 删除，所以调用条目引用的 thread 一定在列表里（前端拿不到就报错）。
 
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `agent_id` + `thread`，唯一索引 `uq_sessions_thread`；#217 之前只按父 session + 名字唯一，给不同 agent 用同名会报错）。模型只用 agent 名 + thread 名，不接触 session id。同一个 agent 同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。用 `delegate_task` 还是 `ask_agent` 续聊都行，thread 与开它的工具无关（#294）。`stop_thread` 只给名字时，这个名字只有一个 thread 就停它，有几个（不同 agent）就报错要求带 `agent`。
-- **推送按信件、不按 session**：每封信件带「用户是否在等它的回答」（`awaited`，由投信的入口设置，见第 14 节）。一次运行处理过的信件里有用户在等的，就把它的回答推送给用户；否则不推，agent 可以自己 `notify_user`。同一个公开 thread 里，父 agent 委派的任务与用户的追问都推送；`report_back` 的委派不推送，结果交回父 agent。
+- **推送按信件、不按 session**：每封信件带「用户是否在等它的回答」（`awaited`，由投信的入口设置，见第 14 节）。一次运行处理过的信件里有用户在等的，就把它的回答推送给用户；否则不推，agent 可以自己 `notify_user`。同一个thread 里，父 agent 委派的任务与用户的追问都推送；`report_back` 的委派不推送，结果交回父 agent。
 - **回答交给谁**（`platform.tooling.Audience`，工具的共同契约，不入库，`mailbox.audience_of`）：运行开始时由它处理的信件推导一次，决定 `ask_user` 能否调用与运行上下文里怎么说（它随运行变化，所以在运行上下文里而不是 instructions 里，见第 6 节）：处理过的和信箱里排着的信件有用户在等就是 `user`；否则会话有委派来、还没结清的工作（带关联的信件没结清：`ask_agent`、`report_back`，`mailbox.delegated_in`）就是 `agent`——会话做完时最终回答在结清里交给发起方，不论这次运行处理的是委派那封信，还是之后的后台任务事件、嵌套 ask 的回答、运行中检查；否则 `none`。用户在这样的 thread 里插话时是 `user`，那次的最终回答推送给用户，工作做完时同样交回发起方。运行中途才到的、用户在等的消息会被这次运行处理、收尾时推送，但这次运行的工具与指令不随之改变（工具集在 pydantic-ai 运行开始时固定）；提问要等下一次运行。
 - **thread** 有自己的信箱和消费者，可以开后台任务、`report_back`、被停止（发问方那次调用拿到「被停止」）。回答交给 agent 的运行里 `ask_user` 会被拒绝（没有用户在等）；拒绝说明会告诉它这是另一个 agent 在问：自己决定，或把需要对方定的问题写进最终回答交回发起方（对方可在同一个 thread 里回复），不提通知用户。
 - **删除**（`deletion.delete_sessions`，删会话与删 agent 唯一的规则）：一个事务删除会话；它开出的 thread 保留（`parent_session_id` 置空）。任一被删会话忙时拒绝（判断只看会话自己的数据，无异步窗口）。交给被删会话、还没结清的关联以「被删除」结清并交回发起方；它自己发起的委派（占用）随它删除，之后 thread 的结局没有收件人。发布 `SessionDeleted`，其他领域各自清理引用它的数据（指向它的通知）；job 行保留终态。
@@ -493,7 +493,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 |---|---|---|
 | 用户发起 / 回复 | 新建；回复沿用（任何会话都能回复） | 是（iOS 要求每个 push 都展示通知，所以页面可见时也会弹） |
 | 触发器 | 默认每次新建，`origin_ref` 记触发器；带回会话 id 的事件在原会话里续写（只能续写本触发器发起的会话） | 否，需要通知时 agent 调 `notify_user` |
-| `delegate_task` | 父会话下的公开 thread，同名续聊 | 是；`report_back` 时否（结果交回父会话） |
+| `delegate_task` | 父会话下的thread，同名续聊 | 是；`report_back` 时否（结果交回父会话） |
 | `ask_agent` | 父会话下的 thread，同名续聊（`delegate_task` 开的也行） | 否（回答作为工具结果交给发问方） |
 
 **触发器**：具名、持久的事件来源（`triggers` 表）。公共字段只有名称、agent、处理说明、启用、已结束（见下）与最近一次触发的记录；怎么被触发由 `kind` 决定，**只在代码里多态实现**，表里不为某种方式开专门的列：`config`（JSON）是这种方式的配置，`state`（JSON）是这种方式自己维护的运行状态。每种方式分两部分：
