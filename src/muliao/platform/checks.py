@@ -11,13 +11,13 @@ import anyio
 
 log = logging.getLogger(__name__)
 
-# 循环看一遍到期工作的间隔：决定心跳与超时的精度
+# 循环看一遍到期工作的间隔：决定心跳与到点唤醒的精度
 TICK_SECONDS = 1.0
 
 
 class PeriodicCheck(Protocol):
     async def check(self) -> int:
-        """给到期的工作投检查信件（并执行到期的超时），返回投出的封数。"""
+        """给到期的工作投检查信件，返回投出的封数。"""
         ...
 
 

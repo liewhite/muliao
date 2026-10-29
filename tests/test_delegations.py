@@ -191,6 +191,11 @@ async def test_each_reported_delegation_is_checked_at_its_own_interval(container
 
 async def test_an_ask_has_no_check_in_and_no_timeout(container, make_agent, models):
     """#307：ask_agent 是阻塞的、不设超时：委派记录没有心跳，检查既不给发问方投信，也不停 thread。"""
+    from datetime import timedelta
+
+    from muliao.platform.db import utcnow
+    from muliao.sessions.delegation import ThreadChecks
+
     lead = (await make_agent("lead", model="l")).id
     helper = await container.agents.get((await make_agent("helper", model="h")).id)
     models.models["l"] = scripted(Recorder())
@@ -209,7 +214,9 @@ async def test_an_ask_has_no_check_in_and_no_timeout(container, make_agent, mode
         )
     await asyncio.sleep(0.01)
 
-    assert await container.thread_checks.check() == 0
+    # 时钟拨到一天以后：仍不投信、不停 thread，占用还 active
+    later = utcnow() + timedelta(days=1)
+    assert await ThreadChecks(container.db, container.queue, clock=lambda: later).check() == 0
     async with container.db.transaction() as s:
         [record] = (await s.scalars(select(Delegation))).all()
         assert list(await active_holders_in(s)) == [record.holder]

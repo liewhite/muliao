@@ -183,7 +183,7 @@ class SessionHold(Base):
 class Delegation(Base):
     """一项要交回结局的委派（ask_agent、delegate_task(report_back)）的发起参数（委派子域，sessions.delegations）。它的进行
     状态在发起方的占用上（holder 相同），是否结清在 thread 一侧以 holder 为关联 id 的信件上；这里只记委派自己的事：做它的
-    thread、心跳间隔与超时。行永久保留，随发起会话删除。"""
+    thread、心跳间隔。行永久保留，随发起会话删除。"""
 
     __tablename__ = "delegations"
 

@@ -1,7 +1,8 @@
 """drop delegations deadline
 
 ask_agent 不再有 timeout（#307：agent 的运行本身有界），删掉 delegations.deadline（ask_agent 的超时时刻）。
-进行中的 ask_agent 委派丢掉超时、照常等结局；不动别的数据。降级加回可空列，旧委派都没有 deadline。
+进行中的 ask_agent 委派丢掉超时、照常等结局；不动别的数据。降级加回可空列，不回填：进行中的 ask_agent 委派两列都空，旧后端的检查跳过它们，但旧前端 waits.ts
+会对这种等待项报错（已知限制：回滚后停掉或等这些 ask_agent 结束即可）。
 
 Revision ID: d5ac95c1847f
 Revises: 9e3b1c7a5d20
