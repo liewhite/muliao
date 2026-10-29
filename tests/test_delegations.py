@@ -12,7 +12,6 @@ from sqlalchemy import select
 from muliao.errors import Conflict
 from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.conventions import STOPPED_TOOL_RESULT
-from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import Delegation, HoldStatus, Mail, MailKind, MailState, SessionHold
@@ -107,7 +106,6 @@ async def test_listing_threads_gives_each_its_own_answer_and_failure(container, 
                 agent=agent,
                 thread=name,
                 prompt="task",
-                kind=SessionKind.THREAD,
                 call_id=name,
                 suspends=False,
                 awaited=False,
@@ -136,7 +134,6 @@ async def test_open_reported_threads_get_check_events_without_piling_up(containe
             agent=target,
             thread="review",
             prompt="check",
-            kind=SessionKind.THREAD,
             call_id="call-1",
             suspends=False,
             awaited=True,
@@ -175,7 +172,6 @@ async def test_each_reported_delegation_is_checked_at_its_own_interval(container
                 agent=reviewer,
                 thread=thread,
                 prompt="check",
-                kind=SessionKind.THREAD,
                 call_id=thread,
                 suspends=False,
                 awaited=False,
@@ -208,7 +204,6 @@ async def test_an_expired_ask_stops_its_thread_once_and_retries_a_failed_stop(co
             agent=helper,
             thread="h",
             prompt="q",
-            kind=SessionKind.PRIVATE_THREAD,
             call_id="ask-1",
             suspends=True,
             awaited=False,
@@ -301,7 +296,6 @@ async def test_nothing_is_reported_once_the_parent_session_is_gone(container, ma
             agent=target,
             thread="review",
             prompt="check",
-            kind=SessionKind.THREAD,
             call_id="call-2",
             suspends=False,
             awaited=True,
@@ -525,7 +519,6 @@ async def test_stopping_a_queued_thread_reports_that_it_was_stopped(container, m
             agent=target,
             thread="review",
             prompt="check",
-            kind=SessionKind.THREAD,
             call_id="call-3",
             suspends=False,
             awaited=True,
@@ -570,7 +563,6 @@ async def test_a_delegation_arriving_during_a_failing_run_is_still_handled_and_r
                 agent=target,
                 thread="review",
                 prompt=prompt,
-                kind=SessionKind.THREAD,
                 call_id=prompt,
                 suspends=False,
                 awaited=False,
@@ -721,7 +713,7 @@ async def test_a_stopped_ask_still_points_at_its_thread(container, make_agent, m
     assert await _call_threads(container, parent.id) == {"ask1": [child.id]}
 
 
-async def test_stopping_a_private_thread_answers_the_waiting_ask_with_stopped(container, make_agent, models):
+async def test_stopping_an_ask_thread_answers_the_waiting_ask_with_stopped(container, make_agent, models):
     import asyncio
     from collections.abc import AsyncIterator
 
@@ -767,7 +759,6 @@ async def test_a_reported_thread_is_deleted_only_after_stopping_and_the_delegato
             agent=target,
             thread="review",
             prompt="check",
-            kind=SessionKind.THREAD,
             call_id="call-5",
             suspends=False,
             awaited=False,
@@ -982,8 +973,8 @@ async def test_an_answer_arriving_mid_run_reaches_the_model_as_late_text(
     assert any("already been closed" in p and "日线" in p for p in prompts)
 
 
-async def test_a_private_thread_answers_only_after_its_background_job_finishes(container, make_agent, models):
-    """私有 thread 开了后台任务就先回了一句：它的工作还没做完，委派不结清；任务结束后的那次运行给出的才是结局。"""
+async def test_an_ask_thread_answers_only_after_its_background_job_finishes(container, make_agent, models):
+    """ask_agent 的 thread 开了后台任务就先回了一句：它的工作还没做完，委派不结清；任务结束后的那次运行给出的才是结局。"""
     import asyncio
 
     from pydantic_ai.messages import ToolCallPart
@@ -1127,7 +1118,6 @@ async def test_stopping_the_asker_stops_its_threads_level_by_level(container, ma
                 agent=agent,
                 thread=thread,
                 prompt="work",
-                kind=SessionKind.THREAD,
                 call_id=f"k-{thread}",
                 suspends=False,
                 awaited=False,

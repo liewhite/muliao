@@ -13,7 +13,6 @@ from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.activity import WorkState
 from muliao.sessions.deferred import ASK_AGENT
 from muliao.sessions.halt import Halted, StopSession
-from muliao.sessions.kinds import DELEGATE_TASK, SessionKind, policy_of
 from muliao.sessions.threads import Threads, validate_thread
 from muliao.sessions.work import DEFAULT_CHECK_SECONDS
 
@@ -23,8 +22,6 @@ _ANSWER_PREVIEW = 500
 class ThreadInfo(BaseModel):
     thread: str
     agent: str
-    # true：ask_agent 开出的、只有你能继续的 thread；false：用户也能看到并回复
-    private: bool
     # running：在处理；waiting：在等它自己开出的后台任务、委派、到点唤醒或提问的回答，还没做完；idle：没有进行中的事
     state: WorkState
     # 最近一次运行最终失败时的错误说明
@@ -39,13 +36,14 @@ def delegation_toolset(
     threads: Threads,
     stop_session: StopSession,
 ) -> FunctionToolset[RunScope]:
-    """委派：thread 是这个会话开出的、以（agent, 名字）区分的子会话，同名即续聊（保留对方上下文）。
+    """委派：thread 是这个会话开出的、以（agent, 名字）区分的子会话，同名即续聊（保留对方上下文），用 delegate_task
+    还是 ask_agent 续聊都行。
 
     ask_agent 是阻塞的（调用不返回、一直等）：必须给 timeout，到期停掉 thread；delegate_task(report_back) 与发起方
     并发：没有 timeout，按 heartbeat_seconds 投运行中检查（sessions.delegation.ThreadChecks）。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool(name=DELEGATE_TASK)
+    @ts.tool
     async def delegate_task(
         ctx: RunContext[RunScope],
         agent: str,
@@ -69,7 +67,8 @@ def delegation_toolset(
             task: Self-contained task description; the agent cannot see this conversation except through
                 earlier messages in the same thread.
             thread: Short name of the thread, e.g. "weekly-report". Reusing a thread name with the same agent
-                continues that conversation with its full context; use a new name for an unrelated task.
+                continues that conversation with its full context, whether it was opened with `delegate_task` or
+                `ask_agent`; use a new name for an unrelated task.
             report_back: Get the thread's answer back as an event in this conversation.
             heartbeat_seconds: With `report_back: true` only: seconds between check-in events while it works
                 (> 0, default 30); choose it from how long you expect the task to take, e.g. 600 for an hour-long
@@ -95,7 +94,6 @@ def delegation_toolset(
                     agent=target,
                     thread=thread,
                     prompt=task,
-                    kind=SessionKind.THREAD,
                     call_id=ctx.tool_call_id,
                     suspends=False,
                     awaited=ctx.deps.user_waits,
@@ -118,9 +116,9 @@ def delegation_toolset(
         """Ask an agent and wait for its answer, which is returned as this tool's result. This is blocking: your
         reply pauses until the answer arrives, so `timeout` is required: if it has not answered within that many
         seconds, its thread is stopped (as with `stop_thread`) and the result says it timed out, with what it said
-        so far. The thread is private to this conversation (the user can read but not reply). Files it shares are
-        shown to the user with your reply. Ask again in the same thread (same agent and name) to follow up with
-        the agent's context intact, e.g. review -> fix -> review again. Several asks in one response run in
+        so far. The user can see the thread and reply in it. Files it shares are shown to the user with your reply.
+        Ask again in the same thread (same agent and name) to follow up with the agent's context intact, e.g.
+        review -> fix -> review again; this also continues a thread opened with `delegate_task`. Several asks in one response run in
         parallel; asks to the same thread share it, so the first one to time out stops it for all of them. If the
         user writes to you meanwhile, you continue and the outcome (answer or timeout) reaches you later as an
         event. For long work you want to keep an eye on while doing other things, use
@@ -133,7 +131,7 @@ def delegation_toolset(
             agent: Target agent name from `list_agents`, or your own name.
             message: Self-contained request; the agent sees only this thread's history.
             thread: Short name of the thread, e.g. "code-review". Reuse it with the same agent to continue the
-                same conversation.
+                same conversation (also one opened with `delegate_task`).
             timeout: Required: seconds to wait for the answer (> 0, no upper limit). Estimate it yourself from
                 the work you ask for, with room to spare, e.g. 300 for a short question, 1800 for a code review.
         """
@@ -153,7 +151,6 @@ def delegation_toolset(
                 agent=target,
                 thread=thread,
                 prompt=message,
-                kind=SessionKind.PRIVATE_THREAD,
                 call_id=ctx.tool_call_id,
                 suspends=True,
                 awaited=ctx.deps.user_waits,
@@ -200,7 +197,7 @@ def delegation_toolset(
     @ts.tool
     async def list_threads(ctx: RunContext[RunScope]) -> list[ThreadInfo]:
         """List the threads this conversation has opened (each is one agent + name). Returns a JSON array of \
-threads, each with `thread`, `agent`, `private`, `state`, `failure` and `answer`. Use it to look at delegated \
+threads, each with `thread`, `agent`, `state`, `failure` and `answer`. Use it to look at delegated \
 work, e.g. after a check-in event, before deciding to keep waiting or `stop_thread`. `state`: running (working \
 now), waiting (its run ended but it is waiting for work it started, a wake-up or answers it asked for: not \
 finished yet), \
@@ -215,7 +212,6 @@ result. `failure` is set when its latest run failed for good."""
             ThreadInfo(
                 thread=v.thread,
                 agent=names[v.agent_id],
-                private=policy_of(v.kind).private,
                 state=v.progress.state,
                 failure=v.progress.failure,
                 answer=truncate(v.progress.answer, _ANSWER_PREVIEW) if v.progress.answer else None,

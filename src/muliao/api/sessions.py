@@ -21,7 +21,6 @@ from muliao.sessions.api import (
     WorkState,
     call_result,
     parse_source,
-    policy_of,
 )
 from muliao.sessions.tables import Compaction, Mail, MailKind, MailState, Session
 
@@ -34,15 +33,10 @@ class SessionOut(BaseModel):
     title: str
     origin: Origin
     origin_ref: str | None
-    # 委派产生的子会话：父会话与 thread 名；种类决定规则（private_thread：ask_agent 开出的、用户只读的 thread）
+    # 委派产生的子会话：父会话与 thread 名
     parent_session_id: str | None
     thread: str | None
     kind: SessionKind
-    # 种类的规则（sessions.kinds.KindPolicy）随会话下发，界面不另写一份：用户能否在里面发消息、能否单独删除、是否私有
-    user_writable: bool
-    deletable: bool
-    # 私有 thread：只有开它的会话能继续
-    private: bool
     # 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生
     unread: bool
     created_at: datetime
@@ -59,9 +53,6 @@ class SessionOut(BaseModel):
             parent_session_id=s.parent_session_id,
             thread=s.thread,
             kind=s.kind,
-            user_writable=policy_of(s.kind).user_writable,
-            deletable=policy_of(s.kind).deletable,
-            private=policy_of(s.kind).private,
             unread=unread,
             created_at=s.created_at,
             updated_at=s.updated_at,

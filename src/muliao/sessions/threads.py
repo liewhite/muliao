@@ -1,7 +1,7 @@
 """thread：父会话内对子会话的具名引用，同名即续聊（docs/architecture.md 第 7 节「thread 与结果路由」）。
 
-委派都是往 thread 的信箱投信，thread 由自己的消费者处理：delegate_task 投给公开 thread（用户能看到、能插话）；
-ask_agent 投给私有 thread（用户只读），发问方停在这次调用上，结局作为它的结果交回（sessions.delegation）。"""
+委派都是往 thread 的信箱投信，thread 由自己的消费者处理，用户能看到、能插话：delegate_task 投信后不等；
+ask_agent 的发问方停在这次调用上，结局作为它的结果交回（sessions.delegation）。同一个 thread 用哪个工具续聊都行。"""
 
 import logging
 from dataclasses import dataclass
@@ -19,7 +19,7 @@ from muliao.sessions.history import latest_answers_among
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.inbound import Inbound, NewSession, Received, create_session, receive
-from muliao.sessions.kinds import SessionKind, policy_of
+from muliao.sessions.kinds import SessionKind
 from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_runs_among, recorded_failure
 from muliao.sessions.tables import Session
@@ -56,7 +56,6 @@ class ThreadView:
     session_id: str
     thread: str
     agent_id: str
-    kind: SessionKind
     progress: ThreadProgress
 
 
@@ -72,36 +71,31 @@ class Threads:
         """父会话里叫这个名字的 thread（每个 agent 至多一个），按创建顺序。"""
         return await threads_named_in(s, parent_id, validate_thread(thread))
 
-    async def open(
-        self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, kind: SessionKind
-    ) -> Session:
-        """取已有 thread 或新建。
-
-        thread 按（父会话, agent, 名字）区分；私有 thread 只能用 ask_agent 续聊，公开 thread 只能用
-        delegate_task（公开 thread 由自己的消费者处理、用户也能插话，不能在调用方那一步里直接跑）。
-        """
+    async def open(self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str) -> Session:
+        """取已有 thread 或新建。thread 按（父会话, agent, 名字）区分，与开它、续它的工具无关。"""
         thread = validate_thread(thread)
         existing = await self.find(s, parent_id, agent.id, thread)
         if existing is not None:
-            if existing.kind != kind:
-                tool = policy_of(existing.kind).continued_by
-                raise InvalidInput(f"thread {thread!r} was started with {tool}; use {tool} to continue it")
             return existing
         return await create_session(
             s,
             origin=Origin.DELEGATION,
             origin_ref=parent_id,
             spec=NewSession(
-                agent_id=agent.id, title=thread, parent_session_id=parent_id, thread=thread, kind=kind
+                agent_id=agent.id,
+                title=thread,
+                parent_session_id=parent_id,
+                thread=thread,
+                kind=SessionKind.THREAD,
             ),
         )
 
     async def send(
         self, s: AsyncSession, *, parent_id: str, agent: AgentInfo, thread: str, prompt: str, call_id: str
     ) -> Received:
-        """不交回结局的委派（delegate_task）：往公开 thread 的信箱投一封用户在等的信（thread 不存在则新建），记下是这次
+        """不交回结局的委派（delegate_task）：往 thread 的信箱投一封用户在等的信（thread 不存在则新建），记下是这次
         调用（call_id）开出或续写了它（sessions.thread_calls）。"""
-        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, kind=SessionKind.THREAD)
+        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread)
         await record_call_in(s, parent_id, call_id, child.id)
         inbound = Inbound(
             origin=Origin.DELEGATION, origin_ref=parent_id, content=prompt, session=child.id, awaited=True
@@ -116,7 +110,6 @@ class Threads:
         agent: AgentInfo,
         thread: str,
         prompt: str,
-        kind: SessionKind,
         call_id: str,
         suspends: bool,
         awaited: bool,
@@ -125,7 +118,7 @@ class Threads:
     ) -> Session:
         """要交回结局的委派（ask_agent、delegate_task(report_back)），在调用方的一个事务里：打开或找到 thread，在发起方
         登记占用（suspends 时这次调用从此算作已交出），往 thread 投一封以占用者为关联 id 的信件（委派的全部状态，结局的
-        交回见 sessions.delegation），并记下这次调用开出或续写了这个 thread（sessions.thread_calls）。thread 不合用时抛
+        交回见 sessions.delegation），并记下这次调用开出或续写了这个 thread（sessions.thread_calls）。thread 名不合法时抛
         InvalidInput，什么都没写。call_id：发出它的工具调用，按它幂等：续跑重新执行这次调用时只返回已经投递到的
         thread。suspends：这次调用挂起、等结局作为它的结果（ask_agent），占用带上 call_id。awaited：用户是否在等发起方
         的回答。check_seconds：并发等待时的运行中检查间隔；timeout_seconds：阻塞等待的超时（到期停掉 thread，
@@ -139,7 +132,7 @@ class Threads:
             if child is None:
                 raise RuntimeError(f"delegation {holder} points to a missing thread {existing}")
             return child
-        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread, kind=kind)
+        child = await self.open(s, parent_id=parent_id, agent=agent, thread=thread)
         await hold_in(s, parent_id, holder, call_id=call_id if suspends else None, awaited=awaited)
         await record_call_in(s, parent_id, call_id, child.id)
         await record_in(
@@ -175,7 +168,7 @@ class Threads:
         return child
 
     async def list_in(self, s: AsyncSession, parent_id: str) -> list[ThreadView]:
-        """父会话开出的 thread（含私有的），按创建顺序，带各自的状态。"""
+        """父会话开出的 thread，按创建顺序，带各自的状态。"""
         children = await threads_of(s, parent_id)
         ids = [c.id for c in children]
         states = await work_states_in(s, self._queue, ids)
@@ -186,7 +179,6 @@ class Threads:
                 session_id=child.id,
                 thread=thread_name(child),
                 agent_id=child.agent_id,
-                kind=child.kind,
                 progress=ThreadProgress(
                     state=states[child.id],
                     failure=recorded_failure(runs.get(child.id)),

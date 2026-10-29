@@ -18,7 +18,7 @@ from muliao.platform.tooling import Audience
 _AUDIENCE_NOTES: dict[Audience, str] = {
     Audience.USER: "The user is notified with your final answer and may reply here.",
     Audience.AGENT: (
-        "Another agent is waiting for your final answer, which is returned to it as a tool result; "
+        "Another agent is waiting for your final answer, which is returned to it; "
         "answer it directly and completely. The user is not notified."
     ),
     Audience.NONE: (

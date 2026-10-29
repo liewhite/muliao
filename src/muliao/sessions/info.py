@@ -23,7 +23,7 @@ class SessionInfo:
     # 会话的发起方：来源与它在来源里的身份（触发器 id、issue id……；委派与用户为 None）
     origin: Origin
     origin_ref: str | None
-    # 会话的种类：它的规则用 policy_of(kind) 读
+    # 会话的种类：顶层会话或委派开出的 thread（sessions.kinds）
     kind: SessionKind
 
 

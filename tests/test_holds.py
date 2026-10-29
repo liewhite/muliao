@@ -7,10 +7,8 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
-from muliao.errors import InvalidInput
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
 from muliao.sessions.holds import hold_in
-from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import HoldStatus, Mail, SessionHold
 from muliao.sessions.work import Delivered, deliver_in
@@ -52,38 +50,6 @@ async def test_an_answered_ask_is_not_executed_again_and_its_hold_stays_as_the_r
             await s.scalars(select(SessionHold).where(SessionHold.holder.like("delegation:%")))
         ).all()
     assert delegation.status == HoldStatus.RELEASED
-
-
-async def test_a_dispatch_to_a_mismatched_thread_writes_nothing(container, make_agent, models):
-    lead = (await make_agent("lead", model="l")).id
-    reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
-    models.models["l"] = scripted(Recorder())
-    parent = await start(container, lead, "go")
-    await drain(container)
-    async with container.db.transaction() as s:
-        await container.threads.send(
-            s, parent_id=parent.id, agent=reviewer, thread="review", prompt="x", call_id="c1"
-        )
-    before = await _mail_count(container)
-    events_before = await _event_count(container)
-
-    with pytest.raises(InvalidInput, match="was started with delegate_task"):
-        async with container.db.transaction() as s:
-            await container.threads.dispatch(
-                s,
-                parent_id=parent.id,
-                agent=reviewer,
-                thread="review",
-                prompt="y",
-                kind=SessionKind.PRIVATE_THREAD,
-                call_id="k",
-                suspends=False,
-                awaited=False,
-            )
-
-    assert await _holds(container, parent.id) == []
-    assert await _mail_count(container) == before
-    assert await _event_count(container) == events_before
 
 
 async def _event_count(container) -> int:
@@ -184,7 +150,6 @@ async def test_a_thread_hands_its_outcome_back_in_the_transaction_that_settles_i
             agent=reviewer,
             thread="review",
             prompt="check",
-            kind=SessionKind.THREAD,
             call_id="k",
             suspends=False,
             awaited=False,
@@ -282,7 +247,6 @@ async def test_reconcile_settles_delegations_whose_failure_hook_failed(
             agent=reviewer,
             thread="review",
             prompt="check",
-            kind=SessionKind.THREAD,
             call_id="k",
             suspends=False,
             awaited=False,
@@ -337,7 +301,6 @@ async def test_stopping_a_thread_hands_back_at_once_and_deleting_its_agent_later
             agent=reviewer,
             thread="review",
             prompt="check",
-            kind=SessionKind.THREAD,
             call_id="k",
             suspends=False,
             awaited=False,
@@ -376,7 +339,6 @@ async def test_a_thread_run_failing_before_its_first_step_with_a_failing_hook_is
             agent=reviewer,
             thread="review",
             prompt="look",
-            kind=SessionKind.THREAD,
             call_id="k",
             suspends=False,
             awaited=False,
@@ -427,7 +389,6 @@ async def test_reconciliation_leaves_delegation_mail_that_arrived_after_the_fail
                 agent=reviewer,
                 thread="review",
                 prompt=key,
-                kind=SessionKind.THREAD,
                 call_id=key,
                 suspends=False,
                 awaited=False,
@@ -478,7 +439,6 @@ async def test_a_thread_settling_a_delegation_its_existing_asker_has_no_hold_for
             agent=reviewer,
             thread="review",
             prompt="check",
-            kind=SessionKind.THREAD,
             call_id="k",
             suspends=False,
             awaited=False,
@@ -496,10 +456,8 @@ async def test_a_thread_settling_a_delegation_its_existing_asker_has_no_hold_for
             )
 
 
-async def test_deleting_an_asker_together_with_its_private_thread_drops_the_threads_outcome(
-    container, make_agent, models
-):
-    """停止过的发起方（占用 cleared）连同它的私有 thread 在一个事务里删除：thread 的结清得到 DROPPED，没有失败。"""
+async def test_deleting_a_stopped_asker_drops_its_threads_outcome(container, make_agent, models):
+    """停止过的发起方（占用 cleared）被删除，它开的 thread 保留：thread 的结清得到 DROPPED，没有失败。"""
     lead = (await make_agent("lead", model="l")).id
     reviewer = await container.agents.get((await make_agent("reviewer", model="v")).id)
     models.models["l"] = scripted(Recorder())
@@ -512,7 +470,6 @@ async def test_deleting_an_asker_together_with_its_private_thread_drops_the_thre
             agent=reviewer,
             thread="ask",
             prompt="check",
-            kind=SessionKind.PRIVATE_THREAD,
             call_id="c1",
             suspends=True,
             awaited=False,
@@ -525,7 +482,8 @@ async def test_deleting_an_asker_together_with_its_private_thread_drops_the_thre
     async with container.db.transaction() as s:
         from muliao.sessions.tables import Session
 
-        assert await s.get(Session, child.id) is None
+        kept = await s.get(Session, child.id)
+        assert kept is not None and kept.parent_session_id is None
         assert (await s.scalars(select(Task).where(Task.status == TaskStatus.FAILED))).all() == []
 
 

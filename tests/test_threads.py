@@ -1,4 +1,4 @@
-"""会话领域：delegate_task（公开 thread）、ask_agent（私有 thread，发问方停在这次调用上，对方的结局作为它的结果
+"""会话领域：delegate_task、ask_agent（发问方停在这次调用上，对方的结局作为它的结果
 交回）、thread 续聊、失败与删除的语义、续写规则。"""
 
 import pytest
@@ -14,7 +14,7 @@ from muliao.sessions.inbound import Inbound, NewSession, receive
 from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import queued_in
-from muliao.sessions.tables import Message, Session
+from muliao.sessions.tables import Mail, Message, Session
 from muliao.sessions.threads import threads_of as sessions_threads_of
 from tests.scripted import scripted
 from tests.test_flow import drain, history_of, idle, last_user_prompt, reply, start, tasks_of, tool_returns
@@ -86,10 +86,10 @@ async def test_ask_agent_returns_answer_and_follow_up_keeps_thread_context(conta
     assert await last_answer(container, parent.id) == "verdict: reviewed v2"
 
     [child] = await threads_of(container, parent.id)
-    assert child.kind == SessionKind.PRIVATE_THREAD and child.thread == "review"
+    assert child.kind == SessionKind.THREAD and child.thread == "review"
     # 第二次 ask 时对方看得到第一次的上下文
     assert child_seen == [1, 3]
-    # 私有 thread 和其他会话一样由自己的运行处理，消息记在运行名下
+    # ask_agent 的 thread 和其他会话一样由自己的运行处理，消息记在运行名下
     child_turns = await turns_in(container, child.id)
     assert [t.status for t in child_turns] == [TaskStatus.DONE, TaskStatus.DONE]
     async with container.db.transaction() as s:
@@ -137,7 +137,7 @@ async def test_parallel_asks_run_concurrently_and_asks_to_one_thread_are_answere
     parent = await start(container, lead, "go")
     await drain(container)
 
-    # 同一个私有 thread 的两次 ask 进了同一个信箱：对方一次看到两个问题、一起回答，两次调用拿到同一个回答
+    # 同一个 thread 的两次 ask 进了同一个信箱：对方一次看到两个问题、一起回答，两次调用拿到同一个回答
     assert await last_answer(container, parent.id) == "all: A x\ny | A x\ny | B z"
     assert a_seen == [1]
 
@@ -174,8 +174,8 @@ async def test_an_agent_asks_itself_in_parallel_threads(container, make_agent, m
     assert await last_answer(container, parent.id) == "all: did x | did y"
     children = await threads_of(container, parent.id)
     assert sorted((c.thread, c.agent_id, c.kind) for c in children) == [
-        ("me-x", me, SessionKind.PRIVATE_THREAD),
-        ("me-y", me, SessionKind.PRIVATE_THREAD),
+        ("me-x", me, SessionKind.THREAD),
+        ("me-y", me, SessionKind.THREAD),
     ]
 
 
@@ -278,14 +278,16 @@ async def test_a_failed_ask_comes_back_as_its_result_and_the_asker_goes_on(conta
     [child] = await threads_of(container, parent.id)
     [child_run] = await turns_in(container, child.id)
     assert child_run.status == TaskStatus.FAILED and "400" in (child_run.error or "")
-    # 私有 thread 的失败已交回发问方，不单独通知用户：只有发问方给用户的回答
-    assert [n.session_id for n in await container.notifications.list(10)] == [parent.id]
+    # 失败交回发问方，也和其他会话一样通知用户
+    notes = await container.notifications.list(10)
+    assert sorted(n.session_id for n in notes) == sorted([parent.id, child.id])
 
 
-async def test_threads_are_told_apart_by_agent_and_name_and_their_kind_is_fixed(
+async def test_threads_are_told_apart_by_agent_and_name_and_either_tool_continues_them(
     container, make_agent, models
 ):
-    """同一个名字给不同的 agent 是两个 thread；stop_thread 在名字有歧义时要 agent。"""
+    """同一个名字给不同的 agent 是两个 thread；用 ask_agent 还是 delegate_task 续聊都行（#294）；stop_thread 在名字有
+    歧义时要 agent。"""
     lead = (await make_agent("lead", model="l")).id
     await make_agent("worker", model="w")
     await make_agent("other", model="o")
@@ -323,11 +325,9 @@ async def test_threads_are_told_apart_by_agent_and_name_and_their_kind_is_fixed(
     parent = await start(container, lead, "go")
     await drain(container)
 
-    assert len(errors) == 4, errors
-    assert "started with ask_agent; use ask_agent" in errors[0]
-    assert "started with delegate_task; use delegate_task" in errors[1]
-    assert "several threads are named 'public' (agents: worker, other); pass `agent`" in errors[2]
-    assert "no thread named 'private' with other" in errors[3]
+    assert len(errors) == 2, errors
+    assert "several threads are named 'public' (agents: worker, other); pass `agent`" in errors[0]
+    assert "no thread named 'private' with other" in errors[1]
     assert returns == ["stopped thread 'public' (other)"]
     children = await threads_of(container, parent.id)
     names = await container.agents.names()
@@ -336,9 +336,14 @@ async def test_threads_are_told_apart_by_agent_and_name_and_their_kind_is_fixed(
         ("public", "other"),
         ("public", "worker"),
     ]
+    # 两个工具往同一个 thread 各投了两次：一个会话、一份上下文
+    [private] = [c for c in children if c.thread == "private"]
+    async with container.db.transaction() as s:
+        mail = (await s.scalars(select(Mail).where(Mail.session_id == private.id))).all()
+    assert len(mail) == 2
 
 
-async def test_deleting_parent_deletes_private_threads_and_keeps_public_ones(container, make_agent, models):
+async def test_deleting_parent_keeps_its_threads(container, make_agent, models):
     lead = (await make_agent("lead", model="l")).id
     await make_agent("worker", model="w")
     models.models["l"] = steps(
@@ -358,19 +363,18 @@ async def test_deleting_parent_deletes_private_threads_and_keeps_public_ones(con
     )
     parent = await start(container, lead, "go")
     await drain(container)
-    pub, priv = sorted(
-        await threads_of(container, parent.id), key=lambda t: t.kind == SessionKind.PRIVATE_THREAD
-    )
+    children = await threads_of(container, parent.id)
+    assert len(children) == 2
 
     await container.sessions.delete(parent.id)
 
     async with container.db.transaction() as s:
-        assert await s.get(Session, priv.id) is None
-        kept = await s.get(Session, pub.id)
-        assert kept is not None and kept.parent_session_id is None
+        for child in children:
+            kept = await s.get(Session, child.id)
+            assert kept is not None and kept.parent_session_id is None
 
 
-async def test_private_thread_is_read_only_for_user_and_hidden_from_list(container, make_agent, models):
+async def test_an_ask_thread_is_listed_and_the_user_may_reply_in_it(container, make_agent, models):
     lead = (await make_agent("lead", model="l")).id
     await make_agent("worker", model="w")
     models.models["l"] = steps(
@@ -381,11 +385,16 @@ async def test_private_thread_is_read_only_for_user_and_hidden_from_list(contain
     await drain(container)
     [child] = await threads_of(container, parent.id)
 
-    with pytest.raises(Conflict):
-        await reply(container, child.id, "hi")
     listed = await container.sessions.list(agent_id=None, origins=None, limit=50, offset=0)
-    assert [x.session.id for x in listed] == [parent.id]
+    assert sorted(x.session.id for x in listed) == sorted([parent.id, child.id])
+    # 回答交给发问方，不推送给用户
     assert await container.notifications.unread_sessions([child.id]) == set()
+    # 用户插话：这一次的回答推送给用户
+    models.models["w"] = echo("worker:")
+    await reply(container, child.id, "hi")
+    await drain(container)
+    assert await last_answer(container, child.id) == "worker: hi"
+    assert await container.notifications.unread_sessions([child.id]) == {child.id}
 
 
 async def test_user_may_continue_any_public_session_but_delegation_only_its_own_threads(
@@ -427,9 +436,7 @@ async def test_user_may_continue_any_public_session_but_delegation_only_its_own_
             )
 
 
-async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_its_agent(
-    container, make_agent, models
-):
+async def test_a_running_ask_thread_is_not_deleted_nor_its_asker_nor_its_agent(container, make_agent, models):
     import asyncio
     from collections.abc import AsyncIterator
 
@@ -456,8 +463,8 @@ async def test_a_running_private_thread_is_not_deleted_with_its_parent_nor_with_
             await running.wait()
         [child] = await threads_of(container, parent.id)
 
-        # 私有 thread 不能单独删除；随父会话删除时，它正在运行就拒绝
-        with pytest.raises(Conflict, match="owned by the session that opened it"):
+        # 正在运行的 thread 不能删除
+        with pytest.raises(Conflict, match="busy"):
             await container.sessions.delete(child.id)
         # 父会话也在等这个 thread（它的占用还在）：忙
         with pytest.raises(Conflict, match="busy"):
@@ -595,7 +602,7 @@ async def test_delegation_results_point_at_the_thread_they_opened(client, contai
 
 
 async def test_a_question_after_a_failed_ask_gets_its_own_answer(container, make_agent, models):
-    """私有 thread 上一次运行失败、历史停在它保存的请求上：下一次 ask 唤醒的运行先续跑那次请求，再处理新问题，
+    """ask_agent 的 thread 上一次运行失败、历史停在它保存的请求上：下一次 ask 唤醒的运行先续跑那次请求，再处理新问题，
     新问题拿到它自己的回答。"""
     lead = (await make_agent("lead", model="l")).id
     await make_agent("helper", model="h")
@@ -632,3 +639,17 @@ async def test_a_question_after_a_failed_ask_gets_its_own_answer(container, make
     [child] = await threads_of(container, parent.id)
     async with container.db.transaction() as s:
         assert await queued_in(s, child.id) == []
+
+
+def test_the_audience_of_a_run_comes_from_its_mail_not_from_the_kind_of_session():
+    """回答交给谁只看这次运行处理的信件（#294）：用户在等优先；委派来的（带关联：ask_agent、report_back）交给
+    发起的 agent；都没有就没人在等。"""
+    from muliao.platform.tooling import Audience
+    from muliao.sessions.mailbox import audience_of
+
+    user = Mail(awaited=True, correlation=None)
+    delegated = Mail(awaited=False, correlation="delegation:p:c1")
+    event = Mail(awaited=False, correlation=None)
+    assert audience_of([delegated, user]) == Audience.USER
+    assert audience_of([event, delegated]) == Audience.AGENT
+    assert audience_of([event]) == Audience.NONE

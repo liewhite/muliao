@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import AgentArchived
-from muliao.errors import Conflict, NotFound
+from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, TaskView, no_commit
@@ -30,7 +30,6 @@ from muliao.sessions.inbound import (
     receive_lane_of,
     target_in,
 )
-from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveSegment, LiveSegments, RunItemEvent
 from muliao.sessions.mailbox import open_asks_in, visible_in
 from muliao.sessions.origins import Origin
@@ -184,7 +183,7 @@ class SessionService:
         origin_ref: str | None = None,
         keyword: str | None = None,
     ) -> list[ListedSession]:
-        """会话列表只含列出的种类（KindPolicy.listed）；私有 thread 从父会话进入。工作状态不是 idle 的会话（在运行、
+        """会话列表含全部会话（顶层会话与 thread）。工作状态不是 idle 的会话（在运行、
         在等后台任务/委派/用户回答，与 issue 看板、触发器同一条规则）置顶，其余按最近更新排序。
 
         置顶看的是筛选后的全部会话（不只是这一页），所以第一页就含全部进行中的会话：工作状态的查询次数与会话数无关，
@@ -239,12 +238,7 @@ class SessionService:
         return commit
 
     async def delete(self, session_id: str) -> None:
-        """用户删除会话（规则见 deletion.delete_sessions）。归父会话所有的 thread 随它删除，不能单独删除。"""
+        """用户删除会话（规则见 deletion.delete_sessions）。"""
         async with self._db.transaction() as s:
             session = await self._get(s, session_id)
-            if not policy_of(session.kind).deletable:
-                raise Conflict(
-                    f"session {session_id} is a {session.kind} owned by the session that opened it; "
-                    "delete that session instead"
-                )
             await delete_sessions(s, self._queue, self._messaging, [session])

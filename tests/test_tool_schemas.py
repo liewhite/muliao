@@ -60,15 +60,12 @@ async def test_redacted_secret_arguments_exist_in_the_registered_tool_schemas(co
         assert secret <= params[name], f"{name} has no parameter {set(secret - params[name])}"
 
 
-async def test_deferred_tools_and_thread_tools_are_registered_under_their_table_names(container):
-    """挂起工具表（sessions.deferred）与续聊工具（KindPolicy.continued_by）按名字查：工具改了名而表没跟上，挂起判断
-    与续聊提示会悄悄失效。"""
+async def test_deferred_tools_are_registered_under_their_table_names(container):
+    """挂起工具表（sessions.deferred）按名字查：工具改了名而表没跟上，挂起判断会悄悄失效。"""
     from muliao.sessions.deferred import DEFERRED_TOOLS
-    from muliao.sessions.kinds import SessionKind, policy_of
 
     names = set(session_tools(container))
-    continued_by = {p.continued_by for k in SessionKind if (p := policy_of(k)).continued_by is not None}
-    missing = (set(DEFERRED_TOOLS) | continued_by) - names
+    missing = set(DEFERRED_TOOLS) - names
     assert not missing, missing
 
 

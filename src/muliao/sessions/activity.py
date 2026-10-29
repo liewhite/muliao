@@ -12,7 +12,7 @@ from enum import StrEnum
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.platform.tasks import TaskQueue
-from muliao.sessions.directory import keyed_among, of_agent_in, owned_threads_in
+from muliao.sessions.directory import keyed_among, of_agent_in
 from muliao.sessions.holds import with_active_among
 from muliao.sessions.info import keyed_sessions_among
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane, session_lane
@@ -66,9 +66,8 @@ async def blocking_deletion_in(
 
 
 async def sessions_blocking_agent_deletion_in(s: AsyncSession, queue: TaskQueue, agent_id: str) -> list[str]:
-    """删除这个 agent 时会被删除、此刻忙着的会话（它的会话与它们的私有 thread）。"""
-    roots = await of_agent_in(s, agent_id)
-    return await blocking_deletion_in(s, queue, await owned_threads_in(s, roots))
+    """删除这个 agent 时会被删除、此刻忙着的会话（它的全部会话）。"""
+    return await blocking_deletion_in(s, queue, {x.id: x for x in await of_agent_in(s, agent_id)})
 
 
 class SessionActivity:

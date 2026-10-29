@@ -6471,8 +6471,7 @@
         "type": "string",
         "enum": [
           "conversation",
-          "thread",
-          "private_thread"
+          "thread"
         ],
         "title": "SessionKind"
       },
@@ -6529,18 +6528,6 @@
           "kind": {
             "$ref": "#/components/schemas/SessionKind"
           },
-          "user_writable": {
-            "type": "boolean",
-            "title": "User Writable"
-          },
-          "deletable": {
-            "type": "boolean",
-            "title": "Deletable"
-          },
-          "private": {
-            "type": "boolean",
-            "title": "Private"
-          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -6569,9 +6556,6 @@
           "parent_session_id",
           "thread",
           "kind",
-          "user_writable",
-          "deletable",
-          "private",
           "unread",
           "created_at",
           "updated_at",
@@ -6633,18 +6617,6 @@
           "kind": {
             "$ref": "#/components/schemas/SessionKind"
           },
-          "user_writable": {
-            "type": "boolean",
-            "title": "User Writable"
-          },
-          "deletable": {
-            "type": "boolean",
-            "title": "Deletable"
-          },
-          "private": {
-            "type": "boolean",
-            "title": "Private"
-          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -6670,9 +6642,6 @@
           "parent_session_id",
           "thread",
           "kind",
-          "user_writable",
-          "deletable",
-          "private",
           "unread",
           "created_at",
           "updated_at"

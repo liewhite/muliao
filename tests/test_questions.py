@@ -371,10 +371,10 @@ async def test_a_question_when_no_user_waits_is_rejected_with_the_reason(
     assert retries == [NO_USER_WAITING]
 
 
-async def test_a_question_in_a_private_thread_is_handed_back_to_the_asking_agent(
+async def test_a_question_in_an_ask_thread_is_handed_back_to_the_asking_agent(
     client, container, make_agent, models
 ):
-    """私有 thread 里是另一个 agent 在问：拒绝时让它把问题写进回答交回发起方，不建议去通知用户。"""
+    """ask_agent 的 thread 里是另一个 agent 在问：拒绝时让它把问题写进回答交回发起方，不建议去通知用户。"""
     from tests.test_flow import tool_returns
 
     await login(client)

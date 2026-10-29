@@ -1,6 +1,6 @@
 """一个 agent 替另一个 agent 做完的结果（ask_agent 的结局），以及把它作为工具结果交回调用方的唯一方式。
 
-被调用方用工具挂给用户的文件（agent_runtime 的 TOOL_ATTACHMENTS）只记在被调用方自己的消息里，私有 thread 用户也不会主动
+被调用方用工具挂给用户的文件（agent_runtime 的 TOOL_ATTACHMENTS）只记在被调用方自己的消息里，thread 用户不一定会
 去翻。所以交回时把这些文件挂到调用方这次工具调用的结果上，文件就出现在用户正在看的会话里。
 """
 

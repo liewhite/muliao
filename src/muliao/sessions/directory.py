@@ -1,6 +1,6 @@
 """会话目录（会话子域）：新建一行、按属性查会话（按发送方定位、按 agent、thread、归属、列表）都只在这里；别的模块按 id
 取会话（`s.get`）或调这里的函数，不另写查询（tests/test_boundaries.py 核对）。按 id 取到的行可在领域内改（续写时间
-在 inbound / finish），删除在 deletion（连同私有 thread 的编排）。
+在 inbound / finish），删除在 deletion。
 会话的规则（种类、来源、续写）在 kinds / origins / inbound，这里只是查询与写入。"""
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.sessions.history import sessions_mentioning
-from muliao.sessions.kinds import LISTED, OWNED_BY_PARENT, TOP_LEVEL, SessionKind
+from muliao.sessions.kinds import TOP_LEVEL, SessionKind
 from muliao.sessions.origins import Origin
 from muliao.sessions.tables import Session
 
@@ -93,25 +93,8 @@ async def keyed_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str
     return {x: (origin, ref, agent_id) for x, origin, ref, agent_id in rows.all()}
 
 
-async def owned_threads_in(s: AsyncSession, roots: Sequence[Session]) -> dict[str, Session]:
-    """这些会话连同（逐层）归它们所有的 thread（KindPolicy.owned_by_parent）：删除与删除前的检查共用。"""
-    doomed = {x.id: x for x in roots}
-    frontier = list(doomed)
-    while frontier:
-        children = (
-            await s.scalars(
-                select(Session).where(
-                    Session.parent_session_id.in_(frontier), Session.kind.in_(OWNED_BY_PARENT)
-                )
-            )
-        ).all()
-        frontier = [c.id for c in children if c.id not in doomed]
-        doomed |= {c.id: c for c in children}
-    return doomed
-
-
 async def threads_of(s: AsyncSession, parent_id: str) -> list[Session]:
-    """父会话开出的 thread（含私有的），按创建顺序。"""
+    """父会话开出的 thread，按创建顺序。"""
     query = select(Session).where(Session.parent_session_id == parent_id).order_by(Session.created_at)
     return list((await s.scalars(query)).all())
 
@@ -137,7 +120,7 @@ async def threads_named_in(s: AsyncSession, parent_id: str, thread: str) -> list
 
 @dataclass(frozen=True)
 class Listing:
-    """会话列表的筛选：只含列出的种类（KindPolicy.listed），可再按 agent、来源、发送方身份筛。"""
+    """会话列表的筛选：按 agent、来源、发送方身份、关键字筛；都不给就是全部会话。"""
 
     agent_id: str | None = None
     origins: Sequence[Origin] | None = None
@@ -147,7 +130,7 @@ class Listing:
 
 
 def _conditions(listing: Listing) -> list[ColumnElement[bool]]:
-    conditions = [Session.kind.in_(LISTED)]
+    conditions: list[ColumnElement[bool]] = []
     if listing.agent_id is not None:
         conditions.append(Session.agent_id == listing.agent_id)
     if listing.origins is not None:

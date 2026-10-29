@@ -11,7 +11,7 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
 from muliao.sessions.activity import blocking_deletion_in, sessions_blocking_agent_deletion_in
-from muliao.sessions.directory import of_agent_in, owned_threads_in
+from muliao.sessions.directory import of_agent_in
 from muliao.sessions.events import AgentSessionsCleared, SessionDeleted
 from muliao.sessions.halt import StopSession
 from muliao.sessions.lanes import agent_deleting_lane
@@ -26,18 +26,16 @@ async def delete_sessions(
 ) -> None:
     """删除会话的唯一规则（删会话、删 agent 都经过这里）。
 
-    私有 thread 只对父会话有意义，逐层随父会话删除（用户不能单独删除它，见 SessionService.delete）；用户可见的
-    thread 保留为独立会话（parent 置空）。
+    它开出的 thread 保留为独立会话（parent 置空）。
     任一被删会话忙时拒绝（判断只看会话自己的数据），避免运行结果无处提交、工具写到被删的目录。交给被删会话、
     还没结清的委派结清为「被删除」，结局交回发起方（sessions.delegation）。
     """
-    doomed = await owned_threads_in(s, roots)
+    doomed = {x.id: x for x in roots}
     for session_id in await blocking_deletion_in(s, queue, doomed):
         # 错误也会交还给模型，不带 id；定位信息记在日志里
         log.info("session deletion refused: busy", extra={"session_id": session_id})
-        what = "the session" if session_id in {x.id for x in roots} else "one of the threads it owns"
         raise Conflict(
-            f"{what} is busy (a run is queued or running, or background jobs or delegated work are still "
+            "the session is busy (a run is queued or running, or background jobs or delegated work are still "
             "going); stop it first, then delete"
         )
     for session in doomed.values():
@@ -81,7 +79,7 @@ class AgentSessionsCleanup:
         )
 
     async def on_agent_deleting(self, event: AgentDeleting, _delivery: Delivery) -> Commit:
-        """删除 agent 的流程：删除它的全部会话（连同私有 thread），发布 AgentSessionsCleared（没有会话也发）。
+        """删除 agent 的流程：删除它的全部会话，发布 AgentSessionsCleared（没有会话也发）。
 
         标记删除之后它的会话不再收到来信（inbound 在事务里用 active_agent_in 检查），但仍可能有会话忙：删除前的检查与标记分属两个
         事务，之间来的信件排上的运行会在标记之后执行、可能开出后台任务或委派；人为重跑它的任务也会让会话变忙。

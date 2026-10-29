@@ -1,8 +1,8 @@
 """向用户提问：一次几个选择题，用户在界面上回答（见 sessions.questions）。
 
 工具总是列出（工具列表在缓存前缀最前面，随运行增减会让整个前缀失效）；没有用户等着这次回答时
-（私有 thread、触发器、运行中检查），调用被拒绝并交还模型。拒绝的说法按回答交给谁（运行开始时推导的
-Audience）区分：私有 thread 是另一个 agent 在问，需要对方定的写进回答交回去，不去打扰用户。"""
+（委派来的工作、触发器、运行中检查），调用被拒绝并交还模型。拒绝的说法按回答交给谁（运行开始时推导的
+Audience）区分：委派来的是另一个 agent 在问，需要对方定的写进回答交回去，不去打扰用户。"""
 
 from pydantic_ai import FunctionToolset, RunContext
 
@@ -16,7 +16,7 @@ NO_USER_WAITING = (
     "or send the user a notification (`notify_user`, if you have it) if they must know something, and carry on."
 )
 ASKED_BY_AGENT = (
-    "This is a private thread: another agent asked you this and is waiting for your final answer; the user is "
+    "Another agent asked you this and is waiting for your final answer; the user is "
     "not here to answer questions. Decide yourself, or put what that agent must decide into your final answer; "
     "it can reply in this same thread."
 )

@@ -22,7 +22,7 @@ from muliao.platform.bus import EventBus
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
-from muliao.sessions.api import SessionInfo, policy_of, session_in
+from muliao.sessions.api import SessionInfo, session_in
 from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted, SessionRead
 
 log = logging.getLogger(__name__)
@@ -99,12 +99,11 @@ class Notifications:
         return commit
 
     async def on_run_failed(self, event: RunFailed, _delivery: Delivery) -> Commit:
-        """运行最终失败：列在会话列表里的会话都通知用户，点开是那个会话。私有 thread 的失败已作为结果交回发问的会话
-        （由那里的 agent 处理），不单独通知；运行中途的工具报错不走这里。"""
+        """运行最终失败：通知用户，点开是那个会话；运行中途的工具报错不走这里。"""
 
         async def commit(s: AsyncSession) -> None:
             session = await _run_session_in(s, event)
-            if session is None or not policy_of(session.kind).listed:
+            if session is None:
                 return
             await self._enqueue_in(
                 s,

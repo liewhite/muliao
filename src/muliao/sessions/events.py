@@ -65,7 +65,7 @@ class SessionStopped(DomainEvent):
 
 
 class SessionDeleted(DomainEvent):
-    """会话（连同它的私有 thread）被删除：引用它的数据由各领域清理（如指向它的通知）。"""
+    """会话被删除：引用它的数据由各领域清理（如指向它的通知）。"""
 
     TYPE = "session.deleted"
     session_id: str

@@ -41,10 +41,9 @@ from muliao.sessions.history import (
     saved_by_in,
 )
 from muliao.sessions.holds import called_in
-from muliao.sessions.kinds import policy_of
 from muliao.sessions.live import LiveSegments
 from muliao.sessions.loading import load_session
-from muliao.sessions.mailbox import consumed_by_in, queued_in, wake_in
+from muliao.sessions.mailbox import audience_of, consumed_by_in, queued_in, wake_in
 from muliao.sessions.origins import OriginNotes
 from muliao.sessions.pending import (
     Delegated,
@@ -228,10 +227,8 @@ class Consumer:
                 if state.messages
                 else self._finisher.idle(state)
             )
-        # 运行开始时就定下（工具与指令随之确定）：会话种类决定回答交给谁（KindPolicy.audience）；用户是否在等看它处理
-        # 过的、和这次要处理的信件
-        awaited = any(m.awaited for m in [*state.handled, *queued])
-        audience = policy_of(session.kind).audience(awaited)
+        # 运行开始时就定下（工具与指令随之确定）：回答交给谁看它处理过的、和这次要处理的信件（mailbox.audience_of）
+        audience = audience_of([*state.handled, *queued])
         scope = self._runtime.scope(agent, session_id=session.id, audience=audience)
         # 随运行变化的上下文（当前时间、回答交给谁）不进 instructions——那是缓存前缀——而是挂在这次运行新增的
         # 第一条请求上（sessions.steps._before_request）

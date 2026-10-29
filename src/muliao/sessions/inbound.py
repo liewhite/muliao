@@ -192,10 +192,8 @@ def _sender_of(session: Session) -> tuple[Origin, str | None]:
 
 
 def _check_may_continue(session: Session, origin: Origin, origin_ref: str | None) -> None:
-    """续写规则：用户可以在任何非私有会话里继续；其他来源只能续写自己发起的会话。"""
+    """续写规则：用户可以在任何会话里继续；其他来源只能续写自己发起的会话。"""
     if RULES[origin].writes_anywhere:
-        if not policy_of(session.kind).user_writable:
-            raise Conflict(f"session {session.id} is a {session.kind} of another agent and is read-only")
         return
     if _sender_of(session) != (origin, origin_ref):
         log.warning(

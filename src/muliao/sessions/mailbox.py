@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.errors import NotFound
 from muliao.platform.tasks import TaskQueue
+from muliao.platform.tooling import Audience
 from muliao.sessions.history import since_last_response, since_last_response_among
 from muliao.sessions.holds import called_in, get_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
@@ -30,6 +31,17 @@ from muliao.sessions.runs import RunPayload, handed_to, latest_run, run_unfinish
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
 
 log = logging.getLogger(__name__)
+
+
+def audience_of(mail: Sequence[Mail]) -> Audience:
+    """一次运行的回答交给谁，由它处理的信件推导（唯一规则）：有用户在等的信件就是用户；否则有委派来的信件（带关联，
+    ask_agent 或 report_back）就是发起委派的 agent；都没有就没人在等。"""
+    if any(m.awaited for m in mail):
+        return Audience.USER
+    if any(m.correlation is not None for m in mail):
+        return Audience.AGENT
+    return Audience.NONE
+
 
 _SOURCE_MAX = 100
 

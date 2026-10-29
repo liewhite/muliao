@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { Button, Chip, Disclosure, Spinner, TextArea, TextField } from '@heroui/react'
-import { Archive, ArrowDown, BellDot, CircleStop, CornerLeftUp, GitBranch, Lock, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
+import { Archive, ArrowDown, BellDot, CircleStop, CornerLeftUp, GitBranch, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   agentRoute,
@@ -406,12 +406,6 @@ function ThreadRow({ thread, agents }: { thread: Session; agents: Agent[] | unde
       <GitBranch className="size-3.5 shrink-0 text-muted" />
       <span className="truncate font-medium">{thread.thread}</span>
       <span className="truncate text-muted">{agentLabel(agents, thread.agent_id)}</span>
-      {thread.private && (
-        <Chip size="sm" variant="soft">
-          <Lock className="size-3" />
-          私有
-        </Chip>
-      )}
       {thread.unread && <span className="size-2 shrink-0 rounded-full bg-accent" aria-label="未读" />}
       <span className="ml-auto shrink-0 text-xs text-muted">{formatTime(thread.updated_at)}</span>
     </Link>
@@ -672,7 +666,7 @@ export default function SessionView() {
   async function remove() {
     const ok = await confirm({
       title: '删除这个会话？',
-      body: '会话的全部消息，以及它开出的私有 thread 都会被删除。',
+      body: '会话的全部消息都会被删除；它开出的 thread 保留。',
       confirmLabel: '删除',
       danger: true,
     })
@@ -705,11 +699,9 @@ export default function SessionView() {
             <Archive className="size-4" />
             压缩
           </Button>
-          {session?.deletable && (
-            <Button isIconOnly size="sm" variant="ghost" onPress={() => void remove()} aria-label="删除会话">
-              <Trash2 className="size-4" />
-            </Button>
-          )}
+          <Button isIconOnly size="sm" variant="ghost" onPress={() => void remove()} aria-label="删除会话">
+            <Trash2 className="size-4" />
+          </Button>
         </>
       }
       footer={
@@ -729,31 +721,24 @@ export default function SessionView() {
               </Button>
             )}
             <ErrorAlert error={action.error ?? voice.error} />
-            {session && !session.user_writable ? (
-              <div className="flex items-center justify-center gap-1.5 py-1 text-sm text-muted">
-                <Lock className="size-4" />
-                这是另一个 agent 向它发起的私有 thread，只能查看
-              </div>
-            ) : (
-              <Composer
-                draft={draft}
-                setDraft={setDraft}
-                uploads={uploads}
-                voice={voice}
-                busy={action.busy}
-                active={detail.data !== undefined && detail.data.state !== 'idle'}
-                onSend={() => void send()}
-                onStop={() =>
-                  // 停止没在运行的会话（等后台任务、委派）不产生前端收得到的事件：自己重新拉取，列表也跟着变
-                  void action.run(() =>
-                    api.stop(id).then(() => {
-                      announceChange('sessions')
-                      return detail.reload()
-                    }),
-                  )
-                }
-              />
-            )}
+            <Composer
+              draft={draft}
+              setDraft={setDraft}
+              uploads={uploads}
+              voice={voice}
+              busy={action.busy}
+              active={detail.data !== undefined && detail.data.state !== 'idle'}
+              onSend={() => void send()}
+              onStop={() =>
+                // 停止没在运行的会话（等后台任务、委派）不产生前端收得到的事件：自己重新拉取，列表也跟着变
+                void action.run(() =>
+                  api.stop(id).then(() => {
+                    announceChange('sessions')
+                    return detail.reload()
+                  }),
+                )
+              }
+            />
           </div>
         </div>
       }

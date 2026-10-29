@@ -2310,7 +2310,7 @@ export interface components {
          * SessionKind
          * @enum {string}
          */
-        SessionKind: "conversation" | "thread" | "private_thread";
+        SessionKind: "conversation" | "thread";
         /**
          * SessionListItem
          * @description 会话列表里的一行：多一个只在列表里算的工作状态（在运行 / 在等后台任务、委派或用户回答 / 空闲；会话页看
@@ -2331,12 +2331,6 @@ export interface components {
             /** Thread */
             thread: string | null;
             kind: components["schemas"]["SessionKind"];
-            /** User Writable */
-            user_writable: boolean;
-            /** Deletable */
-            deletable: boolean;
-            /** Private */
-            private: boolean;
             /** Unread */
             unread: boolean;
             /**
@@ -2367,12 +2361,6 @@ export interface components {
             /** Thread */
             thread: string | null;
             kind: components["schemas"]["SessionKind"];
-            /** User Writable */
-            user_writable: boolean;
-            /** Deletable */
-            deletable: boolean;
-            /** Private */
-            private: boolean;
             /** Unread */
             unread: boolean;
             /**

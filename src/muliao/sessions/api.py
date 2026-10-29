@@ -24,7 +24,7 @@ from muliao.sessions.inbound import (
     receive_command_in,
 )
 from muliao.sessions.info import SessionInfo, keyed_sessions_among, session_in
-from muliao.sessions.kinds import SessionKind, policy_of
+from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 from muliao.sessions.origins import OWN_NOTES, Origin, OriginNotes
@@ -48,7 +48,6 @@ __all__ = [
     "SessionPorts",
     "WorkState",
     "SessionKind",
-    "policy_of",
     "LiveSegment",
     "RunDeltaEvent",
     "RunEvent",

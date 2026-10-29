@@ -1343,3 +1343,39 @@ def test_waiting_issues_become_in_progress_and_downgrade_drops_waiting_wake_ups(
         ).fetchall()
         assert holds == [("wake:s:c1", "cleared", 1), ("wake:s:c0", "released", 0), ("job:7", "active", 0)]
         assert conn.execute("select name from sqlite_master where name = 'wakeups'").fetchone() is None
+
+
+def test_private_threads_become_threads_and_downgrade_keeps_them(tmp_path):
+    """#294：私有 thread 改成 thread；降级分不出原来是哪种，保持 thread。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "5387928cff43")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into agents (id, name, description, model, created_at, updated_at) "
+            "values ('a1', 'a1', 'd', 'p:m', ?, ?)",
+            (t, t),
+        )
+        conn.executemany(
+            "insert into sessions (id, agent_id, title, origin, origin_ref, parent_session_id, thread, kind, "
+            "created_at, updated_at) values (?, 'a1', 't', ?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("p", "user", None, None, None, "conversation", t, t),
+                ("c1", "delegation", "p", "p", "r1", "thread", t, t),
+                ("c2", "delegation", "p", "p", "r2", "private_thread", t, t),
+            ],
+        )
+
+    migrate(path)
+    expected = [("c1", "thread"), ("c2", "thread"), ("p", "conversation")]
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, kind from sessions order by id").fetchall() == expected
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "5387928cff43")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, kind from sessions order by id").fetchall() == expected

@@ -13,7 +13,7 @@ class Audience(StrEnum):
 
     # 有用户在等：运行结束时推送
     USER = "user"
-    # 私有 thread：回答作为 ask_agent 的结果交回发问方
+    # 委派来的工作（ask_agent、report_back）：回答交回发起委派的 agent
     AGENT = "agent"
     # 没有人在等（触发器、运行中检查……）：要通知用户时 agent 自己 notify_user
     NONE = "none"
