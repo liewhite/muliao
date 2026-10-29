@@ -10,19 +10,22 @@ export type PreviewKind = 'image' | 'markdown' | 'text' | 'too-big'
 /** 目录里的一项的相对路径（目录为空串是工作目录本身） */
 export const joinPath = (dir: string, name: string) => (dir ? `${dir}/${name}` : name)
 
+/** joinPath 的反向：[所在目录, 名称] */
+export function splitPath(path: string): [string, string] {
+  const i = path.lastIndexOf('/')
+  return i < 0 ? ['', path] : [path.slice(0, i), path.slice(i + 1)]
+}
+
 const ext = (name: string) => {
   const i = name.lastIndexOf('.')
   return i > 0 ? name.slice(i + 1).toLowerCase() : ''
 }
 
-// 与后端 files.INLINE_IMAGE_TYPES 对应的扩展名：服务端只对这些按 inline 返回
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp'])
-
-/** 按扩展名与大小决定预览方式；不认识的扩展名先按文本读，读到二进制内容再改为只给下载（isBinary） */
-export function previewKind(name: string, size: number): PreviewKind {
-  const e = ext(name)
-  if (IMAGE_EXTS.has(e)) return 'image'
-  if (size > MAX_PREVIEW_BYTES) return 'too-big'
+/** 预览方式：能内联的图片由后端判定（inline）；其余按大小与扩展名，不认识的先按文本读，读到二进制内容再改为只给下载（isBinary） */
+export function previewKind(entry: { name: string; size: number | null; inline: boolean }): PreviewKind {
+  if (entry.inline) return 'image'
+  if ((entry.size ?? 0) > MAX_PREVIEW_BYTES) return 'too-big'
+  const e = ext(entry.name)
   return e === 'md' || e === 'markdown' ? 'markdown' : 'text'
 }
 

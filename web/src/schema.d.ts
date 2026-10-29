@@ -1565,6 +1565,8 @@ export interface components {
              * Format: date-time
              */
             modified: string;
+            /** Inline */
+            inline: boolean;
         };
         /** FeaturesOut */
         FeaturesOut: {

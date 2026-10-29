@@ -41,6 +41,12 @@ FILES_PATH = "/api/files"
 # 浏览器可以直接显示、模型也普遍能看的图片类型：只有这些按 inline 返回，并作为图片交给模型。
 # SVG 不在其中：它能带脚本
 INLINE_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+# 与界面同源、带着登录 cookie 下载 agent 写的内容时的响应头（对话里的文件、工作目录的文件）：不让浏览器猜类型、在沙箱里打开。
+# 只有 INLINE_IMAGE_TYPES 按 inline 返回，其余作为附件（docs/architecture.md 第 15 节）
+UNTRUSTED_CONTENT_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+}
 # 文件系统（APFS、ext4）对单个文件名的限制是 255 个 UTF-8 字节，名称会原样成为工作目录里的文件名
 _NAME_MAX_BYTES = 255
 _CHUNK_BYTES = 64 * 1024

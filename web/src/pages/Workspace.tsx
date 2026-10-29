@@ -15,19 +15,16 @@ import {
   joinPath,
   languageOf,
   previewKind,
+  splitPath,
 } from '../workspaceFiles'
-
-interface Opened {
-  path: string
-  entry: WorkspaceEntry
-}
 
 export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
   const root = useLoad(() => api.workspace(agent, ''), [agent])
   // 展开过的子目录的内容（键是相对路径）；收起时保留，再展开不重新请求，点刷新才重新读
   const [dirs, setDirs] = useState<Record<string, WorkspaceEntry[]>>({})
   const [expanded, setExpanded] = useState<Set<Key>>(new Set())
-  const [opened, setOpened] = useState<Opened | null>(null)
+  // 打开的文件的路径；它的大小、类型取自所在目录当前的列表，刷新后跟着更新
+  const [opened, setOpened] = useState<string | null>(null)
   // 刷新时递增：预览跟着重新读
   const [version, setVersion] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -71,10 +68,10 @@ export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
           id={path}
           textValue={entry.name}
           hasChildItems={entry.is_dir}
-          onAction={() => (entry.is_dir ? toggle(path) : setOpened({ path, entry }))}
+          onAction={() => (entry.is_dir ? toggle(path) : setOpened(path))}
           className={({ isFocusVisible }) =>
             `cursor-pointer rounded-md text-sm outline-none ${isFocusVisible ? 'ring-2 ring-accent' : ''} ${
-              opened?.path === path ? 'bg-accent-soft text-accent-soft-foreground' : 'hover:bg-surface-secondary'
+              opened === path ? 'bg-accent-soft text-accent-soft-foreground' : 'hover:bg-surface-secondary'
             }`
           }
         >
@@ -101,6 +98,16 @@ export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
         </TreeItem>
       )
     })
+  }
+
+  function openedPreview(path: string) {
+    const [parent, name] = splitPath(path)
+    const listing = parent === '' ? root.data : dirs[parent]
+    // 所在目录还在读（刷新中）
+    if (listing === undefined) return null
+    const entry = listing.find((e) => e.name === name)
+    if (entry === undefined) return <EmptyHint>{path} 已不在工作目录里</EmptyHint>
+    return <FilePreview key={`${path}-${version}`} agent={agent} path={path} entry={entry} />
   }
 
   return (
@@ -132,22 +139,15 @@ export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
             }
           </Loading>
         </Card>
-        <Card className="min-w-0 p-3">
-          {opened ? (
-            <FilePreview key={`${opened.path}-${version}`} agent={agent} opened={opened} />
-          ) : (
-            <EmptyHint>选一个文件预览</EmptyHint>
-          )}
-        </Card>
+        <Card className="min-w-0 p-3">{opened ? openedPreview(opened) : <EmptyHint>选一个文件预览</EmptyHint>}</Card>
       </div>
     </div>
   )
 }
 
-function FilePreview({ agent, opened }: { agent: AgentId; opened: Opened }) {
-  const { path, entry } = opened
+function FilePreview({ agent, path, entry }: { agent: AgentId; path: string; entry: WorkspaceEntry }) {
   const size = entry.size ?? 0
-  const kind = previewKind(entry.name, size)
+  const kind = previewKind(entry)
   const url = workspaceFileUrl(agent, path)
   const text = useLoad(
     async () => (kind === 'markdown' || kind === 'text' ? (await api.workspaceFile(agent, path)).text() : ''),

@@ -21,10 +21,10 @@ async def test_lists_one_level_dirs_first_and_reads_files(container, make_agent,
     await login(client)
 
     top = (await client.get(f"/api/agents/{agent}/workspace")).json()
-    assert [(e["name"], e["is_dir"], e["size"]) for e in top] == [
-        ("evolve", True, None),
-        ("a.png", False, 4),
-        ("b.txt", False, 2),
+    assert [(e["name"], e["is_dir"], e["size"], e["inline"]) for e in top] == [
+        ("evolve", True, None, False),
+        ("a.png", False, 4, True),
+        ("b.txt", False, 2, False),
     ]
     inner = (await client.get(f"/api/agents/{agent}/workspace", params={"path": "evolve"})).json()
     assert [e["name"] for e in inner] == ["draft.md"]
@@ -48,11 +48,26 @@ async def test_paths_outside_the_workspace_are_rejected(container, make_agent, c
     os.symlink(outside, root / "link.txt")
     await login(client)
 
-    for path in ("../", "/etc", "link.txt", f"../../{tmp_path.name}/secret.txt"):
+    for path in ("../", "/etc", "link.txt", f"../../{tmp_path.name}/secret.txt", "a\0b"):
         resp = await client.get(f"/api/agents/{agent}/workspace/file", params={"path": path})
         assert resp.status_code == 422, path
     resp = await client.get(f"/api/agents/{agent}/workspace", params={"path": ".."})
     assert resp.status_code == 422
+    # 指向外面的链接打不开，也就不列出
+    assert (await client.get(f"/api/agents/{agent}/workspace")).json() == []
+
+
+async def test_symlinks_inside_the_workspace_are_followed(container, make_agent, client):
+    agent, root = await _workspace(container, make_agent)
+    (root / "real").mkdir()
+    (root / "real" / "f.txt").write_text("inside")
+    os.symlink(root / "real", root / "alias")
+    await login(client)
+
+    top = (await client.get(f"/api/agents/{agent}/workspace")).json()
+    assert [(e["name"], e["is_dir"]) for e in top] == [("alias", True), ("real", True)]
+    resp = await client.get(f"/api/agents/{agent}/workspace/file", params={"path": "alias/f.txt"})
+    assert resp.text == "inside"
 
 
 async def test_missing_paths_and_agents_are_not_found(container, make_agent, client):

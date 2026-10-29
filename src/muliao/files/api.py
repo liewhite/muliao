@@ -4,6 +4,7 @@
 from muliao.files.store import (
     FILES_PATH,
     INLINE_IMAGE_TYPES,
+    UNTRUSTED_CONTENT_HEADERS,
     FileMeta,
     FileStore,
     file_url,
@@ -14,6 +15,7 @@ from muliao.files.store import (
 __all__ = [
     "FILES_PATH",
     "INLINE_IMAGE_TYPES",
+    "UNTRUSTED_CONTENT_HEADERS",
     "FileMeta",
     "FileStore",
     "file_url",

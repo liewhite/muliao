@@ -1,20 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { isBinary, joinPath, languageOf, MAX_PREVIEW_BYTES, previewKind } from './workspaceFiles'
+import { isBinary, joinPath, languageOf, MAX_PREVIEW_BYTES, previewKind, splitPath } from './workspaceFiles'
 
 describe('workspace files', () => {
   it('joins paths from the workspace root', () => {
     expect(joinPath('', 'evolve')).toBe('evolve')
     expect(joinPath('evolve', 'draft.md')).toBe('evolve/draft.md')
+    expect(splitPath('draft.md')).toEqual(['', 'draft.md'])
+    expect(splitPath('a/b/draft.md')).toEqual(['a/b', 'draft.md'])
   })
 
-  it('previews images whatever their size, other files only up to the limit', () => {
-    expect(previewKind('chart.PNG', MAX_PREVIEW_BYTES * 10)).toBe('image')
-    expect(previewKind('draft.md', 10)).toBe('markdown')
-    expect(previewKind('main.py', 10)).toBe('text')
-    expect(previewKind('Makefile', 10)).toBe('text')
-    expect(previewKind('big.log', MAX_PREVIEW_BYTES + 1)).toBe('too-big')
-    // svg 可能带脚本：按源码显示，不当图片
-    expect(previewKind('icon.svg', 10)).toBe('text')
+  it('previews inline images whatever their size, other files only up to the limit', () => {
+    const file = (name: string, size: number, inline = false) => ({ name, size, inline })
+    expect(previewKind(file('chart.png', MAX_PREVIEW_BYTES * 10, true))).toBe('image')
+    expect(previewKind(file('draft.md', 10))).toBe('markdown')
+    expect(previewKind(file('main.py', 10))).toBe('text')
+    expect(previewKind(file('Makefile', 10))).toBe('text')
+    expect(previewKind(file('big.log', MAX_PREVIEW_BYTES + 1))).toBe('too-big')
+    // svg 不是能内联的图片（可能带脚本）：按源码显示
+    expect(previewKind(file('icon.svg', 10))).toBe('text')
   })
 
   it('detects binary content by NUL', () => {

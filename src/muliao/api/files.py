@@ -12,13 +12,12 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.errors import InvalidInput, NotFound
-from muliao.files.api import FILES_PATH, FileMeta
+from muliao.files.api import FILES_PATH, UNTRUSTED_CONTENT_HEADERS, FileMeta
 
 router = APIRouter()
 
 _SAFE_HEADERS = {
-    "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+    **UNTRUSTED_CONTENT_HEADERS,
     # 内容按 id 永不改变
     "Cache-Control": "private, max-age=31536000, immutable",
 }
