@@ -42,6 +42,30 @@ describe('groupSteps', () => {
       'process:2',
     ])
   })
+
+  // #299：thread 与文件显示在组下方，之后的调用不能折进它上面的组
+  it('starts a new group after the steps whose threads or files are shown below the group', () => {
+    const delegate = (id: string, thread: string): Item => ({ ...item('tool_call', '{}', id), threads: [thread] })
+    const report = { url: '/api/files/2/r.md', name: 'r.md', media_type: 'text/markdown', inline: false }
+    const views = groupSteps(
+      toBlocks([
+        item('tool_call', '{}', 'a'),
+        item('tool_result', 'ok', 'a'),
+        delegate('b', 't1'),
+        delegate('c', 't2'),
+        item('tool_result', 'answer 1', 'b'),
+        item('tool_result', 'answer 2', 'c'),
+        item('thinking', '看回答'),
+        item('tool_call', '{}', 'd'),
+        { ...item('tool_result', 'shared', 'd'), attachments: [report] },
+        item('tool_call', '{}', 'e'),
+      ]),
+    )
+    expect(views.map((v) => (v.kind === 'process' ? stepThreads(v.steps).join(',') + `:${v.steps.length}` : v.kind))).toEqual(
+      ['t1,t2:3', ':2', ':1'],
+    )
+    expect(views.map((v) => v.kind === 'process' && stepAttachments(v.steps).length)).toEqual([0, 1, 0])
+  })
 })
 
 describe('stepAttachments', () => {

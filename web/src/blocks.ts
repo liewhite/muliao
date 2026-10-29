@@ -138,14 +138,30 @@ export function toolStatus(tool: ToolView, live: boolean): ToolStatus {
 
 const isStep = (b: Block): b is Step => b.kind === 'thinking' || b.kind === 'tool'
 
-/** 连续的思考与工具调用合成一个过程组；其余块原样保留 */
+/** 这一步有没有不随过程折叠的成果（挂给用户的文件、委派开出的 thread）：它们显示在组下方 */
+const hasOutputs = (s: Step) => s.kind === 'tool' && (s.tool.attachments.length > 0 || s.tool.threads.length > 0)
+
+/**
+ * 连续的思考与工具调用合成一个过程组；其余块原样保留。成果（文件、thread）显示在组下方，所以有成果的组到此为止：
+ * 之后不带成果的步骤另起一组，否则成果之后才做的调用会折进成果上面的组里，看起来像发生在它之前。紧挨着的带成果
+ * 步骤（如一次并行开出几个 thread）仍在一组
+ */
 export function groupSteps(blocks: Block[]): View[] {
   const views: View[] = []
+  let open: { steps: Step[]; hasOutputs: boolean } | null = null
   for (const block of blocks) {
-    const last = views[views.length - 1]
-    if (!isStep(block)) views.push(block)
-    else if (last?.kind === 'process') last.steps.push(block)
-    else views.push({ kind: 'process', steps: [block] })
+    if (!isStep(block)) {
+      views.push(block)
+      open = null
+      continue
+    }
+    const outputs = hasOutputs(block)
+    if (open === null || (open.hasOutputs && !outputs)) {
+      open = { steps: [], hasOutputs: false }
+      views.push({ kind: 'process', steps: open.steps })
+    }
+    open.steps.push(block)
+    open.hasOutputs ||= outputs
   }
   return views
 }
