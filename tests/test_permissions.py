@@ -31,6 +31,11 @@ _ADMIN_TOOLS = {
     "update_role",
     "delete_role",
     "transfer_item",
+    # 很少用、不占每个 agent 上下文的（#295）
+    "mcp_list",
+    "mcp_add",
+    "mcp_remove",
+    "vault_delete",
 }
 
 

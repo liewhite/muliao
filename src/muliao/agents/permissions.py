@@ -33,7 +33,8 @@ class Access(StrEnum):
 @dataclass(frozen=True)
 class Tool:
     access: Access
-    # 管理类工具（管 agent、角色、全局记忆、条目归属）：base 没有，只经 admin 角色或显式规则给出
+    # 管理类工具（管 agent、角色、全局记忆、条目归属，以及很少用的 MCP 配置、删 secret，#295）：base 没有，只经 admin
+    # 角色或显式规则给出
     admin: bool = False
 
 
@@ -52,7 +53,7 @@ def spec_of(name: str) -> ToolSpec:
 
 
 R, W = Tool(Access.READ), Tool(Access.WRITE)
-ADMIN_W = Tool(Access.WRITE, admin=True)
+ADMIN_R, ADMIN_W = Tool(Access.READ, admin=True), Tool(Access.WRITE, admin=True)
 
 # 内置工具：唯一登记处。组合根在启动时核对它与实际注册的工具一一对应（web 只在配置了 [web] 时注册）
 TOOLS: dict[str, Tool] = {
@@ -91,14 +92,14 @@ TOOLS: dict[str, Tool] = {
     "stop_thread": W,
     "wake_me": W,
     "notify_user": W,
-    # MCP 配置
-    "mcp_list": R,
-    "mcp_add": W,
-    "mcp_remove": W,
-    # vault
+    # MCP 配置：很少用（近 30 天只有 muliao 加过一次），不占每个 agent 的上下文，要用的 agent 显式给（#295）
+    "mcp_list": ADMIN_R,
+    "mcp_add": ADMIN_W,
+    "mcp_remove": ADMIN_W,
+    # vault：agent 自己存用户给的 token，vault_set / vault_list 人人有；删很少用（#295）
     "vault_list": R,
     "vault_set": W,
-    "vault_delete": W,
+    "vault_delete": ADMIN_W,
     # trigger
     "trigger_kinds": R,
     "trigger_list": R,

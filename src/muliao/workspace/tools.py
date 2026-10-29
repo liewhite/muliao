@@ -26,7 +26,10 @@ _SHELL_DESCRIPTION = (
     "Only the first {max_output} characters of output are kept, so limit it yourself: pipe through `| head` or `| tail`, "
     "use `rg -m N`, `cut -c1-200`, and read only the part of a long log you need. "
     "Search with ripgrep, not grep/find: `rg -n PATTERN [PATH]` for contents (`-g '*.py'` filters files, `-C 3` "
-    "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules."
+    "adds context), `rg --files [-g GLOB]` to find files; it skips .git and ignored files such as node_modules. "
+    "`pgrep -f` / `pkill -f` also match the shell running your command, since its command line contains the "
+    "pattern (here and over ssh on a remote host), so `pkill -f` can kill that shell: bracket one character, e.g. "
+    "`pgrep -f '[a]rb live'`, or match the process name exactly with `pgrep -x`."
 )
 
 _BACKGROUND_DESCRIPTION = (
