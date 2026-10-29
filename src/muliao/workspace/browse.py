@@ -5,6 +5,7 @@
 """
 
 import mimetypes
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -16,6 +17,15 @@ from muliao.files.api import INLINE_IMAGE_TYPES
 
 def media_type_of(name: str) -> str:
     return mimetypes.guess_type(name)[0] or "application/octet-stream"
+
+
+def _is_inline(media_type: str) -> bool:
+    return media_type in INLINE_IMAGE_TYPES
+
+
+def _real(p: Path) -> Path:
+    # 不用 Path.resolve()：3.12 遇到循环链接抛 RuntimeError；realpath 原样返回，之后的 exists / stat 自然失败
+    return Path(os.path.realpath(p))
 
 
 @dataclass(frozen=True)
@@ -36,43 +46,39 @@ class WorkspaceFile:
 
     @property
     def inline(self) -> bool:
-        return self.media_type in INLINE_IMAGE_TYPES
+        return _is_inline(self.media_type)
 
 
 class WorkspaceFiles:
     def __init__(self, workspace_of: Callable[[str], Path]):
         self._workspace_of = workspace_of
 
-    def _root(self, agent_id: str) -> Path:
-        root = self._workspace_of(agent_id).resolve()
-        if not root.is_dir():
-            raise NotFound(f"agent {agent_id!r} has no workspace")
-        return root
-
-    def _resolve(self, agent_id: str, path: str) -> Path:
+    def _resolve(self, agent_id: str, path: str) -> tuple[Path, Path]:
+        """(工作目录, 目标)，都已解析符号链接。"""
         # 文件系统接口遇到 NUL 直接抛 ValueError
         if "\0" in path:
             raise InvalidInput(f"path contains a NUL character: {path!r}")
         rel = PurePosixPath(path)
         if rel.is_absolute():
             raise InvalidInput(f"path must be relative to the workspace: {path!r}")
-        root = self._root(agent_id)
-        target = (root / rel).resolve()
+        root = _real(self._workspace_of(agent_id))
+        if not root.is_dir():
+            raise NotFound(f"agent {agent_id!r} has no workspace")
+        target = _real(root / rel)
         if not target.is_relative_to(root):
             raise InvalidInput(f"path is outside the workspace: {path!r}")
         if not target.exists():
             raise NotFound(f"no such file in the workspace: {path!r}")
-        return target
+        return root, target
 
     def list(self, agent_id: str, path: str) -> list[Entry]:
-        """目录在前，各自按名称排序。指向工作目录外的符号链接（打不开）、断掉的符号链接等 stat 不了的条目不列出。"""
-        target = self._resolve(agent_id, path)
+        """目录在前，各自按名称排序。指向工作目录外的符号链接（打不开）、断掉或循环的符号链接等 stat 不了的条目不列出。"""
+        root, target = self._resolve(agent_id, path)
         if not target.is_dir():
             raise InvalidInput(f"not a directory: {path!r}")
-        root = self._root(agent_id)
         entries = []
         for child in target.iterdir():
-            if not child.resolve().is_relative_to(root):
+            if not _real(child).is_relative_to(root):
                 continue
             try:
                 st = child.stat()
@@ -85,13 +91,13 @@ class WorkspaceFiles:
                     is_dir=is_dir,
                     size=None if is_dir else st.st_size,
                     modified=datetime.fromtimestamp(st.st_mtime, UTC),
-                    inline=not is_dir and media_type_of(child.name) in INLINE_IMAGE_TYPES,
+                    inline=not is_dir and _is_inline(media_type_of(child.name)),
                 )
             )
         return sorted(entries, key=lambda e: (not e.is_dir, e.name))
 
     def file(self, agent_id: str, path: str) -> WorkspaceFile:
-        target = self._resolve(agent_id, path)
+        _, target = self._resolve(agent_id, path)
         if not target.is_file():
             raise InvalidInput(f"not a file: {path!r}")
         return WorkspaceFile(target, media_type_of(target.name))

@@ -70,6 +70,18 @@ async def test_symlinks_inside_the_workspace_are_followed(container, make_agent,
     assert resp.text == "inside"
 
 
+async def test_symlink_loops_do_not_break_the_listing(container, make_agent, client):
+    agent, root = await _workspace(container, make_agent)
+    (root / "f.txt").write_text("x")
+    os.symlink(root / "loop", root / "loop")
+    await login(client)
+
+    top = (await client.get(f"/api/agents/{agent}/workspace")).json()
+    assert [e["name"] for e in top] == ["f.txt"]
+    resp = await client.get(f"/api/agents/{agent}/workspace/file", params={"path": "loop"})
+    assert resp.status_code == 404
+
+
 async def test_missing_paths_and_agents_are_not_found(container, make_agent, client):
     agent, root = await _workspace(container, make_agent)
     (root / "f.txt").write_text("x")

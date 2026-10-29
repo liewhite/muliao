@@ -55,7 +55,11 @@ export function WorkspaceBrowser({ agent }: { agent: AgentId }) {
     void root.reload()
     // 展开着的重新读；收起的丢掉，下次展开时再读
     setDirs({})
-    for (const k of expanded) void loadDir(String(k))
+    const again = new Set([...expanded].map(String))
+    // 打开的文件所在的目录可能已收起，也要读，预览才有新的元信息
+    if (opened) again.add(splitPath(opened)[0])
+    again.delete('')
+    for (const k of again) void loadDir(k)
     setVersion((v) => v + 1)
   }
 
