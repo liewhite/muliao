@@ -26,7 +26,7 @@ from muliao.sessions.compaction import (
     steps_of,
 )
 from muliao.sessions.conventions import RUN_STOPPED, run_context_index
-from muliao.sessions.history import CONTINUATION
+from muliao.sessions.history import CONTINUATION, add_compaction_in, append_in, load_context
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, session_lane
 from muliao.sessions.tables import Compaction, Message
 from tests.scripted import scripted
@@ -198,7 +198,32 @@ async def test_a_stopped_placeholder_right_after_compacting_does_not_count_as_th
     """压缩后只有一条停止占位回复：还没有压缩后的测量，不压缩，也不拿压缩前的大小判「压不下去」。"""
     threshold = container.settings.runtime.compaction_threshold_tokens
     history = [*_response(threshold + 1), ModelRequest(parts=[UserPromptPart("go")]), _stopped_placeholder()]
+    # 防的是只修 context_tokens、不改计数的半截修复：那时占位回复算压缩后的第一次回复，拿压缩前的数误判 HOPELESS
     assert container.compactor.verdict("s", history, stale_responses=1) == Verdict.NOT_DUE
+
+
+async def test_a_cut_off_reply_that_got_its_usage_is_a_measurement(container):
+    """被截断的回复已收到用量（Anthropic 流式在开头就报输入 token）：它就是最新的上下文大小。"""
+    cut_off = ModelResponse(parts=[TextPart("x")], usage=RequestUsage(input_tokens=777), state="interrupted")
+    assert context_tokens([*_response(5), ModelRequest(parts=[UserPromptPart("go")]), cut_off]) == 777
+
+
+async def test_stale_replies_counted_when_loading_the_context_leave_out_stopped_placeholders(
+    container, make_agent, models
+):
+    """压缩点之前的停止占位回复不算「压缩前的测量」：否则压缩后的第一次真实测量会被当成旧的跳过。"""
+    alpha = (await make_agent("alpha", model="m")).id
+    session, _ = await _session_with_exchanges(container, models, alpha, 2)
+    async with container.db.transaction() as s:
+        rows = (
+            await s.scalars(select(Message).where(Message.session_id == session.id).order_by(Message.id))
+        ).all()
+        await append_in(s, session.id, rows[-1].task_id, [_stopped_placeholder()])
+        await add_compaction_in(s, session.id, rows[0].id, "SUMMARY")
+    async with container.db.transaction() as s:
+        context = await load_context(s, session.id)
+    assert sum(isinstance(m, ModelResponse) for m in context.messages) == 3
+    assert context.stale_responses == 2
 
 
 def test_select_steps_bounds_batch_without_truncating():

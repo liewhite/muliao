@@ -64,7 +64,7 @@ class RunState:
     # 这次运行保存的消息（包括之前几次尝试保存的），和最后保存的那一行
     messages: list[ModelMessage] = field(default_factory=list)
     last_row: Message | None = None
-    # 上下文里最近一次压缩之前就有的模型回复条数（sessions.history.SessionContext.stale_responses），加载上下文时更新
+    # 即 sessions.history.SessionContext.stale_responses，加载上下文时更新
     stale_responses: int | None = None
     # 压缩不下去了（保留窗口之外没有可压缩的，或刚压缩过仍超阈值）：这次运行不再因为上下文大小停下
     compaction_exhausted: bool = False
