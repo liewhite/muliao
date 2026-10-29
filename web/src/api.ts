@@ -40,6 +40,8 @@ export type FileInfo = Schemas['FileOut']
 /** 读不出来的资源文件（skill、MCP 配置）：列表接口不含它们，单独列出供删除 */
 export type Attachment = Schemas['Attachment']
 export type Item = Schemas['Item']
+/** 工具调用的参数或结果按工具的展示规则画成的一块（后端 platform/tool_views.py） */
+export type ViewBlock = NonNullable<Item['view']>[number]
 export type CompactionInfo = Schemas['CompactionOut']
 export type Task = WithAgentId<Schemas['TaskOut'], 'agent_id'>
 

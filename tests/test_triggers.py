@@ -481,9 +481,10 @@ async def test_agent_can_call_mcp_tools_with_secret_env(container, make_agent, m
     session = await start(container, alpha, "token?")
     await drain(container, limit_seconds=30)
 
+    from muliao.platform.tool_views import NO_RENDERS
     from muliao.sessions.transcript import to_items
 
-    items = to_items(await history_of(container, session.id))
+    items = to_items(await history_of(container, session.id), NO_RENDERS)
     results = [i.text for i in items if i.type == "tool_result"]
     assert results == ["tok-123"]
 
@@ -504,9 +505,10 @@ async def test_a_stdio_mcp_server_runs_in_the_agents_workspace(container, make_a
     session = await start(container, alpha, "where?")
     await drain(container, limit_seconds=30)
 
+    from muliao.platform.tool_views import NO_RENDERS
     from muliao.sessions.transcript import to_items
 
-    items = to_items(await history_of(container, session.id))
+    items = to_items(await history_of(container, session.id), NO_RENDERS)
     [result] = [i.text for i in items if i.type == "tool_result"]
     assert _same_dir(Path(result), container.agents.workspace(alpha))
 
@@ -525,6 +527,7 @@ async def test_an_image_a_tool_returns_is_stored_as_a_file_and_shown_to_the_mode
     from pydantic_ai.models.function import AgentInfo
 
     from muliao.files.api import parse_file_url
+    from muliao.platform.tool_views import NO_RENDERS
     from muliao.sessions.transcript import to_items
     from tests.fixtures.echo_mcp import PNG
     from tests.test_flow import scripted, tool_returns
@@ -557,7 +560,9 @@ async def test_an_image_a_tool_returns_is_stored_as_a_file_and_shown_to_the_mode
     assert (meta.name, meta.media_type) == ("echo_screenshot.png", "image/png")
     assert container.files.read(meta) == PNG
     # 会话里图片属于这次调用的过程（images），不是给用户的文件；文字是其余的结果
-    [item] = [i for i in to_items(await history_of(container, session.id)) if i.type == "tool_result"]
+    [item] = [
+        i for i in to_items(await history_of(container, session.id), NO_RENDERS) if i.type == "tool_result"
+    ]
     assert item.text == "page shot"
     assert item.attachments == []
     assert item.images == [
@@ -598,6 +603,7 @@ async def test_an_mcp_tool_call_that_fails_is_handed_back_to_the_model_with_its_
     from pydantic_ai.mcp import MCPToolset
 
     from muliao.platform.tables import TaskStatus
+    from muliao.platform.tool_views import NO_RENDERS
     from muliao.sessions.lanes import RUN_TASK
     from muliao.sessions.transcript import to_items
     from tests.test_flow import call_then_answer, tasks_of
@@ -622,7 +628,7 @@ async def test_an_mcp_tool_call_that_fails_is_handed_back_to_the_model_with_its_
 
     [run] = await tasks_of(container, RUN_TASK)
     assert run.status == TaskStatus.DONE
-    items = to_items(await history_of(container, session.id))
+    items = to_items(await history_of(container, session.id), NO_RENDERS)
     [result] = [i.text for i in items if i.type == "tool_result"]
     assert "MCP server 'echo' failed" in result and "tool crashed" in result
     assert "tok-123" not in result and "[secret:ECHO_TOKEN]" in result

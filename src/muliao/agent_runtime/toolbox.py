@@ -8,6 +8,7 @@ from pydantic_ai.toolsets import AbstractToolset
 
 from muliao.agent_runtime.tool_results import JsonResults
 from muliao.agents.api import AgentInfo, Rules
+from muliao.platform.tool_views import BoundRender, ToolRenders, render_in
 from muliao.platform.tooling import RunScope
 
 
@@ -31,6 +32,16 @@ class Toolbox:
 
     def tool_names(self) -> list[str]:
         return [name for ts in self.toolsets for name in ts.tools]
+
+    def renders(self) -> ToolRenders:
+        """内置工具在界面上的展示规则（platform.tool_views）：挂在工具 metadata 上的那些，配上工具自己的参数校验；
+        MCP 工具没有，显示原文。"""
+        return {
+            name: BoundRender(name, render, tool.function_schema.validator)
+            for ts in self.toolsets
+            for name, tool in ts.tools.items()
+            if (render := render_in(tool.metadata)) is not None
+        }
 
     async def profile(self, agent: AgentInfo) -> RunProfile:
         allowed = set((await self.rules_of(agent.id)).tools(self.tool_names()))

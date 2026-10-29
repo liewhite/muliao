@@ -15,6 +15,7 @@ const item = (type: Item['type'], text: string, tool_call_id: string | null = nu
   images: [],
   threads: [],
   ask: null,
+  view: null,
 })
 
 describe('groupSteps', () => {
@@ -92,6 +93,13 @@ describe('stepAttachments', () => {
     expect(group.kind === 'process' && stepAttachments(group.steps)).toEqual([])
     expect(group.kind === 'process' && group.steps[0].kind === 'tool' && group.steps[0].tool.images).toEqual([shot])
   })
+
+  it('takes the call view from the call item and the result view from its result', () => {
+    const cmd = { kind: 'terminal' as const, command: 'ls', output: null, status: null, failed: false }
+    const out = { kind: 'terminal' as const, command: null, output: 'a', status: null, failed: false }
+    const [block] = toBlocks([{ ...item('tool_call', '{}', 'a'), view: [cmd] }, { ...item('tool_result', 'a', 'a'), view: [out] }])
+    expect(block.kind === 'tool' && [block.tool.callView, block.tool.resultView]).toEqual([[cmd], [out]])
+  })
 })
 
 describe('streaming stability', () => {
@@ -155,7 +163,7 @@ describe('toBlocks times', () => {
 describe('summarizeSteps', () => {
   const tool = (result: string | null, rejected = false): Step => ({
     kind: 'tool',
-    tool: { name: 'run_shell', args: '', result, rejected, attachments: [], images: [], threads: [], startedAt: null, finishedAt: null },
+    tool: { name: 'run_shell', args: '', result, rejected, attachments: [], images: [], threads: [], startedAt: null, finishedAt: null, callView: null, resultView: null },
   })
 
   it('counts tool calls, mentions thinking, and reports the running tool and calls returned to the model', () => {

@@ -17,6 +17,7 @@ from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
 from muliao.platform.text_edit import truncate
+from muliao.platform.tool_views import Args, CodeBlock, ToolRender, ViewBlock, diff, rendered_by
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.workspace import file_edit
 from muliao.workspace.file_edit import numbered
@@ -69,6 +70,60 @@ class ShellLimits:
     max_output_chars: int
 
 
+def _read_call(a: Args) -> list[ViewBlock] | None:
+    """要读的文件，一行一个；不是从头读整份的注明行范围。两种都没给（会被退回）显示原文。"""
+    reads: tuple[FileRange, ...] = a["reads"]
+    parts = reads or (
+        () if a["path"] is None else (FileRange(path=a["path"], offset=a["offset"], limit=a["limit"]),)
+    )
+    if not parts:
+        return None
+
+    def line(p: FileRange) -> str:
+        if p.offset == 1 and p.limit == _DEFAULT_READ_LIMIT:
+            return p.path
+        return f"{p.path}  (lines {p.offset}-{p.offset + p.limit - 1})"
+
+    return [CodeBlock(title=None, text="\n".join(line(p) for p in parts))]
+
+
+_READ_RENDER = ToolRender[str](call=_read_call, result=lambda text: [CodeBlock(title=None, text=text)])
+_WRITE_RENDER = ToolRender[str](call=lambda a: [CodeBlock(title=a["path"], text=a["content"])])
+
+
+def _edit_call(a: Args) -> list[ViewBlock] | None:
+    """每处修改一个 diff：按原文定位的是原文 → 新文；按行号、按模式定位的看不到原文，标题写行号或模式，只显示新文。
+    缺定位方式或新文（会被退回）显示原文。"""
+    edits: tuple[TextEdit, ...] = a["edits"]
+    if not edits:
+        if a["new_text"] is None:
+            return None
+        edits = (
+            TextEdit(
+                old_text=a["old_text"],
+                start_line=a["start_line"],
+                end_line=a["end_line"],
+                pattern=a["pattern"],
+                new_text=a["new_text"],
+            ),
+        )
+    blocks: list[ViewBlock] = []
+    for e in edits:
+        path = e.path or a["path"] or ""
+        if e.old_text is not None:
+            blocks.append(diff(path, e.old_text, e.new_text))
+        elif e.pattern is not None:
+            blocks.append(diff(f"{path} · pattern {e.pattern}", "", e.new_text))
+        elif e.start_line is not None and e.end_line is not None:
+            blocks.append(diff(f"{path} · lines {e.start_line}-{e.end_line}", "", e.new_text))
+        else:
+            return None
+    return blocks
+
+
+_EDIT_RENDER = ToolRender[str](call=_edit_call)
+
+
 def resolve(scope: RunScope, path: str) -> Path:
     p = Path(path).expanduser()
     return p if p.is_absolute() else scope.workspace / p
@@ -81,7 +136,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
     # run_shell 等之间照旧并行（它们由 tools.workspace_toolset 加进同一个工具集，所以逐个工具标，不用工具集的默认值）。
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool(sequential=True)
+    @ts.tool(sequential=True, metadata=rendered_by(_READ_RENDER))
     async def read_file(
         ctx: RunContext[RunScope],
         path: str | None = None,
@@ -123,7 +178,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             return truncate(excerpt.body, limits.max_output_chars) + excerpt.more_note
         return _read_parts(ctx.deps, reads, limits.max_output_chars)
 
-    @ts.tool(sequential=True)
+    @ts.tool(sequential=True, metadata=rendered_by(_WRITE_RENDER))
     async def write_file(ctx: RunContext[RunScope], path: str, content: str) -> str:
         """Create or overwrite a text file. Parent directories are created as needed.
 
@@ -138,7 +193,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         verb = "overwrote" if existed else "created"
         return f"{verb} {target} ({len(content.splitlines())} lines, {len(content)} chars)"
 
-    @ts.tool(sequential=True)
+    @ts.tool(sequential=True, metadata=rendered_by(_EDIT_RENDER))
     async def edit_file(
         ctx: RunContext[RunScope],
         path: str | None = None,

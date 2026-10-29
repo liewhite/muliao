@@ -8,6 +8,7 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agents.memory import MemoryStore
 from muliao.agents.skill_package import ATTACHMENT_SUFFIXES, MAX_FILE_BYTES, SkillFile, Skipped
 from muliao.agents.skills import SkillMeta, SkillStore, attachments_from
+from muliao.platform.tool_views import Args, MarkdownBlock, ToolRender, ViewBlock, diff, fields, rendered_by
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 # 写完 skill 时告诉模型附件怎么放（规则在 skill_package，这里从同一份定义生成）：只在写 skill 时用得上，
@@ -41,11 +42,37 @@ def _saved(verb: str, meta: SkillMeta, skipped: list[Skipped]) -> str:
     return f"{verb} skill {meta.name} at {meta.path.parent}{skipped_note}{_ATTACHMENTS_NOTE}"
 
 
+_READ_SKILL_RENDER = ToolRender[str](
+    call=lambda a: [fields(("skill", a["name"]))],
+    result=lambda text: [MarkdownBlock(title=None, text=text)],
+)
+_WRITE_SKILL_RENDER = ToolRender[str](
+    call=lambda a: [
+        fields(("skill", a["name"]), ("description", a["description"]), ("reason", a["reason"])),
+        MarkdownBlock(title=None, text=a["content"]),
+    ],
+)
+
+
+def _change(a: Args) -> list[ViewBlock]:
+    """old_text → new_text 的替换（空 old_text 是追加）；都空（只改别的）不显示。"""
+    return [diff(None, a["old_text"], a["new_text"])] if a["old_text"] or a["new_text"] else []
+
+
+_SKILL_EDIT_RENDER = ToolRender[str](
+    call=lambda a: [
+        fields(("skill", a["name"]), ("description", a["description"]), ("reason", a["reason"])),
+        *_change(a),
+    ],
+)
+_MEMORY_EDIT_RENDER = ToolRender[str](call=lambda a: [fields(("reason", a["reason"])), *_change(a)])
+
+
 def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
     """skill：读任何 skill；写、改、删按规则 2（自己的，admin 可改任何的），新建的归自己。分给别的 agent 靠角色。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    @ts.tool
+    @ts.tool(metadata=rendered_by(_READ_SKILL_RENDER))
     async def read_skill(ctx: RunContext[RunScope], name: str) -> str:
         """Load the full instructions of a skill listed in your skill index.
 
@@ -63,7 +90,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         )
         return f"# skill {skill.meta.name} ({yours}read-only dir: {skill.meta.path.parent})\n\n{note}{skill.body}"
 
-    @ts.tool
+    @ts.tool(metadata=rendered_by(_WRITE_SKILL_RENDER))
     async def write_skill(
         ctx: RunContext[RunScope],
         name: str,
@@ -93,7 +120,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         )
         return _saved("saved", meta, skipped)
 
-    @ts.tool
+    @ts.tool(metadata=rendered_by(_SKILL_EDIT_RENDER))
     async def edit_skill(
         ctx: RunContext[RunScope],
         name: str,
@@ -157,7 +184,7 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
     def _status(which: str, content: str) -> str:
         return f"updated {which} ({len(content)}/{store.max_chars} chars)"
 
-    @ts.tool
+    @ts.tool(metadata=rendered_by(_MEMORY_EDIT_RENDER))
     async def memory_edit(ctx: RunContext[RunScope], new_text: str, reason: str, old_text: str = "") -> str:
         """Add to or change your private memory (user preferences, environment facts, lessons learned).
         Your memory and the global memory are both shown to you at the start of every run.
@@ -175,7 +202,7 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
         me = ctx.deps.agent_id
         return _status("memory", await store.edit(me, old_text, new_text, me, reason=reason))
 
-    @ts.tool
+    @ts.tool(metadata=rendered_by(_MEMORY_EDIT_RENDER))
     async def memory_edit_public(
         ctx: RunContext[RunScope], new_text: str, reason: str, old_text: str = ""
     ) -> str:

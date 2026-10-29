@@ -25,6 +25,7 @@ from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, TaskQueue, no_commit
+from muliao.platform.tool_views import NO_RENDERS
 from muliao.sessions.codec import load_messages
 from muliao.sessions.conventions import calls_in, measured_responses, results_in
 from muliao.sessions.history import add_compaction_in, latest_compaction, rows_after
@@ -71,7 +72,7 @@ def steps_of(rows: Sequence[Message]) -> list[list[Message]]:
 
 
 def _step_text(step: Sequence[Message]) -> str:
-    return to_text(to_items(load_messages(r.payload for r in step)), max_item_chars=_ITEM_CHARS)
+    return to_text(to_items(load_messages(r.payload for r in step), NO_RENDERS), max_item_chars=_ITEM_CHARS)
 
 
 def select_steps(

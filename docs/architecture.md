@@ -50,7 +50,7 @@ data/
 
 ```
 muliao/
-  platform/        数据库、任务队列（actor 调度；别的领域经它的只读查询 TaskView 看自己 lane 上的任务）、事件与定向命令、实时展示总线、运行中检查的节拍、shell、id
+  platform/        数据库、任务队列（actor 调度；别的领域经它的只读查询 TaskView 看自己 lane 上的任务）、事件与定向命令、实时展示总线、运行中检查的节拍、shell、id、工具调用的展示块（tool_views，第 17 节）
   agent_runtime/   会话运行的端口：模型注册表、指令组装、工具组合（toolbox.py）、pydantic-ai 的逐步驱动、它自己写下的消息约定（工具交回的文件与图片）、MCP 连接
   sessions/        会话（子域：会话、运行、交互、外部工作、委派、到点唤醒、展示，见下表）：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、到点唤醒、压缩、停止、删除、种类、会话的消息约定
   workspace/       工作区：文件工具（read/write/edit_file、share_file）与 edit_file 的编辑规则、run_shell（前台与后台）、后台任务（jobs 表）
@@ -587,6 +587,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 - **SSE 用 FastAPI 自带的事件流**（`/api/events`，`EventSourceResponse`）：每条 data 按 `ServerEvent` 校验并序列化。`ServerEvent` 是具名组件，前端的事件联合直接取它（openapi-typescript 还不认识 OpenAPI 3.2 的 `itemSchema`），只加上前端自己产生的两种：`connected`（每次连上都发，第一次也发：页面的首次请求可能早于订阅建立）与 `changed`（页面自己改了某类数据，如删会话、标已读、增删改 agent，服务端不为这些发事件；分屏并排的列表据此刷新，`events.announceChange`）。数据库是唯一事实源，事件只是展示加速：前端收到任务状态变化、`saved`、连上、`changed` 时从接口重新拉取（按所展示的数据类别 `Resource` 重新拉取的页面用 `events.useRefetch`，会话页按运行事件自己合并；agent 列表是各处共用的一份缓存 `ui.useAgents`）。单个页面监听器抛错不影响其他监听器（`reportError` 报告）。
 - **实时条目与历史同一个投影**（`sessions/transcript.py`）：前端把快照（会话接口的 `live`）与之后收到的事件按 `segment_id`、`seq` 合并，完整条目原样接上，文字增量接在同类最后一条后面（`events.liveItems`），不自己投影。
 - **结构化状态由后端给出**：`ask_user` 条目的状态见第 7 节；前端不解析工具结果文本。
+- **工具调用详情的展示（#301）**：每个工具可以在定义处挂一份展示规则（`platform.tool_views.ToolRender`，经 pydantic-ai 的 tool `metadata` 挂上：`@ts.tool(metadata=rendered_by(...))`，不交给模型），`Toolbox.renders` 收集，会话投影（`transcript.call_item` / `result_item`，历史与实时条目同一份）据此给调用、结果条目填 `Item.view`：结构化的展示块（终端、代码、diff、Markdown、键值、表格、链接），不是 HTML。参数先经工具自己的参数校验（与执行时同一个 pydantic-ai 校验器，`Toolbox.renders` 配上，`tool_views.BoundRender`）再交给规则，展示不另写一份参数模型；结构化结果按规则声明的类型还原，还原不了记 warning。结果文字的格式由工具自己写出、自己的规则认出（如 `workspace.tools` 的 run_shell 首行状态），规则与工具在同一处。`view` 为 null 时界面照旧显示原文：工具没定规则（包括全部 MCP 工具）、参数不合工具的 schema（被退回的调用）、结果还原不了或规则认不出（返回 None）、停止或中断时补上的结果、被退回的错误、带图片的内容列表。网页内容（web_fetch 的结果）不按 Markdown 渲染，免得加载里面的外部图片。界面每种块一个组件（`web/src/ToolViewBlocks.tsx`），相邻的终端块（调用的命令与结果的输出）画进同一个终端框，带「原文」切换；实时条目里块内的长文字同样截断（`tool_views.truncated`）。
 - **路由**：前端会话页地址只由 `api.sessionRoute` 构造（通知点开的地址由后端 `Notification.url` 唯一给出，推送与通知页（`NotificationOut.url`）共用，与前端路由一致）；webhook 地址只由 `triggers.webhook.hook_url` 构造。
 
 ## 18. 领域之间的最终一致：三条判据

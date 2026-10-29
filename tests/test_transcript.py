@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 
+from muliao.platform.tool_views import NO_RENDERS
 from muliao.sessions.history import interrupted_results, stopped_results
 from muliao.sessions.transcript import annotate_threads, checked_times, result_item, to_items
 
@@ -16,8 +17,8 @@ def _result(at: datetime) -> ToolReturnPart:
 
 
 def test_a_call_starts_when_its_response_was_saved_and_ends_with_its_result():
-    items = to_items([ModelResponse(parts=[CALL])], saved_at=T0) + to_items(
-        [ModelRequest(parts=[_result(T0 + timedelta(seconds=4))])]
+    items = to_items([ModelResponse(parts=[CALL])], NO_RENDERS, saved_at=T0) + to_items(
+        [ModelRequest(parts=[_result(T0 + timedelta(seconds=4))])], NO_RENDERS
     )
     assert [(i.type, i.at) for i in checked_times(items)] == [
         ("tool_call", T0),
@@ -26,7 +27,7 @@ def test_a_call_starts_when_its_response_was_saved_and_ends_with_its_result():
 
 
 def test_without_a_save_time_a_call_has_no_start():
-    assert to_items([ModelResponse(parts=[CALL])])[0].at is None
+    assert to_items([ModelResponse(parts=[CALL])], NO_RENDERS)[0].at is None
 
 
 def test_results_made_up_on_stop_or_interruption_have_no_end_time():
@@ -34,14 +35,14 @@ def test_results_made_up_on_stop_or_interruption_have_no_end_time():
     history = [ModelResponse(parts=[CALL])]
     for made_up in (stopped_results(history), interrupted_results([CALL])):
         part = made_up[0].parts[0]
-        assert isinstance(part, ToolReturnPart) and result_item(part).at is None
+        assert isinstance(part, ToolReturnPart) and result_item(part, NO_RENDERS).at is None
 
 
 def test_a_start_after_the_result_is_dropped_as_untrusted():
     # 10-20 之前一整轮在结束时才一次提交：回复那一行的保存时间晚于它的工具结果
-    items = to_items([ModelResponse(parts=[CALL])], saved_at=T0 + timedelta(minutes=3)) + to_items(
-        [ModelRequest(parts=[_result(T0)])]
-    )
+    items = to_items(
+        [ModelResponse(parts=[CALL])], NO_RENDERS, saved_at=T0 + timedelta(minutes=3)
+    ) + to_items([ModelRequest(parts=[_result(T0)])], NO_RENDERS)
     assert [i.at for i in checked_times(items)] == [None, T0]
 
 
@@ -49,7 +50,7 @@ ASK = ToolCallPart("ask_agent", {"agent": "a", "message": "q", "thread": "t"}, t
 
 
 def test_a_call_points_at_the_thread_it_opened():
-    items = to_items([ModelResponse(parts=[ASK, CALL])])
+    items = to_items([ModelResponse(parts=[ASK, CALL])], NO_RENDERS)
     assert [(i.tool_call_id, i.threads) for i in annotate_threads(items, {"ask": "th"})] == [
         ("ask", ["th"]),
         ("c", []),
@@ -60,7 +61,7 @@ def test_a_call_points_at_its_thread_whoever_made_up_its_result():
     # 停止、中断补上的结果不影响关联：只看调用 id
     history = [ModelResponse(parts=[ASK])]
     for made_up in (stopped_results(history), interrupted_results([ASK])):
-        items = to_items(history) + to_items(made_up)
+        items = to_items(history, NO_RENDERS) + to_items(made_up, NO_RENDERS)
         assert [(i.type, i.threads) for i in annotate_threads(items, {"ask": "th"})] == [
             ("tool_call", ["th"]),
             ("tool_result", []),
@@ -71,7 +72,7 @@ def test_the_live_snapshot_points_calls_at_their_threads():
     from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunItemEvent
     from muliao.sessions.service import _with_threads
 
-    [call_item] = to_items([ModelResponse(parts=[ASK])])
+    [call_item] = to_items([ModelResponse(parts=[ASK])], NO_RENDERS)
     base = {"session_id": "s", "agent": "x", "segment_id": "r"}
     live = LiveSegment(
         "r",

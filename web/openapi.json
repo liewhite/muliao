@@ -4036,6 +4036,38 @@
         ],
         "title": "Attachment"
       },
+      "CodeBlock": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "code",
+            "title": "Kind",
+            "default": "code"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "text"
+        ],
+        "title": "CodeBlock",
+        "description": "一段代码或文件内容（等宽），title 多为文件路径。"
+      },
       "CommentIn": {
         "properties": {
           "body": {
@@ -4144,6 +4176,38 @@
         "title": "DelegationWait",
         "description": "在等委派出去的工作交回结局（ask_agent，或 delegate_task 带 report_back）。"
       },
+      "DiffBlock": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "diff",
+            "title": "Kind",
+            "default": "diff"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "text"
+        ],
+        "title": "DiffBlock",
+        "description": "一处修改：统一 diff 格式的文本（以 `+`/`-`/空格开头的行），title 多为文件路径。"
+      },
       "EnabledIn": {
         "properties": {
           "enabled": {
@@ -4169,6 +4233,47 @@
           "transcription"
         ],
         "title": "FeaturesOut"
+      },
+      "FieldRow": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "FieldRow"
+      },
+      "FieldsBlock": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "fields",
+            "title": "Kind",
+            "default": "fields"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/FieldRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows"
+        ],
+        "title": "FieldsBlock",
+        "description": "键值对（如 issue 的状态、指派人）。"
       },
       "FileOut": {
         "properties": {
@@ -4757,6 +4862,54 @@
               }
             ]
           },
+          "view": {
+            "anyOf": [
+              {
+                "items": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TerminalBlock"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CodeBlock"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DiffBlock"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MarkdownBlock"
+                    },
+                    {
+                      "$ref": "#/components/schemas/FieldsBlock"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TableBlock"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LinksBlock"
+                    }
+                  ],
+                  "discriminator": {
+                    "propertyName": "kind",
+                    "mapping": {
+                      "code": "#/components/schemas/CodeBlock",
+                      "diff": "#/components/schemas/DiffBlock",
+                      "fields": "#/components/schemas/FieldsBlock",
+                      "links": "#/components/schemas/LinksBlock",
+                      "markdown": "#/components/schemas/MarkdownBlock",
+                      "table": "#/components/schemas/TableBlock",
+                      "terminal": "#/components/schemas/TerminalBlock"
+                    }
+                  }
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "View"
+          },
           "at": {
             "anyOf": [
               {
@@ -4783,6 +4936,7 @@
           "threads",
           "images",
           "ask",
+          "view",
           "at"
         ],
         "title": "Item"
@@ -4866,6 +5020,58 @@
         ],
         "title": "JobWaitOut",
         "description": "在等的后台任务，补上工作区领域的任务信息（与 job_status 同一份）。"
+      },
+      "Link": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "url",
+          "summary"
+        ],
+        "title": "Link"
+      },
+      "LinksBlock": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "links",
+            "title": "Kind",
+            "default": "links"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/Link"
+            },
+            "type": "array",
+            "title": "Links"
+          }
+        },
+        "type": "object",
+        "required": [
+          "links"
+        ],
+        "title": "LinksBlock"
       },
       "LiveSegmentOut": {
         "properties": {
@@ -5044,6 +5250,37 @@
           "through_id"
         ],
         "title": "MarkReadIn"
+      },
+      "MarkdownBlock": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "markdown",
+            "title": "Kind",
+            "default": "markdown"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "text"
+        ],
+        "title": "MarkdownBlock"
       },
       "McpIn": {
         "properties": {
@@ -7315,6 +7552,39 @@
         ],
         "title": "StreamTriggerOut"
       },
+      "TableBlock": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "table",
+            "title": "Kind",
+            "default": "table"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "rows": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "columns",
+          "rows"
+        ],
+        "title": "TableBlock"
+      },
       "TaskEvent": {
         "properties": {
           "type": {
@@ -7483,6 +7753,62 @@
           "failed"
         ],
         "title": "TaskStatus"
+      },
+      "TerminalBlock": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "terminal",
+            "title": "Kind",
+            "default": "terminal"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "failed": {
+            "type": "boolean",
+            "title": "Failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command",
+          "output",
+          "status",
+          "failed"
+        ],
+        "title": "TerminalBlock",
+        "description": "终端：`$ command` 提示行、输出、状态行（如退出码、超时、后台任务）。界面把相邻的终端块（调用的命令与结果的\n输出）画在同一个终端框里。"
       },
       "ThreadSource": {
         "properties": {

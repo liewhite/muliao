@@ -11,6 +11,8 @@ const tool = (startedAt: string | null, finishedAt: string | null, result: strin
   images: [],
   threads: [],
   startedAt,
+  callView: null,
+  resultView: null,
   finishedAt,
 })
 const step = (t: ToolView): Step => ({ kind: 'tool', tool: t })

@@ -9,6 +9,7 @@ from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
 from muliao.platform.db import utcnow
+from muliao.platform.tool_views import NO_RENDERS
 from muliao.sessions.activity import SessionActivity, WorkState
 from muliao.sessions.sources import OtherSource
 from muliao.sessions.tables import HoldStatus, Mail, SessionHold, WakeUp
@@ -89,7 +90,7 @@ async def test_a_due_wake_up_wakes_the_session_with_its_note(container, make_age
             await s.scalars(select(Mail).where(Mail.session_id == session.id, Mail.source == "wake_me"))
         ).all()
     assert mail.awaited
-    events = [i for i in to_items(await history_of(container, session.id)) if i.type == "event"]
+    events = [i for i in to_items(await history_of(container, session.id), NO_RENDERS) if i.type == "event"]
     assert [i.source for i in events] == [OtherSource(kind="other", raw="wake_me")]
 
 

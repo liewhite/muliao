@@ -117,6 +117,8 @@ class SessionDomain:
             db, runtime, queue, threshold_tokens=compaction_threshold_tokens, keep_steps=compaction_keep_steps
         )
         content = ContentBuilder(files, agents.workspace)
+        # 工具的展示规则：历史（SessionService.detail）与运行中的条目（Steps）用同一份
+        renders = toolbox.renders()
         consumer = Consumer(
             db,
             queue,
@@ -124,7 +126,7 @@ class SessionDomain:
             toolbox,
             live,
             content,
-            Steps(db, live, content, compactor),
+            Steps(db, live, content, compactor, renders),
             RunFinisher(queue, messaging),
             ports.runs,
             ports.halt,
@@ -132,7 +134,7 @@ class SessionDomain:
             notes,
         )
         return cls(
-            sessions=SessionService(db, queue, live, messaging, ports.stopper, compactor, run_now),
+            sessions=SessionService(db, queue, live, messaging, ports.stopper, compactor, run_now, renders),
             compactor=compactor,
             consumer=consumer,
             mail=MailReconciler(db, queue),

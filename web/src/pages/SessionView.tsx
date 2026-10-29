@@ -48,6 +48,7 @@ import {
   type ToolStatus,
   type ToolView,
 } from '../blocks'
+import { ToolViewBlocks } from '../ToolViewBlocks'
 import { groupSpan, isRunning, spanLabel, toolSpan, useNow, type Span } from '../stepTime'
 import { AnsweredQuestions, QuestionForm, QuestionNote } from '../questions'
 import { AttachButton, AttachmentList, PendingUploads, useUploads, type Uploads } from '../attachments'
@@ -114,6 +115,42 @@ function SpanText({ span }: { span: Span | null }) {
   return span && <span className="tabular-nums">{spanLabel(span, now)}</span>
 }
 
+/** 参数与结果：有展示块的一边按块渲染，否则（或切到原文时）显示原文 */
+function ToolDetail({ tool }: { tool: ToolView }) {
+  const [raw, setRaw] = useState(false)
+  const rendered = tool.callView !== null || tool.resultView !== null
+  const callView = raw ? null : tool.callView
+  const resultView = raw ? null : tool.resultView
+  return (
+    <>
+      {callView !== null && resultView !== null ? (
+        // 两边都按块画时合在一起：调用的命令与结果的输出画进同一个终端框
+        <ToolViewBlocks blocks={[...callView, ...resultView]} />
+      ) : (
+        <>
+          {callView !== null ? (
+            <ToolViewBlocks blocks={callView} />
+          ) : (
+            tool.args && tool.args !== '{}' && <pre className={CODE_BLOCK}>{tool.args}</pre>
+          )}
+          {resultView !== null ? (
+            <ToolViewBlocks blocks={resultView} />
+          ) : (
+            tool.result !== null && <pre className={CODE_BLOCK}>{tool.result}</pre>
+          )}
+        </>
+      )}
+      {rendered && (
+        <div className="flex justify-end">
+          <button type="button" className="text-xs text-muted hover:text-foreground" onClick={() => setRaw(!raw)}>
+            {raw ? '渲染' : '原文'}
+          </button>
+        </div>
+      )}
+    </>
+  )
+}
+
 function ToolBlock({ tool, live }: { tool: ToolView; live: boolean }) {
   const status = toolStatus(tool, live)
   return (
@@ -128,8 +165,7 @@ function ToolBlock({ tool, live }: { tool: ToolView; live: boolean }) {
         </>
       }
     >
-      {tool.args && tool.args !== '{}' && <pre className={CODE_BLOCK}>{tool.args}</pre>}
-      {tool.result !== null && <pre className={CODE_BLOCK}>{tool.result}</pre>}
+      <ToolDetail tool={tool} />
       <AttachmentList files={tool.images} />
     </Collapsible>
   )

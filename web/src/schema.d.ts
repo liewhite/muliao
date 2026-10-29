@@ -1435,6 +1435,21 @@ export interface components {
             /** Inline */
             inline: boolean;
         };
+        /**
+         * CodeBlock
+         * @description 一段代码或文件内容（等宽），title 多为文件路径。
+         */
+        CodeBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "code";
+            /** Title */
+            title: string | null;
+            /** Text */
+            text: string;
+        };
         /** CommentIn */
         CommentIn: {
             /** Body */
@@ -1479,6 +1494,21 @@ export interface components {
              */
             since: string;
         };
+        /**
+         * DiffBlock
+         * @description 一处修改：统一 diff 格式的文本（以 `+`/`-`/空格开头的行），title 多为文件路径。
+         */
+        DiffBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "diff";
+            /** Title */
+            title: string | null;
+            /** Text */
+            text: string;
+        };
         /** EnabledIn */
         EnabledIn: {
             /** Enabled */
@@ -1488,6 +1518,26 @@ export interface components {
         FeaturesOut: {
             /** Transcription */
             transcription: boolean;
+        };
+        /** FieldRow */
+        FieldRow: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
+        };
+        /**
+         * FieldsBlock
+         * @description 键值对（如 issue 的状态、指派人）。
+         */
+        FieldsBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "fields";
+            /** Rows */
+            rows: components["schemas"]["FieldRow"][];
         };
         /** FileOut */
         FileOut: {
@@ -1687,6 +1737,8 @@ export interface components {
             /** Images */
             images: components["schemas"]["Attachment"][];
             ask: components["schemas"]["AskView"] | null;
+            /** View */
+            view: (components["schemas"]["TerminalBlock"] | components["schemas"]["CodeBlock"] | components["schemas"]["DiffBlock"] | components["schemas"]["MarkdownBlock"] | components["schemas"]["FieldsBlock"] | components["schemas"]["TableBlock"] | components["schemas"]["LinksBlock"])[] | null;
             /** At */
             at: string | null;
         };
@@ -1732,6 +1784,25 @@ export interface components {
             log_path: string;
             /** Tail */
             tail: string;
+        };
+        /** Link */
+        Link: {
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+            /** Summary */
+            summary: string | null;
+        };
+        /** LinksBlock */
+        LinksBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "links";
+            /** Links */
+            links: components["schemas"]["Link"][];
         };
         /** LiveSegmentOut */
         LiveSegmentOut: {
@@ -1787,6 +1858,18 @@ export interface components {
         MarkReadIn: {
             /** Through Id */
             through_id: number;
+        };
+        /** MarkdownBlock */
+        MarkdownBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "markdown";
+            /** Title */
+            title: string | null;
+            /** Text */
+            text: string;
         };
         /** McpIn */
         McpIn: {
@@ -2616,6 +2699,18 @@ export interface components {
             config: components["schemas"]["StreamConfig"];
             status: components["schemas"]["StreamStatus"];
         };
+        /** TableBlock */
+        TableBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "table";
+            /** Columns */
+            columns: string[];
+            /** Rows */
+            rows: string[][];
+        };
         /**
          * TaskEvent
          * @description 一个 task 的状态变化（前端据此从数据库重新拉取），由 worker 发出。
@@ -2675,6 +2770,26 @@ export interface components {
          * @enum {string}
          */
         TaskStatus: "pending" | "running" | "done" | "failed";
+        /**
+         * TerminalBlock
+         * @description 终端：`$ command` 提示行、输出、状态行（如退出码、超时、后台任务）。界面把相邻的终端块（调用的命令与结果的
+         *     输出）画在同一个终端框里。
+         */
+        TerminalBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "terminal";
+            /** Command */
+            command: string | null;
+            /** Output */
+            output: string | null;
+            /** Status */
+            status: string | null;
+            /** Failed */
+            failed: boolean;
+        };
         /** ThreadSource */
         ThreadSource: {
             /**

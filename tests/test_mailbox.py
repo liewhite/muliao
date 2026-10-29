@@ -18,6 +18,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from muliao.platform.tables import Task, TaskStatus
+from muliao.platform.tool_views import NO_RENDERS
 from muliao.sessions.api import Origin
 from muliao.sessions.codec import dump_message
 from muliao.sessions.consumer import interrupted_calls
@@ -91,7 +92,7 @@ async def test_an_event_to_an_idle_session_is_handled_in_a_run_of_its_own(contai
     assert await queued(container, session.id) == []
     # 界面上事件单独成条
     history = await history_of(container, session.id)
-    events = [i for i in to_items(history) if i.type == "event"]
+    events = [i for i in to_items(history, NO_RENDERS) if i.type == "event"]
     assert [(i.source, i.tool_name, i.text) for i in events] == [
         (JobSource(kind="job", raw="job:1", job_id=1), None, "job 1 finished: exit 0")
     ]
@@ -131,7 +132,7 @@ async def test_mail_arriving_during_a_run_reaches_the_model_between_tool_calls(c
     [_, mail] = await mail_of(container)
     assert mail.state == MailState.CONSUMED
     history = await history_of(container, session.id)
-    assert [i.type for i in to_items(history)][-3:] == ["tool_result", "event", "assistant"]
+    assert [i.type for i in to_items(history, NO_RENDERS)][-3:] == ["tool_result", "event", "assistant"]
 
 
 async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_tools(
@@ -283,14 +284,14 @@ async def test_a_user_message_that_looks_like_an_event_is_still_a_user_message(c
     await drain(container)
 
     history = await history_of(container, session.id)
-    assert [i.type for i in to_items(history)] == ["user", "assistant"]
+    assert [i.type for i in to_items(history, NO_RENDERS)] == ["user", "assistant"]
 
 
 def test_events_read_as_events_in_compaction_transcripts():
     request = ModelRequest(
         parts=[UserPromptPart([format_event("job:7", "exit 0"), "thanks"])], metadata={RUN_EVENTS: [0]}
     )
-    text = to_text(to_items([request]), max_item_chars=1000)
+    text = to_text(to_items([request], NO_RENDERS), max_item_chars=1000)
     assert text.splitlines() == ["[EVENT job:7] exit 0", "[USER] thanks"]
 
 
@@ -302,7 +303,7 @@ def test_check_ins_are_marked_among_the_events_where_they_land_in_the_prompt():
     )
     append_content(request, content)
     assert request.metadata == {RUN_EVENTS: [1, 3], RUN_CHECK_INS: [1]}
-    items = to_items([request])
+    items = to_items([request], NO_RENDERS)
     assert [(i.type, i.check_in) for i in items] == [
         ("user", False),
         ("event", True),
@@ -376,7 +377,7 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
         "ModelRequest",
         "ModelResponse",
     ]
-    assert [i.type for i in to_items(history)][-2:] == ["tool_result", "assistant"]
+    assert [i.type for i in to_items(history, NO_RENDERS)][-2:] == ["tool_result", "assistant"]
 
 
 async def test_a_question_waiting_for_the_user_is_not_an_interrupted_call(container, make_agent, models):

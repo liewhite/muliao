@@ -65,6 +65,7 @@ export function liveItems(events: RunEvent[]): Item[] {
         images: [],
         threads: [],
         ask: null,
+        view: null,
         at: null,
       })
   }

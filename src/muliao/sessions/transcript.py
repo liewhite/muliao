@@ -25,6 +25,7 @@ from pydantic_ai.messages import (
 
 from muliao.agent_runtime.api import Attachment, attachment_of_ref, result_images, tool_attachments
 from muliao.platform.text_edit import truncate
+from muliao.platform.tool_views import ToolRenders, View
 from muliao.sessions.conventions import (
     check_in_indices,
     event_indices,
@@ -75,6 +76,9 @@ class Item(BaseModel):
     images: list[Attachment]
     # ask_user 的调用（参数合法时）；其他条目为 None
     ask: AskView | None
+    # 工具调用的参数、结果按工具自己的展示规则（platform.tool_views）画成的展示块；None 表示显示原文（工具没定规则、
+    # 参数或结果不合它的 schema、被退回的错误）。其他条目为 None
+    view: View | None
     # 工具调用开始执行的时间（tool_call），工具结束的时间（tool_result、tool_error），或事件交给模型的时间（event，
     # 所在用户消息段的 timestamp）；其他条目，以及拿不到真实时间的（被中断后补上的结果、调用方没给保存时间的投影）为 None
     at: datetime | None
@@ -91,6 +95,7 @@ def _item(
     images: list[Attachment] | None = None,
     check_in: bool = False,
     source: str | None = None,
+    view: View | None = None,
 ) -> Item:
     return Item(
         type=type_,
@@ -104,14 +109,22 @@ def _item(
         threads=threads or [],
         images=images or [],
         ask=None,
+        view=view,
         at=at,
     )
 
 
-def call_item(part: ToolCallPart, started_at: datetime | None) -> Item:
+def call_item(part: ToolCallPart, started_at: datetime | None, renders: ToolRenders) -> Item:
     """started_at：调用开始执行的时间。回复在执行工具之前保存（sessions.steps），所以历史里是回复那一行的保存时间，
-    运行中是收到调用事件的时间。"""
-    item = _item("tool_call", part.args_as_json_str(), part.tool_name, part.tool_call_id, at=started_at)
+    运行中是收到调用事件的时间。renders：工具的展示规则（Toolbox.renders）。"""
+    item = _item(
+        "tool_call",
+        part.args_as_json_str(),
+        part.tool_name,
+        part.tool_call_id,
+        at=started_at,
+        view=_call_view(part, renders),
+    )
     try:
         questions = questions_in(part)
     except (ValidationError, KeyError):
@@ -188,18 +201,37 @@ def checked_times(items: list[Item]) -> list[Item]:
     ]
 
 
-def result_item(part: ToolReturnPart | RetryPromptPart) -> Item:
+def _call_view(part: ToolCallPart, renders: ToolRenders) -> View | None:
+    render = renders.get(part.tool_name)
+    if render is None:
+        return None
+    try:
+        args = part.args_as_dict()
+    except ValueError:
+        # 模型给的参数不是合法 JSON（这次调用会被退回）：按原文展示
+        return None
+    return render.call_view(args)
+
+
+def result_item(part: ToolReturnPart | RetryPromptPart, renders: ToolRenders) -> Item:
     """工具结果，或参数被拒绝、交还模型重试的结果。结束时间取结果上的 timestamp（产生结果时打上）；停止、中断时
-    事后补上的结果（made_up_result），它的时间不是调用结束的时间，不给。"""
+    事后补上的结果（made_up_result），它的时间不是调用结束的时间，不给。展示规则只用于文本结果；带图片等的内容列表、
+    事后补上的结果、被退回的错误显示原文。"""
     if isinstance(part, ToolReturnPart):
+        text = part.model_response_str()
+        render = renders.get(part.tool_name)
+        made_up = made_up_result(part)
         return _item(
             "tool_result",
-            part.model_response_str(),
+            text,
             part.tool_name,
             part.tool_call_id,
             tool_attachments(part),
             images=result_images(part),
-            at=None if made_up_result(part) else part.timestamp,
+            at=None if made_up else part.timestamp,
+            view=None
+            if render is None or made_up or not isinstance(part.content, str)
+            else render.result_view(text),
         )
     return _item("tool_error", part.model_response(), part.tool_name, part.tool_call_id, at=part.timestamp)
 
@@ -245,9 +277,11 @@ def _user_item(content: str | Sequence[Any]) -> Item:
     return _item("user", "\n".join(texts), attachments=attachments)
 
 
-def to_items(messages: Sequence[ModelMessage], saved_at: datetime | None = None) -> list[Item]:
+def to_items(
+    messages: Sequence[ModelMessage], renders: ToolRenders, saved_at: datetime | None = None
+) -> list[Item]:
     """saved_at：这些消息保存的时间，即其中工具调用开始执行的时间（见 call_item）；不需要时间的投影（压缩的
-    文字记录）不给。"""
+    文字记录）不给。renders：工具的展示规则；只要文字的投影给空的。"""
     items: list[Item] = []
     for msg in messages:
         if isinstance(msg, ModelRequest):
@@ -260,7 +294,7 @@ def to_items(messages: Sequence[ModelMessage], saved_at: datetime | None = None)
                 if isinstance(part, UserPromptPart):
                     items.extend(_prompt_items(part, event_indices(msg), check_in_indices(msg)))
                 elif isinstance(part, ToolReturnPart | RetryPromptPart):
-                    items.append(result_item(part))
+                    items.append(result_item(part, renders))
         elif isinstance(msg, ModelResponse):
             for part in msg.parts:
                 if isinstance(part, TextPart) and part.content:
@@ -268,7 +302,7 @@ def to_items(messages: Sequence[ModelMessage], saved_at: datetime | None = None)
                 elif isinstance(part, ThinkingPart) and part.content:
                     items.append(_item("thinking", part.content))
                 elif isinstance(part, ToolCallPart):
-                    items.append(call_item(part, saved_at))
+                    items.append(call_item(part, saved_at, renders))
         if is_stopped(msg):
             items.append(_item("stopped", ""))
     return items

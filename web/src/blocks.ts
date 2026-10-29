@@ -1,6 +1,6 @@
 // 会话条目（历史与运行中的事件流共用 Item）到展示块的整理，纯函数，与渲染分开。
 
-import { type AskView, type Attachment, type EventSource, type Item } from './api'
+import { type AskView, type Attachment, type EventSource, type Item, type ViewBlock } from './api'
 
 export interface ToolView {
   name: string
@@ -17,6 +17,9 @@ export interface ToolView {
   /** 开始执行、结束的时间（调用与结果条目上的 at，由后端给出）；拿不到的为 null */
   startedAt: string | null
   finishedAt: string | null
+  /** 参数、结果按工具的展示规则画成的块（调用、结果条目上的 view，由后端给出）；null 时显示原文 */
+  callView: ViewBlock[] | null
+  resultView: ViewBlock[] | null
 }
 
 /** 一次 ask_user 提问：是要用户操作的交互，不收进过程组。状态与内容都由后端给出（条目上的 ask） */
@@ -87,6 +90,8 @@ export function toBlocks(items: Item[]): Block[] {
           threads: item.threads,
           startedAt: item.at,
           finishedAt: null,
+          callView: item.view,
+          resultView: null,
         }
         if (item.tool_call_id) tools.set(item.tool_call_id, tool)
         blocks.push({ kind: 'tool', tool })
@@ -101,6 +106,7 @@ export function toBlocks(items: Item[]): Block[] {
           tool.attachments = item.attachments
           tool.images = item.images
           tool.finishedAt = item.at
+          tool.resultView = item.view
         } else {
           // 没有对应调用的错误（如输出校验重试）单独展示
           blocks.push({
@@ -115,6 +121,8 @@ export function toBlocks(items: Item[]): Block[] {
               threads: item.threads,
               startedAt: null,
               finishedAt: item.at,
+              callView: null,
+              resultView: item.view,
             },
           })
         }

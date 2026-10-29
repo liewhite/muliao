@@ -11,6 +11,7 @@ from muliao.errors import InvalidInput
 from muliao.files.api import FileStore
 from muliao.platform.shell import run_bash
 from muliao.platform.text_edit import truncate
+from muliao.platform.tool_views import TerminalBlock, ToolRender, ViewBlock, rendered_by
 from muliao.platform.tooling import RunScope
 from muliao.sessions.api import DEFAULT_CHECK_SECONDS
 from muliao.workspace.file_tools import ShellLimits, file_toolset
@@ -51,7 +52,7 @@ def workspace_toolset(
     # 输出上限是配置的值，写进说明：模型不知道它，长输出被截了才学会
     description = _SHELL_DESCRIPTION.format(max_output=limits.max_output_chars) + _BACKGROUND_DESCRIPTION
 
-    @ts.tool(description=description)
+    @ts.tool(description=description, metadata=rendered_by(SHELL_RENDER))
     async def run_shell(
         ctx: RunContext[RunScope],
         command: str,
@@ -101,7 +102,7 @@ def workspace_toolset(
             check_seconds=check,
         )
         return (
-            f"started background job {job.id}; output goes to {job.log_path}. "
+            f"{_STARTED} {job.id}; output goes to {job.log_path}.\n"
             f"You will get a check-in event every {check:g} seconds while it runs and an event when it finishes; "
             "keep working or end your reply."
         )
@@ -151,8 +152,34 @@ async def _run_foreground(
         command, cwd=scope.workspace, secrets=secret_values, timeout=timeout, merge_stderr=True
     )
     status = (
-        f"exit_code: {result.exit_code}"
+        f"{_EXIT_CODE} {result.exit_code}"
         if result.exit_code is not None
-        else f"killed after {timeout}s timeout"
+        else f"{_KILLED} {timeout}s timeout"
     )
     return f"{status}\n{truncate(result.stdout, limits.max_output_chars)}"
+
+
+# run_shell 结果首行的开头：上面的工具写出、下面的展示规则认出，只在这里定义。首行总是工具自己写的一行状态，
+# 命令的输出从第二行起
+_EXIT_CODE = "exit_code:"
+_KILLED = "killed after"
+_STARTED = "started background job"
+
+
+def _shell_result(text: str) -> list[ViewBlock] | None:
+    """前台：首行是退出码或超时被杀，其余是输出；后台：首行是启动了哪个任务。认不出就显示原文。"""
+    head, _, output = text.partition("\n")
+    if head.startswith(_EXIT_CODE):
+        code = head.removeprefix(_EXIT_CODE).strip()
+        return [TerminalBlock(command=None, output=output, status=f"exit {code}", failed=code != "0")]
+    if head.startswith(_KILLED):
+        return [TerminalBlock(command=None, output=output, status=head, failed=True)]
+    if head.startswith(_STARTED):
+        return [TerminalBlock(command=None, output=None, status=head, failed=False)]
+    return None
+
+
+SHELL_RENDER = ToolRender[str](
+    call=lambda a: [TerminalBlock(command=a["command"], output=None, status=None, failed=False)],
+    result=_shell_result,
+)

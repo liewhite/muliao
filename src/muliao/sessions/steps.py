@@ -15,6 +15,7 @@ from muliao.agent_runtime.api import StepHooks, redact_messages, with_notices
 from muliao.agents.api import AgentInfo
 from muliao.platform.db import Database, utcnow
 from muliao.platform.text_edit import truncate
+from muliao.platform.tool_views import ToolRenders, truncated
 from muliao.sessions.compaction import Compactor, Verdict
 from muliao.sessions.content import Content, ContentBuilder, append_content, mark_events
 from muliao.sessions.conventions import attach_run_context
@@ -71,8 +72,16 @@ class RunState:
 
 
 class Steps:
-    def __init__(self, db: Database, live: LiveSegments, content: ContentBuilder, compactor: Compactor):
+    def __init__(
+        self,
+        db: Database,
+        live: LiveSegments,
+        content: ContentBuilder,
+        compactor: Compactor,
+        renders: ToolRenders,
+    ):
         self._db = db
+        self._renders = renders
         self._live = live
         self._content = content
         self._compactor = compactor
@@ -86,10 +95,10 @@ class Steps:
                 state.session.id, state.session.agent_id, kind, text
             ),
             on_tool_call=lambda part: self._live.publish_item(
-                state.session.id, state.session.agent_id, _preview(call_item(part, utcnow()))
+                state.session.id, state.session.agent_id, _preview(call_item(part, utcnow(), self._renders))
             ),
             on_tool_result=lambda part: self._live.publish_item(
-                state.session.id, state.session.agent_id, _preview(result_item(part))
+                state.session.id, state.session.agent_id, _preview(result_item(part, self._renders))
             ),
         )
 
@@ -206,5 +215,10 @@ class Steps:
 
 
 def _preview(item: Item) -> Item:
-    """实时展示里工具的参数与结果截断（保存后历史里是完整的）。"""
-    return item.model_copy(update={"text": truncate(item.text, _PREVIEW_CHARS)})
+    """实时展示里工具的参数与结果截断（保存后历史里是完整的），展示块里的文字同样截断。"""
+    return item.model_copy(
+        update={
+            "text": truncate(item.text, _PREVIEW_CHARS),
+            "view": None if item.view is None else truncated(item.view, _PREVIEW_CHARS),
+        }
+    )

@@ -13,6 +13,7 @@ from muliao.errors import NotFound
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue, TaskView, no_commit
+from muliao.platform.tool_views import ToolRenders
 from muliao.sessions.activity import WorkState, waiting_among, work_states_in
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor
@@ -93,7 +94,10 @@ class SessionService:
         stop_session: StopSession,
         compactor: Compactor,
         run_now: Callable[[int], Awaitable[None]],
+        renders: ToolRenders,
     ):
+        # 工具的展示规则（Toolbox.renders）：历史条目用
+        self._renders = renders
         self._db = db
         self._queue = queue
         self._live = live
@@ -133,7 +137,7 @@ class SessionService:
                         for (message_id, _, created_at), message in zip(
                             shown, load_messages(p for _, p, _ in shown), strict=True
                         )
-                        for item in to_items([message], saved_at=created_at)
+                        for item in to_items([message], self._renders, saved_at=created_at)
                     ]
                 ),
                 call_threads,

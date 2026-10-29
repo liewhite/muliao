@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.api import USER, AgentNames, AgentService
@@ -10,6 +10,15 @@ from muliao.errors import InvalidInput
 from muliao.issues.rules import assignee_name
 from muliao.issues.service import IssueService, IssueWork, NewIssue, batch_item
 from muliao.issues.tables import Issue, IssuePriority, IssueStatus
+from muliao.platform.tool_views import (
+    Args,
+    MarkdownBlock,
+    TableBlock,
+    ToolRender,
+    ViewBlock,
+    fields,
+    rendered_by,
+)
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.platform.values import KEEP, Keep
 from muliao.sessions.api import WorkState
@@ -55,6 +64,80 @@ class NewIssueItem(BaseModel):
     )
 
 
+# 工具在界面上的展示（platform.tool_views）：说明、评论按 Markdown，其余字段按键值。参数已经过工具自己的 schema 校验
+
+
+def _markdown(text: str | None) -> list[ViewBlock]:
+    return [MarkdownBlock(title=None, text=text)] if text else []
+
+
+def _issue(a: Args) -> tuple[str, str]:
+    return ("issue", f"#{a['issue_id']}")
+
+
+def _list_result(found: list[IssueSummary]) -> list[ViewBlock]:
+    return [
+        TableBlock(
+            columns=["#", "title", "status", "assignee", "owner"],
+            rows=[[f"#{i.id}", i.title, i.status, i.assignee or "", i.owner or ""] for i in found],
+        )
+    ]
+
+
+_LIST_RENDER = ToolRender[list[IssueSummary]](
+    call=lambda a: [
+        fields(("statuses", a["statuses"] or None), ("assignee", a["assignee"]), ("owner", a["owner"]))
+    ],
+    result=_list_result,
+    result_type=TypeAdapter(list[IssueSummary]),
+)
+_SHOW_RENDER = ToolRender[str](
+    call=lambda a: [fields(_issue(a))], result=lambda text: [MarkdownBlock(title=None, text=text)]
+)
+
+
+def _create_call(a: Args) -> list[ViewBlock]:
+    # 一次建多个时每项的字段与单个参数同名（NewIssueItem），单个的没有 key
+    batch: tuple[NewIssueItem, ...] = a["issues"]
+    items: list[Args] = [i.model_dump() for i in batch] or [{**a, "key": None}]
+    blocks: list[ViewBlock] = []
+    for item in items:
+        blocks.append(
+            fields(
+                ("title", item["title"]),
+                ("key", item["key"]),
+                ("owner", item["owner"]),
+                ("status", item["status"]),
+                ("priority", item["priority"]),
+                ("assignee", item["assignee"]),
+                ("depends on", item["depends_on"] or None),
+            )
+        )
+        blocks += _markdown(item["description"])
+    return blocks
+
+
+_CREATE_RENDER = ToolRender[str](call=_create_call)
+_UPDATE_RENDER = ToolRender[str](
+    call=lambda a: [
+        fields(
+            _issue(a),
+            ("title", a["title"]),
+            ("status", a["status"]),
+            ("priority", a["priority"]),
+            ("assignee", "(unassign)" if a["unassign"] else a["assignee"]),
+            ("owner", a["owner"]),
+            ("depends on", a["depends_on"]),
+        ),
+        *_markdown(a["description"]),
+    ],
+)
+_STOP_RENDER = ToolRender[str](
+    call=lambda a: [fields(_issue(a), ("status", a["status"])), *_markdown(a["message"])],
+)
+_COMMENT_RENDER = ToolRender[str](call=lambda a: [fields(_issue(a)), *_markdown(a["body"])])
+
+
 def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
@@ -77,7 +160,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             updated_at=issue.updated_at,
         )
 
-    @ts.tool_plain
+    @ts.tool_plain(metadata=rendered_by(_LIST_RENDER))
     async def issue_list(
         statuses: tuple[IssueStatus, ...] = (), assignee: str | None = None, owner: str | None = None
     ) -> list[IssueSummary]:
@@ -104,7 +187,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         work = await board.work(found)
         return [summary(i, names, work[i.id]) for i in found]
 
-    @ts.tool_plain
+    @ts.tool_plain(metadata=rendered_by(_SHOW_RENDER))
     async def issue_show(issue_id: int) -> str:
         """Show an issue with its description, dependencies, comments and history.
 
@@ -128,7 +211,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             key=item.key,
         )
 
-    @ts.tool
+    @ts.tool(metadata=rendered_by(_CREATE_RENDER))
     async def issue_create(
         ctx: RunContext[RunScope],
         title: str | None = None,
@@ -202,7 +285,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         ]
         return "created issues:\n" + "\n".join(lines)
 
-    @ts.tool
+    @ts.tool(metadata=rendered_by(_UPDATE_RENDER))
     async def issue_update(
         ctx: RunContext[RunScope],
         issue_id: int,
@@ -256,7 +339,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         )
         return f"updated issue #{issue.id} (status: {issue.status})"
 
-    @ts.tool
+    @ts.tool(metadata=rendered_by(_STOP_RENDER))
     async def issue_stop(
         ctx: RunContext[RunScope], issue_id: int, status: IssueStatus, message: str | None = None
     ) -> str:
@@ -286,7 +369,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
         done = f"stopped {name}'s conversation on issue #{issue_id}; it is {result.issue.status}"
         return done + ("; your message was delivered there" if message is not None else "")
 
-    @ts.tool
+    @ts.tool(metadata=rendered_by(_COMMENT_RENDER))
     async def issue_comment(ctx: RunContext[RunScope], issue_id: int, body: str) -> str:
         """Comment on an issue (Markdown): progress, findings, results, questions for the user. Delivered like any
         other change (see `issue_update`).
