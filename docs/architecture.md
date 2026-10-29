@@ -86,7 +86,7 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 
 | 子域 | 表 | 模块 | 给别的子域的接口 |
 |---|---|---|---|
-| 会话 | `sessions` | `directory.py`（新建一行、按属性查会话只在这里；按 id 取到的行在领域内可改，删除在 `deletion.py`）、`kinds.py`、`origins.py`、`inbound.py`（来信与新建会话的规则）、`info.py`（读模型）、`deletion.py`、`service.py`（门面） | `add_in`、`among_in`、`of_agent_in`、`keyed_rows_among` / `keyed_among`、`owned_threads_in`、`threads_of` / `thread_in` / `threads_named_in`、`listed_ids_in` / `listed_page_in` |
+| 会话 | `sessions` | `directory.py`（新建一行、按属性查会话只在这里；按 id 取到的行在领域内可改，删除在 `deletion.py`）、`kinds.py`、`origins.py`、`inbound.py`（来信与新建会话的规则）、`info.py`（读模型）、`deletion.py`、`service.py`（门面） | `add_in`、`among_in`、`of_agent_in`、`keyed_rows_among` / `keyed_among`、`threads_of` / `thread_in` / `threads_named_in`、`listed_ids_in` / `listed_page_in` |
 | 运行 | `messages`、`message_texts`（消息的可搜索文字）、`compactions`（历史）、`mail`（信箱）；运行本身是平台任务表里的 run task，只经 `TaskQueue` 的只读查询（`TaskView`）看 | `history.py`、`mailbox.py`、`runs.py`（运行与它的 payload）、`consumer.py`、`steps.py`、`finish.py`、`compaction.py`、`halt.py`、`settlement.py`、`conventions.py`、`reconcile.py`、`live.py` | 历史：`append_in`、`mark_last_stopped_in`、`saved_by_in`、`last_message_id_in`、`transcript_rows_in`、`add_compaction_in`、`load_context` 等；信箱：`post_in`、`queued_in`、`consume_in`、`discard_in`、`unsettled_in` / `mark_settled`、`wake_in` 等；运行：`latest_run` / `latest_runs_among`、`run_unfinished_in`、`hand_over_in`、`handed_to` |
 | 交互 | —（由历史与信箱推导） | `pending.py`、`deferred.py`、`ask_user.py`、`questions.py`、`answers.py` | `pending_in`、`open_asks_of`、`waiting` |
 | 外部工作 | `session_holds` | `holds.py`、`work.py`（`SessionWork`、交回结局 `deliver_in`、运行中检查的间隔规则 `DEFAULT_CHECK_SECONDS` / `check_due`）、`activity.py`（工作状态） | `hold_in`、`get_in`、`release`、`abandon`、`clear_in`、`active_holders_of_in`、`active_holders_in`、`called_in`、`deliver_in` |
@@ -320,7 +320,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 - **thread**：父 session 内对子 session 的具名引用（`sessions.parent_session_id` + `agent_id` + `thread`，唯一索引 `uq_sessions_thread`；#217 之前只按父 session + 名字唯一，给不同 agent 用同名会报错）。模型只用 agent 名 + thread 名，不接触 session id。同一个 agent 同名即续聊，对方的上下文保留（例如审查 → 修改 → 再审查）。用 `delegate_task` 还是 `ask_agent` 续聊都行，thread 与开它的工具无关（#294）。`stop_thread` 只给名字时，这个名字只有一个 thread 就停它，有几个（不同 agent）就报错要求带 `agent`。
 - **推送按信件、不按 session**：每封信件带「用户是否在等它的回答」（`awaited`，由投信的入口设置，见第 14 节）。一次运行处理过的信件里有用户在等的，就把它的回答推送给用户；否则不推，agent 可以自己 `notify_user`。同一个公开 thread 里，父 agent 委派的任务与用户的追问都推送；`report_back` 的委派不推送，结果交回父 agent。
-- **回答交给谁**（`platform.tooling.Audience`，工具的共同契约，不入库，`mailbox.audience_of`）：运行开始时由它处理的信件推导一次，决定 `ask_user` 能否调用与运行上下文里怎么说（它随运行变化，所以在运行上下文里而不是 instructions 里，见第 6 节）：处理过的和信箱里排着的信件有用户在等就是 `user`；否则有委派来的信件（带关联：`ask_agent`、`report_back`）就是 `agent`；否则 `none`。运行中途才到的、用户在等的消息会被这次运行处理、收尾时推送，但这次运行的工具与指令不随之改变（工具集在 pydantic-ai 运行开始时固定）；提问要等下一次运行。
+- **回答交给谁**（`platform.tooling.Audience`，工具的共同契约，不入库，`mailbox.audience_of`）：运行开始时由它处理的信件推导一次，决定 `ask_user` 能否调用与运行上下文里怎么说（它随运行变化，所以在运行上下文里而不是 instructions 里，见第 6 节）：处理过的和信箱里排着的信件有用户在等就是 `user`；否则会话有委派来、还没结清的工作（带关联的信件没结清：`ask_agent`、`report_back`，`mailbox.delegated_in`）就是 `agent`——会话做完时最终回答在结清里交给发起方，不论这次运行处理的是委派那封信，还是之后的后台任务事件、嵌套 ask 的回答、运行中检查；否则 `none`。用户在这样的 thread 里插话时是 `user`，那次的最终回答推送给用户，工作做完时同样交回发起方。运行中途才到的、用户在等的消息会被这次运行处理、收尾时推送，但这次运行的工具与指令不随之改变（工具集在 pydantic-ai 运行开始时固定）；提问要等下一次运行。
 - **thread** 有自己的信箱和消费者，可以开后台任务、`report_back`、被停止（发问方那次调用拿到「被停止」）。回答交给 agent 的运行里 `ask_user` 会被拒绝（没有用户在等）；拒绝说明会告诉它这是另一个 agent 在问：自己决定，或把需要对方定的问题写进最终回答交回发起方（对方可在同一个 thread 里回复），不提通知用户。
 - **删除**（`deletion.delete_sessions`，删会话与删 agent 唯一的规则）：一个事务删除会话；它开出的 thread 保留（`parent_session_id` 置空）。任一被删会话忙时拒绝（判断只看会话自己的数据，无异步窗口）。交给被删会话、还没结清的关联以「被删除」结清并交回发起方；它自己发起的委派（占用）随它删除，之后 thread 的结局没有收件人。发布 `SessionDeleted`，其他领域各自清理引用它的数据（指向它的通知）；job 行保留终态。
 
@@ -485,7 +485,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 | `awaited` | 用户是否在等它的回答（处理它的运行结束时推送；UserMessage 为真，SenderMail 为假，委派由 Threads 定） |
 | `attachments` / `answers` | 用户随消息发送的文件、对挂起提问的回答（只有用户会带） |
 
-`receive` 是外部来信投进信箱的唯一入口（委派的 `Threads.send` / `dispatch` 也经过它；代码里的生产者——占用的结局 `deliver_in`、运行中检查 `post_check_in`——直接 `mailbox.post_in`），校验规则与别的领域投信用的 `receive_command_in` 是同一个函数；新建会话也只有 `create_session` 一处实现。**续写规则**：用户可以在任何用户能写的会话里继续（`KindPolicy.user_writable`）；其他来源只能续写自己发起的会话（会话的来源与发送方都一致，委派会话的发送方就是它的父会话），否则 403。发送方身份是触发器 id（AUTOINCREMENT，删除后不复用）或父会话 id。
+`receive` 是外部来信投进信箱的唯一入口（委派的 `Threads.send` / `dispatch` 也经过它；代码里的生产者——占用的结局 `deliver_in`、运行中检查 `post_check_in`——直接 `mailbox.post_in`），校验规则与别的领域投信用的 `receive_command_in` 是同一个函数；新建会话也只有 `create_session` 一处实现。**续写规则**：用户可以在任何会话里继续；其他来源只能续写自己发起的会话（会话的来源与发送方都一致，委派会话的发送方就是它的父会话），否则 403。发送方身份是触发器 id（AUTOINCREMENT，删除后不复用）或父会话 id。
 
 是否推送由信件的 `awaited` 决定（唯一来源），由投信的入口设置：
 

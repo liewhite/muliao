@@ -33,14 +33,21 @@ from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Sessio
 log = logging.getLogger(__name__)
 
 
-def audience_of(mail: Sequence[Mail]) -> Audience:
-    """一次运行的回答交给谁，由它处理的信件推导（唯一规则）：有用户在等的信件就是用户；否则有委派来的信件（带关联，
-    ask_agent 或 report_back）就是发起委派的 agent；都没有就没人在等。"""
+def audience_of(mail: Sequence[Mail], delegated: bool) -> Audience:
+    """一次运行的回答交给谁（唯一规则）：它处理的信件有用户在等的就是用户；否则会话有委派来、还没结清的工作
+    （delegated：带关联的信件还没结清，ask_agent 或 report_back，见 delegated_in）就是发起委派的 agent——会话做完
+    时最终回答在结清里交给它们，不论这次运行处理的是委派那封信，还是之后的后台任务事件、回答、运行中检查；都没有就
+    没人在等。"""
     if any(m.awaited for m in mail):
         return Audience.USER
-    if any(m.correlation is not None for m in mail):
+    if delegated:
         return Audience.AGENT
     return Audience.NONE
+
+
+async def delegated_in(s: AsyncSession, session_id: str) -> bool:
+    """会话有委派来、还没结清的工作（排着的或已交给模型的带关联信件）。"""
+    return bool(await unsettled_in(s, session_id, [MailState.CONSUMED, MailState.QUEUED]))
 
 
 _SOURCE_MAX = 100

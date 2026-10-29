@@ -641,15 +641,44 @@ async def test_a_question_after_a_failed_ask_gets_its_own_answer(container, make
         assert await queued_in(s, child.id) == []
 
 
-def test_the_audience_of_a_run_comes_from_its_mail_not_from_the_kind_of_session():
-    """回答交给谁只看这次运行处理的信件（#294）：用户在等优先；委派来的（带关联：ask_agent、report_back）交给
-    发起的 agent；都没有就没人在等。"""
+def test_the_audience_of_a_run_comes_from_its_mail_and_unsettled_delegations():
+    """回答交给谁（#294）：这次运行的信件有用户在等优先；否则会话有委派来、还没结清的工作就交给发起的 agent；
+    都没有就没人在等。"""
     from muliao.platform.tooling import Audience
     from muliao.sessions.mailbox import audience_of
 
     user = Mail(awaited=True, correlation=None)
-    delegated = Mail(awaited=False, correlation="delegation:p:c1")
     event = Mail(awaited=False, correlation=None)
-    assert audience_of([delegated, user]) == Audience.USER
-    assert audience_of([event, delegated]) == Audience.AGENT
-    assert audience_of([event]) == Audience.NONE
+    assert audience_of([user], delegated=True) == Audience.USER
+    assert audience_of([event], delegated=True) == Audience.AGENT
+    assert audience_of([event], delegated=False) == Audience.NONE
+
+
+async def test_every_run_of_a_thread_with_unsettled_delegated_work_answers_to_the_agent(
+    container, make_agent, models
+):
+    """嵌套 ask：mid 问 leaf 拿到回答后续跑的那次运行处理的是回答信件（不带关联），但最终回答仍交回 lead，
+    运行上下文要说另一个 agent 在等，而不是让它去通知用户。"""
+    from muliao.agent_runtime.instructions import _AUDIENCE_NOTES
+    from muliao.platform.tooling import Audience
+
+    lead = (await make_agent("lead", model="l")).id
+    await make_agent("mid", model="m")
+    await make_agent("leaf", model="f")
+    models.models["f"] = echo("leaf says")
+    models.models["m"] = steps(
+        call("ask_agent", {"agent": "leaf", "message": "fact?", "thread": "leaf", "timeout": 600}),
+        answer_with_tool_results("mid says"),
+    )
+    models.models["l"] = steps(
+        call("ask_agent", {"agent": "mid", "message": "research", "thread": "m", "timeout": 600}),
+        answer_with_tool_results("lead got"),
+    )
+    parent = await start(container, lead, "go")
+    await drain(container)
+
+    [mid] = await threads_of(container, parent.id)
+    assert len(await turns_in(container, mid.id)) == 2
+    text = str(await history_of(container, mid.id))
+    assert text.count(_AUDIENCE_NOTES[Audience.AGENT]) == 2
+    assert _AUDIENCE_NOTES[Audience.NONE] not in text
