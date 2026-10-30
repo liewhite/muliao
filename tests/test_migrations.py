@@ -1423,3 +1423,37 @@ def test_delegation_deadline_is_dropped_keeping_the_delegations_and_downgrade(tm
             "select holder, check_seconds, deadline from delegations order by holder"
         ).fetchall()
         assert rows == [("ask", None, None), ("report", 30.0, None)]
+
+
+def test_issue_activity_session_downgrade_keeps_activities_and_their_ids(tmp_path):
+    """降级删 issue_activities.session_id 要重建表：动态保留，删掉的最大 id 不复用；再升级时这一列为 NULL（#310）。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into issues (id, title, description, status, priority, creator, created_at, updated_at) "
+            "values (1, 't', '', 'backlog', 'none', 'user', '2026-01-01', '2026-01-01')"
+        )
+        for id_, session in ((1, "s1"), (2, None), (3, "s1")):
+            conn.execute(
+                "insert into issue_activities (id, issue_id, created_at, actor, kind, session_id) "
+                "values (?, 1, '2026-01-01', 'a1', 'comment', ?)",
+                (id_, session),
+            )
+        conn.execute("delete from issue_activities where id = 3")
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "d5ac95c1847f")
+    with sqlite3.connect(path) as conn:
+        assert "session_id" not in {r[1] for r in conn.execute("pragma table_info(issue_activities)")}
+        assert conn.execute("select id from issue_activities").fetchall() == [(1,), (2,)]
+        conn.execute(
+            "insert into issue_activities (issue_id, created_at, actor, kind) values (1, '2026-01-01', 'a1', 'comment')"
+        )
+        assert conn.execute("select max(id) from issue_activities").fetchone() == (4,)
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select session_id from issue_activities").fetchall() == [(None,)] * 3

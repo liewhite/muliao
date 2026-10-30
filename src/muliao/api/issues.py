@@ -41,6 +41,8 @@ class IssueOut(BaseModel):
     finished: bool
     # 用户能审核（通过或打回）：指派给用户、还没结束
     reviewable: bool
+    # 用户能一键开工（指派给 owner 并进入 in_progress）：还在 backlog、有 owner
+    startable: bool
     created_at: datetime
     updated_at: datetime
 
@@ -63,6 +65,7 @@ class IssueOut(BaseModel):
             waiting_on=list(work.waiting_on),
             finished=work.finished,
             reviewable=work.reviewable,
+            startable=work.startable,
             created_at=i.created_at,
             updated_at=i.updated_at,
         )
@@ -78,6 +81,8 @@ class ActivityOut(BaseModel):
     body: str | None
     # 属性变化：{"from": ..., "to": ...}；指派人的取值同 IssueOut.assignee
     change: dict[str, Any] | None
+    # 这件事发生在哪个会话（agent 动手时所在的会话）；用户在界面上的操作、系统的清理、会话已删除时为 null
+    session_id: str | None
 
     @classmethod
     def of(cls, a: IssueActivity) -> "ActivityOut":
@@ -88,6 +93,7 @@ class ActivityOut(BaseModel):
             kind=a.kind,
             body=a.body,
             change=a.change,
+            session_id=a.session_id,
         )
 
 
@@ -196,6 +202,12 @@ async def comment_issue(c: C, issue_id: int, body: CommentIn) -> ActivityOut:
 async def approve_issue(c: C, issue_id: int) -> IssueOut:
     """审核通过指派给用户的 issue：设为 done。没有指派给用户时 409。"""
     return await _out(c, await c.issues.approve(issue_id))
+
+
+@router.post("/issues/{issue_id}/start")
+async def start_issue(c: C, issue_id: int) -> IssueOut:
+    """开工 backlog 里的 issue：指派给 owner 并进入 in_progress。不在 backlog 或没有 owner 时 409。"""
+    return await _out(c, await c.issues.start(issue_id))
 
 
 @router.post("/issues/{issue_id}/reject")

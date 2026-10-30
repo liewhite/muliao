@@ -89,6 +89,11 @@ def reviewable(status: IssueStatus, assignee: str | None) -> bool:
     return assignee == USER and not finished(status)
 
 
+def startable(status: IssueStatus, owner: str | None) -> bool:
+    """用户能一键开工（指派给 owner 并进入 in_progress）的 issue：还在 backlog、有负责项目的 agent。"""
+    return status == IssueStatus.BACKLOG and owner is not None
+
+
 def handed_by(creator: str, assigners: Sequence[str]) -> str | None:
     """把当前指派给用户的 issue 交给用户的 agent（用户打回时指派回给它）：最近一条指派动态的 actor（它把指派人
     改成了用户）；从未改过指派人时是创建者（创建时就指派给了用户）。assigners 是按时间排序的各条指派动态的 actor。

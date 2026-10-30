@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button, Card } from '@heroui/react'
-import { MessageSquare, Pencil, Trash2 } from 'lucide-react'
+import { MessageSquare, Pencil, Play, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   SYSTEM_ACTOR,
@@ -52,6 +52,23 @@ function actorName(agents: Agent[] | undefined, actor: string) {
   return actor === SYSTEM_ACTOR ? '系统' : agentLabel(agents, asAgentId(actor))
 }
 
+/** 这条动态发生在哪个会话（agent 动手时所在的会话）：点开看过程；用户的操作、会话已删除时没有 */
+function SourceSession({ sessionId }: { sessionId: string | null }) {
+  const from = useReturnState()
+  if (sessionId === null) return null
+  return (
+    <Link
+      to={sessionRoute(sessionId)}
+      state={from}
+      className="flex shrink-0 items-center text-muted hover:text-accent"
+      aria-label="来源会话"
+      title="打开做这件事的会话"
+    >
+      <MessageSquare className="size-3.5" />
+    </Link>
+  )
+}
+
 function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | undefined }) {
   return (
     <ol className="flex flex-col gap-3">
@@ -63,6 +80,7 @@ function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | u
                 <div className="flex items-center gap-2 text-xs text-muted">
                   <span className="font-medium text-foreground">{actorName(agents, a.actor)}</span>
                   <span>{formatTime(a.created_at)}</span>
+                  <SourceSession sessionId={a.session_id} />
                 </div>
                 <Markdown text={a.body ?? ''} />
               </Card.Content>
@@ -74,6 +92,7 @@ function Timeline({ detail, agents }: { detail: IssueDetail; agents: Agent[] | u
             <span className="font-medium text-foreground">{actorName(agents, a.actor)}</span>
             <span className="min-w-0 break-words">{activityText(agents, a)}</span>
             <span className="ml-auto shrink-0">{formatTime(a.created_at)}</span>
+            <SourceSession sessionId={a.session_id} />
           </li>
         ),
       )}
@@ -282,6 +301,24 @@ function Issue({ detail, reload }: { detail: IssueDetail; reload: () => Promise<
           isDisabled={change.busy}
         />
       </div>
+      {issue.startable && (
+        <div className="flex items-center gap-2">
+          <ActionButton
+            size="sm"
+            isPending={change.busy}
+            onPress={() =>
+              void change.run(async () => {
+                await api.startIssue(issue.id)
+                await reload()
+              })
+            }
+          >
+            <Play className="size-4" />
+            开工
+          </ActionButton>
+          <span className="text-xs text-muted">指派给负责项目的 agent，并进入进行中</span>
+        </div>
+      )}
       <ErrorAlert error={change.error} />
 
       {(issue.depends_on.length > 0 || issue.blocks.length > 0) && (

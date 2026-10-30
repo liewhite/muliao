@@ -3288,6 +3288,46 @@
         }
       }
     },
+    "/api/issues/{issue_id}/start": {
+      "post": {
+        "summary": "Start Issue",
+        "description": "开工 backlog 里的 issue：指派给 owner 并进入 in_progress。不在 backlog 或没有 owner 时 409。",
+        "operationId": "start_issue_api_issues__issue_id__start_post",
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/issues/{issue_id}/reject": {
       "post": {
         "summary": "Reject Issue",
@@ -3603,6 +3643,17 @@
               }
             ],
             "title": "Change"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
           }
         },
         "type": "object",
@@ -3612,7 +3663,8 @@
           "actor",
           "kind",
           "body",
-          "change"
+          "change",
+          "session_id"
         ],
         "title": "ActivityOut"
       },
@@ -4732,6 +4784,10 @@
             "type": "boolean",
             "title": "Reviewable"
           },
+          "startable": {
+            "type": "boolean",
+            "title": "Startable"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -4761,6 +4817,7 @@
           "waiting_on",
           "finished",
           "reviewable",
+          "startable",
           "created_at",
           "updated_at"
         ],

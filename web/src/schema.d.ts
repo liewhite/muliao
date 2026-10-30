@@ -1138,6 +1138,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/issues/{issue_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Issue
+         * @description 开工 backlog 里的 issue：指派给 owner 并进入 in_progress。不在 backlog 或没有 owner 时 409。
+         */
+        post: operations["start_issue_api_issues__issue_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/issues/{issue_id}/reject": {
         parameters: {
             query?: never;
@@ -1279,6 +1299,8 @@ export interface components {
             change: {
                 [key: string]: unknown;
             } | null;
+            /** Session Id */
+            session_id: string | null;
         };
         /**
          * AgentAnswer
@@ -1726,6 +1748,8 @@ export interface components {
             finished: boolean;
             /** Reviewable */
             reviewable: boolean;
+            /** Startable */
+            startable: boolean;
             /**
              * Created At
              * Format: date-time
@@ -5471,6 +5495,37 @@ export interface operations {
         };
     };
     approve_issue_api_issues__issue_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                issue_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssueOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_issue_api_issues__issue_id__start_post: {
         parameters: {
             query?: never;
             header?: never;

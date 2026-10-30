@@ -19,6 +19,7 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   waiting_on: [],
   finished: false,
   reviewable: false,
+  startable: false,
   created_at: '2026-10-21T00:00:00Z',
   updated_at: '2026-10-21T00:00:00Z',
   ...over,
@@ -71,6 +72,7 @@ describe('issues', () => {
       actor: 'user',
       kind,
       body: null,
+      session_id: null,
       change: { from, to },
     })
     expect(activityText(agents, change('status', 'in_review', 'done'))).toBe('把状态从「待审核」改为「完成」')

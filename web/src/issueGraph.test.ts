@@ -19,6 +19,7 @@ const issue = (id: number, over: Partial<Issue> = {}): Issue => ({
   waiting_on: [],
   finished: false,
   reviewable: false,
+  startable: false,
   created_at: '2026-10-21T00:00:00Z',
   updated_at: '2026-10-21T00:00:00Z',
   ...over,

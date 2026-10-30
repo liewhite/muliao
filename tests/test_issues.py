@@ -11,7 +11,7 @@ from muliao.agent_runtime.instructions import build_instructions
 from muliao.agents.api import USER
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
-from muliao.issues.api import SESSION_NOTE, ActivityKind, IssueStatus, WorkState
+from muliao.issues.api import SESSION_NOTE, ActivityKind, IssuePriority, IssueStatus, WorkState
 from muliao.issues.graph import cycle_through
 from muliao.issues.rules import SYSTEM_ACTOR, Snapshot, ask_to_settle, handed_by, recipient, stalled
 from muliao.platform.messaging import Delivery
@@ -375,6 +375,68 @@ async def test_a_cancelled_issue_is_not_reviewed(container, make_agent):
         await container.issues.reject(issue.id, "redo")
 
 
+async def test_starting_a_backlog_issue_assigns_it_to_the_owner_and_delivers(container, make_agent):
+    alpha, beta = (await make_agent("alpha")).id, (await make_agent("beta")).id
+    issue = await container.issues.create(USER, owner=alpha, title="later", assignee=beta)
+    assert (await container.issues.work([issue]))[issue.id].startable
+
+    started = await container.issues.start(issue.id)
+    await deliver(container)
+
+    assert (started.status, started.assignee) == (PROGRESS, alpha)
+    activities = (await container.issues.get(issue.id)).activities[-2:]
+    assert [(a.actor, a.kind, a.session_id) for a in activities] == [
+        (USER, ActivityKind.STATUS, None),
+        (USER, ActivityKind.ASSIGNEE, None),
+    ]
+    [session] = await _issue_sessions(container)
+    assert session.agent_id == alpha
+    assert not (await container.issues.work([started]))[issue.id].startable
+    # 已经开工（连点、另一台设备）：不再开工
+    with pytest.raises(Conflict, match="already in_progress"):
+        await container.issues.start(issue.id)
+
+
+async def test_a_backlog_issue_without_an_owner_cannot_be_started(container, make_agent):
+    alpha = (await make_agent("alpha")).id
+    issue = await container.issues.create(USER, owner=alpha, title="later")
+    commit = await container.issues.on_agent_deleting(AgentDeleting(agent_id=alpha), Delivery("m"))
+    async with container.db.transaction() as s:
+        await commit(s)
+    orphan = (await container.issues.get(issue.id)).issue
+    assert orphan.owner_agent_id is None
+    assert not (await container.issues.work([orphan]))[issue.id].startable
+    with pytest.raises(Conflict, match="no owner"):
+        await container.issues.start(issue.id)
+
+
+async def test_the_timeline_records_the_session_each_change_came_from(container, make_agent):
+    """agent 在哪个会话里动的手记在动态上（界面可跳转，#310）；用户的操作没有会话；会话删除后动态保留、不再指向它。"""
+    alpha = (await make_agent("alpha")).id
+    chat = await start(container, alpha, "track this")
+    issue = await container.issues.create(alpha, owner=alpha, session_id=chat.id, title="mine")
+    await container.issues.comment(alpha, issue.id, "found it", session_id=chat.id)
+    await container.issues.update(alpha, issue.id, session_id=chat.id, priority=IssuePriority.HIGH)
+    await container.issues.comment(USER, issue.id, "thanks")
+    assert [(a.kind, a.session_id) for a in (await container.issues.get(issue.id)).activities] == [
+        (ActivityKind.CREATED, chat.id),
+        (ActivityKind.COMMENT, chat.id),
+        (ActivityKind.PRIORITY, chat.id),
+        (ActivityKind.COMMENT, None),
+    ]
+
+    await drain(container)
+    await container.sessions.delete(chat.id)
+    await deliver(container)
+    activities = (await container.issues.get(issue.id)).activities
+    assert [(a.kind, a.session_id) for a in activities] == [
+        (ActivityKind.CREATED, None),
+        (ActivityKind.COMMENT, None),
+        (ActivityKind.PRIORITY, None),
+        (ActivityKind.COMMENT, None),
+    ]
+
+
 async def test_an_issue_handed_over_by_a_deleted_agent_cannot_be_sent_back(container, make_agent):
     alpha = (await make_agent("alpha")).id
     issue, _ = await _handed_to_user(container, alpha)
@@ -519,6 +581,7 @@ async def test_a_run_that_leaves_its_issue_in_progress_is_asked_until_it_settles
     # 运行结束时还是 in_progress：记一条 UNSETTLED 投进它的 issue 会话
     assert await one_round() == [ActivityKind.CREATED, ActivityKind.UNSETTLED]
     [session] = await _issue_sessions(container)
+    assert (await container.issues.get(issue.id)).activities[-1].session_id == session.id
     mails = await _mail(container, session.id)
     assert len(mails) == 2 and "a comment alone does not settle it" in mails[1]
     assert "`wake_me`" in SESSION_NOTE and "A comment alone does not count" in SESSION_NOTE
@@ -648,6 +711,8 @@ async def test_a_downstream_issue_is_delivered_when_its_last_upstream_finishes(c
     detail = await container.issues.get(down.id)
     assert detail.activities[-1].kind == ActivityKind.DEPENDENCY
     assert detail.activities[-1].change == {"issue": up1.id, "from": "in_progress", "to": "done"}
+    # 随上游那次动作：来自上游的 issue 会话
+    assert detail.activities[-1].session_id == up1_session.id
 
     # 最后一个上游取消也算完成：投给下游，信里是摘要（含上游及其状态）与这次的动态；等待期间的评论靠 issue_show 看
     await container.issues.update(USER, up2.id, status=IssueStatus.CANCELLED)
@@ -990,6 +1055,7 @@ async def test_a_failed_issue_run_is_recorded_on_the_timeline_and_notified(conta
     # 状态不变、不自动重试：失败的动态不投进会话
     assert detail.issue.status == PROGRESS
     [session] = await _issue_sessions(container)
+    assert failed.session_id == session.id
     assert len(await _mail(container, session.id)) == 1
     # 通知由通知领域做（所有列出的会话一样），只有一条
     [note] = await _notifications(container)
@@ -1046,6 +1112,30 @@ async def test_a_run_failure_on_a_deleted_issue_is_ignored(container, make_agent
     async with container.db.transaction() as s:
         await commit(s)
     assert await _notifications(container) == []
+
+
+async def test_a_run_failure_retried_after_its_session_was_deleted_does_not_point_to_it(
+    container, make_agent
+):
+    """RunFailed 的投递失败、在会话删除之后才被人工重试：照记一笔，但不指向已删的会话（之后没有 SessionDeleted 再来置空）。"""
+    from muliao.sessions.events import RunFailed
+
+    alpha = (await make_agent()).id
+    issue = await container.issues.create(USER, owner=alpha, title="t")
+    event = RunFailed(
+        session_id="gone",
+        agent_id=alpha,
+        agent_name="alpha",
+        run_id=1,
+        origin=Origin.ISSUE,
+        origin_ref=str(issue.id),
+        error="Boom",
+    )
+    commit = await container.issues.on_run_failed(event, Delivery("m"))
+    async with container.db.transaction() as s:
+        await commit(s)
+    failed = (await container.issues.get(issue.id)).activities[-1]
+    assert (failed.kind, failed.session_id) == (ActivityKind.RUN_FAILED, None)
 
 
 async def test_a_transient_failure_is_recorded_once_its_retries_are_used_up(container, make_agent, models):

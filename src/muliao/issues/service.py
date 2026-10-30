@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import agent_names_in, runnable_agent_in
@@ -50,6 +50,7 @@ from muliao.issues.rules import (
     handed_by,
     reviewable,
     stalled,
+    startable,
 )
 from muliao.issues.tables import (
     ActivityKind,
@@ -70,12 +71,19 @@ from muliao.sessions.api import (
     StopSession,
     WorkState,
     keyed_sessions_among,
+    session_in,
 )
-from muliao.sessions.events import RunEnded, RunFailed
+from muliao.sessions.events import RunEnded, RunFailed, SessionDeleted
 
 log = logging.getLogger(__name__)
 
 TITLE_MAX = 300
+
+
+def _session_events_lane(event: RunFailed | SessionDeleted) -> str:
+    """同一个会话的事件在同一条 lane 上按发布顺序处理：RunFailed 一定先于 SessionDeleted 发布（会话忙时不能删除），
+    它记下的动态（带这个会话）一定在删除的置空之前。RunEnded 不在这里：它在提交事务里确认会话还是那个 issue 会话才记。"""
+    return f"issues:{event.session_id}"
 
 
 @dataclass(frozen=True)
@@ -98,9 +106,10 @@ class IssueWork:
     depends_on: list[Dependency]
     blocks: list[Dependency]
     waiting_on: tuple[int, ...]
-    # 已结束（rules.finished）、用户能审核（rules.reviewable）
+    # 已结束（rules.finished）、用户能审核（rules.reviewable）、用户能一键开工（rules.startable）
     finished: bool
     reviewable: bool
+    startable: bool
 
 
 def _title(title: str) -> str:
@@ -178,8 +187,23 @@ class IssueService:
 
     def subscribe(self, messaging: Messaging) -> None:
         messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
-        messaging.subscribe(RunFailed, "issues.run_failed", self.on_run_failed)
+        messaging.subscribe(RunFailed, "issues.run_failed", self.on_run_failed, lane=_session_events_lane)
         messaging.subscribe(RunEnded, "issues.run_ended", self.on_run_ended)
+        messaging.subscribe(
+            SessionDeleted, "issues.session_deleted", self.on_session_deleted, lane=_session_events_lane
+        )
+
+    async def on_session_deleted(self, event: SessionDeleted, _delivery: Delivery) -> Commit:
+        """时间线上来自被删会话的动态保留，只是不再指向它（session_id 置空）。"""
+
+        async def commit(s: AsyncSession) -> None:
+            await s.execute(
+                update(IssueActivity)
+                .where(IssueActivity.session_id == event.session_id)
+                .values(session_id=None)
+            )
+
+        return commit
 
     async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
         """issue 会话里的一次运行结束了：issue 指派给这个 agent、却因此停滞（还是 in_progress，会话空闲）时，以它的名义记一条
@@ -203,7 +227,7 @@ class IssueService:
             snap = snapshot(issue, (await links_in(s, [issue_id]))[issue_id])
             if not ask_to_settle(snap, event.agent_id, state):
                 return
-            activity = self._record(s, issue, event.agent_id, ActivityKind.UNSETTLED)
+            activity = self._record(s, issue, event.agent_id, event.session_id, ActivityKind.UNSETTLED)
             issue.updated_at = utcnow()
             # 投递任务随这个事务提交，由 worker 照常执行（订阅方的事务里没有「提交后马上执行」）
             await self._delivery.deliver_in(s, issue, event.agent_id, None, [activity])
@@ -226,7 +250,10 @@ class IssueService:
                     "run failed on a deleted issue", extra={"issue_id": issue_id, "run_id": event.run_id}
                 )
                 return
-            self._record(s, issue, event.agent_id, ActivityKind.RUN_FAILED, body=event.summary)
+            # 正常情况下同一会话的 SessionDeleted 排在后面（_session_events_lane）；投递失败后被人工重试时可能已在删除之后，
+            # 那时不再指向它（之后不会再有它的 SessionDeleted 来置空）。会话只会从存在变为删除，本事务里检查没有竞态。
+            session = event.session_id if await session_in(s, event.session_id) is not None else None
+            self._record(s, issue, event.agent_id, session, ActivityKind.RUN_FAILED, body=event.summary)
             issue.updated_at = utcnow()
             log.info("issue run failure recorded", extra={"issue_id": issue_id, "run_id": event.run_id})
 
@@ -243,10 +270,14 @@ class IssueService:
             for issue in (await s.scalars(query)).all():
                 if issue.assignee == event.agent_id:
                     issue.assignee = None
-                    self._record(s, issue, SYSTEM_ACTOR, ActivityKind.ASSIGNEE, change=(event.agent_id, None))
+                    self._record(
+                        s, issue, SYSTEM_ACTOR, None, ActivityKind.ASSIGNEE, change=(event.agent_id, None)
+                    )
                 if issue.owner_agent_id == event.agent_id:
                     issue.owner_agent_id = None
-                    self._record(s, issue, SYSTEM_ACTOR, ActivityKind.OWNER, change=(event.agent_id, None))
+                    self._record(
+                        s, issue, SYSTEM_ACTOR, None, ActivityKind.OWNER, change=(event.agent_id, None)
+                    )
                 issue.updated_at = utcnow()
 
         return commit
@@ -298,6 +329,7 @@ class IssueService:
                 waiting_on=snap.waiting_on,
                 finished=finished(i.status),
                 reviewable=reviewable(i.status, i.assignee),
+                startable=startable(i.status, i.owner_agent_id),
             )
         return work
 
@@ -375,7 +407,7 @@ class IssueService:
                     await set_depends_on_in(s, issue, upstream)
             wake = []
             for issue in created:
-                happened = [self._record(s, issue, actor, ActivityKind.CREATED)]
+                happened = [self._record(s, issue, actor, session_id, ActivityKind.CREATED)]
                 wake.append(
                     await self._delivery.notify_and_deliver_in(s, None, issue, actor, session_id, happened)
                 )
@@ -409,6 +441,7 @@ class IssueService:
                 s,
                 issue,
                 actor,
+                session_id,
                 owner=owner,
                 title=title,
                 description=description,
@@ -430,11 +463,29 @@ class IssueService:
             issue = await self._get_in(s, issue_id)
             _check_handed_to_user(issue)
             before = issue.status, issue.assignee
-            happened = await self._apply_in(s, issue, USER, status=IssueStatus.DONE)
+            happened = await self._apply_in(s, issue, USER, None, status=IssueStatus.DONE)
             if not happened:
                 return issue
             wake = await self._changed_in(s, issue, before, USER, None, happened)
         log.info("issue approved", extra={"issue_id": issue_id})
+        await self._delivery.run(*wake)
+        return issue
+
+    async def start(self, issue_id: int) -> Issue:
+        """用户开工一个 backlog issue：指派给负责项目的 agent（owner）并进入 in_progress，按规则投递。已不在 backlog
+        （连点、两台设备）或没有 owner 时拒绝。"""
+        async with self._db.transaction() as s:
+            issue = await self._get_in(s, issue_id)
+            if not startable(issue.status, issue.owner_agent_id):
+                if issue.owner_agent_id is None:
+                    raise Conflict(f"issue #{issue_id} has no owner: assign it to an agent yourself")
+                raise Conflict(f"issue #{issue_id} is already {issue.status}, not in the backlog")
+            before = issue.status, issue.assignee
+            happened = await self._apply_in(
+                s, issue, USER, None, status=IssueStatus.IN_PROGRESS, assignee=issue.owner_agent_id
+            )
+            wake = await self._changed_in(s, issue, before, USER, None, happened)
+        log.info("issue started", extra={"issue_id": issue_id, "assignee": issue.assignee})
         await self._delivery.run(*wake)
         return issue
 
@@ -461,8 +512,10 @@ class IssueService:
                     "assign it to an agent yourself"
                 ) from None
             before = issue.status, issue.assignee
-            happened = [self._record(s, issue, USER, ActivityKind.COMMENT, body=reason)]
-            happened += await self._apply_in(s, issue, USER, status=IssueStatus.IN_PROGRESS, assignee=agent)
+            happened = [self._record(s, issue, USER, None, ActivityKind.COMMENT, body=reason)]
+            happened += await self._apply_in(
+                s, issue, USER, None, status=IssueStatus.IN_PROGRESS, assignee=agent
+            )
             wake = await self._changed_in(s, issue, before, USER, None, happened)
         log.info("issue sent back", extra={"issue_id": issue_id, "assignee": agent})
         await self._delivery.run(*wake)
@@ -518,10 +571,12 @@ class IssueService:
             before = issue.status, issue.assignee
             happened = []
             if stopped:
-                happened.append(self._record(s, issue, actor, ActivityKind.STOPPED, change=(None, agent)))
-            happened += await self._apply_in(s, issue, actor, status=status)
+                happened.append(
+                    self._record(s, issue, actor, session_id, ActivityKind.STOPPED, change=(None, agent))
+                )
+            happened += await self._apply_in(s, issue, actor, session_id, status=status)
             if message is not None:
-                happened.append(self._record(s, issue, actor, ActivityKind.COMMENT, body=message))
+                happened.append(self._record(s, issue, actor, session_id, ActivityKind.COMMENT, body=message))
             wake = (
                 await self._changed_in(
                     s,
@@ -553,6 +608,7 @@ class IssueService:
         s: AsyncSession,
         issue: Issue,
         actor: str,
+        session_id: str | None,
         *,
         owner: str | None = None,
         title: str | None = None,
@@ -566,7 +622,7 @@ class IssueService:
         happened: list[IssueActivity] = []
 
         def record(kind: ActivityKind, change: tuple[Any, Any] | None = None) -> None:
-            happened.append(self._record(s, issue, actor, kind, change=change))
+            happened.append(self._record(s, issue, actor, session_id, kind, change=change))
 
         if title is not None and _title(title) != issue.title:
             record(ActivityKind.TITLE, (issue.title, _title(title)))
@@ -625,7 +681,7 @@ class IssueService:
             raise InvalidInput("comment must not be empty")
         async with self._db.transaction() as s:
             issue = await self._get_in(s, issue_id)
-            activity = self._record(s, issue, actor, ActivityKind.COMMENT, body=body)
+            activity = self._record(s, issue, actor, session_id, ActivityKind.COMMENT, body=body)
             issue.updated_at = utcnow()
             wake = await self._delivery.deliver_in(s, issue, actor, session_id, [activity])
         log.info("issue commented", extra={"issue_id": issue_id, "actor": actor})
@@ -645,7 +701,7 @@ class IssueService:
                 down = await self._get_in(s, down_id)
                 old = ids_of(before[down_id].depends_on)
                 change = (old, [i for i in old if i != issue_id])
-                happened = [self._record(s, down, USER, ActivityKind.DEPENDS_ON, change=change)]
+                happened = [self._record(s, down, USER, None, ActivityKind.DEPENDS_ON, change=change)]
                 down.updated_at = utcnow()
                 wake.append(await self._delivery.deliver_in(s, down, USER, None, happened))
         log.info("issue deleted", extra={"issue_id": issue_id, "downstream": downstream})
@@ -672,6 +728,7 @@ class IssueService:
                     s,
                     downstream,
                     actor,
+                    session_id,
                     ActivityKind.DEPENDENCY,
                     change=(was, issue.status),
                     upstream=issue.id,
@@ -698,6 +755,7 @@ class IssueService:
         s: AsyncSession,
         issue: Issue,
         actor: str,
+        session_id: str | None,
         kind: ActivityKind,
         *,
         body: str | None = None,
@@ -714,6 +772,7 @@ class IssueService:
             kind=kind,
             body=body,
             change=recorded,
+            session_id=session_id,
         )
         s.add(activity)
         return activity

@@ -8,7 +8,7 @@ from sqlalchemy import JSON, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from muliao.platform.db import Base, StrEnumType, UTCDateTime, utcnow
-from muliao.platform.tables import agent_ref
+from muliao.platform.tables import agent_ref, session_ref
 
 
 class IssueStatus(StrEnum):
@@ -85,6 +85,8 @@ class IssueActivity(Base):
 
     actor 为做这件事的 agent 的 id，用户做的为 USER（agents.api），系统自己的清理（删除 agent）为 rules.SYSTEM_ACTOR。
     RUN_FAILED 由平台记下，actor 是运行失败的那个 agent（这件事的主体）。
+    session_id 是这件事发生在哪个会话：agent 用工具时所在的会话，UNSETTLED / RUN_FAILED 为那个 issue 会话；用户在界面上的
+    操作、系统的清理没有会话（NULL）。会话被删除时置空（订阅 SessionDeleted）。
     """
 
     __tablename__ = "issue_activities"
@@ -96,6 +98,7 @@ class IssueActivity(Base):
     kind: Mapped[ActivityKind] = mapped_column(StrEnumType(ActivityKind))
     body: Mapped[str | None] = mapped_column(Text)
     change: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    session_id: Mapped[str | None] = mapped_column(session_ref(), index=True)
 
     __table_args__ = ({"sqlite_autoincrement": True},)
 
