@@ -179,7 +179,7 @@ SQLite 只有一个写者，`Database.transaction()` 在进程内用锁串行化
 
 ### 3.5 实时展示总线
 
-`platform.bus.EventBus` 与 SSE 是展示加速，不是领域事件：不持久化、不保证送达。运行的展示事件归会话领域（`sessions.live`），任务状态事件归平台；`api/events.py` 把它们组合成 SSE 的 `ServerEvent`（第 17 节）。命名上区分：领域事件（domain event）与 SSE 推送（server event）。
+`platform.bus.EventBus` 与 SSE 是展示加速，不是领域事件：不持久化、不保证送达。服务关停时入口（`__main__._Server`）先关闭总线，结束所有订阅，SSE 响应随之正常结束，不等 uvicorn 排空超时后强行取消（#330）。运行的展示事件归会话领域（`sessions.live`），任务状态事件归平台；`api/events.py` 把它们组合成 SSE 的 `ServerEvent`（第 17 节）。命名上区分：领域事件（domain event）与 SSE 推送（server event）。
 
 ## 4. 并发模型
 

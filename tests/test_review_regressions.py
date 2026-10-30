@@ -277,6 +277,25 @@ async def test_subscriber_survives_heartbeat_timeouts():
         assert await asyncio.wait_for(sub.next(), timeout=1) == SavedEvent(session_id="s")
 
 
+async def test_closing_the_bus_ends_subscriptions_after_pending_events():
+    import asyncio
+
+    from muliao.platform.bus import EventBus, SubscriptionEnded
+    from muliao.sessions.live import SavedEvent
+
+    bus = EventBus()
+    async with bus.subscribe() as sub:
+        bus.publish(SavedEvent(session_id="s"))
+        bus.close()
+        bus.publish(SavedEvent(session_id="after"))  # 关停时任务状态仍在变化，没人收
+        assert await asyncio.wait_for(sub.next(), timeout=1) == SavedEvent(session_id="s")
+        with pytest.raises(SubscriptionEnded):
+            await asyncio.wait_for(sub.next(), timeout=1)
+    async with bus.subscribe() as late:  # 关闭后才连上的也立刻结束
+        with pytest.raises(SubscriptionEnded):
+            await asyncio.wait_for(late.next(), timeout=1)
+
+
 def test_unparseable_secret_tool_arguments_are_redacted_wholesale():
     from pydantic_ai.messages import ModelResponse, ToolCallPart
 

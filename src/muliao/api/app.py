@@ -49,7 +49,7 @@ from muliao.errors import (
     Unauthorized,
     UpstreamFailed,
 )
-from muliao.platform.bus import SubscriberOverflow
+from muliao.platform.bus import SubscriptionEnded
 
 log = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ def _private_routes() -> APIRouter:
                 try:
                     with anyio.move_on_after(_HEARTBEAT_SECONDS) as waited:
                         event = await sub.next()
-                except SubscriberOverflow:
+                except SubscriptionEnded:
                     return
                 yield heartbeat if waited.cancelled_caught else event
 
