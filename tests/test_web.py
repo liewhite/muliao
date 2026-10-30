@@ -68,19 +68,20 @@ async def test_deepseek_fetch_returns_markdown_page():
 @pytest.mark.parametrize(
     ("op", "status", "error"),
     [
-        ("fetch", 429, TransientError),
         ("search", 408, TransientError),
         ("search", 500, TransientError),
-        ("fetch", 503, TransientError),
         ("search", 504, TransientError),
-        # fetch 带错误体的 408/504 是目标站点超时，交还模型（#134）
-        ("fetch", 408, InvalidInput),
-        ("fetch", 504, InvalidInput),
         ("search", 400, InvalidInput),
         ("search", 413, InvalidInput),
+        ("fetch", 400, InvalidInput),
+        # fetch 目标抓不到（403/404/408/504）或服务暂时不可用（429/5xx）先直连（#189、#309）：
+        # 这里直连也得到同样的状态，所以两边原因一起交还模型
         ("fetch", 403, InvalidInput),
-        # fetch 404 先直连核实（#189）：这里直连也得到 404，所以还是交还模型
         ("fetch", 404, InvalidInput),
+        ("fetch", 408, InvalidInput),
+        ("fetch", 504, InvalidInput),
+        ("fetch", 429, InvalidInput),
+        ("fetch", 503, InvalidInput),
         # 403/404 只在 fetch 的契约里；search 收到是契约之外的响应
         ("search", 403, RuntimeError),
         ("search", 404, RuntimeError),
@@ -119,8 +120,60 @@ async def test_fetch_service_404_falls_back_to_a_direct_get_and_returns_plain_te
     )
     page = await web.fetch("https://raw.example/a.py")
     assert page.title == ""
-    assert page.content.startswith("(Fetched directly")
+    assert page.content.startswith("(Fetched directly from https://raw.example/a.py")
     assert page.content.endswith("\n\nprint(1)\n")
+
+
+@pytest.mark.parametrize(
+    "service",
+    [
+        # 服务在国内，境外站点被墙时表现为目标超时或拒绝（#309）
+        lambda _r: httpx.Response(504, json={"error": {"message": "Request timeout"}}),
+        lambda _r: httpx.Response(408, json={"error": {"message": "Request timeout"}}),
+        lambda _r: httpx.Response(403, json={"error": {"message": "blocked by policy"}}),
+        # 服务本身不可用：网关页面、限流、连不上
+        lambda _r: httpx.Response(502, text="<html>bad gateway"),
+        lambda _r: httpx.Response(429, json={"error": {"message": "slow down"}}),
+        lambda _r: (_ for _ in ()).throw(httpx.ConnectError("refused")),
+    ],
+)
+async def test_fetch_service_unavailable_or_blocked_falls_back_to_a_direct_get(service):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "ds.example":
+            return service(request)
+        return httpx.Response(200, text="ok", headers={"content-type": "text/plain"})
+
+    page = await _deepseek(handler).fetch("https://abroad.example/a.txt")
+    assert page.content.startswith("(Fetched directly") and page.content.endswith("\n\nok")
+
+
+_ARTICLE = """<html><head><title>Bitcoin explained</title></head><body>
+<nav><a href="/">Home</a> | <a href="/about">About</a></nav>
+<article><h1>What is Bitcoin</h1>
+<p>Bitcoin is a decentralized digital currency that runs on a public ledger maintained by miners.
+It was described in a 2008 white paper and launched in January 2009.</p>
+<p>Read the <a href="guide/wallets.html">wallet guide</a> next, it explains keys and addresses in detail.</p>
+</article><footer>Copyright footer text</footer></body></html>"""
+
+
+async def test_direct_get_of_html_returns_the_main_text_as_markdown_with_links_as_on_the_page():
+    web = _not_fetched_then(
+        lambda _r: httpx.Response(200, text=_ARTICLE, headers={"content-type": "text/html; charset=utf-8"})
+    )
+    page = await web.fetch("https://raw.example/a.py")
+    # 标题按 trafilatura 的元数据规则取（正文的 h1 优先于 <title>）
+    assert page.title == "What is Bitcoin"
+    assert page.content.startswith("(Fetched directly from https://raw.example/a.py")
+    assert "decentralized digital currency" in page.content
+    assert "[wallet guide](guide/wallets.html)" in page.content
+    assert "Copyright footer" not in page.content
+
+
+async def test_direct_get_of_html_without_text_tells_the_model_to_use_a_browser():
+    shell = '<html><body><div id="root"></div><script src="/app.js"></script></body></html>'
+    web = _not_fetched_then(lambda _r: httpx.Response(200, text=shell, headers={"content-type": "text/html"}))
+    with pytest.raises(InvalidInput, match="without extractable text .* open it in a browser"):
+        await web.fetch("https://raw.example/a.py")
 
 
 @pytest.mark.parametrize(
@@ -162,15 +215,25 @@ async def test_direct_get_is_limited_in_total_time(monkeypatch):
         await web.fetch("https://raw.example/a.py")
 
 
-@pytest.mark.parametrize("status", [403, 408, 400])
-async def test_other_fetch_rejections_do_not_trigger_a_direct_get(status):
+@pytest.mark.parametrize(
+    ("status", "error"),
+    [
+        # URL 本身无效：直连也没用，交还模型修正
+        (400, InvalidInput),
+        (413, InvalidInput),
+        # key 无效、余额不足：配置问题要让运行失败可见，不被直连掩盖
+        (401, RuntimeError),
+        (402, RuntimeError),
+    ],
+)
+async def test_invalid_input_and_config_failures_do_not_trigger_a_direct_get(status, error):
     seen: list[httpx.URL] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url)
         return httpx.Response(status, json={"error": {"message": "nope"}})
 
-    with pytest.raises(InvalidInput):
+    with pytest.raises(error):
         await _deepseek(handler).fetch("https://example.com/a")
     assert [u.host for u in seen] == ["ds.example"]
 
@@ -180,18 +243,8 @@ async def test_other_fetch_rejections_do_not_trigger_a_direct_get(status):
     [
         (lambda _r: httpx.Response(404, text="Not Found"), "a direct GET returned HTTP 404"),
         (
-            lambda _r: httpx.Response(
-                200, text="<html>", headers={"content-type": "text/html; charset=utf-8"}
-            ),
-            "content-type text/html; charset=utf-8, which web_fetch does not convert",
-        ),
-        (
             lambda _r: httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}),
-            "image/png",
-        ),
-        (
-            lambda _r: httpx.Response(200, text="<html/>", headers={"content-type": "application/xhtml+xml"}),
-            "application/xhtml+xml",
+            "content-type image/png, which web_fetch cannot read",
         ),
         (
             lambda _r: (_ for _ in ()).throw(httpx.ConnectError("refused")),
@@ -212,13 +265,6 @@ async def test_rejection_status_without_contract_error_body_is_a_config_failure_
     # 例如 base_url 指到了别的服务：404 页面不是 DeepSeek 的错误体，不能被当成「这个网页抓不到」交还模型
     web = _deepseek(lambda _r: httpx.Response(404, text="<html>Not Found"))
     with pytest.raises(RuntimeError, match="HTTP 404: response outside the error contract: <html>Not Found"):
-        await web.fetch("https://example.com/a")
-
-
-async def test_fetch_gateway_timeout_without_contract_error_body_stays_transient():
-    # 网关自己的 504 页面说明服务本身不可用，不是目标站点超时
-    web = _deepseek(lambda _r: httpx.Response(504, text="<html>Gateway Timeout"))
-    with pytest.raises(TransientError, match="HTTP 504: response outside the error contract"):
         await web.fetch("https://example.com/a")
 
 
