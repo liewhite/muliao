@@ -97,8 +97,10 @@ async def test_server_shutdown_ends_open_event_streams_without_errors(client, co
     )
     server = _Server(config, container.bus)
     serving = asyncio.create_task(server.serve())
-    while not server.started:  # noqa: ASYNC110 uvicorn 只有这个标志，没有可等待的启动事件
-        await asyncio.sleep(0.01)
+    async with asyncio.timeout(5):
+        while not server.started:  # noqa: ASYNC110 uvicorn 只有这个标志，没有可等待的启动事件
+            assert not serving.done(), "server failed to start"
+            await asyncio.sleep(0.01)
     port = server.servers[0].sockets[0].getsockname()[1]
 
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", cookies=cookies) as http:
