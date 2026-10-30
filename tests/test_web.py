@@ -169,6 +169,16 @@ async def test_direct_get_of_html_returns_the_main_text_as_markdown_with_links_a
     assert "Copyright footer" not in page.content
 
 
+async def test_direct_get_of_html_declaring_its_charset_only_in_meta_is_decoded_by_it():
+    html = _ARTICLE.replace("<head>", '<head><meta charset="gbk">').replace(
+        "Bitcoin is a decentralized", "比特币是一种去中心化的数字货币。Bitcoin is a decentralized"
+    )
+    web = _not_fetched_then(
+        lambda _r: httpx.Response(200, content=html.encode("gbk"), headers={"content-type": "text/html"})
+    )
+    assert "比特币是一种去中心化的数字货币" in (await web.fetch("https://raw.example/a.py")).content
+
+
 async def test_direct_get_of_html_without_text_tells_the_model_to_use_a_browser():
     shell = '<html><body><div id="root"></div><script src="/app.js"></script></body></html>'
     web = _not_fetched_then(lambda _r: httpx.Response(200, text=shell, headers={"content-type": "text/html"}))

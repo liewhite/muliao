@@ -52,16 +52,11 @@ _DEEPSEEK_TIMEOUT_SECONDS = 60.0
 _DEEPSEEK_TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})
 
 _Op = Literal["search", "fetch"]
-# 由模型给出的输入引起、按契约交还模型修正的状态码，按接口区分：400 字段值无效、413 请求体过大；
-# fetch 另有 403 被安全策略拒绝、404 抓取不到可用内容，以及带契约错误体的 408/504：是目标站点抓取超时
-# （如 "Request timeout"），重试同一 URL 多半还是超时，交还模型决定换 URL 还是放弃（#134）。
-# 其余（401 key 无效、402 余额不足、search 的 403/404……）
+# 带契约错误体时的两类拒绝。输入无效（400 字段值无效、413 请求体过大）交还模型修正；
+# fetch 另有「目标抓不到」：403 被安全策略拒绝、404 抓取不到可用内容、408/504 目标站点抓取超时（#134），
+# 改为直连核实（见 _FetchUnavailable）。其余（401 key 无效、402 余额不足、search 的 403/404……）
 # 是配置、账户问题或契约之外的响应，模型改不了，让这一轮失败可见
-_DEEPSEEK_REJECTED_INPUT: dict[_Op, frozenset[int]] = {
-    "search": frozenset({400, 413}),
-    "fetch": frozenset({400, 403, 404, 408, 413, 504}),
-}
-# 其中说的是「目标抓不到」而不是输入无效的那些，改为直连核实（见 _FetchUnavailable）
+_DEEPSEEK_REJECTED_INPUT = frozenset({400, 413})
 _FETCH_UNAVAILABLE = frozenset({403, 404, 408, 504})
 
 
@@ -99,7 +94,7 @@ def _error_message(resp: httpx.Response) -> str | None:
         return None
 
 
-class _FetchUnavailable(InvalidInput):
+class _FetchUnavailable(Exception):
     """fetch 按契约说目标抓不到：404（"failed to fetch URL"）、403（安全策略拒绝）、408/504（目标站点超时）。
     抓取服务在国内，境外站点常被墙或超时，它拿不到不说明页面不存在（实测 raw.githubusercontent.com 的纯文本文件
     都是 404，#189），由 `DeepSeekWeb.fetch` 直连核实（#309）。"""
@@ -133,12 +128,13 @@ class DeepSeekWeb:
             message if message is not None else f"response outside the error contract: {resp.text[:500]}"
         )
         log.warning("web request failed", extra={"provider": "deepseek", "op": op, "reason": reason})
-        # 只有服务按契约拒绝的输入才交还模型；状态码对上而错误体不对是网关或配置问题（如网关自己的 504 页面、
+        # 只有带契约错误体的才算服务按契约拒绝；状态码对上而错误体不对是网关或配置问题（如网关自己的 504 页面、
         # base_url 指错），按下面的暂时性/配置失败处理
-        if resp.status_code in _DEEPSEEK_REJECTED_INPUT[op] and message is not None:
+        if message is not None:
+            if resp.status_code in _DEEPSEEK_REJECTED_INPUT:
+                raise InvalidInput(reason)
             if op == "fetch" and resp.status_code in _FETCH_UNAVAILABLE:
                 raise _FetchUnavailable(reason)
-            raise InvalidInput(reason)
         if resp.status_code in _DEEPSEEK_TRANSIENT:
             raise TransientError(reason)
         raise RuntimeError(reason)
@@ -209,9 +205,11 @@ class _Response:
     # 跟随重定向后的最终地址：HTML 里的相对链接相对它
     url: str
     content_type: str
+    # content_type 里的媒体类型（小写、不带参数）
+    media: str
     body: bytes
-    # 响应头的 charset；没有时是客户端默认值（utf-8）
-    encoding: str
+    # 响应头里声明的 charset；没声明时为 None
+    charset: str | None
 
 
 async def _direct_get(client: httpx.AsyncClient, url: str) -> _Response:
@@ -222,7 +220,8 @@ async def _direct_get(client: httpx.AsyncClient, url: str) -> _Response:
                 if resp.status_code != 200:
                     raise _DirectFailed(f"a direct GET returned HTTP {resp.status_code}")
                 content_type = resp.headers.get("content-type", "")
-                if not _is_readable(_media_type(content_type)):
+                media = _media_type(content_type)
+                if not _is_readable(media):
                     raise _DirectFailed(
                         f"a direct GET returned content-type {content_type or '(none)'}, which web_fetch cannot "
                         "read: try `run_shell` with curl"
@@ -235,8 +234,9 @@ async def _direct_get(client: httpx.AsyncClient, url: str) -> _Response:
                 return _Response(
                     url=str(resp.url),
                     content_type=content_type,
+                    media=media,
                     body=bytes(body[:_DIRECT_MAX_BYTES]),
-                    encoding=resp.encoding,
+                    charset=resp.charset_encoding,
                 )
     except TimeoutError as e:
         raise _DirectFailed(f"a direct GET did not finish within {_DIRECT_TIMEOUT_SECONDS:g}s") from e
@@ -244,21 +244,27 @@ async def _direct_get(client: httpx.AsyncClient, url: str) -> _Response:
         raise _DirectFailed(f"a direct GET failed: {type(e).__name__}: {e}") from e
 
 
-def _html_to_page(html: str) -> Page | None:
+def _html_to_page(html: str | bytes) -> Page | None:
     """用 trafilatura 提取正文转成 Markdown（去掉导航、页脚等）；提取不出正文时返回 None。链接保持页面里的原样
-    （相对链接不由它补全：它只按主机名补，/3/library/x.html 里的相对链接会补错）。CPU 活，在线程里跑。"""
-    text = trafilatura.extract(html, output_format="markdown", include_links=True, include_tables=True)
+    （相对链接不由它补全：它只按主机名补，/3/library/x.html 里的相对链接会补错）。传 bytes 时由它按 <meta> 与内容
+    判断编码。只解析一次，正文与标题共用一棵树。CPU 活，在线程里跑。"""
+    tree = trafilatura.load_html(html)
+    if tree is None:
+        return None
+    text = trafilatura.extract(tree, output_format="markdown", include_links=True, include_tables=True)
     if not text or not text.strip():
         return None
-    meta = trafilatura.extract_metadata(html)
+    meta = trafilatura.extract_metadata(tree)
     return Page(title=(meta.title if meta is not None and meta.title else ""), content=text)
 
 
 async def _readable_page(resp: _Response) -> Page:
-    text = resp.body.decode(resp.encoding, errors="replace")
-    if _media_type(resp.content_type) not in _HTML_TYPES:
-        return Page(title="", content=text)
-    page = await anyio.to_thread.run_sync(_html_to_page, text)
+    if resp.media not in _HTML_TYPES:
+        # 纯文本没有 <meta> 可用，头里没声明就按 utf-8
+        return Page(title="", content=resp.body.decode(resp.charset or "utf-8", errors="replace"))
+    # 头里没声明 charset 时把原始字节交给 trafilatura：只在 <meta> 里声明 GBK 的老站点按 utf-8 解会乱码
+    html = resp.body.decode(resp.charset, errors="replace") if resp.charset else resp.body
+    page = await anyio.to_thread.run_sync(_html_to_page, html)
     if page is None:
         raise _DirectFailed(
             "a direct GET returned HTML without extractable text (the page is probably rendered by JavaScript): "
@@ -270,8 +276,9 @@ async def _readable_page(resp: _Response) -> Page:
 async def _direct_fetch(client: httpx.AsyncClient, url: str, service_reason: str) -> Page:
     """抓取服务拿不到或不可用（`service_reason`）时直接 GET 一次：HTML 转成 Markdown，纯文本（源码、Markdown、JSON……）
     原样返回，都注明是直连；否则把两边的原因一起交还模型（InvalidInput）。直连 404 才说明页面确实不存在，所以服务那句
-    404 不能单独交还（#189）。直连失败不算暂时性失败：连不上的是目标站点，与 #134 的目标站点超时同理交还模型，
-    由它决定换 URL、改用浏览器还是稍后再试。"""
+    404 不能单独交还（#189）。直连失败一律交还模型、不算暂时性失败，包括服务本身也暂时不可用时：连不上的多半是
+    目标站点，与 #134 的目标站点超时同理。本机整体掉线时两边都报连不上，模型从两条原因里看得出来，由它决定稍后重试、
+    换 URL 还是改用浏览器（与「中断后由模型判断是否重试」一致），不再按失败类别分叉。"""
     # 只记 host：URL 里可能带着对话内容
     host = httpx.URL(url).host
     try:
@@ -282,12 +289,12 @@ async def _direct_fetch(client: httpx.AsyncClient, url: str, service_reason: str
             "web request failed", extra={"provider": "direct", "op": "fetch", "host": host, "reason": str(e)}
         )
         raise InvalidInput(
-            f"{service_reason}. The fetch service could not get this URL, which does not by itself mean the page is "
-            f"missing; {e}"
+            f"{service_reason}. The fetch service did not return this page, which does not by itself mean the page "
+            f"is missing; {e}"
         ) from e
     log.info("web fetch", extra={"provider": "direct", "host": host, "chars": len(page.content)})
     note = (
-        f"(Fetched directly from {resp.url} with a plain GET because the fetch service could not get it; "
+        f"(Fetched directly from {resp.url} with a plain GET because the fetch service did not return it; "
         f"content-type {resp.content_type}.)"
     )
     return Page(title=page.title, content=f"{note}\n\n{page.content}")
