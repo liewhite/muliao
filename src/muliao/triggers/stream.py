@@ -20,7 +20,7 @@
   并行会话都有界。单行超过事件上限的丢弃并记日志。
 - 排队的事件只在内存里：服务重启、改配置、停用时丢失；一批开始触发后不再重试（至多一次：前置检查失败、
   触发意外失败都丢弃这一批）；命令退出时队列正满，管道里还没读的输出只限时读、读不完的丢弃。命令自己
-  做断线重连、去重与游标，重要的来源要另加轮询兜底（skill stream-listener）。
+  做断线重连、去重与游标，重要的来源要另加轮询兜底（skill triggers）。
 - 每次触发走 TriggerService.fire_activated（新开会话；有前置检查时先跑，事件内容作为它的 stdin）。
 """
 
@@ -108,7 +108,7 @@ class StreamKind:
         "the first one fire together (one conversation, the lines are the event); while the conversation of the "
         "previous firing is still busy, events queue and are delivered together once it is done. stderr goes to "
         f"{LOG_DIR}/<name>.stderr.log in the workspace. Queued events are lost on a restart, so the command handles "
-        "reconnects, dedup and cursors itself; read skill stream-listener before writing one."
+        "reconnects, dedup and cursors itself; read skill triggers before writing one."
     )
 
     def configure(self, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
