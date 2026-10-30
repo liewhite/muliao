@@ -30,7 +30,7 @@ launchctl kickstart -k gui/$(id -u)/com.muliao    # 重启（升级后）
 deploy/selfcheck.sh <commit>                      # 重启后自检（在仓库里跑）
 ```
 
-`deploy/selfcheck.sh` 做部署后的通用检查并逐项打印 PASS/FAIL 和依据：进程启动时间晚于安装时间、已装版本包含目标 commit、本次启动后日志无 ERROR、端口返回 200、`launchctl` 的 runs 隔 60 秒（`RUNS_WAIT`）不增长（不增长＝没有循环重启）。任一失败退出码为 1；只报告，不处理。
+`deploy/selfcheck.sh` 做部署后的通用检查并逐项打印 PASS/FAIL 和依据：进程启动时间晚于安装时间、已装版本包含目标 commit、本进程启动（日志里带 pid 的 Started server process）后已 startup complete 且无 ERROR、端口返回 200、`launchctl` 的 runs 隔 60 秒（`RUNS_WAIT`）不增长（不增长＝没有循环重启）。任一失败退出码为 1；只报告，不处理。
 
 重启或停止时服务收到 SIGTERM：先最多等 3 秒让 HTTP 连接（界面的 SSE 长连接不会自己关）结束，再取消剩下的连接，进入关停——取消正在进行的运行（收尾最多约 10 秒），再结束后台任务的进程组并通知 agent（重启后处理，监督者收尾两段各最多 10 秒）。合计最坏约 33 秒，所以示例 plist 设了 `ExitTimeOut` 60：launchd 不设时 `kickstart -k` 约 5 秒就 SIGKILL，后台任务的进程会脱离服务继续运行、无人监督。改了 plist 要 `launchctl bootout` 再 `bootstrap` 才生效，`kickstart` 不重读。
 
