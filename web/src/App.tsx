@@ -112,7 +112,23 @@ function IssueRoute() {
 }
 
 /** 动态导航的一项，通知带未读角标；底栏与桌面左侧栏共用 */
-function TabLink({ to, label, Icon, unread, className }: (typeof ACTIVITY_TABS)[number] & { unread: number; className: string }) {
+function TabLink({
+  to,
+  label,
+  Icon,
+  primary,
+  unread,
+  className,
+}: (typeof ACTIVITY_TABS)[number] & { unread: number; className: string }) {
+  if (primary) {
+    return (
+      <NavLink to={to} aria-label={label} title={label} className={`flex items-center justify-center ${className}`}>
+        <span className="flex size-11 items-center justify-center rounded-full bg-accent text-accent-foreground shadow-md transition-transform active:scale-95">
+          <Icon className="size-6" />
+        </span>
+      </NavLink>
+    )
+  }
   return (
     <NavLink
       to={to}
@@ -136,7 +152,7 @@ function TabLink({ to, label, Icon, unread, className }: (typeof ACTIVITY_TABS)[
 }
 
 /**
- * 登录后的界面。首页导航只放动态（会话、Issues、通知），配置类页面都收进管理菜单。
+ * 登录后的界面。首页导航五项（会话、Issues、居中的圆形新会话按钮、触发器、通知），配置类页面都收进管理菜单。
  * 手机：页面 + 底部动态导航；页面头部左上角的按钮打开管理抽屉。
  * 桌面（md 起）：左侧窄栏（左上角管理菜单按钮 + 动态导航）+ 页面；管理类页面在 lg 起多一列常驻的管理菜单。
  * 会话、Agents 在 xl 起列表与详情分屏（见 ListDetail）。

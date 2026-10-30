@@ -8,6 +8,7 @@ import {
   Boxes,
   KanbanSquare,
   MessageSquare,
+  Plus,
   ScrollText,
   ShieldCheck,
   Settings,
@@ -17,10 +18,15 @@ import {
 
 export type NavItem = { to: string; label: string; Icon: LucideIcon }
 
-/** 首页导航：随时在变的动态（手机底栏、桌面左侧栏） */
-export const ACTIVITY_TABS: readonly NavItem[] = [
+/** 首页导航的一项；primary 是主操作，画成居中的圆形按钮 */
+export type TabItem = NavItem & { primary?: true }
+
+/** 首页导航（手机底栏、桌面左侧栏）：五项，新会话居中 */
+export const ACTIVITY_TABS: readonly TabItem[] = [
   { to: '/', label: '会话', Icon: MessageSquare },
   { to: '/issues', label: 'Issues', Icon: KanbanSquare },
+  { to: '/new', label: '新会话', Icon: Plus, primary: true },
+  { to: '/triggers', label: '触发器', Icon: Zap },
   { to: '/notifications', label: '通知', Icon: Bell },
 ]
 
@@ -30,7 +36,6 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
     title: '运行',
     items: [
       { to: '/agents', label: 'Agents', Icon: Bot },
-      { to: '/triggers', label: '触发', Icon: Zap },
       { to: '/tasks', label: '任务与失败记录', Icon: Activity },
       { to: '/usage', label: 'Token 用量', Icon: BarChart3 },
     ],

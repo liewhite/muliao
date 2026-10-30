@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Card, Chip, SearchField, Spinner } from '@heroui/react'
-import { ChevronDown, ChevronRight, Hourglass, Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, Hourglass } from 'lucide-react'
 import { Link, useMatch } from 'react-router-dom'
 import { api, type AgentId, type SessionListItem, sessionRoute } from '../api'
 import { useRefetch } from '../events'
 import { FILTERS, ORIGIN_LABEL, groupByAgent, parseFilter, splitActive, type Filter } from '../sessionGroups'
 import {
   EmptyHint,
-  LinkButton,
   Loading,
   Page,
   Segmented,
@@ -122,15 +121,7 @@ export default function Sessions() {
   useRefetch('sessions', sessions.reload)
 
   return (
-    <Page
-      title="会话"
-      actions={
-        <LinkButton to="/new">
-          <Plus className="size-4" />
-          新对话
-        </LinkButton>
-      }
-    >
+    <Page title="会话">
       <Segmented
         label="会话分类"
         value={filter}

@@ -866,7 +866,7 @@ export default function Triggers() {
   const [showFinished, setShowFinished] = useState(false)
   const reload = () => void triggers.reload()
   return (
-    <Page title="触发" wide>
+    <Page title="触发器" wide>
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-3">
         <Loading state={kinds}>{(list) => <TriggerForm kinds={list} agents={agents.data} onCreated={reload} />}</Loading>
         <Loading state={triggers}>

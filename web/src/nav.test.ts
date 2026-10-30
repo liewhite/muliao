@@ -13,6 +13,8 @@ describe('isAdminPath', () => {
     expect(isAdminPath('/')).toBe(false)
     expect(isAdminPath('/sessions/x')).toBe(false)
     expect(isAdminPath('/issues/3')).toBe(false)
+    expect(isAdminPath('/triggers')).toBe(false)
+    expect(isAdminPath('/new')).toBe(false)
     expect(isAdminPath('/agentsx')).toBe(false)
   })
 })
