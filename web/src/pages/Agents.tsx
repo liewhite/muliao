@@ -328,7 +328,7 @@ export function AgentDetail() {
   async function toggleDefault(on: boolean) {
     if (await action.run(() => api.setDefaultAgent(id, on))) {
       toast.success(on ? '已设为默认 agent' : '已取消默认')
-      // 列表里的「默认」标记与新对话的默认选择跟着更新
+      // 列表里的「默认」标记与新会话的默认选择跟着更新
       announceChange('agents')
       void agent.reload()
     }
@@ -379,7 +379,7 @@ export function AgentDetail() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-muted">
-                      {a.is_default ? '系统默认 agent：新对话默认选中它' : '不是默认 agent'}
+                      {a.is_default ? '系统默认 agent：新会话默认选中它' : '不是默认 agent'}
                     </span>
                     <Button size="sm" variant="ghost" isDisabled={action.busy} onPress={() => void toggleDefault(!a.is_default)}>
                       <Star className="size-4" />

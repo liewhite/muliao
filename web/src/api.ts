@@ -289,7 +289,7 @@ export const api = {
   updateAgent: (agent_id: AgentId, body: AgentInput) =>
     branded<Agent>(call('put', '/api/agents/{agent_id}', { path: { agent_id }, body })),
   deleteAgent: (agent_id: AgentId) => call('delete', '/api/agents/{agent_id}', { path: { agent_id } }),
-  /** 设为（true）或取消（false）系统默认 agent：Web 新对话默认选中它 */
+  /** 设为（true）或取消（false）系统默认 agent：Web 新会话默认选中它 */
   setDefaultAgent: (agent_id: AgentId, on: boolean) =>
     branded<Agent>(
       on

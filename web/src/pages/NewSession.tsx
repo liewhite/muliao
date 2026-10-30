@@ -18,7 +18,7 @@ export default function NewSession() {
   const [prompt, setPrompt] = useState('')
   const uploads = useUploads()
   const action = useAction()
-  // 新对话还要选 agent：转写结果先填进输入框，由用户点「开始」
+  // 新会话还要选 agent：转写结果先填进输入框，由用户点「开始」
   const voice = useVoiceInput((text) => setPrompt((p) => appendTranscript(p, text)))
   const canStart = agent !== null && (prompt.trim() !== '' || uploads.ids.length > 0) && !uploads.blocking
 
@@ -33,7 +33,7 @@ export default function NewSession() {
   }
 
   return (
-    <Page title="新对话" back="/">
+    <Page title="新会话" back="/">
       <Loading state={agents}>
         {(list) =>
           list.length === 0 ? (

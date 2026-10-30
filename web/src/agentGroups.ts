@@ -30,7 +30,7 @@ export function groupAgents(agents: Agent[]): AgentGroups {
   }
 }
 
-/** 可以选来派活（新对话、指派、负责、触发器）的 agent：不含归档的；keep 是当前已选的值，归档了也留着以便显示 */
+/** 可以选来派活（新会话、指派、负责、触发器）的 agent：不含归档的；keep 是当前已选的值，归档了也留着以便显示 */
 export function selectableAgents(agents: Agent[] | undefined, keep?: string | null): Agent[] {
   return (agents ?? []).filter((a) => a.archived_at === null || a.id === keep)
 }

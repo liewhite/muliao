@@ -121,6 +121,7 @@ function TabLink({
   className,
 }: (typeof ACTIVITY_TABS)[number] & { unread: number; className: string }) {
   if (primary) {
+    // 主操作按钮不做选中态：所在页（/new）自己有标题
     return (
       <NavLink to={to} aria-label={label} title={label} className={`flex items-center justify-center ${className}`}>
         <span className="flex size-11 items-center justify-center rounded-full bg-accent text-accent-foreground shadow-md transition-transform active:scale-95">
