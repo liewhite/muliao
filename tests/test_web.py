@@ -179,6 +179,16 @@ async def test_direct_get_of_html_declaring_its_charset_only_in_meta_is_decoded_
     assert "比特币是一种去中心化的数字货币" in (await web.fetch("https://raw.example/a.py")).content
 
 
+@pytest.mark.parametrize("media", ["text/plain", "text/html"])
+async def test_direct_get_with_an_unknown_charset_treats_it_as_undeclared(media):
+    web = _not_fetched_then(
+        lambda _r: httpx.Response(
+            200, content=_ARTICLE.encode(), headers={"content-type": f"{media}; charset=bogus"}
+        )
+    )
+    assert "decentralized digital currency" in (await web.fetch("https://raw.example/a.py")).content
+
+
 async def test_direct_get_of_html_without_text_tells_the_model_to_use_a_browser():
     shell = '<html><body><div id="root"></div><script src="/app.js"></script></body></html>'
     web = _not_fetched_then(lambda _r: httpx.Response(200, text=shell, headers={"content-type": "text/html"}))

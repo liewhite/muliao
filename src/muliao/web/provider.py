@@ -4,6 +4,7 @@
 服务端拒绝时把它的原因作为 InvalidInput 交还模型修正。
 """
 
+import codecs
 import logging
 from dataclasses import dataclass
 from typing import Literal, Protocol, assert_never
@@ -200,6 +201,17 @@ class _DirectFailed(Exception):
     """直连没拿到能给模型读的内容；消息是给模型看的原因。"""
 
 
+def _known_charset(charset: str | None) -> str | None:
+    """响应头里的 charset 只在 Python 认识时采用；站点写错的（如 charset=bogus）当作没声明。"""
+    if charset is None:
+        return None
+    try:
+        codecs.lookup(charset)
+    except LookupError:
+        return None
+    return charset
+
+
 @dataclass(frozen=True)
 class _Response:
     # 跟随重定向后的最终地址：HTML 里的相对链接相对它
@@ -208,7 +220,7 @@ class _Response:
     # content_type 里的媒体类型（小写、不带参数）
     media: str
     body: bytes
-    # 响应头里声明的 charset；没声明时为 None
+    # 响应头里声明、且 Python 认识的 charset；否则为 None
     charset: str | None
 
 
@@ -236,7 +248,7 @@ async def _direct_get(client: httpx.AsyncClient, url: str) -> _Response:
                     content_type=content_type,
                     media=media,
                     body=bytes(body[:_DIRECT_MAX_BYTES]),
-                    charset=resp.charset_encoding,
+                    charset=_known_charset(resp.charset_encoding),
                 )
     except TimeoutError as e:
         raise _DirectFailed(f"a direct GET did not finish within {_DIRECT_TIMEOUT_SECONDS:g}s") from e
