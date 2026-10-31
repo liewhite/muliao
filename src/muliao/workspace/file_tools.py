@@ -33,7 +33,6 @@ _DEFAULT_READ_LIMIT = 2000
 _PART_OVERHEAD = 200
 # read_file 交给模型看的图片上限（文件字节数）：Anthropic API 单张图片限 5MB，按 base64 编码后的长度算，即原始字节
 # 的 3/4（其他 provider 更宽）。超过就拒绝、不在这里缩放：放进历史后每次请求都会被 provider 拒绝
-_MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4
 
 
 class TextEdit(BaseModel):
@@ -343,11 +342,6 @@ def _read_image(target: Path, media_type: str) -> list[str | BinaryContent]:
     if not target.is_file():
         raise NotFound(f"file not found: {target}")
     data = target.read_bytes()
-    if len(data) > _MAX_IMAGE_BYTES:
-        raise InvalidInput(
-            f"image too large to view: {target} is {len(data)} bytes, the limit is {_MAX_IMAGE_BYTES} bytes; "
-            "make a smaller copy first (e.g. `sips -Z 1568 big.png --out small.png`) and read that"
-        )
     return [f"{target} ({media_type}, {len(data)} bytes)", BinaryContent(data, media_type=media_type)]
 
 

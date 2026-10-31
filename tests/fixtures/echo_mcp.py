@@ -6,8 +6,11 @@ from mcp.server.mcpserver import Image, MCPServer
 
 server = MCPServer("echo")
 
-# 一个最小的 PNG 文件头加几个字节：测试只看它按原样存下、原样交给模型
-PNG = b"\x89PNG\r\n\x1a\n" + b"screenshot"
+# 一张 1×1 的 PNG：没超 provider 上限，测试看它按原样存下、原样交给模型（其他测试也用它当一张真图片）
+PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0c"
+    b"IDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 @server.tool()

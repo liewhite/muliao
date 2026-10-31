@@ -3,7 +3,7 @@
 - 存储形态（数据库、界面、重放）：`UserPromptPart.content` 里的 ImageUrl / DocumentUrl，url 是 `files.file_url`，
   只是引用。界面直接用它显示图片和下载链接。
 - 模型形态：每次模型请求前由 `AttachmentsForModel` 展开成一段说明（名称、类型、大小、在工作目录里的路径），
-  能内联的图片再附上内容。展开只改这一次请求，不改持久化的历史，所以数据库里不会出现文件内容的副本。
+  能内联的图片再附上内容，内容先按 provider 的上限整理（`images.fit`：超限的缩小或切段，原件不动）。展开只改这一次请求，不改持久化的历史，所以数据库里不会出现文件内容的副本。
 
 工具交回的图片（如 MCP 浏览器的截图、read_file 读的图片文件）走同一套：`ToolImagesToFiles` 在工具执行完、结果写进历史之前把能内联的图片
 存进文件存储，结果里换成 ImageUrl 引用；发请求时 `AttachmentsForModel` 把它换回内容，放在工具结果里交给模型
@@ -37,6 +37,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.tools import ToolDefinition
 
+from muliao.agent_runtime import images
 from muliao.agent_runtime.conventions import result_image_refs
 from muliao.files.api import INLINE_IMAGE_TYPES, FileMeta, FileStore, parse_file_url
 from muliao.platform.tooling import RunScope
@@ -88,10 +89,23 @@ class AttachmentsForModel(AbstractCapability[RunScope]):
         meta = metas[parse_file_url(item.url)[0]]
         if not meta.is_inline_image:
             return [describe(meta)]
-        return [describe(meta), await self._content(meta)]
+        return [describe(meta), *await self._content(meta)]
 
-    async def _content(self, meta: FileMeta) -> BinaryContent:
-        return BinaryContent(await asyncio.to_thread(self.store.read, meta), media_type=meta.media_type)
+    async def _content(self, meta: FileMeta) -> list[str | BinaryContent]:
+        """一张图片的模型形态：按 provider 的上限整理（images.fit），整理过就在前面写明做了什么；解不成图片的
+        换成一句说明，不发给 provider（它会拒绝整次请求，而图片在历史里，之后每次请求都会失败）。"""
+
+        def load() -> list[str | BinaryContent]:
+            try:
+                fitted = images.fit(self.store.read(meta), meta.media_type)
+            except images.Unreadable:
+                return [
+                    f"[image {meta.name!r} could not be decoded as {meta.media_type}, so it is not shown]"
+                ]
+            tiles = [BinaryContent(t.data, media_type=t.media_type) for t in fitted.tiles]
+            return tiles if fitted.note is None else [fitted.note, *tiles]
+
+        return await asyncio.to_thread(load)
 
     async def _expand_message(self, message: ModelMessage, metas: dict[str, FileMeta]) -> ModelMessage:
         if not isinstance(message, ModelRequest):
@@ -105,8 +119,11 @@ class AttachmentsForModel(AbstractCapability[RunScope]):
                 # 工具结果里的图片（ToolImagesToFiles 存下的）换回内容，其余原样
                 assert isinstance(part, ToolReturnPart) and isinstance(part.content, list)
                 tool_content = [
-                    await self._content(metas[parse_file_url(item.url)[0]]) if item in refs else item
+                    x
                     for item in part.content
+                    for x in (
+                        await self._content(metas[parse_file_url(item.url)[0]]) if item in refs else [item]
+                    )
                 ]
                 part = replace(part, content=tool_content)
             parts.append(part)

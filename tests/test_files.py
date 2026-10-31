@@ -16,11 +16,10 @@ from sqlalchemy import select
 
 from muliao.sessions.tables import Message
 from tests.conftest import login
+from tests.fixtures.echo_mcp import PNG
 from tests.scripted import scripted
 from tests.test_flow import drain, user_prompts
 from tests.test_tools import run_tools
-
-PNG = b"\x89PNG\r\n\x1a\nfake"
 
 
 async def _upload(client, name: str, data: bytes, media_type: str) -> dict:

@@ -957,30 +957,29 @@ async def test_read_file_truncates_very_long_lines(container, make_agent, models
 
 
 async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_stores_only_a_reference(
-    container, make_agent, models, monkeypatch
+    container, make_agent, models
 ):
-    import base64
+    import io
 
+    from PIL import Image
     from pydantic_ai.messages import BinaryContent, ImageUrl
 
     from muliao.files.api import parse_file_url
-    from muliao.workspace import file_tools
+    from tests.fixtures.echo_mcp import PNG as png
     from tests.test_flow import history_of
 
-    # 上限按 provider 的 5MB（base64 编码后）换算
-    assert len(base64.b64encode(b"x" * file_tools._MAX_IMAGE_BYTES)) <= 5 * 1024 * 1024
     me = await make_agent("alpha", model="tools")
-    png = b"\x89PNG\r\n\x1a\n" + b"chart"
     workspace = container.agents.workspace(me.id)
     (workspace / "shot.png").write_bytes(png)
-    (workspace / "big.jpg").write_bytes(b"x" * (len(png) + 1))
-    monkeypatch.setattr(file_tools, "_MAX_IMAGE_BYTES", len(png))
+    Image.new("RGB", (300, 9000), "white").save(workspace / "long.png")
+    (workspace / "broken.jpg").write_bytes(b"not a jpeg")
     seen: list[object] = []
     calls = [
         ("read_file", {"path": "shot.png"}),
         ("read_file", {"path": "shot.png", "offset": 3}),
         ("read_file", {"reads": [{"path": "shot.png"}]}),
-        ("read_file", {"path": "big.jpg"}),
+        ("read_file", {"path": "long.png"}),
+        ("read_file", {"path": "broken.jpg"}),
         ("read_file", {"path": "gone.webp"}),
     ]
 
@@ -999,12 +998,21 @@ async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_st
 
     # 模型在工具结果里看到图片本身
     caption, image = seen[0]
-    assert caption.endswith("shot.png (image/png, 13 bytes)")
+    assert caption.endswith(f"shot.png (image/png, {len(png)} bytes)")
     assert image == BinaryContent(png, media_type="image/png")
     assert "offset/limit do not apply to an image file" in str(seen[1])
     assert "an image file cannot be read in reads" in str(seen[2])
-    assert "image too large to view" in str(seen[3]) and "the limit is 13 bytes" in str(seen[3])
-    assert "file not found" in str(seen[4])
+    # 超过 provider 上限的长图切成几段交给模型，前面写明怎么切的（#336：原样发出去整个会话之后都是 400）
+    caption, note, *tiles = seen[3]
+    assert "long.png (image/png, " in caption
+    assert (
+        note
+        == "[image 300x9000 split into 6 parts shown top to bottom, each scaled to fit 1568x1568, to fit the model's limits]"
+    )
+    assert [Image.open(io.BytesIO(t.data)).size for t in tiles] == [(300, 1500)] * 6
+    # 解不成图片的不发给 provider，换成一句说明
+    assert seen[4][1] == "[image 'read_file.jpg' could not be decoded as image/jpeg, so it is not shown]"
+    assert "file not found" in str(seen[5])
     # 历史里只存文件引用（ToolImagesToFiles），内容在文件存储里
     [stored, *_] = [
         p for m in await history_of(container, session.id) for p in m.parts if p.part_kind == "tool-return"
