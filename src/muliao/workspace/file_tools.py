@@ -31,8 +31,6 @@ _DEFAULT_READ_LIMIT = 2000
 # read_file 按行截断时，正文之外每段还要放的字符数的上界：`==> path lines A-B of N <==` 标题里路径以外的部分、
 # 续读说明、段间分隔（正文预算 = 剩余预算 - 路径长 - 它）
 _PART_OVERHEAD = 200
-# read_file 交给模型看的图片上限（文件字节数）：Anthropic API 单张图片限 5MB，按 base64 编码后的长度算，即原始字节
-# 的 3/4（其他 provider 更宽）。超过就拒绝、不在这里缩放：放进历史后每次请求都会被 provider 拒绝
 
 
 class TextEdit(BaseModel):
@@ -171,7 +169,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             if media_type := _image_type(target):
                 if offset != 1 or limit != _DEFAULT_READ_LIMIT:
                     raise InvalidInput(f"offset/limit do not apply to an image file: {target}")
-                return _read_image(target, media_type)
+                return _read_image(target, media_type, files.max_bytes)
             excerpt = _read_range(target, offset, limit, limits.max_output_chars - _PART_OVERHEAD)
             # 按行截断后正文已在预算内；只有第一行就比整个预算还长时这里才会再截
             return truncate(excerpt.body, limits.max_output_chars) + excerpt.more_note
@@ -337,10 +335,16 @@ def _image_type(path: Path) -> str | None:
     return media_type if media_type in INLINE_IMAGE_TYPES else None
 
 
-def _read_image(target: Path, media_type: str) -> list[str | BinaryContent]:
-    """图片以内容交回；attachments.ToolImagesToFiles 把它存进文件存储，历史里只留引用，发请求时再展开给模型。"""
+def _read_image(target: Path, media_type: str, max_bytes: int) -> list[str | BinaryContent]:
+    """图片以内容交回；attachments.ToolImagesToFiles 把它存进文件存储，历史里只留引用，发请求时再展开给模型
+    （超过 provider 上限的在那里整理）。存不进文件存储的（超过 `max_bytes`）在这里就拒绝，模型可以先缩小一份。"""
     if not target.is_file():
         raise NotFound(f"file not found: {target}")
+    if (size := target.stat().st_size) > max_bytes:
+        raise InvalidInput(
+            f"image too large to view: {target} is {size} bytes, the limit is {max_bytes} bytes; "
+            "make a smaller copy first (e.g. `sips -Z 1568 big.png --out small.png`) and read that"
+        )
     data = target.read_bytes()
     return [f"{target} ({media_type}, {len(data)} bytes)", BinaryContent(data, media_type=media_type)]
 

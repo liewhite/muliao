@@ -14,13 +14,22 @@ import io
 import math
 from dataclasses import dataclass
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps
 
 BOX = 1568
 MAX_BYTES = 5 * 1024 * 1024 * 3 // 4  # Anthropic 单张 5MB 按 base64 编码后计
 MAX_TILES = 8
 
-_FORMATS = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP", "image/gif": "PNG"}
+# 解码出的真实格式 → 原样交回时的类型（MPO 是 iPhone 的多帧 JPEG，按 JPEG 收）。不在表里的（BMP 等）不能原样交回
+_PASS_THROUGH = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "MPO": "image/jpeg",
+    "WEBP": "image/webp",
+    "GIF": "image/gif",
+}
+# 整理后的编码格式：沿用原格式，GIF（取第一帧）与表外的存 PNG
+_ENCODE_AS = {"JPEG": "JPEG", "MPO": "JPEG", "WEBP": "WEBP"}
 _MEDIA_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
 
 
@@ -32,29 +41,35 @@ class Tile:
 
 @dataclass(frozen=True)
 class Fitted:
-    """整理的结果：`note` 为空表示原样交回（`tiles` 就是原图一张）；否则说明做了什么，放在图片前面给模型看。"""
+    """整理的结果：`note` 为空表示原样交回（`tiles` 就是原图一张，类型按内容而不按声明）；否则说明做了什么，
+    放在图片前面给模型看。"""
 
     tiles: list[Tile]
     note: str | None
 
 
 class Unreadable(Exception):
-    """内容解不成图片（损坏或类型不符）。"""
+    """内容解不成图片（损坏、不是图片、像素多到 Pillow 拒绝解码）。"""
 
 
-def fit(data: bytes, media_type: str) -> Fitted:
+def fit(data: bytes) -> Fitted:
+    """类型看内容不看声明：扩展名是 .jpg 而内容是 PNG 的，按声明发 provider 会拒绝。"""
     try:
         image = Image.open(io.BytesIO(data))
         image.load()
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as e:
-        raise Unreadable(str(e)) from e
+    except (OSError, ValueError, Image.DecompressionBombError) as e:  # Pillow 对坏数据也会抛 ValueError
+        raise Unreadable(f"{type(e).__name__}: {e}") from e
+    fmt = image.format or ""
     width, height = image.size
-    if max(width, height) <= BOX and len(data) <= MAX_BYTES:
-        return Fitted([Tile(data, media_type)], None)
+    if max(width, height) <= BOX and len(data) <= MAX_BYTES and fmt in _PASS_THROUGH:
+        return Fitted([Tile(data, _PASS_THROUGH[fmt])], None)
+    # 切段、缩放不看 EXIF 方向，存出来也不带它：先按方向转正，否则竖拍的照片发出去是横的
+    image = ImageOps.exif_transpose(image)
+    width, height = image.size
     short, long = sorted((width, height))
     count = min(math.ceil(long / max(2 * short, BOX)), MAX_TILES)
     pieces = [_shrink(piece) for piece in _split(image, count)]
-    tiles = [_encode(piece, _FORMATS[media_type]) for piece in pieces]
+    tiles = [_encode(piece, _ENCODE_AS.get(fmt, "PNG")) for piece in pieces]
     if count == 1:
         scaled = "x".join(map(str, pieces[0].size))
         note = f"[image {width}x{height} sent as {scaled} {tiles[0].media_type} to fit the model's limits]"

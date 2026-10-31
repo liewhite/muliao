@@ -14,6 +14,7 @@
 """
 
 import asyncio
+import logging
 import mimetypes
 import shutil
 from collections.abc import AsyncIterator, Sequence
@@ -43,6 +44,8 @@ from muliao.files.api import INLINE_IMAGE_TYPES, FileMeta, FileStore, parse_file
 from muliao.platform.tooling import RunScope
 
 UPLOADS_DIR = "uploads"
+
+log = logging.getLogger(__name__)
 
 
 def references(files: Sequence[FileMeta]) -> list[UserContent]:
@@ -97,11 +100,13 @@ class AttachmentsForModel(AbstractCapability[RunScope]):
 
         def load() -> list[str | BinaryContent]:
             try:
-                fitted = images.fit(self.store.read(meta), meta.media_type)
-            except images.Unreadable:
-                return [
-                    f"[image {meta.name!r} could not be decoded as {meta.media_type}, so it is not shown]"
-                ]
+                fitted = images.fit(self.store.read(meta))
+            except images.Unreadable as e:
+                log.warning(
+                    "image not decodable, not sent to the model",
+                    extra={"file_id": meta.id, "media_type": meta.media_type, "error": str(e)},
+                )
+                return [f"[image {meta.name!r} could not be decoded as an image, so it is not shown]"]
             tiles = [BinaryContent(t.data, media_type=t.media_type) for t in fitted.tiles]
             return tiles if fitted.note is None else [fitted.note, *tiles]
 

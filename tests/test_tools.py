@@ -973,6 +973,9 @@ async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_st
     (workspace / "shot.png").write_bytes(png)
     Image.new("RGB", (300, 9000), "white").save(workspace / "long.png")
     (workspace / "broken.jpg").write_bytes(b"not a jpeg")
+    # 存不进文件存储的图片在 read_file 就拒绝（否则 ToolImagesToFiles 存不下、整次运行失败）
+    container.files.max_bytes = (workspace / "long.png").stat().st_size
+    (workspace / "huge.png").write_bytes(b"x" * (container.files.max_bytes + 1))
     seen: list[object] = []
     calls = [
         ("read_file", {"path": "shot.png"}),
@@ -981,6 +984,7 @@ async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_st
         ("read_file", {"path": "long.png"}),
         ("read_file", {"path": "broken.jpg"}),
         ("read_file", {"path": "gone.webp"}),
+        ("read_file", {"path": "huge.png"}),
     ]
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -1011,8 +1015,9 @@ async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_st
     )
     assert [Image.open(io.BytesIO(t.data)).size for t in tiles] == [(300, 1500)] * 6
     # 解不成图片的不发给 provider，换成一句说明
-    assert seen[4][1] == "[image 'read_file.jpg' could not be decoded as image/jpeg, so it is not shown]"
+    assert seen[4][1] == "[image 'read_file.jpg' could not be decoded as an image, so it is not shown]"
     assert "file not found" in str(seen[5])
+    assert "image too large to view" in str(seen[6]) and "make a smaller copy first" in str(seen[6])
     # 历史里只存文件引用（ToolImagesToFiles），内容在文件存储里
     [stored, *_] = [
         p for m in await history_of(container, session.id) for p in m.parts if p.part_kind == "tool-return"
