@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import math
 import os
 import re
 import signal
@@ -74,11 +75,13 @@ async def wait_exit_code(proc: asyncio.subprocess.Process) -> int:
 
 
 async def read_until_exit(
-    proc: asyncio.subprocess.Process, readers: Sequence[Callable[[], Awaitable[None]]]
-) -> tuple[int, bool]:
+    proc: asyncio.subprocess.Process,
+    readers: Sequence[Callable[[], Awaitable[None]]],
+    timeout: float = math.inf,  # noqa: ASYNC109  只限进程运行的时间，不限退出后的补读
+) -> tuple[int | None, bool]:
     """以进程退出为准（不是输出管道关闭）：并发跑 readers 读它的输出，进程退出后最多再给它们 DRAIN_SECONDS
     读完，读不完的取消（它留在后台的后代可能一直占着管道）。返回退出码与输出是否读完。前台命令与后台任务共用。
-    readers 的异常照常抛出。"""
+    timeout 内没退出则取消 readers、返回退出码 None（进程由调用方处置）。readers 的异常照常抛出。"""
     all_read = anyio.Event()
     remaining = len(readers)
     if not remaining:
@@ -94,24 +97,25 @@ async def read_until_exit(
     async with anyio.create_task_group() as group:
         for reader in readers:
             group.start_soon(read, reader)
-        async with anyio.create_task_group() as race:
+        with anyio.move_on_after(timeout):
+            async with anyio.create_task_group() as race:
 
-            async def exited() -> None:
-                await wait_exit_code(proc)
-                race.cancel_scope.cancel()
+                async def exited() -> None:
+                    await wait_exit_code(proc)
+                    race.cancel_scope.cancel()
 
-            async def closed() -> None:
-                # 常见情形：退出时管道随之关闭，Process.wait 立即返回，不用等轮询的间隔
+                async def closed() -> None:
+                    # 常见情形：退出时管道随之关闭，Process.wait 立即返回，不用等轮询的间隔
+                    await all_read.wait()
+                    await proc.wait()
+                    race.cancel_scope.cancel()
+
+                race.start_soon(exited)
+                race.start_soon(closed)
+        if proc.returncode is not None:
+            with anyio.move_on_after(DRAIN_SECONDS):
                 await all_read.wait()
-                await proc.wait()
-                race.cancel_scope.cancel()
-
-            race.start_soon(exited)
-            race.start_soon(closed)
-        with anyio.move_on_after(DRAIN_SECONDS):
-            await all_read.wait()
         group.cancel_scope.cancel()
-    assert proc.returncode is not None
     return proc.returncode, all_read.is_set()
 
 
@@ -176,13 +180,19 @@ async def run_bash(
         except (BrokenPipeError, ConnectionResetError):
             # 命令不读 stdin 就退出了：这是正常的（与 communicate 的处理一致），结果看它的退出码与输出
             pass
+        finally:
+            # 没写完就被取消（命令已退出、留下的后代不读）：丢掉没写出的部分并关掉，不留着写端
+            if not proc.stdin.transport.is_closing():
+                proc.stdin.transport.abort()
 
-    async def run() -> tuple[int, bool]:
+    async def run() -> tuple[int | None, bool]:
         # 写入与读取并发：输入大、命令又先输出很多时，顺序进行会让两边的管道都写满而互相等待。
         # 任务组：其中一个意外失败时其余的一起取消，不留在后台；命令退出后不再写（留下的后代可能不读）
         async with anyio.create_task_group() as group:
             group.start_soon(feed)
-            ended = await read_until_exit(proc, [partial(_collect, stream, buf) for stream, buf in streams])
+            ended = await read_until_exit(
+                proc, [partial(_collect, stream, buf) for stream, buf in streams], timeout
+            )
             group.cancel_scope.cancel()
         return ended
 
@@ -193,18 +203,18 @@ async def run_bash(
                 for stream, buf in streams:
                     group.start_soon(_collect, stream, buf)
 
-    exit_code: int | None
     try:
-        with anyio.fail_after(timeout):
-            exit_code, drained = await run()
-    except TimeoutError:
-        kill_group(proc.pid)
-        await drain()
-        exit_code, drained = None, True
+        # timeout 只限命令运行的时间：在时限前退出的，退出后的补读超出时限也照常返回退出码
+        exit_code, drained = await run()
     except BaseException:
         # 被取消（关停、停止一轮）或读写意外失败：不留下还在跑的命令
         kill_group(proc.pid)
         raise
+    if exit_code is None:
+        # 超时：杀掉整个进程组，限时读完杀掉之前写进管道的输出
+        kill_group(proc.pid)
+        await drain()
+        drained = True
     # 命令退出后留在后台的后代不杀（同后台任务）：要脱离会话长跑的东西本来就该这样起，只如实说明输出没读完
     return ShellResult(
         exit_code=exit_code,

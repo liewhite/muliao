@@ -50,6 +50,15 @@ async def test_a_command_ends_when_bash_exits_even_if_a_background_child_keeps_t
     assert (result.exit_code, result.stdout, result.left_running) == (3, "main\n", True)
 
 
+async def test_reading_after_the_exit_does_not_count_against_the_timeout(tmp_path, monkeypatch):
+    """退出在时限前、补读跨过时限：仍是正常退出，后代不被当成超时杀掉。"""
+    import muliao.platform.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "DRAIN_SECONDS", 1.5)
+    result = await run_bash("echo main; sleep 0.5; sleep 10 & exit 3", cwd=tmp_path, secrets={}, timeout=1.2)
+    assert (result.exit_code, result.stdout, result.left_running) == (3, "main\n", True)
+
+
 async def test_a_command_that_closes_its_output_is_fully_read(tmp_path):
     result = await run_bash("sleep 10 >/dev/null 2>&1 & echo done", cwd=tmp_path, secrets={}, timeout=20)
     assert (result.exit_code, result.stdout, result.left_running) == (0, "done\n", False)
