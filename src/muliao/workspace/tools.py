@@ -9,7 +9,7 @@ from pydantic_ai import FunctionToolset, RunContext
 from muliao.agents.api import Vault
 from muliao.errors import InvalidInput
 from muliao.files.api import FileStore
-from muliao.platform.shell import run_bash
+from muliao.platform.shell import LEFT_RUNNING_NOTE, run_bash
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import TerminalBlock, ToolRender, ViewBlock, rendered_by
 from muliao.platform.tooling import RunScope
@@ -156,7 +156,10 @@ async def _run_foreground(
         if result.exit_code is not None
         else f"{_KILLED} {timeout}s timeout"
     )
-    return f"{status}\n{truncate(result.stdout, limits.max_output_chars)}"
+    output = truncate(result.stdout, limits.max_output_chars)
+    if result.left_running:
+        output += f"\n[{LEFT_RUNNING_NOTE}]"
+    return f"{status}\n{output}"
 
 
 # run_shell 结果首行的开头：上面的工具写出、下面的展示规则认出，只在这里定义。首行总是工具自己写的一行状态，

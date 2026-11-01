@@ -34,8 +34,8 @@ from muliao.agents.api import Vault
 from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
-from muliao.platform.output import tail, wait_exit_code
-from muliao.platform.shell import DRAIN_SECONDS, kill_group, spawn_bash
+from muliao.platform.output import tail
+from muliao.platform.shell import DRAIN_SECONDS, LEFT_RUNNING_NOTE, kill_group, read_until_exit, spawn_bash
 from muliao.platform.tasks import Clock, Commit, no_commit
 from muliao.sessions.api import (
     SessionWork,
@@ -299,14 +299,7 @@ class JobRunner:
         proc = handle.proc
         recorder = Recorder(proc, log_file, secrets)
         try:
-            async with anyio.create_task_group() as group:
-                group.start_soon(recorder.run)
-                exit_code = await wait_exit_code(proc)
-                with anyio.move_on_after(DRAIN_SECONDS):
-                    await recorder.done.wait()
-                drained = recorder.done.is_set()
-                # 后代还占着管道时不再等它的输出
-                group.cancel_scope.cancel()
+            exit_code, drained = await read_until_exit(proc, [recorder.run])
         except BaseException:
             # 关停（stop 随后记为被中断）、启动时记录写不进去，或意外失败：进程不随服务退出，在这里杀掉
             kill_group(proc.pid)
@@ -320,13 +313,7 @@ class JobRunner:
             )
             return JobStatus.INTERRUPTED, None, "its output could not be recorded (see server log)"
         ended = JobStatus.KILLED if handle.killed else JobStatus.EXITED
-        if drained:
-            return ended, exit_code, None
-        return (
-            ended,
-            exit_code,
-            "Processes it left running in the background still hold its output; their later output is not recorded.",
-        )
+        return ended, exit_code, None if drained else LEFT_RUNNING_NOTE
 
     async def _finish(
         self, job_id: int, log_file: Path, status: JobStatus, exit_code: int | None, note: str | None

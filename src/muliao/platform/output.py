@@ -1,4 +1,4 @@
-"""托管进程的进程与输出（纯 IO，不碰数据库）：等进程退出、把输出逐块脱敏写进日志、读日志的最后几行。
+"""托管进程的输出（纯 IO，不碰数据库）：把输出逐块脱敏写进日志、读日志的最后几行（等进程退出在 platform.shell）。
 后台任务（jobs）与流式触发器（triggers.stream）共用。"""
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from muliao.platform.shell import redact
 CHUNK = 65536
 _TAIL_LINES = 30
 _TAIL_BYTES = 16384
-_EXIT_POLL_SECONDS = 0.2
 
 
 def tail(path: Path) -> str:
@@ -30,15 +29,6 @@ def tail(path: Path) -> str:
         # 第一行可能被截在中间
         lines = lines[1:]
     return "\n".join(lines[-_TAIL_LINES:])
-
-
-async def wait_exit_code(proc: asyncio.subprocess.Process) -> int:
-    """进程退出时的退出码。不用 Process.wait()：在进程退出前开始等的话，它要等所有管道都关闭才返回（CPython
-    base_subprocess 只在管道全部断开后唤醒等待者），后代一直占着管道就一直等。returncode 在进程退出时就已设置。"""
-    # 轮询：退出的通知（协议的 process_exited）只在 asyncio 内部对象上，不为它去碰私有属性
-    while proc.returncode is None:  # noqa: ASYNC110
-        await asyncio.sleep(_EXIT_POLL_SECONDS)
-    return proc.returncode
 
 
 def _safe_cut(text: str, cut: int, secrets: Mapping[str, str]) -> int:

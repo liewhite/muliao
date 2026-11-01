@@ -212,9 +212,9 @@ async def test_background_runs_have_no_timeout_argument(container, make_agent, m
 async def test_a_job_ends_when_its_process_exits_even_if_a_grandchild_keeps_the_output_open(
     container, make_agent, models, monkeypatch
 ):
-    import muliao.workspace.runner as jobs_module
+    import muliao.platform.shell as shell_module
 
-    monkeypatch.setattr(jobs_module, "DRAIN_SECONDS", 0.3)
+    monkeypatch.setattr(shell_module, "DRAIN_SECONDS", 0.3)
     # 留在后台的孙进程继承了输出管道：等管道关闭就要等它 30 秒
     _session, job, recorder, _agent = await start_job(
         container, make_agent, models, "echo main; sleep 30 & exit 0"

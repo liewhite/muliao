@@ -6,8 +6,6 @@ import asyncio
 from collections.abc import Mapping
 from pathlib import Path
 
-import anyio
-
 from muliao.platform.output import record_output
 from muliao.platform.shell import kill_group
 
@@ -19,7 +17,6 @@ class Recorder:
         self._proc = proc
         self._log_file = log_file
         self._secrets = secrets
-        self.done = anyio.Event()
         self.error: Exception | None = None
 
     async def run(self) -> None:
@@ -29,5 +26,3 @@ class Recorder:
         except Exception as e:
             self.error = e
             kill_group(self._proc.pid)
-        finally:
-            self.done.set()

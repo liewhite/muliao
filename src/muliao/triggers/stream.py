@@ -45,8 +45,8 @@ from muliao.errors import NotFound
 from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Messaging
-from muliao.platform.output import CHUNK, record_output, tail, wait_exit_code
-from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash
+from muliao.platform.output import CHUNK, record_output, tail
+from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash, wait_exit_code
 from muliao.platform.tasks import Clock
 from muliao.sessions.api import SessionActivity, WorkState
 from muliao.triggers.service import (

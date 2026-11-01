@@ -35,6 +35,26 @@ async def test_secrets_are_redacted_from_both_streams(tmp_path):
     assert result.stdout.strip() == result.stderr.strip() == "[secret:TOKEN]"
 
 
+async def test_a_command_ends_when_bash_exits_even_if_a_background_child_keeps_the_output_open(
+    tmp_path, monkeypatch
+):
+    """#337：前台以进程退出为准（同后台任务），不等留在后台的子进程关闭管道、一直挂到 timeout。"""
+    import time
+
+    import muliao.platform.shell as shell_module
+
+    monkeypatch.setattr(shell_module, "DRAIN_SECONDS", 0.3)
+    started = time.monotonic()
+    result = await run_bash("echo main; sleep 10 & exit 3", cwd=tmp_path, secrets={}, timeout=20)
+    assert time.monotonic() - started < 5
+    assert (result.exit_code, result.stdout, result.left_running) == (3, "main\n", True)
+
+
+async def test_a_command_that_closes_its_output_is_fully_read(tmp_path):
+    result = await run_bash("sleep 10 >/dev/null 2>&1 & echo done", cwd=tmp_path, secrets={}, timeout=20)
+    assert (result.exit_code, result.stdout, result.left_running) == (0, "done\n", False)
+
+
 def test_a_secret_containing_another_secret_is_redacted_whole():
     from muliao.platform.shell import redact
 
