@@ -3,13 +3,13 @@ import { Dropdown, Label, SearchField } from '@heroui/react'
 import { selectVariants } from '@heroui/styles'
 import { ChevronDown, Folder } from 'lucide-react'
 import { Autocomplete } from 'react-aria-components'
-import { groupAgents, searchAgents } from './agentGroups'
+import { groupAgents, searchAgents, selectableAgents } from './agentGroups'
 import type { Agent } from './api'
 
 /**
  * 选 agent：一级菜单是各分组（悬停/点击展开二级列表）和未分组的 agent；
  * 有搜索词时不分级，平铺按名称/描述匹配到的 agent 并标出分组。描述只显示一行，完整内容在 title 提示里。
- * agents 里归档的只用于显示当前已选的值，不进菜单。
+ * agents 传完整列表：菜单只列可选的（selectableAgents）；当前值归档了（如从它的详情页带 ?agent= 进来）仍显示在按钮上，由服务端在使用时拒绝并说明。
  */
 export function AgentPicker({
   label,
@@ -26,9 +26,11 @@ export function AgentPicker({
   placeholder?: string
 }) {
   const labelId = useId()
+  const valueId = useId()
   const [query, setQuery] = useState('')
   const current = agents.find((a) => a.id === value)
-  const active = agents.filter((a) => a.archived_at === null)
+  const active = selectableAgents(agents)
+  const selected = value === null ? [] : [value]
   const searching = query.trim() !== ''
   const slots = selectVariants({ variant: 'secondary', fullWidth: true })
 
@@ -41,8 +43,8 @@ export function AgentPicker({
     <div className={slots.base()}>
       <Label id={labelId}>{label}</Label>
       <Dropdown onOpenChange={(open) => !open && setQuery('')}>
-        <Dropdown.Trigger aria-labelledby={labelId} className={slots.trigger()}>
-          <span className={`${slots.value()} flex min-w-0 items-center gap-2`}>
+        <Dropdown.Trigger aria-labelledby={`${labelId} ${valueId}`} className={slots.trigger()}>
+          <span id={valueId} className={`${slots.value()} flex min-w-0 items-center gap-2`}>
             {current ? (
               <>
                 <span className="truncate">{current.name}</span>
@@ -66,12 +68,14 @@ export function AgentPicker({
             <Dropdown.Menu
               aria-label={label}
               className="max-h-96 overflow-y-auto"
+              selectionMode="single"
+              selectedKeys={selected}
               renderEmptyState={() => <EmptyMenu />}
             >
               {searching ? (
                 searchAgents(active, query).map((a) => <AgentItem key={a.id} agent={a} showGroup onChoose={choose} />)
               ) : (
-                <AgentTree agents={active} onChoose={choose} />
+                <AgentTree agents={active} selected={selected} onChoose={choose} />
               )}
             </Dropdown.Menu>
           </Autocomplete>
@@ -82,7 +86,15 @@ export function AgentPicker({
 }
 
 /** 未搜索时的级联菜单：分组在前（展开为二级菜单），未分组的 agent 与分组同级排在后面 */
-function AgentTree({ agents, onChoose }: { agents: Agent[]; onChoose: (id: string) => void }) {
+function AgentTree({
+  agents,
+  selected,
+  onChoose,
+}: {
+  agents: Agent[]
+  selected: string[]
+  onChoose: (id: string) => void
+}) {
   const { groups, ungrouped } = groupAgents(agents)
   return (
     <>
@@ -95,7 +107,12 @@ function AgentTree({ agents, onChoose }: { agents: Agent[]; onChoose: (id: strin
             <Dropdown.SubmenuIndicator />
           </Dropdown.Item>
           <Dropdown.Popover className="w-[min(24rem,85vw)]">
-            <Dropdown.Menu aria-label={g.name} className="max-h-96 overflow-y-auto">
+            <Dropdown.Menu
+              aria-label={g.name}
+              className="max-h-96 overflow-y-auto"
+              selectionMode="single"
+              selectedKeys={selected}
+            >
               {g.agents.map((a) => (
                 <AgentItem key={a.id} agent={a} onChoose={onChoose} />
               ))}
@@ -128,6 +145,7 @@ function AgentItem({
         </span>
         {agent.description && <span className="truncate text-xs text-muted">{agent.description}</span>}
       </div>
+      <Dropdown.ItemIndicator />
     </Dropdown.Item>
   )
 }

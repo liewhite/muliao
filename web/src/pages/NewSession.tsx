@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { Card } from '@heroui/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AgentPicker } from '../AgentPicker'
-import { selectableAgents } from '../agentGroups'
 import { api, asAgentId, sessionRoute } from '../api'
 import { AttachButton, PendingUploads, useUploads } from '../attachments'
 import { appendTranscript, useVoiceInput } from '../voice'
@@ -49,8 +48,7 @@ export default function NewSession() {
                   label="Agent"
                   value={agent}
                   onChange={setAgent}
-                  // 归档的不能对话；从它的详情页带 ?agent= 进来时留着显示，开始时由服务端拒绝并说明
-                  agents={selectableAgents(list, agent)}
+                  agents={list}
                 />
                 <div onPaste={uploads.onPaste}>
                   <TextAreaInput label="消息" value={prompt} onChange={setPrompt} rows={6} autoFocus onSubmit={() => void start()} />
