@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { groupAgents, selectableAgents } from './agentGroups'
+import { groupAgents, searchAgents, selectableAgents } from './agentGroups'
 import { asAgentId, type Agent } from './api'
 
-function agent(name: string, group: string | null = null, archived = false): Agent {
+function agent(name: string, group: string | null = null, archived = false, description = ''): Agent {
   return {
     id: asAgentId(name),
     name,
-    description: '',
+    description,
     model: 'p:m',
     roles: [],
     allow: [],
@@ -36,6 +36,21 @@ describe('groupAgents', () => {
       ['zhu', ['b', 'f']],
     ])
     expect(g.archived.map((a) => a.name)).toEqual(['d', 'e'])
+  })
+})
+
+describe('searchAgents', () => {
+  const list = [agent('Slack-Hub', null, false, 'Slack 消息分发'), agent('trader', 'zhu', false, '量化交易'), agent('ops', 'zhu')]
+
+  it('matches name or description case-insensitively, keeping order', () => {
+    expect(searchAgents(list, 'slack').map((a) => a.name)).toEqual(['Slack-Hub'])
+    expect(searchAgents(list, ' 交易 ').map((a) => a.name)).toEqual(['trader'])
+    expect(searchAgents(list, 'A').map((a) => a.name)).toEqual(['Slack-Hub', 'trader'])
+  })
+
+  it('returns nothing for a blank query or no match', () => {
+    expect(searchAgents(list, '  ')).toEqual([])
+    expect(searchAgents(list, 'zzz')).toEqual([])
   })
 })
 

@@ -30,6 +30,13 @@ export function groupAgents(agents: Agent[]): AgentGroups {
   }
 }
 
+/** 按名称或描述搜索（不区分大小写、去首尾空格），保持输入顺序；空搜索词返回空列表（调用方此时展示分组菜单） */
+export function searchAgents(agents: Agent[], query: string): Agent[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return []
+  return agents.filter((a) => a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q))
+}
+
 /** 可以选来派活（新会话、指派、负责、触发器）的 agent：不含归档的；keep 是当前已选的值，归档了也留着以便显示 */
 export function selectableAgents(agents: Agent[] | undefined, keep?: string | null): Agent[] {
   return (agents ?? []).filter((a) => a.archived_at === null || a.id === keep)

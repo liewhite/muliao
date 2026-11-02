@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Card } from '@heroui/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { AgentPicker } from '../AgentPicker'
 import { selectableAgents } from '../agentGroups'
 import { api, asAgentId, sessionRoute } from '../api'
 import { AttachButton, PendingUploads, useUploads } from '../attachments'
 import { appendTranscript, useVoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
-import { ActionButton, EmptyHint, ErrorAlert, LinkButton, Loading, Page, SelectInput, TextAreaInput, useAction, useAgents } from '../ui'
+import { ActionButton, EmptyHint, ErrorAlert, LinkButton, Loading, Page, TextAreaInput, useAction, useAgents } from '../ui'
 
 export default function NewSession() {
   const [params] = useSearchParams()
@@ -44,13 +45,12 @@ export default function NewSession() {
           ) : (
             <Card>
               <Card.Content className="flex flex-col gap-4">
-                <SelectInput
+                <AgentPicker
                   label="Agent"
                   value={agent}
                   onChange={setAgent}
-                  placeholder="选择 agent"
                   // 归档的不能对话；从它的详情页带 ?agent= 进来时留着显示，开始时由服务端拒绝并说明
-                  options={selectableAgents(list, agent).map((a) => ({ id: a.id, label: a.name, description: a.description }))}
+                  agents={selectableAgents(list, agent)}
                 />
                 <div onPaste={uploads.onPaste}>
                   <TextAreaInput label="消息" value={prompt} onChange={setPrompt} rows={6} autoFocus onSubmit={() => void start()} />
