@@ -232,6 +232,10 @@ export const agentRoute = (id: AgentId) => `/agents/${id}`
 /** 会话页；通知点开的地址由后端 notifications.tables.Notification.url 生成，与它一致 */
 export const sessionRoute = (id: string) => `/sessions/${id}`
 export const newSessionRoute = (agentId: AgentId) => `/new?${new URLSearchParams({ agent: agentId })}`
+/** agent 自定义页面的界面路由（页面本身在沙箱 iframe 里按接口给的签名地址打开） */
+export const sitePageRoute = (agentId: AgentId, name: string) =>
+  `/pages/${encodeURIComponent(agentId)}/${encodeURIComponent(name)}`
+export type SitePage = WithAgentId<Schemas['SitePageOut'], 'agent_id'>
 /** agent 工作目录里一个文件的内容（path 相对工作目录）：图片可直接内联，其余作为附件下载 */
 export const workspaceFileUrl = (agentId: AgentId, path: string) =>
   `/api/agents/${encodeURIComponent(agentId)}/workspace/file?${new URLSearchParams({ path })}`
@@ -278,6 +282,8 @@ export const api = {
   /** 工作目录里一个文件的内容（响应体是文件本身，接口描述里没有 JSON 响应体） */
   workspaceFile: (agent_id: AgentId, path: string) =>
     send<Blob>('GET', workspaceFileUrl(agent_id, path), undefined, undefined, true),
+  /** 全部 agent 的自定义页面（工作目录 site/<名>/index.html），各带打开它的签名地址 */
+  pages: () => branded<SitePage[]>(call('get', '/api/pages')),
   /** 服务端配置决定的可选能力（如语音输入） */
   features: () => call('get', '/api/features'),
   /** 服务端配置的 LLM provider 名 */

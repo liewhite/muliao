@@ -31,6 +31,15 @@ class Auth:
         payload = f"{_VERSION}.{int(now if now is not None else time.time())}"
         return f"{payload}.{self._sign(payload)}"
 
+    def sign_site(self, agent_id: str, page: str) -> str:
+        """agent 页面的签名 URL 段（api/sites.py）：页面在沙箱里跑、拿不到登录 cookie，凭它访问；与 cookie 同一把
+        key，改了密码一并失效。"""
+        return self._sign(f"site.{agent_id}/{page}")
+
+    def verify_site(self, agent_id: str, page: str, sig: str) -> bool:
+        # 按字节比：URL 里的签名可能含非 ASCII 字符，compare_digest 比 str 时会抛 TypeError
+        return hmac.compare_digest(sig.encode(), self.sign_site(agent_id, page).encode())
+
     def verify(self, token: str, now: float | None = None) -> bool:
         parts = token.split(".")
         if len(parts) != 3 or parts[0] != _VERSION or not parts[1].isdigit():

@@ -7,6 +7,7 @@ import {
   Bot,
   Boxes,
   KanbanSquare,
+  LayoutDashboard,
   MessageSquare,
   Plus,
   ScrollText,
@@ -36,6 +37,7 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
     title: '运行',
     items: [
       { to: '/agents', label: 'Agents', Icon: Bot },
+      { to: '/pages', label: '页面', Icon: LayoutDashboard },
       { to: '/tasks', label: '任务与失败记录', Icon: Activity },
       { to: '/usage', label: 'Token 用量', Icon: BarChart3 },
     ],

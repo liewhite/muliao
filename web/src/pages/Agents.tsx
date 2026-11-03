@@ -31,6 +31,7 @@ import { PermissionsInput } from './Permissions'
 import { MemoryEditor } from './Memory'
 import { HistoryList } from './History'
 import { WorkspaceBrowser } from './Workspace'
+import { SitePageList } from './SitePages'
 import { refreshUnreadLogged } from '../unread'
 import { announceChange } from '../events'
 import { groupAgents } from '../agentGroups'
@@ -281,6 +282,7 @@ const DETAIL_TABS = [
   ['memory', '记忆'],
   ['history', '历史'],
   ['files', '文件'],
+  ['pages', '页面'],
 ] as const
 
 export function AgentDetail() {
@@ -432,6 +434,9 @@ export function AgentDetail() {
             </Tabs.Panel>
             <Tabs.Panel id="files" className="pt-3">
               <WorkspaceBrowser agent={a.id} />
+            </Tabs.Panel>
+            <Tabs.Panel id="pages" className="pt-3">
+              <SitePageList agent={a.id} />
             </Tabs.Panel>
           </Tabs>
         )}

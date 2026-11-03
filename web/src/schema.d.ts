@@ -1238,6 +1238,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Pages
+         * @description 全部 agent 的页面：按 agent 列表的顺序，各自按页面名排序。
+         */
+        get: operations["list_pages_api_pages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/me": {
         parameters: {
             query?: never;
@@ -2624,6 +2644,22 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** SitePageOut */
+        SitePageOut: {
+            /** Agent Id */
+            agent_id: string;
+            /** Name */
+            name: string;
+            /** Title */
+            title: string;
+            /**
+             * Modified
+             * Format: date-time
+             */
+            modified: string;
+            /** Url */
+            url: string;
         };
         /** SkillDetail */
         SkillDetail: {
@@ -5664,6 +5700,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeaturesOut"];
+                };
+            };
+        };
+    };
+    list_pages_api_pages_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SitePageOut"][];
                 };
             };
         };

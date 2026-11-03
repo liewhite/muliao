@@ -3530,6 +3530,29 @@
         }
       }
     },
+    "/api/pages": {
+      "get": {
+        "summary": "List Pages",
+        "description": "全部 agent 的页面：按 agent 列表的顺序，各自按页面名排序。",
+        "operationId": "list_pages_api_pages_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SitePageOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Pages Api Pages Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/me": {
       "get": {
         "summary": "Me",
@@ -7284,6 +7307,40 @@
           "updated_at"
         ],
         "title": "SessionOut"
+      },
+      "SitePageOut": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "modified": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Modified"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "name",
+          "title",
+          "modified",
+          "url"
+        ],
+        "title": "SitePageOut"
       },
       "SkillDetail": {
         "properties": {

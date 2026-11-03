@@ -16,6 +16,7 @@ import GlobalMemory from './pages/Memory'
 import NewSession from './pages/NewSession'
 import Notifications from './pages/Notifications'
 import SessionView from './pages/SessionView'
+import SitePages, { SitePageView } from './pages/SitePages'
 import Sessions from './pages/Sessions'
 import { SkillEditor } from './pages/Skills'
 import UsagePage from './pages/Usage'
@@ -219,6 +220,8 @@ function Shell() {
                 <Route path="/mcp" element={<Navigate to="/items?kind=mcp" replace />} />
                 <Route path="/vault" element={<Navigate to="/items?kind=secret" replace />} />
                 <Route path="/tasks" element={<Tasks />} />
+                <Route path="/pages" element={<SitePages />} />
+                <Route path="/pages/:agent/:name" element={<SitePageView />} />
                 <Route path="/usage" element={<UsagePage />} />
                 <Route path="/login" element={<Navigate to="/" replace />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

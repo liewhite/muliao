@@ -26,6 +26,7 @@ from muliao.api import (
     notifications,
     push,
     sessions,
+    sites,
     speech,
     tasks,
     triggers,
@@ -139,6 +140,7 @@ def _private_routes() -> APIRouter:
     router.include_router(history.router)
     router.include_router(speech.router)
     router.include_router(features.router)
+    router.include_router(sites.router)
 
     @router.get("/auth/me", status_code=204)
     async def me() -> None:
@@ -215,6 +217,8 @@ def _install_api(app: FastAPI) -> None:
     app.include_router(_public_routes())
     # webhook 的事件入口凭触发器 token 鉴权，不走登录
     app.include_router(webhook.public_router)
+    # agent 的页面在沙箱里跑、拿不到 cookie，凭签名 URL 访问
+    app.include_router(sites.public_router)
     app.include_router(_private_routes())
 
 
