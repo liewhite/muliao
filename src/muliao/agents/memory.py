@@ -20,7 +20,9 @@ from muliao.platform.db import Database
 
 
 class MemoryFull(InvalidInput):
-    pass
+    def __init__(self, message: str, current: str):
+        super().__init__(message)
+        self.current = current  # 当时的记忆正文：memory_edit 的报错附上它
 
 
 def revision_name(agent_id: str | None) -> str:
@@ -108,7 +110,7 @@ class MemoryStore:
         try:
             return await self._update(agent_id, apply, actor, described(reason, _label(agent_id)))
         except MemoryFull as e:
-            raise MemoryFull(f"{e}\n\n{_current_text(await self.read(agent_id))}") from e
+            raise MemoryFull(f"{e}\n\n{_current_text(e.current)}", e.current) from e
 
     async def restore(self, agent_id: str | None, rev: int, actor: str) -> str:
         """把第 rev 版的正文作为新的一版写入，读版本与写入在同一个事务里。"""
@@ -137,7 +139,8 @@ class MemoryStore:
                     f"{'global memory' if agent_id is None else 'your memory'} would be {len(updated)} chars, limit is {self.max_chars} "
                     f"(now {len(current)}): free at least {over} chars first by condensing or deleting "
                     f"existing entries with {'memory_edit_public' if agent_id is None else 'memory_edit'} "
-                    "(aim for a few hundred chars of headroom), then retry"
+                    "(aim for a few hundred chars of headroom), then retry",
+                    current,
                 )
             if row is None:
                 # 全局记忆从未写过：写成空串什么都没变，不建行
@@ -152,14 +155,13 @@ class MemoryStore:
 
 
 def _current_text(current: str) -> str:
-    """报错里附的当前全文：按 read_file 的 cat -n 格式编号，报错里说的行号才对得上。"""
+    """报错里附的当前全文：cat -n 编号，分行同 text_edit.miss（splitlines），报错里说的行号才对得上。"""
     if not current:
         return "The memory is currently empty."
-    numbered = "\n".join(f"{i:>6}\t{line}" for i, line in enumerate(current.split("\n"), 1))
     return (
         "The memory may have changed since your run started (the copy in your instructions is not updated). "
         "Its current text follows, each line prefixed with its line number and a tab (not part of the text); "
-        f"copy old_text from it:\n{numbered}"
+        f"edit against this text:\n{text_edit.numbered(current.splitlines())}"
     )
 
 

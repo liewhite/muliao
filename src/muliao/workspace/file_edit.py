@@ -10,6 +10,7 @@ from typing import Protocol
 
 from muliao.errors import InvalidInput
 from muliao.platform.text_edit import Splice, locate_once, miss, occurrences, splice
+from muliao.platform.text_edit import numbered as text_numbered
 
 # 带行号展示时单行的上限：一行压缩过的 JS/JSON 能吃掉整个输出预算
 MAX_LINE_CHARS = 2000
@@ -261,9 +262,8 @@ def changed_ranges(before: str, after: str, context: int) -> list[tuple[int, int
 
 
 def numbered(lines: list[str], start: int, end: int) -> str:
-    """lines[start:end]，按 `cat -n` 的格式：1 起算的行号右对齐占 6 列，后跟一个制表符（read_file、edit_file 的回显与
-    报错同一格式，模型拿来就认得），过长的行截断。"""
-    return "\n".join(f"{i + 1:6}\t{_clip(lines[i])}" for i in range(start, end))
+    """lines[start:end]，按 `cat -n` 的格式（text_edit.numbered，行号 1 起算），过长的行截断。"""
+    return text_numbered([_clip(line) for line in lines[start:end]], start + 1)
 
 
 def _clip(line: str) -> str:

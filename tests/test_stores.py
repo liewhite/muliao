@@ -367,8 +367,9 @@ async def test_hidden_and_dependency_directories_are_skipped_whole(tmp_path):
 async def test_memory_edit_with_nothing_to_append_is_rejected_and_unchanged(container, make_agent):
     alpha = (await make_agent("alpha")).id
     await container.memory.edit(alpha, "", "- kept", alpha)
-    with pytest.raises(InvalidInput, match="new_text is empty"):
+    with pytest.raises(InvalidInput, match="new_text is empty") as raised:
         await container.memory.edit(alpha, "", "  ", alpha)
+    assert "- kept" not in str(raised.value)  # 与原文无关，不附全文
     assert await container.memory.read(alpha) == "- kept\n"
 
 
@@ -378,7 +379,7 @@ async def test_memory_edit_mismatch_shows_the_current_text(container, make_agent
     await container.memory.edit(alpha, "", "- changed elsewhere", alpha)
     with pytest.raises(InvalidInput) as raised:
         await container.memory.edit(alpha, "- as in my snapshot", "- new", alpha)
-    assert "     1\t- changed elsewhere\n" in str(raised.value)
+    assert str(raised.value).endswith("\n     1\t- changed elsewhere")
     assert await container.memory.read(alpha) == "- changed elsewhere\n"
 
 
@@ -387,4 +388,4 @@ async def test_memory_edit_over_the_limit_shows_the_current_text(container, make
     await container.memory.edit(alpha, "", "- old entry", alpha)
     with pytest.raises(MemoryFull) as raised:
         await container.memory.edit(alpha, "", "x" * container.memory.max_chars, alpha)
-    assert "     1\t- old entry\n" in str(raised.value)
+    assert str(raised.value).endswith("\n     1\t- old entry")

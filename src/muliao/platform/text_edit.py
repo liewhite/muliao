@@ -85,6 +85,12 @@ def append(current: str, entry: str) -> str:
     return f"{current.rstrip()}\n\n{entry}\n" if current.strip() else f"{entry}\n"
 
 
+def numbered(lines: Sequence[str], first: int = 1) -> str:
+    """按 `cat -n` 的格式编号：行号（第一行为 first）右对齐占 6 列，后跟一个制表符。带行号的内容（read_file、edit_file 的回显与报错、
+    memory_edit 报错里的全文）都用它，模型拿来就认得。"""
+    return "\n".join(f"{i:6}\t{line}" for i, line in enumerate(lines, first))
+
+
 def listed(line_numbers: list[int]) -> str:
     """报错里「在哪几行」的列表，最多列 20 个。"""
     return ", ".join(map(str, line_numbers[:20])) + (" …" if len(line_numbers) > 20 else "")
