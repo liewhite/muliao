@@ -23,9 +23,24 @@ def _is_inline(media_type: str) -> bool:
     return media_type in INLINE_IMAGE_TYPES
 
 
-def _real(p: Path) -> Path:
+def real(p: Path) -> Path:
+    """解析符号链接后的路径。"""
     # 不用 Path.resolve()：3.12 遇到循环链接抛 RuntimeError；realpath 原样返回，之后的 exists / stat 自然失败
     return Path(os.path.realpath(p))
+
+
+def resolve_within(root: Path, path: str) -> Path:
+    """root（已解析）下的相对 posix 路径 path，解析符号链接后必须仍在 root 内，否则 InvalidInput；不查是否存在。"""
+    # 文件系统接口遇到 NUL 直接抛 ValueError
+    if "\0" in path:
+        raise InvalidInput(f"path contains a NUL character: {path!r}")
+    rel = PurePosixPath(path)
+    if rel.is_absolute():
+        raise InvalidInput(f"path must be relative: {path!r}")
+    target = real(root / rel)
+    if not target.is_relative_to(root):
+        raise InvalidInput(f"path is outside its directory: {path!r}")
+    return target
 
 
 @dataclass(frozen=True)
@@ -55,18 +70,10 @@ class WorkspaceFiles:
 
     def _resolve(self, agent_id: str, path: str) -> tuple[Path, Path]:
         """(工作目录, 目标)，都已解析符号链接。"""
-        # 文件系统接口遇到 NUL 直接抛 ValueError
-        if "\0" in path:
-            raise InvalidInput(f"path contains a NUL character: {path!r}")
-        rel = PurePosixPath(path)
-        if rel.is_absolute():
-            raise InvalidInput(f"path must be relative to the workspace: {path!r}")
-        root = _real(self._workspace_of(agent_id))
+        root = real(self._workspace_of(agent_id))
         if not root.is_dir():
             raise NotFound(f"agent {agent_id!r} has no workspace")
-        target = _real(root / rel)
-        if not target.is_relative_to(root):
-            raise InvalidInput(f"path is outside the workspace: {path!r}")
+        target = resolve_within(root, path)
         if not target.exists():
             raise NotFound(f"no such file in the workspace: {path!r}")
         return root, target
@@ -78,7 +85,7 @@ class WorkspaceFiles:
             raise InvalidInput(f"not a directory: {path!r}")
         entries = []
         for child in target.iterdir():
-            if not _real(child).is_relative_to(root):
+            if not real(child).is_relative_to(root):
                 continue
             try:
                 st = child.stat()

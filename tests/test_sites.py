@@ -2,6 +2,9 @@
 
 import os
 
+import pytest
+
+from muliao.errors import NotFound
 from tests.conftest import login
 
 
@@ -103,10 +106,41 @@ async def test_pages_linking_outside_the_workspace_are_not_listed(container, mak
     assert (await client.get("/api/pages")).json() == []
 
 
-async def test_subdirectories_serve_their_index(container, make_agent):
+async def test_a_directory_with_trailing_slash_serves_its_index(container, make_agent, client):
     agent, root = await _site(container, make_agent)
     d = _page(root, "mon")
     (d / "sub").mkdir()
     (d / "sub" / "index.html").write_text("inner")
-    assert container.container.sites.file(agent, "mon", "sub").path == (d / "sub" / "index.html").resolve()
-    assert container.container.sites.file(agent, "mon", "").path.name == "index.html"
+    await login(client)
+    url = (await client.get("/api/pages")).json()[0]["url"]
+
+    assert (await client.get(url + "sub/")).text == "inner"
+    # 不带 / 的目录不补 index：页面里的相对路径会解析到上一级
+    assert (await client.get(url + "sub")).status_code == 404
+
+
+async def test_index_files_linking_outside_are_neither_listed_nor_served(
+    container, make_agent, client, tmp_path
+):
+    agent, root = await _site(container, make_agent)
+    outside = tmp_path / "out.html"
+    outside.write_text("<title>secret</title>")
+    d = _page(root, "mon")
+    (d / "sub").mkdir()
+    os.symlink(outside, d / "sub" / "index.html")
+    ext = root / "site" / "ext"
+    ext.mkdir()
+    os.symlink(outside, ext / "index.html")
+    # 页面目录必须在 site 内：指回工作目录根的不算页面
+    (root / "index.html").write_text("root")
+    os.symlink(root, root / "site" / "up")
+    await login(client)
+
+    pages = (await client.get("/api/pages")).json()
+    assert [p["name"] for p in pages] == ["mon"]
+    resp = await client.get(pages[0]["url"] + "sub/")
+    assert resp.status_code == 422
+    with pytest.raises(NotFound):
+        container.container.sites.file(agent, "ext", "")
+    with pytest.raises(NotFound):
+        container.container.sites.file(agent, "up", "")

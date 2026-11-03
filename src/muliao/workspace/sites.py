@@ -9,15 +9,14 @@ agent 写的，HTTP 层按不可信内容托管（沙箱、不同源，见 api/s
 """
 
 import html
-import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-from muliao.errors import InvalidInput, NotFound
-from muliao.workspace.browse import WorkspaceFile, media_type_of
+from muliao.errors import NotFound
+from muliao.workspace.browse import WorkspaceFile, media_type_of, real, resolve_within
 
 SITE_DIR = "site"
 INDEX = "index.html"
@@ -34,10 +33,6 @@ class SitePage:
     modified: datetime
 
 
-def _real(p: Path) -> Path:
-    return Path(os.path.realpath(p))
-
-
 def _title_of(index: Path, fallback: str) -> str:
     with index.open("rb") as f:
         head = f.read(_TITLE_SCAN_BYTES)
@@ -46,61 +41,65 @@ def _title_of(index: Path, fallback: str) -> str:
     return " ".join(title.split()) or fallback
 
 
+def _page_of(site: Path, name: str) -> tuple[Path, Path] | None:
+    """site 下名为 name 的页面：(页面目录, index.html)，都已解析符号链接；页面目录必须在 site 内、index.html 必须在
+    页面目录内且是文件，否则不是页面。"""
+    if name in ("", ".", "..") or "/" in name or "\0" in name:
+        return None
+    page_dir = real(site / name)
+    if page_dir == site or not page_dir.is_relative_to(site):
+        return None
+    index = real(page_dir / INDEX)
+    if not index.is_relative_to(page_dir) or not index.is_file():
+        return None
+    return page_dir, index
+
+
 class Sites:
     def __init__(self, workspace_of: Callable[[str], Path]):
         self._workspace_of = workspace_of
 
-    def _site_root(self, agent_id: str) -> tuple[Path, Path]:
-        """(工作目录, site 目录)，都已解析符号链接；site 目录可能不存在。"""
-        root = _real(self._workspace_of(agent_id))
-        return root, _real(root / SITE_DIR)
+    def _site(self, agent_id: str) -> Path | None:
+        """site 目录（已解析符号链接）；没有或不在工作目录内为 None。"""
+        root = real(self._workspace_of(agent_id))
+        site = real(root / SITE_DIR)
+        return site if site.is_relative_to(root) and site.is_dir() else None
 
     def pages(self, agent_id: str) -> list[SitePage]:
         """agent 的全部页面，按名称排序：site 下每个含 index.html 的子目录。没有 site 目录就是没有页面；
-        指向工作目录外的符号链接不算。"""
-        root, site = self._site_root(agent_id)
-        if not site.is_relative_to(root) or not site.is_dir():
+        与工作目录浏览一样，读不了（stat、读标题时出错，如正被删除）的不列出。"""
+        site = self._site(agent_id)
+        if site is None:
             return []
         pages = []
         for d in site.iterdir():
-            real = _real(d)
-            index = real / INDEX
-            if not real.is_relative_to(root) or not index.is_file():
-                continue
-            mtimes = []
-            for f in real.iterdir():
-                try:
-                    if f.is_file():
-                        mtimes.append(f.stat().st_mtime)
-                except OSError:
+            try:
+                found = _page_of(site, d.name)
+                if found is None:
                     continue
-            pages.append(
-                SitePage(
-                    name=d.name,
-                    title=_title_of(index, d.name),
-                    modified=datetime.fromtimestamp(max(mtimes), UTC),
+                page_dir, index = found
+                # index.html 一定在内：时间至少有一个
+                modified = max(f.stat().st_mtime for f in page_dir.iterdir() if f.is_file())
+                pages.append(
+                    SitePage(
+                        name=d.name,
+                        title=_title_of(index, d.name),
+                        modified=datetime.fromtimestamp(modified, UTC),
+                    )
                 )
-            )
+            except (OSError, ValueError):
+                continue
         return sorted(pages, key=lambda p: p.name)
 
     def file(self, agent_id: str, page: str, path: str) -> WorkspaceFile:
-        """页面目录里的一个文件；path 为空或指向目录时取其中的 index.html。"""
-        if "\0" in page or "\0" in path:
-            raise InvalidInput("path contains a NUL character")
-        if page in ("", ".", "..") or "/" in page:
-            raise InvalidInput(f"not a page name: {page!r}")
-        rel = PurePosixPath(path)
-        if rel.is_absolute():
-            raise InvalidInput(f"path must be relative to the page: {path!r}")
-        root, site = self._site_root(agent_id)
-        page_dir = _real(site / page)
-        if not page_dir.is_relative_to(root) or not (page_dir / INDEX).is_file():
+        """页面目录里的一个文件；path 为空或以 / 结尾时取那一层的 index.html（不带 / 的目录不补：页面里的相对路径
+        会解析到上一级）。"""
+        site = self._site(agent_id)
+        found = None if site is None else _page_of(site, page)
+        if found is None:
             raise NotFound(f"agent {agent_id!r} has no page {page!r}")
-        target = _real(page_dir / rel)
-        if not target.is_relative_to(page_dir):
-            raise InvalidInput(f"path is outside the page: {path!r}")
-        if target.is_dir():
-            target = target / INDEX
+        page_dir, _ = found
+        target = resolve_within(page_dir, path + INDEX if path == "" or path.endswith("/") else path)
         if not target.is_file():
             raise NotFound(f"no such file in page {page!r}: {path!r}")
         return WorkspaceFile(target, media_type_of(target.name))
