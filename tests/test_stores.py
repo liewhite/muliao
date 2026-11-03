@@ -370,3 +370,21 @@ async def test_memory_edit_with_nothing_to_append_is_rejected_and_unchanged(cont
     with pytest.raises(InvalidInput, match="new_text is empty"):
         await container.memory.edit(alpha, "", "  ", alpha)
     assert await container.memory.read(alpha) == "- kept\n"
+
+
+async def test_memory_edit_mismatch_shows_the_current_text(container, make_agent):
+    # 指令里的记忆是运行开始时的快照：别的会话改过之后，报错里的全文是模型唯一能读到最新内容的地方（#349）
+    alpha = (await make_agent("alpha")).id
+    await container.memory.edit(alpha, "", "- changed elsewhere", alpha)
+    with pytest.raises(InvalidInput) as raised:
+        await container.memory.edit(alpha, "- as in my snapshot", "- new", alpha)
+    assert "     1\t- changed elsewhere\n" in str(raised.value)
+    assert await container.memory.read(alpha) == "- changed elsewhere\n"
+
+
+async def test_memory_edit_over_the_limit_shows_the_current_text(container, make_agent):
+    alpha = (await make_agent("alpha")).id
+    await container.memory.edit(alpha, "", "- old entry", alpha)
+    with pytest.raises(MemoryFull) as raised:
+        await container.memory.edit(alpha, "", "x" * container.memory.max_chars, alpha)
+    assert "     1\t- old entry\n" in str(raised.value)

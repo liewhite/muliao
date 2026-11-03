@@ -92,12 +92,23 @@ class MemoryStore:
         self, agent_id: str | None, old: str, new: str, actor: str, *, reason: str | None = None
     ) -> str:
         """规则同 skill 正文（text_edit.edit）：old 恰好出现一次时替换为 new（new 为空即删除），old 为空时把 new 追加到末尾。
-        reason 是这一版的说明（revisions.described）。"""
+        reason 是这一版的说明（revisions.described）。
+
+        原文对不上或改后超长时，报错附上当前全文：指令里的记忆是运行开始时的快照，别的会话改过之后，模型没有别的办法
+        读到最新的内容（#349）。"""
 
         async def apply(_s: AsyncSession, current: str) -> str:
-            return text_edit.edit(current, old, new, "memory")
+            try:
+                return text_edit.edit(current, old, new, "memory")
+            except InvalidInput as e:
+                if not old:
+                    raise  # 追加空内容：与原文无关
+                raise InvalidInput(f"{e}\n\n{_current_text(current)}") from e
 
-        return await self._update(agent_id, apply, actor, described(reason, _label(agent_id)))
+        try:
+            return await self._update(agent_id, apply, actor, described(reason, _label(agent_id)))
+        except MemoryFull as e:
+            raise MemoryFull(f"{e}\n\n{_current_text(await self.read(agent_id))}") from e
 
     async def restore(self, agent_id: str | None, rev: int, actor: str) -> str:
         """把第 rev 版的正文作为新的一版写入，读版本与写入在同一个事务里。"""
@@ -138,6 +149,18 @@ class MemoryStore:
             before = None if row is None else current
             record_in(s, Subject.MEMORY, revision_name(agent_id), before, updated, actor, message)
             return updated
+
+
+def _current_text(current: str) -> str:
+    """报错里附的当前全文：按 read_file 的 cat -n 格式编号，报错里说的行号才对得上。"""
+    if not current:
+        return "The memory is currently empty."
+    numbered = "\n".join(f"{i:>6}\t{line}" for i, line in enumerate(current.split("\n"), 1))
+    return (
+        "The memory may have changed since your run started (the copy in your instructions is not updated). "
+        "Its current text follows, each line prefixed with its line number and a tab (not part of the text); "
+        f"copy old_text from it:\n{numbered}"
+    )
 
 
 def _label(agent_id: str | None) -> str:
