@@ -264,6 +264,19 @@ function PrecheckEditor({ precheck, onChange }: { precheck: Precheck | null; onC
   )
 }
 
+function RouteInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <TextInput
+      label="投递目标"
+      hint="new（默认，新会话）、agent:<名>（该 agent 的新会话）、session 或 session:<名>（续写本触发器最近的会话）、issue:<编号>（记进 issue 并投给处理它的 agent）。事件里单独一行 @route <目标> 可以把之后的内容投到别处"
+      value={value}
+      onChange={onChange}
+      placeholder="new"
+      mono
+    />
+  )
+}
+
 function PrecheckSummary({ trigger }: { trigger: Trigger }) {
   if (trigger.precheck === null) return null
   return (
@@ -531,6 +544,11 @@ function TriggerCard({
             前置检查：<code className="font-mono">{trigger.precheck.command}</code>
           </div>
         )}
+        {trigger.route !== 'new' && (
+          <div className="truncate text-xs text-muted">
+            投递到：<code className="font-mono">{trigger.route}</code>
+          </div>
+        )}
         <p className="line-clamp-3 whitespace-pre-wrap break-words text-sm">{trigger.prompt}</p>
         <div className="text-xs text-muted">
           {trigger.finished_at
@@ -581,6 +599,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
   const [prompt, setPrompt] = useState(trigger.prompt)
   const [config, setConfig] = useState<Config | null>(trigger.config)
   const [precheck, setPrecheck] = useState<Precheck | null>(trigger.precheck)
+  const [route, setRoute] = useState(trigger.route)
   const action = useAction()
 
   // 每次进入编辑都从已保存的值开始：取消过的草稿不会在下一次保存时被提交
@@ -588,6 +607,7 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
     setPrompt(trigger.prompt)
     setConfig(trigger.config)
     setPrecheck(trigger.precheck)
+    setRoute(trigger.route)
     setEditing(true)
   }
 
@@ -596,7 +616,12 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
     action.run(async () => {
       if (config === null) throw new Error('配置不合法')
       // 前置检查没改就不提交：改了会重置 changed 模式的基线
-      await api.updateTrigger(trigger.id, { prompt, config, ...(precheckChanged ? { precheck } : {}) })
+      await api.updateTrigger(trigger.id, {
+        prompt,
+        config,
+        ...(precheckChanged ? { precheck } : {}),
+        ...(route.trim() !== trigger.route ? { route: route.trim() || 'new' } : {}),
+      })
       setEditing(false)
       onChange()
     })
@@ -643,11 +668,15 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
           <>
             <ConfigEditor value={trigger} onChange={setConfig} />
             <PrecheckEditor precheck={trigger.precheck} onChange={setPrecheck} />
+            <RouteInput value={route} onChange={setRoute} />
             <TextAreaInput label="处理说明" value={prompt} onChange={setPrompt} rows={5} />
           </>
         ) : (
           <>
             <PrecheckSummary trigger={trigger} />
+            <div className="text-xs text-muted">
+              投递到：<code className="font-mono">{trigger.route}</code>
+            </div>
             <p className="whitespace-pre-wrap text-sm">{trigger.prompt}</p>
             <TriggerSessions trigger={trigger} />
           </>
@@ -681,8 +710,8 @@ function TriggerItem({ trigger, agents, onChange }: { trigger: Trigger; agents: 
               isDisabled={action.busy || !trigger.enabled}
               onPress={() =>
                 void action.run(async () => {
-                  const { session_id } = await api.runTrigger(trigger.id)
-                  toast.success(session_id === null ? '前置检查没有发现要处理的事，未调用 agent' : '已触发')
+                  const { fired } = await api.runTrigger(trigger.id)
+                  toast.success(fired ? '已触发' : '前置检查没有发现要处理的事，未调用 agent')
                   onChange()
                 })
               }
@@ -712,13 +741,22 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
   const [prompt, setPrompt] = useState('')
   const [config, setConfig] = useState<Config | null>(initial?.config ?? null)
   const [precheck, setPrecheck] = useState<Precheck | null>(null)
+  const [route, setRoute] = useState('')
   const action = useAction()
 
   async function create() {
     const ok = await action.run(async () => {
       if (kind === null || agentId === null) throw new Error('请选择触发方式和 agent')
       if (config === null) throw new Error('配置不合法')
-      await api.createTrigger({ name, agent_id: asAgentId(agentId), kind, prompt, config, precheck })
+      await api.createTrigger({
+        name,
+        agent_id: asAgentId(agentId),
+        kind,
+        prompt,
+        config,
+        precheck,
+        route: route.trim() || null,
+      })
       toast.success('触发器已创建')
     })
     if (ok) {
@@ -758,9 +796,10 @@ function TriggerForm({ kinds, agents, onCreated }: { kinds: TriggerKind[]; agent
       />
       {initial && <ConfigEditor key={initial.kind} value={initial} onChange={setConfig} />}
       <PrecheckEditor precheck={null} onChange={setPrecheck} />
+      <RouteInput value={route} onChange={setRoute} />
       <TextAreaInput
         label="处理说明"
-        hint="每次触发都在新会话中执行；事件内容（如 webhook 的请求体）附在其后。触发的会话不会自动推送，需要时在说明里要求 agent 调用 notify_user"
+        hint="每次触发投到投递目标（默认新会话）；事件内容（如 webhook 的请求体）附在其后。触发的会话不会自动推送，需要时在说明里要求 agent 调用 notify_user"
         value={prompt}
         onChange={setPrompt}
         rows={5}
@@ -887,7 +926,7 @@ export default function Triggers() {
                 <DetailModal trigger={open} onClose={() => setOpenId(null)}>
                   {(t) => (
                     <TriggerItem
-                      key={`${t.id}-${t.prompt}-${JSON.stringify(t.config)}-${JSON.stringify(t.precheck)}`}
+                      key={`${t.id}-${t.prompt}-${t.route}-${JSON.stringify(t.config)}-${JSON.stringify(t.precheck)}`}
                       trigger={t}
                       agents={agents.data}
                       onChange={reload}

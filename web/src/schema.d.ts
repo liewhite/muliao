@@ -46,7 +46,8 @@ export interface paths {
         put?: never;
         /**
          * Hook
-         * @description 外部事件入口：Authorization: Bearer <token>。不带 session_id 时新建会话；带上之前返回的则在该会话里继续。
+         * @description 外部事件入口：Authorization: Bearer <token>。不带 session_id 时按触发器的投递目标投递（默认新建会话）；带上之前
+         *     返回的则在该会话里继续。
          */
         post: operations["hook_api_hooks__name__post"];
         delete?: never;
@@ -1284,7 +1285,7 @@ export interface components {
          * ActivityKind
          * @enum {string}
          */
-        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "depends_on" | "dependency" | "run_failed" | "unsettled" | "stopped";
+        ActivityKind: "created" | "comment" | "status" | "assignee" | "priority" | "owner" | "title" | "description" | "depends_on" | "dependency" | "run_failed" | "unsettled" | "stopped" | "event";
         /** ActivityOut */
         ActivityOut: {
             /** Id */
@@ -1685,6 +1686,8 @@ export interface components {
         };
         /** FiredOut */
         FiredOut: {
+            /** Fired */
+            fired: boolean;
             /** Session Id */
             session_id: string | null;
         };
@@ -2243,6 +2246,8 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             precheck: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route: string;
             /** Last Checked At */
             last_checked_at: string | null;
             /** Last Fired At */
@@ -2560,6 +2565,8 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             precheck: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route: string;
             /** Last Checked At */
             last_checked_at: string | null;
             /** Last Fired At */
@@ -2877,6 +2884,8 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             precheck: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route: string;
             /** Last Checked At */
             last_checked_at: string | null;
             /** Last Fired At */
@@ -3073,6 +3082,8 @@ export interface components {
                 [key: string]: unknown;
             };
             precheck?: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route?: string | null;
         };
         /** TriggerKindOut */
         TriggerKindOut: {
@@ -3086,7 +3097,7 @@ export interface components {
         };
         /**
          * TriggerPatch
-         * @description 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。
+         * @description 只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new` 回到默认。
          */
         TriggerPatch: {
             /** Prompt */
@@ -3098,6 +3109,8 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
             precheck?: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route?: string | null;
         };
         /** UnreadOut */
         UnreadOut: {
@@ -3213,6 +3226,8 @@ export interface components {
             /** Enabled */
             enabled: boolean;
             precheck: components["schemas"]["Precheck"] | null;
+            /** Route */
+            route: string;
             /** Last Checked At */
             last_checked_at: string | null;
             /** Last Fired At */

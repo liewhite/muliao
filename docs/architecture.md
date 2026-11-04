@@ -60,6 +60,7 @@ muliao/
   speech/          语音输入：把界面录下的语音转成文字（可选，配置 [transcription] 才有）
   web/             网页搜索与抓取：配置的服务（WebProvider）与 web 工具组（可选，配置 [web] 才有）
   history/         工作历史：agent 做过的事，只追加，按时间与关键词检索；某天的活动概览（热历史，第 22 节）
+  routing/         事件投递：事件按投递目标（新会话、别的 agent、最近的会话、issue）变成给会话或 issue 领域的定向命令（第 14 节「事件投递」）
   files/  notifications/  triggers/
   api/             HTTP 适配
   container.py     组合根：构造领域、注册事件订阅、组装工具箱；只做装配，不含业务规则
@@ -95,7 +96,7 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 
 会话领域的编排（停止 `halt.py`、删除 `deletion.py`、消费者）与跨子域的读模型（会话门面 `service.py`、热历史 `recall.py`，第 22 节）只调各子域的接口；会话领域不 import 任务表的 `TaskStatus`，`Task` 只出现在任务处理器的签名里（`tests/test_boundaries.py`）。
 
-其他领域不设子域，内部按模块组织。各自的表：workspace `jobs`；usage `model_usage`；history `agent_history`；files `files`；triggers `triggers`；issues `issues`、`issue_activities`、`issue_dependencies`；notifications `notifications`、`push_subscriptions`（speech、web、agent_runtime 没有表）。其中几张表由一个模块独占（`tests/test_boundaries.py` 的 `MODULE_TABLES` 登记并核对）：`issue_dependencies` 只在 issues 的依赖图 `graph.py`，`notifications` 只在收件箱 `inbox.py`，`push_subscriptions` 只在推送 `push.py`。issues 另有投递 `delivery.py` 与文本 `render.py`，`IssueService` 只编排（第 21 节）；triggers 的前置检查状态只在 `precheck.py` 迁移（第 14 节）。
+其他领域不设子域，内部按模块组织。各自的表：workspace `jobs`；usage `model_usage`；history `agent_history`；files `files`；triggers `triggers`；issues `issues`、`issue_activities`、`issue_dependencies`；notifications `notifications`、`push_subscriptions`（speech、web、agent_runtime、routing 没有表）。其中几张表由一个模块独占（`tests/test_boundaries.py` 的 `MODULE_TABLES` 登记并核对）：`issue_dependencies` 只在 issues 的依赖图 `graph.py`，`notifications` 只在收件箱 `inbox.py`，`push_subscriptions` 只在推送 `push.py`。issues 另有投递 `delivery.py` 与文本 `render.py`，`IssueService` 只编排（第 21 节）；triggers 的前置检查状态只在 `precheck.py` 迁移（第 14 节）。
 
 `agent_runtime` 不是业务领域，是会话运行的端口：把 pydantic-ai 的 loop 收在「从这段历史推进一步，告诉我发生了什么」后面（`AgentRuntime.run_steps` 与 `StepHooks`），会话领域只依赖这个端口与消息约定；具体的工具不在这里（文件与 shell 在 `workspace`，web 工具在 `web`，各领域的 `tools.py`），它只按规则把组合根交来的工具集组合进运行（`Toolbox`）；以后自己写 loop 时改动限于这个端口的实现。端口不交出 pydantic-ai 的运行与挂起类型：运行的结局是 `Finished`（回答与新增消息）或 `Paused`（挂起的调用），挂起调用的结果以 `{调用 id: 结果}` 交回，工具用 `defer_call()` 挂起（`agent_runtime/outcome.py`）；消息（`ModelMessage`、`ToolCallPart` 等）是会话历史的存储形态，不在此列。`tests/test_boundaries.py` 检查 agent_runtime 之外不 import 这些运行类型。工具一律通过领域接口做事，不碰表。
 
@@ -133,7 +134,7 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 
 **组合根没有构造环**：会话领域的装配在 `sessions/assembly.py`（`SessionPorts`：先于消费者的端口；`SessionDomain`：门面、压缩、消费者、信箱对账与任务处理器，`subscribe` 一处登记会话领域的全部订阅与命令处理），组合根不拼会话领域的内部对象。用到「停止会话」的领域（会话门面、委派工具、删除 agent 的会话清理）依赖端口 `sessions.halt.StopSession`，组合根交给它们的实现是 `sessions.halt.SessionStopper`，它由正在进行的运行的登记（`StoppableRuns`）与 `SessionHalt` 组成，先于消费者构造，消费者用同一份登记运行；要马上执行自己提交的投递的领域（会话、触发器、issue）拿的是 `platform.worker.RunNow` 端口，worker 由各领域的处理器组成、在最后构造，构造后绑定到端口，绑定之前调用当场报错。
 
-经 `api` 的依赖无环、有方向：`files`、`agents`、`usage`、`speech`、`web` → `agent_runtime` → `sessions` → `workspace`、`notifications`、`triggers`、`issues` → `history`（活动概览要读会话与 issue 的动态；`tests/test_boundaries.py` 的 `LAYERS`：领域只能 import 更早一层的 `api`，同层与反向都不行；新增领域要在那里定层）。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
+经 `api` 的依赖无环、有方向：`files`、`agents`、`usage`、`speech`、`web` → `agent_runtime` → `sessions` → `workspace`、`notifications`、`issues` → `routing` → `triggers` → `history`（活动概览要读会话与 issue 的动态；`tests/test_boundaries.py` 的 `LAYERS`：领域只能 import 更早一层的 `api`，同层与反向都不行；新增领域要在那里定层）。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
 
 **一个写事务只写一个领域的表**（外加平台的任务表，它是每个领域的 outbox）：`Database(check_writes=...)` 记下每个事务的 ORM 写入与 insert / update / delete 语句，测试的容器打开 `schema.single_domain_writes` 作为开发期断言。数据库层的级联（`ON DELETE CASCADE`）不在记录里，它们都在会话领域内部。
 
@@ -530,6 +531,13 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 
 **投信**：别的领域投信只有一个入口 `sessions.api.receive_command_in`（只读：校验来信、返回定向命令 `Receive`，发送方在同一事务里 `send_in`）。`TriggerService.fire` 在触发器自己的事务里校验来信（读的会话、agent、文件都是只会单向变化或不变的事实，不合规当场报错给调用方）、记下触发（时间、前置检查的输出、上一次的会话），同一事务发出定向命令 `Receive`（新建会话的 id 在这里预先分配），由会话领域在自己的事务里投信：记下触发与投信都恰好一次。提交之后马上执行这条投递（`Worker.run_now`），通常返回时会话已经存在，调用方可以立即续写；做不到（lane 正忙）就由 worker 稍后投递，这期间续写它会得到 404。`Receive` 按目标会话分 lane，同一会话的来信按发送顺序投递；按 `SessionKey` 定位的投递在会话存在之前就要有 lane，按 key（来源、发送方、agent）命名，同一个 key 串行，「没有就建」不会建出两个会话（工作状态也看这条 lane 上没投递的来信；会话还没建出来、信还排着时算 running，`SessionActivity.keyed_work_states_in`）。按 key 投信的发送方（issue）只用 key 投，不按会话 id 续写它的会话，所以同一会话的来信只在一条 lane 上、顺序不乱。投递时会话或 agent 已被删除就丢弃并记日志。投递处理器自己的失败按队列规则记账（重试或失败可见），不抛给调用方；只有领取这条投递时出错（如数据库暂时不可用）请求才报错，投递仍由 worker 完成，外部调用方此时重试会多触发一次。
 
+**事件投递**（`routing` 领域，#371）：触发器只是事件源，事件交给谁由投递目标决定。领域保持通用，不认识任何渠道（Slack、Telegram……）：渠道逻辑（这条消息属于哪个项目、监控写到哪个 issue）都在产出事件的脚本（前置检查、流式命令）里，用地址表达。目标有三种（`routing/targets.py`，存 id，agent 改名不影响；对模型与界面是文字地址）：
+- `new`（默认）/ `agent:<名>`：新开一个会话（发送方自己的 agent / 那个 agent）；
+- `session` / `session:<名>`：续写这个触发器最近一次给该 agent 开的会话（会话领域的 `SessionKey`），没有就新建；长度靠压缩。和 `new` 混用时续写的是最近开的那个；
+- `issue:<N>`：issue 领域的定向命令 `PostIssueEvent`：在时间线记一条 `event` 动态（actor 是触发器所属的 agent，来源 `trigger <名>`，正文是投递的内容），像用户评论一样按 `rules.recipient` 投递（有被指派的 agent 接手给它，否则给 owner），所以事件不会没人收。
+
+触发器的公共字段 `route` 是默认目标（建、改时解析并校验 agent、issue 存在；`None` 即 `new`）。事件内容里单独一行 `@route <地址>` 把它之后、下一个这样的行之前的内容投到那个地址，第一行之前的投到默认目标；同一目标的各段合并成一次投递，每段前都带处理说明；没有 `@route` 行的内容原样是一段（现有触发器行为不变），各段都空就不触发。webhook 带 `session_id` 续写时整段投进那个会话，不分段。`routing` 只读（`plan_in` 分段并解析地址、`routed_in` 校验并返回命令，同 `receive_command_in` 的模式），触发器在自己的事务里记下触发并 `send_in` 全部命令：一次触发分发到多个目标，仍是记下即投递、恰好一次。地址不合法或目标已不在（agent、issue 被删除）是 `InvalidInput`：整次不投，按「来信被拒绝」处理（激活机制停用触发器并记 `disabled_reason`，webhook 返回 422，`trigger_run` 报错）。
+
 任何未结束的触发器都可以在界面上或用 `trigger_run` 立即运行一次（不带事件内容）；有前置检查时同样先跑检查，可以用来测试整条链路。事件内容（若有）原样附在处理说明之后：
 
 ```
@@ -638,6 +646,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 - **停滞**（`rules.stalled`，唯一规则）：in_progress、不在等上游、指派给 agent，而它的 issue 会话空闲或不存在（会话在等后台任务、委派、到点唤醒或提问的回答都不算：等到了会接着做）。界面卡片上依赖没完成时显示「等待 #x」。`IssueService.work` 一次算出一批 issue 的各 agent 会话、被指派 agent 会话的工作状态（`SessionActivity.keyed_work_states_in`：按发送方定位的会话，running / waiting / idle）与是否停滞，`issue_list` 与接口的 `assignee_state`、`stalled` 都来自它。界面在 `stalled` 的卡片上标「没人在处理」，muliao 的早报列出停滞的 issue（读同一个 `stalled`）。
 - **运行结束表态**（#258，`IssueService.on_run_ended`，订阅 `RunEnded`：事件带会话来源 `origin` / `origin_ref`，只认 `Origin.ISSUE`）：issue 会话里的一次运行结束（被停止、停在挂起调用上的不算）后，issue 指派给这个 agent 且因此停滞（`rules.stalled`：还是 in_progress、会话空闲）时，以该 agent 的名义记一条 `unsettled` 动态并按投递规则投进它的会话，信里请它表态：做完（in_review / done）、blocked 指派用户，或用会话的等待手段挂起再停（后台任务——如轮询某个条件、满足即退出的检查循环——、`report_back` 的委派、`wake_me` 到点唤醒）。强制表态（`rules.ask_to_settle`，用户 10-28 定）：每次这样停下都问，直到它把状态改离 in_progress（做完、blocked）或让会话等着；只写评论不算表态，会再被问。事件迟到时那次运行的会话已不是它在这个 issue 上的当前会话（被删、换了新的）就不问。与 #107 否决的续跑不同：不重跑原任务，每次只投一封要它改状态的信；靠说明（`SESSION_NOTE` 与信里的一句）让模型改状态，平台不设次数上限。怎么表态写在 issue 会话的来源说明里（`SESSION_NOTE`），信里只多一句「只写评论不算」作提醒。
 - **叫停**（`issue_stop(issue_id, status, message?)` → `IssueService.stop`，#272）：叫停被指派 agent 在这个 issue 上的会话。改状态不停会话（用户定：改状态不该有副作用，agent 做完先改状态再留言就会被误杀），所以要停正在做的工作（如已不需要的子 issue）用这个工具。先经端口 `sessions.api.StopSession`（与用户点停止同一条路径：停当前运行、清空信箱、逐层停掉它开出去的 thread）停掉那个会话，返回时停止事务已提交；再在一个事务里记 `stopped` 动态（`{"from": null, "to": 被停的 agent}`）、改状态（`rules.STOP_STATUSES`：backlog / blocked / cancelled / in_progress，停下不是做完，不能 in_review / done）；有 `message` 时记成调用者的评论，连同这几条动态直接投进被停下的会话（`IssueDelivery.deliver_to_in`，不按 `recipient`，不论新状态），让它跑一轮收尾或改方向；没有 message 时按投递规则（停到 backlog 等就不投）。in_progress（打断后改方向）必须带 message。在要停的那个会话里调用报错（改状态用 `issue_update`）；没有 agent 指派人时 `Conflict`；指派人还没有这个会话（或刚被删）时没什么可停，只改状态、记评论，按规则投递，不为收尾新建会话。改成 cancelled 时照常放行下游。
+- **事件**（#371）：别的领域的事件以定向命令 `PostIssueEvent` 投到 issue（发送方先在自己的事务里用只读的 `check_issue_in` 确认 issue 存在，见第 14 节「事件投递」）：记一条 `event` 动态（actor 是事件来源所属的 agent，`change.to` 是来源描述，正文是内容，不属于任何会话），收件人规则同用户评论（`recipient(from_outside=True)`：有被指派的 agent 接手给它，否则给 owner）。处理时 issue 已被删除就丢弃。
 - **交给用户**：agent 把 issue 指派给用户时发 `Notify`（带 `issue_id`，也带它交出 issue 的那个会话），点开是 issue 详情页。
 - **审核**（`IssueService.approve` / `reject`，`POST /api/issues/{id}/approve`、`/reject {reason}`，用户的操作，actor 为 `USER`）：只对当前指派给用户、还没结束（不在 `FINISHED`）的 issue（`rules.reviewable`，接口的 `IssueOut.reviewable`），否则 `Conflict`（已经审过、打回、又被改派或取消：连点、两台设备、通知过时都不覆盖别人刚做的事）。通过 = 设为 done（有下游照常放行；收件人是用户，不投信）。打回 = 同一事务里记一条评论（理由，必填）、状态回到 in_progress、指派给把它交给用户的 agent（`rules.handed_by`：最近一条指派动态的 actor，从未改过指派人时是创建者；是用户自己或系统、或这个 agent 已被删除时 `Conflict`，由用户手动指派），三条动态一封信投进它的 issue 会话。界面：`reviewable` 的 issue 详情页上有审核栏（「通过」、理由 +「打回」）；推送通知上的按钮见第 14 节「通知」。
 - **开工**（`IssueService.start`，`POST /api/issues/{id}/start`，用户的操作）：backlog 里有负责项目的 issue（`rules.startable`，接口的 `IssueOut.startable`）一键指派给 owner 并进入 in_progress（状态与指派的变更一封信）；已不在 backlog、或没有 owner 时 `Conflict`。界面：`startable` 的 issue 详情页上有「开工」按钮。
