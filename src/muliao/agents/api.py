@@ -7,7 +7,7 @@
 - 删除与归档 agent（AgentLifecycle）；
 - AI 资产：种类（kinds：Kind / StoredKind / Subject），记忆（MemoryStore、一次运行放进指令的 MemoryBlock、MemoryInfo）、skill 的存取与标准 .skill 文件的导入导出（自我改进工具与 instructions 组装用），MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret（Vault：存取、加解密与 ${vault:KEY} 引用的解析 VAULT_REF / fill，对外不出密文；SECRET_TOOL_ARGS：要脱敏的工具参数）、条目池（ItemCatalog：全部条目、转移、版本历史与恢复）、版本（RevisionInfo：ItemCatalog.history 读出，角色与 agent 规则的版本由 knowledge-upkeep 的 revisions.py 只读查询）；
 - 分发（Distribution：角色的增删改、agent 的规则 AgentRules 与最终规则、能用的 Reach、预览），内置工具的登记与
-  `kind:name` 规则（permissions）；条目的两条规则在它的 access（能用 = 自己的 ∪ 规则放行的；能改 = owner 或 admin）。
+  `action:kind:name` 规则（permissions）；AI 资产的规则在它的 access（能 use / write = 自己 own 的 ∪ 规则放行的）。
 """
 
 from muliao.agents.access import Reach

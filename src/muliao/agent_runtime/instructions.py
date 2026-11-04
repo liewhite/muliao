@@ -10,6 +10,7 @@ DeepSeek 等自动前缀缓存同样从这里开始匹配。instructions 里只�
 
 from collections.abc import Sequence
 from datetime import datetime
+from html import escape
 from pathlib import Path
 
 from muliao.agents.api import MemoryBlock, SkillMeta
@@ -103,7 +104,7 @@ def build_instructions(
 def _memory_section(memories: Sequence[MemoryBlock], limit: int) -> str:
     """这个 agent 能用的每一块记忆（MemoryStore.for_run，按名字），标出名字与能不能改。"""
     blocks = [
-        f'<memory name="{m.name}" access="{_access(m)}">\n{m.content.strip() or "(empty)"}\n</memory>'
+        f'<memory name="{escape(m.name)}" access="{_access(m)}">\n{m.content.strip() or "(empty)"}\n</memory>'
         for m in memories
     ] or ["(no memory blocks)"]
     return (

@@ -166,7 +166,11 @@ async def writable_in(
 
 async def usable_in(s: AsyncSession, kind: StoredKind, user: str) -> list[Item]:
     """user（agent 的 id 或 ids.USER）能用的（规则 1），按名称。"""
-    grants = await grants_in(s, user)
+    return await usable_by_in(s, kind, await grants_in(s, user))
+
+
+async def usable_by_in(s: AsyncSession, kind: StoredKind, grants: Grants) -> list[Item]:
+    """同 usable_in，按已经算好的 grants（还要用它判断别的动作时，不再读一遍角色与规则）。"""
     return [r for r in await items_in(s, kind) if grants.uses(as_kind(kind), r.name, r.owner)]
 
 

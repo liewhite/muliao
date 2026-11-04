@@ -17,7 +17,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.access import changeable_in, grants_in, usable_in, writable_in
+from muliao.agents.access import changeable_in, grants_in, usable_by_in, writable_in
 from muliao.agents.items import creatable_in, existing_in, item_in
 from muliao.agents.kinds import Kind, StoredKind, Subject, label
 from muliao.agents.naming import validate_slug
@@ -102,7 +102,7 @@ class MemoryStore:
                     grants.writes(Kind.MEMORY, r.name, r.owner),
                     r.owner == agent_id,
                 )
-                for r in await usable_in(s, _KIND, agent_id)
+                for r in await usable_by_in(s, _KIND, grants)
             ]
 
     async def create(
@@ -125,7 +125,8 @@ class MemoryStore:
     async def put(
         self, name: str, content: str, description: str, *, actor: str, owner: str | None = None
     ) -> MemoryInfo:
-        """新建或整体改写（用户在界面上编辑）：已有的要 actor 能改（规则 1 的 write），owner 不变；新建的归 owner。"""
+        """新建或整体改写（用户在界面上编辑）：已有的要 actor 能改（规则 1 的 write），owner 不变；新建的归 owner。版本的文档
+        只有正文：只改 description 不记一版（它只是资产页上的说明，不进 instructions）。"""
         async with self._db.transaction() as s:
             row = await writable_in(s, _KIND, name, actor, owner)
             if row is None:

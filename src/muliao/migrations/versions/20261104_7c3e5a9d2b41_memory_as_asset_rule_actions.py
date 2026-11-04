@@ -10,8 +10,8 @@
 - 删掉 memories 表。
 
 降级：重建 memories（与 c2d9e4b7a1f0 之后的结构一致），`global` 搬回 agent_id NULL，归某个 agent 的记忆（每个 agent 取 id
-最小的一块）搬回它的行，其余记忆（共享记忆）丢弃；版本名改回；规则去掉 `use:` 前缀，带 write / `*` 动作或针对记忆的
-规则去掉。
+最小的一块）搬回它的行，没有的 agent 补一行空的（旧代码要求每个 agent 都有），其余记忆（共享记忆）丢弃；版本名改回；
+规则的 `use:` / `*:` 前缀去掉（去重），只有 write、不限种类或针对记忆的规则去掉。
 
 Revision ID: 7c3e5a9d2b41
 Revises: 1b161820af45
@@ -38,8 +38,9 @@ def _rewrite_rules(convert) -> None:
     conn = op.get_bind()
     for table, key in (("roles", "name"), ("agent_rules", "agent_id")):
         for row in conn.execute(sa.text(f"SELECT {key}, allow, deny FROM {table}")).all():
-            allow = [r for p in json.loads(row[1]) if (r := convert(p)) is not None]
-            deny = [r for p in json.loads(row[2]) if (r := convert(p)) is not None]
+            # 去重：降级时 `use:skill:x` 与 `*:skill:x` 都变成 `skill:x`，规则要互不相同
+            allow = list(dict.fromkeys(r for p in json.loads(row[1]) if (r := convert(p)) is not None))
+            deny = list(dict.fromkeys(r for p in json.loads(row[2]) if (r := convert(p)) is not None))
             conn.execute(
                 sa.text(f"UPDATE {table} SET allow = :a, deny = :d WHERE {key} = :k"),
                 {
@@ -55,8 +56,10 @@ def _up_rule(pattern: str) -> str | None:
 
 
 def _down_rule(pattern: str) -> str | None:
+    """`use:` 与 `*:` 都含「能用」：换回 `kind:glob`（deny 里的 `*:` 丢掉会放宽权限）；只有 write 的、不限种类的、针对记忆的
+    在旧规则里表达不了，去掉。"""
     action, _, rest = pattern.partition(":")
-    if action != "use" or rest == "*" or rest.startswith("memory:"):
+    if action not in ("use", "*") or rest == "*" or rest.startswith("memory:"):
         return None
     return rest
 
@@ -127,4 +130,17 @@ def downgrade() -> None:
             {"old": agent_id or "", "n": name},
         )
     conn.execute(sa.text("DELETE FROM items WHERE kind = 'memory'"))
+    # 旧代码要每个 agent 都有一行（私有记忆被删或转走的补空行），全局记忆也补上
+    now = datetime.now(UTC).replace(tzinfo=None).isoformat(sep=" ")
+    conn.execute(
+        sa.text(
+            "INSERT INTO memories (agent_id, content, updated_at) SELECT id, '', :t FROM agents "
+            "WHERE id NOT IN (SELECT agent_id FROM memories WHERE agent_id IS NOT NULL)"
+        ),
+        {"t": now},
+    )
+    if None not in seen:
+        conn.execute(
+            sa.text("INSERT INTO memories (agent_id, content, updated_at) VALUES (NULL, '', :t)"), {"t": now}
+        )
     _rewrite_rules(_down_rule)

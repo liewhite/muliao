@@ -1520,7 +1520,12 @@ def test_memories_become_memory_assets_rules_get_the_use_action_and_downgrade(tm
             "values ('memory', 'trading', NULL, '', 'shared', 1, ?, ?)",
             (t, t),
         )
-        conn.execute('update roles set allow = \'["use:secret:K_*", "*:memory:trading", "write:*"]\'')
+        conn.execute(
+            'update roles set allow = \'["use:secret:K_*", "*:secret:K_*", "*:memory:trading", "write:*"]\', '
+            'deny = \'["*:tool:run_shell", "write:skill:x"]\''
+        )
+        # 私有记忆被删掉的 agent：降级后也要有一行（旧代码要求）
+        conn.execute("delete from items where kind = 'memory' and owner = 'a2'")
 
     with _migration_engine(path).begin() as connection:
         command.downgrade(alembic_config(connection), "1b161820af45")
@@ -1536,7 +1541,10 @@ def test_memories_become_memory_assets_rules_get_the_use_action_and_downgrade(tm
             "a1",
             "gone",
         ]
-        assert conn.execute("select allow from roles where name = 'r'").fetchone() == ('["secret:K_*"]',)
+        assert conn.execute("select allow, deny from roles where name = 'r'").fetchone() == (
+            '["secret:K_*"]',
+            '["tool:run_shell"]',
+        )
         assert conn.execute("select allow from agent_rules where agent_id = 'a1'").fetchone() == (
             '["skill:x"]',
         )
