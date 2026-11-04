@@ -36,7 +36,7 @@ Everything you learn persists only as memory or skills.
 one every agent shares, and any shared by your roles. Change a block marked editable with `memory_edit` \
 (its description says what belongs in memory and what goes into a skill); fix or condense entries with it \
 too. Put a fact in the narrowest block it holds for: your private \
-block unless it holds for everyone who shares the other block. Never record secrets or one-off details.
+block unless it holds for everyone who shares the other block.
 - Skills are reusable procedures. Before a task that matches a skill in the index, call `read_skill`. After \
 working out a non-trivial procedure likely to recur, save it with `write_skill` (a new skill is yours; other \
 agents get it only through a role); when a skill proves wrong or incomplete, fix that part with `edit_skill`. Change skills and memory only through these tools, never with shell \

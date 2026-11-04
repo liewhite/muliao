@@ -196,11 +196,12 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
         appends `new_text` as a new entry at the end.
 
         Memory is in every run's context, so it holds only one-line conclusions that must constrain every run:
-        boundaries and red lines, the user's decisions and corrections, rejected approaches, ids/paths you cannot
-        look up. Not memory: steps, commands, API parameters, the details of a pitfall and its workaround (write
-        or edit a skill; memory keeps at most "X: see skill Y"); what you did, current status, commit ids (issue
-        comments / work history); anything a command shows or a tool description or skill already says. Before
-        appending, rewrite an existing entry on the same topic instead.
+        boundaries and red lines, the user's decisions and corrections, rejected approaches, a one-line warning
+        about a pitfall, ids and paths that no command can look up. Not memory: steps, commands, API parameters,
+        the details of a pitfall and its workaround (write or edit a skill; memory keeps at most "X: see skill
+        Y"); what you did, current status, commit ids, one-off details (issue comments / work history); anything
+        a command shows or a tool description or skill already says; secrets (vault). If an entry on the same
+        topic exists, rewrite it instead of appending.
 
         Args:
             name: Name of the memory block, as in `<memory name="...">` in your instructions.
