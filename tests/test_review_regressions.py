@@ -416,6 +416,37 @@ async def test_running_out_of_vault_set_retries_keeps_the_value_out_of_the_logge
     assert all("super-secret" not in p for p in payloads)
 
 
+async def test_calling_an_unknown_tool_name_repeatedly_is_handed_back_and_does_not_fail_the_run(
+    container, make_agent, models
+):
+    """不存在的工具名走 pydantic-ai 的 agent 级预算：默认 1 次时第二次就让整轮运行失败（#373）。"""
+    from pydantic_ai.messages import ModelRequest, RetryPromptPart, ToolCallPart
+
+    from muliao.platform.tooling import TOOL_MAX_RETRIES
+    from tests.test_flow import scripted
+
+    def fn(messages, info):
+        retries = sum(
+            isinstance(p, RetryPromptPart) for m in messages if isinstance(m, ModelRequest) for p in m.parts
+        )
+        if retries < TOOL_MAX_RETRIES:
+            return ModelResponse(parts=[ToolCallPart("modify_wri12", {"name": "x"})])
+        return ModelResponse(parts=[TextPart("done")])
+
+    alpha = (await make_agent("alpha", model="m")).id
+    models.models["m"] = scripted(fn)
+    session = await start(container, alpha, "save a skill", origin=Origin.TRIGGER)
+    await drain(container)
+
+    history = await history_of(container, session.id)
+    assert isinstance(history[-1], ModelResponse) and history[-1].parts == [TextPart("done")]
+    unknown = [
+        p for m in history if isinstance(m, ModelRequest) for p in m.parts if isinstance(p, RetryPromptPart)
+    ]
+    assert len(unknown) == TOOL_MAX_RETRIES
+    assert all("Unknown tool name" in str(p.content) for p in unknown)
+
+
 async def test_every_model_run_entry_hands_transient_failures_to_the_queue_as_model_unavailable(
     container, make_agent, models
 ):

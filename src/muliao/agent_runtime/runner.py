@@ -51,7 +51,7 @@ from muliao.agents.api import AgentInfo, AgentService, MemoryStore, SkillStore, 
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
-from muliao.platform.tooling import Audience, RunScope
+from muliao.platform.tooling import TOOL_MAX_RETRIES, Audience, RunScope
 from muliao.usage.api import RunKind, UsageEntry, UsageLog, UsageTotals
 
 # pydantic-ai 不传 usage_limits 时默认 request_limit=50。运行不设请求数
@@ -114,6 +114,10 @@ class AgentRuntime:
             deps_type=RunScope,
             output_type=str,
             capabilities=[AttachmentsForModel(files), ToolImagesToFiles(files)],
+            # 调用不存在的工具名时 pydantic-ai 用的是 agent 级的工具重试预算（默认 1，第二次就以
+            # UnexpectedModelBehavior 终止整轮运行）；这条路径在工具集之外，DomainErrorsAsRetry 管不到，
+            # 所以与各工具集取同一个容忍次数（#373）
+            retries={"tools": TOOL_MAX_RETRIES},
         )
 
     def scope(self, agent: AgentInfo, *, session_id: str, audience: Audience) -> RunScope:
