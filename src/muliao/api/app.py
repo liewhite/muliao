@@ -21,7 +21,6 @@ from muliao.api import (
     issues,
     items,
     jobs,
-    memory,
     models,
     notifications,
     push,
@@ -129,7 +128,6 @@ def _private_routes() -> APIRouter:
     router.include_router(jobs.router)
     router.include_router(workspace.router)
     router.include_router(items.router)
-    router.include_router(memory.router)
     router.include_router(push.router)
     router.include_router(triggers.router)
     router.include_router(webhook.router)

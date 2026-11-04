@@ -82,7 +82,7 @@ async def test_a_finished_background_job_reports_back_with_its_output(container,
 
 async def test_secrets_never_reach_the_log(container, make_agent, models):
     await container.vault.set("TOKEN", "s3cr3t-value", "", actor="user", owner=None)
-    await share(container, "secret:TOKEN")
+    await share(container, "use:secret:TOKEN")
     _session, job, _recorder, agent = await start_job(
         container, make_agent, models, 'echo "token is $TOKEN"', secrets=("TOKEN",)
     )

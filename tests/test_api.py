@@ -57,16 +57,22 @@ async def test_skill_and_memory_endpoints(client):
     ]
     assert (await client.get("/api/items/skill/shared")).json()["body"].strip() == "steps"
 
-    resp = await client.put("/api/memory", json={"agent": agent_id, "content": "- fact"})
-    assert resp.json()["content"] == "- fact"
-    for owner in (agent_id, None):
-        too_long = {"owner": owner, "content": "x" * 10_000}
-        assert (await client.put("/api/memory", json=too_long)).status_code == 422
+    resp = await client.put("/api/items/memory/alpha", json={"content": "- fact"})
+    assert (resp.json()["content"], resp.json()["owner"]) == ("- fact", agent_id)
+    for name in ("alpha", "global"):
+        too_long = {"content": "x" * 10_000}
+        assert (await client.put(f"/api/items/memory/{name}", json=too_long)).status_code == 422
 
 
 async def test_the_old_per_kind_endpoints_are_gone(client):
     await login(client)
-    for path in ("/api/tools", "/api/mcp", "/api/skill?name=x", "/api/resources/memory/history"):
+    for path in (
+        "/api/tools",
+        "/api/mcp",
+        "/api/skill?name=x",
+        "/api/resources/memory/history",
+        "/api/memory",
+    ):
         assert (await client.get(path)).status_code == 404, path
     assert (await client.put("/api/vault/K", json={"value": "v"})).status_code == 404
 
@@ -122,7 +128,7 @@ async def test_items_list_every_owners_items_with_the_roles_that_give_them(clien
     ).status_code == 204
     assert (await client.put("/api/items/secret/X", json={"owner": "nope", "value": "v"})).status_code == 404
     assert (await client.put("/api/items/secret/bad-key", json={"value": "v"})).status_code == 422
-    await share(container, "secret:SLACK_TOKEN")
+    await share(container, "use:secret:SLACK_TOKEN")
     secret = (await client.get("/api/items/secret/SLACK_TOKEN")).json()
     # 改值时没给说明：说明换成空的
     assert (secret["owner"], secret["description"]) == (None, "") and "value" not in secret
@@ -148,7 +154,7 @@ async def test_an_item_given_by_another_agents_allow_is_shared_without_a_role(cl
     await login(client)
     await client.put("/api/items/secret/MINE", json={"owner": alpha, "value": "v"})
     await client.put("/api/items/secret/LONELY", json={"value": "v"})
-    await container.agents.update(beta, AgentPatch(allow=("secret:MINE",)), actor="user")
+    await container.agents.update(beta, AgentPatch(allow=("use:secret:MINE",)), actor="user")
     secrets = {
         i["name"]: (i["roles"], i["shared"])
         for i in (await client.get("/api/items")).json()

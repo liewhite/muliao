@@ -1062,7 +1062,8 @@ def test_unified_language_renames_columns_marks_the_user_and_downgrades(tmp_path
             (t,),
         )
 
-    migrate(path)
+    # 之后的迁移把记忆搬进 items（#365）：只升到这一步
+    migrate(path, "c2d9e4b7a1f0")
     with sqlite3.connect(path) as conn:
         assert conn.execute("select id, creator from issues order by id").fetchall() == [
             (1, "user"),
@@ -1457,3 +1458,85 @@ def test_issue_activity_session_downgrade_keeps_activities_and_their_ids(tmp_pat
     migrate(path)
     with sqlite3.connect(path) as conn:
         assert conn.execute("select session_id from issue_activities").fetchall() == [(None,)] * 3
+
+
+def test_memories_become_memory_assets_rules_get_the_use_action_and_downgrade(tmp_path):
+    """#365：memories 的行搬进 items（全局 → global，agent 的 → agent 名，归该 agent），版本名随之改；规则加 `use:`，
+    已删的 tool:memory_edit_public 去掉。降级搬回 memories、共享记忆丢弃、规则去掉动作。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "1b161820af45")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        for id_, name in (("a1", "alpha"), ("a2", "beta")):
+            conn.execute(
+                "insert into agents (id, name, description, model, created_at, updated_at) "
+                "values (?, ?, 'd', 'm', ?, ?)",
+                (id_, name, t, t),
+            )
+        conn.execute(
+            "insert into agent_rules (agent_id, roles, allow, deny) values "
+            "('a1', '[]', '[\"skill:x\", \"tool:memory_edit_public\"]', '[\"tool:run_shell\"]'), "
+            "('a2', '[]', '[]', '[]')"
+        )
+        conn.execute(
+            "insert into roles (name, description, allow, deny, created_at, updated_at) "
+            "values ('r', 'd', '[\"secret:K_*\"]', '[]', ?, ?)",
+            (t, t),
+        )
+        # a2 没写过全局记忆以外的：全局记忆从未写过（没有行）也要补上
+        conn.execute("insert into memories (agent_id, content, updated_at) values ('a1', 'm1', ?)", (t,))
+        conn.execute("insert into memories (agent_id, content, updated_at) values ('a2', '', ?)", (t,))
+        conn.executemany(
+            "insert into revisions (subject, name, before, after, actor, message, created_at) "
+            "values ('memory', ?, NULL, 'x', 'user', 'x', ?)",
+            [("a1", t), ("gone", t), ("", t)],
+        )
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "select name, owner, content, updated_at from items where kind = 'memory' order by name"
+        ).fetchall()[:2] == [("alpha", "a1", "m1", t), ("beta", "a2", "", t)]
+        assert conn.execute("select owner, content from items where name = 'global'").fetchall() == [
+            (None, "")
+        ]
+        assert sorted(r[0] for r in conn.execute("select name from revisions where subject = 'memory'")) == [
+            "alpha",
+            "global",
+            "gone",
+        ]
+        assert conn.execute("select allow, deny from agent_rules where agent_id = 'a1'").fetchone() == (
+            '["use:skill:x"]',
+            '["use:tool:run_shell"]',
+        )
+        assert conn.execute("select allow from roles where name = 'r'").fetchone() == ('["use:secret:K_*"]',)
+        assert "memories" not in {r[0] for r in conn.execute("select name from sqlite_master")}
+        conn.execute(
+            "insert into items (kind, name, owner, description, content, enabled, created_at, updated_at) "
+            "values ('memory', 'trading', NULL, '', 'shared', 1, ?, ?)",
+            (t, t),
+        )
+        conn.execute('update roles set allow = \'["use:secret:K_*", "*:memory:trading", "write:*"]\'')
+
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "1b161820af45")
+    with sqlite3.connect(path) as conn:
+        assert sorted(conn.execute("select agent_id, content from memories"), key=str) == [
+            ("a1", "m1"),
+            ("a2", ""),
+            (None, ""),
+        ]
+        assert conn.execute("select count(*) from items where kind = 'memory'").fetchone() == (0,)
+        assert sorted(r[0] for r in conn.execute("select name from revisions where subject = 'memory'")) == [
+            "",
+            "a1",
+            "gone",
+        ]
+        assert conn.execute("select allow from roles where name = 'r'").fetchone() == ('["secret:K_*"]',)
+        assert conn.execute("select allow from agent_rules where agent_id = 'a1'").fetchone() == (
+            '["skill:x"]',
+        )

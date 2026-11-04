@@ -940,7 +940,9 @@ async def test_an_answer_arriving_mid_run_reaches_the_model_as_late_text(
                 )
             yield {
                 0: DeltaToolCall(
-                    name="memory_edit", json_args='{"reason": "r", "new_text": "- x"}', tool_call_id="m"
+                    name="memory_edit",
+                    json_args='{"name": "alpha", "reason": "r", "new_text": "- x"}',
+                    tool_call_id="m",
                 )
             }
         else:

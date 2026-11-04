@@ -1389,7 +1389,7 @@
     "/api/items": {
       "get": {
         "summary": "List Items",
-        "description": "全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称；每种带自己的\n详情（工具的读写与管理类、MCP 的配置与启停）。",
+        "description": "全部资产：内置工具（按登记顺序，仅当前配置下注册的）在前，存在库里的按种类、名称；每种带自己的\n详情（工具的读写与管理类、MCP 的配置与启停）。",
         "operationId": "list_items_api_items_get",
         "responses": {
           "200": {
@@ -1410,6 +1410,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/SecretItemOut"
+                      },
+                      {
+                        "$ref": "#/components/schemas/MemoryItemOut"
                       }
                     ],
                     "discriminator": {
@@ -1418,7 +1421,8 @@
                         "tool": "#/components/schemas/ToolItemOut",
                         "skill": "#/components/schemas/SkillItemOut",
                         "mcp": "#/components/schemas/McpItemOut",
-                        "secret": "#/components/schemas/SecretItemOut"
+                        "secret": "#/components/schemas/SecretItemOut",
+                        "memory": "#/components/schemas/MemoryItemOut"
                       }
                     }
                   },
@@ -1568,6 +1572,124 @@
             }
           }
         },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items/memory/{name}": {
+      "get": {
+        "summary": "Get Memory",
+        "operationId": "get_memory_api_items_memory__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Memory",
+        "description": "新建的归 owner（名字要是 slug）；已有的整体改写正文与描述，owner 不变。谁能用由角色收录它（`use:memory:<名>`）。",
+        "operationId": "put_memory_api_items_memory__name__put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Memory",
+        "description": "全局记忆不能删（422）。",
+        "operationId": "delete_memory_api_items_memory__name__delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -2099,172 +2221,6 @@
             }
           }
         ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/memory": {
-      "get": {
-        "summary": "Get Memory",
-        "description": "agent 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。",
-        "operationId": "get_memory_api_memory_get",
-        "parameters": [
-          {
-            "name": "agent",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Agent"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "summary": "Put Memory",
-        "operationId": "put_memory_api_memory_put",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/memory/history": {
-      "get": {
-        "summary": "Memory History",
-        "description": "agent 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。",
-        "operationId": "memory_history_api_memory_history_get",
-        "parameters": [
-          {
-            "name": "agent",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Agent"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RevisionOut"
-                  },
-                  "title": "Response Memory History Api Memory History Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/memory/restore": {
-      "post": {
-        "summary": "Restore Memory",
-        "description": "把某一版的正文作为新的一版写入。",
-        "operationId": "restore_memory_api_memory_restore_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryRestoreIn"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -5778,7 +5734,7 @@
       },
       "MemoryIn": {
         "properties": {
-          "agent": {
+          "owner": {
             "anyOf": [
               {
                 "type": "string"
@@ -5787,7 +5743,12 @@
                 "type": "null"
               }
             ],
-            "title": "Agent"
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
           },
           "content": {
             "type": "string",
@@ -5796,16 +5757,95 @@
         },
         "type": "object",
         "required": [
-          "agent",
           "content"
         ],
         "title": "MemoryIn"
       },
+      "MemoryItemOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "shared": {
+            "type": "boolean",
+            "title": "Shared"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "kind": {
+            "type": "string",
+            "const": "memory",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "roles",
+          "shared",
+          "updated_at",
+          "kind"
+        ],
+        "title": "MemoryItemOut",
+        "description": "正文不在列表里（GET /items/memory/{name} 读）。"
+      },
       "MemoryOut": {
         "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
           "content": {
             "type": "string",
             "title": "Content"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
           },
           "max_chars": {
             "type": "integer",
@@ -5814,34 +5854,14 @@
         },
         "type": "object",
         "required": [
+          "name",
+          "owner",
+          "description",
           "content",
+          "updated_at",
           "max_chars"
         ],
         "title": "MemoryOut"
-      },
-      "MemoryRestoreIn": {
-        "properties": {
-          "agent": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Agent"
-          },
-          "rev": {
-            "type": "integer",
-            "title": "Rev"
-          }
-        },
-        "type": "object",
-        "required": [
-          "rev"
-        ],
-        "title": "MemoryRestoreIn"
       },
       "NotificationEvent": {
         "properties": {
@@ -7584,7 +7604,8 @@
         "enum": [
           "skill",
           "mcp",
-          "secret"
+          "secret",
+          "memory"
         ],
         "title": "StoredKind"
       },

@@ -1,5 +1,5 @@
-"""条目池（ItemCatalog，条目子域的门面）：跨种类看条目——全部条目与收录它们的角色（界面的条目页）、转移 owner、版本历史与恢复。
-各种类自己的内容与写入在各 store（skills、mcp、secrets）；owner 的变更在 agents.ownership；能用、能改的规则与一个 agent 能用的
+"""AI 资产池（ItemCatalog，条目子域的门面）：跨种类看资产——全部资产与收录它们的角色（界面的资产页）、转移 owner、版本历史与
+恢复。各种类自己的内容与写入在各 store（skills、mcp、secrets、memory）；owner 的变更在 agents.ownership；能用、能改的规则与一个 agent 能用的
 （reach）是分发子域的（agents.access、agents.distribution）。"""
 
 from __future__ import annotations
@@ -12,8 +12,9 @@ from datetime import datetime
 from muliao.agents.access import changeable_in, sharing_in
 from muliao.agents.active import check_active_in
 from muliao.agents.items import check_visible_in, owner_label_in, visible_in
-from muliao.agents.kinds import Kind, StoredKind, Subject, as_subject, label
+from muliao.agents.kinds import Kind, StoredKind, as_subject, label
 from muliao.agents.mcp import McpRegistry, McpServer, server_of
+from muliao.agents.memory import MemoryStore
 from muliao.agents.ownership import transfer_in
 from muliao.agents.permissions import ToolSpec, spec_of
 from muliao.agents.revisions import RESTORABLE, RevisionInfo, history_in
@@ -51,6 +52,7 @@ class ItemCatalog:
         tools: Sequence[str],
         skills: SkillStore,
         mcp: McpRegistry,
+        memory: MemoryStore,
     ):
         self._db = db
         self._tools = tuple(tools)
@@ -58,8 +60,9 @@ class ItemCatalog:
         self._restore: dict[StoredKind, Callable[[str, int, str], Awaitable[object]]] = {
             StoredKind.SKILL: skills.restore,
             StoredKind.MCP: mcp.restore,
+            StoredKind.MEMORY: memory.restore,
         }
-        if {as_subject(k) for k in self._restore} != RESTORABLE - {Subject.MEMORY}:
+        if {as_subject(k) for k in self._restore} != RESTORABLE:
             raise RuntimeError(
                 f"restorable item kinds {sorted(self._restore)} do not match revisions.RESTORABLE"
             )

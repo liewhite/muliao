@@ -1,15 +1,17 @@
-"""分发规则（能用什么）：工具登记、`kind:name` 通配符规则、内置角色，在这里唯一登记。
+"""分发规则（AI 资产的 RBAC）：工具登记、`action:kind:name` 通配符规则、内置角色，在这里唯一登记。
 
-用途是防误操作、减少无关工具与条目占用上下文，不是安全隔离。
+用途是防误操作、减少无关工具与资产占用上下文，不是安全隔离。
 
-- 条目分四种（agents.kinds.Kind）：内置工具（tool，登记在 TOOLS，内容在代码里、归平台、不可改）与存在 items 表里的
-  skill、MCP server、secret。名字按种类全局唯一。
-- 规则：allow / deny 两组 `kind:glob`（fnmatch，如 `tool:issue_*`、`skill:relay-host`、`secret:RELAY_*`），deny 优先。
-  一组规则「收录」一个条目即 Rules.allows（allow 匹配、deny 没拦）：条目页列出的收录角色、删 agent 时判断条目是否分发
-  出去，都是这一个定义。
+- AI 资产分五种（agents.kinds.Kind）：内置工具（tool，登记在 TOOLS，内容在代码里、归平台、不可改）与存在 items 表里的
+  skill、MCP server、secret、记忆。名字按种类全局唯一。
+- 权限 = 动作 + 资产：`use:skill:relay-host`、`write:memory:trading`。动作只有 use（用：skill 进索引、MCP 连上、secret 能
+  解析、记忆放进 instructions、工具开放）与 write（改、删），二者互相独立；tool 只有 use。
+- 规则：allow / deny 两组 `action:kind:glob`，整串 fnmatch（如 `use:tool:issue_*`、`*:memory:trading`、`write:*`），deny
+  优先。Rules.allows 是全系统唯一的判断；一组规则「收录」一个资产即它放行 use：条目页列出的收录角色、删 agent 时判断资产
+  是否分发出去，都是这一个定义。
   agent 的规则 = 内置角色 base（每个 agent 隐含）+ 它的各个角色 + 它自己的 allow / deny，allow 与 deny 分别取并集。
-- agent 能用的条目 = 它自己 owner 的 ∪ 规则放行的（agents.access）。
-- 内置角色 base（全部非管理工具）与 admin（全部工具；admin 还能改任何条目，见 agents.access）：规则 = 代码里固定的部分
+- agent 能对资产做某个动作 = 它是 owner（隐含的专属角色：use 与 write）或规则放行（agents.access）；deny 只拦规则分来的。
+- 内置角色 base（全部非管理工具与全局记忆）与 admin（全部工具，并能改任何资产）：规则 = 代码里固定的部分
   （FIXED_RULES，新加的工具自动归入）∪ 存在 roles 表里可编辑的部分（如 base 收录的 skill）。
 - 运行开始时按规则算出工具列表（agent_runtime.toolbox.Toolbox），调用时不再判断，工具列表在一次运行里不变。
 """
@@ -30,10 +32,17 @@ class Access(StrEnum):
     WRITE = "write"
 
 
+class Action(StrEnum):
+    """对资产的动作：权限的第一段。"""
+
+    USE = "use"
+    WRITE = "write"
+
+
 @dataclass(frozen=True)
 class Tool:
     access: Access
-    # 管理类工具（管 agent、角色、全局记忆、条目归属，以及很少用的 MCP 配置、删 secret，#295）：base 没有，只经 admin
+    # 管理类工具（管 agent、角色、记忆的增删、资产归属，以及很少用的 MCP 配置、删 secret，#295）：base 没有，只经 admin
     # 角色或显式规则给出
     admin: bool = False
 
@@ -62,8 +71,10 @@ TOOLS: dict[str, Tool] = {
     "write_skill": W,
     "edit_skill": W,
     "delete_skill": W,
+    # 改哪块记忆按 write 权限，调用时查（agents.memory）
     "memory_edit": W,
-    "memory_edit_public": ADMIN_W,
+    "memory_create": ADMIN_W,
+    "memory_delete": ADMIN_W,
     "history_append": W,
     "history_search": R,
     "ask_user": R,
@@ -128,38 +139,56 @@ def available_tools(*, web_configured: bool) -> tuple[str, ...]:
 
 
 def pattern_of(kind: Kind, name: str) -> str:
-    """一个条目在规则里的名字：`kind:name`。"""
+    """一个资产的名字：`kind:name`（界面、get_agent 列出能用的资产）。"""
     return f"{kind.value}:{name}"
 
 
-def kind_of(pattern: str) -> Kind:
-    """规则的种类；不是 `kind:glob` 形式（kind 为 tool、skill、mcp、secret 之一，glob 非空）时 InvalidInput。"""
-    kind, sep, glob = pattern.partition(":")
-    if not sep or not glob or kind not in Kind.__members__.values():
+def permission_of(action: Action, kind: Kind, name: str) -> str:
+    """一个权限：`action:kind:name`，规则按整串 fnmatch 匹配它。"""
+    return f"{action.value}:{pattern_of(kind, name)}"
+
+
+_ACTIONS = (*(a.value for a in Action), "*")
+
+
+def kind_of(pattern: str) -> Kind | None:
+    """规则针对的种类；`write:*` 这类不限种类的为 None。不是 `action:kind:glob`（action 为 use、write 或 *，kind 为
+    Kind 之一，glob 非空）或 `action:*` 形式时 InvalidInput；tool 只有 use。"""
+    action, _, rest = pattern.partition(":")
+    kind, sep, glob = rest.partition(":")
+    if action not in _ACTIONS or not (rest == "*" or (sep and glob and kind in Kind.__members__.values())):
         raise InvalidInput(
-            f"rule {pattern!r} must look like 'kind:name' with kind one of {[k.value for k in Kind]} "
-            "(fnmatch wildcards allowed in the name), e.g. 'tool:issue_*', 'skill:relay-host', 'secret:RELAY_*'"
+            f"rule {pattern!r} must look like 'action:kind:name' with action one of {list(_ACTIONS)} and kind one "
+            f"of {[k.value for k in Kind]} (fnmatch wildcards allowed in the name), or 'action:*'; e.g. "
+            "'use:tool:issue_*', 'use:skill:relay-host', '*:memory:trading', 'write:*'"
         )
+    if rest == "*":
+        return None
+    if kind == Kind.TOOL and action == Action.WRITE:
+        raise InvalidInput(f"rule {pattern!r}: built-in tools can only be used ('use:tool:...')")
     return Kind(kind)
 
 
 def check_patterns(patterns: Sequence[str]) -> None:
     """不查数据库的规则校验：形式合法、不重复，tool 规则至少匹配一个登记的工具（拼错的在写入时报出，而不是悄悄什么都不
-    匹配）。skill / mcp / secret 规则是否匹配现有条目由写入方在事务里查（agents.roles.check_new_items_in）。"""
+    匹配）。别的种类的规则是否匹配现有资产由写入方在事务里查（agents.roles.check_new_items_in）。"""
     bad = [
         p
         for p in patterns
-        if kind_of(p) == Kind.TOOL and not any(fnmatchcase(pattern_of(Kind.TOOL, t), p) for t in TOOLS)
+        if kind_of(p) == Kind.TOOL
+        and not any(fnmatchcase(permission_of(Action.USE, Kind.TOOL, t), p) for t in TOOLS)
     ]
     if bad:
-        raise InvalidInput(f"rules {bad} match no tool; tools are listed by get_agent, e.g. 'tool:issue_*'")
+        raise InvalidInput(
+            f"rules {bad} match no tool; tools are listed by get_agent, e.g. 'use:tool:issue_*'"
+        )
     if len(set(patterns)) != len(patterns):
         raise InvalidInput(f"rules must be distinct, got {list(patterns)}")
 
 
 @dataclass(frozen=True)
 class Rules:
-    """一组 allow / deny 的 `kind:glob`；deny 优先。"""
+    """一组 allow / deny 的 `action:kind:glob`；deny 优先。"""
 
     allow: tuple[str, ...] = ()
     deny: tuple[str, ...] = ()
@@ -172,16 +201,20 @@ class Rules:
             deny=tuple(dict.fromkeys(p for r in rules for p in r.deny)),
         )
 
-    def allows(self, kind: Kind, name: str) -> bool:
-        """这组规则收录它：allow 匹配、deny 没拦。"""
-        item = pattern_of(kind, name)
-        return any(fnmatchcase(item, p) for p in self.allow) and not any(
-            fnmatchcase(item, p) for p in self.deny
+    def allows(self, action: Action, kind: Kind, name: str) -> bool:
+        """这组规则放行这个权限：allow 匹配、deny 没拦。全系统唯一的判断。"""
+        permission = permission_of(action, kind, name)
+        return any(fnmatchcase(permission, p) for p in self.allow) and not any(
+            fnmatchcase(permission, p) for p in self.deny
         )
+
+    def includes(self, kind: Kind, name: str) -> bool:
+        """收录：放行 use。"""
+        return self.allows(Action.USE, kind, name)
 
     def tools(self, available: Collection[str]) -> list[str]:
         """available（当前配置下注册的工具，available_tools）里放行的，按登记顺序。"""
-        return [n for n in TOOLS if n in available and self.allows(Kind.TOOL, n)]
+        return [n for n in TOOLS if n in available and self.includes(Kind.TOOL, n)]
 
 
 @dataclass(frozen=True)
@@ -214,8 +247,17 @@ class Role:
 BASE = "base"
 ADMIN = "admin"
 
-# 内置角色固定的规则：base 是全部非管理工具（写成纯 allow：deny 优先于一切 allow，写成 deny 的话 admin 也放不开）
+# 全局记忆：所有 agent 共享的那块记忆（agents.memory），由 base 收录
+GLOBAL_MEMORY = "global"
+
+# 内置角色固定的规则：base 是全部非管理工具与全局记忆（写成纯 allow：deny 优先于一切 allow，写成 deny 的话 admin 也放
+# 不开）；admin 是全部工具，并能改任何资产
 FIXED_RULES: dict[str, Rules] = {
-    BASE: Rules(allow=tuple(pattern_of(Kind.TOOL, n) for n, t in TOOLS.items() if not t.admin)),
-    ADMIN: Rules(allow=("tool:*",)),
+    BASE: Rules(
+        allow=(
+            *(permission_of(Action.USE, Kind.TOOL, n) for n, t in TOOLS.items() if not t.admin),
+            permission_of(Action.USE, Kind.MEMORY, GLOBAL_MEMORY),
+        )
+    ),
+    ADMIN: Rules(allow=("use:tool:*", "write:*")),
 }

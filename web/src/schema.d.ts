@@ -506,7 +506,7 @@ export interface paths {
         };
         /**
          * List Items
-         * @description 全部条目：内置工具（按登记顺序，仅当前配置下注册的）在前，skill、MCP server、secret 按种类、名称；每种带自己的
+         * @description 全部资产：内置工具（按登记顺序，仅当前配置下注册的）在前，存在库里的按种类、名称；每种带自己的
          *     详情（工具的读写与管理类、MCP 的配置与启停）。
          */
         get: operations["list_items_api_items_get"];
@@ -573,6 +573,31 @@ export interface paths {
          */
         post: operations["restore_item_api_items__kind___name__restore_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/items/memory/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Memory */
+        get: operations["get_memory_api_items_memory__name__get"];
+        /**
+         * Put Memory
+         * @description 新建的归 owner（名字要是 slug）；已有的整体改写正文与描述，owner 不变。谁能用由角色收录它（`use:memory:<名>`）。
+         */
+        put: operations["put_memory_api_items_memory__name__put"];
+        post?: never;
+        /**
+         * Delete Memory
+         * @description 全局记忆不能删（422）。
+         */
+        delete: operations["delete_memory_api_items_memory__name__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -721,67 +746,6 @@ export interface paths {
         post?: never;
         /** Delete Secret */
         delete: operations["delete_secret_api_items_secret__name__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/memory": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Memory
-         * @description agent 为空是全局记忆（所有 agent 共享），否则是该 agent 的记忆。
-         */
-        get: operations["get_memory_api_memory_get"];
-        /** Put Memory */
-        put: operations["put_memory_api_memory_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/memory/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Memory History
-         * @description agent 为空是全局记忆；新的在前，第一条即当前的一版，只列最近 50 版。
-         */
-        get: operations["memory_history_api_memory_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/memory/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Restore Memory
-         * @description 把某一版的正文作为新的一版写入。
-         */
-        post: operations["restore_memory_api_memory_restore_post"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2079,24 +2043,59 @@ export interface components {
         McpTransport: "stdio" | "http";
         /** MemoryIn */
         MemoryIn: {
-            /** Agent */
-            agent: string | null;
+            /** Owner */
+            owner?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
             /** Content */
             content: string;
+        };
+        /**
+         * MemoryItemOut
+         * @description 正文不在列表里（GET /items/memory/{name} 读）。
+         */
+        MemoryItemOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            /** Roles */
+            roles: string[];
+            /** Shared */
+            shared: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "memory";
         };
         /** MemoryOut */
         MemoryOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
             /** Content */
             content: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
             /** Max Chars */
             max_chars: number;
-        };
-        /** MemoryRestoreIn */
-        MemoryRestoreIn: {
-            /** Agent */
-            agent?: string | null;
-            /** Rev */
-            rev: number;
         };
         /**
          * NotificationEvent
@@ -2753,7 +2752,7 @@ export interface components {
          * StoredKind
          * @enum {string}
          */
-        StoredKind: "skill" | "mcp" | "secret";
+        StoredKind: "skill" | "mcp" | "secret" | "memory";
         /** StreamConfig */
         StreamConfig: {
             /** Command */
@@ -4204,7 +4203,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": (components["schemas"]["ToolItemOut"] | components["schemas"]["SkillItemOut"] | components["schemas"]["McpItemOut"] | components["schemas"]["SecretItemOut"])[];
+                    "application/json": (components["schemas"]["ToolItemOut"] | components["schemas"]["SkillItemOut"] | components["schemas"]["McpItemOut"] | components["schemas"]["SecretItemOut"] | components["schemas"]["MemoryItemOut"])[];
                 };
             };
         };
@@ -4290,6 +4289,101 @@ export interface operations {
                 "application/json": components["schemas"]["RestoreIn"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_memory_api_items_memory__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_memory_api_items_memory__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_memory_api_items_memory__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             204: {
@@ -4702,132 +4796,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_memory_api_memory_get: {
-        parameters: {
-            query?: {
-                agent?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_memory_api_memory_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MemoryIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MemoryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    memory_history_api_memory_history_get: {
-        parameters: {
-            query?: {
-                agent?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RevisionOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    restore_memory_api_memory_restore_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MemoryRestoreIn"];
-            };
-        };
         responses: {
             /** @description Successful Response */
             204: {

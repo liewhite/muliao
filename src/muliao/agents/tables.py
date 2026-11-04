@@ -78,11 +78,11 @@ class Role(Base):
 
 
 class Item(Base):
-    """条目（agents.items）：skill、MCP server、secret，按种类名字全局唯一。owner 为 None 是平台的，否则是该 agent 的；
+    """存在表里的 AI 资产（agents.items）：skill、MCP server、secret、记忆，按种类名字全局唯一。owner 为 None 是平台的，否则是该 agent 的；
     谁能用、谁能改见 agents.access。
 
     content 的含义因种类而异：skill 是 SKILL.md 全文（附件在 item_files），MCP server 是配置 JSON（McpConfig），secret 为空
-    （密文在 secret，由 agents/secrets.py 的 Vault 加解密）。description 是 skill 与 secret 的描述（skill 的也在 SKILL.md 的 frontmatter 里，
+    （密文在 secret，由 agents/secrets.py 的 Vault 加解密），记忆是正文。description 是 skill 与 secret 的描述（skill 的也在 SKILL.md 的 frontmatter 里，
     写入时解析出来存一份，列 skill 索引不必解析全文）。"""
 
     __tablename__ = "items"
@@ -115,25 +115,11 @@ class ItemFile(Base):
     executable: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-class Memory(Base):
-    """记忆（agents.memory）：全局记忆（agent_id 为 None，至多一行）与每个 agent 的记忆（创建 agent 时写入）。"""
-
-    __tablename__ = "memories"
-    __table_args__ = ({"sqlite_autoincrement": True},)
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # 唯一（SQLite 里 NULL 互不相等：全局记忆只有一行由 MemoryStore 保证，写入都在串行的写事务里）
-    agent_id: Mapped[str | None] = mapped_column(String(32), _owner_ref(), unique=True)
-    content: Mapped[str] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
-
-
 class Revision(Base):
     """条目、记忆、角色与 agent 分发规则的一版（agents.revisions）：谁、何时、改前改后、说明。只追加；对象或 agent
     删除后仍保留（审计）。
 
-    subject 是 kinds.Subject（skill、mcp、secret、memory、role、agent）；name 是条目名、角色名，记忆与 agent 规则是
-    agent 的 id（全局记忆为空串）。before / after 是这一版前后的文档（各对象自己的文本形式，见 agents.revisions 的
+    subject 是 kinds.Subject（skill、mcp、secret、memory、role、agent）；name 是资产名、角色名，agent 规则是 agent 的 id。before / after 是这一版前后的文档（各对象自己的文本形式，见 agents.revisions 的
     模块说明），新建时 before 为 None、删除时 after 为 None。secret 的文档只有描述，不含值。"""
 
     __tablename__ = "revisions"

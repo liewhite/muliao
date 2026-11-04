@@ -92,7 +92,11 @@ async def test_a_run_that_fails_still_records_what_it_already_spent(container, m
         if any(isinstance(m, ModelResponse) for m in messages):
             raise ModelHTTPError(500, "m", body="upstream is down")
         return ModelResponse(
-            parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": "- x"}, tool_call_id="c")],
+            parts=[
+                ToolCallPart(
+                    "memory_edit", {"name": "alpha", "reason": "r", "new_text": "- x"}, tool_call_id="c"
+                )
+            ],
             usage=REPLY_USAGE,
         )
 

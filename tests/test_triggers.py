@@ -447,7 +447,7 @@ async def test_an_agent_uses_its_own_enabled_servers_and_those_its_roles_give_it
     assert [(s.owner, s.name) for s in await container.mcp.usable(alpha)] == [(alpha, "mine")]
     assert await owned(container, "mcp", None) == ["echo", "other"]
     # 归平台的只有角色给了的生效；停用的不生效
-    await container.distribution.create(RoleSpec("other-user", "d", ["mcp:other"], []), actor="user")
+    await container.distribution.create(RoleSpec("other-user", "d", ["use:mcp:other"], []), actor="user")
     await container.agents.update(alpha, AgentPatch(roles=["other-user"]), actor="user")
     assert [s.name for s in await container.mcp.index(alpha)] == ["mine", "other"]
     await container.mcp.set_enabled("mine", False, "user")
@@ -817,7 +817,7 @@ async def test_an_mcp_server_with_a_missing_secret_is_skipped_and_the_model_is_t
     await container.mcp.add("echo", broken, actor="user", owner=alpha, probe=False)
     good = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
     await container.mcp.add("good", good, actor="user", owner=None, probe=False)
-    await share(container, "mcp:good")
+    await share(container, "use:mcp:good")
     requests, tools = _recording_model(models, "m")
 
     await start(container, alpha, "token?")
@@ -852,7 +852,7 @@ async def test_an_mcp_server_that_fails_to_list_its_tools_is_skipped_and_the_mod
     spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
     await container.mcp.add("broken", spec, actor="user", owner=alpha, probe=False)
     await container.mcp.add("good", spec, actor="user", owner=None, probe=False)
-    await share(container, "mcp:good")
+    await share(container, "use:mcp:good")
     requests, tools = _recording_model(models, "m")
 
     await start(container, alpha, "go")

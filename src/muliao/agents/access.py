@@ -1,12 +1,14 @@
-"""分发子域的规则（条目的两条，加上改 agent 配置的一条），只在这里写一次：
+"""分发子域的规则（AI 资产的一条，加上改 agent 配置的一条），只在这里写一次：
 
-1. 能用（Grants.uses）：agent 能用的条目 = 它自己 owner 的 ∪ 它的规则（agents.permissions，base + 角色 + 自己的 allow /
-   deny）放行的。deny 只作用于规则分来的，不作用于自己的条目。用户（界面）能用全部。
-2. 能改（check_change_in）：用户、条目的 owner、带 admin 角色的 agent；否则 Forbidden，并说出 owner 是谁。owner 为 None
-   的条目归平台（迁移前的公共条目、用户在界面上建的、内置工具）。
-3. 改 agent 配置（Grants.check_agent_update）：用户、admin 能改任何 agent；别的 agent 只能改自己的描述、模型、思考强度。
+1. 能做某个动作（Grants.can，动作是 use 或 write，agents.permissions.Action）：agent 是资产的 owner（隐含的专属角色，
+   use 与 write 都有），或它的规则（base + 角色 + 自己的 allow / deny）放行这个权限（Rules.allows）。deny 只拦规则分来的，
+   不作用于自己的资产。用户（界面）全部能做。admin 能改任何资产靠它固定的 `write:*`，不另写特判。owner 为 None 的
+   资产归平台（迁移前的公共条目、用户在界面上建的、内置工具、全局与共享记忆）。改不了时 Forbidden，并说出 owner 是谁
+   （check_change_in）。
+2. 改 agent 配置（Grants.check_agent_update）：agent 配置不是资产，按角色判断：用户、带 admin 角色的能改任何 agent；别的
+   agent 只能改自己的描述、模型、思考强度。
 
-由此派生的也都在这里：一份配置能用哪些（reach_in）、条目分发出去了没有与收录它的角色（sharing_in），以及条目子域的查询加上
+由此派生的也都在这里：一份配置能用哪些（reach_in）、资产分发出去了没有与收录它的角色（sharing_in），以及条目子域的查询加上
 规则的 changeable_in / writable_in / usable_in。
 
 规则按读出时角色的定义算：运行开始时算一次工具列表（Toolbox.profile），条目在用到时（skill 索引、MCP 连接、secret
@@ -25,7 +27,7 @@ from muliao.agents.agent_rules import AgentRules, agent_rules_in, all_agent_rule
 from muliao.agents.ids import USER
 from muliao.agents.items import check_owner_active_in, existing_in, item_in, items_in, keys_in, owner_label_in
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
-from muliao.agents.permissions import ADMIN, BASE, Role, Rules, ToolSpec, pattern_of, spec_of
+from muliao.agents.permissions import ADMIN, BASE, Action, Role, Rules, ToolSpec, pattern_of, spec_of
 from muliao.agents.roles import roles_in
 from muliao.agents.tables import Item
 from muliao.errors import Forbidden
@@ -33,27 +35,32 @@ from muliao.errors import Forbidden
 
 @dataclass(frozen=True)
 class Grants:
-    """一个使用者能用什么、能改什么。agent_id 为 None 是用户：全部能用、全部能改。"""
+    """一个使用者能对哪些资产做什么。agent_id 为 None 是用户：全部能做。"""
 
     agent_id: str | None
     rules: Rules
+    # 带 admin 角色：只用于改 agent 配置（规则 2），资产上的权限都来自 rules
     admin: bool
 
     @classmethod
     def of(cls, agent_id: str, roles: Collection[str], rules: Rules) -> Grants:
-        """agent 的 Grants：rules 是它的最终规则（AgentRules.effective），带 admin 角色就能改任何条目。"""
+        """agent 的 Grants：rules 是它的最终规则（AgentRules.effective）。"""
         return cls(agent_id, rules, ADMIN in roles)
 
-    def uses(self, kind: Kind, name: str, owner: str | None) -> bool:
+    def can(self, action: Action, kind: Kind, name: str, owner: str | None) -> bool:
+        """规则 1。"""
         if self.agent_id is None:
             return True
-        return owner == self.agent_id or self.rules.allows(kind, name)
+        return owner == self.agent_id or self.rules.allows(action, kind, name)
 
-    def changes(self, owner: str | None) -> bool:
-        return self.agent_id is None or self.admin or owner == self.agent_id
+    def uses(self, kind: Kind, name: str, owner: str | None) -> bool:
+        return self.can(Action.USE, kind, name, owner)
+
+    def writes(self, kind: Kind, name: str, owner: str | None) -> bool:
+        return self.can(Action.WRITE, kind, name, owner)
 
     def check_agent_update(self, target: str, fields: Collection[str]) -> None:
-        """规则 3：改 agent 的配置（fields 是要改的字段名，归档是 `archived`）。用户与 admin 能改任何 agent 的任何字段；
+        """规则 2：改 agent 的配置（fields 是要改的字段名，归档是 `archived`）。用户与 admin 能改任何 agent 的任何字段；
         别的 agent 只能改自己的 SELF_UPDATABLE（不能借此给自己加角色、规则，也不能改名、换组、归档），否则 Forbidden。"""
         if self.agent_id is None or self.admin:
             return
@@ -82,7 +89,7 @@ Keep = Callable[[Kind, str, str | None], bool]
 
 def granted_by(rules: Rules) -> Keep:
     """只按规则、不看 owner 的「能用」（规则 1 的规则那一半）：一个角色本身、还没建的 agent。与 Grants.uses 同签名。"""
-    return lambda kind, name, _owner: rules.allows(kind, name)
+    return lambda kind, name, _owner: rules.includes(kind, name)
 
 
 def grants_of(agent_id: str, rules: AgentRules, known: dict[str, Role]) -> Grants:
@@ -107,14 +114,16 @@ class Sharing:
     agents: tuple[tuple[str, Rules], ...]
 
     def shared(self, kind: Kind, name: str, owner: str | None) -> bool:
-        """「分发出去了」：base 收录它（人人可用，也给以后新建的 agent），或某个不是它 owner 的 agent 的规则放行它。只有一个
-        定义：条目页据此说明谁能用（CatalogEntry.shared），删 agent 时据此把它名下分发出去的条目转给平台。没分给任何 agent
-        的自建角色收录它不算。"""
-        return self.base.allows(kind, name) or any(r.allows(kind, name) for a, r in self.agents if a != owner)
+        """「分发出去了」：base 收录它（人人可用，也给以后新建的 agent），或某个不是它 owner 的 agent 的规则收录它（放行
+        use：admin 的 `write:*` 不算分发）。只有一个定义：条目页据此说明谁能用（CatalogEntry.shared），删 agent 时据此把它
+        名下分发出去的资产转给平台。没分给任何 agent 的自建角色收录它不算。"""
+        return self.base.includes(kind, name) or any(
+            r.includes(kind, name) for a, r in self.agents if a != owner
+        )
 
     def including(self, kind: Kind, name: str) -> tuple[str, ...]:
         """收录它的角色（含内置的）。"""
-        return tuple(r.name for r in self.roles if r.effective.allows(kind, name))
+        return tuple(r.name for r in self.roles if r.effective.includes(kind, name))
 
 
 async def sharing_in(s: AsyncSession) -> Sharing:
@@ -124,16 +133,17 @@ async def sharing_in(s: AsyncSession) -> Sharing:
 
 
 async def check_change_in(s: AsyncSession, actor: str, row: Item) -> None:
-    """规则 2：actor 能改这一项，否则 Forbidden。"""
-    if not (await grants_in(s, actor)).changes(row.owner):
+    """actor 能改这一项（规则 1 的 write），否则 Forbidden。"""
+    kind = StoredKind(row.kind)
+    if not (await grants_in(s, actor)).writes(as_kind(kind), row.name, row.owner):
         raise Forbidden(
-            f"{label(StoredKind(row.kind))} {row.name!r} belongs to {await owner_label_in(s, row.owner)}; only its owner or an "
-            "admin can change it"
+            f"{label(kind)} {row.name!r} belongs to {await owner_label_in(s, row.owner)}; only its owner, an agent "
+            f"whose roles grant 'write:{kind.value}:{row.name}', or an admin can change it"
         )
 
 
 async def changeable_in(s: AsyncSession, kind: StoredKind, name: str, actor: str) -> Item:
-    """要改或删的已有条目：existing_in，且 actor 能改它（规则 2）。"""
+    """要改或删的已有条目：existing_in，且 actor 能改它（规则 1 的 write）。"""
     row = await existing_in(s, kind, name)
     await check_change_in(s, actor, row)
     return row
@@ -142,7 +152,7 @@ async def changeable_in(s: AsyncSession, kind: StoredKind, name: str, actor: str
 async def writable_in(
     s: AsyncSession, kind: StoredKind, name: str, actor: str, owner: str | None
 ) -> Item | None:
-    """新建或整体改写之前：已存在就按规则 2 检查并返回它（owner 不变）；不存在时返回 None，新条目将归 owner（agent 时
+    """新建或整体改写之前：已存在就按规则 1 的 write 检查并返回它（owner 不变）；不存在时返回 None，新条目将归 owner（agent 时
     检查它还可用）。"""
     row = await item_in(s, kind, name)
     if row is not None:
@@ -162,7 +172,7 @@ async def usable_in(s: AsyncSession, kind: StoredKind, user: str) -> list[Item]:
 
 @dataclass(frozen=True)
 class Reach:
-    """一份配置能用的：内置工具（按登记顺序）与 skill、MCP server、secret（`kind:name`，按种类、名称）。"""
+    """一份配置能用的：内置工具（按登记顺序）与存在 items 里的资产（`kind:name`，按种类、名称）。"""
 
     tools: list[ToolSpec]
     items: list[str]

@@ -1,21 +1,37 @@
-"""记忆：全局记忆（所有 agent 共享）与 agent 的记忆，同一套规则——进每次运行的 instructions、每次修改一版、可以恢复。"""
+"""记忆是 AI 资产（#365）：全局记忆、共享记忆与私有记忆同一套规则——能用（use）的每一块进每次运行的 instructions，能改
+（write）的才能改，每次修改一版、可以恢复。"""
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
-from muliao.agents.api import RevisionInfo, Subject
+from muliao.agents.api import RevisionInfo, RoleSpec, Subject
 from muliao.agents.memory import MemoryFull
-from muliao.errors import NotFound
-from tests.conftest import history, login
+from muliao.agents.service import AgentPatch, AgentSpec
+from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
+from tests.conftest import history, login, owned
 from tests.scripted import scripted
 from tests.test_flow import call_then_answer, drain, start
 
 
-async def test_global_memory_precedes_the_agents_own_memory_in_every_run(container, make_agent, models):
+async def memory_history(container, name: str) -> list[RevisionInfo]:
+    return await history(container, Subject.MEMORY, name, 10)
+
+
+async def _content(container, name: str) -> str:
+    return (await container.memory.read(name)).content
+
+
+async def test_every_memory_block_an_agent_uses_is_in_its_instructions_by_name(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m")).id
-    await container.memory.write(None, "Always answer in Chinese.", "user")
-    await container.memory.write(alpha, "- likes tea", "user")
+    await make_agent("beta")
+    await container.memory.put("global", "Always answer in Chinese.", "", actor="user")
+    await container.memory.put("alpha", "- likes tea", "", actor="user")
+    await container.memory.put("beta", "- secret of beta", "", actor="user")
+    await container.memory.create("trading", "- fees matter", actor="user")
+    await container.memory.create("ops", "- not for alpha", actor="user")
+    await container.distribution.create(RoleSpec("trader", "t", ["use:memory:trading"], []), actor="user")
+    await container.agents.update(alpha, AgentPatch(roles=["trader"]), actor="user")
     seen: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -26,116 +42,144 @@ async def test_global_memory_precedes_the_agents_own_memory_in_every_run(contain
     await start(container, alpha, "hi")
     await drain(container)
 
-    assert seen[0].index("Always answer in Chinese.") < seen[0].index("## Runtime context")
-    assert seen[0].index("## Runtime context") < seen[0].index("- likes tea")
+    text = seen[0]
+    # 按名字排序，每块标出能不能改
+    assert text.index(
+        '<memory name="alpha" access="editable, your private memory">\n- likes tea'
+    ) < text.index('<memory name="global" access="read-only, shared">\nAlways answer in Chinese.')
+    assert text.index('name="global"') < text.index('<memory name="trading" access="read-only, shared">')
+    assert "secret of beta" not in text and "not for alpha" not in text
+    assert text.index("## Runtime context") < text.index("## Memory")
 
 
-async def memory_history(container, agent_id: str | None) -> list[RevisionInfo]:
-    return await history(container, Subject.MEMORY, agent_id or "", 10)
-
-
-async def test_memory_api_reads_and_writes_global_and_agent_memory_and_restores_versions(
-    client, container, make_agent
-):
+async def test_memory_api_reads_writes_creates_deletes_and_restores_versions(client, container, make_agent):
     agent = await make_agent("alpha")
     await login(client)
-    assert (await client.get("/api/memory")).json() == {"content": "", "max_chars": 4000}
-    assert (await client.get("/api/memory/history")).json() == []
+    got = (await client.get("/api/items/memory/global")).json()
+    assert (got["content"], got["owner"], got["max_chars"]) == ("", None, 4000)
 
     for content in ("first", "second"):
-        resp = await client.put("/api/memory", json={"agent": None, "content": content})
+        resp = await client.put("/api/items/memory/global", json={"content": content})
         assert resp.json()["content"] == content
-    history = (await client.get("/api/memory/history")).json()
-    assert [(r["content"], r["actor"]) for r in history] == [("second", "user"), ("first", "user")]
-    assert (await client.post("/api/memory/restore", json={"rev": history[1]["rev"]})).status_code == 204
-    assert await container.memory.read(None) == "first"
+    revs = (await client.get("/api/items/memory/global/history")).json()
+    assert [(r["content"], r["actor"]) for r in revs][:2] == [("second", "user"), ("first", "user")]
+    assert (
+        await client.post("/api/items/memory/global/restore", json={"rev": revs[1]["rev"]})
+    ).status_code == 204
+    assert await _content(container, "global") == "first"
 
-    for content in ("- likes tea\n", "- likes coffee\n"):
-        await client.put("/api/memory", json={"agent": agent.id, "content": content})
-    assert (await client.get("/api/memory", params={"agent": agent.id})).json()[
-        "content"
-    ] == "- likes coffee\n"
-    memory = (await client.get(f"/api/memory/history?agent={agent.id}")).json()
-    assert [r["content"] for r in memory][:2] == ["- likes coffee\n", "- likes tea\n"]
-    await client.post("/api/memory/restore", json={"agent": agent.id, "rev": memory[1]["rev"]})
-    assert await container.memory.read(agent.id) == "- likes tea\n"
-    # 全局记忆不受影响
-    assert await container.memory.read(None) == "first"
-    assert (await client.get("/api/memory", params={"agent": "nope"})).status_code == 404
-    bad = await client.post("/api/memory/restore", json={"agent": agent.id, "rev": "HEAD"})
-    assert bad.status_code == 422
-
-
-async def test_empty_global_memory_that_was_never_written_has_no_history(container):
-    assert await container.memory.read(None) == ""
-    await container.memory.write(None, "", "user")
-    assert await memory_history(container, None) == []
+    await client.put("/api/items/memory/alpha", json={"content": "- likes tea\n"})
+    assert (await client.get("/api/items/memory/alpha")).json()["owner"] == agent.id
+    # 新建的归请求给出的 owner（缺省为平台），名字要是 slug
+    created = await client.put("/api/items/memory/trading", json={"content": "x", "description": "交易"})
+    assert (created.json()["owner"], created.json()["description"]) == (None, "交易")
+    assert (await client.put("/api/items/memory/Bad Name", json={"content": "x"})).status_code == 422
+    kinds = {i["name"]: i for i in (await client.get("/api/items")).json() if i["kind"] == "memory"}
+    assert set(kinds) == {"alpha", "global", "trading"}
+    assert kinds["global"]["roles"] == ["base"] and kinds["global"]["shared"]
+    assert not kinds["trading"]["shared"]
+    assert (await client.delete("/api/items/memory/trading")).status_code == 204
+    assert (await client.delete("/api/items/memory/global")).status_code == 422
+    assert (await client.get("/api/items/memory/nope")).status_code == 404
+    assert (await client.get("/api/memory")).status_code == 404
 
 
-async def test_cleared_global_memory_keeps_a_restorable_history(container):
-    await container.memory.write(None, "v1", "user")
-    await container.memory.write(None, "", "user")
-    assert await container.memory.read(None) == ""
-    assert [r.actor for r in await memory_history(container, None)] == ["user", "user"]
-
-
-async def test_global_memory_has_the_same_length_limit(container):
-    with pytest.raises(MemoryFull, match="global memory would be"):
-        await container.memory.edit(None, "", "x" * (container.memory.max_chars + 1), "user")
-    assert await memory_history(container, None) == []
-
-
-async def test_an_agents_memory_limit_error_tells_the_model_without_its_id(container, make_agent):
+async def test_a_private_memory_is_created_with_the_agent_and_keeps_its_name(container, make_agent):
     agent = await make_agent("alpha")
-    with pytest.raises(MemoryFull, match="your memory would be") as e:
-        await container.memory.edit(agent.id, "", "x" * (container.memory.max_chars + 1), agent.id)
-    assert agent.id not in str(e.value)
+    assert await owned(container, "memory", agent.id) == ["alpha"]
+    assert [r.message for r in await memory_history(container, "alpha")] == ["create memory"]
+    # 改名不跟着改；占用这个名字的记忆在，就不能再建同名 agent
+    await container.agents.update(agent.id, AgentPatch(name="renamed"), actor="user")
+    assert await owned(container, "memory", agent.id) == ["alpha"]
+    with pytest.raises(Conflict, match="memory named 'alpha'"):
+        await container.agents.create(AgentSpec(name="alpha", description="d"), actor="user")
 
 
-async def test_a_cleared_agent_memory_is_a_new_version(container, make_agent):
+async def test_the_memory_limit_is_per_block_and_tells_how_much_to_free(container, make_agent):
     agent = await make_agent("alpha")
-    await container.memory.write(agent.id, "- fact", "user")
-    await container.memory.write(agent.id, "", "user")
-    assert await container.memory.read(agent.id) == ""
-    assert len(await memory_history(container, agent.id)) == 3
+    with pytest.raises(MemoryFull, match="memory 'alpha' would be") as e:
+        await container.memory.edit("alpha", "", "x" * (container.memory.max_chars + 1), agent.id)
+    assert agent.id not in str(e.value) and "free at least" in str(e.value)
+    with pytest.raises(InvalidInput, match="limit"):
+        await container.memory.put("global", "x" * (container.memory.max_chars + 1), "", actor="user")
+    assert [r.message for r in await memory_history(container, "global")] == []
 
 
-async def test_an_agent_edits_the_global_memory_as_a_versioned_change_under_its_name(
-    container, make_agent, models
-):
+async def test_a_cleared_memory_is_a_new_version(container, make_agent):
+    await make_agent("alpha")
+    await container.memory.put("alpha", "- fact", "", actor="user")
+    await container.memory.put("alpha", "", "", actor="user")
+    assert await _content(container, "alpha") == ""
+    assert len(await memory_history(container, "alpha")) == 3
+
+
+async def test_who_can_edit_a_memory_block_follows_write_permissions(container, make_agent):
+    alpha, beta = await make_agent("alpha"), await make_agent("beta")
+    boss = await make_agent("boss", roles=("admin",))
+    await container.memory.create("trading", "", actor="user")
+    await container.memory.create("ops", "", actor="user")
+    await container.distribution.create(RoleSpec("trader", "t", ["*:memory:trading"], []), actor="user")
+    await container.distribution.create(RoleSpec("reader", "r", ["use:memory:ops"], []), actor="user")
+    await container.agents.update(alpha.id, AgentPatch(roles=["trader", "reader"]), actor="user")
+    # 自己的私有记忆、角色给了 write 的共享记忆能改
+    await container.memory.edit("alpha", "", "- mine", alpha.id)
+    await container.memory.edit("trading", "", "- shared", alpha.id)
+    # 只给了 use 的、全局记忆、别人的私有记忆不能改
+    for name in ("ops", "global", "beta"):
+        with pytest.raises(Forbidden, match=f"write:memory:{name}"):
+            await container.memory.edit(name, "", "- no", alpha.id)
+    # admin 靠 write:* 能改任何一块，owner 不变
+    await container.memory.edit("beta", "", "- by admin", boss.id)
+    assert await owned(container, "memory", beta.id) == ["beta"]
+    blocks = {m.name: m for m in await container.memory.for_run(alpha.id)}
+    assert {n: (m.editable, m.yours) for n, m in blocks.items()} == {
+        "alpha": (True, True),
+        "global": (False, False),
+        "ops": (False, False),
+        "trading": (True, False),
+    }
+    # admin 能改不等于能用：别人的私有记忆不进它的指令
+    assert "beta" not in {m.name for m in await container.memory.for_run(boss.id)}
+
+
+async def test_an_agent_edits_a_memory_block_by_name_as_a_versioned_change(container, make_agent, models):
     agent = await make_agent("alpha", model="m", roles=["admin"])
     args = {
+        "name": "global",
         "new_text": "- all agents answer in Chinese",
         "reason": "user asked twice for Chinese (session s1)",
     }
-    models.models["m"] = call_then_answer("memory_edit_public", args, "Added a rule.")
+    models.models["m"] = call_then_answer("memory_edit", args, "Added a rule.")
     await start(container, agent.id, "hello")
     await drain(container)
 
-    assert await container.memory.read(None) == "- all agents answer in Chinese\n"
-    # 自己的记忆没变
-    assert await container.memory.read(agent.id) == ""
-    latest = (await memory_history(container, None))[0]
+    assert await _content(container, "global") == "- all agents answer in Chinese\n"
+    assert await _content(container, "alpha") == ""
+    latest = (await memory_history(container, "global"))[0]
     # 为什么改记进这一版：自进化的时间线
     assert (latest.actor, latest.message) == (agent.id, "user asked twice for Chinese (session s1)")
 
-    models.models["m"] = call_then_answer(
-        "memory_edit_public", {"reason": "r", "old_text": "Chinese", "new_text": "English"}, "Done."
-    )
+    args = {"name": "trading", "reason": "gather fee notes from cex-arb and wick-maker", "content": "- fees"}
+    models.models["m"] = call_then_answer("memory_create", args, "Created.")
     await start(container, agent.id, "again")
     await drain(container)
-    assert await container.memory.read(None) == "- all agents answer in English\n"
+    assert (await container.memory.read("trading")).owner is None
 
 
-async def test_deleting_an_agent_keeps_the_global_memory_it_wrote(container, make_agent):
-    agent = await make_agent("alpha")
-    await container.memory.write(None, "shared", agent.id)
-    await container.agent_lifecycle.delete(agent.id, actor="user")
-    # 删除的清理经事件完成
+async def test_deleting_an_agent_removes_its_memory_unless_a_role_shares_it(container, make_agent):
+    alpha, beta, other = await make_agent("alpha"), await make_agent("beta"), await make_agent("other")
+    await container.memory.put("alpha", "- private", "", actor="user")
+    await container.memory.put("beta", "- handed over", "", actor="user")
+    await container.distribution.create(RoleSpec("b", "b", ["use:memory:beta"], []), actor="user")
+    await container.agents.update(other.id, AgentPatch(roles=["b"]), actor="user")
+    for a in (alpha, beta):
+        await container.agent_lifecycle.delete(a.id, actor="user")
     await drain(container)
 
-    assert [r.actor for r in await memory_history(container, None)] == [agent.id]
     with pytest.raises(NotFound):
-        await container.memory.read(agent.id)
+        await container.memory.read("alpha")
     # 被删 agent 的记忆的历史仍在版本表里，可以审计
-    assert len(await memory_history(container, agent.id)) == 2
+    assert len(await memory_history(container, "alpha")) == 3
+    # 分给了别的 agent 的转给平台
+    assert (await container.memory.read("beta")).owner is None
+    assert "beta" in {m.name for m in await container.memory.for_run(other.id)}

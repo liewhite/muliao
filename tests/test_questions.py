@@ -516,7 +516,11 @@ async def test_a_question_asked_alongside_another_tool_is_answered_as_its_result
             return ModelResponse(
                 parts=[
                     ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="q1"),
-                    ToolCallPart("memory_edit", {"reason": "r", "new_text": "- asked"}, tool_call_id="m1"),
+                    ToolCallPart(
+                        "memory_edit",
+                        {"name": "analyst", "reason": "r", "new_text": "- asked"},
+                        tool_call_id="m1",
+                    ),
                 ]
             )
         last = messages[-1]
@@ -543,7 +547,7 @@ async def test_a_question_asked_alongside_another_tool_is_answered_as_its_result
     # 发给模型时 pydantic-ai 把相邻的两条请求合成一条：别的工具的结果与提问的结果在一起
     assert [name for name, _ in results] == ["memory_edit", "ask_user"]
     assert json.loads(results[1][1])["answered"] is True
-    assert await container.memory.read(agent.id) == "- asked\n"  # 别的工具只执行了一次
+    assert (await container.memory.read("analyst")).content == "- asked\n"  # 别的工具只执行了一次
 
 
 def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():

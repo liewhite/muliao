@@ -110,7 +110,9 @@ async def test_mail_arriving_during_a_run_reaches_the_model_between_tool_calls(c
             await post(container, session.id, "job 7 finished: exit 0", source="job:7")
             yield {
                 0: DeltaToolCall(
-                    name="memory_edit", json_args='{"reason": "r", "new_text": "- x"}', tool_call_id="m1"
+                    name="memory_edit",
+                    json_args='{"name": "alpha", "reason": "r", "new_text": "- x"}',
+                    tool_call_id="m1",
                 )
             }
         else:
@@ -145,7 +147,13 @@ async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_t
         requests["n"] += 1
         if requests["n"] == 1:
             return ModelResponse(
-                parts=[ToolCallPart("memory_edit", {"reason": "r", "new_text": "- once"}, tool_call_id="m1")]
+                parts=[
+                    ToolCallPart(
+                        "memory_edit",
+                        {"name": "alpha", "reason": "r", "new_text": "- once"},
+                        tool_call_id="m1",
+                    )
+                ]
             )
         if requests["n"] == 2:
             raise ModelHTTPError(status_code=400, model_name="flaky", body="bad request")
@@ -162,7 +170,7 @@ async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_t
 
     assert requests["n"] == 3
     # 工具在失败之前已经执行并保存了结果：续跑时重发那次请求，不再执行一遍
-    assert await container.memory.read(agent.id) == "- once\n"
+    assert (await container.memory.read("alpha")).content == "- once\n"
     history = await history_of(container, session.id)
     assert [type(m).__name__ for m in history] == [
         "ModelRequest",
@@ -348,7 +356,9 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
 
     # 回复在执行工具之前就已保存，结果没有；那条 run task 留在 running，由下次启动恢复（platform.worker）
     async with container.db.transaction() as s:
-        call = ToolCallPart("memory_edit", {"reason": "r", "new_text": "- boom"}, tool_call_id="m1")
+        call = ToolCallPart(
+            "memory_edit", {"name": "alpha", "reason": "r", "new_text": "- boom"}, tool_call_id="m1"
+        )
         s.add(
             Message(
                 session_id=session.id,
@@ -362,7 +372,7 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
     await drain(container)
 
     # 工具没有再执行一遍，模型看到的是「被中断、没有重跑」的结果
-    assert "- boom" not in await container.memory.read(agent.id)
+    assert "- boom" not in (await container.memory.read("alpha")).content
     returns = [p for p in seen[-1].parts if isinstance(p, ToolReturnPart)]
     assert [(r.tool_call_id, r.content, r.outcome) for r in returns] == [
         ("m1", INTERRUPTED_TOOL_RESULT, "interrupted")
@@ -455,7 +465,9 @@ async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_agai
                         parts=[
                             ToolCallPart("ask_user", {"questions": QUESTIONS}, tool_call_id="q1"),
                             ToolCallPart(
-                                "memory_edit", {"reason": "r", "new_text": "- boom"}, tool_call_id="m1"
+                                "memory_edit",
+                                {"name": "alpha", "reason": "r", "new_text": "- boom"},
+                                tool_call_id="m1",
                             ),
                         ]
                     )
@@ -475,7 +487,7 @@ async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_agai
     await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "", "answers": answers})
     await drain(container)
 
-    assert "- boom" not in await container.memory.read(agent.id)
+    assert "- boom" not in (await container.memory.read("alpha")).content
     # 这次请求带着两条结果：补上的「被中断」与用户的回答（pydantic-ai 把相邻的请求并成一条发出）
     returns = [p for p in seen[-1].parts if isinstance(p, ToolReturnPart)]
     assert [r.tool_call_id for r in returns] == ["m1", "q1"]

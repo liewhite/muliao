@@ -13,7 +13,7 @@ from muliao.agents.agent_rules import agent_rules_in
 from muliao.agents.api import McpTransport, RoleSpec, Rules, StoredKind, Subject, mcp_config
 from muliao.agents.kinds import as_kind, as_subject
 from muliao.agents.ownership import DOCUMENTS
-from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, TOOLS, Kind, check_patterns
+from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, TOOLS, Action, Kind, check_patterns
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.sessions.api import Origin
@@ -24,7 +24,8 @@ from tests.test_triggers import ECHO_SERVER
 
 # 管理类工具：base 没有，admin 有
 _ADMIN_TOOLS = {
-    "memory_edit_public",
+    "memory_create",
+    "memory_delete",
     "create_agent",
     "delete_agent",
     "create_role",
@@ -39,17 +40,32 @@ _ADMIN_TOOLS = {
 }
 
 
-def test_rules_match_kind_and_name_and_deny_wins():
-    rules = Rules(allow=("tool:*", "skill:relay-*", "secret:RELAY_*"), deny=("tool:delete_agent",))
-    assert rules.allows(Kind.TOOL, "create_agent") and not rules.allows(Kind.TOOL, "delete_agent")
-    assert rules.allows(Kind.SKILL, "relay-host") and not rules.allows(Kind.SKILL, "other")
-    assert rules.allows(Kind.SECRET, "RELAY_KEY") and not rules.allows(Kind.MCP, "RELAY_KEY")
-    # 种类不串：skill 规则不放行同名 MCP
-    assert not Rules(allow=("skill:*",)).allows(Kind.MCP, "x")
-    union = Rules.union(
-        [Rules(allow=("tool:issue_*",)), Rules(allow=("tool:*",), deny=("tool:issue_update",))]
+def test_rules_match_action_kind_and_name_and_deny_wins():
+    rules = Rules(
+        allow=("use:tool:*", "use:skill:relay-*", "use:secret:RELAY_*", "*:memory:trading"),
+        deny=("use:tool:delete_agent",),
     )
-    assert union.allows(Kind.TOOL, "issue_create") and not union.allows(Kind.TOOL, "issue_update")
+    assert rules.includes(Kind.TOOL, "create_agent") and not rules.includes(Kind.TOOL, "delete_agent")
+    assert rules.includes(Kind.SKILL, "relay-host") and not rules.includes(Kind.SKILL, "other")
+    assert rules.includes(Kind.SECRET, "RELAY_KEY") and not rules.includes(Kind.MCP, "RELAY_KEY")
+    # 动作互相独立：use 不含 write，`*` 两者都有
+    assert not rules.allows(Action.WRITE, Kind.SKILL, "relay-host")
+    assert rules.allows(Action.USE, Kind.MEMORY, "trading") and rules.allows(
+        Action.WRITE, Kind.MEMORY, "trading"
+    )
+    writer = Rules(allow=("write:skill:relay-*",))
+    assert writer.allows(Action.WRITE, Kind.SKILL, "relay-host") and not writer.includes(
+        Kind.SKILL, "relay-host"
+    )
+    # admin 的 write:* 覆盖每一种的写，但不等于能用
+    admin = FIXED_RULES[ADMIN]
+    assert admin.allows(Action.WRITE, Kind.MEMORY, "global") and not admin.includes(Kind.MEMORY, "global")
+    # 种类不串：skill 规则不放行同名 MCP
+    assert not Rules(allow=("use:skill:*",)).includes(Kind.MCP, "x")
+    union = Rules.union(
+        [Rules(allow=("use:tool:issue_*",)), Rules(allow=("use:tool:*",), deny=("use:tool:issue_update",))]
+    )
+    assert union.includes(Kind.TOOL, "issue_create") and not union.includes(Kind.TOOL, "issue_update")
 
 
 def test_self_updatable_fields_are_agent_patch_fields():
@@ -57,15 +73,29 @@ def test_self_updatable_fields_are_agent_patch_fields():
     assert SELF_UPDATABLE <= {f.name for f in dataclasses.fields(AgentPatch)}
 
 
-def test_patterns_need_a_kind_and_tool_patterns_a_tool():
-    check_patterns(["tool:*", "tool:issue_*", "skill:anything", "mcp:x", "secret:K_*"])
-    for bad in ("issue:list", "*", "tool:", "skills:x", ":x"):
-        with pytest.raises(InvalidInput, match="kind:name"):
+def test_patterns_need_an_action_and_a_kind_and_tool_patterns_a_tool():
+    check_patterns(
+        ["use:tool:*", "use:tool:issue_*", "use:skill:anything", "use:mcp:x", "use:secret:K_*"]
+        + ["write:memory:m", "*:memory:m", "write:*", "*:tool:run_shell"]
+    )
+    for bad in (
+        "issue:list",
+        "*",
+        "tool:run_shell",
+        "skill:x",
+        "use:tool:",
+        "use:skills:x",
+        "read:skill:x",
+        ":x",
+    ):
+        with pytest.raises(InvalidInput, match="action:kind:name"):
             check_patterns([bad])
+    with pytest.raises(InvalidInput, match="only be used"):
+        check_patterns(["write:tool:run_shell"])
     with pytest.raises(InvalidInput, match="match no tool"):
-        check_patterns(["tool:isue_*"])
+        check_patterns(["use:tool:isue_*"])
     with pytest.raises(InvalidInput, match="distinct"):
-        check_patterns(["tool:issue_*", "tool:issue_*"])
+        check_patterns(["use:tool:issue_*", "use:tool:issue_*"])
 
 
 def test_base_has_every_tool_but_admin_ones_and_admin_has_all():
@@ -92,27 +122,27 @@ async def test_new_agents_have_base_implicitly(container):
 async def test_roles_are_created_assigned_updated_and_protected(container):
     roles = container.distribution
     await roles.create(
-        RoleSpec("reviewer", "reads issues", ["tool:issue_*"], ["tool:issue_update"]), actor="user"
+        RoleSpec("reviewer", "reads issues", ["use:tool:issue_*"], ["use:tool:issue_update"]), actor="user"
     )
     with pytest.raises(Conflict):
-        await roles.create(RoleSpec("reviewer", "again", ["tool:issue_*"], []), actor="user")
+        await roles.create(RoleSpec("reviewer", "again", ["use:tool:issue_*"], []), actor="user")
     with pytest.raises(Conflict):
-        await roles.create(RoleSpec("admin", "shadow a built-in", ["tool:*"], []), actor="user")
+        await roles.create(RoleSpec("admin", "shadow a built-in", ["use:tool:*"], []), actor="user")
     with pytest.raises(InvalidInput, match="match no tool"):
-        await roles.create(RoleSpec("typo", "d", ["tool:isue_*"], []), actor="user")
+        await roles.create(RoleSpec("typo", "d", ["use:tool:isue_*"], []), actor="user")
     with pytest.raises(InvalidInput, match="no existing"):
-        await roles.create(RoleSpec("typo", "d", ["skill:nope"], []), actor="user")
+        await roles.create(RoleSpec("typo", "d", ["use:skill:nope"], []), actor="user")
     with pytest.raises(InvalidInput, match="built in"):
         await roles.delete(BASE, actor="user")
     with pytest.raises(NotFound):
         await roles.delete("nope", actor="user")
 
     agent = await container.agents.create(
-        AgentSpec(name="r", description="d", deny=["tool:*"], roles=["reviewer"]), actor="user"
+        AgentSpec(name="r", description="d", deny=["use:tool:*"], roles=["reviewer"]), actor="user"
     )
     # 自己的 deny 盖过 base 与角色
     assert (await container.distribution.reach(agent.id)).tool_names == []
-    agent = await container.agents.update(agent.id, AgentPatch(deny=["tool:run_shell"]), actor="user")
+    agent = await container.agents.update(agent.id, AgentPatch(deny=["use:tool:run_shell"]), actor="user")
     assert "issue_update" not in (await container.distribution.reach(agent.id)).tool_names
 
     with pytest.raises(Conflict, match="used by agents"):
@@ -132,19 +162,25 @@ async def test_a_role_hands_out_skills_and_secrets_and_an_items_owner_always_has
     assert await container.skills.index(trader.id) == []
 
     await container.distribution.create(
-        RoleSpec("relay-trader", "relay", ["skill:relay-host", "secret:RELAY_*"], []), actor="user"
+        RoleSpec("relay-trader", "relay", ["use:skill:relay-host", "use:secret:RELAY_*"], []), actor="user"
     )
     await container.agents.update(trader.id, AgentPatch(roles=["relay-trader"]), actor="user")
     assert [s.name for s in await container.skills.index(trader.id)] == ["relay-host"]
     assert await container.vault.resolve_many(trader.id, ["RELAY_KEY"]) == {"RELAY_KEY": "v"}
-    assert (await container.distribution.reach(trader.id)).items == ["secret:RELAY_KEY", "skill:relay-host"]
+    # 记忆：base 收录的全局记忆与它自己的私有记忆
+    assert (await container.distribution.reach(trader.id)).items == [
+        "memory:global",
+        "memory:trader",
+        "secret:RELAY_KEY",
+        "skill:relay-host",
+    ]
     with pytest.raises(NotFound):
         await container.vault.resolve_many(other.id, ["RELAY_KEY"])
 
     # deny 只作用于规则分来的，不作用于自己的
-    await container.agents.update(owner.id, AgentPatch(deny=["skill:*"]), actor="user")
+    await container.agents.update(owner.id, AgentPatch(deny=["use:skill:*"]), actor="user")
     assert [s.name for s in await container.skills.index(owner.id)] == ["relay-host"]
-    await container.agents.update(trader.id, AgentPatch(deny=["skill:*"]), actor="user")
+    await container.agents.update(trader.id, AgentPatch(deny=["use:skill:*"]), actor="user")
     assert await container.skills.index(trader.id) == []
 
     # 软隔离：没分到的照样读得到，带提示标记
@@ -182,7 +218,9 @@ async def test_a_deleted_agents_shared_items_move_to_the_platform(container, mak
     await container.skills.write("shared", "d", "b", actor=owner.id, owner=owner.id)
     await container.skills.write("alone", "d", "b", actor=owner.id, owner=owner.id)
     base = await container.distribution.get(BASE)
-    await container.distribution.update(RoleSpec(BASE, base.description, ["skill:shared"], []), actor="user")
+    await container.distribution.update(
+        RoleSpec(BASE, base.description, ["use:skill:shared"], []), actor="user"
+    )
     await container.agent_lifecycle.delete(owner.id, actor="user")
     await drain(container)
     assert await owned(container, "skill", None) == ["shared"]
@@ -247,7 +285,7 @@ async def test_mcp_is_what_the_agent_owns_or_its_roles_give_it(container, models
     spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
     await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
     await container.mcp.add("other", spec, actor="user", owner=None, probe=False)
-    await container.distribution.create(RoleSpec("echoer", "echo", ["mcp:echo"], []), actor="user")
+    await container.distribution.create(RoleSpec("echoer", "echo", ["use:mcp:echo"], []), actor="user")
     picky = await container.agents.create(
         AgentSpec(name="picky", description="d", model="m1", roles=["echoer"]), actor="user"
     )
@@ -277,13 +315,13 @@ async def test_mcp_is_what_the_agent_owns_or_its_roles_give_it(container, models
 async def test_an_item_rule_survives_its_item_being_removed(container):
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
-    await container.distribution.create(RoleSpec("echoer", "echo", ["mcp:echo"], []), actor="user")
+    await container.distribution.create(RoleSpec("echoer", "echo", ["use:mcp:echo"], []), actor="user")
     await container.mcp.remove("echo", "user")
     # 已有的规则不查是否匹配现有条目：改描述照常
-    await container.distribution.update(RoleSpec("echoer", "new", ["mcp:echo"], []), actor="user")
+    await container.distribution.update(RoleSpec("echoer", "new", ["use:mcp:echo"], []), actor="user")
     with pytest.raises(InvalidInput, match="no existing"):
         await container.distribution.update(
-            RoleSpec("echoer", "new", ["mcp:echo", "mcp:gone"], []), actor="user"
+            RoleSpec("echoer", "new", ["use:mcp:echo", "use:mcp:gone"], []), actor="user"
         )
 
 
@@ -298,29 +336,31 @@ async def test_tools_and_roles_api(client, container):
         body = {"agent_id": agent_id, "roles": list(roles), "allow": list(allow), "deny": list(deny)}
         return client.post("/api/agent-preview", json=body)
 
-    resolved = (await preview(deny=["tool:memory_*"])).json()
+    resolved = (await preview(deny=["use:tool:memory_*"])).json()
     names = [t["name"] for t in resolved["tools"]]
     assert "run_shell" in names and "memory_edit" not in names and "create_agent" not in names
     assert (await preview(roles=["nope"])).status_code == 422
-    assert (await preview(allow=["skill:nope"])).status_code == 422
+    assert (await preview(allow=["use:skill:nope"])).status_code == 422
 
     await container.skills.write("s", "d", "b", actor="user", owner=None)
-    body = {"description": "issues only", "allow": ["tool:issue_*", "skill:s"], "deny": []}
+    body = {"description": "issues only", "allow": ["use:tool:issue_*", "use:skill:s"], "deny": []}
     role_preview = (
         await client.post("/api/role-preview", json={"name": None, "allow": body["allow"], "deny": []})
     ).json()
     assert role_preview["items"] == ["skill:s"]
     assert [t["name"] for t in role_preview["tools"]][:2] == ["issue_list", "issue_show"]
-    bad_role = {"name": None, "allow": ["skill:nope"], "deny": []}
+    bad_role = {"name": None, "allow": ["use:skill:nope"], "deny": []}
     assert (await client.post("/api/role-preview", json=bad_role)).status_code == 422
     assert (await client.post("/api/roles/triage", json=body)).status_code == 201
     listed = {r["name"]: r for r in (await client.get("/api/roles")).json()}
     assert listed[BASE]["builtin"] and not listed["triage"]["builtin"]
     # base 每个 agent 隐含：界面上不能选（与写入时的校验同一个定义，Role.assignable）
     assert not listed[BASE]["assignable"] and listed["admin"]["assignable"] and listed["triage"]["assignable"]
-    assert "tool:run_shell" in listed[BASE]["fixed_allow"]
+    assert "use:tool:run_shell" in listed[BASE]["fixed_allow"]
     assert [t["name"] for t in listed["triage"]["reach"]["tools"]][:2] == ["issue_list", "issue_show"]
-    assert listed["triage"]["reach"]["items"] == ["skill:s"] and listed[BASE]["reach"]["items"] == []
+    assert listed["triage"]["reach"]["items"] == ["skill:s"] and listed[BASE]["reach"]["items"] == [
+        "memory:global"
+    ]
     # 内置角色的预览含它固定的部分
     base_preview = (
         await client.post("/api/role-preview", json={"name": BASE, "allow": [], "deny": []})
@@ -339,9 +379,9 @@ async def test_tools_and_roles_api(client, container):
     assert listed["admin"]["agents"] == []
     # 自己的条目总能用，deny 只拦规则分来的
     await container.skills.write("own", "d", "b", actor="user", owner=agent["id"])
-    reach = (await preview(agent["id"], ["triage"], deny=["skill:*"])).json()
-    assert reach["items"] == ["skill:own"]
-    assert (await preview(None, ["triage"])).json()["items"] == ["skill:s"]
+    reach = (await preview(agent["id"], ["triage"], deny=["use:skill:*"])).json()
+    assert reach["items"] == ["memory:global", "memory:t", "skill:own"]
+    assert (await preview(None, ["triage"])).json()["items"] == ["memory:global", "skill:s"]
     assert (await client.delete("/api/roles/triage")).status_code == 409
     assert (await client.delete(f"/api/agents/{agent['id']}")).status_code == 204
     # 删除 agent 的清理做完、行删掉之后角色才没人引用
@@ -357,13 +397,13 @@ def test_every_stored_kind_is_a_kind_and_a_subject_with_a_document():
 
 async def test_role_and_agent_rule_changes_are_recorded(container, make_agent):
     roles = container.distribution
-    await roles.create(RoleSpec("triage", "issues", ["tool:issue_*"], []), actor="user")
+    await roles.create(RoleSpec("triage", "issues", ["use:tool:issue_*"], []), actor="user")
     base = await roles.get(BASE)
-    await roles.patch(BASE, actor="boss", allow=["tool:issue_*"])
-    await roles.patch(BASE, actor="boss", allow=["tool:issue_*"])  # 没变：不记
+    await roles.patch(BASE, actor="boss", allow=["use:tool:issue_*"])
+    await roles.patch(BASE, actor="boss", allow=["use:tool:issue_*"])  # 没变：不记
     agent = await make_agent("a")
     await container.agents.update(
-        agent.id, AgentPatch(roles=["triage"], deny=["tool:run_shell"]), actor="user"
+        agent.id, AgentPatch(roles=["triage"], deny=["use:tool:run_shell"]), actor="user"
     )
     await container.agents.update(agent.id, AgentPatch(description="only the description"), actor="user")
     await container.agents.update(agent.id, AgentPatch(roles=[]), actor="user")
@@ -372,7 +412,7 @@ async def test_role_and_agent_rule_changes_are_recorded(container, make_agent):
     [base_rev] = await history(container, Subject.ROLE, BASE, 10)
     assert (base_rev.actor, base_rev.message) == ("boss", "update role base")
     assert base_rev.before == (f'{{\n "description": "{base.description}",\n "allow": [],\n "deny": []\n}}')
-    assert '"tool:issue_*"' in (base_rev.after or "")
+    assert '"use:tool:issue_*"' in (base_rev.after or "")
     [deleted, created] = await history(container, Subject.ROLE, "triage", 10)
     assert created.before is None and deleted.after is None and deleted.before == created.after
 
@@ -382,7 +422,9 @@ async def test_role_and_agent_rule_changes_are_recorded(container, make_agent):
         "update rules of agent a",
         "create agent a",
     ]
-    assert revs[1].after is not None and '"triage"' in revs[1].after and '"tool:run_shell"' in revs[1].after
+    assert (
+        revs[1].after is not None and '"triage"' in revs[1].after and '"use:tool:run_shell"' in revs[1].after
+    )
     assert revs[2].before is None
 
     await container.agent_lifecycle.delete(agent.id, actor="user")
@@ -399,11 +441,13 @@ async def test_an_item_denied_to_every_other_agent_goes_with_its_owner(container
     owner, other = await make_agent("owner"), await make_agent("other")
     await container.skills.write("shared", "d", "b", actor=owner.id, owner=owner.id)
     await container.skills.write("public", "d", "b", actor=owner.id, owner=owner.id)
-    await container.distribution.create(RoleSpec("triage", "t", ["skill:shared"], []), actor="user")
-    patch = AgentPatch(roles=["triage"], deny=["skill:shared", "skill:public"])
+    await container.distribution.create(RoleSpec("triage", "t", ["use:skill:shared"], []), actor="user")
+    patch = AgentPatch(roles=["triage"], deny=["use:skill:shared", "use:skill:public"])
     await container.agents.update(other.id, patch, actor="user")
     base = await container.distribution.get(BASE)
-    await container.distribution.update(RoleSpec(BASE, base.description, ["skill:public"], []), actor="user")
+    await container.distribution.update(
+        RoleSpec(BASE, base.description, ["use:skill:public"], []), actor="user"
+    )
     # 条目页与删除用同一个「收录」：triage 收录它，但带 triage 的唯一一个 agent 拦了它，没人在用
     [entry] = [e for e in await container.catalog.catalog() if e.name == "shared"]
     assert entry.roles == ("triage",)

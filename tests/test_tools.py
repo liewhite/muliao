@@ -76,7 +76,7 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
     from muliao.agents.service import AgentSpec
 
     await container.agents.create(
-        AgentSpec(name="narrow", description="d", model="n", deny=["tool:issue_update"]),
+        AgentSpec(name="narrow", description="d", model="n", deny=["use:tool:issue_update"]),
         actor="user",
     )
     narrow = await container.agents.find_by_name("narrow")
@@ -86,14 +86,14 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
 
     # 模型收到的是一段 JSON 对象（agent_runtime.tool_results），不是 Python repr
     detail = json.loads(output)
-    assert detail["roles"] == [] and detail["deny"] == ["tool:issue_update"]
+    assert detail["roles"] == [] and detail["deny"] == ["use:tool:issue_update"]
     # 最终工具：base 的减去 deny；base 没有管理类工具
     assert {"issue_create", "memory_edit"} <= set(detail["tools"])
-    assert not {"issue_update", "memory_edit_public"} & set(detail["tools"])
-    assert detail["items"] == ["skill:notes"]
+    assert not {"issue_update", "memory_create"} & set(detail["tools"])
+    assert detail["items"] == ["memory:global", "memory:narrow", "skill:notes"]
     # 参照：全部角色（含固定的规则）与全部内置工具（没配置 [web] 时不列 web 工具）
     admin = next(r for r in detail["available_roles"] if r["name"] == "admin")
-    assert admin["fixed_allow"] == ["tool:*"]
+    assert admin["fixed_allow"] == ["use:tool:*", "write:*"]
     assert "delete_role" in detail["all_tools"] and "web_search" not in detail["all_tools"]
 
 
@@ -186,7 +186,7 @@ async def test_agent_manages_its_secrets_and_shares_them_with_a_role(container, 
             ("vault_set", {"key": "A", "value": "private-a", "description": "mine"}),
             ("vault_set", {"key": "B", "value": "shared-b", "description": "shared"}),
             ("vault_delete", {"key": "A"}),
-            ("create_role", {"name": "b-user", "description": "uses B", "allow": ["secret:B"]}),
+            ("create_role", {"name": "b-user", "description": "uses B", "allow": ["use:secret:B"]}),
             ("update_agent", {"agent": "other", "roles": ["b-user"]}),
             ("vault_list", {}),
         ],
@@ -264,7 +264,7 @@ async def test_agent_without_admin_can_only_change_its_own_description_model_and
             ),
             ("update_agent", {"agent": "other", "description": "hijacked"}),
             ("update_agent", {"agent": "worker", "roles": ["admin"]}),
-            ("update_agent", {"agent": "worker", "allow": ["tool:*"], "description": "x"}),
+            ("update_agent", {"agent": "worker", "allow": ["use:tool:*"], "description": "x"}),
             ("update_agent", {"agent": "worker", "description": "y", "archived": True}),
             ("update_agent", {"agent": "worker", "new_name": "boss"}),
         ],
@@ -320,7 +320,7 @@ async def test_base_sees_every_tool_but_admin_ones_and_no_undistributed_mcp(cont
     await drain(container)
 
     assert sorted(seen) == sorted((await container.distribution.reach(triage.id)).tool_names)
-    assert not {"memory_edit_public", "create_agent", "create_role"} & set(seen)
+    assert not {"memory_create", "create_agent", "create_role"} & set(seen)
     assert {"write_skill", "memory_edit", "vault_set", "run_shell", "trigger_create"} <= set(seen)
     assert not any(name.startswith("echo_") for name in seen)
 
@@ -329,7 +329,7 @@ async def test_asked_agent_runs_with_its_own_permissions(container, make_agent, 
     from muliao.agents.service import AgentSpec
 
     await container.agents.create(
-        AgentSpec(name="narrow", description="d", model="n", deny=["tool:run_shell"]), actor="user"
+        AgentSpec(name="narrow", description="d", model="n", deny=["use:tool:run_shell"]), actor="user"
     )
     seen: list[str] = []
 
@@ -396,12 +396,12 @@ async def test_skill_and_memory_tools_record_the_reason_and_reject_a_blank_one(c
                 {"name": "digest", "description": "d", "content": "b", "reason": "done it twice"},
             ),
             ("delete_skill", {"name": "digest", "reason": "merged into report"}),
-            ("memory_edit", {"new_text": "- fact", "reason": " "}),
+            ("memory_edit", {"name": "alpha", "new_text": "- fact", "reason": " "}),
         ],
     )
 
     assert "reason must not be blank" in outputs[2]
-    assert await container.memory.read(me.id) == ""
+    assert (await container.memory.read("alpha")).content == ""
     history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
     # 删除那一版（content 为空）也带着原因
     assert [(r.message, r.after is None) for r in history] == [
@@ -1033,7 +1033,7 @@ async def test_the_skill_index_lists_own_skills_and_those_given_by_roles(contain
     await container.skills.write("good", "a good skill", "x", actor="user", owner=None)
     await container.skills.write("hidden", "not given", "x", actor="user", owner=None)
     await container.skills.write("mine", "my skill", "x", actor=alpha, owner=alpha)
-    await share(container, "skill:good")
+    await share(container, "use:skill:good")
     seen: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

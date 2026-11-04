@@ -11,7 +11,7 @@ from muliao.agents.mcp import McpTransport, mcp_config
 from muliao.agents.memory import MemoryFull
 from muliao.agents.skill_package import SKILL_FILE, SkillFile
 from muliao.agents.skills import attachments_from, parse_document
-from muliao.errors import Conflict, CorruptState, Forbidden, InvalidInput, NotFound
+from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from tests.conftest import history, owned, share
 from tests.test_flow import drain
 
@@ -32,7 +32,7 @@ async def test_an_agent_sees_its_own_skills_and_those_its_rules_give_it(containe
 
     # 归平台的不自动给谁：进了 base 才人人可用
     assert [(s.name, s.owner) for s in await skills.index(alpha)] == [("mine", alpha)]
-    await share(container, "skill:digest")
+    await share(container, "use:skill:digest")
     assert [s.name for s in await skills.index(alpha)] == ["digest", "mine"]
     assert (await skills.resolve(alpha, "mine")).body.strip() == "alpha body"
     assert not (await skills.resolve(alpha, "theirs")).usable
@@ -175,39 +175,30 @@ async def test_a_skill_is_restored_from_an_earlier_revision(container, make_agen
 async def test_memory_append_replace_limit_and_revisions(container, make_agent):
     memory = container.memory
     alpha = (await make_agent("alpha")).id
-    await memory.edit(alpha, "", "- likes tea", alpha)
-    await memory.edit(alpha, "", "- lives in Paris", alpha)
-    await memory.edit(alpha, "Paris", "Berlin", alpha)
-    assert await memory.read(alpha) == "- likes tea\n\n- lives in Berlin\n"
+    await memory.edit("alpha", "", "- likes tea", alpha)
+    await memory.edit("alpha", "", "- lives in Paris", alpha)
+    await memory.edit("alpha", "Paris", "Berlin", alpha)
+    assert (await memory.read("alpha")).content == "- likes tea\n\n- lives in Berlin\n"
 
     with pytest.raises(InvalidInput, match="found 2"):
-        await memory.edit(alpha, "-", "+", alpha)
+        await memory.edit("alpha", "-", "+", alpha)
     with pytest.raises(MemoryFull):
-        await memory.edit(alpha, "", "x" * 5000, alpha)
-    revisions = await history(container, Subject.MEMORY, alpha, 10)
+        await memory.edit("alpha", "", "x" * 5000, alpha)
+    revisions = await history(container, Subject.MEMORY, "alpha", 10)
     assert [r.before for r in revisions][-1] is None
     assert len(revisions) == 4
 
 
-async def test_a_missing_memory_row_is_corrupt_state_and_global_memory_starts_empty(container, make_agent):
-    from sqlalchemy import delete
-
-    from muliao.agents.tables import Memory
-
-    assert await container.memory.read(None) == ""
+async def test_global_memory_exists_from_the_start_and_unknown_names_are_not_found(container):
+    assert (await container.memory.read("global")).content == ""
     with pytest.raises(NotFound):
         await container.memory.read("c3c3c3c3c3c3")
-    alpha = (await make_agent()).id
-    async with container.db.transaction() as s:
-        await s.execute(delete(Memory).where(Memory.agent_id == alpha))
-    with pytest.raises(CorruptState):
-        await container.memory.read(alpha)
 
 
 async def test_concurrent_memory_edits_are_all_kept(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await asyncio.gather(*(container.memory.edit(alpha, "", f"- fact {i}", alpha) for i in range(5)))
-    assert sorted(line for line in (await container.memory.read(alpha)).split("\n") if line) == [
+    await asyncio.gather(*(container.memory.edit("alpha", "", f"- fact {i}", alpha) for i in range(5)))
+    assert sorted(line for line in ((await container.memory.read("alpha")).content).split("\n") if line) == [
         f"- fact {i}" for i in range(5)
     ]
 
@@ -225,7 +216,7 @@ async def test_mcp_servers_have_unique_names_and_versions(container, make_agent)
     with pytest.raises(Conflict):
         await mcp.add("search", config, actor=alpha, owner=alpha, probe=False)
     assert [s.name for s in await mcp.usable(alpha)] == ["own"]
-    await share(container, "mcp:search")
+    await share(container, "use:mcp:search")
     assert [s.name for s in await mcp.usable(alpha)] == ["own", "search"]
 
     await mcp.set_enabled("own", False, alpha)
@@ -264,7 +255,7 @@ async def test_secrets_are_visible_to_their_owner_and_keys_are_unique(container,
 
     with pytest.raises(Forbidden):
         await vault.set("TOKEN", "alpha-only", "", actor=alpha, owner=alpha)
-    await share(container, "secret:TOKEN")
+    await share(container, "use:secret:TOKEN")
     assert await vault.resolve_many(alpha, ["TOKEN", "ALPHA_KEY"]) == {"TOKEN": "public", "ALPHA_KEY": "a"}
     with pytest.raises(NotFound):
         await vault.resolve_many(beta, ["ALPHA_KEY"])
@@ -285,7 +276,8 @@ async def test_secrets_are_visible_to_their_owner_and_keys_are_unique(container,
 
 
 async def test_an_agents_items_and_memory_go_with_it_and_their_deletion_is_recorded(container, make_agent):
-    alpha = (await make_agent("alpha")).id
+    # admin：能改全局记忆
+    alpha = (await make_agent("alpha", roles=("admin",))).id
     await container.vault.set("TOKEN", "x", "", actor=alpha, owner=alpha)
     meta = await container.skills.write("digest", "d", "b", actor=alpha, owner=alpha)
     await container.mcp.add(
@@ -295,7 +287,7 @@ async def test_an_agents_items_and_memory_go_with_it_and_their_deletion_is_recor
         owner=alpha,
         probe=False,
     )
-    await container.memory.edit(None, "", "- global fact", alpha)
+    await container.memory.edit("global", "", "- global fact", alpha)
 
     await container.agent_lifecycle.delete(alpha, actor="user")
     # 删除的清理经事件完成
@@ -308,12 +300,12 @@ async def test_an_agents_items_and_memory_go_with_it_and_their_deletion_is_recor
         (Subject.SECRET, "TOKEN"),
         (Subject.SKILL, "digest"),
         (Subject.MCP, "own"),
-        (Subject.MEMORY, alpha),
+        (Subject.MEMORY, "alpha"),
     ]:
         latest = (await history(container, subject, name, 1))[0]
         assert (latest.after, latest.actor, latest.message) == (None, "user", f"deleted with agent {alpha}")
     # 它写过的全局记忆留着
-    assert await container.memory.read(None) == "- global fact\n"
+    assert (await container.memory.read("global")).content == "- global fact\n"
 
 
 async def test_writes_for_a_deleting_agent_are_refused(container, make_agent):
@@ -323,7 +315,7 @@ async def test_writes_for_a_deleting_agent_are_refused(container, make_agent):
     with pytest.raises(NotFound):
         await container.skills.write("late", "d", "b", actor=alpha, owner=alpha)
     with pytest.raises(NotFound):
-        await container.memory.edit(alpha, "", "late", alpha)
+        await container.memory.edit("alpha", "", "late", alpha)
     with pytest.raises(NotFound):
         await container.vault.set("LATE", "x", "", actor=alpha, owner=alpha)
 
@@ -366,26 +358,26 @@ async def test_hidden_and_dependency_directories_are_skipped_whole(tmp_path):
 
 async def test_memory_edit_with_nothing_to_append_is_rejected_and_unchanged(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await container.memory.edit(alpha, "", "- kept", alpha)
+    await container.memory.edit("alpha", "", "- kept", alpha)
     with pytest.raises(InvalidInput, match="new_text is empty") as raised:
-        await container.memory.edit(alpha, "", "  ", alpha)
+        await container.memory.edit("alpha", "", "  ", alpha)
     assert "- kept" not in str(raised.value)  # 与原文无关，不附全文
-    assert await container.memory.read(alpha) == "- kept\n"
+    assert (await container.memory.read("alpha")).content == "- kept\n"
 
 
 async def test_memory_edit_mismatch_shows_the_current_text(container, make_agent):
     # 指令里的记忆是运行开始时的快照：别的会话改过之后，报错里的全文是模型唯一能读到最新内容的地方（#349）
     alpha = (await make_agent("alpha")).id
-    await container.memory.edit(alpha, "", "- changed elsewhere", alpha)
+    await container.memory.edit("alpha", "", "- changed elsewhere", alpha)
     with pytest.raises(InvalidInput) as raised:
-        await container.memory.edit(alpha, "- as in my snapshot", "- new", alpha)
+        await container.memory.edit("alpha", "- as in my snapshot", "- new", alpha)
     assert str(raised.value).endswith("\n     1\t- changed elsewhere")
-    assert await container.memory.read(alpha) == "- changed elsewhere\n"
+    assert (await container.memory.read("alpha")).content == "- changed elsewhere\n"
 
 
 async def test_memory_edit_over_the_limit_shows_the_current_text(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await container.memory.edit(alpha, "", "- old entry", alpha)
+    await container.memory.edit("alpha", "", "- old entry", alpha)
     with pytest.raises(MemoryFull) as raised:
-        await container.memory.edit(alpha, "", "x" * container.memory.max_chars, alpha)
+        await container.memory.edit("alpha", "", "x" * container.memory.max_chars, alpha)
     assert str(raised.value).endswith("\n     1\t- old entry")

@@ -17,14 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.items import patterns_in
 from muliao.agents.kinds import Kind
-from muliao.agents.permissions import BASE, FIXED_RULES, Role, Rules, check_patterns, kind_of
+from muliao.agents.permissions import BASE, FIXED_RULES, Action, Role, Rules, check_patterns, kind_of
 from muliao.agents.tables import Role as RoleRow
 from muliao.errors import InvalidInput
 
 # 内置角色在表里没有行时的描述
 BUILTIN_DESCRIPTIONS: dict[str, str] = {
-    BASE: "每个 agent 都有：全部非管理工具，加上这里收录的 skill、MCP server、secret",
-    "admin": "全部工具（含管理 agent、角色、全局记忆），并且能改任何条目",
+    BASE: "每个 agent 都有：全部非管理工具与全局记忆，加上这里收录的 skill、MCP server、secret、记忆",
+    "admin": "全部工具（含管理 agent、角色、记忆的增删），并且能改任何 AI 资产",
 }
 
 
@@ -64,15 +64,17 @@ async def check_assignable_in(s: AsyncSession, names: Sequence[str]) -> None:
 
 
 async def check_new_items_in(s: AsyncSession, patterns: Sequence[str], before: Sequence[str]) -> None:
-    """新加的 skill / mcp / secret 规则（不在 before 里的）至少匹配一个现有条目：拼错的在写入时报出。已有的规则不查——
-    条目删掉再建（如 MCP 重新接入）时分发不丢，也不让改别的字段的写入失败。"""
-    new = [p for p in patterns if p not in before and kind_of(p) != Kind.TOOL]
+    """新加的针对某种存在 items 里的资产的规则（不在 before 里的）至少匹配一个现有资产：拼错的在写入时报出。已有的
+    规则不查——资产删掉再建（如 MCP 重新接入）时分发不丢，也不让改别的字段的写入失败。不限种类的（`write:*`）不查。"""
+    new = [p for p in patterns if p not in before and kind_of(p) not in (Kind.TOOL, None)]
     if not new:
         return
-    items = await patterns_in(s)
+    items = [f"{a.value}:{i}" for i in await patterns_in(s) for a in Action]
     bad = [p for p in new if not any(fnmatchcase(i, p) for i in items)]
     if bad:
-        raise InvalidInput(f"rules {bad} match no existing skill, MCP server or secret; check the names")
+        raise InvalidInput(
+            f"rules {bad} match no existing skill, MCP server, secret or memory; check the names"
+        )
 
 
 async def check_rules_in(s: AsyncSession, rules: Rules, before: Rules = Rules()) -> None:

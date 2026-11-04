@@ -116,11 +116,9 @@ AGENTS_TABLES: dict[str, set[str]] = {
     # 分发
     "Role": {"roles", "distribution"},
     "AgentRulesRow": {"agent_rules"},
-    # 条目
-    "Item": {"items", "skills", "mcp", "secrets", "ownership"},
+    # AI 资产（条目子域，记忆是其中一种）
+    "Item": {"items", "skills", "mcp", "secrets", "memory", "ownership"},
     "ItemFile": {"skills", "ownership"},
-    # 记忆
-    "Memory": {"memory"},
     # 版本
     "Revision": {"revisions"},
 }

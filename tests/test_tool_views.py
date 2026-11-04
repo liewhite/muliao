@@ -138,8 +138,7 @@ _MINIMAL_ARGS = {
     "read_skill": {"name": "s"},
     "write_skill": {"name": "s", "description": "d", "content": "c", "reason": "r"},
     "edit_skill": {"name": "s", "reason": "r", "old_text": "a", "new_text": "b"},
-    "memory_edit": {"new_text": "n", "reason": "r"},
-    "memory_edit_public": {"new_text": "n", "reason": "r", "old_text": "o"},
+    "memory_edit": {"name": "m", "new_text": "n", "reason": "r"},
 }
 
 

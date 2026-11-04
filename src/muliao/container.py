@@ -319,7 +319,7 @@ def assemble(
         AgentDefaults(settings.llm.default_model),
     )
     distribution = Distribution(db, tools)
-    catalog = ItemCatalog(db, tools, skills, mcp)
+    catalog = ItemCatalog(db, tools, skills, mcp, memory)
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
     ports = SessionPorts.build(db, queue, messaging, tz)
     activity = ports.activity

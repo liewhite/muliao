@@ -1,11 +1,11 @@
-"""自我进化工具：skill 与记忆（自己的与全局记忆）。"""
+"""自我进化工具：skill 与记忆。"""
 
 import asyncio
 from pathlib import Path
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agents.memory import MemoryStore
+from muliao.agents.memory import MemoryInfo, MemoryStore
 from muliao.agents.skill_package import ATTACHMENT_SUFFIXES, MAX_FILE_BYTES, SkillFile, Skipped
 from muliao.agents.skills import SkillMeta, SkillStore, attachments_from
 from muliao.platform.tool_views import Args, MarkdownBlock, ToolRender, ViewBlock, diff, fields, rendered_by
@@ -65,7 +65,9 @@ _SKILL_EDIT_RENDER = ToolRender[str](
         *_change(a),
     ],
 )
-_MEMORY_EDIT_RENDER = ToolRender[str](call=lambda a: [fields(("reason", a["reason"])), *_change(a)])
+_MEMORY_EDIT_RENDER = ToolRender[str](
+    call=lambda a: [fields(("memory", a["name"]), ("reason", a["reason"])), *_change(a)]
+)
 
 
 def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
@@ -177,47 +179,62 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
 
 
 def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
-    """记忆：自己的与所有 agent 共享的全局记忆，各用各的工具（全局记忆的 memory_edit_public 是管理类工具，只经 admin
-    角色给出）。全局记忆由 admin 的自进化维护，每次修改记一版（改的人记为那个 agent），用户可在界面上回滚。"""
+    """记忆：memory_edit 改能改（write）的任何一块（自己的私有记忆、角色给了 write 的共享记忆，admin 的全部），调用时查；
+    memory_create / memory_delete 是管理类工具，只经 admin 角色给出。每次修改记一版（改的人记为那个 agent），用户可在
+    界面上回滚。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
-    def _status(which: str, content: str) -> str:
-        return f"updated {which} ({len(content)}/{store.max_chars} chars)"
+    def _status(verb: str, memory: MemoryInfo) -> str:
+        return f"{verb} memory {memory.name} ({len(memory.content)}/{store.max_chars} chars)"
 
     @ts.tool(metadata=rendered_by(_MEMORY_EDIT_RENDER))
-    async def memory_edit(ctx: RunContext[RunScope], new_text: str, reason: str, old_text: str = "") -> str:
-        """Add to or change your private memory (user preferences, environment facts, lessons learned).
-        Your memory and the global memory are both shown to you at the start of every run.
-        `old_text` must occur exactly once in your memory and is replaced by `new_text` (an empty `new_text`
-        deletes it); an empty `old_text` appends `new_text` as a new entry at the end.
+    async def memory_edit(
+        ctx: RunContext[RunScope], name: str, new_text: str, reason: str, old_text: str = ""
+    ) -> str:
+        """Add to or change a memory block marked editable in your instructions (user preferences, environment
+        facts, lessons learned). `old_text` must occur exactly once in the block and is replaced by `new_text`
+        (an empty `new_text` deletes it); an empty `old_text` appends `new_text` as a new entry at the end.
 
         Args:
+            name: Name of the memory block, as in `<memory name="...">` in your instructions.
             new_text: Replacement text, or the entry to append (one concise markdown line or short block);
                 empty deletes `old_text`.
-            reason: Why, kept in the version history as your memory's timeline: the defect it fixes (user
+            reason: Why, kept in the version history as this memory's timeline: the defect it fixes (user
                 correction, error, detour) or the fact it records, the source (session id, the user's words),
                 and how it relates to earlier changes (new / rewrites / overturns what).
-            old_text: Exact text currently in your memory, or empty to append.
+            old_text: Exact text currently in the block, or empty to append.
         """
         me = ctx.deps.agent_id
-        return _status("memory", await store.edit(me, old_text, new_text, me, reason=reason))
+        return _status("updated", await store.edit(name, old_text, new_text, me, reason=reason))
 
-    @ts.tool(metadata=rendered_by(_MEMORY_EDIT_RENDER))
-    async def memory_edit_public(
-        ctx: RunContext[RunScope], new_text: str, reason: str, old_text: str = ""
+    @ts.tool
+    async def memory_create(
+        ctx: RunContext[RunScope], name: str, reason: str, content: str = "", description: str = ""
     ) -> str:
-        """Add to or change the global memory every agent sees: only facts and rules that hold for all agents.
-        `old_text` must occur exactly once in it and is replaced by `new_text` (an empty `new_text` deletes it);
-        an empty `old_text` appends `new_text` as a new entry at the end.
+        """Create a shared memory block, owned by the platform, for knowledge that several agents need but that
+        is not global. Nobody uses it until a role includes it: give the role `*:memory:<name>` (members read and
+        edit it) with `update_role`.
 
         Args:
-            new_text: Replacement text, or the entry to append (one concise markdown line or short block);
-                empty deletes `old_text`.
-            reason: Why, kept in the version history: what it fixes or lifts (from which agents), the source,
-                and how it relates to earlier changes (new / rewrites / overturns what).
-            old_text: Exact text currently in the global memory, or empty to append.
+            name: Lowercase slug, e.g. `trading`.
+            reason: Why, kept in the version history: what it gathers (from which agents) and the source.
+            content: Initial text (markdown).
+            description: One sentence on what belongs in it, shown on the assets page.
         """
-        actor = ctx.deps.agent_id
-        return _status("global memory", await store.edit(None, old_text, new_text, actor, reason=reason))
+        memory = await store.create(
+            name, content, actor=ctx.deps.agent_id, description=description, reason=reason
+        )
+        return _status("created", memory)
+
+    @ts.tool
+    async def memory_delete(ctx: RunContext[RunScope], name: str, reason: str) -> str:
+        """Delete a memory block that is obsolete (e.g. merged into another). The global memory cannot be deleted.
+
+        Args:
+            name: Name of the memory block.
+            reason: Why, and where its content went; kept in the version history.
+        """
+        await store.delete(name, ctx.deps.agent_id, reason=reason)
+        return f"deleted memory {name}"
 
     return ts

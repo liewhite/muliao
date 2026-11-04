@@ -23,7 +23,6 @@ from muliao.agents.access import sharing_in
 from muliao.agents.agent_rules import record_rules_deleted_in
 from muliao.agents.events import AgentDeleting
 from muliao.agents.kinds import Kind
-from muliao.agents.memory import record_memory_deleted_in
 from muliao.agents.ownership import retire_owned_in
 from muliao.agents.service import (
     AgentInfo,
@@ -132,10 +131,10 @@ class AgentLifecycle:
         async def commit(s: AsyncSession) -> None:
             if await deletion_actor_in(s, agent_id) is None:
                 return
-            # 各子域先记删除的版本（版本表不随它删除，留作审计），被分发出去的条目先转给平台，再删行（级联只删还归它的）
+            # 各子域先记删除的版本（版本表不随它删除，留作审计），被分发出去的资产（含记忆）先转给平台，再删行（级联只删还归
+            # 它的）
             message = f"deleted with agent {agent_id}"
             await retire_owned_in(s, agent_id, (await sharing_in(s)).shared, actor, message)
-            await record_memory_deleted_in(s, agent_id, actor, message)
             await record_rules_deleted_in(s, agent_id, actor, message)
             await remove_in(s, agent_id)
             log.info("agent deleted", extra={"agent": agent_id, "actor": actor})

@@ -30,10 +30,15 @@ async def _secret(_s: AsyncSession, row: Item) -> str:
     return secrets.document(row.description)
 
 
+async def _memory(_s: AsyncSession, row: Item) -> str:
+    return row.content
+
+
 DOCUMENTS: dict[StoredKind, Callable[[AsyncSession, Item], Awaitable[str]]] = {
     StoredKind.SKILL: _skill,
     StoredKind.MCP: _mcp,
     StoredKind.SECRET: _secret,
+    StoredKind.MEMORY: _memory,
 }
 
 

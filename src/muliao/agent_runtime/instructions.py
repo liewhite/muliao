@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from muliao.agents.api import SkillMeta
+from muliao.agents.api import MemoryBlock, SkillMeta
 from muliao.platform.tooling import Audience
 
 _AUDIENCE_NOTES: dict[Audience, str] = {
@@ -31,11 +31,11 @@ _AUDIENCE_NOTES: dict[Audience, str] = {
 SELF_IMPROVEMENT = """\
 ## Self-improvement
 Everything you learn persists only as memory or skills.
-- Memory: your private memory and the global memory shared by all agents (above), each limited to \
-{memory_limit} characters. Record durable facts (user preferences, environment details, corrections, lessons \
-learned) with `memory_edit` (empty `old_text` appends); fix or condense entries with it too. The global memory \
-has its own tool (`memory_edit_public`, if you have it): only for facts and rules that hold for every agent. \
-Never record secrets or one-off details.
+- Memory: the memory blocks above, each limited to {memory_limit} characters: your private one, the global \
+one every agent shares, and any shared by your roles. Record durable facts (user preferences, environment \
+details, corrections, lessons learned) with `memory_edit` on a block marked editable (empty `old_text` \
+appends); fix or condense entries with it too. Put a fact in the narrowest block it holds for: your private \
+block unless it holds for everyone who shares the other block. Never record secrets or one-off details.
 - Skills are reusable procedures. Before a task that matches a skill in the index, call `read_skill`. After \
 working out a non-trivial procedure likely to recur, save it with `write_skill` (a new skill is yours; other \
 agents get it only through a role); when a skill proves wrong or incomplete, fix that part with `edit_skill`. Change skills and memory only through these tools, never with shell \
@@ -69,10 +69,9 @@ def build_instructions(
     agent_id: str,
     agent_name: str,
     agent_description: str,
-    global_memory: str,
     workspace: Path,
     origin_note: str,
-    memory: str,
+    memories: Sequence[MemoryBlock],
     skills: Sequence[SkillMeta],
     memory_limit: int,
     summary: str | None,
@@ -87,12 +86,9 @@ def build_instructions(
     skill_lines = [
         f"- `{s.name}`{' (yours)' if s.owner == agent_id else ''}: {s.description}" for s in skills
     ] or ["(no skills yet)"]
-    # 全局记忆在前、agent 自己的记忆在后：具体的可以细化或覆盖通用规则
     sections = [
-        "## Global memory\nShared by every agent.\n"
-        f"<global_memory>\n{global_memory.strip() or '(empty)'}\n</global_memory>",
         "## Runtime context\n" + "\n".join(context),
-        f"## Memory\nYour private memory.\n<memory>\n{memory.strip() or '(empty)'}\n</memory>",
+        _memory_section(memories, memory_limit),
         "## Skill index\n" + "\n".join(skill_lines),
         SELF_IMPROVEMENT.format(memory_limit=memory_limit),
     ]
@@ -102,3 +98,21 @@ def build_instructions(
             f"the messages after it follow in full.\n<summary>\n{summary}\n</summary>"
         )
     return "\n\n".join(s for s in sections if s)
+
+
+def _memory_section(memories: Sequence[MemoryBlock], limit: int) -> str:
+    """这个 agent 能用的每一块记忆（MemoryStore.for_run，按名字），标出名字与能不能改。"""
+    blocks = [
+        f'<memory name="{m.name}" access="{_access(m)}">\n{m.content.strip() or "(empty)"}\n</memory>'
+        for m in memories
+    ] or ["(no memory blocks)"]
+    return (
+        f"## Memory\nThe memory blocks you use, by name (each limited to {limit} characters); change an editable "
+        "one with `memory_edit(name=...)`.\n" + "\n".join(blocks)
+    )
+
+
+def _access(m: MemoryBlock) -> str:
+    if m.yours:
+        return "editable, your private memory"
+    return "editable, shared" if m.editable else "read-only, shared"

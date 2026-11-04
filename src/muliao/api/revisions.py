@@ -1,4 +1,4 @@
-"""版本（agents·版本子域，共享内核）在 HTTP 上的输出格式：条目（api/items.py）与记忆（api/memory.py）的历史共用。"""
+"""版本（agents·版本子域，共享内核）在 HTTP 上的输出格式：AI 资产（api/items.py）的历史。"""
 
 from datetime import datetime
 

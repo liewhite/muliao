@@ -409,7 +409,7 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
         lambda: container.skills.write("t", "d", "b", actor="user", owner=agent.id),
         lambda: container.skills.edit("s", "user", new="more"),
         lambda: container.skills.delete("s", "user"),
-        lambda: container.memory.edit(agent.id, "", "fact", "user"),
+        lambda: container.memory.edit("alpha", "", "fact", "user"),
         lambda: container.mcp.add(
             "m",
             mcp_config(transport=McpTransport.HTTP, url="http://example.invalid/mcp"),
@@ -423,16 +423,16 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
             await write()
     # 行还在（删除流程收尾时才随 agent 删除），只是按不存在处理
     async with container.db.transaction() as s:
-        assert (await s.scalars(select(Item.name).where(Item.owner == agent.id))).all() == ["s"]
+        assert sorted((await s.scalars(select(Item.name).where(Item.owner == agent.id))).all()) == [
+            "alpha",
+            "s",
+        ]
     await container.skills.write("pub", "d", "b", actor="user", owner=None)
 
 
-async def test_agent_without_a_memory_row_can_still_be_deleted(container, make_agent):
-    from muliao.agents.tables import Memory
-
+async def test_agent_whose_private_memory_was_deleted_can_still_be_deleted(container, make_agent):
     agent = await make_agent("alpha")
-    async with container.db.transaction() as s:
-        await s.execute(Memory.__table__.delete().where(Memory.agent_id == agent.id))
+    await container.memory.delete("alpha", "user")
 
     await container.agent_lifecycle.delete(agent.id, actor="user")
     # 删除的清理经事件完成
@@ -447,7 +447,7 @@ async def test_a_run_that_starts_after_the_mark_does_not_fail_on_its_memory(cont
     from tests.test_flow import run_only
 
     agent = await make_agent("alpha")
-    await container.memory.write(agent.id, "- fact", "user")
+    await container.memory.put("alpha", "- fact", "", actor="user")
     await start(container, agent.id, "hi")
     async with container.db.transaction() as s:
         (await s.get(Agent, agent.id)).deleting_by = "user"
@@ -455,6 +455,6 @@ async def test_a_run_that_starts_after_the_mark_does_not_fail_on_its_memory(cont
     await run_only(container)
 
     assert await _failed_tasks(container) == []
-    assert await container.memory.for_run(agent.id) == "- fact"
+    assert "- fact" in [m.content for m in await container.memory.for_run(agent.id)]
     with pytest.raises(NotFound):
-        await container.memory.read(agent.id)
+        await container.memory.read("alpha")

@@ -27,7 +27,7 @@ from muliao.agents.agent_rules import (
     update_agent_rules_in,
 )
 from muliao.agents.ids import new_agent_id
-from muliao.agents.memory import create_memory_in
+from muliao.agents.memory import check_memory_name_free_in, create_memory_in
 from muliao.agents.naming import new_agent_name, normalize_agent_name
 from muliao.agents.tables import Agent
 from muliao.errors import Conflict, InvalidInput, NotFound
@@ -304,6 +304,7 @@ class AgentService:
         agent_id = new_agent_id()
         async with self._db.transaction() as s:
             await self._ensure_name_free(s, name, None)
+            await check_memory_name_free_in(s, name)
             agent = Agent(
                 id=agent_id,
                 name=name,
@@ -314,11 +315,12 @@ class AgentService:
             )
             s.add(agent)
             await s.flush()
-            # 规则与记忆和 agent 的行同一事务：agent 一旦存在，它的规则与记忆就在（每一轮都要读）
+            # 规则与私有记忆和 agent 的行同一事务：agent 一旦存在，它的规则与记忆就在（每一轮都要读）。记忆先建：规则可以
+            # 引用它
+            create_memory_in(s, agent_id, name, actor)
             await create_agent_rules_in(
                 s, agent_id, AgentRules.of(spec.roles, spec.allow, spec.deny), actor, f"create agent {name}"
             )
-            create_memory_in(s, agent_id, actor)
             # 工作目录与数据库行同事务：建不出来则不插行
             self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
             return info_of(agent)
