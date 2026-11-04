@@ -11,7 +11,16 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.access import Provenance, Reach, Source, granted_by, grants_in, grants_of, reach_in
+from muliao.agents.access import (
+    Provenance,
+    Reach,
+    Source,
+    granted_by,
+    grants_in,
+    grants_of,
+    reach_in,
+    usable_by_in,
+)
 from muliao.agents.active import agent_names_in, check_active_in
 from muliao.agents.agent_rules import (
     AgentRules,
@@ -20,11 +29,10 @@ from muliao.agents.agent_rules import (
     check_agent_rules_in,
     holders_in,
 )
-from muliao.agents.items import items_in
 from muliao.agents.kinds import StoredKind, Subject, as_kind, label
 from muliao.agents.mcp import McpServer, server_of
 from muliao.agents.naming import validate_slug
-from muliao.agents.permissions import FIXED_RULES, Action, Role, Rules, check_patterns
+from muliao.agents.permissions import FIXED_RULES, Role, Rules, check_patterns
 from muliao.agents.revisions import record_in
 from muliao.agents.roles import check_rules_in, document, role_of, roles_in
 from muliao.agents.tables import Role as RoleRow
@@ -107,26 +115,29 @@ class Distribution:
 
     async def assets(self, agent_id: str) -> list[UsedAsset]:
         """agent 能用的 skill、MCP server、secret、记忆（按种类、名称），每项带来源与能不能改：界面的 agent 详情。与运行时同一
-        份条目（items_in）与规则（规则 1，按来源拆开：access.Provenance）。"""
+        套判断（usable_by_in、Grants.writes，同 MemoryStore.for_run），来源由 access.Provenance 解释，两者对不上即报错。"""
         async with self._db.transaction() as s:
-            provenance = Provenance.of(agent_id, await agent_rules_in(s, agent_id), await roles_in(s))
+            rules, known = await agent_rules_in(s, agent_id), await roles_in(s)
+            grants = grants_of(agent_id, rules, known)
+            provenance = Provenance.of(agent_id, rules, known)
             used = []
             for kind in StoredKind:
-                for row in await items_in(s, kind):
+                for row in await usable_by_in(s, kind, grants):
                     k = as_kind(kind)
-                    source = provenance.source(Action.USE, k, row.name, row.owner)
-                    if source.usable:
-                        used.append(
-                            UsedAsset(
-                                kind,
-                                row.name,
-                                row.owner,
-                                row.description,
-                                source,
-                                provenance.source(Action.WRITE, k, row.name, row.owner).usable,
-                                server_of(row) if kind == StoredKind.MCP else None,
-                            )
+                    source = provenance.explain(k, row.name, row.owner)
+                    if not (source.own or source.roles or source.allow):
+                        raise RuntimeError(f"no source explains why {agent_id} can use {kind} {row.name!r}")
+                    used.append(
+                        UsedAsset(
+                            kind,
+                            row.name,
+                            row.owner,
+                            row.description,
+                            source,
+                            grants.writes(k, row.name, row.owner),
+                            server_of(row) if kind == StoredKind.MCP else None,
                         )
+                    )
             return used
 
     async def preview_agent(self, agent_id: str | None, rules: AgentRules) -> Reach:

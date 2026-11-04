@@ -85,13 +85,21 @@ async def check_rules_in(s: AsyncSession, rules: Rules, before: Rules = Rules())
     await check_new_items_in(s, rules.deny, before.deny)
 
 
-def rules_of(
+def sources_of(
     known: Mapping[str, Role], roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]
-) -> Rules:
-    """agent 的最终规则（AgentRules.effective）：base + 它的角色 + 它自己的 allow / deny；known 是 roles_in 读出的全部角色
-    （一次读出、算多个 agent 时共用）。读到不存在的角色说明数据与代码不一致（写入时已校验、被引用的角色不能删；内置角色
-    从代码里去掉时启动检查会报出）。"""
+) -> list[tuple[str | None, Rules]]:
+    """agent 规则的各个来源：(角色名, 它的规则)——base 在前、再按它的 roles——最后是 (None, 它自己的 allow / deny)。
+    最终规则就是它们的并集（rules_of）；界面按来源解释（access.Provenance）用同一份。读到不存在的角色说明数据与代码不一致
+    （写入时已校验、被引用的角色不能删；内置角色从代码里去掉时启动检查会报出）。"""
     missing = [r for r in roles if r not in known]
     if missing:
         raise RuntimeError(f"agent references unknown roles {missing}")
-    return Rules.union([*(known[r].effective for r in (BASE, *roles)), Rules(tuple(allow), tuple(deny))])
+    return [*((r, known[r].effective) for r in (BASE, *roles)), (None, Rules(tuple(allow), tuple(deny)))]
+
+
+def rules_of(
+    known: Mapping[str, Role], roles: Sequence[str], allow: Sequence[str], deny: Sequence[str]
+) -> Rules:
+    """agent 的最终规则（AgentRules.effective）：各来源（sources_of）的并集；known 是 roles_in 读出的全部角色
+    （一次读出、算多个 agent 时共用）。"""
+    return Rules.union(r for _, r in sources_of(known, roles, allow, deny))

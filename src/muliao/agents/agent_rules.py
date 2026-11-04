@@ -15,7 +15,7 @@ from muliao.agents.active import agent_names_in
 from muliao.agents.kinds import Subject
 from muliao.agents.permissions import Role, Rules
 from muliao.agents.revisions import record_in
-from muliao.agents.roles import check_assignable_in, check_rules_in, rules_of
+from muliao.agents.roles import check_assignable_in, check_rules_in, rules_of, sources_of
 from muliao.agents.tables import AgentRulesRow
 from muliao.errors import NotFound
 
@@ -40,6 +40,10 @@ class AgentRules:
     def effective(self, known: Mapping[str, Role]) -> Rules:
         """最终规则：base + 角色 + 自己的 allow / deny；known 是 roles.roles_in 读出的全部角色。"""
         return rules_of(known, self.roles, self.allow, self.deny)
+
+    def sources(self, known: Mapping[str, Role]) -> list[tuple[str | None, Rules]]:
+        """最终规则的各个来源（roles.sources_of）。"""
+        return sources_of(known, self.roles, self.allow, self.deny)
 
     def document(self) -> str:
         """在版本表里的文档。"""

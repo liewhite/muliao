@@ -456,6 +456,13 @@ async def test_agent_assets_group_by_kind_with_sources_and_memory_preview(client
     assert sorted(listed) == sorted(reach.items)
     assert (await client.get("/api/agents/nope/assets")).status_code == 404
 
+    # admin 靠 write:* 能改全局记忆，但不算来源（use 只来自 base）
+    await container.agents.update(agent.id, AgentPatch(roles=["triage", ADMIN]), actor="user")
+    got = (await client.get(f"/api/agents/{agent.id}/assets")).json()
+    memories = {m["name"]: m for m in got["memories"]}
+    assert memories["global"]["editable"] and memories["global"]["source"]["roles"] == [BASE]
+    assert 'name="global" access="editable, shared"' in got["memory_preview"]
+
 
 def test_every_stored_kind_is_a_kind_and_a_subject_with_a_document():
     assert {as_kind(k) for k in StoredKind} == set(Kind) - {Kind.TOOL}

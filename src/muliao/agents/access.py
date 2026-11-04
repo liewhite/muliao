@@ -98,45 +98,39 @@ def grants_of(agent_id: str, rules: AgentRules, known: dict[str, Role]) -> Grant
 
 @dataclass(frozen=True)
 class Source:
-    """一个 agent 为什么能用某项资产（规则 1 拆开看）：它名下的、放行它的角色（含 base）、它自己的 allow。三者都空就是用不了。"""
+    """一个 agent 为什么能用某项资产（规则 1 按来源拆开看）：它名下的、放行它的角色（含 base）、它自己的 allow。"""
 
     own: bool
     roles: tuple[str, ...]
     allow: bool
 
-    @property
-    def usable(self) -> bool:
-        return self.own or bool(self.roles) or self.allow
-
 
 @dataclass(frozen=True)
 class Provenance:
-    """按一个 agent 的规则算每项资产的 Source。最终规则是各来源 allow 的并集加上全部 deny（roles.rules_of），所以「某个来源
-    放行」＝它的 allow 匹配且最终的 deny 没拦；Source.usable 与 Grants.uses 一致（tests 核对）。"""
+    """只解释、不判断：能不能用由 Grants 判断，这里说明是哪些来源放行的。最终规则是各来源（roles.sources_of）的并集，即各
+    allow 的并集加上全部 deny，所以「某个来源放行」＝它的 allow 匹配且最终的 deny 没拦。"""
 
     agent_id: str
-    # 它带的角色（base 在前，再按它的 roles 顺序）
-    roles: tuple[Role, ...]
-    own_allow: tuple[str, ...]
+    # (角色名, 它的 allow)，最后一项角色名为 None：它自己的 allow
+    allows: tuple[tuple[str | None, tuple[str, ...]], ...]
     deny: tuple[str, ...]
 
     @classmethod
     def of(cls, agent_id: str, rules: AgentRules, known: Mapping[str, Role]) -> Provenance:
+        sources = rules.sources(known)
         return cls(
             agent_id,
-            tuple(known[r] for r in (BASE, *rules.roles)),
-            rules.allow,
-            rules.effective(known).deny,
+            tuple((n, r.allow) for n, r in sources),
+            Rules.union(r for _, r in sources).deny,
         )
 
-    def source(self, action: Action, kind: Kind, name: str, owner: str | None) -> Source:
-        def grants(allow: tuple[str, ...]) -> bool:
-            return Rules(allow, self.deny).allows(action, kind, name)
-
+    def explain(self, kind: Kind, name: str, owner: str | None) -> Source:
+        """use 的来源；Grants.uses 为假时三项都空（调用方核对两者一致）。"""
+        granting = [n for n, allow in self.allows if Rules(allow, self.deny).includes(kind, name)]
         return Source(
             owner == self.agent_id,
-            tuple(r.name for r in self.roles if grants(r.effective.allow)),
-            grants(self.own_allow),
+            tuple(n for n in granting if n is not None),
+            None in granting,
         )
 
 
