@@ -7,6 +7,7 @@ from pydantic_ai.models.function import AgentInfo
 
 from muliao.agents.api import RevisionInfo, RoleSpec, Subject
 from muliao.agents.memory import MemoryFull
+from muliao.agents.revisions import record_in
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from tests.conftest import history, login, owned
@@ -116,6 +117,21 @@ async def test_every_memory_write_tidies_whitespace_only(container, make_agent):
     assert await _content(container, "alpha") == "- a\n\n- c\n\n  - b\n\n- d"
     await container.memory.create("trading", "x \n\n\n", actor="user")
     assert await _content(container, "trading") == "x"
+    # 恢复：旧版本带着没规整的空白（#361 之前存下的），恢复出来的也规整
+    async with container.db.transaction() as s:
+        record_in(s, Subject.MEMORY, "alpha", None, "- old  \n\n\n", "user", "before #361")
+    old = (await memory_history(container, "alpha"))[0]
+    await container.memory.restore("alpha", old.id, actor="user")
+    assert await _content(container, "alpha") == "- old"
+
+
+async def test_the_memory_limit_counts_the_tidied_text(container, make_agent):
+    agent = await make_agent("alpha")
+    limit = container.memory.max_chars
+    # 原文超过上限、规整后正好到上限：能写入
+    await container.memory.put("alpha", "x" * (limit - 3) + "  \n\n\n", "", actor="user")
+    await container.memory.edit("alpha", "", "y", agent.id)  # 追加出来的是 …\n\ny\n，比上限多 1
+    assert await _content(container, "alpha") == "x" * (limit - 3) + "\n\ny"
 
 
 async def test_a_cleared_memory_is_a_new_version(container, make_agent):

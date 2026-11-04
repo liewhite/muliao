@@ -104,7 +104,7 @@ def build_instructions(
 def _memory_section(memories: Sequence[MemoryBlock], limit: int) -> str:
     """这个 agent 能用的每一块记忆（MemoryStore.for_run，按名字），标出名字与能不能改。"""
     blocks = [
-        f'<memory name="{escape(m.name)}" access="{_access(m)}">\n{m.content.strip() or "(empty)"}\n</memory>'
+        f'<memory name="{escape(m.name)}" access="{_access(m)}">\n{m.content or "(empty)"}\n</memory>'
         for m in memories
     ] or ["(no memory blocks)"]
     return (

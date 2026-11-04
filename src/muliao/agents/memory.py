@@ -133,8 +133,7 @@ class MemoryStore:
                 return await self._new_in(
                     s, name, content, owner, description, actor, f"create memory {name}"
                 )
-            content = tidy(content)
-            self._check_size(len(content), name)
+            content = self._tidied(name, content)
             record_in(s, Subject.MEMORY, name, row.content, content, actor, f"write memory {name}")
             row.content, row.description = content, description
             await s.flush()
@@ -151,8 +150,7 @@ class MemoryStore:
         message: str,
     ) -> MemoryInfo:
         validate_slug(_LABEL, name)
-        content = tidy(content)
-        self._check_size(len(content), name)
+        content = self._tidied(name, content)
         row = Item(kind=_KIND.value, name=name, owner=owner, content=content, description=description)
         s.add(row)
         record_in(s, Subject.MEMORY, name, None, content, actor, message)
@@ -211,17 +209,22 @@ class MemoryStore:
         async with self._db.transaction() as s:
             row = await changeable_in(s, _KIND, name, actor)
             current = row.content
-            updated = tidy(await edit(row, s))
-            if len(updated) > self.max_chars:
-                raise MemoryFull(self._full_message(name, len(updated), len(current)), current)
+            updated = self._tidied(name, await edit(row, s), current)
             row.content = updated
             record_in(s, Subject.MEMORY, name, current, updated, actor, message)
             await s.flush()
             return _info(row)
 
-    def _check_size(self, size: int, name: str) -> None:
-        if size > self.max_chars:
+    def _tidied(self, name: str, content: str, current: str | None = None) -> str:
+        """每条写入存之前都经过这里：规整空白（tidy），再按规整后的长度查上限。current 是局部修改（edit、restore）前的正文：
+        超长时 MemoryFull 告诉模型要腾出多少；整体写入（新建、put）没有，只报超长。"""
+        content = tidy(content)
+        size = len(content)
+        if size <= self.max_chars:
+            return content
+        if current is None:
             raise InvalidInput(f"memory {name!r} would be {size} chars, limit is {self.max_chars}")
+        raise MemoryFull(self._full_message(name, size, len(current)), current)
 
     def _full_message(self, name: str, size: int, now: int) -> str:
         # 给出要腾出的确切字数：只说「超了」时模型往往一次只缩短新条目几个字，反复撞墙

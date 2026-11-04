@@ -1548,3 +1548,31 @@ def test_memories_become_memory_assets_rules_get_the_use_action_and_downgrade(tm
         assert conn.execute("select allow from agent_rules where agent_id = 'a1'").fetchone() == (
             '["skill:x"]',
         )
+
+
+def test_memory_whitespace_is_tidied_and_each_changed_block_gets_a_revision(tmp_path):
+    """#361：已有记忆按写入时的同一规则规整空白，变了的每块记一版（actor system），没变的不动。"""
+    path = tmp_path / "m.db"
+    migrate(path, "7c3e5a9d2b41")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "update items set content = '\n- a  \n\n\n- b\n\n' where kind = 'memory' and name = 'global'"
+        )
+        conn.execute(
+            "insert into items (kind, name, owner, description, content, enabled, created_at, updated_at) "
+            "values ('memory', 'trading', NULL, '', '- tidy', 1, ?, ?)",
+            (t, t),
+        )
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "select name, content from items where kind = 'memory' order by name"
+        ).fetchall() == [
+            ("global", "- a\n\n- b"),
+            ("trading", "- tidy"),
+        ]
+        assert conn.execute(
+            "select name, before, after, actor from revisions where subject = 'memory'"
+        ).fetchall() == [("global", "\n- a  \n\n\n- b\n\n", "- a\n\n- b", "system")]

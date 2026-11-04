@@ -30,7 +30,7 @@ RESTORABLE = frozenset({Subject.MEMORY, Subject.SKILL, Subject.MCP})
 class RevisionInfo:
     id: int
     subject: Subject
-    # 条目名、角色名；记忆与 agent 是 agent 的 id（全局记忆为空串）
+    # 条目名（记忆是记忆名）、角色名；agent 是 agent 的 id
     name: str
     before: str | None
     after: str | None
