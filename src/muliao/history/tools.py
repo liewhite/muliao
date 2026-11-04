@@ -1,13 +1,16 @@
-"""历史的工具（每个 agent 总是可用）：追加自己做过的事、检索自己或别的 agent 的历史。agent 按名称指代，不出现 id。"""
+"""历史的工具（每个 agent 总是可用）：追加自己做过的事、检索自己或别的 agent 的历史（冷历史），以及某一天的活动概览
+（热历史：会话与用户说的话来自会话领域的 SessionRecall，加上当天的工作历史）。agent 按名称指代，不出现 id。"""
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agents.api import AgentService
-from muliao.history.service import HistoryEntry, HistoryLog
+from muliao.agents.api import AgentNames, AgentService
+from muliao.history.service import MAX_LIMIT, HistoryEntry, HistoryLog, HistoryRecord
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.sessions.api import SESSION_READ, Activity, DaySession, SessionRecall
 
 # history_search 的 agent 取这个值时检索全部 agent
 ALL_AGENTS = "all"
@@ -39,7 +42,88 @@ class HistoryFound(BaseModel):
     importance: int
 
 
-def history_toolset(history: HistoryLog, agents: AgentService) -> FunctionToolset[RunScope]:
+def _hm(at: datetime, tz: ZoneInfo) -> str:
+    return at.astimezone(tz).strftime("%H:%M")
+
+
+def _indent(text: str) -> str:
+    return "\n".join("  " + line for line in text.splitlines())
+
+
+def _where(d: DaySession) -> str:
+    info = d.session
+    where = info.origin.value + (f" #{info.origin_ref}" if info.origin_ref else "")
+    if info.thread is not None:
+        where += f" thread {info.thread!r} of {(d.parent_session_id or '(deleted)')[:8]}"
+    return where
+
+
+def overview_text(
+    activity: Activity, records: list[HistoryRecord], names: AgentNames, who: str, day: date, tz: ZoneInfo
+) -> str:
+    """activity_overview 交给模型的文字：会话、用户说的话（全文）、失败的运行、当天的工作历史。"""
+    many = len({d.session.agent_id for d in activity.sessions} | {r.agent_id for r in records}) > 1
+
+    def agent_of(agent_id: str) -> str:
+        return f"{names[agent_id]} " if many else ""
+
+    by_id = {d.session.id: d for d in activity.sessions}
+    origins: dict[str, int] = {}
+    for d in activity.sessions:
+        origins[d.session.origin.value] = origins.get(d.session.origin.value, 0) + 1
+    out = [f"# activity of {who} on {day} (local day, times local)", ""]
+    out.append(
+        f"## sessions ({len(activity.sessions)}"
+        + "".join(f", {k} {v}" for k, v in sorted(origins.items()))
+        + ")"
+    )
+    for d in activity.sessions:
+        span = (
+            "no messages yet"
+            if d.span is None
+            else f"{d.span.messages} msgs {_hm(d.span.first_at, tz)}-{_hm(d.span.last_at, tz)}"
+        )
+        failed = f", {len(d.failures)} FAILED" if d.failures else ""
+        out.append(
+            f"- {agent_of(d.session.agent_id)}{d.session.id[:8]} [{_where(d)}] {d.session.title[:80]!r}: "
+            f"{d.state.value}, {span}, {d.runs} runs{failed}"
+        )
+    if not activity.sessions:
+        out.append("(none)")
+    out += ["", f"## what the user typed ({len(activity.words)}, full text)"]
+    for w in activity.words:
+        d = by_id[w.session_id]
+        files = f" (+{w.attachments} files)" if w.attachments else ""
+        out.append(
+            f"- {_hm(w.at, tz)} {agent_of(d.session.agent_id)}{w.session_id[:8]} [{_where(d)}] "
+            f"{d.session.title[:40]!r}{files}:\n{_indent(w.text)}"
+        )
+    if not activity.words:
+        out.append("(none)")
+    failures = [(f, d) for d in activity.sessions for f in d.failures]
+    out += ["", f"## failed runs ({len(failures)})"]
+    for f, d in sorted(failures, key=lambda x: x[0].at):
+        error = " ".join(f.error.split())
+        out.append(
+            f"- {_hm(f.at, tz)} {agent_of(d.session.agent_id)}{d.session.id[:8]} run {f.run_id}: {error[:300]}"
+        )
+    if not failures:
+        out.append("(none)")
+    out += ["", f"## work history for {day} ({len(records)})"]
+    out += [f"- {agent_of(r.agent_id)}[{r.importance}] {r.title} {list(r.refs)}" for r in records] or [
+        "(none yet)"
+    ]
+    out += [
+        "",
+        f"Next: `{SESSION_READ}(session=<id prefix>)` for a session worth a closer look (`since`/`grep` to narrow it); "
+        "`issue_show` for an issue's full thread.",
+    ]
+    return "\n".join(out)
+
+
+def history_toolset(
+    history: HistoryLog, agents: AgentService, recall: SessionRecall
+) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
@@ -108,5 +192,33 @@ def history_toolset(history: HistoryLog, agents: AgentService) -> FunctionToolse
             )
             for r in found
         ]
+
+    @ts.tool
+    async def activity_overview(
+        ctx: RunContext[RunScope], day: date | None = None, agent: str | None = None
+    ) -> str:
+        """What happened on one local calendar day (default today), as text: every conversation that was active
+        (id prefix, origin/issue, title, state running/waiting/idle, messages and time span, runs and failures),
+        everything the user typed that day in full, failed runs with their errors, and that day's work-history
+        entries. Use it to recall recent work (e.g. today, which `history_search` does not have yet), then
+        `session_read` for a conversation worth a closer look.
+
+        Args:
+            day: Local calendar date (YYYY-MM-DD); today when omitted.
+            agent: Agent name, or `all` for every agent; yourself when omitted.
+        """
+        if agent is None:
+            agent_ids: list[str] | None = [ctx.deps.agent_id]
+        elif agent == ALL_AGENTS:
+            agent_ids = None
+        else:
+            agent_ids = [(await agents.find_by_name(agent)).id]
+        names = await agents.names()
+        day = history.today() if day is None else day
+        start, end = history.day_bounds(day)
+        activity = await recall.between(start, end, agent_ids)
+        records = await history.search(agent_ids=agent_ids, since=day, until=day, limit=MAX_LIMIT)
+        who = "every agent" if agent_ids is None else names[agent_ids[0]]
+        return overview_text(activity, list(reversed(records)), names, who, day, history.tz)
 
     return ts

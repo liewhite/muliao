@@ -57,7 +57,8 @@ class Message(Base):
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
     task_id: Mapped[int]
     payload: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # 索引：按日查各会话的活动（sessions.recall）
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
     # SQLite 默认按 max(rowid)+1 分配 id，删除尾部行后会复用；AUTOINCREMENT 保证单调
     __table_args__ = {"sqlite_autoincrement": True}
@@ -116,6 +117,9 @@ class Mail(Base):
     kind: Mapped[MailKind] = mapped_column(StrEnumType(MailKind))
     # 发送方：事件的来源（如 job:12、thread:<会话 id>，交给模型时标在事件上）；用户消息为 None
     source: Mapped[str | None] = mapped_column(String(100))
+    # 经来信入口（sessions.inbound）投进来的信件的发送方来源：消息一定有，用户对提问的回答也有（user）；事件与交回的
+    # 结局（sessions.work）为 None。「用户说了什么」只按它认（sessions.recall）。迁移前的行按会话与内容回填
+    origin: Mapped[Origin | None] = mapped_column(StrEnumType(Origin))
     content: Mapped[str] = mapped_column(Text)
     # 事件是运行中检查（mailbox.post_check_in 投的，工作还在进行）：交给模型时记进 RUN_CHECK_INS，界面合并连续的检查
     check_in: Mapped[bool] = mapped_column(default=False, server_default="0")

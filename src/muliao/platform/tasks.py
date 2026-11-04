@@ -390,6 +390,22 @@ class TaskQueue:
         rows = (await s.scalars(select(Task).where(Task.id.in_(latest)))).all()
         return {t.lane: TaskView.of(t) for t in rows}
 
+    async def created_between_in(
+        self, s: AsyncSession, lanes: Collection[str], kind: str, start: datetime, end: datetime
+    ) -> dict[str, list[TaskView]]:
+        """这些 lane 上在 [start, end) 里创建的这种 task，各自按创建顺序（一次查询）；没有的 lane 不在结果里。"""
+        rows = await s.scalars(
+            select(Task)
+            .where(
+                Task.lane.in_(list(lanes)), Task.kind == kind, Task.created_at >= start, Task.created_at < end
+            )
+            .order_by(Task.id)
+        )
+        found: dict[str, list[TaskView]] = {}
+        for task in rows.all():
+            found.setdefault(task.lane, []).append(TaskView.of(task))
+        return found
+
     async def has_unfinished_in(
         self,
         s: AsyncSession,

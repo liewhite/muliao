@@ -32,7 +32,7 @@ async def session_in(s: AsyncSession, session_id: str) -> SessionInfo | None:
     session = await s.get(Session, session_id)
     if session is None:
         return None
-    return _info(session)
+    return info_of(session)
 
 
 async def keyed_sessions_among(
@@ -42,11 +42,11 @@ async def keyed_sessions_among(
     issue 各自的会话（发送方不另存会话 id）。"""
     found: dict[str, dict[str, SessionInfo]] = {ref: {} for ref in origin_refs}
     for (ref, agent_id), session in (await keyed_rows_among(s, origin, origin_refs)).items():
-        found[ref][agent_id] = _info(session)
+        found[ref][agent_id] = info_of(session)
     return found
 
 
-def _info(session: Session) -> SessionInfo:
+def info_of(session: Session) -> SessionInfo:
     return SessionInfo(
         id=session.id,
         agent_id=session.agent_id,

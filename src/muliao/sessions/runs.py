@@ -5,6 +5,7 @@ payload 的规则只在这里。"""
 from __future__ import annotations
 
 from collections.abc import Collection
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,15 @@ async def latest_runs_among(
     """这些会话各自最近一次运行（一次查询）；还没有运行的会话不在结果里。"""
     lanes = {session_lane(x): x for x in session_ids}
     return {lanes[lane]: run for lane, run in (await queue.latest_in(s, list(lanes), RUN_TASK)).items()}
+
+
+async def runs_between_in(
+    s: AsyncSession, queue: TaskQueue, session_ids: Collection[str], start: datetime, end: datetime
+) -> dict[str, list[TaskView]]:
+    """这些会话在 [start, end) 里排上的运行，各自按先后（一次查询）；没有的会话不在结果里。"""
+    lanes = {session_lane(x): x for x in session_ids}
+    runs = await queue.created_between_in(s, list(lanes), RUN_TASK, start, end)
+    return {lanes[lane]: found for lane, found in runs.items()}
 
 
 async def run_unfinished_in(

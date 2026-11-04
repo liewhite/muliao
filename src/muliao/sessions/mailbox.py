@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection, Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select, update
@@ -26,6 +27,7 @@ from muliao.platform.tooling import Audience
 from muliao.sessions.history import since_last_response, since_last_response_among
 from muliao.sessions.holds import called_in, get_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
+from muliao.sessions.origins import Origin
 from muliao.sessions.pending import OpenAsks, open_asks_of, waiting
 from muliao.sessions.runs import RunPayload, handed_to, latest_run, run_unfinished_in
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
@@ -61,6 +63,7 @@ async def post_in(
     kind: MailKind,
     content: str,
     awaited: bool,
+    origin: Origin | None = None,
     source: str | None = None,
     check_in: bool = False,
     attachments: Sequence[str] = (),
@@ -68,7 +71,12 @@ async def post_in(
     correlation: str | None = None,
     dedupe_key: str | None = None,
 ) -> Mail:
-    """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。带 dedupe_key 的投信只投一次：已经投过就返回那封。"""
+    """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。带 dedupe_key 的投信只投一次：已经投过就返回那封。
+    origin：来信入口投的信件的发送方来源（消息必有，事件没有）。"""
+    if (kind == MailKind.MESSAGE and origin is None) or (kind == MailKind.EVENT and origin is not None):
+        raise ValueError(
+            f"a message needs its sender's origin and an event has none, got {kind} from {origin}"
+        )
     if kind == MailKind.EVENT and (not source or len(source) > _SOURCE_MAX or '"' in source):
         raise ValueError(f"event source must be 1-{_SOURCE_MAX} characters without quotes, got {source!r}")
     if check_in and kind != MailKind.EVENT:
@@ -82,6 +90,7 @@ async def post_in(
     mail = Mail(
         session_id=session_id,
         kind=kind,
+        origin=origin,
         source=source,
         content=content,
         check_in=check_in,
@@ -107,6 +116,34 @@ async def _with_key_in(s: AsyncSession, session_id: str, key: str) -> Mail | Non
 async def posted_with_key_in(s: AsyncSession, session_id: str, key: str) -> bool:
     """带这个幂等键的信件已经投过。"""
     return await _with_key_in(s, session_id, key) is not None
+
+
+async def sent_by_in(
+    s: AsyncSession,
+    session_ids: Collection[str],
+    origin: Origin,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> list[Mail]:
+    """这些会话里这种来源的发送方投的信件（Mail.origin），按到达顺序；给了 start / end 只取 [start, end) 里到的。
+    热历史（sessions.recall）按它认「用户说了什么」。"""
+    query = select(Mail).where(Mail.session_id.in_(list(session_ids)), Mail.origin == origin)
+    if start is not None:
+        query = query.where(Mail.created_at >= start)
+    if end is not None:
+        query = query.where(Mail.created_at < end)
+    return list((await s.scalars(query.order_by(Mail.id))).all())
+
+
+async def first_arrivals_between_in(s: AsyncSession, start: datetime, end: datetime) -> dict[str, datetime]:
+    """在 [start, end) 里收到过信件的会话（全部 agent）-> 这段时间里第一封到达的时刻（一次查询）。"""
+    rows = await s.execute(
+        select(Mail.session_id, func.min(Mail.created_at))
+        .where(Mail.created_at >= start, Mail.created_at < end)
+        .group_by(Mail.session_id)
+    )
+    return {x: at for x, at in rows.all()}
 
 
 async def queued_in(s: AsyncSession, session_id: str) -> list[Mail]:

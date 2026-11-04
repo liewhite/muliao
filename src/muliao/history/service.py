@@ -6,7 +6,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import column, exists, func, or_, select, table, text
@@ -94,8 +94,18 @@ class HistoryLog:
         self._tz = tz
         self._now = now
 
+    @property
+    def tz(self) -> ZoneInfo:
+        """历史的日历日所在的时区（配置的时区）。"""
+        return self._tz
+
     def today(self) -> date:
         return self._now().astimezone(self._tz).date()
+
+    def day_bounds(self, day: date) -> tuple[datetime, datetime]:
+        """这个本地日历日的起止时刻 [start, end)（带时区）：活动概览按它取当天的会话活动。"""
+        start = datetime.combine(day, time(), self._tz)
+        return start, datetime.combine(day + timedelta(days=1), time(), self._tz)
 
     async def append(self, agent_id: str, entries: Sequence[HistoryEntry]) -> list[HistoryRecord]:
         """给 agent 追加若干件事（一个事务，全部合法才写入）。"""

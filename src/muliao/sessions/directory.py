@@ -51,6 +51,17 @@ async def among_in(s: AsyncSession, session_ids: Collection[str]) -> dict[str, S
     return {x.id: x for x in rows.all()}
 
 
+async def with_prefix_in(s: AsyncSession, prefix: str, *, limit: int) -> list[Session]:
+    """id 以它开头的会话，至多 limit 个（热历史的工具接受 id 前缀，sessions.recall）。"""
+    rows = await s.scalars(
+        select(Session)
+        .where(Session.id.startswith(prefix, autoescape=True))
+        .order_by(Session.id)
+        .limit(limit)
+    )
+    return list(rows.all())
+
+
 async def of_agent_in(s: AsyncSession, agent_id: str) -> list[Session]:
     """agent 的全部会话（删除 agent）。"""
     return list((await s.scalars(select(Session).where(Session.agent_id == agent_id))).all())

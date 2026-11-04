@@ -9,7 +9,7 @@
 | Agent | 一个助手：描述（角色）、模型、分发规则（角色 + allow/deny，`action:kind:name`）、名下的 AI 资产（skill、MCP server、secret、记忆，其中一块是建 agent 时建的私有记忆）、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符；不能取 `user`，模型按名称指派 issue 时它指用户，`naming.new_agent_name`）。删除进行中时记下发起者（`deleting_by`），不再出现在列表与名称解析里。可以归到一个分组（`group`），可以归档（`archived_at`，可取消；归档的不能运行，第 10 节）。最多一个是系统默认 agent（`is_default`，部分唯一索引；`AgentService.set_default`，HTTP `PUT/DELETE /api/agents/{id}/default`）：Web 新对话默认选中它，随 agent 行一起删除 | `agents` 表；名下的 AI 资产在 `items`，工作目录 `data/workspaces/<id>/` |
 | Session | 某个 agent 的一段对话，由某个触发源创建。种类（`kind`）：顶层会话或委派开出的 thread（第 7 节） | `sessions` 表 |
 | Message | pydantic-ai `ModelMessage` 原样序列化 | `messages` 表（每行一条 ModelMessage） |
-| Mail | 投进某个会话信箱、交给它的 agent 的一封信件：用户消息（含附件）、对挂起调用的回答、触发器与委派来的任务、后台任务与 thread 的事件、运行中检查。按到达顺序排列，记下用户是否在等它的回答、不透明的关联 id（委派来的信件以委派的 holder 为关联 id，会话据此结清）、幂等键、状态（排队 / 已处理 / 被丢弃）与处理它的那次运行 | `mail` 表 |
+| Mail | 投进某个会话信箱、交给它的 agent 的一封信件：用户消息（含附件）、对挂起调用的回答、触发器与委派来的任务、后台任务与 thread 的事件、运行中检查。按到达顺序排列，记下发送方（经来信入口投的记来源 `origin`，事件记 `source`）、用户是否在等它的回答、不透明的关联 id（委派来的信件以委派的 holder 为关联 id，会话据此结清）、幂等键、状态（排队 / 已处理 / 被丢弃）与处理它的那次运行 | `mail` 表 |
 | Hold（占用） | 别的工作替某个会话在外面做的一项异步工作：后台任务 `job:<id>`、委派 `delegation:<发起会话>:<工具调用 id>`（holder 全局唯一）。状态 active / released / cleared，记下用户是否在等它的结局、`ask_agent` 的调用 id。委派的全部状态就是发起方的这条占用。行永久保留（随会话删除） | `session_holds` 表 |
 | Task | 一个待执行的工作单元：`run`（会话的一次运行）、`compaction`（上下文压缩）、`deliver`（投递通知）、`event`（领域事件或定向命令的一次投递） | `tasks` 表 |
 | Compaction | session 早期消息的摘要，之后发给模型的上下文用它代替 `through_message_id` 及之前的消息 | `compactions` 表 |
@@ -59,7 +59,7 @@ muliao/
   issues/          issue 看板：人与 agent 协作的事项，动态按状态与指派投进 agent 的 issue 会话
   speech/          语音输入：把界面录下的语音转成文字（可选，配置 [transcription] 才有）
   web/             网页搜索与抓取：配置的服务（WebProvider）与 web 工具组（可选，配置 [web] 才有）
-  history/         工作历史：agent 做过的事，只追加，按时间与关键词检索
+  history/         工作历史：agent 做过的事，只追加，按时间与关键词检索；某天的活动概览（热历史，第 22 节）
   files/  notifications/  triggers/
   api/             HTTP 适配
   container.py     组合根：构造领域、注册事件订阅、组装工具箱；只做装配，不含业务规则
@@ -86,12 +86,12 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 | 子域 | 表 | 模块 | 给别的子域的接口 |
 |---|---|---|---|
 | 会话 | `sessions` | `directory.py`（新建一行、按属性查会话只在这里；按 id 取到的行在领域内可改，删除在 `deletion.py`）、`kinds.py`、`origins.py`、`inbound.py`（来信与新建会话的规则）、`info.py`（读模型）、`deletion.py`、`service.py`（门面） | `add_in`、`among_in`、`of_agent_in`、`keyed_rows_among` / `keyed_among`、`threads_of` / `thread_in` / `threads_named_in`、`listed_ids_in` / `listed_page_in` |
-| 运行 | `messages`、`message_texts`（消息的可搜索文字）、`compactions`（历史）、`mail`（信箱）；运行本身是平台任务表里的 run task，只经 `TaskQueue` 的只读查询（`TaskView`）看 | `history.py`、`mailbox.py`、`runs.py`（运行与它的 payload）、`consumer.py`、`steps.py`、`finish.py`、`compaction.py`、`halt.py`、`settlement.py`、`conventions.py`、`reconcile.py`、`live.py` | 历史：`append_in`、`mark_last_stopped_in`、`saved_by_in`、`last_message_id_in`、`transcript_rows_in`、`add_compaction_in`、`load_context` 等；信箱：`post_in`、`queued_in`、`consume_in`、`discard_in`、`unsettled_in` / `mark_settled`、`wake_in` 等；运行：`latest_run` / `latest_runs_among`、`run_unfinished_in`、`hand_over_in`、`handed_to` |
+| 运行 | `messages`、`message_texts`（消息的可搜索文字）、`compactions`（历史）、`mail`（信箱）；运行本身是平台任务表里的 run task，只经 `TaskQueue` 的只读查询（`TaskView`）看 | `history.py`、`mailbox.py`、`runs.py`（运行与它的 payload）、`consumer.py`、`steps.py`、`finish.py`、`compaction.py`、`halt.py`、`settlement.py`、`conventions.py`、`reconcile.py`、`live.py` | 历史：`append_in`、`mark_last_stopped_in`、`saved_by_in`、`last_message_id_in`、`transcript_rows_in`、`add_compaction_in`、`load_context` 等；信箱：`post_in`、`queued_in`、`sent_by_in`、`consume_in`、`discard_in`、`unsettled_in` / `mark_settled`、`wake_in` 等；运行：`latest_run` / `latest_runs_among`、`run_unfinished_in`、`hand_over_in`、`handed_to` |
 | 交互 | —（由历史与信箱推导） | `pending.py`、`deferred.py`、`ask_user.py`、`questions.py`、`answers.py` | `pending_in`、`open_asks_of`、`waiting` |
 | 外部工作 | `session_holds` | `holds.py`、`work.py`（`SessionWork`、交回结局 `deliver_in`、运行中检查的间隔规则 `DEFAULT_CHECK_SECONDS` / `check_due`）、`activity.py`（工作状态） | `hold_in`、`get_in`、`release`、`abandon`、`clear_in`、`active_holders_of_in`、`active_holders_in`、`called_in`、`deliver_in` |
 | 委派 | `delegations`（每项委派的 thread、心跳间隔）、`thread_calls`（哪次调用开出或续写了哪个 thread） | `delegations.py`（记录）、`thread_calls.py`（调用开出的 thread）、`delegation.py`（交回与运行中检查）、`threads.py`（发出）、`delegation_tools.py` | `record_in`、`records_among`、`threads_of_holds_in`、`hand_back_in`、`record_call_in` / `call_threads_in` |
 | 到点唤醒 | `wakeups` | `wakeups.py`（约、取消、到点投信 `WakeUps`）、`wakeup_tools.py`（`wake_me`） | `schedule_in`、`cancel_in`、`WakeUps` |
-| 展示 | — | `transcript.py`、`live.py`、`sources.py`（结构化的事件来源） | `to_items`、`annotate_asks` / `annotate_threads`、`parse_source` |
+| 展示 | — | `transcript.py`、`live.py`、`sources.py`（结构化的事件来源）、`recall.py` / `recall_tools.py`（热历史的读模型与 `session_read`，第 22 节） | `to_items`、`annotate_asks` / `annotate_threads`、`parse_source` |
 
 会话领域的编排（停止 `halt.py`、删除 `deletion.py`、消费者）只调各子域的接口；会话领域不 import 任务表的 `TaskStatus`，`Task` 只出现在任务处理器的签名里（`tests/test_boundaries.py`）。
 
@@ -280,6 +280,7 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
   - `agents`：`list_agents`（能委派的 agent，按分组列 name、description）/ `get_agent` / `create_agent` / `update_agent`（只改给出的字段，可以改自己；不是管理类，base 就有，但非 admin 只能改自己的描述、模型、思考档位，改别人或自己的名称、角色、规则、分组、归档都是 `Forbidden`：规则 2，`access.Grants.check_agent_update`，在 `AgentService.update` 的事务里查，带归档时工具先用 `check_update` 一起查，#289）/ `delete_agent`（不能删除自己），`create_role` / `update_role`（只改给出的字段；allow / deny 整体替换）/ `delete_role`，`transfer_item`（把 skill / MCP / secret / 记忆转给某个 agent 或平台，`ItemCatalog.transfer_item`；kind 参数只接受存在库里的四种）。agent 只有名称、描述、模型、思考档位、分发规则（`roles` / `allow` / `deny`）；`get_agent` 给出它最终能用的工具与资产（`kind:name`）、全部角色（含固定规则）与全部内置工具；新建的 agent 私有记忆为空，角色写在描述里（它出现在 agent 自己的运行上下文里，也是委派时选人的依据）。
   - `delegation`：`delegate_task` / `ask_agent` / `list_threads` / `stop_thread`（停止一个 thread：结束它正在进行的运行、清空它的信箱）（按名称指定目标 agent、按 agent + thread 名指定子会话，见第 7 节）。阻塞 / 非阻塞的参数语义（#217）：阻塞（调用不返回、一直等）：`run_shell` 前台必填 `timeout`，无上限、模型自己估；`ask_agent` 没有 timeout（#307：agent 的运行本身有界，总会以回答、失败或停止结束；要中途照看就用 `delegate_task(report_back)`）；非阻塞（发起后与 agent 并发：`delegate_task(report_back)`、`run_shell(background)`）没有 timeout，有 `heartbeat_seconds`（默认 60，`sessions.work.DEFAULT_CHECK_SECONDS` 一处）；参数用错场合（后台传 timeout、前台或不 report_back 时传 heartbeat）以告诉正确用法的 `InvalidInput` 交还模型。`ask_user` 等的是用户，不算任务，没有 timeout。 目标可以是自己（#183）：一次性、可并行的杂活（审查、抓取总结、拆开并行的几部分）就 `ask_agent` / `delegate_task` 给自己开新 thread——它是自己的一个新会话，带着自己的记忆、skill 与工具，上下文不进发起的会话。以前的临时 agent（`run_temp_agent`）因此删除：它以发起方身份运行、回答交回发起方，本来就等于给自己开一个新会话，却要另维护一套工具组合、工作目录与无会话的运行路径。
   - `wakeup`：`wake_me`（到点唤醒这个会话，会话等待的一种，见第 7 节「到点唤醒」；`sessions/wakeup_tools.py`）。
+  - `history`：`history_append` / `history_search`（冷历史）与 `activity_overview`（某天的活动概览）；`session_read`（读一个会话的时间线，`sessions/recall_tools.py`）。见第 22 节。
   - `notify`：`notify_user`（显式 Web Push）。
   - `mcp_admin`（管理类，base 没有：很少用，要用的 agent 经 admin 或显式规则给，#295）：`mcp_list`（它能用的 server，含停用的，标明是否是自己的）/ `mcp_add`（写入前按添加者能用的 secret 实际连接并列出工具，连接失败直接把错误还给 agent；新建的归调用者）/ `mcp_remove`（规则 1 的 write）。启停只在界面上。改动从下一次运行起生效。
   - `vault`：`vault_list`（它能用的 key，标明是否是自己的）/ `vault_set`（新建归调用者，改已有的按规则 1 的 write）/ `vault_delete`（管理类，base 没有，#295）。没有读取明文的工具；`vault_set` 的 value 参数在消息落库和推送到前端前被替换为 `[redacted]`，参数校验失败时交还模型的错误（`RetryPromptPart` 里 pydantic 错误的 `input`，缺字段时就是整个参数）同样替换；重试用完时运行失败的 `UnexpectedModelBehavior` 去掉挂着校验错误的异常链再抛出（`redaction.tool_input_kept_out_of_failures`），日志的 traceback 里也没有参数原文（`agent_runtime/redaction.py`；要脱敏的工具参数由定义这些工具的 agents 声明为 `agents.api.SECRET_TOOL_ARGS`（`agents/secret_tools.py`），tests/test_tool_schemas.py 断言它们在注册的工具 schema 里存在）。
@@ -653,6 +654,13 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 - **检索**（`HistoryLog.search`，工具 `history_search`、`GET /api/agents/{id}/history`）：按 agent（工具默认自己，可给名字或 `all`）、日期范围（含两端）、最低重要程度过滤。没给 query 按日期倒序；给了按空白切词、每个词都要出现在标题、摘要或引用里：词都不短于 3 个字符时走 FTS5（`tokenize='trigram'`，中文可用）按 bm25 排序（trigram 要求 SQLite ≥ 3.34，部署环境 3.53），有更短的词（trigram 匹配不了）就逐词 `LIKE`、按日期倒序。不做 embedding：语义问题由 agent 按时间捞出一段再自己判断。
 - **FTS 虚表**不在 ORM 的 metadata 里：`history.tables` 把它登记进 `platform.db.UNMANAGED_TABLES`，Alembic 比对结构（`env.py`、迁移测试）用 `include_name` 跳过它与影子表；插入时由 AFTER INSERT 触发器同步（行不改不删，只需要这一个），引用索引的是 JSON 解码后的值，LIKE 分支同样经 `json_each` 匹配值，不匹配 JSON 原文。
 - **界面**：agent 详情页「历史」标签，按日期分组列出，可按关键词搜索（搜索结果按相关度平铺，每条标日期）（`web/src/pages/History.tsx`）。
+
+**热历史**（#368）：上面是冷历史（agent 自己总结的事，只到昨天）；还没总结的活动直接从会话领域读（读模型 `sessions/recall.py` 的 `SessionRecall`，经 `sessions.api` 给出），两个只读工具，进 base：
+
+- `activity_overview(day?, agent?)`（history 领域的工具组，它要把会话活动与当天的工作历史合在一起）：本地日历日（默认今天，`HistoryLog.day_bounds`）里有活动（保存了消息或收到了信件）的会话：id 前缀、来源（issue 号、thread 名与父会话）、标题、此刻的工作状态、当天的消息数与起止时刻、运行数与最终失败的运行（`TaskQueue.created_between_in`）；用户当天说的话（全文）；失败运行的错误；当天的工作历史。agent 默认自己，可给名字或 `all`（同 `history_search`）。
+- `session_read(session, since?, grep?, clip?, offset?)`（会话领域的工具组，`SessionPorts.recall_toolset`）：一个会话（id 或唯一前缀）的时间线，与会话页同一份投影（`transcript.to_items`，不含思考），每条带所在消息的保存时刻；用户与助手的文字全文，工具调用、结果与事件按 `clip` 截断；`grep` 按正则筛条目；整体按 `runtime.tool_output_max_chars` 在整条处停下、给出 `offset` 接着读（同 read_file）。
+- **「用户说了什么」只按信件记下的发送方认**（`mail.origin`：经来信入口投的信件记下 `Inbound.origin`，消息必有、事件没有，`post_in` 校验），不从文字反推：用户能在任何会话里写，别的来源只续写自己发起的会话，所以时间线里一条用户消息条目含用户写的信件就标 USER，否则是会话的发起方（TRIGGER / ISSUE / DELEGATION）。迁移前的信件按当时的投信规则回填（迁移 `cb9354fa36e7` 的说明）。
+- 按日取消息走 `messages.created_at` 的索引。以前的 shell 脚本 `self-evolve/activity.py` 直接读库里的原始 JSON、按文字猜发送方，已由这两个工具取代。
 
 ## 23. 暂缓的项
 

@@ -331,6 +331,7 @@ async def test_only_events_can_be_check_ins(container, make_agent, models):
                 container.queue,
                 session.id,
                 kind=MailKind.MESSAGE,
+                origin=Origin.TRIGGER,
                 content="x",
                 awaited=False,
                 check_in=True,

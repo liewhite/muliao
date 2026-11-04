@@ -378,11 +378,12 @@ def assemble(
     static_toolsets = [
         skills_toolset(skills),
         memory_toolset(memory),
-        history_toolset(history, agents),
+        history_toolset(history, agents, ports.recall),
         ask_user_toolset(),
         workspace_toolset(vault, limits, files, jobs),
         ports.delegation_toolset(agents),
         ports.wakeup_toolset(),
+        ports.recall_toolset(agents, settings.runtime.tool_output_max_chars),
         notify_toolset(notifications),
         mcp_admin_toolset(mcp),
         vault_toolset(vault),

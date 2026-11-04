@@ -77,6 +77,9 @@ TOOLS: dict[str, Tool] = {
     "memory_delete": ADMIN_W,
     "history_append": W,
     "history_search": R,
+    # 热历史：某天的会话活动与用户说的话、一个会话的时间线（#368）
+    "activity_overview": R,
+    "session_read": R,
     "ask_user": R,
     # 文件与 shell
     "read_file": R,

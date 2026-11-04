@@ -126,15 +126,35 @@ async def saved_by_in(s: AsyncSession, session_id: str, run_id: int) -> list[Mes
     return list(rows.all())
 
 
-async def transcript_rows_in(s: AsyncSession, session_id: str) -> list[tuple[int, str, datetime]]:
-    """完整原始历史（不受压缩影响）的 (消息 id, payload, 保存时刻)：会话页的展示。只取原始行，反序列化在事务
-    之外做（sessions.service）。"""
-    rows = await s.execute(
-        select(Message.id, Message.payload, Message.created_at)
-        .where(Message.session_id == session_id)
-        .order_by(Message.id)
-    )
+async def transcript_rows_in(
+    s: AsyncSession, session_id: str, *, since: datetime | None = None
+) -> list[tuple[int, str, datetime]]:
+    """完整原始历史（不受压缩影响）的 (消息 id, payload, 保存时刻)：会话页的展示；since 只取这之后保存的（热历史的
+    时间线，sessions.recall）。只取原始行，反序列化在事务之外做（sessions.service）。"""
+    query = select(Message.id, Message.payload, Message.created_at).where(Message.session_id == session_id)
+    if since is not None:
+        query = query.where(Message.created_at >= since)
+    rows = await s.execute(query.order_by(Message.id))
     return [(i, p, t) for i, p, t in rows.all()]
+
+
+@dataclass(frozen=True)
+class Span:
+    """一个会话在一段时间里保存的消息：条数与第一条、最后一条的保存时刻。"""
+
+    messages: int
+    first_at: datetime
+    last_at: datetime
+
+
+async def spans_between_in(s: AsyncSession, start: datetime, end: datetime) -> dict[str, Span]:
+    """在 [start, end) 里保存过消息的会话（全部 agent）-> 它在这段时间的消息（一次查询，走 created_at 的索引）。"""
+    rows = await s.execute(
+        select(Message.session_id, func.count(), func.min(Message.created_at), func.max(Message.created_at))
+        .where(Message.created_at >= start, Message.created_at < end)
+        .group_by(Message.session_id)
+    )
+    return {x: Span(n, first, last) for x, n, first, last in rows.all()}
 
 
 def sessions_mentioning(keyword: str) -> Select[tuple[str]]:

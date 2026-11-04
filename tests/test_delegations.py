@@ -14,6 +14,7 @@ from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.conventions import STOPPED_TOOL_RESULT
 from muliao.sessions.holds import active_holders_in
 from muliao.sessions.lanes import RUN_TASK
+from muliao.sessions.origins import Origin
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import Delegation, HoldStatus, Mail, MailKind, MailState, SessionHold
 from tests.scripted import scripted
@@ -934,6 +935,7 @@ async def test_an_answer_arriving_mid_run_reaches_the_model_as_late_text(
                     container.queue,
                     session_id,
                     kind=MailKind.ANSWER,
+                    origin=Origin.USER,
                     content="",
                     answers={"q": UserAnswered.of(answer).model_dump()},
                     awaited=True,

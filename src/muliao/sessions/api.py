@@ -6,7 +6,8 @@
   WorkEnded / WorkCheckIn（sessions.events）；
 - HTTP 层用的会话门面（SessionService：会话的读写、停止、手动压缩）；别的领域停止会话经端口 StopSession（结果 Halted），返回时
   停止已生效；
-- 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙）；
+- 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙）、SessionRecall（热历史：一段时间的会话活动与用户说的话，
+  history 领域的 activity_overview 用；会话的时间线由本领域的 session_read 工具读）；
 - 会话在等的东西（Wait：后台任务、委派、到点唤醒、提问，随会话详情给出）；
 - 会话来源（Origin：发送方新建会话时给出）、会话种类与 HTTP 层用的读模型、展示事件；
 - 会话 lane 上的任务种类（RUN_TASK、COMPACTION_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
@@ -31,6 +32,8 @@ from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEv
 from muliao.sessions.origins import OWN_NOTES, Origin, OriginNotes
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
+from muliao.sessions.recall import Activity, DaySession, RunFailure, SessionRecall, UserWords
+from muliao.sessions.recall_tools import SESSION_READ
 from muliao.sessions.service import SessionService
 from muliao.sessions.sources import EventSource, job_holder, job_id_of_holder, parse_source
 from muliao.sessions.transcript import Item
@@ -58,6 +61,12 @@ __all__ = [
     "CallResult",
     "call_result",
     "QuestionAnswer",
+    "SessionRecall",
+    "Activity",
+    "DaySession",
+    "RunFailure",
+    "UserWords",
+    "SESSION_READ",
     "SessionService",
     "Item",
     "Wait",

@@ -3,7 +3,7 @@
 分两段，因为中间隔着别的领域：
 1. SessionPorts.build：先于消费者构造、别的领域要用的端口——会话忙不忙（SessionActivity）、停止会话（SessionStopper，
    由正在进行的运行的登记与 SessionHalt 组成）、委派（Threads、ThreadChecks）、到点唤醒（WakeUps）、后台任务的占用
-   （SessionWork）；以及委派与到点唤醒的工具组（工具箱要先于消费者组好）。
+   （SessionWork）、热历史（SessionRecall）；以及委派、到点唤醒与读会话的工具组（工具箱要先于消费者组好）。
 2. SessionDomain.build：有了运行时与工具箱之后，会话门面、压缩、消费者、信箱对账，与会话领域的任务处理器。
    subscribe 一处登记会话领域的全部订阅与命令处理（后台任务与委派的结局、Receive、删除 agent 的会话清理）。
 """
@@ -36,6 +36,8 @@ from muliao.sessions.halt import SessionHalt, SessionStopper
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveSegments
 from muliao.sessions.origins import OriginNotes
+from muliao.sessions.recall import SessionRecall
+from muliao.sessions.recall_tools import recall_toolset
 from muliao.sessions.reconcile import MailReconciler
 from muliao.sessions.service import SessionService
 from muliao.sessions.steps import Steps
@@ -57,6 +59,8 @@ class SessionPorts:
     thread_checks: ThreadChecks
     wakeups: WakeUps
     work: SessionWork
+    # 热历史：一段时间里的会话活动与会话的时间线（history 领域的 activity_overview 也用）
+    recall: SessionRecall
     _db: Database
     _tz: ZoneInfo
 
@@ -74,6 +78,7 @@ class SessionPorts:
             thread_checks=ThreadChecks(db, queue),
             wakeups=WakeUps(db, queue, tz),
             work=SessionWork(db),
+            recall=SessionRecall(db, queue),
             _db=db,
             _tz=tz,
         )
@@ -83,6 +88,9 @@ class SessionPorts:
 
     def wakeup_toolset(self) -> FunctionToolset[RunScope]:
         return wakeup_toolset(self._db, self._tz)
+
+    def recall_toolset(self, agents: AgentService, max_chars: int) -> FunctionToolset[RunScope]:
+        return recall_toolset(self.recall, agents, self._tz, max_chars)
 
 
 @dataclass(frozen=True)

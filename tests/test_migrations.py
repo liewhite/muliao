@@ -1576,3 +1576,83 @@ def test_memory_whitespace_is_tidied_and_each_changed_block_gets_a_revision(tmp_
         assert conn.execute(
             "select name, before, after, actor from revisions where subject = 'memory'"
         ).fetchall() == [("global", "\n- a  \n\n\n- b\n\n", "- a\n\n- b", "system")]
+
+
+def test_mail_origin_is_backfilled_from_the_sending_rules_and_dropped_on_downgrade(tmp_path):
+    """#368：旧信件按当时的投信规则回填发送方来源——用户会话全是 user；issue 会话按通知前缀；触发器会话第一封是 trigger；
+    thread 里带关联或与父会话交出的文字相同的是 delegation，其余 user；ask_user 的回答是 user，ask_agent 的、事件为空。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "a8f1c2d3e4b5")
+    t = "2026-01-01 00:00:00"
+    delegated = {
+        "parts": [
+            {"part_kind": "tool-call", "tool_name": "delegate_task", "args": json.dumps({"task": "去查"})}
+        ],
+        "kind": "response",
+    }
+    with sqlite3.connect(path) as conn:
+        for sid, origin, parent in (
+            ("u", "user", None),
+            ("i", "issue", None),
+            ("t", "trigger", None),
+            ("p", "user", None),
+            ("d", "delegation", "p"),
+        ):
+            conn.execute(
+                "insert into sessions (id, agent_id, title, origin, parent_session_id, kind, created_at, updated_at) "
+                "values (?, 'a1', 't', ?, ?, 'chat', ?, ?)",
+                (sid, origin, parent, t, t),
+            )
+        conn.execute(
+            "insert into messages (session_id, task_id, payload, created_at) values ('p', 1, ?, ?)",
+            (json.dumps(delegated), t),
+        )
+        ask_user = json.dumps(
+            {"q": {"tool": "ask_user", "result": {"answered": True, "answers": [], "note": None}}}
+        )
+        ask_agent = json.dumps({"q": {"tool": "ask_agent", "result": {"text": "x"}}})
+        for id_, sid, kind, content, answers, correlation in (
+            (1, "u", "message", "hi", "{}", None),
+            (2, "u", "answer", "", ask_user, None),
+            (3, "u", "event", "done", "{}", None),
+            (4, "i", "message", "New activity on issue #1: x", "{}", None),
+            (5, "i", "message", "我补充一句", "{}", None),
+            (6, "t", "message", "nightly", "{}", None),
+            (7, "t", "message", "改一下", "{}", None),
+            (8, "d", "message", "去查", "{}", None),
+            (9, "d", "message", "查快点", "{}", None),
+            (10, "d", "message", "ask", "{}", "delegation:p:c1"),
+            (11, "p", "answer", "", ask_agent, None),
+        ):
+            conn.execute(
+                "insert into mail (id, session_id, kind, source, content, attachments, answers, awaited, correlation, "
+                "correlation_settled, state, created_at) values (?, ?, ?, ?, ?, '[]', ?, 0, ?, 0, 'consumed', ?)",
+                (id_, sid, kind, "job:1" if kind == "event" else None, content, answers, correlation, t),
+            )
+
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, origin from mail order by id").fetchall() == [
+            (1, "user"),
+            (2, "user"),
+            (3, None),
+            (4, "issue"),
+            (5, "user"),
+            (6, "trigger"),
+            (7, "user"),
+            (8, "delegation"),
+            (9, "user"),
+            (10, "delegation"),
+            (11, None),
+        ]
+        assert "ix_messages_created_at" in {r[1] for r in conn.execute("pragma index_list(messages)")}
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "a8f1c2d3e4b5")
+    with sqlite3.connect(path) as conn:
+        assert "origin" not in {r[1] for r in conn.execute("pragma table_info(mail)")}
+        assert "ix_messages_created_at" not in {r[1] for r in conn.execute("pragma index_list(messages)")}
+        assert conn.execute("select count(*) from mail").fetchone() == (11,)
