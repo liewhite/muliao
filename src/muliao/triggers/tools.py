@@ -66,7 +66,8 @@ Where the event goes is `route` (default `new`): {address_help}. The event itsel
 or a stream's lines) can send parts elsewhere: a line `@route <address>` sends the lines after it, up to \
 the next such line, to that address (parts to the same address are joined); the part before the first one \
 goes to `route`. Each part gets `prompt` in front. So channel logic (which project a Slack message belongs \
-to, which issue a monitor writes to) lives in the script. A bad address (or a target that no longer \
+to, which issue a monitor writes to) lives in the script. Only a line starting exactly with `@route` counts, \
+so a script passing on outside text (messages, web pages) must indent any such line in it. A bad address (or a target that no longer \
 exists) rejects the firing, which disables the trigger with the reason."""
 
 

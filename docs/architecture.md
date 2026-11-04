@@ -534,9 +534,9 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 **事件投递**（`routing` 领域，#371）：触发器只是事件源，事件交给谁由投递目标决定。领域保持通用，不认识任何渠道（Slack、Telegram……）：渠道逻辑（这条消息属于哪个项目、监控写到哪个 issue）都在产出事件的脚本（前置检查、流式命令）里，用地址表达。目标有三种（`routing/targets.py`，存 id，agent 改名不影响；对模型与界面是文字地址）：
 - `new`（默认）/ `agent:<名>`：新开一个会话（发送方自己的 agent / 那个 agent）；
 - `session` / `session:<名>`：续写这个触发器最近一次给该 agent 开的会话（会话领域的 `SessionKey`），没有就新建；长度靠压缩。和 `new` 混用时续写的是最近开的那个；
-- `issue:<N>`：issue 领域的定向命令 `PostIssueEvent`：在时间线记一条 `event` 动态（actor 是触发器所属的 agent，来源 `trigger <名>`，正文是投递的内容），像用户评论一样按 `rules.recipient` 投递（有被指派的 agent 接手给它，否则给 owner），所以事件不会没人收。
+- `issue:<N>`：issue 领域的定向命令 `PostIssueEvent`：在时间线记一条 `event` 动态（actor 是触发器所属的 agent，来源 `trigger <名>`，正文是投递的内容：处理说明加这段事件），像用户评论一样按 `rules.recipient` 投递（有被指派的 agent 接手给它，否则给 owner），所以事件不会没人收。
 
-触发器的公共字段 `route` 是默认目标（建、改时解析并校验 agent、issue 存在；`None` 即 `new`）。事件内容里单独一行 `@route <地址>` 把它之后、下一个这样的行之前的内容投到那个地址，第一行之前的投到默认目标；同一目标的各段合并成一次投递，每段前都带处理说明；没有 `@route` 行的内容原样是一段（现有触发器行为不变），各段都空就不触发。webhook 带 `session_id` 续写时整段投进那个会话，不分段。`routing` 只读（`plan_in` 分段并解析地址、`routed_in` 校验并返回命令，同 `receive_command_in` 的模式），触发器在自己的事务里记下触发并 `send_in` 全部命令：一次触发分发到多个目标，仍是记下即投递、恰好一次。地址不合法或目标已不在（agent、issue 被删除）是 `InvalidInput`：整次不投，按「来信被拒绝」处理（激活机制停用触发器并记 `disabled_reason`，webhook 返回 422，`trigger_run` 报错）。
+触发器的公共字段 `route` 是默认目标（建、改时解析并校验 agent、issue 存在；`None` 即 `new`）。事件内容里单独一行 `@route <地址>` 把它之后、下一个这样的行之前的内容投到那个地址，第一行之前的投到默认目标；同一目标的各段合并成一次投递，每段前都带处理说明；只认顶格的 `@route` 行，脚本转发外部文本（消息、网页）时要把其中这样的行缩进，外部内容不能改投递去向（工具说明里写明）。没有 `@route` 行的内容原样是一段（现有触发器行为不变），各段都空就不触发。地址里写发送方自己的 agent（`agent:<自己>`、`session:<自己>`）存成和 `new`、`session` 一样的目标。webhook 带 `session_id` 续写时整段投进那个会话，不分段；这是「按 key 投信的发送方不按会话 id 续写」的例外：默认目标是 `session` 的触发器再用 `session_id` 续写，两条 lane 之间不保证先后。`last_session_id` 是这次开出或续写的第一个已知会话（定时跳过、流式排队看它），只投进了 issue、或续写的会话还没建出来时保留上一次的。`routing` 只读（`plan_in` 分段并解析地址、`routed_in` 校验并返回命令，同 `receive_command_in` 的模式），触发器在自己的事务里记下触发并 `send_in` 全部命令：一次触发分发到多个目标，仍是记下即投递、恰好一次。地址不合法或目标已不在（agent、issue 被删除）是 `InvalidInput`：整次不投，按「来信被拒绝」处理（激活机制停用触发器并记 `disabled_reason`，webhook 返回 422，`trigger_run` 报错）。
 
 任何未结束的触发器都可以在界面上或用 `trigger_run` 立即运行一次（不带事件内容）；有前置检查时同样先跑检查，可以用来测试整条链路。事件内容（若有）原样附在处理说明之后：
 

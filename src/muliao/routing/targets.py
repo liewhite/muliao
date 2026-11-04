@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from muliao.agents.api import AgentNames
 from muliao.errors import InvalidInput
 
 
@@ -58,7 +59,7 @@ ADDRESS_HELP = (
 
 
 class Address(BaseModel):
-    """文字地址解析出的目标，agent 还是名称（解析成 id 要查库，见 routing.router.Router.resolve_in）。"""
+    """文字地址解析出的目标，agent 还是名称（解析成 id 要查库，见 routing.router.resolve_in）。"""
 
     model_config = ConfigDict(frozen=True)
     to: Literal["new", "session", "issue"]
@@ -89,19 +90,30 @@ _ROUTE_LINE = re.compile(r"^@route[ \t]+(\S+)[ \t]*$")
 
 
 def split_routed(text: str) -> list[tuple[str | None, str]]:
-    """把事件文本按 `@route <地址>` 行分段：[(地址或 None（默认目标）, 内容)]，同一地址的各段按出现顺序合并，没有内容的段
-    丢掉。没有 `@route` 行时原样是一段（不改动现有的事件）。"""
+    """把事件文本按 `@route <地址>` 行（必须顶格）分段：[(地址或 None（默认目标）, 内容)]，按出现顺序，没有内容的段丢掉
+    （同一目标的合并在解析成目标之后，见 router.plan_in）。没有 `@route` 行时原样是一段（不改动现有的事件）。"""
     lines = text.splitlines()
     if not any(_ROUTE_LINE.match(line) for line in lines):
         return [(None, text)]
-    sections: dict[str | None, list[str]] = {}
-    current: str | None = None
+    sections: list[tuple[str | None, list[str]]] = [(None, [])]
     for line in lines:
         if m := _ROUTE_LINE.match(line):
-            current = m.group(1)
-            sections.setdefault(current, [])
+            sections.append((m.group(1), []))
         else:
-            sections.setdefault(current, []).append(line)
-    return [
-        (address, "\n".join(body).strip("\n")) for address, body in sections.items() if "".join(body).strip()
-    ]
+            sections[-1][1].append(line)
+    return [(address, "\n".join(body).strip("\n")) for address, body in sections if "".join(body).strip()]
+
+
+def describe(target: NewTo | LatestOf | IssueTo, names: AgentNames) -> str:
+    """目标的文字地址（parse_address 的逆）：给模型与界面看。发送方自己的 agent 存为 None，不写名字。"""
+    match target:
+        case NewTo(agent_id=None):
+            return "new"
+        case NewTo(agent_id=agent_id):
+            return f"agent:{names[agent_id]}"
+        case LatestOf(agent_id=None):
+            return "session"
+        case LatestOf(agent_id=agent_id):
+            return f"session:{names[agent_id]}"
+        case IssueTo(issue_id=issue_id):
+            return f"issue:{issue_id}"

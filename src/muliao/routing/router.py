@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentNames, named_agent_in
+from muliao.agents.api import named_agent_in
 from muliao.errors import InvalidInput, NotFound
 from muliao.issues.api import check_issue_in
 from muliao.issues.events import PostIssueEvent
@@ -51,25 +51,9 @@ class Routed:
     session_id: str | None
 
 
-def describe(target: Target, sender_agent: str, names: AgentNames) -> str:
-    """目标的文字地址（parse_address 的逆）：给模型与界面看。发送方自己的 agent 不写名字。"""
-    match target:
-        case NewTo(agent_id=agent_id) if agent_id in (None, sender_agent):
-            return "new"
-        case NewTo(agent_id=agent_id):
-            assert agent_id is not None
-            return f"agent:{names[agent_id]}"
-        case LatestOf(agent_id=agent_id) if agent_id in (None, sender_agent):
-            return "session"
-        case LatestOf(agent_id=agent_id):
-            assert agent_id is not None
-            return f"session:{names[agent_id]}"
-        case IssueTo(issue_id=issue_id):
-            return f"issue:{issue_id}"
-
-
-async def resolve_in(s: AsyncSession, address: str) -> Target:
-    """文字地址解析成目标（agent 名称换成 id，确认 issue 存在）；不合法时 InvalidInput。只读。"""
+async def resolve_in(s: AsyncSession, address: str, sender_agent: str) -> Target:
+    """文字地址解析成目标（agent 名称换成 id，确认 issue 存在）；不合法时 InvalidInput。只读。发送方自己的 agent 存为 None：
+    `agent:<自己>` 与 `new` 是同一个目标（同一次触发里合并成一次投递）。"""
     parsed = parse_address(address)
     try:
         if parsed.to == "issue":
@@ -77,19 +61,23 @@ async def resolve_in(s: AsyncSession, address: str) -> Target:
             await check_issue_in(s, parsed.issue_id)
             return IssueTo(issue_id=parsed.issue_id)
         agent_id = None if parsed.agent is None else (await named_agent_in(s, parsed.agent)).id
+        if agent_id == sender_agent:
+            agent_id = None
     except NotFound as e:
         raise InvalidInput(f"invalid route {address!r}: {e}") from e
     return NewTo(agent_id=agent_id) if parsed.to == "new" else LatestOf(agent_id=agent_id)
 
 
-async def plan_in(s: AsyncSession, payload: str | None, default: Target) -> list[tuple[Target, str | None]]:
+async def plan_in(
+    s: AsyncSession, payload: str | None, default: Target, sender_agent: str
+) -> list[tuple[Target, str | None]]:
     """事件内容按 `@route` 行分到各目标（targets.split_routed）：[(目标, 这段内容)]，同一目标的各段按出现顺序合并。
     没有内容（payload 为 None，如定时触发）时是默认目标的一次投递；有内容但各段都是空的时为空列表。只读。"""
     if payload is None:
         return [(default, None)]
     planned: dict[Target, list[str]] = {}
     for address, body in split_routed(payload):
-        target = default if address is None else await resolve_in(s, address)
+        target = default if address is None else await resolve_in(s, address, sender_agent)
         planned.setdefault(target, []).append(body)
     return [(target, "\n".join(bodies)) for target, bodies in planned.items()]
 

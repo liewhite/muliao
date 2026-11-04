@@ -281,7 +281,7 @@ class IssueService:
                 change=(None, command.source),
             )
             issue.updated_at = utcnow()
-            # 投递任务随这个事务提交，由 worker 照常执行
+            # 投递任务随这个事务提交，由 worker 照常执行（订阅方的事务里没有「提交后马上执行」，同 on_run_ended）
             await self._delivery.deliver_in(s, issue, command.agent_id, None, [activity])
             log.info("issue event posted", extra={"issue_id": command.issue_id, "source": command.source})
 

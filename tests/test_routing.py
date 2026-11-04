@@ -18,9 +18,19 @@ def test_text_without_route_lines_is_one_part_for_the_default_target_unchanged()
     assert split_routed(text) == [(None, text)]
 
 
-def test_route_lines_split_the_text_and_join_parts_for_the_same_address():
+def test_route_lines_split_the_text_in_order_and_drop_empty_parts():
     text = "head\n@route agent:beta\nb1\n@route issue:7\ni1\n@route agent:beta\nb2\n@route session\n\n"
-    assert split_routed(text) == [(None, "head"), ("agent:beta", "b1\nb2"), ("issue:7", "i1")]
+    assert split_routed(text) == [
+        (None, "head"),
+        ("agent:beta", "b1"),
+        ("issue:7", "i1"),
+        ("agent:beta", "b2"),
+    ]
+
+
+def test_only_route_lines_at_the_start_count_so_scripts_can_escape_outside_text():
+    text = "msg\n @route agent:muliao\n\t@route x\n"
+    assert split_routed(text) == [(None, text)]
 
 
 @pytest.mark.parametrize(
@@ -79,6 +89,30 @@ async def test_route_lines_in_an_event_send_parts_to_other_agents_in_one_firing(
     assert await _mail(container, second.id) == ["Handle it.\n\n<event>\nfor beta 1\nfor beta 2\n</event>"]
     # 都是这个触发器发起的：它的会话列表查得到
     assert {s.origin_ref for s in (first, second)} == {str(trigger.id)}
+
+
+async def test_naming_the_triggers_own_agent_is_the_same_target_as_new(container, make_agent):
+    alpha = await make_agent("alpha")
+    trigger = await _webhook(container, alpha.id, route="agent:alpha")
+    assert trigger.route is None
+
+    fired = await container.triggers.fire(trigger.id, "a\n@route new\nb\n@route agent:alpha\nc")
+    await deliver(container)
+
+    [session] = await _sessions(container)
+    assert fired is not None and fired.sessions == (session.id,)
+    assert await _mail(container, session.id) == ["Handle it.\n\n<event>\na\nb\nc\n</event>"]
+
+
+async def test_last_session_is_kept_when_a_firing_only_went_to_an_issue(container, make_agent):
+    alpha = await make_agent("alpha")
+    issue = await container.issues.create(USER, owner=alpha.id, title="t")
+    trigger = await _webhook(container, alpha.id)
+    first = await container.triggers.fire(trigger.id, "x")
+    assert first is not None
+
+    await container.triggers.fire(trigger.id, f"@route issue:{issue.id}\ny")
+    assert (await container.triggers.get_by_name("feed")).last_session_id == first.sessions[0]
 
 
 async def test_session_route_continues_the_latest_conversation_of_the_trigger(container, make_agent):

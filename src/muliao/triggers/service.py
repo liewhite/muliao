@@ -100,7 +100,7 @@ def route_of(trigger: Trigger) -> Target:
 
 def route_address(trigger: Trigger, names: AgentNames) -> str:
     """默认投递目标的文字地址（routing.api.ADDRESS_HELP），给模型与界面看。"""
-    return describe(route_of(trigger), trigger.agent_id, names)
+    return describe(route_of(trigger), names)
 
 
 # 全部触发方式的名字（各方式模块的 KIND）；接口契约里的种类就是它，与组合根注册的方式一一对应（tests/test_triggers.py）
@@ -241,9 +241,9 @@ class TriggerService:
         """触发器的读模型：行、它的触发方式给出的运行状态（TriggerKind.status）、解析好的前置检查。"""
         return TriggerView(trigger, self.kind(trigger.kind).status(trigger), precheck_of(trigger))
 
-    async def _route_in(self, s: AsyncSession, address: str) -> dict[str, Any] | None:
+    async def _route_in(self, s: AsyncSession, address: str, agent_id: str) -> dict[str, Any] | None:
         """默认投递目标的文字地址解析成存储的形式（不合法时 InvalidInput）；新开自己的会话（默认）存为 None。"""
-        target = await resolve_in(s, address)
+        target = await resolve_in(s, address, agent_id)
         return None if target == DEFAULT else target.model_dump()
 
     async def create(
@@ -278,7 +278,7 @@ class TriggerService:
                 # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又建的触发器没人认领；归档的拒绝（它不能运行）
                 await runnable_agent_in(s, agent_id)
                 if route is not None:
-                    trigger.route = await self._route_in(s, route)
+                    trigger.route = await self._route_in(s, route, agent_id)
                 s.add(trigger)
         except IntegrityError as e:
             raise Conflict(f"trigger {name!r} already exists") from e
@@ -312,7 +312,7 @@ class TriggerService:
             if prompt is not None:
                 trigger.prompt = prompt
             if route is not None:
-                trigger.route = await self._route_in(s, route)
+                trigger.route = await self._route_in(s, route, trigger.agent_id)
             reenabled = enabled is True and not trigger.enabled
             if config is not None or reenabled:
                 derived_config, derived = self.kind(trigger.kind).configure(
@@ -414,7 +414,7 @@ class TriggerService:
             sessions: list[str | None] = [session_id]
             tasks = [self._messaging.send_in(s, await receive_command_in(s, inbound))]
         else:
-            planned = await plan_in(s, payload, route_of(trigger))
+            planned = await plan_in(s, payload, route_of(trigger), trigger.agent_id)
             if not planned:
                 log.info(
                     "trigger event has no content after routing, not firing", extra={"trigger": trigger.name}
@@ -435,7 +435,11 @@ class TriggerService:
             sessions = [r.session_id for r in routed]
             tasks = [self._messaging.send_in(s, r.command) for r in routed]
         trigger.last_fired_at = now
-        trigger.last_session_id = sessions[0]
+        # 这次开出或续写的第一个已知会话（定时跳过、流式排队看它的工作状态）；只投进了 issue、或续写的会话还没建出来时
+        # 留着上一次的，不清空
+        known = [x for x in sessions if x is not None]
+        if known:
+            trigger.last_session_id = known[0]
         log.info("trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "sessions": sessions})
         return _Fired(fired=Fired(sessions=tuple(sessions)), deliveries=tasks)
 

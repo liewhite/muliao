@@ -6,8 +6,8 @@
 - 发送方 Sender。
 """
 
-from muliao.routing.router import Routed, Sender, describe, plan_in, resolve_in, routed_in
-from muliao.routing.targets import ADDRESS_HELP, DEFAULT, TARGET, IssueTo, LatestOf, NewTo, Target
+from muliao.routing.router import Routed, Sender, plan_in, resolve_in, routed_in
+from muliao.routing.targets import ADDRESS_HELP, DEFAULT, TARGET, IssueTo, LatestOf, NewTo, Target, describe
 
 __all__ = [
     "ADDRESS_HELP",

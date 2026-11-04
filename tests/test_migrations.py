@@ -1688,3 +1688,39 @@ def test_sessions_get_a_nullable_compaction_threshold_and_lose_it_on_downgrade(t
             r[1] for r in conn.execute("pragma table_info(sessions)")
         }
         assert conn.execute("select id from sessions").fetchall() == [("s",)]
+
+
+def test_triggers_get_a_null_route_and_downgrade_drops_it_with_issue_events(tmp_path):
+    """#371：已有触发器的 route 为 NULL（新开它的 agent 的会话，行为不变）；降级删掉这一列与旧代码不认识的 event 动态。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "8f956292ff5b")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into triggers (name, agent_id, prompt, kind, config, state, enabled, created_at) "
+            "values ('w', 'a1', 'p', 'webhook', '{}', '{}', 1, ?)",
+            (t,),
+        )
+        conn.execute(
+            "insert into issues (title, description, status, priority, creator, created_at, updated_at) "
+            "values ('i', '', 'backlog', 'none', 'user', ?, ?)",
+            (t, t),
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select route from triggers").fetchall() == [(None,)]
+        for kind in ("comment", "event"):
+            conn.execute(
+                "insert into issue_activities (issue_id, created_at, actor, kind) values (1, ?, 'a1', ?)",
+                (t, kind),
+            )
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "8f956292ff5b")
+    with sqlite3.connect(path) as conn:
+        assert "route" not in {r[1] for r in conn.execute("pragma table_info(triggers)")}
+        assert conn.execute("select kind from issue_activities").fetchall() == [("comment",)]
+        assert conn.execute("select name from triggers").fetchall() == [("w",)]
