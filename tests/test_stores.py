@@ -178,7 +178,7 @@ async def test_memory_append_replace_limit_and_revisions(container, make_agent):
     await memory.edit("alpha", "", "- likes tea", alpha)
     await memory.edit("alpha", "", "- lives in Paris", alpha)
     await memory.edit("alpha", "Paris", "Berlin", alpha)
-    assert (await memory.read("alpha")).content == "- likes tea\n\n- lives in Berlin\n"
+    assert (await memory.read("alpha")).content == "- likes tea\n\n- lives in Berlin"
 
     with pytest.raises(InvalidInput, match="found 2"):
         await memory.edit("alpha", "-", "+", alpha)
@@ -305,7 +305,7 @@ async def test_an_agents_items_and_memory_go_with_it_and_their_deletion_is_recor
         latest = (await history(container, subject, name, 1))[0]
         assert (latest.after, latest.actor, latest.message) == (None, "user", f"deleted with agent {alpha}")
     # 它写过的全局记忆留着
-    assert (await container.memory.read("global")).content == "- global fact\n"
+    assert (await container.memory.read("global")).content == "- global fact"
 
 
 async def test_writes_for_a_deleting_agent_are_refused(container, make_agent):
@@ -362,7 +362,7 @@ async def test_memory_edit_with_nothing_to_append_is_rejected_and_unchanged(cont
     with pytest.raises(InvalidInput, match="new_text is empty") as raised:
         await container.memory.edit("alpha", "", "  ", alpha)
     assert "- kept" not in str(raised.value)  # 与原文无关，不附全文
-    assert (await container.memory.read("alpha")).content == "- kept\n"
+    assert (await container.memory.read("alpha")).content == "- kept"
 
 
 async def test_memory_edit_mismatch_shows_the_current_text(container, make_agent):
@@ -372,7 +372,7 @@ async def test_memory_edit_mismatch_shows_the_current_text(container, make_agent
     with pytest.raises(InvalidInput) as raised:
         await container.memory.edit("alpha", "- as in my snapshot", "- new", alpha)
     assert str(raised.value).endswith("\n     1\t- changed elsewhere")
-    assert (await container.memory.read("alpha")).content == "- changed elsewhere\n"
+    assert (await container.memory.read("alpha")).content == "- changed elsewhere"
 
 
 async def test_memory_edit_over_the_limit_shows_the_current_text(container, make_agent):

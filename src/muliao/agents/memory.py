@@ -133,6 +133,7 @@ class MemoryStore:
                 return await self._new_in(
                     s, name, content, owner, description, actor, f"create memory {name}"
                 )
+            content = tidy(content)
             self._check_size(len(content), name)
             record_in(s, Subject.MEMORY, name, row.content, content, actor, f"write memory {name}")
             row.content, row.description = content, description
@@ -150,6 +151,7 @@ class MemoryStore:
         message: str,
     ) -> MemoryInfo:
         validate_slug(_LABEL, name)
+        content = tidy(content)
         self._check_size(len(content), name)
         row = Item(kind=_KIND.value, name=name, owner=owner, content=content, description=description)
         s.add(row)
@@ -205,11 +207,11 @@ class MemoryStore:
         actor: str,
         message: str,
     ) -> MemoryInfo:
-        """读取、修改、写入与记版本在同一个写事务里：并发的修改互不覆盖。message 是这一版的说明。"""
+        """读取、修改、写入与记版本在同一个写事务里：并发的修改互不覆盖。message 是这一版的说明。写入前规整空白（tidy）。"""
         async with self._db.transaction() as s:
             row = await changeable_in(s, _KIND, name, actor)
             current = row.content
-            updated = await edit(row, s)
+            updated = tidy(await edit(row, s))
             if len(updated) > self.max_chars:
                 raise MemoryFull(self._full_message(name, len(updated), len(current)), current)
             row.content = updated
@@ -228,6 +230,20 @@ class MemoryStore:
             f"{size - self.max_chars} chars first by condensing or deleting existing entries with memory_edit "
             "(aim for a few hundred chars of headroom), then retry"
         )
+
+
+def tidy(content: str) -> str:
+    """记忆写入前规整空白（每条写入都经过这里）：每行去掉行尾空白，连续空行合并成一个，去掉首尾空行，不留结尾换行，存下的
+    就是指令里显示的样子。只动空白：记忆一条一行，空行个数和行尾空格没有意义，而指令里看不出它们，memory_edit 的原文常
+    因此对不上（#361）。"""
+    lines: list[str] = []
+    for line in content.splitlines():
+        line = line.rstrip()
+        if line or (lines and lines[-1]):
+            lines.append(line)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
 
 
 def _current_text(current: str) -> str:

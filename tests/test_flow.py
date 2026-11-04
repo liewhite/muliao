@@ -178,7 +178,7 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     await drain(container)
 
     history = await history_of(container, session.id)
-    assert (await container.memory.read("alpha")).content == "- user likes tea\n"
+    assert (await container.memory.read("alpha")).content == "- user likes tea"
     assert last_user_prompt(history) == "I like tea"
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "Noted!"
     deliver = await tasks_of(container, DELIVER_TASK)

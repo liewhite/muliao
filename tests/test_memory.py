@@ -105,6 +105,19 @@ async def test_the_memory_limit_is_per_block_and_tells_how_much_to_free(containe
     assert [r.message for r in await memory_history(container, "global")] == []
 
 
+async def test_every_memory_write_tidies_whitespace_only(container, make_agent):
+    # 行尾空白、连续空行、首尾空行在指令里看不出，memory_edit 对不上原文（#361）：每条写入路径都规整
+    agent = await make_agent("alpha")
+    await container.memory.put("alpha", "\n\n- a  \n\n\n\n  - b\t\n\n", "", actor="user")
+    assert await _content(container, "alpha") == "- a\n\n  - b"
+    await container.memory.edit("alpha", "- a", "- a \n\n\n- c   ", agent.id)
+    assert await _content(container, "alpha") == "- a\n\n- c\n\n  - b"
+    await container.memory.edit("alpha", "", "- d\n\n\n", agent.id)
+    assert await _content(container, "alpha") == "- a\n\n- c\n\n  - b\n\n- d"
+    await container.memory.create("trading", "x \n\n\n", actor="user")
+    assert await _content(container, "trading") == "x"
+
+
 async def test_a_cleared_memory_is_a_new_version(container, make_agent):
     await make_agent("alpha")
     await container.memory.put("alpha", "- fact", "", actor="user")
@@ -153,7 +166,7 @@ async def test_an_agent_edits_a_memory_block_by_name_as_a_versioned_change(conta
     await start(container, agent.id, "hello")
     await drain(container)
 
-    assert await _content(container, "global") == "- all agents answer in Chinese\n"
+    assert await _content(container, "global") == "- all agents answer in Chinese"
     assert await _content(container, "alpha") == ""
     latest = (await memory_history(container, "global"))[0]
     # 为什么改记进这一版：自进化的时间线

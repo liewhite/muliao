@@ -170,7 +170,7 @@ async def test_a_failed_run_resumes_from_its_last_saved_step_without_replaying_t
 
     assert requests["n"] == 3
     # 工具在失败之前已经执行并保存了结果：续跑时重发那次请求，不再执行一遍
-    assert (await container.memory.read("alpha")).content == "- once\n"
+    assert (await container.memory.read("alpha")).content == "- once"
     history = await history_of(container, session.id)
     assert [type(m).__name__ for m in history] == [
         "ModelRequest",
