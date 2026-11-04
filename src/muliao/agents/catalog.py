@@ -101,7 +101,7 @@ class ItemCatalog:
             ]
 
     async def transfer_item(self, kind: StoredKind, name: str, owner: str | None, actor: str) -> None:
-        """把条目转给 owner（agent 的 id；None 归平台），记一版。actor 要能改它（规则 2），新 owner 要还可用（归档的也行：
+        """把条目转给 owner（agent 的 id；None 归平台），记一版。actor 要能改它（规则 1 的 write），新 owner 要还可用（归档的也行：
         条目照常可改）。内容不变；谁能用随 owner 变（agents.access 的规则 1）。"""
         async with self._db.transaction() as s:
             row = await changeable_in(s, kind, name, actor)

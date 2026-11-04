@@ -182,7 +182,7 @@ class SkillStore:
         reason: str | None = None,
     ) -> SkillMeta:
         """新建或整体改写 SKILL.md；attachments 为 None 时附件不变，否则整体换成它。actor（agent 的 id 或 USER）是改的人，
-        已有的要它能改（规则 2）；新建的归 owner，已有的 owner 不变。reason 是这一版的说明（revisions.described）。"""
+        已有的要它能改（规则 1 的 write）；新建的归 owner，已有的 owner 不变。reason 是这一版的说明（revisions.described）。"""
         validate_slug(label(StoredKind.SKILL), name)
         description = _valid_description(description)
         message = described(reason, f"write skill {name}")
@@ -236,7 +236,7 @@ class SkillStore:
         *,
         replace: bool = True,
     ) -> SkillMeta:
-        """新建或整篇写入：已有的按规则 2 查 actor，owner 不变；新建的归 owner。replace 为假时只新建：同名的已存在
+        """新建或整篇写入：已有的按规则 1 的 write 查 actor，owner 不变；新建的归 owner。replace 为假时只新建：同名的已存在
         Conflict（在写入的事务里查，并发的新建不会互相覆盖）。"""
         async with self._db.transaction() as s:
             if replace:

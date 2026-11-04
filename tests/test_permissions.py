@@ -1,5 +1,5 @@
 """分发与归属（#235、#365）：`action:kind:name` 规则、内置角色 base / admin、自建角色；能用 = 自己的 ∪ 规则放行的（skill 索引、MCP、
-secret）；能改 = owner 或 admin；read_skill 的软隔离。"""
+secret）；能改 = owner 或规则放行 write（admin 的 write:*）；read_skill 的软隔离。"""
 
 import dataclasses
 import sys

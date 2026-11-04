@@ -71,7 +71,7 @@ _MEMORY_EDIT_RENDER = ToolRender[str](
 
 
 def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
-    """skill：读任何 skill；写、改、删按规则 2（自己的，admin 可改任何的），新建的归自己。分给别的 agent 靠角色。"""
+    """skill：读任何 skill；写、改、删按规则 1 的 write（自己的、规则放行 write 的，admin 靠 write:*），新建的归自己。分给别的 agent 靠角色。"""
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool(metadata=rendered_by(_READ_SKILL_RENDER))
