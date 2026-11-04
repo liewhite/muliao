@@ -33,9 +33,9 @@ SELF_IMPROVEMENT = """\
 ## Self-improvement
 Everything you learn persists only as memory or skills.
 - Memory: the memory blocks above, each limited to {memory_limit} characters: your private one, the global \
-one every agent shares, and any shared by your roles. Record durable facts (user preferences, environment \
-details, corrections, lessons learned) with `memory_edit` on a block marked editable (empty `old_text` \
-appends); fix or condense entries with it too. Put a fact in the narrowest block it holds for: your private \
+one every agent shares, and any shared by your roles. Change a block marked editable with `memory_edit` \
+(its description says what belongs in memory and what goes into a skill); fix or condense entries with it \
+too. Put a fact in the narrowest block it holds for: your private \
 block unless it holds for everyone who shares the other block. Never record secrets or one-off details.
 - Skills are reusable procedures. Before a task that matches a skill in the index, call `read_skill`. After \
 working out a non-trivial procedure likely to recur, save it with `write_skill` (a new skill is yours; other \

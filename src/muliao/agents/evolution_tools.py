@@ -191,14 +191,21 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
     async def memory_edit(
         ctx: RunContext[RunScope], name: str, new_text: str, reason: str, old_text: str = ""
     ) -> str:
-        """Add to or change a memory block marked editable in your instructions (user preferences, environment
-        facts, lessons learned). `old_text` must occur exactly once in the block and is replaced by `new_text`
-        (an empty `new_text` deletes it); an empty `old_text` appends `new_text` as a new entry at the end.
+        """Add to or change a memory block marked editable in your instructions. `old_text` must occur exactly
+        once in the block and is replaced by `new_text` (an empty `new_text` deletes it); an empty `old_text`
+        appends `new_text` as a new entry at the end.
+
+        Memory is in every run's context, so it holds only one-line conclusions that must constrain every run:
+        boundaries and red lines, the user's decisions and corrections, rejected approaches, ids/paths you cannot
+        look up. Not memory: steps, commands, API parameters, the details of a pitfall and its workaround (write
+        or edit a skill; memory keeps at most "X: see skill Y"); what you did, current status, commit ids (issue
+        comments / work history); anything a command shows or a tool description or skill already says. Before
+        appending, rewrite an existing entry on the same topic instead.
 
         Args:
             name: Name of the memory block, as in `<memory name="...">` in your instructions.
-            new_text: Replacement text, or the entry to append (one concise markdown line or short block);
-                empty deletes `old_text`.
+            new_text: Replacement text, or the entry to append: one concise line (a conclusion, not a
+                procedure); empty deletes `old_text`.
             reason: Why, kept in the version history as this memory's timeline: the defect it fixes (user
                 correction, error, detour) or the fact it records, the source (session id, the user's words),
                 and how it relates to earlier changes (new / rewrites / overturns what).
