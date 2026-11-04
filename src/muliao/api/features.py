@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from muliao.api.deps import C
-from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
+from muliao.sessions.api import MIN_COMPACTION_THRESHOLD_TOKENS
 
 router = APIRouter()
 

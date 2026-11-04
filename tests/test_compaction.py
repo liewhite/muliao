@@ -572,3 +572,16 @@ async def test_compaction_uses_the_agents_thinking_level(container, make_agent, 
     await drain(container)
 
     assert recorder.compaction_thinking == ["low"]
+
+
+async def test_a_threshold_below_the_minimum_is_refused_by_the_domain_not_only_by_http(container, make_agent):
+    import pytest
+
+    from muliao.errors import InvalidInput
+    from muliao.sessions.api import NewChat, UserMessage
+
+    alpha = (await make_agent("alpha")).id
+    with pytest.raises(InvalidInput):
+        await container.sessions.receive(
+            UserMessage(content="hi", session=NewChat(alpha, compaction_threshold_tokens=5))
+        )

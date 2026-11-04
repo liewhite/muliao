@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.api.tasks import TaskOut
-from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
 from muliao.container import Container
 from muliao.sessions.api import (
+    MIN_COMPACTION_THRESHOLD_TOKENS,
     AskWait,
     CallResult,
     DelegationWait,

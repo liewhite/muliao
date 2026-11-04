@@ -13,6 +13,7 @@
 - 会话 lane 上的任务种类（RUN_TASK、COMPACTION_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
 """
 
+from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
 from muliao.sessions.activity import SessionActivity, WorkState
 from muliao.sessions.assembly import SessionDomain, SessionPorts
 from muliao.sessions.halt import Halted, StopSession
@@ -42,6 +43,7 @@ from muliao.sessions.work import DEFAULT_CHECK_SECONDS, SessionWork, check_due
 
 __all__ = [
     "COMPACTION_TASK",
+    "MIN_COMPACTION_THRESHOLD_TOKENS",
     "RUN_TASK",
     "OWN_NOTES",
     "Origin",

@@ -115,7 +115,7 @@ def test_config_requires_type_model_and_key():
 
 async def test_without_config_features_say_no_transcription_and_the_endpoint_is_404(client):
     await login(client)
-    assert (await client.get("/api/features")).json() == {"transcription": False}
+    assert (await client.get("/api/features")).json()["transcription"] is False
     resp = await client.post("/api/transcriptions", content=b"x", headers={"content-type": "audio/webm"})
     assert resp.status_code == 404
 
@@ -140,7 +140,7 @@ async def speech_client(settings, models, tmp_path):
 
 async def test_configured_transcription_turns_posted_audio_into_text(speech_client):
     await login(speech_client)
-    assert (await speech_client.get("/api/features")).json() == {"transcription": True}
+    assert (await speech_client.get("/api/features")).json()["transcription"] is True
 
     resp = await speech_client.post(
         "/api/transcriptions", content=b"opus", headers={"content-type": "audio/webm"}

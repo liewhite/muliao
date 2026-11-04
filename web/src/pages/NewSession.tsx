@@ -3,6 +3,7 @@ import { Card } from '@heroui/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AgentPicker } from '../AgentPicker'
 import { api, asAgentId, sessionRoute } from '../api'
+import { loadFeatures } from '../features'
 import { AttachButton, PendingUploads, useUploads } from '../attachments'
 import { appendTranscript, useVoiceInput } from '../voice'
 import { VoiceButton } from '../VoiceButton'
@@ -36,9 +37,9 @@ export default function NewSession() {
   const agent = chosen ?? agents.data?.find((a) => a.is_default)?.id ?? null
   const [prompt, setPrompt] = useState('')
   const [thresholdText, setThresholdText] = useState('')
-  const features = useLoad(() => api.features(), [])
-  const min = features.data?.min_compaction_threshold_tokens ?? 0
-  const threshold = parseThreshold(thresholdText, min)
+  const features = useLoad(loadFeatures, [])
+  // 默认值与下限没取到时输入框禁用、只能留空（用默认）
+  const threshold = features.data ? parseThreshold(thresholdText, features.data.min_compaction_threshold_tokens) : null
   const uploads = useUploads()
   const action = useAction()
   // 新会话还要选 agent：转写结果先填进输入框，由用户点「开始」
@@ -84,18 +85,19 @@ export default function NewSession() {
                 <TextInput
                   label="压缩阈值（token，可选）"
                   type="number"
-                  value={thresholdText}
+                  value={features.data ? thresholdText : ''}
                   onChange={setThresholdText}
+                  isDisabled={!features.data}
                   placeholder={
                     features.data ? `留空用默认 ${features.data.compaction_threshold_tokens.toLocaleString()}` : '留空用默认'
                   }
                   hint={
-                    threshold === 'invalid'
-                      ? `要是不小于 ${min.toLocaleString()} 的整数`
+                    features.data && threshold === 'invalid'
+                      ? `要是不小于 ${features.data.min_compaction_threshold_tokens.toLocaleString()} 的整数`
                       : '发给模型的上下文超过它就压缩早期内容'
                   }
                 />
-                <ErrorAlert error={action.error ?? voice.error} />
+                <ErrorAlert error={action.error ?? voice.error ?? features.error} />
                 <div className="flex items-center gap-2">
                   <AttachButton uploads={uploads} isDisabled={action.busy} />
                   <VoiceButton voice={voice} isDisabled={action.busy} />

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
+import { loadFeatures } from './features'
 import { errorMessage as apiErrorMessage } from './ui'
 
 // 录音的容器格式：Chrome/Firefox 录 webm/ogg（opus），iOS/Safari 只能录 mp4（aac）；服务端都认
@@ -21,23 +22,16 @@ export function appendTranscript(draft: string, text: string): string {
   return head === '' ? text : `${head} ${text}`
 }
 
-let featuresOnce: Promise<boolean> | null = null
-
 /** 服务端配置了语音转写、且浏览器能录音（需要 HTTPS 或 localhost）时才显示语音输入。 */
 function useVoiceAvailable(): boolean {
   const [available, setAvailable] = useState(false)
   useEffect(() => {
     if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) return
-    featuresOnce ??= api.features().then(
-      (f) => f.transcription,
-      (e) => {
-        console.error('loading server features failed', e)
-        featuresOnce = null
-        return false
-      },
-    )
     let live = true
-    void featuresOnce.then((ok) => live && setAvailable(ok))
+    void loadFeatures().then(
+      (f) => live && setAvailable(f.transcription),
+      (e: unknown) => console.error('loading server features failed', e),
+    )
     return () => {
       live = false
     }

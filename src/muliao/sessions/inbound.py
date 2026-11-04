@@ -18,6 +18,7 @@ from enum import Enum
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.api import runnable_agent_in
+from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.files.api import FileMeta, load_metas
 from muliao.platform.db import utcnow
@@ -233,6 +234,11 @@ async def create_session(
     if is_thread and spec.parent_session_id != origin_ref:
         raise ValueError(
             f"delegated session must be created by its parent {spec.parent_session_id}, not {origin_ref}"
+        )
+    threshold = spec.compaction_threshold_tokens
+    if threshold is not None and threshold < MIN_COMPACTION_THRESHOLD_TOKENS:
+        raise InvalidInput(
+            f"compaction threshold must be at least {MIN_COMPACTION_THRESHOLD_TOKENS} tokens, got {threshold}"
         )
     return await add_in(
         s,
