@@ -290,7 +290,7 @@ export const api = {
     send<Blob>('GET', workspaceFileUrl(agent_id, path), undefined, undefined, true),
   /** 全部 agent 的自定义页面（工作目录 site/<名>/index.html），各带打开它的签名地址 */
   pages: () => branded<SitePage[]>(call('get', '/api/pages')),
-  /** 服务端配置决定的可选能力（如语音输入） */
+  /** 服务端配置决定的可选能力（如语音输入）与默认值（如压缩阈值） */
   features: () => call('get', '/api/features'),
   /** 服务端配置的 LLM provider 名 */
   providers: () => call('get', '/api/providers'),
@@ -345,8 +345,11 @@ export const api = {
     branded<SessionListItem[]>(call('get', '/api/sessions', { query })),
   session: (session_id: string) =>
     branded<SessionDetail>(call('get', '/api/sessions/{session_id}', { path: { session_id } })),
-  startSession: (agent_id: AgentId, prompt: string, attachments: string[]) =>
-    branded<Session>(call('post', '/api/sessions', { body: { agent_id, prompt, attachments } })),
+  /** compaction_threshold_tokens 为 null 时用全局默认 */
+  startSession: (agent_id: AgentId, prompt: string, attachments: string[], compaction_threshold_tokens: number | null) =>
+    branded<Session>(
+      call('post', '/api/sessions', { body: { agent_id, prompt, attachments, compaction_threshold_tokens } }),
+    ),
   reply: (session_id: string, prompt: string, attachments: string[]) =>
     call('post', '/api/sessions/{session_id}/messages', { path: { session_id }, body: { prompt, attachments, answers: {} } }),
   /** 回答挂起的提问：作为这次 ask_user 调用的结果交回模型 */

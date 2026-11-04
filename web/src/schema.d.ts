@@ -1211,7 +1211,7 @@ export interface paths {
         };
         /**
          * Features
-         * @description 服务端配置决定的可选能力，界面据此显示或隐藏对应入口。
+         * @description 服务端配置决定的界面行为：可选能力与界面要展示的默认值。
          */
         get: operations["features_api_features_get"];
         put?: never;
@@ -1638,6 +1638,10 @@ export interface components {
         FeaturesOut: {
             /** Transcription */
             transcription: boolean;
+            /** Compaction Threshold Tokens */
+            compaction_threshold_tokens: number;
+            /** Min Compaction Threshold Tokens */
+            min_compaction_threshold_tokens: number;
         };
         /** FieldRow */
         FieldRow: {
@@ -2676,6 +2680,8 @@ export interface components {
             /** Thread */
             thread: string | null;
             kind: components["schemas"]["SessionKind"];
+            /** Compaction Threshold Tokens */
+            compaction_threshold_tokens: number | null;
             /** Unread */
             unread: boolean;
             /**
@@ -2706,6 +2712,8 @@ export interface components {
             /** Thread */
             thread: string | null;
             kind: components["schemas"]["SessionKind"];
+            /** Compaction Threshold Tokens */
+            compaction_threshold_tokens: number | null;
             /** Unread */
             unread: boolean;
             /**
@@ -2822,6 +2830,8 @@ export interface components {
              * @default []
              */
             attachments: string[];
+            /** Compaction Threshold Tokens */
+            compaction_threshold_tokens?: number | null;
         };
         /**
          * StoredKind
