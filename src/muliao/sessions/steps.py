@@ -152,7 +152,7 @@ class Steps:
         """该停下压缩了（规则见 Compactor.verdict）。压缩不下去时这次运行不再判断。"""
         if state.compaction_exhausted:
             return False
-        verdict = self._compactor.verdict(state.session.id, messages, state.stale_responses)
+        verdict = self._compactor.verdict(state.session, messages, state.stale_responses)
         if verdict == Verdict.HOPELESS:
             state.compaction_exhausted = True
         return verdict == Verdict.DUE

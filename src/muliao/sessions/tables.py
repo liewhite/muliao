@@ -32,6 +32,8 @@ class Session(Base):
     thread: Mapped[str | None] = mapped_column(String(100))
     # 会话的种类决定它的规则（sessions.kinds）；thread 种类只由委派创建（origin 为 delegation）
     kind: Mapped[SessionKind] = mapped_column(StrEnumType(SessionKind))
+    # 建会话时给的压缩阈值（token）；None 用全局默认，取值规则只在 sessions.compaction.Compactor.threshold_of
+    compaction_threshold_tokens: Mapped[int | None]
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 

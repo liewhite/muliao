@@ -28,6 +28,7 @@ async def add_in(
     parent_session_id: str | None,
     thread: str | None,
     kind: SessionKind,
+    compaction_threshold_tokens: int | None,
 ) -> Session:
     """写入一个新会话（规则由唯一的入口 inbound.create_session 检查）。"""
     session = Session(
@@ -39,6 +40,7 @@ async def add_in(
         parent_session_id=parent_session_id,
         thread=thread,
         kind=kind,
+        compaction_threshold_tokens=compaction_threshold_tokens,
     )
     s.add(session)
     await s.flush()

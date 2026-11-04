@@ -67,6 +67,8 @@ class NewSession:
     kind: SessionKind = SessionKind.CONVERSATION
     # 发送方预先分配的会话 id（经定向命令异步投递时，发送方要立即告诉它的调用方会话 id，见 Receive）；None 时生成
     id: str | None = None
+    # 这个会话自己的压缩阈值（token）；None 用全局默认。只有用户在界面上新建会话（NewChat）会给
+    compaction_threshold_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +148,8 @@ class NewChat:
     """用户在界面上新建会话：标题由这条消息推导（文字的第一行，只发了文件时用文件名）。"""
 
     agent_id: str
+    # 这个会话自己的压缩阈值（token）；None 用全局默认
+    compaction_threshold_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -162,7 +166,11 @@ class UserMessage:
     def inbound(self) -> Inbound:
         target = self.session
         session = (
-            NewSession(agent_id=target.agent_id, title=DerivedTitle.FROM_MESSAGE)
+            NewSession(
+                agent_id=target.agent_id,
+                title=DerivedTitle.FROM_MESSAGE,
+                compaction_threshold_tokens=target.compaction_threshold_tokens,
+            )
             if isinstance(target, NewChat)
             else target
         )
@@ -238,6 +246,7 @@ async def create_session(
         parent_session_id=spec.parent_session_id,
         thread=spec.thread,
         kind=spec.kind,
+        compaction_threshold_tokens=spec.compaction_threshold_tokens,
     )
 
 

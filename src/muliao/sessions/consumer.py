@@ -172,7 +172,7 @@ class Consumer:
         # 上下文超过阈值时先压缩（之后每一步之前同样检查，见 sessions.steps.CompactionDue）
         async with self._db.transaction() as s:
             context = await load_context(s, session.id)
-        verdict = self._compactor.verdict(session.id, context.messages, context.stale_responses)
+        verdict = self._compactor.verdict(session, context.messages, context.stale_responses)
         compacted = await self._compactor.compact(session, agent) if verdict == Verdict.DUE else None
         async with self._db.transaction() as s:
             if compacted is not None:

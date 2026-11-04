@@ -182,6 +182,11 @@ class SessionService:
         """用户手动压缩上下文（sessions.compaction.Compactor.request）：返回是否新排了一次。"""
         return await self._compactor.request(session_id)
 
+    @property
+    def default_compaction_threshold(self) -> int:
+        """没有自己压缩阈值的会话用的全局默认（sessions.compaction.Compactor.threshold_of）。"""
+        return self._compactor.default_threshold
+
     async def list(
         self,
         *,

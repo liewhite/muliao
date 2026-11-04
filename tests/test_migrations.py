@@ -1661,3 +1661,30 @@ def test_mail_origin_is_backfilled_from_the_sending_rules_and_dropped_on_downgra
         assert "origin" not in {r[1] for r in conn.execute("pragma table_info(mail)")}
         assert "ix_messages_created_at" not in {r[1] for r in conn.execute("pragma index_list(messages)")}
         assert conn.execute("select count(*) from mail").fetchone() == (13,)
+
+
+def test_sessions_get_a_nullable_compaction_threshold_and_lose_it_on_downgrade(tmp_path):
+    """#372：已有会话的阈值为 NULL（用全局默认）；降级删掉这一列，会话保留。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "cb9354fa36e7")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into sessions (id, agent_id, title, origin, kind, created_at, updated_at) "
+            "values ('s', 'a1', 't', 'user', 'chat', ?, ?)",
+            (t, t),
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select compaction_threshold_tokens from sessions").fetchall() == [(None,)]
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "cb9354fa36e7")
+    with sqlite3.connect(path) as conn:
+        assert "compaction_threshold_tokens" not in {
+            r[1] for r in conn.execute("pragma table_info(sessions)")
+        }
+        assert conn.execute("select id from sessions").fetchall() == [("s",)]

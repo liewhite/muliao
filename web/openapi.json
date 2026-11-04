@@ -3510,7 +3510,7 @@
     "/api/features": {
       "get": {
         "summary": "Features",
-        "description": "服务端配置决定的可选能力，界面据此显示或隐藏对应入口。",
+        "description": "服务端配置决定的界面行为：可选能力与界面要展示的默认值。",
         "operationId": "features_api_features_get",
         "responses": {
           "200": {
@@ -4538,11 +4538,21 @@
           "transcription": {
             "type": "boolean",
             "title": "Transcription"
+          },
+          "compaction_threshold_tokens": {
+            "type": "integer",
+            "title": "Compaction Threshold Tokens"
+          },
+          "min_compaction_threshold_tokens": {
+            "type": "integer",
+            "title": "Min Compaction Threshold Tokens"
           }
         },
         "type": "object",
         "required": [
-          "transcription"
+          "transcription",
+          "compaction_threshold_tokens",
+          "min_compaction_threshold_tokens"
         ],
         "title": "FeaturesOut"
       },
@@ -7408,6 +7418,17 @@
           "kind": {
             "$ref": "#/components/schemas/SessionKind"
           },
+          "compaction_threshold_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compaction Threshold Tokens"
+          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -7436,6 +7457,7 @@
           "parent_session_id",
           "thread",
           "kind",
+          "compaction_threshold_tokens",
           "unread",
           "created_at",
           "updated_at",
@@ -7497,6 +7519,17 @@
           "kind": {
             "$ref": "#/components/schemas/SessionKind"
           },
+          "compaction_threshold_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compaction Threshold Tokens"
+          },
           "unread": {
             "type": "boolean",
             "title": "Unread"
@@ -7522,6 +7555,7 @@
           "parent_session_id",
           "thread",
           "kind",
+          "compaction_threshold_tokens",
           "unread",
           "created_at",
           "updated_at"
@@ -7790,6 +7824,18 @@
             "type": "array",
             "title": "Attachments",
             "default": []
+          },
+          "compaction_threshold_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1000.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compaction Threshold Tokens"
           }
         },
         "type": "object",

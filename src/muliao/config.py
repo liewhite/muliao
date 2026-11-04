@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 DEFAULT_CONFIG_PATH = Path("~/.muliao/config.toml")
 # 前端构建产物：`cd web && npm run build` 生成到包内，随 wheel 分发；不是用户配置
 WEB_DIR = Path(__file__).parent / "webui"
+# 压缩阈值（全局默认与新建会话时自定义的）的下限：再小每一步都要压缩
+MIN_COMPACTION_THRESHOLD_TOKENS = 1000
 
 
 def split_model(model: str) -> tuple[str, str]:
@@ -135,8 +137,9 @@ class RuntimeConfig(_Section):
     # 外部服务不可用（errors.ServiceUnavailable：模型接口、推送服务 5xx/429、连不上）的故障常持续几分钟到半小时
     # （relay 503、本机到境外 HTTPS 断开），重试次数单独设：默认 12 次，等待 5+10+…+160 再加 5×300 秒，约 30 分钟
     outage_retry_max_attempts: int = Field(default=12, ge=1)
-    # 发给模型的上下文（上一次请求的输入 token）超过此值，就在步与步之间压缩该 session 的早期上下文
-    compaction_threshold_tokens: int = Field(default=100_000, ge=1000)
+    # 发给模型的上下文（上一次请求的输入 token）超过此值，就在步与步之间压缩该 session 的早期上下文。这是默认值：
+    # 用户新建会话时可以给这个会话单独设（sessions.compaction.Compactor.threshold_of）
+    compaction_threshold_tokens: int = Field(default=100_000, ge=MIN_COMPACTION_THRESHOLD_TOKENS)
     # 压缩时保留最近这么多步原文不压缩（一步是一次模型回复及其工具结果）
     compaction_keep_steps: int = Field(default=10, ge=1)
     memory_max_chars: int = Field(default=4000, ge=100)

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from muliao.api.deps import C
 from muliao.api.files import FileOut
 from muliao.api.tasks import TaskOut
+from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
 from muliao.container import Container
 from muliao.sessions.api import (
     AskWait,
@@ -45,6 +46,8 @@ class SessionOut(BaseModel):
     parent_session_id: str | None
     thread: str | None
     kind: SessionKind
+    # 建会话时给的压缩阈值；null 用全局默认
+    compaction_threshold_tokens: int | None
     # 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生
     unread: bool
     created_at: datetime
@@ -61,6 +64,7 @@ class SessionOut(BaseModel):
             parent_session_id=s.parent_session_id,
             thread=s.thread,
             kind=s.kind,
+            compaction_threshold_tokens=s.compaction_threshold_tokens,
             unread=unread,
             created_at=s.created_at,
             updated_at=s.updated_at,
@@ -194,6 +198,8 @@ class StartIn(BaseModel):
     prompt: str
     # 先经 POST /api/files 上传得到的 id
     attachments: list[str] = []
+    # 这个会话自己的压缩阈值（token）；不给用全局默认（GET /api/features 的 compaction_threshold_tokens）
+    compaction_threshold_tokens: int | None = Field(None, ge=MIN_COMPACTION_THRESHOLD_TOKENS)
 
 
 class ReplyIn(BaseModel):
@@ -226,7 +232,11 @@ async def list_sessions(
 @router.post("/sessions", status_code=201)
 async def start_session(c: C, body: StartIn) -> SessionOut:
     received = await c.sessions.receive(
-        UserMessage(content=body.prompt, session=NewChat(body.agent_id), attachments=tuple(body.attachments))
+        UserMessage(
+            content=body.prompt,
+            session=NewChat(body.agent_id, compaction_threshold_tokens=body.compaction_threshold_tokens),
+            attachments=tuple(body.attachments),
+        )
     )
     [out] = await session_outs(c, [received.session])
     return out

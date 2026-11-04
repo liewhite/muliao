@@ -113,11 +113,22 @@ class Compactor:
         self._db = db
         self._runtime = runtime
         self._queue = queue
-        self._threshold = threshold_tokens
+        # 全局默认阈值；会话建时给了自己的（Session.compaction_threshold_tokens）就用会话的
+        self._default_threshold = threshold_tokens
         self._keep_steps = keep_steps
 
-    def over_threshold(self, session_id: str, history: Sequence[ModelMessage]) -> bool:
-        """发给模型的上下文是否超过阈值。"""
+    @property
+    def default_threshold(self) -> int:
+        """没有自己阈值的会话用的全局默认（界面新建会话时作占位提示）。"""
+        return self._default_threshold
+
+    def threshold_of(self, session: Session) -> int:
+        """会话的压缩阈值，唯一规则：建会话时给了就用它，否则用全局默认（config [runtime] compaction_threshold_tokens）。"""
+        own = session.compaction_threshold_tokens
+        return self._default_threshold if own is None else own
+
+    def over_threshold(self, session: Session, history: Sequence[ModelMessage]) -> bool:
+        """发给模型的上下文是否超过这个会话的阈值。"""
         tokens = context_tokens(history)
         if tokens is None:
             return False
@@ -125,26 +136,26 @@ class Compactor:
             # 部分 OpenAI 兼容服务流式时不返回 usage：无法判断上下文大小，自动压缩对该模型失效
             log.warning(
                 "model reported no input token usage, automatic compaction cannot trigger",
-                extra={"session_id": session_id},
+                extra={"session_id": session.id},
             )
             return False
-        return tokens > self._threshold
+        return tokens > self.threshold_of(session)
 
     def verdict(
-        self, session_id: str, history: Sequence[ModelMessage], stale_responses: int | None
+        self, session: Session, history: Sequence[ModelMessage], stale_responses: int | None
     ) -> Verdict:
         """该不该压缩，唯一规则。只认最近一次压缩之后的回复报告的 token 数（stale_responses 之前的反映的是压缩前的
         上下文）。压缩后的第一次回复就超阈值，说明保留窗口本身就超了，再压也压不下去（HOPELESS）：这次运行不再压缩，
         上下文继续变大直到超出模型的上限时运行失败可见，重试时重新判断（用最终正确性换掉「保留窗口也要切」的复杂度）。"""
         responses = len(measured_responses(history))
         if (stale_responses is not None and responses <= stale_responses) or not self.over_threshold(
-            session_id, history
+            session, history
         ):
             return Verdict.NOT_DUE
         if stale_responses is not None and responses == stale_responses + 1:
             log.warning(
                 "context still over the compaction threshold right after compacting; not compacting again this run",
-                extra={"session_id": session_id},
+                extra={"session_id": session.id},
             )
             return Verdict.HOPELESS
         return Verdict.DUE
