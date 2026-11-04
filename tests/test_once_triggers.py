@@ -162,9 +162,8 @@ async def test_running_a_once_trigger_by_hand_does_not_use_up_its_firing(contain
     alpha = (await make_agent()).id
     trigger = await _once(container, alpha)
 
-    manual = await container.triggers.run(trigger.id)
+    manual = (await container.triggers.run(trigger.id)).sessions[0]
 
-    assert manual is not None
     assert (await container.triggers.get_by_name("remind")).finished_at is None
     assert await _fire_due(container, trigger.id) == 1
     finished = (await container.triggers.list(finished=True))[0]

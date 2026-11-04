@@ -30,7 +30,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentArchived, runnable_agent_in
+from muliao.agents.api import AgentArchived, AgentNames, runnable_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 from muliao.notifications.events import Notify
@@ -40,6 +40,7 @@ from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Clock, Commit
 from muliao.platform.values import KEEP, Keep, local_time
+from muliao.routing.api import DEFAULT, TARGET, Sender, Target, describe, plan_in, resolve_in, routed_in
 from muliao.sessions.api import (
     NewConversation,
     Origin,
@@ -83,6 +84,23 @@ class TriggerView:
     trigger: Trigger
     status: BaseModel
     precheck: Precheck | None
+
+
+@dataclass(frozen=True)
+class Fired:
+    """一次触发投出去的信：每次投递交给的会话（按投递顺序；投进 issue 的、或要续写的会话还没建出来时为 None）。"""
+
+    sessions: tuple[str | None, ...]
+
+
+def route_of(trigger: Trigger) -> Target:
+    """触发器的默认投递目标；没设时是新开它的 agent 的会话。"""
+    return DEFAULT if trigger.route is None else TARGET.validate_python(trigger.route)
+
+
+def route_address(trigger: Trigger, names: AgentNames) -> str:
+    """默认投递目标的文字地址（routing.api.ADDRESS_HELP），给模型与界面看。"""
+    return describe(route_of(trigger), trigger.agent_id, names)
 
 
 # 全部触发方式的名字（各方式模块的 KIND）；接口契约里的种类就是它，与组合根注册的方式一一对应（tests/test_triggers.py）
@@ -223,6 +241,11 @@ class TriggerService:
         """触发器的读模型：行、它的触发方式给出的运行状态（TriggerKind.status）、解析好的前置检查。"""
         return TriggerView(trigger, self.kind(trigger.kind).status(trigger), precheck_of(trigger))
 
+    async def _route_in(self, s: AsyncSession, address: str) -> dict[str, Any] | None:
+        """默认投递目标的文字地址解析成存储的形式（不合法时 InvalidInput）；新开自己的会话（默认）存为 None。"""
+        target = await resolve_in(s, address)
+        return None if target == DEFAULT else target.model_dump()
+
     async def create(
         self,
         *,
@@ -232,7 +255,9 @@ class TriggerService:
         prompt: str,
         config: dict[str, Any],
         precheck: Precheck | None = None,
+        route: str | None = None,
     ) -> Trigger:
+        """route 是默认投递目标的文字地址（routing.api.ADDRESS_HELP），不给是新开这个 agent 的会话。"""
         if not prompt.strip():
             raise InvalidInput("trigger prompt must not be empty")
         config, state = self.kind(kind).configure(config)
@@ -252,6 +277,8 @@ class TriggerService:
             async with self._db.transaction() as s:
                 # 正在删除的 agent 按不存在处理：否则删除流程清理过之后又建的触发器没人认领；归档的拒绝（它不能运行）
                 await runnable_agent_in(s, agent_id)
+                if route is not None:
+                    trigger.route = await self._route_in(s, route)
                 s.add(trigger)
         except IntegrityError as e:
             raise Conflict(f"trigger {name!r} already exists") from e
@@ -267,8 +294,10 @@ class TriggerService:
         config: dict[str, Any] | None = None,
         enabled: bool | None = None,
         precheck: Precheck | None | Keep = KEEP,
+        route: str | None = None,
     ) -> Trigger:
-        """在一个事务里只修改给出的字段（None 不变；precheck 为 KEEP 不变、None 去掉）。重新启用时清除上次的失败原因。"""
+        """在一个事务里只修改给出的字段（None 不变；precheck 为 KEEP 不变、None 去掉；route 给 `new` 回到默认）。
+        重新启用时清除上次的失败原因。"""
         if prompt is not None and not prompt.strip():
             raise InvalidInput("trigger prompt must not be empty")
         if isinstance(precheck, Precheck):
@@ -282,6 +311,8 @@ class TriggerService:
                 set_precheck(trigger, precheck)
             if prompt is not None:
                 trigger.prompt = prompt
+            if route is not None:
+                trigger.route = await self._route_in(s, route)
             reenabled = enabled is True and not trigger.enabled
             if config is not None or reenabled:
                 derived_config, derived = self.kind(trigger.kind).configure(
@@ -363,36 +394,55 @@ class TriggerService:
 
     async def _deliver_in(
         self, s: AsyncSession, trigger: Trigger, payload: str | None, session_id: str | None
-    ) -> _Fired:
-        """组装成事件交给会话领域（只由 fire 调用）。
+    ) -> _Fired | None:
+        """组装成事件按投递目标交出去（只由 fire 调用）。
 
-        payload 为事件内容（无则只有处理说明）；session_id 为空时新建会话，否则续写——只能续写本触发器发起的会话。
-        在这个事务里校验来信（不合规的当场报错给调用方）、记下触发，同一事务发出定向命令 Receive，由会话领域在自己的
-        事务里投信：触发记下了就一定投递，投递恰好一次。新建的会话 id 在这里预先分配，投递之后（通常毫秒级）会话才
-        出现。
+        payload 为事件内容（无则只有处理说明）。session_id 为空时按目标投递（routing）：内容里的 `@route` 行把各段分到各自的
+        目标，其余投到触发器的默认目标（route，没设是新开它的 agent 的会话），每段前面都带处理说明；各段都是空的时不触发（None）。
+        session_id 不为空时整段续写那个会话（webhook 的续写）——只能续写本触发器发起的会话，不按 `@route` 分。
+        在这个事务里校验来信与目标（不合规的当场报错给调用方，整次不投）、记下触发，同一事务发出各次投递：触发记下了就一定
+        投递，投递恰好一次。新建的会话 id 在这里预先分配，投递之后（通常毫秒级）会话才出现。
         """
         now = self._clock()
-        target = new_id() if session_id is None else session_id
-        inbound = SenderMail(
-            origin=Origin.TRIGGER,
-            origin_ref=str(trigger.id),
-            content=event_prompt(trigger.prompt, payload),
-            session=NewConversation(
-                id=target, agent_id=trigger.agent_id, title=f"{trigger.name} · {local_time(now, self._tz)}"
+        if session_id is not None:
+            inbound = SenderMail(
+                origin=Origin.TRIGGER,
+                origin_ref=str(trigger.id),
+                content=event_prompt(trigger.prompt, payload),
+                session=session_id,
             )
-            if session_id is None
-            else session_id,
-        )
-        delivery = self._messaging.send_in(s, await receive_command_in(s, inbound))
+            sessions: list[str | None] = [session_id]
+            tasks = [self._messaging.send_in(s, await receive_command_in(s, inbound))]
+        else:
+            planned = await plan_in(s, payload, route_of(trigger))
+            if not planned:
+                log.info(
+                    "trigger event has no content after routing, not firing", extra={"trigger": trigger.name}
+                )
+                return None
+            sender = Sender(
+                origin=Origin.TRIGGER,
+                origin_ref=str(trigger.id),
+                agent_id=trigger.agent_id,
+                source=f"trigger {trigger.name}",
+                title=f"{trigger.name} · {local_time(now, self._tz)}",
+                latest_title=trigger.name,
+            )
+            routed = [
+                await routed_in(s, sender, target, event_prompt(trigger.prompt, body))
+                for target, body in planned
+            ]
+            sessions = [r.session_id for r in routed]
+            tasks = [self._messaging.send_in(s, r.command) for r in routed]
         trigger.last_fired_at = now
-        trigger.last_session_id = target
-        log.info("trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "session_id": target})
-        return _Fired(session_id=target, delivery=delivery)
+        trigger.last_session_id = sessions[0]
+        log.info("trigger fired", extra={"trigger": trigger.name, "kind": trigger.kind, "sessions": sessions})
+        return _Fired(fired=Fired(sessions=tuple(sessions)), deliveries=tasks)
 
-    async def run(self, trigger_id: int) -> str | None:
+    async def run(self, trigger_id: int) -> Fired | None:
         """用户或 agent 的「立即运行一次」（不带事件内容）：管理操作，不消耗一次性触发器预定的那一次。
 
-        有前置检查时同样先跑检查，可以用来测试整条链路；返回交给的会话 id，检查判定没事时为 None。检查失败只报给
+        有前置检查时同样先跑检查，可以用来测试整条链路；返回投出去的信，检查判定没事时为 None。检查失败只报给
         调用方（PrecheckFailed），不记在触发器上、不告警：agent 修脚本时用它验证，告警会另开会话重复处理；记下了又会压住之后
         自动触发时的告警（只在正常变出错时告警），用户点了运行看到报错，脚本的主人却永远收不到。
         """
@@ -407,8 +457,8 @@ class TriggerService:
         session_id: str | None = None,
         *,
         record_failure: bool = True,
-    ) -> str | None:
-        """所有触发方式的唯一出口，返回交给的会话 id。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
+    ) -> Fired | None:
+        """所有触发方式的唯一出口，返回投出去的信。有前置检查时先跑检查：不触发返回 None（这次不调用 agent）；
         检查失败记在触发器上并抛出 PrecheckFailed（触发器保持启用：脚本的故障往往是暂时的）。
 
         这是激活机制的入口，不看触发器是否已结束（finished_at）：按到期时间触发的方式（triggers.due）在调用前就把这次到期消耗掉了，
@@ -419,8 +469,9 @@ class TriggerService:
         fired = await self._fire(trigger_id, payload, session_id, record_failure)
         if fired is None:
             return None
-        await self._run_now(fired.delivery.id)
-        return fired.session_id
+        for task in fired.deliveries:
+            await self._run_now(task.id)
+        return fired.fired
 
     async def fire_activated(self, trigger_id: int, payload: str | None = None) -> None:
         """没有调用方等着结果的激活机制（到期扫描、流式）用的 fire：失败按统一的规则处理，不上抛领域错误。
@@ -556,6 +607,6 @@ class TriggerService:
 
 @dataclass(frozen=True)
 class _Fired:
-    session_id: str
-    # 投信的定向命令（Receive）的投递任务
-    delivery: Task
+    fired: Fired
+    # 提交后要马上执行的投递任务（投信的定向命令 Receive、issue 动态的投递）
+    deliveries: list[Task]

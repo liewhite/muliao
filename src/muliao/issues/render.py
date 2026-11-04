@@ -108,6 +108,8 @@ def render_activity(a: ActivityView) -> str:
         return f"- [{a.at}] {a.actor} changed status of dependency #{a.upstream}: {a.before} -> {a.after}"
     if a.kind == ActivityKind.RUN_FAILED:
         return f"- [{a.at}] {a.actor}'s run in its issue session failed: {a.body}"
+    if a.kind == ActivityKind.EVENT:
+        return f"- [{a.at}] event from {a.after} ({a.actor}):\n  " + (a.body or "").replace("\n", "\n  ")
     if a.kind == ActivityKind.STOPPED:
         return f"- [{a.at}] {a.actor} stopped {a.after}'s conversation on this issue"
     if a.kind == ActivityKind.UNSETTLED:

@@ -1,0 +1,174 @@
+"""事件投递（routing）：触发器的默认投递目标与事件文本里的 `@route` 行，把事件投到新会话、别的 agent、最近的会话或 issue。"""
+
+import pytest
+from sqlalchemy import select
+
+from muliao.agents.api import USER
+from muliao.errors import InvalidInput
+from muliao.issues.api import ActivityKind, IssueStatus
+from muliao.routing.targets import parse_address, split_routed
+from muliao.sessions.api import Origin
+from muliao.sessions.tables import Mail, Session
+from muliao.triggers.api import Precheck, route_address
+from tests.test_flow import deliver
+
+
+def test_text_without_route_lines_is_one_part_for_the_default_target_unchanged():
+    text = "line 1\n\nline 2\n"
+    assert split_routed(text) == [(None, text)]
+
+
+def test_route_lines_split_the_text_and_join_parts_for_the_same_address():
+    text = "head\n@route agent:beta\nb1\n@route issue:7\ni1\n@route agent:beta\nb2\n@route session\n\n"
+    assert split_routed(text) == [(None, "head"), ("agent:beta", "b1\nb2"), ("issue:7", "i1")]
+
+
+@pytest.mark.parametrize(
+    ("text", "to", "agent", "issue_id"),
+    [
+        ("new", "new", None, None),
+        ("agent:beta", "new", "beta", None),
+        ("session", "session", None, None),
+        ("session:beta", "session", "beta", None),
+        ("issue:12", "issue", None, 12),
+        ("issue:#12", "issue", None, 12),
+    ],
+)
+def test_addresses_parse(text, to, agent, issue_id):
+    parsed = parse_address(text)
+    assert (parsed.to, parsed.agent, parsed.issue_id) == (to, agent, issue_id)
+
+
+@pytest.mark.parametrize("text", ["", "agent", "agent:", "issue:x", "slack:C123", "new:beta"])
+def test_bad_addresses_are_rejected(text):
+    with pytest.raises(InvalidInput, match="invalid route"):
+        parse_address(text)
+
+
+async def _sessions(container, origin: Origin = Origin.TRIGGER) -> list[Session]:
+    async with container.db.transaction() as s:
+        query = select(Session).where(Session.origin == origin).order_by(Session.created_at)
+        return list((await s.scalars(query)).all())
+
+
+async def _mail(container, session_id: str) -> list[str]:
+    async with container.db.transaction() as s:
+        rows = await s.scalars(select(Mail).where(Mail.session_id == session_id).order_by(Mail.id))
+        return [m.content for m in rows]
+
+
+async def _webhook(container, agent_id: str, **kw):
+    return await container.triggers.create(
+        name="feed", agent_id=agent_id, kind="webhook", prompt="Handle it.", config={}, **kw
+    )
+
+
+async def test_route_lines_in_an_event_send_parts_to_other_agents_in_one_firing(container, make_agent):
+    alpha, beta = await make_agent("alpha"), await make_agent("beta")
+    trigger = await _webhook(container, alpha.id)
+
+    fired = await container.triggers.fire(
+        trigger.id, "mine\n@route agent:beta\nfor beta 1\n@route agent:beta\nfor beta 2"
+    )
+    await deliver(container)
+
+    first, second = await _sessions(container)
+    assert fired is not None and fired.sessions == (first.id, second.id)
+    assert (first.agent_id, second.agent_id) == (alpha.id, beta.id)
+    assert await _mail(container, first.id) == ["Handle it.\n\n<event>\nmine\n</event>"]
+    assert await _mail(container, second.id) == ["Handle it.\n\n<event>\nfor beta 1\nfor beta 2\n</event>"]
+    # 都是这个触发器发起的：它的会话列表查得到
+    assert {s.origin_ref for s in (first, second)} == {str(trigger.id)}
+
+
+async def test_session_route_continues_the_latest_conversation_of_the_trigger(container, make_agent):
+    alpha = await make_agent("alpha")
+    trigger = await _webhook(container, alpha.id, route="session")
+    assert route_address(trigger, await container.agents.names()) == "session"
+
+    first = await container.triggers.fire(trigger.id, "one")
+    await deliver(container)
+    second = await container.triggers.fire(trigger.id, "two")
+    await deliver(container)
+
+    [session] = await _sessions(container)
+    assert first is not None and first.sessions == (None,)  # 第一次时会话还没建出来
+    assert second is not None and second.sessions == (session.id,)
+    assert session.title == "feed"
+    assert [m.split("<event>\n")[1] for m in await _mail(container, session.id)] == [
+        "one\n</event>",
+        "two\n</event>",
+    ]
+
+
+async def test_issue_route_records_an_event_and_delivers_it_like_a_user_comment(container, make_agent):
+    alpha, beta = await make_agent("alpha"), await make_agent("beta")
+    issue = await container.issues.create(USER, owner=alpha.id, title="watch", assignee=beta.id)
+    trigger = await _webhook(container, alpha.id, route=f"issue:{issue.id}")
+
+    # backlog：没人接手，像用户评论一样投给 owner
+    fired = await container.triggers.fire(trigger.id, "price moved")
+    await deliver(container)
+    assert fired is not None and fired.sessions == (None,)
+    assert await _sessions(container) == []  # 没开触发器自己的会话
+    [owner_session] = await _sessions(container, Origin.ISSUE)
+    assert owner_session.agent_id == alpha.id
+    [letter] = await _mail(container, owner_session.id)
+    assert "event from trigger feed (alpha):\n  Handle it." in letter and "price moved" in letter
+
+    # in_progress：只投给被指派的 beta
+    await container.issues.update(USER, issue.id, status=IssueStatus.IN_PROGRESS)
+    await deliver(container)
+    await container.triggers.fire(trigger.id, "again")
+    await deliver(container)
+    sessions = {s.agent_id: s for s in await _sessions(container, Origin.ISSUE)}
+    assert "again" in (await _mail(container, sessions[beta.id].id))[-1]
+    assert len(await _mail(container, owner_session.id)) == 1
+
+    detail = await container.issues.get(issue.id)
+    events = [a for a in detail.activities if a.kind == ActivityKind.EVENT]
+    assert [(a.actor, a.change) for a in events] == [(alpha.id, {"from": None, "to": "trigger feed"})] * 2
+    assert "<event>\nagain\n</event>" in (events[1].body or "")
+
+
+async def test_a_bad_route_rejects_the_firing_and_an_activated_firing_disables_the_trigger(
+    container, make_agent
+):
+    alpha = await make_agent("alpha")
+    trigger = await container.triggers.create(
+        name="feed",
+        agent_id=alpha.id,
+        kind="webhook",
+        prompt="p",
+        config={},
+        precheck=Precheck(command="echo ok; echo '@route agent:nobody'; echo lost"),
+    )
+
+    with pytest.raises(InvalidInput, match="no agent named 'nobody'"):
+        await container.triggers.fire(trigger.id, "x")
+    assert await _sessions(container) == []  # 整次都不投
+
+    await container.triggers.fire_activated(trigger.id, "x")
+    after = await container.triggers.get_by_name("feed")
+    assert not after.enabled and "nobody" in (after.disabled_reason or "")
+
+
+async def test_the_default_route_is_checked_when_set_and_again_when_its_target_is_gone(container, make_agent):
+    alpha = await make_agent("alpha")
+    await make_agent("beta")
+    with pytest.raises(InvalidInput, match="issue #99 not found"):
+        await _webhook(container, alpha.id, route="issue:99")
+    with pytest.raises(InvalidInput, match="invalid route"):
+        await _webhook(container, alpha.id, route="slack:C1")
+
+    issue = await container.issues.create(USER, owner=alpha.id, title="t")
+    trigger = await _webhook(container, alpha.id, route=f"issue:{issue.id}")
+    trigger = await container.triggers.update(trigger.id, route="session:beta")
+    assert route_address(trigger, await container.agents.names()) == "session:beta"
+    trigger = await container.triggers.update(trigger.id, route="new")
+    assert trigger.route is None
+
+    trigger = await container.triggers.update(trigger.id, route=f"issue:{issue.id}")
+    await container.issues.delete(issue.id)
+    with pytest.raises(InvalidInput, match="route target is gone"):
+        await container.triggers.fire(trigger.id, "x")

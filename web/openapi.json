@@ -50,7 +50,7 @@
     "/api/hooks/{name}": {
       "post": {
         "summary": "Hook",
-        "description": "外部事件入口：Authorization: Bearer <token>。不带 session_id 时新建会话；带上之前返回的则在该会话里继续。",
+        "description": "外部事件入口：Authorization: Bearer <token>。不带 session_id 时按触发器的投递目标投递（默认新建会话）；带上之前\n返回的则在该会话里继续。",
         "operationId": "hook_api_hooks__name__post",
         "parameters": [
           {
@@ -3618,7 +3618,8 @@
           "dependency",
           "run_failed",
           "unsettled",
-          "stopped"
+          "stopped",
+          "event"
         ],
         "title": "ActivityKind"
       },
@@ -4643,6 +4644,10 @@
       },
       "FiredOut": {
         "properties": {
+          "fired": {
+            "type": "boolean",
+            "title": "Fired"
+          },
           "session_id": {
             "anyOf": [
               {
@@ -4657,6 +4662,7 @@
         },
         "type": "object",
         "required": [
+          "fired",
           "session_id"
         ],
         "title": "FiredOut"
@@ -6236,6 +6242,10 @@
               }
             ]
           },
+          "route": {
+            "type": "string",
+            "title": "Route"
+          },
           "last_checked_at": {
             "anyOf": [
               {
@@ -6325,6 +6335,7 @@
           "prompt",
           "enabled",
           "precheck",
+          "route",
           "last_checked_at",
           "last_fired_at",
           "last_session_id",
@@ -7011,6 +7022,10 @@
               }
             ]
           },
+          "route": {
+            "type": "string",
+            "title": "Route"
+          },
           "last_checked_at": {
             "anyOf": [
               {
@@ -7100,6 +7115,7 @@
           "prompt",
           "enabled",
           "precheck",
+          "route",
           "last_checked_at",
           "last_fired_at",
           "last_session_id",
@@ -7961,6 +7977,10 @@
               }
             ]
           },
+          "route": {
+            "type": "string",
+            "title": "Route"
+          },
           "last_checked_at": {
             "anyOf": [
               {
@@ -8050,6 +8070,7 @@
           "prompt",
           "enabled",
           "precheck",
+          "route",
           "last_checked_at",
           "last_fired_at",
           "last_session_id",
@@ -8505,6 +8526,17 @@
                 "type": "null"
               }
             ]
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
           }
         },
         "type": "object",
@@ -8586,11 +8618,22 @@
                 "type": "null"
               }
             ]
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
           }
         },
         "type": "object",
         "title": "TriggerPatch",
-        "description": "只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。"
+        "description": "只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new` 回到默认。"
       },
       "UnreadOut": {
         "properties": {
@@ -8847,6 +8890,10 @@
               }
             ]
           },
+          "route": {
+            "type": "string",
+            "title": "Route"
+          },
           "last_checked_at": {
             "anyOf": [
               {
@@ -8936,6 +8983,7 @@
           "prompt",
           "enabled",
           "precheck",
+          "route",
           "last_checked_at",
           "last_fired_at",
           "last_session_id",

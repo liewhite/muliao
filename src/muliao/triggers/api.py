@@ -9,16 +9,19 @@ from muliao.triggers.schedule import ScheduleConfig, ScheduleStatus
 from muliao.triggers.service import (
     EVENT_MAX_BYTES,
     SESSION_NOTE,
+    Fired,
     TriggerKind,
     TriggerKindName,
     TriggerService,
     TriggerView,
+    route_address,
 )
 from muliao.triggers.stream import StreamConfig, StreamStatus
 from muliao.triggers.webhook import WebhookConfig, Webhooks, WebhookStatus
 
 __all__ = [
     "EVENT_MAX_BYTES",
+    "Fired",
     "OnceConfig",
     "OnceStatus",
     "Precheck",
@@ -35,4 +38,5 @@ __all__ = [
     "WebhookConfig",
     "WebhookStatus",
     "Webhooks",
+    "route_address",
 ]

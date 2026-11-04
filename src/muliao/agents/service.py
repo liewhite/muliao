@@ -160,6 +160,22 @@ async def runnable_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     return info_of(await runnable_row_in(s, agent_id))
 
 
+async def named_agent_in(s: AsyncSession, name: str) -> AgentInfo:
+    """按名称找还可用的 agent（模型与脚本按名称指代 agent，不接触 id；名称唯一）。没有时 NotFound，列出可用的名称。"""
+    return info_of(await _named_row_in(s, name))
+
+
+async def _named_row_in(s: AsyncSession, name: str) -> Agent:
+    name = normalize_agent_name(name)
+    agent = await s.scalar(select(Agent).where(Agent.name == name, Agent.deleting_by.is_(None)))
+    if agent is None:
+        names = (
+            await s.scalars(select(Agent.name).where(Agent.deleting_by.is_(None)).order_by(Agent.name))
+        ).all()
+        raise NotFound(f"no agent named {name!r}; available agents: {list(names)}")
+    return agent
+
+
 async def agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
     """agent（包括正在删除的）。在调用方的事务里读它的展示信息（名称、模型）：这些字段的修改与调用方的写入之间没有
     先后要求。"""
@@ -396,23 +412,13 @@ class AgentService:
     async def find_by_name(self, name: str) -> AgentInfo:
         """模型按名称指代 agent（不接触 id）：在工具层把名称解析为 agent。名称唯一。"""
         async with self._db.transaction() as s:
-            return info_of(await self._named_in(s, name))
+            return await named_agent_in(s, name)
 
     async def find_with_rules(self, name: str) -> tuple[AgentInfo, AgentRules]:
         """按名称找到的 agent 加上它的分发规则，同一个事务里读（get_agent 工具）。"""
         async with self._db.transaction() as s:
-            agent = await self._named_in(s, name)
-            return info_of(agent), await agent_rules_in(s, agent.id)
-
-    async def _named_in(self, s: AsyncSession, name: str) -> Agent:
-        name = normalize_agent_name(name)
-        agent = await s.scalar(select(Agent).where(Agent.name == name, Agent.deleting_by.is_(None)))
-        if agent is None:
-            names = (
-                await s.scalars(select(Agent.name).where(Agent.deleting_by.is_(None)).order_by(Agent.name))
-            ).all()
-            raise NotFound(f"no agent named {name!r}; available agents: {list(names)}")
-        return agent
+            agent = await named_agent_in(s, name)
+            return agent, await agent_rules_in(s, agent.id)
 
     async def names(self) -> AgentNames:
         async with self._db.transaction() as s:

@@ -30,6 +30,7 @@ from muliao.agents.api import agent_names_in, runnable_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.issues.delivery import IssueDelivery
+from muliao.issues.events import PostIssueEvent
 from muliao.issues.graph import (
     Dependency,
     batch_label,
@@ -181,6 +182,13 @@ def batch_item(size: int, n: int, key: str | None) -> Iterator[None]:
         raise type(e)(f"{batch_label(n, key)}: {e}") from None
 
 
+async def check_issue_in(s: AsyncSession, issue_id: int) -> None:
+    """issue 存在（别的领域要把事件投到它之前，在自己的事务里只读地确认；之后再被删除的由 PostIssueEvent 的处理丢弃）。
+    不存在时 NotFound。issue 只会从存在变为删除。"""
+    if await s.get(Issue, issue_id) is None:
+        raise NotFound(f"issue #{issue_id} not found")
+
+
 class IssueService:
     def __init__(
         self,
@@ -201,6 +209,12 @@ class IssueService:
         messaging.subscribe(AgentDeleting, "issues.agent_deleting", self.on_agent_deleting)
         messaging.subscribe(RunFailed, "issues.run_failed", self.on_run_failed, lane=_session_events_lane)
         messaging.subscribe(RunEnded, "issues.run_ended", self.on_run_ended)
+        messaging.handle(
+            PostIssueEvent,
+            "issues.post_event",
+            self.on_post_event,
+            lane=lambda c: f"issue-event:{c.issue_id}",
+        )
         messaging.subscribe(
             SessionDeleted, "issues.session_deleted", self.on_session_deleted, lane=_session_events_lane
         )
@@ -244,6 +258,32 @@ class IssueService:
             # 投递任务随这个事务提交，由 worker 照常执行（订阅方的事务里没有「提交后马上执行」）
             await self._delivery.deliver_in(s, issue, event.agent_id, None, [activity])
             log.info("issue left unsettled, asked", extra={"issue_id": issue_id, "run_id": event.run_id})
+
+        return commit
+
+    async def on_post_event(self, command: PostIssueEvent, _delivery: Delivery) -> Commit:
+        """投到 issue 的一个事件：记一条 EVENT（actor 是事件来源所属的 agent，change 的 to 是来源的描述），按 rules.recipient
+        投递：有被指派的 agent 接手时给它，否则像用户评论一样给 owner。不在任何 issue 会话里发生（session_id 为空），所以来源的
+        agent 自己是指派人时也投给它。发送方校验之后 issue 被删除了就丢弃。"""
+
+        async def commit(s: AsyncSession) -> None:
+            issue = await s.get(Issue, command.issue_id)
+            if issue is None:
+                log.info("event to a deleted issue dropped", extra={"issue_id": command.issue_id})
+                return
+            activity = self._record(
+                s,
+                issue,
+                command.agent_id,
+                None,
+                ActivityKind.EVENT,
+                body=command.body,
+                change=(None, command.source),
+            )
+            issue.updated_at = utcnow()
+            # 投递任务随这个事务提交，由 worker 照常执行
+            await self._delivery.deliver_in(s, issue, command.agent_id, None, [activity])
+            log.info("issue event posted", extra={"issue_id": command.issue_id, "source": command.source})
 
         return commit
 

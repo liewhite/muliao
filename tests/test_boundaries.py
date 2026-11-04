@@ -17,7 +17,10 @@ LAYERS: list[set[str]] = [
     {"files", "agents", "usage", "speech", "web"},
     {"agent_runtime"},
     {"sessions"},
-    {"workspace", "notifications", "triggers", "issues"},
+    {"workspace", "notifications", "issues"},
+    # 事件按投递目标交给会话或 issue（触发器经它投递）
+    {"routing"},
+    {"triggers"},
     # 活动概览（热历史）要读会话与 issue 的动态
     {"history"},
 ]
@@ -331,8 +334,10 @@ async def test_a_domain_and_the_task_table_may_be_written_together(container):
 # 写自己的数据（runnable_agent_in 是双向变化、只用来拒绝的例外，理由见 2.2）；否则（SessionActivity 的两个查询）只能
 # 先查后写。新增一个这样的函数要先确认它只读，再登记到这里。
 READ_ONLY_IN_CALLER_TRANSACTION = {
-    "agents": {"active_agent_in", "agent_in", "agent_names_in", "runnable_agent_in"},
+    "agents": {"active_agent_in", "agent_in", "agent_names_in", "named_agent_in", "runnable_agent_in"},
     "files": {"load_metas"},
+    "issues": {"check_issue_in"},
+    "routing": {"plan_in", "resolve_in", "routed_in"},
     "sessions": {
         "session_in",
         "receive_command_in",

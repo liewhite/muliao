@@ -6,9 +6,11 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field, TypeAdapter
 
+from muliao.agents.api import AgentNames
 from muliao.api.deps import C
 from muliao.platform.values import KEEP
 from muliao.triggers.api import (
+    Fired,
     OnceConfig,
     OnceStatus,
     Precheck,
@@ -21,6 +23,7 @@ from muliao.triggers.api import (
     TriggerView,
     WebhookConfig,
     WebhookStatus,
+    route_address,
 )
 from muliao.triggers.tables import Trigger
 
@@ -45,15 +48,18 @@ class TriggerCreate(BaseModel):
     config: dict[str, Any]
     # 触发前的前置检查（见 triggers.precheck）；不给则每次都交给 agent
     precheck: Precheck | None = None
+    # 事件的默认投递目标（文字地址，routing.api.ADDRESS_HELP）；不给是新开这个 agent 的会话
+    route: str | None = None
 
 
 class TriggerPatch(BaseModel):
-    """只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变。"""
+    """只修改给出的字段。precheck 给出 null 表示去掉前置检查，不出现表示不变；route 给 `new` 回到默认。"""
 
     prompt: str | None = None
     config: dict[str, Any] | None = None
     enabled: bool | None = None
     precheck: Precheck | None = None
+    route: str | None = None
 
 
 class _TriggerOutBase(BaseModel):
@@ -66,6 +72,8 @@ class _TriggerOutBase(BaseModel):
     prompt: str
     enabled: bool
     precheck: Precheck | None
+    # 事件的默认投递目标（文字地址）
+    route: str
     last_checked_at: datetime | None
     last_fired_at: datetime | None
     last_session_id: str | None
@@ -107,15 +115,21 @@ _TRIGGER_OUT: TypeAdapter[TriggerOut] = TypeAdapter(TriggerOut)
 
 
 class FiredOut(BaseModel):
-    # 触发一次的结果（手动触发与 webhook 共用）：前置检查判定这次不触发时为 null
+    # 触发一次的结果（手动触发与 webhook 共用）：是否投出了信（前置检查判定这次不触发时为 false），第一次投递交给的会话
+    # （投进 issue 的、或要续写的会话还没建出来时为 null）
+    fired: bool
     session_id: str | None
 
+    @classmethod
+    def of(cls, fired: Fired | None) -> "FiredOut":
+        return cls(fired=fired is not None, session_id=None if fired is None else fired.sessions[0])
 
-def _out(c: C, t: Trigger) -> TriggerOut:
-    return _out_of(c.triggers.view(t))
+
+async def _out(c: C, t: Trigger) -> TriggerOut:
+    return _out_of(c.triggers.view(t), await c.agents.names())
 
 
-def _out_of(view: TriggerView) -> TriggerOut:
+def _out_of(view: TriggerView, names: AgentNames) -> TriggerOut:
     t = view.trigger
     return _TRIGGER_OUT.validate_python(
         dict(
@@ -128,6 +142,7 @@ def _out_of(view: TriggerView) -> TriggerOut:
             status=view.status,
             enabled=t.enabled,
             precheck=view.precheck,
+            route=route_address(t, names),
             last_checked_at=t.last_checked_at,
             last_fired_at=t.last_fired_at,
             last_session_id=t.last_session_id,
@@ -147,7 +162,8 @@ async def trigger_kinds(c: C) -> list[TriggerKindOut]:
 async def list_triggers(
     c: C, finished: bool = Query(False, description="列已结束的（跑完的一次性触发器）而不是还会触发的")
 ) -> list[TriggerOut]:
-    return [_out(c, t) for t in await c.triggers.list(finished=finished)]
+    names = await c.agents.names()
+    return [_out_of(c.triggers.view(t), names) for t in await c.triggers.list(finished=finished)]
 
 
 @router.post("/triggers", status_code=201)
@@ -159,8 +175,9 @@ async def create_trigger(c: C, body: TriggerCreate) -> TriggerOut:
         prompt=body.prompt,
         config=body.config,
         precheck=body.precheck,
+        route=body.route,
     )
-    return _out(c, trigger)
+    return await _out(c, trigger)
 
 
 @router.patch("/triggers/{trigger_id}")
@@ -171,8 +188,9 @@ async def update_trigger(c: C, trigger_id: int, body: TriggerPatch) -> TriggerOu
         config=body.config,
         enabled=body.enabled,
         precheck=body.precheck if "precheck" in body.model_fields_set else KEEP,
+        route=body.route,
     )
-    return _out(c, trigger)
+    return await _out(c, trigger)
 
 
 @router.delete("/triggers/{trigger_id}", status_code=204)
@@ -186,4 +204,4 @@ async def run_trigger(c: C, trigger_id: int) -> FiredOut:
 
     不消耗一次性触发器预定的那一次；已结束的触发器不能再运行。
     """
-    return FiredOut(session_id=await c.triggers.run(trigger_id))
+    return FiredOut.of(await c.triggers.run(trigger_id))

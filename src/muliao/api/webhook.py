@@ -21,7 +21,8 @@ class TokenOut(BaseModel):
 
 @public_router.post("/api/hooks/{name}", status_code=202)
 async def hook(c: C, name: str, request: Request, session_id: str | None = None) -> FiredOut:
-    """外部事件入口：Authorization: Bearer <token>。不带 session_id 时新建会话；带上之前返回的则在该会话里继续。"""
+    """外部事件入口：Authorization: Bearer <token>。不带 session_id 时按触发器的投递目标投递（默认新建会话）；带上之前
+    返回的则在该会话里继续。"""
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise Unauthorized("missing bearer token")
@@ -37,7 +38,7 @@ async def hook(c: C, name: str, request: Request, session_id: str | None = None)
     except PrecheckFailed as e:
         # 原因（可能含脚本的 stderr）只记在触发器上给用户看，不交给外部调用方
         raise HTTPException(status_code=502, detail="trigger precheck failed") from e
-    return FiredOut(session_id=delivered)
+    return FiredOut.of(delivered)
 
 
 @router.post("/triggers/{trigger_id}/webhook/token")

@@ -190,11 +190,11 @@ async def test_a_new_blocking_session_or_reenabling_starts_a_new_streak(containe
         await drain(container)
         return triggers.view(await triggers.get_by_name("slack")).status.model_dump(mode="json")["skipped"]
 
-    first = await triggers.run(trigger.id)
+    first = (await triggers.run(trigger.id)).sessions[0]
     await drain(container)
     await wait_on(first, "job:1")
     assert (await skip())["count"] == 1
-    second = await triggers.run(trigger.id)
+    second = (await triggers.run(trigger.id)).sessions[0]
     await drain(container)
     await wait_on(second, "job:2")
 
@@ -414,7 +414,7 @@ async def test_trigger_config_is_validated_by_its_kind(container, make_agent, ki
 async def test_manual_run_starts_a_session_with_just_the_prompt(container, make_agent):
     alpha = (await make_agent()).id
     trigger = await container.triggers.create(name="h", agent_id=alpha, kind="webhook", prompt="p", config={})
-    session = await container.sessions.get(await container.triggers.fire(trigger.id))
+    session = await container.sessions.get((await container.triggers.fire(trigger.id)).sessions[0])
     assert session.origin == Origin.TRIGGER and session.origin_ref == str(trigger.id)
 
 
@@ -881,7 +881,7 @@ async def test_a_fire_delivered_later_is_dropped_when_its_agent_was_deleted_mean
         return None
 
     container.triggers._run_now = later  # noqa: SLF001  模拟投递没能马上执行
-    session_id = await container.triggers.fire(trigger.id)
+    session_id = (await container.triggers.fire(trigger.id)).sessions[0]
     await container.agent_lifecycle.delete(alpha, actor="user")
     await drain(container)
 
@@ -918,7 +918,7 @@ async def test_a_previous_fire_waiting_on_a_background_job_counts_as_busy(contai
     trigger = await container.triggers.create(
         name="slack", agent_id=alpha, kind="schedule", prompt="check slack", config={"cron": "* * * * *"}
     )
-    session_id = await container.triggers.fire(trigger.id)
+    session_id = (await container.triggers.fire(trigger.id)).sessions[0]
     await drain(container)
 
     async def busy() -> bool:

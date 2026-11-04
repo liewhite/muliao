@@ -65,10 +65,13 @@ class IssueDelivery:
         """在调用方的事务里把这次的动态投给该收到的 agent（rules.recipient），进它在这个 issue 上唯一的会话。返回要
         提交后马上执行的投递（run）。"""
         links = (await links_in(s, [issue.id]))[issue.id]
-        user_comment = actor == USER and any(a.kind == ActivityKind.COMMENT for a in happened)
+        from_outside = any(
+            a.kind == ActivityKind.EVENT or (actor == USER and a.kind == ActivityKind.COMMENT)
+            for a in happened
+        )
         agent = recipient(
             snapshot(issue, links),
-            user_comment=user_comment,
+            from_outside=from_outside,
             from_its_session=await _from_its_session_in(s, issue, actor, session_id),
         )
         if agent is None:

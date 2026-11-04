@@ -112,7 +112,7 @@ async def test_mail_validated_before_archiving_is_dropped_on_delivery(container,
     await container.agent_lifecycle.set_archived(alpha.id, True)
     await deliver(container)
     async with container.db.transaction() as s:
-        assert await s.get(Session, fired.session_id) is None
+        assert await s.get(Session, fired.fired.sessions[0]) is None
 
 
 async def test_triggers_of_an_archived_agent_neither_run_their_precheck_nor_fire(

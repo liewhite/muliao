@@ -112,12 +112,12 @@ def _assignee_recipient(issue: Snapshot) -> str | None:
     return None if agent is None or issue.status != IssueStatus.IN_PROGRESS or issue.waiting_on else agent
 
 
-def recipient(issue: Snapshot, *, user_comment: bool, from_its_session: str | None) -> str | None:
+def recipient(issue: Snapshot, *, from_outside: bool, from_its_session: str | None) -> str | None:
     """issue 上的一条动态（创建、评论、任何字段的修改）投给谁：动作之后处于 in_progress（包括这次动作让它进入）
     时，投给被指派的 agent；backlog 是以后再做，in_review / done 等是已经交出去，不投。还在等上游（waiting_on
     非空）时也不投：动态照常记进时间线，最后一个上游完成时投一封信，agent 自己 issue_show 看等待期间的动态。
 
-    例外是用户的评论（user_comment）：按上面的规则没有 agent 接手时（backlog、blocked、in_review、done、cancelled，
+    例外是外来的输入（from_outside：用户的评论、投到 issue 的事件）：按上面的规则没有 agent 接手时（backlog、blocked、in_review、done、cancelled，
     没指派或指派给用户，在等上游），投给负责项目的 agent，由它判断关掉、派人还是回复；有被指派的 agent 接手时只投给
     它，同一件事只有一个 agent 负责。agent 的评论与字段修改不唤起 owner，避免 agent 之间来回唤醒。
 
@@ -127,7 +127,7 @@ def recipient(issue: Snapshot, *, user_comment: bool, from_its_session: str | No
     agent = _assignee_recipient(issue)
     if agent is not None:
         return None if agent == from_its_session else agent
-    return issue.owner if user_comment else None
+    return issue.owner if from_outside else None
 
 
 def stalled(issue: Snapshot, assignee_state: WorkState | None) -> bool:
