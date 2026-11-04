@@ -10,11 +10,11 @@
   `action:kind:name` 规则（permissions）；AI 资产的规则在它的 access（能 use / write = 自己 own 的 ∪ 规则放行的）。
 """
 
-from muliao.agents.access import Reach
+from muliao.agents.access import Reach, Source
 from muliao.agents.active import AgentArchived, AgentNames, agent_names_in
 from muliao.agents.agent_rules import AgentRules
 from muliao.agents.catalog import CatalogEntry, ItemCatalog
-from muliao.agents.distribution import Distribution, RoleSpec, RoleView
+from muliao.agents.distribution import Distribution, RoleSpec, RoleView, UsedAsset
 from muliao.agents.ids import USER
 from muliao.agents.kinds import Kind, StoredKind, Subject
 from muliao.agents.lifecycle import AgentLifecycle
@@ -38,6 +38,8 @@ from muliao.agents.skill_package import MAX_PACKAGE_BYTES
 from muliao.agents.skills import SkillImport, SkillMeta, SkillStore
 
 __all__ = [
+    "Source",
+    "UsedAsset",
     "AgentArchived",
     "AgentLifecycle",
     "McpConfig",

@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,6 +94,50 @@ def granted_by(rules: Rules) -> Keep:
 
 def grants_of(agent_id: str, rules: AgentRules, known: dict[str, Role]) -> Grants:
     return Grants.of(agent_id, rules.roles, rules.effective(known))
+
+
+@dataclass(frozen=True)
+class Source:
+    """一个 agent 为什么能用某项资产（规则 1 拆开看）：它名下的、放行它的角色（含 base）、它自己的 allow。三者都空就是用不了。"""
+
+    own: bool
+    roles: tuple[str, ...]
+    allow: bool
+
+    @property
+    def usable(self) -> bool:
+        return self.own or bool(self.roles) or self.allow
+
+
+@dataclass(frozen=True)
+class Provenance:
+    """按一个 agent 的规则算每项资产的 Source。最终规则是各来源 allow 的并集加上全部 deny（roles.rules_of），所以「某个来源
+    放行」＝它的 allow 匹配且最终的 deny 没拦；Source.usable 与 Grants.uses 一致（tests 核对）。"""
+
+    agent_id: str
+    # 它带的角色（base 在前，再按它的 roles 顺序）
+    roles: tuple[Role, ...]
+    own_allow: tuple[str, ...]
+    deny: tuple[str, ...]
+
+    @classmethod
+    def of(cls, agent_id: str, rules: AgentRules, known: Mapping[str, Role]) -> Provenance:
+        return cls(
+            agent_id,
+            tuple(known[r] for r in (BASE, *rules.roles)),
+            rules.allow,
+            rules.effective(known).deny,
+        )
+
+    def source(self, action: Action, kind: Kind, name: str, owner: str | None) -> Source:
+        def grants(allow: tuple[str, ...]) -> bool:
+            return Rules(allow, self.deny).allows(action, kind, name)
+
+        return Source(
+            owner == self.agent_id,
+            tuple(r.name for r in self.roles if grants(r.effective.allow)),
+            grants(self.own_allow),
+        )
 
 
 async def grants_in(s: AsyncSession, actor: str) -> Grants:

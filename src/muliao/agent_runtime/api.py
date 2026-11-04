@@ -12,7 +12,7 @@ from muliao.agent_runtime.conventions import (
     shared_attachments,
     tool_attachments,
 )
-from muliao.agent_runtime.instructions import with_notices
+from muliao.agent_runtime.instructions import memory_section, with_notices
 from muliao.agent_runtime.llm import ModelRegistry
 from muliao.agent_runtime.outcome import Finished, Paused, defer_call
 from muliao.agent_runtime.redaction import redact_messages
@@ -20,6 +20,7 @@ from muliao.agent_runtime.runner import AgentRuntime, StepHooks
 from muliao.agent_runtime.toolbox import Toolbox
 
 __all__ = [
+    "memory_section",
     "attachment_of",
     "attachment_of_ref",
     "ModelRegistry",

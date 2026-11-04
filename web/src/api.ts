@@ -104,6 +104,9 @@ export type Role = Omit<Schemas['RoleOut'], 'agents'> & { agents: AgentId[] }
 export type RoleInput = Schemas['RoleIn']
 export type ToolPermission = Schemas['ToolOut']
 export type Reach = Schemas['ReachOut']
+/** agent 能用的记忆、skill、secret、MCP 与各自来源，加记忆注入预览；后端 agents/distribution.py 的 assets */
+export type AgentAssets = Schemas['AgentAssetsOut']
+export type AgentAsset = Schemas['AssetOut']
 export type IssueStatus = Schemas['IssueStatus']
 export type IssuePriority = Schemas['IssuePriority']
 /** assignee：agent id、'user'（用户），或 null（未指派） */
@@ -258,6 +261,9 @@ export const api = {
   deleteRole: (name: string) => call('delete', '/api/roles/{name}', { path: { name } }),
   /** agent 配置（还没保存的也行）最终能用的工具与条目：与运行时同一套计算；agent_id 为 null 是还没建的 */
   previewAgent: (body: Schemas['AgentPreviewIn']) => call('post', '/api/agent-preview', { body }),
+  /** agent 能用的资产按种类分组，各带来源；记忆另附合并后注入指令的样子（与运行时同一渲染） */
+  agentAssets: (agentId: AgentId) =>
+    call('get', '/api/agents/{agent_id}/assets', { path: { agent_id: agentId } }),
   /** 角色规则（还没保存的也行）能用的工具与条目；name 为 null 是还没建的 */
   previewRole: (body: Schemas['RolePreviewIn']) => call('post', '/api/role-preview', { body }),
   /** 全部 AI 资产：内置工具在前，存在库里的按种类、名称 */

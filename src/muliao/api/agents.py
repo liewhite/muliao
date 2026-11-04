@@ -4,17 +4,22 @@ from typing import Literal
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from muliao.agent_runtime.api import memory_section
 from muliao.agents.api import (
     USER,
     AgentInfo,
     AgentPatch,
     AgentRules,
     AgentSpec,
+    McpTransport,
     Reach,
     RoleSpec,
     RoleView,
+    Source,
+    StoredKind,
     Thinking,
     ToolSpec,
+    UsedAsset,
 )
 from muliao.api.deps import C
 
@@ -241,6 +246,75 @@ async def create_agent(c: C, body: AgentCreate) -> AgentOut:
 async def get_agent(c: C, agent_id: str) -> AgentOut:
     # 正在删除的按不存在处理
     return AgentOut.of(*await c.agents.get_with_rules(agent_id))
+
+
+class AssetSourceOut(BaseModel):
+    """为什么能用：它名下的、放行它的角色（含 base）、它自己的 allow 规则（至少一项）。"""
+
+    own: bool
+    roles: list[str]
+    allow: bool
+
+    @classmethod
+    def of(cls, s: Source) -> "AssetSourceOut":
+        return cls(own=s.own, roles=list(s.roles), allow=s.allow)
+
+
+class AssetOut(BaseModel):
+    name: str
+    # null 归平台
+    owner: str | None
+    description: str
+    source: AssetSourceOut
+    # 它能改（write）
+    editable: bool
+
+    @classmethod
+    def of(cls, u: UsedAsset) -> "AssetOut":
+        return cls(
+            name=u.name,
+            owner=u.owner,
+            description=u.description,
+            source=AssetSourceOut.of(u.source),
+            editable=u.editable,
+        )
+
+
+class McpAssetOut(AssetOut):
+    transport: McpTransport
+    enabled: bool
+
+
+class AgentAssetsOut(BaseModel):
+    """agent 能用的资产，按种类分组，各组按名称。"""
+
+    memories: list[AssetOut]
+    # 记忆注入 instructions 的那一段（与运行时同一个渲染函数）
+    memory_preview: str
+    skills: list[AssetOut]
+    secrets: list[AssetOut]
+    mcp: list[McpAssetOut]
+
+
+@router.get("/agents/{agent_id}/assets")
+async def agent_assets(c: C, agent_id: str) -> AgentAssetsOut:
+    """agent 能用的记忆、skill、secret、MCP server 与各自的来源（不含 secret 的值），加上记忆合并后放进指令的样子。"""
+    used = await c.distribution.assets(agent_id)
+    by_kind = {k: [u for u in used if u.kind == k] for k in StoredKind}
+    preview = memory_section(await c.memory.for_run(agent_id), c.memory.max_chars)
+    return AgentAssetsOut(
+        memories=[AssetOut.of(u) for u in by_kind[StoredKind.MEMORY]],
+        memory_preview=preview,
+        skills=[AssetOut.of(u) for u in by_kind[StoredKind.SKILL]],
+        secrets=[AssetOut.of(u) for u in by_kind[StoredKind.SECRET]],
+        mcp=[_mcp_out(u) for u in by_kind[StoredKind.MCP]],
+    )
+
+
+def _mcp_out(u: UsedAsset) -> McpAssetOut:
+    if u.mcp is None:
+        raise RuntimeError(f"MCP asset {u.name!r} has no server config")
+    return McpAssetOut(**AssetOut.of(u).model_dump(), transport=u.mcp.transport, enabled=u.mcp.enabled)
 
 
 @router.put("/agents/{agent_id}")

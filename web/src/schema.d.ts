@@ -198,6 +198,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/{agent_id}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Assets
+         * @description agent 能用的记忆、skill、secret、MCP server 与各自的来源（不含 secret 的值），加上记忆合并后放进指令的样子。
+         */
+        get: operations["agent_assets_api_agents__agent_id__assets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/{agent_id}/default": {
         parameters: {
             query?: never;
@@ -1309,6 +1329,22 @@ export interface components {
             tool: "ask_agent";
             result: components["schemas"]["AgentAnswer"];
         };
+        /**
+         * AgentAssetsOut
+         * @description agent 能用的资产，按种类分组，各组按名称。
+         */
+        AgentAssetsOut: {
+            /** Memories */
+            memories: components["schemas"]["AssetOut"][];
+            /** Memory Preview */
+            memory_preview: string;
+            /** Skills */
+            skills: components["schemas"]["AssetOut"][];
+            /** Secrets */
+            secrets: components["schemas"]["AssetOut"][];
+            /** Mcp */
+            mcp: components["schemas"]["McpAssetOut"][];
+        };
         /** AgentCreate */
         AgentCreate: {
             /** Name */
@@ -1469,6 +1505,30 @@ export interface components {
             call_id: string;
             /** Headers */
             headers: string[];
+        };
+        /** AssetOut */
+        AssetOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            source: components["schemas"]["AssetSourceOut"];
+            /** Editable */
+            editable: boolean;
+        };
+        /**
+         * AssetSourceOut
+         * @description 为什么能用：它名下的、放行它的角色（含 base）、它自己的 allow 规则（至少一项）。
+         */
+        AssetSourceOut: {
+            /** Own */
+            own: boolean;
+            /** Roles */
+            roles: string[];
+            /** Allow */
+            allow: boolean;
         };
         /** Attachment */
         Attachment: {
@@ -1932,6 +1992,21 @@ export interface components {
             title: string | null;
             /** Text */
             text: string;
+        };
+        /** McpAssetOut */
+        McpAssetOut: {
+            /** Name */
+            name: string;
+            /** Owner */
+            owner: string | null;
+            /** Description */
+            description: string;
+            source: components["schemas"]["AssetSourceOut"];
+            /** Editable */
+            editable: boolean;
+            transport: components["schemas"]["McpTransport"];
+            /** Enabled */
+            enabled: boolean;
         };
         /** McpIn */
         McpIn: {
@@ -3587,6 +3662,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_assets_api_agents__agent_id__assets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAssetsOut"];
+                };
             };
             /** @description Validation Error */
             422: {

@@ -29,6 +29,7 @@ import { ActionButton,
 } from '../ui'
 import { PermissionsInput } from './Permissions'
 import { AgentMemories } from './Memory'
+import { AgentAssetsView } from './AgentAssets'
 import { HistoryList } from './History'
 import { WorkspaceBrowser } from './Workspace'
 import { SitePageList } from './SitePages'
@@ -279,6 +280,7 @@ export function AgentCreate() {
 
 const DETAIL_TABS = [
   ['config', '配置'],
+  ['assets', '资源'],
   ['memory', '记忆'],
   ['history', '历史'],
   ['files', '文件'],
@@ -425,6 +427,9 @@ export function AgentDetail() {
                 <Trash2 className="size-4" />
                 删除 agent
               </Button>
+            </Tabs.Panel>
+            <Tabs.Panel id="assets" className="pt-3">
+              <AgentAssetsView agent={a.id} />
             </Tabs.Panel>
             <Tabs.Panel id="memory" className="pt-3">
               <AgentMemories agent={a.id} />

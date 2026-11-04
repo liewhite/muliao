@@ -8,6 +8,7 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
+from muliao.agent_runtime.api import memory_section
 from muliao.agents.access import SELF_UPDATABLE
 from muliao.agents.agent_rules import agent_rules_in
 from muliao.agents.api import McpTransport, RoleSpec, Rules, StoredKind, Subject, mcp_config
@@ -387,6 +388,73 @@ async def test_tools_and_roles_api(client, container):
     # 删除 agent 的清理做完、行删掉之后角色才没人引用
     await drain(container)
     assert (await client.delete("/api/roles/triage")).status_code == 204
+
+
+async def test_agent_assets_group_by_kind_with_sources_and_memory_preview(client, container):
+    await login(client)
+    await container.skills.write("s", "shared skill", "b", actor="user", owner=None)
+    await container.skills.write("hidden", "d", "b", actor="user", owner=None)
+    await container.vault.set("K", "secret-value", "a key", actor="user", owner=None)
+    spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
+    await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
+    await container.memory.create("team", "- team fact", actor="user")
+    await container.distribution.create(
+        RoleSpec("triage", "t", ["use:skill:s", "*:memory:team", "use:skill:hidden"], []), actor="user"
+    )
+    agent = await container.agents.create(
+        AgentSpec(
+            name="t",
+            description="d",
+            model="m1",
+            roles=["triage"],
+            allow=["use:secret:K", "use:mcp:echo", "use:skill:s"],
+            deny=["use:skill:hidden"],
+        ),
+        actor="user",
+    )
+    await container.skills.write("own", "mine", "b", actor="user", owner=agent.id)
+    # deny 不拦自己名下的
+    await container.agents.update(
+        agent.id, AgentPatch(deny=["use:skill:hidden", "use:skill:own"]), actor="user"
+    )
+
+    got = (await client.get(f"/api/agents/{agent.id}/assets")).json()
+    src = {g: {a["name"]: a["source"] for a in got[g]} for g in ("memories", "skills", "secrets", "mcp")}
+    assert src["skills"] == {
+        "own": {"own": True, "roles": [], "allow": False},
+        "s": {"own": False, "roles": ["triage"], "allow": True},
+    }
+    assert src["memories"] == {
+        "global": {"own": False, "roles": [BASE], "allow": False},
+        "t": {"own": True, "roles": [], "allow": False},
+        "team": {"own": False, "roles": ["triage"], "allow": False},
+    }
+    assert {m["name"]: m["editable"] for m in got["memories"]} == {"global": False, "t": True, "team": True}
+    assert got["secrets"] == [
+        {
+            "name": "K",
+            "owner": None,
+            "description": "a key",
+            "source": {"own": False, "roles": [], "allow": True},
+            "editable": False,
+        }
+    ]
+    assert "secret-value" not in str(got)
+    assert [(m["name"], m["transport"], m["enabled"]) for m in got["mcp"]] == [("echo", "http", True)]
+    # 记忆预览就是运行时 instructions 里的那一段
+    assert got["memory_preview"] == memory_section(
+        await container.memory.for_run(agent.id), container.memory.max_chars
+    )
+    assert '<memory name="team" access="editable, shared">\n- team fact\n</memory>' in got["memory_preview"]
+    # 与 reach（运行时同一套规则）列出的条目一致
+    reach = await container.distribution.reach(agent.id)
+    listed = [
+        f"{k}:{a['name']}"
+        for k, g in (("mcp", "mcp"), ("memory", "memories"), ("secret", "secrets"), ("skill", "skills"))
+        for a in got[g]
+    ]
+    assert sorted(listed) == sorted(reach.items)
+    assert (await client.get("/api/agents/nope/assets")).status_code == 404
 
 
 def test_every_stored_kind_is_a_kind_and_a_subject_with_a_document():

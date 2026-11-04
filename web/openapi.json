@@ -525,6 +525,46 @@
         }
       }
     },
+    "/api/agents/{agent_id}/assets": {
+      "get": {
+        "summary": "Agent Assets",
+        "description": "agent 能用的记忆、skill、secret、MCP server 与各自的来源（不含 secret 的值），加上记忆合并后放进指令的样子。",
+        "operationId": "agent_assets_api_agents__agent_id__assets_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentAssetsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/agents/{agent_id}/default": {
       "put": {
         "summary": "Set Default Agent",
@@ -3688,6 +3728,52 @@
         "title": "AgentAnswered",
         "description": "回答信件里一次 ask_agent 调用的结果：被问的 agent 的结局。"
       },
+      "AgentAssetsOut": {
+        "properties": {
+          "memories": {
+            "items": {
+              "$ref": "#/components/schemas/AssetOut"
+            },
+            "type": "array",
+            "title": "Memories"
+          },
+          "memory_preview": {
+            "type": "string",
+            "title": "Memory Preview"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/AssetOut"
+            },
+            "type": "array",
+            "title": "Skills"
+          },
+          "secrets": {
+            "items": {
+              "$ref": "#/components/schemas/AssetOut"
+            },
+            "type": "array",
+            "title": "Secrets"
+          },
+          "mcp": {
+            "items": {
+              "$ref": "#/components/schemas/McpAssetOut"
+            },
+            "type": "array",
+            "title": "Mcp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "memories",
+          "memory_preview",
+          "skills",
+          "secrets",
+          "mcp"
+        ],
+        "title": "AgentAssetsOut",
+        "description": "agent 能用的资产，按种类分组，各组按名称。"
+      },
       "AgentCreate": {
         "properties": {
           "name": {
@@ -4139,6 +4225,72 @@
         ],
         "title": "AskWait",
         "description": "在等用户回答提问（ask_user）。"
+      },
+      "AssetOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AssetSourceOut"
+          },
+          "editable": {
+            "type": "boolean",
+            "title": "Editable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "source",
+          "editable"
+        ],
+        "title": "AssetOut"
+      },
+      "AssetSourceOut": {
+        "properties": {
+          "own": {
+            "type": "boolean",
+            "title": "Own"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "allow": {
+            "type": "boolean",
+            "title": "Allow"
+          }
+        },
+        "type": "object",
+        "required": [
+          "own",
+          "roles",
+          "allow"
+        ],
+        "title": "AssetSourceOut",
+        "description": "为什么能用：它名下的、放行它的角色（含 base）、它自己的 allow 规则（至少一项）。"
       },
       "Attachment": {
         "properties": {
@@ -5446,6 +5598,54 @@
           "text"
         ],
         "title": "MarkdownBlock"
+      },
+      "McpAssetOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AssetSourceOut"
+          },
+          "editable": {
+            "type": "boolean",
+            "title": "Editable"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/McpTransport"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "description",
+          "source",
+          "editable",
+          "transport",
+          "enabled"
+        ],
+        "title": "McpAssetOut"
       },
       "McpIn": {
         "properties": {

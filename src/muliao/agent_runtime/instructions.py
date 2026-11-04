@@ -89,7 +89,7 @@ def build_instructions(
     ] or ["(no skills yet)"]
     sections = [
         "## Runtime context\n" + "\n".join(context),
-        _memory_section(memories, memory_limit),
+        memory_section(memories, memory_limit),
         "## Skill index\n" + "\n".join(skill_lines),
         SELF_IMPROVEMENT.format(memory_limit=memory_limit),
     ]
@@ -101,8 +101,9 @@ def build_instructions(
     return "\n\n".join(s for s in sections if s)
 
 
-def _memory_section(memories: Sequence[MemoryBlock], limit: int) -> str:
-    """这个 agent 能用的每一块记忆（MemoryStore.for_run，按名字），标出名字与能不能改。"""
+def memory_section(memories: Sequence[MemoryBlock], limit: int) -> str:
+    """这个 agent 能用的每一块记忆（MemoryStore.for_run，按名字），标出名字与能不能改。界面的 agent 详情用它预览注入的样子
+    （api/agents.py），与运行时同一个函数。"""
     blocks = [
         f'<memory name="{escape(m.name)}" access="{_access(m)}">\n{m.content or "(empty)"}\n</memory>'
         for m in memories
