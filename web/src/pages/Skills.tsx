@@ -27,7 +27,7 @@ function editorPath(name?: string): string {
   return name ? `/items/skill?${new URLSearchParams({ name })}` : '/items/skill'
 }
 
-/** skill 的条目页：items 是条目池里（已筛选的）skill，点进编辑 */
+/** skill 的资产页：items 是资产池里（已筛选的）skill，点进编辑 */
 export function SkillTab({ items, onChange }: { items: ItemOf<'skill'>[]; onChange: () => void }) {
   const [owner, setOwner] = useState<AgentId | null>(null)
   return (

@@ -38,9 +38,9 @@ export function ToolLine({ tool }: { tool: ToolPermission }) {
   )
 }
 
-/** 能用的条目（`kind:name`）：按种类成组，点进条目页 */
+/** 能用的资产（`kind:name`）：按种类成组，点进资产页 */
 function ItemChips({ items }: { items: string[] }) {
-  if (items.length === 0) return <span className="text-sm text-muted">没有 skill、MCP、secret</span>
+  if (items.length === 0) return <span className="text-sm text-muted">没有 skill、MCP、secret、记忆</span>
   return (
     <div className="flex flex-wrap gap-1.5">
       {items.map((i) => {
@@ -57,12 +57,12 @@ function ItemChips({ items }: { items: string[] }) {
   )
 }
 
-/** 一份配置能用的：条目直接列出，工具（较多）折叠 */
+/** 一份配置能用的：资产直接列出，工具（较多）折叠 */
 export function ReachView({ reach, what = '能用' }: { reach: Reach; what?: string }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="text-sm text-muted">
-        {what}的 skill、MCP、secret（{reach.items.length}）
+        {what}的 skill、MCP、secret、记忆（{reach.items.length}）
       </div>
       <ItemChips items={reach.items} />
       <Disclosure>
@@ -86,8 +86,8 @@ export function ReachView({ reach, what = '能用' }: { reach: Reach; what?: str
 }
 
 /**
- * 一组 `kind:glob` 规则：已有的是可删的标签，输入框从现有条目（及每种的 `kind:*`）里补全，也可以直接写通配符，回车加入。
- * 拼错的（不匹配任何条目）由服务端在预览与保存时报出
+ * 一组 `action:kind:glob` 规则：已有的是可删的标签，输入框从现有资产（及每种的 `use:kind:*`）里补全，也可以直接写通配符，
+ * 回车加入。拼错的（不匹配任何资产）由服务端在预览与保存时报出
  */
 export function RulesInput({
   label,
@@ -126,7 +126,7 @@ export function RulesInput({
         <ComboBox.InputGroup>
           <Input
             className="font-mono"
-            placeholder="输入 kind:name 或通配符，回车加入"
+            placeholder="输入 动作:种类:名字 或通配符，回车加入"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && text.trim() && !options.includes(text.trim())) {
                 e.preventDefault()
@@ -161,7 +161,7 @@ export function RulesInput({
   )
 }
 
-/** 规则补全的候选：全部条目（含工具）及每种的 `kind:*` */
+/** 规则补全的候选：全部资产（含工具）及每种的 `use:kind:*` */
 function useCandidates(): string[] {
   const items = useLoad(() => api.items(), [])
   return ruleCandidates(items.data ?? [])
@@ -169,7 +169,7 @@ function useCandidates(): string[] {
 
 export type PermissionValue = { roles: string[]; allow: string[]; deny: string[] }
 
-/** agent 的角色开关、自己的 allow / deny，以及按它们算出的最终工具与条目（服务端计算；agentId 为 null 是还没建的） */
+/** agent 的角色开关、自己的 allow / deny，以及按它们算出的最终工具与资产（服务端计算；agentId 为 null 是还没建的） */
 export function PermissionsInput({
   agentId,
   value,
@@ -187,7 +187,7 @@ export function PermissionsInput({
     <div className="flex flex-col gap-3">
       <div className="text-sm font-medium">角色与规则</div>
       <div className="text-xs text-muted">
-        能用的 = 它自己的条目 + base（每个 agent 都有）+ 选中的角色 + 下面的 allow，deny 优先（不拦它自己的条目）。admin 是全部工具并能改任何条目。
+        规则是 动作:种类:名字，动作 use（用）或 write（改）。能做的 = 它自己名下的（use 与 write）+ base（每个 agent 都有）+ 选中的角色 + 下面的 allow，deny 优先（不拦它自己名下的）。admin 是全部工具并能改任何资产。
       </div>
       <Loading state={roles}>
         {(list) => {
@@ -221,14 +221,14 @@ export function PermissionsInput({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <RulesInput
           label="额外允许"
-          hint="只给这个 agent 的，如 skill:relay-host、tool:issue_*"
+          hint="只给这个 agent 的，如 use:skill:relay-host、use:tool:issue_*、*:memory:trading"
           value={value.allow}
           onChange={(allow) => onChange({ ...value, allow })}
           candidates={candidates}
         />
         <RulesInput
           label="禁止"
-          hint="优先于所有角色与允许，如 tool:trigger_*"
+          hint="优先于所有角色与允许，如 use:tool:trigger_*"
           value={value.deny}
           onChange={(deny) => onChange({ ...value, deny })}
           candidates={candidates}
@@ -266,7 +266,7 @@ function RoleForm({ role, onSaved }: { role?: Role; onSaved: () => void }) {
       <TextInput label="描述" value={description} onChange={setDescription} isRequired />
       <RulesInput
         label="收录（允许）"
-        hint="kind:name，可用通配符，如 skill:relay-host、secret:RELAY_*、tool:issue_*"
+        hint="动作:种类:名字，可用通配符，如 use:skill:relay-host、use:secret:RELAY_*、*:memory:trading（成员能用也能改）"
         value={allow}
         onChange={setAllow}
         candidates={candidates}
@@ -370,14 +370,14 @@ function RoleCard({ role, onChanged }: { role: Role; onChanged: () => void }) {
   )
 }
 
-/** 角色：内置角色（base、admin）的固定规则只读、可编辑部分可改，不能删；自建角色可增删改。每个角色列出收录的条目与分给的 agent */
+/** 角色：内置角色（base、admin）的固定规则只读、可编辑部分可改，不能删；自建角色可增删改。每个角色列出收录的资产与分给的 agent */
 export function Roles() {
   const roles = useLoad(() => api.roles(), [])
   const [formKey, setFormKey] = useState(0)
   return (
     <Page title="角色">
       <p className="text-sm text-muted">
-        角色把条目（工具、skill、MCP、secret）打包分给 agent：收录写 kind:name 通配符，deny 优先。base 每个 agent 都有，收录进 base
+        角色把 AI 资产（工具、skill、MCP、secret、记忆）的权限打包分给 agent：写 动作:种类:名字（动作 use 用、write 改，可用通配符），deny 优先。base 每个 agent 都有，收录进 base
         的人人可用；其余角色在 agent 配置里勾选，从它的下一次运行起生效。
       </p>
       <CollapsibleForm title="新建角色">

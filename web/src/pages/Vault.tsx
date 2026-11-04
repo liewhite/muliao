@@ -76,7 +76,7 @@ function SecretItem({ item, onChange }: { item: ItemOf<'secret'>; onChange: () =
   )
 }
 
-/** secret 的条目页：值加密保存、不再显示；items 是条目池里（已筛选的）secret */
+/** secret 的资产页：值加密保存、不再显示；items 是资产池里（已筛选的）secret */
 export function SecretTab({ items, onChange }: { items: ItemOf<'secret'>[]; onChange: () => void }) {
   return (
     <div className="flex flex-col gap-3">

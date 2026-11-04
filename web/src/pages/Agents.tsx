@@ -28,7 +28,7 @@ import { ActionButton,
   useLoad,
 } from '../ui'
 import { PermissionsInput } from './Permissions'
-import { MemoryEditor } from './Memory'
+import { AgentMemories } from './Memory'
 import { HistoryList } from './History'
 import { WorkspaceBrowser } from './Workspace'
 import { SitePageList } from './SitePages'
@@ -299,7 +299,7 @@ export function AgentDetail() {
   async function remove() {
     const ok = await confirm({
       title: `删除 agent「${name}」？`,
-      body: '它的会话、记忆、工作目录和它名下的条目都会被删除（被角色收录的条目转给平台），无法恢复。',
+      body: '它的会话、工作目录和它名下的 AI 资产（含私有记忆）都会被删除（被分给别的 agent 的转给平台），无法恢复。',
       confirmLabel: '删除',
       danger: true,
     })
@@ -376,7 +376,7 @@ export function AgentDetail() {
                   <div className="text-muted">
                     创建于 {formatTime(a.created_at)} ·{' '}
                     <Link to={`/items?owner=${a.id}`} className="text-accent">
-                      它名下的条目
+                      它名下的 AI 资产
                     </Link>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -427,7 +427,7 @@ export function AgentDetail() {
               </Button>
             </Tabs.Panel>
             <Tabs.Panel id="memory" className="pt-3">
-              <MemoryEditor agent={a.id} hint="agent 每次运行都会看到全部记忆，也会自行修改" />
+              <AgentMemories agent={a.id} />
             </Tabs.Panel>
             <Tabs.Panel id="history" className="pt-3">
               <HistoryList agent={a.id} />

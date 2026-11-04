@@ -6,7 +6,7 @@ import { ActionButton, ErrorAlert, SelectInput, agentLabel, useAction, useAgents
 
 const PLATFORM = 'platform'
 
-/** 条目归谁：平台（要收录进角色才有人能用）或某个 agent（它自己总能用）。withArchived：也列出归档的（转移时，条目可能正归它们） */
+/** 资产归谁：平台（要收录进角色才有人能用）或某个 agent（它自己总能用）。withArchived：也列出归档的（转移时，资产可能正归它们） */
 export function OwnerSelect({
   value,
   onChange,
@@ -22,7 +22,7 @@ export function OwnerSelect({
       label="归属（owner）"
       hint={
         value === null
-          ? '归平台的条目要收录进某个角色（如 base）才有 agent 能用'
+          ? '归平台的资产要收录进某个角色（如 base）才有 agent 能用'
           : '这个 agent 自己总能用；要给别的 agent，把它收录进角色'
       }
       value={value ?? PLATFORM}
@@ -37,7 +37,7 @@ export function OwnerSelect({
   )
 }
 
-/** 把条目转给另一个 owner：内容与收录它的角色不变，记一版 */
+/** 把资产转给另一个 owner：内容与收录它的角色不变，记一版 */
 function TransferOwner({ item, onDone }: { item: Exclude<CatalogItem, { kind: 'tool' }>; onDone: () => void }) {
   const [owner, setOwner] = useState<AgentId | null>(item.owner)
   const action = useAction()
@@ -59,7 +59,7 @@ function TransferOwner({ item, onDone }: { item: Exclude<CatalogItem, { kind: 't
   )
 }
 
-/** 条目归谁、被哪些角色收录；没被收录时说明谁能用。给了 onTransferred 的可以转移 owner（内置工具归平台，不能转） */
+/** 资产归谁、被哪些角色收录；没被收录时说明谁能用。给了 onTransferred 的可以转移 owner（内置工具归平台，不能转） */
 export function ItemAccess({ item, onTransferred }: { item: CatalogItem; onTransferred?: () => void }) {
   const agents = useAgents()
   const [transferring, setTransferring] = useState(false)

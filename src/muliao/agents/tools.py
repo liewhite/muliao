@@ -49,7 +49,7 @@ class AgentDetail(BaseModel):
     deny: list[str]
     # 按规则最终能用的内置工具
     tools: list[str]
-    # 能用的 skill、MCP server、secret（`kind:name`）：自己的与规则放行的
+    # 能用（use）的 skill、MCP server、secret、记忆（`kind:name`）：自己的与规则放行的
     items: list[str]
     # 全部角色与全部内置工具，写 roles / allow / deny 时参照
     available_roles: list[RoleDetail]
@@ -94,11 +94,11 @@ def agents_toolset(
 
     @ts.tool_plain
     async def get_agent(agent: str) -> AgentDetail:
-        """Show an agent's configuration, the built-in tools and the skills/MCP servers/secrets it ends up with,
+        """Show an agent's configuration, the built-in tools and the skills/MCP servers/secrets/memories it ends up with,
         every role and every built-in tool. Use your own name to see yours. Returns a JSON object with `name`,
         `description`, `group`, `archived`, `model`, `thinking`, `roles` (besides `base`), `allow`, `deny`,
-        `tools` (the built-in tools it ends up with), `items` (`kind:name` of the skills, MCP servers and secrets
-        it can use), `available_roles` (every role: `name`, `description`, `fixed_allow`, `allow`, `deny`) and
+        `tools` (the built-in tools it ends up with), `items` (`kind:name` of the skills, MCP servers, secrets
+        and memory blocks it can use), `available_roles` (every role: `name`, `description`, `fixed_allow`, `allow`, `deny`) and
         `all_tools` (every built-in tool).
 
         Args:
@@ -144,9 +144,9 @@ def agents_toolset(
                 whom to delegate to by it. The agent starts with an empty memory and grows it by itself.
             model: `<provider>:<model>`; defaults to the server's default model.
             roles: Its roles besides `base`, which every agent has (`get_agent` lists them all).
-            allow: Extra rules `kind:name` (kind is tool, skill, mcp or secret; fnmatch wildcards), e.g.
-                `skill:relay-host`, `secret:RELAY_*`.
-            deny: Rules to deny; deny wins over every allow, e.g. `tool:trigger_*`.
+            allow: Extra rules `action:kind:name` (action use or write; kind tool, skill, mcp, secret or memory;
+                fnmatch wildcards), e.g. `use:skill:relay-host`, `use:secret:RELAY_*`, `*:memory:trading`.
+            deny: Rules to deny; deny wins over every allow, e.g. `use:tool:trigger_*`.
             thinking: Thinking/reasoning effort of its model: `default` sends nothing (the model's own default),
                 `off` disables it, the others set the effort level.
             group: Group it belongs to, e.g. a batch of agents doing the same kind of job; `list_agents` lists
@@ -191,8 +191,8 @@ def agents_toolset(
             description: New description.
             model: New `<provider>:<model>`.
             roles: New full list of roles (besides `base`, which every agent has).
-            allow: New full list of extra `kind:name` rules to allow.
-            deny: New full list of `kind:name` rules to deny.
+            allow: New full list of extra `action:kind:name` rules to allow.
+            deny: New full list of `action:kind:name` rules to deny.
             thinking: New thinking/reasoning effort (`default` = the model's own default).
             group: New group; an empty string removes it from its group.
             archived: `true` to archive a finished or inactive agent, `false` to unarchive it.
@@ -244,12 +244,12 @@ def agents_toolset(
 
     @ts.tool
     async def transfer_item(ctx: RunContext[RunScope], kind: StoredKind, name: str, owner: str | None) -> str:
-        """Give a skill, MCP server or secret to another owner, e.g. before deleting or archiving its current
+        """Give a skill, MCP server, secret or memory block to another owner, e.g. before deleting or archiving its current
         owner. Its content and the roles that hand it out stay; the new owner can always use and change it, the
         old one only through roles. Recorded in the item's version history.
 
         Args:
-            kind: `skill`, `mcp` or `secret`.
+            kind: `skill`, `mcp`, `secret` or `memory`.
             name: Item name.
             owner: Agent name of the new owner, or null for the platform (then only roles hand it out).
         """
@@ -265,9 +265,10 @@ def agents_toolset(
         allow: tuple[str, ...] = (),
         deny: tuple[str, ...] = (),
     ) -> str:
-        """Create a role: a bundle of `kind:name` rules (kind is tool, skill, mcp or secret; fnmatch wildcards)
-        that hands tools and items to every agent given the role (`update_agent` roles), e.g. a role
-        `relay-trader` with allow `skill:relay-host`, `secret:RELAY_*`.
+        """Create a role: a bundle of `action:kind:name` rules (action `use` or `write`, independent of each other;
+        kind tool, skill, mcp, secret or memory; fnmatch wildcards over the whole rule) that hands AI assets to
+        every agent given the role (`update_agent` roles), e.g. a role `relay-trader` with allow
+        `use:skill:relay-host`, `use:secret:RELAY_*`, `*:memory:trading` (members read and edit that memory).
 
         Args:
             name: Lowercase slug.
@@ -286,7 +287,7 @@ def agents_toolset(
         allow: tuple[str, ...] | None = None,
         deny: tuple[str, ...] | None = None,
     ) -> str:
-        """Change a role; only the given fields change. Adding an item to a role (e.g. `skill:<name>` to the
+        """Change a role; only the given fields change. Adding an asset to a role (e.g. `use:skill:<name>` to the
         built-in `base` role every agent has) shares it with the agents having the role. The fixed rules of the
         built-in roles cannot change. Takes effect from those agents' next run.
 

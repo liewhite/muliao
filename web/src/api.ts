@@ -71,7 +71,7 @@ export type LiveSegment = Schemas['LiveSegmentOut']
 export type Wait = SessionDetail['waits'][number]
 
 export type Skill = Schemas['SkillDetail']
-export type Memory = Schemas['MemoryOut']
+export type Memory = WithAgentId<Schemas['MemoryOut'], 'owner'>
 export type TriggerKind = Schemas['TriggerKindOut']
 export type Precheck = Schemas['Precheck']
 /** 按 kind 区分的联合：收窄 kind 后 config 与 status 就是这种方式的类型 */
@@ -82,18 +82,22 @@ export type Trigger = WithAgentId<
 export type TriggerKindName = Trigger['kind']
 export type McpServer = WithAgentId<Schemas['McpOut'], 'owner'>
 export type McpInput = WithAgentId<Schemas['McpIn'], 'owner'>
-/** 条目池里的一项（内置工具、skill、MCP server、secret），带收录它的角色与这一种自己的详情（按 kind 收窄）；
+/** AI 资产池里的一项（内置工具、skill、MCP server、secret、记忆），带收录它的角色与这一种自己的详情（按 kind 收窄）；
  * 后端 agents/catalog.py、api/items.py */
 export type CatalogItem = WithAgentId<
-  Schemas['ToolItemOut'] | Schemas['SkillItemOut'] | Schemas['McpItemOut'] | Schemas['SecretItemOut'],
+  | Schemas['ToolItemOut']
+  | Schemas['SkillItemOut']
+  | Schemas['McpItemOut']
+  | Schemas['SecretItemOut']
+  | Schemas['MemoryItemOut'],
   'owner'
 >
 export type ItemKind = CatalogItem['kind']
 export type ItemOf<K extends ItemKind> = Extract<CatalogItem, { kind: K }>
-/** 存在库里的条目种类（能改、能转移、有版本）：内置工具之外的三种 */
+/** 存在库里的资产种类（能改、能转移、有版本）：内置工具之外的四种 */
 export type StoredKind = Schemas['StoredKind']
-/** 版本历史的对象：记忆按 agent（null 为全局记忆），条目按种类与名字 */
-export type RevisionTarget = { kind: 'memory'; agent: AgentId | null } | { kind: StoredKind; name: string }
+/** 版本历史的对象：资产的种类与名字 */
+export type RevisionTarget = { kind: StoredKind; name: string }
 export type Revision = Schemas['RevisionOut']
 /** 角色（内置或自建）、它能用的工具与条目、带它的 agent；后端 agents/permissions.py、agents/roles.py */
 export type Role = Omit<Schemas['RoleOut'], 'agents'> & { agents: AgentId[] }
@@ -256,21 +260,17 @@ export const api = {
   previewAgent: (body: Schemas['AgentPreviewIn']) => call('post', '/api/agent-preview', { body }),
   /** 角色规则（还没保存的也行）能用的工具与条目；name 为 null 是还没建的 */
   previewRole: (body: Schemas['RolePreviewIn']) => call('post', '/api/role-preview', { body }),
-  /** 全部条目：内置工具在前，skill、MCP server、secret 按种类、名称 */
+  /** 全部 AI 资产：内置工具在前，存在库里的按种类、名称 */
   items: () => branded<CatalogItem[]>(call('get', '/api/items')),
-  /** 把 skill / MCP server / secret 转给另一个 owner（null 归平台），记一版；内容与收录它的角色不变 */
+  /** 把 skill / MCP server / secret / 记忆转给另一个 owner（null 归平台），记一版；内容与收录它的角色不变 */
   transferItem: (kind: StoredKind, name: string, owner: AgentId | null) =>
     call('put', '/api/items/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
   /** 版本历史：新的在前，第一条即当前生效 */
   history: (target: RevisionTarget): Promise<Revision[]> =>
-    target.kind === 'memory'
-      ? call('get', '/api/memory/history', { query: { agent: target.agent } })
-      : call('get', '/api/items/{kind}/{name}/history', { path: { kind: target.kind, name: target.name } }),
+    call('get', '/api/items/{kind}/{name}/history', { path: { kind: target.kind, name: target.name } }),
   /** 把某一版恢复为新的一版（secret 的版本不含值，不能恢复） */
   restore: (target: RevisionTarget, rev: number) =>
-    target.kind === 'memory'
-      ? call('post', '/api/memory/restore', { body: { agent: target.agent, rev } })
-      : call('post', '/api/items/{kind}/{name}/restore', { path: { kind: target.kind, name: target.name }, body: { rev } }),
+    call('post', '/api/items/{kind}/{name}/restore', { path: { kind: target.kind, name: target.name }, body: { rev } }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
   agentHistory: (agent_id: AgentId, query?: string) =>
     branded<HistoryEntry[]>(
@@ -309,9 +309,12 @@ export const api = {
         ? call('put', '/api/agents/{agent_id}/archive', { path: { agent_id } })
         : call('delete', '/api/agents/{agent_id}/archive', { path: { agent_id } }),
     ),
-  /** agent 为 null 时是全局记忆（所有 agent 共享） */
-  memory: (agent: AgentId | null) => call('get', '/api/memory', { query: { agent } }),
-  setMemory: (agent: AgentId | null, content: string) => call('put', '/api/memory', { body: { agent, content } }),
+  /** 一块记忆（global 是全局记忆，agent 的私有记忆名字是它建时的名字） */
+  memory: (name: string) => branded<Memory>(call('get', '/api/items/memory/{name}', { path: { name } })),
+  /** 新建的归 owner（缺省为平台）；已有的整体改写正文与描述，owner 不变 */
+  saveMemory: (name: string, body: WithAgentId<Schemas['MemoryIn'], 'owner'>) =>
+    branded<Memory>(call('put', '/api/items/memory/{name}', { path: { name }, body })),
+  deleteMemory: (name: string) => call('delete', '/api/items/memory/{name}', { path: { name } }),
 
   skill: (name: string) => call('get', '/api/items/skill/{name}', { path: { name } }),
   /** 新建的归 owner；已有的整体改写正文与描述，owner 不变 */

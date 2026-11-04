@@ -196,7 +196,7 @@ function McpItem({ server, onChange }: { server: ItemOf<'mcp'>; onChange: () => 
   )
 }
 
-/** MCP server 的条目页：items 是条目池里（已筛选的）MCP 条目，带各自的配置与启停 */
+/** MCP server 的资产页：items 是资产池里（已筛选的）MCP server，带各自的配置与启停 */
 export function McpTab({ items, onChange }: { items: ItemOf<'mcp'>[]; onChange: () => void }) {
   return (
     <div className="flex flex-col gap-3">

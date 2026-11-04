@@ -16,21 +16,24 @@ describe('splitRule', () => {
     expect(splitRule('secret:A:B')).toEqual({ kind: 'secret', name: 'A:B' })
   })
 
-  it('不是条目的种类时报错', () => {
+  it('不是资产的种类时报错', () => {
     expect(() => splitRule('agent:x')).toThrow()
   })
 })
 
 describe('ruleCandidates', () => {
-  it('每种的通配符在前，然后是全部条目', () => {
+  it('每种的通配符在前，然后是全部资产（存在库里的还有 use + write）', () => {
     expect(ruleCandidates(ITEMS)).toEqual([
-      'tool:*',
-      'skill:*',
-      'mcp:*',
-      'secret:*',
-      'tool:run_shell',
-      'skill:relay-host',
-      'skill:mine',
+      'use:tool:*',
+      'use:skill:*',
+      'use:mcp:*',
+      'use:secret:*',
+      'use:memory:*',
+      'use:tool:run_shell',
+      'use:skill:relay-host',
+      '*:skill:relay-host',
+      'use:skill:mine',
+      '*:skill:mine',
     ])
   })
 })

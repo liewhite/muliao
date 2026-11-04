@@ -4,6 +4,7 @@ import { api, asAgentId, type CatalogItem, type ItemKind, type ItemOf } from '..
 import { KIND_LABEL, KINDS, filterItems, isKind, type OwnerFilter } from '../rules'
 import { ItemAccess } from './itemParts'
 import { McpTab } from './Mcp'
+import { MemoryTab } from './Memory'
 import { ToolLine } from './Permissions'
 import { SecretTab } from './Vault'
 import { SkillTab } from './Skills'
@@ -47,6 +48,8 @@ function KindTab({
       return <McpTab items={filterItems(items, 'mcp', owner)} onChange={onChange} />
     case 'secret':
       return <SecretTab items={filterItems(items, 'secret', owner)} onChange={onChange} />
+    case 'memory':
+      return <MemoryTab items={filterItems(items, 'memory', owner)} onChange={onChange} />
   }
 }
 
@@ -56,8 +59,8 @@ function ownerFilterOf(value: string | null): OwnerFilter {
 }
 
 /**
- * 条目池：全部工具、skill、MCP server、secret，不分公共私有。每项显示 owner（平台或某个 agent）与收录它的角色；
- * agent 能用的 = 它自己的 + 它的角色（含 base）收录的，在「角色」页编辑。种类与 owner 筛选放在地址里（?kind=&owner=）
+ * AI 资产池：全部工具、skill、MCP server、secret、记忆，不分公共私有。每项显示 owner（平台或某个 agent）与收录它的角色；
+ * agent 能用、能改的 = 它自己的 + 它的角色（含 base）与 allow 放行的，在「角色」页编辑。种类与 owner 筛选放在地址里（?kind=&owner=）
  */
 export default function Items() {
   const [params, setParams] = useSearchParams()
@@ -69,10 +72,11 @@ export default function Items() {
   const set = (patch: Record<string, string>) => setParams({ kind, owner, ...patch }, { replace: true })
 
   return (
-    <Page title="条目">
+    <Page title="AI 资产">
       <p className="text-sm text-muted">
-        条目归平台或某个 agent（owner）：owner 与 admin 能改。agent 能用的是它自己的，加上它的角色（每个 agent 都有
-        base）收录的。
+        每项 AI 资产归平台或某个 agent（owner）。agent 对它能做什么按权限 <code className="font-mono">动作:种类:名字</code>{' '}
+        算：动作是 use（用）与 write（改），owner 两者都有，其余来自它的角色（每个 agent 都有 base）与自己的 allow；admin
+        能改全部。
       </p>
       <div className="max-w-xs">
         <SelectInput
@@ -88,7 +92,7 @@ export default function Items() {
       </div>
       <Tabs selectedKey={kind} onSelectionChange={(k: Key) => set({ kind: String(k) })} variant="secondary">
         <Tabs.ListContainer>
-          <Tabs.List aria-label="条目种类">
+          <Tabs.List aria-label="资产种类">
             {KINDS.map((k) => (
               <Tabs.Tab key={k} id={k}>
                 {KIND_LABEL[k]}

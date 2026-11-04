@@ -10,7 +10,6 @@ import {
   LayoutDashboard,
   MessageSquare,
   Plus,
-  ScrollText,
   ShieldCheck,
   Settings,
   Zap,
@@ -45,9 +44,8 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
   {
     title: '资源',
     items: [
-      { to: '/items', label: '条目', Icon: Boxes },
+      { to: '/items', label: 'AI 资产', Icon: Boxes },
       { to: '/roles', label: '角色', Icon: ShieldCheck },
-      { to: '/memory', label: '全局记忆', Icon: ScrollText },
     ],
   },
   {

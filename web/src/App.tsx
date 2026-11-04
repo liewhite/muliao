@@ -12,7 +12,6 @@ import Triggers from './pages/Triggers'
 import Issues from './pages/Issues'
 import IssueView from './pages/IssueView'
 import Items from './pages/Items'
-import GlobalMemory from './pages/Memory'
 import NewSession from './pages/NewSession'
 import Notifications from './pages/Notifications'
 import SessionView from './pages/SessionView'
@@ -212,13 +211,13 @@ function Shell() {
                 <Route path="/issues" element={<Issues />} />
                 <Route path="/issues/:id" element={<IssueRoute />} />
                 <Route path="/settings" element={<Settings />} />
-                <Route path="/memory" element={<GlobalMemory />} />
                 <Route path="/items" element={<Items />} />
                 <Route path="/items/skill" element={<SkillEditor />} />
                 {/* 合并进条目页之前的地址 */}
                 <Route path="/skills" element={<Navigate to="/items?kind=skill" replace />} />
                 <Route path="/mcp" element={<Navigate to="/items?kind=mcp" replace />} />
                 <Route path="/vault" element={<Navigate to="/items?kind=secret" replace />} />
+                <Route path="/memory" element={<Navigate to="/items?kind=memory" replace />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/pages" element={<SitePages />} />
                 <Route path="/pages/:agent/:name" element={<SitePageView />} />

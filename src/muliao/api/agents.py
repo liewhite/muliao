@@ -114,7 +114,7 @@ class ToolOut(BaseModel):
 
 
 class ReachOut(BaseModel):
-    """一份配置能用的内置工具与条目（skill、MCP server、secret，`kind:name`）。"""
+    """一份配置能用（use）的内置工具与资产（skill、MCP server、secret、记忆，`kind:name`）。"""
 
     tools: list[ToolOut]
     items: list[str]

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, asAgentId } from './api'
+import { api } from './api'
 
 function respond(status: number, body: string, headers: Record<string, string> = {}) {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(status === 204 ? null : body, { status, headers })))
@@ -29,7 +29,7 @@ describe('send decodes responses by HTTP status and type', () => {
 
   it('fails when a declared JSON body is missing', async () => {
     respond(200, '', JSON_TYPE)
-    await expect(api.memory(asAgentId('a1'))).rejects.toThrow(SyntaxError)
+    await expect(api.memory('global')).rejects.toThrow(SyntaxError)
   })
 
   it('fails when a response without a declared body has one', async () => {
