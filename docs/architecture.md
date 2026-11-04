@@ -133,7 +133,7 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 
 **组合根没有构造环**：会话领域的装配在 `sessions/assembly.py`（`SessionPorts`：先于消费者的端口；`SessionDomain`：门面、压缩、消费者、信箱对账与任务处理器，`subscribe` 一处登记会话领域的全部订阅与命令处理），组合根不拼会话领域的内部对象。用到「停止会话」的领域（会话门面、委派工具、删除 agent 的会话清理）依赖端口 `sessions.halt.StopSession`，组合根交给它们的实现是 `sessions.halt.SessionStopper`，它由正在进行的运行的登记（`StoppableRuns`）与 `SessionHalt` 组成，先于消费者构造，消费者用同一份登记运行；要马上执行自己提交的投递的领域（会话、触发器、issue）拿的是 `platform.worker.RunNow` 端口，worker 由各领域的处理器组成、在最后构造，构造后绑定到端口，绑定之前调用当场报错。
 
-经 `api` 的依赖无环、有方向：`files`、`agents`、`usage`、`speech`、`web` → `agent_runtime` → `sessions` → `workspace`、`notifications`、`triggers`、`issues`、`history`（`tests/test_boundaries.py` 的 `LAYERS`：领域只能 import 更早一层的 `api`，同层与反向都不行；新增领域要在那里定层）。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
+经 `api` 的依赖无环、有方向：`files`、`agents`、`usage`、`speech`、`web` → `agent_runtime` → `sessions` → `workspace`、`notifications`、`triggers`、`issues` → `history`（活动概览要读会话与 issue 的动态；`tests/test_boundaries.py` 的 `LAYERS`：领域只能 import 更早一层的 `api`，同层与反向都不行；新增领域要在那里定层）。反向需要的查询（删除 agent 时查会话是否忙）由组合根注入函数。事件与定向命令不受这个方向限制（订阅方 import 发布方的 `events`），`events` 模块只放消息的数据形状。
 
 **一个写事务只写一个领域的表**（外加平台的任务表，它是每个领域的 outbox）：`Database(check_writes=...)` 记下每个事务的 ORM 写入与 insert / update / delete 语句，测试的容器打开 `schema.single_domain_writes` 作为开发期断言。数据库层的级联（`ON DELETE CASCADE`）不在记录里，它们都在会话领域内部。
 
@@ -657,7 +657,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 
 **热历史**（#368）：上面是冷历史（agent 自己总结的事，只到昨天）；还没总结的活动直接从会话领域读（读模型 `sessions/recall.py` 的 `SessionRecall`，经 `sessions.api` 给出），两个只读工具，进 base：
 
-- `activity_overview(day?, agent?)`（history 领域的工具组，它要把会话活动与当天的工作历史合在一起）：本地日历日（默认今天，`HistoryLog.day_bounds`）里有活动（保存了消息或收到了信件）的会话：id 前缀、来源（issue 号、thread 名与父会话）、标题、此刻的工作状态、当天的消息数与起止时刻、运行数与最终失败的运行（`TaskQueue.created_between_in`）；用户当天说的话（全文）；失败运行的错误；当天的工作历史。agent 默认自己，可给名字或 `all`（同 `history_search`）。
+- `activity_overview(day?, agent?)`（history 领域的工具组，它要把会话活动、issue 动态与当天的工作历史合在一起）：本地日历日（默认今天，`HistoryLog.day_bounds`）里有活动（保存了消息或收到了信件）的会话：id 前缀、来源（issue 号、thread 名与父会话）、标题、此刻的工作状态、当天的消息数与起止时刻、运行数与最终失败的运行（`TaskQueue.created_between_in`）；用户当天在会话里说的话（全文）；用户当天对这些 agent 负责或被指派的 issue 做的事（`IssueService.user_actions_between`，与 issue_show 同一种渲染，评论全文）；失败运行的错误；当天的工作历史。agent 默认自己，可给名字或 `all`（同 `history_search`）。
 - `session_read(session, since?, grep?, clip?, offset?)`（会话领域的工具组，`SessionPorts.recall_toolset`）：一个会话（id 或唯一前缀）的时间线，与会话页同一份投影（`transcript.to_items`，不含思考），每条带所在消息的保存时刻；用户与助手的文字全文，工具调用、结果与事件按 `clip` 截断；`grep` 按正则筛条目；整体按 `runtime.tool_output_max_chars` 在整条处停下、给出 `offset` 接着读（同 read_file）。
 - **「用户说了什么」只按信件记下的发送方认**（`mail.origin`：经来信入口投的信件记下 `Inbound.origin`，消息必有、事件没有，`post_in` 校验），不从文字反推：用户能在任何会话里写，别的来源只续写自己发起的会话，所以时间线里一条用户消息条目含用户写的信件就标 USER，否则是会话的发起方（TRIGGER / ISSUE / DELEGATION）。迁移前的信件按当时的投信规则回填（迁移 `cb9354fa36e7` 的说明）。
 - 按日取消息走 `messages.created_at` 的索引。以前的 shell 脚本 `self-evolve/activity.py` 直接读库里的原始 JSON、按文字猜发送方，已由这两个工具取代。

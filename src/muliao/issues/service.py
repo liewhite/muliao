@@ -16,9 +16,10 @@ done / cancelled 时，在同一事务里给每个下游记一条 DEPENDENCY 动
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -39,7 +40,7 @@ from muliao.issues.graph import (
     set_depends_on_in,
     snapshot,
 )
-from muliao.issues.render import issue_view, render_issue
+from muliao.issues.render import activity_views, issue_view, render_activity, render_issue
 from muliao.issues.rules import (
     STOP_STATUSES,
     SYSTEM_ACTOR,
@@ -110,6 +111,17 @@ class IssueWork:
     finished: bool
     reviewable: bool
     startable: bool
+
+
+@dataclass(frozen=True)
+class UserActions:
+    """用户在一段时间里对一个 issue 做的事（评论与属性变化），每条渲染成与 issue_show 同样的一行（评论全文）。"""
+
+    issue_id: int
+    title: str
+    # 此刻的状态
+    status: IssueStatus
+    lines: list[str]
 
 
 def _title(title: str) -> str:
@@ -332,6 +344,39 @@ class IssueService:
                 startable=startable(i.status, i.owner_agent_id),
             )
         return work
+
+    async def user_actions_between(
+        self, start: datetime, end: datetime, agent_ids: Collection[str] | None
+    ) -> list[UserActions]:
+        """用户在 [start, end) 里对这些 agent 负责（owner）或被指派的 issue（None 为全部）做的事，按 issue 分组、
+        按时间排序（热历史：history 领域的 activity_overview）。"""
+        query = (
+            select(IssueActivity, Issue)
+            .join(Issue, Issue.id == IssueActivity.issue_id)
+            .where(
+                IssueActivity.actor == USER, IssueActivity.created_at >= start, IssueActivity.created_at < end
+            )
+            .order_by(IssueActivity.id)
+        )
+        if agent_ids is not None:
+            query = query.where(
+                or_(Issue.owner_agent_id.in_(list(agent_ids)), Issue.assignee.in_(list(agent_ids)))
+            )
+        async with self._db.transaction() as s:
+            rows = (await s.execute(query)).all()
+            names = await agent_names_in(s)
+        grouped: dict[int, tuple[Issue, list[IssueActivity]]] = {}
+        for activity, issue in rows:
+            grouped.setdefault(issue.id, (issue, []))[1].append(activity)
+        return [
+            UserActions(
+                issue_id=issue.id,
+                title=issue.title,
+                status=issue.status,
+                lines=[render_activity(v) for v in activity_views(activities, names, self._tz)],
+            )
+            for issue, activities in grouped.values()
+        ]
 
     async def render(self, issue_id: int) -> str:
         async with self._db.transaction() as s:

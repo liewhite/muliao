@@ -17,7 +17,9 @@ LAYERS: list[set[str]] = [
     {"files", "agents", "usage", "speech", "web"},
     {"agent_runtime"},
     {"sessions"},
-    {"workspace", "notifications", "triggers", "issues", "history"},
+    {"workspace", "notifications", "triggers", "issues"},
+    # 活动概览（热历史）要读会话与 issue 的动态
+    {"history"},
 ]
 DOMAINS = set().union(*LAYERS)
 RANK = {d: rank for rank, layer in enumerate(LAYERS) for d in layer}

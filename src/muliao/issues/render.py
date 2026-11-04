@@ -42,13 +42,14 @@ class IssueView:
     activities: Sequence[ActivityView]
 
 
-def issue_view(
-    issue: Issue, activities: Sequence[IssueActivity], links: Links, names: AgentNames, tz: ZoneInfo
-) -> IssueView:
-    """issue 连同给出的时间线（完整的，或只是这次的动态）换成展示名与本地时间。"""
+def _assignee(value: Any, names: AgentNames) -> str:
+    return "unassigned" if value is None else assignee_name(value, names)
 
-    def assignee(value: Any) -> str:
-        return "unassigned" if value is None else assignee_name(value, names)
+
+def activity_views(
+    activities: Sequence[IssueActivity], names: AgentNames, tz: ZoneInfo
+) -> list[ActivityView]:
+    """时间线换成展示名与本地时间。"""
 
     def issues(found: list[int]) -> str:
         return ", ".join(f"#{i}" for i in found) or "none"
@@ -58,7 +59,7 @@ def issue_view(
         before = after = None
         if a.change is not None:
             if a.kind in (ActivityKind.ASSIGNEE, ActivityKind.OWNER, ActivityKind.STOPPED):
-                before, after = assignee(a.change["from"]), assignee(a.change["to"])
+                before, after = _assignee(a.change["from"], names), _assignee(a.change["to"], names)
             elif a.kind == ActivityKind.DEPENDS_ON:
                 before, after = issues(a.change["from"]), issues(a.change["to"])
             else:
@@ -74,18 +75,25 @@ def issue_view(
                 upstream=a.change["issue"] if a.kind == ActivityKind.DEPENDENCY else None,
             )
         )
+    return views
+
+
+def issue_view(
+    issue: Issue, activities: Sequence[IssueActivity], links: Links, names: AgentNames, tz: ZoneInfo
+) -> IssueView:
+    """issue 连同给出的时间线（完整的，或只是这次的动态）换成展示名与本地时间。"""
     return IssueView(
         id=issue.id,
         title=issue.title,
         description=issue.description,
         status=issue.status,
         priority=issue.priority,
-        assignee=assignee(issue.assignee),
+        assignee=_assignee(issue.assignee, names),
         owner="none" if issue.owner_agent_id is None else names[issue.owner_agent_id],
         creator=actor_name(issue.creator, names),
         depends_on=links.depends_on,
         blocks=links.blocks,
-        activities=views,
+        activities=activity_views(activities, names, tz),
     )
 
 

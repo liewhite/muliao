@@ -9,6 +9,7 @@ from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.api import AgentNames, AgentService
 from muliao.history.service import MAX_LIMIT, HistoryEntry, HistoryLog, HistoryRecord
+from muliao.issues.api import IssueService, UserActions
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.api import SESSION_READ, Activity, DaySession, SessionRecall
 
@@ -59,9 +60,15 @@ def _where(d: DaySession) -> str:
 
 
 def overview_text(
-    activity: Activity, records: list[HistoryRecord], names: AgentNames, who: str, day: date, tz: ZoneInfo
+    activity: Activity,
+    actions: list[UserActions],
+    records: list[HistoryRecord],
+    names: AgentNames,
+    who: str,
+    day: date,
+    tz: ZoneInfo,
 ) -> str:
-    """activity_overview 交给模型的文字：会话、用户说的话（全文）、失败的运行、当天的工作历史。"""
+    """activity_overview 交给模型的文字：会话、用户在会话里说的话与对 issue 做的事（全文）、失败的运行、当天的工作历史。"""
     many = len({d.session.agent_id for d in activity.sessions} | {r.agent_id for r in records}) > 1
 
     def agent_of(agent_id: str) -> str:
@@ -100,6 +107,12 @@ def overview_text(
         )
     if not activity.words:
         out.append("(none)")
+    out += ["", f"## what the user did on issues ({len(actions)} issues, comments in full)"]
+    for a in actions:
+        out.append(f"- #{a.issue_id} {a.title[:80]!r} (now {a.status.value}):")
+        out += [_indent(line) for line in a.lines]
+    if not actions:
+        out.append("(none)")
     failures = [(f, d) for d in activity.sessions for f in d.failures]
     out += ["", f"## failed runs ({len(failures)})"]
     for f, d in sorted(failures, key=lambda x: x[0].at):
@@ -122,7 +135,7 @@ def overview_text(
 
 
 def history_toolset(
-    history: HistoryLog, agents: AgentService, recall: SessionRecall
+    history: HistoryLog, agents: AgentService, recall: SessionRecall, issues: IssueService
 ) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
@@ -199,8 +212,8 @@ def history_toolset(
     ) -> str:
         """What happened on one local calendar day (default today), as text: every conversation that was active
         (id prefix, origin/issue, title, state running/waiting/idle, messages and time span, runs and failures),
-        everything the user typed that day in full, failed runs with their errors, and that day's work-history
-        entries. Use it to recall recent work (e.g. today, which `history_search` does not have yet), then
+        everything the user typed that day and every comment or change the user made on the agent's issues (in
+        full), failed runs with their errors, and that day's work-history entries. Use it to recall recent work (e.g. today, which `history_search` does not have yet), then
         `session_read` for a conversation worth a closer look.
 
         Args:
@@ -217,8 +230,9 @@ def history_toolset(
         day = history.today() if day is None else day
         start, end = history.day_bounds(day)
         activity = await recall.between(start, end, agent_ids)
+        actions = await issues.user_actions_between(start, end, agent_ids)
         records = await history.search(agent_ids=agent_ids, since=day, until=day, limit=MAX_LIMIT)
         who = "every agent" if agent_ids is None else names[agent_ids[0]]
-        return overview_text(activity, list(reversed(records)), names, who, day, history.tz)
+        return overview_text(activity, actions, list(reversed(records)), names, who, day, history.tz)
 
     return ts

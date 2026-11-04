@@ -5,6 +5,7 @@ from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo
 
+from muliao.agents.ids import USER
 from muliao.history.service import HistoryEntry
 from muliao.sessions.api import Origin
 from tests.scripted import scripted
@@ -42,6 +43,10 @@ async def _day(container, make_agent, models):
     await start(container, worker.id, "explode now")
     await start(container, other.id, "别人的事", origin=Origin.TRIGGER)
     await drain(container)
+    # 用户在 worker 负责的 issue 上评论（投进 worker 的 issue 会话；那封信不算用户在会话里说的话）
+    issue = await container.issues.create(USER, owner=worker.id, title="修备份")
+    await container.issues.comment(USER, issue.id, "备份要保留七天\n第二行")
+    await drain(container)
     today = container.history.today()
     await container.history.append(worker.id, [HistoryEntry(today, "备份了数据库", "做完", ("#1",), 2)])
     return worker, nightly
@@ -63,14 +68,18 @@ async def test_overview_lists_sessions_what_the_user_typed_failures_and_history(
         ],
     )
 
-    sessions, typed, failed, history = mine.split("\n## ")[1:5]
-    assert sessions.startswith("sessions (2, trigger 1, user 1)")
+    sessions, typed, on_issues, failed, history = mine.split("\n## ")[1:6]
+    assert sessions.startswith("sessions (3, issue 1, trigger 1, user 1)")
     assert f"{nightly.id[:8]} [trigger] 'nightly job': idle," in sessions
     assert "'explode now': idle, 1 msgs" in sessions and "1 runs, 1 FAILED" in sessions
     assert "别人的事" not in mine
     # 用户说的话只有用户在界面上发的；触发器的来信不算
     assert typed.startswith("what the user typed (2, full text)")
     assert "不对，要先备份" in typed and "explode now" in typed and "\n  nightly job" not in typed
+    assert "New activity on issue" not in typed
+    assert on_issues.startswith("what the user did on issues (1 issues, comments in full)")
+    assert "'修备份' (now backlog):" in on_issues and "created the issue" in on_issues
+    assert "commented:\n    备份要保留七天\n    第二行" in on_issues
     assert failed.startswith("failed runs (1)") and "400" in failed
     assert "[2] 备份了数据库 ['#1']" in history
     # 全部 agent：带上 agent 名

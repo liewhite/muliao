@@ -378,7 +378,7 @@ def assemble(
     static_toolsets = [
         skills_toolset(skills),
         memory_toolset(memory),
-        history_toolset(history, agents, ports.recall),
+        history_toolset(history, agents, ports.recall, issues),
         ask_user_toolset(),
         workspace_toolset(vault, limits, files, jobs),
         ports.delegation_toolset(agents),
