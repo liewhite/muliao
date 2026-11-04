@@ -1,12 +1,13 @@
 """热历史（会话领域的读模型）：一段时间里 agent 的会话做了什么、用户说了什么，以及一个会话的时间线。给热历史的两个
 工具用（history 领域的 activity_overview、本领域的 session_read）；冷历史是 agent 自己写的工作历史（history 领域）。
 
-「用户说了什么」只按信件记下的发送方来源认（Mail.origin 为 user：用户在界面上发的消息与对提问的回答），不从文字反推。
+「用户说了什么」只按信件记下的发送方来源认（Mail.origin 为 user：用户在界面上发的消息与对提问的回答），不从文字猜谁发的；
+时间线里的用户消息条目按保存它的那次运行处理的用户信件整段对上（_from_user）。
 时间线的条目与会话页同一份投影（transcript.to_items），只要文字，不用工具的展示规则。"""
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -99,9 +100,22 @@ def _words(mail: Mail) -> UserWords:
     return UserWords(mail.session_id, mail.created_at, text, len(mail.attachments))
 
 
-def _from_user(item: Item, typed: Collection[str]) -> bool:
-    """用户消息条目里有用户在界面上写的一段（一次请求里排着的信件并成一条，段落原样保留）。"""
-    return any(t.strip() and t.strip() in item.text for t in typed)
+def _has_segment(text: str, segment: str) -> bool:
+    """条目文字里有这一整段：一条用户消息条目是连续内容段用换行连起来的（transcript._user_item）。"""
+    return (
+        text == segment
+        or text.startswith(segment + "\n")
+        or text.endswith("\n" + segment)
+        or f"\n{segment}\n" in text
+    )
+
+
+def _from_user(item: Item, typed: Sequence[Mail]) -> bool:
+    """用户消息条目里有用户在界面上写的一封信：typed 是保存这条消息的那次运行处理的用户消息（信件交给模型时
+    原文作为一整段，sessions.content）；只有附件的按条目带不带附件认。"""
+    return any(
+        _has_segment(item.text, m.content) if m.content.strip() else bool(item.attachments) for m in typed
+    )
 
 
 class SessionRecall:
@@ -154,13 +168,17 @@ class SessionRecall:
                 )
             (row,) = matches
             rows = await transcript_rows_in(s, row.id, since=since)
-            typed = [m.content for m in await sent_by_in(s, [row.id], Origin.USER)]
+            typed: dict[int | None, list[Mail]] = {}
+            for m in await sent_by_in(s, [row.id], Origin.USER):
+                if m.kind == MailKind.MESSAGE:
+                    typed.setdefault(m.consumed_by, []).append(m)
             info, parent = info_of(row), row.parent_session_id
         entries = []
-        for (_, _, saved_at), message in zip(rows, load_messages(p for _, p, _ in rows), strict=True):
+        messages = load_messages(p for _, p, _, _ in rows)
+        for (_, _, saved_at, run_id), message in zip(rows, messages, strict=True):
             for item in to_items([message], {}, saved_at=saved_at):
                 sender = None
                 if item.type == "user":
-                    sender = Origin.USER if _from_user(item, typed) else info.origin
+                    sender = Origin.USER if _from_user(item, typed.get(run_id, [])) else info.origin
                 entries.append(Entry(saved_at, item, sender))
         return Timeline(info, parent, entries)

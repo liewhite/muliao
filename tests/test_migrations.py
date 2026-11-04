@@ -1621,6 +1621,8 @@ def test_mail_origin_is_backfilled_from_the_sending_rules_and_dropped_on_downgra
             (3, "u", "event", "done", "{}", None),
             (4, "i", "message", "New activity on issue #1: x", "{}", None),
             (5, "i", "message", "我补充一句", "{}", None),
+            (12, "i", "message", "Issue #1 was created and assigned to you.", "{}", None),
+            (13, "i", "message", "The user commented on issue #1.\n\nYou are", "{}", None),
             (6, "t", "message", "nightly", "{}", None),
             (7, "t", "message", "改一下", "{}", None),
             (8, "d", "message", "去查", "{}", None),
@@ -1648,11 +1650,14 @@ def test_mail_origin_is_backfilled_from_the_sending_rules_and_dropped_on_downgra
             (9, "user"),
             (10, "delegation"),
             (11, None),
+            (12, "issue"),
+            (13, "issue"),
         ]
         assert "ix_messages_created_at" in {r[1] for r in conn.execute("pragma index_list(messages)")}
+        assert "ix_mail_created_at" in {r[1] for r in conn.execute("pragma index_list(mail)")}
     with _migration_engine(path).begin() as connection:
         command.downgrade(alembic_config(connection), "a8f1c2d3e4b5")
     with sqlite3.connect(path) as conn:
         assert "origin" not in {r[1] for r in conn.execute("pragma table_info(mail)")}
         assert "ix_messages_created_at" not in {r[1] for r in conn.execute("pragma index_list(messages)")}
-        assert conn.execute("select count(*) from mail").fetchone() == (11,)
+        assert conn.execute("select count(*) from mail").fetchone() == (13,)

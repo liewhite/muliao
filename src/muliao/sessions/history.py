@@ -128,14 +128,16 @@ async def saved_by_in(s: AsyncSession, session_id: str, run_id: int) -> list[Mes
 
 async def transcript_rows_in(
     s: AsyncSession, session_id: str, *, since: datetime | None = None
-) -> list[tuple[int, str, datetime]]:
-    """完整原始历史（不受压缩影响）的 (消息 id, payload, 保存时刻)：会话页的展示；since 只取这之后保存的（热历史的
+) -> list[tuple[int, str, datetime, int]]:
+    """完整原始历史（不受压缩影响）的 (消息 id, payload, 保存时刻, 保存它的运行)：会话页的展示；since 只取这之后保存的（热历史的
     时间线，sessions.recall）。只取原始行，反序列化在事务之外做（sessions.service）。"""
-    query = select(Message.id, Message.payload, Message.created_at).where(Message.session_id == session_id)
+    query = select(Message.id, Message.payload, Message.created_at, Message.task_id).where(
+        Message.session_id == session_id
+    )
     if since is not None:
         query = query.where(Message.created_at >= since)
     rows = await s.execute(query.order_by(Message.id))
-    return [(i, p, t) for i, p, t in rows.all()]
+    return [(i, p, t, r) for i, p, t, r in rows.all()]
 
 
 @dataclass(frozen=True)

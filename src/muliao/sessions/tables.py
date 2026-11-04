@@ -138,7 +138,8 @@ class Mail(Base):
     state: Mapped[MailState] = mapped_column(StrEnumType(MailState), default=MailState.QUEUED)
     # 处理掉它的运行（turn task）
     consumed_by: Mapped[int | None] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # 索引：按日查各会话收到的信件（sessions.recall）
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
 
     # 查询几乎只看还在排队的，用部分索引
     __table_args__ = (

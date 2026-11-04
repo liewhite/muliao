@@ -1,10 +1,11 @@
 """mail origin：信件记下发送方来源；messages.created_at 加索引（#368）
 
 经来信入口投的信件（消息、用户对提问的回答）记下发送方的来源（mail.origin，sessions.Origin 的值），「用户说了什么」
-只按它认（sessions.recall 的热历史工具）；事件与交回的结局为 NULL。messages.created_at 加索引：按日查各会话的活动。
+只按它认（sessions.recall 的热历史工具）；事件与交回的结局为 NULL。messages.created_at 与 mail.created_at 加索引：按日查各会话的活动。
 
 回填旧数据（会改数据）：迁移前没记发送方，按当时的投信规则推出（别的来源只能续写自己发起的会话，用户能写任何会话）：
-- 消息：用户开的会话里都是 user；issue 会话里以「New activity on issue」开头的是 issue，其余 user；触发器会话里
+- 消息：用户开的会话里都是 user；issue 会话里是 issue 通知格式的（「New activity on issue」，#43 之前的「Issue #N …」「Agent X commented on
+  issue」「The user commented on issue」）是 issue，其余 user；触发器会话里
   第一封消息是 trigger，其余 user；thread 里带关联 id 的、或与父会话某次 delegate_task / ask_agent 交出的文字相同的
   （父会话已删除时无从比对，也算）是 delegation，其余 user。
 - 回答：内容是 ask_user 的结果的（只有用户在界面上回答提问会投这种回答）是 user，其余（ask_agent 交回的）NULL。
@@ -17,6 +18,7 @@ Create Date: 2026-11-04 17:16:40.102109
 """
 
 import json
+import re
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -28,7 +30,10 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 # 迁移时的文字与工具参数，迁移里自带一份，不随代码变
-_ISSUE_PREFIX = "New activity on issue"
+# issue 会话的通知：#43（10-21）起是「New activity on issue」，之前按动作各有一种开头
+_ISSUE_NOTICE = re.compile(
+    r"(New activity on issue|Issue #\d+ |Agent \S+ commented on issue|The user commented on issue)"
+)
 _DELEGATION_ARGS = {"delegate_task": "task", "ask_agent": "message"}
 
 
@@ -67,7 +72,7 @@ def _message_origin(
     if origin == "user":
         return "user"
     if origin == "issue":
-        return "issue" if row.content.startswith(_ISSUE_PREFIX) else "user"
+        return "issue" if _ISSUE_NOTICE.match(row.content) else "user"
     if origin == "trigger":
         return "trigger" if first_of_session[row.session_id] == row.id else "user"
     if origin == "delegation":
@@ -82,6 +87,7 @@ def _message_origin(
 def upgrade() -> None:
     op.add_column("mail", sa.Column("origin", sa.String(length=16), nullable=True))
     op.create_index("ix_messages_created_at", "messages", ["created_at"], unique=False)
+    op.create_index("ix_mail_created_at", "mail", ["created_at"], unique=False)
     bind = op.get_bind()
     rows = bind.execute(
         sa.text(
@@ -117,4 +123,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_messages_created_at", table_name="messages")
+    op.drop_index("ix_mail_created_at", table_name="mail")
     op.drop_column("mail", "origin")

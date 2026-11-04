@@ -72,10 +72,16 @@ async def post_in(
     dedupe_key: str | None = None,
 ) -> Mail:
     """在调用方事务里往会话信箱投一封信件，需要时唤醒消费者。带 dedupe_key 的投信只投一次：已经投过就返回那封。
-    origin：来信入口投的信件的发送方来源（消息必有，事件没有）。"""
-    if (kind == MailKind.MESSAGE and origin is None) or (kind == MailKind.EVENT and origin is not None):
+    origin：来信入口投的信件的发送方来源（消息必有，事件没有，回答是 user 或没有）。"""
+    if (
+        (kind == MailKind.MESSAGE and origin is None)
+        or (kind == MailKind.EVENT and origin is not None)
+        or (kind == MailKind.ANSWER and origin not in (Origin.USER, None))
+    ):
+        # 来信入口的回答只有用户对提问的回答；ask_agent 交回的结局（sessions.work）没有来源
         raise ValueError(
-            f"a message needs its sender's origin and an event has none, got {kind} from {origin}"
+            "a message needs its sender's origin, an event has none and an answer is the user's or has none; "
+            f"got {kind} from {origin}"
         )
     if kind == MailKind.EVENT and (not source or len(source) > _SOURCE_MAX or '"' in source):
         raise ValueError(f"event source must be 1-{_SOURCE_MAX} characters without quotes, got {source!r}")

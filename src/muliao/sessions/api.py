@@ -33,7 +33,7 @@ from muliao.sessions.origins import OWN_NOTES, Origin, OriginNotes
 from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.recall import Activity, DaySession, RunFailure, SessionRecall, UserWords
-from muliao.sessions.recall_tools import SESSION_READ
+from muliao.sessions.recall_tools import SESSION_READ, indented, place
 from muliao.sessions.service import SessionService
 from muliao.sessions.sources import EventSource, job_holder, job_id_of_holder, parse_source
 from muliao.sessions.transcript import Item
@@ -67,6 +67,8 @@ __all__ = [
     "RunFailure",
     "UserWords",
     "SESSION_READ",
+    "indented",
+    "place",
     "SessionService",
     "Item",
     "Wait",

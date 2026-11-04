@@ -113,6 +113,25 @@ async def test_session_read_labels_who_said_what_and_filters(container, make_age
     assert "not a valid regular expression" in bad_regex
 
 
+async def test_session_read_marks_only_the_users_own_messages_in_an_issue_session(
+    container, make_agent, models
+):
+    """用户在 issue 会话里直接回过一句「备份」：之后 issue 通知里含有这两个字的不算用户说的（只认同一次运行处理的用户信件、
+    整段对上）。"""
+    worker, _ = await _day(container, make_agent, models)
+    [listed] = await container.sessions.list(agent_id=worker.id, origins=[Origin.ISSUE], limit=5, offset=0)
+    await reply(container, listed.session.id, "备份")
+    await drain(container)
+    [issue] = await container.issues.list(owner=worker.id)
+    await container.issues.comment(USER, issue.id, "备份再确认一下")
+    await drain(container)
+    me = await make_agent("me", model="tools")
+    (read,) = await run_tools(container, models, me.id, [("session_read", {"session": listed.session.id})])
+
+    assert read.count("] ISSUE\n  New activity on issue") == 2
+    assert read.count("] USER\n") == 1 and "] USER\n  备份\n" in read
+
+
 async def test_session_read_clips_tool_output_and_pages_at_the_output_limit(container, make_agent, models):
     models.models["w"] = scripted(lambda messages, info: ModelResponse(parts=[TextPart("ok")]))
     worker = await make_agent("worker", model="w")
@@ -137,6 +156,17 @@ async def test_session_read_clips_tool_output_and_pages_at_the_output_limit(cont
     assert "b" * 100 in rest and "output limit" not in rest
     assert "offset 9 is past the last entry (4)" in past
 
+    # 活动概览也按同一个上限在整行处停下，按提示的 offset 接着读
+    (first_page,) = await run_tools(container, models, me.id, [("activity_overview", {"agent": "worker"})])
+    assert "a" * 100 in first_page and "b" * 100 not in first_page
+    note = first_page.splitlines()[-1]
+    assert note.startswith("[output limit reached at line ")
+    offset = int(note.rsplit("offset=", 1)[1].rstrip("]"))
+    (next_page,) = await run_tools(
+        container, models, me.id, [("activity_overview", {"agent": "worker", "offset": offset})]
+    )
+    assert "b" * 100 in next_page
+
     # 工具结果按 clip 截断；用户与助手的文字不截
     calls = [("session_read", {"session": long.id, "clip": 5})]
     (clipped,) = await run_tools(container, models, me.id, calls)
@@ -144,7 +174,7 @@ async def test_session_read_clips_tool_output_and_pages_at_the_output_limit(cont
         container, models, me.id, [("session_read", {"session": (await _session_of(container, me.id))[:8]})]
     )
     assert "a" * 100 in clipped
-    assert "chars; clip=0 for full]" in reread
+    assert "more chars]" in reread
 
 
 async def _session_of(container, agent_id: str) -> str:

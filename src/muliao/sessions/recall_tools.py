@@ -9,7 +9,9 @@ from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.api import AgentService
 from muliao.errors import InvalidInput
+from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
+from muliao.sessions.info import SessionInfo
 from muliao.sessions.recall import Entry, SessionRecall
 
 SESSION_READ = "session_read"
@@ -53,14 +55,17 @@ def _label(entry: Entry) -> str | None:
     }[item.type]
 
 
-def _clipped(text: str, clip: int) -> str:
-    if clip and len(text) > clip:
-        return text[:clip] + f"\n[... +{len(text) - clip} chars; clip=0 for full]"
-    return text
-
-
-def _indent(text: str) -> str:
+def indented(text: str) -> str:
+    """热历史的文字里正文缩进两格，挂在标题行下面。"""
     return "\n".join("  " + line for line in text.splitlines())
+
+
+def place(session: SessionInfo, parent_session_id: str | None) -> str:
+    """会话从哪来：来源、发送方身份（issue 号等），thread 再加上名字与父会话 id 前缀。"""
+    where = session.origin.value + (f" #{session.origin_ref}" if session.origin_ref else "")
+    if session.thread is not None:
+        where += f" thread {session.thread!r} of {(parent_session_id or '(deleted)')[:8]}"
+    return where
 
 
 def recall_toolset(
@@ -110,16 +115,16 @@ def recall_toolset(
             text = entry.item.text
             if pattern is not None and not (pattern.search(label) or pattern.search(text)):
                 continue
-            if entry.item.type not in ("user", "assistant"):
-                text = _clipped(text, clip)
-            shown.append(f"[{short_time(entry.at, tz)}] {label}\n{_indent(text)}")
+            if entry.item.type not in ("user", "assistant") and clip:
+                text = truncate(text, clip)
+            files = "".join(
+                f"\n[attachment {a['name']!r} ({a['media_type']})]" for a in entry.item.attachments
+            )
+            shown.append(f"[{short_time(entry.at, tz)}] {label}\n{indented(text + files)}")
         info = timeline.session
         names = await agents.names()
-        where = f"{info.origin}" + (f" #{info.origin_ref}" if info.origin_ref else "")
-        if info.thread is not None:
-            where += f", thread {info.thread!r} of {(timeline.parent_session_id or '(deleted)')[:8]}"
         head = (
-            f"# session {info.id} [{where}] {info.title!r}, agent {names[info.agent_id]}: "
+            f"# session {info.id} [{place(info, timeline.parent_session_id)}] {info.title!r}, agent {names[info.agent_id]}: "
             f"{len(shown)} entries"
             + ("" if since is None else f" since {since}")
             + ("" if grep is None else f" matching /{grep}/")

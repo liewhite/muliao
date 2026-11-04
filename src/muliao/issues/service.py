@@ -349,7 +349,8 @@ class IssueService:
         self, start: datetime, end: datetime, agent_ids: Collection[str] | None
     ) -> list[UserActions]:
         """用户在 [start, end) 里对这些 agent 负责（owner）或被指派的 issue（None 为全部）做的事，按 issue 分组、
-        按时间排序（热历史：history 领域的 activity_overview）。"""
+        按时间排序（热历史：history 领域的 activity_overview）。按 issue 此刻的 owner / 指派人筛：当天被转给别人的 issue 算新的
+        负责人的（要看全部就不筛）。"""
         query = (
             select(IssueActivity, Issue)
             .join(Issue, Issue.id == IssueActivity.issue_id)

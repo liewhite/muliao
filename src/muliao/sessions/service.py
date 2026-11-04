@@ -126,7 +126,7 @@ class SessionService:
             waits = await waits_of_in(s, (await waiting_among(s, [session_id]))[session_id])
         shown = [
             (message_id, payload, created_at)
-            for message_id, payload, created_at in rows
+            for message_id, payload, created_at, _ in rows
             if live is None or live.after_message_id is None or message_id <= live.after_message_id
         ]
         items = annotate_asks(
