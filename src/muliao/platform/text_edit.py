@@ -1,5 +1,5 @@
 """文本的唯一规则（纯函数）：修改文本——替换恰好出现一次的片段（locate_once、replace_once），或追加一段（记忆、
-skill 正文、工作区文件都用它）；截断过长的文本（交给模型、展示、通知的长输出都用它）；带行号展示的 cat -n 格式（numbered）。edit_file 的多处修改（替换全部、按行号
+skill 正文、工作区文件都用它），依次做多处这样的修改（edit_each）；截断过长的文本（交给模型、展示、通知的长输出都用它）；带行号展示的 cat -n 格式（numbered）。edit_file 的多处修改（替换全部、按行号
 区间、按语法结构、换算原文行号）只有工作区工具用，在 workspace.file_edit。"""
 
 import re
@@ -75,6 +75,42 @@ def miss(current: str, old: str, count: int, rule: str) -> str:
 def edit(current: str, old: str, new: str, what: str) -> str:
     """old 恰好出现一次时替换为 new（new 为空即删除）；old 为空时把 new 追加到末尾。"""
     return replace_once(current, old, new, what) if old else append(current, new)
+
+
+class TextChange(NamedTuple):
+    """一处修改，规则见 edit：old 为空是追加。"""
+
+    old: str
+    new: str
+
+
+class ChangeFailed(InvalidInput):
+    """edit_each 里某一处做不了；change 是那一处（调用方据此决定要不要在报错里附上原文）。"""
+
+    def __init__(self, message: str, change: TextChange) -> None:
+        super().__init__(message)
+        self.change = change
+
+
+def edit_each(current: str, changes: Sequence[TextChange], what: str) -> str:
+    """依次做多处修改（memory_edit、edit_skill 的 `edits`），后一处在前面改过的结果上找原文。任何一处失败都整体失败，
+    报错指出是第几处；调用方只在成功后写入，所以不会留下改了一半的文本。"""
+    if not changes:
+        raise InvalidInput("no edits given")
+    text = current
+    for i, change in enumerate(changes, 1):
+        try:
+            text = edit(text, change.old, change.new, what)
+        except InvalidInput as e:
+            if len(changes) == 1:
+                raise ChangeFailed(str(e), change) from e
+            after = (
+                f" (old_text is matched against the text with the {i - 1} earlier edit(s) applied)"
+                if i > 1
+                else ""
+            )
+            raise ChangeFailed(f"edit {i} of {len(changes)}{after}: {e}; nothing was written", change) from e
+    return text
 
 
 def append(current: str, entry: str) -> str:

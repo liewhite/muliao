@@ -12,6 +12,7 @@ from muliao.agents.memory import MemoryFull
 from muliao.agents.skill_package import SKILL_FILE, SkillFile
 from muliao.agents.skills import attachments_from, parse_document
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
+from muliao.platform.text_edit import TextChange
 from tests.conftest import history, owned, share
 from tests.test_flow import drain
 
@@ -53,7 +54,7 @@ async def test_skill_names_are_unique_across_owners(container, make_agent):
     with pytest.raises(Forbidden, match="skill 'mine' belongs to agent 'alpha'"):
         await skills.write("mine", "steal", "x", actor=beta, owner=beta)
     with pytest.raises(Forbidden):
-        await skills.edit("mine", beta, new="more")
+        await skills.edit("mine", beta, changes=[TextChange("", "more")])
     # 用户能改任何条目，owner 不变
     meta = await skills.write("mine", "by user", "x", actor="user", owner=None)
     assert meta.owner == alpha
@@ -80,7 +81,7 @@ async def test_editing_a_skill_changes_body_description_or_attachments_in_one_re
     alpha = (await make_agent("alpha")).id
     await skills.write("digest", "d1", "step one", actor=alpha, owner=alpha)
 
-    await skills.edit("digest", alpha, old="one", new="two", description="d2")
+    await skills.edit("digest", alpha, changes=[TextChange("one", "two")], description="d2")
     skill = await skills.read("digest")
     assert (skill.body.strip(), skill.meta.description) == ("step two", "d2")
     await skills.edit("digest", alpha, attachments={"run.sh": SkillFile("echo hi\n", True)})
@@ -110,7 +111,7 @@ async def test_the_skill_directory_is_a_read_only_copy_generated_from_the_databa
         (directory / "new.py").write_text("x")
 
     # 只改正文：附件保留；删掉附件：目录跟着变
-    await skills.edit("digest", alpha, new="more")
+    await skills.edit("digest", alpha, changes=[TextChange("", "more")])
     assert (directory / "run.sh").exists()
     await skills.edit("digest", alpha, attachments={})
     assert sorted(p.name for p in directory.iterdir()) == ["SKILL.md"]
@@ -175,15 +176,15 @@ async def test_a_skill_is_restored_from_an_earlier_revision(container, make_agen
 async def test_memory_append_replace_limit_and_revisions(container, make_agent):
     memory = container.memory
     alpha = (await make_agent("alpha")).id
-    await memory.edit("alpha", "", "- likes tea", alpha)
-    await memory.edit("alpha", "", "- lives in Paris", alpha)
-    await memory.edit("alpha", "Paris", "Berlin", alpha)
+    await memory.edit("alpha", [TextChange("", "- likes tea")], alpha)
+    await memory.edit("alpha", [TextChange("", "- lives in Paris")], alpha)
+    await memory.edit("alpha", [TextChange("Paris", "Berlin")], alpha)
     assert (await memory.read("alpha")).content == "- likes tea\n\n- lives in Berlin"
 
     with pytest.raises(InvalidInput, match="found 2"):
-        await memory.edit("alpha", "-", "+", alpha)
+        await memory.edit("alpha", [TextChange("-", "+")], alpha)
     with pytest.raises(MemoryFull):
-        await memory.edit("alpha", "", "x" * 5000, alpha)
+        await memory.edit("alpha", [TextChange("", "x" * 5000)], alpha)
     revisions = await history(container, Subject.MEMORY, "alpha", 10)
     assert [r.before for r in revisions][-1] is None
     assert len(revisions) == 4
@@ -197,7 +198,9 @@ async def test_global_memory_exists_from_the_start_and_unknown_names_are_not_fou
 
 async def test_concurrent_memory_edits_are_all_kept(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await asyncio.gather(*(container.memory.edit("alpha", "", f"- fact {i}", alpha) for i in range(5)))
+    await asyncio.gather(
+        *(container.memory.edit("alpha", [TextChange("", f"- fact {i}")], alpha) for i in range(5))
+    )
     assert sorted(line for line in ((await container.memory.read("alpha")).content).split("\n") if line) == [
         f"- fact {i}" for i in range(5)
     ]
@@ -287,7 +290,7 @@ async def test_an_agents_items_and_memory_go_with_it_and_their_deletion_is_recor
         owner=alpha,
         probe=False,
     )
-    await container.memory.edit("global", "", "- global fact", alpha)
+    await container.memory.edit("global", [TextChange("", "- global fact")], alpha)
 
     await container.agent_lifecycle.delete(alpha, actor="user")
     # 删除的清理经事件完成
@@ -315,7 +318,7 @@ async def test_writes_for_a_deleting_agent_are_refused(container, make_agent):
     with pytest.raises(NotFound):
         await container.skills.write("late", "d", "b", actor=alpha, owner=alpha)
     with pytest.raises(NotFound):
-        await container.memory.edit("alpha", "", "late", alpha)
+        await container.memory.edit("alpha", [TextChange("", "late")], alpha)
     with pytest.raises(NotFound):
         await container.vault.set("LATE", "x", "", actor=alpha, owner=alpha)
 
@@ -326,7 +329,9 @@ async def test_concurrent_edits_of_one_skill_all_apply(container, make_agent):
     alpha = (await make_agent("alpha")).id
     await store.write("digest", "d", "\n".join(f"line{i}" for i in range(6)), actor=alpha, owner=alpha)
 
-    await asyncio.gather(*(store.edit("digest", alpha, old=f"line{i}", new=f"LINE{i}") for i in range(6)))
+    await asyncio.gather(
+        *(store.edit("digest", alpha, changes=[TextChange(f"line{i}", f"LINE{i}")]) for i in range(6))
+    )
 
     assert (await store.read("digest")).body.split() == [f"LINE{i}" for i in range(6)]
     assert (store.dir("digest") / SKILL_FILE).read_text().count("LINE") == 6
@@ -340,7 +345,7 @@ async def test_an_edit_of_a_vanished_skill_is_not_found(container, make_agent):
     await store.write("digest", "d", "body", actor=alpha, owner=alpha)
     await store.delete("digest", alpha)
     with pytest.raises(NotFound):
-        await store.edit("digest", alpha, new="more")
+        await store.edit("digest", alpha, changes=[TextChange("", "more")])
 
 
 async def test_hidden_and_dependency_directories_are_skipped_whole(tmp_path):
@@ -358,9 +363,9 @@ async def test_hidden_and_dependency_directories_are_skipped_whole(tmp_path):
 
 async def test_memory_edit_with_nothing_to_append_is_rejected_and_unchanged(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await container.memory.edit("alpha", "", "- kept", alpha)
+    await container.memory.edit("alpha", [TextChange("", "- kept")], alpha)
     with pytest.raises(InvalidInput, match="new_text is empty") as raised:
-        await container.memory.edit("alpha", "", "  ", alpha)
+        await container.memory.edit("alpha", [TextChange("", "  ")], alpha)
     assert "- kept" not in str(raised.value)  # 与原文无关，不附全文
     assert (await container.memory.read("alpha")).content == "- kept"
 
@@ -368,16 +373,16 @@ async def test_memory_edit_with_nothing_to_append_is_rejected_and_unchanged(cont
 async def test_memory_edit_mismatch_shows_the_current_text(container, make_agent):
     # 指令里的记忆是运行开始时的快照：别的会话改过之后，报错里的全文是模型唯一能读到最新内容的地方（#349）
     alpha = (await make_agent("alpha")).id
-    await container.memory.edit("alpha", "", "- changed elsewhere", alpha)
+    await container.memory.edit("alpha", [TextChange("", "- changed elsewhere")], alpha)
     with pytest.raises(InvalidInput) as raised:
-        await container.memory.edit("alpha", "- as in my snapshot", "- new", alpha)
+        await container.memory.edit("alpha", [TextChange("- as in my snapshot", "- new")], alpha)
     assert str(raised.value).endswith("\n     1\t- changed elsewhere")
     assert (await container.memory.read("alpha")).content == "- changed elsewhere"
 
 
 async def test_memory_edit_over_the_limit_shows_the_current_text(container, make_agent):
     alpha = (await make_agent("alpha")).id
-    await container.memory.edit("alpha", "", "- old entry", alpha)
+    await container.memory.edit("alpha", [TextChange("", "- old entry")], alpha)
     with pytest.raises(MemoryFull) as raised:
-        await container.memory.edit("alpha", "", "x" * container.memory.max_chars, alpha)
+        await container.memory.edit("alpha", [TextChange("", "x" * container.memory.max_chars)], alpha)
     assert str(raised.value).endswith("\n     1\t- old entry")

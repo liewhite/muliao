@@ -3,11 +3,14 @@
 import asyncio
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.memory import MemoryInfo, MemoryStore
 from muliao.agents.skill_package import ATTACHMENT_SUFFIXES, MAX_FILE_BYTES, SkillFile, Skipped
 from muliao.agents.skills import SkillMeta, SkillStore, attachments_from
+from muliao.errors import InvalidInput
+from muliao.platform.text_edit import TextChange
 from muliao.platform.tool_views import Args, MarkdownBlock, ToolRender, ViewBlock, diff, fields, rendered_by
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
@@ -54,9 +57,31 @@ _WRITE_SKILL_RENDER = ToolRender[str](
 )
 
 
+class TextReplace(BaseModel):
+    # memory_edit / edit_skill 一次调用里的一处修改（类 docstring 会进 schema，所以用注释）；规则与单处的 old_text/new_text 相同
+    model_config = ConfigDict(extra="forbid")
+
+    old_text: str = Field(
+        default="", description="Exact text to replace, or empty to append new_text at the end."
+    )
+    new_text: str = Field(description="Replacement (or appended) text; empty deletes old_text.")
+
+
+def _changes(old_text: str, new_text: str, edits: tuple[TextReplace, ...]) -> tuple[TextChange, ...]:
+    """单处的 old_text/new_text 与 `edits` 列表二选一，统一成按顺序的修改；单处两个都空是不改正文。"""
+    if edits:
+        if old_text or new_text:
+            raise InvalidInput("pass either one change (old_text/new_text) or edits, not both")
+        return tuple(TextChange(e.old_text, e.new_text) for e in edits)
+    return (TextChange(old_text, new_text),) if old_text or new_text else ()
+
+
 def _change(a: Args) -> list[ViewBlock]:
-    """old_text → new_text 的替换（空 old_text 是追加）；都空（只改别的）不显示。"""
-    return [diff(None, a["old_text"], a["new_text"])] if a["old_text"] or a["new_text"] else []
+    """每处 old_text → new_text 一个 diff（空 old_text 是追加）；没有改正文（只改别的）不显示。两种写法都给了（会被退回）时
+    两种都画。"""
+    edits: tuple[TextReplace, ...] = a["edits"]
+    single = [(a["old_text"], a["new_text"])] if a["old_text"] or a["new_text"] else []
+    return [diff(None, old, new) for old, new in [*single, *((e.old_text, e.new_text) for e in edits)]]
 
 
 _SKILL_EDIT_RENDER = ToolRender[str](
@@ -129,6 +154,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         reason: str,
         old_text: str = "",
         new_text: str = "",
+        edits: tuple[TextReplace, ...] = (),
         description: str | None = None,
         attachments_dir: str | None = None,
     ) -> str:
@@ -136,6 +162,9 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         instructions, its description, its attachments, or several. Instructions: `old_text` must occur exactly
         once in them and is replaced by `new_text`; an empty `old_text` appends `new_text` at the end; leave both
         empty to keep the instructions. At least one change must be given.
+        To change several places in one call, pass `edits` instead of old_text/new_text: they are applied in
+        order, each `old_text` found in the text as the earlier edits left it; if any fails nothing is written,
+        and all of them make one version.
         The skill directory on disk is a read-only copy: change skills only with this or `write_skill`.
 
         Args:
@@ -145,6 +174,8 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
                 user's words), and how it relates to earlier changes (new / rewrites / overturns what).
             old_text: Exact text currently in the skill's instructions, or empty to append.
             new_text: Replacement (or appended) text; empty deletes `old_text`.
+            edits: Several changes, each {old_text, new_text} with the same rules, applied in order (omit
+                old_text/new_text when using it).
             description: New one-sentence description shown in the skill index; omit to keep the current one.
             attachments_dir: Directory (workspace-relative or absolute) whose text files replace all the
                 skill's attachments (scripts etc. next to SKILL.md); omit to keep them.
@@ -153,8 +184,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         meta = await store.edit(
             name,
             ctx.deps.agent_id,
-            old=old_text,
-            new=new_text,
+            changes=_changes(old_text, new_text, edits),
             description=description,
             attachments=files,
             reason=reason,
@@ -189,11 +219,18 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
 
     @ts.tool(metadata=rendered_by(_MEMORY_EDIT_RENDER))
     async def memory_edit(
-        ctx: RunContext[RunScope], name: str, new_text: str, reason: str, old_text: str = ""
+        ctx: RunContext[RunScope],
+        name: str,
+        reason: str,
+        new_text: str = "",
+        old_text: str = "",
+        edits: tuple[TextReplace, ...] = (),
     ) -> str:
         """Add to or change a memory block marked editable in your instructions. `old_text` must occur exactly
         once in the block and is replaced by `new_text` (an empty `new_text` deletes it); an empty `old_text`
-        appends `new_text` as a new entry at the end.
+        appends `new_text` as a new entry at the end. To change several places in one call, pass `edits`
+        instead: they are applied in order, each `old_text` found in the text as the earlier edits left it; if
+        any fails nothing is written, all of them make one version, and the size limit is checked once at the end.
 
         Memory is in every run's context, so it holds only one-line conclusions that must constrain every run:
         boundaries and red lines, the user's decisions and corrections, rejected approaches, a one-line warning
@@ -211,9 +248,15 @@ def memory_toolset(store: MemoryStore) -> FunctionToolset[RunScope]:
                 correction, error, detour) or the fact it records, the source (session id, the user's words),
                 and how it relates to earlier changes (new / rewrites / overturns what).
             old_text: Exact text currently in the block, or empty to append.
+            edits: Several changes, each {old_text, new_text} with the same rules, applied in order (omit
+                old_text/new_text when using it).
         """
-        me = ctx.deps.agent_id
-        return _status("updated", await store.edit(name, old_text, new_text, me, reason=reason))
+        changes = _changes(old_text, new_text, edits)
+        if not changes:
+            raise InvalidInput(
+                "nothing to change: give new_text (with old_text to replace or delete) or edits"
+            )
+        return _status("updated", await store.edit(name, changes, ctx.deps.agent_id, reason=reason))
 
     @ts.tool
     async def memory_create(

@@ -16,7 +16,7 @@ import shutil
 import stat
 import tempfile
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,6 +36,7 @@ from muliao.agents.tables import Item, ItemFile
 from muliao.errors import InvalidInput
 from muliao.platform import text_edit
 from muliao.platform.db import Database
+from muliao.platform.text_edit import TextChange
 
 log = logging.getLogger(__name__)
 
@@ -193,30 +194,29 @@ class SkillStore:
         name: str,
         actor: str,
         *,
-        old: str = "",
-        new: str = "",
+        changes: Sequence[TextChange] = (),
         description: str | None = None,
         attachments: Mapping[str, SkillFile] | None = None,
         reason: str | None = None,
     ) -> SkillMeta:
-        """改一个 skill，不整篇重写：正文的一部分、描述、附件（整体换成 attachments），可以同时改（同一版）。
-        正文规则同记忆（见 text_edit.edit）：old 恰好出现一次时替换为 new，old 为空时把 new 追加到末尾；
-        old、new 都为空表示不改正文。description / attachments 为 None 表示不改。什么都不改是错误。名称不变。"""
+        """改一个 skill，不整篇重写：正文的几处、描述、附件（整体换成 attachments），可以同时改（同一版）。
+        正文依次做 changes，规则同记忆（见 text_edit.edit_each）：old 恰好出现一次时替换为 new，old 为空时把 new 追加到
+        末尾，任何一处做不了就整体不写；changes 为空表示不改正文。description / attachments 为 None 表示不改。什么都不改
+        是错误。名称不变。"""
         message = described(reason, f"edit skill {name}")
-        edits_body = bool(old or new)
         if description is not None:
             description = _valid_description(description)
-        elif not edits_body and attachments is None:
+        elif not changes and attachments is None:
             raise InvalidInput(
-                "nothing to change: give old_text/new_text to edit the instructions, description, "
+                "nothing to change: give old_text/new_text (or edits) to edit the instructions, description, "
                 "attachments_dir, or several of them"
             )
         # 读取、修改、写入与记版本在同一个写事务里（同记忆）：并发的编辑依次基于最新正文应用，互不覆盖
         async with self._db.transaction() as s:
             row = await changeable_in(s, StoredKind.SKILL, name, actor)
             post = frontmatter.loads(row.content)
-            if edits_body:
-                post.content = text_edit.edit(post.content, old, new, f"skill {name}").strip() + "\n"
+            if changes:
+                post.content = text_edit.edit_each(post.content, changes, f"skill {name}").strip() + "\n"
             if description is not None:
                 post["description"] = description
             meta = await self._store_in(

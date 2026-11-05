@@ -12,6 +12,7 @@ from muliao.agents.api import McpTransport, mcp_config
 from muliao.agents.tables import Agent, Item
 from muliao.errors import Conflict, NotFound
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
+from muliao.platform.text_edit import TextChange
 from muliao.sessions.api import NewChat, UserMessage
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.workspace.tables import Job, JobStatus
@@ -407,9 +408,9 @@ async def test_a_deleting_agents_private_resources_can_no_longer_be_written(cont
 
     writes = [
         lambda: container.skills.write("t", "d", "b", actor="user", owner=agent.id),
-        lambda: container.skills.edit("s", "user", new="more"),
+        lambda: container.skills.edit("s", "user", changes=[TextChange("", "more")]),
         lambda: container.skills.delete("s", "user"),
-        lambda: container.memory.edit("alpha", "", "fact", "user"),
+        lambda: container.memory.edit("alpha", [TextChange("", "fact")], "user"),
         lambda: container.mcp.add(
             "m",
             mcp_config(transport=McpTransport.HTTP, url="http://example.invalid/mcp"),

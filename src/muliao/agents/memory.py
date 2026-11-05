@@ -11,7 +11,7 @@ instructions；能改（write）的才能用 memory_edit 改。谁能用、能�
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -27,6 +27,7 @@ from muliao.agents.tables import Item
 from muliao.errors import Conflict, InvalidInput
 from muliao.platform import text_edit
 from muliao.platform.db import Database
+from muliao.platform.text_edit import ChangeFailed, TextChange
 
 _KIND = StoredKind.MEMORY
 _LABEL = label(_KIND)
@@ -158,9 +159,10 @@ class MemoryStore:
         return _info(row)
 
     async def edit(
-        self, name: str, old: str, new: str, actor: str, *, reason: str | None = None
+        self, name: str, changes: Sequence[TextChange], actor: str, *, reason: str | None = None
     ) -> MemoryInfo:
-        """规则同 skill 正文（text_edit.edit）：old 恰好出现一次时替换为 new（new 为空即删除），old 为空时把 new 追加到末尾。
+        """依次做 changes（text_edit.edit_each，规则同 skill 正文）：每处 old 恰好出现一次时替换为 new（new 为空即删除），
+        old 为空时把 new 追加到末尾；任何一处做不了就整体不写。全部改完后规整、查上限，只记一版。
         actor 要能改它（规则 1 的 write）。reason 是这一版的说明（revisions.described）。
 
         原文对不上或改后超长时，报错附上当前全文：指令里的记忆是运行开始时的快照，别的会话改过之后，模型没有别的办法
@@ -168,9 +170,9 @@ class MemoryStore:
 
         async def apply(row: Item, _s: AsyncSession) -> str:
             try:
-                return text_edit.edit(row.content, old, new, f"memory {name}")
-            except InvalidInput as e:
-                if not old:
+                return text_edit.edit_each(row.content, changes, f"memory {name}")
+            except ChangeFailed as e:
+                if not e.change.old:
                     raise  # 追加空内容：与原文无关
                 raise InvalidInput(f"{e}\n\n{_current_text(row.content)}") from e
 

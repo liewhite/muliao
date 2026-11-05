@@ -10,6 +10,7 @@ from muliao.agents.memory import MemoryFull
 from muliao.agents.revisions import record_in
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
+from muliao.platform.text_edit import TextChange
 from tests.conftest import history, login, owned
 from tests.scripted import scripted
 from tests.test_flow import call_then_answer, drain, start
@@ -99,7 +100,9 @@ async def test_a_private_memory_is_created_with_the_agent_and_keeps_its_name(con
 async def test_the_memory_limit_is_per_block_and_tells_how_much_to_free(container, make_agent):
     agent = await make_agent("alpha")
     with pytest.raises(MemoryFull, match="memory 'alpha' would be") as e:
-        await container.memory.edit("alpha", "", "x" * (container.memory.max_chars + 1), agent.id)
+        await container.memory.edit(
+            "alpha", [TextChange("", "x" * (container.memory.max_chars + 1))], agent.id
+        )
     assert agent.id not in str(e.value) and "free at least" in str(e.value)
     with pytest.raises(InvalidInput, match="limit"):
         await container.memory.put("global", "x" * (container.memory.max_chars + 1), "", actor="user")
@@ -111,9 +114,9 @@ async def test_every_memory_write_tidies_whitespace_only(container, make_agent):
     agent = await make_agent("alpha")
     await container.memory.put("alpha", "\n\n- a  \n\n\n\n  - b\t\n\n", "", actor="user")
     assert await _content(container, "alpha") == "- a\n\n  - b"
-    await container.memory.edit("alpha", "- a", "- a \n\n\n- c   ", agent.id)
+    await container.memory.edit("alpha", [TextChange("- a", "- a \n\n\n- c   ")], agent.id)
     assert await _content(container, "alpha") == "- a\n\n- c\n\n  - b"
-    await container.memory.edit("alpha", "", "- d\n\n\n", agent.id)
+    await container.memory.edit("alpha", [TextChange("", "- d\n\n\n")], agent.id)
     assert await _content(container, "alpha") == "- a\n\n- c\n\n  - b\n\n- d"
     await container.memory.create("trading", "x \n\n\n", actor="user")
     assert await _content(container, "trading") == "x"
@@ -130,8 +133,18 @@ async def test_the_memory_limit_counts_the_tidied_text(container, make_agent):
     limit = container.memory.max_chars
     # 原文超过上限、规整后正好到上限：能写入
     await container.memory.put("alpha", "x" * (limit - 3) + "  \n\n\n", "", actor="user")
-    await container.memory.edit("alpha", "", "y", agent.id)  # 追加出来的是 …\n\ny\n，比上限多 1
+    await container.memory.edit("alpha", [TextChange("", "y")], agent.id)  # 追加出来的是 …\n\ny\n，比上限多 1
     assert await _content(container, "alpha") == "x" * (limit - 3) + "\n\ny"
+
+
+async def test_several_memory_edits_check_the_limit_once_on_the_result(container, make_agent):
+    # #375：一次调用里先加后删，中途超过上限不算；只看全部改完的结果
+    agent = await make_agent("alpha")
+    limit = container.memory.max_chars
+    drop = "d" * 30 + "\n\n"
+    await container.memory.put("alpha", drop + "x" * (limit - 40), "", actor="user")
+    await container.memory.edit("alpha", [TextChange("", "y" * 20), TextChange(drop, "")], agent.id)
+    assert await _content(container, "alpha") == "x" * (limit - 40) + "\n\n" + "y" * 20
 
 
 async def test_a_cleared_memory_is_a_new_version(container, make_agent):
@@ -151,14 +164,14 @@ async def test_who_can_edit_a_memory_block_follows_write_permissions(container, 
     await container.distribution.create(RoleSpec("reader", "r", ["use:memory:ops"], []), actor="user")
     await container.agents.update(alpha.id, AgentPatch(roles=["trader", "reader"]), actor="user")
     # 自己的私有记忆、角色给了 write 的共享记忆能改
-    await container.memory.edit("alpha", "", "- mine", alpha.id)
-    await container.memory.edit("trading", "", "- shared", alpha.id)
+    await container.memory.edit("alpha", [TextChange("", "- mine")], alpha.id)
+    await container.memory.edit("trading", [TextChange("", "- shared")], alpha.id)
     # 只给了 use 的、全局记忆、别人的私有记忆不能改
     for name in ("ops", "global", "beta"):
         with pytest.raises(Forbidden, match=f"write:memory:{name}"):
-            await container.memory.edit(name, "", "- no", alpha.id)
+            await container.memory.edit(name, [TextChange("", "- no")], alpha.id)
     # admin 靠 write:* 能改任何一块，owner 不变
-    await container.memory.edit("beta", "", "- by admin", boss.id)
+    await container.memory.edit("beta", [TextChange("", "- by admin")], boss.id)
     assert await owned(container, "memory", beta.id) == ["beta"]
     blocks = {m.name: m for m in await container.memory.for_run(alpha.id)}
     assert {n: (m.editable, m.yours) for n, m in blocks.items()} == {

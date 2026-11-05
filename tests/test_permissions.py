@@ -17,6 +17,7 @@ from muliao.agents.ownership import DOCUMENTS
 from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, TOOLS, Action, Kind, check_patterns
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
+from muliao.platform.text_edit import TextChange
 from muliao.sessions.api import Origin
 from tests.conftest import history, login, owned
 from tests.scripted import scripted
@@ -197,7 +198,7 @@ async def test_only_the_owner_an_admin_or_the_user_can_change_an_item(container,
     with pytest.raises(Forbidden, match="belongs to agent 'owner'"):
         await container.skills.write("s", "d", "steal", actor=stranger.id, owner=stranger.id)
     with pytest.raises(Forbidden):
-        await container.skills.edit("s", stranger.id, new="x")
+        await container.skills.edit("s", stranger.id, changes=[TextChange("", "x")])
     with pytest.raises(Forbidden):
         await container.skills.delete("s", stranger.id)
     with pytest.raises(Forbidden):
@@ -205,7 +206,7 @@ async def test_only_the_owner_an_admin_or_the_user_can_change_an_item(container,
     with pytest.raises(Forbidden):
         await container.vault.delete("K", stranger.id)
     # admin 改别人的：owner 不变
-    meta = await container.skills.edit("s", admin.id, new="by admin")
+    meta = await container.skills.edit("s", admin.id, changes=[TextChange("", "by admin")])
     assert meta.owner == owner.id
     await container.skills.write("p", "d", "b", actor="user", owner=None)
     with pytest.raises(Forbidden, match="belongs to the platform"):
@@ -252,9 +253,9 @@ async def test_transferring_an_item_moves_who_owns_and_uses_it(container, make_a
     assert [s.name for s in await container.skills.index(new.id)] == ["s"]
     assert await container.skills.index(old.id) == []
     # 新 owner 能改，旧的不能了
-    await container.skills.edit("s", new.id, new="more")
+    await container.skills.edit("s", new.id, changes=[TextChange("", "more")])
     with pytest.raises(Forbidden):
-        await container.skills.edit("s", old.id, new="more")
+        await container.skills.edit("s", old.id, changes=[TextChange("", "more")])
     revs = await history(container, Subject.SKILL, "s", 2)
     assert revs[1].message == "transfer skill s from agent 'old' to agent 'new'"
     assert revs[1].actor == "user" and revs[1].before == revs[1].after

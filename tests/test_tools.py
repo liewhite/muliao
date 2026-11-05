@@ -410,6 +410,67 @@ async def test_skill_and_memory_tools_record_the_reason_and_reject_a_blank_one(c
     ]
 
 
+async def test_memory_edit_and_edit_skill_apply_a_list_of_edits_as_one_version_or_not_at_all(
+    container, make_agent, models
+):
+    # #375：要改多处时模型照 edit_file 传 `edits`；一次调用一版，任何一处对不上就都不写
+    me = await make_agent("alpha", model="tools")
+    await container.memory.put("alpha", "- a\n\n- b", "", actor="user")
+    await container.skills.write("digest", "d", "step one\n\nstep two", actor=me.id, owner=me.id)
+    two_and_append = [
+        {"old_text": "- a", "new_text": "- A"},
+        {"old_text": "- A", "new_text": "- AA"},  # 在前一处改过的结果上找
+        {"new_text": "- c"},
+    ]
+    bad_second = [{"old_text": "- b", "new_text": "- B"}, {"old_text": "- missing", "new_text": "x"}]
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("memory_edit", {"name": "alpha", "reason": "r1", "edits": two_and_append}),
+            ("memory_edit", {"name": "alpha", "reason": "r2", "edits": bad_second}),
+            ("memory_edit", {"name": "alpha", "reason": "r3", "new_text": "- d", "edits": bad_second}),
+            ("memory_edit", {"name": "alpha", "reason": "r4"}),
+            (
+                "edit_skill",
+                {
+                    "name": "digest",
+                    "reason": "s1",
+                    "description": "d2",
+                    "edits": [
+                        {"old_text": "one", "new_text": "1"},
+                        {"old_text": "two", "new_text": "2"},
+                    ],
+                },
+            ),
+            (
+                "edit_skill",
+                {
+                    "name": "digest",
+                    "reason": "s2",
+                    "edits": [{"old_text": "step 1", "new_text": "x"}, {"old_text": "nope", "new_text": "x"}],
+                },
+            ),
+        ],
+    )
+
+    assert outputs[0].startswith("updated memory alpha")
+    assert "edit 2 of 2" in outputs[1] and "nothing was written" in outputs[1] and "- AA" in outputs[1]
+    assert "not both" in outputs[2]
+    assert "nothing to change" in outputs[3]
+    assert outputs[4] == "edited skill digest" and "edit 2 of 2" in outputs[5]
+    assert (await container.memory.read("alpha")).content == "- AA\n\n- b\n\n- c"
+    memory_history = await container.catalog.history(StoredKind.MEMORY, "alpha", 10)
+    # 建 agent、put 各一版，三处修改只多一版
+    assert (len(memory_history), memory_history[0].message) == (3, "r1")
+    assert memory_history[1].after == "- a\n\n- b"
+    skill = await container.skills.read("digest")
+    assert (skill.meta.description, skill.body.strip()) == ("d2", "step 1\n\nstep 2")
+    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
+    assert [r.message for r in history][:2] == ["s1", "write skill digest"]
+
+
 async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):
     """agent 写检查脚本时要知道时限：生产上一个「正常 15 秒、网络抖动时重试 30~60 秒」的脚本反复超时。"""
     create = session_tools(container)["trigger_create"]
