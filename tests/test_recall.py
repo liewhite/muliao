@@ -113,6 +113,29 @@ async def test_session_read_labels_who_said_what_and_filters(container, make_age
     assert "not a valid regular expression" in bad_regex
 
 
+async def test_session_read_filters_by_label_case_sensitively(container, make_agent, models):
+    """#377：grep 不分大小写，USER 会命中 /Users/ 路径；labels 只按条目标签挑，可与 grep 同时用。"""
+    worker, nightly = await _day(container, make_agent, models)
+    await reply(container, nightly.id, "看 /Users/me 下的备份")
+    await drain(container)
+    me = await make_agent("me", model="tools")
+    users, users_backup, two, bad = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("session_read", {"session": nightly.id, "labels": ["USER"]}),
+            ("session_read", {"session": nightly.id, "labels": ["USER"], "grep": "Users"}),
+            ("session_read", {"session": nightly.id, "labels": ["TRIGGER", "ASSISTANT"]}),
+            ("session_read", {"session": nightly.id, "labels": ["user"]}),
+        ],
+    )
+    assert "2 entries labelled USER" in users and "不对，要先备份" in users and "ASSISTANT" not in users
+    assert "1 entries labelled USER matching /Users/" in users_backup and "/Users/me" in users_backup
+    assert "4 entries labelled TRIGGER, ASSISTANT" in two and "] USER" not in two
+    assert "'user' is not a label" in bad
+
+
 async def test_session_read_marks_only_the_users_own_messages_in_an_issue_session(
     container, make_agent, models
 ):

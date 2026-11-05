@@ -12,6 +12,7 @@ from muliao.errors import InvalidInput
 from muliao.platform.text_edit import truncate
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.sessions.info import SessionInfo
+from muliao.sessions.origins import Origin
 from muliao.sessions.recall import Entry, SessionRecall
 
 SESSION_READ = "session_read"
@@ -55,6 +56,15 @@ def _label(entry: Entry) -> str | None:
     }[item.type]
 
 
+# labels 参数里每项的首词只能是这些（条目标签的首词；中途停下的标记不在其列）
+LABEL_WORDS = (*(o.value.upper() for o in Origin), "EVENT", "ASSISTANT", "call", "result", "error")
+
+
+def _labelled(label: str, wanted: tuple[str, ...]) -> bool:
+    """标签是 wanted 中某一项本身，或以它加空格开头（区分大小写）："call" 匹配所有工具调用，"call run_shell" 只匹配它。"""
+    return any(label == w or label.startswith(w + " ") for w in wanted)
+
+
 def indented(text: str) -> str:
     """热历史的文字里正文缩进两格，挂在标题行下面。"""
     return "\n".join("  " + line for line in text.splitlines())
@@ -80,6 +90,7 @@ def recall_toolset(
         session: str,
         since: str | None = None,
         grep: str | None = None,
+        labels: tuple[str, ...] = (),
         clip: int = DEFAULT_CLIP,
         offset: int = 1,
     ) -> str:
@@ -94,9 +105,15 @@ def recall_toolset(
             session: Session id or a unique prefix of it (8 characters are usually enough).
             since: Only messages saved from this local date or time on, ISO 8601, e.g. "2026-11-04" or
                 "2026-11-04T09:30".
-            grep: Only entries whose label or text matches this regular expression (case-insensitive).
+            grep: Only entries whose label or text matches this regular expression (case-insensitive, so `USER`
+                also matches `/Users/` paths: use `labels` to pick entries by who or what they are).
+            labels: Only entries with one of these labels (case-sensitive; each item matches that label or any
+                label starting with it and a space): USER (typed by the user), TRIGGER, ISSUE, DELEGATION, EVENT,
+                ASSISTANT, `call`, `result`, `error`, or e.g. `call run_shell`. Combined with `grep`, both must
+                match.
             clip: Clip tool calls, tool results and events to this many characters; 0 shows them in full.
-            offset: Entry number to start from (1-based, counted after `grep`), as given in the continue note.
+            offset: Entry number to start from (1-based, counted after `labels` and `grep`), as given in the
+                continue note.
         """
         if clip < 0:
             raise InvalidInput(f"clip must be 0 (full) or more, got {clip}")
@@ -106,11 +123,18 @@ def recall_toolset(
             pattern = None if grep is None else re.compile(grep, re.IGNORECASE)
         except re.error as e:
             raise InvalidInput(f"grep is not a valid regular expression: {e}") from None
+        for wanted in labels:
+            if wanted.split(" ", 1)[0] not in LABEL_WORDS:
+                raise InvalidInput(
+                    f"labels: {wanted!r} is not a label; a label starts with one of {', '.join(LABEL_WORDS)}"
+                )
         timeline = await recall.timeline(session, None if since is None else local_since(since, tz))
         shown: list[str] = []
         for entry in timeline.entries:
             label = _label(entry)
             if label is None:
+                continue
+            if labels and not _labelled(label, labels):
                 continue
             text = entry.item.text
             if pattern is not None and not (pattern.search(label) or pattern.search(text)):
@@ -127,6 +151,7 @@ def recall_toolset(
             f"# session {info.id} [{place(info, timeline.parent_session_id)}] {info.title!r}, agent {names[info.agent_id]}: "
             f"{len(shown)} entries"
             + ("" if since is None else f" since {since}")
+            + ("" if not labels else f" labelled {', '.join(labels)}")
             + ("" if grep is None else f" matching /{grep}/")
         )
         if offset > max(len(shown), 1):
