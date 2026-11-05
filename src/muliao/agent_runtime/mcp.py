@@ -175,6 +175,9 @@ class McpConnector:
                 args=[fill(a, secrets) for a in c.args],
                 env={k: fill(v, secrets) for k, v in c.env.items()} or None,
                 cwd=None if cwd is None else str(cwd),
+                # 每次运行新建 transport、不复用：运行结束（toolset 退出）时子进程随之退出。fastmcp 默认 keep_alive=True，
+                # 关了 client 也不停子进程，每次运行漏一个（#393）
+                keep_alive=False,
             )
             toolset = MCPToolset(
                 client, id=f"mcp-{server.name}", init_timeout=_CONNECT_TIMEOUT, max_retries=TOOL_MAX_RETRIES

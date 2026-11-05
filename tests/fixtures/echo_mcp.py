@@ -32,6 +32,12 @@ def cwd() -> str:
 
 
 @server.tool()
+def pid() -> str:
+    """Return the process id of this server process."""
+    return str(os.getpid())
+
+
+@server.tool()
 def screenshot() -> list:
     """Return a caption and a PNG image, like a browser screenshot."""
     return ["page shot", Image(data=PNG, format="png")]

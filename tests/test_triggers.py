@@ -430,7 +430,7 @@ async def test_mcp_add_probes_server_resolving_vault_refs(container, make_agent)
 
     row, tools = await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=True)
 
-    assert sorted(tools) == ["cwd", "echo", "screenshot", "token"]
+    assert sorted(tools) == ["cwd", "echo", "pid", "screenshot", "token"]
     assert row.config.env == {"TOKEN": "${vault:ECHO_TOKEN}"}  # 存储的是引用而不是明文
     assert [s.name for s in (await container.mcp.index(alpha))] == ["echo"]
     other = (await make_agent("other")).id
@@ -511,6 +511,43 @@ async def test_a_stdio_mcp_server_runs_in_the_agents_workspace(container, make_a
     items = to_items(await history_of(container, session.id), NO_RENDERS)
     [result] = [i.text for i in items if i.type == "tool_result"]
     assert _same_dir(Path(result), container.agents.workspace(alpha))
+
+
+async def test_a_stdio_mcp_server_process_exits_when_the_run_ends(container, make_agent, models):
+    # #393：fastmcp 的 StdioTransport 默认 keep_alive，关了 client 子进程也不退，每次运行漏一个
+    import os
+
+    import anyio
+
+    from tests.test_flow import call_then_answer
+
+    alpha = (await make_agent("alpha", model="m")).id
+    spec = mcp_config(transport=McpTransport.STDIO, command=sys.executable, args=[ECHO_SERVER])
+    await container.mcp.add("echo", spec, actor="user", owner=alpha, probe=False)
+    models.models["m"] = call_then_answer("echo_pid", {}, "done")
+
+    session = await start(container, alpha, "pid?")
+    await drain(container, limit_seconds=30)
+
+    from muliao.platform.tool_views import NO_RENDERS
+    from muliao.sessions.transcript import to_items
+
+    items = to_items(await history_of(container, session.id), NO_RENDERS)
+    [result] = [i.text for i in items if i.type == "tool_result"]
+    pid = int(result)
+
+    def alive() -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    for _ in range(100):  # 退出要等子进程被回收，最多等 5 秒
+        if not alive():
+            break
+        await anyio.sleep(0.05)
+    assert not alive()
 
 
 async def test_an_image_a_tool_returns_is_stored_as_a_file_and_shown_to_the_model_and_in_the_session(
