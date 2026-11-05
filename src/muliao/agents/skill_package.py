@@ -28,7 +28,9 @@ SKILL_FILE = "SKILL.md"
 # 不存（skill 里写明版本与来源，由安装脚本获取）
 ATTACHMENT_SUFFIXES = (
     "md", "txt", "py", "sh", "bash", "js", "mjs", "cjs", "ts", "json", "toml", "yaml", "yml",
-    "sql", "ini", "cfg", "csv", "html", "css", "jq",
+    "sql", "ini", "cfg", "conf", "csv", "html", "css", "jq", "xml", "proto", "tf",
+    "go", "mod", "sum", "rs", "java", "kt", "kts", "gradle", "swift", "c", "h", "cc", "cpp", "hpp", "rb", "lua",
+    "tsx", "jsx", "vue", "zsh", "ps1",
 )  # fmt: skip
 MAX_FILE_BYTES = 256 * 1024
 # 即使后缀在白名单里也不是附件的：隐藏文件与目录（.env、.venv、.cache……）、依赖与虚拟环境目录

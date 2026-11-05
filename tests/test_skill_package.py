@@ -219,6 +219,7 @@ async def test_exporting_a_missing_skill_fails(container):
 
 def test_attachment_rules():
     kept = {"a.py", "sub/deep/b.json", "o.yml", "p.jq", "venvx/m.py", "my_node_modules/n.js", "SKILL.md"}
+    kept |= {"main.go", "go.mod", "go.sum", "src/lib.rs", "A.java", "x.c", "x.h", "api.proto", "pom.xml"}
     dropped = {
         "c.PY", "d.tmp", "noext", ".env", ".hidden.md", ".cache/e.md", "sub/.git-like/f.py", "node_modules/g.js",
         "sub/node_modules/h.js", "venv/i.py", "x/venv/j.py", "lib/site-packages/k.py", "__pycache__/l.py", "q.md.bak",
