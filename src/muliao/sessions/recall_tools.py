@@ -36,6 +36,18 @@ def local_since(since: str, tz: ZoneInfo) -> datetime:
     return at if at.tzinfo is not None else at.replace(tzinfo=tz)
 
 
+# 非用户消息条目标签的首词（用户消息的首词是发送方 Origin 的大写）；_label 与 labels 参数的校验都从这里取
+_WORDS = {
+    "event": "EVENT",
+    "assistant": "ASSISTANT",
+    "tool_call": "call",
+    "tool_result": "result",
+    "tool_error": "error",
+}
+# labels 参数里每项的首词只能是这些（思考不展示，中途停下的标记不能筛）
+LABEL_WORDS = (*(o.value.upper() for o in Origin), *_WORDS.values())
+
+
 def _label(entry: Entry) -> str | None:
     item = entry.item
     if item.type == "user":
@@ -45,19 +57,12 @@ def _label(entry: Entry) -> str | None:
     if item.type == "event":
         if item.source is None:
             raise RuntimeError("an event item must carry its source")
-        return f"EVENT {item.source.raw}" + (" (check-in)" if item.check_in else "")
-    return {
-        "assistant": "ASSISTANT",
-        "thinking": None,
-        "tool_call": f"call {item.tool_name}",
-        "tool_result": f"result {item.tool_name}",
-        "tool_error": f"error {item.tool_name}",
-        "stopped": "-- run stopped by the user --",
-    }[item.type]
-
-
-# labels 参数里每项的首词只能是这些（条目标签的首词；中途停下的标记不在其列）
-LABEL_WORDS = (*(o.value.upper() for o in Origin), "EVENT", "ASSISTANT", "call", "result", "error")
+        return f"{_WORDS['event']} {item.source.raw}" + (" (check-in)" if item.check_in else "")
+    if item.type == "assistant":
+        return _WORDS["assistant"]
+    if item.type in ("tool_call", "tool_result", "tool_error"):
+        return f"{_WORDS[item.type]} {item.tool_name}"
+    return {"thinking": None, "stopped": "-- run stopped by the user --"}[item.type]
 
 
 def _labelled(label: str, wanted: tuple[str, ...]) -> bool:
@@ -124,7 +129,7 @@ def recall_toolset(
         except re.error as e:
             raise InvalidInput(f"grep is not a valid regular expression: {e}") from None
         for wanted in labels:
-            if wanted.split(" ", 1)[0] not in LABEL_WORDS:
+            if wanted != wanted.strip() or wanted.split(" ", 1)[0] not in LABEL_WORDS:
                 raise InvalidInput(
                     f"labels: {wanted!r} is not a label; a label starts with one of {', '.join(LABEL_WORDS)}"
                 )
