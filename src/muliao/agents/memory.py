@@ -174,7 +174,14 @@ class MemoryStore:
             except ChangeFailed as e:
                 if not e.change.old:
                     raise  # 追加空内容：与原文无关
-                raise InvalidInput(f"{e}\n\n{_current_text(row.content)}") from e
+                # 第 2 处起失败时，报错里的行号线索指改了一半的文本；什么都没写，模型要对着原文重发整组，所以附的仍是原文
+                shifted = (
+                    f"Line numbers above refer to the text with the first {e.index - 1} edit(s) applied; "
+                    "the text below is before this call. "
+                    if e.index > 1
+                    else ""
+                )
+                raise InvalidInput(f"{e}\n\n{shifted}{_current_text(row.content)}") from e
 
         try:
             return await self._update(name, apply, actor, described(reason, f"edit memory {name}"))
@@ -252,7 +259,8 @@ def tidy(content: str) -> str:
 
 
 def _current_text(current: str) -> str:
-    """报错里附的当前全文：cat -n 编号，分行同 text_edit.miss（splitlines），报错里说的行号才对得上。"""
+    """报错里附的当前全文：cat -n 编号，分行同 text_edit.miss（splitlines），报错里说的行号才对得上（多处修改里第 2 处起
+    失败的除外：那时行号指改了一半的文本，调用方另加说明）。"""
     if not current:
         return "The memory is currently empty."
     return (

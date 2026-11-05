@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from muliao.errors import InvalidInput
-from muliao.platform.text_edit import Splice, locate_once, miss, occurrences, splice
+from muliao.platform.text_edit import NO_EDITS, Splice, failed_edit, locate_once, miss, occurrences, splice
 from muliao.platform.text_edit import numbered as text_numbered
 
 # 带行号展示时单行的上限：一行压缩过的 JS/JSON 能吃掉整个输出预算
@@ -221,7 +221,7 @@ def apply_each[K](
     被改到的键）。任何一项失败都整体失败，报错指出是第几项；调用方只在成功后写盘，所以不会因为某处对不上而留下改了
     一半的文件（写盘本身的 IO 失败不归这里管）。"""
     if not edits:
-        raise InvalidInput("no edits given")
+        raise InvalidInput(NO_EDITS)
     current: dict[K, str] = {}
     origins: dict[K, Origin] = {}
     counts: dict[K, int] = {}
@@ -242,7 +242,7 @@ def apply_each[K](
                 if k
                 else ""
             )
-            raise InvalidInput(f"edit {i} of {len(edits)}{after}: {e}; nothing was written") from e
+            raise InvalidInput(failed_edit(i, len(edits), e, after)) from e
         current[key] = splice(text, places)
         origin.follow(text, places, i)
         counts[key] = counts.get(key, 0) + count

@@ -85,31 +85,42 @@ class TextChange(NamedTuple):
 
 
 class ChangeFailed(InvalidInput):
-    """edit_each 里某一处做不了；change 是那一处（调用方据此决定要不要在报错里附上原文）。"""
+    """edit_each 里第 index 处（1 起）做不了；change 是那一处（调用方据此决定要不要在报错里附上原文）。index > 1 时
+    报错里的行号线索指前面几处改过之后的文本。"""
 
-    def __init__(self, message: str, change: TextChange) -> None:
+    def __init__(self, message: str, change: TextChange, index: int) -> None:
         super().__init__(message)
         self.change = change
+        self.index = index
+
+
+NO_EDITS = "no edits given"
+
+
+def failed_edit(i: int, n: int, error: Exception, after: str = "") -> str:
+    """多处修改里第 i 处（共 n 处）失败的说明，edit_file 与 memory_edit / edit_skill 共用；after 补充这一处是在什么文本上
+    找的。"""
+    return f"edit {i} of {n}{after}: {error}; nothing was written"
 
 
 def edit_each(current: str, changes: Sequence[TextChange], what: str) -> str:
     """依次做多处修改（memory_edit、edit_skill 的 `edits`），后一处在前面改过的结果上找原文。任何一处失败都整体失败，
     报错指出是第几处；调用方只在成功后写入，所以不会留下改了一半的文本。"""
     if not changes:
-        raise InvalidInput("no edits given")
+        raise InvalidInput(NO_EDITS)
     text = current
     for i, change in enumerate(changes, 1):
         try:
             text = edit(text, change.old, change.new, what)
         except InvalidInput as e:
             if len(changes) == 1:
-                raise ChangeFailed(str(e), change) from e
+                raise ChangeFailed(str(e), change, i) from e
             after = (
                 f" (old_text is matched against the text with the {i - 1} earlier edit(s) applied)"
                 if i > 1
                 else ""
             )
-            raise ChangeFailed(f"edit {i} of {len(changes)}{after}: {e}; nothing was written", change) from e
+            raise ChangeFailed(failed_edit(i, len(changes), e, after), change, i) from e
     return text
 
 

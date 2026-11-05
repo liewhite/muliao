@@ -147,6 +147,21 @@ async def test_several_memory_edits_check_the_limit_once_on_the_result(container
     assert await _content(container, "alpha") == "x" * (limit - 40) + "\n\n" + "y" * 20
 
 
+async def test_a_later_failing_memory_edit_says_its_line_numbers_are_after_the_earlier_ones(
+    container, make_agent
+):
+    # 前一处插了行，第 2 处的行号线索指改了一半的文本，附的全文是原文：报错要讲明，否则按行号会错位
+    agent = await make_agent("alpha")
+    await container.memory.put("alpha", "- a\n\n- b", "", actor="user")
+    changes = [TextChange("- a", "- a\n\n- new"), TextChange("  - b", "- B")]
+    with pytest.raises(InvalidInput) as e:
+        await container.memory.edit("alpha", changes, agent.id)
+    message = str(e.value)
+    assert "edit 2 of 2" in message and "lines 5-5 match it except for whitespace" in message
+    assert "refer to the text with the first 1 edit(s) applied" in message and "     3\t- b" in message
+    assert await _content(container, "alpha") == "- a\n\n- b"
+
+
 async def test_a_cleared_memory_is_a_new_version(container, make_agent):
     await make_agent("alpha")
     await container.memory.put("alpha", "- fact", "", actor="user")
