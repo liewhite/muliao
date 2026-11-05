@@ -3,14 +3,14 @@
 import { selectableAgents } from './agentGroups'
 import { USER, type Agent, type Issue, type IssueActivity, type IssuePriority, type IssueStatus } from './api'
 
-/** 状态的标签；键的顺序就是看板的列顺序（也是列表视图的分组顺序）：受阻最不常用，放最后 */
+/** 状态的标签；键的顺序就是看板的列顺序（也是列表视图的分组顺序）：受阻排在进行中和待审核之间 */
 export const STATUS_LABEL: Record<IssueStatus, string> = {
   backlog: 'Backlog',
   in_progress: '进行中',
+  blocked: '受阻',
   in_review: '待审核',
   done: '完成',
   cancelled: '已取消',
-  blocked: '受阻',
 }
 
 /** 看板的列顺序：从 STATUS_LABEL 的键推导，Record 保证每个状态都在 */
