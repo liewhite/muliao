@@ -70,7 +70,10 @@ def _sign_transaction(account: LocalAccount, payload: str | dict[str, Any]) -> S
     if not isinstance(payload, dict):
         raise InvalidInput("kind=transaction needs payload to be an object of transaction fields")
     # 没有 chainId（或为 null、0）的 legacy 交易签出来是 EIP-155 之前的格式或无意义的链，任何链都能重放
-    if not payload.get("chainId"):
+    chain_id = payload.get("chainId")
+    if isinstance(chain_id, str) and chain_id.startswith("0x"):
+        chain_id = _checked(lambda: int(chain_id, 16), "invalid chainId")
+    if not chain_id:
         raise InvalidInput("the transaction must include a non-zero chainId")
     signed = _checked(lambda: account.sign_transaction(payload), "invalid transaction")
     return Signature(

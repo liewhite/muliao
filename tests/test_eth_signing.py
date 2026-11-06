@@ -56,8 +56,9 @@ def test_key_without_0x_prefix_works():
         {k: v for k, v in LEGACY.items() if k != "chainId"},
         {**LEGACY, "chainId": None},
         {**LEGACY, "chainId": 0},
+        {**LEGACY, "chainId": "0x00"},
     ],
-    ids=["missing", "null", "zero"],
+    ids=["missing", "null", "zero", "hex-zero"],
 )
 def test_transaction_without_chain_id_is_refused(tx):
     # 没有 chainId 的 legacy 签名可在任何链重放
