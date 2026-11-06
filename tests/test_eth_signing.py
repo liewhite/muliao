@@ -50,10 +50,19 @@ def test_key_without_0x_prefix_works():
     assert sign(KEY.removeprefix("0x"), "K", SignKind.MESSAGE, "hi").signer == ADDRESS
 
 
-def test_transaction_without_chain_id_is_refused():
+@pytest.mark.parametrize(
+    "tx",
+    [
+        {k: v for k, v in LEGACY.items() if k != "chainId"},
+        {**LEGACY, "chainId": None},
+        {**LEGACY, "chainId": 0},
+    ],
+    ids=["missing", "null", "zero"],
+)
+def test_transaction_without_chain_id_is_refused(tx):
     # 没有 chainId 的 legacy 签名可在任何链重放
     with pytest.raises(InvalidInput, match="chainId"):
-        sign(KEY, "K", SignKind.TRANSACTION, {k: v for k, v in LEGACY.items() if k != "chainId"})
+        sign(KEY, "K", SignKind.TRANSACTION, tx)
 
 
 @pytest.mark.parametrize(
@@ -86,6 +95,9 @@ def test_typed_data_is_signed_per_eip712():
         (SignKind.MESSAGE, "0xzz", "invalid message"),
         (SignKind.TRANSACTION, {**LEGACY, "gas": "lots"}, "invalid transaction"),
         (SignKind.TYPED_DATA, {"types": {}}, "invalid typed data"),
+        # 库抛的不继承 ValueError 的异常（rlp、eth_abi）也是输入错误
+        (SignKind.TRANSACTION, {**LEGACY, "nonce": -1}, "invalid transaction"),
+        (SignKind.TYPED_DATA, {**TYPED, "message": {"to": "0x12", "value": 5}}, "invalid typed data"),
     ],
 )
 def test_payload_not_matching_kind_is_invalid_input(kind, payload, error):
@@ -99,4 +111,4 @@ def test_bad_private_key_error_does_not_show_the_key():
         sign(secret, "K", SignKind.MESSAGE, "hi")
 
     assert "'K' is not a valid Ethereum private key" in str(e.value)
-    assert secret not in str(e.value) and e.value.__cause__ is None and e.value.__suppress_context__
+    assert secret not in str(e.value) and e.value.__cause__ is None and e.value.__context__ is None

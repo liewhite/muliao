@@ -7,6 +7,7 @@ EIP-191 消息带前缀、EIP-712 带域，签出的都不是合法交易签名�
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -38,17 +39,24 @@ class Signature:
     message_hash: str | None = None
 
 
-def _account(private_key: str, key: str) -> LocalAccount:
+def _checked[T](call: Callable[[], T], error: str, *, with_cause: bool = True) -> T:
+    """调 eth-account：它抛的任何异常都是输入不合约定（输入全部来自模型，库的异常体系不统一：rlp、eth_abi、eth_utils
+    的异常不继承 ValueError），转成 InvalidInput 交还模型。在 except 块外再抛，原异常不挂在 __context__ 上（私钥的
+    异常文本可能带私钥）；with_cause=False 时连原异常的文本也不带。"""
     try:
-        return Account.from_key(private_key)
-    except Exception:
-        # 不带原异常：它的文本或 traceback 可能含私钥
-        raise InvalidInput(f"secret {key!r} is not a valid Ethereum private key (32 bytes hex)") from None
+        return call()
+    except Exception as e:
+        cause = f": {e}" if with_cause else ""
+    raise InvalidInput(error + cause)
 
 
 def sign(private_key: str, key: str, kind: SignKind, payload: str | dict[str, Any]) -> Signature:
     """用 private_key（vault 里名为 key 的 secret 的明文）签 payload。payload 不合 kind 的约定即 InvalidInput。"""
-    account = _account(private_key, key)
+    account = _checked(
+        lambda: Account.from_key(private_key),
+        f"secret {key!r} is not a valid Ethereum private key (32 bytes hex)",
+        with_cause=False,
+    )
     match kind:
         case SignKind.TRANSACTION:
             return _sign_transaction(account, payload)
@@ -61,13 +69,10 @@ def sign(private_key: str, key: str, kind: SignKind, payload: str | dict[str, An
 def _sign_transaction(account: LocalAccount, payload: str | dict[str, Any]) -> Signature:
     if not isinstance(payload, dict):
         raise InvalidInput("kind=transaction needs payload to be an object of transaction fields")
-    # 没有 chainId 的 legacy 交易签出来是 EIP-155 之前的格式，任何链都能重放
-    if "chainId" not in payload:
-        raise InvalidInput("the transaction must include chainId")
-    try:
-        signed = account.sign_transaction(payload)
-    except (TypeError, ValueError, KeyError) as e:
-        raise InvalidInput(f"invalid transaction: {e}") from None
+    # 没有 chainId（或为 null、0）的 legacy 交易签出来是 EIP-155 之前的格式或无意义的链，任何链都能重放
+    if not payload.get("chainId"):
+        raise InvalidInput("the transaction must include a non-zero chainId")
+    signed = _checked(lambda: account.sign_transaction(payload), "invalid transaction")
     return Signature(
         signer=account.address,
         raw_transaction=signed.raw_transaction.to_0x_hex(),
@@ -80,10 +85,10 @@ def _sign_message(account: LocalAccount, payload: str | dict[str, Any]) -> Signa
         raise InvalidInput(
             "kind=message needs payload to be a string: text, or 0x-prefixed hex for raw bytes"
         )
-    try:
-        message = encode_defunct(hexstr=payload) if payload.startswith("0x") else encode_defunct(text=payload)
-    except ValueError as e:
-        raise InvalidInput(f"invalid message: {e}") from None
+    message = _checked(
+        lambda: encode_defunct(hexstr=payload) if payload.startswith("0x") else encode_defunct(text=payload),
+        "invalid message",
+    )
     signed = account.sign_message(message)
     return Signature(
         signer=account.address,
@@ -97,10 +102,7 @@ def _sign_typed_data(account: LocalAccount, payload: str | dict[str, Any]) -> Si
         raise InvalidInput(
             "kind=typed_data needs payload to be the full EIP-712 object with types, primaryType, domain and message"
         )
-    try:
-        signed = account.sign_typed_data(full_message=payload)
-    except (TypeError, ValueError, KeyError) as e:
-        raise InvalidInput(f"invalid typed data: {e}") from None
+    signed = _checked(lambda: account.sign_typed_data(full_message=payload), "invalid typed data")
     return Signature(
         signer=account.address,
         signature=signed.signature.to_0x_hex(),

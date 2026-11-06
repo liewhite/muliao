@@ -569,6 +569,7 @@ agent 在任何一次运行里都可以主动 `write_skill`。新建的 skill �
 - shell 只继承少量环境变量（`PATH`、`HOME` 等）；
 - `run_shell(secrets=[KEY])` 输出中的 secret 明文被替换为 `[secret:KEY]`（逐字匹配，编码后的输出不会被替换）；
 - `vault_set` 的参数在持久化前脱敏；但用户在 prompt 里直接写的明文会原样保存并在之后的请求里发给模型——敏感值应在 UI 的 Vault 页录入。
+- `eth_sign` 用 vault 里的以太坊私钥在服务进程内签名，私钥不进命令、环境变量、文件与对话（第 6 节 `vault`）；用它的 agent 仍有 `use:secret`，能用 `run_shell(secrets=…)` 取明文，这只防意外泄露。
 
 如需真正隔离，应让服务以独立系统用户运行、把配置文件与数据目录放在 agent 可读范围之外并限制权限。
 
