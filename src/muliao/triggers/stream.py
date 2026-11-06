@@ -46,6 +46,7 @@ from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.output import CHUNK, record_output, tail
+from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import DRAIN_SECONDS, kill_group, redact, spawn_bash, wait_exit_code
 from muliao.platform.tasks import Clock
 from muliao.sessions.api import SessionActivity, WorkState
@@ -201,6 +202,8 @@ class StreamRunner:
         activity: SessionActivity,
         vault: Vault,
         workspace_of: Callable[[str], Path],
+        # agent 的命令关在什么限制里（workspace.writable.Confiner.of）
+        confine: Callable[[str], Awaitable[Confinement]],
         messaging: Messaging,
         max_bytes: int,
         clock: Clock = utcnow,
@@ -213,6 +216,7 @@ class StreamRunner:
         self._activity = activity
         self._vault = vault
         self._workspace_of = workspace_of
+        self._confine = confine
         self._messaging = messaging
         self._max_bytes = max_bytes
         self._clock = clock
@@ -303,7 +307,10 @@ class StreamRunner:
         await anyio.to_thread.run_sync(
             _prepare_log, log_file, f"--- started {self._clock().isoformat()} ---\n"
         )
-        proc = await spawn_bash(config.command, cwd=cwd, secrets=secrets, pipefail=True)
+        confinement = await self._confine(spec.agent_id)
+        proc = await spawn_bash(
+            config.command, cwd=cwd, secrets=secrets, confinement=confinement, pipefail=True
+        )
         # spawn 之后的任何一步（包括在这里被取消）都要杀掉进程组，所以紧接着进 try
         try:
             log.info("stream started", extra={"trigger": spec.name, "pid": proc.pid})

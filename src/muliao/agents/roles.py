@@ -65,8 +65,9 @@ async def check_assignable_in(s: AsyncSession, names: Sequence[str]) -> None:
 
 async def check_new_items_in(s: AsyncSession, patterns: Sequence[str], before: Sequence[str]) -> None:
     """新加的针对某种存在 items 里的资产的规则（不在 before 里的）至少匹配一个现有资产：拼错的在写入时报出。已有的
-    规则不查——资产删掉再建（如 MCP 重新接入）时分发不丢，也不让改别的字段的写入失败。不限种类的（`write:*`）不查。"""
-    new = [p for p in patterns if p not in before and kind_of(p) not in (Kind.TOOL, None)]
+    规则不查——资产删掉再建（如 MCP 重新接入）时分发不丢，也不让改别的字段的写入失败。不限种类的（`write:*`）与路径规则（目录不是
+    条目，可以还没建）不查。"""
+    new = [p for p in patterns if p not in before and kind_of(p) not in (Kind.TOOL, Kind.PATH, None)]
     if not new:
         return
     items = [f"{a.value}:{i}" for i in await patterns_in(s) for a in Action]

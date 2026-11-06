@@ -146,6 +146,9 @@ class RuntimeConfig(_Section):
     # 触发器前置检查的时限：webhook 的调用方在同步等它，检查本该便宜
     precheck_timeout_seconds: float = Field(default=30.0, gt=0)
     tool_output_max_chars: int = Field(default=20000, ge=1000)
+    # agent 的命令与文件工具写到可写路径之外时（workspace.writable）：enforce 拒绝；report 放行并记录（命令的记在系统日志，
+    # 文件工具的记在服务日志），上线前试跑统计漏掉的路径。当前系统没有写沙箱时两种都拒绝启动
+    write_sandbox: Literal["enforce", "report"] = "enforce"
     # 单个文件（用户上传的附件、agent 发出的文件）的字节上限，默认与 Matrix Synapse 一致
     upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
 

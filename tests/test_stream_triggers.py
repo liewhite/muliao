@@ -23,6 +23,7 @@ def _runner(container, **kw) -> StreamRunner:
         SessionActivity(container.queue),
         container.vault,
         container.agents.workspace,
+        container.confiner.of,
         container.messaging,
         kw.pop("max_bytes", EVENT_MAX_BYTES),
         backoff=kw.pop("backoff", lambda _n: 0.05),

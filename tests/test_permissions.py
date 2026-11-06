@@ -466,7 +466,7 @@ async def test_agent_assets_group_by_kind_with_sources_and_memory_preview(client
 
 
 def test_every_stored_kind_is_a_kind_and_a_subject_with_a_document():
-    assert {as_kind(k) for k in StoredKind} == set(Kind) - {Kind.TOOL}
+    assert {as_kind(k) for k in StoredKind} == set(Kind) - {Kind.TOOL, Kind.PATH}
     assert {as_subject(k) for k in StoredKind} <= set(Subject)
     assert set(DOCUMENTS) == set(StoredKind)
 

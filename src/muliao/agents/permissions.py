@@ -11,6 +11,8 @@
   是否分发出去，都是这一个定义。
   agent 的规则 = 内置角色 base（每个 agent 隐含）+ 它的各个角色 + 它自己的 allow / deny，allow 与 deny 分别取并集。
 - agent 能对资产做某个动作 = 它是 owner（隐含的专属角色：use 与 write）或规则放行（agents.access）；deny 只拦规则分来的。
+- 本机可写目录（path，#416）：`write:path:<目录>` 放开这个目录及其下的写，写在 deny 里则收回（Rules.paths，由
+  workspace.writable 并进默认可写范围）；字面目录、不带通配符，不经 fnmatch，`write:*` 不含路径。
 - 内置角色 base（全部非管理工具与全局记忆）与 admin（全部工具，并能改任何资产）：规则 = 代码里固定的部分
   （FIXED_RULES，新加的工具自动归入）∪ 存在 roles 表里可编辑的部分（如 base 收录的 skill）。
 - 运行开始时按规则算出工具列表（agent_runtime.toolbox.Toolbox），调用时不再判断，工具列表在一次运行里不变。
@@ -169,6 +171,14 @@ def kind_of(pattern: str) -> Kind | None:
         return None
     if kind == Kind.TOOL and action == Action.WRITE:
         raise InvalidInput(f"rule {pattern!r}: built-in tools can only be used ('use:tool:...')")
+    if kind == Kind.PATH and (
+        action != Action.WRITE or not glob.startswith(("/", "~/")) or any(c in glob for c in "*?[")
+    ):
+        raise InvalidInput(
+            f"rule {pattern!r}: a writable path rule is 'write:path:<directory>' with an absolute or '~/' path "
+            "and no wildcards, e.g. 'write:path:~/projects/arb'; it lets the agent write that directory and "
+            "everything under it"
+        )
     return Kind(kind)
 
 
@@ -214,6 +224,15 @@ class Rules:
     def includes(self, kind: Kind, name: str) -> bool:
         """收录：放行 use。"""
         return self.allows(Action.USE, kind, name)
+
+    def paths(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """`write:path:<目录>` 规则里的目录：(allow 的, deny 的)，按规则顺序。路径规则是字面的目录（kind_of 不让写通配符），
+        放开的是目录及其下的一切，不经 fnmatch：不限种类的 `write:*`（admin）不放开任何路径。"""
+        prefix = f"{Action.WRITE.value}:{Kind.PATH.value}:"
+        return (
+            tuple(p.removeprefix(prefix) for p in self.allow if p.startswith(prefix)),
+            tuple(p.removeprefix(prefix) for p in self.deny if p.startswith(prefix)),
+        )
 
     def tools(self, available: Collection[str]) -> list[str]:
         """available（当前配置下注册的工具，available_tools）里放行的，按登记顺序。"""

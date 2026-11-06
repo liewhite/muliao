@@ -52,6 +52,7 @@ from muliao.platform.checks import WorkWatcher
 from muliao.platform.db import Database, WriteCheck, create_engine, migrate
 from muliao.platform.messaging import Messaging
 from muliao.platform.retention import TaskRetention
+from muliao.platform.sandbox import sandbox_for
 from muliao.platform.tables import EVENT_TASK
 from muliao.platform.tasks import Retries, RetryPolicy, TaskAdmin, TaskQueue
 from muliao.platform.worker import RunNow, Worker, register_handlers
@@ -78,7 +79,7 @@ from muliao.triggers.webhook import WebhookKind
 from muliao.usage.api import UsageLog
 from muliao.web.api import WebProvider, build_web_provider
 from muliao.web.tools import web_toolset
-from muliao.workspace.api import JobAdmin, JobRunner, ShellLimits, Sites, WorkspaceFiles
+from muliao.workspace.api import Confiner, JobAdmin, JobRunner, ShellLimits, Sites, WorkspaceFiles
 from muliao.workspace.tools import workspace_toolset
 
 log = logging.getLogger(__name__)
@@ -160,6 +161,7 @@ class Assembly:
     threads: Threads
     mail: MailReconciler
     jobs: JobRunner
+    confiner: Confiner
     thread_checks: ThreadChecks
     wakeups: WakeUps
     work: WorkWatcher
@@ -319,6 +321,8 @@ def assemble(
         AgentDefaults(settings.llm.default_model),
     )
     distribution = Distribution(db, tools)
+    # agent 的命令与文件工具只能写它的可写路径（#416）：当前系统没有写沙箱时在这里拒绝启动
+    confiner = Confiner(sandbox_for(settings.runtime.write_sandbox), agents.workspace, distribution.rules)
     catalog = ItemCatalog(db, tools, skills, mcp, memory)
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
     ports = SessionPorts.build(db, queue, messaging, tz)
@@ -331,7 +335,7 @@ def assemble(
     schedule_kind, once_kind = ScheduleKind(tz), OnceKind(tz)
     # 触发方式在这里注册：新增一种（如消息队列）= 一个 TriggerKind + 它的激活机制
     precheck = PrecheckRunner(
-        vault, agents.workspace, settings.runtime.precheck_timeout_seconds, EVENT_MAX_BYTES
+        vault, agents.workspace, confiner.of, settings.runtime.precheck_timeout_seconds, EVENT_MAX_BYTES
     )
     issues = IssueService(db, messaging, tz, run_now, activity, ports.stopper)
     triggers = TriggerService(
@@ -347,7 +351,9 @@ def assemble(
     )
     # 按到期时间触发的方式共用一个扫描循环，各自给出到期时间与这次到期被用掉之后这一行怎么变
     due_triggers = DueRunner(db, triggers, [ScheduleDue(activity, schedule_kind, messaging), OnceDue()])
-    streams = StreamRunner(db, triggers, activity, vault, agents.workspace, messaging, EVENT_MAX_BYTES)
+    streams = StreamRunner(
+        db, triggers, activity, vault, agents.workspace, confiner.of, messaging, EVENT_MAX_BYTES
+    )
     webhooks = Webhooks(db, triggers)
     vapid = VapidKeys(settings.vapid_key_path)
 
@@ -368,6 +374,7 @@ def assemble(
         db,
         vault,
         agents.workspace,
+        confiner,
         messaging,
         ports.work,
     )
@@ -380,7 +387,7 @@ def assemble(
         memory_toolset(memory),
         history_toolset(history, agents, ports.recall, issues, settings.runtime.tool_output_max_chars),
         ask_user_toolset(),
-        workspace_toolset(vault, limits, files, jobs),
+        workspace_toolset(vault, limits, files, jobs, confiner),
         ports.delegation_toolset(agents),
         ports.wakeup_toolset(),
         ports.recall_toolset(agents, settings.runtime.tool_output_max_chars),
@@ -462,6 +469,7 @@ def assemble(
         threads=ports.threads,
         mail=session_domain.mail,
         jobs=jobs,
+        confiner=confiner,
         thread_checks=ports.thread_checks,
         wakeups=ports.wakeups,
         work=WorkWatcher([jobs, ports.thread_checks, ports.wakeups]),

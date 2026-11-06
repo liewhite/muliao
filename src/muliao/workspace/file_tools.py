@@ -1,4 +1,4 @@
-"""文件工具：read_file / write_file / edit_file / share_file。相对路径以 agent 工作目录为基准；不做强隔离（单人本机使用，
+"""文件工具：read_file / write_file / edit_file / share_file。相对路径以 agent 工作目录为基准；读不限，写只能写 agent 的可写路径（writable，防误操作不防故意，
 见架构文档）。组合进运行的是 tools.workspace_toolset，它在此之上加上 run_shell 与后台任务。edit_file 的定位与拼接规则在
 file_edit / syntax_edit。
 """
@@ -22,6 +22,7 @@ from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 from muliao.workspace import file_edit
 from muliao.workspace.file_edit import numbered
 from muliao.workspace.syntax_edit import PatternEdit, language_of
+from muliao.workspace.writable import Confiner, check_write
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +127,7 @@ def resolve(scope: RunScope, path: str) -> Path:
     return p if p.is_absolute() else scope.workspace / p
 
 
-def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunScope]:
+def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> FunctionToolset[RunScope]:
     # 文件工具都是屏障（sequential）：同一次回复里排在它前面的调用先做完、它再执行，排在后面的等它做完。
     # 模型常在一次回复里先 run_shell 生成文件、再 read_file/share_file 它；并行执行时文件还没生成，
     # 报 file not found（#224）。文件工具都是瞬时的本地操作，串行几乎没有代价；不夹着文件工具时
@@ -184,6 +185,7 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
             content: Full file content.
         """
         target = resolve(ctx.deps, path)
+        check_write(await confiner.of(ctx.deps.agent_id), target)
         existed = target.is_file()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -265,11 +267,13 @@ def file_toolset(limits: ShellLimits, files: FileStore) -> FunctionToolset[RunSc
         same: dict[Path, Path] = {}
         before: dict[Path, str] = {}
         located: list[_Located] = []
+        confinement = await confiner.of(ctx.deps.agent_id)
         for i, e in enumerate(edits, 1):
             given = _edit_target(ctx.deps, path, e, i)
             where = f"edit {i}: " if len(edits) > 1 else ""
             if not given.is_file():
                 raise NotFound(f"{where}file not found: {given}")
+            check_write(confinement, given)
             # 只读文件在任何写盘之前挡住，不留下改了一半的几个文件（写盘时的其他 IO 失败不在此保证内）
             if not os.access(given, os.W_OK):
                 raise InvalidInput(f"{where}file is not writable: {given}; nothing was written")

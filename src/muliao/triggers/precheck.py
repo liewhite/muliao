@@ -17,7 +17,7 @@ webhook 的请求体，定时与手动触发为空）。退出码 0 时按 fire_
 import difflib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -29,8 +29,10 @@ from sqlalchemy.orm import undefer
 
 from muliao.agents.api import Vault
 from muliao.errors import NotFound, ScriptFailed
+from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import run_bash
 from muliao.triggers.tables import Trigger
+from muliao.workspace.api import denial_note
 
 log = logging.getLogger(__name__)
 
@@ -176,9 +178,18 @@ def precheck_alert(trigger: Trigger, error: str) -> str:
 
 
 class PrecheckRunner:
-    def __init__(self, vault: Vault, workspace_of: Callable[[str], Path], timeout: float, max_bytes: int):
+    def __init__(
+        self,
+        vault: Vault,
+        workspace_of: Callable[[str], Path],
+        # agent 的命令关在什么限制里（workspace.writable.Confiner.of）
+        confine: Callable[[str], Awaitable[Confinement]],
+        timeout: float,
+        max_bytes: int,
+    ):
         self._vault = vault
         self._workspace_of = workspace_of
+        self._confine = confine
         self._timeout = timeout
         self._max_bytes = max_bytes
 
@@ -197,11 +208,13 @@ class PrecheckRunner:
         except NotFound as e:
             raise PrecheckFailed(f"precheck secrets unavailable: {e}") from e
         started = time.monotonic()
+        confinement = await self._confine(agent_id)
         result = await run_bash(
             precheck.command,
             cwd=self._workspace_of(agent_id),
             secrets=secrets,
             timeout=self._timeout,
+            confinement=confinement,
             stdin=(payload or "").encode(),
             # 「curl … | jq」里 curl 失败、jq 对空输入照样退出 0：不开 pipefail 时检查的故障会变成静默的「没事」
             pipefail=True,
@@ -214,8 +227,11 @@ class PrecheckRunner:
         if result.exit_code is None:
             raise PrecheckFailed(f"precheck timed out after {self._timeout}s")
         if result.exit_code != 0:
+            stderr = result.stderr[-_STDERR_TAIL_CHARS:].strip()
+            refused = denial_note(confinement, stderr)
             raise PrecheckFailed(
-                f"precheck exited with {result.exit_code}: {result.stderr[-_STDERR_TAIL_CHARS:].strip()}"
+                f"precheck exited with {result.exit_code}: {stderr}"
+                + ("" if refused is None else f"\n{refused}")
             )
         size = len(result.stdout.encode())
         if size > self._max_bytes:

@@ -1,7 +1,7 @@
 """在 agent 工作目录里执行一条 bash 命令：run_shell 工具与触发器的前置检查共用这一份实现。
 
 只继承少量环境变量，按 key 注入 secret，输出里的 secret 明文替换为 [secret:KEY]；超时杀掉整个进程组。
-不做强隔离（单人本机使用，见架构文档「安全边界」）。
+命令关在写沙箱里（platform.sandbox）：只能写给它的可写路径；读、网络不限（防误操作，见架构文档「安全边界」）。
 """
 
 import asyncio
@@ -15,6 +15,8 @@ from functools import partial
 from pathlib import Path
 
 import anyio
+
+from muliao.platform.sandbox import Confinement
 
 # 只继承这些环境变量，不把服务进程的其余环境带给命令
 _INHERITED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "USER", "SHELL")
@@ -124,19 +126,18 @@ async def spawn_bash(
     *,
     cwd: Path,
     secrets: Mapping[str, str],
+    confinement: Confinement,
     stdin: bool = False,
     merge_stderr: bool = False,
     pipefail: bool = False,
 ) -> asyncio.subprocess.Process:
-    """在 cwd 里启动 bash -c command：只继承少量环境变量、注入 secret、自成进程组（kill_group 能杀掉它的整棵进程树）。
-    run_bash（等它结束）与后台任务（workspace.runner）共用。"""
+    """在 cwd 里启动 bash -c command：只继承少量环境变量、注入 secret、关在 confinement 的写沙箱里、自成进程组（kill_group
+    能杀掉它的整棵进程树）。run_bash（等它结束）与后台任务（workspace.runner）、stream 触发器共用。"""
     env = {k: os.environ[k] for k in _INHERITED_ENV if k in os.environ} | dict(secrets)
     await asyncio.to_thread(cwd.mkdir, parents=True, exist_ok=True)
+    argv = confinement.wrap(["bash", *(["-o", "pipefail"] if pipefail else []), "-c", command])
     return await asyncio.create_subprocess_exec(
-        "bash",
-        *(["-o", "pipefail"] if pipefail else []),
-        "-c",
-        command,
+        *argv,
         cwd=cwd,
         env=env,
         stdin=asyncio.subprocess.PIPE if stdin else asyncio.subprocess.DEVNULL,
@@ -152,6 +153,7 @@ async def run_bash(
     cwd: Path,
     secrets: Mapping[str, str],
     timeout: float,  # noqa: ASYNC109  调用方给出的时限，超时要杀掉进程组而不只是取消等待
+    confinement: Confinement,
     stdin: bytes | None = None,
     merge_stderr: bool = False,
     pipefail: bool = False,
@@ -161,6 +163,7 @@ async def run_bash(
         command,
         cwd=cwd,
         secrets=secrets,
+        confinement=confinement,
         stdin=stdin is not None,
         merge_stderr=merge_stderr,
         pipefail=pipefail,

@@ -35,6 +35,7 @@ from muliao.errors import Conflict, NotFound
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.output import tail
+from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import DRAIN_SECONDS, LEFT_RUNNING_NOTE, kill_group, read_until_exit, spawn_bash
 from muliao.platform.tasks import Clock, Commit, no_commit
 from muliao.sessions.api import (
@@ -48,6 +49,7 @@ from muliao.sessions.api import (
 from muliao.sessions.events import SessionStopped, WorkCheckIn, WorkEnded
 from muliao.workspace.process import Recorder
 from muliao.workspace.tables import Job, JobStatus
+from muliao.workspace.writable import Confiner, denial_note
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +81,8 @@ class JobInfo:
 @dataclass
 class _Running:
     proc: asyncio.subprocess.Process
+    # 它被关在哪些可写路径里：结束时按它判断输出里被拒的写要不要补说明
+    confinement: Confinement
     # job_kill 设置：进程结束后记为 KILLED 而不是 EXITED
     killed: bool = False
     # 监督者自己的取消作用域：只取消这一个监督者（启动时记录写不进去）；关停取消的是整个任务组
@@ -98,10 +102,12 @@ class JobRunner:
         db: Database,
         vault: Vault,
         workspace_of: Callable[[str], Path],
+        confiner: Confiner,
         messaging: Messaging,
         sessions: SessionWork,
         clock: Clock = utcnow,
     ):
+        self._confiner = confiner
         self._db = db
         self._sessions = sessions
         self._messaging = messaging
@@ -187,11 +193,14 @@ class JobRunner:
             # 先在会话上登记占用（会话据此知道工作还没做完；用户是否在等结局记在占用上），再起进程
             await self._sessions.hold(job.session_id, job_holder(job.id), awaited=awaited)
             await asyncio.to_thread(log_file.parent.mkdir, parents=True, exist_ok=True)
-            proc = await spawn_bash(job.command, cwd=workspace, secrets=values, merge_stderr=True)
+            confinement = await self._confiner.of(job.agent_id)
+            proc = await spawn_bash(
+                job.command, cwd=workspace, secrets=values, confinement=confinement, merge_stderr=True
+            )
         except BaseException as e:
             await self._cleanup(job.id, "spawn", self._close_unstarted(job.id, _start_failure(e)))
             raise
-        handle = _Running(proc)
+        handle = _Running(proc, confinement)
         try:
             # 进程一起来就有人管：先登记、起监督者，再记 pid
             self._running[job.id] = handle
@@ -284,7 +293,7 @@ class JobRunner:
             with handle.scope:
                 status, exit_code, note = await self._watch(job_id, handle, log_file, secrets)
                 # 写结局失败（如数据库暂时不可用）时这一行停在 running；撤销登记后由 check 的对账收敛
-                await self._finish(job_id, log_file, status, exit_code, note)
+                await self._finish(job_id, log_file, status, exit_code, note, handle.confinement)
         except Exception:
             log.exception("background job supervisor crashed", extra={"job_id": job_id})
         finally:
@@ -316,10 +325,17 @@ class JobRunner:
         return ended, exit_code, None if drained else LEFT_RUNNING_NOTE
 
     async def _finish(
-        self, job_id: int, log_file: Path, status: JobStatus, exit_code: int | None, note: str | None
+        self,
+        job_id: int,
+        log_file: Path,
+        status: JobStatus,
+        exit_code: int | None,
+        note: str | None,
+        confinement: Confinement,
     ) -> None:
         # 事务里不做文件 IO：进程已经结束，先读好输出的最后几行
         last = await asyncio.to_thread(tail, log_file)
+        refused = denial_note(confinement, last)
         async with self._db.transaction() as s:
             job = await s.get(Job, job_id)
             if job is None:
@@ -330,7 +346,8 @@ class JobRunner:
                 raise RuntimeError(f"job {job_id} already ended as {job.status}, cannot record {status}")
             now = self._clock()
             job.status, job.exit_code, job.finished_at = status, exit_code, now
-            self._report_in(s, job, _final_text(job, now, last, note))
+            text = _final_text(job, now, last, note)
+            self._report_in(s, job, text if refused is None else f"{text}\n{refused}")
         log.info(
             "background job finished", extra={"job_id": job_id, "status": status, "exit_code": exit_code}
         )

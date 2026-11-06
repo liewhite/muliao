@@ -17,6 +17,7 @@ from muliao.sessions.api import DEFAULT_CHECK_SECONDS
 from muliao.workspace.file_tools import ShellLimits, file_toolset
 from muliao.workspace.runner import JobRunner
 from muliao.workspace.tables import JobStatus
+from muliao.workspace.writable import Confiner, denial_note
 
 _SHELL_DESCRIPTION = (
     "Run a shell command (bash) in your workspace and return its exit code and combined output. "
@@ -46,10 +47,10 @@ _BACKGROUND_DESCRIPTION = (
 
 
 def workspace_toolset(
-    vault: Vault, limits: ShellLimits, files: FileStore, jobs: JobRunner
+    vault: Vault, limits: ShellLimits, files: FileStore, jobs: JobRunner, confiner: Confiner
 ) -> FunctionToolset[RunScope]:
     """文件、shell 与后台任务。"""
-    ts = file_toolset(limits, files)
+    ts = file_toolset(limits, files, confiner)
     # 输出上限是配置的值，写进说明：模型不知道它，长输出被截了才学会
     description = _SHELL_DESCRIPTION.format(max_output=limits.max_output_chars) + _BACKGROUND_DESCRIPTION
 
@@ -85,7 +86,7 @@ def workspace_toolset(
                     "timeout is required for a foreground command: estimate how many seconds it needs "
                     "(no upper limit), or run it with `background: true`"
                 )
-            return await _run_foreground(vault, limits, ctx.deps, command, timeout, secrets)
+            return await _run_foreground(vault, limits, confiner, ctx.deps, command, timeout, secrets)
         if timeout is not None:
             raise InvalidInput(
                 "background jobs have no timeout; leave `timeout` out (set `heartbeat_seconds` for how often "
@@ -141,6 +142,7 @@ def workspace_toolset(
 async def _run_foreground(
     vault: Vault,
     limits: ShellLimits,
+    confiner: Confiner,
     scope: RunScope,
     command: str,
     timeout: float,  # noqa: ASYNC109  run_shell 的参数原样传入（前台命令必填）
@@ -149,8 +151,14 @@ async def _run_foreground(
     if not timeout > 0:  # 也拒绝 NaN
         raise InvalidInput("timeout must be greater than 0 seconds")
     secret_values = await vault.resolve_many(scope.agent_id, list(secrets))
+    confinement = await confiner.of(scope.agent_id)
     result = await run_bash(
-        command, cwd=scope.workspace, secrets=secret_values, timeout=timeout, merge_stderr=True
+        command,
+        cwd=scope.workspace,
+        secrets=secret_values,
+        timeout=timeout,
+        confinement=confinement,
+        merge_stderr=True,
     )
     status = (
         f"{_EXIT_CODE} {result.exit_code}"
@@ -158,6 +166,9 @@ async def _run_foreground(
         else f"{_KILLED} {timeout}s timeout"
     )
     output = truncate(result.stdout, limits.max_output_chars)
+    if (note := denial_note(confinement, result.stdout)) is not None:
+        # 紧接在系统报错之后：输出以换行结尾就不再空一行
+        output += note if output.endswith("\n") else f"\n{note}"
     if result.left_running:
         output += f"\n[{LEFT_RUNNING_NOTE}]"
     return f"{status}\n{output}"
