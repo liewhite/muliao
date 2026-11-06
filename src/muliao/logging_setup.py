@@ -70,8 +70,16 @@ class _StdioRotatingHandler(logging.handlers.RotatingFileHandler):
         os.dup2(fd, 2)
 
 
-def setup_logging(level: str, file: Path | None = None, *, max_bytes: int = 0, backups: int = 0) -> None:
-    handler = logging.StreamHandler() if file is None else _StdioRotatingHandler(file, max_bytes, backups)
+def setup_logging(
+    level: str, file: Path | None = None, *, max_bytes: int | None = None, backups: int | None = None
+) -> None:
+    if file is None:
+        handler: logging.Handler = logging.StreamHandler()
+    elif max_bytes is None or backups is None or max_bytes <= 0 or backups <= 0:
+        # RotatingFileHandler 的 0 是「永不轮转」，漏传时别悄悄退化
+        raise ValueError("a log file needs positive max_bytes and backups")
+    else:
+        handler = _StdioRotatingHandler(file, max_bytes, backups)
     handler.setFormatter(KeyValueFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
     root.handlers[:] = [handler]

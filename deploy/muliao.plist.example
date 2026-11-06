@@ -29,6 +29,7 @@
   <integer>60</integer>
   <key>ThrottleInterval</key>
   <integer>10</integer>
+  <!-- 和 config.toml 的 log_file 设成同一个文件：进程自己按大小轮转并把 stdout/stderr 跟过去（docs/deployment.md） -->
   <key>StandardOutPath</key>
   <string>/Users/YOU/.muliao/muliao.log</string>
   <key>StandardErrorPath</key>

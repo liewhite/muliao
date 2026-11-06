@@ -61,3 +61,10 @@ def test_log_file_rotates_and_takes_stdout_and_stderr_along(tmp_path):
         "printed after rotation" in current and "raw stderr" in current
     )  # 进的是当前文件，不是改名后的旧文件
     assert "printed before rotation" not in current
+
+
+def test_a_log_file_without_rotation_limits_is_rejected(tmp_path):
+    from muliao.logging_setup import setup_logging
+
+    with pytest.raises(ValueError, match="positive"):
+        setup_logging("INFO", tmp_path / "x.log", max_bytes=0, backups=4)

@@ -65,12 +65,16 @@ fi
 if [ -z "$pid" ]; then
   fail log "服务没在跑，无从对照日志"
 else
-  start=$(grep -n "Started server process \[${pid}\]" "$LOG" 2>/dev/null | tail -1 | cut -d: -f1)
+  # 重启后若刚好轮转过（log_file，#413），启动行在 .1 里：拼起来看
+  joined=$(mktemp)
+  trap 'rm -f "$joined"' EXIT
+  cat "$LOG.1" "$LOG" > "$joined" 2>/dev/null
+  start=$(grep -n "Started server process \[${pid}\]" "$joined" 2>/dev/null | tail -1 | cut -d: -f1)
   if [ -z "$start" ]; then
-    fail log "${LOG} 里没有 Started server process [${pid}]"
+    fail log "${LOG}(.1) 里没有 Started server process [${pid}]"
   else
-    ready=$(awk -v s="$start" 'NR >= s && /Application startup complete/ {print NR; exit}' "$LOG")
-    errors=$(awk -v s="$start" 'NR >= s && / ERROR / {print NR ": " substr($0, 1, 300)}' "$LOG" | head -5)
+    ready=$(awk -v s="$start" 'NR >= s && /Application startup complete/ {print NR; exit}' "$joined")
+    errors=$(awk -v s="$start" 'NR >= s && / ERROR / {print NR ": " substr($0, 1, 300)}' "$joined" | head -5)
     if [ -z "$ready" ]; then
       fail log "第 ${start} 行起本进程没有 Application startup complete"
     elif [ -n "$errors" ]; then

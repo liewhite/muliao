@@ -34,7 +34,7 @@ deploy/selfcheck.sh <commit>                      # 重启后自检（在仓库�
 
 重启或停止时服务收到 SIGTERM：先关闭事件总线，界面的 SSE 长连接随之结束（浏览器稍后自动重连）；再最多等 3 秒让其余 HTTP 连接结束，到时取消剩下的（会打 uvicorn 的 ERROR，只在有上传、下载没完成时出现），进入关停——取消正在进行的运行（收尾最多约 10 秒），再结束后台任务的进程组并通知 agent（重启后处理，监督者收尾两段各最多 10 秒）。合计最坏约 33 秒，所以示例 plist 设了 `ExitTimeOut` 60：launchd 不设时 `kickstart -k` 约 5 秒就 SIGKILL，后台任务的进程会脱离服务继续运行、无人监督。改了 plist 要 `launchctl bootout` 再 `bootstrap` 才生效，`kickstart` 不重读。
 
-日志：配置 `log_file`（和 plist 的 `StandardOutPath` 写同一个文件）后由进程自己按大小轮转（`log_max_mb` 默认 50，留 `log_backups` 默认 4 份 `.1`…`.4`），每次换新文件时把 stdout/stderr 也重定向过去，未捕获的异常等也进当前文件。不用 newsyslog：launchd 只在启动时打开 `StandardOutPath`，外部改名轮转后进程仍写旧文件。不设 `log_file` 就只写 stderr，不轮转。没有唤醒 agent 的前置检查、成功的未读通知轮询（`GET /api/notifications/unread`）不记 INFO。
+日志：配置 `log_file`（和 plist 的 `StandardOutPath` 写同一个文件）后由进程自己按大小轮转（`log_max_mb` 默认 50，留 `log_backups` 默认 4 份 `.1`…`.4`），每次换新文件时把 stdout/stderr 也重定向过去，未捕获的异常等也进当前文件；轮转前起的子进程（stdio MCP 的 stderr 继承 fd 2）仍写旧文件。自检把 `.1` 和当前文件拼起来看。不用 newsyslog：launchd 只在启动时打开 `StandardOutPath`，外部改名轮转后进程仍写旧文件。不设 `log_file` 就只写 stderr，不轮转。没有唤醒 agent 的前置检查、成功的未读通知轮询（`GET /api/notifications/unread`）不记 INFO。
 
 agent 的 shell 与 stdio MCP 只继承服务的 `PATH`（示例 plist 里的那一串），不读 shell 配置：nvm 装的 node 在服务里找不到。agent 常用、要放进这些目录的命令用 Homebrew 装（落在 `/opt/homebrew/bin`）：`brew install ripgrep node@24 coreutils && brew link node@24`——`rg` 是工具说明里指定的搜索方式；`node`/`npm`/`npx` 给前端构建和 `npx` 起的 MCP（node@24 是 keg-only，要 `brew link` 才进 `/opt/homebrew/bin`）；coreutils 补上 macOS 没有的 `timeout`（它只把 macOS 没有的命令不加 `g` 前缀地装进去，`ls`/`sed` 等仍是系统自带的版本）。
 
