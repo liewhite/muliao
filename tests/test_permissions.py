@@ -39,6 +39,8 @@ _ADMIN_TOOLS = {
     "mcp_add",
     "mcp_remove",
     "vault_delete",
+    # 只有管钱包的 agent 用（#423）
+    "eth_sign",
 }
 
 

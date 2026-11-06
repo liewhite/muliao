@@ -17,6 +17,7 @@ dependencies = [
     "ast-grep-py>=0.51.0",
     "croniter>=6.2.4",
     "cryptography>=50.0.2",
+    "eth-account>=0.14.0",
     "fastapi>=0.146.0",
     "httpx>=0.28.1",
     "httpx2>=2.14.0",

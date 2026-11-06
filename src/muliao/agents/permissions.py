@@ -44,7 +44,7 @@ class Action(StrEnum):
 @dataclass(frozen=True)
 class Tool:
     access: Access
-    # 管理类工具（管 agent、角色、记忆的增删、资产归属，以及很少用的 MCP 配置、删 secret，#295）：base 没有，只经 admin
+    # 管理类工具（管 agent、角色、记忆的增删、资产归属，以及很少用的 MCP 配置、删 secret（#295）、只有少数 agent 用的 eth_sign（#423））：base 没有，只经 admin
     # 角色或显式规则给出
     admin: bool = False
 
@@ -116,6 +116,8 @@ TOOLS: dict[str, Tool] = {
     "vault_list": R,
     "vault_set": W,
     "vault_delete": ADMIN_W,
+    # 用 vault 里的以太坊私钥在进程内签名（#423）：只有管钱包的 agent 用，经角色或 allow 给
+    "eth_sign": ADMIN_W,
     # trigger
     "trigger_kinds": R,
     "trigger_list": R,

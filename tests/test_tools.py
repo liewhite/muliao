@@ -198,6 +198,43 @@ async def test_agent_manages_its_secrets_and_shares_them_with_a_role(container, 
     assert [(s.key, s.owner) for s in await container.vault.usable_by(me.id)] == [("B", me.id)]
 
 
+async def test_eth_sign_signs_with_a_vault_key_without_showing_it(container, make_agent, models, caplog):
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+
+    key = "0x" + "11" * 32
+    me = await make_agent("signer", model="tools", roles=["admin"])
+    other = await make_agent("other")
+    await container.vault.set("WALLET", key, "wallet", actor=other.id, owner=other.id)
+    await container.vault.set("MINE", key, "wallet", actor=me.id, owner=me.id)
+    caplog.set_level("INFO", logger="muliao.agents.secret_tools")
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("eth_sign", {"key": "MINE", "kind": "message", "payload": "hello"}),
+            # 别人的、没分给我的 key 用不了
+            ("eth_sign", {"key": "WALLET", "kind": "message", "payload": "hello"}),
+        ],
+    )
+
+    signed = json.loads(outputs[0])
+    address = Account.from_key(key).address
+    assert signed["signer"] == address
+    assert Account.recover_message(encode_defunct(text="hello"), signature=signed["signature"]) == address
+    assert "not found among the secrets you can use" in outputs[1]
+    assert key.removeprefix("0x") not in "\n".join(outputs) + caplog.text
+    [audit] = [r for r in caplog.records if r.getMessage() == "eth signed"]
+    assert (audit.agent, audit.key, audit.sign_kind, audit.signer, audit.digest) == (
+        me.id,
+        "MINE",
+        "message",
+        address,
+        signed["message_hash"],
+    )
+
+
 async def test_list_threads_shows_each_thread_with_its_state(container, make_agent, models):
     me = await make_agent("manager", model="tools", roles=["admin"])
     await make_agent("worker")
