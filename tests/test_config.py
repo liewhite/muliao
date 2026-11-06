@@ -34,6 +34,16 @@ def test_example_config_is_valid_once_required_fields_are_filled(tmp_path):
     assert settings.llm.default_model == "claude:claude-sonnet-5-5"
 
 
+def test_log_file_is_off_by_default_and_relative_to_the_config_file(tmp_path):
+    path = _filled_example(tmp_path)
+    assert load_settings(path).log_file is None
+
+    path.write_text(path.read_text().replace('# log_file = "muliao.log"', 'log_file = "muliao.log"'))
+    settings = load_settings(path)
+    assert settings.log_file == tmp_path / "muliao.log"
+    assert (settings.log_max_mb, settings.log_backups) == (50, 4)
+
+
 def test_example_config_with_empty_secrets_is_rejected(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text(EXAMPLE.read_text())

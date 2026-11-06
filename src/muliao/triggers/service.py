@@ -550,7 +550,7 @@ class TriggerService:
                 failure = e
             else:
                 if decision.event is None:
-                    log.info(
+                    log.debug(
                         "trigger precheck: nothing to do, not firing",
                         extra={"trigger": name, "baseline": decision.baseline},
                     )

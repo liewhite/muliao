@@ -43,7 +43,12 @@ def main() -> None:
     args = parser.parse_args()
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
     settings = load_settings(args.config)
-    setup_logging(settings.log_level)
+    setup_logging(
+        settings.log_level,
+        settings.log_file,
+        max_bytes=settings.log_max_mb * 1024 * 1024,
+        backups=settings.log_backups,
+    )
     assembly = assemble(settings)
     app = create_app(assembly.container, WEB_DIR, auth=settings.auth, public_url=settings.server.public_url)
     config = uvicorn.Config(

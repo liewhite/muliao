@@ -156,6 +156,12 @@ class Settings(_Section):
     # cron 表达式按此时区解释，也用于告诉 agent 当前本地时间
     timezone: str = "UTC"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # 日志文件，按大小轮转（见 muliao.logging_setup）；不设就写 stderr，由启动方（launchd 等）决定去向。
+    # 相对路径以配置文件所在目录为基准
+    log_file: Path | None = None
+    # 当前文件超过这么多 MB 就轮转为 <log_file>.1，保留这么多份旧文件
+    log_max_mb: int = Field(default=50, ge=1)
+    log_backups: int = Field(default=4, ge=1)
 
     server: ServerConfig
     auth: AuthConfig
@@ -197,4 +203,6 @@ def load_settings(path: Path) -> Settings:
     settings = Settings.model_validate(raw)
     if not settings.data_dir.is_absolute():
         settings = settings.model_copy(update={"data_dir": path.parent / settings.data_dir})
+    if settings.log_file is not None and not settings.log_file.is_absolute():
+        settings = settings.model_copy(update={"log_file": path.parent / settings.log_file})
     return settings

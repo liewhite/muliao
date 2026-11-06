@@ -222,5 +222,6 @@ class PrecheckRunner:
             raise PrecheckFailed(
                 f"precheck output is {size} bytes, over the {self._max_bytes}-byte event limit"
             )
-        log.info("precheck done", extra={**ctx, "bytes": size})
+        # 每分钟一次的 precheck 绝大多数是空跑，记 INFO 会占日志三成（#413）；触发与失败另有 INFO/WARNING
+        log.debug("precheck done", extra={**ctx, "bytes": size})
         return result.stdout

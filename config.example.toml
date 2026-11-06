@@ -7,6 +7,11 @@ data_dir = "data"
 # cron 表达式按此时区解释，也是 agent 看到的本地时间
 timezone = "Asia/Shanghai"
 log_level = "INFO"
+# 日志文件，超过 log_max_mb 就轮转为 muliao.log.1 …，保留 log_backups 份。不设就写 stderr。
+# 用 launchd 跑时设成和 plist 的 StandardOutPath 同一个文件：未捕获的异常等直接写到 stderr 的输出也跟着轮转
+# log_file = "muliao.log"
+# log_max_mb = 50
+# log_backups = 4
 
 [server]
 # 0.0.0.0 监听所有网卡（反向代理在其他机器上时需要）；代理在本机时用 127.0.0.1
