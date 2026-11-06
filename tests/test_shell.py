@@ -6,7 +6,9 @@ from muliao.platform.sandbox import Confinement, WritablePaths, sandbox_for
 from muliao.platform.shell import run_bash
 
 # 不限写的路径：这里测的是命令执行本身，写沙箱在 test_sandbox.py
-OPEN = Confinement(sandbox_for("enforce"), WritablePaths.of([(True, Path("/"))], "test"))
+OPEN = Confinement(
+    sandbox_for("enforce", Path.home()), WritablePaths.of([(True, Path("/"))], "test"), Path.home()
+)
 
 
 async def test_a_timed_out_command_keeps_the_output_it_produced_before_being_killed(tmp_path):

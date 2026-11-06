@@ -18,7 +18,7 @@ import anyio
 
 from muliao.agents.api import Rules
 from muliao.errors import Forbidden
-from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths
+from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, expand
 
 log = logging.getLogger(__name__)
 
@@ -36,44 +36,45 @@ PROTECTED = (Category.PLATFORM_INSTALL,)
 
 
 def _note(path: Path) -> str:
+    # 读受系统保护的目录也报同样的错，分不出来：只说「如果这是一次写」
     return (
-        f"[{path} is outside the paths this agent may write (its workspace, temp, cache and toolchain "
-        "directories, plus directories granted to it), so the write was refused. If it really needs to write "
-        "there, ask the user or an agent with the admin role to grant it 'write:path:<directory>'.]"
+        f"[If this was a write: {path} is outside the paths this agent may write (its workspace, temp, cache "
+        "and toolchain directories, plus directories granted to it), so the write sandbox refused it. If it "
+        "really needs to write there, ask the user or an agent with the admin role to grant it "
+        "'write:path:<directory>'.]"
     )
 
 
 class Confiner:
-    """按 agent 现在的分发规则算出它的 Confinement：每次起命令、写文件时现算，改了授权下一条命令就生效。"""
+    """按 agent 现在的分发规则算出它的 Confinement：每次起命令、写文件时现算，改了授权下一条命令就生效。
+    受保护的排在授权之前：授权它本身或它的上级目录都会放开它。"""
 
     def __init__(
         self,
         sandbox: Sandbox,
         workspace_of: Callable[[str], Path],
         rules_of: Callable[[str], Awaitable[Rules]],
-        home: Path | None = None,
+        # 服务运行用户的家目录，与适配器的是同一个（组合根注入）
+        home: Path,
     ):
         self._sandbox = sandbox
         self._workspace_of = workspace_of
         self._rules_of = rules_of
-        self._home = Path.home() if home is None else home
+        self._home = home
 
     async def of(self, agent_id: str) -> Confinement:
         allow, deny = (await self._rules_of(agent_id)).paths()
+        # 规则的形式已在写入时校验（agents.permissions.kind_of）：绝对路径或 ~/ 开头
         rules = [
             (True, self._workspace_of(agent_id)),
             *((True, p) for c in DEFAULT_WRITABLE for p in self._sandbox.paths(c)),
             *((False, p) for c in PROTECTED for p in self._sandbox.paths(c)),
-            *((True, self._expand(p)) for p in allow),
-            *((False, self._expand(p)) for p in deny),
+            *((True, expand(p, self._home)) for p in allow),
+            *((False, expand(p, self._home)) for p in deny),
         ]
         # 换成真实路径要读文件系统
         writable = await anyio.to_thread.run_sync(WritablePaths.of, rules, agent_id)
-        return Confinement(self._sandbox, writable)
-
-    def _expand(self, path: str) -> Path:
-        # 规则的形式已在写入时校验（agents.permissions.kind_of）：绝对路径或 ~/ 开头
-        return self._home / path.removeprefix("~/") if path.startswith("~/") else Path(path)
+        return Confinement(self._sandbox, writable, self._home)
 
 
 def check_write(confinement: Confinement, path: Path) -> None:
@@ -89,22 +90,23 @@ def check_write(confinement: Confinement, path: Path) -> None:
     )
 
 
-# 系统拒绝写时的报错（EPERM、EACCES 的标准说法），与其中的路径：绝对路径或 ~/ 开头，到空白、引号或冒号为止
-_REFUSED = ("Operation not permitted", "Permission denied")
+# 写沙箱拒绝时系统报的错一律是 EPERM：各语言的说法大小写不一（Node `EPERM: operation not permitted`、Go
+# `operation not permitted`）。EACCES（Permission denied）不是它拦的，不认
+_REFUSED = re.compile(r"operation not permitted", re.IGNORECASE)
+# 报错里的路径：绝对路径或 ~/ 开头，到空白、引号或冒号为止（带空格的路径只取到空格前，可能拿错：只影响补不补说明）
 _PATH = re.compile(r"(?<![\w.~/-])(~/[^\s'\":]*|/[^\s'\":]+)")
 
 
-def denial_note(confinement: Confinement, output: str, home: Path | None = None) -> str | None:
-    """命令输出里有被拒绝的写、且报错里的路径在可写范围外时补的说明；不是沙箱拦的（如文件本身只读）不补。
+def denial_note(confinement: Confinement, output: str) -> str | None:
+    """命令输出里有被拒绝的操作、且报错里的路径在可写范围外时补的说明；范围内的拒绝不是写沙箱拦的，不补。
     只认绝对路径与 ~/ 开头的路径：相对路径不知道命令当时在哪个目录。"""
     if not confinement.enforcing:
         return None
-    home = Path.home() if home is None else home
     for line in output.splitlines():
-        if not any(r in line for r in _REFUSED):
+        if not _REFUSED.search(line):
             continue
         for found in _PATH.findall(line):
-            path = home / found.removeprefix("~/") if found.startswith("~/") else Path(found)
+            path = expand(found, confinement.home)
             if not confinement.writable.permits(path):
                 return _note(path)
     return None

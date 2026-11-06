@@ -22,7 +22,9 @@ def platform(request) -> str:
 
 
 def _confinement(platform: str, rules: list[tuple[bool, Path]], mode="enforce") -> Confinement:
-    return Confinement(sandbox_for(mode, platform), WritablePaths.of(rules, "agent-x"))
+    return Confinement(
+        sandbox_for(mode, Path.home(), platform), WritablePaths.of(rules, "agent-x"), Path.home()
+    )
 
 
 async def _sh(confinement: Confinement, cwd: Path, command: str):
@@ -95,7 +97,7 @@ async def test_inside_the_writable_paths_output_is_identical_to_running_unconfin
         "git init -q r && git -C r config user.email a@b && git -C r config user.name a && "
         "echo x > r/x && git -C r add x && git -C r commit -qm m && git -C r log --format=%s; "
         "mv d/e/f d/g; rm -r d/e; ls d; tmp=$(mktemp); echo t > $tmp; cat $tmp; rm $tmp; "
-        "echo err >&2; exit 3"
+        "ps -p $$ -o pid= | wc -l | tr -d ' '; echo err >&2; exit 3"
     )
     runs = []
     for name, confinement in (
@@ -130,7 +132,7 @@ async def test_report_mode_lets_writes_outside_through(platform, tmp_path):
 
 
 def _adapter(platform: str) -> Sandbox:
-    return sandbox_for("enforce", platform)
+    return sandbox_for("enforce", Path.home(), platform)
 
 
 async def test_each_category_maps_to_paths_and_temp_covers_the_temp_dir(platform):
@@ -145,9 +147,27 @@ async def test_each_category_maps_to_paths_and_temp_covers_the_temp_dir(platform
     assert Path(sys.prefix) in sandbox.paths(Category.PLATFORM_INSTALL)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS only")
+async def test_macos_programs_that_cannot_run_sandboxed_still_run(tmp_path):
+    """setuid 程序（ps）、自己建沙箱的（sandbox-exec 本身、Chromium）在 Seatbelt 里跑不起来，放到沙箱外执行。"""
+    c = _confinement("darwin", [(True, tmp_path), (True, Path("/dev"))])
+    result = await _sh(
+        c, tmp_path, "ps -p $$ -o pid= >/dev/null && sandbox-exec -p '(version 1)(allow default)' echo nested"
+    )
+    assert (result.exit_code, result.stdout) == (0, "nested\n")
+    shells = sorted(
+        Path.home().glob("Library/Caches/ms-playwright/chromium_headless_shell-*/*/chrome-headless-shell")
+    )
+    if shells:
+        result = await _sh(
+            c, tmp_path, f"'{shells[-1]}' --headless --dump-dom 'data:text/html,<p>hi</p>' 2>/dev/null"
+        )
+        assert "<p>hi</p>" in result.stdout
+
+
 def test_a_system_without_an_adapter_is_refused_not_left_unconfined():
     with pytest.raises(RuntimeError, match="no write sandbox"):
-        sandbox_for("enforce", "plan9")
+        sandbox_for("enforce", Path.home(), "plan9")
 
 
 # ---- 领域：授权规则、可写路径的组成、文件工具的检查、被拒说明 ----
@@ -169,7 +189,7 @@ def test_writable_path_rules_are_literal_directories_written_with_write():
 async def test_an_agent_writes_its_workspace_the_defaults_and_its_grants_minus_protected_and_denied(tmp_path):
     # 不在临时目录下（临时目录默认可写）；只用来展开授权里的 ~/，不写任何东西
     home = Path("/nonexistent-home-416")
-    sandbox = sandbox_for("enforce")
+    sandbox = sandbox_for("enforce", home)
 
     async def rules_of(_agent: str) -> Rules:
         return Rules(allow=("write:path:~/proj",), deny=("write:path:~/proj/secret",))
@@ -181,7 +201,7 @@ async def test_an_agent_writes_its_workspace_the_defaults_and_its_grants_minus_p
     assert w.permits(home / "proj/x") and not w.permits(home / "proj/secret/x")
     assert not w.permits(home / "Documents/x")
     assert not w.permits(Path(sys.prefix) / "lib/x")
-    assert w.permits(Path.home() / ".cache/uv/x")
+    assert w.permits(home / ".cache/uv/x") and w.permits(home / "Library/Caches/x")
 
 
 def test_file_tools_are_refused_with_the_system_error_and_the_note(tmp_path):
@@ -198,8 +218,10 @@ def test_the_note_is_added_only_when_the_refused_path_is_outside(tmp_path):
     assert (
         denial_note(c, f"PermissionError: [Errno 1] Operation not permitted: '{tmp_path}/no/f'") is not None
     )
-    # 范围内的拒绝（文件只读等）不是沙箱拦的
-    assert denial_note(c, f"bash: {tmp_path}/ok/f: Permission denied") is None
+    assert denial_note(c, f"Error: EPERM: operation not permitted, open '{tmp_path}/no/f'") is not None
+    # 范围内的拒绝（文件只读等）、EACCES 都不是写沙箱拦的
+    assert denial_note(c, f"bash: {tmp_path}/ok/f: Operation not permitted") is None
+    assert denial_note(c, f"bash: {tmp_path}/no/f: Permission denied") is None
     assert denial_note(c, "all good") is None
     assert denial_note(c, "rm: f: Operation not permitted") is None
     report = _confinement("darwin", [(True, tmp_path / "ok")], mode="report")
@@ -227,7 +249,10 @@ async def test_run_shell_and_write_file_refuse_a_denied_path_and_leave_the_rest_
         ],
     )
     assert outputs[0].startswith("exit_code: 1\nin\n")
-    assert f"touch: {blocked}/x: Operation not permitted\n[{blocked}/x is outside" in outputs[0]
+    assert (
+        f"touch: {blocked}/x: Operation not permitted\n[If this was a write: {blocked}/x is outside"
+        in outputs[0]
+    )
     assert f"[Errno 1] Operation not permitted: '{blocked}/y'" in outputs[1]
     assert outputs[2].startswith("created ")
     assert not any(blocked.iterdir())

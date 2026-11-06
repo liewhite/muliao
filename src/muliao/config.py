@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from muliao.platform.sandbox import Mode
+
 DEFAULT_CONFIG_PATH = Path("~/.muliao/config.toml")
 # 前端构建产物：`cd web && npm run build` 生成到包内，随 wheel 分发；不是用户配置
 WEB_DIR = Path(__file__).parent / "webui"
@@ -148,7 +150,7 @@ class RuntimeConfig(_Section):
     tool_output_max_chars: int = Field(default=20000, ge=1000)
     # agent 的命令与文件工具写到可写路径之外时（workspace.writable）：enforce 拒绝；report 放行并记录（命令的记在系统日志，
     # 文件工具的记在服务日志），上线前试跑统计漏掉的路径。当前系统没有写沙箱时两种都拒绝启动
-    write_sandbox: Literal["enforce", "report"] = "enforce"
+    write_sandbox: Mode = "enforce"
     # 单个文件（用户上传的附件、agent 发出的文件）的字节上限，默认与 Matrix Synapse 一致
     upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1)
 

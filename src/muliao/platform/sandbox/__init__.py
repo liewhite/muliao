@@ -39,6 +39,11 @@ class Category(StrEnum):
     PLATFORM_INSTALL = "platform_install"
 
 
+def expand(path: str, home: Path) -> Path:
+    """`~/x` 换成 home 下的路径，其余原样（授权规则与报错里的路径共用）。"""
+    return home / path.removeprefix("~/") if path.startswith("~/") else Path(path)
+
+
 def real_forms(path: Path) -> tuple[Path, ...]:
     """路径在文件系统里的写法：上级目录解析符号链接后的它（链接本身），以及连它一起解析后的（链接指向的）。系统按真实路径
     判断，而 /tmp 这类上级是链接的路径、本身是链接的路径两种都会被写到。"""
@@ -90,13 +95,14 @@ class Sandbox(Protocol):
         ...
 
 
-def sandbox_for(mode: Mode, platform: str = sys.platform) -> Sandbox:
-    """当前系统的适配器；没有时 RuntimeError（启动时报出，不退回到不隔离）。"""
+def sandbox_for(mode: Mode, home: Path, platform: str = sys.platform) -> Sandbox:
+    """当前系统的适配器（home：服务运行用户的家目录，家目录下的类别按它算）；没有时 RuntimeError（启动时报出，
+    不退回到不隔离）。"""
     if platform == "darwin":
         from muliao.platform.sandbox.seatbelt import Seatbelt
 
         if Seatbelt.supported():
-            return Seatbelt(mode)
+            return Seatbelt(mode, home)
     raise RuntimeError(
         f"no write sandbox is available on this system ({platform}); agents' shell commands cannot run unconfined"
     )
@@ -108,6 +114,8 @@ class Confinement:
 
     sandbox: Sandbox
     writable: WritablePaths
+    # 家目录：规则与报错里的 ~/ 按它展开（expand）
+    home: Path
 
     def wrap(self, argv: Sequence[str]) -> list[str]:
         return self.sandbox.wrap(argv, self.writable)
