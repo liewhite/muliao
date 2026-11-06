@@ -44,7 +44,9 @@ function AgentCard({ a }: { a: Agent }) {
         <Card className={`transition-colors hover:bg-surface-hover ${isActive ? 'ring-2 ring-accent' : ''}`}>
           <Card.Header>
             <Card.Title>{a.name}</Card.Title>
-            <Card.Description>{a.description}</Card.Description>
+            <Card.Description className="truncate" title={a.description}>
+              {a.description}
+            </Card.Description>
           </Card.Header>
           <Card.Footer className="flex flex-wrap gap-2">
             {a.is_default && (
