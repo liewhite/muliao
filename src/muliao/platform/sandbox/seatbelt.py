@@ -78,10 +78,10 @@ class Seatbelt:
             case Category.PACKAGES:
                 return (Path("/opt/homebrew"), *under(home, HOME_PACKAGES))
             case Category.TOOLCHAINS:
-                # go 的用户配置目录（telemetry 计数，每次 go build 都写；#416 试跑）
-                return (*under(home, HOME_TOOLCHAINS), home / "Library/Application Support/go")
+                return under(home, HOME_TOOLCHAINS)
             case Category.TOOL_STATE:
-                return under(home, HOME_TOOL_STATE)
+                # go 的用户配置目录：telemetry 计数（每次 go build 都写，#416 试跑）与 `go env -w`
+                return (*under(home, HOME_TOOL_STATE), home / "Library/Application Support/go")
             case Category.PLATFORM_INSTALL:
                 return platform_install()
 
