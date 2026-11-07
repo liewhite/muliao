@@ -83,7 +83,9 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
             key: Vault key holding the private key (one you can use, see vault_list).
             kind: `transaction`: payload is an object of transaction fields (must include `chainId`; legacy with
                 `gasPrice` or EIP-1559 with `maxFeePerGas`/`maxPriorityFeePerGas`; numbers as integers or 0x hex);
-                returns `raw_transaction` and `tx_hash`. `message`: EIP-191 personal_sign of payload, a string:
+                signed offline: nothing is looked up on chain or filled in, so give `nonce`, `gas` and the fee
+                fields yourself (a missing one fails with `invalid transaction`); returns `raw_transaction` and
+                `tx_hash`. `message`: EIP-191 personal_sign of payload, a string:
                 text, or 0x-prefixed hex meaning raw bytes. `typed_data`: payload is the full EIP-712 object
                 (`types` incl. `EIP712Domain`, `primaryType`, `domain`, `message`), e.g. a Safe transaction for
                 its safeTxHash signature. message and typed_data return the 65-byte `signature` (r||s||v) and
