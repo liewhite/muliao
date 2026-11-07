@@ -34,6 +34,8 @@ HOME_TOOL_STATE = (
     ".aws/cli/cache",
     ".ipython",
     ".matplotlib",
+    # gcloud 刷新访问令牌时写它的凭据库（#416 试跑：sto-bard-deposit-monitor）
+    ".config/gcloud",
     ".python_history",
     ".psql_history",
     ".node_repl_history",
