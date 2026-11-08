@@ -775,7 +775,41 @@ async def test_edit_file_refuses_a_read_only_file_before_writing_any(
         ],
     )
     assert "edit 2: file is not writable" in outputs[2] and "nothing was written" in outputs[2]
+    assert "chmod -R u+w" in outputs[2]
     assert "     1\tA = 1" in outputs[3]
+
+
+async def test_write_into_a_read_only_copy_is_returned_to_the_model_with_the_reason(
+    container, make_agent, models
+):
+    # skill 只读副本 cp -R 出来，目录和文件都是 r-x/r--：写入失败交还给模型并指出要 chmod 的路径，不打崩运行（#483）
+    me = await make_agent("alpha", model="tools")
+    ro = container.agents.workspace(me.id) / "att"
+    ro.mkdir(parents=True)
+    (ro / "old.sh").write_text("echo 1\n")
+    (ro / "old.sh").chmod(0o444)
+    ro.chmod(0o555)
+    try:
+        outputs = await run_tools(
+            container,
+            models,
+            me.id,
+            [
+                ("write_file", {"path": "att/new.sh", "content": "echo 2\n"}),
+                ("write_file", {"path": "att/sub/x.sh", "content": "echo 3\n"}),
+                ("write_file", {"path": "att/old.sh", "content": "echo 4\n"}),
+                ("write_file", {"path": "ok.txt", "content": "fine\n"}),
+            ],
+        )
+    finally:
+        ro.chmod(0o755)
+        (ro / "old.sh").chmod(0o644)
+    assert f"cannot write {ro / 'new.sh'}: Permission denied" in outputs[0]
+    assert f"chmod -R u+w {ro}`" in outputs[0]
+    assert f"chmod -R u+w {ro}`" in outputs[1]
+    assert f"chmod -R u+w {ro / 'old.sh'}`" in outputs[2]
+    assert outputs[3].startswith("created ")
+    assert (ro / "old.sh").read_text() == "echo 1\n"
 
 
 async def test_edit_file_locates_by_line_range_or_pattern_and_validates_the_locator(

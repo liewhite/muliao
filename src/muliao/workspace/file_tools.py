@@ -122,6 +122,33 @@ def _edit_call(a: Args) -> list[ViewBlock] | None:
 _EDIT_RENDER = ToolRender[str](call=_edit_call)
 
 
+_READ_ONLY_HINT = (
+    "{path} has no write permission for you, e.g. because it was copied (`cp -R`) from a read-only skill "
+    "copy and kept its r-- modes; run `chmod -R u+w {path}` first."
+)
+
+
+def _write_text(target: Path, content: str, written_note: str) -> None:
+    """写盘（父目录按需建）。IO 失败转成领域错误交还给模型，不打崩整次运行（#483）；没写权限的指出是文件
+    还是哪一级目录、给 chmod 提示。written_note 说明本次调用里已写下了什么（edit_file 多文件时）。"""
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    except PermissionError as e:
+        blocked = target if target.exists() else _nearest_existing(target.parent)
+        raise InvalidInput(
+            f"cannot write {target}: {e.strerror}. {written_note}{_READ_ONLY_HINT.format(path=blocked)}"
+        ) from e
+    except OSError as e:
+        raise InvalidInput(f"cannot write {target}: {e}. {written_note}".rstrip()) from e
+
+
+def _nearest_existing(p: Path) -> Path:
+    while not p.exists():
+        p = p.parent
+    return p
+
+
 def resolve(scope: RunScope, path: str) -> Path:
     p = Path(path).expanduser()
     return p if p.is_absolute() else scope.workspace / p
@@ -187,8 +214,7 @@ def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> F
         target = resolve(ctx.deps, path)
         check_write(await confiner.of(ctx.deps.agent_id), target)
         existed = target.is_file()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        _write_text(target, content, "")
         verb = "overwrote" if existed else "created"
         return f"{verb} {target} ({len(content.splitlines())} lines, {len(content)} chars)"
 
@@ -276,15 +302,22 @@ def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> F
             check_write(confinement, given)
             # 只读文件在任何写盘之前挡住，不留下改了一半的几个文件（写盘时的其他 IO 失败不在此保证内）
             if not os.access(given, os.W_OK):
-                raise InvalidInput(f"{where}file is not writable: {given}; nothing was written")
+                raise InvalidInput(
+                    f"{where}file is not writable: {given}; nothing was written. {_READ_ONLY_HINT.format(path=given)}"
+                )
             target = same.setdefault(given.resolve(), given)
             if target not in before:
                 before[target] = target.read_text(encoding="utf-8")
             located.append(_Located(target, e))
         after, counts = file_edit.apply_each(before, [(c.target, c) for c in located])
         # 全部校验通过才写盘
+        written: list[Path] = []
         for target, content in after.items():
-            target.write_text(content, encoding="utf-8")
+            done = (
+                f"already written: {', '.join(map(str, written))}. " if written else "nothing was written. "
+            )
+            _write_text(target, content, done)
+            written.append(target)
         reports = [_edit_report(t, before[t], after[t], counts[t]) for t in after]
         return truncate("\n\n".join(reports), limits.max_output_chars)
 
