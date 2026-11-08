@@ -10,7 +10,7 @@ from muliao.agents.api import Subject, fill
 from muliao.agents.mcp import McpTransport, mcp_config
 from muliao.agents.memory import MemoryFull
 from muliao.agents.skill_package import SKILL_FILE, SkillFile
-from muliao.agents.skills import FileChange, attachments_from, parse_document
+from muliao.agents.skills import FileChange, parse_document, skill_dir_from
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.platform.text_edit import TextChange
 from tests.conftest import history, owned, share
@@ -137,23 +137,23 @@ async def test_startup_regenerates_every_skill_directory_and_drops_strays(contai
     assert sorted(p.name for p in skills.skills_dir.iterdir()) == ["digest"]
 
 
-async def test_attachments_are_taken_from_a_directory_by_the_attachment_rules(tmp_path):
+async def test_a_skill_directory_is_read_by_the_attachment_rules_with_skill_md_as_instructions(tmp_path):
     src = tmp_path / "src"
     (src / "lib").mkdir(parents=True)
     (src / "lib" / "a.py").write_text("print(1)")
-    (src / "SKILL.md").write_text("ignored: given separately")
+    (src / "SKILL.md").write_text("the instructions")
     (src / ".venv").mkdir()
     (src / ".venv" / "x.py").write_text("hidden")
     (src / "blob.bin").write_bytes(b"\0\1")
     (src / "big.txt").write_text("x" * (300 * 1024))
     (src / "link.py").symlink_to(src / "lib" / "a.py")
 
-    files, skipped = attachments_from(src)
+    drafted = skill_dir_from(src)
 
-    assert set(files) == {"lib/a.py"}
-    assert {s.path for s in skipped} >= {"blob.bin", "big.txt", "link.py"}
+    assert (drafted.skill_md, set(drafted.attachments)) == ("the instructions", {"lib/a.py"})
+    assert {s.path for s in drafted.skipped} >= {"blob.bin", "big.txt", "link.py"}
     with pytest.raises(InvalidInput):
-        attachments_from(tmp_path / "missing")
+        skill_dir_from(tmp_path / "missing")
 
 
 async def test_a_skill_is_restored_from_an_earlier_revision(container, make_agent):
@@ -358,10 +358,10 @@ async def test_hidden_and_dependency_directories_are_skipped_whole(tmp_path):
         (src / "node_modules" / "pkg" / f"{i}.js").write_text("x")
     (src / "run.py").write_text("x")
 
-    files, skipped = attachments_from(src)
+    drafted = skill_dir_from(src)
 
-    assert set(files) == {"run.py"}
-    assert [s.path for s in skipped] == ["node_modules/"]
+    assert (drafted.skill_md, set(drafted.attachments)) == (None, {"run.py"})
+    assert [s.path for s in drafted.skipped] == ["node_modules/"]
 
 
 async def test_memory_edit_with_nothing_to_append_is_rejected_and_unchanged(container, make_agent):

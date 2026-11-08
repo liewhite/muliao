@@ -3,7 +3,7 @@ skill 正文、工作区文件都用它），依次做多处这样的修改（ed
 区间、按语法结构、换算原文行号）只有工作区工具用，在 workspace.file_edit。"""
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import NamedTuple
 
 from muliao.errors import InvalidInput
@@ -104,24 +104,39 @@ def failed_edit(i: int, n: int, error: Exception, after: str = "") -> str:
 
 
 def edit_each(current: str, changes: Sequence[TextChange], what: str) -> str:
-    """依次做一段文本的多处修改（memory_edit 的 `edits`；edit_skill 跨文件，在 skills._edited 按同样的规则做），后一处在前面改过的结果上找原文。任何一处失败都整体失败，
-    报错指出是第几处；调用方只在成功后写入，所以不会留下改了一半的文本。"""
+    """依次做一段文本的多处修改（memory_edit 的 `edits`），每处按 edit；规则见 edit_keyed。"""
+
+    def step(_: int, text: str | None, c: TextChange) -> str:
+        return edit(text or "", c.old, c.new, what)
+
+    return edit_keyed({0: current}, [(0, c) for c in changes], step)[0]
+
+
+def edit_keyed[K](
+    texts: Mapping[K, str],
+    changes: Sequence[tuple[K, TextChange]],
+    step: Callable[[K, str | None, TextChange], str],
+) -> dict[K, str]:
+    """依次做多处修改，每处作用在它那份文本上（键是文本的名字，如 skill 里的文件），后一处在前面改过的结果上找原文。
+    step(键, 当前文本（还没有这份时为 None）, 修改) 做一处、返回新文本，做不了时 InvalidInput。任何一处失败都整体失败（ChangeFailed，
+    报错指出是第几处）；调用方只在成功后写入，所以不会留下改了一半的文本。返回全部文本（含没改到的）。"""
     if not changes:
         raise InvalidInput(NO_EDITS)
-    text = current
-    for i, change in enumerate(changes, 1):
+    current = dict(texts)
+    for i, (key, change) in enumerate(changes, 1):
         try:
-            text = edit(text, change.old, change.new, what)
+            current[key] = step(key, current.get(key), change)
         except InvalidInput as e:
             if len(changes) == 1:
                 raise ChangeFailed(str(e), change, i) from e
+            k = sum(1 for earlier, _ in changes[: i - 1] if earlier == key)
             after = (
-                f" (old_text is matched against the text with the {i - 1} earlier edit(s) applied)"
-                if i > 1
+                f" (old_text is matched against the text with the {k} earlier edit(s) to it applied)"
+                if k
                 else ""
             )
             raise ChangeFailed(failed_edit(i, len(changes), e, after), change, i) from e
-    return text
+    return current
 
 
 def append(current: str, entry: str) -> str:

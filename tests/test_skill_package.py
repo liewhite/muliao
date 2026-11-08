@@ -145,18 +145,18 @@ async def test_importing_for_an_unavailable_owner_is_refused(container, make_age
         (
             {"digest/SKILL.md": SKILL_MD, "digest/a.md": "x", "digest/a.md/b.md": "y"},
             (),
-            "file and a directory",
+            "cannot also be a directory",
         ),
-        ({"digest/SKILL.md": SKILL_MD, "digest/skill.md": "x"}, (), "more than once"),
+        ({"digest/SKILL.md": SKILL_MD, "digest/skill.md": "x"}, (), "same file"),
         (
             {"digest/SKILL.md": SKILL_MD, "digest/caf\u00e9.md": "x", "digest/cafe\u0301.md": "y"},
             (),
-            "more than once",
+            "same file",
         ),
         (
             {"digest/SKILL.md": SKILL_MD, "digest/A.md": "x", "digest/a.md/b.md": "y"},
             (),
-            "file and a directory",
+            "cannot also be a directory",
         ),
         ({"digest/notes.md": "x"}, (), "no usable digest/SKILL.md"),
         ({"Digest!/SKILL.md": SKILL_MD}, (), "invalid skill name"),
@@ -190,7 +190,7 @@ def test_duplicate_entries_are_rejected():
         archive.writestr("digest/SKILL.md", SKILL_MD)
         with pytest.warns(UserWarning, match="Duplicate name"):
             archive.writestr("digest/SKILL.md", SKILL_MD)
-    with pytest.raises(InvalidInput, match="more than once"):
+    with pytest.raises(InvalidInput, match="same file"):
         skill_package.unpack(buffer.getvalue())
 
 

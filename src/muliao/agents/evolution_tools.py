@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.memory import MemoryInfo, MemoryStore
-from muliao.agents.skill_package import ATTACHMENT_SUFFIXES, MAX_FILE_BYTES, SKILL_FILE, SkillFile, Skipped
-from muliao.agents.skills import FileChange, SkillMeta, SkillStore, attachments_from
+from muliao.agents.skill_package import ATTACHMENT_SUFFIXES, MAX_FILE_BYTES, SKILL_FILE, Skipped
+from muliao.agents.skills import FileChange, SkillDir, SkillMeta, SkillStore, instructions, skill_dir_from
 from muliao.errors import InvalidInput
 from muliao.platform.text_edit import TextChange
 from muliao.platform.tool_views import Args, MarkdownBlock, ToolRender, ViewBlock, diff, fields, rendered_by
@@ -17,25 +17,23 @@ from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 # 写完 skill 时告诉模型附件怎么放（规则在 skill_package，这里从同一份定义生成）：只在写 skill 时用得上，
 # 不放进每次请求都带的工具说明
 _ATTACHMENTS_NOTE = (
-    ". That directory is a read-only copy generated from the database: to add or change one script or other "
-    "text file of the skill, use `edit_skill` with `file` (the path in that directory); to reorganize or "
-    "delete attachments, put the full set in a directory in your workspace and pass it as `attachments_dir`. "
-    "Files ending in "
+    ". That directory is a read-only copy generated from the database: to change part of SKILL.md or of one "
+    "attachment (or add one), use `edit_skill` with `file` (the path in that directory); to rewrite the skill "
+    "from a draft, delete or reorganize attachments, keep the whole skill as a directory in your workspace "
+    "(SKILL.md + attachments) and pass it as `skill_dir`. Files ending in "
     f"{', '.join('.' + s for s in ATTACHMENT_SUFFIXES)} of at most {MAX_FILE_BYTES // 1024} KB are kept "
     "(not inside hidden, node_modules, venv or site-packages directories); anything else, binaries included, "
     "is not: write in the skill how to install it (version and source)."
 )
 
 
-async def _attachments(
-    ctx: RunContext[RunScope], directory: str | None
-) -> tuple[dict[str, SkillFile] | None, list[Skipped]]:
+async def _skill_dir(ctx: RunContext[RunScope], directory: str | None) -> SkillDir | None:
     if directory is None:
-        return None, []
+        return None
 
-    def collect() -> tuple[dict[str, SkillFile], list[Skipped]]:
+    def collect() -> SkillDir:
         path = Path(directory).expanduser()
-        return attachments_from(path if path.is_absolute() else ctx.deps.workspace / path)
+        return skill_dir_from(path if path.is_absolute() else ctx.deps.workspace / path)
 
     return await asyncio.to_thread(collect)
 
@@ -52,7 +50,7 @@ _READ_SKILL_RENDER = ToolRender[str](
 _WRITE_SKILL_RENDER = ToolRender[str](
     call=lambda a: [
         fields(("skill", a["name"]), ("description", a["description"]), ("reason", a["reason"])),
-        MarkdownBlock(title=None, text=a["content"]),
+        *([MarkdownBlock(title=None, text=a["content"])] if a["content"] is not None else []),
     ],
 )
 
@@ -149,31 +147,50 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
     async def write_skill(
         ctx: RunContext[RunScope],
         name: str,
-        description: str,
-        content: str,
         reason: str,
-        attachments_dir: str | None = None,
+        description: str | None = None,
+        content: str | None = None,
+        skill_dir: str | None = None,
     ) -> str:
         """Create or replace a skill: a reusable procedure for a recurring kind of task. A new skill is yours and
         only you have it in your skill index; other agents get it only through a role. Replacing an existing one
         needs you to own it (or be an admin). Skill names are unique.
+        Give the instructions either as `content` or as SKILL.md in `skill_dir`, and the description either as
+        `description` or in that SKILL.md's frontmatter; giving one of them twice is an error.
 
         Args:
             name: Lowercase slug, e.g. `slack-digest`.
-            description: One sentence on when to use this skill; shown in the skill index.
-            content: Markdown instructions: steps, commands, pitfalls, examples.
             reason: Why, kept in the version history as this skill's timeline: the defect it fixes (user
                 correction, error, detour) or the recurring pattern it captures, the source (session id, the
                 user's words), and how it relates to earlier changes (new / rewrites / overturns what).
-            attachments_dir: Directory (workspace-relative or absolute) whose text files replace all the
-                skill's attachments (scripts etc. next to SKILL.md); omit to keep them.
+            description: One sentence on when to use this skill; shown in the skill index.
+            content: Markdown instructions: steps, commands, pitfalls, examples.
+            skill_dir: Directory (workspace-relative or absolute) holding the whole skill as drafted in your
+                workspace: its SKILL.md (optional YAML frontmatter with `name`, `description`) is the
+                instructions, every other text file an attachment (scripts etc.), replacing all existing
+                attachments. Omit to keep the attachments.
         """
         me = ctx.deps.agent_id
-        files, skipped = await _attachments(ctx, attachments_dir)
-        meta = await store.write(
-            name, description, content, actor=me, owner=me, attachments=files, reason=reason
+        drafted = await _skill_dir(ctx, skill_dir)
+        description, body = instructions(
+            name, description, content, None if drafted is None else drafted.skill_md
         )
-        return _saved("saved", meta, skipped)
+        if body is None:
+            raise InvalidInput(f"no instructions: give content, or {SKILL_FILE} in skill_dir")
+        if description is None:
+            raise InvalidInput(
+                f"no description: give description, or `description` in the frontmatter of {SKILL_FILE} in skill_dir"
+            )
+        meta = await store.write(
+            name,
+            description,
+            body,
+            actor=me,
+            owner=me,
+            attachments=None if drafted is None else drafted.attachments,
+            reason=reason,
+        )
+        return _saved("saved", meta, [] if drafted is None else drafted.skipped)
 
     @ts.tool(metadata=rendered_by(_SKILL_EDIT_RENDER))
     async def edit_skill(
@@ -185,19 +202,21 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         edits: tuple[FileTextReplace, ...] = (),
         file: str = SKILL_FILE,
         description: str | None = None,
-        attachments_dir: str | None = None,
+        skill_dir: str | None = None,
     ) -> str:
         """Change a skill you own (or any skill, if you are an admin) without rewriting it: part of its
         instructions or of one of its attachments (scripts etc.), its description, or several. Text: in `file`
         (default SKILL.md, the instructions), `old_text` must occur exactly once and is replaced by `new_text`;
-        an empty `old_text` appends `new_text` at the end, and creates the attachment if it does not exist yet
-        (executable if it starts with `#!`; existing files keep their mode). Leave both empty to change no text.
-        At least one change must be given.
+        an empty `old_text` appends `new_text` at the end (to SKILL.md after a blank line; to an attachment
+        exactly as given, on a new line), and creates the attachment if it does not exist yet (executable if it
+        starts with `#!`; existing files keep their mode). Leave both empty to change no text. At least one
+        change must be given.
         To change several places in one call, in one file or in several, pass `edits` instead of
         old_text/new_text: they are applied in order, each `old_text` found in the text as the earlier edits left
         it; if any fails nothing is written, and all of them make one version.
         The skill directory on disk is a read-only copy: change skills only with this or `write_skill`.
-        To delete or reorganize attachments, use `attachments_dir` instead.
+        To delete or reorganize attachments, or to rewrite the skill from a draft in your workspace, use
+        `skill_dir` instead.
 
         Args:
             name: Skill name.
@@ -212,22 +231,27 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
                 instructions, without the frontmatter) or an attachment's path in the skill directory, e.g.
                 `scripts/run.py`.
             description: New one-sentence description shown in the skill index; omit to keep the current one.
-            attachments_dir: Directory (workspace-relative or absolute) whose text files replace all the
-                skill's attachments (scripts etc. next to SKILL.md); omit to keep them. Not together with
-                text changes to attachments.
+            skill_dir: Directory (workspace-relative or absolute) holding the skill as drafted in your
+                workspace: its other text files replace all the attachments; its SKILL.md, if there is one,
+                replaces the instructions (a `description` in its frontmatter replaces the description). Omit
+                to keep them. Not together with text changes to what it replaces.
         """
-        files, skipped = await _attachments(ctx, attachments_dir)
+        drafted = await _skill_dir(ctx, skill_dir)
+        description, body = instructions(
+            name, description, None, None if drafted is None else drafted.skill_md
+        )
         meta = await store.edit(
             name,
             ctx.deps.agent_id,
             changes=_file_changes(file, old_text, new_text, edits),
+            body=body,
             description=description,
-            attachments=files,
+            attachments=None if drafted is None else drafted.attachments,
             reason=reason,
         )
-        if files is None:
+        if drafted is None:
             return f"edited skill {meta.name}"
-        return _saved("edited", meta, skipped)
+        return _saved("edited", meta, drafted.skipped)
 
     @ts.tool
     async def delete_skill(ctx: RunContext[RunScope], name: str, reason: str) -> str:

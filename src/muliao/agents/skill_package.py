@@ -16,7 +16,7 @@ import stat
 import unicodedata
 import zipfile
 import zlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 from muliao.agents.kinds import StoredKind, label
@@ -133,6 +133,29 @@ def check_attachment_path(rel: str) -> None:
         )
 
 
+def check_files(paths: Iterable[str]) -> None:
+    """一个 skill 的全部文件（相对路径，含 SKILL.md）能一起生成到磁盘上：不分大小写、不分 Unicode 规范化形式不重名
+    （macOS 默认的文件系统上这样的两个路径是同一个文件），一个路径不能既是文件又是别的文件的上级目录；否则 InvalidInput。
+    导入的包与每次写入附件都查（生成目录时撞上会写失败，启动时的全量生成就起不来）。"""
+    seen: dict[str, str] = {}
+    for path in paths:
+        key = unicodedata.normalize("NFC", path).casefold()
+        if key in seen:
+            hint = f"; {SKILL_FILE} is the instructions" if key == SKILL_FILE.casefold() else ""
+            raise InvalidInput(
+                f"{path!r} and {seen[key]!r} are the same file (paths are case-insensitive{hint})"
+            )
+        seen[key] = path
+    for key, path in seen.items():
+        parent = key.rpartition("/")[0]
+        while parent:
+            if parent in seen:
+                raise InvalidInput(
+                    f"{seen[parent]!r} is a file, so it cannot also be a directory of {path!r}"
+                )
+            parent = parent.rpartition("/")[0]
+
+
 def _parts(filename: str) -> list[str]:
     """zip 里的一个路径（目录条目以 `/` 结尾）拆成各段；越界或歧义的整个包拒绝。"""
     return path_parts(filename.removesuffix("/"), "package path")
@@ -170,22 +193,7 @@ def unpack(data: bytes) -> Package:
         if total > MAX_UNPACKED_BYTES:
             raise TooLarge(f"package unpacks to {total} bytes, more than {MAX_UNPACKED_BYTES}")
         files: dict[str, SkillFile] = {}
-        # 按不分大小写、不分 Unicode 规范化形式比较：macOS 默认的文件系统上这样的两个路径是同一个文件
-        seen: set[str] = set()
-        for info, parts in entries:
-            rel = unicodedata.normalize("NFC", "/".join(parts[1:])).casefold()
-            if rel in seen:
-                raise InvalidInput(
-                    f"package contains {info.filename!r} more than once (paths are case-insensitive)"
-                )
-            seen.add(rel)
-        # 一个路径不能既是文件又是别的文件的上级目录
-        for rel in seen:
-            parent = rel.rpartition("/")[0]
-            while parent:
-                if parent in seen:
-                    raise InvalidInput(f"package path {name}/{parent} is both a file and a directory")
-                parent = parent.rpartition("/")[0]
+        check_files(["/".join(parts[1:]) for _, parts in entries])
         for info, parts in entries:
             rel = "/".join(parts[1:])
 

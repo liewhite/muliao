@@ -584,7 +584,7 @@ async def test_edit_skill_edits_and_creates_attachments_by_file_as_one_version_o
                     "reason": "r9",
                     "file": "notes.md",
                     "new_text": "x",
-                    "attachments_dir": ".",
+                    "skill_dir": ".",
                 },
             ),
         ],
@@ -595,11 +595,11 @@ async def test_edit_skill_edits_and_creates_attachments_by_file_as_one_version_o
     assert "nope.md of skill digest does not exist" in outputs[3] and "notes.md" in outputs[3]
     assert "'..' segment" in outputs[4] and "absolute" in outputs[5]
     assert "cannot be an attachment" in outputs[6] and "larger than" in outputs[7]
-    assert "attachments_dir replaces all attachments" in outputs[8]
+    assert "skill_dir replaces all attachments" in outputs[8]
     files = await container.skills.files("digest")
-    assert files["scripts/run.sh"] == SkillFile("#!/bin/sh\necho 1\n\necho 2\n", executable=True)
-    assert files["scripts/new.py"] == SkillFile("#!/usr/bin/env python3\nprint(3)\n", executable=True)
-    assert files["refs/api.md"] == SkillFile("# API\n")
+    assert files["scripts/run.sh"] == SkillFile("#!/bin/sh\necho 1\necho 2", executable=True)
+    assert files["scripts/new.py"] == SkillFile("#!/usr/bin/env python3\nprint(3)", executable=True)
+    assert files["refs/api.md"] == SkillFile("# API")
     assert files["notes.md"] == SkillFile("keep me\n")
     assert (await container.skills.read("digest")).body == "run scripts/run.sh"
     history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
@@ -608,6 +608,111 @@ async def test_edit_skill_edits_and_creates_attachments_by_file_as_one_version_o
     generated = container.skills.dir("digest")
     assert (generated / "scripts/new.py").stat().st_mode & 0o111
     assert not (generated / "refs/api.md").stat().st_mode & 0o111
+
+
+async def test_edit_skill_keeps_modes_appends_code_as_is_and_rejects_colliding_paths(
+    container, make_agent, models
+):
+    from muliao.agents.skill_package import SkillFile
+
+    me = await make_agent("alpha", model="tools")
+    await container.skills.write(
+        "digest",
+        "d",
+        "body",
+        actor=me.id,
+        owner=me.id,
+        attachments={
+            "plain.py": SkillFile("x = 1\n"),
+            "run.sh": SkillFile("#!/bin/sh\necho hi\n", executable=True),
+            "scripts/a.py": SkillFile("def f():\n    pass\n"),
+        },
+    )
+    tool = "edit_skill"
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            (
+                tool,
+                {
+                    "name": "digest",
+                    "reason": "r1",
+                    "edits": [
+                        {
+                            "file": "plain.py",
+                            "old_text": "x = 1",
+                            "new_text": "#!/usr/bin/env python3\nx = 1",
+                        },
+                        {"file": "run.sh", "old_text": "#!/bin/sh\n", "new_text": ""},
+                        {"file": "scripts/a.py", "new_text": "    return 1\n"},
+                    ],
+                },
+            ),
+            (tool, {"name": "digest", "reason": "r2", "file": "skill.md", "new_text": "x"}),
+            (tool, {"name": "digest", "reason": "r3", "file": "Scripts/A.py", "new_text": "x"}),
+            (tool, {"name": "digest", "reason": "r4", "file": "plain.py/b.py", "new_text": "x"}),
+        ],
+    )
+
+    assert outputs[0] == "edited skill digest"
+    assert "same file" in outputs[1] and "SKILL.md is the instructions" in outputs[1]
+    assert "same file" in outputs[2] and "cannot also be a directory" in outputs[3]
+    files = await container.skills.files("digest")
+    # 已有文件保留原来的可执行位，不看改后是否以 #! 开头
+    assert files["plain.py"] == SkillFile("#!/usr/bin/env python3\nx = 1\n", executable=False)
+    assert files["run.sh"] == SkillFile("echo hi\n", executable=True)
+    # 附件追加原样拼接：缩进不丢、不插空行
+    assert files["scripts/a.py"].content == "def f():\n    pass\n    return 1\n"
+    assert set(files) == {"SKILL.md", "plain.py", "run.sh", "scripts/a.py"}
+
+
+async def test_a_skill_drafted_as_a_directory_is_written_whole_with_its_skill_md_as_instructions(
+    container, make_agent, models
+):
+    # #493：草稿在 workspace 里是一个目录（SKILL.md + 附件），不用把正文内联进 content，也不会先存个空壳
+    from muliao.agents.skill_package import SkillFile
+
+    me = await make_agent("alpha", model="tools")
+    draft = container.settings.workspaces_dir / me.id / "draft"
+    (draft / "scripts").mkdir(parents=True)
+    (draft / "SKILL.md").write_text("---\nname: digest\ndescription: When digesting\n---\n\nrun it\n")
+    (draft / "scripts" / "run.py").write_text("print(1)\n")
+    bare = draft.parent / "bare"
+    bare.mkdir()
+    (bare / "SKILL.md").write_text("just the body\n")
+    (bare / "notes.md").write_text("n\n")
+    tool = "write_skill"
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            (tool, {"name": "digest", "reason": "r1", "skill_dir": "draft"}),
+            (tool, {"name": "digest", "reason": "r2", "skill_dir": "draft", "content": "x"}),
+            (tool, {"name": "digest", "reason": "r3", "skill_dir": "draft", "description": "d"}),
+            (tool, {"name": "other", "reason": "r4", "skill_dir": "draft"}),
+            (tool, {"name": "lone", "reason": "r5", "skill_dir": "bare"}),
+            (tool, {"name": "lone", "reason": "r6", "description": "d"}),
+            ("edit_skill", {"name": "digest", "reason": "r7", "skill_dir": "bare"}),
+            ("edit_skill", {"name": "digest", "reason": "r8", "skill_dir": "bare", "new_text": "more"}),
+        ],
+    )
+
+    assert outputs[0].startswith("saved skill digest")
+    assert "give the instructions once" in outputs[1] and "give the description once" in outputs[2]
+    assert "does not match 'other'" in outputs[3]
+    assert "no description" in outputs[4] and "no instructions" in outputs[5]
+    assert outputs[6].startswith("edited skill digest")
+    assert "replaces the instructions" in outputs[7]
+    # 编辑：目录里的 SKILL.md 换掉正文（没写描述就保留原描述），其余文件整体换掉附件
+    skill = await container.skills.read("digest")
+    assert (skill.meta.description, skill.body.strip()) == ("When digesting", "just the body")
+    files = await container.skills.files("digest")
+    assert set(files) == {"SKILL.md", "notes.md"} and files["notes.md"] == SkillFile("n\n")
+    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
+    assert [r.message for r in history] == ["r7", "r1"]
 
 
 async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):
