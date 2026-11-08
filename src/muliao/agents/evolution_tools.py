@@ -40,7 +40,13 @@ async def _skill_dir(ctx: RunContext[RunScope], directory: str | None) -> SkillD
 
 def _saved(verb: str, meta: SkillMeta, skipped: list[Skipped]) -> str:
     skipped_note = "".join(f"; skipped {s.path}: {s.reason}" for s in skipped)
-    return f"{verb} skill {meta.name} at {meta.path.parent}{skipped_note}{_ATTACHMENTS_NOTE}"
+    removed_note = (
+        f"; removed attachments not in skill_dir: {', '.join(meta.removed)} (restore them from the version "
+        "history if that was not intended)"
+        if meta.removed
+        else ""
+    )
+    return f"{verb} skill {meta.name} at {meta.path.parent}{removed_note}{skipped_note}{_ATTACHMENTS_NOTE}"
 
 
 _READ_SKILL_RENDER = ToolRender[str](
@@ -166,7 +172,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             description: One sentence on when to use this skill; shown in the skill index.
             content: Markdown instructions: steps, commands, pitfalls, examples.
             skill_dir: Directory (workspace-relative or absolute) holding the whole skill as drafted in your
-                workspace: its SKILL.md (optional YAML frontmatter with `name`, `description`) is the
+                workspace: its SKILL.md (optional YAML frontmatter with `name`, `description`; other keys are not kept) is the
                 instructions, every other text file an attachment (scripts etc.), replacing all existing
                 attachments. Omit to keep the attachments.
         """

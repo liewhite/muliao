@@ -597,9 +597,9 @@ async def test_edit_skill_edits_and_creates_attachments_by_file_as_one_version_o
     assert "cannot be an attachment" in outputs[6] and "larger than" in outputs[7]
     assert "skill_dir replaces all attachments" in outputs[8]
     files = await container.skills.files("digest")
-    assert files["scripts/run.sh"] == SkillFile("#!/bin/sh\necho 1\necho 2", executable=True)
-    assert files["scripts/new.py"] == SkillFile("#!/usr/bin/env python3\nprint(3)", executable=True)
-    assert files["refs/api.md"] == SkillFile("# API")
+    assert files["scripts/run.sh"] == SkillFile("#!/bin/sh\necho 1\necho 2\n", executable=True)
+    assert files["scripts/new.py"] == SkillFile("#!/usr/bin/env python3\nprint(3)\n", executable=True)
+    assert files["refs/api.md"] == SkillFile("# API\n")
     assert files["notes.md"] == SkillFile("keep me\n")
     assert (await container.skills.read("digest")).body == "run scripts/run.sh"
     history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
@@ -705,6 +705,7 @@ async def test_a_skill_drafted_as_a_directory_is_written_whole_with_its_skill_md
     assert "does not match 'other'" in outputs[3]
     assert "no description" in outputs[4] and "no instructions" in outputs[5]
     assert outputs[6].startswith("edited skill digest")
+    assert "removed attachments not in skill_dir: scripts/run.py" in outputs[6]
     assert "replaces the instructions" in outputs[7]
     # 编辑：目录里的 SKILL.md 换掉正文（没写描述就保留原描述），其余文件整体换掉附件
     skill = await container.skills.read("digest")

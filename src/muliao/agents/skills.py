@@ -10,6 +10,7 @@ FileChange），或 write_skill / edit_skill 的 attachments 整体替换（从�
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -55,6 +56,8 @@ class SkillMeta:
     owner: str | None
     # 生成目录里的 SKILL.md
     path: Path
+    # 只在写入的返回值里有：这次写入删掉的附件（整体替换附件时，没在新的一组里的），工具结果里告诉模型
+    removed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -83,16 +86,24 @@ class SkillImport:
 def parse_frontmatter(text: str, name: str) -> tuple[str, frontmatter.Post]:
     """SKILL.md 的 frontmatter 规则：name、description 都是字符串，name 与 skill 名一致，description 非空。返回描述与解析结果；
     不合规则时 InvalidInput（写入的 SKILL.md 来自调用方：导入的包、恢复的旧版）。"""
+    where = f"{name}/{SKILL_FILE}"
+    post = _loads(text, name, where)
+    fm_name, description = post.get("name"), post.get("description")
+    if not isinstance(fm_name, str) or not isinstance(description, str):
+        raise InvalidInput(f"{where}: frontmatter must contain string 'name' and 'description'")
+    return _valid_description(description), post
+
+
+def _loads(text: str, name: str, where: str) -> frontmatter.Post:
+    """解析 SKILL.md；frontmatter 里有 name 时必须与 skill 同名。where 是报错里对这份文件的称呼。"""
     try:
         post = frontmatter.loads(text)
     except (yaml.YAMLError, ValueError) as e:
-        raise InvalidInput(f"{name}/{SKILL_FILE}: cannot parse frontmatter: {e}") from e
-    fm_name, description = post.get("name"), post.get("description")
-    if not isinstance(fm_name, str) or not isinstance(description, str):
-        raise InvalidInput(f"{name}/{SKILL_FILE}: frontmatter must contain string 'name' and 'description'")
-    if fm_name != name:
-        raise InvalidInput(f"{name}/{SKILL_FILE}: frontmatter name {fm_name!r} does not match {name!r}")
-    return _valid_description(description), post
+        raise InvalidInput(f"{where}: cannot parse frontmatter: {e}") from e
+    fm_name = post.get("name")
+    if fm_name is not None and fm_name != name:
+        raise InvalidInput(f"{where}: frontmatter name {fm_name!r} does not match {name!r}")
+    return post
 
 
 def _skill_md(name: str, description: str, body: str) -> str:
@@ -163,7 +174,7 @@ def instructions(
     name: str, description: str | None, body: str | None, skill_md: str | None
 ) -> tuple[str | None, str | None]:
     """正文与描述各只有一个来源：参数（description、body）或 skill 目录里的 SKILL.md（skill_md：正文，可带 frontmatter，
-    其中的 name 须与 skill 同名、description 当描述；其余键不存）。同一项两处都给是错误（不猜哪个优先）。返回（描述, 正文），
+    其中的 name 须与 skill 同名、description 当描述；其余键不存，同 write_skill 的 content）。同一项两处都给是错误（不猜哪个优先）。返回（描述, 正文），
     哪项都没给就是 None。"""
     if skill_md is None:
         return description, body
@@ -171,13 +182,8 @@ def instructions(
         raise InvalidInput(
             f"give the instructions once: either content or {SKILL_FILE} in skill_dir, not both"
         )
-    try:
-        post = frontmatter.loads(skill_md)
-    except (yaml.YAMLError, ValueError) as e:
-        raise InvalidInput(f"{SKILL_FILE} in skill_dir: cannot parse frontmatter: {e}") from e
-    fm_name, fm_description = post.get("name"), post.get("description")
-    if fm_name is not None and fm_name != name:
-        raise InvalidInput(f"{SKILL_FILE} in skill_dir: frontmatter name {fm_name!r} does not match {name!r}")
+    post = _loads(skill_md, name, f"{SKILL_FILE} in skill_dir")
+    fm_description = post.get("description")
     if fm_description is not None:
         if not isinstance(fm_description, str):
             raise InvalidInput(f"{SKILL_FILE} in skill_dir: frontmatter description must be a string")
@@ -357,7 +363,7 @@ class SkillStore:
             )
         record_in(s, Subject.SKILL, name, before, document(skill_md, new_files), actor, message)
         await s.flush()
-        return self._meta(row)
+        return dataclasses.replace(self._meta(row), removed=tuple(sorted(set(old_files) - set(new_files))))
 
     async def export(self, name: str) -> bytes:
         """打成标准 .skill 文件（skill_package）：SKILL.md 与附件。"""
@@ -451,7 +457,7 @@ def _edited(
     """依次做 changes（text_edit.edit_keyed：后一处在前面改过的结果上找，任何一处做不了整体失败），返回改后的正文与全部
     附件（纯函数）。SKILL.md 按 text_edit.edit 改正文（追加时规整空白，同记忆）。其余路径改附件：路径与类型按
     check_attachment_path（这里逐处查，报错带上第几处；整组路径的约束由 _store_in 兜底），大小按 MAX_FILE_BYTES；替换同
-    text_edit.replace_once，追加原样接在末尾（代码不能去掉缩进、插空行；原文末尾没有换行时先补一个）；不存在的附件只能
+    text_edit.replace_once，追加原样接在末尾（代码不能去掉缩进、插空行；原文与结果末尾没有换行时补一个）；不存在的附件只能
     追加，即新建：以 `#!` 开头的可执行，已有附件保留原来的可执行位。"""
 
     def step(rel: str, text: str | None, change: TextChange) -> str:
@@ -471,6 +477,7 @@ def _edited(
         else:
             base = text or ""
             new = base + ("\n" if base and not base.endswith("\n") else "") + change.new
+            new += "" if new.endswith("\n") else "\n"
         if len(new.encode()) > skill_package.MAX_FILE_BYTES:
             raise InvalidInput(f"{what} would be larger than {skill_package.MAX_FILE_BYTES} bytes")
         return new
