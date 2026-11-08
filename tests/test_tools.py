@@ -775,7 +775,7 @@ async def test_edit_file_refuses_a_read_only_file_before_writing_any(
         ],
     )
     assert "edit 2: file is not writable" in outputs[2] and "nothing was written" in outputs[2]
-    assert "chmod -R u+w" in outputs[2]
+    assert "chmod -R u+rwX" in outputs[2]
     assert "     1\tA = 1" in outputs[3]
 
 
@@ -789,6 +789,9 @@ async def test_write_into_a_read_only_copy_is_returned_to_the_model_with_the_rea
     (ro / "old.sh").write_text("echo 1\n")
     (ro / "old.sh").chmod(0o444)
     ro.chmod(0o555)
+    shut = container.agents.workspace(me.id) / "shut"
+    shut.mkdir()
+    shut.chmod(0o000)  # 进不去的目录：连 stat 里面的文件都 EACCES，错误处理本身不能再抛
     try:
         outputs = await run_tools(
             container,
@@ -799,16 +802,19 @@ async def test_write_into_a_read_only_copy_is_returned_to_the_model_with_the_rea
                 ("write_file", {"path": "att/sub/x.sh", "content": "echo 3\n"}),
                 ("write_file", {"path": "att/old.sh", "content": "echo 4\n"}),
                 ("write_file", {"path": "ok.txt", "content": "fine\n"}),
+                ("write_file", {"path": "shut/x.sh", "content": "echo 5\n"}),
             ],
         )
     finally:
+        shut.chmod(0o755)
         ro.chmod(0o755)
         (ro / "old.sh").chmod(0o644)
-    assert f"cannot write {ro / 'new.sh'}: Permission denied" in outputs[0]
-    assert f"chmod -R u+w {ro}`" in outputs[0]
-    assert f"chmod -R u+w {ro}`" in outputs[1]
-    assert f"chmod -R u+w {ro / 'old.sh'}`" in outputs[2]
+    assert f"Permission denied: '{ro / 'new.sh'}'" in outputs[0]
+    assert f"chmod -R u+rwX {ro}`" in outputs[0]
+    assert f"chmod -R u+rwX {ro}`" in outputs[1]
+    assert f"chmod -R u+rwX {ro / 'old.sh'}`" in outputs[2]
     assert outputs[3].startswith("created ")
+    assert f"chmod -R u+rwX {shut}`" in outputs[4]
     assert (ro / "old.sh").read_text() == "echo 1\n"
 
 
