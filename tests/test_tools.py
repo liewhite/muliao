@@ -508,6 +508,108 @@ async def test_memory_edit_and_edit_skill_apply_a_list_of_edits_as_one_version_o
     assert [r.message for r in history][:2] == ["s1", "write skill digest"]
 
 
+async def test_edit_skill_edits_and_creates_attachments_by_file_as_one_version_or_not_at_all(
+    container, make_agent, models
+):
+    # #494：改一个附件不用再把全部附件拷出来、整个目录传回去
+    from muliao.agents.skill_package import SkillFile
+
+    me = await make_agent("alpha", model="tools")
+    await container.skills.write(
+        "digest",
+        "d",
+        "run the script",
+        actor=me.id,
+        owner=me.id,
+        attachments={
+            "scripts/run.sh": SkillFile("#!/bin/sh\necho one\n", executable=True),
+            "notes.md": SkillFile("keep me\n"),
+        },
+    )
+    tool = "edit_skill"
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            # 单处：顶层 file
+            (
+                tool,
+                {
+                    "name": "digest",
+                    "reason": "r1",
+                    "file": "scripts/run.sh",
+                    "old_text": "one",
+                    "new_text": "1",
+                },
+            ),
+            # 多文件一次一版：正文、已有附件、新建两个附件（#! 开头的可执行）
+            (
+                tool,
+                {
+                    "name": "digest",
+                    "reason": "r2",
+                    "edits": [
+                        {"old_text": "the script", "new_text": "scripts/run.sh"},
+                        {"file": "scripts/run.sh", "new_text": "echo 2"},
+                        {"file": "scripts/new.py", "new_text": "#!/usr/bin/env python3\nprint(3)"},
+                        {"file": "refs/api.md", "new_text": "# API"},
+                    ],
+                },
+            ),
+            # 第二处失败：什么都不写
+            (
+                tool,
+                {
+                    "name": "digest",
+                    "reason": "r3",
+                    "edits": [
+                        {"file": "notes.md", "old_text": "keep me", "new_text": "changed"},
+                        {"file": "scripts/run.sh", "old_text": "missing", "new_text": "x"},
+                    ],
+                },
+            ),
+            (tool, {"name": "digest", "reason": "r4", "file": "nope.md", "old_text": "a", "new_text": "b"}),
+            (tool, {"name": "digest", "reason": "r5", "file": "../escape.md", "new_text": "x"}),
+            (tool, {"name": "digest", "reason": "r6", "file": "/abs.md", "new_text": "x"}),
+            (tool, {"name": "digest", "reason": "r7", "file": "tool.bin", "new_text": "x"}),
+            (
+                tool,
+                {"name": "digest", "reason": "r8", "file": "big.md", "new_text": "x" * (256 * 1024 + 1)},
+            ),
+            (
+                tool,
+                {
+                    "name": "digest",
+                    "reason": "r9",
+                    "file": "notes.md",
+                    "new_text": "x",
+                    "attachments_dir": ".",
+                },
+            ),
+        ],
+    )
+
+    assert outputs[:2] == ["edited skill digest"] * 2
+    assert "edit 2 of 2" in outputs[2] and "nothing was written" in outputs[2]
+    assert "nope.md of skill digest does not exist" in outputs[3] and "notes.md" in outputs[3]
+    assert "'..' segment" in outputs[4] and "absolute" in outputs[5]
+    assert "cannot be an attachment" in outputs[6] and "larger than" in outputs[7]
+    assert "attachments_dir replaces all attachments" in outputs[8]
+    files = await container.skills.files("digest")
+    assert files["scripts/run.sh"] == SkillFile("#!/bin/sh\necho 1\n\necho 2\n", executable=True)
+    assert files["scripts/new.py"] == SkillFile("#!/usr/bin/env python3\nprint(3)\n", executable=True)
+    assert files["refs/api.md"] == SkillFile("# API\n")
+    assert files["notes.md"] == SkillFile("keep me\n")
+    assert (await container.skills.read("digest")).body == "run scripts/run.sh"
+    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
+    assert [r.message for r in history] == ["r2", "r1", "write skill digest"]
+    # 生成目录同步更新，可执行位按上面
+    generated = container.skills.dir("digest")
+    assert (generated / "scripts/new.py").stat().st_mode & 0o111
+    assert not (generated / "refs/api.md").stat().st_mode & 0o111
+
+
 async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):
     """agent 写检查脚本时要知道时限：生产上一个「正常 15 秒、网络抖动时重试 30~60 秒」的脚本反复超时。"""
     create = session_tools(container)["trigger_create"]

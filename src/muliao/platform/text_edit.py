@@ -104,7 +104,7 @@ def failed_edit(i: int, n: int, error: Exception, after: str = "") -> str:
 
 
 def edit_each(current: str, changes: Sequence[TextChange], what: str) -> str:
-    """依次做多处修改（memory_edit、edit_skill 的 `edits`），后一处在前面改过的结果上找原文。任何一处失败都整体失败，
+    """依次做一段文本的多处修改（memory_edit 的 `edits`；edit_skill 跨文件，在 skills._edited 按同样的规则做），后一处在前面改过的结果上找原文。任何一处失败都整体失败，
     报错指出是第几处；调用方只在成功后写入，所以不会留下改了一半的文本。"""
     if not changes:
         raise InvalidInput(NO_EDITS)

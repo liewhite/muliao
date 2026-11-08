@@ -111,14 +111,31 @@ def pack(name: str, files: Mapping[str, SkillFile]) -> bytes:
     return buffer.getvalue()
 
 
-def _parts(filename: str) -> list[str]:
-    """zip 里的一个路径拆成各段；绝对路径、`..`、反斜杠（Windows 分隔符）都是越界或歧义，整个包拒绝。"""
-    if filename.startswith("/") or "\\" in filename:
-        raise InvalidInput(f"package path {filename!r} is absolute or uses backslashes")
-    parts = filename.removesuffix("/").split("/")
+def path_parts(path: str, what: str) -> list[str]:
+    """skill 目录里的一个相对路径（zip 条目、附件名）拆成各段；绝对路径、`..`、`.`、空段、反斜杠（Windows 分隔符）
+    都是越界或歧义，拒绝。what 是报错里对它的称呼。"""
+    if path.startswith("/") or "\\" in path:
+        raise InvalidInput(f"{what} {path!r} is absolute or uses backslashes")
+    parts = path.split("/")
     if any(p in ("", ".", "..") for p in parts):
-        raise InvalidInput(f"package path {filename!r} has an empty, '.' or '..' segment")
+        raise InvalidInput(f"{what} {path!r} has an empty, '.' or '..' segment")
     return parts
+
+
+def check_attachment_path(rel: str) -> None:
+    """rel 能作为附件存进 skill：skill 目录内的相对路径、附件的文件类型，且不是 SKILL.md；否则 InvalidInput。"""
+    path_parts(rel, "attachment path")
+    if rel == SKILL_FILE or not is_attachment(rel):
+        raise InvalidInput(
+            f"{rel!r} cannot be an attachment of a skill (text files ending in "
+            f"{', '.join('.' + s for s in ATTACHMENT_SUFFIXES)}, not hidden or inside "
+            f"{', '.join(NOT_ATTACHMENT_DIRS)})"
+        )
+
+
+def _parts(filename: str) -> list[str]:
+    """zip 里的一个路径（目录条目以 `/` 结尾）拆成各段；越界或歧义的整个包拒绝。"""
+    return path_parts(filename.removesuffix("/"), "package path")
 
 
 def unpack(data: bytes) -> Package:

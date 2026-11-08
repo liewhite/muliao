@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.memory import MemoryInfo, MemoryStore
-from muliao.agents.skill_package import ATTACHMENT_SUFFIXES, MAX_FILE_BYTES, SkillFile, Skipped
-from muliao.agents.skills import SkillMeta, SkillStore, attachments_from
+from muliao.agents.skill_package import ATTACHMENT_SUFFIXES, MAX_FILE_BYTES, SKILL_FILE, SkillFile, Skipped
+from muliao.agents.skills import FileChange, SkillMeta, SkillStore, attachments_from
 from muliao.errors import InvalidInput
 from muliao.platform.text_edit import TextChange
 from muliao.platform.tool_views import Args, MarkdownBlock, ToolRender, ViewBlock, diff, fields, rendered_by
@@ -17,10 +17,10 @@ from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 # 写完 skill 时告诉模型附件怎么放（规则在 skill_package，这里从同一份定义生成）：只在写 skill 时用得上，
 # 不放进每次请求都带的工具说明
 _ATTACHMENTS_NOTE = (
-    ". That directory is a read-only copy generated from the database: to add or change scripts and other "
-    "text files of the skill, put them in a directory in your workspace and pass it as `attachments_dir` "
-    "(to change one file: `cp -R <dir> <copy> && chmod -R u+w <copy>` (the copy keeps the read-only modes), edit, "
-    "pass the copy). Files ending in "
+    ". That directory is a read-only copy generated from the database: to add or change one script or other "
+    "text file of the skill, use `edit_skill` with `file` (the path in that directory); to reorganize or "
+    "delete attachments, put the full set in a directory in your workspace and pass it as `attachments_dir`. "
+    "Files ending in "
     f"{', '.join('.' + s for s in ATTACHMENT_SUFFIXES)} of at most {MAX_FILE_BYTES // 1024} KB are kept "
     "(not inside hidden, node_modules, venv or site-packages directories); anything else, binaries included, "
     "is not: write in the skill how to install it (version and source)."
@@ -67,6 +67,15 @@ class TextReplace(BaseModel):
     new_text: str = Field(description="Replacement (or appended) text; empty deletes old_text.")
 
 
+class FileTextReplace(TextReplace):
+    # edit_skill 一次调用里的一处修改：可以指定改哪个文件
+    file: str | None = Field(
+        default=None,
+        description="File to change, a path in the skill directory (e.g. `scripts/run.py`); defaults to the "
+        "top-level `file`.",
+    )
+
+
 def _changes(old_text: str, new_text: str, edits: tuple[TextReplace, ...]) -> tuple[TextChange, ...]:
     """单处的 old_text/new_text 与 `edits` 列表二选一，统一成按顺序的修改；单处两个都空是不改正文。"""
     if edits:
@@ -74,6 +83,16 @@ def _changes(old_text: str, new_text: str, edits: tuple[TextReplace, ...]) -> tu
             raise InvalidInput("pass either one change (old_text/new_text) or edits, not both")
         return tuple(TextChange(e.old_text, e.new_text) for e in edits)
     return (TextChange(old_text, new_text),) if old_text or new_text else ()
+
+
+def _file_changes(
+    file: str, old_text: str, new_text: str, edits: tuple[FileTextReplace, ...]
+) -> tuple[FileChange, ...]:
+    """edit_skill 的修改：同 _changes，每处带上改的文件（edits 里没给 file 的用顶层的 file）。"""
+    changes = _changes(old_text, new_text, edits)
+    if edits:
+        return tuple(FileChange(e.file or file, c) for e, c in zip(edits, changes, strict=True))
+    return tuple(FileChange(file, c) for c in changes)
 
 
 def _change(a: Args) -> list[ViewBlock]:
@@ -84,10 +103,19 @@ def _change(a: Args) -> list[ViewBlock]:
     return [diff(None, old, new) for old, new in [*single, *((e.old_text, e.new_text) for e in edits)]]
 
 
+def _file_change(a: Args) -> list[ViewBlock]:
+    """edit_skill 的各处修改，同 _change；改的不是 SKILL.md 时以文件名为 diff 的标题。"""
+    file: str = a["file"]
+    edits: tuple[FileTextReplace, ...] = a["edits"]
+    single = [(file, a["old_text"], a["new_text"])] if a["old_text"] or a["new_text"] else []
+    rest = [(e.file or file, e.old_text, e.new_text) for e in edits]
+    return [diff(None if f == SKILL_FILE else f, old, new) for f, old, new in [*single, *rest]]
+
+
 _SKILL_EDIT_RENDER = ToolRender[str](
     call=lambda a: [
         fields(("skill", a["name"]), ("description", a["description"]), ("reason", a["reason"])),
-        *_change(a),
+        *_file_change(a),
     ],
 )
 _MEMORY_EDIT_RENDER = ToolRender[str](
@@ -154,37 +182,45 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         reason: str,
         old_text: str = "",
         new_text: str = "",
-        edits: tuple[TextReplace, ...] = (),
+        edits: tuple[FileTextReplace, ...] = (),
+        file: str = SKILL_FILE,
         description: str | None = None,
         attachments_dir: str | None = None,
     ) -> str:
         """Change a skill you own (or any skill, if you are an admin) without rewriting it: part of its
-        instructions, its description, its attachments, or several. Instructions: `old_text` must occur exactly
-        once in them and is replaced by `new_text`; an empty `old_text` appends `new_text` at the end; leave both
-        empty to keep the instructions. At least one change must be given.
-        To change several places in one call, pass `edits` instead of old_text/new_text: they are applied in
-        order, each `old_text` found in the text as the earlier edits left it; if any fails nothing is written,
-        and all of them make one version.
+        instructions or of one of its attachments (scripts etc.), its description, or several. Text: in `file`
+        (default SKILL.md, the instructions), `old_text` must occur exactly once and is replaced by `new_text`;
+        an empty `old_text` appends `new_text` at the end, and creates the attachment if it does not exist yet
+        (executable if it starts with `#!`; existing files keep their mode). Leave both empty to change no text.
+        At least one change must be given.
+        To change several places in one call, in one file or in several, pass `edits` instead of
+        old_text/new_text: they are applied in order, each `old_text` found in the text as the earlier edits left
+        it; if any fails nothing is written, and all of them make one version.
         The skill directory on disk is a read-only copy: change skills only with this or `write_skill`.
+        To delete or reorganize attachments, use `attachments_dir` instead.
 
         Args:
             name: Skill name.
             reason: Why, kept in the version history as this skill's timeline: the defect it fixes (user
                 correction, error, detour) or the recurring pattern it captures, the source (session id, the
                 user's words), and how it relates to earlier changes (new / rewrites / overturns what).
-            old_text: Exact text currently in the skill's instructions, or empty to append.
+            old_text: Exact text currently in `file`, or empty to append.
             new_text: Replacement (or appended) text; empty deletes `old_text`.
-            edits: Several changes, each {old_text, new_text} with the same rules, applied in order (omit
-                old_text/new_text when using it).
+            edits: Several changes, each {old_text, new_text} with the same rules and optionally its own
+                `file`, applied in order (omit old_text/new_text when using it).
+            file: File whose text old_text/new_text (and edits without a `file`) change: `SKILL.md` (the
+                instructions, without the frontmatter) or an attachment's path in the skill directory, e.g.
+                `scripts/run.py`.
             description: New one-sentence description shown in the skill index; omit to keep the current one.
             attachments_dir: Directory (workspace-relative or absolute) whose text files replace all the
-                skill's attachments (scripts etc. next to SKILL.md); omit to keep them.
+                skill's attachments (scripts etc. next to SKILL.md); omit to keep them. Not together with
+                text changes to attachments.
         """
         files, skipped = await _attachments(ctx, attachments_dir)
         meta = await store.edit(
             name,
             ctx.deps.agent_id,
-            changes=_changes(old_text, new_text, edits),
+            changes=_file_changes(file, old_text, new_text, edits),
             description=description,
             attachments=files,
             reason=reason,

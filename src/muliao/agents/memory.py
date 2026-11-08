@@ -161,7 +161,7 @@ class MemoryStore:
     async def edit(
         self, name: str, changes: Sequence[TextChange], actor: str, *, reason: str | None = None
     ) -> MemoryInfo:
-        """依次做 changes（text_edit.edit_each，规则同 skill 正文）：每处 old 恰好出现一次时替换为 new（new 为空即删除），
+        """依次做 changes（text_edit.edit_each，规则同 skill 的文件）：每处 old 恰好出现一次时替换为 new（new 为空即删除），
         old 为空时把 new 追加到末尾；任何一处做不了就整体不写。全部改完后规整、查上限，只记一版。
         actor 要能改它（规则 1 的 write）。reason 是这一版的说明（revisions.described）。
 

@@ -2,8 +2,9 @@
 （脚本、配置、参考文档）存在 item_files，每次修改记一版（revisions，文档是全部文件的 JSON）。
 
 磁盘上的 skill 目录（`<skills_dir>/<name>/`）是数据库生成的只读副本：每次写入后重新生成这个 skill 的目录，启动时全量
-重新生成（多余的目录删掉）。agent 读 skill 里的脚本、执行它们都在这个目录里；改附件要经 write_skill / edit_skill 的
-attachments（从工作目录里的一个目录收进来），直接改副本会被拒绝（只读）且下次生成时被覆盖。
+重新生成（多余的目录删掉）。agent 读 skill 里的脚本、执行它们都在这个目录里；改附件要经 edit_skill 按文件改（edit 的
+FileChange），或 write_skill / edit_skill 的 attachments 整体替换（从工作目录里的一个目录收进来），直接改副本会被拒绝（只读）
+且下次生成时被覆盖。
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import frontmatter
 import yaml
@@ -61,6 +63,14 @@ class Skill:
     body: str
     # 读的 agent 是否用得到它（自己的或分发给它的，agents.access）；不是也照常读到（软隔离）
     usable: bool = True
+
+
+class FileChange(NamedTuple):
+    """SkillStore.edit 的一处修改：file 是 skill 目录里的相对路径（SKILL.md 即正文，不含 frontmatter），change 的规则同
+    text_edit.edit。"""
+
+    file: str
+    change: TextChange
 
 
 @dataclass(frozen=True)
@@ -194,29 +204,39 @@ class SkillStore:
         name: str,
         actor: str,
         *,
-        changes: Sequence[TextChange] = (),
+        changes: Sequence[FileChange] = (),
         description: str | None = None,
         attachments: Mapping[str, SkillFile] | None = None,
         reason: str | None = None,
     ) -> SkillMeta:
-        """改一个 skill，不整篇重写：正文的几处、描述、附件（整体换成 attachments），可以同时改（同一版）。
-        正文依次做 changes，规则同记忆（见 text_edit.edit_each）：old 恰好出现一次时替换为 new，old 为空时把 new 追加到
-        末尾，任何一处做不了就整体不写；changes 为空表示不改正文。description / attachments 为 None 表示不改。什么都不改
-        是错误。名称不变。"""
+        """改一个 skill，不整篇重写：正文与各附件的几处、描述、附件（整体换成 attachments），可以同时改（同一版）。
+        changes 依次做（规则见 _edited），任何一处做不了就整体不写；changes 为空表示不改文件。description / attachments 为 None
+        表示不改。attachments 整体替换附件，不能再同时按文件改附件（两者谁先谁后没有唯一含义）。什么都不改是错误。名称不变。"""
         message = described(reason, f"edit skill {name}")
         if description is not None:
             description = _valid_description(description)
         elif not changes and attachments is None:
             raise InvalidInput(
-                "nothing to change: give old_text/new_text (or edits) to edit the instructions, description, "
-                "attachments_dir, or several of them"
+                "nothing to change: give old_text/new_text (or edits) to edit the instructions or attachments, "
+                "description, attachments_dir, or several of them"
+            )
+        touches_attachments = any(c.file != SKILL_FILE for c in changes)
+        if attachments is not None and touches_attachments:
+            raise InvalidInput(
+                "attachments_dir replaces all attachments: edit the files in that directory instead of also "
+                "giving edits for attachments"
             )
         # 读取、修改、写入与记版本在同一个写事务里（同记忆）：并发的编辑依次基于最新正文应用，互不覆盖
         async with self._db.transaction() as s:
             row = await changeable_in(s, StoredKind.SKILL, name, actor)
             post = frontmatter.loads(row.content)
             if changes:
-                post.content = text_edit.edit_each(post.content, changes, f"skill {name}").strip() + "\n"
+                old_files = await _attachments_in(s, row) if touches_attachments else {}
+                body, files = _edited(name, post.content, old_files, changes)
+                if any(c.file == SKILL_FILE for c in changes):
+                    post.content = body.strip() + "\n"
+                if touches_attachments:
+                    attachments = files
             if description is not None:
                 post["description"] = description
             meta = await self._store_in(
@@ -263,8 +283,7 @@ class SkillStore:
         生成目录由调用方在事务提交后做。"""
         description, _ = parse_frontmatter(skill_md, name)
         for rel in attachments or {}:
-            if not skill_package.is_attachment(rel) or rel == SKILL_FILE:
-                raise InvalidInput(f"{rel!r} cannot be an attachment of a skill")
+            skill_package.check_attachment_path(rel)
         old_files = {} if row is None else await _attachments_in(s, row)
         before = None if row is None else document(row.content, old_files)
         if row is None:
@@ -367,6 +386,40 @@ class SkillStore:
 async def _attachments_in(s, row: Item) -> dict[str, SkillFile]:  # noqa: ANN001
     files = await s.scalars(select(ItemFile).where(ItemFile.item_id == row.id).order_by(ItemFile.path))
     return {f.path: SkillFile(f.content, f.executable) for f in files}
+
+
+def _edited(
+    name: str, body: str, attachments: Mapping[str, SkillFile], changes: Sequence[FileChange]
+) -> tuple[str, dict[str, SkillFile]]:
+    """依次做 changes，返回改后的正文与全部附件（纯函数）。每处的规则同 text_edit.edit（old 恰好出现一次时替换，为空时
+    追加），后一处在前面改过的结果上找；SKILL.md 改正文，其余路径改附件（路径与类型按 check_attachment_path，大小按
+    MAX_FILE_BYTES）。不存在的附件只能追加（old 为空），即新建：以 `#!` 开头的可执行；已有附件保留原来的可执行位。任何一处
+    做不了整体失败，多处时报错指出第几处（同 text_edit.edit_each）。"""
+    texts = {SKILL_FILE: body} | {rel: f.content for rel, f in attachments.items()}
+    for i, (rel, change) in enumerate(changes, 1):
+        what = f"skill {name}" if rel == SKILL_FILE else f"{rel} of skill {name}"
+        try:
+            if rel != SKILL_FILE:
+                skill_package.check_attachment_path(rel)
+            if rel not in texts and change.old:
+                existing = ", ".join(sorted(attachments)) or "none"
+                raise InvalidInput(
+                    f"{what} does not exist (attachments: {existing}); to create it, give only new_text"
+                )
+            texts[rel] = text_edit.edit(texts.get(rel, ""), change.old, change.new, what)
+            if rel != SKILL_FILE and len(texts[rel].encode()) > skill_package.MAX_FILE_BYTES:
+                raise InvalidInput(f"{what} would be larger than {skill_package.MAX_FILE_BYTES} bytes")
+        except InvalidInput as e:
+            if len(changes) == 1:
+                raise
+            after = f" (old_text is matched against the files with the {i - 1} earlier edit(s) applied)"
+            raise InvalidInput(text_edit.failed_edit(i, len(changes), e, after if i > 1 else "")) from e
+    files = {
+        rel: SkillFile(text, attachments[rel].executable if rel in attachments else text.startswith("#!"))
+        for rel, text in texts.items()
+        if rel != SKILL_FILE
+    }
+    return texts[SKILL_FILE], files
 
 
 def _valid_description(description: str) -> str:
