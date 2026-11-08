@@ -69,8 +69,8 @@ class FileChange(NamedTuple):
     """SkillStore.edit 的一处修改：file 是 skill 目录里的相对路径（SKILL.md 即正文，不含 frontmatter），change 的规则同
     text_edit.edit。"""
 
-    file: str
     change: TextChange
+    file: str = SKILL_FILE
 
 
 @dataclass(frozen=True)
@@ -396,7 +396,7 @@ def _edited(
     MAX_FILE_BYTES）。不存在的附件只能追加（old 为空），即新建：以 `#!` 开头的可执行；已有附件保留原来的可执行位。任何一处
     做不了整体失败，多处时报错指出第几处（同 text_edit.edit_each）。"""
     texts = {SKILL_FILE: body} | {rel: f.content for rel, f in attachments.items()}
-    for i, (rel, change) in enumerate(changes, 1):
+    for i, (change, rel) in enumerate(changes, 1):
         what = f"skill {name}" if rel == SKILL_FILE else f"{rel} of skill {name}"
         try:
             if rel != SKILL_FILE:

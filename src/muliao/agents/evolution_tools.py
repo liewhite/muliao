@@ -91,8 +91,8 @@ def _file_changes(
     """edit_skill 的修改：同 _changes，每处带上改的文件（edits 里没给 file 的用顶层的 file）。"""
     changes = _changes(old_text, new_text, edits)
     if edits:
-        return tuple(FileChange(e.file or file, c) for e, c in zip(edits, changes, strict=True))
-    return tuple(FileChange(file, c) for c in changes)
+        return tuple(FileChange(c, e.file or file) for e, c in zip(edits, changes, strict=True))
+    return tuple(FileChange(c, file) for c in changes)
 
 
 def _change(a: Args) -> list[ViewBlock]:

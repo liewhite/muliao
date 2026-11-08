@@ -10,7 +10,7 @@ from muliao.agents.api import Subject, fill
 from muliao.agents.mcp import McpTransport, mcp_config
 from muliao.agents.memory import MemoryFull
 from muliao.agents.skill_package import SKILL_FILE, SkillFile
-from muliao.agents.skills import attachments_from, parse_document
+from muliao.agents.skills import FileChange, attachments_from, parse_document
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
 from muliao.platform.text_edit import TextChange
 from tests.conftest import history, owned, share
@@ -54,7 +54,7 @@ async def test_skill_names_are_unique_across_owners(container, make_agent):
     with pytest.raises(Forbidden, match="skill 'mine' belongs to agent 'alpha'"):
         await skills.write("mine", "steal", "x", actor=beta, owner=beta)
     with pytest.raises(Forbidden):
-        await skills.edit("mine", beta, changes=[TextChange("", "more")])
+        await skills.edit("mine", beta, changes=[FileChange(TextChange("", "more"))])
     # 用户能改任何条目，owner 不变
     meta = await skills.write("mine", "by user", "x", actor="user", owner=None)
     assert meta.owner == alpha
@@ -81,7 +81,7 @@ async def test_editing_a_skill_changes_body_description_or_attachments_in_one_re
     alpha = (await make_agent("alpha")).id
     await skills.write("digest", "d1", "step one", actor=alpha, owner=alpha)
 
-    await skills.edit("digest", alpha, changes=[TextChange("one", "two")], description="d2")
+    await skills.edit("digest", alpha, changes=[FileChange(TextChange("one", "two"))], description="d2")
     skill = await skills.read("digest")
     assert (skill.body.strip(), skill.meta.description) == ("step two", "d2")
     await skills.edit("digest", alpha, attachments={"run.sh": SkillFile("echo hi\n", True)})
@@ -111,7 +111,7 @@ async def test_the_skill_directory_is_a_read_only_copy_generated_from_the_databa
         (directory / "new.py").write_text("x")
 
     # 只改正文：附件保留；删掉附件：目录跟着变
-    await skills.edit("digest", alpha, changes=[TextChange("", "more")])
+    await skills.edit("digest", alpha, changes=[FileChange(TextChange("", "more"))])
     assert (directory / "run.sh").exists()
     await skills.edit("digest", alpha, attachments={})
     assert sorted(p.name for p in directory.iterdir()) == ["SKILL.md"]
@@ -330,7 +330,10 @@ async def test_concurrent_edits_of_one_skill_all_apply(container, make_agent):
     await store.write("digest", "d", "\n".join(f"line{i}" for i in range(6)), actor=alpha, owner=alpha)
 
     await asyncio.gather(
-        *(store.edit("digest", alpha, changes=[TextChange(f"line{i}", f"LINE{i}")]) for i in range(6))
+        *(
+            store.edit("digest", alpha, changes=[FileChange(TextChange(f"line{i}", f"LINE{i}"))])
+            for i in range(6)
+        )
     )
 
     assert (await store.read("digest")).body.split() == [f"LINE{i}" for i in range(6)]
@@ -345,7 +348,7 @@ async def test_an_edit_of_a_vanished_skill_is_not_found(container, make_agent):
     await store.write("digest", "d", "body", actor=alpha, owner=alpha)
     await store.delete("digest", alpha)
     with pytest.raises(NotFound):
-        await store.edit("digest", alpha, changes=[TextChange("", "more")])
+        await store.edit("digest", alpha, changes=[FileChange(TextChange("", "more"))])
 
 
 async def test_hidden_and_dependency_directories_are_skipped_whole(tmp_path):
