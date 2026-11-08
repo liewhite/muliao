@@ -330,7 +330,11 @@ def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> F
             try:
                 target.write_text(content, encoding="utf-8")
             except OSError as e:
-                done = f" Already written: {', '.join(map(str, written))}." if written else ""
+                done = (
+                    f" Already written: {', '.join(map(str, written))}."
+                    if written
+                    else " Nothing was written."
+                )
                 # 权限错误在 open 时就失败、不动文件；其他错误（如磁盘满）可能在截断之后发生
                 torn = (
                     ""
