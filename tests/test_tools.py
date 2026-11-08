@@ -577,16 +577,6 @@ async def test_edit_skill_edits_and_creates_attachments_by_file_as_one_version_o
                 tool,
                 {"name": "digest", "reason": "r8", "file": "big.md", "new_text": "x" * (256 * 1024 + 1)},
             ),
-            (
-                tool,
-                {
-                    "name": "digest",
-                    "reason": "r9",
-                    "file": "notes.md",
-                    "new_text": "x",
-                    "skill_dir": ".",
-                },
-            ),
         ],
     )
 
@@ -595,7 +585,6 @@ async def test_edit_skill_edits_and_creates_attachments_by_file_as_one_version_o
     assert "nope.md of skill digest does not exist" in outputs[3] and "notes.md" in outputs[3]
     assert "'..' segment" in outputs[4] and "absolute" in outputs[5]
     assert "cannot be an attachment" in outputs[6] and "larger than" in outputs[7]
-    assert "skill_dir replaces all attachments" in outputs[8]
     files = await container.skills.files("digest")
     assert files["scripts/run.sh"] == SkillFile("#!/bin/sh\necho 1\necho 2\n", executable=True)
     assert files["scripts/new.py"] == SkillFile("#!/usr/bin/env python3\nprint(3)\n", executable=True)
@@ -695,7 +684,8 @@ async def test_a_skill_drafted_as_a_directory_is_written_whole_with_its_skill_md
             (tool, {"name": "other", "reason": "r4", "skill_dir": "draft"}),
             (tool, {"name": "lone", "reason": "r5", "skill_dir": "bare"}),
             (tool, {"name": "lone", "reason": "r6", "description": "d"}),
-            ("edit_skill", {"name": "digest", "reason": "r7", "skill_dir": "bare"}),
+            (tool, {"name": "digest", "reason": "r7", "skill_dir": "bare", "description": "When digesting"}),
+            # #495：edit_skill 只做局部修改，没有 skill_dir
             ("edit_skill", {"name": "digest", "reason": "r8", "skill_dir": "bare", "new_text": "more"}),
         ],
     )
@@ -704,10 +694,10 @@ async def test_a_skill_drafted_as_a_directory_is_written_whole_with_its_skill_md
     assert "give the instructions once" in outputs[1] and "give the description once" in outputs[2]
     assert "does not match 'other'" in outputs[3]
     assert "no description" in outputs[4] and "no instructions" in outputs[5]
-    assert outputs[6].startswith("edited skill digest")
+    assert outputs[6].startswith("saved skill digest")
     assert "removed attachments not in skill_dir: scripts/run.py" in outputs[6]
-    assert "replaces the instructions" in outputs[7]
-    # 编辑：目录里的 SKILL.md 换掉正文（没写描述就保留原描述），其余文件整体换掉附件
+    assert "skill_dir" in outputs[7] and "edited skill" not in outputs[7]
+    # 整体写入：目录里的 SKILL.md 换掉正文，其余文件整体换掉附件
     skill = await container.skills.read("digest")
     assert (skill.meta.description, skill.body.strip()) == ("When digesting", "just the body")
     files = await container.skills.files("digest")

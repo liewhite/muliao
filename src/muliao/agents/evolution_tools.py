@@ -19,8 +19,9 @@ from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 _ATTACHMENTS_NOTE = (
     ". That directory is a read-only copy generated from the database: to change part of SKILL.md or of one "
     "attachment (or add one), use `edit_skill` with `file` (the path in that directory); to rewrite the skill "
-    "from a draft, delete or reorganize attachments, keep the whole skill as a directory in your workspace "
-    "(SKILL.md + attachments) and pass it as `skill_dir`. Files ending in "
+    "whole, delete or reorganize attachments, keep the whole skill as a directory in your workspace "
+    "(SKILL.md + attachments; e.g. `cp -R` that copy and `chmod -R u+w` it) and pass it to `write_skill` as "
+    "`skill_dir`: attachments not in it are removed. Files ending in "
     f"{', '.join('.' + s for s in ATTACHMENT_SUFFIXES)} of at most {MAX_FILE_BYTES // 1024} KB are kept "
     "(not inside hidden, node_modules, venv or site-packages directories); anything else, binaries included, "
     "is not: write in the skill how to install it (version and source)."
@@ -38,7 +39,7 @@ async def _skill_dir(ctx: RunContext[RunScope], directory: str | None) -> SkillD
     return await asyncio.to_thread(collect)
 
 
-def _saved(verb: str, meta: SkillMeta, skipped: list[Skipped]) -> str:
+def _saved(meta: SkillMeta, skipped: list[Skipped]) -> str:
     skipped_note = "".join(f"; skipped {s.path}: {s.reason}" for s in skipped)
     removed_note = (
         f"; removed attachments not in skill_dir: {', '.join(meta.removed)} (restore them from the version "
@@ -46,7 +47,7 @@ def _saved(verb: str, meta: SkillMeta, skipped: list[Skipped]) -> str:
         if meta.removed
         else ""
     )
-    return f"{verb} skill {meta.name} at {meta.path.parent}{removed_note}{skipped_note}{_ATTACHMENTS_NOTE}"
+    return f"saved skill {meta.name} at {meta.path.parent}{removed_note}{skipped_note}{_ATTACHMENTS_NOTE}"
 
 
 _READ_SKILL_RENDER = ToolRender[str](
@@ -196,7 +197,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             attachments=None if drafted is None else drafted.attachments,
             reason=reason,
         )
-        return _saved("saved", meta, [] if drafted is None else drafted.skipped)
+        return _saved(meta, [] if drafted is None else drafted.skipped)
 
     @ts.tool(metadata=rendered_by(_SKILL_EDIT_RENDER))
     async def edit_skill(
@@ -208,7 +209,6 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         edits: tuple[FileTextReplace, ...] = (),
         file: str = SKILL_FILE,
         description: str | None = None,
-        skill_dir: str | None = None,
     ) -> str:
         """Change a skill you own (or any skill, if you are an admin) without rewriting it: part of its
         instructions or of one of its attachments (scripts etc.), its description, or several. Text: in `file`
@@ -221,8 +221,8 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
         old_text/new_text: they are applied in order, each `old_text` found in the text as the earlier edits left
         it; if any fails nothing is written, and all of them make one version.
         The skill directory on disk is a read-only copy: change skills only with this or `write_skill`.
-        To delete or reorganize attachments, or to rewrite the skill from a draft in your workspace, use
-        `skill_dir` instead.
+        It never deletes a file: to rewrite the skill whole, or delete or reorganize attachments, use
+        `write_skill` with `skill_dir`.
 
         Args:
             name: Skill name.
@@ -237,27 +237,15 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
                 instructions, without the frontmatter) or an attachment's path in the skill directory, e.g.
                 `scripts/run.py`.
             description: New one-sentence description shown in the skill index; omit to keep the current one.
-            skill_dir: Directory (workspace-relative or absolute) holding the skill as drafted in your
-                workspace: its other text files replace all the attachments; its SKILL.md, if there is one,
-                replaces the instructions (a `description` in its frontmatter replaces the description; other frontmatter keys are ignored). Omit
-                to keep them. Not together with text changes to what it replaces.
         """
-        drafted = await _skill_dir(ctx, skill_dir)
-        description, body = instructions(
-            name, description, None, None if drafted is None else drafted.skill_md
-        )
         meta = await store.edit(
             name,
             ctx.deps.agent_id,
             changes=_file_changes(file, old_text, new_text, edits),
-            body=body,
             description=description,
-            attachments=None if drafted is None else drafted.attachments,
             reason=reason,
         )
-        if drafted is None:
-            return f"edited skill {meta.name}"
-        return _saved("edited", meta, drafted.skipped)
+        return f"edited skill {meta.name}"
 
     @ts.tool
     async def delete_skill(ctx: RunContext[RunScope], name: str, reason: str) -> str:

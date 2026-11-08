@@ -3,7 +3,7 @@
 
 磁盘上的 skill 目录（`<skills_dir>/<name>/`）是数据库生成的只读副本：每次写入后重新生成这个 skill 的目录，启动时全量
 重新生成（多余的目录删掉）。agent 读 skill 里的脚本、执行它们都在这个目录里；改附件要经 edit_skill 按文件改（edit 的
-FileChange），或 write_skill / edit_skill 的 attachments 整体替换（从工作目录里的一个目录收进来），直接改副本会被拒绝（只读）
+FileChange，只增改不删），或 write_skill 的 attachments 整体替换（从工作目录里的一个目录收进来），直接改副本会被拒绝（只读）
 且下次生成时被覆盖。
 """
 
@@ -126,7 +126,7 @@ def parse_document(doc: str) -> dict[str, SkillFile]:
 
 @dataclass(frozen=True)
 class SkillDir:
-    """工作目录里的一个 skill 目录（write_skill / edit_skill 的 skill_dir）：SKILL.md 的原文（没有就是 None）与附件。"""
+    """工作目录里的一个 skill 目录（write_skill 的 skill_dir）：SKILL.md 的原文（没有就是 None）与附件。"""
 
     skill_md: str | None
     attachments: dict[str, SkillFile]
@@ -256,35 +256,23 @@ class SkillStore:
         actor: str,
         *,
         changes: Sequence[FileChange] = (),
-        body: str | None = None,
         description: str | None = None,
-        attachments: Mapping[str, SkillFile] | None = None,
         reason: str | None = None,
     ) -> SkillMeta:
-        """改一个 skill：正文与各附件的几处（changes）、整篇正文（body）、描述、全部附件（整体换成 attachments），可以同时改
-        （同一版）。changes 依次做（规则见 _edited），任何一处做不了就整体不写；changes 为空表示不按处改。body / description /
-        attachments 为 None 表示不改。整体换掉的东西不能再同时按处改（body 与改 SKILL.md、attachments 与改附件：谁先谁后没有
-        唯一含义）。什么都不改是错误。名称不变。"""
+        """局部改一个 skill：正文与各附件的几处（changes，可新建附件）、描述，可以同时改（同一版）；不删任何文件，整体写入
+        与删附件走 write。changes 依次做（规则见 _edited），任何一处做不了就整体不写；description 为 None 表示不改。
+        什么都不改是错误。名称不变。"""
         message = described(reason, f"edit skill {name}")
         if description is not None:
             description = _valid_description(description)
-        elif not changes and body is None and attachments is None:
+        elif not changes:
             raise InvalidInput(
                 "nothing to change: give old_text/new_text (or edits) to edit the instructions or attachments, "
-                "description, skill_dir, or several of them"
+                "description, or both"
             )
         touches_attachments = any(c.file != SKILL_FILE for c in changes)
         touches_body = any(c.file == SKILL_FILE for c in changes)
-        if attachments is not None and touches_attachments:
-            raise InvalidInput(
-                "skill_dir replaces all attachments: edit the files in that directory instead of also "
-                "giving edits for attachments"
-            )
-        if body is not None and touches_body:
-            raise InvalidInput(
-                f"{SKILL_FILE} in skill_dir replaces the instructions: edit that file instead of also giving "
-                f"edits for {SKILL_FILE}"
-            )
+        attachments: Mapping[str, SkillFile] | None = None
         # 读取、修改、写入与记版本在同一个写事务里（同记忆）：并发的编辑依次基于最新正文应用，互不覆盖
         async with self._db.transaction() as s:
             row = await changeable_in(s, StoredKind.SKILL, name, actor)
@@ -293,11 +281,9 @@ class SkillStore:
                 old_files = await _attachments_in(s, row) if touches_attachments else {}
                 edited, files = _edited(name, post.content, old_files, changes)
                 if touches_body:
-                    body = edited
+                    post.content = edited.strip() + "\n"
                 if touches_attachments:
                     attachments = files
-            if body is not None:
-                post.content = body.strip() + "\n"
             if description is not None:
                 post["description"] = description
             meta = await self._store_in(

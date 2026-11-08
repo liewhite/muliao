@@ -76,7 +76,7 @@ async def test_skill_roundtrip_and_validation(container, make_agent):
         await skills.delete("missing", alpha)
 
 
-async def test_editing_a_skill_changes_body_description_or_attachments_in_one_revision(container, make_agent):
+async def test_editing_a_skill_changes_body_description_or_attachments_in_place(container, make_agent):
     skills = container.skills
     alpha = (await make_agent("alpha")).id
     await skills.write("digest", "d1", "step one", actor=alpha, owner=alpha)
@@ -84,11 +84,11 @@ async def test_editing_a_skill_changes_body_description_or_attachments_in_one_re
     await skills.edit("digest", alpha, changes=[FileChange(TextChange("one", "two"))], description="d2")
     skill = await skills.read("digest")
     assert (skill.body.strip(), skill.meta.description) == ("step two", "d2")
-    await skills.edit("digest", alpha, attachments={"run.sh": SkillFile("echo hi\n", True)})
+    await skills.edit("digest", alpha, changes=[FileChange(TextChange("", "echo hi"), "run.sh")])
     with pytest.raises(InvalidInput, match="nothing to change"):
         await skills.edit("digest", alpha)
     with pytest.raises(InvalidInput):
-        await skills.edit("digest", alpha, attachments={"../x.py": SkillFile("x")})
+        await skills.edit("digest", alpha, changes=[FileChange(TextChange("", "x"), "../x.py")])
 
     [attach, edit, create] = await history(container, Subject.SKILL, "digest", 10)
     assert (create.before, edit.actor, attach.message) == (None, alpha, "edit skill digest")
@@ -113,7 +113,7 @@ async def test_the_skill_directory_is_a_read_only_copy_generated_from_the_databa
     # 只改正文：附件保留；删掉附件：目录跟着变
     await skills.edit("digest", alpha, changes=[FileChange(TextChange("", "more"))])
     assert (directory / "run.sh").exists()
-    await skills.edit("digest", alpha, attachments={})
+    await skills.write("digest", "d", "body", actor=alpha, owner=alpha, attachments={})
     assert sorted(p.name for p in directory.iterdir()) == ["SKILL.md"]
     await skills.delete("digest", alpha)
     assert not directory.exists()
