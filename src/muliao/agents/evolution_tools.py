@@ -239,7 +239,7 @@ def skills_toolset(store: SkillStore) -> FunctionToolset[RunScope]:
             description: New one-sentence description shown in the skill index; omit to keep the current one.
             skill_dir: Directory (workspace-relative or absolute) holding the skill as drafted in your
                 workspace: its other text files replace all the attachments; its SKILL.md, if there is one,
-                replaces the instructions (a `description` in its frontmatter replaces the description). Omit
+                replaces the instructions (a `description` in its frontmatter replaces the description; other frontmatter keys are ignored). Omit
                 to keep them. Not together with text changes to what it replaces.
         """
         drafted = await _skill_dir(ctx, skill_dir)
