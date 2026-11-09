@@ -90,7 +90,8 @@ class AssetSource:
 
     @asynccontextmanager
     async def writing(self) -> AsyncIterator[Snapshot]:
-        """平台自己改资源文件：与读串行（读-改-写不会互相覆盖），交出改之前的快照，退出时让缓存失效。"""
+        """平台自己改资源文件：与读串行（读-改-写不会互相覆盖），交出改之前的快照，退出时让缓存失效。锁不可重入：块内
+        不要调 snapshot()（会卡死），只用交进来的快照。"""
         async with self._lock:
             try:
                 yield await self._current()

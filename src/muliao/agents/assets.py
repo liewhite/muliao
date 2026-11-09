@@ -272,8 +272,10 @@ class _Reader:
             platform = self.root / PLATFORM
             if platform.is_dir():
                 self.owner_assets(platform, None, None)
+        reported = {p.owner for p in self.problems}
         for agent_id, name in self.known.items():
-            if agent_id not in agents:
+            # 目录在、只是名字或内容不对的，上面已经报给它了
+            if agent_id not in agents and agent_id not in reported:
                 self.problem(
                     self.root / name,
                     f"agent {name!r} ({agent_id}) has no directory with an {AGENT_FILE} carrying its id; it keeps "
