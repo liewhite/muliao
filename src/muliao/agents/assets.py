@@ -16,8 +16,8 @@
 
 这里只管文件：布局、把整棵树读成一份不可变的快照（load_tree，纯同步 IO），以及原子写入。读坏的文件不加载、记成
 Problem（路径与原因），名字冲突的（同一种类的同名资源在不止一处）全部不加载、每处各记一条；运行时把与这个 agent 相关的
-报给它（agents.source.AssetSource）。agent 目录按 agent.toml 里的 id 对应数据库里的 agent（目录名就是它的名字，改名即
-mv 目录），对不上（id 不认识、重复）的整个目录不加载。
+报给它（agents.source.AssetSource）。agent 目录按 agent.toml 里的 id 对应数据库里的 agent，目录名必须就是数据库里它的名字
+（名字只认数据库，改名只走平台）；对不上（id 不认识、重复、目录名不同）的整个目录不加载。
 
 隐藏文件与目录（`.` 开头，如 .git、.DS_Store）不读。
 """
@@ -40,12 +40,12 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from muliao.agents.agent_rules import AgentRules
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import McpConfig, parse_mcp_file
-from muliao.agents.naming import validate_slug
-from muliao.agents.permissions import BASE, FIXED_RULES, Role, Rules, check_patterns
+from muliao.agents.naming import file_name, validate_slug
+from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, Role, Rules, check_patterns
 from muliao.agents.secrets_format import parse_secret_file
 from muliao.agents.skill_package import SKILL_FILE, parse_frontmatter
 from muliao.agents.thinking import Thinking
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
 
@@ -146,12 +146,24 @@ class Snapshot:
     # access.toml 里各 agent 的规则，按 id；没写的 agent 只有 base
     rules: Mapping[str, AgentRules]
     problems: tuple[Problem, ...]
+    # 磁盘上有、但读坏了或名字冲突而没加载的资源名：新建同名的会再添一处冲突，按已占用处理（check_free）
+    unloaded: Mapping[StoredKind, frozenset[str]]
 
     def rules_of(self, agent_id: str) -> AgentRules:
         return self.rules.get(agent_id, AgentRules())
 
     def get(self, kind: StoredKind, name: str) -> Asset | None:
         return self.assets[kind].get(name)
+
+    def check_free(self, kind: StoredKind, name: str) -> None:
+        """新建之前：同名的已加载，或在磁盘上但没加载（读坏、冲突），都是 Conflict。"""
+        if name in self.assets[kind]:
+            raise Conflict(f"{label(kind)} {name!r} already exists; names are unique, choose another name")
+        if name in self.unloaded[kind]:
+            raise Conflict(
+                f"a {label(kind)} named {name!r} is already on disk but not loaded (broken or duplicated; see the "
+                "reported problems); fix or remove it first, or choose another name"
+            )
 
     def asset(self, kind: StoredKind, name: str) -> Asset:
         found = self.get(kind, name)
@@ -189,8 +201,10 @@ class Snapshot:
         return base / SECRETS_DIR / f"{name}.toml"
 
     def problems_for(self, agent_id: str) -> list[Problem]:
-        """报给这个 agent 的问题：它自己目录里的与平台的（人人都受影响）。"""
-        return [p for p in self.problems if p.owner in (None, agent_id)]
+        """报给这个 agent 的问题：它自己目录里的；平台的（platform/、根目录、access.toml）只报给能写它们的 admin（规则里有
+        `write:*`），免得几十个 agent 同时去改同一个平台文件。别的照样记在服务日志里。"""
+        admin = ADMIN in self.rules_of(agent_id).roles
+        return [p for p in self.problems if p.owner == agent_id or (p.owner is None and admin)]
 
     @property
     def access_file(self) -> Path:
@@ -219,6 +233,7 @@ class _Reader:
         self.problems: list[Problem] = []
         # 每种资源：名字 → 找到的各处（冲突时不止一处）
         self.found: dict[StoredKind, dict[str, list[Asset]]] = {k: {} for k in StoredKind}
+        self.unloaded: dict[StoredKind, set[str]] = {k: set() for k in StoredKind}
 
     def problem(self, path: Path, reason: str, owner: str | None) -> None:
         self.problems.append(Problem(path, reason, owner))
@@ -273,6 +288,7 @@ class _Reader:
             roles,
             rules,
             tuple(self.problems),
+            {k: frozenset(v) for k, v in self.unloaded.items()},
         )
 
     def resolved(self, kind: StoredKind) -> dict[str, Asset]:
@@ -289,6 +305,7 @@ class _Reader:
                     "of them is loaded until all but one are renamed or removed",
                     a.owner,
                 )
+            self.unloaded[kind].add(name)
         return out
 
     def agent_dir(self, path: Path) -> AgentDir | None:
@@ -304,6 +321,15 @@ class _Reader:
             return None
         if data.id not in self.known:
             self.problem(file, f"id {data.id!r} is not an existing agent", None)
+            return None
+        if self.known[data.id] != name:
+            # 名字只认数据库：目录被手动改了名（或拷错了地方），不猜，整个不加载
+            self.problem(
+                path,
+                f"this is agent {self.known[data.id]!r}'s directory (id {data.id}) under another name; agents are "
+                f"renamed only in the app — move it back to {self.known[data.id]!r}",
+                data.id,
+            )
             return None
         if not data.description.strip():
             self.problem(file, "description must not be empty", data.id)
@@ -353,16 +379,20 @@ class _Reader:
                 self.problem(d, f"expected only skill directories in {directory.name}/", owner)
         return out
 
-    def guarded(self, path: Path, owner: str | None, load: Callable[[], Asset]) -> None:
+    def guarded(
+        self, kind: StoredKind, name: str, path: Path, owner: str | None, load: Callable[[], Asset]
+    ) -> None:
         try:
             self.add(load())
         except (InvalidInput, OSError, UnicodeDecodeError) as e:
             self.problem(path, str(e), owner)
+            self.unloaded[kind].add(name)
 
     def memory(self, path: Path, name: str, owner: str | None) -> None:
         def load() -> Asset:
             if owner is None:
-                validate_slug(label(StoredKind.MEMORY), name)
+                # 界面新建的要是 slug；agent 删除或转移时挪来的私有记忆带着 agent 名（可以是中文），能当文件名就行
+                file_name(label(StoredKind.MEMORY), name)
             text = path.read_text(encoding="utf-8").strip()
             if len(text) > self.memory_max_chars:
                 # 照常加载（截断更糟），但要让它缩短
@@ -373,7 +403,7 @@ class _Reader:
                 )
             return Asset(StoredKind.MEMORY, name, owner, path, "", updated(path), text=text)
 
-        self.guarded(path, owner, load)
+        self.guarded(StoredKind.MEMORY, name, path, owner, load)
 
     def skill(self, path: Path, owner: str | None) -> None:
         def load() -> Asset:
@@ -384,7 +414,7 @@ class _Reader:
             description, _ = parse_frontmatter(md.read_text(encoding="utf-8"), name)
             return Asset(StoredKind.SKILL, name, owner, path, description, updated(md))
 
-        self.guarded(path, owner, load)
+        self.guarded(StoredKind.SKILL, path.name, path, owner, load)
 
     def mcp(self, path: Path, owner: str | None) -> None:
         def load() -> Asset:
@@ -392,7 +422,7 @@ class _Reader:
             config, enabled = parse_mcp_file(path.read_text(encoding="utf-8"))
             return Asset(StoredKind.MCP, name, owner, path, "", updated(path), mcp=(config, enabled))
 
-        self.guarded(path, owner, load)
+        self.guarded(StoredKind.MCP, path.stem, path, owner, load)
 
     def secret(self, path: Path, owner: str | None) -> None:
         def load() -> Asset:
@@ -402,7 +432,7 @@ class _Reader:
                 StoredKind.SECRET, key, owner, path, description, updated(path), ciphertext=ciphertext
             )
 
-        self.guarded(path, owner, load)
+        self.guarded(StoredKind.SECRET, path.stem, path, owner, load)
 
     def access(self, agents: Mapping[str, AgentDir]) -> tuple[dict[str, Role], dict[str, AgentRules]]:
         """access.toml：坏掉的单条规则、不认识的角色各自跳过并记一条，其余照常（不让一个笔误拿掉一个 agent 的全部角色）。
@@ -497,7 +527,7 @@ def _brief(e: Exception) -> str:
 
 
 def load_tree(root: Path, known: Mapping[str, str], memory_max_chars: int) -> Snapshot:
-    """读整棵树。known 是数据库里的 agent（id → 名字，不含正在删除的）：agent 目录按 agent.toml 的 id 对上它们。同步 IO，
+    """读整棵树。known 是数据库里的 agent（id → 名字，含正在删除的）：agent 目录按 agent.toml 的 id 对上它们。同步 IO，
     调用方放到线程里。"""
     return _Reader(root, known, memory_max_chars).read()
 

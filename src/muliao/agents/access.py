@@ -150,9 +150,11 @@ def changeable(snapshot: Snapshot, kind: StoredKind, name: str, actor: str) -> A
 
 
 def writable(snapshot: Snapshot, kind: StoredKind, name: str, actor: str) -> Asset | None:
-    """新建或整体改写之前：已存在就按Grants.can 的 write 检查并返回它（owner 不变）；不存在返回 None。"""
+    """新建或整体改写之前：已存在就按Grants.can 的 write 检查并返回它（owner 不变）；不存在返回 None（磁盘上有同名但没加载的是 Conflict）。"""
     asset = snapshot.get(kind, name)
-    if asset is not None:
+    if asset is None:
+        snapshot.check_free(kind, name)
+    else:
         check_change(snapshot, actor, asset)
     return asset
 

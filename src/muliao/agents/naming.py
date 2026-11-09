@@ -22,12 +22,27 @@ def normalize_agent_name(value: str) -> str:
     return name
 
 
+# 资源目录里平台的目录名（agents.assets.PLATFORM）：agent 不能取
+PLATFORM_DIR = "platform"
+
+
 def new_agent_name(value: str) -> str:
-    """给 agent 起名或改名时的名称：normalize_agent_name，并且不能是 USER——模型按名称指代 agent 的地方（issue 的
-    指派人等）用它指用户，同名的 agent 就分不出来了。只在起名时拦：按名称查找时照常规范化。"""
+    """给 agent 起名或改名时的名称（读资源目录时目录名也按它查）：normalize_agent_name，不能是 USER——模型按名称指代 agent
+    的地方（issue 的指派人等）用它指用户，同名的 agent 就分不出来了；它还是资源目录里的目录名（#498），所以要能当一个
+    文件名：不含 `/`、`\\`，不以 `.` 开头（隐藏目录不读），不是 platform。只在起名时拦：按名称查找时照常规范化。"""
     name = normalize_agent_name(value)
     if name == USER:
         raise InvalidInput(f"agent name {USER!r} is reserved: it refers to the user (e.g. as issue assignee)")
+    return file_name("agent", name)
+
+
+def file_name(kind: str, name: str) -> str:
+    """能当资源目录里一个文件或目录名的名字（agent 名、私有记忆挪到平台后的记忆名）。"""
+    if "/" in name or "\\" in name or name.startswith(".") or name == PLATFORM_DIR:
+        raise InvalidInput(
+            f"{kind} name {name!r} must not contain '/' or '\\', start with '.', or be {PLATFORM_DIR!r}: it is a "
+            "directory name in the asset tree"
+        )
     return name
 
 

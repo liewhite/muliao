@@ -1,6 +1,7 @@
 """执行一次 agent 运行：组装 instructions、toolsets、模型，转发流式事件到总线。"""
 
 import logging
+from pathlib import Path
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
@@ -141,13 +142,18 @@ class AgentRuntime:
             agent_name=agent.name,
             agent_description=agent.description,
             workspace=scope.workspace,
-            asset_dir=self._assets.root / agent.name,
+            asset_dir=await self._asset_dir(agent),
             origin_note=origin_note,
             memories=await self._memory.for_run(agent.id),
             skills=await self._skills.index(agent.id),
             memory_limit=self._memory.max_chars,
             summary=summary,
         )
+
+    async def _asset_dir(self, agent: AgentInfo) -> Path:
+        """它的资源目录：加载成功时就是快照里那个；目录坏了（问题已报给它）时是它该在的位置。"""
+        loaded = (await self._assets.snapshot()).agents.get(agent.id)
+        return loaded.path if loaded is not None else self._assets.root / agent.name
 
     async def _asset_problems(self, agent_id: str) -> list[str]:
         snapshot = await self._assets.snapshot()

@@ -17,7 +17,6 @@ from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import McpConfig, McpServer, McpTransport, mcp_config, mcp_file
 from muliao.agents.naming import validate_slug
 from muliao.agents.source import AssetSource
-from muliao.errors import Conflict
 
 log = logging.getLogger(__name__)
 
@@ -75,8 +74,7 @@ class McpRegistry:
 
     @staticmethod
     def _check_free(snapshot: assets.Snapshot, name: str) -> None:
-        if snapshot.get(_KIND, name) is not None:
-            raise Conflict(f"{label(_KIND)} {name!r} already exists; names are unique, choose another name")
+        snapshot.check_free(_KIND, name)
 
     async def remove(self, name: str, actor: str) -> None:
         async with self._source.writing() as snapshot:

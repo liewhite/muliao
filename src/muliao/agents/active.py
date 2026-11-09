@@ -78,39 +78,30 @@ async def known_agents_in(s: AsyncSession) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class Mirrored:
-    """agents 表里从资源文件同步来的镜像列（agents.source.AssetSource）：事实来源是 `<名>/agent.toml` 与目录名，表里这份
-    给别的领域在自己的事务里读（名称解析、展示、运行用的模型），旧版本回滚后也读得到最新的值。"""
+    """agents 表里从 `<名>/agent.toml` 同步来的镜像列（agents.source.AssetSource）：别的领域在自己的事务里读（展示、运行用
+    的模型），旧版本回滚后也读得到最新的值。名字不在这里：名字只认数据库，目录名对不上的目录不加载（agents.assets），改名
+    只走平台（AgentService.update）。model / thinking 为 None 时不同步（文件里的在当前配置下不能运行，保留上次的）。"""
 
     id: str
-    name: str
     description: str
-    model: str
-    thinking: str
+    model: str | None
+    thinking: str | None
     group: str | None
 
 
 async def sync_mirror_in(s: AsyncSession, agents: list[Mirrored]) -> list[str]:
-    """把镜像列改成文件里的值，返回改了的 agent 的 id。名字唯一：先把要改名的都换成占位名（id），再写新名字，互换名字
-    的两个 agent 也不撞唯一约束。"""
+    """把镜像列改成文件里的值，返回改了的 agent 的 id。"""
     rows = {a.id: a for a in await s.scalars(select(Agent).where(Agent.id.in_([m.id for m in agents])))}
-
-    def fields(row: Agent | Mirrored) -> tuple[object, ...]:
-        return (row.name, row.description, row.model, row.thinking, row.group)
-
-    changed = [m for m in agents if m.id in rows and fields(rows[m.id]) != fields(m)]
-    renamed = [m for m in changed if rows[m.id].name != m.name]
-    for m in renamed:
-        rows[m.id].name = f"\x00{m.id}"
-    if renamed:
-        await s.flush()
-    for m in changed:
-        row = rows[m.id]
-        row.name, row.description, row.model, row.thinking, row.group = (
-            m.name,
-            m.description,
-            m.model,
-            m.thinking,
-            m.group,
-        )
+    changed = []
+    for m in agents:
+        row = rows.get(m.id)
+        if row is None:
+            continue
+        before = (row.description, row.model, row.thinking, row.group)
+        row.description, row.group = m.description, m.group
+        if m.model is not None and m.thinking is not None:
+            row.model, row.thinking = m.model, m.thinking
+        if (row.description, row.model, row.thinking, row.group) != before:
+            changed.append(m.id)
     await s.flush()
-    return [m.id for m in changed]
+    return changed

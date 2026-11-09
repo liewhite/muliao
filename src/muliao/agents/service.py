@@ -303,8 +303,11 @@ class AgentService:
         own = snapshot.agents.get(agent_id) if agent_id else None
         if name.casefold() in taken - ({own.path.name.casefold()} if own else set()) or name == PLATFORM:
             raise Conflict(f"agent name {name!r} is already taken by a directory in {snapshot.root}")
+        # 私有记忆名就是 agent 名：任何别的同名记忆（含共享、全局记忆，以及磁盘上没加载的）都占着这个名字
         memory = snapshot.get(StoredKind.MEMORY, name)
-        if memory is not None and memory.owner != agent_id:
+        if (memory is not None and (agent_id is None or memory.owner != agent_id)) or (
+            name in snapshot.unloaded[StoredKind.MEMORY]
+        ):
             raise Conflict(
                 f"a memory named {name!r} already exists (private memories carry the agent's name)"
             )
@@ -327,10 +330,10 @@ class AgentService:
             async with self._db.transaction() as s:
                 await self._check_name_free(s, snapshot, name, None)
             directory = snapshot.root / name
-            await asyncio.to_thread(
-                _write_new_agent, directory, snapshot.access_file, agent_id, fields, rules
-            )
             try:
+                await asyncio.to_thread(
+                    _write_new_agent, directory, snapshot.access_file, agent_id, fields, rules
+                )
                 async with self._db.transaction() as s:
                     agent = Agent(
                         id=agent_id,
@@ -351,9 +354,9 @@ class AgentService:
         return info
 
     async def update(self, agent_id: str, patch: AgentPatch, *, actor: str) -> AgentInfo:
-        """只修改给出的字段：配置改 agent.toml（保留人手写的注释），规则改 access.toml，改名挪目录（access.toml 里那一节跟着
-        改名），再同步镜像。只有用户（界面）改：agent 改自己的配置是改它目录里的 agent.toml，角色与规则在 access.toml，只有
-        admin 能写（写沙箱，workspace.writable）。"""
+        """只修改给出的字段（用户在界面上改）：配置改 agent.toml（保留人手写的注释），规则改 access.toml，改名先挪目录、再改
+        access.toml 里那一节，最后在同一把锁里写数据库（名字只认数据库）。任何一步失败都把已改的文件改回去，再报错。agent
+        自己改描述、模型、思考档位是直接改它的 agent.toml。"""
         async with self._source.writing() as snapshot:
             async with self._db.transaction() as s:
                 agent = await active_row_in(s, agent_id)
@@ -362,7 +365,8 @@ class AgentService:
             directory = snapshot.agents.get(agent_id)
             if directory is None:
                 raise NotFound(
-                    f"agent {agent.name!r} has no directory with its {AGENT_FILE} in {snapshot.root}; fix that first"
+                    f"agent {agent.name!r} has no loadable directory in {snapshot.root} (see the reported asset "
+                    "problems); fix that first"
                 )
             before = snapshot.rules_of(agent_id)
             rules = AgentRules.of(
@@ -371,12 +375,25 @@ class AgentService:
                 before.deny if patch.deny is None else patch.deny,
             )
             check_agent_rules(snapshot, rules, before)
-            await asyncio.to_thread(
-                _write_agent_update, directory.path, snapshot.access_file, directory.name, fields, rules
+            undo = await asyncio.to_thread(
+                _write_agent_update,
+                directory.path,
+                snapshot.access_file,
+                directory.name,
+                agent_id,
+                fields,
+                rules,
             )
-        await self._source.snapshot()
-        async with self._db.transaction() as s:
-            return info_of(await active_row_in(s, agent_id))
+            try:
+                async with self._db.transaction() as s:
+                    row = await active_row_in(s, agent_id)
+                    row.name, row.description, row.model = fields.name, fields.description, fields.model
+                    row.thinking, row.group = fields.thinking, fields.group
+                    await s.flush()
+                    return info_of(row)
+            except BaseException:
+                await asyncio.to_thread(undo)
+                raise
 
     async def set_default(self, agent_id: str, is_default: bool) -> AgentInfo:
         """设为（或取消）系统默认 agent。设为默认时同一事务里先清掉旧的，始终最多一个；取消不是默认的 agent 不做任何事。
@@ -495,16 +512,36 @@ def _undo_new_agent(directory: Path, access: Path, name: str) -> None:
 
 
 def _write_agent_update(
-    directory: Path, access: Path, old_name: str, fields: _AgentFields, rules: AgentRules
-) -> None:
-    agent_id = tomlkit.parse((directory / AGENT_FILE).read_text(encoding="utf-8"))["id"]
-    assets.write_text(directory / AGENT_FILE, _agent_toml(directory, str(agent_id), fields))
-
-    def change(doc: tomlkit.TOMLDocument) -> None:
-        if fields.name != old_name:
-            access_file.rename_agent(doc, old_name, fields.name)
-        access_file.set_agent_rules(doc, fields.name, rules)
-
-    access_file.edit(access, change)
+    directory: Path, access: Path, old_name: str, agent_id: str, fields: _AgentFields, rules: AgentRules
+) -> Callable[[], None]:
+    """改 agent 的文件，返回把它们改回去的函数。改名先挪目录（挪不了就什么都没改），再改 agent.toml 与 access.toml；后面
+    任何一步失败都当场改回去再报错。"""
+    agent_toml = directory / AGENT_FILE
+    old_toml = agent_toml.read_text(encoding="utf-8")
+    old_access = access.read_text(encoding="utf-8") if access.is_file() else None
+    target = directory.parent / fields.name
     if fields.name != old_name:
-        assets.move(directory, directory.parent / fields.name)
+        assets.move(directory, target)
+
+    def undo() -> None:
+        if old_access is None:
+            access.unlink(missing_ok=True)
+        else:
+            assets.write_text(access, old_access)
+        assets.write_text(target / AGENT_FILE, old_toml)
+        if target != directory:
+            target.rename(directory)
+
+    try:
+        assets.write_text(target / AGENT_FILE, _agent_toml(target, agent_id, fields))
+
+        def change(doc: tomlkit.TOMLDocument) -> None:
+            if fields.name != old_name:
+                access_file.rename_agent(doc, old_name, fields.name)
+            access_file.set_agent_rules(doc, fields.name, rules)
+
+        access_file.edit(access, change)
+    except BaseException:
+        undo()
+        raise
+    return undo

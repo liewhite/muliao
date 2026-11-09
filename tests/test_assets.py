@@ -67,7 +67,7 @@ async def test_broken_files_are_skipped_and_reported_to_their_owner(container, m
     write(r / "alpha" / "mcp" / "bad.json", "{not json")
     write(r / "alpha" / "secrets" / "TOKEN.toml", 'description = "x"\n')
     write(r / "alpha" / "notes.txt", "stray")
-    write(r / "platform" / "memory" / "Bad Name.md", "x")
+    write(r / "platform" / "memory" / "notes.txt", "x")
     snapshot = await container.assets.snapshot()
     assert snapshot.get(StoredKind.SKILL, "nodesc") is None
     assert snapshot.get(StoredKind.MCP, "bad") is None
@@ -78,12 +78,15 @@ async def test_broken_files_are_skipped_and_reported_to_their_owner(container, m
         ("alpha/mcp/bad.json", alpha.id),
         ("alpha/secrets/TOKEN.toml", alpha.id),
         ("alpha/notes.txt", alpha.id),
-        ("platform/memory/Bad Name.md", None),
+        ("platform/memory/notes.txt", None),
     }
     beta = await make_agent("beta")
-    # 报给相关的：自己目录里的与平台的
-    assert {str(p.path.relative_to(r)) for p in snapshot.problems_for(beta.id)} == {
-        "platform/memory/Bad Name.md"
+    boss = await make_agent("boss", roles=("admin",))
+    snapshot = await container.assets.snapshot()
+    # 报给相关的：自己目录里的；平台的只报给 admin
+    assert snapshot.problems_for(beta.id) == []
+    assert {str(p.path.relative_to(r)) for p in snapshot.problems_for(boss.id)} == {
+        "platform/memory/notes.txt"
     }
 
 
@@ -100,17 +103,70 @@ async def test_a_name_used_twice_loads_neither_and_reports_both(container, make_
     ]
 
 
-async def test_an_agent_directory_is_matched_by_the_id_in_its_agent_toml(container, make_agent):
+async def test_an_agent_directory_must_carry_a_known_id_under_the_agents_own_name(container, make_agent):
     alpha = await make_agent("alpha")
+    beta = await make_agent("beta")
     r = root(container)
     write(r / "ghost" / "agent.toml", 'id = "0123456789ab"\ndescription = "d"\nmodel = "test"\n')
-    (r / "alpha").rename(r / "renamed")
+    # 名字只认数据库：手动 mv 的目录不加载，不猜是改名（也不会撞上别的 agent 占着的名字）
+    (r / "beta").rename(r / "gamma")
+    (r / "alpha").rename(r / "beta")
     snapshot = await container.assets.snapshot()
-    assert snapshot.agents[alpha.id].name == "renamed"
-    assert [str(p.path.relative_to(r)) for p in snapshot.problems] == ["ghost/agent.toml"]
-    # 改名就是挪目录：镜像列跟着变，按新名字找得到
-    assert (await container.agents.find_by_name("renamed")).id == alpha.id
-    assert (await container.memory.read("renamed")).owner == alpha.id
+    assert snapshot.agents == {}
+    reported = {(str(p.path.relative_to(r)), p.owner): p.reason for p in snapshot.problems}
+    assert ("ghost/agent.toml", None) in reported
+    assert "move it back to 'alpha'" in reported[("beta", alpha.id)]
+    assert "move it back to 'beta'" in reported[("gamma", beta.id)]
+    # 运行照常：名字仍是数据库里的
+    assert (await container.agents.find_by_name("alpha")).id == alpha.id
+    assert [m.name for m in await container.memory.for_run(alpha.id)] == ["global"]
+
+
+async def test_renaming_in_the_app_moves_the_directory_and_rules_together(container, make_agent):
+    await container.distribution.create(RoleSpec("reader", "r", [], []), actor="user")
+    agent = await container.agents.create(
+        AgentSpec(name="alpha", description="d", model="test", roles=["reader"]), actor="user"
+    )
+    await make_agent("beta")
+    r = root(container)
+    with pytest.raises(Conflict, match="already taken"):
+        await container.agents.update(agent.id, AgentPatch(name="beta"), actor="user")
+    assert (r / "alpha").is_dir()
+    renamed = await container.agents.update(agent.id, AgentPatch(name="gamma"), actor="user")
+    assert renamed.name == "gamma" and (r / "gamma" / "agent.toml").exists()
+    assert (await container.distribution.agent_rules(agent.id)).roles == ("reader",)
+    assert (await container.memory.read("gamma")).owner == agent.id
+    assert await problems(container) == []
+
+
+async def test_a_failed_rename_puts_the_files_back(container, make_agent, monkeypatch):
+    from muliao.agents import access_file
+
+    agent = await make_agent("alpha")
+    r = root(container)
+    access = r / "platform" / "access.toml"
+    before = access.read_text() if access.exists() else None
+
+    def broken(path, change):  # noqa: ANN001, ANN202
+        raise OSError("disk full")
+
+    monkeypatch.setattr(access_file, "edit", broken)
+    with pytest.raises(OSError):
+        await container.agents.update(agent.id, AgentPatch(name="gamma", description="x"), actor="user")
+    assert (r / "alpha" / "agent.toml").exists() and not (r / "gamma").exists()
+    assert 'description = "test agent"' in (r / "alpha" / "agent.toml").read_text()
+    assert (access.read_text() if access.exists() else None) == before
+    assert (await container.agents.get(agent.id)).name == "alpha"
+
+
+async def test_a_name_on_disk_but_not_loaded_cannot_be_created_again(container, make_agent):
+    await make_agent("alpha")
+    write(
+        root(container) / "alpha" / "skills" / "digest" / "SKILL.md",
+        "---\nname: digest\n---\nno description\n",
+    )
+    with pytest.raises(Conflict, match="not loaded"):
+        await container.skills.write("digest", "When digesting", "x", actor="user", owner=None)
 
 
 async def test_editing_agent_toml_takes_effect_and_an_unrunnable_model_is_reported(
@@ -349,11 +405,17 @@ async def test_creating_and_renaming_an_agent_writes_its_directory_and_rules(con
     assert "[agents.alpha]" in access and '"write:path:~/x"' in access
     with pytest.raises(Conflict):
         await container.agents.create(AgentSpec(name="alpha", description="d"), actor="user")
-    with pytest.raises(Conflict, match="platform"):
-        await container.agents.create(AgentSpec(name="platform", description="d"), actor="user")
+    for bad in ("platform", "../escape", "a/b", ".hidden"):
+        with pytest.raises(InvalidInput, match="directory name"):
+            await container.agents.create(AgentSpec(name=bad, description="d"), actor="user")
+    assert sorted(p.name for p in r.iterdir()) == ["alpha", "platform"]
+    # 私有记忆名就是 agent 名：与共享、全局记忆同名的 agent 建不了
+    with pytest.raises(Conflict, match="memory named 'global'"):
+        await container.agents.create(AgentSpec(name="global", description="d"), actor="user")
 
     # 手写的注释保留；改名挪目录，access.toml 里那一节跟着改名
     write(r / "alpha" / "agent.toml", "# keep me\n" + (r / "alpha" / "agent.toml").read_text())
+    await container.assets.snapshot()
     updated = await container.agents.update(
         agent.id, AgentPatch(name="beta", description="new"), actor="user"
     )

@@ -20,7 +20,6 @@ from muliao.agents.kinds import StoredKind, label
 from muliao.agents.naming import validate_slug
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped, parse_frontmatter
 from muliao.agents.source import AssetSource
-from muliao.errors import Conflict
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +70,8 @@ def _read_files(directory: Path) -> dict[str, SkillFile]:
 
 
 def _replace_dir(directory: Path, files: Mapping[str, SkillFile]) -> None:
-    """把 skill 目录整体换成 files：先在同级临时目录写好再换上。"""
+    """把 skill 目录整体换成 files：先在同级临时目录写好再换上。两次 rename 之间进程死掉时目录会不在、只剩隐藏的
+    `.<名>.old`（读树不读隐藏目录）：罕见，由人把它改回原名，不自动恢复。"""
     parent = directory.parent
     parent.mkdir(parents=True, exist_ok=True)
     tmp = parent / f".{directory.name}.new"
@@ -143,12 +143,9 @@ class SkillStore:
         parse_frontmatter(package.files[SKILL_FILE].content, name)
         async with self._source.writing() as snapshot:
             existing = snapshot.get(_KIND, name)
-            if existing is not None and not replace:
-                raise Conflict(
-                    f"{label(_KIND)} {name!r} already exists; names are unique, choose another name"
-                )
-            if existing is not None:
-                writable(snapshot, _KIND, name, actor)
+            if existing is None or not replace:
+                snapshot.check_free(_KIND, name)
+            writable(snapshot, _KIND, name, actor)
             directory = existing.path if existing is not None else snapshot.path_of(_KIND, name, owner)
             await asyncio.to_thread(_replace_dir, directory, package.files)
         meta = _meta((await self._source.snapshot()).asset(_KIND, name))
