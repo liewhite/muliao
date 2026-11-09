@@ -252,6 +252,11 @@ async def test_asset_tree_is_writable_by_ownership_roles_and_admin(container, ma
     # agent 改不了自己的权限：access.toml 只有 admin 能写
     for a in (alice, bob, carol):
         assert not await can(a.id, access)
+    # 资源树只按归属：祖先目录的 write:path 授权也放不开它
+    await container.agents.update(carol.id, AgentPatch(allow=[f"write:path:{tree.parent}"]), actor="user")
+    assert await can(carol.id, tree.parent / "elsewhere")
+    assert not await can(carol.id, access) and not await can(carol.id, skill / "SKILL.md")
+    assert await can(carol.id, tree / "carol/memory.md")
     # admin 整棵树
     for p in (
         access,
@@ -296,10 +301,19 @@ async def test_refused_asset_writes_say_whose_it_is_and_whom_to_ask(container, m
         ],
     )
     assert "joint notes" in (tree / "platform/memory/trading.md").read_text()
+    # 只给了单个文件：在同目录建临时文件再改名的 sed -i 被拒（文档写明的行为）
+    shared = tree / "platform/memory/trading.md"
+    outputs = await run_tools(
+        container,
+        models,
+        bob.id,
+        [("run_shell", {"command": f"sed -i '' s/joint/x/ {shared}", "timeout": 30})],
+    )
+    assert "Operation not permitted" in outputs[0] and "joint notes" in shared.read_text()
 
 
 async def test_a_stdio_mcp_server_runs_inside_its_users_write_sandbox(container, make_agent, tmp_path):
-    from muliao.agents.api import McpServer, McpTransport, mcp_config
+    from muliao.agents.api import USER, McpServer, McpTransport, mcp_config
 
     me = await make_agent("alpha", model="tools")
     outside = tmp_path / "outside"
@@ -331,6 +345,14 @@ async def test_a_stdio_mcp_server_runs_inside_its_users_write_sandbox(container,
     assert await container.mcp.probe(server, me.id) == ["ping"]
     assert inside.read_text() == "x"
     assert not (outside / "f").exists()
+    # 用户在界面上测试：关在 owner 的限制里
+    inside.unlink()
+    assert await container.mcp.probe(server, USER) == ["ping"]
+    assert inside.read_text() == "x" and not (outside / "f").exists()
+    # 平台的（只有 admin 能写配置）由用户测试时不关
+    platform = McpServer(owner=None, name="probe", config=config, enabled=True)
+    assert await container.mcp.probe(platform, USER) == ["ping"]
+    assert (outside / "f").read_text() == "x"
 
 
 def test_file_tools_are_refused_with_the_system_error_and_the_note(tmp_path):

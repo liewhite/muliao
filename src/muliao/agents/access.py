@@ -175,10 +175,11 @@ def usable_by(snapshot: Snapshot, kind: StoredKind, grants: Grants) -> list[Asse
 
 @dataclass(frozen=True)
 class WriteScope:
-    """agent 能写哪里的领域输入（workspace.writable 并进默认可写范围）。资源树（tree）整个按归属管：除了 assets
-    里的都不能写，哪怕它落在默认可写的目录里。assets：admin 是整棵树；别的 agent 是自己的目录，加上规则放行 write 的别人的资源（记忆、
-    MCP、secret 是那个文件，skill 是它的目录）。access.toml 与 platform/ 下别的文件只有 admin 能写：agent 改不了自己的权限。
-    granted / revoked：`write:path:<目录>` 的 allow 与 deny（Rules.paths），排在资源之后，显式授权优先。"""
+    """agent 能写哪里的领域输入（workspace.writable 并进默认可写范围）。资源树（tree）整个只按归属管：除了 assets
+    里的都不能写，哪怕它落在默认可写的目录或 `write:path` 授权的目录里（排在它们之后），所以 access.toml 与 platform/ 下
+    别的文件只有 admin 能写，agent 改不了自己的权限。assets：admin 是整棵树（admin 的 deny 不收回资源树里的路径）；别的
+    agent 是自己的目录，加上规则放行 write 的别人的资源（记忆、MCP、secret 是那个文件，skill 是它的目录）。
+    granted / revoked：`write:path:<目录>` 的 allow 与 deny（Rules.paths）。"""
 
     tree: Path
     assets: tuple[Path, ...]
@@ -209,13 +210,14 @@ class WriteScope:
                 f"{snapshot.root / PLATFORM / ACCESS_FILE}.]"
             )
         parts = target.relative_to(tree).parts
-        if not parts or parts[0] == PLATFORM:
-            return (
-                f"{rest} The platform's files (roles and permissions in {PLATFORM}/{ACCESS_FILE}, global and "
-                "shared memories, public skills) are changed only by an admin: ask the user or an agent with the "
-                "admin role.]"
-            )
-        return f"{rest} {parts[0]}/ is another agent's directory: ask that agent or an admin.]"
+        others = {n for a, n in snapshot.names.items() if a != self.agent_id}
+        if parts and parts[0] in others:
+            return f"{rest} {parts[0]}/ is agent {parts[0]!r}'s directory: ask that agent or an admin.]"
+        return (
+            f"{rest} The platform's files (roles and permissions in {PLATFORM}/{ACCESS_FILE}, global and "
+            "shared memories, public skills) and the tree's root are changed only by an admin: ask the user or "
+            "an agent with the admin role.]"
+        )
 
 
 def _containing(snapshot: Snapshot, target: Path) -> Asset | None:
@@ -229,7 +231,8 @@ def _containing(snapshot: Snapshot, target: Path) -> Asset | None:
 
 
 def write_scope(snapshot: Snapshot, agent_id: str) -> WriteScope:
-    """agent 现在能写哪里（WriteScope），按快照算。「能写某项资源」与 check_change 是同一个判断（Grants.can 的 write）。"""
+    """agent 现在能写哪里（WriteScope），按快照算。非 admin 「能写别人的某项资源」与 check_change 是同一个判断（Grants.can
+    的 write）；admin 整棵树可写（它还要写 access.toml 与任何人的目录）。"""
     grants = grants_for(snapshot, agent_id)
     if snapshot.administers(agent_id):
         assets: tuple[Path, ...] = (snapshot.root,)

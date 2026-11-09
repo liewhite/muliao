@@ -2,9 +2,9 @@
 误写别处的东西。对 agent 无感：工具、说明、提示词都不提它；在范围内一切照旧，写到范围外时只在原本的系统报错后面补一句
 说明（denial_note）。
 
-可写路径 = 它的工作目录 + 默认可写的几类路径（DEFAULT_WRITABLE）− 受保护的（PROTECTED）− 整棵 AI 资源树 + 树里它能改的
-资源（agents.access.write_scope：自己的目录、角色授予 write 的、admin 整棵树，#499）+ 它的 `write:path:<目录>` 授权 − 它的
-deny 里的 `write:path:<目录>`，后面的覆盖前面的。「能不能改某项资源」由此完全由沙箱回答。类别换成具体路径、命令怎么关进沙箱由执行层按当前系统做
+可写路径 = 它的工作目录 + 默认可写的几类路径（DEFAULT_WRITABLE）− 受保护的（PROTECTED）+ 它的 `write:path:<目录>` 授权
+− 它的 deny 里的 `write:path:<目录>` − 整棵 AI 资源树 + 树里它能改的资源（agents.access.write_scope：自己的目录、角色
+授予 write 的、admin 整棵树，#499），后面的覆盖前面的。「能不能改某项资源」由此完全由沙箱回答。类别换成具体路径、命令怎么关进沙箱由执行层按当前系统做
 （platform.sandbox）。
 """
 
@@ -48,7 +48,7 @@ def _note(path: Path) -> str:
 
 class Confiner:
     """按 agent 现在的分发规则与资源归属算出它的 Confinement：每次起命令、写文件时现算，改了授权下一条命令就生效。
-    受保护的与资源树排在授权之前：`write:path` 授权它本身或它的上级目录都会放开它。"""
+    受保护的排在授权之前：`write:path` 授权它本身或它的上级目录都会放开它；资源树排在授权之后，只按归属。"""
 
     def __init__(
         self,
@@ -70,10 +70,11 @@ class Confiner:
             (True, self._workspace_of(agent_id)),
             *((True, p) for c in DEFAULT_WRITABLE for p in self._sandbox.paths(c)),
             *((False, p) for c in PROTECTED for p in self._sandbox.paths(c)),
-            (False, scope.tree),
-            *((True, p) for p in scope.assets),
             *((True, expand(p, self._home)) for p in scope.granted),
             *((False, expand(p, self._home)) for p in scope.revoked),
+            # 资源树只按归属管：排在 write:path 之后，祖先目录的授权（如 ~/.muliao）不放开 access.toml
+            (False, scope.tree),
+            *((True, p) for p in scope.assets),
         ]
         # 换成真实路径要读文件系统
         writable = await anyio.to_thread.run_sync(WritablePaths.of, rules, agent_id)
