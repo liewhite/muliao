@@ -1,17 +1,16 @@
-"""agent 与角色的查看与管理：列出能委派的 agent（list_agents），查看、创建、修改、删除 agent 与角色，转移条目的 owner。给模型看的是名称和描述，不出现 id。"""
+"""agent 的查看、创建与删除：列出能委派的 agent（list_agents）、看一个 agent 最终的配置与能用的（get_agent）、建与删 agent。改 agent
+配置、角色与分发规则是改资源目录里的文件（agents.assets）。给模型看的是名称和描述，不出现 id。"""
 
 from collections.abc import Iterable
 
 from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agents.catalog import ItemCatalog
-from muliao.agents.distribution import Distribution, RoleSpec
-from muliao.agents.kinds import StoredKind, label
+from muliao.agents.distribution import Distribution
 from muliao.agents.lifecycle import AgentLifecycle
 from muliao.agents.permissions import Role
-from muliao.agents.service import AgentInfo, AgentPatch, AgentService, AgentSpec, Thinking
-from muliao.errors import Conflict, InvalidInput
+from muliao.agents.service import AgentInfo, AgentService, AgentSpec, Thinking
+from muliao.errors import InvalidInput
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
 
@@ -39,7 +38,7 @@ class AgentDetail(BaseModel):
     description: str
     # 分组名，null 为不分组
     group: str | None
-    # 已归档：不能对话、委派、指派，它的触发器不触发；用 update_agent(archived=false) 取消
+    # 已归档：不能对话、委派、指派，它的触发器不触发；用户在界面上取消
     archived: bool
     model: str
     thinking: Thinking
@@ -81,7 +80,6 @@ def agents_toolset(
     agents: AgentService,
     distribution: Distribution,
     lifecycle: AgentLifecycle,
-    catalog: ItemCatalog,
 ) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
@@ -89,7 +87,7 @@ def agents_toolset(
     async def list_agents() -> list[AgentGroup]:
         """List all agents and what each one is for. Returns a JSON array of groups, each with `group` (null = not
         in any group) and `agents` (each with `name` and `description`). Use before delegating. Archived agents
-        are not listed: they cannot be used until unarchived (`update_agent`)."""
+        are not listed: they cannot be used until the user unarchives them."""
         return agent_directory(await agents.list())
 
     @ts.tool_plain
@@ -166,64 +164,6 @@ def agents_toolset(
         return f"created agent {created.name}"
 
     @ts.tool
-    async def update_agent(
-        ctx: RunContext[RunScope],
-        agent: str,
-        new_name: str | None = None,
-        description: str | None = None,
-        model: str | None = None,
-        roles: tuple[str, ...] | None = None,
-        allow: tuple[str, ...] | None = None,
-        deny: tuple[str, ...] | None = None,
-        thinking: Thinking | None = None,
-        group: str | None = None,
-        archived: bool | None = None,
-    ) -> str:
-        """Change an agent's configuration, including your own (use your own name). Only the given fields change.
-        Without the admin role you can only change your own `description`, `model` and `thinking`; changing
-        another agent or your own name, roles, rules, group or archived state needs the user or an admin.
-        An archived agent cannot be talked to, delegated to or assigned issues, and its triggers do not fire,
-        until it is unarchived; archiving needs it to be idle.
-
-        Args:
-            agent: Name of the agent to change.
-            new_name: New display name.
-            description: New description.
-            model: New `<provider>:<model>`.
-            roles: New full list of roles (besides `base`, which every agent has).
-            allow: New full list of extra `action:kind:name` rules to allow.
-            deny: New full list of `action:kind:name` rules to deny.
-            thinking: New thinking/reasoning effort (`default` = the model's own default).
-            group: New group; an empty string removes it from its group.
-            archived: `true` to archive a finished or inactive agent, `false` to unarchive it.
-        """
-        target = await agents.find_by_name(agent)
-        patch = AgentPatch(
-            name=new_name,
-            description=description,
-            model=model,
-            roles=roles,
-            allow=allow,
-            deny=deny,
-            thinking=thinking,
-            group=group,
-        )
-        if archived is not None:
-            # 归档不在 update 里：先把它一起查过，没权限时什么都不改
-            await agents.check_update(target.id, patch.given() | {"archived"}, actor=ctx.deps.agent_id)
-        target = await agents.update(target.id, patch, actor=ctx.deps.agent_id)
-        if archived is not None:
-            try:
-                target = await lifecycle.set_archived(target.id, archived)
-            except Conflict as e:
-                if patch == AgentPatch():
-                    raise
-                # 归档要查空闲，与改配置不在一个事务里：说清楚哪部分生效了
-                raise Conflict(f"{e} (the other changes were saved; only archiving failed)") from e
-        state = " (archived)" if target.archived else ""
-        return f"updated agent {target.name}{state}"
-
-    @ts.tool
     async def delete_agent(ctx: RunContext[RunScope], agent: str) -> str:
         """Delete another agent with its sessions, memory, the skills, secrets and MCP servers it owns (those
         a role or another agent's allow still hands out pass to the platform instead), triggers and workspace.
@@ -241,75 +181,5 @@ def agents_toolset(
             )
         await lifecycle.delete(target.id, actor=ctx.deps.agent_id)
         return f"deleted agent {target.name}"
-
-    @ts.tool
-    async def transfer_item(ctx: RunContext[RunScope], kind: StoredKind, name: str, owner: str | None) -> str:
-        """Give a skill, MCP server, secret or memory block to another owner, e.g. before deleting or archiving its current
-        owner. Its content and the roles that hand it out stay; the new owner can always use and change it, the
-        old one only through roles. Recorded in the item's version history.
-
-        Args:
-            kind: `skill`, `mcp`, `secret` or `memory`.
-            name: Item name.
-            owner: Agent name of the new owner, or null for the platform (then only roles hand it out).
-        """
-        target = None if owner is None else await agents.find_by_name(owner)
-        await catalog.transfer_item(kind, name, None if target is None else target.id, ctx.deps.agent_id)
-        return f"transferred {label(kind)} {name} to {'the platform' if target is None else f'agent {target.name}'}"
-
-    @ts.tool
-    async def create_role(
-        ctx: RunContext[RunScope],
-        name: str,
-        description: str,
-        allow: tuple[str, ...] = (),
-        deny: tuple[str, ...] = (),
-    ) -> str:
-        """Create a role: a bundle of `action:kind:name` rules (action `use` or `write`, independent of each other;
-        kind tool, skill, mcp, secret or memory; fnmatch wildcards over the whole rule) that hands AI assets to
-        every agent given the role (`update_agent` roles), e.g. a role `relay-trader` with allow
-        `use:skill:relay-host`, `use:secret:RELAY_*`, `*:memory:trading` (members read and edit that memory).
-
-        Args:
-            name: Lowercase slug.
-            description: What the role is for.
-            allow: Rules to allow.
-            deny: Rules to deny; deny wins over every allow, also over other roles' allows.
-        """
-        role = await distribution.create(RoleSpec(name, description, allow, deny), actor=ctx.deps.agent_id)
-        return f"created role {role.name}"
-
-    @ts.tool
-    async def update_role(
-        ctx: RunContext[RunScope],
-        name: str,
-        description: str | None = None,
-        allow: tuple[str, ...] | None = None,
-        deny: tuple[str, ...] | None = None,
-    ) -> str:
-        """Change a role; only the given fields change. Adding an asset to a role (e.g. `use:skill:<name>` to the
-        built-in `base` role every agent has) shares it with the agents having the role. The fixed rules of the
-        built-in roles cannot change. Takes effect from those agents' next run.
-
-        Args:
-            name: Role name.
-            description: New description.
-            allow: New full list of rules to allow (`get_agent` shows the current ones).
-            deny: New full list of rules to deny.
-        """
-        await distribution.patch(
-            name, actor=ctx.deps.agent_id, description=description, allow=allow, deny=deny
-        )
-        return f"updated role {name}"
-
-    @ts.tool
-    async def delete_role(ctx: RunContext[RunScope], name: str) -> str:
-        """Delete a role no agent has. Built-in roles cannot be deleted.
-
-        Args:
-            name: Role name.
-        """
-        await distribution.delete(name, actor=ctx.deps.agent_id)
-        return f"deleted role {name}"
 
     return ts

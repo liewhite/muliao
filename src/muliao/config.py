@@ -158,6 +158,8 @@ class RuntimeConfig(_Section):
 class Settings(_Section):
     # 相对路径以配置文件所在目录为基准（见 load_settings）
     data_dir: Path = Path("data")
+    # AI 资源（记忆、skill、MCP、secret、agent 配置、分发规则）的目录树（muliao.agents.assets）；相对路径同 data_dir
+    assets_dir: Path = Path("assets")
     # cron 表达式按此时区解释，也用于告诉 agent 当前本地时间
     timezone: str = "UTC"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
@@ -182,8 +184,8 @@ class Settings(_Section):
         return self.data_dir / "muliao.db"
 
     @property
-    def skills_dir(self) -> Path:
-        """skill 目录的只读副本，由数据库生成（muliao.agents.skills）。"""
+    def legacy_skills_dir(self) -> Path:
+        """#498 之前由数据库生成的 skill 只读副本目录：资源导出成文件后删掉（muliao.agents.export）。"""
         return self.data_dir / "skills"
 
     @property
@@ -208,6 +210,8 @@ def load_settings(path: Path) -> Settings:
     settings = Settings.model_validate(raw)
     if not settings.data_dir.is_absolute():
         settings = settings.model_copy(update={"data_dir": path.parent / settings.data_dir})
+    if not settings.assets_dir.is_absolute():
+        settings = settings.model_copy(update={"assets_dir": path.parent / settings.assets_dir})
     if settings.log_file is not None and not settings.log_file.is_absolute():
         settings = settings.model_copy(update={"log_file": path.parent / settings.log_file})
     return settings

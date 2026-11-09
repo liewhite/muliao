@@ -3,16 +3,16 @@
 1. 能做某个动作（Grants.can，动作是 use 或 write，agents.permissions.Action）：agent 是资产的 owner（隐含的专属角色，
    use 与 write 都有），或它的规则（base + 角色 + 自己的 allow / deny）放行这个权限（Rules.allows）。deny 只拦规则分来的，
    不作用于自己的资产。用户（界面）全部能做。admin 能改任何资产靠它固定的 `write:*`，不另写特判。owner 为 None 的
-   资产归平台（迁移前的公共条目、用户在界面上建的、内置工具、全局与共享记忆）。改不了时 Forbidden，并说出 owner 是谁
-   （check_change_in）。
+   资产归平台（platform/ 目录下的，以及内置工具）。改不了时 Forbidden，并说出 owner 是谁
+   （check_change）。
 2. 改 agent 配置（Grants.check_agent_update）：agent 配置不是资产，按角色判断：用户、带 admin 角色的能改任何 agent；别的
    agent 只能改自己的描述、模型、思考强度。
 
-由此派生的也都在这里：一份配置能用哪些（reach_in）、资产分发出去了没有与收录它的角色（sharing_in），以及条目子域的查询加上
-规则的 changeable_in / writable_in / usable_in。
+由此派生的也都在这里：一份配置能用哪些（reach_of）、资源分发出去了没有与收录它的角色（sharing_of），以及在快照上加上规则的
+changeable / writable / usable。全部按一份资源快照（agents.assets.Snapshot）算，资源的 owner 就是它所在的目录。
 
-规则按读出时角色的定义算：运行开始时算一次工具列表（Toolbox.profile），条目在用到时（skill 索引、MCP 连接、secret
-解析）按当时的定义算。
+规则按读出时角色的定义算：运行开始时算一次工具列表（Toolbox.profile），资源在用到时（skill 索引、MCP 连接、secret
+解析）按当时的快照算。
 """
 
 from __future__ import annotations
@@ -20,16 +20,11 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from muliao.agents.active import check_active_in
-from muliao.agents.agent_rules import AgentRules, agent_rules_in, all_agent_rules_in
+from muliao.agents.agent_rules import AgentRules
+from muliao.agents.assets import Asset, Snapshot
 from muliao.agents.ids import USER
-from muliao.agents.items import check_owner_active_in, existing_in, item_in, items_in, keys_in, owner_label_in
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
 from muliao.agents.permissions import ADMIN, BASE, Action, Role, Rules, ToolSpec, pattern_of, spec_of
-from muliao.agents.roles import roles_in
-from muliao.agents.tables import Item
 from muliao.errors import Forbidden
 
 
@@ -92,7 +87,7 @@ def granted_by(rules: Rules) -> Keep:
     return lambda kind, name, _owner: rules.includes(kind, name)
 
 
-def grants_of(agent_id: str, rules: AgentRules, known: dict[str, Role]) -> Grants:
+def grants_of(agent_id: str, rules: AgentRules, known: Mapping[str, Role]) -> Grants:
     return Grants.of(agent_id, rules.roles, rules.effective(known))
 
 
@@ -134,12 +129,11 @@ class Provenance:
         )
 
 
-async def grants_in(s: AsyncSession, actor: str) -> Grants:
-    """actor（agent 的 id，或 ids.USER 即用户）的 Grants，按角色现在的定义算。agent 包括正在删除的（它的写入另由
-    check_active_in 拦下）。"""
+def grants_for(snapshot: Snapshot, actor: str) -> Grants:
+    """actor（agent 的 id，或 ids.USER 即用户）的 Grants，按快照里角色的定义算。"""
     if actor == USER:
         return USER_GRANTS
-    return grants_of(actor, await agent_rules_in(s, actor), await roles_in(s))
+    return grants_of(actor, snapshot.rules_of(actor), snapshot.roles)
 
 
 @dataclass(frozen=True)
@@ -164,52 +158,44 @@ class Sharing:
         return tuple(r.name for r in self.roles if r.effective.includes(kind, name))
 
 
-async def sharing_in(s: AsyncSession) -> Sharing:
-    known = await roles_in(s)
-    agents = tuple((a, r.effective(known)) for a, r in (await all_agent_rules_in(s)).items())
+def sharing_of(snapshot: Snapshot) -> Sharing:
+    known = snapshot.roles
+    agents = tuple((a, snapshot.rules_of(a).effective(known)) for a in snapshot.agents)
     return Sharing(tuple(known.values()), known[BASE].effective, agents)
 
 
-async def check_change_in(s: AsyncSession, actor: str, row: Item) -> None:
+def check_change(snapshot: Snapshot, actor: str, asset: Asset) -> None:
     """actor 能改这一项（规则 1 的 write），否则 Forbidden。"""
-    kind = StoredKind(row.kind)
-    if not (await grants_in(s, actor)).writes(as_kind(kind), row.name, row.owner):
+    if not grants_for(snapshot, actor).writes(as_kind(asset.kind), asset.name, asset.owner):
         raise Forbidden(
-            f"{label(kind)} {row.name!r} belongs to {await owner_label_in(s, row.owner)}; only its owner, an agent "
-            f"whose roles grant 'write:{kind.value}:{row.name}', or an admin can change it"
+            f"{label(asset.kind)} {asset.name!r} belongs to {snapshot.owner_label(asset.owner)}; only its owner, "
+            f"an agent whose roles grant 'write:{asset.kind.value}:{asset.name}', or an admin can change it"
         )
 
 
-async def changeable_in(s: AsyncSession, kind: StoredKind, name: str, actor: str) -> Item:
-    """要改或删的已有条目：existing_in，且 actor 能改它（规则 1 的 write）。"""
-    row = await existing_in(s, kind, name)
-    await check_change_in(s, actor, row)
-    return row
+def changeable(snapshot: Snapshot, kind: StoredKind, name: str, actor: str) -> Asset:
+    """要改或删的已有资源：存在，且 actor 能改它（规则 1 的 write）。"""
+    asset = snapshot.asset(kind, name)
+    check_change(snapshot, actor, asset)
+    return asset
 
 
-async def writable_in(
-    s: AsyncSession, kind: StoredKind, name: str, actor: str, owner: str | None
-) -> Item | None:
-    """新建或整体改写之前：已存在就按规则 1 的 write 检查并返回它（owner 不变）；不存在时返回 None，新条目将归 owner（agent 时
-    检查它还可用）。"""
-    row = await item_in(s, kind, name)
-    if row is not None:
-        await check_owner_active_in(s, kind, row)
-        await check_change_in(s, actor, row)
-        return row
-    if owner is not None:
-        await check_active_in(s, owner)
-    return None
+def writable(snapshot: Snapshot, kind: StoredKind, name: str, actor: str) -> Asset | None:
+    """新建或整体改写之前：已存在就按规则 1 的 write 检查并返回它（owner 不变）；不存在返回 None。"""
+    asset = snapshot.get(kind, name)
+    if asset is not None:
+        check_change(snapshot, actor, asset)
+    return asset
 
 
-async def usable_in(s: AsyncSession, kind: StoredKind, user: str) -> list[Item]:
+def usable(snapshot: Snapshot, kind: StoredKind, user: str) -> list[Asset]:
     """user（agent 的 id 或 ids.USER）能用的（规则 1），按名称。"""
-    return await usable_by_in(s, kind, await grants_in(s, user))
+    return usable_by(snapshot, kind, grants_for(snapshot, user))
 
 
-async def usable_by_in(s: AsyncSession, kind: StoredKind, grants: Grants) -> list[Item]:
-    """同 usable_in，按已经算好的 grants（还要用它判断别的动作时，不再读一遍角色与规则）。"""
-    return [r for r in await items_in(s, kind) if grants.uses(as_kind(kind), r.name, r.owner)]
+def usable_by(snapshot: Snapshot, kind: StoredKind, grants: Grants) -> list[Asset]:
+    """同 usable，按已经算好的 grants。"""
+    return [a for a in snapshot.of_kind(kind) if grants.uses(as_kind(kind), a.name, a.owner)]
 
 
 @dataclass(frozen=True)
@@ -224,8 +210,13 @@ class Reach:
         return [t.name for t in self.tools]
 
 
-async def reach_in(s: AsyncSession, available: Collection[str], rules: Rules, keep: Keep) -> Reach:
-    """工具按 rules 在 available（当前配置下注册的工具）里取；条目是 keep(kind, name, owner) 为真的。界面预览、角色的覆盖范围、
+def reach_of(snapshot: Snapshot, available: Collection[str], rules: Rules, keep: Keep) -> Reach:
+    """工具按 rules 在 available（当前配置下注册的工具）里取；资源是 keep(kind, name, owner) 为真的。界面预览、角色的覆盖范围、
     get_agent 共用。"""
-    items = [pattern_of(k, n) for k, n, o in await keys_in(s) if keep(k, n, o)]
+    items = [
+        pattern_of(as_kind(k), a.name)
+        for k in StoredKind
+        for a in snapshot.of_kind(k)
+        if keep(as_kind(k), a.name, a.owner)
+    ]
     return Reach([spec_of(n) for n in rules.tools(available)], items)

@@ -27,7 +27,8 @@ class Agent(Base):
 
     # 系统生成、不可变：主键、外键、目录名、URL 与工具调用都用它
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    # 仅供展示，可改名；唯一以免委派时混淆
+    # name / description / model / thinking / group 是资源目录（`<名>/agent.toml` 与目录名）的镜像，由 agents.source 同步：
+    # 别的领域在自己的事务里按名字解析、展示；事实来源是文件。名字仅供展示，可改名；唯一以免委派时混淆
     name: Mapped[str] = mapped_column(String(64), unique=True)
     description: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(200))
@@ -46,8 +47,12 @@ class Agent(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
 
+# ---- 以下是 #498 之前存在数据库里的 AI 资源（现在是资源目录里的文件，agents.assets）：只在启动时一次性导出
+# （agents.export）时读，不再写。表先保留，回滚到旧版本时还能用；确认新版运行正常后另加迁移删除 ----
+
+
 def _owner_ref() -> ForeignKey:
-    # 同一领域内的外键：agent 的行删除时它名下的条目、记忆与分发规则一起删除（AgentLifecycle.on_sessions_cleared）
+    # 同一领域内的外键：agent 的行删除时它名下的旧行一起删除
     return ForeignKey("agents.id", ondelete="CASCADE")
 
 

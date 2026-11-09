@@ -1,29 +1,29 @@
 """删除 agent（docs/architecture.md 第 10 节）：agent 领域发起、各领域清理自己的数据的流程。这里只编排 agent 领域各子域的
-接口（目录 agents.service、条目 agents.ownership、记忆 agents.memory、分发 agents.agent_rules / access），不直接碰它们的表。
+接口（目录 agents.service、资源目录 agents.assets、分发 agents.access），不直接碰它们的表。
 
 1. delete：它的会话有忙的，就拒绝（与删除会话同一条规则）；否则把 agent 标为正在删除
    （不再出现在列表与名称解析里，各领域的写入口按不存在处理，见 agents.service.active_agent_in），同一事务发布
    AgentDeleting。
 2. 各领域订阅 AgentDeleting 清理自己引用它的数据：会话领域删除它的全部会话（标记之后它的会话不会再收到
    来信），然后发布 AgentSessionsCleared；触发器各自删除。
-3. 收到 AgentSessionsCleared：删除工作目录与它的 skill 的生成目录，再删除这一行：它名下的条目（skill、MCP server、secret）
-   里分发出去的（agents.access.Sharing.shared）转给平台（owner 置空，别的 agent 还在用），其余与记忆、分发规则随行
-   级联删除，同一事务里各子域为每一项记一版。
+3. 收到 AgentSessionsCleared：删除工作目录与它的资源目录（`assets/<名>/`）和 access.toml 里它的那一节，再删除这一行；
+   它名下分发出去的资源（agents.access.Sharing.shared）先挪到平台目录（别的 agent 还在用）。
 
 归档（set_archived）是可以来回切换的停用：同样只在它空闲时做（与删除同一组检查），之后给它派新工作的入口都拒绝
 （agents.active.runnable_row_in），数据都留着。
 """
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.access import sharing_in
-from muliao.agents.agent_rules import record_rules_deleted_in
+from muliao.agents import access_file, assets
+from muliao.agents.access import sharing_of
+from muliao.agents.assets import Snapshot
 from muliao.agents.events import AgentDeleting
-from muliao.agents.kinds import Kind
-from muliao.agents.ownership import retire_owned_in
+from muliao.agents.kinds import StoredKind, as_kind
 from muliao.agents.service import (
     AgentInfo,
     AgentService,
@@ -35,7 +35,7 @@ from muliao.agents.service import (
     remove_in,
     set_archived_in,
 )
-from muliao.agents.skills import SkillStore
+from muliao.agents.source import AssetSource
 from muliao.errors import Conflict
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
@@ -54,13 +54,13 @@ class AgentLifecycle:
         self,
         db: Database,
         agents: AgentService,
-        skills: SkillStore,
+        source: AssetSource,
         messaging: Messaging,
         blockers: Mapping[str, DeletionBlocker],
     ):
         self._db = db
         self._agents = agents
-        self._skills = skills
+        self._source = source
         self._messaging = messaging
         self._blockers = blockers
 
@@ -113,30 +113,34 @@ class AgentLifecycle:
             actor = await deletion_actor_in(s, agent_id)
         if actor is None:
             return no_commit
-        # 目录不在数据库事务里：重放时它们已经不在，删除是空操作。skill 的生成目录只是副本，先于行删除
+        # 文件不在数据库事务里：重放时它们已经不在，删除是空操作
         await self._agents.remove_workspace(agent_id)
-        # 要转给平台的 skill 留着生成目录。这里与 commit 里各算一次：中间改了角色时两边可能不一致（多删或留下目录），
-        # 生成目录只是副本，启动时 materialize_all 按数据库全量对齐，下次写入该 skill 也会重新生成
-        async with self._db.transaction() as s:
-            sharing = await sharing_in(s)
-        await self._skills.remove_generated(
-            [
-                n
-                for n in await self._skills.owned_names(agent_id)
-                if not sharing.shared(Kind.SKILL, n, agent_id)
-            ]
-        )
+        async with self._source.writing() as snapshot:
+            await asyncio.to_thread(_retire_assets, snapshot, agent_id)
         log.info("files of a deleted agent removed", extra={"agent": agent_id})
 
         async def commit(s: AsyncSession) -> None:
             if await deletion_actor_in(s, agent_id) is None:
                 return
-            # 各子域先记删除的版本（版本表不随它删除，留作审计），被分发出去的资产（含记忆）先转给平台，再删行（级联只删还归
-            # 它的）
-            message = f"deleted with agent {agent_id}"
-            await retire_owned_in(s, agent_id, (await sharing_in(s)).shared, actor, message)
-            await record_rules_deleted_in(s, agent_id, actor, message)
             await remove_in(s, agent_id)
             log.info("agent deleted", extra={"agent": agent_id, "actor": actor})
 
         return commit
+
+
+def _retire_assets(snapshot: Snapshot, agent_id: str) -> None:
+    """删掉 agent 的资源目录与 access.toml 里它的那一节；它名下分发出去的资源（agents.access.Sharing.shared：base 收录，或别的
+    agent 的规则收录）先挪到平台目录（别的 agent 还在用）。"""
+    agent = snapshot.agents.get(agent_id)
+    if agent is None:
+        return
+    sharing = sharing_of(snapshot)
+    for kind in StoredKind:
+        for a in snapshot.of_kind(kind):
+            if a.owner == agent_id and sharing.shared(as_kind(kind), a.name, agent_id):
+                assets.move(a.path, snapshot.path_of(kind, a.name, None))
+                log.info(
+                    "asset moved to the platform with its agent deleted", extra={"kind": kind, "item": a.name}
+                )
+    access_file.edit(snapshot.access_file, lambda doc: access_file.remove_agent(doc, agent.name))
+    assets.remove(agent.path)

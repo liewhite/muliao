@@ -47,7 +47,7 @@ from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.toolbox import RunProfile
 from muliao.agent_runtime.transient import transient_as_retryable
-from muliao.agents.api import AgentInfo, AgentService, MemoryStore, SkillStore, Thinking
+from muliao.agents.api import AgentInfo, AgentService, AssetSource, MemoryStore, SkillStore, Thinking
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
@@ -95,6 +95,7 @@ class AgentRuntime:
         self,
         *,
         agents: AgentService,
+        assets: AssetSource,
         skills: SkillStore,
         memory: MemoryStore,
         tz: ZoneInfo,
@@ -104,6 +105,7 @@ class AgentRuntime:
         usage: UsageLog,
     ):
         self._agents = agents
+        self._assets = assets
         self._skills = skills
         self._memory = memory
         self._tz = tz
@@ -139,12 +141,20 @@ class AgentRuntime:
             agent_name=agent.name,
             agent_description=agent.description,
             workspace=scope.workspace,
+            asset_dir=self._assets.root / agent.name,
             origin_note=origin_note,
             memories=await self._memory.for_run(agent.id),
             skills=await self._skills.index(agent.id),
             memory_limit=self._memory.max_chars,
             summary=summary,
         )
+
+    async def _asset_problems(self, agent_id: str) -> list[str]:
+        snapshot = await self._assets.snapshot()
+        return [
+            f"Asset file not loaded: {p.path}: {p.reason}. Fix the file (or tell an admin if you cannot write it)."
+            for p in snapshot.problems_for(agent_id)
+        ]
 
     def run_context(self, audience: Audience) -> str:
         """这次运行开头交给模型的运行上下文（当前时间等，见 instructions.build_run_context），由 sessions.steps
@@ -176,8 +186,9 @@ class AgentRuntime:
         # 这次交回结果的挂起调用：调用已在历史里，结果随第一步保存
         resumed = frozenset(deferred or ())
         instructions = await self.instructions(agent, scope, summary, origin_note)
-        # 这次驱动自己的一份 scope：notices 为空，工具组连接时往里加；压缩后续跑会重新连接工具组
-        scope = replace(scope, notices=[])
+        # 这次驱动自己的一份 scope：notices 先放资源目录里与它相关的问题（读坏、名字冲突而没加载的文件），工具组连接时
+        # 再往里加；压缩后续跑会重新连接工具组
+        scope = replace(scope, notices=await self._asset_problems(agent.id))
         ctx = {
             "agent": scope.agent_id,
             "session_id": scope.session_id,

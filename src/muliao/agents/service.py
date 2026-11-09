@@ -1,6 +1,7 @@
-"""agent 目录（子域）：agent 定义的增删改查及其工作目录，agents 表只在这里与 agents.active 读写。新建与修改带着它的分发规则时，
-在同一个写事务里经分发子域的接口写入（agents.agent_rules，记一版），新建时经记忆子域建空记忆；其余字段（名称、描述、模型……）
-不记版本。删除与归档的流程在 agents.lifecycle，它对 agents 表的写入用这里的 `*_in`。"""
+"""agent 目录（子域）：agent 的身份与配置及其工作目录。身份（id）、归档、默认 agent、删除标记在 agents 表；名字、描述、模型、
+思考档位、分组的事实来源是资源目录（`<名>/agent.toml` 与目录名，agents.assets），表里那几列是同步来的镜像
+（agents.source）。新建与修改都写文件（agent.toml、access.toml 里它的规则、空的私有记忆）再写表；改名就是挪目录。删除与
+归档的流程在 agents.lifecycle，它对 agents 表的写入用这里的 `*_in`。"""
 
 from __future__ import annotations
 
@@ -12,34 +13,30 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, cast, get_args
+from typing import cast
 
+import tomlkit
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.access import grants_in
+from muliao.agents import access_file, assets
+from muliao.agents.access import grants_for
 from muliao.agents.active import AgentNames, active_row_in, agent_names_in, runnable_row_in
-from muliao.agents.agent_rules import (
-    AgentRules,
-    agent_rules_in,
-    all_agent_rules_in,
-    create_agent_rules_in,
-    update_agent_rules_in,
-)
+from muliao.agents.agent_rules import AgentRules
+from muliao.agents.assets import AGENT_FILE, PLATFORM, PRIVATE_MEMORY_FILE, Snapshot
+from muliao.agents.distribution import check_agent_rules
 from muliao.agents.ids import new_agent_id
-from muliao.agents.memory import check_memory_name_free_in, create_memory_in
+from muliao.agents.kinds import StoredKind
 from muliao.agents.naming import new_agent_name, normalize_agent_name
+from muliao.agents.source import AssetSource
 from muliao.agents.tables import Agent
+from muliao.agents.thinking import THINKING_LEVELS, Thinking, check_thinking_level
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
 
 log = logging.getLogger(__name__)
 
-# agent 的思考档位，运行时交给 pydantic_ai 的 ModelSettings.thinking（agent_runtime.llm.model_settings）：
-# "default" 什么都不传，按模型与服务端的默认；"off" 关闭；其余是 effort 档位。各 provider 怎么换算、模型不支持
-# 时怎么处理都由 pydantic_ai 与服务端决定，这里不映射
-Thinking = Literal["default", "off", "low", "medium", "high", "xhigh"]
-THINKING_LEVELS: tuple[Thinking, ...] = get_args(Thinking)
+__all__ = ["THINKING_LEVELS", "Thinking"]
 
 GROUP_MAX = 64
 
@@ -132,19 +129,13 @@ def info_of(agent: Agent) -> AgentInfo:
         name=agent.name,
         description=agent.description,
         model=agent.model,
-        # 写入时与启动时已校验（_check_thinking_level）
+        # 同步镜像前已校验（agents.source）
         thinking=cast(Thinking, agent.thinking),
         created_at=agent.created_at,
         is_default=agent.is_default,
         group=agent.group,
         archived_at=agent.archived_at,
     )
-
-
-def _check_thinking_level(thinking: str) -> None:
-    """写入时与启动检查时同一条规则（库里的值经 info_of 直接当作 Thinking 用）。"""
-    if thinking not in THINKING_LEVELS:
-        raise InvalidInput(f"thinking must be one of {list(THINKING_LEVELS)}, got {thinking!r}")
 
 
 async def active_agent_in(s: AsyncSession, agent_id: str) -> AgentInfo:
@@ -249,12 +240,14 @@ class AgentService:
     def __init__(
         self,
         db: Database,
+        source: AssetSource,
         workspaces_dir: Path,
         # (模型, 思考档位) 在当前配置下不能运行时报 InvalidInput（agent_runtime.llm.ModelRegistry.check）
         model_checker: Callable[[str, Thinking], None],
         defaults: AgentDefaults,
     ):
         self._db = db
+        self._source = source
         self._workspaces_dir = workspaces_dir
         self._check_model = model_checker
         self.defaults = defaults
@@ -275,7 +268,7 @@ class AgentService:
         broken = []
         for agent in await self.list():
             try:
-                _check_thinking_level(agent.thinking)
+                check_thinking_level(agent.thinking)
                 self._check_model(agent.model, agent.thinking)
             except InvalidInput as e:
                 broken.append(f"{agent.name} ({agent.id}): {e}")
@@ -294,20 +287,31 @@ class AgentService:
             log.warning("workspaces of deleted agents remain", extra={"agent_ids": leftovers})
 
     def _check(self, fields: _AgentFields) -> None:
-        """不依赖数据库的校验；分发规则在写事务里由分发子域校验（agent_rules.check_agent_rules_in）。"""
-        _check_thinking_level(fields.thinking)
+        """不依赖快照的校验；分发规则在写入时按快照校验（distribution.check_agent_rules）。"""
+        check_thinking_level(fields.thinking)
         if not fields.description.strip():
             raise InvalidInput("agent description must not be empty")
         self._check_model(fields.model, fields.thinking)
 
-    async def _ensure_name_free(self, s: AsyncSession, name: str, agent_id: str | None) -> None:
+    @staticmethod
+    async def _check_name_free(s: AsyncSession, snapshot: Snapshot, name: str, agent_id: str | None) -> None:
+        """名字要没人用：数据库里别的 agent（含目录坏掉、只剩镜像的）、资源目录里已有的目录、同名的共享记忆（私有记忆名就是
+        agent 名）。只给名称：这条错误也会交还给模型，模型不接触 id。"""
         holder = await s.scalar(select(Agent.id).where(Agent.name == name))
         if holder is not None and holder != agent_id:
-            # 只给名称：这条错误也会交还给模型，模型不接触 id
             raise Conflict(f"agent name {name!r} is already taken by another agent")
+        taken = {p.name.casefold() for p in snapshot.root.iterdir()} if snapshot.root.is_dir() else set()
+        own = snapshot.agents.get(agent_id) if agent_id else None
+        if name.casefold() in taken - ({own.path.name.casefold()} if own else set()) or name == PLATFORM:
+            raise Conflict(f"agent name {name!r} is already taken by a directory in {snapshot.root}")
+        memory = snapshot.get(StoredKind.MEMORY, name)
+        if memory is not None and memory.owner != agent_id:
+            raise Conflict(
+                f"a memory named {name!r} already exists (private memories carry the agent's name)"
+            )
 
     async def create(self, spec: AgentSpec, *, actor: str) -> AgentInfo:
-        """actor：创建者，"user" 或创建它的 agent 的 id（记在记忆与规则的第一版上）。新 agent 的记忆是空的。"""
+        """actor：创建者，"user" 或创建它的 agent 的 id。建资源目录（agent.toml、空的私有记忆）、写它的规则、插行、建工作目录。"""
         fields = _AgentFields(
             name=new_agent_name(spec.name),
             description=spec.description,
@@ -318,55 +322,66 @@ class AgentService:
         self._check(fields)
         name = fields.name
         agent_id = new_agent_id()
-        async with self._db.transaction() as s:
-            await self._ensure_name_free(s, name, None)
-            await check_memory_name_free_in(s, name)
-            agent = Agent(
-                id=agent_id,
-                name=name,
-                description=fields.description,
-                model=fields.model,
-                thinking=fields.thinking,
-                group=fields.group,
+        rules = AgentRules.of(spec.roles, spec.allow, spec.deny)
+        async with self._source.writing() as snapshot:
+            check_agent_rules(snapshot, rules)
+            async with self._db.transaction() as s:
+                await self._check_name_free(s, snapshot, name, None)
+            directory = snapshot.root / name
+            await asyncio.to_thread(
+                _write_new_agent, directory, snapshot.access_file, agent_id, fields, rules
             )
-            s.add(agent)
-            await s.flush()
-            # 规则与私有记忆和 agent 的行同一事务：agent 一旦存在，它的规则与记忆就在（每一轮都要读）。记忆先建：规则可以
-            # 引用它
-            create_memory_in(s, agent_id, name, actor)
-            await create_agent_rules_in(
-                s, agent_id, AgentRules.of(spec.roles, spec.allow, spec.deny), actor, f"create agent {name}"
-            )
-            # 工作目录与数据库行同事务：建不出来则不插行
-            self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
-            return info_of(agent)
+            try:
+                async with self._db.transaction() as s:
+                    agent = Agent(
+                        id=agent_id,
+                        name=name,
+                        description=fields.description,
+                        model=fields.model,
+                        thinking=fields.thinking,
+                        group=fields.group,
+                    )
+                    s.add(agent)
+                    await s.flush()
+                    self.workspace(agent_id).mkdir(parents=True, exist_ok=True)
+                    info = info_of(agent)
+            except BaseException:
+                await asyncio.to_thread(_undo_new_agent, directory, snapshot.access_file, name)
+                raise
+        log.info("agent created", extra={"agent": agent_id, "name": name, "actor": actor})
+        return info
 
     async def check_update(self, agent_id: str, fields: frozenset[str], *, actor: str) -> None:
-        """actor 能不能改这个 agent 的这些字段（access.Grants.check_agent_update，不能时 Forbidden）。update 自己会查；
-        一次操作还要归档时（工具 update_agent），调用方先用它把归档一起查过，免得改了一半才被拒。"""
-        async with self._db.transaction() as s:
-            (await grants_in(s, actor)).check_agent_update(agent_id, fields)
+        """actor 能不能改这个 agent 的这些字段（access.Grants.check_agent_update，不能时 Forbidden）。"""
+        grants_for(await self._source.snapshot(), actor).check_agent_update(agent_id, fields)
 
     async def update(self, agent_id: str, patch: AgentPatch, *, actor: str) -> AgentInfo:
-        """在一个事务里读取并只修改给出的字段：并发的局部修改互不覆盖。分发规则变了就记一版（改的人 actor）。
-        actor 不是用户也不是 admin 时只能改自己的一部分字段（access.Grants.check_agent_update）。"""
-        async with self._db.transaction() as s:
-            (await grants_in(s, actor)).check_agent_update(agent_id, patch.given())
-            agent = await active_row_in(s, agent_id)
-            fields = self._validated(agent, patch)
-            await self._ensure_name_free(s, fields.name, agent_id)
-            before = await agent_rules_in(s, agent_id)
+        """只修改给出的字段：配置改 agent.toml（保留人手写的注释），规则改 access.toml，改名挪目录（access.toml 里那一节跟着
+        改名），再同步镜像。actor 不是用户也不是 admin 时只能改自己的一部分字段（access.Grants.check_agent_update）。"""
+        async with self._source.writing() as snapshot:
+            grants_for(snapshot, actor).check_agent_update(agent_id, patch.given())
+            async with self._db.transaction() as s:
+                agent = await active_row_in(s, agent_id)
+                fields = self._validated(agent, patch)
+                await self._check_name_free(s, snapshot, fields.name, agent_id)
+            directory = snapshot.agents.get(agent_id)
+            if directory is None:
+                raise NotFound(
+                    f"agent {agent.name!r} has no directory with its {AGENT_FILE} in {snapshot.root}; fix that first"
+                )
+            before = snapshot.rules_of(agent_id)
             rules = AgentRules.of(
                 before.roles if patch.roles is None else patch.roles,
                 before.allow if patch.allow is None else patch.allow,
                 before.deny if patch.deny is None else patch.deny,
             )
-            await update_agent_rules_in(s, agent_id, rules, actor, f"update rules of agent {fields.name}")
-            agent.name, agent.description, agent.model = fields.name, fields.description, fields.model
-            agent.thinking = fields.thinking
-            agent.group = fields.group
-            await s.flush()
-            return info_of(agent)
+            check_agent_rules(snapshot, rules, before)
+            await asyncio.to_thread(
+                _write_agent_update, directory.path, snapshot.access_file, directory.name, fields, rules
+            )
+        await self._source.snapshot()
+        async with self._db.transaction() as s:
+            return info_of(await active_row_in(s, agent_id))
 
     async def set_default(self, agent_id: str, is_default: bool) -> AgentInfo:
         """设为（或取消）系统默认 agent。设为默认时同一事务里先清掉旧的，始终最多一个；取消不是默认的 agent 不做任何事。
@@ -400,9 +415,9 @@ class AgentService:
             return await active_agent_in(s, agent_id)
 
     async def get_with_rules(self, agent_id: str) -> tuple[AgentInfo, AgentRules]:
-        """还可用的 agent 加上它的分发规则，同一个事务里读（两个子域的读模型彼此一致）。"""
-        async with self._db.transaction() as s:
-            return info_of(await active_row_in(s, agent_id)), await agent_rules_in(s, agent_id)
+        """还可用的 agent 加上它的分发规则。"""
+        snapshot = await self._source.snapshot()
+        return await self.get_active(agent_id), snapshot.rules_of(agent_id)
 
     async def get(self, agent_id: str) -> AgentInfo:
         """agent（包括正在删除的）。"""
@@ -416,9 +431,10 @@ class AgentService:
 
     async def find_with_rules(self, name: str) -> tuple[AgentInfo, AgentRules]:
         """按名称找到的 agent 加上它的分发规则，同一个事务里读（get_agent 工具）。"""
+        snapshot = await self._source.snapshot()
         async with self._db.transaction() as s:
             agent = await named_agent_in(s, name)
-            return agent, await agent_rules_in(s, agent.id)
+        return agent, snapshot.rules_of(agent.id)
 
     async def names(self) -> AgentNames:
         async with self._db.transaction() as s:
@@ -429,10 +445,9 @@ class AgentService:
             return [info_of(a) for a in await _listed_in(s)]
 
     async def list_with_rules(self) -> list[tuple[AgentInfo, AgentRules]]:
-        """list 加上各自的分发规则（分发子域的 all_agent_rules_in），同一个事务里读：两边一致，缺规则即数据损坏、报错。"""
-        async with self._db.transaction() as s:
-            rules = await all_agent_rules_in(s)
-            return [(info_of(a), rules[a.id]) for a in await _listed_in(s)]
+        """list 加上各自的分发规则。"""
+        snapshot = await self._source.snapshot()
+        return [(a, snapshot.rules_of(a.id)) for a in await self.list()]
 
     async def _ids(self) -> set[str]:
         """数据库里所有 agent 的 id，正在删除的也算（它的目录还在是正常的，删除流程会删）。"""
@@ -453,3 +468,48 @@ class AgentService:
                     "workspace of a deleted agent could not be fully removed",
                     extra={"agent": agent_id, "path": str(workspace), "error": repr(e)},
                 )
+
+
+def _agent_toml(directory: Path, agent_id: str, fields: _AgentFields) -> str:
+    """agent.toml 的新内容：已有的文件在原文上改（保留注释与别的排版），没有就新建。"""
+    path = directory / AGENT_FILE
+    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.is_file() else tomlkit.document()
+    doc["id"] = agent_id
+    doc["description"] = fields.description
+    doc["model"] = fields.model
+    doc["thinking"] = fields.thinking
+    if fields.group is None:
+        doc.pop("group", None)
+    else:
+        doc["group"] = fields.group
+    return tomlkit.dumps(doc)
+
+
+def _write_new_agent(
+    directory: Path, access: Path, agent_id: str, fields: _AgentFields, rules: AgentRules
+) -> None:
+    directory.mkdir(parents=True)
+    assets.write_text(directory / AGENT_FILE, _agent_toml(directory, agent_id, fields))
+    assets.write_text(directory / PRIVATE_MEMORY_FILE, "")
+    access_file.edit(access, lambda doc: access_file.set_agent_rules(doc, fields.name, rules))
+
+
+def _undo_new_agent(directory: Path, access: Path, name: str) -> None:
+    assets.remove(directory)
+    access_file.edit(access, lambda doc: access_file.remove_agent(doc, name))
+
+
+def _write_agent_update(
+    directory: Path, access: Path, old_name: str, fields: _AgentFields, rules: AgentRules
+) -> None:
+    agent_id = tomlkit.parse((directory / AGENT_FILE).read_text(encoding="utf-8"))["id"]
+    assets.write_text(directory / AGENT_FILE, _agent_toml(directory, str(agent_id), fields))
+
+    def change(doc: tomlkit.TOMLDocument) -> None:
+        if fields.name != old_name:
+            access_file.rename_agent(doc, old_name, fields.name)
+        access_file.set_agent_rules(doc, fields.name, rules)
+
+    access_file.edit(access, change)
+    if fields.name != old_name:
+        assets.move(directory, directory.parent / fields.name)

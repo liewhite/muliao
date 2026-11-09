@@ -19,6 +19,7 @@ from muliao.agent_runtime.mcp import McpConnector
 from muliao.agents.api import (
     AgentLifecycle,
     AgentService,
+    AssetSource,
     Distribution,
     ItemCatalog,
     McpRegistry,
@@ -27,11 +28,7 @@ from muliao.agents.api import (
     Thinking,
     Vault,
 )
-from muliao.agents.evolution_tools import (
-    memory_toolset,
-    skills_toolset,
-)
-from muliao.agents.mcp_tools import mcp_admin_toolset
+from muliao.agents.export import export_if_missing
 from muliao.agents.permissions import available_tools
 from muliao.agents.secret_tools import vault_toolset
 from muliao.agents.service import AgentDefaults
@@ -109,7 +106,7 @@ class Container:
     agents: AgentService
     # 分发：角色、agent 的规则与能用的、预览
     distribution: Distribution
-    # 条目池：全部条目、转移、条目的版本历史与恢复
+    # 资源池：全部资源、转移 owner
     catalog: ItemCatalog
     agent_lifecycle: AgentLifecycle
     sessions: SessionService
@@ -140,6 +137,8 @@ class Assembly:
     bus: EventBus
     live: LiveSegments
     queue: TaskQueue
+    # AI 资源的目录树（agents.assets）：当前快照
+    assets: AssetSource
     vault: Vault
     skills: SkillStore
     memory: MemoryStore
@@ -237,10 +236,10 @@ class Assembly:
 
     async def _prepare(self) -> None:
         await asyncio.to_thread(migrate, self.settings.db_path)
-        # skill 的生成目录按数据库全量重新生成（上次进程留下的临时目录、被改动的副本都在这里收敛）
-        await self.skills.materialize_all()
+        # #498：AI 资源第一次启动时从数据库导出成文件；之后每次读资源目录（第一次读同步 agent 配置的镜像列）
+        await export_if_missing(self.db, self.settings.assets_dir, self.settings.legacy_skills_dir)
+        await self.assets.snapshot()
         await self.agents.verify_stored()
-        await self.distribution.verify_stored()
         await self.queue.check_kinds()
         await asyncio.to_thread(self.files.recover)
         # 上次运行留下的「运行中」后台任务：进程已随服务结束，记为被中断并通知 agent（worker 处理这些事件之前）
@@ -307,32 +306,35 @@ def assemble(
     messaging = Messaging(queue)
     # 马上执行已提交的投递（Worker.run_now）：worker 由各领域的处理器组成，在最后构造、绑定
     run_now = RunNow()
-    vault = Vault(db, settings.vault.key.get_secret_value())
+    check_model = model_checker or models.check
+    assets = AssetSource(db, settings.assets_dir, settings.runtime.memory_max_chars, check_model)
+    vault = Vault(assets, settings.vault.key.get_secret_value())
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
-    skills = SkillStore(db, settings.skills_dir)
-    memory = MemoryStore(db, settings.runtime.memory_max_chars)
+    skills = SkillStore(assets)
+    memory = MemoryStore(assets, settings.runtime.memory_max_chars)
     # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接
     mcp_connector = McpConnector(vault)
-    mcp = McpRegistry(db, mcp_connector.probe)
+    mcp = McpRegistry(assets, mcp_connector.probe)
     tools = available_tools(web_configured=bool(web_tools))
     agents = AgentService(
         db,
+        assets,
         settings.workspaces_dir,
-        model_checker or models.check,
+        check_model,
         AgentDefaults(settings.llm.default_model),
     )
-    distribution = Distribution(db, tools)
+    distribution = Distribution(assets, tools)
     # agent 的命令与文件工具只能写它的可写路径（#416）：当前系统没有写沙箱时在这里拒绝启动
     home = Path.home()
     confiner = Confiner(
         sandbox_for(settings.runtime.write_sandbox, home), agents.workspace, distribution.rules, home
     )
-    catalog = ItemCatalog(db, tools, skills, mcp, memory)
+    catalog = ItemCatalog(assets, tools)
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
     ports = SessionPorts.build(db, queue, messaging, tz)
     activity = ports.activity
     agent_lifecycle = AgentLifecycle(
-        db, agents, skills, messaging, {"sessions": activity.blocks_agent_deletion_in}
+        db, agents, assets, messaging, {"sessions": activity.blocks_agent_deletion_in}
     )
     notifications = Notifications(db, queue, bus)
     push_subscriptions = PushSubscriptions(db)
@@ -367,6 +369,7 @@ def assemble(
     history = HistoryLog(db, tz)
     runtime = AgentRuntime(
         agents=agents,
+        assets=assets,
         skills=skills,
         memory=memory,
         tz=tz,
@@ -387,8 +390,6 @@ def assemble(
     # （Toolbox.profile），不随运行状态变（工具列表稳定才命中缓存）：如 ask_user 在没有用户会回答的运行里照样列出，
     # 调用时被拒绝（sessions.ask_user）
     static_toolsets = [
-        skills_toolset(skills),
-        memory_toolset(memory),
         history_toolset(history, agents, ports.recall, issues, settings.runtime.tool_output_max_chars),
         ask_user_toolset(),
         workspace_toolset(vault, limits, files, jobs, confiner),
@@ -396,13 +397,12 @@ def assemble(
         ports.wakeup_toolset(),
         ports.recall_toolset(agents, settings.runtime.tool_output_max_chars),
         notify_toolset(notifications),
-        mcp_admin_toolset(mcp),
         vault_toolset(vault),
         triggers_toolset(triggers, agents, settings.runtime.precheck_timeout_seconds),
         issues_toolset(issues, agents),
         *web_tools,
     ]
-    static_toolsets.append(agents_toolset(agents, distribution, agent_lifecycle, catalog))
+    static_toolsets.append(agents_toolset(agents, distribution, agent_lifecycle))
     toolbox = Toolbox(
         toolsets=static_toolsets,
         mcp=lambda: mcp_connector.toolset(mcp.index),
@@ -452,6 +452,7 @@ def assemble(
         bus=bus,
         live=live,
         queue=queue,
+        assets=assets,
         vault=vault,
         skills=skills,
         memory=memory,

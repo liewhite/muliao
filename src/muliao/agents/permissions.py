@@ -2,19 +2,19 @@
 
 用途是防误操作、减少无关工具与资产占用上下文，不是安全隔离。
 
-- AI 资产分五种（agents.kinds.Kind）：内置工具（tool，登记在 TOOLS，内容在代码里、归平台、不可改）与存在 items 表里的
-  skill、MCP server、secret、记忆。名字按种类全局唯一。
+- AI 资产分五种（agents.kinds.Kind）：内置工具（tool，登记在 TOOLS，内容在代码里、归平台、不可改）与资源目录里的文件
+  （agents.assets）：skill、MCP server、secret、记忆。名字按种类全局唯一。
 - 权限 = 动作 + 资产：`use:skill:relay-host`、`write:memory:trading`。动作只有 use（用：skill 进索引、MCP 连上、secret 能
   解析、记忆放进 instructions、工具开放）与 write（改、删），二者互相独立；tool 只有 use。
 - 规则：allow / deny 两组 `action:kind:glob`，整串 fnmatch（如 `use:tool:issue_*`、`*:memory:trading`、`write:*`），deny
-  优先。Rules.allows 是全系统唯一的判断；一组规则「收录」一个资产即它放行 use：条目页列出的收录角色、删 agent 时判断资产
+  优先。Rules.allows 是全系统唯一的判断；一组规则「收录」一个资产即它放行 use：资源页列出的收录角色、删 agent 时判断资产
   是否分发出去，都是这一个定义。
   agent 的规则 = 内置角色 base（每个 agent 隐含）+ 它的各个角色 + 它自己的 allow / deny，allow 与 deny 分别取并集。
 - agent 能对资产做某个动作 = 它是 owner（隐含的专属角色：use 与 write）或规则放行（agents.access）；deny 只拦规则分来的。
 - 本机可写目录（path，#416）：`write:path:<目录>` 放开这个目录及其下的写，写在 deny 里则收回（Rules.paths，由
   workspace.writable 并进默认可写范围）；字面目录、不带通配符，不经 fnmatch，`write:*` 不含路径。
 - 内置角色 base（全部非管理工具与全局记忆）与 admin（全部工具，并能改任何资产）：规则 = 代码里固定的部分
-  （FIXED_RULES，新加的工具自动归入）∪ 存在 roles 表里可编辑的部分（如 base 收录的 skill）。
+  （FIXED_RULES，新加的工具自动归入）∪ access.toml 里可编辑的部分（如 base 收录的 skill）。
 - 运行开始时按规则算出工具列表（agent_runtime.toolbox.Toolbox），调用时不再判断，工具列表在一次运行里不变。
 """
 
@@ -44,7 +44,7 @@ class Action(StrEnum):
 @dataclass(frozen=True)
 class Tool:
     access: Access
-    # 管理类工具（管 agent、角色、记忆的增删、资产归属，以及很少用的 MCP 配置、删 secret（#295）、只有少数 agent 用的 eth_sign（#423））：base 没有，只经 admin
+    # 管理类工具（建、删 agent，以及只有少数 agent 用的 eth_sign（#423））：base 没有，只经 admin
     # 角色或显式规则给出
     admin: bool = False
 
@@ -64,19 +64,11 @@ def spec_of(name: str) -> ToolSpec:
 
 
 R, W = Tool(Access.READ), Tool(Access.WRITE)
-ADMIN_R, ADMIN_W = Tool(Access.READ, admin=True), Tool(Access.WRITE, admin=True)
+ADMIN_W = Tool(Access.WRITE, admin=True)
 
 # 内置工具：唯一登记处。组合根在启动时核对它与实际注册的工具一一对应（web 只在配置了 [web] 时注册）
 TOOLS: dict[str, Tool] = {
-    # 自我改进、工作历史、提问
-    "read_skill": R,
-    "write_skill": W,
-    "edit_skill": W,
-    "delete_skill": W,
-    # 改哪块记忆按 write 权限，调用时查（agents.memory）
-    "memory_edit": W,
-    "memory_create": ADMIN_W,
-    "memory_delete": ADMIN_W,
+    # 工作历史、提问
     "history_append": W,
     "history_search": R,
     # 热历史：某天的会话活动与用户说的话、一个会话的时间线（#368）
@@ -91,31 +83,19 @@ TOOLS: dict[str, Tool] = {
     "run_shell": W,
     "job_status": R,
     "job_kill": W,
-    # agent、角色与委派
+    # agent 与委派（改 agent 配置、角色、分发规则是改资源目录里的文件，agents.assets）
     "list_agents": R,
     "get_agent": R,
     "create_agent": ADMIN_W,
-    # 人人有：非 admin 只能改自己的一部分字段，调用时查（agents.access.Grants.check_agent_update，#289）
-    "update_agent": W,
     "delete_agent": ADMIN_W,
-    "create_role": ADMIN_W,
-    "update_role": ADMIN_W,
-    "delete_role": ADMIN_W,
-    "transfer_item": ADMIN_W,
     "delegate_task": W,
     "ask_agent": W,
     "list_threads": R,
     "stop_thread": W,
     "wake_me": W,
     "notify_user": W,
-    # MCP 配置：很少用（近 30 天只有 muliao 加过一次），不占每个 agent 的上下文，要用的 agent 显式给（#295）
-    "mcp_list": ADMIN_R,
-    "mcp_add": ADMIN_W,
-    "mcp_remove": ADMIN_W,
-    # vault：agent 自己存用户给的 token，vault_set / vault_list 人人有；删很少用（#295）
-    "vault_list": R,
+    # vault：agent 自己存用户给的 token（加密写进它的资源目录）；看与删就是 ls、rm 那个文件
     "vault_set": W,
-    "vault_delete": ADMIN_W,
     # 用 vault 里的以太坊私钥在进程内签名（#423）：只有管钱包的 agent 用，经角色或 allow 给
     "eth_sign": ADMIN_W,
     # trigger

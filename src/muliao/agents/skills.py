@@ -1,52 +1,30 @@
-"""Skill：条目（items，kind=skill）。SKILL.md（YAML frontmatter：name、description + 正文）存在 items.content，附件
-（脚本、配置、参考文档）存在 item_files，每次修改记一版（revisions，文档是全部文件的 JSON）。
-
-磁盘上的 skill 目录（`<skills_dir>/<name>/`）是数据库生成的只读副本：每次写入后重新生成这个 skill 的目录，启动时全量
-重新生成（多余的目录删掉）。agent 读 skill 里的脚本、执行它们都在这个目录里；改附件要经 edit_skill 按文件改（edit 的
-FileChange，只增改不删），或 write_skill 的 attachments 整体替换（从工作目录里的一个目录收进来），直接改副本会被拒绝（只读）
-且下次生成时被覆盖。
+"""Skill：AI 资源的一种，一个目录（`skills/<名>/`，在 owner 的资源目录下，agents.assets）：SKILL.md（YAML frontmatter：
+description，可选 name 须与目录同名）加任意附件。agent 直接用文件工具读、改、执行里面的文件；这里是平台自己的读写：
+skill 索引、界面的编辑页（只改 SKILL.md）、标准 .skill 文件的导入导出与删除。
 """
 
 from __future__ import annotations
 
 import asyncio
-import dataclasses
-import json
 import logging
 import os
-import shutil
-import stat
-import tempfile
-import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
 
 import frontmatter
-import yaml
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents import skill_package
-from muliao.agents.access import changeable_in, grants_in, usable_in, writable_in
-from muliao.agents.items import creatable_in, existing_in, item_in
-from muliao.agents.kinds import Kind, StoredKind, Subject, label
+from muliao.agents import assets, skill_package
+from muliao.agents.access import changeable, usable, writable
+from muliao.agents.kinds import StoredKind, label
 from muliao.agents.naming import validate_slug
-from muliao.agents.revisions import described, record_in, revision_doc_in
-from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped
-from muliao.agents.tables import Item, ItemFile
-from muliao.errors import InvalidInput
-from muliao.platform import text_edit
-from muliao.platform.db import Database
-from muliao.platform.text_edit import TextChange
+from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped, parse_frontmatter
+from muliao.agents.source import AssetSource
+from muliao.errors import Conflict
 
 log = logging.getLogger(__name__)
 
-# 生成目录里的权限：只读（脚本保留可执行位）
-_FILE_MODE, _EXEC_MODE, _DIR_MODE = 0o444, 0o555, 0o555
-# 生成中的临时目录与被替换下来的旧目录的前缀（隐藏，生成完即删；启动时清理残留）
-_TMP_PREFIX = "."
+_KIND = StoredKind.SKILL
 
 
 @dataclass(frozen=True)
@@ -54,26 +32,14 @@ class SkillMeta:
     name: str
     description: str
     owner: str | None
-    # 生成目录里的 SKILL.md
+    # SKILL.md 的位置
     path: Path
-    # 只在写入的返回值里有：这次写入删掉的附件（整体替换附件时，没在新的一组里的），工具结果里告诉模型
-    removed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class Skill:
     meta: SkillMeta
     body: str
-    # 读的 agent 是否用得到它（自己的或分发给它的，agents.access）；不是也照常读到（软隔离）
-    usable: bool = True
-
-
-class FileChange(NamedTuple):
-    """SkillStore.edit 的一处修改：file 是 skill 目录里的相对路径（SKILL.md 即正文，不含 frontmatter），change 的规则同
-    text_edit.edit。"""
-
-    change: TextChange
-    file: str = SKILL_FILE
 
 
 @dataclass(frozen=True)
@@ -83,453 +49,108 @@ class SkillImport:
     skipped: list[Skipped]
 
 
-def parse_frontmatter(text: str, name: str) -> tuple[str, frontmatter.Post]:
-    """SKILL.md 的 frontmatter 规则：name、description 都是字符串，name 与 skill 名一致，description 非空。返回描述与解析结果；
-    不合规则时 InvalidInput（写入的 SKILL.md 来自调用方：导入的包、恢复的旧版）。"""
-    where = f"{name}/{SKILL_FILE}"
-    post = _loads(text, name, where)
-    fm_name, description = post.get("name"), post.get("description")
-    if not isinstance(fm_name, str) or not isinstance(description, str):
-        raise InvalidInput(f"{where}: frontmatter must contain string 'name' and 'description'")
-    return _valid_description(description), post
+def _meta(a: assets.Asset) -> SkillMeta:
+    return SkillMeta(a.name, a.description, a.owner, a.path / SKILL_FILE)
 
 
-def _loads(text: str, name: str, where: str) -> frontmatter.Post:
-    """解析 SKILL.md；frontmatter 里有 name 时必须与 skill 同名。where 是报错里对这份文件的称呼。"""
-    try:
-        post = frontmatter.loads(text)
-    except (yaml.YAMLError, ValueError) as e:
-        raise InvalidInput(f"{where}: cannot parse frontmatter: {e}") from e
-    fm_name = post.get("name")
-    if fm_name is not None and fm_name != name:
-        raise InvalidInput(f"{where}: frontmatter name {fm_name!r} does not match {name!r}")
-    return post
-
-
-def _skill_md(name: str, description: str, body: str) -> str:
-    return frontmatter.dumps(frontmatter.Post(body.strip() + "\n", name=name, description=description)) + "\n"
-
-
-def document(skill_md: str, attachments: Mapping[str, SkillFile]) -> str:
-    """一个 skill 在版本表里的文档：全部文件（SKILL.md 与附件）的 JSON。"""
-    files = {SKILL_FILE: SkillFile(skill_md), **attachments}
-    return json.dumps(
-        {rel: {"content": f.content, "executable": f.executable} for rel, f in sorted(files.items())},
-        ensure_ascii=False,
-        indent=1,
-    )
-
-
-def parse_document(doc: str) -> dict[str, SkillFile]:
-    return {rel: SkillFile(f["content"], f["executable"]) for rel, f in json.loads(doc).items()}
-
-
-@dataclass(frozen=True)
-class SkillDir:
-    """工作目录里的一个 skill 目录（write_skill 的 skill_dir）：SKILL.md 的原文（没有就是 None）与附件。"""
-
-    skill_md: str | None
-    attachments: dict[str, SkillFile]
-    skipped: list[Skipped]
-
-
-def skill_dir_from(directory: Path) -> SkillDir:
-    """一个目录里能收进 skill 的文件（同导入的规则：skill_package.accept），以及跳过的与原因。顶层的 SKILL.md 是正文
-    （规则见 instructions），其余是附件。不跟随符号链接；隐藏目录与依赖目录整个跳过（只记一条，不逐个列出里面的文件，
-    给错目录时结果也不会有成千上万行）。读文件是同步 IO，调用方放到线程里。"""
-    if not directory.is_dir():
-        raise InvalidInput(f"skill directory {directory} does not exist or is not a directory")
-    skill_md: str | None = None
+def _read_files(directory: Path) -> dict[str, SkillFile]:
+    """skill 目录里的全部 UTF-8 文本文件（导出用；二进制文件不进 .skill 包）。"""
     files: dict[str, SkillFile] = {}
-    skipped: list[Skipped] = []
     for current, dirs, names in os.walk(directory):
-        base = Path(current)
-        for d in sorted(dirs):
-            if d.startswith(".") or d in skill_package.NOT_ATTACHMENT_DIRS:
-                skipped.append(
-                    Skipped((base / d).relative_to(directory).as_posix() + "/", "directory not kept")
-                )
-        dirs[:] = sorted(
-            d for d in dirs if not d.startswith(".") and d not in skill_package.NOT_ATTACHMENT_DIRS
-        )
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         for name in sorted(names):
-            path = base / name
-            rel = path.relative_to(directory).as_posix()
-            if path.is_symlink():
-                skipped.append(Skipped(rel, "symbolic link"))
+            path = Path(current) / name
+            if name.startswith(".") or path.is_symlink() or not path.is_file():
                 continue
-            if not path.is_file():
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
                 continue
-            accepted = skill_package.accept(rel, path.stat().st_size, path.read_bytes, skipped)
-            if accepted is None:
-                continue
-            if rel == SKILL_FILE:
-                skill_md = accepted.content
-            else:
-                files[rel] = SkillFile(accepted.content, os.access(path, os.X_OK))
-    return SkillDir(skill_md, files, skipped)
+            files[path.relative_to(directory).as_posix()] = SkillFile(text, os.access(path, os.X_OK))
+    return files
 
 
-def instructions(
-    name: str, description: str | None, body: str | None, skill_md: str | None
-) -> tuple[str | None, str | None]:
-    """正文与描述各只有一个来源：参数（description、body）或 skill 目录里的 SKILL.md（skill_md：正文，可带 frontmatter，
-    其中的 name 须与 skill 同名、description 当描述；其余键不存，同 write_skill 的 content）。同一项两处都给是错误（不猜哪个优先）。返回（描述, 正文），
-    哪项都没给就是 None。"""
-    if skill_md is None:
-        return description, body
-    if body is not None:
-        raise InvalidInput(
-            f"give the instructions once: either content or {SKILL_FILE} in skill_dir, not both"
-        )
-    post = _loads(skill_md, name, f"{SKILL_FILE} in skill_dir")
-    fm_description = post.get("description")
-    if fm_description is not None:
-        if not isinstance(fm_description, str):
-            raise InvalidInput(f"{SKILL_FILE} in skill_dir: frontmatter description must be a string")
-        if description is not None:
-            raise InvalidInput(
-                f"give the description once: either description or the frontmatter of {SKILL_FILE} in "
-                "skill_dir, not both"
-            )
-        description = fm_description
-    return description, post.content
+def _replace_dir(directory: Path, files: Mapping[str, SkillFile]) -> None:
+    """把 skill 目录整体换成 files：先在同级临时目录写好再换上。"""
+    parent = directory.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    tmp = parent / f".{directory.name}.new"
+    assets.remove(tmp)
+    for rel, f in files.items():
+        assets.write_text(tmp / rel, f.content, executable=f.executable)
+    old = parent / f".{directory.name}.old"
+    assets.remove(old)
+    if directory.exists():
+        directory.rename(old)
+    tmp.rename(directory)
+    assets.remove(old)
 
 
 class SkillStore:
-    def __init__(self, db: Database, skills_dir: Path):
-        self._db = db
-        self.skills_dir = skills_dir
-        # 生成目录的写入串行：每次都按数据库里最新的状态生成，并发的写入最终收敛到最后一次
-        self._materialize_lock = asyncio.Lock()
-
-    def dir(self, name: str) -> Path:
-        return self.skills_dir / validate_slug(label(StoredKind.SKILL), name)
-
-    def _meta(self, row: Item) -> SkillMeta:
-        return SkillMeta(row.name, row.description, row.owner, self.dir(row.name) / SKILL_FILE)
+    def __init__(self, source: AssetSource):
+        self._source = source
 
     async def index(self, agent: str) -> list[SkillMeta]:
         """agent 能用的 skill（自己的与分发给它的，agents.access），按名称：它的 skill 索引。"""
-        async with self._db.transaction() as s:
-            return [self._meta(r) for r in await usable_in(s, StoredKind.SKILL, agent)]
+        return [_meta(a) for a in usable(await self._source.snapshot(), _KIND, agent)]
 
     async def read(self, name: str) -> Skill:
-        async with self._db.transaction() as s:
-            row = await existing_in(s, StoredKind.SKILL, name)
-            return Skill(self._meta(row), frontmatter.loads(row.content).content)
-
-    async def resolve(self, agent: str, name: str) -> Skill:
-        """agent 读取：任何存在的 skill 都读得到（软隔离），usable 标明它是否在这个 agent 能用的范围里。"""
-        async with self._db.transaction() as s:
-            row = await existing_in(s, StoredKind.SKILL, name)
-            usable = (await grants_in(s, agent)).uses(Kind.SKILL, name, row.owner)
-            return Skill(self._meta(row), frontmatter.loads(row.content).content, usable)
-
-    async def files(self, name: str) -> dict[str, SkillFile]:
-        """SKILL.md 与全部附件。"""
-        async with self._db.transaction() as s:
-            row = await existing_in(s, StoredKind.SKILL, name)
-            return {SKILL_FILE: SkillFile(row.content), **await _attachments_in(s, row)}
+        asset = (await self._source.snapshot()).asset(_KIND, name)
+        text = await asyncio.to_thread((asset.path / SKILL_FILE).read_text, encoding="utf-8")
+        return Skill(_meta(asset), frontmatter.loads(text).content)
 
     async def write(
-        self,
-        name: str,
-        description: str,
-        body: str,
-        *,
-        actor: str,
-        owner: str | None,
-        attachments: Mapping[str, SkillFile] | None = None,
-        reason: str | None = None,
+        self, name: str, description: str, body: str, *, actor: str, owner: str | None
     ) -> SkillMeta:
-        """新建或整体改写 SKILL.md；attachments 为 None 时附件不变，否则整体换成它。actor（agent 的 id 或 USER）是改的人，
-        已有的要它能改（规则 1 的 write）；新建的归 owner，已有的 owner 不变。reason 是这一版的说明（revisions.described）。"""
-        validate_slug(label(StoredKind.SKILL), name)
-        description = _valid_description(description)
-        message = described(reason, f"write skill {name}")
-        return await self._put(name, _skill_md(name, description, body), attachments, actor, owner, message)
+        """新建或整体改写 SKILL.md（附件不变；frontmatter 里别的键保留）。已有的要 actor 能改（规则 1 的 write），owner 不变；
+        新建的归 owner。"""
+        validate_slug(label(_KIND), name)
+        description = skill_package.valid_description(description)
+        async with self._source.writing() as snapshot:
+            existing = writable(snapshot, _KIND, name, actor)
+            directory = existing.path if existing is not None else snapshot.path_of(_KIND, name, owner)
+            md = directory / SKILL_FILE
 
-    async def edit(
-        self,
-        name: str,
-        actor: str,
-        *,
-        changes: Sequence[FileChange] = (),
-        description: str | None = None,
-        reason: str | None = None,
-    ) -> SkillMeta:
-        """局部改一个 skill：正文与各附件的几处（changes，可新建附件）、描述，可以同时改（同一版）；不删任何文件，整体写入
-        与删附件走 write。changes 依次做（规则见 _edited），任何一处做不了就整体不写；description 为 None 表示不改。
-        什么都不改是错误。名称不变。"""
-        message = described(reason, f"edit skill {name}")
-        if description is not None:
-            description = _valid_description(description)
-        elif not changes:
-            raise InvalidInput(
-                "nothing to change: give old_text/new_text (or edits) to edit the instructions or attachments, "
-                "description, or both"
-            )
-        touches_attachments = any(c.file != SKILL_FILE for c in changes)
-        touches_body = any(c.file == SKILL_FILE for c in changes)
-        attachments: Mapping[str, SkillFile] | None = None
-        # 读取、修改、写入与记版本在同一个写事务里（同记忆）：并发的编辑依次基于最新正文应用，互不覆盖
-        async with self._db.transaction() as s:
-            row = await changeable_in(s, StoredKind.SKILL, name, actor)
-            post = frontmatter.loads(row.content)
-            if changes:
-                old_files = await _attachments_in(s, row) if touches_attachments else {}
-                edited, files = _edited(name, post.content, old_files, changes)
-                if touches_body:
-                    post.content = edited.strip() + "\n"
-                if touches_attachments:
-                    attachments = files
-            if description is not None:
-                post["description"] = description
-            meta = await self._store_in(
-                s, row, name, frontmatter.dumps(post) + "\n", attachments, actor, row.owner, message
-            )
-        await self.materialize(name)
-        return meta
+            def put() -> None:
+                post = (
+                    frontmatter.loads(md.read_text(encoding="utf-8"))
+                    if md.is_file()
+                    else frontmatter.Post("")
+                )
+                post.content = body.strip() + "\n"
+                post["name"], post["description"] = name, description
+                assets.write_text(md, frontmatter.dumps(post) + "\n")
 
-    async def _put(
-        self,
-        name: str,
-        skill_md: str,
-        attachments: Mapping[str, SkillFile] | None,
-        actor: str,
-        owner: str | None,
-        message: str,
-        *,
-        replace: bool = True,
-    ) -> SkillMeta:
-        """新建或整篇写入：已有的按规则 1 的 write 查 actor，owner 不变；新建的归 owner。replace 为假时只新建：同名的已存在
-        Conflict（在写入的事务里查，并发的新建不会互相覆盖）。"""
-        async with self._db.transaction() as s:
-            if replace:
-                row = await writable_in(s, StoredKind.SKILL, name, actor, owner)
-            else:
-                await creatable_in(s, StoredKind.SKILL, name, owner)
-                row = None
-            meta = await self._store_in(s, row, name, skill_md, attachments, actor, owner, message)
-        await self.materialize(name)
-        return meta
-
-    async def _store_in(
-        self,
-        s: AsyncSession,
-        row: Item | None,
-        name: str,
-        skill_md: str,
-        attachments: Mapping[str, SkillFile] | None,
-        actor: str,
-        owner: str | None,
-        message: str,
-    ) -> SkillMeta:
-        """在调用方的事务里写入 SKILL.md（校验 frontmatter）与附件（None 表示不变）、记一版（说明 message 由公开方法入口定）；row 为 None 时新建，归 owner。
-        生成目录由调用方在事务提交后做。"""
-        description, _ = parse_frontmatter(skill_md, name)
-        for rel in attachments or {}:
-            skill_package.check_attachment_path(rel)
-        if attachments is not None:
-            skill_package.check_files([SKILL_FILE, *attachments])
-        old_files = {} if row is None else await _attachments_in(s, row)
-        before = None if row is None else document(row.content, old_files)
-        if row is None:
-            row = Item(kind=StoredKind.SKILL.value, name=name, owner=owner)
-            s.add(row)
-        row.content, row.description = skill_md, description
-        new_files = old_files if attachments is None else dict(attachments)
-        if attachments is not None:
-            await s.flush()
-            await s.execute(delete(ItemFile).where(ItemFile.item_id == row.id))
-            s.add_all(
-                ItemFile(item_id=row.id, path=rel, content=f.content, executable=f.executable)
-                for rel, f in new_files.items()
-            )
-        record_in(s, Subject.SKILL, name, before, document(skill_md, new_files), actor, message)
-        await s.flush()
-        return dataclasses.replace(self._meta(row), removed=tuple(sorted(set(old_files) - set(new_files))))
+            await asyncio.to_thread(put)
+        return _meta((await self._source.snapshot()).asset(_KIND, name))
 
     async def export(self, name: str) -> bytes:
-        """打成标准 .skill 文件（skill_package）：SKILL.md 与附件。"""
-        return skill_package.pack(name, await self.files(name))
+        """打成标准 .skill 文件（skill_package）：SKILL.md 与文本附件。"""
+        asset = (await self._source.snapshot()).asset(_KIND, name)
+        return skill_package.pack(name, await asyncio.to_thread(_read_files, asset.path))
 
     async def import_package(
         self, data: bytes, *, actor: str, owner: str | None, replace: bool
     ) -> SkillImport:
-        """导入标准 .skill 文件，新建的归 owner，记一版。SKILL.md 原样写入（标准里的 license、metadata 等其他
-        frontmatter 键保留），但要满足与 write 相同的规则。同名 skill 已存在时：replace 为假报冲突；为真则覆盖（附件整体
-        换掉，owner 不变，actor 要能改它）。"""
+        """导入标准 .skill 文件，新建的归 owner。SKILL.md 原样写入（标准里的 license、metadata 等其他 frontmatter 键保留）。
+        同名 skill 已存在时：replace 为假报冲突；为真则整个目录换掉（owner 不变，actor 要能改它）。"""
         package = skill_package.unpack(data)
         name = package.name
-        skill_md = package.files[SKILL_FILE].content
-        parse_frontmatter(skill_md, name)
-        attachments = {rel: f for rel, f in package.files.items() if rel != SKILL_FILE}
-        meta = await self._put(
-            name, skill_md, attachments, actor, owner, f"import skill {name}", replace=replace
-        )
+        parse_frontmatter(package.files[SKILL_FILE].content, name)
+        async with self._source.writing() as snapshot:
+            existing = snapshot.get(_KIND, name)
+            if existing is not None and not replace:
+                raise Conflict(
+                    f"{label(_KIND)} {name!r} already exists; names are unique, choose another name"
+                )
+            if existing is not None:
+                writable(snapshot, _KIND, name, actor)
+            directory = existing.path if existing is not None else snapshot.path_of(_KIND, name, owner)
+            await asyncio.to_thread(_replace_dir, directory, package.files)
+        meta = _meta((await self._source.snapshot()).asset(_KIND, name))
         return SkillImport(meta, package.skipped)
 
-    async def restore(self, name: str, rev: int, actor: str) -> SkillMeta:
-        """把第 rev 版的文档作为新的一版写入（归属不变：恢复的是内容），读版本与写入在同一个事务里。"""
-        async with self._db.transaction() as s:
-            row = await changeable_in(s, StoredKind.SKILL, name, actor)
-            files = parse_document(await revision_doc_in(s, Subject.SKILL, name, rev))
-            skill_md = files.pop(SKILL_FILE).content
-            meta = await self._store_in(
-                s, row, name, skill_md, files, actor, row.owner, f"restore skill {name}"
-            )
-        await self.materialize(name)
-        return meta
-
-    async def delete(self, name: str, actor: str, *, reason: str | None = None) -> None:
-        """reason 是这一版的说明（revisions.described）。"""
-        message = described(reason, f"delete skill {name}")
-        async with self._db.transaction() as s:
-            row = await changeable_in(s, StoredKind.SKILL, name, actor)
-            before = document(row.content, await _attachments_in(s, row))
-            await s.delete(row)
-            record_in(s, Subject.SKILL, name, before, None, actor, message)
-        await self.materialize(name)
-
-    async def owned_names(self, owner: str) -> list[str]:
-        async with self._db.transaction() as s:
-            rows = await s.scalars(
-                select(Item.name).where(Item.kind == StoredKind.SKILL.value, Item.owner == owner)
-            )
-            return list(rows)
-
-    # ---- 生成目录 ----
-
-    async def materialize(self, name: str) -> None:
-        """按数据库里现在的状态重新生成这个 skill 的目录（已删除就删掉目录）。"""
-        async with self._materialize_lock:
-            async with self._db.transaction() as s:
-                row = await item_in(s, StoredKind.SKILL, name)
-                files = (
-                    None
-                    if row is None
-                    else {SKILL_FILE: SkillFile(row.content), **await _attachments_in(s, row)}
-                )
-            await asyncio.to_thread(_materialize, self.skills_dir, name, files)
-
-    async def remove_generated(self, names: list[str]) -> None:
-        """删掉这些 skill 的生成目录（它们的行即将随 agent 删除）。"""
-        async with self._materialize_lock:
-            for name in names:
-                await asyncio.to_thread(_materialize, self.skills_dir, name, None)
-
-    async def materialize_all(self) -> None:
-        """启动时：按数据库全量重新生成，删掉数据库里没有的目录与上次留下的临时目录。"""
-        async with self._materialize_lock:
-            async with self._db.transaction() as s:
-                rows = list(await s.scalars(select(Item).where(Item.kind == StoredKind.SKILL.value)))
-                skills = {
-                    r.name: {SKILL_FILE: SkillFile(r.content), **await _attachments_in(s, r)} for r in rows
-                }
-            await asyncio.to_thread(_materialize_all, self.skills_dir, skills)
-        log.info("skill directories generated", extra={"skills": len(skills), "root": str(self.skills_dir)})
-
-
-async def _attachments_in(s, row: Item) -> dict[str, SkillFile]:  # noqa: ANN001
-    files = await s.scalars(select(ItemFile).where(ItemFile.item_id == row.id).order_by(ItemFile.path))
-    return {f.path: SkillFile(f.content, f.executable) for f in files}
-
-
-def _edited(
-    name: str, body: str, attachments: Mapping[str, SkillFile], changes: Sequence[FileChange]
-) -> tuple[str, dict[str, SkillFile]]:
-    """依次做 changes（text_edit.edit_keyed：后一处在前面改过的结果上找，任何一处做不了整体失败），返回改后的正文与全部
-    附件（纯函数）。SKILL.md 按 text_edit.edit 改正文（追加时规整空白，同记忆）。其余路径改附件：路径与类型按
-    check_attachment_path（这里逐处查，报错带上第几处；整组路径的约束由 _store_in 兜底），大小按 MAX_FILE_BYTES；替换同
-    text_edit.replace_once，追加原样接在末尾（代码不能去掉缩进、插空行；原文与结果末尾没有换行时补一个）；不存在的附件只能
-    追加，即新建：以 `#!` 开头的可执行，已有附件保留原来的可执行位。"""
-
-    def step(rel: str, text: str | None, change: TextChange) -> str:
-        if rel == SKILL_FILE:
-            return text_edit.edit(text or "", change.old, change.new, f"skill {name}")
-        what = f"{rel} of skill {name}"
-        skill_package.check_attachment_path(rel)
-        if change.old:
-            if text is None:
-                existing = ", ".join(sorted(attachments)) or "none"
-                raise InvalidInput(
-                    f"{what} does not exist (attachments: {existing}); to create it, give only new_text"
-                )
-            new = text_edit.replace_once(text, change.old, change.new, what)
-        elif not change.new:
-            raise InvalidInput(f"nothing to append to {what}: new_text is empty")
-        else:
-            base = text or ""
-            new = base + ("\n" if base and not base.endswith("\n") else "") + change.new
-            new += "" if new.endswith("\n") else "\n"
-        if len(new.encode()) > skill_package.MAX_FILE_BYTES:
-            raise InvalidInput(f"{what} would be larger than {skill_package.MAX_FILE_BYTES} bytes")
-        return new
-
-    texts = {SKILL_FILE: body} | {rel: f.content for rel, f in attachments.items()}
-    texts = text_edit.edit_keyed(texts, [(c.file, c.change) for c in changes], step)
-    files = {
-        rel: SkillFile(text, attachments[rel].executable if rel in attachments else text.startswith("#!"))
-        for rel, text in texts.items()
-        if rel != SKILL_FILE
-    }
-    return texts[SKILL_FILE], files
-
-
-def _valid_description(description: str) -> str:
-    description = description.strip()
-    if not description:
-        raise InvalidInput("skill description must not be empty")
-    return description
-
-
-def _force_rmtree(path: Path) -> None:
-    """删掉一个（可能只读的）生成目录。"""
-    if not path.exists() and not path.is_symlink():
-        return
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-        return
-    for d, _, _ in os.walk(path):
-        os.chmod(d, stat.S_IRWXU)
-    shutil.rmtree(path)
-
-
-def _materialize(root: Path, name: str, files: Mapping[str, SkillFile] | None) -> None:
-    """生成（或删除）一个 skill 目录：先在临时目录里写好，再换上去，读的人看不到写了一半的目录。"""
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / name
-    if files is None:
-        _force_rmtree(target)
-        return
-    tmp = Path(tempfile.mkdtemp(prefix=f"{_TMP_PREFIX}{name}.", dir=root))
-    try:
-        for rel, f in files.items():
-            path = tmp / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f.content, encoding="utf-8")
-            path.chmod(_EXEC_MODE if f.executable else _FILE_MODE)
-        for d, _, _ in sorted(os.walk(tmp), key=lambda w: len(w[0]), reverse=True):
-            os.chmod(d, _DIR_MODE)
-        old = None
-        if target.exists() or target.is_symlink():
-            # 同一个上级里改名：换上级要改只读目录自己的 ..
-            old = root / f"{_TMP_PREFIX}{name}.old.{uuid.uuid4().hex}"
-            target.rename(old)
-        tmp.rename(target)
-        if old is not None:
-            _force_rmtree(old)
-    except BaseException:
-        _force_rmtree(tmp)
-        raise
-
-
-def _materialize_all(root: Path, skills: Mapping[str, Mapping[str, SkillFile]]) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    for entry in root.iterdir():
-        if entry.name not in skills:
-            _force_rmtree(entry)
-    for name, files in skills.items():
-        _materialize(root, name, files)
+    async def delete(self, name: str, actor: str) -> None:
+        async with self._source.writing() as snapshot:
+            asset = changeable(snapshot, _KIND, name, actor)
+            await asyncio.to_thread(assets.remove, asset.path)

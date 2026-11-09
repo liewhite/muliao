@@ -1,8 +1,8 @@
-"""AI 资产（内置工具、skill、MCP server、secret、记忆）的接口，按统一模型：`/items` 列出全部资产（每种带自己的详情），
-`/items/{kind}/{name}` 读、写、删一个资产，`/owner`、`/history`、`/restore` 对存在库里的资产通用，各种类专有的操作
-在自己的子路径（MCP 的启停与测试连接、skill 包的导入导出）。
+"""AI 资源（内置工具、skill、MCP server、secret、记忆）的接口，按统一模型：`/items` 列出全部资源（每种带自己的详情），
+`/items/{kind}/{name}` 读、写、删一个资源，`/owner` 对存成文件的资源通用（挪到另一个 owner 的目录），各种类专有的操作
+在自己的子路径（MCP 的启停与测试连接、skill 包的导入导出）。资源都是资源目录里的文件（agents.assets），这里读写的就是它们。
 
-写入的人（actor）都是 user；新建的条目归请求给出的 owner（缺省为平台），已有的 owner 不变。secret 的版本不含值，只能看历史。
+写入的人（actor）都是 user；新建的资源归请求给出的 owner（缺省为平台），已有的 owner 不变。
 """
 
 from datetime import datetime
@@ -25,7 +25,6 @@ from muliao.agents.api import (
     mcp_config,
 )
 from muliao.api.deps import C, read_limited
-from muliao.api.revisions import HISTORY_LIMIT, RevisionOut
 
 router = APIRouter()
 
@@ -58,7 +57,10 @@ class ToolItemOut(_ItemBase):
 
 
 class _StoredItemBase(_ItemBase):
+    # 文件的修改时间
     updated_at: datetime
+    # 文件（skill 是目录）的位置
+    path: str
 
 
 class SkillItemOut(_StoredItemBase):
@@ -93,7 +95,7 @@ class McpItemOut(_StoredItemBase, McpConfigOut):
 
 
 class SecretItemOut(_StoredItemBase):
-    """值不返回；updated_at 是最后一次修改（设值、改说明、转移）的时间。"""
+    """值不返回。"""
 
     kind: Literal["secret"]
 
@@ -118,30 +120,31 @@ def _item_out(e: CatalogEntry) -> ToolItemOut | SkillItemOut | McpItemOut | Secr
         "roles": list(e.roles),
         "shared": e.shared,
     }
+    stored = {**common, "path": str(e.path)}
     match e.kind:
         case Kind.TOOL:
             tool = e.tool
             assert tool is not None
             return ToolItemOut(kind="tool", access=tool.access.value, admin=tool.admin, **common)
         case Kind.SKILL:
-            return SkillItemOut(kind="skill", **common)
+            return SkillItemOut(kind="skill", **stored)
         case Kind.MCP:
             assert e.mcp is not None
-            return McpItemOut(kind="mcp", **common, **McpConfigOut.fields_of(e.mcp))
+            return McpItemOut(kind="mcp", **stored, **McpConfigOut.fields_of(e.mcp))
         case Kind.SECRET:
-            return SecretItemOut(kind="secret", **common)
+            return SecretItemOut(kind="secret", **stored)
         case Kind.MEMORY:
-            return MemoryItemOut(kind="memory", **common)
+            return MemoryItemOut(kind="memory", **stored)
 
 
 @router.get("/items")
 async def list_items(c: C) -> list[ItemOut]:
-    """全部资产：内置工具（按登记顺序，仅当前配置下注册的）在前，存在库里的按种类、名称；每种带自己的
+    """全部资源：内置工具（按登记顺序，仅当前配置下注册的）在前，存成文件的按种类、名称；每种带自己的
     详情（工具的读写与管理类、MCP 的配置与启停）。"""
     return [_item_out(e) for e in await c.catalog.catalog()]
 
 
-# ---- 存在库里的资产通用：owner、版本 ----
+# ---- 存成文件的资源通用：owner ----
 
 
 class OwnerIn(BaseModel):
@@ -151,24 +154,8 @@ class OwnerIn(BaseModel):
 
 @router.put("/items/{kind}/{name}/owner", status_code=204)
 async def transfer_item(c: C, kind: StoredKind, name: str, body: OwnerIn) -> None:
-    """转给另一个 owner，记一版；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。"""
+    """挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。"""
     await c.catalog.transfer_item(kind, name, body.owner, USER)
-
-
-class RestoreIn(BaseModel):
-    rev: int
-
-
-@router.get("/items/{kind}/{name}/history")
-async def item_history(c: C, kind: StoredKind, name: str) -> list[RevisionOut]:
-    """新的在前，第一条即当前的一版（已删除的是那次删除）；只列最近 50 版。"""
-    return [RevisionOut.of(r) for r in await c.catalog.history(kind, name, HISTORY_LIMIT)]
-
-
-@router.post("/items/{kind}/{name}/restore", status_code=204)
-async def restore_item(c: C, kind: StoredKind, name: str, body: RestoreIn) -> None:
-    """把某一版之后的内容作为新的一版写入（secret 不能恢复：422）。"""
-    await c.catalog.restore(kind, name, body.rev, USER)
 
 
 # ---- 记忆 ----
@@ -177,9 +164,9 @@ async def restore_item(c: C, kind: StoredKind, name: str, body: RestoreIn) -> No
 class MemoryOut(BaseModel):
     name: str
     owner: str | None
-    description: str
     content: str
     updated_at: datetime
+    path: str
     # 每一块的上限
     max_chars: int
 
@@ -187,7 +174,6 @@ class MemoryOut(BaseModel):
 class MemoryIn(BaseModel):
     # 新建时的 owner（缺省为平台）；已有的不变
     owner: str | None = None
-    description: str = ""
     content: str
 
 
@@ -195,9 +181,9 @@ def _memory_out(c: C, m: MemoryInfo) -> MemoryOut:
     return MemoryOut(
         name=m.name,
         owner=m.owner,
-        description=m.description,
         content=m.content,
         updated_at=m.updated_at,
+        path=str(m.path),
         max_chars=c.memory.max_chars,
     )
 
@@ -209,10 +195,9 @@ async def get_memory(c: C, name: str) -> MemoryOut:
 
 @router.put("/items/memory/{name}")
 async def put_memory(c: C, name: str, body: MemoryIn) -> MemoryOut:
-    """新建的归 owner（名字要是 slug）；已有的整体改写正文与描述，owner 不变。谁能用由角色收录它（`use:memory:<名>`）。"""
-    return _memory_out(
-        c, await c.memory.put(name, body.content, body.description, actor=USER, owner=body.owner)
-    )
+    """新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由
+    角色收录它（`use:memory:<名>`）。"""
+    return _memory_out(c, await c.memory.put(name, body.content, actor=USER, owner=body.owner))
 
 
 @router.delete("/items/memory/{name}", status_code=204)

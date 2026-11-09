@@ -1,23 +1,14 @@
-"""secret 的工具（vault_*、eth_sign）：保存用户给的 secret，只能按 key 引用，没有读取明文的工具；eth_sign 用 vault 里
+"""secret 的工具（vault_set、eth_sign）：保存用户给的 secret，只能按 key 引用，没有读取明文的工具；eth_sign 用 vault 里
 的私钥在本进程内签名（agents.eth_signing），明文不出进程。"""
 
 import logging
 from typing import Any
 
-from pydantic import BaseModel
 from pydantic_ai import FunctionToolset, RunContext
 
 from muliao.agents.eth_signing import Signature, SignKind, sign
 from muliao.agents.secrets import Vault
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
-
-
-class SecretKeyInfo(BaseModel):
-    key: str
-    # 是你自己的（否则是角色或你自己的 allow 分给你的）
-    yours: bool
-    description: str
-
 
 log = logging.getLogger(__name__)
 
@@ -33,21 +24,12 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
-    async def vault_list(ctx: RunContext[RunScope]) -> list[SecretKeyInfo]:
-        """List the secret keys you can use: your own and those your roles or your own allow rules give you.
-        Returns a JSON array, each item with `key`, `yours` and `description`. Values are never shown."""
-        me = ctx.deps.agent_id
-        return [
-            SecretKeyInfo(key=s.key, yours=s.owner == me, description=s.description)
-            for s in await vault.usable_by(me)
-        ]
-
-    @ts.tool
     async def vault_set(ctx: RunContext[RunScope], key: str, value: str, description: str = "") -> str:
-        """Store a secret the user gave you so it never has to appear in files, skills, memory or MCP configs.
-        A new key is yours; other agents get it only through a role. Changing an existing key needs you to own
-        it (or be an admin). Keys are unique. The value is redacted from the saved conversation.
-        Reference it later as `${vault:KEY}` in MCP configs, or via `run_shell(secrets=[KEY])`.
+        """Store a secret the user gave you so it never has to appear in files, skills, memory or MCP configs:
+        it is encrypted into `secrets/<KEY>.toml` in your asset directory (a new key is yours; changing an existing
+        one needs you to be able to write it). Keys are unique. The value is redacted from the saved conversation.
+        Reference it later as `${vault:KEY}` in MCP configs, or via `run_shell(secrets=[KEY])`. To see keys, list
+        the `secrets/` directories; to delete one, remove its file.
 
         Args:
             key: Identifier like `SLACK_TOKEN`.
@@ -57,16 +39,6 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
         me = ctx.deps.agent_id
         await vault.set(key, value, description, actor=me, owner=me)
         return f"stored secret {key}"
-
-    @ts.tool
-    async def vault_delete(ctx: RunContext[RunScope], key: str) -> str:
-        """Delete a secret that is no longer needed (yours, or any if you are an admin).
-
-        Args:
-            key: The secret key.
-        """
-        await vault.delete(key, ctx.deps.agent_id)
-        return f"deleted secret {key}"
 
     @ts.tool
     async def eth_sign(
@@ -80,7 +52,7 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
         `signature` and `message_hash` (the others are null).
 
         Args:
-            key: Vault key holding the private key (one you can use, see vault_list).
+            key: Vault key holding the private key (one you can use).
             kind: `transaction`: payload is an object of transaction fields (must include `chainId`; legacy with
                 `gasPrice` or EIP-1559 with `maxFeePerGas`/`maxPriorityFeePerGas`; numbers as integers or 0x hex);
                 signed offline: nothing is looked up on chain or filled in, so give `nonce`, `gas` and the fee

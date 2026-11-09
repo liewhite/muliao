@@ -69,3 +69,48 @@ async def agent_name_in(s: AsyncSession, agent_id: str) -> str | None:
 def deleting_ids() -> Select[tuple[str]]:
     """正在删除的 agent 的 id（子查询：别的子域在自己的查询里排除它们名下的数据）。"""
     return select(Agent.id).where(Agent.deleting_by.is_not(None))
+
+
+async def known_agents_in(s: AsyncSession) -> dict[str, str]:
+    """数据库里全部 agent（含正在删除的）的 id → 名字：读资源树时按 id 对上 agent 目录（agents.assets）。"""
+    return {agent_id: name for agent_id, name in await s.execute(select(Agent.id, Agent.name))}
+
+
+@dataclass(frozen=True)
+class Mirrored:
+    """agents 表里从资源文件同步来的镜像列（agents.source.AssetSource）：事实来源是 `<名>/agent.toml` 与目录名，表里这份
+    给别的领域在自己的事务里读（名称解析、展示、运行用的模型），旧版本回滚后也读得到最新的值。"""
+
+    id: str
+    name: str
+    description: str
+    model: str
+    thinking: str
+    group: str | None
+
+
+async def sync_mirror_in(s: AsyncSession, agents: list[Mirrored]) -> list[str]:
+    """把镜像列改成文件里的值，返回改了的 agent 的 id。名字唯一：先把要改名的都换成占位名（id），再写新名字，互换名字
+    的两个 agent 也不撞唯一约束。"""
+    rows = {a.id: a for a in await s.scalars(select(Agent).where(Agent.id.in_([m.id for m in agents])))}
+
+    def fields(row: Agent | Mirrored) -> tuple[object, ...]:
+        return (row.name, row.description, row.model, row.thinking, row.group)
+
+    changed = [m for m in agents if m.id in rows and fields(rows[m.id]) != fields(m)]
+    renamed = [m for m in changed if rows[m.id].name != m.name]
+    for m in renamed:
+        rows[m.id].name = f"\x00{m.id}"
+    if renamed:
+        await s.flush()
+    for m in changed:
+        row = rows[m.id]
+        row.name, row.description, row.model, row.thinking, row.group = (
+            m.name,
+            m.description,
+            m.model,
+            m.thinking,
+            m.group,
+        )
+    await s.flush()
+    return [m.id for m in changed]

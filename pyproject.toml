@@ -28,6 +28,7 @@ dependencies = [
     "pywebpush>=2.5.0",
     "pyyaml>=6",
     "sqlalchemy[asyncio]>=2.1.5",
+    "tomlkit>=0.15.2",
     "trafilatura>=2",
     "uvicorn[standard]>=0.54.0",
 ]

@@ -19,6 +19,9 @@ import zlib
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
+import frontmatter
+import yaml
+
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.naming import validate_slug
 from muliao.errors import InvalidInput, TooLarge
@@ -211,3 +214,40 @@ def unpack(data: bytes) -> Package:
         why = next((f": {s.reason}" for s in skipped if s.path == SKILL_FILE), "")
         raise InvalidInput(f"package has no usable {name}/{SKILL_FILE}{why}")
     return Package(name, files, skipped)
+
+
+# ---- SKILL.md 的 frontmatter（导入的包、资源目录里的 skill 都按它） ----
+
+
+def parse_frontmatter(text: str, name: str) -> tuple[str, frontmatter.Post]:
+    """SKILL.md 的 frontmatter 规则：description 是非空字符串；有 name 时必须与 skill（目录名）同名。返回描述与解析结果；
+    不合规则时 InvalidInput。"""
+    where = f"{name}/{SKILL_FILE}"
+    post = loads_skill_md(text, name, where)
+    description = post.get("description")
+    if not isinstance(description, str):
+        raise InvalidInput(f"{where}: frontmatter must contain a string 'description'")
+    return valid_description(description), post
+
+
+def loads_skill_md(text: str, name: str, where: str) -> frontmatter.Post:
+    """解析 SKILL.md；frontmatter 里有 name 时必须与 skill 同名。where 是报错里对这份文件的称呼。"""
+    try:
+        post = frontmatter.loads(text)
+    except (yaml.YAMLError, ValueError) as e:
+        raise InvalidInput(f"{where}: cannot parse frontmatter: {e}") from e
+    fm_name = post.get("name")
+    if fm_name is not None and fm_name != name:
+        raise InvalidInput(f"{where}: frontmatter name {fm_name!r} does not match {name!r}")
+    return post
+
+
+def valid_description(description: str) -> str:
+    description = description.strip()
+    if not description:
+        raise InvalidInput("skill description must not be empty")
+    return description
+
+
+def skill_md(name: str, description: str, body: str) -> str:
+    return frontmatter.dumps(frontmatter.Post(body.strip() + "\n", name=name, description=description)) + "\n"

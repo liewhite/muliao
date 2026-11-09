@@ -31,17 +31,20 @@ _AUDIENCE_NOTES: dict[Audience, str] = {
 
 SELF_IMPROVEMENT = """\
 ## Self-improvement
-Everything you learn persists only as memory or skills.
-- Memory: the memory blocks above, each limited to {memory_limit} characters: your private one, the global \
-one every agent shares, and any shared by your roles. Change a block marked editable with `memory_edit` \
-(its description says what belongs in memory and what goes into a skill); fix or condense entries with it \
-too. Put a fact in the narrowest block it holds for: your private \
-block unless it holds for everyone who shares the other block.
-- Skills are reusable procedures. Before a task that matches a skill in the index, call `read_skill`. After \
-working out a non-trivial procedure likely to recur, save it with `write_skill` (a new skill is yours; other \
-agents get it only through a role); when a skill proves wrong or incomplete, fix that part with `edit_skill`. Change skills and memory only through these tools, never with shell \
-commands or file tools, so every change is versioned under your name and the user can roll it back.
-- Secrets belong in the vault, referenced by key; never write secret values into files, memory or skills.
+Everything you learn persists only as memory or skills. Both are plain files: yours are in {asset_dir} \
+(shared ones elsewhere under {assets_root}). Change them with the file tools like any other file; changes \
+take effect from your next run.
+- Memory: the memory blocks above, each limited to {memory_limit} characters and shown with its file: your \
+private one, the global one every agent shares, and any shared by your roles. Edit a block marked editable \
+(its description says what belongs in memory and what goes into a skill); fix or condense entries the same \
+way. Put a fact in the narrowest block it holds for: your private block unless it holds for everyone who \
+shares the other block.
+- Skills are reusable procedures: a directory with a SKILL.md (frontmatter `description`: when to use it) \
+plus any attachments. Before a task that matches a skill in the index, read its SKILL.md. After working out \
+a non-trivial procedure likely to recur, create `skills/<name>/SKILL.md` in your directory (a new skill is \
+yours; other agents get it only through a role); when a skill proves wrong or incomplete, fix that file.
+- Secrets belong in the vault (`vault_set`), referenced by key; never write secret values into files, memory \
+or skills.
 - Keep state you need across runs (cursors, caches) in files in your workspace."""
 
 
@@ -71,6 +74,7 @@ def build_instructions(
     agent_name: str,
     agent_description: str,
     workspace: Path,
+    asset_dir: Path,
     origin_note: str,
     memories: Sequence[MemoryBlock],
     skills: Sequence[SkillMeta],
@@ -85,13 +89,13 @@ def build_instructions(
         f"- {origin_note}",
     ]
     skill_lines = [
-        f"- `{s.name}`{' (yours)' if s.owner == agent_id else ''}: {s.description}" for s in skills
+        f"- `{s.name}`{' (yours)' if s.owner == agent_id else ''}: {s.description} ({s.path})" for s in skills
     ] or ["(no skills yet)"]
     sections = [
         "## Runtime context\n" + "\n".join(context),
         memory_section(memories, memory_limit),
         "## Skill index\n" + "\n".join(skill_lines),
-        SELF_IMPROVEMENT.format(memory_limit=memory_limit),
+        SELF_IMPROVEMENT.format(memory_limit=memory_limit, asset_dir=asset_dir, assets_root=asset_dir.parent),
     ]
     if summary is not None:
         sections.append(
@@ -105,12 +109,13 @@ def memory_section(memories: Sequence[MemoryBlock], limit: int) -> str:
     """这个 agent 能用的每一块记忆（MemoryStore.for_run，按名字），标出名字与能不能改。界面的 agent 详情用它预览注入的样子
     （api/agents.py），与运行时同一个函数。"""
     blocks = [
-        f'<memory name="{escape(m.name)}" access="{_access(m)}">\n{m.content or "(empty)"}\n</memory>'
+        f'<memory name="{escape(m.name)}" access="{_access(m)}" file="{escape(str(m.path))}">\n'
+        f"{m.content or '(empty)'}\n</memory>"
         for m in memories
     ] or ["(no memory blocks)"]
     return (
         f"## Memory\nThe memory blocks you use, by name (each limited to {limit} characters); change an editable "
-        "one with `memory_edit(name=...)`.\n" + "\n".join(blocks)
+        "one by editing its file.\n" + "\n".join(blocks)
     )
 
 
