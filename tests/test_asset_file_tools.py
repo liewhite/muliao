@@ -2,6 +2,7 @@
 之后没被改过；资源文件原子写入。"""
 
 import json
+import os
 
 from tests.test_tools import run_tools
 
@@ -52,7 +53,7 @@ async def test_wrong_formats_are_refused_with_the_reason_and_the_skill_section(c
     assert "over the limit of 4000" in outputs[1] and "section 'Memory'" in outputs[1]
     assert "not valid JSON" in outputs[2] and "section 'MCP servers'" in outputs[2]
     assert "not a place for an asset file" in outputs[3]
-    assert "was not written" in outputs[4]
+    assert "nothing was written" in outputs[4]
     assert not (mine / "skills/new-one").exists() and not (mine / "mcp").exists()
     assert not (mine / "notes.txt").exists()
     assert (mine / "memory.md").read_text() == "note\n"
@@ -198,3 +199,53 @@ async def test_overwriting_an_asset_file_needs_a_fresh_read(container, make_agen
     assert outputs[5].startswith("overwrote ") and outputs[6].startswith("overwrote ")
     assert memory.read_text() == "mine again\n"
     assert outputs[8].startswith("overwrote ")
+
+
+async def test_an_oversized_memory_can_be_shortened_step_by_step(container, make_agent, models):
+    me, _tree, mine = await _setup(container, make_agent)
+    memory = mine / "memory.md"
+    memory.write_text("a" * 3000 + "\n" + "b" * 2000 + "\n")
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("edit_file", {"path": str(memory), "old_text": "b" * 2000, "new_text": "b" * 1500}),
+            ("edit_file", {"path": str(memory), "old_text": "b" * 1500, "new_text": "b" * 1600}),
+        ],
+    )
+    assert outputs[0].startswith("edited ")
+    assert "over the limit" in outputs[1]
+    assert memory.read_text().count("b") == 1500
+
+
+async def test_a_write_landing_while_the_check_runs_is_not_overwritten(
+    container, make_agent, models, monkeypatch
+):
+    # 校验要 await：等待期间别处写进来的，write_file 与 edit_file 都不能盖掉
+    me, _tree, mine = await _setup(container, make_agent)
+    memory = mine / "memory.md"
+    memory.write_text("note\n")
+    vet = container.assets.vet
+
+    async def racing_vet(path, text):
+        await vet(path, text)
+        if path == memory:
+            memory.write_text(memory.read_text() + "theirs\n")
+            st = memory.stat()
+            os.utime(memory, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+
+    monkeypatch.setattr(container.assets, "vet", racing_vet)
+    outputs = await run_tools(
+        container,
+        models,
+        me.id,
+        [
+            ("edit_file", {"path": str(memory), "old_text": "note", "new_text": "mine"}),
+            ("read_file", {"path": str(memory)}),
+            ("write_file", {"path": str(memory), "content": "mine\n"}),
+        ],
+    )
+    assert "changed while this edit was being checked" in outputs[0]
+    assert "was changed after you read it" in outputs[2]
+    assert memory.read_text() == "note\ntheirs\ntheirs\n"

@@ -218,9 +218,10 @@ def file_toolset(
         check_write(await confiner.of(ctx.deps.agent_id), target)
         existed = target.is_file()
         if assets.contains(target):
+            await assets.vet(target, content)
+            # vet 要等（读树、线程）：核对放在它之后、与写盘之间不再有 await，等待期间别处写进来的也拦得住
             if existed:
                 _check_fresh(ctx.deps, target)
-            await assets.vet(target, content)
             write_atomic(target, content)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -304,6 +305,8 @@ def file_toolset(
         # 否则后写的一份会覆盖先写的
         same: dict[Path, Path] = {}
         before: dict[Path, str] = {}
+        # 读 before 时各文件的修改时间：校验（会 await）之后、写盘之前再核对，等待期间被别处改了就整次不写
+        stamps: dict[Path, int] = {}
         located: list[_Located] = []
         confinement = await confiner.of(ctx.deps.agent_id)
         for i, e in enumerate(edits, 1):
@@ -317,12 +320,19 @@ def file_toolset(
                 raise InvalidInput(f"{where}file is not writable: {given}; nothing was written.")
             target = same.setdefault(given.resolve(), given)
             if target not in before:
+                stamps[target] = target.stat().st_mtime_ns
                 before[target] = target.read_text(encoding="utf-8")
             located.append(_Located(target, e))
         after, counts = file_edit.apply_each(before, [(c.target, c) for c in located])
         in_tree = {t for t in after if assets.contains(t)}
         for target in in_tree:
             await assets.vet(target, after[target])
+        changed = [str(t) for t in in_tree if t.stat().st_mtime_ns != stamps[t]]
+        if changed:
+            raise InvalidInput(
+                f"{', '.join(changed)} changed while this edit was being checked (someone else wrote it); "
+                "nothing was written: redo the edit on the current content"
+            )
         # 全部校验通过才写盘；资源目录里的原子写入（读树的不会读到写了一半的文件）
         written: list[Path] = []
         for target, content in after.items():

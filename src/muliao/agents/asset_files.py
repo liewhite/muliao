@@ -72,11 +72,10 @@ def vet(
     )
     try:
         _check(snapshot, rel, owner, text, memory_max_chars, check_model)
-    except (_Rejected, InvalidInput) as e:
-        reason, section = (e.reason, e.section) if isinstance(e, _Rejected) else (str(e), "Layout")
+    except _Rejected as e:
         raise InvalidInput(
-            f"{path} was not written ({whose} asset files under {snapshot.root}): {reason}. The layout and file "
-            f"formats are in the {SKILL} skill, section {section!r}."
+            f"{path} ({whose} asset files under {snapshot.root}): {e.reason}; nothing was written. The layout "
+            f"and file formats are in the {SKILL} skill, section {e.section!r}."
         ) from e
 
 
@@ -104,12 +103,12 @@ def _check(
         assert owner is not None
         _agent(owner, text, check_model)
     elif rest == (PRIVATE_MEMORY_FILE,) and not platform:
-        _memory(text, memory_max_chars)
+        _memory(base / PRIVATE_MEMORY_FILE, text, memory_max_chars)
     elif platform and len(rest) == 2 and rest[0] == MEMORY_DIR and rest[1].endswith(".md"):
         name = rest[1].removesuffix(".md")
         _named(lambda: file_name(label(StoredKind.MEMORY), name), "Memory")
         _new(snapshot, StoredKind.MEMORY, name, base / MEMORY_DIR / rest[1], "Memory")
-        _memory(text, memory_max_chars)
+        _memory(base / MEMORY_DIR / rest[1], text, memory_max_chars)
     elif len(rest) >= 3 and rest[0] == SKILLS_DIR:
         name = rest[1]
         _named(lambda: validate_slug(label(StoredKind.SKILL), name), "Skills")
@@ -150,9 +149,11 @@ def _new(snapshot: Snapshot, kind: StoredKind, name: str, path: Path, section: s
         raise _Rejected(str(e), section) from e
 
 
-def _memory(text: str, limit: int) -> None:
+def _memory(path: Path, text: str, limit: int) -> None:
+    """超过上限且比原来长才拒绝：已经超长的（shell 追加、上限调低）可以一段段删短，不必一次删够。"""
     size = len(text.strip())
-    if size > limit:
+    old = len(path.read_text(encoding="utf-8").strip()) if path.is_file() else 0
+    if size > limit and size > old:
         raise _Rejected(f"memory would be {size} chars, over the limit of {limit}; condense it", "Memory")
 
 
