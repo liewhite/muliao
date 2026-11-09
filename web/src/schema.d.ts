@@ -2533,6 +2533,8 @@ export interface components {
              * @default
              */
             description: string;
+            /** Allow Shell */
+            allow_shell?: boolean | null;
         };
         /**
          * SecretItemOut
@@ -2561,6 +2563,8 @@ export interface components {
              * @enum {string}
              */
             kind: "secret";
+            /** Allow Shell */
+            allow_shell: boolean;
         };
         /** SecretOut */
         SecretOut: {
@@ -2570,6 +2574,8 @@ export interface components {
             name: string;
             /** Description */
             description: string;
+            /** Allow Shell */
+            allow_shell: boolean;
             /**
              * Updated At
              * Format: date-time

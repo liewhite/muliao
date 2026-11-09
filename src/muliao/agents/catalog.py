@@ -40,6 +40,8 @@ class CatalogEntry:
     tool: ToolSpec | None = None
     # MCP server 的配置与启用状态；别的种类为 None
     mcp: McpServer | None = None
+    # secret 的 allow_shell（agents.secrets）；别的种类为 None
+    allow_shell: bool | None = None
 
 
 class ItemCatalog:
@@ -80,6 +82,7 @@ class ItemCatalog:
                 sharing.shared(as_kind(kind), a.name, a.owner),
                 path=a.path,
                 mcp=server_of(a) if kind == StoredKind.MCP else None,
+                allow_shell=a.secret.allow_shell if a.secret is not None else None,
             )
             for kind in sorted(StoredKind, key=lambda k: k.value)
             for a in snapshot.of_kind(kind)

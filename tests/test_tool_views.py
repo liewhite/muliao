@@ -49,6 +49,13 @@ async def test_shell_results_show_exit_code_timeout_and_background_job(renders):
     assert shell.result_view("something else") is None
 
 
+async def test_skill_run_shows_the_script_with_its_args_like_a_shell_call(renders):
+    skill_run = renders["skill_run"]
+    call = {"skill": "ops", "script": "bin/deploy.sh", "args": ["prod", "a b"], "timeout": 5}
+    assert skill_run.call_view(call) == [_term(command="ops/bin/deploy.sh prod 'a b'")]
+    assert skill_run.result_view("exit_code: 0\nhi\n") == [_term(output="hi\n", status="exit 0")]
+
+
 async def test_calls_rejected_by_the_tool_schema_are_shown_raw(renders):
     assert renders["run_shell"].call_view({"cmd": "ls"}) is None
     assert renders["edit_file"].call_view({"path": "a", "edits": "nope"}) is None
@@ -125,6 +132,7 @@ async def test_results_made_up_on_interruption_are_shown_raw(renders):
 # 每个挂了规则的工具一份最小的合法参数：规则按参数名取值，写错名字会直接报错（规则内部的错误不兜底）
 _MINIMAL_ARGS = {
     "run_shell": {"command": "ls", "timeout": 5},
+    "skill_run": {"skill": "ops", "script": "run.sh", "args": ["a b"]},
     "read_file": {"path": "a"},
     "write_file": {"path": "a", "content": "x"},
     "edit_file": {"path": "a", "old_text": "x", "new_text": "y"},

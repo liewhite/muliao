@@ -6980,6 +6980,17 @@
             "type": "string",
             "title": "Description",
             "default": ""
+          },
+          "allow_shell": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Shell"
           }
         },
         "type": "object",
@@ -7033,6 +7044,10 @@
             "type": "string",
             "const": "secret",
             "title": "Kind"
+          },
+          "allow_shell": {
+            "type": "boolean",
+            "title": "Allow Shell"
           }
         },
         "type": "object",
@@ -7044,7 +7059,8 @@
           "shared",
           "updated_at",
           "path",
-          "kind"
+          "kind",
+          "allow_shell"
         ],
         "title": "SecretItemOut",
         "description": "值不返回。"
@@ -7070,6 +7086,10 @@
             "type": "string",
             "title": "Description"
           },
+          "allow_shell": {
+            "type": "boolean",
+            "title": "Allow Shell"
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time",
@@ -7081,6 +7101,7 @@
           "owner",
           "name",
           "description",
+          "allow_shell",
           "updated_at"
         ],
         "title": "SecretOut"

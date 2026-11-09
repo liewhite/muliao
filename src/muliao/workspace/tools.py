@@ -4,10 +4,15 @@
 前台命令是阻塞的（调用不返回、一直等）：必须给 timeout；后台任务与 agent 并发：没有 timeout，按 heartbeat_seconds
 投运行中检查，由 agent 决定继续等还是 job_kill。"""
 
+import asyncio
+import os
+import shlex
+from pathlib import Path, PurePosixPath
+
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agents.api import AssetSource, Vault
-from muliao.errors import InvalidInput
+from muliao.agents.api import AssetSource, SkillStore, Vault
+from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import FileStore
 from muliao.platform.shell import LEFT_RUNNING_NOTE, run_bash
 from muliao.platform.text_edit import truncate
@@ -46,6 +51,34 @@ _BACKGROUND_DESCRIPTION = (
 )
 
 
+_SKILL_RUN_DESCRIPTION = (
+    "Run a script from one of your skills: `<skill directory>/<script>` with `args`, executed directly (no shell "
+    "parsing; it needs a shebang line and the executable bit). It runs like run_shell (in your workspace, only "
+    "able to write where your commands may write, same output limit, same `timeout` / `background` / "
+    "`heartbeat_seconds` rules). `secrets` works as in run_shell and also takes secrets marked "
+    "`allow_shell = false`, which run_shell, trigger prechecks and streams refuse: such a key is meant to be used "
+    "only through a script that wraps the operation with its own checks, so use the skill's script for it "
+    "instead of writing the command yourself."
+)
+
+
+def _script_command(directory: Path, skill: str, script: str, args: tuple[str, ...]) -> str:
+    """skill 目录里的脚本加参数，拼成一条不经 shell 解析的命令。脚本必须落在目录里（经符号链接也不行）。"""
+    root = directory.resolve()
+    path = (root / script).resolve()
+    if PurePosixPath(script).is_absolute() or not path.is_relative_to(root) or path == root:
+        raise InvalidInput(
+            f"script must be a path inside the skill's directory ({directory}), got {script!r}"
+        )
+    if not path.is_file():
+        raise NotFound(f"skill {skill!r} has no script {script!r} (looked for {path})")
+    if not os.access(path, os.X_OK):
+        raise InvalidInput(
+            f"{path} is not executable: a skill script needs a shebang line and the executable bit (chmod +x)"
+        )
+    return shlex.join([str(path), *args])
+
+
 def workspace_toolset(
     vault: Vault,
     limits: ShellLimits,
@@ -53,8 +86,9 @@ def workspace_toolset(
     jobs: JobRunner,
     confiner: Confiner,
     assets: AssetSource,
+    skills: SkillStore,
 ) -> FunctionToolset[RunScope]:
-    """文件、shell 与后台任务。"""
+    """文件、shell、skill 脚本与后台任务。"""
     ts = file_toolset(limits, files, confiner, assets)
     # 输出上限是配置的值，写进说明：模型不知道它，长输出被截了才学会
     description = _SHELL_DESCRIPTION.format(max_output=limits.max_output_chars) + _BACKGROUND_DESCRIPTION
@@ -81,6 +115,47 @@ def workspace_toolset(
             heartbeat_seconds: Background only: seconds between check-in events while the job runs (> 0,
                 default 60).
         """
+        return await execute(ctx.deps, command, timeout, secrets, background, heartbeat_seconds, shell=True)
+
+    @ts.tool(description=_SKILL_RUN_DESCRIPTION, metadata=rendered_by(SKILL_RUN_RENDER))
+    async def skill_run(
+        ctx: RunContext[RunScope],
+        skill: str,
+        script: str,
+        args: tuple[str, ...] = (),
+        timeout: float | None = None,  # noqa: ASYNC109  工具参数，与 run_shell 同名同义
+        secrets: tuple[str, ...] = (),
+        background: bool = False,
+        heartbeat_seconds: float | None = None,
+    ) -> str:
+        """The description is set in the decorator.
+
+        Args:
+            skill: Name of a skill in your skill index.
+            script: Path of the script relative to the skill's directory, e.g. `scripts/deploy.py`.
+            args: Arguments passed to the script as they are (no shell parsing).
+            timeout: As in run_shell: foreground only, and required there (seconds, no upper limit).
+            secrets: As in run_shell (vault keys you can use, exposed as environment variables of the same name,
+                values in the output replaced by `[secret:KEY]`), and also keys marked `allow_shell = false`.
+            background: As in run_shell: run it as a background job instead of waiting for it.
+            heartbeat_seconds: As in run_shell: background only, seconds between check-in events (default 60).
+        """
+        directory = await skills.directory(skill, ctx.deps.agent_id)
+        command = await asyncio.to_thread(_script_command, directory, skill, script, args)
+        return await execute(ctx.deps, command, timeout, secrets, background, heartbeat_seconds, shell=False)
+
+    async def execute(
+        scope: RunScope,
+        command: str,
+        timeout: float | None,  # noqa: ASYNC109  工具参数原样传入
+        secrets: tuple[str, ...],
+        background: bool,
+        heartbeat_seconds: float | None,
+        *,
+        shell: bool,
+    ) -> str:
+        """run_shell 与 skill_run 共用的执行：前台或后台、参数用错场合的报错都一样。shell：command 是 agent 自己写的
+        （决定能不能注入 allow_shell = false 的 secret，Vault.resolve_many）。"""
         if not background:
             if heartbeat_seconds is not None:
                 raise InvalidInput(
@@ -91,7 +166,7 @@ def workspace_toolset(
                     "timeout is required for a foreground command: estimate how many seconds it needs "
                     "(no upper limit), or run it with `background: true`"
                 )
-            return await _run_foreground(vault, limits, confiner, ctx.deps, command, timeout, secrets)
+            return await _run_foreground(vault, limits, confiner, scope, command, timeout, secrets, shell)
         if timeout is not None:
             raise InvalidInput(
                 "background jobs have no timeout; leave `timeout` out (set `heartbeat_seconds` for how often "
@@ -101,11 +176,12 @@ def workspace_toolset(
         if not check > 0:  # 也拒绝 NaN
             raise InvalidInput("heartbeat_seconds must be greater than 0")
         job = await jobs.start(
-            session_id=ctx.deps.session_id,
-            agent_id=ctx.deps.agent_id,
+            session_id=scope.session_id,
+            agent_id=scope.agent_id,
             command=command,
             secrets=list(secrets),
-            awaited=ctx.deps.user_waits,
+            shell=shell,
+            awaited=scope.user_waits,
             check_seconds=check,
         )
         return (
@@ -152,10 +228,11 @@ async def _run_foreground(
     command: str,
     timeout: float,  # noqa: ASYNC109  run_shell 的参数原样传入（前台命令必填）
     secrets: tuple[str, ...],
+    shell: bool,
 ) -> str:
     if not timeout > 0:  # 也拒绝 NaN
         raise InvalidInput("timeout must be greater than 0 seconds")
-    secret_values = await vault.resolve_many(scope.agent_id, list(secrets))
+    secret_values = await vault.resolve_many(scope.agent_id, list(secrets), shell=shell)
     confinement = await confiner.of(scope.agent_id)
     result = await run_bash(
         command,
@@ -201,5 +278,17 @@ def _shell_result(text: str) -> list[ViewBlock] | None:
 
 SHELL_RENDER = ToolRender[str](
     call=lambda a: [TerminalBlock(command=a["command"], output=None, status=None, failed=False)],
+    result=_shell_result,
+)
+
+SKILL_RUN_RENDER = ToolRender[str](
+    call=lambda a: [
+        TerminalBlock(
+            command=shlex.join([f"{a['skill']}/{a['script']}", *a["args"]]),
+            output=None,
+            status=None,
+            failed=False,
+        )
+    ],
     result=_shell_result,
 )

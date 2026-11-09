@@ -2,6 +2,8 @@
 密文存放，主密钥在服务端配置。agent 只能通过 key 引用，没有读取明文的工具。
 
 这里管加解密、存取，以及 ${vault:KEY} 引用的解析。对外只有不含值的 SecretInfo，与按使用者解析出的明文（resolve_many）。
+每个 secret 带 allow_shell（#528，防误操作）：false 的不让 agent 自己写的命令（run_shell、触发器的 precheck 与 stream）拿到，只给
+skill 里封装好的脚本（skill_run）、MCP 配置与进程内的工具（eth_sign）。哪些入口算 shell 由调用方在 resolve_many 的 shell 参数里说。
 引用按使用者能用的 secret 解析（agents.access 的 Grants.can：自己的与分发给它的）：agent 运行的命令与它连接的 MCP server
 都用该 agent；用户（USER，如界面上新增 MCP 时的探测）能用全部。
 """
@@ -19,7 +21,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from muliao.agents import assets
 from muliao.agents.access import changeable, usable, writable
 from muliao.agents.kinds import StoredKind
-from muliao.agents.secrets_format import KEY_SYNTAX, VAULT_REF, secret_file, validate_key
+from muliao.agents.secrets_format import KEY_SYNTAX, VAULT_REF, SecretFile, secret_file, validate_key
 from muliao.agents.source import AssetSource
 from muliao.errors import InvalidInput, NotFound
 from muliao.platform.fs import write_atomic
@@ -43,11 +45,17 @@ class SecretInfo:
     owner: str | None
     key: str
     description: str
+    allow_shell: bool
     updated_at: datetime
 
 
+def _file(a: assets.Asset) -> SecretFile:
+    assert a.secret is not None, "a secret asset always carries its file content"
+    return a.secret
+
+
 def _info(a: assets.Asset) -> SecretInfo:
-    return SecretInfo(a.owner, a.name, a.description, a.updated_at)
+    return SecretInfo(a.owner, a.name, a.description, _file(a).allow_shell, a.updated_at)
 
 
 class Vault:
@@ -55,18 +63,32 @@ class Vault:
         self._source = source
         self._fernet = Fernet(fernet_key.encode())
 
-    async def set(self, key: str, value: str, description: str, *, actor: str, owner: str | None) -> None:
-        """新建（归 owner）或改写（actor 要能改它，owner 不变）这个 secret 的值与描述：加密后写进文件。"""
+    async def set(
+        self,
+        key: str,
+        value: str,
+        description: str,
+        *,
+        actor: str,
+        owner: str | None,
+        allow_shell: bool | None = None,
+    ) -> bool:
+        """新建（归 owner）或改写（actor 要能改它，owner 不变）这个 secret 的值与描述：加密后写进文件。
+        allow_shell 为 None：已有的保持原值，新建的允许（只改值时不把设成不允许的悄悄放开）。返回最终的 allow_shell。"""
         if not value:
             raise InvalidInput("secret value must not be empty")
         validate_key(key)
         ciphertext = self._fernet.encrypt(value.encode())
         async with self._source.writing() as snapshot:
             existing = writable(snapshot, _KIND, key, actor)
+            if allow_shell is None:
+                allow_shell = True if existing is None else _file(existing).allow_shell
             path = existing.path if existing is not None else snapshot.path_of(_KIND, key, owner)
-            await asyncio.to_thread(write_atomic, path, secret_file(description, ciphertext))
+            content = secret_file(SecretFile(description, ciphertext, allow_shell))
+            await asyncio.to_thread(write_atomic, path, content)
         # 别的 agent 可能依赖它：记录谁改了哪个 key（不记值）
         log.info("secret set", extra={"owner": owner, "key": key, "actor": actor})
+        return allow_shell
 
     async def delete(self, key: str, actor: str) -> None:
         async with self._source.writing() as snapshot:
@@ -82,8 +104,9 @@ class Vault:
         """user（agent 的 id，或 USER 即全部）能用的 secret（agents.access，不含值），按 key。"""
         return [_info(a) for a in usable(await self._source.snapshot(), _KIND, user)]
 
-    async def resolve_many(self, user: str, keys: list[str]) -> dict[str, str]:
-        """取 user（agent 的 id，或 USER）能用的 secret 的明文；任一 key 不能用或解不开即报错。"""
+    async def resolve_many(self, user: str, keys: list[str], *, shell: bool) -> dict[str, str]:
+        """取 user（agent 的 id，或 USER）能用的 secret 的明文；任一 key 不能用或解不开即报错。shell：明文要交给 agent
+        自己写的命令，这时 allow_shell 为 false 的也报错。"""
         if not keys:
             return {}
         found = {a.name: a for a in usable(await self._source.snapshot(), _KIND, user)}
@@ -93,10 +116,14 @@ class Vault:
                 f"secret(s) {missing} not found among the secrets you can use (your own and those given to you "
                 "by your roles or your own allow rules)"
             )
+        if shell and (denied := [k for k in keys if not _file(found[k]).allow_shell]):
+            raise InvalidInput(
+                f"secret(s) {denied} are not allowed in shell commands (allow_shell = false): use them through a "
+                "skill script that wraps the operation, with skill_run(secrets=[...])"
+            )
         values = {}
         for k in keys:
-            ciphertext = found[k].ciphertext
-            assert ciphertext is not None, "a secret asset always carries its ciphertext"
+            ciphertext = _file(found[k]).ciphertext
             try:
                 values[k] = self._fernet.decrypt(ciphertext).decode()
             except InvalidToken:

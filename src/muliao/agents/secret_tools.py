@@ -24,21 +24,31 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
     ts = FunctionToolset[RunScope](max_retries=TOOL_MAX_RETRIES)
 
     @ts.tool
-    async def vault_set(ctx: RunContext[RunScope], key: str, value: str, description: str = "") -> str:
+    async def vault_set(
+        ctx: RunContext[RunScope],
+        key: str,
+        value: str,
+        description: str = "",
+        allow_shell: bool | None = None,
+    ) -> str:
         """Store a secret the user gave you so it never has to appear in files, skills, memory or MCP configs:
         it is encrypted into `secrets/<KEY>.toml` in your asset directory (a new key is yours; changing an existing
         one needs you to be able to write it). Keys are unique. The value is redacted from the saved conversation.
-        Reference it later as `${vault:KEY}` in MCP configs, or via `run_shell(secrets=[KEY])`. To see keys, list
-        the `secrets/` directories; to delete one, remove its file.
+        Reference it later as `${vault:KEY}` in MCP configs, or via `run_shell(secrets=[KEY])` /
+        `skill_run(secrets=[KEY])`. To see keys, list the `secrets/` directories; to delete one, remove its file.
 
         Args:
             key: Identifier like `SLACK_TOKEN`.
             value: The secret value.
             description: What it is for.
+            allow_shell: false keeps the key out of commands you write yourself (run_shell, trigger prechecks and
+                streams): only skill scripts run with skill_run, MCP configs and built-in tools can use it. Use it
+                for keys that must only be used through a script wrapping the operation. Omitted: a new secret
+                allows shell, an existing one keeps its setting.
         """
         me = ctx.deps.agent_id
-        await vault.set(key, value, description, actor=me, owner=me)
-        return f"stored secret {key}"
+        shell = await vault.set(key, value, description, actor=me, owner=me, allow_shell=allow_shell)
+        return f"stored secret {key} (allow_shell: {str(shell).lower()})"
 
     @ts.tool
     async def eth_sign(
@@ -65,7 +75,7 @@ def vault_toolset(vault: Vault) -> FunctionToolset[RunScope]:
             payload: What to sign, as described for `kind`.
         """
         me = ctx.deps.agent_id
-        private_key = (await vault.resolve_many(me, [key]))[key]
+        private_key = (await vault.resolve_many(me, [key], shell=False))[key]
         result = sign(private_key, key, kind, payload)
         # 审计：谁用哪个 key 签了什么（不记私钥）
         log.info(

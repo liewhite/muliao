@@ -168,7 +168,7 @@ async def test_secrets_are_written_only_by_vault_set(container, make_agent, mode
     assert "vault_set" in outputs[0] and "section 'Secrets'" in outputs[0]
     assert "ciphertext must stay" in outputs[1]
     assert outputs[2].startswith("edited ")
-    assert await container.vault.resolve_many(me.id, ["TOKEN"]) == {"TOKEN": "s3cret"}
+    assert await container.vault.resolve_many(me.id, ["TOKEN"], shell=False) == {"TOKEN": "s3cret"}
     assert (await container.vault.get("TOKEN")).description == "new note"
 
 

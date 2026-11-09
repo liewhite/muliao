@@ -142,17 +142,19 @@ class JobRunner:
         agent_id: str,
         command: str,
         secrets: list[str],
+        shell: bool,
         awaited: bool,
         check_seconds: float,
     ) -> Job:
-        """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。check_seconds：运行中检查的间隔。"""
+        """awaited：发起它的那次运行里用户是否在等回答（完成通知随它推送）。check_seconds：运行中检查的间隔。
+        shell：command 是 agent 自己写的（run_shell），不是 skill_run 拼出的 skill 脚本调用（见 Vault.resolve_many）。"""
         if not check_seconds > 0:  # 也拒绝 NaN
             raise ValueError(f"check_seconds must be greater than 0, got {check_seconds}")
         group = self._group
         if group is None:
             raise RuntimeError("background jobs can only start while the job runner is running")
         # vault 自己开事务，不能放进下面的事务
-        values = await self._vault.resolve_many(agent_id, secrets)
+        values = await self._vault.resolve_many(agent_id, secrets, shell=shell)
         job: Job | None = None
         try:
             async with self._db.transaction() as s:

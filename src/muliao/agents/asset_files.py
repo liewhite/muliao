@@ -196,11 +196,12 @@ def _secret(path: Path, key: str, text: str) -> None:
     if not path.is_file():
         raise _Rejected(f"new secrets are not written by hand; {hint}", "Secrets")
     try:
-        _, ciphertext = parse_secret_file(key, text)
-        _, old = parse_secret_file(key, path.read_text(encoding="utf-8"))
+        new = parse_secret_file(key, text)
+        old = parse_secret_file(key, path.read_text(encoding="utf-8"))
     except InvalidInput as e:
         raise _Rejected(f"{e}; {hint}", "Secrets") from e
-    if ciphertext != old:
+    if new.ciphertext != old.ciphertext:
         raise _Rejected(
-            f"only the description may be edited by hand, the ciphertext must stay; {hint}", "Secrets"
+            f"only the description and allow_shell may be edited by hand, the ciphertext must stay; {hint}",
+            "Secrets",
         )

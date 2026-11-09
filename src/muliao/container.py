@@ -393,7 +393,7 @@ def assemble(
     static_toolsets = [
         history_toolset(history, agents, ports.recall, issues, settings.runtime.tool_output_max_chars),
         ask_user_toolset(),
-        workspace_toolset(vault, limits, files, jobs, confiner, assets),
+        workspace_toolset(vault, limits, files, jobs, confiner, assets, skills),
         ports.delegation_toolset(agents),
         ports.wakeup_toolset(),
         ports.recall_toolset(agents, settings.runtime.tool_output_max_chars),

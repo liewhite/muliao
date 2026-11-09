@@ -173,7 +173,7 @@ class McpConnector:
         快照）落在 agent 的文件工具与 shell 读得到的地方；新增时的探测没有运行，为 None（沿用服务进程的）。"""
         c = server.config
         # 只解析一次：代入配置的与脱敏用的是同一份明文
-        secrets = await self._vault.resolve_many(user, _vault_keys(c))
+        secrets = await self._vault.resolve_many(user, _vault_keys(c), shell=False)
         if c.transport == McpTransport.STDIO:
             assert c.command is not None
             argv = [c.command, *(fill(a, secrets) for a in c.args)]

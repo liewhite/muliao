@@ -149,7 +149,7 @@ async def test_a_role_hands_out_skills_and_secrets_and_an_items_owner_always_has
     )
     await container.agents.update(trader.id, AgentPatch(roles=["relay-trader"]), actor="user")
     assert [s.name for s in await container.skills.index(trader.id)] == ["relay-host"]
-    assert await container.vault.resolve_many(trader.id, ["RELAY_KEY"]) == {"RELAY_KEY": "v"}
+    assert await container.vault.resolve_many(trader.id, ["RELAY_KEY"], shell=False) == {"RELAY_KEY": "v"}
     # 记忆：base 收录的全局记忆与它自己的私有记忆
     assert (await container.distribution.reach(trader.id)).items == [
         "memory:global",
@@ -158,7 +158,7 @@ async def test_a_role_hands_out_skills_and_secrets_and_an_items_owner_always_has
         "skill:relay-host",
     ]
     with pytest.raises(NotFound):
-        await container.vault.resolve_many(other.id, ["RELAY_KEY"])
+        await container.vault.resolve_many(other.id, ["RELAY_KEY"], shell=False)
 
     # deny 只作用于规则分来的，不作用于自己的
     await container.agents.update(owner.id, AgentPatch(deny=["use:skill:*"]), actor="user")

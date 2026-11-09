@@ -3,6 +3,8 @@
 ```toml
 description = "…"
 ciphertext = "gAAAA…"   # Fernet 密文（agents.secrets.Vault 加密），不能手写
+allow_shell = false     # 可省略，缺省 true：false 时 agent 自写的命令（run_shell、precheck、stream）不能注入它，
+                        # 只有 skill 里的脚本（skill_run）、MCP 配置与进程内工具能用（#528）
 ```
 
 key 语法也用于 `${vault:KEY}` 引用（VAULT_REF）。
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from dataclasses import dataclass, field
 
 import tomlkit
 
@@ -35,24 +38,41 @@ def validate_key(key: str) -> str:
     return key
 
 
-def parse_secret_file(key: str, text: str) -> tuple[str, bytes]:
-    """返回（描述, 密文）；不合规则时 InvalidInput。密文能不能解开在用到时才知道（解不开报出是哪个 key）。"""
+@dataclass(frozen=True)
+class SecretFile:
+    description: str
+    ciphertext: bytes = field(repr=False)
+    # agent 自写的命令能不能注入它（见模块说明）
+    allow_shell: bool
+
+
+def parse_secret_file(key: str, text: str) -> SecretFile:
+    """不合规则时 InvalidInput。密文能不能解开在用到时才知道（解不开报出是哪个 key）。"""
     validate_key(key)
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise InvalidInput(f"cannot parse: {e}") from e
-    extra = sorted(set(data) - {"description", "ciphertext"})
+    extra = sorted(set(data) - {"description", "ciphertext", "allow_shell"})
     description, ciphertext = data.get("description", ""), data.get("ciphertext")
-    if extra or not isinstance(description, str) or not isinstance(ciphertext, str) or not ciphertext:
+    allow_shell = data.get("allow_shell", True)
+    if (
+        extra
+        or not isinstance(description, str)
+        or not isinstance(ciphertext, str)
+        or not ciphertext
+        or not isinstance(allow_shell, bool)
+    ):
         raise InvalidInput(
-            "a secret file has only 'description' (string) and 'ciphertext' (set by vault_set; never write it by hand)"
+            "a secret file has only 'description' (string), 'ciphertext' (set by vault_set; never write it by "
+            "hand) and optionally 'allow_shell' (true or false, default true)"
         )
-    return description, ciphertext.encode()
+    return SecretFile(description, ciphertext.encode(), allow_shell)
 
 
-def secret_file(description: str, ciphertext: bytes) -> str:
+def secret_file(secret: SecretFile) -> str:
     doc = tomlkit.document()
-    doc["description"] = description
-    doc["ciphertext"] = ciphertext.decode()
+    doc["description"] = secret.description
+    doc["ciphertext"] = secret.ciphertext.decode()
+    doc["allow_shell"] = secret.allow_shell
     return tomlkit.dumps(doc)

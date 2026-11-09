@@ -37,7 +37,7 @@ from muliao.agents.assets import (
     SKILLS_DIR,
 )
 from muliao.agents.mcp_config import McpConfig, mcp_file
-from muliao.agents.secrets_format import secret_file
+from muliao.agents.secrets_format import SecretFile, secret_file
 from muliao.agents.skill_package import SKILL_FILE
 from muliao.agents.tables import Agent, AgentRulesRow, Item, ItemFile, RoleRow
 from muliao.platform.db import Database
@@ -142,7 +142,10 @@ def _write(rows: _Rows, tmp: Path, root: Path, legacy_skills_dir: Path) -> None:
                 write_atomic(base / MCP_DIR / f"{i.name}.json", mcp_file(config, i.enabled))
             case "secret":
                 assert i.secret is not None, "a secret item always has its ciphertext"
-                write_atomic(base / SECRETS_DIR / f"{i.name}.toml", secret_file(i.description, i.secret))
+                write_atomic(
+                    base / SECRETS_DIR / f"{i.name}.toml",
+                    secret_file(SecretFile(i.description, i.secret, allow_shell=True)),
+                )
             case other:
                 raise RuntimeError(f"unknown item kind {other!r} ({i.name})")
 

@@ -401,9 +401,12 @@ export const api = {
     branded<McpServer>(call('put', '/api/items/mcp/{name}/enabled', { path: { name }, body: { enabled } })),
   deleteMcp: (name: string) => call('delete', '/api/items/mcp/{name}', { path: { name } }),
 
-  /** 新建的归 owner（null 为平台）；已有的改值与描述，owner 不变 */
-  setSecret: (owner: AgentId | null, key: string, value: string, description: string) =>
-    call('put', '/api/items/secret/{name}', { path: { name: key }, body: { owner, value, description } }),
+  /** 新建的归 owner（null 为平台）；已有的改值与描述，owner 不变；allowShell 为 null：已有的保持原值，新建的允许 */
+  setSecret: (owner: AgentId | null, key: string, value: string, description: string, allowShell: boolean | null) =>
+    call('put', '/api/items/secret/{name}', {
+      path: { name: key },
+      body: { owner, value, description, allow_shell: allowShell },
+    }),
   deleteSecret: (key: string) => call('delete', '/api/items/secret/{name}', { path: { name: key } }),
 
   /** owner 给出时只列这个项目（agent）负责的 issue */

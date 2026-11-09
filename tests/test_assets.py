@@ -13,6 +13,7 @@ from sqlalchemy import select
 from muliao.agents.api import McpTransport, RoleSpec, StoredKind, mcp_config
 from muliao.agents.assets import load_tree
 from muliao.agents.export import export_if_missing
+from muliao.agents.secrets_format import SecretFile
 from muliao.agents.service import AgentPatch, AgentSpec
 from muliao.agents.tables import Agent, AgentRulesRow, Item, ItemFile, RoleRow
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
@@ -415,14 +416,14 @@ async def test_secrets_are_encrypted_files(container, make_agent):
     await container.vault.set("TOKEN", "s3cret", "slack", actor=alpha.id, owner=alpha.id)
     path = root(container) / "alpha" / "secrets" / "TOKEN.toml"
     assert "s3cret" not in path.read_text() and 'description = "slack"' in path.read_text()
-    assert await container.vault.resolve_many(alpha.id, ["TOKEN"]) == {"TOKEN": "s3cret"}
+    assert await container.vault.resolve_many(alpha.id, ["TOKEN"], shell=False) == {"TOKEN": "s3cret"}
     with pytest.raises(NotFound):
-        await container.vault.resolve_many(beta.id, ["TOKEN"])
+        await container.vault.resolve_many(beta.id, ["TOKEN"], shell=False)
     with pytest.raises(Forbidden):
         await container.vault.set("TOKEN", "x", "", actor=beta.id, owner=beta.id)
     write(path, 'description = "slack"\nciphertext = "gAAAAbroken"\n')
     with pytest.raises(InvalidInput, match="cannot be decrypted"):
-        await container.vault.resolve_many(alpha.id, ["TOKEN"])
+        await container.vault.resolve_many(alpha.id, ["TOKEN"], shell=False)
     await container.vault.delete("TOKEN", alpha.id)
     assert not path.exists()
 
@@ -569,6 +570,8 @@ async def test_the_database_is_exported_once_into_files(container, tmp_path, mon
     # 正文里写死的旧 skill 目录换成新位置，写法不变
     assert "Run $HOME/.muliao/assets/alpha/skills/digest/x.py" in (digest_dir / "SKILL.md").read_text()
     assert snapshot.asset(StoredKind.MEMORY, "alpha").text == "see ~/.muliao/assets/alpha/skills/digest/x.py"
-    assert snapshot.asset(StoredKind.SECRET, "TOKEN").ciphertext == b"gAAAAtoken"
+    assert snapshot.asset(StoredKind.SECRET, "TOKEN").secret == SecretFile(
+        "t", b"gAAAAtoken", allow_shell=True
+    )
     assert snapshot.asset(StoredKind.MCP, "docs").mcp[1] is False
     assert snapshot.asset(StoredKind.MEMORY, "trading").owner is None

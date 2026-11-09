@@ -98,6 +98,8 @@ class SecretItemOut(_StoredItemBase):
     """值不返回。"""
 
     kind: Literal["secret"]
+    # false：agent 自己写的命令不能注入，只有 skill_run 的 skill 脚本、MCP 配置与内置工具能用（#528）
+    allow_shell: bool
 
 
 class MemoryItemOut(_StoredItemBase):
@@ -132,7 +134,8 @@ def _item_out(e: CatalogEntry) -> ToolItemOut | SkillItemOut | McpItemOut | Secr
             assert e.mcp is not None
             return McpItemOut(kind="mcp", **stored, **McpConfigOut.fields_of(e.mcp))
         case Kind.SECRET:
-            return SecretItemOut(kind="secret", **stored)
+            assert e.allow_shell is not None
+            return SecretItemOut(kind="secret", allow_shell=e.allow_shell, **stored)
         case Kind.MEMORY:
             return MemoryItemOut(kind="memory", **stored)
 
@@ -370,6 +373,7 @@ class SecretOut(BaseModel):
     owner: str | None
     name: str
     description: str
+    allow_shell: bool
     updated_at: datetime
 
 
@@ -378,19 +382,29 @@ class SecretIn(BaseModel):
     owner: str | None = None
     value: str
     description: str = ""
+    # None：已有的保持原值，新建的允许（Vault.set）
+    allow_shell: bool | None = None
 
 
 @router.get("/items/secret/{name}")
 async def get_secret(c: C, name: str) -> SecretOut:
     """不含值。"""
     s = await c.vault.get(name)
-    return SecretOut(owner=s.owner, name=s.key, description=s.description, updated_at=s.updated_at)
+    return SecretOut(
+        owner=s.owner,
+        name=s.key,
+        description=s.description,
+        allow_shell=s.allow_shell,
+        updated_at=s.updated_at,
+    )
 
 
 @router.put("/items/secret/{name}", status_code=204)
 async def set_secret(c: C, name: str, body: SecretIn) -> None:
     """新建的归 owner（缺省为平台）；已有的改值与描述，owner 不变。"""
-    await c.vault.set(name, body.value, body.description, actor=USER, owner=body.owner)
+    await c.vault.set(
+        name, body.value, body.description, actor=USER, owner=body.owner, allow_shell=body.allow_shell
+    )
 
 
 @router.delete("/items/secret/{name}", status_code=204)

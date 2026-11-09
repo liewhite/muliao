@@ -7,7 +7,7 @@
     memory/<名>.md              全局记忆（global）与共享记忆
     skills/<名>/SKILL.md …      公共 skill
     mcp/<名>.json               MCP server（mcp_config.parse_mcp_file）
-    secrets/<KEY>.toml          secret：description 与 Fernet 密文 ciphertext（agents.secrets 加解密）
+    secrets/<KEY>.toml          secret：description、Fernet 密文 ciphertext（agents.secrets 加解密）与 allow_shell
   <agent 名>/                   归这个 agent
     agent.toml                  id、description、model、thinking、group（AgentFile）
     memory.md                   私有记忆，记忆名就是 agent 名
@@ -31,7 +31,7 @@ import shutil
 import tomllib
 import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -42,7 +42,7 @@ from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import McpConfig, parse_mcp_file
 from muliao.agents.naming import file_name, validate_slug
 from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, Role, Rules, check_patterns
-from muliao.agents.secrets_format import parse_secret_file
+from muliao.agents.secrets_format import SecretFile, parse_secret_file
 from muliao.agents.skill_package import SKILL_FILE, parse_frontmatter
 from muliao.agents.thinking import Thinking
 from muliao.errors import Conflict, InvalidInput, NotFound
@@ -109,7 +109,7 @@ class AgentDir:
 @dataclass(frozen=True)
 class Asset:
     """一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。description：skill 与 secret 的描述（记忆、MCP
-    为空）。种类专有的内容：记忆的正文 text，MCP 的 mcp（配置与是否启用），secret 的密文 ciphertext。"""
+    为空）。种类专有的内容：记忆的正文 text，MCP 的 mcp（配置与是否启用），secret 的文件内容 secret（密文与 allow_shell）。"""
 
     kind: StoredKind
     name: str
@@ -119,7 +119,7 @@ class Asset:
     updated_at: datetime
     text: str = ""
     mcp: tuple[McpConfig, bool] | None = None
-    ciphertext: bytes | None = field(default=None, repr=False)
+    secret: SecretFile | None = None
 
 
 @dataclass(frozen=True)
@@ -496,9 +496,9 @@ class _Reader:
     def secret(self, path: Path, owner: str | None) -> None:
         def load() -> Asset:
             key = path.stem
-            description, ciphertext = parse_secret_file(key, path.read_text(encoding="utf-8"))
+            secret = parse_secret_file(key, path.read_text(encoding="utf-8"))
             return Asset(
-                StoredKind.SECRET, key, owner, path, description, updated(path), ciphertext=ciphertext
+                StoredKind.SECRET, key, owner, path, secret.description, updated(path), secret=secret
             )
 
         self.guarded(StoredKind.SECRET, path.stem, path, owner, load)

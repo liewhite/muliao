@@ -338,6 +338,7 @@ async def test_a_job_that_fails_before_holding_its_session_leaves_no_row(contain
             agent_id=agent.id,
             command="true",
             secrets=[],
+            shell=True,
             awaited=False,
             check_seconds=30,
         )
@@ -367,6 +368,7 @@ async def test_a_job_whose_process_cannot_start_is_reported_interrupted(containe
             agent_id=agent.id,
             command="true",
             secrets=[],
+            shell=True,
             awaited=False,
             check_seconds=30,
         )
@@ -402,6 +404,7 @@ async def test_a_job_whose_pid_cannot_be_recorded_kills_its_process_and_is_repor
             agent_id=agent.id,
             command="sleep 30",
             secrets=[],
+            shell=True,
             awaited=False,
             check_seconds=30,
         )
@@ -432,6 +435,7 @@ async def test_a_start_whose_cleanup_times_out_is_reconciled_as_interrupted(
             agent_id=agent.id,
             command="true",
             secrets=[],
+            shell=True,
             awaited=False,
             check_seconds=30,
         )
@@ -460,6 +464,7 @@ async def test_leaving_the_running_service_interrupts_jobs_after_the_runs_have_s
             agent_id=agent.id,
             command="sleep 30",
             secrets=[],
+            shell=True,
             awaited=False,
             check_seconds=30,
         )
@@ -480,6 +485,7 @@ async def test_each_job_is_checked_at_its_own_interval(container, make_agent):
         agent_id=agent.id,
         command="sleep 30",
         secrets=[],
+        shell=True,
         awaited=False,
         check_seconds=0.2,
     )
@@ -488,6 +494,7 @@ async def test_each_job_is_checked_at_its_own_interval(container, make_agent):
         agent_id=agent.id,
         command="sleep 30",
         secrets=[],
+        shell=True,
         awaited=False,
         check_seconds=3600,
     )
@@ -529,6 +536,7 @@ async def test_a_check_while_a_job_is_starting_skips_it(container, make_agent, m
                 agent_id=agent.id,
                 command="true",
                 secrets=[],
+                shell=True,
                 awaited=False,
                 check_seconds=30,
             )

@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from muliao.agents.api import Vault
-from muliao.errors import NotFound, ScriptFailed
+from muliao.errors import InvalidInput, NotFound, ScriptFailed
 from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import run_bash
 from muliao.triggers.tables import Trigger
@@ -195,7 +195,7 @@ class PrecheckRunner:
 
     async def check(self, agent_id: str, precheck: Precheck) -> None:
         """创建或修改时就确认 secret 可见：配置错误在第一现场报出，而不是等到第一次触发。"""
-        await self._vault.resolve_many(agent_id, precheck.secrets)
+        await self._vault.resolve_many(agent_id, precheck.secrets, shell=True)
 
     @property
     def max_bytes(self) -> int:
@@ -204,8 +204,8 @@ class PrecheckRunner:
     async def run(self, agent_id: str, precheck: Precheck, payload: str | None) -> str:
         """执行检查，返回它的输出；检查本身失败时抛出 PrecheckFailed。是否触发由 decide 决定。"""
         try:
-            secrets = await self._vault.resolve_many(agent_id, precheck.secrets)
-        except NotFound as e:
+            secrets = await self._vault.resolve_many(agent_id, precheck.secrets, shell=True)
+        except (NotFound, InvalidInput) as e:
             raise PrecheckFailed(f"precheck secrets unavailable: {e}") from e
         started = time.monotonic()
         confinement = await self._confine(agent_id)

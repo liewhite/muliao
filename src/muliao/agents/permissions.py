@@ -81,6 +81,8 @@ TOOLS: dict[str, Tool] = {
     "edit_file": W,
     "share_file": W,
     "run_shell": W,
+    # 跑 skill 目录里的脚本，可注入 allow_shell = false 的 secret（#528）
+    "skill_run": W,
     "job_status": R,
     "job_kill": W,
     # agent 与委派（改 agent 配置、角色、分发规则是改资源目录里的文件，agents.assets）

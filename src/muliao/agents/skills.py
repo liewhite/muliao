@@ -20,6 +20,7 @@ from muliao.agents.kinds import StoredKind, label
 from muliao.agents.naming import validate_slug
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped, parse_frontmatter
 from muliao.agents.source import AssetSource
+from muliao.errors import NotFound
 from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
@@ -94,6 +95,13 @@ class SkillStore:
     async def index(self, agent: str) -> list[SkillMeta]:
         """agent 能用的 skill（自己的与分发给它的，agents.access），按名称：它的 skill 索引。"""
         return [_meta(a) for a in usable(await self._source.snapshot(), _KIND, agent)]
+
+    async def directory(self, name: str, agent: str) -> Path:
+        """agent 能用的这个 skill 的目录（skill_run 在里面找脚本）；不存在或它不能用都是 NotFound。"""
+        found = {a.name: a for a in usable(await self._source.snapshot(), _KIND, agent)}
+        if name not in found:
+            raise NotFound(f"skill {name!r} not found among the skills you can use (see your skill index)")
+        return found[name].path
 
     async def read(self, name: str) -> Skill:
         asset = (await self._source.snapshot()).asset(_KIND, name)

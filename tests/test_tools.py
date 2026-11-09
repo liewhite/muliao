@@ -163,10 +163,10 @@ async def test_agent_stores_a_secret_as_an_encrypted_file_of_its_own(container, 
     outputs = await run_tools(
         container, models, me.id, [("vault_set", {"key": "A", "value": "private-a", "description": "mine"})]
     )
-    assert outputs == ["stored secret A"]
+    assert outputs == ["stored secret A (allow_shell: true)"]
     path = container.settings.assets_dir / "manager" / "secrets" / "A.toml"
     assert "private-a" not in path.read_text()
-    assert await container.vault.resolve_many(me.id, ["A"]) == {"A": "private-a"}
+    assert await container.vault.resolve_many(me.id, ["A"], shell=False) == {"A": "private-a"}
 
 
 async def test_eth_sign_signs_with_a_vault_key_without_showing_it(container, make_agent, models, caplog):

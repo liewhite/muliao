@@ -41,7 +41,7 @@ import anyio
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from muliao.agents.api import Vault
-from muliao.errors import NotFound
+from muliao.errors import InvalidInput, NotFound
 from muliao.notifications.events import Notify
 from muliao.platform.db import Database, utcnow
 from muliao.platform.messaging import Messaging
@@ -299,8 +299,8 @@ class StreamRunner:
     ) -> str:
         """起一次进程并跑到它退出，返回退出的原因。"""
         try:
-            secrets = await self._vault.resolve_many(spec.agent_id, config.secrets)
-        except NotFound as e:
+            secrets = await self._vault.resolve_many(spec.agent_id, config.secrets, shell=True)
+        except (NotFound, InvalidInput) as e:
             return f"stream secrets unavailable: {e}"
         cwd = self._workspace_of(spec.agent_id)
         log_file = cwd / stderr_log(spec.name)
