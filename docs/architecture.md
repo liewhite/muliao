@@ -87,11 +87,11 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 |---|---|---|---|
 | 会话 | `sessions` | `directory.py`（新建一行、按属性查会话只在这里；按 id 取到的行在领域内可改，删除在 `deletion.py`）、`kinds.py`、`origins.py`、`inbound.py`（来信与新建会话的规则）、`info.py`（读模型）、`deletion.py`、`service.py`（门面） | `add_in`、`among_in`、`with_prefix_in`、`of_agent_in`、`keyed_rows_among` / `keyed_among`、`threads_of` / `thread_in` / `threads_named_in`、`listed_ids_in` / `listed_page_in` |
 | 运行 | `messages`、`message_texts`（消息的可搜索文字）、`compactions`（历史）、`mail`（信箱）；运行本身是平台任务表里的 run task，只经 `TaskQueue` 的只读查询（`TaskView`）看 | `history.py`、`mailbox.py`、`runs.py`（运行与它的 payload）、`consumer.py`、`steps.py`、`finish.py`、`compaction.py`、`halt.py`、`settlement.py`、`conventions.py`、`reconcile.py`、`live.py` | 历史：`append_in`、`mark_last_stopped_in`、`saved_by_in`、`last_message_id_in`、`transcript_rows_in`、`spans_between_in`、`add_compaction_in`、`load_context` 等；信箱：`post_in`、`queued_in`、`sent_by_in`、`first_arrivals_between_in`、`consume_in`、`discard_in`、`unsettled_in` / `mark_settled`、`wake_in` 等；运行：`latest_run` / `latest_runs_among`、`runs_between_in`、`run_unfinished_in`、`hand_over_in`、`handed_to` |
-| 交互 | —（由历史与信箱推导） | `pending.py`、`deferred.py`、`ask_user.py`、`questions.py`、`answers.py` | `pending_in`、`open_asks_of`、`waiting` |
+| 交互 | `approval_requests`（停下来等批准的调用）；其余由历史与信箱推导 | `pending.py`、`deferred.py`、`ask_user.py`、`questions.py`、`answers.py`、`approvals.py` | `pending_in`、`handed_out_in`、`open_asks_of`、`waiting`、`record_in`（等批准）、`requested_in` / `requested_among` |
 | 外部工作 | `session_holds` | `holds.py`、`work.py`（`SessionWork`、交回结局 `deliver_in`、运行中检查的间隔规则 `DEFAULT_CHECK_SECONDS` / `check_due`）、`activity.py`（工作状态） | `hold_in`、`get_in`、`release`、`abandon`、`clear_in`、`active_holders_of_in`、`active_holders_in`、`called_in`、`deliver_in` |
 | 委派 | `delegations`（每项委派的 thread、心跳间隔）、`thread_calls`（哪次调用开出或续写了哪个 thread） | `delegations.py`（记录）、`thread_calls.py`（调用开出的 thread）、`delegation.py`（交回与运行中检查）、`threads.py`（发出）、`delegation_tools.py` | `record_in`、`records_among`、`threads_of_holds_in`、`hand_back_in`、`record_call_in` / `call_threads_in` |
 | 到点唤醒 | `wakeups` | `wakeups.py`（约、取消、到点投信 `WakeUps`）、`wakeup_tools.py`（`wake_me`） | `schedule_in`、`cancel_in`、`WakeUps` |
-| 展示 | — | `transcript.py`、`live.py`、`sources.py`（结构化的事件来源）、`recall_tools.py`（`session_read`） | `to_items`、`annotate_asks` / `annotate_threads`、`parse_source` |
+| 展示 | — | `transcript.py`、`live.py`、`sources.py`（结构化的事件来源）、`recall_tools.py`（`session_read`） | `to_items`、`annotate_asks` / `annotate_approvals` / `annotate_threads`、`parse_source` |
 
 会话领域的编排（停止 `halt.py`、删除 `deletion.py`、消费者）与跨子域的读模型（会话门面 `service.py`、热历史 `recall.py`，第 22 节）只调各子域的接口；会话领域不 import 任务表的 `TaskStatus`，`Task` 只出现在任务处理器的签名里（`tests/test_boundaries.py`）。
 
@@ -364,7 +364,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 接收的定向命令：`WorkEnded` / `WorkCheckIn`（后台任务的结局与运行中检查，来源与幂等键由会话领域按占用者推出）、`Receive`（触发器的来信）、`StopThread`（自己发给自己：停止委派出去的 thread）。
 
-### 挂起的调用（`ask_user` 与 `ask_agent`，`sessions/pending.py`）
+### 挂起的调用（`ask_user`、`ask_agent` 与等批准的调用，`sessions/pending.py`）
 
 两者是同一件事：**模型调用了一个要等别人回信的工具**。工具调用 `defer_call()`（agent_runtime），这次运行停在这里正常结束，不占 worker、不在 worker 里等。回信是一封回答信件（`MailKind.ANSWER`，`tool_call_id →` 带工具名的结果信封 `{"tool": "ask_user" | "ask_agent", "result": …}`，读的一方按 `tool` 区分，不按形状），消费者开始下一次运行时把它作为那次调用的结果交回（`run_steps` 的 `deferred`），模型看到的就是「我问了，对方这样答」。
 
@@ -380,6 +380,13 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 - **跳过**：pydantic-ai 拒绝在未处理的调用后追加新消息，所以用户发了新消息时，没回答的 `ask_user` 显式记为「用户没回答、发了新消息」（同一次提交里回答了别的提问时记为跳过），还没回答的 `ask_agent` 记为「它还在处理，回答会作为事件送达」（`STILL_WORKING`）——那时它已不再挂着，委派的结局按事件投回（第 8 节）。结果随那一步保存。
 - **迟到的回答**：回答投信之后、交给模型之前，调用可能已被另一次运行关闭（用户先发了消息）。这时回答作为一段用户消息交给模型（`pending.late_text`），不丢、也不让运行卡住。
 - **续跑**：`ask_agent` 被重新执行（续跑那一步）时按调用 id 幂等（`Threads.dispatch` 的 holder 由调用 id 派生），已经投过就只再挂起，不重复投信。
+
+**等批准的调用**（#530，`sessions/approvals.py`）：工具在参数校验过、执行之前调用 `require_approval()`（agent_runtime，pydantic-ai 的 ApprovalRequired），运行以 `Paused.approvals` 正常结束。目前只有 `skill_run`：脚本列在 SKILL.md frontmatter 的 `approval:`（相对 skill 目录的路径，按整个脚本标记，不按参数）。
+
+- 哪些调用在等批准不按工具名认（同一个工具多数调用不用批准），也不能只看历史（与「执行到一半被打断」的调用一样没有结果）：运行收尾的事务里把它们记进 `approval_requests`（永久事实，同 ask_agent 带 call_id 的占用；两者合称 `HandedOut`）。没有结果、记过的调用就是在等批准。可能要批准的工具是普通工具，其余规则同普通工具：不重放、用户停止时补「已停止」；挂起的工具（`DEFERRED_TOOLS`）不请求批准。
+- 界面按钮随消息提交 `approvals: {tool_call_id: bool}`，`inbound.receive` 校验它针对现在能批准的调用（`OpenAsks.approvable`），回答信封是 `{"tool": "approval", "result": {"approved": …}}`。交回时是 `Approval`：批准 → pydantic-ai 按原参数再调一次工具（`is_approved` 为真），结果就是执行结果；拒绝 → `DENIED`；没批准就来了新消息 → `NOT_DECIDED`；迟到的决定作为文字。
+- 批准后工具在运行开头就执行，结果随下一步保存；这次运行是重试（run task 已尝试过，进程退出后恢复等）而批准还排着时，上一次可能在执行中被打断：不再执行，给 `INTERRUPTED`（同「从哪里开始」）。保守：第一次尝试在执行前就失败也这样处理，模型可以再发起一次（重新审批）。
+- 停在等批准上的运行不论有没有人在等都推送（`RunEnded.needs_approval`）：触发器、issue 的运行也只有用户能批准。会话是 waiting，等待项列出 `approval`；条目上 `Item.approval`（pending / submitted，`transcript.annotate_approvals`），界面显示调用与批准、拒绝两个按钮。
 
 **`ask_user`**：做法同 Claude Code 的 AskUserQuestion、Codex 的提问：一次 1 到 4 个选择题（单选或多选，每题 2 到 6 个选项），界面上每题总能在「其他」里自己写。工具总是列出，只在 `Audience.USER` 时可用，否则抛领域错误交还模型，说明按 Audience 区分（`agent`：另一个 agent 在问，把要对方定的写进回答；`none`：自己决定、必要时 `notify_user`）（`sessions/ask_user.py` 的 `REJECTED`；不用 `prepare` 隐藏，以免工具列表随运行变化破坏 prompt 缓存）。
 

@@ -342,12 +342,18 @@ export const api = {
       call('post', '/api/sessions', { body: { agent_id, prompt, attachments, compaction_threshold_tokens } }),
     ),
   reply: (session_id: string, prompt: string, attachments: string[]) =>
-    call('post', '/api/sessions/{session_id}/messages', { path: { session_id }, body: { prompt, attachments, answers: {} } }),
+    call('post', '/api/sessions/{session_id}/messages', { path: { session_id }, body: { prompt, attachments, answers: {}, approvals: {} } }),
   /** 回答挂起的提问：作为这次 ask_user 调用的结果交回模型 */
   answer: (session_id: string, toolCallId: string, answers: QuestionAnswer[]) =>
     call('post', '/api/sessions/{session_id}/messages', {
       path: { session_id },
-      body: { prompt: '', attachments: [], answers: { [toolCallId]: answers } },
+      body: { prompt: '', attachments: [], answers: { [toolCallId]: answers }, approvals: {} },
+    }),
+  /** 批准或拒绝一次等批准的工具调用：批准后按原参数执行，结果交回模型；拒绝时模型收到「用户拒绝」 */
+  approve: (session_id: string, toolCallId: string, approved: boolean) =>
+    call('post', '/api/sessions/{session_id}/messages', {
+      path: { session_id },
+      body: { prompt: '', attachments: [], answers: {}, approvals: { [toolCallId]: approved } },
     }),
   /** 请求体就是文件内容，Content-Type 是它的类型（接口描述里没有 JSON 请求体）；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
   uploadFile: (file: File) =>

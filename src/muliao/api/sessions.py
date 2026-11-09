@@ -10,6 +10,7 @@ from muliao.api.tasks import TaskOut
 from muliao.container import Container
 from muliao.sessions.api import (
     MIN_COMPACTION_THRESHOLD_TOKENS,
+    ApprovalWait,
     AskWait,
     CallResult,
     DelegationWait,
@@ -162,7 +163,9 @@ class JobWaitOut(JobWait):
         )
 
 
-WaitOut = Annotated[JobWaitOut | DelegationWait | WakeWait | AskWait, Field(discriminator="kind")]
+WaitOut = Annotated[
+    JobWaitOut | DelegationWait | WakeWait | AskWait | ApprovalWait, Field(discriminator="kind")
+]
 
 
 async def wait_outs(c: Container, agent_id: str, waits: list[Wait]) -> list[WaitOut]:

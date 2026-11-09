@@ -28,6 +28,13 @@ export interface AskBlock {
   ask: AskView
 }
 
+/** 停下来等用户批准的工具调用（条目上的 approval，由后端给出）：要用户操作，不收进过程组 */
+export interface ApprovalBlock {
+  callId: string
+  status: 'pending' | 'submitted'
+  tool: ToolView
+}
+
 export type Block =
   | { kind: 'user'; text: string; attachments: Attachment[] }
   /** checkIn：运行中检查（工作还在进行，后端显式标记）；at：交给 agent 的时间 */
@@ -36,6 +43,7 @@ export type Block =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; tool: ToolView }
   | { kind: 'ask'; ask: AskBlock }
+  | { kind: 'approval'; approval: ApprovalBlock }
   | { kind: 'stopped' }
 
 /** 过程步骤：思考与工具调用。连续的步骤收进一个折叠组，回答与说明文字留在组外 */
@@ -94,7 +102,11 @@ export function toBlocks(items: Item[]): Block[] {
           resultView: null,
         }
         if (item.tool_call_id) tools.set(item.tool_call_id, tool)
-        blocks.push({ kind: 'tool', tool })
+        if (item.approval !== null && item.tool_call_id !== null) {
+          blocks.push({ kind: 'approval', approval: { callId: item.tool_call_id, status: item.approval, tool } })
+        } else {
+          blocks.push({ kind: 'tool', tool })
+        }
         break
       }
       case 'tool_result':

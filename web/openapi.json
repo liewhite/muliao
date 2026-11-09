@@ -4013,6 +4013,50 @@
         ],
         "title": "AnsweredQuestion"
       },
+      "ApprovalAnswered": {
+        "properties": {
+          "tool": {
+            "type": "string",
+            "const": "approval",
+            "title": "Tool"
+          },
+          "result": {
+            "$ref": "#/components/schemas/Decision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool",
+          "result"
+        ],
+        "title": "ApprovalAnswered",
+        "description": "回答信件里一次等批准的调用的结果：用户的决定。信封的 tool 是 approval，不是调用的工具名（同一个工具多数\n调用不用批准）。"
+      },
+      "ApprovalWait": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "approval",
+            "title": "Kind",
+            "default": "approval"
+          },
+          "call_id": {
+            "type": "string",
+            "title": "Call Id"
+          },
+          "tool_name": {
+            "type": "string",
+            "title": "Tool Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "call_id",
+          "tool_name"
+        ],
+        "title": "ApprovalWait",
+        "description": "在等用户批准一次工具调用（如 skill_run 执行 SKILL.md 里标了 approval 的脚本）。"
+      },
       "AskResult": {
         "properties": {
           "answered": {
@@ -4299,6 +4343,20 @@
           "created_at"
         ],
         "title": "CompactionOut"
+      },
+      "Decision": {
+        "properties": {
+          "approved": {
+            "type": "boolean",
+            "title": "Approved"
+          }
+        },
+        "type": "object",
+        "required": [
+          "approved"
+        ],
+        "title": "Decision",
+        "description": "用户对一次等批准的调用的决定。"
       },
       "DelegationWait": {
         "properties": {
@@ -5092,6 +5150,21 @@
               }
             ]
           },
+          "approval": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "submitted"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval"
+          },
           "view": {
             "anyOf": [
               {
@@ -5166,6 +5239,7 @@
           "threads",
           "images",
           "ask",
+          "approval",
           "view",
           "at"
         ],
@@ -5422,11 +5496,15 @@
                 },
                 {
                   "$ref": "#/components/schemas/AgentAnswered"
+                },
+                {
+                  "$ref": "#/components/schemas/ApprovalAnswered"
                 }
               ],
               "discriminator": {
                 "propertyName": "tool",
                 "mapping": {
+                  "approval": "#/components/schemas/ApprovalAnswered",
                   "ask_agent": "#/components/schemas/AgentAnswered",
                   "ask_user": "#/components/schemas/UserAnswered"
                 }
@@ -6525,6 +6603,14 @@
             "type": "object",
             "title": "Answers",
             "default": {}
+          },
+          "approvals": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Approvals",
+            "default": {}
           }
         },
         "type": "object",
@@ -7200,11 +7286,15 @@
                 },
                 {
                   "$ref": "#/components/schemas/AskWait"
+                },
+                {
+                  "$ref": "#/components/schemas/ApprovalWait"
                 }
               ],
               "discriminator": {
                 "propertyName": "kind",
                 "mapping": {
+                  "approval": "#/components/schemas/ApprovalWait",
                   "ask": "#/components/schemas/AskWait",
                   "delegation": "#/components/schemas/DelegationWait",
                   "job": "#/components/schemas/JobWaitOut",

@@ -15,6 +15,7 @@ const item = (type: Item['type'], text: string, tool_call_id: string | null = nu
   images: [],
   threads: [],
   ask: null,
+  approval: null,
   view: null,
 })
 
@@ -323,5 +324,16 @@ describe('foldCheckIns', () => {
 
   it('leaves a filler reply that does not follow a check-in alone', () => {
     expect(fold([item('user', 'hi'), item('assistant', '…')]).map((v) => v.kind)).toEqual(['user', 'assistant'])
+  })
+})
+
+describe('approvals', () => {
+  it('takes a call waiting for approval out of the process group as its own block', () => {
+    const gated: Item = { ...item('tool_call', '{"skill":"ops"}', 'g1'), tool_name: 'skill_run', approval: 'pending' }
+    const views = groupSteps(toBlocks([item('tool_call', '{}', 'a'), item('tool_result', 'ok', 'a'), gated]))
+    expect(views.map((v) => v.kind)).toEqual(['process', 'approval'])
+    const last = views[1]
+    if (last.kind !== 'approval') throw new Error('expected an approval block')
+    expect([last.approval.callId, last.approval.status, last.approval.tool.name]).toEqual(['g1', 'pending', 'skill_run'])
   })
 })

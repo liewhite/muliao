@@ -11,6 +11,7 @@ import {
   Hourglass,
   MessageCircleQuestion,
   RotateCcw,
+  ShieldQuestion,
   SendHorizontal,
   Square,
   SquareTerminal,
@@ -32,7 +33,7 @@ import {
   type Wait,
   sessionRoute,
 } from '../api'
-import { askAnchor, waitDetail, waitKey } from '../waits'
+import { approvalAnchor, askAnchor, waitDetail, waitKey } from '../waits'
 import {
   foldCheckIns,
   groupSteps,
@@ -42,6 +43,7 @@ import {
   summarizeSteps,
   toBlocks,
   toolStatus,
+  type ApprovalBlock as ApprovalBlockData,
   type AskBlock as AskBlockData,
   type CheckIn,
   type Step,
@@ -232,6 +234,8 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
 /** 渲染会话条目要用到的会话信息：回答提问的方式、这个会话开出的 thread、agent 名称 */
 interface SessionContext {
   answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
+  /** 批准或拒绝一次等批准的工具调用 */
+  approve: (callId: string, approved: boolean) => Promise<unknown>
   threads: Map<string, Session>
   agents: Agent[] | undefined
   /**
@@ -262,6 +266,39 @@ function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) 
     case 'not_answered':
       return <QuestionNote text="没有回答这些问题" />
   }
+}
+
+/** 停下来等用户批准的工具调用：显示调用的工具与参数，待批准时给出批准、拒绝两个按钮 */
+function ApprovalBlock({ block, ctx }: { block: ApprovalBlockData; ctx: SessionContext }) {
+  const [busy, setBusy] = useState(false)
+  const decide = (approved: boolean) => {
+    setBusy(true)
+    void ctx.approve(block.callId, approved).finally(() => setBusy(false))
+  }
+  return (
+    // 等待项里的「去批准」滚到这里
+    <div
+      id={approvalAnchor(block.callId)}
+      className="flex scroll-mt-4 flex-col gap-2 self-stretch rounded-xl border border-warning/40 bg-surface p-3 shadow-sm"
+    >
+      <div className="flex items-center gap-1.5 text-sm">
+        <ShieldQuestion className="size-4 shrink-0 text-warning" />
+        <span>{block.status === 'pending' ? '这次调用要你批准才执行' : '已提交，等待执行'}</span>
+        <span className="font-mono text-muted">{block.tool.name}</span>
+      </div>
+      <ToolDetail tool={block.tool} />
+      {block.status === 'pending' && (
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="secondary" isDisabled={busy} onPress={() => decide(false)}>
+            拒绝
+          </Button>
+          <Button size="sm" isDisabled={busy} onPress={() => decide(true)}>
+            批准
+          </Button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 /** 事件来源的可读名称：thread 显示名字与 agent（可点开），后台任务显示编号 */
@@ -339,6 +376,8 @@ function Blocks({ items, ctx }: { items: Item[]; ctx: SessionContext }) {
         switch (v.kind) {
           case 'ask':
             return <AskBlock key={i} block={v.ask} ctx={ctx} />
+          case 'approval':
+            return <ApprovalBlock key={i} block={v.approval} ctx={ctx} />
           case 'stopped':
             return (
               <div key={i} className="flex items-center gap-1.5 self-start text-xs text-muted">
@@ -416,6 +455,8 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
         Object.values(mail.answers).map((result, i) =>
           result.tool === 'ask_user' ? (
             <AnsweredQuestions key={i} answers={result.result.answers} />
+          ) : result.tool === 'approval' ? (
+            <QuestionNote key={i} text={result.result.approved ? '已批准' : '已拒绝'} />
           ) : (
             <EventNote key={i} lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={result.result.text} />
           ),
@@ -596,6 +637,22 @@ function WaitRow({ wait, now, ctx, actions }: { wait: Wait; now: number; ctx: Se
             onPress={() => document.getElementById(askAnchor(wait.call_id))?.scrollIntoView({ behavior: 'smooth' })}
           >
             跳到提问
+          </Button>
+        </div>
+      )
+    case 'approval':
+      return (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+          <ShieldQuestion className="size-3.5 shrink-0 text-muted" />
+          <span className="shrink-0">等你批准</span>
+          <span className="font-mono">{detail}</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto shrink-0"
+            onPress={() => document.getElementById(approvalAnchor(wait.call_id))?.scrollIntoView({ behavior: 'smooth' })}
+          >
+            去批准
           </Button>
         </div>
       )
@@ -926,6 +983,7 @@ export default function SessionView() {
         {(d) => {
           const ctx: SessionContext = {
             answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
+            approve: (callId, approved) => api.approve(id, callId, approved).then(() => detail.reload()),
             threads: new Map(d.threads.map((t) => [t.id, t])),
             agents: agents.data,
             view: 'history',

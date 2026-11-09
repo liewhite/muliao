@@ -1423,6 +1423,34 @@ export interface components {
             other: string | null;
         };
         /**
+         * ApprovalAnswered
+         * @description 回答信件里一次等批准的调用的结果：用户的决定。信封的 tool 是 approval，不是调用的工具名（同一个工具多数
+         *     调用不用批准）。
+         */
+        ApprovalAnswered: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            tool: "approval";
+            result: components["schemas"]["Decision"];
+        };
+        /**
+         * ApprovalWait
+         * @description 在等用户批准一次工具调用（如 skill_run 执行 SKILL.md 里标了 approval 的脚本）。
+         */
+        ApprovalWait: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "approval";
+            /** Call Id */
+            call_id: string;
+            /** Tool Name */
+            tool_name: string;
+        };
+        /**
          * AskResult
          * @description 一次提问交给模型的结果（也是界面展示已回答提问的来源）：answered 区分用户回答了，还是没回答就发了新消息。
          */
@@ -1539,6 +1567,14 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * Decision
+         * @description 用户对一次等批准的调用的决定。
+         */
+        Decision: {
+            /** Approved */
+            approved: boolean;
         };
         /**
          * DelegationWait
@@ -1827,6 +1863,8 @@ export interface components {
             /** Images */
             images: components["schemas"]["Attachment"][];
             ask: components["schemas"]["AskView"] | null;
+            /** Approval */
+            approval: ("pending" | "submitted") | null;
             /** View */
             view: (components["schemas"]["TerminalBlock"] | components["schemas"]["CodeBlock"] | components["schemas"]["DiffBlock"] | components["schemas"]["MarkdownBlock"] | components["schemas"]["FieldsBlock"] | components["schemas"]["TableBlock"] | components["schemas"]["LinksBlock"])[] | null;
             /** At */
@@ -1930,7 +1968,7 @@ export interface components {
             attachments: components["schemas"]["FileOut"][];
             /** Answers */
             answers: {
-                [key: string]: components["schemas"]["UserAnswered"] | components["schemas"]["AgentAnswered"];
+                [key: string]: components["schemas"]["UserAnswered"] | components["schemas"]["AgentAnswered"] | components["schemas"]["ApprovalAnswered"];
             };
             state: components["schemas"]["MailState"];
             /**
@@ -2362,6 +2400,13 @@ export interface components {
             answers: {
                 [key: string]: components["schemas"]["QuestionAnswer"][];
             };
+            /**
+             * Approvals
+             * @default {}
+             */
+            approvals: {
+                [key: string]: boolean;
+            };
         };
         /** RoleIn */
         RoleIn: {
@@ -2603,7 +2648,7 @@ export interface components {
             live: components["schemas"]["LiveSegmentOut"] | null;
             state: components["schemas"]["WorkState"];
             /** Waits */
-            waits: (components["schemas"]["JobWaitOut"] | components["schemas"]["DelegationWait"] | components["schemas"]["WakeWait"] | components["schemas"]["AskWait"])[];
+            waits: (components["schemas"]["JobWaitOut"] | components["schemas"]["DelegationWait"] | components["schemas"]["WakeWait"] | components["schemas"]["AskWait"] | components["schemas"]["ApprovalWait"])[];
         };
         /**
          * SessionKind

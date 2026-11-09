@@ -3,6 +3,8 @@ import { formatClock, formatDuration } from './stepTime'
 
 /** 提问条目的锚点：等待项里的「跳到提问」滚到这里 */
 export const askAnchor = (callId: string) => `ask-${callId}`
+/** 等批准的调用的锚点：等待项里的「去批准」滚到这里 */
+export const approvalAnchor = (callId: string) => `approval-${callId}`
 
 /** 等待项的稳定 key：前面的项消失时，后面一行的展开状态不串到别的行 */
 export function waitKey(w: Wait): string {
@@ -15,6 +17,8 @@ export function waitKey(w: Wait): string {
       return `wake:${w.due_at}`
     case 'ask':
       return `ask:${w.call_id}`
+    case 'approval':
+      return `approval:${w.call_id}`
   }
 }
 
@@ -38,5 +42,7 @@ export function waitDetail(w: Wait, now: number): string {
     }
     case 'ask':
       return w.headers.join('、')
+    case 'approval':
+      return w.tool_name
   }
 }

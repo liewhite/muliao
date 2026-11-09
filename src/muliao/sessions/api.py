@@ -38,7 +38,7 @@ from muliao.sessions.recall_tools import SESSION_READ, indented, place
 from muliao.sessions.service import SessionService
 from muliao.sessions.sources import EventSource, job_holder, job_id_of_holder, parse_source
 from muliao.sessions.transcript import Item
-from muliao.sessions.waits import AskWait, DelegationWait, JobWait, Wait, WakeWait
+from muliao.sessions.waits import ApprovalWait, AskWait, DelegationWait, JobWait, Wait, WakeWait
 from muliao.sessions.work import DEFAULT_CHECK_SECONDS, SessionWork, check_due
 
 __all__ = [
@@ -77,6 +77,7 @@ __all__ = [
     "JobWait",
     "DelegationWait",
     "WakeWait",
+    "ApprovalWait",
     "AskWait",
     "NewChat",
     "NewConversation",
