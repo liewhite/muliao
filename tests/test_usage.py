@@ -17,7 +17,7 @@ from muliao.usage.api import RunKind, UsageEntry, UsageGroup, UsageTotals
 from muliao.usage.tables import ModelUsage
 from tests.conftest import login
 from tests.scripted import scripted
-from tests.test_flow import drain, start, tasks_of
+from tests.test_flow import drain, note_args, start, tasks_of
 
 # 一次模型调用报告的用量：input 是输入总数，其中 80 命中缓存、10 写入缓存（pydantic-ai 的口径）。
 # 只在非流式请求（压缩）里原样保留：会话的运行是流式的，FunctionModel 那时自己估算 token，
@@ -94,7 +94,7 @@ async def test_a_run_that_fails_still_records_what_it_already_spent(container, m
         return ModelResponse(
             parts=[
                 ToolCallPart(
-                    "memory_edit", {"name": "alpha", "reason": "r", "new_text": "- x"}, tool_call_id="c"
+                    "history_append", note_args("- x"), tool_call_id="c"
                 )
             ],
             usage=REPLY_USAGE,

@@ -7,8 +7,8 @@ const common = (name: string, owner: CatalogItem['owner']) => ({ name, owner, de
 const AT = '2026-10-27T00:00:00Z'
 const ITEMS: CatalogItem[] = [
   { kind: 'tool', access: 'write', admin: false, updated_at: null, ...common('run_shell', null) },
-  { kind: 'skill', updated_at: AT, ...common('relay-host', null) },
-  { kind: 'skill', updated_at: AT, ...common('mine', a) },
+  { kind: 'skill', updated_at: AT, path: '/a/platform/skills/relay-host', ...common('relay-host', null) },
+  { kind: 'skill', updated_at: AT, path: '/a/agent-a/skills/mine', ...common('mine', a) },
 ]
 
 describe('splitRule', () => {

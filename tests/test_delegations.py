@@ -18,7 +18,7 @@ from muliao.sessions.origins import Origin
 from muliao.sessions.pending import UserAnswered
 from muliao.sessions.tables import Delegation, HoldStatus, Mail, MailKind, MailState, SessionHold
 from tests.scripted import scripted
-from tests.test_flow import deliver, drain, history_of, start, tasks_of
+from tests.test_flow import deliver, drain, history_of, note_args, start, tasks_of
 from tests.test_mailbox import Recorder
 from tests.test_threads import call, echo, threads_of
 from tests.test_tools import run_tools
@@ -942,8 +942,8 @@ async def test_an_answer_arriving_mid_run_reaches_the_model_as_late_text(
                 )
             yield {
                 0: DeltaToolCall(
-                    name="memory_edit",
-                    json_args='{"name": "alpha", "reason": "r", "new_text": "- x"}',
+                    name="history_append",
+                    json_args=json.dumps(note_args("- x")),
                     tool_call_id="m",
                 )
             }

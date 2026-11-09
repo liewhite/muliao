@@ -3,7 +3,6 @@ import { Button, Card, toast } from '@heroui/react'
 import { Trash2 } from 'lucide-react'
 import { api, type AgentId, type ItemOf } from '../api'
 import { ItemAccess, OwnerSelect } from './itemParts'
-import { ResourceHistory } from '../ResourceHistory'
 import { ActionButton, CollapsibleForm, EmptyHint, ErrorAlert, TextInput, formatTime, useAction, useConfirm } from '../ui'
 
 function SecretForm({ onSaved }: { onSaved: () => void }) {
@@ -70,7 +69,6 @@ function SecretItem({ item, onChange }: { item: ItemOf<'secret'>; onChange: () =
         </div>
         <ItemAccess item={item} onTransferred={onChange} />
         <ErrorAlert error={action.error} />
-        <ResourceHistory target={{ kind: 'secret', name: item.name }} current={item.updated_at} onRestored={onChange} />
       </Card.Content>
     </Card>
   )
@@ -82,7 +80,7 @@ export function SecretTab({ items, onChange }: { items: ItemOf<'secret'>[]; onCh
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted">
         agent 通过 key 引用：MCP 配置里写 <code className="font-mono">{'${vault:KEY}'}</code>，shell 里用{' '}
-        <code className="font-mono">run_shell(secrets=[KEY])</code> 注入同名环境变量。版本历史只记说明，不含值。
+        <code className="font-mono">run_shell(secrets=[KEY])</code> 注入同名环境变量。
       </p>
       <SecretForm onSaved={onChange} />
       {items.length === 0 ? (

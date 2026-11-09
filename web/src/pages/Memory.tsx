@@ -3,7 +3,6 @@ import { Button, Card, toast } from '@heroui/react'
 import { ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type AgentId, type ItemOf } from '../api'
-import { ResourceHistory } from '../ResourceHistory'
 import { ItemAccess, OwnerSelect } from './itemParts'
 import {
   ActionButton,
@@ -22,7 +21,7 @@ import {
 /** 全局记忆的名字（后端 agents/permissions.py 的 GLOBAL_MEMORY）：base 固定收录，不能删 */
 export const GLOBAL_MEMORY = 'global'
 
-/** 一块记忆：编辑正文、保存，以及它的历史版本 */
+/** 一块记忆：编辑正文、保存（写的是它的文件） */
 export function MemoryEditor({ name, hint, onSaved }: { name: string; hint: string; onSaved?: () => void }) {
   const memory = useLoad(() => api.memory(name), [name])
   const [content, setContent] = useState('')
@@ -49,7 +48,7 @@ export function MemoryEditor({ name, hint, onSaved }: { name: string; hint: stri
             isPending={action.busy}
             onPress={() =>
               void action.run(async () => {
-                await api.saveMemory(name, { content, description: m.description })
+                await api.saveMemory(name, { content })
                 toast.success('记忆已保存')
                 await memory.reload()
                 onSaved?.()
@@ -58,7 +57,7 @@ export function MemoryEditor({ name, hint, onSaved }: { name: string; hint: stri
           >
             保存记忆
           </ActionButton>
-          <ResourceHistory target={{ kind: 'memory', name }} current={m.content} onRestored={() => void memory.reload()} />
+          <div className="font-mono text-xs break-all text-muted">{m.path}</div>
         </div>
       )}
     </Loading>
@@ -68,17 +67,15 @@ export function MemoryEditor({ name, hint, onSaved }: { name: string; hint: stri
 function MemoryForm({ onSaved }: { onSaved: () => void }) {
   const [owner, setOwner] = useState<AgentId | null>(null)
   const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
   const action = useAction()
 
   async function save() {
     const ok = await action.run(async () => {
-      await api.saveMemory(name, { owner, description, content: '' })
+      await api.saveMemory(name, { owner, content: '' })
       toast.success(`已新建记忆 ${name}`)
     })
     if (ok) {
       setName('')
-      setDescription('')
       onSaved()
     }
   }
@@ -86,7 +83,6 @@ function MemoryForm({ onSaved }: { onSaved: () => void }) {
   return (
     <CollapsibleForm title="新建共享记忆">
       <TextInput label="名字" hint="小写字母、数字、- 和 _" value={name} onChange={setName} placeholder="trading" mono isRequired />
-      <TextInput label="说明" hint="哪类知识放这里" value={description} onChange={setDescription} />
       <OwnerSelect value={owner} onChange={setOwner} />
       <ErrorAlert error={action.error} />
       <ActionButton isDisabled={!name} isPending={action.busy} onPress={() => void save()}>
@@ -121,7 +117,7 @@ function MemoryItem({ item, onChange }: { item: ItemOf<'memory'>; onChange: () =
           <div className="min-w-0 flex-1">
             <div className="font-mono font-medium">{item.name}</div>
             <div className="truncate text-xs text-muted">
-              {item.description || (item.name === GLOBAL_MEMORY ? '所有 agent 共享' : '无说明')} · {formatTime(item.updated_at)}
+              <span className="font-mono">{item.path}</span> · {formatTime(item.updated_at)}
             </div>
           </div>
           {item.name !== GLOBAL_MEMORY && (
@@ -135,7 +131,7 @@ function MemoryItem({ item, onChange }: { item: ItemOf<'memory'>; onChange: () =
         {open && (
           <MemoryEditor
             name={item.name}
-            hint="能用它的 agent 每次运行都会看到全文；能改它的 agent 也会用 memory_edit 修改。每次保存都会留下一个版本"
+            hint="能用它的 agent 每次运行都会看到全文；能改它的 agent 也会直接改它的文件"
             onSaved={onChange}
           />
         )}
@@ -149,7 +145,7 @@ export function MemoryTab({ items, onChange }: { items: ItemOf<'memory'>[]; onCh
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted">
-        agent 能用（use）的每一块记忆每次运行都全文放进指令，能改（write）的可以用工具修改。私有记忆归它的 agent；共享记忆在角色里写{' '}
+        agent 能用（use）的每一块记忆每次运行都全文放进指令，能改（write）的直接改它的文件。私有记忆归它的 agent；共享记忆在角色里写{' '}
         <code className="font-mono">*:memory:名字</code> 分给一组 agent（成员能用也能改），只读写{' '}
         <code className="font-mono">use:memory:名字</code>。
       </p>

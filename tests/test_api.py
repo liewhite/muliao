@@ -164,7 +164,7 @@ async def test_an_item_given_by_another_agents_allow_is_shared_without_a_role(cl
     assert secrets == {"MINE": ([], True), "LONELY": ([], False)}
 
 
-async def test_mcp_items_carry_their_config_and_have_history_and_restore(client):
+async def test_mcp_items_carry_their_config_and_have_no_history(client):
     await login(client)
     body = {"owner": None, "transport": "http", "url": "https://example.com/mcp", "probe": False}
     assert (await client.put("/api/items/mcp/remote", json=body)).status_code == 201
@@ -179,29 +179,11 @@ async def test_mcp_items_carry_their_config_and_have_history_and_restore(client)
         "http",
         False,
     )
+    assert item["path"].endswith("/platform/mcp/remote.json")
     assert (await client.get("/api/items/mcp/remote")).json()["enabled"] is False
-
-    history = (await client.get("/api/items/mcp/remote/history")).json()
-    assert [r["message"] for r in history] == ["disable MCP server remote", "add MCP server remote"]
-    restored = await client.post("/api/items/mcp/remote/restore", json={"rev": history[1]["rev"]})
-    assert restored.status_code == 204
-    assert (await client.get("/api/items/mcp/remote")).json()["enabled"] is True
-    # 不是它的版本不认
-    await client.put("/api/items/skill/other", json={"owner": None, "description": "d", "body": "b"})
-    [skill_rev] = (await client.get("/api/items/skill/other/history")).json()
-    assert (
-        await client.post("/api/items/mcp/remote/restore", json={"rev": skill_rev["rev"]})
-    ).status_code == 404
+    # 不再有版本历史与恢复（#498）
+    assert (await client.get("/api/items/mcp/remote/history")).status_code in (404, 405)
     assert (await client.delete("/api/items/mcp/remote")).status_code == 204
-    deletion = (await client.get("/api/items/mcp/remote/history")).json()[0]
-    assert deletion["content"] is None and not deletion["restorable"] and history[1]["restorable"]
-
-    await client.put("/api/items/secret/K", json={"value": "v"})
-    [secret_rev] = (await client.get("/api/items/secret/K/history")).json()
-    assert not secret_rev["restorable"]
-    resp = await client.post("/api/items/secret/K/restore", json={"rev": secret_rev["rev"]})
-    assert resp.status_code == 422 and "cannot be restored" in resp.text
-    assert (await client.get("/api/items/tool/run_shell/history")).status_code == 422
 
 
 def test_auth_token_expires_and_rejects_tampering():
@@ -453,23 +435,17 @@ async def test_session_list_filters_by_keyword_in_title_or_messages(client, cont
 
 
 async def test_an_agent_being_deleted_reads_as_missing(client, container, make_agent):
-    """删除窗口里它的私有资源（指令、记忆）可能已经删了：读它与它的资源一律 404，不读到一半变成 500。"""
+    """删除窗口里读它一律 404，不读到一半变成 500（它的资源目录在删除流程收尾时才删）。"""
     from muliao.agents.tables import Agent
 
     agent = await make_agent("alpha")
     await login(client)
-    await client.put("/api/items/skill/mine", json={"owner": agent.id, "description": "d", "body": "b"})
     async with container.db.transaction() as s:
         (await s.get(Agent, agent.id)).deleting_by = "user"
 
     assert (await client.get(f"/api/agents/{agent.id}")).status_code == 404
     assert (await client.get(f"/api/agents/{agent.id}/history")).status_code == 404
-    # 记忆与条目同一条规则，在领域的 store 里查：读、看历史都按不存在处理，列表里也没有
-    assert (await client.get("/api/memory", params={"agent": agent.id})).status_code == 404
-    assert (await client.get("/api/memory/history", params={"agent": agent.id})).status_code == 404
-    assert (await client.get("/api/items/skill/mine")).status_code == 404
-    assert (await client.get("/api/items/skill/mine/history")).status_code == 404
-    assert "mine" not in [i["name"] for i in (await client.get("/api/items")).json()]
+    assert (await client.get(f"/api/agents/{agent.id}/assets")).status_code == 404
 
 
 async def test_agent_thinking_is_set_and_validated_over_http(client, models):

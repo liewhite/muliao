@@ -15,7 +15,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.profiles import ModelProfile
 
-from muliao.agents.api import AgentPatch, McpTransport, StoredKind, mcp_config
+from muliao.agents.api import AgentPatch, McpTransport, mcp_config
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
 from tests.conftest import login, session_tools, share
@@ -46,7 +46,7 @@ async def run_tools(
     return outputs
 
 
-async def test_agent_creates_and_reconfigures_agents(container, make_agent, models):
+async def test_agent_creates_inspects_and_deletes_agents(container, make_agent, models):
     me = await make_agent("manager", model="tools", roles=["admin"])
     outputs = await run_tools(
         container,
@@ -57,17 +57,15 @@ async def test_agent_creates_and_reconfigures_agents(container, make_agent, mode
                 "create_agent",
                 {"name": "researcher", "description": "finds facts"},
             ),
-            ("update_agent", {"agent": "manager", "description": "Delegates research to researcher."}),
             ("get_agent", {"agent": "researcher"}),
             ("delete_agent", {"agent": "researcher"}),
         ],
     )
 
     assert outputs[0] == "created agent researcher"
-    assert "finds facts" in outputs[2] and "fake:default" in outputs[2]  # 未指定模型时取服务端默认值
-    assert outputs[3] == "deleted agent researcher"
+    assert "finds facts" in outputs[1] and "fake:default" in outputs[1]  # 未指定模型时取服务端默认值
+    assert outputs[2] == "deleted agent researcher"
     assert [a.name for a in await container.agents.list()] == ["manager"]
-    assert (await container.agents.get(me.id)).description == "Delegates research to researcher."
     # 结果里只出现名称，不出现 id
     assert me.id not in "\n".join(outputs)
 
@@ -88,13 +86,13 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
     detail = json.loads(output)
     assert detail["roles"] == [] and detail["deny"] == ["use:tool:issue_update"]
     # 最终工具：base 的减去 deny；base 没有管理类工具
-    assert {"issue_create", "memory_edit"} <= set(detail["tools"])
-    assert not {"issue_update", "memory_create"} & set(detail["tools"])
+    assert {"issue_create", "edit_file"} <= set(detail["tools"])
+    assert not {"issue_update", "create_agent"} & set(detail["tools"])
     assert detail["items"] == ["memory:global", "memory:narrow", "skill:notes"]
     # 参照：全部角色（含固定的规则）与全部内置工具（没配置 [web] 时不列 web 工具）
     admin = next(r for r in detail["available_roles"] if r["name"] == "admin")
     assert admin["fixed_allow"] == ["use:tool:*", "write:*"]
-    assert "delete_role" in detail["all_tools"] and "web_search" not in detail["all_tools"]
+    assert "delete_agent" in detail["all_tools"] and "web_search" not in detail["all_tools"]
 
 
 def test_registered_tools_must_match_the_permission_table_both_ways():
@@ -113,31 +111,14 @@ def test_registered_tools_must_match_the_permission_table_both_ways():
         _check_permissions([*every, "run_shell"], web_configured=True)
 
 
-async def test_agent_pauses_trigger_and_lists_its_mcp_servers(container, make_agent, models):
+async def test_agent_pauses_trigger(container, make_agent, models):
     me = await make_agent("manager", model="tools", roles=["admin"])
     await container.triggers.create(
         name="daily", agent_id=me.id, kind="schedule", prompt="report", config={"cron": "0 9 * * *"}
     )
-    spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
-    await container.mcp.add("echo", spec, actor="user", owner=me.id, probe=False)
-    # 停用的 server 不会被连接；agent 在 mcp_list 里看得到它（启停只在界面上）
-    await container.mcp.set_enabled("echo", False, "user")
-
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            ("trigger_update", {"name": "daily", "enabled": False}),
-            ("mcp_list", {}),
-        ],
-    )
-
+    outputs = await run_tools(container, models, me.id, [("trigger_update", {"name": "daily", "enabled": False})])
     assert outputs[0].startswith("updated trigger daily (paused)")
     assert not (await container.triggers.get_by_name("daily")).enabled
-    [echo] = json.loads(outputs[1])
-    assert (echo["name"], echo["yours"], echo["enabled"]) == ("echo", True, False)
-    assert await container.mcp.index(me.id) == []
 
 
 async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
@@ -175,27 +156,15 @@ async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
     assert await container.vault.usable_by(me.id) == []
 
 
-async def test_agent_manages_its_secrets_and_shares_them_with_a_role(container, make_agent, models):
-    me = await make_agent("manager", model="tools", roles=["admin"])
-    other = await make_agent("other")
+async def test_agent_stores_a_secret_as_an_encrypted_file_of_its_own(container, make_agent, models):
+    me = await make_agent("manager", model="tools")
     outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            ("vault_set", {"key": "A", "value": "private-a", "description": "mine"}),
-            ("vault_set", {"key": "B", "value": "shared-b", "description": "shared"}),
-            ("vault_delete", {"key": "A"}),
-            ("create_role", {"name": "b-user", "description": "uses B", "allow": ["use:secret:B"]}),
-            ("update_agent", {"agent": "other", "roles": ["b-user"]}),
-            ("vault_list", {}),
-        ],
+        container, models, me.id, [("vault_set", {"key": "A", "value": "private-a", "description": "mine"})]
     )
-
-    assert "private-a" not in "\n".join(outputs) and "shared-b" not in "\n".join(outputs)
-    assert json.loads(outputs[5]) == [{"key": "B", "yours": True, "description": "shared"}]
-    assert await container.vault.resolve_many(other.id, ["B"]) == {"B": "shared-b"}
-    assert [(s.key, s.owner) for s in await container.vault.usable_by(me.id)] == [("B", me.id)]
+    assert outputs == ["stored secret A"]
+    path = container.settings.assets_dir / "manager" / "secrets" / "A.toml"
+    assert "private-a" not in path.read_text()
+    assert await container.vault.resolve_many(me.id, ["A"]) == {"A": "private-a"}
 
 
 async def test_eth_sign_signs_with_a_vault_key_without_showing_it(container, make_agent, models, caplog):
@@ -259,66 +228,6 @@ async def test_list_threads_shows_each_thread_with_its_state(container, make_age
     )
 
 
-async def test_parallel_partial_updates_of_one_agent_both_survive(container, make_agent, models):
-    me = await make_agent("manager", model="tools", roles=["admin"])
-    target = await make_agent("worker")
-
-    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        if sum(isinstance(m, ModelResponse) for m in messages) == 0:
-            return ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        "update_agent", {"agent": "worker", "description": "new desc"}, tool_call_id="a"
-                    ),
-                    ToolCallPart(
-                        "update_agent", {"agent": "worker", "new_name": "worker2"}, tool_call_id="b"
-                    ),
-                ]
-            )
-        return ModelResponse(parts=[TextPart("done")])
-
-    models.models["tools"] = scripted(fn)
-    await start(container, me.id, "go", origin=Origin.TRIGGER)
-    await drain(container)
-
-    updated = await container.agents.get(target.id)
-    assert (updated.description, updated.name) == ("new desc", "worker2")
-
-
-async def test_agent_without_admin_can_only_change_its_own_description_model_and_thinking(
-    container, make_agent, models
-):
-    me = await make_agent("worker", model="tools")
-    other = await make_agent("other")
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            (
-                "update_agent",
-                {"agent": "worker", "description": "new desc", "model": "tools", "thinking": "default"},
-            ),
-            ("update_agent", {"agent": "other", "description": "hijacked"}),
-            ("update_agent", {"agent": "worker", "roles": ["admin"]}),
-            ("update_agent", {"agent": "worker", "allow": ["use:tool:*"], "description": "x"}),
-            ("update_agent", {"agent": "worker", "description": "y", "archived": True}),
-            ("update_agent", {"agent": "worker", "new_name": "boss"}),
-        ],
-    )
-
-    assert outputs[0] == "updated agent worker"
-    assert "only an admin can change another agent" in outputs[1]
-    assert "not roles" in outputs[2] and "not allow" in outputs[3] and "not archived" in outputs[4]
-    assert "not name" in outputs[5]
-    # 被拒的调用什么都没改：没提权、没归档，描述停在第一次成功的修改
-    mine = await container.agents.get(me.id)
-    assert (mine.name, mine.description, mine.archived) == ("worker", "new desc", False)
-    assert (await container.agents.get(other.id)).description != "hijacked"
-    _, rules = await container.agents.find_with_rules("worker")
-    assert (rules.roles, rules.allow) == ((), ())
-
-
 async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agent, models):
     me = await make_agent("manager", model="tools", roles=["admin"])
     other = await make_agent("worker")
@@ -328,13 +237,12 @@ async def test_tool_errors_name_agents_but_never_expose_ids(container, make_agen
         me.id,
         [
             ("create_agent", {"name": "worker", "description": "d"}),
-            ("update_agent", {"agent": "manager", "new_name": "worker"}),
             ("delete_agent", {"agent": "manager"}),
         ],
     )
 
-    assert "already taken" in outputs[0] and "already taken" in outputs[1]
-    assert "cannot delete yourself" in outputs[2]
+    assert "already taken" in outputs[0]
+    assert "cannot delete yourself" in outputs[1]
     for agent_id in (me.id, other.id):
         assert agent_id not in "\n".join(outputs)
 
@@ -357,8 +265,8 @@ async def test_base_sees_every_tool_but_admin_ones_and_no_undistributed_mcp(cont
     await drain(container)
 
     assert sorted(seen) == sorted((await container.distribution.reach(triage.id)).tool_names)
-    assert not {"memory_create", "create_agent", "create_role"} & set(seen)
-    assert {"write_skill", "memory_edit", "vault_set", "run_shell", "trigger_create"} <= set(seen)
+    assert not {"create_agent", "delete_agent", "eth_sign"} & set(seen)
+    assert {"edit_file", "vault_set", "run_shell", "trigger_create"} <= set(seen)
     assert not any(name.startswith("echo_") for name in seen)
 
 
@@ -386,324 +294,6 @@ async def test_asked_agent_runs_with_its_own_permissions(container, make_agent, 
     assert outputs == ["answer"]
     # 被问的 agent 用自己的权限，不是调用方（admin）的
     assert "run_shell" not in seen and "notify_user" in seen and "create_agent" not in seen
-
-
-@pytest.mark.parametrize("platform_owned", [False, True])
-async def test_edit_skill_changes_description_body_or_both_and_rejects_empty_edits(
-    container, make_agent, models, platform_owned
-):
-    # admin 改得了归平台的
-    me = await make_agent("alpha", model="tools", roles=["admin"])
-    owner = None if platform_owned else me.id
-    await container.skills.write("digest", "When digesting", "step one", actor="user", owner=owner)
-    tool = "edit_skill"
-
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            (tool, {"name": "digest", "reason": "r1", "description": "When summarizing"}),
-            (tool, {"name": "digest", "reason": "r2", "old_text": "step one", "new_text": "step 1"}),
-            (tool, {"name": "digest", "reason": "r3", "new_text": "step 2", "description": "When digesting"}),
-            (tool, {"name": "digest", "reason": "r4"}),
-            (tool, {"name": "digest", "reason": "  ", "new_text": "step 3"}),
-        ],
-    )
-
-    assert outputs[:3] == ["edited skill digest"] * 3
-    assert "nothing to change" in outputs[3]
-    assert "reason must not be blank" in outputs[4]
-    skill = await container.skills.read("digest")
-    assert (skill.meta.description, skill.body) == ("When digesting", "step 1\n\nstep 2")
-    # 每一版记下改的原因，按新到旧；用户在界面上写的那一版仍是默认的动作描述
-    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
-    assert [r.message for r in history] == ["r3", "r2", "r1", "write skill digest"]
-
-
-async def test_skill_and_memory_tools_record_the_reason_and_reject_a_blank_one(container, make_agent, models):
-    me = await make_agent("alpha", model="tools")
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            (
-                "write_skill",
-                {"name": "digest", "description": "d", "content": "b", "reason": "done it twice"},
-            ),
-            ("delete_skill", {"name": "digest", "reason": "merged into report"}),
-            ("memory_edit", {"name": "alpha", "new_text": "- fact", "reason": " "}),
-        ],
-    )
-
-    assert "reason must not be blank" in outputs[2]
-    assert (await container.memory.read("alpha")).content == ""
-    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
-    # 删除那一版（content 为空）也带着原因
-    assert [(r.message, r.after is None) for r in history] == [
-        ("merged into report", True),
-        ("done it twice", False),
-    ]
-
-
-async def test_memory_edit_and_edit_skill_apply_a_list_of_edits_as_one_version_or_not_at_all(
-    container, make_agent, models
-):
-    # #375：要改多处时模型照 edit_file 传 `edits`；一次调用一版，任何一处对不上就都不写
-    me = await make_agent("alpha", model="tools")
-    await container.memory.put("alpha", "- a\n\n- b", "", actor="user")
-    await container.skills.write("digest", "d", "step one\n\nstep two", actor=me.id, owner=me.id)
-    two_and_append = [
-        {"old_text": "- a", "new_text": "- A"},
-        {"old_text": "- A", "new_text": "- AA"},  # 在前一处改过的结果上找
-        {"new_text": "- c"},
-    ]
-    bad_second = [{"old_text": "- b", "new_text": "- B"}, {"old_text": "- missing", "new_text": "x"}]
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            ("memory_edit", {"name": "alpha", "reason": "r1", "edits": two_and_append}),
-            ("memory_edit", {"name": "alpha", "reason": "r2", "edits": bad_second}),
-            ("memory_edit", {"name": "alpha", "reason": "r3", "new_text": "- d", "edits": bad_second}),
-            ("memory_edit", {"name": "alpha", "reason": "r4"}),
-            (
-                "edit_skill",
-                {
-                    "name": "digest",
-                    "reason": "s1",
-                    "description": "d2",
-                    "edits": [
-                        {"old_text": "one", "new_text": "1"},
-                        {"old_text": "two", "new_text": "2"},
-                    ],
-                },
-            ),
-            (
-                "edit_skill",
-                {
-                    "name": "digest",
-                    "reason": "s2",
-                    "edits": [{"old_text": "step 1", "new_text": "x"}, {"old_text": "nope", "new_text": "x"}],
-                },
-            ),
-        ],
-    )
-
-    assert outputs[0].startswith("updated memory alpha")
-    assert "edit 2 of 2" in outputs[1] and "nothing was written" in outputs[1] and "- AA" in outputs[1]
-    assert "not both" in outputs[2]
-    assert "nothing to change" in outputs[3]
-    assert outputs[4] == "edited skill digest" and "edit 2 of 2" in outputs[5]
-    assert (await container.memory.read("alpha")).content == "- AA\n\n- b\n\n- c"
-    memory_history = await container.catalog.history(StoredKind.MEMORY, "alpha", 10)
-    # 建 agent、put 各一版，三处修改只多一版
-    assert (len(memory_history), memory_history[0].message) == (3, "r1")
-    assert memory_history[1].after == "- a\n\n- b"
-    skill = await container.skills.read("digest")
-    assert (skill.meta.description, skill.body.strip()) == ("d2", "step 1\n\nstep 2")
-    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
-    assert [r.message for r in history][:2] == ["s1", "write skill digest"]
-
-
-async def test_edit_skill_edits_and_creates_attachments_by_file_as_one_version_or_not_at_all(
-    container, make_agent, models
-):
-    # #494：改一个附件不用再把全部附件拷出来、整个目录传回去
-    from muliao.agents.skill_package import SkillFile
-
-    me = await make_agent("alpha", model="tools")
-    await container.skills.write(
-        "digest",
-        "d",
-        "run the script",
-        actor=me.id,
-        owner=me.id,
-        attachments={
-            "scripts/run.sh": SkillFile("#!/bin/sh\necho one\n", executable=True),
-            "notes.md": SkillFile("keep me\n"),
-        },
-    )
-    tool = "edit_skill"
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            # 单处：顶层 file
-            (
-                tool,
-                {
-                    "name": "digest",
-                    "reason": "r1",
-                    "file": "scripts/run.sh",
-                    "old_text": "one",
-                    "new_text": "1",
-                },
-            ),
-            # 多文件一次一版：正文、已有附件、新建两个附件（#! 开头的可执行）
-            (
-                tool,
-                {
-                    "name": "digest",
-                    "reason": "r2",
-                    "edits": [
-                        {"old_text": "the script", "new_text": "scripts/run.sh"},
-                        {"file": "scripts/run.sh", "new_text": "echo 2"},
-                        {"file": "scripts/new.py", "new_text": "#!/usr/bin/env python3\nprint(3)"},
-                        {"file": "refs/api.md", "new_text": "# API"},
-                    ],
-                },
-            ),
-            # 第二处失败：什么都不写
-            (
-                tool,
-                {
-                    "name": "digest",
-                    "reason": "r3",
-                    "edits": [
-                        {"file": "notes.md", "old_text": "keep me", "new_text": "changed"},
-                        {"file": "scripts/run.sh", "old_text": "missing", "new_text": "x"},
-                    ],
-                },
-            ),
-            (tool, {"name": "digest", "reason": "r4", "file": "nope.md", "old_text": "a", "new_text": "b"}),
-            (tool, {"name": "digest", "reason": "r5", "file": "../escape.md", "new_text": "x"}),
-            (tool, {"name": "digest", "reason": "r6", "file": "/abs.md", "new_text": "x"}),
-            (tool, {"name": "digest", "reason": "r7", "file": "tool.bin", "new_text": "x"}),
-            (
-                tool,
-                {"name": "digest", "reason": "r8", "file": "big.md", "new_text": "x" * (256 * 1024 + 1)},
-            ),
-        ],
-    )
-
-    assert outputs[:2] == ["edited skill digest"] * 2
-    assert "edit 2 of 2" in outputs[2] and "nothing was written" in outputs[2]
-    assert "nope.md of skill digest does not exist" in outputs[3] and "notes.md" in outputs[3]
-    assert "'..' segment" in outputs[4] and "absolute" in outputs[5]
-    assert "cannot be an attachment" in outputs[6] and "larger than" in outputs[7]
-    files = await container.skills.files("digest")
-    assert files["scripts/run.sh"] == SkillFile("#!/bin/sh\necho 1\necho 2\n", executable=True)
-    assert files["scripts/new.py"] == SkillFile("#!/usr/bin/env python3\nprint(3)\n", executable=True)
-    assert files["refs/api.md"] == SkillFile("# API\n")
-    assert files["notes.md"] == SkillFile("keep me\n")
-    assert (await container.skills.read("digest")).body == "run scripts/run.sh"
-    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
-    assert [r.message for r in history] == ["r2", "r1", "write skill digest"]
-    # 生成目录同步更新，可执行位按上面
-    generated = container.skills.dir("digest")
-    assert (generated / "scripts/new.py").stat().st_mode & 0o111
-    assert not (generated / "refs/api.md").stat().st_mode & 0o111
-
-
-async def test_edit_skill_keeps_modes_appends_code_as_is_and_rejects_colliding_paths(
-    container, make_agent, models
-):
-    from muliao.agents.skill_package import SkillFile
-
-    me = await make_agent("alpha", model="tools")
-    await container.skills.write(
-        "digest",
-        "d",
-        "body",
-        actor=me.id,
-        owner=me.id,
-        attachments={
-            "plain.py": SkillFile("x = 1\n"),
-            "run.sh": SkillFile("#!/bin/sh\necho hi\n", executable=True),
-            "scripts/a.py": SkillFile("def f():\n    pass\n"),
-        },
-    )
-    tool = "edit_skill"
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            (
-                tool,
-                {
-                    "name": "digest",
-                    "reason": "r1",
-                    "edits": [
-                        {
-                            "file": "plain.py",
-                            "old_text": "x = 1",
-                            "new_text": "#!/usr/bin/env python3\nx = 1",
-                        },
-                        {"file": "run.sh", "old_text": "#!/bin/sh\n", "new_text": ""},
-                        {"file": "scripts/a.py", "new_text": "    return 1\n"},
-                    ],
-                },
-            ),
-            (tool, {"name": "digest", "reason": "r2", "file": "skill.md", "new_text": "x"}),
-            (tool, {"name": "digest", "reason": "r3", "file": "Scripts/A.py", "new_text": "x"}),
-            (tool, {"name": "digest", "reason": "r4", "file": "plain.py/b.py", "new_text": "x"}),
-        ],
-    )
-
-    assert outputs[0] == "edited skill digest"
-    assert "same file" in outputs[1] and "SKILL.md is the instructions" in outputs[1]
-    assert "same file" in outputs[2] and "cannot also be a directory" in outputs[3]
-    files = await container.skills.files("digest")
-    # 已有文件保留原来的可执行位，不看改后是否以 #! 开头
-    assert files["plain.py"] == SkillFile("#!/usr/bin/env python3\nx = 1\n", executable=False)
-    assert files["run.sh"] == SkillFile("echo hi\n", executable=True)
-    # 附件追加原样拼接：缩进不丢、不插空行
-    assert files["scripts/a.py"].content == "def f():\n    pass\n    return 1\n"
-    assert set(files) == {"SKILL.md", "plain.py", "run.sh", "scripts/a.py"}
-
-
-async def test_a_skill_drafted_as_a_directory_is_written_whole_with_its_skill_md_as_instructions(
-    container, make_agent, models
-):
-    # #493：草稿在 workspace 里是一个目录（SKILL.md + 附件），不用把正文内联进 content，也不会先存个空壳
-    from muliao.agents.skill_package import SkillFile
-
-    me = await make_agent("alpha", model="tools")
-    draft = container.settings.workspaces_dir / me.id / "draft"
-    (draft / "scripts").mkdir(parents=True)
-    (draft / "SKILL.md").write_text("---\nname: digest\ndescription: When digesting\n---\n\nrun it\n")
-    (draft / "scripts" / "run.py").write_text("print(1)\n")
-    bare = draft.parent / "bare"
-    bare.mkdir()
-    (bare / "SKILL.md").write_text("just the body\n")
-    (bare / "notes.md").write_text("n\n")
-    tool = "write_skill"
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            (tool, {"name": "digest", "reason": "r1", "skill_dir": "draft"}),
-            (tool, {"name": "digest", "reason": "r2", "skill_dir": "draft", "content": "x"}),
-            (tool, {"name": "digest", "reason": "r3", "skill_dir": "draft", "description": "d"}),
-            (tool, {"name": "other", "reason": "r4", "skill_dir": "draft"}),
-            (tool, {"name": "lone", "reason": "r5", "skill_dir": "bare"}),
-            (tool, {"name": "lone", "reason": "r6", "description": "d"}),
-            (tool, {"name": "digest", "reason": "r7", "skill_dir": "bare", "description": "When digesting"}),
-            # #495：edit_skill 只做局部修改，没有 skill_dir
-            ("edit_skill", {"name": "digest", "reason": "r8", "skill_dir": "bare", "new_text": "more"}),
-        ],
-    )
-
-    assert outputs[0].startswith("saved skill digest")
-    assert "give the instructions once" in outputs[1] and "give the description once" in outputs[2]
-    assert "does not match 'other'" in outputs[3]
-    assert "no description" in outputs[4] and "no instructions" in outputs[5]
-    assert outputs[6].startswith("saved skill digest")
-    assert "removed attachments not in skill_dir: scripts/run.py" in outputs[6]
-    assert "skill_dir" in outputs[7] and "edited skill" not in outputs[7]
-    # 整体写入：目录里的 SKILL.md 换掉正文，其余文件整体换掉附件
-    skill = await container.skills.read("digest")
-    assert (skill.meta.description, skill.body.strip()) == ("When digesting", "just the body")
-    files = await container.skills.files("digest")
-    assert set(files) == {"SKILL.md", "notes.md"} and files["notes.md"] == SkillFile("n\n")
-    history = await container.catalog.history(StoredKind.SKILL, "digest", 10)
-    assert [r.message for r in history] == ["r7", "r1"]
 
 
 async def test_trigger_create_tells_the_model_the_configured_precheck_time_limit(container):
@@ -1381,7 +971,11 @@ async def test_the_skill_index_lists_own_skills_and_those_given_by_roles(contain
     await drain(container)
 
     index = seen[0][seen[0].index("## Skill index") :]
-    assert "- `good`: a good skill\n- `mine` (yours): my skill\n\n" in index and "hidden" not in index
+    r = container.settings.assets_dir
+    assert (
+        f"- `good`: a good skill ({r / 'platform' / 'skills' / 'good' / 'SKILL.md'})\n"
+        f"- `mine` (yours): my skill ({r / 'alpha' / 'skills' / 'mine' / 'SKILL.md'})\n\n"
+    ) in index and "hidden" not in index
 
 
 THINKS = ModelProfile(supports_thinking=True)
@@ -1394,27 +988,6 @@ def _thinking_seen(seen: list[object]) -> Callable[[list[ModelMessage], AgentInf
         return ModelResponse(parts=[TextPart("ok")])
 
     return fn
-
-
-async def test_agent_updates_its_thinking_level_and_bad_levels_go_back_to_the_model(
-    container, make_agent, models
-):
-    me = await make_agent("manager", model="tools", roles=["admin"])
-    outputs = await run_tools(
-        container,
-        models,
-        me.id,
-        [
-            ("update_agent", {"agent": "manager", "thinking": "low"}),
-            ("get_agent", {"agent": "manager"}),
-            ("update_agent", {"agent": "manager", "thinking": "max"}),
-        ],
-        THINKS,
-    )
-
-    assert json.loads(outputs[1])["thinking"] == "low"
-    assert "'xhigh'" in outputs[2]  # 不在档位里：交还模型重试
-    assert (await container.agents.get(me.id)).thinking == "low"
 
 
 async def test_agent_run_sends_its_thinking_level(container, make_agent, models):

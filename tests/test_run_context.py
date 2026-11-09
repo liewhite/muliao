@@ -15,7 +15,7 @@ from muliao.sessions.conventions import run_context_index
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Message
 from tests.scripted import scripted
-from tests.test_flow import drain, history_of, start, tasks_of
+from tests.test_flow import drain, history_of, note_args, start, tasks_of
 
 _TIME = "[Current local time: "
 
@@ -83,8 +83,8 @@ async def test_resuming_resends_the_saved_request_unchanged_and_marks_the_next_n
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "memory_edit",
-                        {"name": "alpha", "reason": "r", "new_text": "- one"},
+                        "history_append",
+                        note_args("- one"),
                         tool_call_id="m1",
                     )
                 ]
@@ -95,8 +95,8 @@ async def test_resuming_resends_the_saved_request_unchanged_and_marks_the_next_n
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "memory_edit",
-                        {"name": "alpha", "reason": "r", "new_text": "- two"},
+                        "history_append",
+                        note_args("- two"),
                         tool_call_id="m2",
                     )
                 ]

@@ -68,7 +68,7 @@ class AgentRulesRow(Base):
     deny: Mapped[list[str]] = mapped_column(JSON)
 
 
-class Role(Base):
+class RoleRow(Base):
     """角色可编辑的规则（agents.roles）：用户自建的角色，与内置角色 base、admin 可编辑的部分（它们固定的部分在
     agents.permissions，行可以不存在）。自建的被 agent 引用时不能删，内置的不能删。"""
 

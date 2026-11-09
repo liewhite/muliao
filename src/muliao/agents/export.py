@@ -39,7 +39,7 @@ from muliao.agents.assets import (
 from muliao.agents.mcp_config import McpConfig, mcp_file
 from muliao.agents.secrets_format import secret_file
 from muliao.agents.skill_package import SKILL_FILE
-from muliao.agents.tables import Agent, AgentRulesRow, Item, ItemFile, Role
+from muliao.agents.tables import Agent, AgentRulesRow, Item, ItemFile, RoleRow
 from muliao.platform.db import Database
 
 log = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ async def export_if_missing(db: Database, root: Path, legacy_skills_dir: Path) -
         agents = list(await s.scalars(select(Agent).order_by(Agent.name)))
         items = list(await s.scalars(select(Item).order_by(Item.kind, Item.name)))
         files = list(await s.scalars(select(ItemFile).order_by(ItemFile.item_id, ItemFile.path)))
-        roles = list(await s.scalars(select(Role).order_by(Role.name)))
+        roles = list(await s.scalars(select(RoleRow).order_by(RoleRow.name)))
         rules = {r.agent_id: r for r in await s.scalars(select(AgentRulesRow))}
         snapshot = _Rows(agents, items, files, roles, rules)
     await asyncio.to_thread(_export, snapshot, root, legacy_skills_dir)
@@ -72,7 +72,7 @@ class _Rows:
         agents: list[Agent],
         items: list[Item],
         files: list[ItemFile],
-        roles: list[Role],
+        roles: list[RoleRow],
         rules: dict[str, AgentRulesRow],
     ):
         self.agents = agents

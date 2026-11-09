@@ -11,6 +11,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.tools import Tool
 
 from muliao.agent_runtime.llm import check_thinking
+from muliao.agents.export import export_if_missing
 from muliao.api.app import create_app
 from muliao.config import Settings
 from muliao.container import Assembly, assemble
@@ -45,6 +46,7 @@ def settings(tmp_path: Path) -> Settings:
     return Settings.model_validate(
         {
             "data_dir": tmp_path / "data",
+            "assets_dir": tmp_path / "assets",
             "server": {"public_url": "http://test"},
             "auth": {"password": "password1", "secret_key": "k" * 32},
             "vault": {"key": Fernet.generate_key().decode()},
@@ -73,6 +75,8 @@ async def container(settings: Settings, models: ModelSlot) -> AsyncIterator[Asse
         check_writes=single_domain_writes,
     )
     migrate(settings.db_path)
+    # 同服务启动（Assembly._prepare）：资源目录第一次从数据库导出（迁移建好的全局记忆）
+    await export_if_missing(c.db, settings.assets_dir, settings.legacy_skills_dir)
     # 后台任务的监督者需要它的任务组（服务里由 Assembly.running 打开）；worker 等循环由测试自己驱动
     async with c.jobs.running():
         yield c
@@ -142,11 +146,3 @@ async def share(container: Assembly, *rules: str) -> None:
 async def owned(container: Assembly, kind: str, owner: str | None) -> list[str]:
     """owner 名下（None 为平台的）这一种条目的名字，按名称（条目池 ItemCatalog.catalog）。"""
     return [e.name for e in await container.catalog.catalog() if e.kind == kind and e.owner == owner]
-
-
-async def history(container: Assembly, subject, name: str, limit: int):  # noqa: ANN001, ANN201
-    """一个对象的版本，新的在前（agents.revisions.history_in）。"""
-    from muliao.agents.revisions import history_in
-
-    async with container.db.transaction() as s:
-        return await history_in(s, subject, name, limit)

@@ -348,7 +348,7 @@ class AgentService:
             except BaseException:
                 await asyncio.to_thread(_undo_new_agent, directory, snapshot.access_file, name)
                 raise
-        log.info("agent created", extra={"agent": agent_id, "name": name, "actor": actor})
+        log.info("agent created", extra={"agent": agent_id, "agent_name": name, "actor": actor})
         return info
 
     async def check_update(self, agent_id: str, fields: frozenset[str], *, actor: str) -> None:

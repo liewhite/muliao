@@ -124,10 +124,14 @@ class SkillStore:
             await asyncio.to_thread(put)
         return _meta((await self._source.snapshot()).asset(_KIND, name))
 
+    async def files(self, name: str) -> dict[str, SkillFile]:
+        """SKILL.md 与全部文本附件（二进制文件不在内）。"""
+        asset = (await self._source.snapshot()).asset(_KIND, name)
+        return await asyncio.to_thread(_read_files, asset.path)
+
     async def export(self, name: str) -> bytes:
         """打成标准 .skill 文件（skill_package）：SKILL.md 与文本附件。"""
-        asset = (await self._source.snapshot()).asset(_KIND, name)
-        return skill_package.pack(name, await asyncio.to_thread(_read_files, asset.path))
+        return skill_package.pack(name, await self.files(name))
 
     async def import_package(
         self, data: bytes, *, actor: str, owner: str | None, replace: bool

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from muliao.agents import access_file
@@ -89,9 +89,12 @@ class Distribution:
         source: AssetSource,
         # 当前配置下注册的工具（permissions.available_tools）：能用的工具只在它里面取
         tools: Sequence[str],
+        # agent 还可用（正在删除的按不存在处理），否则 NotFound（agents.service.AgentService.get_active）
+        check_agent: Callable[[str], Awaitable[object]],
     ):
         self._source = source
         self.tools = tuple(tools)
+        self._check_agent = check_agent
 
     # ---- agent 的规则 ----
 
@@ -114,6 +117,7 @@ class Distribution:
     async def assets(self, agent_id: str) -> list[UsedAsset]:
         """agent 能用的 skill、MCP server、secret、记忆（按种类、名称），每项带来源与能不能改：界面的 agent 详情。与运行时同一
         套判断，来源由 access.Provenance 解释，两者对不上即报错。"""
+        await self._check_agent(agent_id)
         snapshot = await self._source.snapshot()
         rules, known = snapshot.rules_of(agent_id), snapshot.roles
         grants = grants_of(agent_id, rules, known)
@@ -141,6 +145,8 @@ class Distribution:
     async def preview_agent(self, agent_id: str | None, rules: AgentRules) -> Reach:
         """agent（None 为还没建的）按还没保存的规则能用的内置工具与资源（界面预览），与写入时同样校验：已存的规则算作
         「之前的」，不要求仍匹配现有资源。"""
+        if agent_id is not None:
+            await self._check_agent(agent_id)
         snapshot = await self._source.snapshot()
         before = AgentRules() if agent_id is None else snapshot.rules_of(agent_id)
         check_agent_rules(snapshot, rules, before)

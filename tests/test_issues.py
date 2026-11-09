@@ -998,6 +998,7 @@ async def test_issue_sessions_are_told_once_how_to_work_on_the_issue(container):
             agent_name="a",
             agent_description="",
             workspace=Path("/w"),
+            asset_dir=Path("/assets/a"),
             origin_note=notes[origin],
             memories=(),
             skills=(),

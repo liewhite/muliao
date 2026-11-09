@@ -215,7 +215,7 @@ def reach_of(snapshot: Snapshot, available: Collection[str], rules: Rules, keep:
     get_agent 共用。"""
     items = [
         pattern_of(as_kind(k), a.name)
-        for k in StoredKind
+        for k in sorted(StoredKind, key=lambda k: k.value)
         for a in snapshot.of_kind(k)
         if keep(as_kind(k), a.name, a.owner)
     ]

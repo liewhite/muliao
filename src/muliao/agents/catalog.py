@@ -81,7 +81,7 @@ class ItemCatalog:
                 path=a.path,
                 mcp=server_of(a) if kind == StoredKind.MCP else None,
             )
-            for kind in StoredKind
+            for kind in sorted(StoredKind, key=lambda k: k.value)
             for a in snapshot.of_kind(kind)
         ]
 

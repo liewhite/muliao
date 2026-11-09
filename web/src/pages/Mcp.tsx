@@ -3,7 +3,6 @@ import { Button, Card, Chip, toast } from '@heroui/react'
 import { Plug, Trash2 } from 'lucide-react'
 import { api, type AgentId, type ItemOf, type McpInput } from '../api'
 import { ItemAccess, OwnerSelect } from './itemParts'
-import { ResourceHistory } from '../ResourceHistory'
 import { CollapsibleForm, ToggleSwitch, ActionButton,
   EmptyHint,
   ErrorAlert,
@@ -81,7 +80,7 @@ function McpForm({ onCreated }: { onCreated: () => void }) {
 
   return (
     <CollapsibleForm title="添加 MCP server">
-            <p className="text-sm text-muted">也可以直接在对话里把 MCP 信息告诉 agent，让它自己调用 mcp_add 创建（MCP 配置工具不在 base 里，先在权限页给它加 tool:mcp_*）。</p>
+            <p className="text-sm text-muted">也可以直接在对话里把 MCP 信息告诉 agent，让它在自己的资源目录里写 mcp/&lt;名字&gt;.json。</p>
             <TextInput label="名称" hint="工具名会以「名称_」为前缀" value={name} onChange={setName} mono isRequired />
             <OwnerSelect value={owner} onChange={setOwner} />
             <div>
@@ -175,7 +174,6 @@ function McpItem({ server, onChange }: { server: ItemOf<'mcp'>; onChange: () => 
         <McpTarget server={server} />
         {tools && <ToolChips tools={tools} />}
         <ErrorAlert error={action.error} />
-        <ResourceHistory target={{ kind: 'mcp', name: server.name }} current={JSON.stringify(server)} onRestored={onChange} />
       </Card.Content>
       <Card.Footer className="flex gap-2">
         <ActionButton

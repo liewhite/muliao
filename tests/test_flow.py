@@ -113,6 +113,16 @@ def tool_returns(messages: list[ModelMessage]) -> list[ToolReturnPart]:
     return [p for p in last.parts if isinstance(p, ToolReturnPart)] if isinstance(last, ModelRequest) else []
 
 
+def note_args(text: str) -> dict:
+    """一个有副作用、可数的工具调用（history_append 记一条工作历史，标题是 text）的参数：测试用它看工具执行了几次。"""
+    return {"entries": [{"day": "2026-11-01", "title": text, "summary": text}]}
+
+
+async def noted(container) -> list[str]:
+    """记下的工作历史的标题，按写入顺序（note_args）。"""
+    return [r.title for r in reversed(await container.history.search(agent_ids=None, limit=200))]
+
+
 def call_then_answer(tool: str, args: dict, answer: str) -> FunctionModel:
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         if tool_returns(messages):
@@ -171,14 +181,14 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     pushed: list[str] = []
     monkeypatch.setattr(WebPushDelivery, "_push", lambda _self, sub, _data: pushed.append(sub.endpoint))
     models.models["m"] = call_then_answer(
-        "memory_edit", {"name": "alpha", "reason": "r", "new_text": "- user likes tea"}, "Noted!"
+        "history_append", note_args("- user likes tea"), "Noted!"
     )
 
     session = await start(container, alpha, "I like tea")
     await drain(container)
 
     history = await history_of(container, session.id)
-    assert (await container.memory.read("alpha")).content == "- user likes tea"
+    assert await noted(container) == ["- user likes tea"]
     assert last_user_prompt(history) == "I like tea"
     assert isinstance(history[-1], ModelResponse) and history[-1].parts[0].content == "Noted!"
     deliver = await tasks_of(container, DELIVER_TASK)
@@ -347,20 +357,19 @@ async def test_domain_error_in_tool_is_returned_to_model_for_correction(containe
         if retries:
             retry_texts.append(str(retries[0].content))
             return ModelResponse(parts=[TextPart("sorry")])
-        return ModelResponse(parts=[ToolCallPart("read_skill", {"name": "missing"})])
+        return ModelResponse(parts=[ToolCallPart("get_agent", {"agent": "missing"})])
 
     models.models["m"] = scripted(fn)
-    await start(container, alpha, "use skill", origin=Origin.TRIGGER)
+    await start(container, alpha, "look up", origin=Origin.TRIGGER)
     await drain(container)
 
-    assert "not found" in retry_texts[0]
+    assert "no agent named 'missing'" in retry_texts[0]
     assert (await tasks_of(container, RUN_TASK))[0].status == TaskStatus.DONE
 
 
 async def test_tool_that_keeps_failing_does_not_abort_the_run(container, make_agent, models):
     """重试预算用完的领域错误以失败结果交给模型，不终止整轮运行（10-21 记忆满时连续 append 把整轮打成失败）。"""
     alpha = (await make_agent("alpha", model="m")).id
-    await container.memory.put("alpha", "x" * container.memory.max_chars, "", actor=alpha)
     seen: list[str] = []
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -370,23 +379,16 @@ async def test_tool_that_keeps_failing_does_not_abort_the_run(container, make_ag
         parts = last.parts if isinstance(last, ModelRequest) else []
         seen.extend(str(p.content) for p in parts if isinstance(p, RetryPromptPart | ToolReturnPart))
         if len(seen) >= 6:
-            return ModelResponse(parts=[TextPart("gave up on memory")])
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    "memory_edit", {"name": "alpha", "reason": "r", "new_text": f"- fact {len(seen)}"}
-                )
-            ]
-        )
+            return ModelResponse(parts=[TextPart("gave up")])
+        return ModelResponse(parts=[ToolCallPart("get_agent", {"agent": f"missing-{len(seen)}"})])
 
     models.models["m"] = scripted(fn)
     await start(container, alpha, "remember", origin=Origin.TRIGGER)
     await drain(container)
 
     assert (await tasks_of(container, RUN_TASK))[0].status == TaskStatus.DONE
-    assert all("free at least" in text for text in seen)
+    assert all("no agent named" in text for text in seen)
     assert "stop retrying" in seen[3] and "stop retrying" not in seen[2]
-    assert (await container.memory.read("alpha")).content == "x" * container.memory.max_chars
 
 
 async def test_long_run_is_not_capped_by_pydantic_ai_default_request_limit(container, make_agent, models):

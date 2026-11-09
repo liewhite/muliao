@@ -194,6 +194,8 @@ async def test_startup_rejects_agents_with_unresolvable_models(settings, models)
             from muliao.agents.tables import Agent
 
             (await s.get(Agent, agent.id)).model = "gone:m"  # 模拟配置里删掉了 provider
+        toml = settings.assets_dir / "ok" / "agent.toml"
+        toml.write_text(toml.read_text().replace('"fake:m"', '"gone:m"'))
     finally:
         await c.db.engine.dispose()
     c2 = assemble(settings, resolve_model=models)

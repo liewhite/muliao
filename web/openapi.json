@@ -1429,7 +1429,7 @@
     "/api/items": {
       "get": {
         "summary": "List Items",
-        "description": "全部资产：内置工具（按登记顺序，仅当前配置下注册的）在前，存在库里的按种类、名称；每种带自己的\n详情（工具的读写与管理类、MCP 的配置与启停）。",
+        "description": "全部资源：内置工具（按登记顺序，仅当前配置下注册的）在前，存成文件的按种类、名称；每种带自己的\n详情（工具的读写与管理类、MCP 的配置与启停）。",
         "operationId": "list_items_api_items_get",
         "responses": {
           "200": {
@@ -1478,7 +1478,7 @@
     "/api/items/{kind}/{name}/owner": {
       "put": {
         "summary": "Transfer Item",
-        "description": "转给另一个 owner，记一版；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。",
+        "description": "挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。",
         "operationId": "transfer_item_api_items__kind___name__owner_put",
         "parameters": [
           {
@@ -1505,109 +1505,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/OwnerIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/items/{kind}/{name}/history": {
-      "get": {
-        "summary": "Item History",
-        "description": "新的在前，第一条即当前的一版（已删除的是那次删除）；只列最近 50 版。",
-        "operationId": "item_history_api_items__kind___name__history_get",
-        "parameters": [
-          {
-            "name": "kind",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/StoredKind"
-            }
-          },
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RevisionOut"
-                  },
-                  "title": "Response Item History Api Items  Kind   Name  History Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/items/{kind}/{name}/restore": {
-      "post": {
-        "summary": "Restore Item",
-        "description": "把某一版之后的内容作为新的一版写入（secret 不能恢复：422）。",
-        "operationId": "restore_item_api_items__kind___name__restore_post",
-        "parameters": [
-          {
-            "name": "kind",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/StoredKind"
-            }
-          },
-          {
-            "name": "name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Name"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RestoreIn"
               }
             }
           }
@@ -1669,7 +1566,7 @@
       },
       "put": {
         "summary": "Put Memory",
-        "description": "新建的归 owner（名字要是 slug）；已有的整体改写正文与描述，owner 不变。谁能用由角色收录它（`use:memory:<名>`）。",
+        "description": "新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由\n角色收录它（`use:memory:<名>`）。",
         "operationId": "put_memory_api_items_memory__name__put",
         "parameters": [
           {
@@ -5825,6 +5722,10 @@
             "format": "date-time",
             "title": "Updated At"
           },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
           "kind": {
             "type": "string",
             "const": "mcp",
@@ -5846,6 +5747,7 @@
           "roles",
           "shared",
           "updated_at",
+          "path",
           "kind"
         ],
         "title": "McpItemOut"
@@ -5961,11 +5863,6 @@
             ],
             "title": "Owner"
           },
-          "description": {
-            "type": "string",
-            "title": "Description",
-            "default": ""
-          },
           "content": {
             "type": "string",
             "title": "Content"
@@ -6014,6 +5911,10 @@
             "format": "date-time",
             "title": "Updated At"
           },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
           "kind": {
             "type": "string",
             "const": "memory",
@@ -6028,6 +5929,7 @@
           "roles",
           "shared",
           "updated_at",
+          "path",
           "kind"
         ],
         "title": "MemoryItemOut",
@@ -6050,10 +5952,6 @@
             ],
             "title": "Owner"
           },
-          "description": {
-            "type": "string",
-            "title": "Description"
-          },
           "content": {
             "type": "string",
             "title": "Content"
@@ -6062,6 +5960,10 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
           },
           "max_chars": {
             "type": "integer",
@@ -6072,9 +5974,9 @@
         "required": [
           "name",
           "owner",
-          "description",
           "content",
           "updated_at",
+          "path",
           "max_chars"
         ],
         "title": "MemoryOut"
@@ -6631,77 +6533,6 @@
         ],
         "title": "ReplyIn"
       },
-      "RestoreIn": {
-        "properties": {
-          "rev": {
-            "type": "integer",
-            "title": "Rev"
-          }
-        },
-        "type": "object",
-        "required": [
-          "rev"
-        ],
-        "title": "RestoreIn"
-      },
-      "RevisionOut": {
-        "properties": {
-          "rev": {
-            "type": "integer",
-            "title": "Rev"
-          },
-          "content": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Content"
-          },
-          "before": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Before"
-          },
-          "actor": {
-            "type": "string",
-            "title": "Actor"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "restorable": {
-            "type": "boolean",
-            "title": "Restorable"
-          }
-        },
-        "type": "object",
-        "required": [
-          "rev",
-          "content",
-          "before",
-          "actor",
-          "message",
-          "created_at",
-          "restorable"
-        ],
-        "title": "RevisionOut"
-      },
       "RoleIn": {
         "properties": {
           "description": {
@@ -7194,6 +7025,10 @@
             "format": "date-time",
             "title": "Updated At"
           },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
           "kind": {
             "type": "string",
             "const": "secret",
@@ -7208,10 +7043,11 @@
           "roles",
           "shared",
           "updated_at",
+          "path",
           "kind"
         ],
         "title": "SecretItemOut",
-        "description": "值不返回；updated_at 是最后一次修改（设值、改说明、转移）的时间。"
+        "description": "值不返回。"
       },
       "SecretOut": {
         "properties": {
@@ -7734,6 +7570,10 @@
             "format": "date-time",
             "title": "Updated At"
           },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
           "kind": {
             "type": "string",
             "const": "skill",
@@ -7748,6 +7588,7 @@
           "roles",
           "shared",
           "updated_at",
+          "path",
           "kind"
         ],
         "title": "SkillItemOut"

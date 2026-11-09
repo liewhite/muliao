@@ -527,7 +527,7 @@ export interface paths {
         };
         /**
          * List Items
-         * @description 全部资产：内置工具（按登记顺序，仅当前配置下注册的）在前，存在库里的按种类、名称；每种带自己的
+         * @description 全部资源：内置工具（按登记顺序，仅当前配置下注册的）在前，存成文件的按种类、名称；每种带自己的
          *     详情（工具的读写与管理类、MCP 的配置与启停）。
          */
         get: operations["list_items_api_items_get"];
@@ -549,50 +549,10 @@ export interface paths {
         get?: never;
         /**
          * Transfer Item
-         * @description 转给另一个 owner，记一版；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。
+         * @description 挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。
          */
         put: operations["transfer_item_api_items__kind___name__owner_put"];
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/items/{kind}/{name}/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Item History
-         * @description 新的在前，第一条即当前的一版（已删除的是那次删除）；只列最近 50 版。
-         */
-        get: operations["item_history_api_items__kind___name__history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/items/{kind}/{name}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Restore Item
-         * @description 把某一版之后的内容作为新的一版写入（secret 不能恢复：422）。
-         */
-        post: operations["restore_item_api_items__kind___name__restore_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -610,7 +570,8 @@ export interface paths {
         get: operations["get_memory_api_items_memory__name__get"];
         /**
          * Put Memory
-         * @description 新建的归 owner（名字要是 slug）；已有的整体改写正文与描述，owner 不变。谁能用由角色收录它（`use:memory:<名>`）。
+         * @description 新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由
+         *     角色收录它（`use:memory:<名>`）。
          */
         put: operations["put_memory_api_items_memory__name__put"];
         post?: never;
@@ -2083,6 +2044,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Path */
+            path: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -2127,11 +2090,6 @@ export interface components {
         MemoryIn: {
             /** Owner */
             owner?: string | null;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
             /** Content */
             content: string;
         };
@@ -2155,6 +2113,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Path */
+            path: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -2167,8 +2127,6 @@ export interface components {
             name: string;
             /** Owner */
             owner: string | null;
-            /** Description */
-            description: string;
             /** Content */
             content: string;
             /**
@@ -2176,6 +2134,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Path */
+            path: string;
             /** Max Chars */
             max_chars: number;
         };
@@ -2403,31 +2363,6 @@ export interface components {
                 [key: string]: components["schemas"]["QuestionAnswer"][];
             };
         };
-        /** RestoreIn */
-        RestoreIn: {
-            /** Rev */
-            rev: number;
-        };
-        /** RevisionOut */
-        RevisionOut: {
-            /** Rev */
-            rev: number;
-            /** Content */
-            content: string | null;
-            /** Before */
-            before: string | null;
-            /** Actor */
-            actor: string;
-            /** Message */
-            message: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Restorable */
-            restorable: boolean;
-        };
         /** RoleIn */
         RoleIn: {
             /** Description */
@@ -2601,7 +2536,7 @@ export interface components {
         };
         /**
          * SecretItemOut
-         * @description 值不返回；updated_at 是最后一次修改（设值、改说明、转移）的时间。
+         * @description 值不返回。
          */
         SecretItemOut: {
             /** Name */
@@ -2619,6 +2554,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Path */
+            path: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -2793,6 +2730,8 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Path */
+            path: string;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -4352,72 +4291,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["OwnerIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    item_history_api_items__kind___name__history_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                kind: components["schemas"]["StoredKind"];
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RevisionOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    restore_item_api_items__kind___name__restore_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                kind: components["schemas"]["StoredKind"];
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RestoreIn"];
             };
         };
         responses: {

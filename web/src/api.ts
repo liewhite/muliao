@@ -94,11 +94,8 @@ export type CatalogItem = WithAgentId<
 >
 export type ItemKind = CatalogItem['kind']
 export type ItemOf<K extends ItemKind> = Extract<CatalogItem, { kind: K }>
-/** 存在库里的资产种类（能改、能转移、有版本）：内置工具之外的四种 */
+/** 存成文件的资源种类（能改、能转移）：内置工具之外的四种 */
 export type StoredKind = Schemas['StoredKind']
-/** 版本历史的对象：资产的种类与名字 */
-export type RevisionTarget = { kind: StoredKind; name: string }
-export type Revision = Schemas['RevisionOut']
 /** 角色（内置或自建）、它能用的工具与条目、带它的 agent；后端 agents/permissions.py、agents/roles.py */
 export type Role = Omit<Schemas['RoleOut'], 'agents'> & { agents: AgentId[] }
 export type RoleInput = Schemas['RoleIn']
@@ -266,17 +263,11 @@ export const api = {
     call('get', '/api/agents/{agent_id}/assets', { path: { agent_id: agentId } }),
   /** 角色规则（还没保存的也行）能用的工具与条目；name 为 null 是还没建的 */
   previewRole: (body: Schemas['RolePreviewIn']) => call('post', '/api/role-preview', { body }),
-  /** 全部 AI 资产：内置工具在前，存在库里的按种类、名称 */
+  /** 全部 AI 资源：内置工具在前，资源文件按种类、名称 */
   items: () => branded<CatalogItem[]>(call('get', '/api/items')),
-  /** 把 skill / MCP server / secret / 记忆转给另一个 owner（null 归平台），记一版；内容与收录它的角色不变 */
+  /** 把 skill / MCP server / secret / 记忆挪到另一个 owner（null 归平台）的目录下；内容与收录它的角色不变 */
   transferItem: (kind: StoredKind, name: string, owner: AgentId | null) =>
     call('put', '/api/items/{kind}/{name}/owner', { path: { kind, name }, body: { owner } }),
-  /** 版本历史：新的在前，第一条即当前生效 */
-  history: (target: RevisionTarget): Promise<Revision[]> =>
-    call('get', '/api/items/{kind}/{name}/history', { path: { kind: target.kind, name: target.name } }),
-  /** 把某一版恢复为新的一版（secret 的版本不含值，不能恢复） */
-  restore: (target: RevisionTarget, rev: number) =>
-    call('post', '/api/items/{kind}/{name}/restore', { path: { kind: target.kind, name: target.name }, body: { rev } }),
   /** agent 的工作历史：不给 query 按日期倒序；给了按关键词检索 */
   agentHistory: (agent_id: AgentId, query?: string) =>
     branded<HistoryEntry[]>(

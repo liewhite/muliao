@@ -323,7 +323,7 @@ def assemble(
         check_model,
         AgentDefaults(settings.llm.default_model),
     )
-    distribution = Distribution(assets, tools)
+    distribution = Distribution(assets, tools, agents.get_active)
     # agent 的命令与文件工具只能写它的可写路径（#416）：当前系统没有写沙箱时在这里拒绝启动
     home = Path.home()
     confiner = Confiner(

@@ -7,10 +7,10 @@ import zipfile
 import pytest
 
 from muliao.agents import skill_package
-from muliao.agents.api import SkillMeta, Subject
-from muliao.agents.skill_package import MAX_FILE_BYTES, SkillFile, is_attachment
+from muliao.agents.api import SkillMeta
+from muliao.agents.skill_package import MAX_FILE_BYTES, is_attachment
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound, TooLarge
-from tests.conftest import history, owned
+from tests.conftest import owned
 
 SKILL_MD = "---\nname: digest\ndescription: When digesting\nlicense: MIT\n---\n\nRun `scripts/fetch.py`.\n"
 
@@ -61,16 +61,14 @@ async def test_an_imported_skill_exports_the_same_files_and_keeps_extra_frontmat
     with zipfile.ZipFile(io.BytesIO(exported)) as archive:
         modes = {i.filename: (i.external_attr >> 16) & 0o777 for i in archive.infolist()}
     assert (modes["digest/run.sh"], modes["digest/SKILL.md"]) == (0o755, 0o644)
-    [revision] = await history(container, Subject.SKILL, "digest", 10)
-    assert (revision.actor, revision.message) == ("user", "import skill digest")
 
 
 async def test_importing_over_an_existing_skill_needs_replace_and_then_swaps_its_files(container, make_agent):
     skills = container.skills
     beta = (await make_agent("beta")).id
-    await skills.write(
-        "digest", "old", "old body", actor=beta, owner=beta, attachments={"old.py": SkillFile("old = 1\n")}
-    )
+    meta = await skills.write("digest", "old", "old body", actor=beta, owner=beta)
+    directory = meta.path.parent
+    (directory / "old.py").write_text("old = 1\n")
     package = _zip({"digest/SKILL.md": SKILL_MD, "digest/scripts/fetch.py": "new = 1\n"})
 
     with pytest.raises(Conflict):
@@ -80,11 +78,9 @@ async def test_importing_over_an_existing_skill_needs_replace_and_then_swaps_its
     await skills.import_package(package, actor="user", owner=beta, replace=True)
 
     assert set(await skills.files("digest")) == {"SKILL.md", "scripts/fetch.py"}
-    assert not (skills.skills_dir / "digest" / "old.py").exists()
+    assert not (directory / "old.py").exists()
     # 用户覆盖时 owner 不变
-    assert (await skills.read("digest")).meta == SkillMeta(
-        "digest", "When digesting", beta, skills.skills_dir / "digest" / "SKILL.md"
-    )
+    assert (await skills.read("digest")).meta == SkillMeta("digest", "When digesting", beta, directory / "SKILL.md")
     # 不是 owner 也不是 admin 的 agent 覆盖不了
     alpha = (await make_agent("alpha")).id
     with pytest.raises(Forbidden):
@@ -121,11 +117,9 @@ async def test_files_that_would_not_be_kept_are_skipped_and_listed(container, ma
 
 
 async def test_importing_for_an_unavailable_owner_is_refused(container, make_agent):
-    alpha = (await make_agent("alpha")).id
-    await container.agent_lifecycle.delete(alpha, actor="user")
     with pytest.raises(NotFound):
         await container.skills.import_package(
-            _zip({"digest/SKILL.md": SKILL_MD}), actor="user", owner=alpha, replace=False
+            _zip({"digest/SKILL.md": SKILL_MD}), actor="user", owner="0123456789ab", replace=False
         )
 
 
@@ -161,7 +155,7 @@ async def test_importing_for_an_unavailable_owner_is_refused(container, make_age
         ({"digest/notes.md": "x"}, (), "no usable digest/SKILL.md"),
         ({"Digest!/SKILL.md": SKILL_MD}, (), "invalid skill name"),
         ({"other/SKILL.md": SKILL_MD}, (), "does not match"),
-        ({"digest/SKILL.md": "no frontmatter\n"}, (), "'name' and 'description'"),
+        ({"digest/SKILL.md": "no frontmatter\n"}, (), "a string 'description'"),
         ({"digest/SKILL.md": "---\nname: digest\ndescription: '  '\n---\nx\n"}, (), "must not be empty"),
         ({"digest/SKILL.md": "---\nname: [\n---\n"}, (), "digest/SKILL.md"),
     ],

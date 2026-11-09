@@ -30,7 +30,7 @@ from muliao.sessions.history import CONTINUATION, add_compaction_in, append_in, 
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK, session_lane
 from muliao.sessions.tables import Compaction, Message, Session
 from tests.scripted import scripted
-from tests.test_flow import drain, history_of, last_user_prompt, reply, start
+from tests.test_flow import drain, history_of, last_user_prompt, note_args, noted, reply, start
 
 
 class Recorder:
@@ -84,10 +84,10 @@ def _row(i: int, message: ModelMessage) -> Message:
 def test_steps_split_where_no_call_is_left_dangling():
     call = ModelResponse(
         parts=[
-            ToolCallPart("memory_edit", {"name": "alpha", "reason": "r", "new_text": "x"}, tool_call_id="c")
+            ToolCallPart("history_append", note_args("x"), tool_call_id="c")
         ]
     )
-    result = ModelRequest(parts=[ToolReturnPart("memory_edit", "ok", tool_call_id="c")])
+    result = ModelRequest(parts=[ToolReturnPart("history_append", "ok", tool_call_id="c")])
     rows = [
         _row(1, ModelRequest(parts=[UserPromptPart("go")])),
         _row(2, call),
@@ -292,8 +292,8 @@ async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "memory_edit",
-                        {"name": "alpha", "reason": "r", "new_text": "- once"},
+                        "history_append",
+                        note_args("- once"),
                         tool_call_id="c",
                     )
                 ]
@@ -309,7 +309,7 @@ async def test_a_long_run_is_compacted_between_steps_and_resumes(container, make
     assert isinstance(resumed[0], ModelRequest) and resumed[0].parts[0].content == CONTINUATION
     assert "SUMMARY" in (instructions or "")
     # 工具只执行一次，运行只有一次
-    assert (await container.memory.read("alpha")).content == "- once"
+    assert await noted(container) == ["- once"]
     runs = [t for t in await _tasks(container, RUN_TASK)]
     assert [r.status for r in runs] == [TaskStatus.DONE]
     history = await history_of(container, session.id)
@@ -408,7 +408,7 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
         return ModelResponse(
             parts=[
                 ToolCallPart(
-                    "memory_edit", {"name": "alpha", "reason": "r", "new_text": "- x"}, tool_call_id="c"
+                    "history_append", note_args("- x"), tool_call_id="c"
                 )
             ]
         )
@@ -475,8 +475,8 @@ async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "memory_edit",
-                        {"name": "alpha", "reason": "r", "new_text": "- a"},
+                        "history_append",
+                        note_args("- a"),
                         tool_call_id="c-small",
                     )
                 ]
@@ -485,8 +485,8 @@ async def test_after_a_manual_compaction_a_long_run_still_compacts_mid_way(
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "memory_edit",
-                        {"name": "alpha", "reason": "r", "new_text": "- b"},
+                        "history_append",
+                        note_args("- b"),
                         tool_call_id="c-big",
                     )
                 ]
@@ -526,8 +526,8 @@ async def test_a_run_compacted_past_its_own_start_gets_its_run_context_again(
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "memory_edit",
-                        {"name": "alpha", "reason": "r", "new_text": entry},
+                        "history_append",
+                        note_args(entry),
                         tool_call_id=f"c{len(seen)}",
                     )
                 ]

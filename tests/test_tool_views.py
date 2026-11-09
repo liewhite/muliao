@@ -82,21 +82,6 @@ async def test_edit_file_shows_each_change_as_a_diff(renders):
     ]
 
 
-async def test_edit_skill_titles_the_diff_with_the_attachment_it_changes(renders):
-    view = renders["edit_skill"].call_view(
-        {
-            "name": "s",
-            "reason": "r",
-            "file": "scripts/a.py",
-            "edits": [{"old_text": "a", "new_text": "b"}, {"file": "SKILL.md", "new_text": "c"}],
-        }
-    )
-    assert [b for b in view if isinstance(b, DiffBlock)] == [
-        DiffBlock(title="scripts/a.py", text="@@ -1 +1 @@\n-a\n+b"),
-        DiffBlock(title=None, text="+c"),
-    ]
-
-
 async def test_read_file_lists_the_parts_and_shows_the_content_as_code(renders):
     read = renders["read_file"]
     assert read.call_view({"reads": [{"path": "a"}, {"path": "b", "offset": 10, "limit": 5}]}) == [
@@ -150,10 +135,6 @@ _MINIMAL_ARGS = {
     "issue_stop": {"issue_id": 1, "status": "cancelled", "message": "m"},
     "issue_comment": {"issue_id": 1, "body": "b"},
     "notify_user": {"title": "t", "body": "b"},
-    "read_skill": {"name": "s"},
-    "write_skill": {"name": "s", "description": "d", "content": "c", "reason": "r"},
-    "edit_skill": {"name": "s", "reason": "r", "old_text": "a", "new_text": "b"},
-    "memory_edit": {"name": "m", "new_text": "n", "reason": "r"},
 }
 
 

@@ -1,19 +1,15 @@
 """删除经事件完成（docs/architecture.md 第 10 节与第 7 节「thread 与结果路由」）：没有跨领域外键，各领域按 SessionDeleted / AgentDeleting 清理
 自己的数据；先停止再删除时迟到的结局不产生失败投递。"""
 
-import sys
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
 import muliao.agents.service
-from muliao.agents.api import McpTransport, mcp_config
-from muliao.agents.skills import FileChange
-from muliao.agents.tables import Agent, Item
+from muliao.agents.tables import Agent
 from muliao.errors import Conflict, NotFound
 from muliao.platform.tables import EVENT_TASK, Task, TaskStatus
-from muliao.platform.text_edit import TextChange
 from muliao.sessions.api import NewChat, UserMessage
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.workspace.tables import Job, JobStatus
@@ -158,17 +154,9 @@ async def test_deleting_an_agent_twice_is_a_conflict(container, make_agent):
     await container.agent_lifecycle.delete(agent.id, actor="user")
     with pytest.raises(Conflict, match="already being deleted"):
         await container.agent_lifecycle.delete(agent.id, actor="user")
-    # 正在删除的 agent 不能再改，也不能再为它写资源或 secret
+    # 正在删除的 agent 不能再改（它的资源目录随删除流程收尾时删掉）
     with pytest.raises(NotFound):
         await container.agents.get_active(agent.id)
-    with pytest.raises(NotFound):
-        await container.vault.set("K", "v", "", actor="user", owner=agent.id)
-    # 添加 MCP server 在连接验证之前就拒绝（这个配置一连就失败，报 InvalidInput 说明白跑了一次连接）
-    failing = mcp_config(
-        transport=McpTransport.STDIO, command=sys.executable, args=["-c", "raise SystemExit(1)"]
-    )
-    with pytest.raises(NotFound):
-        await container.mcp.add("probe", failing, actor="user", owner=agent.id, probe=True)
     await drain(container)
 
 
@@ -399,39 +387,6 @@ async def test_agent_names_cover_agents_being_deleted_and_label_deleted_ones(con
     assert (await container.agents.names())[agent.id] == f"(deleted agent {agent.id})"
 
 
-async def test_a_deleting_agents_private_resources_can_no_longer_be_written(container, make_agent):
-    """写私有条目与记忆之前 owner 必须还可用：在写入的同一事务里检查（agents.active），不论写入来自 HTTP 还是工具；删除流程最后随 agent 的行一起删掉它们，不会留下孤儿。公共条目不受影响。"""
-    from muliao.agents.api import McpTransport, mcp_config
-
-    agent = await make_agent("alpha")
-    await container.skills.write("s", "d", "b", actor="user", owner=agent.id)
-    await container.agent_lifecycle.delete(agent.id, actor="user")
-
-    writes = [
-        lambda: container.skills.write("t", "d", "b", actor="user", owner=agent.id),
-        lambda: container.skills.edit("s", "user", changes=[FileChange(TextChange("", "more"))]),
-        lambda: container.skills.delete("s", "user"),
-        lambda: container.memory.edit("alpha", [TextChange("", "fact")], "user"),
-        lambda: container.mcp.add(
-            "m",
-            mcp_config(transport=McpTransport.HTTP, url="http://example.invalid/mcp"),
-            actor="user",
-            owner=agent.id,
-            probe=False,
-        ),
-    ]
-    for write in writes:
-        with pytest.raises(NotFound, match="not found"):
-            await write()
-    # 行还在（删除流程收尾时才随 agent 删除），只是按不存在处理
-    async with container.db.transaction() as s:
-        assert sorted((await s.scalars(select(Item.name).where(Item.owner == agent.id))).all()) == [
-            "alpha",
-            "s",
-        ]
-    await container.skills.write("pub", "d", "b", actor="user", owner=None)
-
-
 async def test_agent_whose_private_memory_was_deleted_can_still_be_deleted(container, make_agent):
     agent = await make_agent("alpha")
     await container.memory.delete("alpha", "user")
@@ -445,11 +400,11 @@ async def test_agent_whose_private_memory_was_deleted_can_still_be_deleted(conta
 
 async def test_a_run_that_starts_after_the_mark_does_not_fail_on_its_memory(container, make_agent, models):
     """删除前的检查与标记分属两个事务：标记之后仍可能有它的运行开始执行（由删除流程停下）。组装指令时读记忆包括正在
-    删除的 agent，运行不因读不到记忆而失败（不产生失败通知、issue 的 run_failed 动态）；用户与工具的读按不存在处理。"""
+    删除的 agent（资源目录在删除流程收尾时才删），运行不因读不到记忆而失败（不产生失败通知、issue 的 run_failed 动态）。"""
     from tests.test_flow import run_only
 
     agent = await make_agent("alpha")
-    await container.memory.put("alpha", "- fact", "", actor="user")
+    await container.memory.put("alpha", "- fact", actor="user")
     await start(container, agent.id, "hi")
     async with container.db.transaction() as s:
         (await s.get(Agent, agent.id)).deleting_by = "user"
@@ -458,5 +413,3 @@ async def test_a_run_that_starts_after_the_mark_does_not_fail_on_its_memory(cont
 
     assert await _failed_tasks(container) == []
     assert "- fact" in [m.content for m in await container.memory.for_run(agent.id)]
-    with pytest.raises(NotFound):
-        await container.memory.read("alpha")

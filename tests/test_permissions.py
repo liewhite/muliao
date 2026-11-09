@@ -1,5 +1,5 @@
 """分发与归属（#235、#365）：`action:kind:name` 规则、内置角色 base / admin、自建角色；能用 = 自己的 ∪ 规则放行的（skill 索引、MCP、
-secret）；能改 = owner 或规则放行 write（admin 的 write:*）；read_skill 的软隔离。"""
+secret）；能改 = owner 或规则放行 write（admin 的 write:*）。"""
 
 import dataclasses
 import sys
@@ -10,36 +10,21 @@ from pydantic_ai.models.function import AgentInfo
 
 from muliao.agent_runtime.api import memory_section
 from muliao.agents.access import SELF_UPDATABLE
-from muliao.agents.agent_rules import agent_rules_in
-from muliao.agents.api import McpTransport, RoleSpec, Rules, StoredKind, Subject, mcp_config
-from muliao.agents.kinds import as_kind, as_subject
-from muliao.agents.ownership import DOCUMENTS
+from muliao.agents.api import McpTransport, RoleSpec, Rules, StoredKind, mcp_config
+from muliao.agents.kinds import as_kind
 from muliao.agents.permissions import ADMIN, BASE, FIXED_RULES, TOOLS, Action, Kind, check_patterns
 from muliao.agents.service import AgentPatch, AgentSpec
-from muliao.agents.skills import FileChange
 from muliao.errors import Conflict, Forbidden, InvalidInput, NotFound
-from muliao.platform.text_edit import TextChange
 from muliao.sessions.api import Origin
-from tests.conftest import history, login, owned
+from tests.conftest import login, owned
 from tests.scripted import scripted
 from tests.test_flow import drain, start
 from tests.test_triggers import ECHO_SERVER
 
 # 管理类工具：base 没有，admin 有
 _ADMIN_TOOLS = {
-    "memory_create",
-    "memory_delete",
     "create_agent",
     "delete_agent",
-    "create_role",
-    "update_role",
-    "delete_role",
-    "transfer_item",
-    # 很少用、不占每个 agent 上下文的（#295）
-    "mcp_list",
-    "mcp_add",
-    "mcp_remove",
-    "vault_delete",
     # 只有管钱包的 agent 用（#423）
     "eth_sign",
 }
@@ -117,7 +102,7 @@ async def test_new_agents_have_base_implicitly(container):
     agent = await container.agents.create(AgentSpec(name="a", description="d"), actor="user")
     assert (await container.agents.get_with_rules(agent.id))[1].roles == ()
     tools = (await container.distribution.reach(agent.id)).tool_names
-    assert not set(tools) & _ADMIN_TOOLS and {"run_shell", "memory_edit", "vault_set"} <= set(tools)
+    assert not set(tools) & _ADMIN_TOOLS and {"run_shell", "edit_file", "vault_set"} <= set(tools)
     with pytest.raises(InvalidInput, match="implicit"):
         await container.agents.create(AgentSpec(name="b", description="d", roles=[BASE]), actor="user")
     admin = await container.agents.create(AgentSpec(name="c", description="d", roles=[ADMIN]), actor="user")
@@ -188,10 +173,6 @@ async def test_a_role_hands_out_skills_and_secrets_and_an_items_owner_always_has
     await container.agents.update(trader.id, AgentPatch(deny=["use:skill:*"]), actor="user")
     assert await container.skills.index(trader.id) == []
 
-    # 软隔离：没分到的照样读得到，带提示标记
-    skill = await container.skills.resolve(other.id, "relay-host")
-    assert skill.body.strip() == "body" and not skill.usable
-
 
 async def test_only_the_owner_an_admin_or_the_user_can_change_an_item(container, make_agent):
     owner, stranger = await make_agent("owner"), await make_agent("stranger")
@@ -201,15 +182,13 @@ async def test_only_the_owner_an_admin_or_the_user_can_change_an_item(container,
     with pytest.raises(Forbidden, match="belongs to agent 'owner'"):
         await container.skills.write("s", "d", "steal", actor=stranger.id, owner=stranger.id)
     with pytest.raises(Forbidden):
-        await container.skills.edit("s", stranger.id, changes=[FileChange(TextChange("", "x"))])
-    with pytest.raises(Forbidden):
         await container.skills.delete("s", stranger.id)
     with pytest.raises(Forbidden):
         await container.vault.set("K", "x", "", actor=stranger.id, owner=stranger.id)
     with pytest.raises(Forbidden):
         await container.vault.delete("K", stranger.id)
     # admin 改别人的：owner 不变
-    meta = await container.skills.edit("s", admin.id, changes=[FileChange(TextChange("", "by admin"))])
+    meta = await container.skills.write("s", "d", "by admin", actor=admin.id, owner=admin.id)
     assert meta.owner == owner.id
     await container.skills.write("p", "d", "b", actor="user", owner=None)
     with pytest.raises(Forbidden, match="belongs to the platform"):
@@ -230,12 +209,9 @@ async def test_a_deleted_agents_shared_items_move_to_the_platform(container, mak
     await drain(container)
     assert await owned(container, "skill", None) == ["shared"]
     assert [s.name for s in await container.skills.index(user.id)] == ["shared"]
-    assert (container.skills.dir("shared") / "SKILL.md").exists()
-    assert not container.skills.dir("alone").exists()
-    # 转给平台记了一版（文档前后相同也记）
-    latest = (await history(container, Subject.SKILL, "shared", 1))[0]
-    assert latest.message == f"moved to the platform with agent {owner.id} deleted"
-    assert latest.before == latest.after is not None
+    platform = container.settings.assets_dir / "platform" / "skills"
+    assert (platform / "shared" / "SKILL.md").exists()
+    assert not (platform / "alone").exists()
 
 
 async def test_transferring_an_item_moves_who_owns_and_uses_it(container, make_agent):
@@ -249,19 +225,12 @@ async def test_transferring_an_item_moves_who_owns_and_uses_it(container, make_a
     await container.catalog.transfer_item(StoredKind.SECRET, "K", None, old.id)
     assert await owned(container, "skill", new.id) == ["s"]
     assert await owned(container, "secret", None) == ["K"]
-    # secret 的文档只有描述：换 owner 前后相同，照样记一版
-    secret_rev = (await history(container, Subject.SECRET, "K", 1))[0]
-    assert secret_rev.message == "transfer secret K from agent 'old' to the platform"
-    assert secret_rev.before == secret_rev.after == '{"description": ""}'
     assert [s.name for s in await container.skills.index(new.id)] == ["s"]
     assert await container.skills.index(old.id) == []
     # 新 owner 能改，旧的不能了
-    await container.skills.edit("s", new.id, changes=[FileChange(TextChange("", "more"))])
+    await container.skills.write("s", "d", "more", actor=new.id, owner=new.id)
     with pytest.raises(Forbidden):
-        await container.skills.edit("s", old.id, changes=[FileChange(TextChange("", "more"))])
-    revs = await history(container, Subject.SKILL, "s", 2)
-    assert revs[1].message == "transfer skill s from agent 'old' to agent 'new'"
-    assert revs[1].actor == "user" and revs[1].before == revs[1].after
+        await container.skills.write("s", "d", "more", actor=old.id, owner=old.id)
 
 
 async def test_transfer_rejects_no_ops_and_unknown_owners(container, make_agent):
@@ -341,9 +310,9 @@ async def test_tools_and_roles_api(client, container):
         body = {"agent_id": agent_id, "roles": list(roles), "allow": list(allow), "deny": list(deny)}
         return client.post("/api/agent-preview", json=body)
 
-    resolved = (await preview(deny=["use:tool:memory_*"])).json()
+    resolved = (await preview(deny=["use:tool:edit_*"])).json()
     names = [t["name"] for t in resolved["tools"]]
-    assert "run_shell" in names and "memory_edit" not in names and "create_agent" not in names
+    assert "run_shell" in names and "edit_file" not in names and "create_agent" not in names
     assert (await preview(roles=["nope"])).status_code == 422
     assert (await preview(allow=["use:skill:nope"])).status_code == 422
 
@@ -401,7 +370,7 @@ async def test_agent_assets_group_by_kind_with_sources_and_memory_preview(client
     await container.vault.set("K", "secret-value", "a key", actor="user", owner=None)
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
-    await container.memory.create("team", "- team fact", actor="user")
+    await container.memory.put("team", "- team fact", actor="user")
     await container.distribution.create(
         RoleSpec("triage", "t", ["use:skill:s", "*:memory:team", "use:skill:hidden"], []), actor="user"
     )
@@ -449,7 +418,8 @@ async def test_agent_assets_group_by_kind_with_sources_and_memory_preview(client
     assert got["memory_preview"] == memory_section(
         await container.memory.for_run(agent.id), container.memory.max_chars
     )
-    assert '<memory name="team" access="editable, shared">\n- team fact\n</memory>' in got["memory_preview"]
+    assert '<memory name="team" access="editable, shared"' in got["memory_preview"]
+    assert "\n- team fact\n</memory>" in got["memory_preview"]
     # 与 reach（运行时同一套规则）列出的条目一致
     reach = await container.distribution.reach(agent.id)
     listed = [
@@ -468,52 +438,8 @@ async def test_agent_assets_group_by_kind_with_sources_and_memory_preview(client
     assert 'name="global" access="editable, shared"' in got["memory_preview"]
 
 
-def test_every_stored_kind_is_a_kind_and_a_subject_with_a_document():
+def test_every_stored_kind_is_a_kind():
     assert {as_kind(k) for k in StoredKind} == set(Kind) - {Kind.TOOL, Kind.PATH}
-    assert {as_subject(k) for k in StoredKind} <= set(Subject)
-    assert set(DOCUMENTS) == set(StoredKind)
-
-
-async def test_role_and_agent_rule_changes_are_recorded(container, make_agent):
-    roles = container.distribution
-    await roles.create(RoleSpec("triage", "issues", ["use:tool:issue_*"], []), actor="user")
-    base = await roles.get(BASE)
-    await roles.patch(BASE, actor="boss", allow=["use:tool:issue_*"])
-    await roles.patch(BASE, actor="boss", allow=["use:tool:issue_*"])  # 没变：不记
-    agent = await make_agent("a")
-    await container.agents.update(
-        agent.id, AgentPatch(roles=["triage"], deny=["use:tool:run_shell"]), actor="user"
-    )
-    await container.agents.update(agent.id, AgentPatch(description="only the description"), actor="user")
-    await container.agents.update(agent.id, AgentPatch(roles=[]), actor="user")
-    await roles.delete("triage", actor="user")
-
-    [base_rev] = await history(container, Subject.ROLE, BASE, 10)
-    assert (base_rev.actor, base_rev.message) == ("boss", "update role base")
-    assert base_rev.before == (f'{{\n "description": "{base.description}",\n "allow": [],\n "deny": []\n}}')
-    assert '"use:tool:issue_*"' in (base_rev.after or "")
-    [deleted, created] = await history(container, Subject.ROLE, "triage", 10)
-    assert created.before is None and deleted.after is None and deleted.before == created.after
-
-    revs = await history(container, Subject.AGENT, agent.id, 10)
-    assert [r.message for r in revs] == [
-        "update rules of agent a",
-        "update rules of agent a",
-        "create agent a",
-    ]
-    assert (
-        revs[1].after is not None and '"triage"' in revs[1].after and '"use:tool:run_shell"' in revs[1].after
-    )
-    assert revs[2].before is None
-
-    await container.agent_lifecycle.delete(agent.id, actor="user")
-    await drain(container)
-    gone = (await history(container, Subject.AGENT, agent.id, 1))[0]
-    assert gone.after is None and gone.before == revs[0].after
-    # 规则行随 agent 的行级联删除
-    async with container.db.transaction() as s:
-        with pytest.raises(NotFound):
-            await agent_rules_in(s, agent.id)
 
 
 async def test_an_item_denied_to_every_other_agent_goes_with_its_owner(container, make_agent):

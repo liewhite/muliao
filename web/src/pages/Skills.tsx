@@ -4,7 +4,6 @@ import { Download, Plus, Trash2, Upload } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, asAgentId, type AgentId, type ItemOf, type Schemas, type Skill } from '../api'
 import { ItemAccess, OwnerSelect } from './itemParts'
-import { ResourceHistory } from '../ResourceHistory'
 import { ActionButton,
   CollapsibleForm,
   EmptyHint,
@@ -82,7 +81,7 @@ function ImportSkill({ owner, onImported }: { owner: AgentId | null; onImported:
         if (!(e instanceof ApiError && e.status === 409)) throw e
         const ok = await confirm({
           title: '同名 skill 已存在，覆盖它？',
-          body: '覆盖后它的 SKILL.md 与附件换成包里的版本，旧版本留在历史里。',
+          body: '覆盖后它的整个目录（SKILL.md 与附件）换成包里的内容，旧内容不保留。',
           confirmLabel: '覆盖',
           danger: true,
         })
@@ -229,13 +228,6 @@ export function SkillEditor() {
                   </Button>
                 )}
               </div>
-              {existing && loaded.data && (
-                <ResourceHistory
-                  target={{ kind: 'skill', name: existing }}
-                  current={loaded.data.body + loaded.data.description}
-                  onRestored={() => void loaded.reload()}
-                />
-              )}
             </Card.Content>
           </Card>
         )}
