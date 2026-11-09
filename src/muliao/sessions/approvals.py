@@ -28,7 +28,7 @@ NOT_DECIDED = (
     "The user did not approve this call and responded with something else instead; it was not run. "
     "Call it again if it is still needed."
 )
-# 批准了，但这次运行之前的尝试已经开始过（sessions.pending.deferred_results 的 retried）：可能已在执行中被打断，不再执行
+# 批准了，但这份批准之前已经交给过运行去执行（sessions.approvals.take_in）：可能已在执行中被打断，不再执行
 INTERRUPTED = (
     "The user approved this call, but the run was interrupted (e.g. the service restarted) after it may have "
     "started executing, so it was not run again. It may have taken effect: check before calling it again "
@@ -82,6 +82,27 @@ async def record_in(s: AsyncSession, session_id: str, call_ids: Collection[str])
         if call_id not in known:
             s.add(ApprovalRequest(session_id=session_id, call_id=call_id, created_at=utcnow()))
     await s.flush()
+
+
+async def take_in(s: AsyncSession, session_id: str, call_ids: Collection[str]) -> set[str]:
+    """这些调用的批准要交给运行去执行（运行开头取走信件的事务里）：没交过的记下时间；返回之前已经交过的——那次运行
+    可能在执行中被打断（进程退出、运行最终失败后又被新消息或手动重试接手），不能再执行一遍。按调用记，与哪个
+    run task、第几次尝试无关。"""
+    if not call_ids:
+        return set()
+    rows = (
+        await s.scalars(
+            select(ApprovalRequest).where(
+                ApprovalRequest.session_id == session_id, ApprovalRequest.call_id.in_(list(call_ids))
+            )
+        )
+    ).all()
+    taken = {r.call_id for r in rows if r.taken_at is not None}
+    now = utcnow()
+    for r in rows:
+        if r.taken_at is None:
+            r.taken_at = now
+    return taken
 
 
 async def requested_in(s: AsyncSession, session_id: str) -> set[str]:

@@ -271,9 +271,15 @@ function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) 
 /** 停下来等用户批准的工具调用：显示调用的工具与参数，待批准时给出批准、拒绝两个按钮 */
 function ApprovalBlock({ block, ctx }: { block: ApprovalBlockData; ctx: SessionContext }) {
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const decide = (approved: boolean) => {
     setBusy(true)
-    void ctx.approve(block.callId, approved).finally(() => setBusy(false))
+    setError(null)
+    // 失败（如新消息先把这次调用关掉了，409）要让人看到，不吞掉
+    ctx
+      .approve(block.callId, approved)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
   }
   return (
     // 等待项里的「去批准」滚到这里
@@ -283,10 +289,11 @@ function ApprovalBlock({ block, ctx }: { block: ApprovalBlockData; ctx: SessionC
     >
       <div className="flex items-center gap-1.5 text-sm">
         <ShieldQuestion className="size-4 shrink-0 text-warning" />
-        <span>{block.status === 'pending' ? '这次调用要你批准才执行' : '已提交，等待执行'}</span>
+        <span>{block.status === 'pending' ? '这次调用要你批准才执行' : '已提交决定'}</span>
         <span className="font-mono text-muted">{block.tool.name}</span>
       </div>
       <ToolDetail tool={block.tool} />
+      <ErrorAlert error={error} />
       {block.status === 'pending' && (
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="secondary" isDisabled={busy} onPress={() => decide(false)}>

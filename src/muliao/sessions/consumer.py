@@ -24,6 +24,7 @@ from muliao.platform.db import Database
 from muliao.platform.messaging import Messaging
 from muliao.platform.tables import Task
 from muliao.platform.tasks import Commit, TaskQueue, TaskView
+from muliao.sessions.approvals import take_in as take_approvals_in
 from muliao.sessions.approvals import waiting_text as approval_waiting_text
 from muliao.sessions.codec import load_messages
 from muliao.sessions.compaction import Compactor, Verdict
@@ -48,6 +49,7 @@ from muliao.sessions.origins import OriginNotes
 from muliao.sessions.pending import (
     HandedOut,
     answered_in,
+    approved_calls,
     deferred_results,
     handed_out_in,
     is_on_time,
@@ -199,11 +201,6 @@ class Consumer:
             delegated_work = await delegated_in(s, session.id)
             earlier = await consumed_by_in(s, session_id, run_id)
             handed = await handed_out_in(s, session.id)
-            # 这次运行之前的尝试已经开始过（领取时计数）：批准过的调用不再执行（pending.deferred_results）
-            run = await self._queue.task_in(s, run_id)
-            if run is None:
-                raise RuntimeError(f"run {run_id} vanished while it was running")
-            retried = run.attempts > 1
             adopted = await _adopted(s, session.id, run_id) if resumable(context.messages, handed) else []
             saved_rows = await saved_by_in(s, session_id, run_id)
             last_message = await last_message_id_in(s, session_id)
@@ -237,7 +234,7 @@ class Consumer:
             last_message = await self._steps.save_interrupted(state, filled)
             history = [*history, *filled]
         state.resending = resumable(history, handed) and isinstance(history[-1], ModelRequest)
-        prompt, deferred = await self._opening(state, history, queued, handed, retried=retried)
+        prompt, deferred = await self._opening(state, history, queued, handed)
         if prompt is None and deferred is None and not resumable(history, handed):
             # 没有要交给模型的：信箱空了，或停在挂起的调用上、还不能继续。之前的尝试已经跑完、只差收尾时（它保存的就是
             # 历史的末尾），按保存的历史收尾；之后的运行已经接着它保存的部分继续了（重试一个过时的失败运行），推送与
@@ -301,21 +298,21 @@ class Consumer:
         history: list[ModelMessage],
         queued: list[Mail],
         handed: HandedOut,
-        *,
-        retried: bool,
     ) -> tuple[list[UserContent] | None, dict[str, object] | None]:
         """这次运行开头交给模型的：新信件的内容，以及挂起调用的结果（`{调用 id: 结果}`）。从历史续跑、或还在等挂起调用的回答时什么都不交。"""
         if resumable(history, handed) or waiting(history, queued, handed):
             return None, None
         pending = pending_calls(history, handed)
         answers = answered_in(queued, pending)
-        deferred = deferred_results(pending, answers, handed, retried=retried) if pending else None
         state.taken = list(queued)
+        spent: set[str] = set()
         if queued:
             # 开头取走的信件都交给了这次运行（mailbox.handed_to），哪怕它在第一次保存之前就最终失败：失败的结清据此
-            # 了结它们，也不会为它们再唤醒一次运行
+            # 了结它们，也不会为它们再唤醒一次运行。批准在同一个事务里记为已交给运行执行：之前交过的不再执行
             async with self._db.transaction() as s:
                 await hand_over_in(s, self._queue, state.run_id, queued[-1].id)
+                spent = await take_approvals_in(s, state.session.id, approved_calls(answers))
+        deferred = deferred_results(pending, answers, handed, spent=spent) if pending else None
         content = await self._content.of(state.agent.id, [m for m in queued if not is_on_time(m, pending)])
         # 开头的内容由 pydantic-ai 放进第一次请求的用户消息（下标从 0 起），事件在那次请求保存前标上
         state.opening = content

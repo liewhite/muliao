@@ -385,7 +385,8 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 - 哪些调用在等批准不按工具名认（同一个工具多数调用不用批准），也不能只看历史（与「执行到一半被打断」的调用一样没有结果）：运行收尾的事务里把它们记进 `approval_requests`（永久事实，同 ask_agent 带 call_id 的占用；两者合称 `HandedOut`）。没有结果、记过的调用就是在等批准。可能要批准的工具是普通工具，其余规则同普通工具：不重放、用户停止时补「已停止」；挂起的工具（`DEFERRED_TOOLS`）不请求批准。
 - 界面按钮随消息提交 `approvals: {tool_call_id: bool}`，`inbound.receive` 校验它针对现在能批准的调用（`OpenAsks.approvable`），回答信封是 `{"tool": "approval", "result": {"approved": …}}`。交回时是 `Approval`：批准 → pydantic-ai 按原参数再调一次工具（`is_approved` 为真），结果就是执行结果；拒绝 → `DENIED`；没批准就来了新消息 → `NOT_DECIDED`；迟到的决定作为文字。
-- 批准后工具在运行开头就执行，结果随下一步保存；这次运行是重试（run task 已尝试过，进程退出后恢复等）而批准还排着时，上一次可能在执行中被打断：不再执行，给 `INTERRUPTED`（同「从哪里开始」）。保守：第一次尝试在执行前就失败也这样处理，模型可以再发起一次（重新审批）。
+- 批准后工具在运行开头就执行，结果随下一步保存。批准被运行取走时（取走信件的同一个事务）记下 `approval_requests.taken_at`；再被取走（进程退出后恢复、运行最终失败后被新消息或手动重试接手）说明上一次可能在执行中被打断：不再执行，给 `INTERRUPTED`（同「从哪里开始」）。按调用记，与哪个 run task、第几次尝试无关。保守：取走后、执行前就失败也这样处理，模型可以再发起一次（重新审批）。
+- 已知边界（罕见、只会误导不会重复执行，不加机制）：带调用的回复已保存、收尾事务还没记下等批准时进程退出，这次调用按「被中断、可能已执行」补结果；用户停止等批准的调用时补的是通用的「已停止、可能已部分执行」。
 - 停在等批准上的运行不论有没有人在等都推送（`RunEnded.needs_approval`）：触发器、issue 的运行也只有用户能批准。会话是 waiting，等待项列出 `approval`；条目上 `Item.approval`（pending / submitted，`transcript.annotate_approvals`），界面显示调用与批准、拒绝两个按钮。
 
 **`ask_user`**：做法同 Claude Code 的 AskUserQuestion、Codex 的提问：一次 1 到 4 个选择题（单选或多选，每题 2 到 6 个选项），界面上每题总能在「其他」里自己写。工具总是列出，只在 `Audience.USER` 时可用，否则抛领域错误交还模型，说明按 Audience 区分（`agent`：另一个 agent 在问，把要对方定的写进回答；`none`：自己决定、必要时 `notify_user`）（`sessions/ask_user.py` 的 `REJECTED`；不用 `prepare` 隐藏，以免工具列表随运行变化破坏 prompt 缓存）。

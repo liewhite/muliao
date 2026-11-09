@@ -559,7 +559,7 @@ def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():
     call = ToolCallPart("ask_user", {"questions": []}, tool_call_id="c")
     wrong = AgentAnswered.of(AgentAnswer(text="hi", attachments=[]))
     with pytest.raises(RuntimeError, match="got an answer for ask_agent"):
-        deferred_results({"c": call}, {"c": wrong}, HandedOut(), retried=False)
+        deferred_results({"c": call}, {"c": wrong}, HandedOut())
 
 
 def test_an_answer_mailed_before_thread_calls_still_parses():

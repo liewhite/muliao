@@ -237,6 +237,8 @@ class ApprovalRequest(Base):
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
     call_id: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # 批准第一次交给运行去执行的时间（sessions.approvals.take_in）：之后再交就是重复执行，改给「被中断」的结果
+    taken_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     # 复合唯一索引以 session_id 开头，也是它的外键索引
     __table_args__ = (Index("uq_approval_requests_call", "session_id", "call_id", unique=True),)

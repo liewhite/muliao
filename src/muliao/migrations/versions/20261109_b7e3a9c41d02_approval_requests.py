@@ -1,5 +1,6 @@
 """approval_requests（#530）：哪些工具调用停下来等用户批准了（会话 + 调用 id）。运行停在等批准的调用上时在收尾事务里
-写入，是「没有结果的调用在等批准」与「执行到一半被打断」的区分依据。新表，不动已有数据。
+写入，是「没有结果的调用在等批准」与「执行到一半被打断」的区分依据；taken_at 记批准第一次交给运行去执行的时间，
+防止重复执行。新表，不动已有数据。
 
 降级：删表（旧代码不认识等批准的调用；降级前应没有停在等批准上的会话，否则它们按「被中断」补结果）。
 
@@ -26,6 +27,7 @@ def upgrade() -> None:
         sa.Column("session_id", sa.String(length=36), nullable=False),
         sa.Column("call_id", sa.String(length=100), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("taken_at", sa.DateTime(), nullable=True),
         sa.ForeignKeyConstraint(["session_id"], ["sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )

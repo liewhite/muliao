@@ -150,15 +150,16 @@ def deferred_results(
     answers: Mapping[str, CallResult],
     handed: HandedOut,
     *,
-    retried: bool,
+    spent: AbstractSet[str] = frozenset(),
 ) -> dict[str, object]:
     """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（来了新消息，或这次只回答了一部分）用工具的
     DeferredTool.skipped_result：ask_user 记为没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后
     作为事件送达；等批准的记为没批准。
 
-    retried：这次运行之前的尝试已经开始过（进程退出后恢复、失败后重试）。批准后工具在运行开头就执行，执行完
-    的结果随下一步保存；重试时批准还排着、调用还没有结果，说明上一次尝试可能在执行中被打断：不再执行，给「被中断」
-    的结果，由模型查过再决定（同 docs/architecture.md「从哪里开始」不重新执行被打断的调用）。"""
+    spent：批准之前已经交给过运行去执行的调用（sessions.approvals.take_in）。批准后工具在运行开头就执行，执行完
+    的结果随下一步保存；批准再次被取走、调用还没有结果，说明上一次可能在执行中被打断（进程退出，或运行最终失败后
+    被新消息、手动重试接手）：不再执行，给「被中断」的结果，由模型查过再决定（同 docs/architecture.md「从哪里
+    开始」不重新执行被打断的调用）。"""
     any_answered = any(isinstance(r, UserAnswered) for r in answers.values())
     results: dict[str, object] = {}
     for call_id, call in pending.items():
@@ -168,7 +169,7 @@ def deferred_results(
         if result is not None:
             if result.tool != expected:
                 raise RuntimeError(f"call {call_id} of {call.tool_name} got an answer for {result.tool}")
-            if retried and isinstance(result, ApprovalAnswered) and result.result.approved:
+            if call_id in spent and isinstance(result, ApprovalAnswered) and result.result.approved:
                 results[call_id] = approvals.INTERRUPTED
             else:
                 results[call_id] = result.tool_return()
@@ -177,6 +178,11 @@ def deferred_results(
         else:
             results[call_id] = DEFERRED_TOOLS[call.tool_name].skipped_result(any_answered)
     return results
+
+
+def approved_calls(answers: Mapping[str, CallResult]) -> set[str]:
+    """回答里被批准的调用（要交给运行去执行的）。"""
+    return {k for k, r in answers.items() if isinstance(r, ApprovalAnswered) and r.result.approved}
 
 
 def late_text(results: Sequence[CallResult]) -> str:

@@ -178,15 +178,12 @@ async def test_a_pending_approval_survives_a_restart(client, container, make_age
 async def test_an_approved_call_interrupted_while_running_is_not_run_again(
     client, container, make_agent, models
 ):
-    """批准后，运行在执行脚本时进程退出（run task 留在 running、已经尝试过一次）：恢复后不再执行，交给模型
-    「被中断、可能已生效」的结果。"""
+    """批准后，运行在执行脚本时进程退出（run task 留在 running）：恢复后不再执行，交给模型「被中断、可能已生效」
+    的结果。"""
     await login(client)
     session_id, gate, ran = await _gated(container, make_agent, models)
     assert await _decide(client, session_id, True) == 202
-    run = (await tasks_of(container, RUN_TASK))[-1]
-    async with container.db.transaction() as s:
-        task = await s.get(Task, run.id)
-        task.status, task.attempts = TaskStatus.RUNNING, 1
+    await _crash_while_running(container)
 
     await restart(container)
     await drain(container)
@@ -194,6 +191,41 @@ async def test_an_approved_call_interrupted_while_running_is_not_run_again(
     assert not ran.exists()
     assert gate.results == [INTERRUPTED]
     assert [t.status for t in await tasks_of(container, RUN_TASK)][-1] == TaskStatus.DONE
+
+
+async def _crash_while_running(container) -> None:
+    """模拟运行在执行批准过的脚本时进程退出：运行开头取走了信件、记下批准已交出（同一个事务），脚本还没出结果。"""
+    from muliao.sessions.approvals import take_in
+
+    run = (await tasks_of(container, RUN_TASK))[-1]
+    async with container.db.transaction() as s:
+        task = await s.get(Task, run.id)
+        task.status, task.attempts = TaskStatus.RUNNING, 1
+        assert await take_in(s, run.session_id, ["c1"]) == set()
+
+
+@pytest.mark.parametrize("then", ["message", "retry"])
+async def test_an_approval_taken_by_a_failed_run_is_not_run_again(
+    client, container, make_agent, models, then
+):
+    """执行中途的运行最终失败了（换了 run task，尝试计数从头算）：之后新消息唤醒的运行、或手动重试，都不再执行。"""
+    await login(client)
+    session_id, gate, ran = await _gated(container, make_agent, models)
+    assert await _decide(client, session_id, True) == 202
+    await _crash_while_running(container)
+    run = (await tasks_of(container, RUN_TASK))[-1]
+    async with container.db.transaction() as s:
+        task = await s.get(Task, run.id)
+        task.status, task.error = TaskStatus.FAILED, "boom"
+
+    if then == "message":
+        await client.post(f"/api/sessions/{session_id}/messages", json={"prompt": "怎么样了"})
+    else:
+        assert (await client.post(f"/api/tasks/{run.id}/retry")).status_code == 200
+    await drain(container)
+
+    assert not ran.exists()
+    assert gate.results == [INTERRUPTED]
 
 
 async def test_stopping_the_session_closes_the_pending_approval(client, container, make_agent, models):
