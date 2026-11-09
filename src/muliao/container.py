@@ -312,9 +312,6 @@ def assemble(
     files = FileStore(db, settings.files_dir, settings.runtime.upload_max_bytes)
     skills = SkillStore(assets)
     memory = MemoryStore(assets, settings.runtime.memory_max_chars)
-    # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接
-    mcp_connector = McpConnector(vault)
-    mcp = McpRegistry(assets, mcp_connector.probe)
     tools = available_tools(web_configured=bool(web_tools))
     agents = AgentService(
         db,
@@ -327,8 +324,12 @@ def assemble(
     # agent 的命令与文件工具只能写它的可写路径（#416）：当前系统没有写沙箱时在这里拒绝启动
     home = Path.home()
     confiner = Confiner(
-        sandbox_for(settings.runtime.write_sandbox, home), agents.workspace, distribution.rules, home
+        sandbox_for(settings.runtime.write_sandbox, home), agents.workspace, distribution.write_scope, home
     )
+    # MCP 的配置归 agent 领域，连接归运行时：新增时的连接验证注入给配置，运行时按 agent 可用的 server 连接；
+    # stdio server 的进程与 agent 的命令关在同一个写沙箱里（#499）
+    mcp_connector = McpConnector(vault, confiner.of)
+    mcp = McpRegistry(assets, mcp_connector.probe)
     catalog = ItemCatalog(assets, tools)
     # 会话领域先于消费者构造的端口（会话忙不忙、停止会话、委派、后台任务的占用），别的领域与工具集要用它们
     ports = SessionPorts.build(db, queue, messaging, tz)

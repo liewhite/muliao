@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from muliao.agents.api import AgentPatch, Rules
+from muliao.agents.api import AgentPatch, Rules, WriteScope
+from muliao.agents.assets import load_tree
 from muliao.errors import Forbidden, InvalidInput
 from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, sandbox_for
 from muliao.platform.shell import run_bash
@@ -23,7 +24,10 @@ def platform(request) -> str:
 
 def _confinement(platform: str, rules: list[tuple[bool, Path]], mode="enforce") -> Confinement:
     return Confinement(
-        sandbox_for(mode, Path.home(), platform), WritablePaths.of(rules, "agent-x"), Path.home()
+        sandbox_for(mode, Path.home(), platform),
+        WritablePaths.of(rules, "agent-x"),
+        Path.home(),
+        lambda p: f"[If this was a write: {p} is outside; grant 'write:path:<directory>']",
     )
 
 
@@ -190,11 +194,14 @@ async def test_an_agent_writes_its_workspace_the_defaults_and_its_grants_minus_p
     # 不在临时目录下（临时目录默认可写）；只用来展开授权里的 ~/，不写任何东西
     home = Path("/nonexistent-home-416")
     sandbox = sandbox_for("enforce", home)
+    tree = tmp_path / "assets"
 
-    async def rules_of(_agent: str) -> Rules:
-        return Rules(allow=("write:path:~/proj",), deny=("write:path:~/proj/secret",))
+    async def scope_of(agent: str) -> WriteScope:
+        return WriteScope(
+            tree, (tree / "a1",), ("~/proj",), ("~/proj/secret",), agent, load_tree(tree, {}, 4000)
+        )
 
-    confiner = Confiner(sandbox, lambda a: tmp_path / "ws" / a, rules_of, home=home)
+    confiner = Confiner(sandbox, lambda a: tmp_path / "ws" / a, scope_of, home=home)
     w = (await confiner.of("a1")).writable
     assert w.owner == "a1"
     assert w.permits(tmp_path / "ws/a1/x")
@@ -202,6 +209,128 @@ async def test_an_agent_writes_its_workspace_the_defaults_and_its_grants_minus_p
     assert not w.permits(home / "Documents/x")
     assert not w.permits(Path(sys.prefix) / "lib/x")
     assert w.permits(home / ".cache/uv/x") and w.permits(home / "Library/Caches/x")
+    # 资源树整个按归属管，哪怕它落在默认可写的临时目录里
+    assert w.permits(tree / "a1/memory.md") and not w.permits(tree / "a2/memory.md")
+    assert not w.permits(tree / "platform/access.toml")
+
+
+# ---- 资源树按归属（#499） ----
+
+
+async def _tree_fixture(container, make_agent):
+    """alice 有一个 skill；平台有共享记忆 trading，角色 trader 能改它；bob 带 trader，carol 什么都没有，root 是 admin。"""
+    from muliao.agents.api import RoleSpec
+
+    alice = await make_agent("alice", model="tools")
+    await container.skills.write("alice-skill", "alice's skill", "body", actor="user", owner=alice.id)
+    await container.memory.put("trading", "shared notes", actor="user", owner=None)
+    await container.distribution.create(RoleSpec("trader", "trades", ["*:memory:trading"], []), actor="user")
+    bob = await make_agent("bob", model="tools", roles=("trader",))
+    carol = await make_agent("carol", model="tools")
+    root = await make_agent("root", model="tools", roles=("admin",))
+    return alice, bob, carol, root, container.settings.assets_dir
+
+
+async def test_asset_tree_is_writable_by_ownership_roles_and_admin(container, make_agent):
+    alice, bob, carol, root, tree = await _tree_fixture(container, make_agent)
+    skill, shared = tree / "alice/skills/alice-skill", tree / "platform/memory/trading.md"
+    access = tree / "platform/access.toml"
+
+    async def can(agent_id: str, path: Path) -> bool:
+        return (await container.confiner.of(agent_id)).writable.permits(path)
+
+    # owner：自己的目录整个能写（含新建 skill）
+    assert await can(alice.id, skill / "SKILL.md") and await can(alice.id, tree / "alice/skills/new/SKILL.md")
+    assert await can(alice.id, tree / "alice/memory.md") and await can(alice.id, tree / "alice/agent.toml")
+    # 非 owner 改不了别人的
+    assert not await can(carol.id, skill / "SKILL.md") and not await can(carol.id, tree / "alice/memory.md")
+    assert not await can(carol.id, shared)
+    # 被授权 write 的角色成员能改共享记忆，平台别的文件照样不行
+    assert await can(bob.id, shared)
+    assert not await can(bob.id, tree / "platform/memory/global.md")
+    assert not await can(bob.id, tree / "platform/skills/x/SKILL.md")
+    # agent 改不了自己的权限：access.toml 只有 admin 能写
+    for a in (alice, bob, carol):
+        assert not await can(a.id, access)
+    # admin 整棵树
+    for p in (
+        access,
+        skill / "SKILL.md",
+        shared,
+        tree / "carol/memory.md",
+        tree / "platform/skills/x/SKILL.md",
+    ):
+        assert await can(root.id, p)
+
+
+async def test_refused_asset_writes_say_whose_it_is_and_whom_to_ask(container, make_agent, models):
+    alice, bob, carol, _root, tree = await _tree_fixture(container, make_agent)
+    skill_md = tree / "alice/skills/alice-skill/SKILL.md"
+    before = skill_md.read_text()
+    outputs = await run_tools(
+        container,
+        models,
+        carol.id,
+        [
+            ("run_shell", {"command": f"echo x >> {skill_md}", "timeout": 30}),
+            ("write_file", {"path": str(tree / "platform/access.toml"), "content": "[agents.carol]\n"}),
+            ("write_file", {"path": str(tree / "carol/skills/mine/SKILL.md"), "content": "x"}),
+        ],
+    )
+    assert "Operation not permitted" in outputs[0]
+    assert "belongs to agent 'alice' (skill 'alice-skill')" in outputs[0]
+    assert "'write:skill:alice-skill'" in outputs[0]
+    assert "only by an admin" in outputs[1]
+    assert outputs[2].startswith("created ")
+    assert skill_md.read_text() == before
+    # 角色成员用文件工具改共享记忆
+    outputs = await run_tools(
+        container,
+        models,
+        bob.id,
+        [
+            (
+                "edit_file",
+                {"path": str(tree / "platform/memory/trading.md"), "old_text": "shared", "new_text": "joint"},
+            )
+        ],
+    )
+    assert "joint notes" in (tree / "platform/memory/trading.md").read_text()
+
+
+async def test_a_stdio_mcp_server_runs_inside_its_users_write_sandbox(container, make_agent, tmp_path):
+    from muliao.agents.api import McpServer, McpTransport, mcp_config
+
+    me = await make_agent("alpha", model="tools")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    inside = container.agents.workspace(me.id) / "from-mcp"
+    script = tmp_path / "server.py"
+    script.write_text(
+        "import sys\n"
+        "for p in sys.argv[1:]:\n"
+        "    try:\n"
+        "        open(p, 'w').write('x')\n"
+        "    except OSError:\n"
+        "        pass\n"
+        "from mcp.server.mcpserver import MCPServer\n"
+        "m = MCPServer('t')\n"
+        "@m.tool()\n"
+        "def ping() -> str:\n"
+        "    return 'pong'\n"
+        "m.run()\n"
+    )
+    # 临时目录默认可写：把 outside 收回来
+    await container.agents.update(me.id, AgentPatch(deny=[f"write:path:{outside}"]), actor="user")
+    config = mcp_config(
+        transport=McpTransport.STDIO,
+        command=sys.executable,
+        args=[str(script), str(outside / "f"), str(inside)],
+    )
+    server = McpServer(owner=me.id, name="probe", config=config, enabled=True)
+    assert await container.mcp.probe(server, me.id) == ["ping"]
+    assert inside.read_text() == "x"
+    assert not (outside / "f").exists()
 
 
 def test_file_tools_are_refused_with_the_system_error_and_the_note(tmp_path):

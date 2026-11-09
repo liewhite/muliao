@@ -3,7 +3,6 @@
 file_edit / syntax_edit。
 """
 
-import errno
 import functools
 import logging
 import mimetypes
@@ -125,26 +124,9 @@ def _edit_call(a: Args) -> list[ViewBlock] | None:
 _EDIT_RENDER = ToolRender[str](call=_edit_call)
 
 
-_PERMISSION_HINT = (
-    "{path} denies you access by its permission bits, e.g. because it was copied (`cp -R`) from a read-only "
-    "skill copy and kept its r--/r-x modes; run `chmod -R u+rwX {path}` first."
-)
-
-
 def _io_error(e: OSError, note: str = "") -> InvalidInput:
-    """文件工具里的 IO 失败转成领域错误交还给模型，不打崩整次运行（#483）。EACCES（mode 不允许）指出要 chmod 的
-    路径：存在的就是它本身，不存在的是最近一级存在的目录；EPERM（uchg 标志、系统保护目录）chmod 无用，不给提示。"""
-    hint = ""
-    if e.errno == errno.EACCES and e.filename is not None:
-        hint = " " + _PERMISSION_HINT.format(path=_nearest_existing(Path(os.fsdecode(e.filename))))
-    return InvalidInput(f"{e}.{note}{hint}")
-
-
-def _nearest_existing(p: Path) -> Path:
-    # os.path.exists 遇到任何 OSError 都返回 False（Path.exists 遇 EACCES 会抛），错误处理里不能再抛
-    while not os.path.exists(p):
-        p = p.parent
-    return p
+    """文件工具里的 IO 失败转成领域错误交还给模型，不打崩整次运行（#483）。"""
+    return InvalidInput(f"{e}.{note}")
 
 
 def _io_errors_returned[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
@@ -316,9 +298,7 @@ def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> F
             check_write(confinement, given)
             # 只读文件在任何写盘之前挡住，不留下改了一半的几个文件（写盘时的其他 IO 失败不在此保证内）
             if not os.access(given, os.W_OK):
-                raise InvalidInput(
-                    f"{where}file is not writable: {given}; nothing was written. {_PERMISSION_HINT.format(path=given)}"
-                )
+                raise InvalidInput(f"{where}file is not writable: {given}; nothing was written.")
             target = same.setdefault(given.resolve(), given)
             if target not in before:
                 before[target] = target.read_text(encoding="utf-8")

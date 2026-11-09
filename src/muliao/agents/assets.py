@@ -137,6 +137,8 @@ class Snapshot:
     """某一时刻整棵树的内容（只读）。"""
 
     root: Path
+    # 数据库里的 agent（id → 名字，含正在删除的）：目录读坏、没加载的 agent 也知道自己的目录该叫什么（own_dir）
+    names: Mapping[str, str]
     # 加载成功的 agent 目录，按 id
     agents: Mapping[str, AgentDir]
     # 每种资源按名字
@@ -200,10 +202,19 @@ class Snapshot:
             return base / MCP_DIR / f"{name}.json"
         return base / SECRETS_DIR / f"{name}.toml"
 
+    def own_dir(self, agent_id: str) -> Path | None:
+        """agent 的目录该在的位置（目录名就是数据库里的名字），不论它现在加载成功没有；不认识的 agent 为 None。"""
+        name = self.names.get(agent_id)
+        return None if name is None else self.root / name
+
+    def administers(self, agent_id: str) -> bool:
+        """agent 管整棵树（有 admin 角色）：平台目录、access.toml 与每个 agent 的目录都能写，平台的问题报给它。"""
+        return ADMIN in self.rules_of(agent_id).roles
+
     def problems_for(self, agent_id: str) -> list[Problem]:
-        """报给这个 agent 的问题：它自己目录里的；平台的（platform/、根目录、access.toml）只报给能写它们的 admin（规则里有
-        `write:*`），免得几十个 agent 同时去改同一个平台文件。别的照样记在服务日志里。"""
-        admin = ADMIN in self.rules_of(agent_id).roles
+        """报给这个 agent 的问题：它自己目录里的；平台的（platform/、根目录、access.toml）只报给能写它们的 admin
+        （administers），免得几十个 agent 同时去改同一个平台文件。别的照样记在服务日志里。"""
+        admin = self.administers(agent_id)
         return [p for p in self.problems if p.owner == agent_id or (p.owner is None and admin)]
 
     @property
@@ -285,6 +296,7 @@ class _Reader:
         roles, rules = self.access(agents)
         return Snapshot(
             self.root,
+            dict(self.known),
             agents,
             {kind: self.resolved(kind) for kind in StoredKind},
             roles,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -116,6 +116,8 @@ class Confinement:
     writable: WritablePaths
     # 家目录：规则与报错里的 ~/ 按它展开（expand）
     home: Path
+    # 写到可写路径外的一个路径被拒时，补在系统报错后面的说明（领域给的：为什么不让写、找谁授权）
+    explain: Callable[[Path], str]
 
     def wrap(self, argv: Sequence[str]) -> list[str]:
         return self.sandbox.wrap(argv, self.writable)

@@ -14,11 +14,13 @@ from muliao.agents.access import (
     Provenance,
     Reach,
     Source,
+    WriteScope,
     granted_by,
     grants_for,
     grants_of,
     reach_of,
     usable_by,
+    write_scope,
 )
 from muliao.agents.agent_rules import AgentRules
 from muliao.agents.assets import Snapshot
@@ -100,8 +102,12 @@ class Distribution:
 
     async def rules(self, agent_id: str) -> Rules:
         """agent 的最终规则（base + 角色 + 自己的 allow / deny），按角色现在的定义算：运行开放哪些工具
-        （agent_runtime.Toolbox.profile）、写沙箱的可写路径。"""
+        （agent_runtime.Toolbox.profile）。"""
         return grants_for(await self._source.snapshot(), agent_id).rules
+
+    async def write_scope(self, agent_id: str) -> WriteScope:
+        """agent 现在能写哪里（写沙箱 workspace.writable 用）：资源树按归属，加 `write:path` 授权。"""
+        return write_scope(await self._source.snapshot(), agent_id)
 
     async def agent_rules(self, agent_id: str) -> AgentRules:
         """agent 自己的规则（角色与 allow / deny）。"""

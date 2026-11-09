@@ -8,20 +8,24 @@ write 都有），或它的规则（base + 角色 + 自己的 allow / deny）放
 由此派生的也都在这里：一份配置能用哪些（reach_of）、资源分发出去了没有与收录它的角色（sharing_of），以及在快照上加上规则的
 changeable / writable / usable。全部按一份资源快照（agents.assets.Snapshot）算，资源的 owner 就是它所在的目录。
 
+写沙箱的领域输入也在这里（write_scope，#499）：「能不能改某项资源」换算成资源树里的可写路径，文件工具与命令都由沙箱回答。
+
 规则按读出时角色的定义算：运行开始时算一次工具列表（Toolbox.profile），资源在用到时（skill 索引、MCP 连接、secret
 解析）按当时的快照算。
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from muliao.agents.agent_rules import AgentRules
-from muliao.agents.assets import Asset, Snapshot
+from muliao.agents.assets import ACCESS_FILE, PLATFORM, Asset, Snapshot
 from muliao.agents.ids import USER
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
-from muliao.agents.permissions import BASE, Action, Role, Rules, ToolSpec, pattern_of, spec_of
+from muliao.agents.permissions import BASE, Action, Role, Rules, ToolSpec, pattern_of, permission_of, spec_of
 from muliao.errors import Forbidden
 
 
@@ -167,6 +171,79 @@ def usable(snapshot: Snapshot, kind: StoredKind, user: str) -> list[Asset]:
 def usable_by(snapshot: Snapshot, kind: StoredKind, grants: Grants) -> list[Asset]:
     """同 usable，按已经算好的 grants。"""
     return [a for a in snapshot.of_kind(kind) if grants.uses(as_kind(kind), a.name, a.owner)]
+
+
+@dataclass(frozen=True)
+class WriteScope:
+    """agent 能写哪里的领域输入（workspace.writable 并进默认可写范围）。资源树（tree）整个按归属管：除了 assets
+    里的都不能写，哪怕它落在默认可写的目录里。assets：admin 是整棵树；别的 agent 是自己的目录，加上规则放行 write 的别人的资源（记忆、
+    MCP、secret 是那个文件，skill 是它的目录）。access.toml 与 platform/ 下别的文件只有 admin 能写：agent 改不了自己的权限。
+    granted / revoked：`write:path:<目录>` 的 allow 与 deny（Rules.paths），排在资源之后，显式授权优先。"""
+
+    tree: Path
+    assets: tuple[Path, ...]
+    granted: tuple[str, ...]
+    revoked: tuple[str, ...]
+    agent_id: str
+    snapshot: Snapshot = field(repr=False, compare=False)
+
+    def refusal(self, path: Path) -> str | None:
+        """资源树里的 path 被拒时补的说明：是谁的、找谁授权；不在树里为 None（用通用的说明）。"""
+        tree = Path(os.path.realpath(self.tree))
+        target = Path(os.path.realpath(path))
+        if target != tree and tree not in target.parents:
+            return None
+        snapshot = self.snapshot
+        own = snapshot.own_dir(self.agent_id)
+        mine = f"its own directory {own}" if own is not None else "its own directory"
+        rest = (
+            f"[If this was a write: {path} is in the AI asset tree, where an agent may write only {mine}, the "
+            "assets its roles grant it 'write:<kind>:<name>' on, and an admin everything."
+        )
+        asset = _containing(snapshot, target)
+        if asset is not None:
+            return (
+                f"{rest} It belongs to {snapshot.owner_label(asset.owner)} ({label(asset.kind)} {asset.name!r}): "
+                f"ask its owner or an admin to change it, or ask the user or an admin to grant you "
+                f"'{permission_of(Action.WRITE, as_kind(asset.kind), asset.name)}' in "
+                f"{snapshot.root / PLATFORM / ACCESS_FILE}.]"
+            )
+        parts = target.relative_to(tree).parts
+        if not parts or parts[0] == PLATFORM:
+            return (
+                f"{rest} The platform's files (roles and permissions in {PLATFORM}/{ACCESS_FILE}, global and "
+                "shared memories, public skills) are changed only by an admin: ask the user or an agent with the "
+                "admin role.]"
+            )
+        return f"{rest} {parts[0]}/ is another agent's directory: ask that agent or an admin.]"
+
+
+def _containing(snapshot: Snapshot, target: Path) -> Asset | None:
+    """target（真实路径）所在的那一项资源：就是它的文件，或在 skill 目录里。"""
+    for kind in StoredKind:
+        for a in snapshot.of_kind(kind):
+            real = Path(os.path.realpath(a.path))
+            if target == real or real in target.parents:
+                return a
+    return None
+
+
+def write_scope(snapshot: Snapshot, agent_id: str) -> WriteScope:
+    """agent 现在能写哪里（WriteScope），按快照算。「能写某项资源」与 check_change 是同一个判断（Grants.can 的 write）。"""
+    grants = grants_for(snapshot, agent_id)
+    if snapshot.administers(agent_id):
+        assets: tuple[Path, ...] = (snapshot.root,)
+    else:
+        own = snapshot.own_dir(agent_id)
+        others = (
+            a.path
+            for k in StoredKind
+            for a in snapshot.of_kind(k)
+            if a.owner != agent_id and grants.writes(as_kind(k), a.name, a.owner)
+        )
+        assets = (*([own] if own is not None else []), *others)
+    granted, revoked = grants.rules.paths()
+    return WriteScope(snapshot.root, assets, granted, revoked, agent_id, snapshot)
 
 
 @dataclass(frozen=True)

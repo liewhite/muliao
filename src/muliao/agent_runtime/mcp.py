@@ -21,8 +21,9 @@ from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.toolsets import AbstractToolset, CombinedToolset, DynamicToolset, ToolsetTool, WrapperToolset
 
 from muliao.agent_runtime.transient import is_transient
-from muliao.agents.api import VAULT_REF, McpConfig, McpServer, McpTransport, Vault, fill
+from muliao.agents.api import USER, VAULT_REF, McpConfig, McpServer, McpTransport, Vault, fill
 from muliao.errors import InvalidInput, NotFound, TransientError
+from muliao.platform.sandbox import Confinement
 from muliao.platform.shell import redact
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
 
@@ -156,10 +157,15 @@ def _skip(notices: list[str], *, agent: str, server: str, reason: str) -> None:
 
 
 class McpConnector:
-    """按配置连接 MCP server：解析 vault 引用、构建 toolset、脱敏失败信息。"""
+    """按配置连接 MCP server：解析 vault 引用、构建 toolset、脱敏失败信息。
 
-    def __init__(self, vault: Vault):
+    stdio server 的进程关进写沙箱（#499）：它的 command 是 agent 在自己目录里写的，不关的话等于平台替它在沙箱外跑任意
+    命令。关在用它的 agent 的限制里（自己的就是 owner 的，分发来的就是使用者的）；用户在界面上测试连接时关在 owner 的限制里，
+    平台的（platform/ 下只有 admin 能写）由用户测试时不关。"""
+
+    def __init__(self, vault: Vault, confine: Callable[[str], Awaitable[Confinement]]):
         self._vault = vault
+        self._confine = confine
 
     async def build_toolset(self, server: McpServer, user: str, cwd: Path | None) -> AbstractToolset:
         """按 user（用它的 agent 的 id，或 USER）能用的 secret 解析 vault 引用并构建 toolset；工具名以 `<server名>_` 为前缀
@@ -170,9 +176,13 @@ class McpConnector:
         secrets = await self._vault.resolve_many(user, _vault_keys(c))
         if c.transport == McpTransport.STDIO:
             assert c.command is not None
+            argv = [c.command, *(fill(a, secrets) for a in c.args)]
+            confined_as = user if user != USER else server.owner
+            if confined_as is not None:
+                argv = (await self._confine(confined_as)).wrap(argv)
             client = StdioTransport(
-                command=c.command,
-                args=[fill(a, secrets) for a in c.args],
+                command=argv[0],
+                args=argv[1:],
                 env={k: fill(v, secrets) for k, v in c.env.items()} or None,
                 cwd=None if cwd is None else str(cwd),
                 # 每次运行新建 transport、不复用：运行结束（toolset 退出）时子进程随之退出。fastmcp 默认 keep_alive=True，

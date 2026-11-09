@@ -2,8 +2,9 @@
 误写别处的东西。对 agent 无感：工具、说明、提示词都不提它；在范围内一切照旧，写到范围外时只在原本的系统报错后面补一句
 说明（denial_note）。
 
-可写路径 = 它的工作目录 + 默认可写的几类路径（DEFAULT_WRITABLE）− 受保护的（PROTECTED）+ 它的 `write:path:<目录>` 授权
-− 它的 deny 里的 `write:path:<目录>`，后面的覆盖前面的。类别换成具体路径、命令怎么关进沙箱由执行层按当前系统做
+可写路径 = 它的工作目录 + 默认可写的几类路径（DEFAULT_WRITABLE）− 受保护的（PROTECTED）− 整棵 AI 资源树 + 树里它能改的
+资源（agents.access.write_scope：自己的目录、角色授予 write 的、admin 整棵树，#499）+ 它的 `write:path:<目录>` 授权 − 它的
+deny 里的 `write:path:<目录>`，后面的覆盖前面的。「能不能改某项资源」由此完全由沙箱回答。类别换成具体路径、命令怎么关进沙箱由执行层按当前系统做
 （platform.sandbox）。
 """
 
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import anyio
 
-from muliao.agents.api import Rules
+from muliao.agents.api import WriteScope
 from muliao.errors import Forbidden
 from muliao.platform.sandbox import Category, Confinement, Sandbox, WritablePaths, expand
 
@@ -46,35 +47,37 @@ def _note(path: Path) -> str:
 
 
 class Confiner:
-    """按 agent 现在的分发规则算出它的 Confinement：每次起命令、写文件时现算，改了授权下一条命令就生效。
-    受保护的排在授权之前：授权它本身或它的上级目录都会放开它。"""
+    """按 agent 现在的分发规则与资源归属算出它的 Confinement：每次起命令、写文件时现算，改了授权下一条命令就生效。
+    受保护的与资源树排在授权之前：`write:path` 授权它本身或它的上级目录都会放开它。"""
 
     def __init__(
         self,
         sandbox: Sandbox,
         workspace_of: Callable[[str], Path],
-        rules_of: Callable[[str], Awaitable[Rules]],
+        scope_of: Callable[[str], Awaitable[WriteScope]],
         # 服务运行用户的家目录，与适配器的是同一个（组合根注入）
         home: Path,
     ):
         self._sandbox = sandbox
         self._workspace_of = workspace_of
-        self._rules_of = rules_of
+        self._scope_of = scope_of
         self._home = home
 
     async def of(self, agent_id: str) -> Confinement:
-        allow, deny = (await self._rules_of(agent_id)).paths()
-        # 规则的形式已在写入时校验（agents.permissions.kind_of）：绝对路径或 ~/ 开头
+        scope = await self._scope_of(agent_id)
+        # 规则的形式已在读入时校验（agents.permissions.kind_of）：绝对路径或 ~/ 开头
         rules = [
             (True, self._workspace_of(agent_id)),
             *((True, p) for c in DEFAULT_WRITABLE for p in self._sandbox.paths(c)),
             *((False, p) for c in PROTECTED for p in self._sandbox.paths(c)),
-            *((True, expand(p, self._home)) for p in allow),
-            *((False, expand(p, self._home)) for p in deny),
+            (False, scope.tree),
+            *((True, p) for p in scope.assets),
+            *((True, expand(p, self._home)) for p in scope.granted),
+            *((False, expand(p, self._home)) for p in scope.revoked),
         ]
         # 换成真实路径要读文件系统
         writable = await anyio.to_thread.run_sync(WritablePaths.of, rules, agent_id)
-        return Confinement(self._sandbox, writable, self._home)
+        return Confinement(self._sandbox, writable, self._home, lambda p: scope.refusal(p) or _note(p))
 
 
 def check_write(confinement: Confinement, path: Path) -> None:
@@ -83,7 +86,7 @@ def check_write(confinement: Confinement, path: Path) -> None:
     if confinement.writable.permits(path):
         return
     if confinement.enforcing:
-        raise Forbidden(f"[Errno 1] Operation not permitted: '{path}'\n{_note(path)}")
+        raise Forbidden(f"[Errno 1] Operation not permitted: '{path}'\n{confinement.explain(path)}")
     log.warning(
         "write outside writable paths (report mode)",
         extra={"agent": confinement.writable.owner, "path": str(path)},
@@ -108,5 +111,5 @@ def denial_note(confinement: Confinement, output: str) -> str | None:
         for found in _PATH.findall(line):
             path = expand(found, confinement.home)
             if not confinement.writable.permits(path):
-                return _note(path)
+                return confinement.explain(path)
     return None

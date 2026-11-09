@@ -7,7 +7,10 @@ from muliao.platform.shell import run_bash
 
 # 不限写的路径：这里测的是命令执行本身，写沙箱在 test_sandbox.py
 OPEN = Confinement(
-    sandbox_for("enforce", Path.home()), WritablePaths.of([(True, Path("/"))], "test"), Path.home()
+    sandbox_for("enforce", Path.home()),
+    WritablePaths.of([(True, Path("/"))], "test"),
+    Path.home(),
+    lambda p: f"[{p} refused]",
 )
 
 
