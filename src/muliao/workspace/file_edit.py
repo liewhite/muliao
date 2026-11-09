@@ -67,16 +67,19 @@ class LineRange:
         line, anchor = original[self.start - 1].rstrip("\r\n"), self.anchor.strip()
         # 超长的行在 read_file 里是截断着展示的，照抄截断后的样子也算对上
         if anchor not in {line.strip(), _clip(line).strip()}:
-            if anchor and line.strip().startswith(anchor):
-                raise InvalidInput(
-                    f"anchor is only the beginning of line {self.start} of {what}: give the whole line "
-                    "as read_file shows it, not just its beginning"
-                )
             plain = origin.text.splitlines()
             first, last = max(self.start - 3, 0), min(self.end + 2, len(plain))
+            # 只给了行首是最常见的错（#517），单说一句，免得被当成行号过期；但行号真过期时新行也可能碰巧以它开头，所以两种都提
+            prefix = bool(anchor) and line.strip().startswith(anchor)
             raise InvalidInput(
-                f"anchor does not match line {self.start} of {what}; lines {first + 1}-{last} are now:\n"
-                f"{numbered(plain, first, last)}\ngive the line numbers and anchor of the text as it is now"
+                f"anchor {'matches only the beginning of' if prefix else 'does not match'} line {self.start} of "
+                f"{what}; lines {first + 1}-{last} are now:\n{numbered(plain, first, last)}\n"
+                + (
+                    f"anchor must be the whole line as read_file shows it: if line {self.start} is the one you "
+                    "meant, give it whole; otherwise the line numbers are stale, give those of the text as it is now"
+                    if prefix
+                    else "give the line numbers and anchor of the text as it is now"
+                )
             )
         start, end = origin.now(self.start, self.end)
         starts = _line_starts(current)

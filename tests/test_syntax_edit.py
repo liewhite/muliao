@@ -68,10 +68,26 @@ def test_line_range_with_a_stale_anchor_fails_and_shows_the_lines_as_they_are_no
 
 
 def test_line_range_with_only_the_beginning_of_the_line_as_anchor_asks_for_the_whole_line():
-    with pytest.raises(
-        InvalidInput, match="anchor is only the beginning of line 2 of f: give the whole line"
-    ):
+    with pytest.raises(InvalidInput) as e:
         run(LineRange(2, 2, "  hello", "X"), "a\n  hello world\nc\n", "f")
+    message = str(e.value)
+    assert "anchor matches only the beginning of line 2 of f; lines 1-3 are now:" in message
+    assert "     2\t  hello world" in message
+    assert "give it whole; otherwise the line numbers are stale" in message
+
+
+def test_line_range_with_stale_numbers_landing_on_a_line_the_anchor_begins_still_shows_the_lines():
+    with pytest.raises(InvalidInput) as e:
+        run(LineRange(2, 2, "    }", "X"), "a\n    },\n    }\n", "f")
+    message = str(e.value)
+    assert "lines 1-3 are now:\n     1\ta\n     2\t    },\n     3\t    }" in message
+    assert "the line numbers are stale" in message
+
+
+def test_line_range_anchor_copied_from_a_truncated_line_without_its_marker_asks_for_the_line_as_shown():
+    long = "x" * 2500
+    with pytest.raises(InvalidInput, match="(?s)matches only the beginning.*as read_file shows it"):
+        run(LineRange(1, 1, long[:2000], "y"), f"{long}\nb\n", "f")
 
 
 @pytest.mark.parametrize(
