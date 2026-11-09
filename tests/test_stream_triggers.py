@@ -8,7 +8,7 @@ import anyio
 import pytest
 from pydantic_ai.messages import UserPromptPart
 
-from muliao.errors import InvalidInput
+from muliao.errors import InvalidInput, NotFound
 from muliao.sessions.api import Origin, SessionActivity
 from muliao.sessions.mailbox import queued_in
 from muliao.triggers.service import EVENT_MAX_BYTES
@@ -277,9 +277,41 @@ async def test_secrets_are_injected_and_redacted_from_events(container, make_age
     assert await _contents(container, alpha) == ["handle\n\n<event>\ngot [secret:TOKEN]\n</event>"]
 
 
-async def test_a_missing_secret_is_recorded_as_the_error(container, make_agent):
+async def test_unusable_secrets_are_refused_when_the_stream_is_created(container, make_agent):
+    """#529：没有的 key、不许进 shell 的 key，建的时候就报错，而不是建成后每次启动都失败。"""
     alpha = (await make_agent()).id
+    await container.vault.set("DEPLOY", "v", "", actor="user", owner=alpha, allow_shell=False)
+    with pytest.raises(NotFound, match="NOPE"):
+        await _create(container, alpha, "sleep 30", secrets=["NOPE"])
+    with pytest.raises(InvalidInput, match="allow_shell"):
+        await _create(container, alpha, "sleep 30", secrets=["DEPLOY"])
+    assert await container.triggers.list() == []
+
+
+async def test_unusable_secrets_are_refused_when_the_config_changes_or_it_is_reenabled(container, make_agent):
+    alpha = (await make_agent()).id
+    await container.vault.set("TOKEN", "v", "", actor="user", owner=alpha)
+    trigger = await _create(container, alpha, "sleep 30", secrets=["TOKEN"])
+    with pytest.raises(NotFound, match="NOPE"):
+        await container.triggers.update(trigger.id, config={"command": "sleep 30", "secrets": ["NOPE"]})
+
+    await container.triggers.update(trigger.id, enabled=False)
+    await container.vault.delete("TOKEN", actor="user")
+    # 只改说明时界面带着原配置：配置没变，不核对
+    renamed = await container.triggers.update(
+        trigger.id, prompt="new", config={"command": "sleep 30", "secrets": ["TOKEN"]}
+    )
+    assert renamed.prompt == "new"
+    with pytest.raises(NotFound, match="TOKEN"):
+        await container.triggers.update(trigger.id, enabled=True)
+    assert not (await container.triggers.get_by_name("feed")).enabled
+
+
+async def test_a_secret_gone_after_creation_is_recorded_as_the_error(container, make_agent):
+    alpha = (await make_agent()).id
+    await container.vault.set("NOPE", "v", "", actor="user", owner=alpha)
     await _create(container, alpha, "sleep 30", secrets=["NOPE"])
+    await container.vault.delete("NOPE", actor="user")
 
     async with _running(_runner(container)):
 

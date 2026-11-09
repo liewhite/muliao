@@ -97,6 +97,9 @@ class ScheduleKind:
             "skipped": None,
         }
 
+    def secrets(self, config: dict[str, Any]) -> list[str]:
+        return []
+
     def status(self, trigger: Trigger) -> ScheduleStatus:
         streak = _streak(trigger)
         return ScheduleStatus(

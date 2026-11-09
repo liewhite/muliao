@@ -30,7 +30,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agents.api import AgentArchived, AgentNames, runnable_agent_in
+from muliao.agents.api import AgentArchived, AgentNames, Vault, runnable_agent_in
 from muliao.agents.events import AgentDeleting
 from muliao.errors import Conflict, DomainError, InvalidInput, NotFound
 from muliao.notifications.events import Notify
@@ -122,6 +122,10 @@ class TriggerKind(Protocol):
         """
         ...
 
+    def secrets(self, config: dict[str, Any]) -> list[str]:
+        """规范化后的 config 交给命令的 vault key（没有就是空列表）；创建、改配置、重新启用时据此核对 secret 可用。"""
+        ...
+
     def status(self, trigger: Trigger) -> BaseModel:
         """给界面与模型看的运行状态（如下次触发时间、地址），不含任何凭证。
 
@@ -194,11 +198,13 @@ class TriggerService:
         db: Database,
         kinds: Mapping[str, TriggerKind],
         tz: ZoneInfo,
+        vault: Vault,
         precheck: PrecheckRunner,
         messaging: Messaging,
         run_now: Callable[[int], Awaitable[None]],
         clock: Clock = utcnow,
     ):
+        self._vault = vault
         self._precheck = precheck
         self._messaging = messaging
         # 马上执行一个已提交的投递任务（Worker.run_now）
@@ -241,6 +247,11 @@ class TriggerService:
         """触发器的读模型：行、它的触发方式给出的运行状态（TriggerKind.status）、解析好的前置检查。"""
         return TriggerView(trigger, self.kind(trigger.kind).status(trigger), precheck_of(trigger))
 
+    async def _check_secrets(self, agent_id: str, keys: list[str]) -> None:
+        """前置检查与流式命令都是 agent 自己写的命令：创建或修改时就确认这些 secret 能交给命令（含 allow_shell），
+        配置错误在第一现场报出，而不是等到运行时一直失败。要读 vault（它自己开事务），不能在别的事务里调用。"""
+        await self._vault.resolve_many(agent_id, keys, shell=True)
+
     async def _route_in(self, s: AsyncSession, address: str, agent_id: str) -> dict[str, Any] | None:
         """默认投递目标的文字地址解析成存储的形式（不合法时 InvalidInput）；新开自己的会话（默认）存为 None。"""
         target = await resolve_in(s, address, agent_id)
@@ -260,9 +271,11 @@ class TriggerService:
         """route 是默认投递目标的文字地址（routing.api.ADDRESS_HELP），不给是新开这个 agent 的会话。"""
         if not prompt.strip():
             raise InvalidInput("trigger prompt must not be empty")
-        config, state = self.kind(kind).configure(config)
-        if precheck is not None:
-            await self._precheck.check(agent_id, precheck)
+        trigger_kind = self.kind(kind)
+        config, state = trigger_kind.configure(config)
+        await self._check_secrets(
+            agent_id, trigger_kind.secrets(config) + (precheck.secrets if precheck is not None else [])
+        )
         trigger = Trigger(
             name=validate_trigger_name(name),
             agent_id=agent_id,
@@ -300,11 +313,19 @@ class TriggerService:
         重新启用时清除上次的失败原因。"""
         if prompt is not None and not prompt.strip():
             raise InvalidInput("trigger prompt must not be empty")
-        if isinstance(precheck, Precheck):
-            # 校验要读 vault（它自己开事务），不能放在下面的事务里；agent 不可改，先读出来即可
+        if isinstance(precheck, Precheck) or config is not None or enabled is True:
+            # 核对 secret 要读 vault，不能放在下面的事务里：先读出 agent（不可改）与当前配置。新配置的 secret 只在它会
+            # 生效时核对（配置变了或重新启用，与下面重新推导 state 的条件一致），只改说明时带着原配置不受影响
             async with self._db.transaction() as s:
-                agent_id = (await self._manageable_in(s, trigger_id)).agent_id
-            await self._precheck.check(agent_id, precheck)
+                current = await self._manageable_in(s, trigger_id)
+                agent_id, kind, was_enabled = current.agent_id, self.kind(current.kind), current.enabled
+                stored = current.config
+            keys = precheck.secrets if isinstance(precheck, Precheck) else []
+            if config is not None or enabled is True:
+                new_config, _ = kind.configure(stored if config is None else config)
+                if new_config != stored or (enabled is True and not was_enabled):
+                    keys = keys + kind.secrets(new_config)
+            await self._check_secrets(agent_id, keys)
         async with self._db.transaction() as s:
             trigger = await self._manageable_in(s, trigger_id)
             if not isinstance(precheck, Keep):

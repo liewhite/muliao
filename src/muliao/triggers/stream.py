@@ -122,6 +122,9 @@ class StreamKind:
             "failures": 0,
         }
 
+    def secrets(self, config: dict[str, Any]) -> list[str]:
+        return StreamConfig.model_validate(config).secrets
+
     def status(self, trigger: Trigger) -> StreamStatus:
         state = trigger.state
         return StreamStatus(

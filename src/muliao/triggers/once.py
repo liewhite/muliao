@@ -75,6 +75,9 @@ class OnceKind:
         # 到期时间就是配置本身，没有随运行变化的状态
         return {"at": at.isoformat()}, {}
 
+    def secrets(self, config: dict[str, Any]) -> list[str]:
+        return []
+
     def status(self, trigger: Trigger) -> OnceStatus:
         return OnceStatus(run_at=run_at(trigger))
 

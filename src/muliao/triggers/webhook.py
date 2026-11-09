@@ -61,6 +61,9 @@ class WebhookKind:
         parse_config(KIND, WebhookConfig, config)
         return {}, {}
 
+    def secrets(self, config: dict[str, Any]) -> list[str]:
+        return []
+
     def status(self, trigger: Trigger) -> WebhookStatus:
         return WebhookStatus(
             url=hook_url(self._public_url, trigger.name), has_token="token_hash" in trigger.state

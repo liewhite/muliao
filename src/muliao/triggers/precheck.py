@@ -193,10 +193,6 @@ class PrecheckRunner:
         self._timeout = timeout
         self._max_bytes = max_bytes
 
-    async def check(self, agent_id: str, precheck: Precheck) -> None:
-        """创建或修改时就确认 secret 可见：配置错误在第一现场报出，而不是等到第一次触发。"""
-        await self._vault.resolve_many(agent_id, precheck.secrets, shell=True)
-
     @property
     def max_bytes(self) -> int:
         return self._max_bytes
