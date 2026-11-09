@@ -41,6 +41,7 @@ from muliao.agents.secrets_format import secret_file
 from muliao.agents.skill_package import SKILL_FILE
 from muliao.agents.tables import Agent, AgentRulesRow, Item, ItemFile, RoleRow
 from muliao.platform.db import Database
+from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def _write(rows: _Rows, tmp: Path, root: Path, legacy_skills_dir: Path) -> None:
         doc["thinking"] = a.thinking
         if a.group is not None:
             doc["group"] = a.group
-        assets.write_text(tmp / a.name / AGENT_FILE, tomlkit.dumps(doc))
+        write_atomic(tmp / a.name / AGENT_FILE, tomlkit.dumps(doc))
 
     # 旧路径 → 新路径（导出后的根目录下）
     skill_dirs = {
@@ -130,18 +131,18 @@ def _write(rows: _Rows, tmp: Path, root: Path, legacy_skills_dir: Path) -> None:
                         "memory not named after its agent moved to the platform", extra={"memory": i.name}
                     )
                 text = rewrite(i.content)
-                assets.write_text(path, text + "\n" if text else "")
+                write_atomic(path, text + "\n" if text else "")
             case "skill":
                 directory = base / SKILLS_DIR / i.name
-                assets.write_text(directory / SKILL_FILE, rewrite(i.content))
+                write_atomic(directory / SKILL_FILE, rewrite(i.content))
                 for f in by_item.get(i.id, []):
-                    assets.write_text(directory / f.path, rewrite(f.content), executable=f.executable)
+                    write_atomic(directory / f.path, rewrite(f.content), executable=f.executable)
             case "mcp":
                 config = McpConfig.model_validate_json(i.content)
-                assets.write_text(base / MCP_DIR / f"{i.name}.json", mcp_file(config, i.enabled))
+                write_atomic(base / MCP_DIR / f"{i.name}.json", mcp_file(config, i.enabled))
             case "secret":
                 assert i.secret is not None, "a secret item always has its ciphertext"
-                assets.write_text(base / SECRETS_DIR / f"{i.name}.toml", secret_file(i.description, i.secret))
+                write_atomic(base / SECRETS_DIR / f"{i.name}.toml", secret_file(i.description, i.secret))
             case other:
                 raise RuntimeError(f"unknown item kind {other!r} ({i.name})")
 

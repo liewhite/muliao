@@ -22,6 +22,7 @@ from muliao.agents.kinds import StoredKind
 from muliao.agents.secrets_format import KEY_SYNTAX, VAULT_REF, secret_file, validate_key
 from muliao.agents.source import AssetSource
 from muliao.errors import InvalidInput, NotFound
+from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class Vault:
         async with self._source.writing() as snapshot:
             existing = writable(snapshot, _KIND, key, actor)
             path = existing.path if existing is not None else snapshot.path_of(_KIND, key, owner)
-            await asyncio.to_thread(assets.write_text, path, secret_file(description, ciphertext))
+            await asyncio.to_thread(write_atomic, path, secret_file(description, ciphertext))
         # 别的 agent 可能依赖它：记录谁改了哪个 key（不记值）
         log.info("secret set", extra={"owner": owner, "key": key, "actor": actor})
 

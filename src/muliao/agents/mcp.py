@@ -17,6 +17,7 @@ from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import McpConfig, McpServer, McpTransport, mcp_config, mcp_file
 from muliao.agents.naming import validate_slug
 from muliao.agents.source import AssetSource
+from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class McpRegistry:
         async with self._source.writing() as snapshot:
             self._check_free(snapshot, name)
             path = snapshot.path_of(_KIND, name, owner)
-            await asyncio.to_thread(assets.write_text, path, mcp_file(config, True))
+            await asyncio.to_thread(write_atomic, path, mcp_file(config, True))
         log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
 
@@ -85,5 +86,5 @@ class McpRegistry:
         async with self._source.writing() as snapshot:
             server = server_of(changeable(snapshot, _KIND, name, actor))
             path = snapshot.asset(_KIND, name).path
-            await asyncio.to_thread(assets.write_text, path, mcp_file(server.config, enabled))
+            await asyncio.to_thread(write_atomic, path, mcp_file(server.config, enabled))
             return McpServer(server.owner, name, server.config, enabled)

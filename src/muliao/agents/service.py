@@ -32,6 +32,7 @@ from muliao.agents.tables import Agent
 from muliao.agents.thinking import THINKING_LEVELS, Thinking, check_thinking_level
 from muliao.errors import Conflict, InvalidInput, NotFound
 from muliao.platform.db import Database, utcnow
+from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -501,8 +502,8 @@ def _write_new_agent(
     directory: Path, access: Path, agent_id: str, fields: _AgentFields, rules: AgentRules
 ) -> None:
     directory.mkdir(parents=True)
-    assets.write_text(directory / AGENT_FILE, _agent_toml(directory, agent_id, fields))
-    assets.write_text(directory / PRIVATE_MEMORY_FILE, "")
+    write_atomic(directory / AGENT_FILE, _agent_toml(directory, agent_id, fields))
+    write_atomic(directory / PRIVATE_MEMORY_FILE, "")
     access_file.edit(access, lambda doc: access_file.set_agent_rules(doc, fields.name, rules))
 
 
@@ -527,13 +528,13 @@ def _write_agent_update(
         if old_access is None:
             access.unlink(missing_ok=True)
         else:
-            assets.write_text(access, old_access)
-        assets.write_text(target / AGENT_FILE, old_toml)
+            write_atomic(access, old_access)
+        write_atomic(target / AGENT_FILE, old_toml)
         if target != directory:
             target.rename(directory)
 
     try:
-        assets.write_text(target / AGENT_FILE, _agent_toml(target, agent_id, fields))
+        write_atomic(target / AGENT_FILE, _agent_toml(target, agent_id, fields))
 
         def change(doc: tomlkit.TOMLDocument) -> None:
             if fields.name != old_name:

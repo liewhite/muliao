@@ -10,15 +10,15 @@ import tomlkit
 from tomlkit.items import Table
 from tomlkit.toml_document import TOMLDocument
 
-from muliao.agents import assets
 from muliao.agents.agent_rules import AgentRules
+from muliao.platform.fs import write_atomic
 
 
 def edit(path: Path, change: Callable[[TOMLDocument], None]) -> None:
     """读出 path（不存在就是空文档）、交给 change 改、原子写回。同步 IO。"""
     doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.is_file() else tomlkit.document()
     change(doc)
-    assets.write_text(path, tomlkit.dumps(doc))
+    write_atomic(path, tomlkit.dumps(doc))
 
 
 def _section(doc: TOMLDocument, name: str) -> Table:

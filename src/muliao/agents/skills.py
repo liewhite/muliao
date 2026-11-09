@@ -20,6 +20,7 @@ from muliao.agents.kinds import StoredKind, label
 from muliao.agents.naming import validate_slug
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped, parse_frontmatter
 from muliao.agents.source import AssetSource
+from muliao.platform.fs import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ def _replace_dir(directory: Path, files: Mapping[str, SkillFile]) -> None:
     tmp = parent / f".{directory.name}.new"
     assets.remove(tmp)
     for rel, f in files.items():
-        assets.write_text(tmp / rel, f.content, executable=f.executable)
+        write_atomic(tmp / rel, f.content, executable=f.executable)
     old = parent / f".{directory.name}.old"
     assets.remove(old)
     if directory.exists():
@@ -119,7 +120,7 @@ class SkillStore:
                 )
                 post.content = body.strip() + "\n"
                 post["name"], post["description"] = name, description
-                assets.write_text(md, frontmatter.dumps(post) + "\n")
+                write_atomic(md, frontmatter.dumps(post) + "\n")
 
             await asyncio.to_thread(put)
         return _meta((await self._source.snapshot()).asset(_KIND, name))

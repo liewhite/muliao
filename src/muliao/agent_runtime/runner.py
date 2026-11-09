@@ -193,8 +193,8 @@ class AgentRuntime:
         resumed = frozenset(deferred or ())
         instructions = await self.instructions(agent, scope, summary, origin_note)
         # 这次驱动自己的一份 scope：notices 先放资源目录里与它相关的问题（读坏、名字冲突而没加载的文件），工具组连接时
-        # 再往里加；压缩后续跑会重新连接工具组
-        scope = replace(scope, notices=await self._asset_problems(agent.id))
+        # 再往里加；压缩后续跑会重新连接工具组。读过的文件从空开始（压缩后模型看不到之前读到的内容了）
+        scope = replace(scope, notices=await self._asset_problems(agent.id), reads={})
         ctx = {
             "agent": scope.agent_id,
             "session_id": scope.session_id,

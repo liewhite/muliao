@@ -14,8 +14,9 @@
     skills/<名>/  mcp/<名>.json  secrets/<KEY>.toml
 ```
 
-这里只管文件：布局、把整棵树读成一份不可变的快照（load_tree，纯同步 IO），以及原子写入。读坏的文件不加载、记成
-Problem（路径与原因），名字冲突的（同一种类的同名资源在不止一处）全部不加载、每处各记一条；运行时把与这个 agent 相关的
+这里只管文件：布局、把整棵树读成一份不可变的快照（load_tree，纯同步 IO），以及平台自己写（原子写入用 platform.fs.write_atomic）时的删除、挪动。读坏的文件不加载、记成
+Problem（路径与原因）。名字冲突的（同一种类的同名资源在不止一处）：其中一处在平台目录时只加载平台那份，其余各记一条；
+否则全部不加载、每处各记一条（_Reader.resolved）。运行时把与这个 agent 相关的
 报给它（agents.source.AssetSource）。agent 目录按 agent.toml 里的 id 对应数据库里的 agent，目录名必须就是数据库里它的名字
 （名字只认数据库，改名只走平台）；对不上（id 不认识、重复、目录名不同）的整个目录不加载。
 
@@ -27,7 +28,6 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import tempfile
 import tomllib
 import unicodedata
 from collections.abc import Callable, Mapping
@@ -150,6 +150,8 @@ class Snapshot:
     problems: tuple[Problem, ...]
     # 磁盘上有、但读坏了或名字冲突而没加载的资源名：新建同名的会再添一处冲突，按已占用处理（check_free）
     unloaded: Mapping[StoredKind, frozenset[str]]
+    # 被平台同名的那份遮住、没加载的 agent 目录里的副本（#502），按名字：平台那份转给 agent 之前要先处理掉它们
+    shadowed: Mapping[StoredKind, Mapping[str, tuple[Path, ...]]]
 
     def rules_of(self, agent_id: str) -> AgentRules:
         return self.rules.get(agent_id, AgentRules())
@@ -245,6 +247,9 @@ class _Reader:
         # 每种资源：名字 → 找到的各处（冲突时不止一处）
         self.found: dict[StoredKind, dict[str, list[Asset]]] = {k: {} for k in StoredKind}
         self.unloaded: dict[StoredKind, set[str]] = {k: set() for k in StoredKind}
+        # 平台目录里读坏了的名字：仍归平台占着，agent 的副本照样被遮住（不让副本趁平台那份坏了接管）
+        self.broken_platform: dict[StoredKind, set[str]] = {k: set() for k in StoredKind}
+        self.shadowed: dict[StoredKind, dict[str, tuple[Path, ...]]] = {k: {} for k in StoredKind}
 
     def problem(self, path: Path, reason: str, owner: str | None) -> None:
         self.problems.append(Problem(path, reason, owner))
@@ -293,7 +298,14 @@ class _Reader:
                     "its last known name, description and model, without private memory and own assets",
                     agent_id,
                 )
-        roles, rules = self.access(agents)
+        access = self.root / PLATFORM / ACCESS_FILE
+        text = None
+        if access.is_file():
+            try:
+                text = access.read_text(encoding="utf-8")
+            except UnicodeDecodeError as e:
+                self.problem(access, f"cannot parse: {e}; only the fixed parts of built-in roles apply", None)
+        roles, rules = self.access(agents, text)
         return Snapshot(
             self.root,
             dict(self.known),
@@ -303,13 +315,30 @@ class _Reader:
             rules,
             tuple(self.problems),
             {k: frozenset(v) for k, v in self.unloaded.items()},
+            {k: dict(v) for k, v in self.shadowed.items()},
         )
 
     def resolved(self, kind: StoredKind) -> dict[str, Asset]:
+        """同名的只在一处才加载。平台目录优先（#502）：平台的那份照常加载（读坏了也照样占着名字），agent 目录里同名的
+        不加载、报给那个 agent，免得 agent 在自己目录里复制一份公共资源就让所有人都用不了它；agent 之间同名地位相同，
+        全部不加载。"""
         out: dict[str, Asset] = {}
         for name, places in sorted(self.found[kind].items()):
-            if len(places) == 1:
+            platform = [a for a in places if a.owner is None]
+            broken = name in self.broken_platform[kind]
+            if len(places) == 1 and not broken:
                 out[name] = places[0]
+                continue
+            if len(platform) == 1 or broken:
+                copies = [a for a in places if a.owner is not None]
+                if platform:
+                    out[name] = platform[0]
+                    where = str(platform[0].path.relative_to(self.root))
+                else:
+                    where = f"{PLATFORM}/ (broken, see the problem reported for it)"
+                self.shadowed[kind][name] = tuple(a.path for a in copies)
+                for a in copies:
+                    self.shadow(kind, name, a, where)
                 continue
             for a in places:
                 others = [str(p.path.relative_to(self.root)) for p in places if p is not a]
@@ -322,6 +351,30 @@ class _Reader:
             self.unloaded[kind].add(name)
         return out
 
+    def shadow(self, kind: StoredKind, name: str, copy: Asset, where: str) -> None:
+        """agent 目录里的 copy 与平台的同名，不加载，报给它。私有记忆的名字就是 agent 名、改不了：报给它不要动，另报给
+        admin 处理平台那份。"""
+        if kind != StoredKind.MEMORY:
+            self.problem(
+                copy.path,
+                f"{label(kind)} name {name!r} is already used by the platform's {where}; the platform's one is "
+                "loaded and this one is not: rename or remove it",
+                copy.owner,
+            )
+            return
+        self.problem(
+            copy.path,
+            f"your private memory is not loaded: the platform has a memory with the same name {name!r} ({where}); "
+            "do not rename or remove this file, an admin has to rename or move the platform's one",
+            copy.owner,
+        )
+        self.problem(
+            self.root / PLATFORM / MEMORY_DIR / f"{name}.md",
+            f"memory {name!r} has the name of agent {name!r}, whose private memory is therefore not loaded: rename "
+            "it, or move it into that agent's directory if it is that agent's memory",
+            None,
+        )
+
     def agent_dir(self, path: Path) -> AgentDir | None:
         name = _nfc(path.name)
         file = path / AGENT_FILE
@@ -329,9 +382,9 @@ class _Reader:
             self.problem(path, f"no {AGENT_FILE}: not an agent directory", None)
             return None
         try:
-            data = AgentFile.model_validate(tomllib.loads(file.read_text(encoding="utf-8")))
-        except (tomllib.TOMLDecodeError, UnicodeDecodeError, ValidationError) as e:
-            self.problem(file, f"invalid {AGENT_FILE}: {_brief(e)}", None)
+            data = parse_agent_file(file.read_text(encoding="utf-8"))
+        except (InvalidInput, UnicodeDecodeError) as e:
+            self.problem(file, str(e), None)
             return None
         if data.id not in self.known:
             self.problem(file, f"id {data.id!r} is not an existing agent", None)
@@ -401,6 +454,8 @@ class _Reader:
         except (InvalidInput, OSError, UnicodeDecodeError) as e:
             self.problem(path, str(e), owner)
             self.unloaded[kind].add(name)
+            if owner is None:
+                self.broken_platform[kind].add(name)
 
     def memory(self, path: Path, name: str, owner: str | None) -> None:
         def load() -> Asset:
@@ -448,15 +503,17 @@ class _Reader:
 
         self.guarded(StoredKind.SECRET, path.stem, path, owner, load)
 
-    def access(self, agents: Mapping[str, AgentDir]) -> tuple[dict[str, Role], dict[str, AgentRules]]:
-        """access.toml：坏掉的单条规则、不认识的角色各自跳过并记一条，其余照常（不让一个笔误拿掉一个 agent 的全部角色）。
-        整个文件读不出来时只剩内置角色的固定部分，没有任何 agent 的规则。"""
+    def access(
+        self, agents: Mapping[str, AgentDir], text: str | None
+    ) -> tuple[dict[str, Role], dict[str, AgentRules]]:
+        """access.toml 的内容 text（没有这个文件为 None）：坏掉的单条规则、不认识的角色各自跳过并记一条，其余照常（不让
+        一个笔误拿掉一个 agent 的全部角色）。整个文件读不出来时只剩内置角色的固定部分，没有任何 agent 的规则。"""
         path = self.root / PLATFORM / ACCESS_FILE
         data: dict[str, object] = {}
-        if path.is_file():
+        if text is not None:
             try:
-                data = tomllib.loads(path.read_text(encoding="utf-8"))
-            except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+                data = tomllib.loads(text)
+            except tomllib.TOMLDecodeError as e:
                 self.problem(path, f"cannot parse: {e}; only the fixed parts of built-in roles apply", None)
         extra = sorted(set(data) - {"roles", "agents"})
         if extra:
@@ -540,6 +597,21 @@ def _brief(e: Exception) -> str:
     return str(e)
 
 
+def parse_agent_file(text: str) -> AgentFile:
+    """agent.toml 的格式（不含与数据库的对应）；不合规则时 InvalidInput。"""
+    try:
+        return AgentFile.model_validate(tomllib.loads(text))
+    except (tomllib.TOMLDecodeError, ValidationError) as e:
+        raise InvalidInput(f"invalid {AGENT_FILE}: {_brief(e)}") from e
+
+
+def access_problems(snapshot: Snapshot, text: str) -> list[str]:
+    """access.toml 若写成 text，按读树的同一套规则会报的问题（对照 snapshot 里的 agent 与角色）。"""
+    reader = _Reader(snapshot.root, snapshot.names, 0)
+    reader.access(snapshot.agents, text)
+    return [p.reason for p in reader.problems]
+
+
 def load_tree(root: Path, known: Mapping[str, str], memory_max_chars: int) -> Snapshot:
     """读整棵树。known 是数据库里的 agent（id → 名字，含正在删除的）：agent 目录按 agent.toml 的 id 对上它们。同步 IO，
     调用方放到线程里。"""
@@ -566,23 +638,6 @@ def fingerprint(root: Path) -> tuple[tuple[str, int, int], ...]:
 
 
 # ---- 写入（平台自己写的：界面、vault_set、建 agent、迁移） ----
-
-
-def write_text(path: Path, text: str, *, executable: bool | None = None) -> None:
-    """原子写入：先写同目录的临时文件再 rename，读的人看不到写了一半的文件。executable 为 None 时保留原文件的可执行位
-    （新文件不可执行）。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if executable is None:
-        executable = path.is_file() and os.access(path, os.X_OK)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.chmod(tmp, 0o755 if executable else 0o644)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
 
 
 def remove(path: Path) -> None:

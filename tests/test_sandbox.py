@@ -279,7 +279,13 @@ async def test_refused_asset_writes_say_whose_it_is_and_whom_to_ask(container, m
         [
             ("run_shell", {"command": f"echo x >> {skill_md}", "timeout": 30}),
             ("write_file", {"path": str(tree / "platform/access.toml"), "content": "[agents.carol]\n"}),
-            ("write_file", {"path": str(tree / "carol/skills/mine/SKILL.md"), "content": "x"}),
+            (
+                "write_file",
+                {
+                    "path": str(tree / "carol/skills/mine/SKILL.md"),
+                    "content": "---\ndescription: mine\n---\nx\n",
+                },
+            ),
         ],
     )
     assert "Operation not permitted" in outputs[0]

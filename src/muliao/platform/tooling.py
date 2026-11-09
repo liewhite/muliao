@@ -31,6 +31,9 @@ class RunScope:
     # 开头交给模型的运行上下文（AgentRuntime）。每次驱动一份：只由 AgentRuntime 在驱动前换新（dataclasses.replace），
     # 别处构造的 RunScope 不要和别的运行共用这个列表
     notices: list[str] = field(default_factory=list, compare=False)
+    # 这次驱动里 read_file 读过、或文件工具刚写过的文件：真实路径 → 当时的修改时间（ns）。write_file 整体覆盖资源目录里
+    # 已有的文件之前核对它（读过、之后没被别人改过），防止两处同时改时后写的静默盖掉先写的。与 notices 一样每次驱动换新
+    reads: dict[Path, int] = field(default_factory=dict, compare=False)
 
     @property
     def user_waits(self) -> bool:

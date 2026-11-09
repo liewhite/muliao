@@ -15,9 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import BinaryContent, FunctionToolset, RunContext, ToolReturn
 
 from muliao.agent_runtime.api import TOOL_ATTACHMENTS, attachment_of
+from muliao.agents.api import AssetSource
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import INLINE_IMAGE_TYPES, FileStore
 from muliao.platform import text_edit
+from muliao.platform.fs import write_atomic
 from muliao.platform.text_edit import truncate
 from muliao.platform.tool_views import Args, CodeBlock, ToolRender, ViewBlock, diff, rendered_by
 from muliao.platform.tooling import TOOL_MAX_RETRIES, RunScope
@@ -146,7 +148,9 @@ def resolve(scope: RunScope, path: str) -> Path:
     return p if p.is_absolute() else scope.workspace / p
 
 
-def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> FunctionToolset[RunScope]:
+def file_toolset(
+    limits: ShellLimits, files: FileStore, confiner: Confiner, assets: AssetSource
+) -> FunctionToolset[RunScope]:
     # 文件工具都是屏障（sequential）：同一次回复里排在它前面的调用先做完、它再执行，排在后面的等它做完。
     # 模型常在一次回复里先 run_shell 生成文件、再 read_file/share_file 它；并行执行时文件还没生成，
     # 报 file not found（#224）。文件工具都是瞬时的本地操作，串行几乎没有代价；不夹着文件工具时
@@ -191,6 +195,7 @@ def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> F
                 if offset != 1 or limit != _DEFAULT_READ_LIMIT:
                     raise InvalidInput(f"offset/limit do not apply to an image file: {target}")
                 return _read_image(target, media_type, files.max_bytes)
+            _remember(ctx.deps, target)
             excerpt = _read_range(target, offset, limit, limits.max_output_chars - _PART_OVERHEAD)
             # 按行截断后正文已在预算内；只有第一行就比整个预算还长时这里才会再截
             return truncate(excerpt.body, limits.max_output_chars) + excerpt.more_note
@@ -200,6 +205,10 @@ def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> F
     @_io_errors_returned
     async def write_file(ctx: RunContext[RunScope], path: str, content: str) -> str:
         """Create or overwrite a text file. Parent directories are created as needed.
+        In the AI asset tree (where memory and skills live), write_file and edit_file check a file's format
+        before writing and refuse it with the reason if it is wrong; write_file overwrites an existing asset
+        file only if you read it with read_file in this run and nobody changed it since (else read it again,
+        or change just a part with edit_file).
 
         Args:
             path: File path.
@@ -208,8 +217,15 @@ def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> F
         target = resolve(ctx.deps, path)
         check_write(await confiner.of(ctx.deps.agent_id), target)
         existed = target.is_file()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        if assets.contains(target):
+            if existed:
+                _check_fresh(ctx.deps, target)
+            await assets.vet(target, content)
+            write_atomic(target, content)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        _remember(ctx.deps, target)
         verb = "overwrote" if existed else "created"
         return f"{verb} {target} ({len(content.splitlines())} lines, {len(content)} chars)"
 
@@ -304,11 +320,17 @@ def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> F
                 before[target] = target.read_text(encoding="utf-8")
             located.append(_Located(target, e))
         after, counts = file_edit.apply_each(before, [(c.target, c) for c in located])
-        # 全部校验通过才写盘
+        in_tree = {t for t in after if assets.contains(t)}
+        for target in in_tree:
+            await assets.vet(target, after[target])
+        # 全部校验通过才写盘；资源目录里的原子写入（读树的不会读到写了一半的文件）
         written: list[Path] = []
         for target, content in after.items():
             try:
-                target.write_text(content, encoding="utf-8")
+                if target in in_tree:
+                    write_atomic(target, content)
+                else:
+                    target.write_text(content, encoding="utf-8")
             except OSError as e:
                 done = (
                     f" Already written: {', '.join(map(str, written))}."
@@ -323,6 +345,7 @@ def file_toolset(limits: ShellLimits, files: FileStore, confiner: Confiner) -> F
                 )
                 raise _io_error(e, done + torn) from e
             written.append(target)
+            _remember(ctx.deps, target)
         reports = [_edit_report(t, before[t], after[t], counts[t]) for t in after]
         return truncate("\n\n".join(reports), limits.max_output_chars)
 
@@ -392,6 +415,29 @@ def _read_image(target: Path, media_type: str, max_bytes: int) -> list[str | Bin
     return [f"{target} ({media_type}, {len(data)} bytes)", BinaryContent(data, media_type=media_type)]
 
 
+def _remember(scope: RunScope, target: Path) -> None:
+    """记下这次驱动读到（或刚写成）的文件当时的修改时间（RunScope.reads）。读之前记：读的过程中被改了，记下的是旧的，
+    之后覆盖时按「改过了」拒绝，不会放过。"""
+    if target.is_file():
+        scope.reads[Path(os.path.realpath(target))] = target.stat().st_mtime_ns
+
+
+def _check_fresh(scope: RunScope, target: Path) -> None:
+    """write_file 整体覆盖资源目录里已有的文件之前：这次驱动读过它、之后没被改过；否则拒绝，免得盖掉别处刚做的修改
+    （共享记忆、access.toml 可能有几处同时在改）。"""
+    seen = scope.reads.get(Path(os.path.realpath(target)))
+    if seen is None:
+        raise InvalidInput(
+            f"{target} is an existing AI asset file and write_file replaces it whole: read it with read_file "
+            "first (in this run), then write; or change just the part you mean with edit_file. Nothing was written."
+        )
+    if target.stat().st_mtime_ns != seen:
+        raise InvalidInput(
+            f"{target} was changed after you read it (by someone else, or a command): read it again and redo "
+            "your change on the current content, or use edit_file. Nothing was written."
+        )
+
+
 def _read_parts(scope: RunScope, reads: tuple[FileRange, ...], max_chars: int) -> str:
     """read_file 的多段读取：按次序读，共用一个输出预算。预算用完的那段在整行处停下并写明续读的 offset；之后
     的段不再读，最后一行逐个列出（这一行不参与截断），模型照着另起一次调用、不必猜。"""
@@ -407,6 +453,7 @@ def _read_parts(scope: RunScope, reads: tuple[FileRange, ...], max_chars: int) -
         try:
             if _image_type(target):
                 raise InvalidInput("an image file cannot be read in reads; read it alone with path")
+            _remember(scope, target)
             excerpt = _read_range(target, part.offset, part.limit, body_budget)
         except (InvalidInput, NotFound, OSError) as e:
             # 标题用模型给的路径认出是哪一段（有的错误信息里不带路径）

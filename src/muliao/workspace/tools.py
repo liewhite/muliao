@@ -6,7 +6,7 @@
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agents.api import Vault
+from muliao.agents.api import AssetSource, Vault
 from muliao.errors import InvalidInput
 from muliao.files.api import FileStore
 from muliao.platform.shell import LEFT_RUNNING_NOTE, run_bash
@@ -47,10 +47,15 @@ _BACKGROUND_DESCRIPTION = (
 
 
 def workspace_toolset(
-    vault: Vault, limits: ShellLimits, files: FileStore, jobs: JobRunner, confiner: Confiner
+    vault: Vault,
+    limits: ShellLimits,
+    files: FileStore,
+    jobs: JobRunner,
+    confiner: Confiner,
+    assets: AssetSource,
 ) -> FunctionToolset[RunScope]:
     """文件、shell 与后台任务。"""
-    ts = file_toolset(limits, files, confiner)
+    ts = file_toolset(limits, files, confiner, assets)
     # 输出上限是配置的值，写进说明：模型不知道它，长输出被截了才学会
     description = _SHELL_DESCRIPTION.format(max_output=limits.max_output_chars) + _BACKGROUND_DESCRIPTION
 

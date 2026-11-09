@@ -16,7 +16,7 @@ from muliao.agents.kinds import Kind, StoredKind, as_kind, label
 from muliao.agents.mcp import McpServer, server_of
 from muliao.agents.permissions import ToolSpec, spec_of
 from muliao.agents.source import AssetSource
-from muliao.errors import InvalidInput, NotFound
+from muliao.errors import Conflict, InvalidInput, NotFound
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +98,14 @@ class ItemCatalog:
                 raise InvalidInput(
                     f"an agent's private memory is named after the agent; memory {name!r} cannot go to "
                     f"{snapshot.owner_label(owner)}"
+                )
+            copies = snapshot.shadowed[kind].get(name, ())
+            if owner is not None and copies:
+                # 平台那份遮住着 agent 目录里的同名副本（#502）：转给 agent 后就是 agent 之间同名，两边都不加载
+                raise Conflict(
+                    f"{label(kind)} {name!r} has copies in agent directories that the platform's one hides: "
+                    f"{[str(p) for p in copies]}; once it belongs to an agent, the copies would clash with it and "
+                    "none would load. Rename or remove the copies first"
                 )
             await asyncio.to_thread(assets.move, asset.path, snapshot.path_of(kind, name, owner))
         log.info("item transferred", extra={"kind": kind, "item": name, "owner": owner, "actor": actor})

@@ -5,6 +5,7 @@
 - 读到的 agent 配置（描述、模型、思考档位、分组；名字只认数据库）同步到 agents 表的镜像列（agents.active.sync_mirror_in）；模型或
   思考档位在当前配置下不能运行的不同步、记成 Problem，agent 照旧用上次同步的值运行。
 - 平台自己写资源（界面、vault_set、建 / 改名 / 删 agent）时在 writing() 里做：与读共用一把锁，读-改-写串行。
+- 文件工具写资源目录里的文件之前问 contains / vet（agents.asset_files）：按读树的规则校验格式（#500）。
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from muliao.agents import asset_files
 from muliao.agents.active import Mirrored, known_agents_in, sync_mirror_in
 from muliao.agents.assets import AGENT_FILE, Problem, Snapshot, fingerprint, load_tree
 from muliao.agents.thinking import Thinking, check_thinking_level
@@ -87,6 +89,17 @@ class AssetSource:
         if not problems:
             return snapshot
         return dataclasses.replace(snapshot, problems=(*snapshot.problems, *problems))
+
+    def contains(self, path: Path) -> bool:
+        """path 是资源目录里的文件（按真实路径）。"""
+        return asset_files.in_tree(self.root, path)
+
+    async def vet(self, path: Path, text: str) -> None:
+        """文件工具把资源目录里的 path 写成 text 之前：不合格式时 InvalidInput（agents.asset_files）。"""
+        snapshot = await self.snapshot()
+        await asyncio.to_thread(
+            asset_files.vet, snapshot, path, text, self.memory_max_chars, self._check_model
+        )
 
     @asynccontextmanager
     async def writing(self) -> AsyncIterator[Snapshot]:

@@ -1,4 +1,4 @@
-"""AI 资源存成文件（#498）：资源目录树的读法（归属看目录、坏文件跳过并报出、同名冲突全部跳过）、agent 配置同步进镜像列、
+"""AI 资源存成文件（#498）：资源目录树的读法（归属看目录、坏文件跳过并报出、同名冲突：与平台同名只跳过副本、agent 之间同名全部跳过）、agent 配置同步进镜像列、
 平台自己的读写（界面、vault_set、建 / 改名 / 删 agent），以及从数据库一次性导出。"""
 
 import json
@@ -90,17 +90,72 @@ async def test_broken_files_are_skipped_and_reported_to_their_owner(container, m
     }
 
 
-async def test_a_name_used_twice_loads_neither_and_reports_both(container, make_agent):
-    await make_agent("alpha")
+async def test_a_name_used_by_two_agents_loads_neither_and_reports_both(container, make_agent):
+    alpha = await make_agent("alpha")
+    beta = await make_agent("beta")
     r = root(container)
     skill(r / "alpha" / "skills" / "dup")
-    skill(r / "platform" / "skills" / "dup")
+    skill(r / "beta" / "skills" / "dup")
     snapshot = await container.assets.snapshot()
     assert snapshot.get(StoredKind.SKILL, "dup") is None
-    assert sorted(str(p.path.relative_to(r)) for p in snapshot.problems) == [
-        "alpha/skills/dup",
-        "platform/skills/dup",
-    ]
+    assert sorted((str(p.path.relative_to(r)), p.owner) for p in snapshot.problems) == sorted(
+        [("alpha/skills/dup", alpha.id), ("beta/skills/dup", beta.id)]
+    )
+    with pytest.raises(Conflict, match="not loaded"):
+        await container.skills.write("dup", "When testing", "x", actor="user", owner=None)
+
+
+async def test_a_copy_of_a_platform_asset_breaks_only_the_copy(container, make_agent):
+    # #502：agent 在自己目录里复制一份公共资源，平台那份照常加载，只有副本不加载、报给这个 agent
+    alpha = await make_agent("alpha")
+    r = root(container)
+    skill(r / "platform" / "skills" / "dup", description="Platform one")
+    skill(r / "alpha" / "skills" / "dup", description="Copy")
+    write(r / "platform" / "mcp" / "docs.json", json.dumps({"transport": "http", "url": "https://x/mcp"}))
+    write(r / "alpha" / "mcp" / "docs.json", json.dumps({"transport": "http", "url": "https://y/mcp"}))
+    snapshot = await container.assets.snapshot()
+    kept = snapshot.asset(StoredKind.SKILL, "dup")
+    assert (kept.owner, kept.description) == (None, "Platform one")
+    assert snapshot.asset(StoredKind.MCP, "docs").owner is None
+    reported = {(str(p.path.relative_to(r)), p.owner): p.reason for p in snapshot.problems}
+    assert set(reported) == {("alpha/skills/dup", alpha.id), ("alpha/mcp/docs.json", alpha.id)}
+    assert "platform/skills/dup" in reported[("alpha/skills/dup", alpha.id)]
+    assert len(snapshot.problems_for(alpha.id)) == 2
+
+
+async def test_a_platform_asset_with_hidden_copies_is_not_transferred_to_an_agent(container, make_agent):
+    # 转给 agent 后副本与它就是 agent 之间同名，两边都不加载：先拒绝，说清副本在哪
+    await make_agent("alpha")
+    beta = await make_agent("beta")
+    r = root(container)
+    skill(r / "platform" / "skills" / "dup")
+    skill(r / "alpha" / "skills" / "dup")
+    with pytest.raises(Conflict, match="alpha/skills/dup"):
+        await container.catalog.transfer_item(StoredKind.SKILL, "dup", beta.id, actor="user")
+    assert (await container.assets.snapshot()).asset(StoredKind.SKILL, "dup").owner is None
+
+
+async def test_a_broken_platform_asset_still_hides_agent_copies(container, make_agent):
+    alpha = await make_agent("alpha")
+    r = root(container)
+    write(r / "platform" / "skills" / "dup" / "SKILL.md", "no frontmatter\n")
+    skill(r / "alpha" / "skills" / "dup")
+    snapshot = await container.assets.snapshot()
+    assert snapshot.get(StoredKind.SKILL, "dup") is None
+    reported = {(str(p.path.relative_to(r)), p.owner) for p in snapshot.problems}
+    assert reported == {("platform/skills/dup", None), ("alpha/skills/dup", alpha.id)}
+
+
+async def test_a_platform_memory_named_like_an_agent_is_left_to_an_admin(container, make_agent):
+    alpha = await make_agent("alpha")
+    r = root(container)
+    write(r / "alpha" / "memory.md", "mine\n")
+    write(r / "platform" / "memory" / "alpha.md", "platform's\n")
+    snapshot = await container.assets.snapshot()
+    assert snapshot.asset(StoredKind.MEMORY, "alpha").owner is None
+    reported = {p.owner: p.reason for p in snapshot.problems}
+    assert "do not rename or remove this file" in reported[alpha.id]
+    assert "private memory is therefore not loaded" in reported[None]
 
 
 async def test_an_agent_directory_must_carry_a_known_id_under_the_agents_own_name(container, make_agent):

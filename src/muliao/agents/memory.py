@@ -22,6 +22,7 @@ from muliao.agents.naming import validate_slug
 from muliao.agents.permissions import GLOBAL_MEMORY
 from muliao.agents.source import AssetSource
 from muliao.errors import InvalidInput
+from muliao.platform.fs import write_atomic
 
 _KIND = StoredKind.MEMORY
 _LABEL = label(_KIND)
@@ -79,7 +80,7 @@ class MemoryStore:
         async with self._source.writing() as snapshot:
             existing = writable(snapshot, _KIND, name, actor)
             path = existing.path if existing is not None else self._new_path(snapshot, name, owner)
-            await asyncio.to_thread(assets.write_text, path, _file_text(self._tidied(name, content)))
+            await asyncio.to_thread(write_atomic, path, _file_text(self._tidied(name, content)))
         return await self.read(name)
 
     def _new_path(self, snapshot: assets.Snapshot, name: str, owner: str | None) -> Path:
