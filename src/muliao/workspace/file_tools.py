@@ -220,7 +220,7 @@ def file_toolset(
         if assets.contains(target):
             await assets.vet(target, content)
             # vet 要等（读树、线程）：核对放在它之后、与写盘之间不再有 await，等待期间别处写进来的也拦得住
-            if existed:
+            if target.is_file():  # 校验期间别处新建的也算已存在
                 _check_fresh(ctx.deps, target)
             write_atomic(target, content)
         else:

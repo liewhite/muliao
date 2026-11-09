@@ -152,7 +152,7 @@ def _new(snapshot: Snapshot, kind: StoredKind, name: str, path: Path, section: s
 def _memory(path: Path, text: str, limit: int) -> None:
     """超过上限且比原来长才拒绝：已经超长的（shell 追加、上限调低）可以一段段删短，不必一次删够。"""
     size = len(text.strip())
-    old = len(path.read_text(encoding="utf-8").strip()) if path.is_file() else 0
+    old = len(path.read_text(encoding="utf-8", errors="replace").strip()) if path.is_file() else 0
     if size > limit and size > old:
         raise _Rejected(f"memory would be {size} chars, over the limit of {limit}; condense it", "Memory")
 
