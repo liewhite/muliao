@@ -395,3 +395,19 @@ def test_the_fingerprint_skips_skill_md_and_pycache_but_sees_helpers(tmp_path):
     (tmp_path / "lib").mkdir()
     (tmp_path / "lib" / "SKILL.md").write_text("nested is a helper")
     assert scripts.fingerprint() != first
+
+
+def test_the_fingerprint_follows_a_symlinked_directory_and_survives_a_loop(tmp_path):
+    from muliao.agents.skills import SkillScripts
+
+    skill, outside = tmp_path / "skill", tmp_path / "outside"
+    skill.mkdir()
+    outside.mkdir()
+    (skill / "run.sh").write_text("source lib/x.sh")
+    (outside / "x.sh").write_text("v1")
+    (skill / "lib").symlink_to(outside)
+    (outside / "loop").symlink_to(skill)
+    scripts = SkillScripts(skill, ("run.sh",))
+    first = scripts.fingerprint()
+    (outside / "x.sh").write_text("v2")
+    assert scripts.fingerprint() != first

@@ -81,6 +81,7 @@ from muliao.workspace.api import (
     Confiner,
     JobAdmin,
     JobRunner,
+    ScriptGrantAdmin,
     ScriptGrants,
     ShellLimits,
     Sites,
@@ -107,7 +108,7 @@ class Container:
     # agent 页的「文件」：工作目录的只读浏览
     workspace_files: WorkspaceFiles
     # 设置页的「始终允许」：查看与撤销
-    script_grants: ScriptGrants
+    script_grants: ScriptGrantAdmin
     # 「页面」：agent 在工作目录 site/ 下写的网页
     sites: Sites
     vault: Vault
@@ -197,7 +198,7 @@ class Assembly:
             tasks=TaskAdmin(self.queue),
             jobs=JobAdmin(self.jobs),
             workspace_files=WorkspaceFiles(self.agents.workspace),
-            script_grants=self.script_grants,
+            script_grants=ScriptGrantAdmin(self.script_grants),
             sites=Sites(self.agents.workspace),
             vault=self.vault,
             skills=self.skills,

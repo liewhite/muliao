@@ -53,23 +53,27 @@ class SkillScripts:
     def fingerprint(self) -> str:
         """skill 目录里除 SKILL.md 以外全部文件的内容指纹（sha256，十六进制）：「始终允许」按它认同一份脚本（#531），
         改了脚本或它用的辅助文件就不再算同一份，改说明不算。按相对路径排序，路径与内容一起算；跳过 `__pycache__`
-        （运行 Python 脚本时自动生成，Python 只在源文件对得上时用它）；符号链接记链接目标，链到文件的再算目标的内容，
-        链到目录的不进去（只记目标路径）。阻塞 IO，在线程里调。"""
+        （运行 Python 脚本时自动生成，Python 只在源文件对得上时用它）；符号链接跟进去算目标的内容（链到目录的也是：
+        脚本可能 source 里面的文件），同一个目录只算一次（链接成环也不会走不完）。阻塞 IO，在线程里调。"""
         root = self.directory
         digest = hashlib.sha256()
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        seen: set[tuple[int, int]] = set()
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
             here = Path(dirpath)
-            for name in sorted([*filenames, *(d for d in dirnames if (here / d).is_symlink())]):
+            st = here.stat()
+            if (st.st_dev, st.st_ino) in seen:
+                dirnames[:] = []
+                continue
+            seen.add((st.st_dev, st.st_ino))
+            dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+            digest.update(f"{here.relative_to(root).as_posix()}/\0".encode())
+            for name in sorted(filenames):
                 path = here / name
                 rel = path.relative_to(root).as_posix()
-                if rel == SKILL_FILE:
+                if rel == SKILL_FILE or not path.is_file():
                     continue
                 digest.update(f"{rel}\0".encode())
-                if path.is_symlink():
-                    digest.update(f"-> {os.readlink(path)}\0".encode())
-                if path.is_file():
-                    digest.update(hashlib.sha256(path.read_bytes()).digest())
+                digest.update(hashlib.sha256(path.read_bytes()).digest())
         return digest.hexdigest()
 
 

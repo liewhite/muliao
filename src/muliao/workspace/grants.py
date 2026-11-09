@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents.events import AgentDeleting
@@ -74,6 +75,19 @@ class GrantInfo:
     last_used_at: datetime | None
 
 
+class ScriptGrantAdmin:
+    """设置页看到的始终允许：只能列出与撤销（记下与放行只在 skill_run 里）。"""
+
+    def __init__(self, grants: ScriptGrants):
+        self._grants = grants
+
+    async def list(self) -> list[GrantInfo]:
+        return await self._grants.list()
+
+    async def revoke(self, grant_id: int) -> None:
+        await self._grants.revoke(grant_id)
+
+
 class ScriptGrants:
     def __init__(self, db: Database):
         self._db = db
@@ -104,12 +118,12 @@ class ScriptGrants:
             )
 
     async def grant(self, call: ScriptCall, session_id: str, call_id: str) -> None:
-        """用户对这次调用点了「始终允许」。已有同一调用的始终允许时不再添一条。"""
+        """用户对这次调用点了「始终允许」。已有同一调用的始终允许时不再添一条（一条语句：两个会话同时记也不撞唯一
+        约束）。"""
         async with self._db.transaction() as s:
-            if await s.scalar(select(ScriptGrant.id).where(ScriptGrant.key == call.key)) is not None:
-                return
-            s.add(
-                ScriptGrant(
+            await s.execute(
+                sqlite_insert(ScriptGrant)
+                .values(
                     agent_id=call.agent_id,
                     skill=call.skill,
                     script=call.script,
@@ -119,7 +133,10 @@ class ScriptGrants:
                     key=call.key,
                     session_id=session_id,
                     call_id=call_id,
+                    created_at=utcnow(),
+                    hits=0,
                 )
+                .on_conflict_do_nothing(index_elements=["key"])
             )
 
     async def list(self) -> list[GrantInfo]:

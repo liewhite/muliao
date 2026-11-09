@@ -6,7 +6,7 @@ WorkCheckIn（sessions.events）得知后台任务的结局，不调用这里。
 
 from muliao.workspace.browse import Entry, WorkspaceFiles
 from muliao.workspace.file_tools import ShellLimits
-from muliao.workspace.grants import GrantInfo, ScriptGrants
+from muliao.workspace.grants import GrantInfo, ScriptGrantAdmin, ScriptGrants
 from muliao.workspace.runner import JobAdmin, JobInfo, JobRunner
 from muliao.workspace.sites import SitePage, Sites
 from muliao.workspace.writable import Confiner, denial_note
@@ -19,6 +19,7 @@ __all__ = [
     "JobInfo",
     "JobRunner",
     "GrantInfo",
+    "ScriptGrantAdmin",
     "ScriptGrants",
     "ShellLimits",
     "SitePage",
