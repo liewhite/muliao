@@ -249,3 +249,33 @@ async def test_a_write_landing_while_the_check_runs_is_not_overwritten(
     assert "changed while this edit was being checked" in outputs[0]
     assert "was changed after you read it" in outputs[2]
     assert memory.read_text() == "note\ntheirs\ntheirs\n"
+
+
+def test_every_rejection_names_a_section_of_the_assets_skill():
+    """报错里的 `section '<名>'` 必须是公共 skill assets-files 的小节标题（Section）：源码里传给 _Rejected / _named / _new 的
+    小节名都在 SECTIONS 里；SECTIONS 变了，要同步改 skill 的 `## <名>` 标题（#501）。"""
+    import ast
+    import inspect
+
+    from muliao.agents import asset_files
+
+    tree = ast.parse(inspect.getsource(asset_files))
+    used = {
+        call.args[-1].value
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id in {"_Rejected", "_named", "_new"}
+        and call.args
+        and isinstance(call.args[-1], ast.Constant)
+    }
+    assert used == set(asset_files.SECTIONS)
+    assert asset_files.SECTIONS == (
+        "Layout",
+        "Memory",
+        "Skills",
+        "MCP servers",
+        "Secrets",
+        "agent.toml",
+        "Roles and permissions",
+    )

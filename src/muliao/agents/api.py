@@ -5,7 +5,7 @@
   AgentArchived），返回 AgentInfo；
   名称映射 AgentService.names / 事务内的 agent_names_in（AgentNames，已删除的 agent 也有展示名）；
 - 删除与归档 agent（AgentLifecycle）；
-- AI 资源：种类（kinds：Kind / StoredKind），资源目录（AssetSource：当前快照与读树时发现的问题 Problem），记忆（MemoryStore、一次运行放进指令的 MemoryBlock、MemoryInfo）、skill 的索引、界面编辑与标准 .skill 文件的导入导出，MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret（Vault：存取、加解密与 ${vault:KEY} 引用的解析 VAULT_REF / fill，对外不出密文；SECRET_TOOL_ARGS：要脱敏的工具参数）、资源池（ItemCatalog：全部资源、转移 owner）；
+- AI 资源：种类（kinds：Kind / StoredKind），资源目录（AssetSource：当前快照与读树时发现的问题 Problem；讲怎么改资源文件的公共 skill 名 ASSETS_SKILL），记忆（MemoryStore、一次运行放进指令的 MemoryBlock、MemoryInfo）、skill 的索引、界面编辑与标准 .skill 文件的导入导出，MCP server 的配置（McpServer 等；把配置连接成工具在 agent_runtime）、secret（Vault：存取、加解密与 ${vault:KEY} 引用的解析 VAULT_REF / fill，对外不出密文；SECRET_TOOL_ARGS：要脱敏的工具参数）、资源池（ItemCatalog：全部资源、转移 owner）；
 - 分发（Distribution：角色的增删改、agent 的规则 AgentRules 与最终规则、能用的 Reach、预览），内置工具的登记与
   `action:kind:name` 规则（permissions）；AI 资产的规则在它的 access（能 use / write = 自己 own 的 ∪ 规则放行的）。
 """
@@ -13,6 +13,7 @@
 from muliao.agents.access import Reach, Source, WriteScope
 from muliao.agents.active import AgentArchived, AgentNames, agent_names_in
 from muliao.agents.agent_rules import AgentRules
+from muliao.agents.asset_files import SKILL as ASSETS_SKILL
 from muliao.agents.assets import Problem
 from muliao.agents.catalog import CatalogEntry, ItemCatalog
 from muliao.agents.distribution import Distribution, RoleSpec, RoleView, UsedAsset
@@ -70,6 +71,7 @@ __all__ = [
     "MemoryInfo",
     "MemoryStore",
     "AssetSource",
+    "ASSETS_SKILL",
     "Problem",
     "SecretInfo",
     "Vault",

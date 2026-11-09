@@ -13,7 +13,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 
-from muliao.agents.api import MemoryBlock, SkillMeta
+from muliao.agents.api import ASSETS_SKILL, MemoryBlock, SkillMeta
 from muliao.platform.tooling import Audience
 
 _AUDIENCE_NOTES: dict[Audience, str] = {
@@ -33,7 +33,8 @@ SELF_IMPROVEMENT = """\
 ## Self-improvement
 Everything you learn persists only as memory or skills. Both are plain files: yours are in {asset_dir} \
 (shared ones elsewhere under {assets_root}). Change them with the file tools like any other file; changes \
-take effect from your next run.
+take effect from your next run. The layout, file formats, permissions and what to do when a write is \
+refused are in the `{assets_skill}` skill.
 - Memory: the memory blocks above, each limited to {memory_limit} characters and shown with its file: your \
 private one, the global one every agent shares, and any shared by your roles. Edit a block marked editable \
 (its description says what belongs in memory and what goes into a skill); fix or condense entries the same \
@@ -95,7 +96,12 @@ def build_instructions(
         "## Runtime context\n" + "\n".join(context),
         memory_section(memories, memory_limit),
         "## Skill index\n" + "\n".join(skill_lines),
-        SELF_IMPROVEMENT.format(memory_limit=memory_limit, asset_dir=asset_dir, assets_root=asset_dir.parent),
+        SELF_IMPROVEMENT.format(
+            memory_limit=memory_limit,
+            asset_dir=asset_dir,
+            assets_root=asset_dir.parent,
+            assets_skill=ASSETS_SKILL,
+        ),
     ]
     if summary is not None:
         sections.append(

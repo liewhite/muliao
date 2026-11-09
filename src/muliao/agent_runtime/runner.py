@@ -48,7 +48,15 @@ from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.toolbox import RunProfile
 from muliao.agent_runtime.transient import transient_as_retryable
-from muliao.agents.api import AgentInfo, AgentService, AssetSource, MemoryStore, SkillStore, Thinking
+from muliao.agents.api import (
+    ASSETS_SKILL,
+    AgentInfo,
+    AgentService,
+    AssetSource,
+    MemoryStore,
+    SkillStore,
+    Thinking,
+)
 from muliao.files.api import FileStore
 from muliao.platform.db import utcnow
 from muliao.platform.tasks import Clock
@@ -158,7 +166,8 @@ class AgentRuntime:
     async def _asset_problems(self, agent_id: str) -> list[str]:
         snapshot = await self._assets.snapshot()
         return [
-            f"Asset file not loaded: {p.path}: {p.reason}. Fix the file (or tell an admin if you cannot write it)."
+            f"Asset file not loaded: {p.path}: {p.reason}. Fix the file (or tell an admin if you cannot write it); "
+            f"formats are in the {ASSETS_SKILL} skill."
             for p in snapshot.problems_for(agent_id)
         ]
 

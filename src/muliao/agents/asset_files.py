@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal, get_args
 
 from muliao.agents.assets import (
     ACCESS_FILE,
@@ -32,12 +33,16 @@ from muliao.agents.skill_package import SKILL_FILE, parse_frontmatter
 from muliao.agents.thinking import Thinking
 from muliao.errors import Conflict, InvalidInput
 
-# 讲资源目录怎么改的公共 skill（#501）；报错里指向它的小节
+# 讲资源目录怎么改的公共 skill（#501）；报错里指向它的小节，小节标题（`## <名>`）与 Section 逐字一致，改这里要同步改 skill
 SKILL = "assets-files"
+Section = Literal[
+    "Layout", "Memory", "Skills", "MCP servers", "Secrets", "agent.toml", "Roles and permissions"
+]
+SECTIONS: tuple[Section, ...] = get_args(Section)
 
 
 class _Rejected(Exception):
-    def __init__(self, reason: str, section: str):
+    def __init__(self, reason: str, section: Section):
         self.reason, self.section = reason, section
 
 
@@ -132,14 +137,14 @@ def _check(
         raise _Rejected(f"{'/'.join(rest)} is not a place for an asset file in {head}/", "Layout")
 
 
-def _named(validate: Callable[[], object], section: str) -> None:
+def _named(validate: Callable[[], object], section: Section) -> None:
     try:
         validate()
     except InvalidInput as e:
         raise _Rejected(str(e), section) from e
 
 
-def _new(snapshot: Snapshot, kind: StoredKind, name: str, path: Path, section: str) -> None:
+def _new(snapshot: Snapshot, kind: StoredKind, name: str, path: Path, section: Section) -> None:
     """新建一项资源（它的文件或目录还不在磁盘上）：名字每种资源全局唯一，别处已有的不让建（读树时两处都会被跳过）。"""
     if path.exists():
         return
