@@ -576,7 +576,7 @@ agent 在任何一次运行里都可以在自己的资源目录里建 `skills/<�
 - **MCP stdio server**（#499，`agent_runtime.mcp.McpConnector`）：进程包进用它的 agent 的写沙箱（自己的就是 owner 的，分发来的就是使用者的）；用户在界面上测试连接时包进 owner 的，平台的不包。否则 agent 在自己目录写一个 `mcp/x.json` 就能让平台在沙箱外替它跑任意命令。
 - **执行层**（`platform/sandbox/`）：领域按**类别**（`Category`）声明，每个系统一个适配器把类别换成本系统的路径（`Sandbox.paths`）、把命令包进沙箱（`Sandbox.wrap(argv, writable)`）；`shell.spawn_bash` 只调这个接口。现在只有 macOS（`seatbelt.py`：`sandbox-exec -p` 一份生成的 SBPL，先 `(allow default)`、再禁止一切文件写、再按 WritablePaths 的顺序逐条放开或收回，SBPL 后写的优先；沙箱里跑不起来的程序用 `process-exec … (with no-sandbox)` 放到沙箱外执行：setuid 程序如 `ps`、`top`，以及自己建沙箱的 `sandbox-exec` 与 Chromium 系浏览器）；Linux（Landlock）以后只加一个适配器文件。当前系统没有适配器时启动即报错，不退回到不隔离。
 - **只记录不拦**（`runtime.write_sandbox = "report"`，默认 `enforce`）：上线前试跑，越界的写照常放行；命令的记在系统日志（每条附 `muliao write sandbox agent=<id>`；不落盘、`log show` 事后查不到，试跑期间另挂一个脱离会话的 `log stream --predicate 'eventMessage CONTAINS "muliao write sandbox"' >> 文件` 收集），文件工具的记在服务日志。
-- 已知缺口（接受，防误操作不防故意）：`docker -v` 挂载由 daemon 代写；launchctl / osascript 让沙箱外的进程代执行；放到沙箱外执行的程序（上面的 setuid 程序、`sandbox-exec`、浏览器）及其子进程写文件不受限；stream 触发器的报错只进它的日志文件，不补说明；授权规则按字面路径比较，大小写写得与磁盘上不一致时文件工具的检查可能与系统不一致。
+- 已知缺口（接受，防误操作不防故意）：agent 在自己目录里建与平台或别人同名的 skill、MCP、secret，按「同名全部不加载」会让对方那份也不加载（沙箱挡不住，待定处理，#502）；`docker -v` 挂载由 daemon 代写；launchctl / osascript 让沙箱外的进程代执行；放到沙箱外执行的程序（上面的 setuid 程序、`sandbox-exec`、浏览器）及其子进程写文件不受限；stream 触发器的报错只进它的日志文件，不补说明；授权规则按字面路径比较，大小写写得与磁盘上不一致时文件工具的检查可能与系统不一致。
 
 其他边界：
 
