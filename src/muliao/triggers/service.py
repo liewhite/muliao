@@ -299,6 +299,23 @@ class TriggerService:
         log.info("trigger created", extra={"trigger": name, "kind": kind, "agent": agent_id})
         return trigger
 
+    def _rederive(
+        self, trigger: Trigger, config: dict[str, Any] | None, enabled: bool | None
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """这次修改要不要按 TriggerKind.configure 重新推导，要就返回 (config, 推导出的 state)。
+
+        配置变了、或停用后重新启用（如定时触发器的下次时间要从现在算起、流式触发重起进程）才重新推导；规范化后没变的
+        配置（界面只改说明时也带着原配置）不算改动，运行状态留着。"""
+        reenabled = enabled is True and not trigger.enabled
+        if config is None and not reenabled:
+            return None
+        derived_config, derived = self.kind(trigger.kind).configure(
+            trigger.config if config is None else config
+        )
+        if reenabled or derived_config != trigger.config:
+            return derived_config, derived
+        return None
+
     async def update(
         self,
         trigger_id: int,
@@ -314,17 +331,14 @@ class TriggerService:
         if prompt is not None and not prompt.strip():
             raise InvalidInput("trigger prompt must not be empty")
         if isinstance(precheck, Precheck) or config is not None or enabled is True:
-            # 核对 secret 要读 vault，不能放在下面的事务里：先读出 agent（不可改）与当前配置。新配置的 secret 只在它会
-            # 生效时核对（配置变了或重新启用，与下面重新推导 state 的条件一致），只改说明时带着原配置不受影响
+            # 核对 secret 要读 vault，不能放在下面的事务里：先按此刻的行算出会生效的配置。中间若有并发修改，核对按的是
+            # 旧行，后果只是走回运行时的失败路径（与建好后 secret 才被删一样），有意不加锁
             async with self._db.transaction() as s:
                 current = await self._manageable_in(s, trigger_id)
-                agent_id, kind, was_enabled = current.agent_id, self.kind(current.kind), current.enabled
-                stored = current.config
-            keys = precheck.secrets if isinstance(precheck, Precheck) else []
-            if config is not None or enabled is True:
-                new_config, _ = kind.configure(stored if config is None else config)
-                if new_config != stored or (enabled is True and not was_enabled):
-                    keys = keys + kind.secrets(new_config)
+                agent_id = current.agent_id
+                keys = precheck.secrets if isinstance(precheck, Precheck) else []
+                if (rederived := self._rederive(current, config, enabled)) is not None:
+                    keys = keys + self.kind(current.kind).secrets(rederived[0])
             await self._check_secrets(agent_id, keys)
         async with self._db.transaction() as s:
             trigger = await self._manageable_in(s, trigger_id)
@@ -335,15 +349,10 @@ class TriggerService:
             if route is not None:
                 trigger.route = await self._route_in(s, route, trigger.agent_id)
             reenabled = enabled is True and not trigger.enabled
-            if config is not None or reenabled:
-                derived_config, derived = self.kind(trigger.kind).configure(
-                    trigger.config if config is None else config
-                )
-                # 配置变了、或停用后重新启用（如定时触发器的下次时间要从现在算起、流式触发重起进程）才重新推导
-                # state；规范化后没变的配置（界面只改说明时也带着原配置）不算改动，运行状态留着
-                if reenabled or derived_config != trigger.config:
-                    # JSON 列只在整体赋值时被追踪
-                    trigger.config, trigger.state = derived_config, {**trigger.state, **derived}
+            if (rederived := self._rederive(trigger, config, enabled)) is not None:
+                derived_config, derived = rederived
+                # JSON 列只在整体赋值时被追踪
+                trigger.config, trigger.state = derived_config, {**trigger.state, **derived}
             if enabled is not None:
                 trigger.enabled = enabled
                 # 重新启用只清停用的原因；前置检查的错误留着（界面一直显示它），它恢复之前不会再告警一次
