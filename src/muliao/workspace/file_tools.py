@@ -46,7 +46,7 @@ class TextEdit(BaseModel):
     old_text: str | None = Field(default=None, description="Exact text to replace.")
     start_line: int | None = Field(default=None, description="First line to replace (1-based).")
     end_line: int | None = Field(default=None, description="Last line to replace (inclusive).")
-    anchor: str | None = Field(default=None, description="The text of line start_line.")
+    anchor: str | None = Field(default=None, description="The whole text of line start_line.")
     pattern: str | None = Field(default=None, description="ast-grep pattern matching the code to replace.")
     new_text: str = Field(description="Replacement text.")
     replace_all: bool = Field(
@@ -248,7 +248,7 @@ def file_toolset(
         - `old_text`: exact text that must occur exactly once (unless `replace_all`). Copy it from the file as it
           is now (without the line-number prefix of read_file's `cat -n` output), with enough surrounding lines to be unique.
         - `start_line` + `end_line` + `anchor`: whole lines start_line..end_line as numbered by read_file;
-          `anchor` is the text of line start_line, checked so that stale line numbers fail instead of
+          `anchor` is the whole text of line start_line (not just its beginning), checked so that stale line numbers fail instead of
           changing the wrong lines. Good for replacing or deleting a long block without copying it.
         - `pattern`: an ast-grep pattern for a source file (language from the extension): code where `$VAR`
           matches one syntax node and `$$$VARS` any number of them, e.g. `def test_x` matches that whole Python
@@ -273,7 +273,8 @@ def file_toolset(
             old_text: Exact text to replace (omit when using `edits`).
             start_line: First line to replace (1-based); give with `end_line` and `anchor`.
             end_line: Last line to replace (inclusive).
-            anchor: The text of line start_line (leading/trailing whitespace ignored).
+            anchor: The whole text of line start_line, not just its beginning (leading/trailing whitespace
+                ignored).
             pattern: ast-grep pattern matching the code to replace.
             new_text: Replacement text; empty deletes the located text (omit when using `edits`).
             replace_all: Replace every occurrence of `old_text` or every match of `pattern` (e.g. renaming a

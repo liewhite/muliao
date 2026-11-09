@@ -67,6 +67,13 @@ def test_line_range_with_a_stale_anchor_fails_and_shows_the_lines_as_they_are_no
     )
 
 
+def test_line_range_with_only_the_beginning_of_the_line_as_anchor_asks_for_the_whole_line():
+    with pytest.raises(
+        InvalidInput, match="anchor is only the beginning of line 2 of f: give the whole line"
+    ):
+        run(LineRange(2, 2, "  hello", "X"), "a\n  hello world\nc\n", "f")
+
+
 @pytest.mark.parametrize(
     ("start", "end", "anchor", "error"),
     [

@@ -67,6 +67,11 @@ class LineRange:
         line, anchor = original[self.start - 1].rstrip("\r\n"), self.anchor.strip()
         # 超长的行在 read_file 里是截断着展示的，照抄截断后的样子也算对上
         if anchor not in {line.strip(), _clip(line).strip()}:
+            if anchor and line.strip().startswith(anchor):
+                raise InvalidInput(
+                    f"anchor is only the beginning of line {self.start} of {what}: give the whole line "
+                    "as read_file shows it, not just its beginning"
+                )
             plain = origin.text.splitlines()
             first, last = max(self.start - 3, 0), min(self.end + 2, len(plain))
             raise InvalidInput(
