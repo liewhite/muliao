@@ -180,9 +180,7 @@ async def test_turn_runs_tools_persists_messages_and_queues_notification(
     await container.push_subscriptions.add("https://push.example/phone", "k", "a")
     pushed: list[str] = []
     monkeypatch.setattr(WebPushDelivery, "_push", lambda _self, sub, _data: pushed.append(sub.endpoint))
-    models.models["m"] = call_then_answer(
-        "history_append", note_args("- user likes tea"), "Noted!"
-    )
+    models.models["m"] = call_then_answer("history_append", note_args("- user likes tea"), "Noted!")
 
     session = await start(container, alpha, "I like tea")
     await drain(container)

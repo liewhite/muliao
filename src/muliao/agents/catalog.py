@@ -86,8 +86,8 @@ class ItemCatalog:
         ]
 
     async def transfer_item(self, kind: StoredKind, name: str, owner: str | None, actor: str) -> None:
-        """把资源挪到 owner（agent 的 id；None 归平台）的目录下。actor 要能改它（规则 1 的 write）。内容不变；谁能用随
-        owner 变（agents.access 的规则 1）。agent 的私有记忆名字就是 agent 名，所以记忆只能在平台与同名 agent 之间转。"""
+        """把资源挪到 owner（agent 的 id；None 归平台）的目录下。actor 要能改它（Grants.can 的 write）。内容不变；谁能用随
+        owner 变（agents.access 的 Grants.can）。agent 的私有记忆名字就是 agent 名，所以记忆只能在平台与同名 agent 之间转。"""
         async with self._source.writing() as snapshot:
             asset = changeable(snapshot, kind, name, actor)
             if asset.owner == owner:

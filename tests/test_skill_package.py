@@ -80,7 +80,9 @@ async def test_importing_over_an_existing_skill_needs_replace_and_then_swaps_its
     assert set(await skills.files("digest")) == {"SKILL.md", "scripts/fetch.py"}
     assert not (directory / "old.py").exists()
     # 用户覆盖时 owner 不变
-    assert (await skills.read("digest")).meta == SkillMeta("digest", "When digesting", beta, directory / "SKILL.md")
+    assert (await skills.read("digest")).meta == SkillMeta(
+        "digest", "When digesting", beta, directory / "SKILL.md"
+    )
     # 不是 owner 也不是 admin 的 agent 覆盖不了
     alpha = (await make_agent("alpha")).id
     with pytest.raises(Forbidden):

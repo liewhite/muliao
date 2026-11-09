@@ -116,7 +116,9 @@ async def test_agent_pauses_trigger(container, make_agent, models):
     await container.triggers.create(
         name="daily", agent_id=me.id, kind="schedule", prompt="report", config={"cron": "0 9 * * *"}
     )
-    outputs = await run_tools(container, models, me.id, [("trigger_update", {"name": "daily", "enabled": False})])
+    outputs = await run_tools(
+        container, models, me.id, [("trigger_update", {"name": "daily", "enabled": False})]
+    )
     assert outputs[0].startswith("updated trigger daily (paused)")
     assert not (await container.triggers.get_by_name("daily")).enabled
 

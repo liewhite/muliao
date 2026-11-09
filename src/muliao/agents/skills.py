@@ -102,7 +102,7 @@ class SkillStore:
     async def write(
         self, name: str, description: str, body: str, *, actor: str, owner: str | None
     ) -> SkillMeta:
-        """新建或整体改写 SKILL.md（附件不变；frontmatter 里别的键保留）。已有的要 actor 能改（规则 1 的 write），owner 不变；
+        """新建或整体改写 SKILL.md（附件不变；frontmatter 里别的键保留）。已有的要 actor 能改（Grants.can 的 write），owner 不变；
         新建的归 owner。"""
         validate_slug(label(_KIND), name)
         description = skill_package.valid_description(description)

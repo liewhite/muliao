@@ -82,11 +82,7 @@ def _row(i: int, message: ModelMessage) -> Message:
 
 
 def test_steps_split_where_no_call_is_left_dangling():
-    call = ModelResponse(
-        parts=[
-            ToolCallPart("history_append", note_args("x"), tool_call_id="c")
-        ]
-    )
+    call = ModelResponse(parts=[ToolCallPart("history_append", note_args("x"), tool_call_id="c")])
     result = ModelRequest(parts=[ToolReturnPart("history_append", "ok", tool_call_id="c")])
     rows = [
         _row(1, ModelRequest(parts=[UserPromptPart("go")])),
@@ -405,13 +401,7 @@ async def test_stopping_while_compacting_between_steps_leaves_one_result_per_cal
     alpha = (await make_agent("alpha", model="m")).id
 
     def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    "history_append", note_args("- x"), tool_call_id="c"
-                )
-            ]
-        )
+        return ModelResponse(parts=[ToolCallPart("history_append", note_args("- x"), tool_call_id="c")])
 
     models.models["m"] = scripted(fn)
     session = await start(container, alpha, "go", origin=Origin.TRIGGER)

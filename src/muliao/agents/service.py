@@ -20,7 +20,6 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.agents import access_file, assets
-from muliao.agents.access import grants_for
 from muliao.agents.active import AgentNames, active_row_in, agent_names_in, runnable_row_in
 from muliao.agents.agent_rules import AgentRules
 from muliao.agents.assets import AGENT_FILE, PLATFORM, PRIVATE_MEMORY_FILE, Snapshot
@@ -214,7 +213,7 @@ async def deletion_actor_in(s: AsyncSession, agent_id: str) -> str | None:
 
 
 async def remove_in(s: AsyncSession, agent_id: str) -> None:
-    """删除 agent 的行：它名下还归它的条目、记忆与分发规则随之级联删除（各子域先在同一事务里记好删除的版本）。"""
+    """删除 agent 的行（它的资源目录已由删除流程删掉；#498 之前的旧表行随之级联删除）。"""
     await s.delete(await _row_in(s, agent_id))
 
 
@@ -351,15 +350,11 @@ class AgentService:
         log.info("agent created", extra={"agent": agent_id, "agent_name": name, "actor": actor})
         return info
 
-    async def check_update(self, agent_id: str, fields: frozenset[str], *, actor: str) -> None:
-        """actor 能不能改这个 agent 的这些字段（access.Grants.check_agent_update，不能时 Forbidden）。"""
-        grants_for(await self._source.snapshot(), actor).check_agent_update(agent_id, fields)
-
     async def update(self, agent_id: str, patch: AgentPatch, *, actor: str) -> AgentInfo:
         """只修改给出的字段：配置改 agent.toml（保留人手写的注释），规则改 access.toml，改名挪目录（access.toml 里那一节跟着
-        改名），再同步镜像。actor 不是用户也不是 admin 时只能改自己的一部分字段（access.Grants.check_agent_update）。"""
+        改名），再同步镜像。只有用户（界面）改：agent 改自己的配置是改它目录里的 agent.toml，角色与规则在 access.toml，只有
+        admin 能写（写沙箱，workspace.writable）。"""
         async with self._source.writing() as snapshot:
-            grants_for(snapshot, actor).check_agent_update(agent_id, patch.given())
             async with self._db.transaction() as s:
                 agent = await active_row_in(s, agent_id)
                 fields = self._validated(agent, patch)

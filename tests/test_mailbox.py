@@ -357,9 +357,7 @@ async def test_a_tool_call_interrupted_by_a_restart_is_not_executed_again(contai
 
     # 回复在执行工具之前就已保存，结果没有；那条 run task 留在 running，由下次启动恢复（platform.worker）
     async with container.db.transaction() as s:
-        call = ToolCallPart(
-            "history_append", note_args("- boom"), tool_call_id="m1"
-        )
+        call = ToolCallPart("history_append", note_args("- boom"), tool_call_id="m1")
         s.add(
             Message(
                 session_id=session.id,

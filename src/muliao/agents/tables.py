@@ -35,7 +35,7 @@ class Agent(Base):
     # 思考档位（agents.service.Thinking）；"default" 表示不传、按模型与服务端默认
     thinking: Mapped[str] = mapped_column(String(16), default="default", server_default="default")
     # 正在删除时是发起删除的人（actor）（docs/architecture.md 第 10 节）：不出现在列表与名称解析里，各领域清理完它的数据后删除
-    # 这一行（它名下的条目、记忆与分发规则随之删除，删除的版本记这个 actor）
+    # 这一行（它的资源目录同时删掉）
     deleting_by: Mapped[str | None] = mapped_column(String(64))
     # 系统默认 agent（AgentService.set_default）；行删除时设置随之消失，正在删除的不出现在列表里
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

@@ -1,9 +1,9 @@
-"""文本的唯一规则（纯函数）：修改文本——替换恰好出现一次的片段（locate_once、replace_once），或追加一段（记忆、
-skill 正文、工作区文件都用它），依次做多处这样的修改（edit_each）；截断过长的文本（交给模型、展示、通知的长输出都用它）；带行号展示的 cat -n 格式（numbered）。edit_file 的多处修改（替换全部、按行号
-区间、按语法结构、换算原文行号）只有工作区工具用，在 workspace.file_edit。"""
+"""文本的唯一规则（纯函数）：找恰好出现一次的片段（locate_once）与找不到时的提示（miss）、按位置替换（splice）；截断过长的
+文本（交给模型、展示、通知的长输出都用它）；带行号展示的 cat -n 格式（numbered）。edit_file 的多处修改（替换全部、按行号
+区间、按语法结构、换算原文行号）在 workspace.file_edit。"""
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Sequence
 from typing import NamedTuple
 
 from muliao.errors import InvalidInput
@@ -20,12 +20,6 @@ def locate_once(current: str, old: str, what: str) -> int:
     if len(at) != 1:
         raise InvalidInput(miss(current, old, len(at), f"old text must occur exactly once in {what}"))
     return at[0]
-
-
-def replace_once(current: str, old: str, new: str, what: str) -> str:
-    """把恰好出现一次的 old 替换为 new；new 为空即删除。"""
-    at = locate_once(current, old, what)
-    return splice(current, [Splice(at, at + len(old), new)])
 
 
 class Splice(NamedTuple):
@@ -72,84 +66,16 @@ def miss(current: str, old: str, count: int, rule: str) -> str:
     return f"{message}; not even its first non-blank line occurs: re-read the current text before editing"
 
 
-def edit(current: str, old: str, new: str, what: str) -> str:
-    """old 恰好出现一次时替换为 new（new 为空即删除）；old 为空时把 new 追加到末尾。"""
-    return replace_once(current, old, new, what) if old else append(current, new)
-
-
-class TextChange(NamedTuple):
-    """一处修改，规则见 edit：old 为空是追加。"""
-
-    old: str
-    new: str
-
-
-class ChangeFailed(InvalidInput):
-    """edit_each 里第 index 处（1 起）做不了；change 是那一处（调用方据此决定要不要在报错里附上原文）。index > 1 时
-    报错里的行号线索指前面几处改过之后的文本。"""
-
-    def __init__(self, message: str, change: TextChange, index: int) -> None:
-        super().__init__(message)
-        self.change = change
-        self.index = index
-
-
 NO_EDITS = "no edits given"
 
 
 def failed_edit(i: int, n: int, error: Exception, after: str = "") -> str:
-    """多处修改里第 i 处（共 n 处）失败的说明，edit_file 与 memory_edit / edit_skill 共用；after 补充这一处是在什么文本上
-    找的。"""
+    """多处修改里第 i 处（共 n 处）失败的说明，edit_file 用；after 补充这一处是在什么文本上找的。"""
     return f"edit {i} of {n}{after}: {error}; nothing was written"
 
 
-def edit_each(current: str, changes: Sequence[TextChange], what: str) -> str:
-    """依次做一段文本的多处修改（memory_edit 的 `edits`），每处按 edit；规则见 edit_keyed。"""
-
-    def step(_: int, text: str | None, c: TextChange) -> str:
-        return edit(text or "", c.old, c.new, what)
-
-    return edit_keyed({0: current}, [(0, c) for c in changes], step)[0]
-
-
-def edit_keyed[K](
-    texts: Mapping[K, str],
-    changes: Sequence[tuple[K, TextChange]],
-    step: Callable[[K, str | None, TextChange], str],
-) -> dict[K, str]:
-    """依次做多处修改，每处作用在它那份文本上（键是文本的名字，如 skill 里的文件），后一处在前面改过的结果上找原文。
-    step(键, 当前文本（还没有这份时为 None）, 修改) 做一处、返回新文本，做不了时 InvalidInput。任何一处失败都整体失败（ChangeFailed，
-    报错指出是第几处）；调用方只在成功后写入，所以不会留下改了一半的文本。返回全部文本（含没改到的）。"""
-    if not changes:
-        raise InvalidInput(NO_EDITS)
-    current = dict(texts)
-    for i, (key, change) in enumerate(changes, 1):
-        try:
-            current[key] = step(key, current.get(key), change)
-        except InvalidInput as e:
-            if len(changes) == 1:
-                raise ChangeFailed(str(e), change, i) from e
-            k = sum(1 for earlier, _ in changes[: i - 1] if earlier == key)
-            after = (
-                f" (old_text is matched against the text with the {k} earlier edit(s) to it applied)"
-                if k
-                else ""
-            )
-            raise ChangeFailed(failed_edit(i, len(changes), e, after), change, i) from e
-    return current
-
-
-def append(current: str, entry: str) -> str:
-    """在末尾追加一段，与已有内容之间空一行。"""
-    entry = entry.strip()
-    if not entry:
-        raise InvalidInput("nothing to append: new_text is empty (give old_text too to replace or delete)")
-    return f"{current.rstrip()}\n\n{entry}\n" if current.strip() else f"{entry}\n"
-
-
 def numbered(lines: Sequence[str], first: int = 1) -> str:
-    """按 `cat -n` 的格式编号：行号（第一行为 first）右对齐占 6 列，后跟一个制表符。带行号的内容（read_file、edit_file 的回显与报错、
-    memory_edit 报错里的全文）都用它，模型拿来就认得。"""
+    """按 `cat -n` 的格式编号：行号（第一行为 first）右对齐占 6 列，后跟一个制表符。带行号的内容（read_file、edit_file 的回显与报错）都用它，模型拿来就认得。"""
     return "\n".join(f"{i:6}\t{line}" for i, line in enumerate(lines, first))
 
 

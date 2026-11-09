@@ -2,7 +2,7 @@
 密文存放，主密钥在服务端配置。agent 只能通过 key 引用，没有读取明文的工具。
 
 这里管加解密、存取，以及 ${vault:KEY} 引用的解析。对外只有不含值的 SecretInfo，与按使用者解析出的明文（resolve_many）。
-引用按使用者能用的 secret 解析（agents.access 的规则 1：自己的与分发给它的）：agent 运行的命令与它连接的 MCP server
+引用按使用者能用的 secret 解析（agents.access 的 Grants.can：自己的与分发给它的）：agent 运行的命令与它连接的 MCP server
 都用该 agent；用户（USER，如界面上新增 MCP 时的探测）能用全部。
 """
 

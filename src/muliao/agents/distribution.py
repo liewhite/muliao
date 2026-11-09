@@ -59,7 +59,7 @@ class UsedAsset:
     description: str
     # 为什么能用：它名下的 / 哪些角色 / 它自己的 allow
     source: Source
-    # 能改（规则 1 的 write）
+    # 能改（Grants.can 的 write）
     editable: bool
     # MCP server 的配置与启用状态；别的种类为 None
     mcp: McpServer | None
@@ -108,7 +108,7 @@ class Distribution:
         return (await self._source.snapshot()).rules_of(agent_id)
 
     async def reach(self, agent_id: str) -> Reach:
-        """agent 最终能用的内置工具与 skill、MCP server、secret、记忆（agents.access 的规则 1）：get_agent 与界面同一套计算；
+        """agent 最终能用的内置工具与 skill、MCP server、secret、记忆（agents.access 的 Grants.can）：get_agent 与界面同一套计算；
         运行时（agent_runtime.Toolbox）按实际注册的工具集算，两者一致由组合根启动时核对 available_tools 与注册的工具保证。"""
         snapshot = await self._source.snapshot()
         grants = grants_for(snapshot, agent_id)
@@ -151,7 +151,7 @@ class Distribution:
         before = AgentRules() if agent_id is None else snapshot.rules_of(agent_id)
         check_agent_rules(snapshot, rules, before)
         known = snapshot.roles
-        # 还没建的 agent 没有自己的资源，只看规则；已有的按 agents.access 的规则 1
+        # 还没建的 agent 没有自己的资源，只看规则；已有的按 agents.access 的 Grants.can
         if agent_id is None:
             effective = rules.effective(known)
             return reach_of(snapshot, self.tools, effective, granted_by(effective))

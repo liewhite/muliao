@@ -1,12 +1,9 @@
-"""分发子域的规则（AI 资产的一条，加上改 agent 配置的一条），只在这里写一次：
+"""分发子域的规则，只在这里写一次：
 
-1. 能做某个动作（Grants.can，动作是 use 或 write，agents.permissions.Action）：agent 是资产的 owner（隐含的专属角色，
-   use 与 write 都有），或它的规则（base + 角色 + 自己的 allow / deny）放行这个权限（Rules.allows）。deny 只拦规则分来的，
-   不作用于自己的资产。用户（界面）全部能做。admin 能改任何资产靠它固定的 `write:*`，不另写特判。owner 为 None 的
-   资产归平台（platform/ 目录下的，以及内置工具）。改不了时 Forbidden，并说出 owner 是谁
-   （check_change）。
-2. 改 agent 配置（Grants.check_agent_update）：agent 配置不是资产，按角色判断：用户、带 admin 角色的能改任何 agent；别的
-   agent 只能改自己的描述、模型、思考强度。
+能做某个动作（Grants.can，动作是 use 或 write，agents.permissions.Action）：agent 是资源的 owner（隐含的专属角色，use 与
+write 都有），或它的规则（base + 角色 + 自己的 allow / deny）放行这个权限（Rules.allows）。deny 只拦规则分来的，不作用于
+自己的资源。用户（界面）全部能做。admin 能改任何资源靠它固定的 `write:*`，不另写特判。owner 为 None 的资源归平台
+（platform/ 目录下的，以及内置工具）。改不了时 Forbidden，并说出 owner 是谁（check_change）。
 
 由此派生的也都在这里：一份配置能用哪些（reach_of）、资源分发出去了没有与收录它的角色（sharing_of），以及在快照上加上规则的
 changeable / writable / usable。全部按一份资源快照（agents.assets.Snapshot）算，资源的 owner 就是它所在的目录。
@@ -24,7 +21,7 @@ from muliao.agents.agent_rules import AgentRules
 from muliao.agents.assets import Asset, Snapshot
 from muliao.agents.ids import USER
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
-from muliao.agents.permissions import ADMIN, BASE, Action, Role, Rules, ToolSpec, pattern_of, spec_of
+from muliao.agents.permissions import BASE, Action, Role, Rules, ToolSpec, pattern_of, spec_of
 from muliao.errors import Forbidden
 
 
@@ -34,16 +31,8 @@ class Grants:
 
     agent_id: str | None
     rules: Rules
-    # 带 admin 角色：只用于改 agent 配置（规则 2），资产上的权限都来自 rules
-    admin: bool
-
-    @classmethod
-    def of(cls, agent_id: str, roles: Collection[str], rules: Rules) -> Grants:
-        """agent 的 Grants：rules 是它的最终规则（AgentRules.effective）。"""
-        return cls(agent_id, rules, ADMIN in roles)
 
     def can(self, action: Action, kind: Kind, name: str, owner: str | None) -> bool:
-        """规则 1。"""
         if self.agent_id is None:
             return True
         return owner == self.agent_id or self.rules.allows(action, kind, name)
@@ -54,28 +43,8 @@ class Grants:
     def writes(self, kind: Kind, name: str, owner: str | None) -> bool:
         return self.can(Action.WRITE, kind, name, owner)
 
-    def check_agent_update(self, target: str, fields: Collection[str]) -> None:
-        """规则 2：改 agent 的配置（fields 是要改的字段名，归档是 `archived`）。用户与 admin 能改任何 agent 的任何字段；
-        别的 agent 只能改自己的 SELF_UPDATABLE（不能借此给自己加角色、规则，也不能改名、换组、归档），否则 Forbidden。"""
-        if self.agent_id is None or self.admin:
-            return
-        if target != self.agent_id:
-            raise Forbidden(
-                "only an admin can change another agent; ask the user or an agent with the admin role"
-            )
-        refused = sorted(set(fields) - SELF_UPDATABLE)
-        if refused:
-            raise Forbidden(
-                f"without the admin role you can only change your own {', '.join(sorted(SELF_UPDATABLE))}, "
-                f"not {', '.join(refused)}; ask the user or an agent with the admin role"
-            )
 
-
-# 非 admin 的 agent 能改自己的哪些配置（#289）：角色、规则、名称、分组、归档只有用户与 admin 能改
-SELF_UPDATABLE = frozenset({"description", "model", "thinking"})
-
-
-USER_GRANTS = Grants(None, Rules(), admin=True)
+USER_GRANTS = Grants(None, Rules())
 
 
 # 「这一项能不能用」：(种类, 名字, owner)；Grants.uses 与 granted_by 都是它
@@ -83,17 +52,17 @@ Keep = Callable[[Kind, str, str | None], bool]
 
 
 def granted_by(rules: Rules) -> Keep:
-    """只按规则、不看 owner 的「能用」（规则 1 的规则那一半）：一个角色本身、还没建的 agent。与 Grants.uses 同签名。"""
+    """只按规则、不看 owner 的「能用」（Grants.can 的规则那一半）：一个角色本身、还没建的 agent。与 Grants.uses 同签名。"""
     return lambda kind, name, _owner: rules.includes(kind, name)
 
 
 def grants_of(agent_id: str, rules: AgentRules, known: Mapping[str, Role]) -> Grants:
-    return Grants.of(agent_id, rules.roles, rules.effective(known))
+    return Grants(agent_id, rules.effective(known))
 
 
 @dataclass(frozen=True)
 class Source:
-    """一个 agent 为什么能用某项资产（规则 1 按来源拆开看）：它名下的、放行它的角色（含 base）、它自己的 allow。"""
+    """一个 agent 为什么能用某项资产（Grants.can 按来源拆开看）：它名下的、放行它的角色（含 base）、它自己的 allow。"""
 
     own: bool
     roles: tuple[str, ...]
@@ -165,7 +134,7 @@ def sharing_of(snapshot: Snapshot) -> Sharing:
 
 
 def check_change(snapshot: Snapshot, actor: str, asset: Asset) -> None:
-    """actor 能改这一项（规则 1 的 write），否则 Forbidden。"""
+    """actor 能改这一项（Grants.can 的 write），否则 Forbidden。"""
     if not grants_for(snapshot, actor).writes(as_kind(asset.kind), asset.name, asset.owner):
         raise Forbidden(
             f"{label(asset.kind)} {asset.name!r} belongs to {snapshot.owner_label(asset.owner)}; only its owner, "
@@ -174,14 +143,14 @@ def check_change(snapshot: Snapshot, actor: str, asset: Asset) -> None:
 
 
 def changeable(snapshot: Snapshot, kind: StoredKind, name: str, actor: str) -> Asset:
-    """要改或删的已有资源：存在，且 actor 能改它（规则 1 的 write）。"""
+    """要改或删的已有资源：存在，且 actor 能改它（Grants.can 的 write）。"""
     asset = snapshot.asset(kind, name)
     check_change(snapshot, actor, asset)
     return asset
 
 
 def writable(snapshot: Snapshot, kind: StoredKind, name: str, actor: str) -> Asset | None:
-    """新建或整体改写之前：已存在就按规则 1 的 write 检查并返回它（owner 不变）；不存在返回 None。"""
+    """新建或整体改写之前：已存在就按Grants.can 的 write 检查并返回它（owner 不变）；不存在返回 None。"""
     asset = snapshot.get(kind, name)
     if asset is not None:
         check_change(snapshot, actor, asset)
@@ -189,7 +158,7 @@ def writable(snapshot: Snapshot, kind: StoredKind, name: str, actor: str) -> Ass
 
 
 def usable(snapshot: Snapshot, kind: StoredKind, user: str) -> list[Asset]:
-    """user（agent 的 id 或 ids.USER）能用的（规则 1），按名称。"""
+    """user（agent 的 id 或 ids.USER）能用的（Grants.can），按名称。"""
     return usable_by(snapshot, kind, grants_for(snapshot, user))
 
 

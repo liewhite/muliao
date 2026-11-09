@@ -33,7 +33,7 @@ class MemoryBlock:
 
     name: str
     content: str
-    # 这个 agent 能改它（规则 1 的 write）
+    # 这个 agent 能改它（Grants.can 的 write）
     editable: bool
     # 归这个 agent（它的私有记忆）
     yours: bool
@@ -75,7 +75,7 @@ class MemoryStore:
         ]
 
     async def put(self, name: str, content: str, *, actor: str, owner: str | None = None) -> MemoryInfo:
-        """新建或整体改写（用户在界面上编辑）：已有的要 actor 能改（规则 1 的 write），owner 不变；新建的归 owner。"""
+        """新建或整体改写（用户在界面上编辑）：已有的要 actor 能改（Grants.can 的 write），owner 不变；新建的归 owner。"""
         async with self._source.writing() as snapshot:
             existing = writable(snapshot, _KIND, name, actor)
             path = existing.path if existing is not None else self._new_path(snapshot, name, owner)

@@ -82,7 +82,9 @@ async def test_broken_files_are_skipped_and_reported_to_their_owner(container, m
     }
     beta = await make_agent("beta")
     # 报给相关的：自己目录里的与平台的
-    assert {str(p.path.relative_to(r)) for p in snapshot.problems_for(beta.id)} == {"platform/memory/Bad Name.md"}
+    assert {str(p.path.relative_to(r)) for p in snapshot.problems_for(beta.id)} == {
+        "platform/memory/Bad Name.md"
+    }
 
 
 async def test_a_name_used_twice_loads_neither_and_reports_both(container, make_agent):
@@ -111,7 +113,9 @@ async def test_an_agent_directory_is_matched_by_the_id_in_its_agent_toml(contain
     assert (await container.memory.read("renamed")).owner == alpha.id
 
 
-async def test_editing_agent_toml_takes_effect_and_an_unrunnable_model_is_reported(container, make_agent, models):
+async def test_editing_agent_toml_takes_effect_and_an_unrunnable_model_is_reported(
+    container, make_agent, models
+):
     alpha = await make_agent("alpha")
     path = root(container) / "alpha" / "agent.toml"
     text = path.read_text()
@@ -197,7 +201,10 @@ async def test_memory_blocks_skills_and_problems_reach_the_run(container, make_a
     await drain(container)
 
     text, context = seen[0]
-    assert f'<memory name="alpha" access="editable, your private memory" file="{r / "alpha" / "memory.md"}">' in text
+    assert (
+        f'<memory name="alpha" access="editable, your private memory" file="{r / "alpha" / "memory.md"}">'
+        in text
+    )
     assert '<memory name="trading" access="read-only, shared"' in text
     assert "secret of beta" not in text
     assert f"- `mine` (yours): When mine ({r / 'alpha' / 'skills' / 'mine' / 'SKILL.md'})" in text
@@ -216,12 +223,16 @@ async def test_memory_api_writes_files_and_follows_ownership(client, container, 
     resp = await client.put("/api/items/memory/global", json={"content": "first  \n\n\nsecond"})
     assert resp.json()["content"] == "first\n\nsecond"
     assert (root(container) / "platform" / "memory" / "global.md").read_text() == "first\n\nsecond\n"
-    assert (await client.put("/api/items/memory/alpha", json={"content": "- tea"})).json()["owner"] == agent.id
+    assert (await client.put("/api/items/memory/alpha", json={"content": "- tea"})).json()[
+        "owner"
+    ] == agent.id
     created = await client.put("/api/items/memory/trading", json={"content": "x"})
     assert created.json()["owner"] is None
     assert (await client.put("/api/items/memory/Bad Name", json={"content": "x"})).status_code == 422
     # 私有记忆名字就是 agent 名
-    assert (await client.put("/api/items/memory/other", json={"content": "x", "owner": agent.id})).status_code == 422
+    assert (
+        await client.put("/api/items/memory/other", json={"content": "x", "owner": agent.id})
+    ).status_code == 422
     assert (await client.delete("/api/items/memory/trading")).status_code == 204
     assert not (root(container) / "platform" / "memory" / "trading.md").exists()
     assert (await client.delete("/api/items/memory/global")).status_code == 422
@@ -343,7 +354,9 @@ async def test_creating_and_renaming_an_agent_writes_its_directory_and_rules(con
 
     # 手写的注释保留；改名挪目录，access.toml 里那一节跟着改名
     write(r / "alpha" / "agent.toml", "# keep me\n" + (r / "alpha" / "agent.toml").read_text())
-    updated = await container.agents.update(agent.id, AgentPatch(name="beta", description="new"), actor="user")
+    updated = await container.agents.update(
+        agent.id, AgentPatch(name="beta", description="new"), actor="user"
+    )
     assert (updated.name, updated.description) == ("beta", "new")
     assert not (r / "alpha").exists()
     assert (r / "beta" / "agent.toml").read_text().startswith("# keep me\n")
@@ -374,19 +387,47 @@ async def test_the_database_is_exported_once_into_files(container, tmp_path, mon
     monkeypatch.setenv("HOME", str(tmp_path))
     db = container.db
     async with db.transaction() as s:
-        s.add(Agent(id="a1b2c3d4e5f6", name="alpha", description="d", model="test", thinking="low", group="g"))
+        s.add(
+            Agent(id="a1b2c3d4e5f6", name="alpha", description="d", model="test", thinking="low", group="g")
+        )
         await s.flush()
         s.add(AgentRulesRow(agent_id="a1b2c3d4e5f6", roles=["reader"], allow=["write:path:~/x"], deny=[]))
         s.add(RoleRow(name="reader", description="r", allow=["use:skill:digest"], deny=[]))
         await s.merge(RoleRow(name="base", description="b", allow=["use:skill:digest"], deny=[]))
-        s.add(Item(kind="memory", name="alpha", owner="a1b2c3d4e5f6", content="see ~/.muliao/data/skills/digest/x.py"))
+        s.add(
+            Item(
+                kind="memory",
+                name="alpha",
+                owner="a1b2c3d4e5f6",
+                content="see ~/.muliao/data/skills/digest/x.py",
+            )
+        )
         s.add(Item(kind="memory", name="trading", owner=None, content="t"))
-        md = "---\nname: digest\ndescription: When digesting\n---\nRun $HOME/.muliao/data/skills/digest/x.py\n"
-        s.add(Item(kind="skill", name="digest", owner="a1b2c3d4e5f6", description="When digesting", content=md))
+        md = (
+            "---\nname: digest\ndescription: When digesting\n---\nRun $HOME/.muliao/data/skills/digest/x.py\n"
+        )
+        s.add(
+            Item(kind="skill", name="digest", owner="a1b2c3d4e5f6", description="When digesting", content=md)
+        )
         s.add(Item(kind="secret", name="TOKEN", owner=None, description="t", secret=b"gAAAAtoken"))
-        s.add(Item(kind="mcp", name="docs", owner=None, enabled=False, content=json.dumps(
-            {"transport": "http", "command": None, "args": [], "url": "https://x", "env": {}, "headers": {}}
-        )))
+        s.add(
+            Item(
+                kind="mcp",
+                name="docs",
+                owner=None,
+                enabled=False,
+                content=json.dumps(
+                    {
+                        "transport": "http",
+                        "command": None,
+                        "args": [],
+                        "url": "https://x",
+                        "env": {},
+                        "headers": {},
+                    }
+                ),
+            )
+        )
         await s.flush()
         digest = await s.scalar(select(Item.id).where(Item.name == "digest"))
         s.add(ItemFile(item_id=digest, path="x.py", content="print(1)\n", executable=True))
