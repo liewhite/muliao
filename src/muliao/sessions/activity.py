@@ -29,7 +29,7 @@ class WorkState(StrEnum):
 
     # 有排着或正在进行的运行，或有投给它、还没投递的来信
     RUNNING = "running"
-    # 运行停了，但在等外面的结果：后台任务、委派出去的工作、到点唤醒，或挂起的提问等用户回答
+    # 运行停了，但在等外面的结果：后台任务、委派出去的工作、到点唤醒，或挂起的提问、等批准的调用等用户
     WAITING = "waiting"
     # 没有任何进行中的事
     IDLE = "idle"
@@ -37,30 +37,33 @@ class WorkState(StrEnum):
 
 @dataclass(frozen=True)
 class Waiting:
-    """会话在等的东西（waiting 的唯一定义）：active 占用（后台任务、委派出去的工作、到点唤醒），与还能回答的提问。
-    会话页据此列出等待项（sessions.waits）。"""
+    """会话在等的东西（waiting 的唯一定义）：active 占用（后台任务、委派出去的工作、到点唤醒），与还能回答的提问、
+    还能批准的调用。会话页据此列出等待项（sessions.waits）。"""
 
     # 按登记先后
     holds: tuple[SessionHold, ...]
     # 提问的工具调用 id -> 问题
     asks: Mapping[str, list[Question]]
+    # 等批准的工具调用 id -> 工具名
+    approvals: Mapping[str, str]
 
     def __bool__(self) -> bool:
-        return bool(self.holds or self.asks)
+        return bool(self.holds or self.asks or self.approvals)
 
 
 async def waiting_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, Waiting]:
     """一批会话各自在等的东西，查询次数与会话数无关。"""
     held = await active_among(s, session_ids)
     asks = await open_asks_among(s, session_ids)
-    return {x: Waiting(tuple(held.get(x, ())), asks[x].answerable) for x in session_ids}
+    return {x: Waiting(tuple(held.get(x, ())), asks[x].answerable, asks[x].approvable) for x in session_ids}
 
 
 async def work_states_in(
     s: AsyncSession, queue: TaskQueue, session_ids: Collection[str]
 ) -> dict[str, WorkState]:
     """一批会话的工作状态，查询次数与会话数无关（会话列表一次要几百个，事务持有全局写锁）：running 有排队或进行中
-    的运行、还没投递的来信；waiting 有 active 占用（后台任务、委派、到点唤醒）或还能回答的提问；否则 idle。"""
+    的运行、还没投递的来信；waiting 有 active 占用（后台任务、委派、到点唤醒）或还能回答的提问、还能批准的调用；
+    否则 idle。"""
     lanes: dict[str, tuple[str, ...]] = {x: (session_lane(x), receive_lane(x)) for x in session_ids}
     # 按发送方定位（inbound.SessionKey）投给它、还没投递的来信在按 key 命名的 lane 上
     for x, (origin, origin_ref, agent_id) in (await keyed_among(s, session_ids)).items():

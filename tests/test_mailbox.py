@@ -26,6 +26,7 @@ from muliao.sessions.content import Content, append_content
 from muliao.sessions.conventions import INTERRUPTED_TOOL_RESULT, RUN_CHECK_INS, RUN_EVENTS, format_event
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import post_in, queued_in
+from muliao.sessions.pending import HandedOut
 from muliao.sessions.sources import JobSource
 from muliao.sessions.tables import Mail, MailKind, MailState, Message
 from muliao.sessions.transcript import to_items, to_text
@@ -425,11 +426,11 @@ def test_only_a_step_whose_unfinished_calls_are_all_idempotent_asks_is_replayed(
     def history(*calls: ToolCallPart) -> list[ModelMessage]:
         return [ModelRequest(parts=[UserPromptPart("go")]), ModelResponse(parts=list(calls))]
 
-    assert interrupted_calls(history(ask), set()) == []
-    assert interrupted_calls(history(shell), set()) == [shell]
-    assert interrupted_calls(history(ask, shell), set()) == [ask, shell]
+    assert interrupted_calls(history(ask), HandedOut()) == []
+    assert interrupted_calls(history(shell), HandedOut()) == [shell]
+    assert interrupted_calls(history(ask, shell), HandedOut()) == [ask, shell]
     # 已经交出去的 ask_agent 是在等回信（挂起的调用），不是被中断的调用
-    assert interrupted_calls(history(ask), {"a1"}) == []
+    assert interrupted_calls(history(ask), HandedOut(delegated={"a1"})) == []
 
 
 async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_again(

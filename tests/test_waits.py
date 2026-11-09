@@ -11,7 +11,7 @@ from muliao.sessions.activity import Waiting, WorkState, waiting_among
 from muliao.sessions.delegations import record_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.questions import Option, Question
-from muliao.sessions.waits import AskWait, DelegationWait, JobWait, WakeWait, waits_of_in
+from muliao.sessions.waits import ApprovalWait, AskWait, DelegationWait, JobWait, WakeWait, waits_of_in
 from muliao.sessions.wakeups import schedule_in
 from tests.conftest import login
 from tests.scripted import scripted
@@ -56,9 +56,13 @@ async def test_each_kind_of_wait_is_named_in_the_order_it_began(container, make_
         )
         await schedule_in(s, session.id, "w1", due, "check the deploy", awaited=False)
         [waiting] = (await waiting_among(s, [session.id])).values()
-        waits = await waits_of_in(s, Waiting(waiting.holds, {"q1": [_question("Scope"), _question("When")]}))
+        waits = await waits_of_in(
+            s,
+            Waiting(waiting.holds, {"q1": [_question("Scope"), _question("When")]}, {"c1": "skill_run"}),
+        )
 
-    job, report, ask, wake, question = waits
+    job, report, ask, wake, question, approval = waits
+    assert approval == ApprovalWait(call_id="c1", tool_name="skill_run")
     assert isinstance(job, JobWait) and job.job_id == 7
     assert isinstance(report, DelegationWait)
     assert (report.thread_session_id, report.check_seconds) == (thread.id, 30)

@@ -24,14 +24,15 @@ from muliao.files.api import FileMeta, load_metas
 from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
+from muliao.sessions.approvals import ApprovalAnswered
 from muliao.sessions.directory import add_in, keyed_rows_among
 from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import open_asks_in, post_in
 from muliao.sessions.origins import RULES, Origin
-from muliao.sessions.pending import UserAnswered
-from muliao.sessions.questions import AskResult, QuestionAnswer, answer_result
+from muliao.sessions.pending import CallResult, UserAnswered
+from muliao.sessions.questions import QuestionAnswer, answer_result
 from muliao.sessions.tables import TITLE_LENGTH, Mail, MailKind, Session
 
 log = logging.getLogger(__name__)
@@ -100,6 +101,8 @@ class Inbound:
     attachments: tuple[str, ...] = ()
     # 对这个会话里挂起提问的回答：tool_call_id -> 每题的回答（sessions.questions）；只有用户会带
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
+    # 对这个会话里等批准的调用的决定：tool_call_id -> 是否批准（sessions.approvals）；只有用户会带
+    approvals: Mapping[str, bool] = field(default_factory=dict)
     # 委派来的信件：关联 id（发起方的占用者），结局按它交回；只有 Threads.dispatch 会带
     correlation: str | None = None
 
@@ -163,6 +166,8 @@ class UserMessage:
     attachments: tuple[str, ...] = ()
     # 对这个会话里挂起提问的回答：tool_call_id -> 每题的回答（sessions.questions）
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
+    # 对这个会话里等批准的调用的决定：tool_call_id -> 是否批准（sessions.approvals）
+    approvals: Mapping[str, bool] = field(default_factory=dict)
 
     def inbound(self) -> Inbound:
         target = self.session
@@ -183,6 +188,7 @@ class UserMessage:
             awaited=True,
             attachments=self.attachments,
             answers=self.answers,
+            approvals=self.approvals,
         )
 
 
@@ -268,22 +274,34 @@ def _key_ref(inbound: Inbound) -> str:
 
 
 async def _resolve_answers(
-    s: AsyncSession, session_id: str, answers: Mapping[str, Sequence[QuestionAnswer]]
-) -> dict[str, AskResult]:
-    """用户提交的回答：每个都对应还在等回答的提问。返回交给模型的结果。"""
-    pending = (await open_asks_in(s, session_id)).answerable
-    resolved = {}
+    s: AsyncSession,
+    session_id: str,
+    answers: Mapping[str, Sequence[QuestionAnswer]],
+    approvals: Mapping[str, bool],
+) -> dict[str, CallResult]:
+    """用户提交的回答与批准决定：每个都对应还在等的提问、等批准的调用。返回回答信件里存的结果。"""
+    asks = await open_asks_in(s, session_id)
+    resolved: dict[str, CallResult] = {}
     for call_id, given in answers.items():
-        if call_id not in pending:
+        if call_id not in asks.answerable:
             raise Conflict(f"question {call_id!r} is not waiting for an answer in session {session_id}")
-        resolved[call_id] = answer_result(pending[call_id], given)
+        resolved[call_id] = UserAnswered.of(answer_result(asks.answerable[call_id], given))
+    for call_id, approved in approvals.items():
+        if call_id not in asks.approvable:
+            raise Conflict(f"call {call_id!r} is not waiting for approval in session {session_id}")
+        resolved[call_id] = ApprovalAnswered.of(approved)
     return resolved
 
 
 async def target_in(s: AsyncSession, inbound: Inbound) -> tuple[Session | None, list[FileMeta]]:
     """来信的校验规则（只读）：内容不为空、附件存在、目标会话存在且发送方可以续写、agent 能运行（没在删除、没归档）。返回要续写的会话
     （新建时为 None）与附件的元数据（推导标题时用，不再读一遍）。"""
-    if not inbound.content.strip() and not inbound.attachments and not inbound.answers:
+    if (
+        not inbound.content.strip()
+        and not inbound.attachments
+        and not inbound.answers
+        and not inbound.approvals
+    ):
         raise InvalidInput("message must not be empty")
     attachments = await load_metas(s, inbound.attachments)
     if isinstance(inbound.session, NewSession):
@@ -402,8 +420,8 @@ async def receive_into(
         session = await create_session(s, origin=inbound.origin, origin_ref=inbound.origin_ref, spec=spec)
     session.updated_at = utcnow()
     mail = []
-    if inbound.answers:
-        answers = await _resolve_answers(s, session.id, inbound.answers)
+    if inbound.answers or inbound.approvals:
+        answers = await _resolve_answers(s, session.id, inbound.answers, inbound.approvals)
         mail.append(
             await post_in(
                 s,
@@ -412,7 +430,7 @@ async def receive_into(
                 kind=MailKind.ANSWER,
                 origin=inbound.origin,
                 content="",
-                answers={k: UserAnswered.of(v).model_dump() for k, v in answers.items()},
+                answers={k: v.model_dump() for k, v in answers.items()},
                 awaited=inbound.awaited,
             )
         )

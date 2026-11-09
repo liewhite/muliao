@@ -20,12 +20,14 @@ class RunEnded(DomainEvent):
     agent_id: str
     agent_name: str
     run_id: int
-    # 给用户的回答：停在提问上时是问题列表，停在等 agent 上时为空
+    # 给用户的回答：停在提问、等批准上时是问题与等批准的调用，停在等 agent 上时为空
     answer: str
     stopped: bool
-    # 停在挂起的调用上（等用户回答，或等被问的 agent）
+    # 停在挂起的调用上（等用户回答、批准，或等被问的 agent）
     paused: bool
     asked_user: bool
+    # 停在等用户批准的调用上：不论有没有人在等都推送（触发器等没人看的运行也要有人批准）；更早发布的事件没有这个字段
+    needs_approval: bool = False
     # 这次运行处理过的信件里有用户在等的
     awaited: bool
 

@@ -37,7 +37,14 @@ from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_run
 from muliao.sessions.tables import Compaction, Mail, Session
 from muliao.sessions.thread_calls import call_threads_in
-from muliao.sessions.transcript import Item, annotate_asks, annotate_threads, checked_times, to_items
+from muliao.sessions.transcript import (
+    Item,
+    annotate_approvals,
+    annotate_asks,
+    annotate_threads,
+    checked_times,
+    to_items,
+)
 from muliao.sessions.waits import Wait, waits_of_in
 
 log = logging.getLogger(__name__)
@@ -129,21 +136,25 @@ class SessionService:
             for message_id, payload, created_at, _ in rows
             if live is None or live.after_message_id is None or message_id <= live.after_message_id
         ]
-        items = annotate_asks(
-            annotate_threads(
-                checked_times(
-                    [
-                        item.model_copy(update={"message_id": message_id})
-                        for (message_id, _, created_at), message in zip(
-                            shown, load_messages(p for _, p, _ in shown), strict=True
-                        )
-                        for item in to_items([message], self._renders, saved_at=created_at)
-                    ]
+        items = annotate_approvals(
+            annotate_asks(
+                annotate_threads(
+                    checked_times(
+                        [
+                            item.model_copy(update={"message_id": message_id})
+                            for (message_id, _, created_at), message in zip(
+                                shown, load_messages(p for _, p, _ in shown), strict=True
+                            )
+                            for item in to_items([message], self._renders, saved_at=created_at)
+                        ]
+                    ),
+                    call_threads,
                 ),
-                call_threads,
+                answerable=asks.answerable.keys(),
+                submitted=asks.submitted,
             ),
-            answerable=asks.answerable.keys(),
-            submitted=asks.submitted,
+            approvable=asks.approvable.keys(),
+            submitted=asks.approvals_submitted,
         )
         return SessionView(
             session=session,

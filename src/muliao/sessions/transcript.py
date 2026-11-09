@@ -76,6 +76,9 @@ class Item(BaseModel):
     images: list[Attachment]
     # ask_user 的调用（参数合法时）；其他条目为 None
     ask: AskView | None
+    # 停下来等用户批准的工具调用（sessions.approvals）：pending 现在能批准（显示批准/拒绝按钮），submitted 决定已提交、
+    # 还排着。由会话接口填（annotate_approvals）；其他条目（含已有结果的调用）为 None
+    approval: Literal["pending", "submitted"] | None
     # 工具调用的参数、结果按工具自己的展示规则（platform.tool_views）画成的展示块；None 表示显示原文（工具没定规则、
     # 参数或结果不合它的 schema、被退回的错误）。其他条目为 None
     view: View | None
@@ -109,6 +112,7 @@ def _item(
         threads=threads or [],
         images=images or [],
         ask=None,
+        approval=None,
         view=view,
         at=at,
     )
@@ -169,6 +173,21 @@ def _annotated(
     else:
         return item
     return item.model_copy(update={"ask": item.ask.model_copy(update=update)})
+
+
+def annotate_approvals(
+    items: list[Item], approvable: Collection[str], submitted: Collection[str]
+) -> list[Item]:
+    """给等批准的工具调用填上状态：现在能批准（approvable）是 pending，决定已提交、还排着（submitted）是 submitted。
+    两者都只含还没有结果的调用（pending.open_asks_of），所以不看结果条目。"""
+    return [
+        item.model_copy(update={"approval": "pending" if item.tool_call_id in approvable else "submitted"})
+        if item.type == "tool_call"
+        and item.tool_call_id is not None
+        and (item.tool_call_id in approvable or item.tool_call_id in submitted)
+        else item
+        for item in items
+    ]
 
 
 def annotate_threads(items: list[Item], call_threads: Mapping[str, str]) -> list[Item]:

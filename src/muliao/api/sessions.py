@@ -207,6 +207,8 @@ class ReplyIn(BaseModel):
     attachments: list[str] = []
     # 对挂起提问的回答（条目里 ask.status 为 pending 的提问）；只回答时 prompt 可以为空
     answers: dict[str, list[QuestionAnswer]] = {}
+    # 对等批准的调用的决定（条目里 approval 为 pending 的工具调用）：true 批准、false 拒绝；只做决定时 prompt 可以为空
+    approvals: dict[str, bool] = {}
 
 
 @router.get("/sessions")
@@ -263,7 +265,11 @@ async def get_session(c: C, session_id: str) -> SessionDetail:
 async def reply(c: C, session_id: str, body: ReplyIn) -> list[MailOut]:
     received = await c.sessions.receive(
         UserMessage(
-            content=body.prompt, session=session_id, attachments=tuple(body.attachments), answers=body.answers
+            content=body.prompt,
+            session=session_id,
+            attachments=tuple(body.attachments),
+            answers=body.answers,
+            approvals=body.approvals,
         )
     )
     return await mail_outs(c, received.mail)

@@ -7,11 +7,12 @@
 import asyncio
 import os
 import shlex
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agents.api import AssetSource, SkillStore, Vault
+from muliao.agent_runtime.api import is_approved, require_approval
+from muliao.agents.api import AssetSource, SkillScripts, SkillStore, Vault
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import FileStore
 from muliao.platform.shell import LEFT_RUNNING_NOTE, run_bash
@@ -58,12 +59,18 @@ _SKILL_RUN_DESCRIPTION = (
     "`heartbeat_seconds` rules). `secrets` works as in run_shell and also takes secrets marked "
     "`allow_shell = false`, which run_shell, trigger prechecks and streams refuse: such a key is meant to be used "
     "only through a script that wraps the operation with its own checks, so use the skill's script for it "
-    "instead of writing the command yourself."
+    "instead of writing the command yourself. A script listed under `approval:` in the skill's SKILL.md "
+    "frontmatter waits for the user to approve or deny this exact call before it runs: your turn ends once this "
+    "response's tool calls finish, and the script's result (or the denial) arrives as this tool's result."
 )
 
 
-def _script_command(directory: Path, skill: str, script: str, args: tuple[str, ...]) -> str:
-    """skill 目录里的脚本加参数，拼成一条不经 shell 解析的命令。脚本必须落在目录里（经符号链接也不行）。"""
+def _script_command(
+    scripts: SkillScripts, skill: str, script: str, args: tuple[str, ...]
+) -> tuple[str, bool]:
+    """skill 目录里的脚本加参数，拼成一条不经 shell 解析的命令，以及它执行前要不要用户批准。脚本必须落在目录里
+    （经符号链接也不行）。"""
+    directory = scripts.directory
     root = directory.resolve()
     path = (root / script).resolve()
     if PurePosixPath(script).is_absolute() or not path.is_relative_to(root) or path == root:
@@ -76,7 +83,7 @@ def _script_command(directory: Path, skill: str, script: str, args: tuple[str, .
         raise InvalidInput(
             f"{path} is not executable: a skill script needs a shebang line and the executable bit (chmod +x)"
         )
-    return shlex.join([str(path), *args])
+    return shlex.join([str(path), *args]), scripts.needs_approval(path)
 
 
 def workspace_toolset(
@@ -140,9 +147,18 @@ def workspace_toolset(
             background: As in run_shell: run it as a background job instead of waiting for it.
             heartbeat_seconds: As in run_shell: background only, seconds between check-in events (default 60).
         """
-        directory = await skills.directory(skill, ctx.deps.agent_id)
-        command = await asyncio.to_thread(_script_command, directory, skill, script, args)
-        return await execute(ctx.deps, command, timeout, secrets, background, heartbeat_seconds, shell=False)
+        found = await skills.scripts(skill, ctx.deps.agent_id)
+        command, gated = await asyncio.to_thread(_script_command, found, skill, script, args)
+        return await execute(
+            ctx.deps,
+            command,
+            timeout,
+            secrets,
+            background,
+            heartbeat_seconds,
+            shell=False,
+            ask_approval=gated and not is_approved(ctx),
+        )
 
     async def execute(
         scope: RunScope,
@@ -153,9 +169,11 @@ def workspace_toolset(
         heartbeat_seconds: float | None,
         *,
         shell: bool,
+        ask_approval: bool = False,
     ) -> str:
         """run_shell 与 skill_run 共用的执行：前台或后台、参数用错场合的报错都一样。shell：command 是 agent 自己写的
-        （决定能不能注入 allow_shell = false 的 secret，Vault.resolve_many）。"""
+        （决定能不能注入 allow_shell = false 的 secret，Vault.resolve_many）。ask_approval：参数校验通过后先停下等用户批准
+        （require_approval），不去问一个参数就不对的调用。"""
         if not background:
             if heartbeat_seconds is not None:
                 raise InvalidInput(
@@ -166,6 +184,8 @@ def workspace_toolset(
                     "timeout is required for a foreground command: estimate how many seconds it needs "
                     "(no upper limit), or run it with `background: true`"
                 )
+            if ask_approval:
+                require_approval()
             return await _run_foreground(vault, limits, confiner, scope, command, timeout, secrets, shell)
         if timeout is not None:
             raise InvalidInput(
@@ -175,6 +195,8 @@ def workspace_toolset(
         check = DEFAULT_CHECK_SECONDS if heartbeat_seconds is None else heartbeat_seconds
         if not check > 0:  # 也拒绝 NaN
             raise InvalidInput("heartbeat_seconds must be greater than 0")
+        if ask_approval:
+            require_approval()
         job = await jobs.start(
             session_id=scope.session_id,
             agent_id=scope.agent_id,

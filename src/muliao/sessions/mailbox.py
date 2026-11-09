@@ -24,11 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from muliao.errors import NotFound
 from muliao.platform.tasks import TaskQueue
 from muliao.platform.tooling import Audience
+from muliao.sessions.approvals import requested_among, requested_in
 from muliao.sessions.history import since_last_response, since_last_response_among
-from muliao.sessions.holds import called_in, get_in
+from muliao.sessions.holds import get_in
 from muliao.sessions.lanes import RUN_TASK, session_lane
 from muliao.sessions.origins import Origin
-from muliao.sessions.pending import OpenAsks, open_asks_of, waiting
+from muliao.sessions.pending import OpenAsks, handed_out_in, open_asks_of, waiting
 from muliao.sessions.runs import RunPayload, handed_to, latest_run, run_unfinished_in
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, Session
 
@@ -191,7 +192,7 @@ async def wake_in(
     if finished is None and latest is not None and all(handed_to(m.id, latest) for m in queued):
         # 都已经交给过一次运行（它失败了、等重试）：由它或之后新信件唤醒的运行处理，不重复投递
         return False
-    if waiting(await since_last_response(s, session.id), queued, await called_in(s, session.id)):
+    if waiting(await since_last_response(s, session.id), queued, await handed_out_in(s, session.id)):
         # 停在挂起的调用上：等回答或新消息（跳过），事件到时一起交给模型。挂起的调用只可能在最后一条模型回复里，
         # 不加载整段上下文
         return False
@@ -348,12 +349,17 @@ async def post_check_in(
 
 
 async def open_asks_in(s: AsyncSession, session_id: str) -> OpenAsks:
-    """会话还没有结果的提问（规则在 pending.open_asks_of）。"""
-    return open_asks_of(await since_last_response(s, session_id), await queued_in(s, session_id))
+    """会话还没有结果、等用户的挂起调用：提问与等批准的调用（规则在 pending.open_asks_of）。"""
+    return open_asks_of(
+        await since_last_response(s, session_id),
+        await queued_in(s, session_id),
+        await requested_in(s, session_id),
+    )
 
 
 async def open_asks_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str, OpenAsks]:
     """open_asks_in 的批量版本（会话列表的工作状态），同一条规则。"""
     tails = await since_last_response_among(s, session_ids)
     queued = await queued_among(s, session_ids)
-    return {x: open_asks_of(tails[x], queued[x]) for x in session_ids}
+    requested = await requested_among(s, session_ids)
+    return {x: open_asks_of(tails[x], queued[x], requested[x]) for x in session_ids}

@@ -13,7 +13,6 @@ from pydantic_ai import Agent as PaiAgent
 from pydantic_ai import (
     AgentRun,
     DeferredToolRequests,
-    DeferredToolResults,
     UsageLimits,
     UserPromptNode,
 )
@@ -43,7 +42,7 @@ from pydantic_graph import End
 from muliao.agent_runtime.attachments import AttachmentsForModel, ToolImagesToFiles
 from muliao.agent_runtime.instructions import build_instructions, build_run_context
 from muliao.agent_runtime.llm import ModelResolver, check_thinking, model_settings
-from muliao.agent_runtime.outcome import Finished, Paused, outcome_of
+from muliao.agent_runtime.outcome import Finished, Paused, deferred_tool_results, outcome_of
 from muliao.agent_runtime.redaction import redact_call, redact_retry, tool_input_kept_out_of_failures
 from muliao.agent_runtime.tool_errors import DomainErrorsAsRetry
 from muliao.agent_runtime.toolbox import RunProfile
@@ -225,9 +224,7 @@ class AgentRuntime:
                     deps=scope,
                     toolsets=[DomainErrorsAsRetry(t) for t in profile.toolsets],
                     output_type=[str, DeferredToolRequests],
-                    deferred_tool_results=None
-                    if deferred is None
-                    else DeferredToolResults(calls=dict(deferred)),
+                    deferred_tool_results=None if deferred is None else deferred_tool_results(deferred),
                     usage=usage,
                     usage_limits=_UNLIMITED,
                 ) as run:

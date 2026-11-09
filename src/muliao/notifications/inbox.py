@@ -79,8 +79,10 @@ class Notifications:
 
     async def on_run_ended(self, event: RunEnded, _delivery: Delivery) -> Commit:
         """推送一次运行的回答：处理过的信件里有用户在等的，且有话要告诉用户（做完了，或停下来问用户）；用户自己停止的
-        不推。"""
-        if not event.awaited or event.stopped or (event.paused and not event.asked_user):
+        不推。停下来等用户批准的总是推：没人在看的运行（触发器、issue）也只有用户能批准。"""
+        if not event.needs_approval and (
+            not event.awaited or event.stopped or (event.paused and not event.asked_user)
+        ):
             return no_commit
 
         async def commit(s: AsyncSession) -> None:

@@ -554,12 +554,12 @@ def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():
     import pytest
     from pydantic_ai.messages import ToolCallPart
 
-    from muliao.sessions.pending import AgentAnswer, AgentAnswered, deferred_results
+    from muliao.sessions.pending import AgentAnswer, AgentAnswered, HandedOut, deferred_results
 
     call = ToolCallPart("ask_user", {"questions": []}, tool_call_id="c")
     wrong = AgentAnswered.of(AgentAnswer(text="hi", attachments=[]))
     with pytest.raises(RuntimeError, match="got an answer for ask_agent"):
-        deferred_results({"c": call}, {"c": wrong})
+        deferred_results({"c": call}, {"c": wrong}, HandedOut(), retried=False)
 
 
 def test_an_answer_mailed_before_thread_calls_still_parses():

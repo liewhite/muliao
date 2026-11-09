@@ -2,12 +2,11 @@
 
 from types import SimpleNamespace
 
-import pytest
-from pydantic_ai import DeferredToolRequests
+from pydantic_ai import DeferredToolRequests, ToolDenied
 from pydantic_ai.messages import ToolCallPart
 
-from muliao.agent_runtime.api import Finished, Paused
-from muliao.agent_runtime.outcome import outcome_of
+from muliao.agent_runtime.api import Approval, Finished, Paused
+from muliao.agent_runtime.outcome import deferred_tool_results, outcome_of
 
 
 def _result(output: object) -> SimpleNamespace:
@@ -24,7 +23,15 @@ def test_deferred_calls_are_a_paused_run():
     assert outcome == Paused(calls=(call,))
 
 
-def test_a_run_asking_for_approval_is_rejected():
-    call = ToolCallPart(tool_name="run_shell", args={}, tool_call_id="c1")
-    with pytest.raises(RuntimeError, match="approvals.*run_shell"):
-        outcome_of(_result(DeferredToolRequests(approvals=[call])))  # type: ignore[arg-type]
+def test_calls_asking_for_approval_are_a_paused_run():
+    call = ToolCallPart(tool_name="skill_run", args={}, tool_call_id="c1")
+    outcome = outcome_of(_result(DeferredToolRequests(approvals=[call])))  # type: ignore[arg-type]
+    assert outcome == Paused(calls=(), approvals=(call,))
+
+
+def test_decisions_on_approvals_go_to_approvals_and_other_results_to_calls():
+    results = deferred_tool_results(
+        {"a": Approval(approved=True), "d": Approval(approved=False, note="no"), "c": "answer"}
+    )
+    assert results.approvals == {"a": True, "d": ToolDenied("no")}
+    assert results.calls == {"c": "answer"}

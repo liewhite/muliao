@@ -38,7 +38,7 @@ from muliao.agents.service import (
     runnable_agent_in,
 )
 from muliao.agents.skill_package import MAX_PACKAGE_BYTES
-from muliao.agents.skills import SkillImport, SkillMeta, SkillStore
+from muliao.agents.skills import SkillImport, SkillMeta, SkillScripts, SkillStore
 from muliao.agents.source import AssetSource
 
 __all__ = [
@@ -78,6 +78,7 @@ __all__ = [
     "MAX_PACKAGE_BYTES",
     "SkillImport",
     "SkillMeta",
+    "SkillScripts",
     "SkillStore",
     "Access",
     "Kind",

@@ -38,6 +38,19 @@ class SkillMeta:
 
 
 @dataclass(frozen=True)
+class SkillScripts:
+    # skill 的目录（脚本在里面）
+    directory: Path
+    # 执行前要用户批准的脚本，相对目录的路径（SKILL.md frontmatter 的 approval）
+    approval: tuple[str, ...]
+
+    def needs_approval(self, script: Path) -> bool:
+        """这个脚本（已解析成真实路径）在要批准的列表里；列表里的路径同样解析后比较（`./x.sh` 与 `x.sh` 是同一个）。"""
+        root = self.directory.resolve()
+        return any((root / p).resolve() == script for p in self.approval)
+
+
+@dataclass(frozen=True)
 class Skill:
     meta: SkillMeta
     body: str
@@ -96,12 +109,12 @@ class SkillStore:
         """agent 能用的 skill（自己的与分发给它的，agents.access），按名称：它的 skill 索引。"""
         return [_meta(a) for a in usable(await self._source.snapshot(), _KIND, agent)]
 
-    async def directory(self, name: str, agent: str) -> Path:
-        """agent 能用的这个 skill 的目录（skill_run 在里面找脚本）；不存在或它不能用都是 NotFound。"""
+    async def scripts(self, name: str, agent: str) -> SkillScripts:
+        """agent 能用的这个 skill 的脚本在哪、哪些要批准（skill_run 用）；不存在或它不能用都是 NotFound。"""
         found = {a.name: a for a in usable(await self._source.snapshot(), _KIND, agent)}
         if name not in found:
             raise NotFound(f"skill {name!r} not found among the skills you can use (see your skill index)")
-        return found[name].path
+        return SkillScripts(found[name].path, found[name].approval)
 
     async def read(self, name: str) -> Skill:
         asset = (await self._source.snapshot()).asset(_KIND, name)

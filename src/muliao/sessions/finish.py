@@ -12,6 +12,7 @@ from muliao.agent_runtime.api import shared_attachments
 from muliao.platform.db import utcnow
 from muliao.platform.messaging import Messaging
 from muliao.platform.tasks import Commit, TaskQueue
+from muliao.sessions.approvals import record_in as record_approvals_in
 from muliao.sessions.events import RunEnded as RunEndedEvent
 from muliao.sessions.holds import has_active_in
 from muliao.sessions.loading import load_session
@@ -24,13 +25,15 @@ from muliao.sessions.steps import RunState
 class RunEnd:
     """一次运行怎么结束的。"""
 
-    # 给用户的回答：停在提问上时是问题列表，停在等 agent 上时为空
+    # 给用户的回答：停在提问、等批准上时是问题与等批准的调用，停在等 agent 上时为空
     answer: str
-    # 停在挂起的调用上（等用户回答提问，或等被问的 agent）：工作还没做完
+    # 停在挂起的调用上（等用户回答提问、批准，或等被问的 agent）：工作还没做完
     paused: bool
     # 停下来等用户回答提问：要告诉用户
     asked_user: bool
     stopped: bool
+    # 停下来等用户批准的调用 id：收尾时记下（sessions.approvals），不论有没有人在等都要告诉用户
+    approvals: tuple[str, ...] = ()
 
 
 class RunFinisher:
@@ -63,6 +66,8 @@ class RunFinisher:
     def commit(self, state: RunState, end: RunEnd) -> Commit:
         async def finish(s: AsyncSession) -> None:
             session, agent = await load_session(s, state.session.id)
+            if end.approvals:
+                await record_approvals_in(s, session.id, end.approvals)
             if state.messages:
                 session.updated_at = utcnow()
                 # 推送由通知领域订阅（运行结束后随即投递）
@@ -80,6 +85,7 @@ class RunFinisher:
                         stopped=end.stopped,
                         paused=end.paused,
                         asked_user=end.asked_user,
+                        needs_approval=bool(end.approvals),
                         awaited=any(m.awaited for m in state.handled),
                     ),
                 )

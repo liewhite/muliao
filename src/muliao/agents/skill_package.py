@@ -219,15 +219,35 @@ def unpack(data: bytes) -> Package:
 # ---- SKILL.md 的 frontmatter（导入的包、资源目录里的 skill 都按它） ----
 
 
-def parse_frontmatter(text: str, name: str) -> tuple[str, frontmatter.Post]:
-    """SKILL.md 的 frontmatter 规则：description 是非空字符串；有 name 时必须与 skill（目录名）同名。返回描述与解析结果；
-    不合规则时 InvalidInput。"""
+@dataclass(frozen=True)
+class Frontmatter:
+    description: str
+    # 执行前要用户批准的脚本（相对 skill 目录的路径，skill_run 执行前挂起等批准，#530）
+    approval: tuple[str, ...]
+    post: frontmatter.Post
+
+
+def parse_frontmatter(text: str, name: str) -> Frontmatter:
+    """SKILL.md 的 frontmatter 规则：description 是非空字符串；有 name 时必须与 skill（目录名）同名；有 approval 时是
+    相对 skill 目录的脚本路径列表。不合规则时 InvalidInput。"""
     where = f"{name}/{SKILL_FILE}"
     post = loads_skill_md(text, name, where)
     description = post.get("description")
     if not isinstance(description, str):
         raise InvalidInput(f"{where}: frontmatter must contain a string 'description'")
-    return valid_description(description), post
+    return Frontmatter(valid_description(description), _approval(post.get("approval", []), where), post)
+
+
+def _approval(value: object, where: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(p, str) and p.strip() for p in value):
+        raise InvalidInput(
+            f"{where}: 'approval' must be a list of script paths relative to the skill directory, "
+            f"e.g. [scripts/deploy.sh], got {value!r}"
+        )
+    for p in value:
+        if p.startswith("/"):
+            raise InvalidInput(f"{where}: approval path {p!r} must be relative to the skill directory")
+    return tuple(p.strip() for p in value)
 
 
 def loads_skill_md(text: str, name: str, where: str) -> frontmatter.Post:

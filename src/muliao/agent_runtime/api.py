@@ -14,7 +14,14 @@ from muliao.agent_runtime.conventions import (
 )
 from muliao.agent_runtime.instructions import memory_section, with_notices
 from muliao.agent_runtime.llm import ModelRegistry
-from muliao.agent_runtime.outcome import Finished, Paused, defer_call
+from muliao.agent_runtime.outcome import (
+    Approval,
+    Finished,
+    Paused,
+    defer_call,
+    is_approved,
+    require_approval,
+)
 from muliao.agent_runtime.redaction import redact_messages
 from muliao.agent_runtime.runner import AgentRuntime, StepHooks
 from muliao.agent_runtime.toolbox import Toolbox
@@ -26,6 +33,7 @@ __all__ = [
     "ModelRegistry",
     "TOOL_ATTACHMENTS",
     "AgentRuntime",
+    "Approval",
     "Attachment",
     "Finished",
     "Paused",
@@ -33,6 +41,8 @@ __all__ = [
     "Toolbox",
     "copy_to_workspace",
     "defer_call",
+    "is_approved",
+    "require_approval",
     "redact_messages",
     "references",
     "result_images",

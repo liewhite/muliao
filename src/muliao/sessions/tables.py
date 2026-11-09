@@ -227,6 +227,21 @@ class WakeUp(Base):
     __table_args__ = (Index("uq_wakeups_holder", "holder", unique=True),)
 
 
+class ApprovalRequest(Base):
+    """这次工具调用停下来等用户批准了（sessions.approvals）：运行停在等批准的调用上时，在它收尾的事务里记下。是「没有
+    结果的调用在等批准」与「执行到一半被打断」的区分依据（sessions.pending）。行永久保留，随会话删除。"""
+
+    __tablename__ = "approval_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
+    call_id: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+    # 复合唯一索引以 session_id 开头，也是它的外键索引
+    __table_args__ = (Index("uq_approval_requests_call", "session_id", "call_id", unique=True),)
+
+
 class ThreadCall(Base):
     """哪次工具调用开出或续写了哪个 thread（sessions.thread_calls）：在开出/续写 thread 的同一个事务里记下，是界面把
     thread 显示在调用处的唯一来源，与调用有没有结果、结果是谁补的无关。续写同一个 thread 时每次调用各一行；随发起会话

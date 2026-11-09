@@ -109,7 +109,8 @@ class AgentDir:
 @dataclass(frozen=True)
 class Asset:
     """一项资源。path：记忆、MCP、secret 是那个文件，skill 是它的目录。description：skill 与 secret 的描述（记忆、MCP
-    为空）。种类专有的内容：记忆的正文 text，MCP 的 mcp（配置与是否启用），secret 的文件内容 secret（密文与 allow_shell）。"""
+    为空）。种类专有的内容：记忆的正文 text，MCP 的 mcp（配置与是否启用），secret 的文件内容 secret（密文与 allow_shell），
+    skill 执行前要批准的脚本 approval（frontmatter，相对目录的路径）。"""
 
     kind: StoredKind
     name: str
@@ -120,6 +121,7 @@ class Asset:
     text: str = ""
     mcp: tuple[McpConfig, bool] | None = None
     secret: SecretFile | None = None
+    approval: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -480,8 +482,10 @@ class _Reader:
             md = path / SKILL_FILE
             if not md.is_file():
                 raise InvalidInput(f"skill directory has no {SKILL_FILE}")
-            description, _ = parse_frontmatter(md.read_text(encoding="utf-8"), name)
-            return Asset(StoredKind.SKILL, name, owner, path, description, updated(md))
+            fm = parse_frontmatter(md.read_text(encoding="utf-8"), name)
+            return Asset(
+                StoredKind.SKILL, name, owner, path, fm.description, updated(md), approval=fm.approval
+            )
 
         self.guarded(StoredKind.SKILL, path.name, path, owner, load)
 
