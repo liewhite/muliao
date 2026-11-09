@@ -77,7 +77,15 @@ from muliao.triggers.webhook import WebhookKind
 from muliao.usage.api import UsageLog
 from muliao.web.api import WebProvider, build_web_provider
 from muliao.web.tools import web_toolset
-from muliao.workspace.api import Confiner, JobAdmin, JobRunner, ShellLimits, Sites, WorkspaceFiles
+from muliao.workspace.api import (
+    Confiner,
+    JobAdmin,
+    JobRunner,
+    ScriptGrants,
+    ShellLimits,
+    Sites,
+    WorkspaceFiles,
+)
 from muliao.workspace.tools import workspace_toolset
 
 log = logging.getLogger(__name__)
@@ -98,6 +106,8 @@ class Container:
     jobs: JobAdmin
     # agent 页的「文件」：工作目录的只读浏览
     workspace_files: WorkspaceFiles
+    # 设置页的「始终允许」：查看与撤销
+    script_grants: ScriptGrants
     # 「页面」：agent 在工作目录 site/ 下写的网页
     sites: Sites
     vault: Vault
@@ -161,6 +171,7 @@ class Assembly:
     threads: Threads
     mail: MailReconciler
     jobs: JobRunner
+    script_grants: ScriptGrants
     confiner: Confiner
     thread_checks: ThreadChecks
     wakeups: WakeUps
@@ -186,6 +197,7 @@ class Assembly:
             tasks=TaskAdmin(self.queue),
             jobs=JobAdmin(self.jobs),
             workspace_files=WorkspaceFiles(self.agents.workspace),
+            script_grants=self.script_grants,
             sites=Sites(self.agents.workspace),
             vault=self.vault,
             skills=self.skills,
@@ -386,6 +398,7 @@ def assemble(
         messaging,
         ports.work,
     )
+    script_grants = ScriptGrants(db)
     limits = ShellLimits(settings.runtime.tool_output_max_chars)
     # 运行可用的全部静态工具集；每个工具的权限在 agents.permissions 登记，一次运行开放哪些只按 agent 的分发规则算
     # （Toolbox.profile），不随运行状态变（工具列表稳定才命中缓存）：如 ask_user 在没有用户会回答的运行里照样列出，
@@ -393,7 +406,7 @@ def assemble(
     static_toolsets = [
         history_toolset(history, agents, ports.recall, issues, settings.runtime.tool_output_max_chars),
         ask_user_toolset(),
-        workspace_toolset(vault, limits, files, jobs, confiner, assets, skills),
+        workspace_toolset(vault, limits, files, jobs, confiner, assets, skills, script_grants),
         ports.delegation_toolset(agents),
         ports.wakeup_toolset(),
         ports.recall_toolset(agents, settings.runtime.tool_output_max_chars),
@@ -430,6 +443,7 @@ def assemble(
     # 跨领域的反应：各领域的订阅与命令处理者（删除 agent 与会话时各领域清理自己的数据）
     session_domain.subscribe(messaging)
     jobs.subscribe(messaging)
+    script_grants.subscribe(messaging)
     notifications.subscribe(messaging)
     agent_lifecycle.subscribe(messaging)
     triggers.subscribe(messaging)
@@ -475,6 +489,7 @@ def assemble(
         threads=ports.threads,
         mail=session_domain.mail,
         jobs=jobs,
+        script_grants=script_grants,
         confiner=confiner,
         thread_checks=ports.thread_checks,
         wakeups=ports.wakeups,

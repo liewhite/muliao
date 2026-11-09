@@ -6,6 +6,7 @@ skill 索引、界面的编辑页（只改 SKILL.md）、标准 .skill 文件的
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from collections.abc import Mapping
@@ -48,6 +49,28 @@ class SkillScripts:
         """这个脚本（已解析成真实路径）在要批准的列表里；列表里的路径同样解析后比较（`./x.sh` 与 `x.sh` 是同一个）。"""
         root = self.directory.resolve()
         return any((root / p).resolve() == script for p in self.approval)
+
+    def fingerprint(self) -> str:
+        """skill 目录里除 SKILL.md 以外全部文件的内容指纹（sha256，十六进制）：「始终允许」按它认同一份脚本（#531），
+        改了脚本或它用的辅助文件就不再算同一份，改说明不算。按相对路径排序，路径与内容一起算；跳过 `__pycache__`
+        （运行 Python 脚本时自动生成，Python 只在源文件对得上时用它）；符号链接记链接目标，链到文件的再算目标的内容，
+        链到目录的不进去（只记目标路径）。阻塞 IO，在线程里调。"""
+        root = self.directory
+        digest = hashlib.sha256()
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+            here = Path(dirpath)
+            for name in sorted([*filenames, *(d for d in dirnames if (here / d).is_symlink())]):
+                path = here / name
+                rel = path.relative_to(root).as_posix()
+                if rel == SKILL_FILE:
+                    continue
+                digest.update(f"{rel}\0".encode())
+                if path.is_symlink():
+                    digest.update(f"-> {os.readlink(path)}\0".encode())
+                if path.is_file():
+                    digest.update(hashlib.sha256(path.read_bytes()).digest())
+        return digest.hexdigest()
 
 
 @dataclass(frozen=True)

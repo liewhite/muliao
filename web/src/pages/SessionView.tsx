@@ -22,6 +22,7 @@ import {
   agentRoute,
   api,
   type Agent,
+  type ApprovalChoice,
   type Attachment,
   type CompactionInfo,
   type EventSource,
@@ -234,8 +235,8 @@ function StepsGroup({ steps, ctx }: { steps: Step[]; ctx: SessionContext }) {
 /** 渲染会话条目要用到的会话信息：回答提问的方式、这个会话开出的 thread、agent 名称 */
 interface SessionContext {
   answer: (callId: string, answers: QuestionAnswer[]) => Promise<unknown>
-  /** 批准或拒绝一次等批准的工具调用 */
-  approve: (callId: string, approved: boolean) => Promise<unknown>
+  /** 批准、拒绝或始终允许一次等批准的工具调用 */
+  approve: (callId: string, choice: ApprovalChoice) => Promise<unknown>
   threads: Map<string, Session>
   agents: Agent[] | undefined
   /**
@@ -268,16 +269,19 @@ function AskBlock({ block, ctx }: { block: AskBlockData; ctx: SessionContext }) 
   }
 }
 
-/** 停下来等用户批准的工具调用：显示调用的工具与参数，待批准时给出批准、拒绝两个按钮 */
+/**
+ * 停下来等用户批准的工具调用：显示调用的工具与参数，待批准时给出拒绝、始终允许、批准三个按钮（始终允许：以后同样的调用
+ * 不再问，设置页可撤销）
+ */
 function ApprovalBlock({ block, ctx }: { block: ApprovalBlockData; ctx: SessionContext }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const decide = (approved: boolean) => {
+  const decide = (choice: ApprovalChoice) => {
     setBusy(true)
     setError(null)
     // 失败（如新消息先把这次调用关掉了，409）要让人看到，不吞掉
     ctx
-      .approve(block.callId, approved)
+      .approve(block.callId, choice)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
   }
@@ -296,10 +300,13 @@ function ApprovalBlock({ block, ctx }: { block: ApprovalBlockData; ctx: SessionC
       <ErrorAlert error={error} />
       {block.status === 'pending' && (
         <div className="flex justify-end gap-2">
-          <Button size="sm" variant="secondary" isDisabled={busy} onPress={() => decide(false)}>
+          <Button size="sm" variant="secondary" isDisabled={busy} onPress={() => decide('deny')}>
             拒绝
           </Button>
-          <Button size="sm" isDisabled={busy} onPress={() => decide(true)}>
+          <Button size="sm" variant="secondary" isDisabled={busy} onPress={() => decide('always')}>
+            始终允许
+          </Button>
+          <Button size="sm" isDisabled={busy} onPress={() => decide('approve')}>
             批准
           </Button>
         </div>
@@ -463,7 +470,10 @@ function MailNote({ mail, ctx }: { mail: Mail; ctx: SessionContext }) {
           result.tool === 'ask_user' ? (
             <AnsweredQuestions key={i} answers={result.result.answers} />
           ) : result.tool === 'approval' ? (
-            <QuestionNote key={i} text={result.result.approved ? '已批准' : '已拒绝'} />
+            <QuestionNote
+              key={i}
+              text={result.result.approved ? (result.result.always ? '已始终允许' : '已批准') : '已拒绝'}
+            />
           ) : (
             <EventNote key={i} lead={<span className="shrink-0 text-foreground">agent 的回答</span>} text={result.result.text} />
           ),
@@ -990,7 +1000,7 @@ export default function SessionView() {
         {(d) => {
           const ctx: SessionContext = {
             answer: (callId, answers) => api.answer(id, callId, answers).then(() => detail.reload()),
-            approve: (callId, approved) => api.approve(id, callId, approved).then(() => detail.reload()),
+            approve: (callId, choice) => api.approve(id, callId, choice).then(() => detail.reload()),
             threads: new Map(d.threads.map((t) => [t.id, t])),
             agents: agents.data,
             view: 'history',

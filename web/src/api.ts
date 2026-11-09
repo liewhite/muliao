@@ -22,6 +22,9 @@ export type Agent = WithAgentId<Schemas['AgentOut'], 'id'>
 /** 修改 agent 的请求体：整体替换，字段全部必填（新建用 Schemas['AgentCreate']） */
 export type AgentInput = Schemas['AgentUpdate']
 export type Session = WithAgentId<Schemas['SessionOut'], 'agent_id'>
+/** 对等批准的调用的决定：批准、拒绝、始终允许 */
+export type ApprovalChoice = Schemas['ReplyIn']['approvals'][string]
+export type ScriptGrant = Schemas['ScriptGrantOut']
 // 会话列表里的一行：多一个工作状态 state（在运行 / 在等 / 空闲），不空闲的（在运行、在等）排在最前（接口排序）
 export type SessionListItem = WithAgentId<Schemas['SessionListItem'], 'agent_id'>
 /** 一条通知（不叫 Notification：那是浏览器的全局对象） */
@@ -349,12 +352,20 @@ export const api = {
       path: { session_id },
       body: { prompt: '', attachments: [], answers: { [toolCallId]: answers }, approvals: {} },
     }),
-  /** 批准或拒绝一次等批准的工具调用：批准后按原参数执行，结果交回模型；拒绝时模型收到「用户拒绝」 */
-  approve: (session_id: string, toolCallId: string, approved: boolean) =>
+  /**
+   * 批准或拒绝一次等批准的工具调用：批准后按原参数执行，结果交回模型；拒绝时模型收到「用户拒绝」；始终允许：批准，
+   * 且以后同样的调用不再问（设置页可撤销）
+   */
+  approve: (session_id: string, toolCallId: string, choice: ApprovalChoice) =>
     call('post', '/api/sessions/{session_id}/messages', {
       path: { session_id },
-      body: { prompt: '', attachments: [], answers: {}, approvals: { [toolCallId]: approved } },
+      body: { prompt: '', attachments: [], answers: {}, approvals: { [toolCallId]: choice } },
     }),
+  /** skill 脚本的「始终允许」，新的在前 */
+  scriptGrants: () => call('get', '/api/script-grants'),
+  /** 撤销一条始终允许：之后同一调用重新要批准 */
+  revokeScriptGrant: (grant_id: number) =>
+    call('delete', '/api/script-grants/{grant_id}', { path: { grant_id } }),
   /** 请求体就是文件内容，Content-Type 是它的类型（接口描述里没有 JSON 请求体）；浏览器认不出类型时 file.type 为空，按「未知二进制」上传 */
   uploadFile: (file: File) =>
     send<FileInfo>('POST', FILES_PATH, { name: file.name }, { type: file.type || 'application/octet-stream', data: file }),

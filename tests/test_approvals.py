@@ -21,7 +21,8 @@ from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.api import Origin
 from muliao.sessions.approvals import DENIED, INTERRUPTED, NOT_DECIDED
 from muliao.sessions.lanes import RUN_TASK
-from tests.conftest import login, restart
+from muliao.workspace.grants import GRANTED_NOTE, ScriptCall
+from tests.conftest import login, restart, share
 from tests.scripted import scripted
 from tests.test_flow import drain, start, tasks_of
 
@@ -78,9 +79,11 @@ def _approval_states(detail: dict) -> dict[str, str]:
     return {i["tool_call_id"]: i["approval"] for i in detail["items"] if i["approval"] is not None}
 
 
-async def _decide(client, session_id: str, approved: bool) -> int:
+async def _decide(client, session_id: str, choice: bool | str) -> int:
+    if isinstance(choice, bool):
+        choice = "approve" if choice else "deny"
     resp = await client.post(
-        f"/api/sessions/{session_id}/messages", json={"prompt": "", "approvals": {"c1": approved}}
+        f"/api/sessions/{session_id}/messages", json={"prompt": "", "approvals": {"c1": choice}}
     )
     return resp.status_code
 
@@ -258,3 +261,137 @@ def test_the_approval_list_must_be_relative_script_paths():
     for bad in ("scripts/a.sh", "[/abs/a.sh]", "[1]", "['']"):
         with pytest.raises(InvalidInput, match="approval"):
             parse_frontmatter(fm(bad), "ops")
+
+
+# ---- 始终允许（#531） ----
+
+
+async def _again(container, models, agent_id: str, args=GATED, model: str = "gate2") -> tuple[str, Gate]:
+    """同一个 agent 在新会话里再发起一次调用（模型换一个名字，各自记结果）。"""
+    gate = Gate(args)
+    models.models[model] = scripted(gate)
+    async with container.db.transaction() as s:
+        from muliao.agents.tables import Agent
+
+        (await s.get(Agent, agent_id)).model = model
+    session = await start(container, agent_id, "again")
+    await drain(container)
+    return session.id, gate
+
+
+async def _always_allowed(client, container, make_agent, models):
+    session_id, gate, ran = await _gated(container, make_agent, models)
+    assert await _decide(client, session_id, "always") == 202
+    await drain(container)
+    assert gate.results == ["exit_code: 0\ndeployed prod\n"]
+    detail = (await client.get(f"/api/sessions/{session_id}")).json()
+    return detail["session"]["agent_id"], ran
+
+
+async def test_an_always_allowed_call_runs_without_asking_next_time(client, container, make_agent, models):
+    await login(client)
+    agent_id, ran = await _always_allowed(client, container, make_agent, models)
+    [grant] = (await client.get("/api/script-grants")).json()
+    assert (
+        grant["agent_id"],
+        grant["skill"],
+        grant["script"],
+        grant["args"],
+        grant["secrets"],
+        grant["hits"],
+    ) == (
+        agent_id,
+        "ops",
+        "scripts/deploy.sh",
+        ["prod"],
+        [],
+        0,
+    )
+
+    # 同一调用（timeout 不同也算同一个）：直接执行，结果里标明按始终允许放行，不再请用户批准
+    session_id, gate = await _again(container, models, agent_id, args={**GATED, "timeout": 30})
+    assert gate.results[0].startswith(GRANTED_NOTE) and "deployed prod" in gate.results[0]
+    assert ran.read_text() == "prod\nprod\n"
+    assert _approval_states((await client.get(f"/api/sessions/{session_id}")).json()) == {}
+    assert sum("等你批准" in n["body"] for n in (await client.get("/api/notifications")).json()) == 1
+    [grant] = (await client.get("/api/script-grants")).json()
+    assert grant["hits"] == 1 and grant["last_used_at"] is not None
+
+
+async def test_an_always_allowed_call_asks_again_when_anything_that_matters_changes(
+    client, container, make_agent, models
+):
+    await login(client)
+    agent_id, ran = await _always_allowed(client, container, make_agent, models)
+    skill_dir = container.settings.assets_dir / "alpha" / "skills" / "ops"
+
+    # 参数不同：要批准
+    session_id, _ = await _again(container, models, agent_id, args={**GATED, "args": ["staging"]}, model="g1")
+    assert _approval_states((await client.get(f"/api/sessions/{session_id}")).json()) == {"c1": "pending"}
+
+    # 改了说明（SKILL.md）不算变：照样放行
+    md = skill_dir / "SKILL.md"
+    md.write_text(md.read_text() + "\nmore notes\n")
+    _, gate = await _again(container, models, agent_id, model="g2")
+    assert gate.results[0].startswith(GRANTED_NOTE)
+
+    # 改了辅助文件：要批准
+    (skill_dir / "scripts" / "lib.sh").write_text("helper\n")
+    session_id, _ = await _again(container, models, agent_id, model="g3")
+    assert _approval_states((await client.get(f"/api/sessions/{session_id}")).json()) == {"c1": "pending"}
+
+
+async def test_a_revoked_grant_asks_again(client, container, make_agent, models):
+    await login(client)
+    agent_id, ran = await _always_allowed(client, container, make_agent, models)
+    [grant] = (await client.get("/api/script-grants")).json()
+
+    assert (await client.delete(f"/api/script-grants/{grant['id']}")).status_code == 204
+    assert (await client.delete(f"/api/script-grants/{grant['id']}")).status_code == 404
+    assert (await client.get("/api/script-grants")).json() == []
+    session_id, _ = await _again(container, models, agent_id)
+    assert _approval_states((await client.get(f"/api/sessions/{session_id}")).json()) == {"c1": "pending"}
+
+
+async def test_a_grant_is_per_agent_and_goes_with_the_agent(client, container, make_agent, models):
+    await login(client)
+    await _always_allowed(client, container, make_agent, models)
+    # 别的 agent 用同一个 skill（公共 skill）的同一调用：要批准
+    other = await make_agent("beta", model="gate2")
+    (container.settings.assets_dir / "platform" / "skills").mkdir(parents=True, exist_ok=True)
+    (container.settings.assets_dir / "alpha" / "skills" / "ops").rename(
+        container.settings.assets_dir / "platform" / "skills" / "ops"
+    )
+    await share(container, "use:skill:ops")
+    session_id, _ = await _again(container, models, other.id)
+    assert _approval_states((await client.get(f"/api/sessions/{session_id}")).json()) == {"c1": "pending"}
+
+    alpha = (await client.get("/api/script-grants")).json()[0]["agent_id"]
+    assert (await client.delete(f"/api/agents/{alpha}")).status_code == 204
+    await drain(container)
+    assert (await client.get("/api/script-grants")).json() == []
+
+
+def test_a_script_call_key_ignores_the_order_of_secrets_but_not_their_set():
+    def key(secrets: tuple[str, ...], agent: str = "a1") -> str:
+        return ScriptCall.of(agent, "ops", "scripts/deploy.sh", ("prod",), secrets, "f" * 64).key
+
+    assert key(("A", "B")) == key(("B", "A", "A"))
+    assert key(("A",)) != key(("A", "B")) != key(())
+    assert key(()) != key((), agent="a2")
+
+
+def test_the_fingerprint_skips_skill_md_and_pycache_but_sees_helpers(tmp_path):
+    from muliao.agents.skills import SkillScripts
+
+    (tmp_path / "SKILL.md").write_text("a")
+    (tmp_path / "run.py").write_text("print(1)")
+    scripts = SkillScripts(tmp_path, ("run.py",))
+    first = scripts.fingerprint()
+    (tmp_path / "SKILL.md").write_text("b")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "run.cpython-312.pyc").write_bytes(b"x")
+    assert scripts.fingerprint() == first
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "SKILL.md").write_text("nested is a helper")
+    assert scripts.fingerprint() != first

@@ -50,7 +50,7 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
   },
   {
     title: '本设备',
-    items: [{ to: '/settings', label: '推送与登录', Icon: Settings }],
+    items: [{ to: '/settings', label: '设置', Icon: Settings }],
   },
 ]
 

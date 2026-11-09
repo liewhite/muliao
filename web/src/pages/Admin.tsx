@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Chip, Form, toast } from '@heroui/react'
-import { BellRing, LogOut, RotateCcw } from 'lucide-react'
+import { BellRing, LogOut, RotateCcw, ShieldCheck, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api, unauthorizedEvent, type TaskStatus, sessionRoute } from '../api'
+import { api, unauthorizedEvent, type AgentId, type TaskStatus, sessionRoute } from '../api'
 import { useReturnState } from '../nav'
 import { enablePush, pushState, unsubscribePush, type PushState } from '../push'
 import { ActionButton,
@@ -146,7 +146,7 @@ export function Settings() {
   }
 
   return (
-    <Page title="推送与登录">
+    <Page title="设置">
       <Card>
         <Card.Header>
           <Card.Title className="flex items-center gap-2">
@@ -182,12 +182,88 @@ export function Settings() {
           </Card.Footer>
         )}
       </Card>
+      <ScriptGrants />
       <ErrorAlert error={action.error} />
       <Button variant="danger-soft" onPress={() => void logout()}>
         <LogOut className="size-4" />
         退出登录
       </Button>
     </Page>
+  )
+}
+
+/** skill 脚本的「始终允许」：在审批处点「始终允许」记下的，逐条可撤销（撤销后同一调用重新要批准） */
+function ScriptGrants() {
+  const from = useReturnState()
+  const grants = useLoad(() => api.scriptGrants(), [])
+  const agents = useAgents()
+  const confirm = useConfirm()
+  const action = useAction()
+  async function revoke(id: number) {
+    if (!(await confirm({ title: '撤销这条始终允许？', confirmLabel: '撤销' }))) return
+    await action.run(() => api.revokeScriptGrant(id).then(grants.reload))
+  }
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title className="flex items-center gap-2">
+          <ShieldCheck className="size-4" />
+          始终允许的脚本
+        </Card.Title>
+        <Card.Description>
+          同一个 agent 以同样的参数和 secret 运行同一个脚本、且 skill 里除 SKILL.md 外的文件没变时，不再问你。
+        </Card.Description>
+      </Card.Header>
+      <Card.Content>
+        <ErrorAlert error={action.error} />
+        <Loading state={grants}>
+          {(list) =>
+            list.length === 0 ? (
+              <p className="text-sm text-muted">没有</p>
+            ) : (
+              <div className="flex flex-col divide-y divide-border">
+                {list.map((g) => (
+                  <div key={g.id} className="flex items-start gap-2 py-2">
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-sm">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Chip size="sm" color="accent" variant="soft">
+                          {agentLabel(agents.data, g.agent_id as AgentId)}
+                        </Chip>
+                        <span className="break-all font-mono">
+                          {g.skill}/{g.script}
+                        </span>
+                      </div>
+                      <span className="break-all font-mono text-xs">
+                        {g.args.length === 0 ? '（无参数）' : g.args.map((a) => JSON.stringify(a)).join(' ')}
+                        {g.secrets.length > 0 && ` · secrets: ${g.secrets.join(', ')}`}
+                      </span>
+                      <span className="text-xs text-muted">
+                        {formatTime(g.created_at)} 允许（
+                        <Link className="text-accent" to={sessionRoute(g.session_id)} state={from}>
+                          会话
+                        </Link>
+                        ）· 已放行 {g.hits} 次
+                        {g.last_used_at && `，最近 ${formatTime(g.last_used_at)}`}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isIconOnly
+                      aria-label="撤销"
+                      isDisabled={action.busy}
+                      onPress={() => void revoke(g.id)}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )
+          }
+        </Loading>
+      </Card.Content>
+    </Card>
   )
 }
 

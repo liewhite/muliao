@@ -10,6 +10,7 @@ from muliao.api.tasks import TaskOut
 from muliao.container import Container
 from muliao.sessions.api import (
     MIN_COMPACTION_THRESHOLD_TOKENS,
+    ApprovalChoice,
     ApprovalWait,
     AskWait,
     CallResult,
@@ -210,8 +211,9 @@ class ReplyIn(BaseModel):
     attachments: list[str] = []
     # 对挂起提问的回答（条目里 ask.status 为 pending 的提问）；只回答时 prompt 可以为空
     answers: dict[str, list[QuestionAnswer]] = {}
-    # 对等批准的调用的决定（条目里 approval 为 pending 的工具调用）：true 批准、false 拒绝；只做决定时 prompt 可以为空
-    approvals: dict[str, bool] = {}
+    # 对等批准的调用的决定（条目里 approval 为 pending 的工具调用）：approve 批准、deny 拒绝、always 始终允许
+    # （批准，以后同样的调用不再问，#531）；只做决定时 prompt 可以为空
+    approvals: dict[str, ApprovalChoice] = {}
 
 
 @router.get("/sessions")

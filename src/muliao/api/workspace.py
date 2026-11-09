@@ -1,4 +1,5 @@
-"""agent 工作目录的只读浏览（工作区领域 WorkspaceFiles）：agent 页「文件」列出一层目录、读一个文件。
+"""agent 工作目录的只读浏览（工作区领域 WorkspaceFiles）：agent 页「文件」列出一层目录、读一个文件；设置页的 skill 脚本
+「始终允许」（ScriptGrants）：列出与撤销。
 
 文件内容是 agent 写的，与界面同源、带着登录 cookie，所以和对话里的文件下载（api/files.py）一样按不可信处理
 （files.UNTRUSTED_CONTENT_HEADERS），只有能内联的图片按 inline 返回，其余一律作为附件，不在本站执行；
@@ -14,7 +15,7 @@ from pydantic import BaseModel
 
 from muliao.api.deps import C
 from muliao.files.api import UNTRUSTED_CONTENT_HEADERS
-from muliao.workspace.api import Entry
+from muliao.workspace.api import Entry, GrantInfo
 
 router = APIRouter()
 
@@ -55,3 +56,45 @@ async def read_workspace_file(c: C, agent_id: str, path: str) -> FileResponse:
         content_disposition_type="inline" if f.inline else "attachment",
         headers=_SAFE_HEADERS,
     )
+
+
+class ScriptGrantOut(BaseModel):
+    id: int
+    agent_id: str
+    skill: str
+    script: str
+    args: list[str]
+    secrets: list[str]
+    # 用户点「始终允许」的那次调用所在的会话（可能已删除）
+    session_id: str
+    created_at: datetime
+    # 按它直接放行的次数与最后一次的时间
+    hits: int
+    last_used_at: datetime | None
+
+    @classmethod
+    def of(cls, g: GrantInfo) -> "ScriptGrantOut":
+        return cls(
+            id=g.id,
+            agent_id=g.agent_id,
+            skill=g.skill,
+            script=g.script,
+            args=list(g.args),
+            secrets=list(g.secrets),
+            session_id=g.session_id,
+            created_at=g.created_at,
+            hits=g.hits,
+            last_used_at=g.last_used_at,
+        )
+
+
+@router.get("/script-grants")
+async def list_script_grants(c: C) -> list[ScriptGrantOut]:
+    """skill 脚本的「始终允许」（#531），新的在前。"""
+    return [ScriptGrantOut.of(g) for g in await c.script_grants.list()]
+
+
+@router.delete("/script-grants/{grant_id}", status_code=204)
+async def revoke_script_grant(c: C, grant_id: int) -> None:
+    """撤销一条始终允许：之后同一调用重新要批准。"""
+    await c.script_grants.revoke(grant_id)

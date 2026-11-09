@@ -53,7 +53,7 @@ muliao/
   platform/        数据库、任务队列（actor 调度；别的领域经它的只读查询 TaskView 看自己 lane 上的任务）、事件与定向命令、实时展示总线、运行中检查的节拍、shell、id、工具调用的展示块（tool_views，第 17 节）
   agent_runtime/   会话运行的端口：模型注册表、指令组装、工具组合（toolbox.py）、pydantic-ai 的逐步驱动、它自己写下的消息约定（工具交回的文件与图片）、MCP 连接
   sessions/        会话（子域：会话、运行、交互、外部工作、委派、到点唤醒、展示，见下表）：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、到点唤醒、压缩、停止、删除、种类、会话的消息约定
-  workspace/       工作区：文件工具（read/write/edit_file、share_file）与 edit_file 的编辑规则、run_shell（前台与后台）、后台任务（jobs 表）、界面对工作目录的只读浏览（browse.py）与 agent 自定义页面（sites.py，第 15 节）
+  workspace/       工作区：文件工具（read/write/edit_file、share_file）与 edit_file 的编辑规则、run_shell（前台与后台）、后台任务（jobs 表）、skill 脚本的始终允许（grants.py）、界面对工作目录的只读浏览（browse.py）与 agent 自定义页面（sites.py，第 15 节）
   agents/          agent 目录、AI 资源（资源目录树 agents/assets.py 与快照 agents/source.py；skill、MCP、secret、记忆；secret 的加解密与 ${vault:KEY} 引用解析在 agents/secrets.py）、工具权限与角色
   usage/           模型用量：每次运行记一条，按时间范围汇总
   issues/          issue 看板：人与 agent 协作的事项，动态按状态与指派投进 agent 的 issue 会话
@@ -95,7 +95,7 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 
 会话领域的编排（停止 `halt.py`、删除 `deletion.py`、消费者）与跨子域的读模型（会话门面 `service.py`、热历史 `recall.py`，第 22 节）只调各子域的接口；会话领域不 import 任务表的 `TaskStatus`，`Task` 只出现在任务处理器的签名里（`tests/test_boundaries.py`）。
 
-其他领域不设子域，内部按模块组织。各自的表：workspace `jobs`；usage `model_usage`；history `agent_history`；files `files`；triggers `triggers`；issues `issues`、`issue_activities`、`issue_dependencies`；notifications `notifications`、`push_subscriptions`（speech、web、agent_runtime、routing 没有表）。其中几张表由一个模块独占（`tests/test_boundaries.py` 的 `MODULE_TABLES` 登记并核对）：`issue_dependencies` 只在 issues 的依赖图 `graph.py`，`notifications` 只在收件箱 `inbox.py`，`push_subscriptions` 只在推送 `push.py`。issues 另有投递 `delivery.py` 与文本 `render.py`，`IssueService` 只编排（第 21 节）；triggers 的前置检查状态只在 `precheck.py` 迁移（第 14 节）。
+其他领域不设子域，内部按模块组织。各自的表：workspace `jobs`、`script_grants`；usage `model_usage`；history `agent_history`；files `files`；triggers `triggers`；issues `issues`、`issue_activities`、`issue_dependencies`；notifications `notifications`、`push_subscriptions`（speech、web、agent_runtime、routing 没有表）。其中几张表由一个模块独占（`tests/test_boundaries.py` 的 `MODULE_TABLES` 登记并核对）：`issue_dependencies` 只在 issues 的依赖图 `graph.py`，`notifications` 只在收件箱 `inbox.py`，`push_subscriptions` 只在推送 `push.py`，`script_grants` 只在 workspace 的 `grants.py`。issues 另有投递 `delivery.py` 与文本 `render.py`，`IssueService` 只编排（第 21 节）；triggers 的前置检查状态只在 `precheck.py` 迁移（第 14 节）。
 
 `agent_runtime` 不是业务领域，是会话运行的端口：把 pydantic-ai 的 loop 收在「从这段历史推进一步，告诉我发生了什么」后面（`AgentRuntime.run_steps` 与 `StepHooks`），会话领域只依赖这个端口与消息约定；具体的工具不在这里（文件与 shell 在 `workspace`，web 工具在 `web`，各领域的 `tools.py`），它只按规则把组合根交来的工具集组合进运行（`Toolbox`）；以后自己写 loop 时改动限于这个端口的实现。端口不交出 pydantic-ai 的运行与挂起类型：运行的结局是 `Finished`（回答与新增消息）或 `Paused`（挂起的调用），挂起调用的结果以 `{调用 id: 结果}` 交回，工具用 `defer_call()` 挂起（`agent_runtime/outcome.py`）；消息（`ModelMessage`、`ToolCallPart` 等）是会话历史的存储形态，不在此列。`tests/test_boundaries.py` 检查 agent_runtime 之外不 import 这些运行类型。工具一律通过领域接口做事，不碰表。
 
@@ -384,10 +384,11 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 **等批准的调用**（#530，`sessions/approvals.py`）：工具在参数校验过、执行之前调用 `require_approval()`（agent_runtime，pydantic-ai 的 ApprovalRequired），运行以 `Paused.approvals` 正常结束。目前只有 `skill_run`：脚本列在 SKILL.md frontmatter 的 `approval:`（相对 skill 目录的路径，按整个脚本标记，不按参数）。
 
 - 哪些调用在等批准不按工具名认（同一个工具多数调用不用批准），也不能只看历史（与「执行到一半被打断」的调用一样没有结果）：运行收尾的事务里把它们记进 `approval_requests`（永久事实，同 ask_agent 带 call_id 的占用；两者合称 `HandedOut`）。没有结果、记过的调用就是在等批准。可能要批准的工具是普通工具，其余规则同普通工具：不重放、用户停止时补「已停止」；挂起的工具（`DEFERRED_TOOLS`）不请求批准。
-- 界面按钮随消息提交 `approvals: {tool_call_id: bool}`，`inbound.receive` 校验它针对现在能批准的调用（`OpenAsks.approvable`），回答信封是 `{"tool": "approval", "result": {"approved": …}}`。交回时是 `Approval`：批准 → pydantic-ai 按原参数再调一次工具（`is_approved` 为真），结果就是执行结果；拒绝 → `DENIED`；没批准就来了新消息 → `NOT_DECIDED`；迟到的决定作为文字。
+- 界面按钮随消息提交 `approvals: {tool_call_id: "approve" | "deny" | "always"}`，`inbound.receive` 校验它针对现在能批准的调用（`OpenAsks.approvable`），回答信封是 `{"tool": "approval", "result": {"approved": …, "always": …}}`。交回时是 `Approval`：批准 → pydantic-ai 按原参数再调一次工具（`is_approved` 为真），结果就是执行结果；拒绝 → `DENIED`；没批准就来了新消息 → `NOT_DECIDED`；迟到的决定作为文字。
 - 批准后工具在运行开头就执行，结果随下一步保存。批准被运行取走时（取走信件的同一个事务）记下 `approval_requests.taken_at`；再被取走（进程退出后恢复、运行最终失败后被新消息或手动重试接手）说明上一次可能在执行中被打断：不再执行，给 `INTERRUPTED`（同「从哪里开始」）。按调用记，与哪个 run task、第几次尝试无关。保守：取走后、执行前就失败也这样处理，模型可以再发起一次（重新审批）。
 - 已知边界（罕见、只会误导不会重复执行，不加机制）：带调用的回复已保存、收尾事务还没记下等批准时进程退出，这次调用按「被中断、可能已执行」补结果；用户停止等批准的调用时补的是通用的「已停止、可能已部分执行」。
-- 停在等批准上的运行不论有没有人在等都推送（`RunEnded.needs_approval`）：触发器、issue 的运行也只有用户能批准。会话是 waiting，等待项列出 `approval`；条目上 `Item.approval`（pending / submitted，`transcript.annotate_approvals`），界面显示调用与批准、拒绝两个按钮。
+- 停在等批准上的运行不论有没有人在等都推送（`RunEnded.needs_approval`）：触发器、issue 的运行也只有用户能批准。会话是 waiting，等待项列出 `approval`；条目上 `Item.approval`（pending / submitted，`transcript.annotate_approvals`），界面显示调用与拒绝、始终允许、批准三个按钮。
+- **始终允许**（#531，`workspace/grants.py`，表 `script_grants`）：选 always 时 `Approval.always` 经 pydantic-ai 的 `DeferredToolResults.metadata` 交到工具（`always_allow_requested`），由 `skill_run` 自己记下：什么算「同一调用」是工具的事，会话领域只传用户的选择。同一调用：agent id、skill、脚本（解析后相对目录的路径）、参数、secret（排序去重）与 skill 目录除 SKILL.md 外的内容指纹（`SkillScripts.fingerprint`，跳过 `__pycache__`）；timeout、background、heartbeat_seconds 不算；没有通配。之后要批准的调用先查表，有就直接执行、记命中次数，结果前加 `GRANTED_NOTE` 留痕。存库不放资源目录（agent 能写自己的资源目录，等于自批）；设置页列出与撤销（`GET/DELETE /api/script-grants`），agent 删除时随 `AgentDeleting` 删掉。点始终允许不放行别的会话里已在等的同一调用。
 
 **`ask_user`**：做法同 Claude Code 的 AskUserQuestion、Codex 的提问：一次 1 到 4 个选择题（单选或多选，每题 2 到 6 个选项），界面上每题总能在「其他」里自己写。工具总是列出，只在 `Audience.USER` 时可用，否则抛领域错误交还模型，说明按 Audience 区分（`agent`：另一个 agent 在问，把要对方定的写进回答；`none`：自己决定、必要时 `notify_user`）（`sessions/ask_user.py` 的 `REJECTED`；不用 `prepare` 隐藏，以免工具列表随运行变化破坏 prompt 缓存）。
 

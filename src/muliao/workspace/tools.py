@@ -11,7 +11,7 @@ from pathlib import PurePosixPath
 
 from pydantic_ai import FunctionToolset, RunContext
 
-from muliao.agent_runtime.api import is_approved, require_approval
+from muliao.agent_runtime.api import always_allow_requested, is_approved, require_approval
 from muliao.agents.api import AssetSource, SkillScripts, SkillStore, Vault
 from muliao.errors import InvalidInput, NotFound
 from muliao.files.api import FileStore
@@ -21,6 +21,7 @@ from muliao.platform.tool_views import TerminalBlock, ToolRender, ViewBlock, ren
 from muliao.platform.tooling import RunScope
 from muliao.sessions.api import DEFAULT_CHECK_SECONDS
 from muliao.workspace.file_tools import ShellLimits, file_toolset
+from muliao.workspace.grants import GRANTED_NOTE, ScriptCall, ScriptGrants
 from muliao.workspace.runner import JobRunner
 from muliao.workspace.tables import JobStatus
 from muliao.workspace.writable import Confiner, denial_note
@@ -61,15 +62,17 @@ _SKILL_RUN_DESCRIPTION = (
     "only through a script that wraps the operation with its own checks, so use the skill's script for it "
     "instead of writing the command yourself. A script listed under `approval:` in the skill's SKILL.md "
     "frontmatter waits for the user to approve or deny this exact call before it runs: your turn ends once this "
-    "response's tool calls finish, and the script's result (or the denial) arrives as this tool's result."
+    "response's tool calls finish, and the script's result (or the denial) arrives as this tool's result. A call "
+    "the user has chosen to always allow runs without waiting when it is repeated exactly (same script, args and "
+    "secrets, and the skill's files other than SKILL.md unchanged)."
 )
 
 
 def _script_command(
     scripts: SkillScripts, skill: str, script: str, args: tuple[str, ...]
-) -> tuple[str, bool]:
-    """skill 目录里的脚本加参数，拼成一条不经 shell 解析的命令，以及它执行前要不要用户批准。脚本必须落在目录里
-    （经符号链接也不行）。"""
+) -> tuple[str, str | None]:
+    """skill 目录里的脚本加参数，拼成一条不经 shell 解析的命令；脚本执行前要用户批准时还给出它相对目录的路径
+    （解析后的，始终允许按它认脚本），不用批准为 None。脚本必须落在目录里（经符号链接也不行）。"""
     directory = scripts.directory
     root = directory.resolve()
     path = (root / script).resolve()
@@ -83,7 +86,8 @@ def _script_command(
         raise InvalidInput(
             f"{path} is not executable: a skill script needs a shebang line and the executable bit (chmod +x)"
         )
-    return shlex.join([str(path), *args]), scripts.needs_approval(path)
+    gated = path.relative_to(root).as_posix() if scripts.needs_approval(path) else None
+    return shlex.join([str(path), *args]), gated
 
 
 def workspace_toolset(
@@ -94,6 +98,7 @@ def workspace_toolset(
     confiner: Confiner,
     assets: AssetSource,
     skills: SkillStore,
+    grants: ScriptGrants,
 ) -> FunctionToolset[RunScope]:
     """文件、shell、skill 脚本与后台任务。"""
     ts = file_toolset(limits, files, confiner, assets)
@@ -149,7 +154,16 @@ def workspace_toolset(
         """
         found = await skills.scripts(skill, ctx.deps.agent_id)
         command, gated = await asyncio.to_thread(_script_command, found, skill, script, args)
-        return await execute(
+        # 要批准的脚本：用户这次点了始终允许就记下；还没批准的看有没有始终允许（workspace.grants）
+        granted: int | None = None
+        if gated is not None and (always_allow_requested(ctx) or not is_approved(ctx)):
+            fingerprint = await asyncio.to_thread(found.fingerprint)
+            call = ScriptCall.of(ctx.deps.agent_id, skill, gated, args, secrets, fingerprint)
+            if always_allow_requested(ctx):
+                await grants.grant(call, ctx.deps.session_id, ctx.tool_call_id)
+            else:
+                granted = await grants.find(call)
+        result = await execute(
             ctx.deps,
             command,
             timeout,
@@ -157,8 +171,12 @@ def workspace_toolset(
             background,
             heartbeat_seconds,
             shell=False,
-            ask_approval=gated and not is_approved(ctx),
+            ask_approval=gated is not None and not is_approved(ctx) and granted is None,
         )
+        if granted is None:
+            return result
+        await grants.used(granted)
+        return f"{GRANTED_NOTE}\n{result}"
 
     async def execute(
         scope: RunScope,

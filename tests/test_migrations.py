@@ -1724,3 +1724,21 @@ def test_triggers_get_a_null_route_and_downgrade_drops_it_with_issue_events(tmp_
         assert "route" not in {r[1] for r in conn.execute("pragma table_info(triggers)")}
         assert conn.execute("select kind from issue_activities").fetchall() == [("comment",)]
         assert conn.execute("select name from triggers").fetchall() == [("w",)]
+
+
+def test_script_grants_table_is_created_and_dropped_on_downgrade(tmp_path):
+    """script_grants（#531）：新表；降级删表，其余不动。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert "key" in {r[1] for r in conn.execute("pragma table_info(script_grants)")}
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "b7e3a9c41d02")
+    with sqlite3.connect(path) as conn:
+        tables = {r[0] for r in conn.execute("select name from sqlite_master where type = 'table'")}
+        assert "script_grants" not in tables and "approval_requests" in tables
+    migrate(path)

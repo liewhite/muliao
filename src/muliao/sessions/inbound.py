@@ -24,7 +24,7 @@ from muliao.files.api import FileMeta, load_metas
 from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
-from muliao.sessions.approvals import ApprovalAnswered
+from muliao.sessions.approvals import ApprovalAnswered, Choice
 from muliao.sessions.directory import add_in, keyed_rows_among
 from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
 from muliao.sessions.kinds import SessionKind, policy_of
@@ -101,8 +101,8 @@ class Inbound:
     attachments: tuple[str, ...] = ()
     # 对这个会话里挂起提问的回答：tool_call_id -> 每题的回答（sessions.questions）；只有用户会带
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
-    # 对这个会话里等批准的调用的决定：tool_call_id -> 是否批准（sessions.approvals）；只有用户会带
-    approvals: Mapping[str, bool] = field(default_factory=dict)
+    # 对这个会话里等批准的调用的决定：tool_call_id -> 批准、拒绝或始终允许（sessions.approvals）；只有用户会带
+    approvals: Mapping[str, Choice] = field(default_factory=dict)
     # 委派来的信件：关联 id（发起方的占用者），结局按它交回；只有 Threads.dispatch 会带
     correlation: str | None = None
 
@@ -166,8 +166,8 @@ class UserMessage:
     attachments: tuple[str, ...] = ()
     # 对这个会话里挂起提问的回答：tool_call_id -> 每题的回答（sessions.questions）
     answers: Mapping[str, Sequence[QuestionAnswer]] = field(default_factory=dict)
-    # 对这个会话里等批准的调用的决定：tool_call_id -> 是否批准（sessions.approvals）
-    approvals: Mapping[str, bool] = field(default_factory=dict)
+    # 对这个会话里等批准的调用的决定：tool_call_id -> 批准、拒绝或始终允许（sessions.approvals）
+    approvals: Mapping[str, Choice] = field(default_factory=dict)
 
     def inbound(self) -> Inbound:
         target = self.session
@@ -277,7 +277,7 @@ async def _resolve_answers(
     s: AsyncSession,
     session_id: str,
     answers: Mapping[str, Sequence[QuestionAnswer]],
-    approvals: Mapping[str, bool],
+    approvals: Mapping[str, Choice],
 ) -> dict[str, CallResult]:
     """用户提交的回答与批准决定：每个都对应还在等的提问、等批准的调用。返回回答信件里存的结果。"""
     asks = await open_asks_in(s, session_id)
@@ -286,10 +286,10 @@ async def _resolve_answers(
         if call_id not in asks.answerable:
             raise Conflict(f"question {call_id!r} is not waiting for an answer in session {session_id}")
         resolved[call_id] = UserAnswered.of(answer_result(asks.answerable[call_id], given))
-    for call_id, approved in approvals.items():
+    for call_id, choice in approvals.items():
         if call_id not in asks.approvable:
             raise Conflict(f"call {call_id!r} is not waiting for approval in session {session_id}")
-        resolved[call_id] = ApprovalAnswered.of(approved)
+        resolved[call_id] = ApprovalAnswered.of(choice)
     return resolved
 
 

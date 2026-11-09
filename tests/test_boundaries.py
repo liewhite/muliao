@@ -201,6 +201,7 @@ def test_sessions_subdomains_only_query_their_own_tables():
 MODULE_TABLES: dict[str, dict[str, str]] = {
     "issues": {"IssueDependency": "graph"},
     "notifications": {"Notification": "inbox", "PushSubscription": "push"},
+    "workspace": {"ScriptGrant": "grants"},
 }
 
 

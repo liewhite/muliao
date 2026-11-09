@@ -15,6 +15,7 @@
 
 from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
 from muliao.sessions.activity import SessionActivity, WorkState
+from muliao.sessions.approvals import Choice as ApprovalChoice
 from muliao.sessions.assembly import SessionDomain, SessionPorts
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.holds import registered_in as hold_registered_in
@@ -77,6 +78,7 @@ __all__ = [
     "JobWait",
     "DelegationWait",
     "WakeWait",
+    "ApprovalChoice",
     "ApprovalWait",
     "AskWait",
     "NewChat",

@@ -2,7 +2,7 @@
 
 运行时的端口不把模型库的运行与挂起类型交出去（docs/architecture.md 2.1）：别的领域只看到这里的 Finished / Paused、
 交回挂起结果时给的 `{调用 id: 结果}`（等批准的调用的结果是 Approval），工具挂起用 defer_call、等批准用
-require_approval / is_approved。换掉模型库时改动只在 agent_runtime 里。消息（ModelMessage、ToolCallPart 等）是会话历史的存储形态，不在此列。
+require_approval / is_approved / always_allow_requested。换掉模型库时改动只在 agent_runtime 里。消息（ModelMessage、ToolCallPart 等）是会话历史的存储形态，不在此列。
 """
 
 from collections.abc import Mapping
@@ -34,10 +34,15 @@ class Paused:
 @dataclass(frozen=True)
 class Approval:
     """对一次等批准的调用的决定（作为它在 deferred 里的结果交回）：批准时工具按原参数再执行一次（工具里
-    is_approved 为真），结果就是它的执行结果；不批准时 note 作为这次调用的结果交给模型，工具不执行。"""
+    is_approved 为真），结果就是它的执行结果；不批准时 note 作为这次调用的结果交给模型，工具不执行。always：批准时用户
+    还要求以后同样的调用不再问（工具里 always_allow_requested 为真，由工具自己记下）。"""
 
     approved: bool
     note: str = ""
+    always: bool = False
+
+
+_ALWAYS = "always"
 
 
 def defer_call() -> NoReturn:
@@ -56,6 +61,11 @@ def is_approved(ctx: RunContext[Any]) -> bool:
     return ctx.tool_call_approved
 
 
+def always_allow_requested(ctx: RunContext[Any]) -> bool:
+    """这次批准之后的再执行里，用户还要求以后同样的调用不再问（Approval.always）。"""
+    return ctx.tool_call_approved and bool((ctx.tool_call_metadata or {}).get(_ALWAYS))
+
+
 def outcome_of(result: AgentRunResult[str | DeferredToolRequests]) -> Finished | Paused:
     output = result.output
     if isinstance(output, str):
@@ -68,9 +78,12 @@ def deferred_tool_results(deferred: Mapping[str, object]) -> DeferredToolResults
     作为结果），其余是调用的结果本身（等批准的调用也可以直接给结果，工具不执行）。"""
     approvals: dict[str, bool | ToolDenied] = {}
     calls: dict[str, object] = {}
+    metadata: dict[str, dict[str, Any]] = {}
     for call_id, result in deferred.items():
         if isinstance(result, Approval):
             approvals[call_id] = True if result.approved else ToolDenied(result.note)
+            if result.approved and result.always:
+                metadata[call_id] = {_ALWAYS: True}
         else:
             calls[call_id] = result
-    return DeferredToolResults(calls=calls, approvals=approvals)
+    return DeferredToolResults(calls=calls, approvals=approvals, metadata=metadata)

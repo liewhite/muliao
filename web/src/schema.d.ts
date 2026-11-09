@@ -518,6 +518,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/script-grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Script Grants
+         * @description skill 脚本的「始终允许」（#531），新的在前。
+         */
+        get: operations["list_script_grants_api_script_grants_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/script-grants/{grant_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke Script Grant
+         * @description 撤销一条始终允许：之后同一调用重新要批准。
+         */
+        delete: operations["revoke_script_grant_api_script_grants__grant_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/items": {
         parameters: {
             query?: never;
@@ -1570,11 +1610,16 @@ export interface components {
         };
         /**
          * Decision
-         * @description 用户对一次等批准的调用的决定。
+         * @description 用户对一次等批准的调用的决定。always：批准时还要求以后同样的调用不再问（#531 之前的信件没有这一项）。
          */
         Decision: {
             /** Approved */
             approved: boolean;
+            /**
+             * Always
+             * @default false
+             */
+            always: boolean;
         };
         /**
          * DelegationWait
@@ -2405,7 +2450,7 @@ export interface components {
              * @default {}
              */
             approvals: {
-                [key: string]: boolean;
+                [key: string]: "approve" | "deny" | "always";
             };
         };
         /** RoleIn */
@@ -2566,6 +2611,32 @@ export interface components {
             kind: "schedule";
             config: components["schemas"]["ScheduleConfig"];
             status: components["schemas"]["ScheduleStatus"];
+        };
+        /** ScriptGrantOut */
+        ScriptGrantOut: {
+            /** Id */
+            id: number;
+            /** Agent Id */
+            agent_id: string;
+            /** Skill */
+            skill: string;
+            /** Script */
+            script: string;
+            /** Args */
+            args: string[];
+            /** Secrets */
+            secrets: string[];
+            /** Session Id */
+            session_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Hits */
+            hits: number;
+            /** Last Used At */
+            last_used_at: string | null;
         };
         /** SecretIn */
         SecretIn: {
@@ -4297,6 +4368,55 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_script_grants_api_script_grants_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScriptGrantOut"][];
+                };
+            };
+        };
+    };
+    revoke_script_grant_api_script_grants__grant_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                grant_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -36,10 +36,15 @@ INTERRUPTED = (
 )
 
 
+# 用户在界面上的选择：批准、拒绝、始终允许（批准，并且以后同样的调用不再问，#531；记下什么算「同样」由工具决定）
+Choice = Literal["approve", "deny", "always"]
+
+
 class Decision(BaseModel):
-    """用户对一次等批准的调用的决定。"""
+    """用户对一次等批准的调用的决定。always：批准时还要求以后同样的调用不再问（#531 之前的信件没有这一项）。"""
 
     approved: bool
+    always: bool = False
 
 
 class ApprovalAnswered(BaseModel):
@@ -50,11 +55,13 @@ class ApprovalAnswered(BaseModel):
     result: Decision
 
     @classmethod
-    def of(cls, approved: bool) -> ApprovalAnswered:
-        return cls(tool=APPROVAL, result=Decision(approved=approved))
+    def of(cls, choice: Choice) -> ApprovalAnswered:
+        return cls(tool=APPROVAL, result=Decision(approved=choice != "deny", always=choice == "always"))
 
     def tool_return(self) -> object:
-        return Approval(approved=True) if self.result.approved else Approval(approved=False, note=DENIED)
+        if self.result.approved:
+            return Approval(approved=True, always=self.result.always)
+        return Approval(approved=False, note=DENIED)
 
 
 def skipped() -> Approval:
