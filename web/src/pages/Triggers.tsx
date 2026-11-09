@@ -30,6 +30,7 @@ import {
   TextAreaInput,
   TextInput,
   ToggleSwitch,
+  CardGrid,
   agentLabel,
   copyText,
   errorMessage,
@@ -560,11 +561,6 @@ function TriggerCard({
       </div>
     </Card>
   )
-}
-
-/** 卡片网格：按容器宽度自动排列，宽屏一行 3–4 张 */
-function CardGrid({ children }: { children: ReactNode }) {
-  return <div className="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-3">{children}</div>
 }
 
 /**

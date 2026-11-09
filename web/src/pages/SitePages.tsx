@@ -1,51 +1,56 @@
-// 「页面」：agent 在工作目录 site/<名>/ 下写的网页（监控、数据展示）。列表按 agent 分组；点开在 iframe 里全屏显示。
+// 「页面」：agent 在工作目录 site/<名>/ 下写的网页（监控、数据展示）。列表是按 agent 分组的卡片网格、按最近更新排；点开在 iframe 里全屏显示。
 // 页面在沙箱里跑（服务端 CSP sandbox，不与界面同源），iframe 再加一层同样的 sandbox；地址是接口给的签名地址。
 
 import { useState } from 'react'
 import { Button, Card } from '@heroui/react'
-import { ChevronRight, ExternalLink, RefreshCw } from 'lucide-react'
+import { ExternalLink, RefreshCw } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { api, asAgentId, sitePageRoute, type AgentId, type SitePage } from '../api'
 import { useReturnState } from '../nav'
-import { EmptyHint, ErrorAlert, Loading, Page, agentLabel, relativeTime, useAgents, useLoad } from '../ui'
+import { groupPagesByAgent } from '../pageGroups'
+import { CardGrid, EmptyHint, ErrorAlert, GroupSection, Loading, Page, agentLabel, relativeTime, useAgents, useLoad } from '../ui'
 
 // 与服务端页面响应的 CSP sandbox（src/muliao/api/sites.py _PAGE_HEADERS）一致：浏览器取交集，改就两处一起改
 const SANDBOX = 'allow-scripts allow-forms allow-popups allow-modals allow-downloads'
 
-/** 页面列表；给了 agent 只列它的（agent 详情页），否则按 agent 分组列全部 */
-export function SitePageList({ agent }: { agent?: AgentId }) {
+/** 网格里的一张页面卡片，整张可点，打开页面 */
+function PageCard({ page }: { page: SitePage }) {
   const from = useReturnState()
+  return (
+    <Link to={sitePageRoute(page.agent_id, page.name)} state={from} className="rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-accent">
+      <Card className="h-full gap-1 transition-shadow hover:shadow-md">
+        <div className="truncate font-medium">{page.title}</div>
+        <code className="truncate font-mono text-xs text-muted">site/{page.name}</code>
+        <div className="text-xs text-muted">更新于 {relativeTime(page.modified)}</div>
+      </Card>
+    </Link>
+  )
+}
+
+/** 页面列表；给了 agent 只列它的（agent 详情页），否则按 agent 分组列全部。都按最近更新排 */
+export function SitePageList({ agent }: { agent?: AgentId }) {
   const agents = useAgents()
   const pages = useLoad(() => api.pages(), [])
   return (
     <Loading state={pages}>
       {(all) => {
-        const list = agent ? all.filter((p) => p.agent_id === agent) : all
-        if (list.length === 0)
+        const groups = groupPagesByAgent(agent ? all.filter((p) => p.agent_id === agent) : all)
+        if (groups.length === 0)
           return <EmptyHint>还没有页面：agent 在工作目录写 site/&lt;页面名&gt;/index.html 即出现在这里</EmptyHint>
-        const groups = new Map<AgentId, SitePage[]>()
-        for (const p of list) groups.set(p.agent_id, [...(groups.get(p.agent_id) ?? []), p])
+        const grid = (ps: SitePage[]) => (
+          <CardGrid>
+            {ps.map((p) => (
+              <PageCard key={p.name} page={p} />
+            ))}
+          </CardGrid>
+        )
+        if (agent) return grid(groups[0].pages)
         return (
           <div className="flex flex-col gap-4">
-            {[...groups].map(([id, ps]) => (
-              <section key={id} className="flex flex-col gap-2">
-                {!agent && <h2 className="text-sm font-medium text-muted">{agentLabel(agents.data, id)}</h2>}
-                {ps.map((p) => (
-                  <Link key={p.name} to={sitePageRoute(p.agent_id, p.name)} state={from}>
-                    <Card className="transition-colors hover:bg-surface-hover">
-                      <Card.Content className="flex flex-row items-center gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate font-medium">{p.title}</div>
-                          <div className="text-xs text-muted">
-                            site/{p.name} · 更新于 {relativeTime(p.modified)}
-                          </div>
-                        </div>
-                        <ChevronRight className="size-4 shrink-0 text-muted" aria-hidden />
-                      </Card.Content>
-                    </Card>
-                  </Link>
-                ))}
-              </section>
+            {groups.map((g) => (
+              <GroupSection key={g.agentId} name={agentLabel(agents.data, g.agentId)} count={g.pages.length}>
+                {grid(g.pages)}
+              </GroupSection>
             ))}
           </div>
         )
@@ -56,8 +61,10 @@ export function SitePageList({ agent }: { agent?: AgentId }) {
 
 export default function SitePages() {
   return (
-    <Page title="页面">
-      <SitePageList />
+    <Page title="页面" wide>
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-3">
+        <SitePageList />
+      </div>
     </Page>
   )
 }

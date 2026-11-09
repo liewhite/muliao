@@ -247,6 +247,11 @@ export function ActionButton({ isPending = false, children, ...props }: ButtonPr
   )
 }
 
+/** 卡片网格：按容器宽度自动排列，宽屏一行 3–4 张（触发器、页面） */
+export function CardGrid({ children }: { children: ReactNode }) {
+  return <div className="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-3">{children}</div>
+}
+
 /** 列表里可折叠的一组（如一个 agent 的触发器、一个分组的 agent）。组头靠左，左侧一道强调色竖条 + 加粗大字，和卡片区分开 */
 export function GroupSection({
   name,

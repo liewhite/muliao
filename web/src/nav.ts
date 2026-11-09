@@ -26,7 +26,7 @@ export const ACTIVITY_TABS: readonly TabItem[] = [
   { to: '/', label: '会话', Icon: MessageSquare },
   { to: '/issues', label: 'Issues', Icon: KanbanSquare },
   { to: '/new', label: '新会话', Icon: Plus, primary: true },
-  { to: '/triggers', label: '触发器', Icon: Zap },
+  { to: '/pages', label: '页面', Icon: LayoutDashboard },
   { to: '/notifications', label: '通知', Icon: Bell },
 ]
 
@@ -36,7 +36,7 @@ export const ADMIN_GROUPS: readonly { title: string; items: readonly NavItem[] }
     title: '运行',
     items: [
       { to: '/agents', label: 'Agents', Icon: Bot },
-      { to: '/pages', label: '页面', Icon: LayoutDashboard },
+      { to: '/triggers', label: '触发器', Icon: Zap },
       { to: '/tasks', label: '任务与失败记录', Icon: Activity },
       { to: '/usage', label: 'Token 用量', Icon: BarChart3 },
     ],
