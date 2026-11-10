@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from muliao.agents import assets, memory_file
-from muliao.agents.access import changeable, grants_for, usable_by, writable
+from muliao.agents.access import grants_for, usable_by
 from muliao.agents.kinds import Kind, StoredKind, label
 from muliao.agents.permissions import GLOBAL_MEMORY
 from muliao.agents.source import AssetSource
@@ -76,12 +76,12 @@ class MemoryStore:
         ]
 
     async def put(
-        self, name: str, content: str, *, actor: str, version: str | None, owner: str | None = None
+        self, name: str, content: str, *, version: str | None, owner: str | None = None
     ) -> MemoryInfo:
-        """新建或整体改写（用户在界面上编辑）：已有的要 actor 能改（Grants.can 的 write），owner 不变；新建的归 owner。
+        """新建或整体改写（用户在界面上编辑）：已有的 owner 不变；新建的归 owner。
         version 是打开编辑时的版本（新建为 None），期间被别处改过就 Conflict（assets.check_version）。"""
         snapshot = await self._source.snapshot()
-        existing = writable(snapshot, _KIND, name, actor)
+        existing = snapshot.existing(_KIND, name)
         path = existing.path if existing is not None else self._new_path(snapshot, name, owner)
 
         def unchanged(path: Path) -> None:
@@ -103,10 +103,10 @@ class MemoryStore:
                 )
         return snapshot.path_of(_KIND, name, owner)
 
-    async def delete(self, name: str, actor: str) -> None:
+    async def delete(self, name: str) -> None:
         """全局记忆不能删（base 固定收录它）。"""
         if name == GLOBAL_MEMORY:
             raise InvalidInput(f"the global memory {GLOBAL_MEMORY!r} cannot be deleted")
         async with self._source.writing() as snapshot:
-            asset = changeable(snapshot, _KIND, name, actor)
+            asset = snapshot.asset(_KIND, name)
             await asyncio.to_thread(assets.remove, asset.path)

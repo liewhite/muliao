@@ -13,7 +13,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from muliao.agents import assets
-from muliao.agents.access import changeable, usable
+from muliao.agents.access import usable
+from muliao.agents.ids import USER
 from muliao.agents.kinds import StoredKind, label
 from muliao.agents.mcp_config import McpConfig, McpServer, McpTransport, mcp_config, mcp_file, parse_mcp_file
 from muliao.agents.source import AssetSource
@@ -46,27 +47,25 @@ class McpRegistry:
         """实际连接 server 并列出工具名（检验配置能否工作；连不上是 InvalidInput），secret 按 user 能用的解析。"""
         return await self._probe(server, user)
 
-    async def usable(self, user: str) -> list[McpServer]:
-        """user（agent 的 id，或 USER 即全部）能用的 server（agents.access，含停用的），按名称。"""
-        return [server_of(a) for a in usable(await self._source.snapshot(), _KIND, user)]
-
     async def index(self, agent_id: str) -> list[McpServer]:
         """agent 这次运行要连接的 server：它能用的（agents.access）、已启用的，按名称。"""
-        return [s for s in await self.usable(agent_id) if s.enabled]
+        servers = (server_of(a) for a in usable(await self._source.snapshot(), _KIND, agent_id))
+        return [s for s in servers if s.enabled]
 
     async def get(self, name: str) -> McpServer:
         return server_of((await self._source.snapshot()).asset(_KIND, name))
 
     async def add(
-        self, name: str, config: McpConfig, *, actor: str, owner: str | None, probe: bool
+        self, name: str, config: McpConfig, *, owner: str | None, probe: bool
     ) -> tuple[McpServer, list[str]]:
-        """新增 server（启用的，归 owner）。probe=True 时先按 actor 能用的 secret 连接验证，验证失败不写入。"""
+        """用户在界面上新增 server（启用的，归 owner）。probe=True 时先连接验证（secret 按用户的——全部——解析），
+        验证失败不写入。"""
         server = McpServer(owner=owner, name=name, config=config, enabled=True)
         # 连接验证之前先查一次（已有同名的不必白跑一次连接）；写入口按此刻的树再查（asset_files.vet）
         snapshot = await self._source.snapshot()
         path = snapshot.path_of(_KIND, name, owner)
         snapshot.check_free(_KIND, name)
-        tools = await self.probe(server, actor) if probe else []
+        tools = await self.probe(server, USER) if probe else []
 
         def new(path: Path) -> None:
             if path.exists():
@@ -78,13 +77,13 @@ class McpRegistry:
         log.info("mcp server added", extra={"owner": owner, "mcp": name, "tools": len(tools)})
         return server, tools
 
-    async def remove(self, name: str, actor: str) -> None:
+    async def remove(self, name: str) -> None:
         async with self._source.writing() as snapshot:
-            asset = changeable(snapshot, _KIND, name, actor)
+            asset = snapshot.asset(_KIND, name)
             await asyncio.to_thread(assets.remove, asset.path)
 
-    async def set_enabled(self, name: str, enabled: bool, actor: str) -> McpServer:
-        asset = changeable(await self._source.snapshot(), _KIND, name, actor)
+    async def set_enabled(self, name: str, enabled: bool) -> McpServer:
+        asset = (await self._source.snapshot()).asset(_KIND, name)
         server = server_of(asset)
 
         def unchanged(path: Path) -> None:

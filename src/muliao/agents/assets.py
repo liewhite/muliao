@@ -234,6 +234,13 @@ class Snapshot:
                 "reported problems); fix or remove it first, or choose another name"
             )
 
+    def existing(self, kind: StoredKind, name: str) -> Asset | None:
+        """新建或整体改写之前：已存在就返回它（改写时 owner 不变）；不存在返回 None（同名在磁盘上但没加载的是 Conflict，check_free）。"""
+        found = self.get(kind, name)
+        if found is None:
+            self.check_free(kind, name)
+        return found
+
     def asset(self, kind: StoredKind, name: str) -> Asset:
         found = self.get(kind, name)
         if found is None:

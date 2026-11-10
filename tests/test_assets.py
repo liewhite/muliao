@@ -103,7 +103,7 @@ async def test_a_name_used_by_two_agents_loads_neither_and_reports_both(containe
         [("alpha/skills/dup", alpha.id), ("beta/skills/dup", beta.id)]
     )
     with pytest.raises(Conflict, match="not loaded"):
-        await container.skills.write("dup", "When testing", "x", version=None, actor="user", owner=None)
+        await container.skills.write("dup", "When testing", "x", version=None, owner=None)
 
 
 async def test_a_copy_of_a_platform_asset_breaks_only_the_copy(container, make_agent):
@@ -132,7 +132,7 @@ async def test_a_platform_asset_with_hidden_copies_is_not_transferred_to_an_agen
     skill(r / "platform" / "skills" / "dup")
     skill(r / "alpha" / "skills" / "dup")
     with pytest.raises(Conflict, match="alpha/skills/dup"):
-        await container.catalog.transfer(StoredKind.SKILL, "dup", beta.id, actor="user")
+        await container.catalog.transfer(StoredKind.SKILL, "dup", beta.id)
     assert (await container.assets.snapshot()).asset(StoredKind.SKILL, "dup").owner is None
 
 
@@ -179,14 +179,14 @@ async def test_an_agent_directory_must_carry_a_known_id_under_the_agents_own_nam
 
 
 async def test_renaming_in_the_app_moves_the_directory_and_rules_together(container, make_agent):
-    await container.distribution.create(RoleSpec("reader", "r", [], []), actor="user")
+    await container.distribution.create(RoleSpec("reader", "r", [], []))
     agent = await container.agents.create(
         AgentSpec(name="alpha", description="d", model="test", roles=["reader"]), actor="user"
     )
     beta = await make_agent("beta")
     # 别人指名 alpha 私有记忆的规则跟着改名；带通配的不动
     await container.distribution.create(
-        RoleSpec("peek", "p", ["use:memory:alpha", "use:memory:alpha*"], ["write:memory:alpha"]), actor="user"
+        RoleSpec("peek", "p", ["use:memory:alpha", "use:memory:alpha*"], ["write:memory:alpha"])
     )
     await container.agents.update(beta.id, AgentPatch(allow=["*:memory:alpha"]), actor="user")
     r = root(container)
@@ -195,9 +195,10 @@ async def test_renaming_in_the_app_moves_the_directory_and_rules_together(contai
     assert (r / "alpha").is_dir()
     renamed = await container.agents.update(agent.id, AgentPatch(name="gamma"), actor="user")
     assert renamed.name == "gamma" and (r / "gamma" / "agent.toml").exists()
-    assert (await container.distribution.agent_rules(agent.id)).roles == ("reader",)
+    snapshot = await container.assets.snapshot()
+    assert snapshot.rules_of(agent.id).roles == ("reader",)
     assert (await container.memory.read("gamma")).owner == agent.id
-    assert (await container.distribution.agent_rules(beta.id)).allow == ("*:memory:gamma",)
+    assert snapshot.rules_of(beta.id).allow == ("*:memory:gamma",)
     access = (r / "platform" / "access.toml").read_text()
     assert '"use:memory:gamma", "use:memory:alpha*"' in access and '"write:memory:gamma"' in access
     assert await problems(container) == []
@@ -230,7 +231,7 @@ async def test_a_name_on_disk_but_not_loaded_cannot_be_created_again(container, 
         "---\nname: digest\n---\nno description\n",
     )
     with pytest.raises(Conflict, match="not loaded"):
-        await container.skills.write("digest", "When digesting", "x", version=None, actor="user", owner=None)
+        await container.skills.write("digest", "When digesting", "x", version=None, owner=None)
 
 
 async def test_editing_agent_toml_takes_effect_and_a_broken_one_fails_the_run(container, make_agent, models):
@@ -316,7 +317,7 @@ def _roles_not_a_table(doc: dict) -> None:
 async def test_any_malformed_part_invalidates_the_whole_access_toml(container, make_agent, mutate, extra):
     """形式上任何一处不合法整份作废、沿用上份规则（#573 延伸 #550）：跳过写坏的那一条（尤其 deny）等于放宽权限。"""
     boss = await make_agent("boss", roles=("admin",))
-    await container.distribution.create(RoleSpec("watcher", "w", [], ["use:tool:run_shell"]), actor="user")
+    await container.distribution.create(RoleSpec("watcher", "w", [], ["use:tool:run_shell"]))
     alpha = await make_agent("alpha", roles=("watcher",))
     path = root(container) / "platform" / "access.toml"
     before = await container.assets.snapshot()
@@ -331,7 +332,7 @@ async def test_any_malformed_part_invalidates_the_whole_access_toml(container, m
     assert reported and all("last read successfully stay in effect" in r for r in reported)
     # 平台自己的写入（界面改角色、建 / 改 / 删 agent）在不合法的文件上一律拒绝，不写一半
     with pytest.raises(Conflict, match="fix it first"):
-        await container.distribution.create(RoleSpec("other", "o", [], []), actor="user")
+        await container.distribution.create(RoleSpec("other", "o", [], []))
     with pytest.raises(Conflict, match="fix it first"):
         await make_agent("beta")
     assert not (root(container) / "beta").exists()
@@ -345,12 +346,12 @@ async def test_any_malformed_part_invalidates_the_whole_access_toml(container, m
 
 async def test_deleting_a_role_still_referenced_by_an_unloaded_agent_is_refused(container, make_agent):
     """平台自己改完的 access.toml 也要合法：没加载的 agent 那一节还引用着的角色删不掉，文件不变。"""
-    await container.distribution.create(RoleSpec("watcher", "w", [], ["use:tool:run_shell"]), actor="user")
+    await container.distribution.create(RoleSpec("watcher", "w", [], ["use:tool:run_shell"]))
     path = root(container) / "platform" / "access.toml"
     write(path, path.read_text() + '\n[agents.ghost]\nroles = ["watcher"]\n')
     before = path.read_text()
     with pytest.raises(InvalidInput, match="not defined"):
-        await container.distribution.delete("watcher", actor="user")
+        await container.distribution.delete("watcher")
     assert path.read_text() == before
 
 
@@ -359,7 +360,7 @@ async def test_an_unparsable_access_toml_keeps_the_last_rules_and_reports_to_the
 ):
     """access.toml 整个读不出来时沿用上次读到的规则（#550）：否则谁都没了 admin，这条问题报不到人，也没人能改回文件。"""
     boss = await make_agent("boss", roles=("admin",))
-    await container.distribution.create(RoleSpec("readers", "r", [], []), actor="user")
+    await container.distribution.create(RoleSpec("readers", "r", [], []))
     await make_agent("alpha", roles=("readers",))
     assert (await container.assets.snapshot()).administers(boss.id)
     path = root(container) / "platform" / "access.toml"
@@ -420,7 +421,7 @@ async def test_memory_blocks_skills_and_problems_reach_the_run(container, make_a
     write(r / "platform" / "memory" / "trading.md", "- fees matter")
     skill(r / "alpha" / "skills" / "mine", "When mine")
     write(r / "alpha" / "mcp" / "broken.json", "{")
-    await container.distribution.create(RoleSpec("trader", "t", ["use:memory:trading"], []), actor="user")
+    await container.distribution.create(RoleSpec("trader", "t", ["use:memory:trading"], []))
     await container.agents.update(alpha, AgentPatch(roles=["trader"]), actor="user")
     seen: list[tuple[str, str]] = []
 
@@ -518,30 +519,9 @@ async def test_saving_memory_or_skill_changed_elsewhere_since_opening_is_a_confl
     assert (await client.put("/api/assets/skill/s", json={**body, "version": fresh})).status_code == 409
 
 
-async def test_writes_need_write_permission(container, make_agent):
-    alpha = await make_agent("alpha")
-    beta = await make_agent("beta")
-    await container.memory.put("trading", "x", version=None, actor="user")
-    with pytest.raises(Forbidden, match="belongs to the platform"):
-        await container.memory.put("trading", "y", version=None, actor=alpha.id)
-    with pytest.raises(Forbidden, match="agent 'beta'"):
-        await container.memory.put("beta", "y", version=None, actor=alpha.id)
-    await container.distribution.create(RoleSpec("trader", "t", ["*:memory:trading"], []), actor="user")
-    await container.agents.update(alpha.id, AgentPatch(roles=["trader"]), actor="user")
-    await container.memory.put(
-        "trading", "y", version=(await container.memory.read("trading")).version, actor=alpha.id
-    )
-    assert (await container.memory.read("trading")).content == "y"
-    await container.memory.put(
-        "beta", "own", version=(await container.memory.read("beta")).version, actor=beta.id
-    )
-
-
 async def test_skills_are_written_imported_exported_and_deleted_as_directories(container, make_agent):
     alpha = await make_agent("alpha")
-    meta = await container.skills.write(
-        "digest", "When digesting", "Do it.", version=None, actor="user", owner=alpha.id
-    )
+    meta = await container.skills.write("digest", "When digesting", "Do it.", version=None, owner=alpha.id)
     directory = root(container) / "alpha" / "skills" / "digest"
     assert meta.path == directory / "SKILL.md"
     write(directory / "scripts" / "run.sh", "#!/bin/sh\necho hi\n")
@@ -553,38 +533,35 @@ async def test_skills_are_written_imported_exported_and_deleted_as_directories(c
         "When digesting",
         "New.",
         version=(await container.skills.read("digest")).version,
-        actor="user",
         owner=None,
     )
     text = (directory / "SKILL.md").read_text()
     assert "license: MIT" in text and "New." in text
     assert (directory / "scripts" / "run.sh").exists()
     package = (await container.skills.export("digest")).package
-    await container.skills.delete("digest", "user")
+    await container.skills.delete("digest")
     assert not directory.exists()
-    imported = await container.skills.import_package(package, actor="user", owner=None, replace=False)
+    imported = await container.skills.import_package(package, owner=None, replace=False)
     assert imported.meta.owner is None
     copy = root(container) / "platform" / "skills" / "digest"
     assert os.access(copy / "scripts" / "run.sh", os.X_OK)
     with pytest.raises(Conflict):
-        await container.skills.import_package(package, actor="user", owner=None, replace=False)
-    await container.skills.import_package(package, actor="user", owner=None, replace=True)
-    with pytest.raises(Forbidden):
-        await container.skills.delete("digest", alpha.id)
+        await container.skills.import_package(package, owner=None, replace=False)
+    await container.skills.import_package(package, owner=None, replace=True)
 
 
 async def test_mcp_servers_are_files(container, make_agent):
     alpha = await make_agent("alpha")
     config = mcp_config(transport=McpTransport.HTTP, url="https://x/mcp", headers={"A": "${vault:K}"})
-    await container.mcp.add("docs", config, actor="user", owner=alpha.id, probe=False)
+    await container.mcp.add("docs", config, owner=alpha.id, probe=False)
     with pytest.raises(Conflict):
-        await container.mcp.add("docs", config, actor="user", owner=None, probe=False)
+        await container.mcp.add("docs", config, owner=None, probe=False)
     path = root(container) / "alpha" / "mcp" / "docs.json"
     assert json.loads(path.read_text())["headers"] == {"A": "${vault:K}"}
-    await container.mcp.set_enabled("docs", False, "user")
+    await container.mcp.set_enabled("docs", False)
     assert json.loads(path.read_text())["enabled"] is False
     assert await container.mcp.index(alpha.id) == []
-    await container.mcp.remove("docs", "user")
+    await container.mcp.remove("docs")
     assert not path.exists()
 
 
@@ -602,26 +579,24 @@ async def test_secrets_are_encrypted_files(container, make_agent):
     write(path, 'description = "slack"\nciphertext = "gAAAAbroken"\n')
     with pytest.raises(InvalidInput, match="cannot be decrypted"):
         await container.vault.resolve_many(alpha.id, ["TOKEN"], shell=False)
-    await container.vault.delete("TOKEN", alpha.id)
+    await container.vault.delete("TOKEN")
     assert not path.exists()
 
 
 async def test_transferring_moves_the_file_to_the_new_owner(container, make_agent):
     alpha = await make_agent("alpha")
-    await container.skills.write(
-        "digest", "When digesting", "Do it.", version=None, actor="user", owner=alpha.id
-    )
-    await container.catalog.transfer(StoredKind.SKILL, "digest", None, "user")
+    await container.skills.write("digest", "When digesting", "Do it.", version=None, owner=alpha.id)
+    await container.catalog.transfer(StoredKind.SKILL, "digest", None)
     assert (root(container) / "platform" / "skills" / "digest" / "SKILL.md").exists()
     assert await owned(container, "skill", None) == ["digest"]
     with pytest.raises(InvalidInput, match="already belongs"):
-        await container.catalog.transfer(StoredKind.SKILL, "digest", None, "user")
-    await container.catalog.transfer(StoredKind.MEMORY, "alpha", None, "user")
+        await container.catalog.transfer(StoredKind.SKILL, "digest", None)
+    await container.catalog.transfer(StoredKind.MEMORY, "alpha", None)
     assert (root(container) / "platform" / "memory" / "alpha.md").exists()
-    await container.memory.put("trading", "x", version=None, actor="user")
+    await container.memory.put("trading", "x", version=None)
     with pytest.raises(InvalidInput, match="named after the agent"):
-        await container.catalog.transfer(StoredKind.MEMORY, "trading", alpha.id, "user")
-    await container.catalog.transfer(StoredKind.MEMORY, "alpha", alpha.id, "user")
+        await container.catalog.transfer(StoredKind.MEMORY, "trading", alpha.id)
+    await container.catalog.transfer(StoredKind.MEMORY, "alpha", alpha.id)
     assert (root(container) / "alpha" / "memory.md").exists()
 
 
@@ -629,7 +604,7 @@ async def test_transferring_moves_the_file_to_the_new_owner(container, make_agen
 
 
 async def test_creating_and_renaming_an_agent_writes_its_directory_and_rules(container, make_agent):
-    await container.distribution.create(RoleSpec("reader", "r", [], []), actor="user")
+    await container.distribution.create(RoleSpec("reader", "r", [], []))
     agent = await container.agents.create(
         AgentSpec(name="alpha", description="d", model="test", roles=["reader"], allow=["write:path:~/x"]),
         actor="user",
@@ -661,14 +636,14 @@ async def test_creating_and_renaming_an_agent_writes_its_directory_and_rules(con
     assert (r / "beta" / "agent.toml").read_text().startswith("# keep me\n")
     access = (r / "platform" / "access.toml").read_text()
     assert "[agents.beta]" in access and "[agents.alpha]" not in access
-    assert (await container.distribution.agent_rules(agent.id)).roles == ("reader",)
+    assert (await container.assets.snapshot()).rules_of(agent.id).roles == ("reader",)
 
 
 async def test_deleting_an_agent_removes_its_directory_but_keeps_what_others_use(container, make_agent):
     alpha = await make_agent("alpha")
-    await container.skills.write("kept", "When kept", "x", version=None, actor="user", owner=alpha.id)
-    await container.skills.write("gone", "When gone", "x", version=None, actor="user", owner=alpha.id)
-    await container.distribution.create(RoleSpec("readers", "r", ["use:skill:kept"], []), actor="user")
+    await container.skills.write("kept", "When kept", "x", version=None, owner=alpha.id)
+    await container.skills.write("gone", "When gone", "x", version=None, owner=alpha.id)
+    await container.distribution.create(RoleSpec("readers", "r", ["use:skill:kept"], []))
     await make_agent("beta", roles=("readers",))
     await container.agent_lifecycle.delete(alpha.id, actor="user")
     await drain(container)
@@ -681,7 +656,7 @@ async def test_deleting_an_agent_removes_its_directory_but_keeps_what_others_use
 
 async def test_deleting_an_agent_whose_directory_is_not_loaded_frees_its_name(container, make_agent):
     """目录没加载成功（agent.toml 坏了）也删掉目录与 access.toml 里那一节，同名能再建（#550）。"""
-    await container.distribution.create(RoleSpec("readers", "r", [], []), actor="user")
+    await container.distribution.create(RoleSpec("readers", "r", [], []))
     alpha = await make_agent("alpha", roles=("readers",))
     r = root(container)
     write(r / "alpha" / "agent.toml", "broken")

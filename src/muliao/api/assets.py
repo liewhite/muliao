@@ -2,7 +2,7 @@
 `/assets/{kind}/{name}` 读、写、删一个资源，`/owner` 对存成文件的资源通用（挪到另一个 owner 的目录），各种类专有的操作
 在自己的子路径（MCP 的启停与测试连接、skill 包的导入导出）。资源都是资源目录里的文件（agents.assets），这里读写的就是它们。
 
-写入的人（actor）都是 user；新建的资源归请求给出的 owner（缺省为平台），已有的 owner 不变。
+这里的写入都是用户在界面上做的；新建的资源归请求给出的 owner（缺省为平台），已有的 owner 不变。
 """
 
 import json
@@ -166,7 +166,7 @@ class OwnerIn(BaseModel):
 @router.put("/assets/{kind}/{name}/owner", status_code=204)
 async def transfer_asset(c: C, kind: StoredKind, name: str, body: OwnerIn) -> None:
     """挪到另一个 owner 的目录下；内容与收录它的角色不变。内置工具归平台，不在这里（kind 不接受 tool）。"""
-    await c.catalog.transfer(kind, name, body.owner, USER)
+    await c.catalog.transfer(kind, name, body.owner)
 
 
 # ---- 记忆 ----
@@ -213,15 +213,13 @@ async def get_memory(c: C, name: str) -> MemoryOut:
 async def put_memory(c: C, name: str, body: MemoryIn) -> MemoryOut:
     """新建的归 owner（归平台的名字要是 slug；agent 的私有记忆名字就是 agent 名）；已有的整体改写正文，owner 不变。谁能用由
     角色收录它（`use:memory:<名>`）。"""
-    return _memory_out(
-        c, await c.memory.put(name, body.content, actor=USER, version=body.version, owner=body.owner)
-    )
+    return _memory_out(c, await c.memory.put(name, body.content, version=body.version, owner=body.owner))
 
 
 @router.delete("/assets/memory/{name}", status_code=204)
 async def delete_memory(c: C, name: str) -> None:
     """全局记忆不能删（422）。"""
-    await c.memory.delete(name, USER)
+    await c.memory.delete(name)
 
 
 # ---- skill ----
@@ -264,15 +262,13 @@ async def get_skill(c: C, name: str) -> SkillDetail:
 @router.put("/assets/skill/{name}")
 async def put_skill(c: C, name: str, body: SkillIn) -> SkillOut:
     """新建的归 owner；已有的整体改写正文与描述（附件不变），owner 不变。"""
-    meta = await c.skills.write(
-        name, body.description, body.body, actor=USER, owner=body.owner, version=body.version
-    )
+    meta = await c.skills.write(name, body.description, body.body, owner=body.owner, version=body.version)
     return SkillOut.of(meta)
 
 
 @router.delete("/assets/skill/{name}", status_code=204)
 async def delete_skill(c: C, name: str) -> None:
-    await c.skills.delete(name, USER)
+    await c.skills.delete(name)
 
 
 @router.get("/assets/skill/{name}/files")
@@ -352,7 +348,7 @@ async def import_skill(
     skill 已存在时 409，replace=true 覆盖。包的结构不对（路径越界、符号链接、顶层目录不唯一、名字与目录不一致……）422，
     超限 413。"""
     package = await read_limited(request, MAX_PACKAGE_BYTES)
-    return SkillImportOut.of(await c.skills.import_package(package, actor=USER, owner=owner, replace=replace))
+    return SkillImportOut.of(await c.skills.import_package(package, owner=owner, replace=replace))
 
 
 # ---- MCP server ----
@@ -401,18 +397,18 @@ async def add_mcp(c: C, name: str, body: McpIn) -> McpOut:
         env=dict(body.env),
         headers=dict(body.headers),
     )
-    server, tools = await c.mcp.add(name, config, actor=USER, owner=body.owner, probe=body.probe)
+    server, tools = await c.mcp.add(name, config, owner=body.owner, probe=body.probe)
     return McpOut.of(server, tools)
 
 
 @router.delete("/assets/mcp/{name}", status_code=204)
 async def delete_mcp(c: C, name: str) -> None:
-    await c.mcp.remove(name, USER)
+    await c.mcp.remove(name)
 
 
 @router.put("/assets/mcp/{name}/enabled")
 async def set_mcp_enabled(c: C, name: str, body: EnabledIn) -> McpOut:
-    return McpOut.of(await c.mcp.set_enabled(name, body.enabled, USER))
+    return McpOut.of(await c.mcp.set_enabled(name, body.enabled))
 
 
 @router.post("/assets/mcp/{name}/tools")
@@ -464,4 +460,4 @@ async def set_secret(c: C, name: str, body: SecretIn) -> None:
 
 @router.delete("/assets/secret/{name}", status_code=204)
 async def delete_secret(c: C, name: str) -> None:
-    await c.vault.delete(name, USER)
+    await c.vault.delete(name)

@@ -16,7 +16,7 @@ from pathlib import Path
 import frontmatter
 
 from muliao.agents import assets, skill_package
-from muliao.agents.access import changeable, usable, writable
+from muliao.agents.access import usable
 from muliao.agents.kinds import StoredKind
 from muliao.agents.skill_package import SKILL_FILE, SkillFile, Skipped, parse_frontmatter
 from muliao.agents.source import AssetSource
@@ -173,13 +173,13 @@ class SkillStore:
         return (await self._source.snapshot()).asset(_KIND, name).path
 
     async def write(
-        self, name: str, description: str, body: str, *, actor: str, owner: str | None, version: str | None
+        self, name: str, description: str, body: str, *, owner: str | None, version: str | None
     ) -> SkillMeta:
-        """新建或整体改写 SKILL.md（附件不变；frontmatter 里别的键保留）。已有的要 actor 能改（Grants.can 的 write），owner 不变；
+        """新建或整体改写 SKILL.md（附件不变；frontmatter 里别的键保留），用户在界面上编辑。已有的 owner 不变；
         新建的归 owner。version 是打开编辑时 SKILL.md 的版本（新建为 None），期间被别处改过就 Conflict（assets.check_version）。"""
         description = skill_package.valid_description(description)
         snapshot = await self._source.snapshot()
-        existing = writable(snapshot, _KIND, name, actor)
+        existing = snapshot.existing(_KIND, name)
         md = (existing.path if existing is not None else snapshot.path_of(_KIND, name, owner)) / SKILL_FILE
         current = await asyncio.to_thread(md.read_text, encoding="utf-8") if existing is not None else None
         post = frontmatter.Post("") if current is None else frontmatter.loads(current)
@@ -204,25 +204,22 @@ class SkillStore:
         read = await self.files(name)
         return SkillExport(skill_package.pack(name, read.files), read.skipped)
 
-    async def import_package(
-        self, data: bytes, *, actor: str, owner: str | None, replace: bool
-    ) -> SkillImport:
+    async def import_package(self, data: bytes, *, owner: str | None, replace: bool) -> SkillImport:
         """导入标准 .skill 文件，新建的归 owner。SKILL.md 原样写入（标准里的 license、metadata 等其他 frontmatter 键保留）。
-        同名 skill 已存在时：replace 为假报冲突；为真则整个目录换掉（owner 不变，actor 要能改它）。"""
+        同名 skill 已存在时：replace 为假报冲突；为真则整个目录换掉（owner 不变）。"""
         package = skill_package.unpack(data)
         name = package.name
         parse_frontmatter(package.files[SKILL_FILE].content, name)
         async with self._source.writing() as snapshot:
-            existing = snapshot.get(_KIND, name)
-            if existing is None or not replace:
+            existing = snapshot.existing(_KIND, name)
+            if existing is not None and not replace:
                 snapshot.check_free(_KIND, name)
-            writable(snapshot, _KIND, name, actor)
             directory = existing.path if existing is not None else snapshot.path_of(_KIND, name, owner)
             await asyncio.to_thread(_replace_dir, directory, package.files)
         meta = _meta((await self._source.snapshot()).asset(_KIND, name))
         return SkillImport(meta, package.skipped)
 
-    async def delete(self, name: str, actor: str) -> None:
+    async def delete(self, name: str) -> None:
         async with self._source.writing() as snapshot:
-            asset = changeable(snapshot, _KIND, name, actor)
+            asset = snapshot.asset(_KIND, name)
             await asyncio.to_thread(assets.remove, asset.path)

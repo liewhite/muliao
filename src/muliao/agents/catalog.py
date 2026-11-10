@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from muliao.agents import assets
-from muliao.agents.access import changeable, sharing_of
+from muliao.agents.access import sharing_of
 from muliao.agents.kinds import Kind, StoredKind, as_kind, label
 from muliao.agents.mcp import McpServer, server_of
 from muliao.agents.permissions import ToolSpec, spec_of
@@ -88,11 +88,11 @@ class AssetCatalog:
             for a in snapshot.of_kind(kind)
         ]
 
-    async def transfer(self, kind: StoredKind, name: str, owner: str | None, actor: str) -> None:
-        """把资源挪到 owner（agent 的 id；None 归平台）的目录下。actor 要能改它（Grants.can 的 write）。内容不变；谁能用随
+    async def transfer(self, kind: StoredKind, name: str, owner: str | None) -> None:
+        """把资源挪到 owner（agent 的 id；None 归平台）的目录下（用户在界面上转）。内容不变；谁能用随
         owner 变（agents.access 的 Grants.can）。agent 的私有记忆名字就是 agent 名，所以记忆只能在平台与同名 agent 之间转。"""
         async with self._source.writing() as snapshot:
-            asset = changeable(snapshot, kind, name, actor)
+            asset = snapshot.asset(kind, name)
             if asset.owner == owner:
                 raise InvalidInput(f"{label(kind)} {name!r} already belongs to {snapshot.owner_label(owner)}")
             if owner is not None and owner not in snapshot.agents:
@@ -111,4 +111,4 @@ class AssetCatalog:
                     "none would load. Rename or remove the copies first"
                 )
             await asyncio.to_thread(assets.move, asset.path, snapshot.path_of(kind, name, owner))
-        log.info("asset transferred", extra={"kind": kind, "asset": name, "owner": owner, "actor": actor})
+        log.info("asset transferred", extra={"kind": kind, "asset": name, "owner": owner})

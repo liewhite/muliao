@@ -16,6 +16,7 @@ from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.profiles import ModelProfile
 
 from muliao.agents.api import AgentPatch, McpTransport, mcp_config
+from muliao.agents.kinds import StoredKind
 from muliao.errors import InvalidInput
 from muliao.sessions.api import Origin
 from tests.conftest import login, session_tools, share
@@ -78,7 +79,7 @@ async def test_get_agent_shows_roles_resulting_tools_and_every_permission(contai
         actor="user",
     )
     narrow = await container.agents.find_by_name("narrow")
-    await container.skills.write("notes", "d", "b", version=None, actor=narrow.id, owner=narrow.id)
+    await container.skills.write("notes", "d", "b", version=None, owner=narrow.id)
     me = await make_agent("manager", model="tools", roles=["admin"])
     [output] = await run_tools(container, models, me.id, [("get_agent", {"agent": "narrow"})])
 
@@ -155,7 +156,7 @@ async def test_agent_creates_webhook_but_only_the_user_can_issue_its_token(
         "/api/hooks/github", content="opened", headers={"Authorization": f"Bearer {token}"}
     )
     assert resp.status_code == 202
-    assert await container.vault.usable_by(me.id) == []
+    assert (await container.assets.snapshot()).of_kind(StoredKind.SECRET) == []
 
 
 async def test_agent_stores_a_secret_as_an_encrypted_file_of_its_own(container, make_agent, models):
@@ -217,7 +218,7 @@ async def test_base_sees_every_tool_but_admin_ones_and_no_undistributed_mcp(cont
 
     spec = mcp_config(transport=McpTransport.HTTP, url="http://x")
     # 归平台的 MCP：没分给它就看不到它的工具
-    await container.mcp.add("echo", spec, actor="user", owner=None, probe=False)
+    await container.mcp.add("echo", spec, owner=None, probe=False)
     triage = await container.agents.create(AgentSpec(name="triage", description="d", model="m"), actor="user")
     seen: list[str] = []
 
@@ -920,9 +921,9 @@ async def test_read_file_returns_an_image_file_as_an_image_the_model_sees_and_st
 
 async def test_the_skill_index_lists_own_skills_and_those_given_by_roles(container, make_agent, models):
     alpha = (await make_agent("alpha", model="m")).id
-    await container.skills.write("good", "a good skill", "x", version=None, actor="user", owner=None)
-    await container.skills.write("hidden", "not given", "x", version=None, actor="user", owner=None)
-    await container.skills.write("mine", "my skill", "x", version=None, actor=alpha, owner=alpha)
+    await container.skills.write("good", "a good skill", "x", version=None, owner=None)
+    await container.skills.write("hidden", "not given", "x", version=None, owner=None)
+    await container.skills.write("mine", "my skill", "x", version=None, owner=alpha)
     await share(container, "use:skill:good")
     seen: list[str] = []
 

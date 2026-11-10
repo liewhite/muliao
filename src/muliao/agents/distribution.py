@@ -109,10 +109,6 @@ class Distribution:
         """agent 现在能写哪里（写沙箱 workspace.writable 用）：资源树按归属，加 `write:path` 授权。"""
         return write_scope(await self._source.snapshot(), agent_id)
 
-    async def agent_rules(self, agent_id: str) -> AgentRules:
-        """agent 自己的规则（角色与 allow / deny）。"""
-        return (await self._source.snapshot()).rules_of(agent_id)
-
     async def reach(self, agent_id: str) -> Reach:
         """agent 最终能用的内置工具与 skill、MCP server、secret、记忆（agents.access 的 Grants.can）：get_agent 与界面同一套计算；
         运行时（agent_runtime.Toolbox）按实际注册的工具集算，两者一致由组合根启动时核对 available_tools 与注册的工具保证。"""
@@ -167,7 +163,7 @@ class Distribution:
     async def get(self, name: str) -> Role:
         return _role(await self._source.snapshot(), name)
 
-    async def create(self, spec: RoleSpec, *, actor: str) -> Role:
+    async def create(self, spec: RoleSpec) -> Role:
         async with self._source.writing() as snapshot:
             if spec.name in snapshot.roles:
                 raise Conflict(f"role {spec.name!r} already exists")
@@ -178,7 +174,6 @@ class Distribution:
         self,
         name: str,
         *,
-        actor: str,
         description: str | None = None,
         allow: Sequence[str] | None = None,
         deny: Sequence[str] | None = None,
@@ -206,7 +201,7 @@ class Distribution:
             ),
         )
 
-    async def delete(self, name: str, *, actor: str) -> None:
+    async def delete(self, name: str) -> None:
         if name in FIXED_RULES:
             raise InvalidInput(f"role {name!r} is built in and cannot be deleted")
         async with self._source.writing() as snapshot:
@@ -269,7 +264,7 @@ def check_rules(snapshot: Snapshot, rules: Rules, before: Rules = Rules()) -> No
     内容用同样的形式规则（agents.access_file，任何一处不合法整份作废）。"""
     check_patterns(rules.allow)
     check_patterns(rules.deny)
-    assets = [pattern_of(Kind(k.value), n) for k, by_name in snapshot.assets.items() for n in by_name]
+    assets = [pattern_of(as_kind(k), n) for k, by_name in snapshot.assets.items() for n in by_name]
     _check_new(assets, rules.allow, before.allow)
     _check_new(assets, rules.deny, before.deny)
 

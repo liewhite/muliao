@@ -147,7 +147,7 @@ async def share(container: Assembly, *rules: str) -> None:
 
     base = await container.distribution.get("base")
     allow = [*base.rules.allow, *rules]
-    await container.distribution.patch("base", actor="user", allow=allow)
+    await container.distribution.patch("base", allow=allow)
 
 
 async def owned(container: Assembly, kind: str, owner: str | None) -> list[str]:

@@ -6,7 +6,7 @@ write 都有），或它的规则（base + 角色 + 自己的 allow / deny）放
 （platform/ 目录下的，以及内置工具）。改不了时 Forbidden，并说出 owner 是谁（check_change）。
 
 由此派生的也都在这里：一份配置能用哪些（reach_of）、资源分发出去了没有与收录它的角色（sharing_of），以及在快照上加上规则的
-changeable / writable / usable。全部按一份资源快照（agents.assets.Snapshot）算，资源的 owner 就是它所在的目录。
+writable / usable。全部按一份资源快照（agents.assets.Snapshot）算，资源的 owner 就是它所在的目录。
 
 写沙箱的领域输入也在这里（write_scope，#499）：「能不能改某项资源」换算成资源树里的可写路径，文件工具与命令都由沙箱回答。
 
@@ -142,19 +142,10 @@ def check_change(snapshot: Snapshot, actor: str, asset: Asset) -> None:
         )
 
 
-def changeable(snapshot: Snapshot, kind: StoredKind, name: str, actor: str) -> Asset:
-    """要改或删的已有资源：存在，且 actor 能改它（Grants.can 的 write）。"""
-    asset = snapshot.asset(kind, name)
-    check_change(snapshot, actor, asset)
-    return asset
-
-
 def writable(snapshot: Snapshot, kind: StoredKind, name: str, actor: str) -> Asset | None:
-    """新建或整体改写之前：已存在就按Grants.can 的 write 检查并返回它（owner 不变）；不存在返回 None（磁盘上有同名但没加载的是 Conflict）。"""
-    asset = snapshot.get(kind, name)
-    if asset is None:
-        snapshot.check_free(kind, name)
-    else:
+    """Snapshot.existing，已存在的再要 actor 能改它（check_change）。"""
+    asset = snapshot.existing(kind, name)
+    if asset is not None:
         check_change(snapshot, actor, asset)
     return asset
 

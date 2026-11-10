@@ -223,7 +223,7 @@ async def preview_role(c: C, body: RolePreviewIn) -> ReachOut:
 
 @router.post("/roles/{name}", status_code=201)
 async def create_role(c: C, name: str, body: RoleIn) -> RoleOut:
-    await c.distribution.create(RoleSpec(name, body.description, body.allow, body.deny), actor=USER)
+    await c.distribution.create(RoleSpec(name, body.description, body.allow, body.deny))
     return RoleOut.of(await c.distribution.view(name))
 
 
@@ -238,16 +238,14 @@ class RoleUpdate(BaseModel):
 @router.patch("/roles/{name}")
 async def update_role(c: C, name: str, body: RoleUpdate) -> RoleOut:
     """改角色的描述与可编辑的规则（内置角色也可以，固定的部分不变）；从带它的 agent 的下一次运行起生效。"""
-    await c.distribution.patch(
-        name, actor=USER, description=body.description, allow=body.allow, deny=body.deny
-    )
+    await c.distribution.patch(name, description=body.description, allow=body.allow, deny=body.deny)
     return RoleOut.of(await c.distribution.view(name))
 
 
 @router.delete("/roles/{name}", status_code=204)
 async def delete_role(c: C, name: str) -> None:
     """有 agent 引用时 409。"""
-    await c.distribution.delete(name, actor=USER)
+    await c.distribution.delete(name)
 
 
 @router.get("/agents")

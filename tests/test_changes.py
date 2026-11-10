@@ -42,5 +42,5 @@ async def test_committed_writes_announce_their_domain_and_rolled_back_or_read_on
 async def test_writing_asset_files_announces_agents(container):
     async with container.bus.subscribe() as sub:
         version = (await container.memory.read("global")).version
-        await container.memory.put("global", "- fact", actor="user", version=version)
+        await container.memory.put("global", "- fact", version=version)
         assert _changed(sub) == ["agents"]

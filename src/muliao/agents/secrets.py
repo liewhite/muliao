@@ -19,7 +19,7 @@ from datetime import datetime
 from cryptography.fernet import Fernet, InvalidToken
 
 from muliao.agents import assets
-from muliao.agents.access import changeable, usable, writable
+from muliao.agents.access import usable, writable
 from muliao.agents.kinds import StoredKind
 from muliao.agents.secrets_format import KEY_SYNTAX, VAULT_REF, SecretFile, secret_file, validate_key
 from muliao.agents.source import AssetSource
@@ -90,19 +90,16 @@ class Vault:
         log.info("secret set", extra={"owner": owner, "key": key, "actor": actor})
         return allow_shell
 
-    async def delete(self, key: str, actor: str) -> None:
+    async def delete(self, key: str) -> None:
+        """用户在界面上删。"""
         async with self._source.writing() as snapshot:
-            asset = changeable(snapshot, _KIND, key, actor)
+            asset = snapshot.asset(_KIND, key)
             await asyncio.to_thread(assets.remove, asset.path)
-        log.info("secret deleted", extra={"key": key, "actor": actor})
+        log.info("secret deleted", extra={"key": key})
 
     async def get(self, key: str) -> SecretInfo:
         """一个 secret 的信息（不含值）。"""
         return _info((await self._source.snapshot()).asset(_KIND, key))
-
-    async def usable_by(self, user: str) -> list[SecretInfo]:
-        """user（agent 的 id，或 USER 即全部）能用的 secret（agents.access，不含值），按 key。"""
-        return [_info(a) for a in usable(await self._source.snapshot(), _KIND, user)]
 
     async def resolve_many(self, user: str, keys: list[str], *, shell: bool) -> dict[str, str]:
         """取 user（agent 的 id，或 USER）能用的 secret 的明文；任一 key 不能用或解不开即报错。shell：明文要交给 agent

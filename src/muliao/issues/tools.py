@@ -251,9 +251,7 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             issues: Several issues to create at once, each with the fields above plus an optional `key`; in
                 their `depends_on`, a string is the key of another item of this batch, a number an existing issue.
         """
-        single = NewIssueItem(
-            title=title or "",
-            owner=owner or "",
+        rest = dict(
             description=description,
             status=status,
             priority=priority,
@@ -261,14 +259,15 @@ def issues_toolset(board: IssueService, agents: AgentService) -> FunctionToolset
             depends_on=depends_on,
         )
         if issues:
-            # 缺省值与领域同源（NewIssue）：单个的字段都是缺省值，就是没给（显式传缺省值与不传等价）
-            if title is not None or owner is not None or single != NewIssueItem(title="", owner=""):
+            # 缺省值与领域同源（NewIssue）：title / owner 之外的字段都等于缺省值，就是没给（显式传缺省值与不传等价）
+            others = NewIssueItem(title="", owner="", **rest) != NewIssueItem(title="", owner="")
+            if title is not None or owner is not None or others:
                 raise InvalidInput("pass either one issue (title/owner/...) or issues, not both")
             new = [await new_issue(item, len(issues), n) for n, item in enumerate(issues)]
         else:
             if title is None or owner is None:
                 raise InvalidInput("title and owner are required (or pass issues)")
-            new = [await new_issue(single, 1, 0)]
+            new = [await new_issue(NewIssueItem(title=title, owner=owner, **rest), 1, 0)]
         created = await board.create_many(ctx.deps.agent_id, new, session_id=ctx.deps.session_id)
         if not issues:
             return f"created issue #{created[0].id}"

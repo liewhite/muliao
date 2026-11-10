@@ -16,7 +16,7 @@ SKILL_MD = "---\ndescription: does things\n---\nbody\n"
 
 async def _setup(container, make_agent):
     me = await make_agent("alice", model="tools")
-    await container.skills.write("helper", "helps", "body", version=None, actor="user", owner=me.id)
+    await container.skills.write("helper", "helps", "body", version=None, owner=me.id)
     tree = container.settings.assets_dir
     return me, tree, tree / "alice"
 
@@ -311,12 +311,12 @@ async def test_the_app_and_the_file_tools_reach_the_same_conclusion(container, m
     memory = tree / "root" / "memory.md"
     toml = tree / "root" / "agent.toml"
     access = tree / "platform" / "access.toml"
-    await container.distribution.create(RoleSpec("ops", "runs things", [], []), actor="user")
+    await container.distribution.create(RoleSpec("ops", "runs things", [], []))
     long = "a" * 3000 + "\n" + "b" * 2100
 
     async def memory_ui(content: str) -> str:
         info = await container.memory.read("root")
-        return await _ui(container.memory.put("root", content, actor="user", version=info.version))
+        return await _ui(container.memory.put("root", content, version=info.version))
 
     async def memory_tool(content: str) -> str:
         out = await run_tools(
@@ -358,7 +358,7 @@ async def test_the_app_and_the_file_tools_reach_the_same_conclusion(container, m
     assert "description must not be empty" in ui and "description must not be empty" in _tool(out[0])
 
     # 角色的描述不能空
-    ui = await _ui(container.distribution.patch("ops", actor="user", description=" "))
+    ui = await _ui(container.distribution.patch("ops", description=" "))
     out = await run_tools(
         container,
         models,
@@ -377,7 +377,7 @@ async def test_the_app_and_the_file_tools_reach_the_same_conclusion(container, m
     assert "description must not be empty" in ui and "description must not be empty" in _tool(out[0])
 
     # 新建的平台记忆名字要是 slug
-    ui = await _ui(container.memory.put("Bad Name", "x", actor="user", version=None))
+    ui = await _ui(container.memory.put("Bad Name", "x", version=None))
     out = await run_tools(
         container,
         models,
