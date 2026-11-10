@@ -8,7 +8,7 @@ from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from pydantic_ai.messages import (
     DocumentUrl,
     ImageUrl,
@@ -129,12 +129,7 @@ def call_item(part: ToolCallPart, started_at: datetime | None, renders: ToolRend
         at=started_at,
         view=_call_view(part, renders),
     )
-    try:
-        questions = questions_in(part)
-    except (ValidationError, KeyError):
-        # 参数被工具 schema 拒绝、交还模型重试的提问（它有 tool_error 结果）：按普通工具调用展示
-        return item
-    if questions:
+    if questions := questions_in(part):
         item.ask = AskView(status="asking", questions=questions, answers=[], note=None)
     return item
 

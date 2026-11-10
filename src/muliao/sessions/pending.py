@@ -14,72 +14,26 @@ agent_runtime 的 defer_call；或工具执行前要用户批准（require_appro
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter
-from pydantic_ai import ToolReturn
 from pydantic_ai.messages import ModelMessage, ToolCallPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from muliao.agent_runtime.api import Attachment
 from muliao.sessions import approvals
-from muliao.sessions.answers import Answer
-from muliao.sessions.approvals import APPROVAL, ApprovalAnswered, requested_in
+from muliao.sessions.approvals import ApprovalAnswered, requested_in
 from muliao.sessions.conventions import unanswered_calls
-from muliao.sessions.deferred import ASK_AGENT, DEFERRED_TOOLS, deferred_tool, questions_in
+from muliao.sessions.deferred import (
+    AWAITING_APPROVAL,
+    KINDS,
+    CallResult,
+    DeferredKind,
+    call_result,
+    deferred_tool,
+    questions_in,
+)
 from muliao.sessions.history import since_last_response
 from muliao.sessions.holds import called_in
-from muliao.sessions.questions import ASK_USER, AskResult, Question, late_answer_lines
+from muliao.sessions.questions import Question, UserAnswered
 from muliao.sessions.tables import Mail, MailKind
-
-
-class AgentAnswer(BaseModel):
-    """被问的 agent 交回的结局（sessions.delegation）：给发问方模型的文字，它挂给用户的文件。做它的 thread 不在这里：
-    调用开出了哪个 thread 记在 sessions.thread_calls。更早投出的回答信件里的 thread 键忽略。"""
-
-    text: str
-    attachments: list[Attachment]
-
-    def to_tool_return(self) -> ToolReturn:
-        return Answer(self.text, list(self.attachments)).to_tool_return()
-
-
-class UserAnswered(BaseModel):
-    """回答信件里一次 ask_user 调用的结果：用户的回答。"""
-
-    tool: Literal["ask_user"]
-    result: AskResult
-
-    @classmethod
-    def of(cls, result: AskResult) -> "UserAnswered":
-        return cls(tool=ASK_USER, result=result)
-
-    def tool_return(self) -> object:
-        return self.result.model_dump()
-
-
-class AgentAnswered(BaseModel):
-    """回答信件里一次 ask_agent 调用的结果：被问的 agent 的结局。"""
-
-    tool: Literal["ask_agent"]
-    result: AgentAnswer
-
-    @classmethod
-    def of(cls, result: AgentAnswer) -> "AgentAnswered":
-        return cls(tool=ASK_AGENT, result=result)
-
-    def tool_return(self) -> object:
-        return self.result.to_tool_return()
-
-
-# 回答信件里一次调用的结果（mail.answers 的值）：信封带着调用的工具名（等批准的调用是 approval），按它区分
-CallResult = Annotated[UserAnswered | AgentAnswered | ApprovalAnswered, Field(discriminator="tool")]
-_CALL_RESULT: TypeAdapter[CallResult] = TypeAdapter(CallResult)
-
-
-def call_result(value: object) -> CallResult:
-    """读回信件里存的结果；不合法是数据与代码不一致。"""
-    return _CALL_RESULT.validate_python(value)
 
 
 @dataclass(frozen=True)
@@ -87,8 +41,8 @@ class HandedOut:
     """挂起调用的永久事实（其余由历史推导）：已经交出去的 ask_agent 调用 id（带 call_id 的占用，
     sessions.holds.called_in），与停下来等批准的调用 id（sessions.approvals）。"""
 
-    delegated: AbstractSet[str] = frozenset()
-    approvals: AbstractSet[str] = frozenset()
+    delegated: AbstractSet[str]
+    approvals: AbstractSet[str]
 
 
 async def handed_out_in(s: AsyncSession, session_id: str) -> HandedOut:
@@ -97,18 +51,23 @@ async def handed_out_in(s: AsyncSession, session_id: str) -> HandedOut:
 
 def pending_calls(history: Sequence[ModelMessage], handed: HandedOut) -> dict[str, ToolCallPart]:
     """还在等回信的调用，按出现顺序：没有结果的挂起工具调用（参数被拒绝、交还模型重试的有结果，不算）；要占用的
-    （ask_agent，DeferredTool.needs_hold）只算已经交出去的。没有占用的 ask_agent 不是在等回信：工具还没执行完
+    （ask_agent，DeferredKind.needs_hold）只算已经交出去的。没有占用的 ask_agent 不是在等回信：工具还没执行完
     （回复保存后、投递提交前失败），它是待执行的调用，续跑时再执行（Threads.dispatch 按调用 id 幂等；这一步里
     还有别的没出结果的调用时整步都不重放，见 sessions.consumer.interrupted_calls）。其他工具的调用记过等批准的（
     HandedOut.approvals）在等批准；没记过的是执行到一半被打断的。"""
     return {c.tool_call_id: c for c in unanswered_calls(history) if _is_pending(c, handed)}
 
 
+def kind_of(call: ToolCallPart, handed: HandedOut) -> DeferredKind | None:
+    """这次调用若挂起，是哪一种（deferred.KINDS）：记过等批准的是等批准，否则按工具名认；都不是为 None。"""
+    if call.tool_call_id in handed.approvals:
+        return AWAITING_APPROVAL
+    return deferred_tool(call.tool_name)
+
+
 def _is_pending(call: ToolCallPart, handed: HandedOut) -> bool:
-    tool = deferred_tool(call.tool_name)
-    if tool is None:
-        return call.tool_call_id in handed.approvals
-    return not tool.needs_hold or call.tool_call_id in handed.delegated
+    kind = kind_of(call, handed)
+    return kind is not None and (not kind.needs_hold or call.tool_call_id in handed.delegated)
 
 
 def pending_questions(history: Sequence[ModelMessage]) -> dict[str, list[Question]]:
@@ -153,7 +112,7 @@ def deferred_results(
     spent: AbstractSet[str] = frozenset(),
 ) -> dict[str, object]:
     """交给 pydantic-ai 的挂起调用结果。有回答的用回答；其余（来了新消息，或这次只回答了一部分）用工具的
-    DeferredTool.skipped_result：ask_user 记为没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后
+    回答信封的 skipped：ask_user 记为没回答（这次回答了别的提问时是跳过了它们），ask_agent 记为回答之后
     作为事件送达；等批准的记为没批准。
 
     spent：批准之前已经交给过运行去执行的调用（sessions.approvals.take_in）。批准后工具在运行开头就执行，执行完
@@ -163,20 +122,18 @@ def deferred_results(
     any_answered = any(isinstance(r, UserAnswered) for r in answers.values())
     results: dict[str, object] = {}
     for call_id, call in pending.items():
-        approval = call_id in handed.approvals
-        expected = APPROVAL if approval else call.tool_name
+        kind = kind_of(call, handed)
+        if kind is None:
+            raise RuntimeError(f"call {call_id} of {call.tool_name} is not a deferred call")
         result = answers.get(call_id)
-        if result is not None:
-            if result.tool != expected:
-                raise RuntimeError(f"call {call_id} of {call.tool_name} got an answer for {result.tool}")
-            if call_id in spent and isinstance(result, ApprovalAnswered) and result.result.approved:
-                results[call_id] = approvals.INTERRUPTED
-            else:
-                results[call_id] = result.tool_return()
-        elif approval:
-            results[call_id] = approvals.skipped()
+        if result is None:
+            results[call_id] = kind.answer.skipped(any_answered)
+        elif not isinstance(result, kind.answer):
+            raise RuntimeError(f"call {call_id} of {call.tool_name} got an answer for {result.tool}")
+        elif call_id in spent:
+            results[call_id] = approvals.INTERRUPTED
         else:
-            results[call_id] = DEFERRED_TOOLS[call.tool_name].skipped_result(any_answered)
+            results[call_id] = result.tool_return()
     return results
 
 
@@ -188,15 +145,8 @@ def approved_calls(answers: Mapping[str, CallResult]) -> set[str]:
 def late_text(results: Sequence[CallResult]) -> str:
     """回答到达时那次调用已经结束（模型已经带着「没回答」或「之后送达」继续了）：作为一段用户消息交给模型，回答不丢。"""
     lines: list[str] = []
-    asked = [r.result for r in results if isinstance(r, UserAnswered)]
-    if asked:
-        lines += ["The user answered questions that had already been closed:", *late_answer_lines(asked)]
-    lines += [
-        f"An agent you asked earlier answered:\n{r.result.text}"
-        for r in results
-        if isinstance(r, AgentAnswered)
-    ]
-    lines += approvals.late_lines([r for r in results if isinstance(r, ApprovalAnswered)])
+    for kind in KINDS:
+        lines += kind.answer.late_lines([r for r in results if isinstance(r, kind.answer)])
     return "\n".join(lines)
 
 
@@ -221,11 +171,7 @@ def open_asks_of(
     requested 是会话里停下来等过批准的调用（HandedOut.approvals）。"""
     pending = pending_questions(since_last_response)
     submitted = frozenset(k for m in queued if m.kind == MailKind.ANSWER for k in m.answers)
-    gated = {
-        k: c
-        for k, c in pending_calls(since_last_response, HandedOut(approvals=requested)).items()
-        if k in requested
-    }
+    gated = {c.tool_call_id: c for c in unanswered_calls(since_last_response) if c.tool_call_id in requested}
     return OpenAsks(
         answerable={k: v for k, v in pending.items() if k not in submitted},
         approvable={k: c.tool_name for k, c in gated.items() if k not in submitted},

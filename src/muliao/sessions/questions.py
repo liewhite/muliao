@@ -2,10 +2,12 @@
 挂起、唤醒与交回的规则见 sessions.pending；哪些提问现在能回答由来信的规则判断（sessions.inbound.open_asks）。
 """
 
-from collections.abc import Sequence
-from typing import Annotated, Final
+from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from collections.abc import Sequence
+from typing import Annotated, Final, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic_ai.messages import ToolCallPart
 
 from muliao.errors import InvalidInput
@@ -34,7 +36,6 @@ class Question(BaseModel):
 QUESTIONS_MAX = 4
 # ask_user 的参数与读回调用时用同一个类型：题数约束只写这一处
 Questions = Annotated[list[Question], Field(min_length=1, max_length=QUESTIONS_MAX)]
-_QUESTIONS: TypeAdapter[list[Question]] = TypeAdapter(Questions)
 
 
 class QuestionAnswer(BaseModel):
@@ -75,9 +76,49 @@ SKIPPED = AskResult(
 )
 
 
+class _AskArgs(BaseModel):
+    questions: Questions
+
+
+_ASK_ARGS: TypeAdapter[_AskArgs] = TypeAdapter(_AskArgs)
+
+
 def questions_of(call: ToolCallPart) -> list[Question]:
-    """挂起的 ask_user 调用里的问题：能挂起就说明参数已通过同一个 Questions 类型的校验，读回不合法是数据与代码不一致。"""
-    return _QUESTIONS.validate_python(call.args_as_dict()["questions"])
+    """ask_user 调用里的问题，参数一次解析：参数没通过 Questions 校验的调用被工具 schema 退回给模型重试（结果是
+    tool_error），它不是提问，没有问题。挂起的调用参数都已通过同一个类型的校验。"""
+    try:
+        return _ASK_ARGS.validate_json(call.args_as_json_str()).questions
+    except ValidationError:
+        return []
+
+
+class UserAnswered(BaseModel):
+    """回答信件里一次 ask_user 调用的结果：用户的回答。"""
+
+    tool: Literal["ask_user"]
+    result: AskResult
+
+    @classmethod
+    def of(cls, result: AskResult) -> UserAnswered:
+        return cls(tool="ask_user", result=result)
+
+    def tool_return(self) -> object:
+        return self.result.model_dump()
+
+    @staticmethod
+    def skipped(answered_other: bool) -> object:
+        """没等到回答就继续时的结果：这次回答了别的提问时是跳过了它，否则是用户发了新消息。"""
+        return (SKIPPED if answered_other else NOT_ANSWERED).model_dump()
+
+    @staticmethod
+    def late_lines(answers: Sequence[UserAnswered]) -> list[str]:
+        """提问已经结束后才到的回答（sessions.pending.late_text）。"""
+        if not answers:
+            return []
+        return [
+            "The user answered questions that had already been closed:",
+            *late_answer_lines([a.result for a in answers]),
+        ]
 
 
 def answer_result(questions: Sequence[Question], answers: Sequence[QuestionAnswer]) -> AskResult:
@@ -101,7 +142,7 @@ def answer_result(questions: Sequence[Question], answers: Sequence[QuestionAnswe
 
 
 def late_answer_lines(results: Sequence[AskResult]) -> list[str]:
-    """已经结束的提问的回答，每题一行（sessions.pending.late_text 交给模型）。"""
+    """已经结束的提问的回答，每题一行（UserAnswered.late_lines 交给模型）。"""
     lines = []
     for result in results:
         for a in result.answers:

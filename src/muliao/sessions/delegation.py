@@ -28,8 +28,8 @@ from muliao.agents.api import AgentInfo, agent_in
 from muliao.platform.db import Database, utcnow
 from muliao.platform.tasks import Clock, TaskQueue, TaskView
 from muliao.sessions.activity import WorkState, work_states_in
+from muliao.sessions.deferred import AgentAnswer
 from muliao.sessions.directory import among_in
-from muliao.sessions.pending import AgentAnswer
 from muliao.sessions.runs import latest_runs_among
 from muliao.sessions.sources import thread_source
 from muliao.sessions.tables import Session

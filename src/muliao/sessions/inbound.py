@@ -25,14 +25,14 @@ from muliao.platform.db import utcnow
 from muliao.platform.ids import new_id
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.approvals import ApprovalAnswered, Choice
+from muliao.sessions.deferred import CallResult
 from muliao.sessions.directory import add_in, keyed_rows_among
 from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
 from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import open_asks_in, post_in
 from muliao.sessions.origins import RULES, Origin
-from muliao.sessions.pending import CallResult, UserAnswered
-from muliao.sessions.questions import QuestionAnswer, answer_result
+from muliao.sessions.questions import QuestionAnswer, UserAnswered, answer_result
 from muliao.sessions.tables import TITLE_LENGTH, Mail, MailKind, Session
 
 log = logging.getLogger(__name__)

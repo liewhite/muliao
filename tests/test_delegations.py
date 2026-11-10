@@ -14,7 +14,7 @@ from muliao.platform.tables import Task, TaskStatus
 from muliao.sessions.conventions import STOPPED_TOOL_RESULT
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.origins import Origin
-from muliao.sessions.pending import UserAnswered
+from muliao.sessions.questions import UserAnswered
 from muliao.sessions.tables import HoldStatus, Mail, MailKind, MailState, SessionHold, ThreadCall
 from tests.scripted import scripted
 from tests.test_flow import deliver, drain, history_of, note_args, start, tasks_of

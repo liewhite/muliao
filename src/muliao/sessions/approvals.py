@@ -20,8 +20,6 @@ from muliao.agent_runtime.api import Approval
 from muliao.platform.db import utcnow
 from muliao.sessions.tables import ApprovalRequest
 
-APPROVAL: Literal["approval"] = "approval"
-
 DENIED = "The user denied this call; it was not run."
 # 没批准就继续了（来了新消息，或这次只回答了别的挂起调用）
 NOT_DECIDED = (
@@ -56,25 +54,26 @@ class ApprovalAnswered(BaseModel):
 
     @classmethod
     def of(cls, choice: Choice) -> ApprovalAnswered:
-        return cls(tool=APPROVAL, result=Decision(approved=choice != "deny", always=choice == "always"))
+        return cls(tool="approval", result=Decision(approved=choice != "deny", always=choice == "always"))
 
     def tool_return(self) -> object:
         if self.result.approved:
             return Approval(approved=True, always=self.result.always)
         return Approval(approved=False, note=DENIED)
 
+    @staticmethod
+    def skipped(answered_other: bool) -> object:
+        """没等到决定就继续时的结果：没批准，不执行。"""
+        return Approval(approved=False, note=NOT_DECIDED)
 
-def skipped() -> Approval:
-    return Approval(approved=False, note=NOT_DECIDED)
-
-
-def late_lines(decisions: Sequence[ApprovalAnswered]) -> list[str]:
-    """已经结束的等批准调用的决定（sessions.pending.late_text）：那次调用已经带着「没批准」结束了，没有执行。"""
-    return [
-        f"The user {'approved' if d.result.approved else 'denied'} a call that had already been closed "
-        "without running; it was not run."
-        for d in decisions
-    ]
+    @staticmethod
+    def late_lines(decisions: Sequence[ApprovalAnswered]) -> list[str]:
+        """已经结束的等批准调用的决定（sessions.pending.late_text）：那次调用已经带着「没批准」结束了，没有执行。"""
+        return [
+            f"The user {'approved' if d.result.approved else 'denied'} a call that had already been closed "
+            "without running; it was not run."
+            for d in decisions
+        ]
 
 
 def waiting_text(tools: Sequence[str]) -> str:

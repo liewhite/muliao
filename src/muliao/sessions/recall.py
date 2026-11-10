@@ -16,13 +16,13 @@ from muliao.platform.db import Database
 from muliao.platform.tasks import TaskQueue
 from muliao.sessions.activity import WorkState, work_states_in
 from muliao.sessions.codec import load_messages
+from muliao.sessions.deferred import call_result
 from muliao.sessions.directory import among_in, with_prefix_in
 from muliao.sessions.history import Span, spans_between_in, transcript_rows_in
 from muliao.sessions.info import SessionInfo, info_of
 from muliao.sessions.mailbox import first_arrivals_between_in, sent_by_in
 from muliao.sessions.origins import Origin
-from muliao.sessions.pending import UserAnswered, call_result
-from muliao.sessions.questions import late_answer_lines
+from muliao.sessions.questions import UserAnswered, late_answer_lines
 from muliao.sessions.runs import failure_of, runs_between_in
 from muliao.sessions.tables import Mail, MailKind
 from muliao.sessions.transcript import Item, to_items

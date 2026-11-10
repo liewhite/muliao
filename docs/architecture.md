@@ -368,12 +368,13 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 两者是同一件事：**模型调用了一个要等别人回信的工具**。工具调用 `defer_call()`（agent_runtime），这次运行停在这里正常结束，不占 worker、不在 worker 里等。回信是一封回答信件（`MailKind.ANSWER`，`tool_call_id →` 带工具名的结果信封 `{"tool": "ask_user" | "ask_agent", "result": …}`，读的一方按 `tool` 区分，不按形状），消费者开始下一次运行时把它作为那次调用的结果交回（`run_steps` 的 `deferred`），模型看到的就是「我问了，对方这样答」。
 
-两者的差别只写在一张表里（`sessions/deferred.py` 的 `DeferredTool`），各处查表，不按工具名分支；工具注册时显式用表里的名字：
+三种挂起调用（两种挂起工具与下面的等批准）的差别只写在一张表里（`sessions/deferred.py` 的 `DeferredKind`，`KINDS`），各处查表，不按种类分支。挂起工具按工具名认（`DEFERRED_TOOLS`，工具注册时显式用表里的名字），等批准的按记录认（`pending.kind_of`）。每种的回答信封（`answer`，种类名就是信封 `tool` 字段的取值）自己给出交给模型的结果（`tool_return`）、没等到回答就继续时的结果（`skipped`）和迟到回答的文字（`late_lines`）：
 
-| 工具 | 要占用才算挂起（`needs_hold`） | 没交出去时可原样重放（`replayable`） | 停止时仍挂着（`kept_open_on_stop`） | 调用里给用户的问题（`questions`） | 没等到回答就继续时的结果（`skipped_result`） |
+| 种类（信封 `tool`） | 要占用才算挂起（`needs_hold`） | 没交出去时可原样重放（`replayable`） | 停止时仍挂着（`kept_open_on_stop`） | 调用里给用户的问题（`questions`） | 没等到回答就继续时的结果（`skipped`） |
 |---|---|---|---|---|---|
-| `ask_user` | 否 | 否（没结果的总是挂着） | 是 | `questions_of` | 没回答 / 跳过 |
+| `ask_user` | 否 | 否（没结果的总是挂着） | 是 | `questions_of`（参数没通过校验的不是提问，没有问题） | 没回答 / 跳过 |
 | `ask_agent` | 是 | 是 | 否 | 无 | `STILL_WORKING` |
+| `approval`（等批准） | 否 | 否 | 否 | 无 | `NOT_DECIDED` |
 
 - **哪些调用还挂着**由历史推导（`pending_calls`），不另存状态：没有结果的 `ask_user` 调用等用户；没有结果、并且已经交出去（本会话有带它的调用 id 的占用）的 `ask_agent` 调用等 agent（没有占用的不算挂着：回复保存后、投递提交前失败，它是待执行的调用，续跑时再执行——这一步里还有别的没出结果的调用时整步都不重放，见「从哪里开始」）。「调用是否已有结果」只在 `sessions.conventions.unanswered_calls` 定义一处，参数被拒绝、交还模型重试的调用也算有结果。挂起的调用只可能在历史末尾：之后的运行都会先关闭它们。
 - **什么时候继续**（`waiting`，唯一规则）：用户发了新消息（跳过还没回答的），或挂起的调用都有了回答；事件（检查、完成通知）留在信箱里，等它们一起交给模型。唤醒（`mailbox.wake_in`）与消费者开头共用这一条。

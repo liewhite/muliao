@@ -426,11 +426,11 @@ def test_only_a_step_whose_unfinished_calls_are_all_idempotent_asks_is_replayed(
     def history(*calls: ToolCallPart) -> list[ModelMessage]:
         return [ModelRequest(parts=[UserPromptPart("go")]), ModelResponse(parts=list(calls))]
 
-    assert interrupted_calls(history(ask), HandedOut()) == []
-    assert interrupted_calls(history(shell), HandedOut()) == [shell]
-    assert interrupted_calls(history(ask, shell), HandedOut()) == [ask, shell]
+    assert interrupted_calls(history(ask), HandedOut(frozenset(), frozenset())) == []
+    assert interrupted_calls(history(shell), HandedOut(frozenset(), frozenset())) == [shell]
+    assert interrupted_calls(history(ask, shell), HandedOut(frozenset(), frozenset())) == [ask, shell]
     # 已经交出去的 ask_agent 是在等回信（挂起的调用），不是被中断的调用
-    assert interrupted_calls(history(ask), HandedOut(delegated={"a1"})) == []
+    assert interrupted_calls(history(ask), HandedOut(delegated={"a1"}, approvals=frozenset())) == []
 
 
 async def test_a_tool_call_interrupted_alongside_a_question_is_not_executed_again(

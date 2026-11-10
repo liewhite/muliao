@@ -22,11 +22,12 @@ from muliao.errors import InvalidInput
 from muliao.platform.db import Database
 from muliao.platform.messaging import Delivery, Messaging
 from muliao.platform.tasks import Commit, TaskQueue
+from muliao.sessions.deferred import AgentAnswer, AgentAnswered
 from muliao.sessions.events import WorkCheckIn, WorkEnded
 from muliao.sessions.holds import get_in, hold_in, release
 from muliao.sessions.lanes import work_lane
 from muliao.sessions.mailbox import has_queued_from, post_in, posted_with_key_in
-from muliao.sessions.pending import AgentAnswer, AgentAnswered, pending_in
+from muliao.sessions.pending import pending_in
 from muliao.sessions.tables import HoldStatus, MailKind, Session, SessionHold
 
 log = logging.getLogger(__name__)

@@ -172,8 +172,8 @@ async def test_an_answer_behind_a_queued_message_still_answers_the_questions(
 
 def test_an_answer_arriving_after_the_questions_closed_reaches_the_model_as_text():
     """回答投信后、交给模型前，提问已被别的运行结束（它带着「没回答」继续了）：回答作为一段文字交给模型。"""
-    from muliao.sessions.pending import UserAnswered, late_text
-    from muliao.sessions.questions import AnsweredQuestion, AskResult
+    from muliao.sessions.pending import late_text
+    from muliao.sessions.questions import AnsweredQuestion, AskResult, UserAnswered
 
     answered = AskResult(
         answered=True,
@@ -554,19 +554,42 @@ def test_an_answer_for_another_tool_than_the_pending_call_is_an_error():
     import pytest
     from pydantic_ai.messages import ToolCallPart
 
-    from muliao.sessions.pending import AgentAnswer, AgentAnswered, HandedOut, deferred_results
+    from muliao.sessions.deferred import AgentAnswer, AgentAnswered
+    from muliao.sessions.pending import HandedOut, deferred_results
 
     call = ToolCallPart("ask_user", {"questions": []}, tool_call_id="c")
     wrong = AgentAnswered.of(AgentAnswer(text="hi", attachments=[]))
     with pytest.raises(RuntimeError, match="got an answer for ask_agent"):
-        deferred_results({"c": call}, {"c": wrong}, HandedOut())
+        deferred_results({"c": call}, {"c": wrong}, HandedOut(frozenset(), frozenset()))
 
 
 def test_an_answer_mailed_before_thread_calls_still_parses():
     # #251 之前的回答信件里带 thread 键：现在 thread 记在 thread_calls，旧键忽略
-    from muliao.sessions.pending import AgentAnswer, AgentAnswered
+    from muliao.sessions.deferred import AgentAnswer, AgentAnswered
 
     parsed = AgentAnswered.model_validate(
         {"tool": "ask_agent", "result": {"text": "hi", "attachments": [], "thread": "t"}}
     )
     assert parsed.result == AgentAnswer(text="hi", attachments=[])
+
+
+def test_every_deferred_kind_has_its_envelope_in_call_result():
+    # 回答信封的联合类型与种类表各写一处：成员必须一致，种类名就是信封的 tool
+    from typing import get_args
+
+    from muliao.sessions.deferred import KINDS, CallResult
+
+    (union, _) = get_args(CallResult)
+    assert set(get_args(union)) == {k.answer for k in KINDS}
+    assert [k.name for k in KINDS] == ["ask_user", "ask_agent", "approval"]
+
+
+def test_an_ask_whose_arguments_were_rejected_has_no_questions():
+    # 参数被工具 schema 退回的提问不是提问（transcript 按普通工具调用展示），解析不抛异常
+    from pydantic_ai.messages import ToolCallPart
+
+    from muliao.sessions.deferred import questions_in
+
+    assert questions_in(ToolCallPart("ask_user", {"questions": []}, tool_call_id="a")) == []
+    assert questions_in(ToolCallPart("ask_user", "{not json", tool_call_id="b")) == []
+    assert questions_in(ToolCallPart("ask_user", {}, tool_call_id="c")) == []

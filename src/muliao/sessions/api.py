@@ -17,6 +17,7 @@ from muliao.config import MIN_COMPACTION_THRESHOLD_TOKENS
 from muliao.sessions.activity import SessionActivity, WorkState
 from muliao.sessions.approvals import Choice as ApprovalChoice
 from muliao.sessions.assembly import SessionDomain, SessionPorts
+from muliao.sessions.deferred import CallResult, call_result
 from muliao.sessions.halt import Halted, StopSession
 from muliao.sessions.holds import registered_in as hold_registered_in
 from muliao.sessions.inbound import (
@@ -32,7 +33,6 @@ from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 from muliao.sessions.origins import OWN_NOTES, Origin, OriginNotes
-from muliao.sessions.pending import CallResult, call_result
 from muliao.sessions.questions import QuestionAnswer
 from muliao.sessions.recall import Activity, DaySession, RunFailure, SessionRecall, UserWords
 from muliao.sessions.recall_tools import SESSION_READ, indented, place
