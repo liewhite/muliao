@@ -7,7 +7,7 @@
 | 概念 | 含义 | 事实存放处（唯一来源） |
 |---|---|---|
 | Agent | 一个助手：描述（角色）、模型、分发规则（角色 + allow/deny，`action:kind:name`）、名下的 AI 资源（skill、MCP server、secret、私有记忆，都是它资源目录里的文件）、工作目录。以系统生成、不可变的 `id`（12 位十六进制）标识——主键、目录名、URL、工具参数、配置引用都用它；`name` 只用于展示，可改、唯一（NFC 规范化，任意可见字符；不能取 `user`，模型按名称指派 issue 时它指用户，`naming.new_agent_name`）。删除进行中时记下发起者（`deleting_by`），不再出现在列表与名称解析里。可以归到一个分组（`group`），可以归档（`archived_at`，可取消；归档的不能运行，第 10 节）。最多一个是系统默认 agent（`is_default`，部分唯一索引；`AgentService.set_default`，HTTP `PUT/DELETE /api/agents/{id}/default`）：Web 新对话默认选中它，随 agent 行一起删除 | 身份（id、名字、默认、删除标记、归档）在 `agents` 表，名字也是它资源目录的目录名；描述、模型、思考档位、分组只在 `assets/<名>/agent.toml`（快照的 `Snapshot.loaded_agent`；表里同名的旧列 #549 起无人读写，待 #503 删）；分发规则在 `assets/platform/access.toml`；工作目录 `data/workspaces/<id>/` |
-| Session | 某个 agent 的一段对话，由某个触发源创建。种类（`kind`）：顶层会话或委派开出的 thread（第 7 节） | `sessions` 表 |
+| Session | 某个 agent 的一段对话，由某个触发源创建。顶层会话或委派开出的 thread（来源为 delegation、带父会话与 thread 名，第 7 节） | `sessions` 表 |
 | Message | pydantic-ai `ModelMessage` 原样序列化 | `messages` 表（每行一条 ModelMessage） |
 | Mail | 投进某个会话信箱、交给它的 agent 的一封信件：用户消息（含附件）、对挂起调用的回答、触发器与委派来的任务、后台任务与 thread 的事件、运行中检查。按到达顺序排列，记下发送方（经来信入口投的记来源 `origin`，事件记 `source`）、用户是否在等它的回答、不透明的关联 id（委派来的信件以委派的 holder 为关联 id，会话据此结清）、幂等键、状态（排队 / 已处理 / 被丢弃）与处理它的那次运行 | `mail` 表 |
 | Hold（占用） | 别的工作替某个会话在外面做的一项异步工作：后台任务 `job:<id>`、委派 `delegation:<发起会话>:<工具调用 id>`（holder 全局唯一）。状态 active / released / cleared，记下用户是否在等它的结局、`ask_agent` 的调用 id。委派的全部状态就是发起方的这条占用。行永久保留（随会话删除） | `session_holds` 表 |
@@ -52,7 +52,7 @@ data/
 muliao/
   platform/        数据库、任务队列（actor 调度；别的领域经它的只读查询 TaskView 看自己 lane 上的任务）、事件与定向命令、实时展示总线、运行中检查的节拍、shell、id、工具调用的展示块（tool_views，第 17 节）
   agent_runtime/   会话运行的端口：模型注册表、指令组装、工具组合（toolbox.py）、pydantic-ai 的逐步驱动、它自己写下的消息约定（工具交回的文件与图片）、MCP 连接
-  sessions/        会话（子域：会话、运行、交互、外部工作、委派、到点唤醒、展示，见下表）：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、到点唤醒、压缩、停止、删除、种类、会话的消息约定
+  sessions/        会话（子域：会话、运行、交互、外部工作、委派、到点唤醒、展示，见下表）：信箱、历史、运行、挂起的调用、占用、结清、委派与 thread、到点唤醒、压缩、停止、删除、会话的消息约定
   workspace/       工作区：文件工具（read/write/edit_file、share_file）与 edit_file 的编辑规则、run_shell（前台与后台）、后台任务（jobs 表）、skill 脚本的始终允许（grants.py）、界面对工作目录与 skill 目录的只读浏览（browse.py）与 agent 自定义页面（sites.py，第 15 节）
   agents/          agent 目录、AI 资源（资源目录树 agents/assets.py 与快照 agents/source.py；skill、MCP、secret、记忆；secret 的加解密与 ${vault:KEY} 引用解析在 agents/secrets.py）、工具权限与角色
   usage/           模型用量：每次运行记一条，按时间范围汇总
@@ -85,7 +85,7 @@ sessions（表类只在它的子域模块里出现在查询与构造中；领域
 
 | 子域 | 表 | 模块 | 给别的子域的接口 |
 |---|---|---|---|
-| 会话 | `sessions` | `directory.py`（新建一行、按属性查会话只在这里；按 id 取到的行在领域内可改，删除在 `deletion.py`）、`kinds.py`、`origins.py`、`inbound.py`（来信与新建会话的规则）、`info.py`（读模型）、`deletion.py`、`service.py`（门面） | `add_in`、`among_in`、`with_prefix_in`、`of_agent_in`、`keyed_rows_among` / `keyed_among`、`threads_of` / `thread_in` / `threads_named_in`、`listed_ids_in` / `listed_page_in` |
+| 会话 | `sessions` | `directory.py`（新建一行、按属性查会话只在这里；按 id 取到的行在领域内可改，删除在 `deletion.py`）、`origins.py`、`inbound.py`（来信与新建会话的规则）、`info.py`（读模型）、`deletion.py`、`service.py`（门面） | `add_in`、`among_in`、`with_prefix_in`、`of_agent_in`、`keyed_rows_among` / `keyed_among`、`threads_of` / `thread_in` / `threads_named_in`、`listed_ids_in` / `listed_page_in` |
 | 运行 | `messages`、`message_texts`（消息的可搜索文字）、`compactions`（历史）、`mail`（信箱）；运行本身是平台任务表里的 run task，只经 `TaskQueue` 的只读查询（`TaskView`）看 | `history.py`、`mailbox.py`、`runs.py`（运行与它的 payload）、`consumer.py`、`steps.py`、`finish.py`、`compaction.py`、`halt.py`、`settlement.py`、`conventions.py`、`reconcile.py`、`live.py` | 历史：`append_in`、`mark_last_stopped_in`、`saved_by_in`、`last_message_id_in`、`transcript_rows_in`、`spans_between_in`、`add_compaction_in`、`load_context` 等；信箱：`post_in`、`queued_in`、`sent_by_in`、`first_arrivals_between_in`、`consume_in`、`discard_in`、`unsettled_in` / `mark_settled`、`wake_in` 等；运行：`latest_run` / `latest_runs_among`、`runs_between_in`、`run_unfinished_in`、`hand_over_in`、`handed_to` |
 | 交互 | `approval_requests`（停下来等批准的调用）；其余由历史与信箱推导 | `pending.py`、`deferred.py`、`ask_user.py`、`questions.py`、`answers.py`、`approvals.py` | `pending_in`、`handed_out_in`、`open_asks_of`、`waiting`、`record_in`（等批准）、`requested_in` / `requested_among` |
 | 外部工作 | `session_holds` | `holds.py`、`work.py`（`SessionWork`、交回结局 `deliver_in`、运行中检查 `check_interval` / `CheckBeats` / `post_check_in`）、`activity.py`（工作状态） | `hold_in`、`get_in`、`release`、`abandon`、`clear_in`、`active_holders_of_in`、`active_holds`（active 占用的子查询，给别的子域连表）、`called_in`、`deliver_in` |
@@ -293,13 +293,13 @@ Web / 触发器（Receive 命令）/ delegate_task / ask_agent     后台任务�
 
 ## 7. 会话领域
 
-**职责**：会话、thread 树、信箱、历史、挂起的调用、运行（消费者与逐步保存）、压缩、停止、删除、会话种类的规则。会话 actor（lane）是运行的串行边界，会话领域的一个本地事务是状态的一致性边界。对外接口在 `sessions/api.py`，发布的事件与接收的定向命令在 `sessions/events.py`。
+**职责**：会话、thread 树、信箱、历史、挂起的调用、运行（消费者与逐步保存）、压缩、停止、删除。会话 actor（lane）是运行的串行边界，会话领域的一个本地事务是状态的一致性边界。对外接口在 `sessions/api.py`，发布的事件与接收的定向命令在 `sessions/events.py`。
 
 ### 会话种类
 
-会话的种类在 `sessions/kinds.py` 定义一处（`KindPolicy`），别处读策略，不按种类分支。只有两种：`conversation`（用户、触发器开出的顶层会话）与 `thread`（`delegate_task`、`ask_agent` 开出）。两种都列在会话列表里、用户能写、能单独删除、运行最终失败时通知用户；回答交给谁不看种类，看这次运行处理的信件（下文「回答交给谁」）。#294 之前 `ask_agent` 开的是私有 thread（`private_thread`：用户只读、不列出、随父会话删除、只能用 `ask_agent` 续聊），迁移已全部改成 `thread`：两种委派早已都经 thread 自己的信箱与消费者运行，绑定工具只剩让模型续聊被拒的代价。
+会话只有两种：顶层会话（用户、触发器、issue 开出）与 thread（`delegate_task`、`ask_agent` 开出）。不另存种类（#581 删了 `kind` 列与 `sessions/kinds.py`）：是不是 thread 只由来源定（`OriginRule.from_parent`，即 `origin` 为 delegation），这样的会话带父会话与 thread 名。两种都列在会话列表里、用户能写、能单独删除、运行最终失败时通知用户；回答交给谁不看种类，看这次运行处理的信件（下文「回答交给谁」）。#294 之前 `ask_agent` 开的是私有 thread（`private_thread`：用户只读、不列出、随父会话删除、只能用 `ask_agent` 续聊），迁移已全部改成 `thread`：两种委派早已都经 thread 自己的信箱与消费者运行，绑定工具只剩让模型续聊被拒的代价。
 
-thread 种类只由委派创建（`origin` 为 delegation，带父会话，`KindPolicy.opened_by_delegation`），新建会话时检查种类与来源一致；按发送方定位会话只在顶层种类里找（`kinds.TOP_LEVEL`）。
+thread 只由委派创建：新建会话（`inbound.create_session`）时检查父会话与 thread 名有无和来源一致；thread 不记发送方身份（`origin_ref` 为 None），所以按发送方定位会话（`directory.keyed_rows_among`）天然只找到顶层会话。
 
 会话列表（`SessionService.list`）把工作状态不是 idle 的会话置顶（在符合筛选的全部会话里算，不只这一页，所以第一页就含全部进行中的会话；代价是每个会话读一条最后的消息，看有没有挂起的提问；10-22 实测 259 个会话约 10ms，会话 id 进 `IN (...)`，到上万个会话会碰到 SQLite 的参数上限，那时改成先按 lane 上的任务、占用与最后一条回复找候选再算），其余按最近更新排序；列表接口的每一行（`SessionListItem`）带工作状态 `state`（`SessionActivity` 的同一条规则，见下文「工作状态」；与置顶是同一次计算），界面据此标记「运行中」（转圈）或「等待中」（沙漏）；按 agent 分组时，不空闲的会话单独成一个「进行中」区，置于所有 agent 分组之上（带 agent 名），其余会话再按 agent 分组。运行开始与结束都有 task 事件，列表据此重新拉取。筛选（`directory.Listing`）：按 agent、来源（界面的分类 tab：全部 / 对话 / issue / 自动任务）、发送方身份，以及关键字 `q`（#254：标题或任一条消息的可搜索文字含有它，`LIKE` 子串匹配，`%`、`_` 按字面，不区分 ASCII 大小写）。可搜索文字（`history.searchable_text`）是从消息派生的索引表 `message_texts`（归 history 子域，写消息时同一事务写入，随消息级联删除）：用户消息（不含运行上下文）、文字回复、工具调用的工具名与参数的字符串值；不含工具结果（占消息文字的三分之二以上，搜什么都命中）、思考和 JSON 的键名结构。不直接 LIKE 消息 JSON：键名让常见英文词命中几乎所有会话，工具参数是二次编码的 JSON 字符串，含引号的搜不到，且要扫 174MB。10-27 实测索引文字 20MB、全扫约 30ms（在全局事务锁内；搜索框非空时 task 事件会触发重新拉取），到百毫秒级再把它换成 FTS5 trigram。
 
@@ -459,7 +459,7 @@ agent 之间的委派有两种形态，都是「往某个 thread 的信箱投一
 
 与模型提供方无关的统一机制（`sessions/compaction.py`）。pydantic-ai 只为 Anthropic 与 OpenAI Responses 提供原生压缩，`openai` 兼容接口和 Gemini 没有，按提供方分支会产生两套语义，所以统一自己实现：
 
-- **触发**：发给模型的上下文（上一次模型请求的输入 token，pydantic-ai 已计入缓存 token）超过会话的压缩阈值时（用户新建会话时可以给这个会话单独设，存 `sessions.compaction_threshold_tokens`；没设为 NULL，用全局默认 `runtime.compaction_threshold_tokens`，取值规则只在 `Compactor.threshold_of`，#372），由消费者在步与步之间压缩：运行开始时（确认有要交给模型的之后、交出信件与批准之前：没事可做的运行不花一次总结，压缩失败重试时批准不会被当成已经交过），以及每次请求模型之前（这次请求照常保存为一步，然后停下驱动、压缩、从库里重新加载上下文续跑，pydantic-ai 重发末尾那条请求）。「该不该压缩」只有一条规则（`Compactor.verdict`）：只认最近一次压缩之后的回复报告的 token 数（之前的反映的是压缩前的上下文，按压缩记录的 `at_message_id` 推导）；「回复」只算报告了用量的（`conventions.measured_responses`）：被截断的回复（`state='interrupted'`）收到了输入用量才算，停止时保存的占位回复没有用量，取它之前那条（#293，否则读到 0 会误报下面的 warn 并跳过这次判断）；压缩后的第一次回复就超阈值，说明保留窗口本身就超了，这次运行不再压缩，上下文继续变大直到超出模型的上限时运行失败可见，重试时重新判断。模型不返回 usage（部分 OpenAI 兼容服务流式时如此）时记 warn 日志，自动压缩对该模型失效。也可在会话页手动触发：同一个会话 lane 上的一个 `compaction` task，处理器只调用同一个压缩方法。
+- **触发**：发给模型的上下文（上一次模型请求的输入 token，pydantic-ai 已计入缓存 token）超过会话的压缩阈值时（用户新建会话时可以给这个会话单独设，存 `sessions.compaction_threshold_tokens`；没设为 NULL，用全局默认 `runtime.compaction_threshold_tokens`，取值规则只在 `Compactor.threshold_of`，#372），由消费者在步与步之间压缩：运行开始时（确认有要交给模型的之后、交出信件与批准之前：没事可做的运行不花一次总结，压缩失败重试时批准不会被当成已经交过），以及每次请求模型之前（这次请求照常保存为一步，然后停下驱动、压缩、从库里重新加载上下文续跑，pydantic-ai 重发末尾那条请求）。两处压缩后重载上下文、对上运行状态都走同一个 `Steps.compact`（#581），续跑是否重发末尾请求由调用方定。「该不该压缩」只有一条规则（`Compactor.verdict`）：只认最近一次压缩之后的回复报告的 token 数（之前的反映的是压缩前的上下文，按压缩记录的 `at_message_id` 推导）；「回复」只算报告了用量的（`conventions.measured_responses`）：被截断的回复（`state='interrupted'`）收到了输入用量才算，停止时保存的占位回复没有用量，取它之前那条（#293，否则读到 0 会误报下面的 warn 并跳过这次判断）；压缩后的第一次回复就超阈值，说明保留窗口本身就超了，这次运行不再压缩，上下文继续变大直到超出模型的上限时运行失败可见，重试时重新判断。模型不返回 usage（部分 OpenAI 兼容服务流式时如此）时记 warn 日志，自动压缩对该模型失效。也可在会话页手动触发：同一个会话 lane 上的一个 `compaction` task，处理器只调用同一个压缩方法。
 - **执行**：把最近 `runtime.compaction_keep_steps` 步之前的消息连同上一份摘要交给该 agent 的模型总结，写入 `compactions` 表（`through_message_id` + `summary`）。切点在步与步之间、之前的消息里没有悬空调用的地方（`compaction.steps_of`）：工具调用与其结果、挂起的调用与之后的回答不会被拆开；一次运行中途也有切点（每一批工具结果之后），长任务在运行中也能压缩。单次只取总长不超过上限的最早若干步，不截断内容，剩下的接着压缩，直到保留窗口之外没有可压缩的。
 - **使用**：发给模型的上下文 = 最新摘要（放进 instructions）+ 切点之后的原始消息（`sessions.history.load_context`；切点之后的第一条是回复时，前面补一条说明「接着之前的工作」的请求）。原始消息不删除，UI 显示完整原文并标出压缩点。
 

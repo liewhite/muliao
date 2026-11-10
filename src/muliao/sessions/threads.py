@@ -18,7 +18,6 @@ from muliao.sessions.history import latest_answers_among
 from muliao.sessions.holds import get_in as get_hold_in
 from muliao.sessions.holds import hold_in
 from muliao.sessions.inbound import Inbound, NewSession, Received, create_session, receive
-from muliao.sessions.kinds import SessionKind
 from muliao.sessions.origins import Origin
 from muliao.sessions.runs import latest_runs_among, recorded_failure
 from muliao.sessions.tables import Session
@@ -85,7 +84,6 @@ class Threads:
                 title=thread,
                 parent_session_id=parent_id,
                 thread=thread,
-                kind=SessionKind.THREAD,
             ),
         )
 

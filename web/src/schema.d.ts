@@ -3038,11 +3038,6 @@ export interface components {
             waits: (components["schemas"]["JobWaitOut"] | components["schemas"]["DelegationWait"] | components["schemas"]["WakeWait"] | components["schemas"]["AskWait"] | components["schemas"]["ApprovalWait"])[];
         };
         /**
-         * SessionKind
-         * @enum {string}
-         */
-        SessionKind: "conversation" | "thread";
-        /**
          * SessionListItem
          * @description 会话列表里的一行：多一个只在列表里算的工作状态（在运行 / 在等后台任务、委派或用户回答 / 空闲；会话页看
          *     SessionDetail.run）。
@@ -3061,7 +3056,6 @@ export interface components {
             parent_session_id: string | null;
             /** Thread */
             thread: string | null;
-            kind: components["schemas"]["SessionKind"];
             /** Compaction Threshold Tokens */
             compaction_threshold_tokens: number | null;
             /** Unread */
@@ -3093,7 +3087,6 @@ export interface components {
             parent_session_id: string | null;
             /** Thread */
             thread: string | null;
-            kind: components["schemas"]["SessionKind"];
             /** Compaction Threshold Tokens */
             compaction_threshold_tokens: number | null;
             /** Unread */

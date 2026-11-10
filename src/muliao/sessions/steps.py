@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse
@@ -151,10 +151,13 @@ class Steps:
             state.live = None
             raise CompactionDue()
 
-    async def compact(self, state: RunState, config: AgentDir, fresh_run_context: str) -> SessionContext:
-        """运行中途该压缩了（CompactionDue，触发它的请求已经保存）：用这次运行的配置快照（config）压缩，从库里重新加载上下文（摘要 + 切点之后），并把这次
-        运行的状态对上它，返回续跑用的上下文。挂着运行上下文的那条请求被压进了摘要时，模型不再看得到它：下一条新请求
-        重新挂一段（fresh_run_context，时间取现在）。"""
+    async def compact(
+        self, state: RunState, config: AgentDir, fresh_run_context: Callable[[], str]
+    ) -> SessionContext:
+        """该压缩了（运行开头，或运行中途的 CompactionDue，触发它的请求已经保存）：用这次运行的配置快照（config）压缩，从库里
+        重新加载上下文（摘要 + 切点之后），并把这次运行的状态对上它，返回续跑用的上下文。挂着运行上下文的那条请求被压进
+        了摘要时，模型不再看得到它：下一条新请求重新挂一段（fresh_run_context()，时间取现在）。续跑是不是重发历史末尾
+        的请求（RunState.resending）由调用方定。"""
         compacted = await self._compactor.compact(state.session, config)
         async with self._db.transaction() as s:
             context = await load_context(s, state.session.id)
@@ -164,11 +167,10 @@ class Steps:
             and state.run_context_row is not None
             and state.run_context_row <= compaction.through_message_id
         ):
-            state.run_context = fresh_run_context
+            state.run_context = fresh_run_context()
             state.run_context_row = None
         state.stale_responses = context.stale_responses
         state.compaction_exhausted = compacted == 0
-        state.resending = True
         return context
 
     def _compaction_due(self, state: RunState, messages: list[ModelMessage]) -> bool:

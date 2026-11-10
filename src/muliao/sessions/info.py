@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.sessions.directory import keyed_rows_among
-from muliao.sessions.kinds import SessionKind
 from muliao.sessions.origins import Origin
 from muliao.sessions.tables import Session
 
@@ -23,8 +22,6 @@ class SessionInfo:
     # 会话的发起方：来源与它在来源里的身份（触发器 id、issue id……；委派与用户为 None）
     origin: Origin
     origin_ref: str | None
-    # 会话的种类：顶层会话或委派开出的 thread（sessions.kinds）
-    kind: SessionKind
 
 
 async def session_in(s: AsyncSession, session_id: str) -> SessionInfo | None:
@@ -62,5 +59,4 @@ def info_of(session: Session) -> SessionInfo:
         thread=session.thread,
         origin=session.origin,
         origin_ref=session.origin_ref,
-        kind=session.kind,
     )

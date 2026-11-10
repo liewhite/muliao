@@ -25,7 +25,6 @@ from muliao.sessions.codec import load_messages
 from muliao.sessions.consumer import RunHandler
 from muliao.sessions.conventions import run_context_index
 from muliao.sessions.inbound import Inbound, NewSession, receive
-from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.tables import Mail, Message
 from tests.scripted import scripted
@@ -334,7 +333,7 @@ async def test_delegate_task_opens_public_thread_and_notifies_user(container, ma
     assert len(children) == 1
     child = children[0].session
     assert child.origin == Origin.DELEGATION and child.parent_session_id == parent.id
-    assert child.thread == "x" and child.kind == SessionKind.THREAD
+    assert child.thread == "x"
     assert (await history_of(container, child.id))[-1].parts[0].content == "summary of X"
     assert [n.session_id for n in await container.notifications.list(10)] == [child.id]
 

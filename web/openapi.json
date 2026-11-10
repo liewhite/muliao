@@ -8535,14 +8535,6 @@
         ],
         "title": "SessionDetail"
       },
-      "SessionKind": {
-        "type": "string",
-        "enum": [
-          "conversation",
-          "thread"
-        ],
-        "title": "SessionKind"
-      },
       "SessionListItem": {
         "properties": {
           "id": {
@@ -8593,9 +8585,6 @@
             ],
             "title": "Thread"
           },
-          "kind": {
-            "$ref": "#/components/schemas/SessionKind"
-          },
           "compaction_threshold_tokens": {
             "anyOf": [
               {
@@ -8634,7 +8623,6 @@
           "origin_ref",
           "parent_session_id",
           "thread",
-          "kind",
           "compaction_threshold_tokens",
           "unread",
           "created_at",
@@ -8694,9 +8682,6 @@
             ],
             "title": "Thread"
           },
-          "kind": {
-            "$ref": "#/components/schemas/SessionKind"
-          },
           "compaction_threshold_tokens": {
             "anyOf": [
               {
@@ -8732,7 +8717,6 @@
           "origin_ref",
           "parent_session_id",
           "thread",
-          "kind",
           "compaction_threshold_tokens",
           "unread",
           "created_at",

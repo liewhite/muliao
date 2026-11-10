@@ -11,7 +11,6 @@ from muliao.errors import Conflict, Forbidden
 from muliao.platform.tables import TaskStatus
 from muliao.sessions.api import Origin
 from muliao.sessions.inbound import Inbound, NewSession, receive
-from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import RUN_TASK
 from muliao.sessions.mailbox import queued_in
 from muliao.sessions.tables import Mail, Message, Session
@@ -86,7 +85,7 @@ async def test_ask_agent_returns_answer_and_follow_up_keeps_thread_context(conta
     assert await last_answer(container, parent.id) == "verdict: reviewed v2"
 
     [child] = await threads_of(container, parent.id)
-    assert child.kind == SessionKind.THREAD and child.thread == "review"
+    assert child.thread == "review"
     # 第二次 ask 时对方看得到第一次的上下文
     assert child_seen == [1, 3]
     # ask_agent 的 thread 和其他会话一样由自己的运行处理，消息记在运行名下
@@ -173,9 +172,9 @@ async def test_an_agent_asks_itself_in_parallel_threads(container, make_agent, m
 
     assert await last_answer(container, parent.id) == "all: did x | did y"
     children = await threads_of(container, parent.id)
-    assert sorted((c.thread, c.agent_id, c.kind) for c in children) == [
-        ("me-x", me, SessionKind.THREAD),
-        ("me-y", me, SessionKind.THREAD),
+    assert sorted((c.thread, c.agent_id, c.origin) for c in children) == [
+        ("me-x", me, Origin.DELEGATION),
+        ("me-y", me, Origin.DELEGATION),
     ]
 
 
@@ -247,7 +246,7 @@ async def test_delegate_task_runs_in_public_thread_without_returning_the_answer(
 
     assert await last_answer(container, parent.id) == "lead: delegated to worker in thread 'report'"
     [child] = await threads_of(container, parent.id)
-    assert child.kind == SessionKind.THREAD and await last_answer(container, child.id) == "report: write it"
+    assert await last_answer(container, child.id) == "report: write it"
     # 公开 thread 的回答推送给用户
     notes = await container.notifications.list(100)
     assert sorted(n.session_id for n in notes) == sorted([parent.id, child.id])

@@ -12,7 +12,6 @@ from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from muliao.sessions.history import sessions_mentioning
-from muliao.sessions.kinds import TOP_LEVEL, SessionKind
 from muliao.sessions.origins import Origin
 from muliao.sessions.tables import Session
 
@@ -27,7 +26,6 @@ async def add_in(
     origin_ref: str | None,
     parent_session_id: str | None,
     thread: str | None,
-    kind: SessionKind,
     compaction_threshold_tokens: int | None,
 ) -> Session:
     """写入一个新会话（规则由唯一的入口 inbound.create_session 检查）。"""
@@ -39,7 +37,6 @@ async def add_in(
         origin_ref=origin_ref,
         parent_session_id=parent_session_id,
         thread=thread,
-        kind=kind,
         compaction_threshold_tokens=compaction_threshold_tokens,
     )
     s.add(session)
@@ -73,13 +70,13 @@ async def keyed_rows_among(
     s: AsyncSession, origin: Origin, origin_refs: Collection[str], agent_id: str | None = None
 ) -> dict[tuple[str, str], Session]:
     """按发送方定位会话（inbound.SessionKey）的唯一规则：(发送方身份, agent id) -> 这个发送方给这个 agent 开过的最新
-    一个顶层会话，一次查询。给出 agent_id 时只看这个 agent。"""
+    一个顶层会话，一次查询。给出 agent_id 时只看这个 agent。委派开出的 thread 没有发送方身份（origin_ref 为 None，
+    inbound.create_session），不会被按发送方定位到。"""
     query = (
         select(Session)
         .where(
             Session.origin == origin,
             Session.origin_ref.in_(list(origin_refs)),
-            Session.kind.in_(TOP_LEVEL),
         )
         .order_by(Session.created_at, Session.id)
     )
@@ -100,7 +97,6 @@ async def keyed_among(s: AsyncSession, session_ids: Collection[str]) -> dict[str
         select(Session.id, Session.origin, Session.origin_ref, Session.agent_id).where(
             Session.id.in_(list(session_ids)),
             Session.origin_ref.is_not(None),
-            Session.kind.in_(TOP_LEVEL),
         )
     )
     return {x: (origin, ref, agent_id) for x, origin, ref, agent_id in rows.all()}

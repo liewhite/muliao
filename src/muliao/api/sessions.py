@@ -22,7 +22,6 @@ from muliao.sessions.api import (
     Origin,
     QuestionAnswer,
     RunEvent,
-    SessionKind,
     UserMessage,
     Wait,
     WakeWait,
@@ -46,7 +45,6 @@ class SessionOut(BaseModel):
     # 委派产生的子会话：父会话与 thread 名
     parent_session_id: str | None
     thread: str | None
-    kind: SessionKind
     # 建会话时给的压缩阈值；null 用全局默认
     compaction_threshold_tokens: int | None
     # 有指向它的未读通知（用户在等的回答、提问、agent 主动通知、运行失败）：未读不另存，从通知派生
@@ -64,7 +62,6 @@ class SessionOut(BaseModel):
             origin_ref=s.origin_ref,
             parent_session_id=s.parent_session_id,
             thread=s.thread,
-            kind=s.kind,
             compaction_threshold_tokens=s.compaction_threshold_tokens,
             unread=unread,
             created_at=s.created_at,

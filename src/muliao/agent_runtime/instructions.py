@@ -53,7 +53,7 @@ def build_run_context(*, now_local: datetime, audience: Audience) -> str:
     """一次运行开头交给模型的运行上下文：必须随运行变化、因而不能放进 instructions 的那几行（见模块说明）。
 
     - 当前时间：每次运行都不同。
-    - 回答交给谁（Audience）：由这次运行处理的信件推导（sessions.kinds.KindPolicy.audience），同一个会话的不同
+    - 回答交给谁（Audience）：由这次运行处理的信件推导（sessions.mailbox.audience_of），同一个会话的不同
       运行会不同——用户在等回答的那次是 `user`，后台触发的那次是 `none`。
     会话来源的说明不在这里：它是会话创建时定下、整个会话不变的，留在 instructions 里（origin_note）。
     """

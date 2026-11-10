@@ -28,7 +28,6 @@ from muliao.sessions.approvals import ApprovalAnswered, Choice, pins_in
 from muliao.sessions.deferred import CallResult
 from muliao.sessions.directory import add_in, keyed_rows_among
 from muliao.sessions.events import Receive, ReceiveKey, ReceiveNewSession
-from muliao.sessions.kinds import SessionKind, policy_of
 from muliao.sessions.lanes import keyed_receive_lane, receive_lane
 from muliao.sessions.mailbox import open_asks_in, post_in
 from muliao.sessions.origins import RULES, Origin
@@ -63,10 +62,9 @@ class NewSession:
 
     agent_id: str
     title: str | DerivedTitle
-    # 委派产生的 thread：父会话、thread 名与种类
+    # 委派产生的 thread：父会话与 thread 名
     parent_session_id: str | None = None
     thread: str | None = None
-    kind: SessionKind = SessionKind.CONVERSATION
     # 发送方预先分配的会话 id（经定向命令异步投递时，发送方要立即告诉它的调用方会话 id，见 Receive）；None 时生成
     id: str | None = None
     # 这个会话自己的压缩阈值（token）；None 用全局默认。只有用户在界面上新建会话（NewChat）会给
@@ -228,14 +226,10 @@ async def create_session(
         raise ValueError(f"a new session needs a title by now (receive derives one), got {spec}")
     await runnable_agent_in(s, spec.agent_id)
     is_thread = RULES[origin].from_parent
-    if (
-        (spec.parent_session_id is not None) != is_thread
-        or policy_of(spec.kind).opened_by_delegation != is_thread
-        or (spec.thread is not None) != is_thread
-    ):
+    if (spec.parent_session_id is not None) != is_thread or (spec.thread is not None) != is_thread:
         raise ValueError(
             f"only delegation creates threads, each with a parent and a name; got {origin} creating a "
-            f"{spec.kind} with parent {spec.parent_session_id} and name {spec.thread!r}"
+            f"session with parent {spec.parent_session_id} and name {spec.thread!r}"
         )
     if is_thread and spec.parent_session_id != origin_ref:
         raise ValueError(
@@ -257,7 +251,6 @@ async def create_session(
         origin_ref=None if is_thread else origin_ref,
         parent_session_id=spec.parent_session_id,
         thread=spec.thread,
-        kind=spec.kind,
         compaction_threshold_tokens=spec.compaction_threshold_tokens,
     )
 

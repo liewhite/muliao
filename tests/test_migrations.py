@@ -1394,8 +1394,8 @@ def test_waiting_issues_become_in_progress_and_downgrade_drops_waiting_wake_ups(
             (t, t),
         )
         conn.execute(
-            "insert into sessions (id, agent_id, title, origin, kind, created_at, updated_at) "
-            "values ('s', 'a1', 't', 'user', 'conversation', ?, ?)",
+            "insert into sessions (id, agent_id, title, origin, created_at, updated_at) "
+            "values ('s', 'a1', 't', 'user', ?, ?)",
             (t, t),
         )
         conn.executemany(
@@ -1447,7 +1447,8 @@ def test_private_threads_become_threads_and_downgrade_keeps_them(tmp_path):
             ],
         )
 
-    migrate(path)
+    # 停在 #581 删 kind 列之前
+    migrate(path, "ff49bc305899")
     expected = [("c1", "thread"), ("c2", "thread"), ("p", "conversation")]
     with sqlite3.connect(path) as conn:
         assert conn.execute("select id, kind from sessions order by id").fetchall() == expected
@@ -1841,3 +1842,36 @@ def test_triggers_get_a_null_route_error_and_downgrade_drops_it(tmp_path):
     with sqlite3.connect(path) as conn:
         assert "route_error" not in {r[1] for r in conn.execute("pragma table_info(triggers)")}
         assert conn.execute("select name from triggers").fetchall() == [("w",)]
+
+
+def test_sessions_lose_kind_and_downgrade_derives_it_from_origin(tmp_path):
+    """#581：kind 列删掉，会话保留；降级按来源重算（delegation 为 thread，其余为 conversation）。"""
+    from alembic import command
+
+    from muliao.platform.db import _migration_engine
+
+    path = tmp_path / "m.db"
+    migrate(path, "ff49bc305899")
+    t = "2026-01-01 00:00:00"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "insert into sessions (id, agent_id, title, origin, kind, created_at, updated_at) "
+            "values ('p', 'a1', 't', 'user', 'conversation', ?, ?)",
+            (t, t),
+        )
+        conn.execute(
+            "insert into sessions (id, agent_id, title, origin, parent_session_id, thread, kind, created_at, "
+            "updated_at) values ('c', 'a1', 'x', 'delegation', 'p', 'x', 'thread', ?, ?)",
+            (t, t),
+        )
+    migrate(path)
+    with sqlite3.connect(path) as conn:
+        assert "kind" not in {r[1] for r in conn.execute("pragma table_info(sessions)")}
+        assert conn.execute("select id from sessions order by id").fetchall() == [("c",), ("p",)]
+    with _migration_engine(path).begin() as connection:
+        command.downgrade(alembic_config(connection), "ff49bc305899")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("select id, kind from sessions order by id").fetchall() == [
+            ("c", "thread"),
+            ("p", "conversation"),
+        ]

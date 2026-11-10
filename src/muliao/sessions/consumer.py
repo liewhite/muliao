@@ -263,24 +263,27 @@ class Consumer:
         # 都用这一份，运行中途改 agent.toml 或权限从下一次运行起生效，也不会让进行中的运行半路失败
         config = await self._runtime.config(agent.id)
         profile = await self._toolbox.profile(agent)
-        # 上下文超过阈值时先压缩（之后每一步之前同样检查，见 sessions.steps.CompactionDue）。放在确认有要交给模型的
-        # 之后（没事可做的运行不花一次总结），交出信件与批准之前（压缩失败重试时，批准不会被当成已经交过、不再执行）
-        verdict = self._compactor.verdict(session, history, context.stale_responses)
-        compacted = await self._compactor.compact(session, config) if verdict == Verdict.DUE else None
-        if compacted is not None:
-            async with self._db.transaction() as s:
-                context = await load_context(s, session.id)
-            history = context.messages
-        state.stale_responses = context.stale_responses
-        state.compaction_exhausted = verdict == Verdict.HOPELESS or compacted == 0
-        prompt, deferred = (None, None) if opening is None else await self._hand_over(state, opening, handed)
         # 运行开始时就定下（工具与指令随之确定）：回答交给谁看它处理过的、和这次要处理的信件，以及会话有没有委派来、
         # 还没结清的工作（mailbox.audience_of）
         audience = audience_of([*state.handled, *queued], delegated_work)
         scope = self._runtime.scope(agent, session_id=session.id, audience=audience)
+
         # 随运行变化的上下文（当前时间、回答交给谁）不进 instructions——那是缓存前缀——而是挂在这次运行新增的
-        # 第一条请求上（sessions.steps._before_request）
-        state.run_context = self._runtime.run_context(audience)
+        # 第一条请求上（sessions.steps._before_request）；压缩之后才生成，时间取当时
+        def run_context() -> str:
+            return self._runtime.run_context(audience)
+
+        # 上下文超过阈值时先压缩（之后每一步之前同样检查，见 sessions.steps.CompactionDue），和运行中途走同一个
+        # Steps.compact。放在确认有要交给模型的之后（没事可做的运行不花一次总结），交出信件与批准之前（压缩失败重试时，
+        # 批准不会被当成已经交过、不再执行）
+        state.stale_responses = context.stale_responses
+        verdict = self._compactor.verdict(session, history, context.stale_responses)
+        state.compaction_exhausted = verdict == Verdict.HOPELESS
+        if verdict == Verdict.DUE:
+            context = await self._steps.compact(state, config, run_context)
+            history = context.messages
+        state.run_context = run_context()
+        prompt, deferred = (None, None) if opening is None else await self._hand_over(state, opening, handed)
         self._live.begin(session_id, last_message)
         while True:
             try:
@@ -298,7 +301,9 @@ class Consumer:
                 break
             except CompactionDue:
                 # 这次请求已经保存：压缩，再从库里加载上下文（摘要 + 切点之后），从它续跑
-                context = await self._steps.compact(state, config, self._runtime.run_context(audience))
+                context = await self._steps.compact(state, config, run_context)
+                # 触发压缩的那条请求已经在库里，续跑就是重发它
+                state.resending = True
                 history, prompt, deferred = context.messages, None, None
         end = end_of(outcome)
         # 停在挂起的调用上时别的工具的结果还没保存：和等批准的记录同一个事务，且在运行还登记可停止时做——之后才到的停止

@@ -9,7 +9,7 @@
 - 查询：session_in（SessionInfo）、SessionActivity（会话忙不忙）、SessionRecall（热历史：一段时间的会话活动与用户说的话，
   history 领域的 activity_overview 用；会话的时间线由本领域的 session_read 工具读）；
 - 会话在等的东西（Wait：后台任务、委派、到点唤醒、提问，随会话详情给出）；
-- 会话来源（Origin：发送方新建会话时给出）、会话种类与 HTTP 层用的读模型、展示事件；
+- 会话来源（Origin：发送方新建会话时给出）与 HTTP 层用的读模型、展示事件；
 - 会话 lane 上的任务种类（RUN_TASK、COMPACTION_TASK：HTTP 层把各领域的任务种类组成接口里的 TaskKind）。
 """
 
@@ -29,7 +29,6 @@ from muliao.sessions.inbound import (
     receive_command_in,
 )
 from muliao.sessions.info import SessionInfo, keyed_session_in, keyed_sessions_among, session_in
-from muliao.sessions.kinds import SessionKind
 from muliao.sessions.lanes import COMPACTION_TASK, RUN_TASK
 from muliao.sessions.live import LiveSegment, RunDeltaEvent, RunEvent, RunItemEvent, SavedEvent
 from muliao.sessions.origins import OWN_NOTES, Origin, OriginNotes
@@ -55,7 +54,6 @@ __all__ = [
     "SessionDomain",
     "SessionPorts",
     "WorkState",
-    "SessionKind",
     "LiveSegment",
     "RunDeltaEvent",
     "RunEvent",
