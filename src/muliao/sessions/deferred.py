@@ -130,7 +130,7 @@ def asks_user(name: str) -> bool:
 
 def questions_in(call: ToolCallPart) -> list[Question]:
     """挂起的调用里给用户的问题；不是提问的调用没有。提问至少有一个问题（questions.Questions），所以非空就是提问：
-    要的是问题时只用它判断，不再先问 asks_user。只用于挂起的调用（参数已校验过）；展示任意调用用
+    要的是问题时只用它判断，不再先问 asks_user。只用于挂起的调用（参数一般已校验过，例外见 #563）；展示任意调用用
     questions.shown_questions。"""
     tool = deferred_tool(call.tool_name)
     return [] if tool is None or tool.questions is None else tool.questions(call)

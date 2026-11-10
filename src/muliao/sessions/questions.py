@@ -82,7 +82,7 @@ _ASK_ARGS: TypeAdapter[_AskArgs] = TypeAdapter(_AskArgs)
 
 
 def questions_of(call: ToolCallPart) -> list[Question]:
-    """挂起的 ask_user 调用里的问题：能挂起就说明参数已通过同一个 Questions 类型的校验，不合法（ValidationError）是
+    """挂起的 ask_user 调用里的问题：一般已通过同一个 Questions 类型的校验（中途打断留下的没校验过的调用见 #563），不合法（ValidationError）是
     数据与代码不一致。"""
     return _ASK_ARGS.validate_json(call.args_as_json_str()).questions
 
